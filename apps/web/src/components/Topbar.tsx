@@ -1,0 +1,140 @@
+import { useQueryClient } from "@tanstack/react-query";
+import { Command, LogOut, Moon, Search, Sun, UserRound, FileClock } from "lucide-react";
+import { useEffect, useState } from "react";
+import { Link, useNavigate } from "react-router-dom";
+import { Avatar, AvatarFallback, AvatarImage } from "./ui/avatar";
+import { Button } from "./ui/button";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger
+} from "./ui/dropdown-menu";
+import { Badge } from "./ui/badge";
+import { toast } from "./ui/toaster";
+import { NotificationsBell } from "./NotificationsBell";
+import { CommandPalette, useCommandPaletteHotkey } from "./command-palette";
+import { authApi, fileUrl } from "../services/api";
+import { useAuthStore } from "../store/auth";
+
+const THEME_KEY = "timesheet:theme";
+
+function initialsFor(name?: string) {
+  if (!name) return "?";
+  return name
+    .split(/\s+/)
+    .filter(Boolean)
+    .slice(0, 2)
+    .map((part) => part[0]?.toUpperCase() ?? "")
+    .join("");
+}
+
+export function Topbar() {
+  const navigate = useNavigate();
+  const user = useAuthStore((s) => s.user);
+  const logoutStore = useAuthStore((s) => s.logout);
+  const [dark, setDark] = useState(() => {
+    if (typeof window === "undefined") return false;
+    return document.documentElement.classList.contains("dark");
+  });
+  const [paletteOpen, setPaletteOpen] = useState(false);
+
+  useEffect(() => {
+    document.documentElement.classList.toggle("dark", dark);
+    localStorage.setItem(THEME_KEY, dark ? "dark" : "light");
+  }, [dark]);
+
+  useCommandPaletteHotkey(() => setPaletteOpen(true));
+
+  const queryClient = useQueryClient();
+  async function handleLogout() {
+    try {
+      await authApi.logout();
+    } catch {
+      // ignore — we still want local cleanup
+    }
+    logoutStore();
+    // Drop every cached server response so the next sign-in starts clean and
+    // we don't briefly flash the previous user's data.
+    queryClient.clear();
+    toast.success("Signed out");
+    navigate("/login");
+  }
+
+  const avatarSrc = fileUrl(user?.avatarUrl);
+
+  return (
+    <>
+      <header className="sticky top-0 z-20 flex h-16 items-center gap-2 border-b border-border bg-background/85 px-4 backdrop-blur-xl lg:px-6">
+        <button
+          type="button"
+          onClick={() => setPaletteOpen(true)}
+          className="focus-ring group relative flex h-10 w-full max-w-xl items-center gap-2 rounded-md border border-input bg-background px-3 text-sm text-muted-foreground transition hover:border-primary/40 hover:text-foreground"
+          aria-label="Open command palette"
+        >
+          <Search className="h-4 w-4" />
+          <span className="flex-1 text-left">Search users, projects, actions...</span>
+          <kbd className="hidden items-center gap-1 rounded border border-border bg-muted px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wider sm:inline-flex">
+            <Command className="h-3 w-3" /> K
+          </kbd>
+        </button>
+
+        <div className="ml-auto flex items-center gap-1">
+          <NotificationsBell />
+
+          <Button
+            variant="ghost"
+            size="icon"
+            onClick={() => setDark((value) => !value)}
+            aria-label={dark ? "Switch to light mode" : "Switch to dark mode"}
+            title="Toggle theme"
+          >
+            {dark ? <Sun className="h-4 w-4" /> : <Moon className="h-4 w-4" />}
+          </Button>
+
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button variant="ghost" className="h-10 gap-2 rounded-full border border-border px-2 pr-3">
+                <Avatar className="h-7 w-7">
+                  {avatarSrc ? <AvatarImage src={avatarSrc} alt={user?.name ?? "Profile photo"} /> : null}
+                  <AvatarFallback>{initialsFor(user?.name)}</AvatarFallback>
+                </Avatar>
+                <span className="hidden text-sm font-semibold sm:inline">{user?.name?.split(" ")[0] ?? "Account"}</span>
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent className="w-64" align="end">
+              <DropdownMenuLabel>
+                <div className="flex items-center gap-3 normal-case">
+                  <Avatar className="h-10 w-10">
+                    {avatarSrc ? <AvatarImage src={avatarSrc} alt={user?.name ?? "Profile photo"} /> : null}
+                    <AvatarFallback>{initialsFor(user?.name)}</AvatarFallback>
+                  </Avatar>
+                  <div className="min-w-0">
+                    <p className="text-sm font-bold tracking-tight">{user?.name}</p>
+                    <p className="truncate text-xs font-normal text-muted-foreground">{user?.email}</p>
+                    <Badge variant="info" className="mt-1 w-fit">{user?.role}</Badge>
+                  </div>
+                </div>
+              </DropdownMenuLabel>
+              <DropdownMenuSeparator />
+              <DropdownMenuItem asChild>
+                <Link to="/app/profile"><UserRound /> Profile</Link>
+              </DropdownMenuItem>
+              <DropdownMenuItem asChild>
+                <Link to="/app/history"><FileClock /> My history</Link>
+              </DropdownMenuItem>
+              <DropdownMenuSeparator />
+              <DropdownMenuItem onSelect={handleLogout} className="text-destructive focus:bg-destructive/10 focus:text-destructive">
+                <LogOut /> Sign out
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
+        </div>
+      </header>
+
+      <CommandPalette open={paletteOpen} onOpenChange={setPaletteOpen} />
+    </>
+  );
+}

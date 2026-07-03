@@ -1,0 +1,371 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "mysql"
+  url      = env("DATABASE_URL")
+}
+
+enum RoleName {
+  SUPER_ADMIN
+  ADMIN
+  MANAGER
+  TEAM_LEAD
+  EMPLOYEE
+}
+
+enum UserStatus {
+  ACTIVE
+  INACTIVE
+  PENDING_VERIFICATION
+}
+
+enum TimesheetStatus {
+  DRAFT
+  SUBMITTED
+  APPROVED
+  REJECTED
+}
+
+enum EmailStatus {
+  QUEUED
+  SENT
+  FAILED
+}
+
+model Role {
+  id          String           @id @default(uuid())
+  name        RoleName         @unique
+  description String?
+  users       User[]
+  permissions RolePermission[]
+}
+
+model Permission {
+  id          String           @id @default(uuid())
+  key         String           @unique
+  description String?
+  roles       RolePermission[]
+}
+
+model RolePermission {
+  roleId       String
+  permissionId String
+  role         Role       @relation(fields: [roleId], references: [id], onDelete: Cascade)
+  permission   Permission @relation(fields: [permissionId], references: [id], onDelete: Cascade)
+
+  @@id([roleId, permissionId])
+}
+
+model User {
+  id                 String                  @id @default(uuid())
+  name               String
+  email              String                  @unique
+  passwordHash       String
+  status             UserStatus              @default(PENDING_VERIFICATION)
+  roleId             String
+  role               Role                    @relation(fields: [roleId], references: [id])
+  avatarUrl          String?                 @db.VarChar(500)
+  bio                String?                 @db.Text
+  phoneNumber        String?                 @db.VarChar(40)
+  timezone           String?                 @db.VarChar(80)
+  emailVerifiedAt    DateTime?
+  lastLoginAt        DateTime?
+
+  managerId          String?
+  manager            User?                   @relation("UserManager", fields: [managerId], references: [id], onDelete: SetNull)
+  reports            User[]                  @relation("UserManager")
+
+  sessions               Session[]
+  resetTokens            PasswordResetToken[]
+  projectAssignments     UserProjectAssignment[]
+  timesheets             Timesheet[]
+  notifications          Notification[]
+  auditLogs              AuditLog[]
+  escalationsFrom        Escalation[]            @relation("EscalationFrom")
+  escalationsTo          Escalation[]            @relation("EscalationTo")
+  notificationPreference NotificationPreference?
+
+  createdAt          DateTime                @default(now())
+  updatedAt          DateTime                @updatedAt
+  deletedAt          DateTime?
+
+  @@index([roleId, status])
+  @@index([managerId])
+}
+
+model Session {
+  id           String   @id @default(uuid())
+  userId       String
+  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  refreshHash  String
+  userAgent    String?
+  ipAddress    String?
+  expiresAt    DateTime
+  revokedAt    DateTime?
+  createdAt    DateTime @default(now())
+
+  @@index([userId, expiresAt])
+}
+
+model PasswordResetToken {
+  id        String   @id @default(uuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  tokenHash String   @unique
+  expiresAt DateTime
+  usedAt    DateTime?
+  createdAt DateTime @default(now())
+
+  @@index([userId, expiresAt])
+}
+
+model Project {
+  id          String                  @id @default(uuid())
+  code        String                  @unique
+  name        String
+  description String?
+  status      String                  @default("ACTIVE")
+
+  /// Hours allowed between SUBMITTED and APPROVED before SLA breach + escalation.
+  slaApprovalHours Int                @default(48)
+  /// Day of month by which employees must have submitted (1-28). Null = no cadence enforcement.
+  submissionDeadlineDayOfMonth Int?
+
+  modules     ProjectModule[]
+  assignments UserProjectAssignment[]
+  timesheets  Timesheet[]
+  createdAt   DateTime                @default(now())
+  updatedAt   DateTime                @updatedAt
+  deletedAt   DateTime?
+}
+
+model ProjectModule {
+  id          String             @id @default(uuid())
+  projectId   String
+  project     Project            @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  name        String
+  status      String             @default("ACTIVE")
+  submodules  ProjectSubmodule[]
+  timesheets  Timesheet[]
+  createdAt   DateTime           @default(now())
+  updatedAt   DateTime           @updatedAt
+
+  @@unique([projectId, name])
+}
+
+model ProjectSubmodule {
+  id         String        @id @default(uuid())
+  moduleId   String
+  module     ProjectModule @relation(fields: [moduleId], references: [id], onDelete: Cascade)
+  name       String
+  status     String        @default("ACTIVE")
+  timesheets Timesheet[]
+  createdAt  DateTime      @default(now())
+  updatedAt  DateTime      @updatedAt
+
+  @@unique([moduleId, name])
+}
+
+model UserProjectAssignment {
+  id        String   @id @default(uuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  projectId String
+  project   Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  createdAt DateTime @default(now())
+
+  @@unique([userId, projectId])
+}
+
+model ActivityType {
+  id        String   @id @default(uuid())
+  name      String   @unique
+  isActive  Boolean  @default(true)
+  createdAt DateTime @default(now())
+}
+
+model Timesheet {
+  id              String             @id @default(uuid())
+  userId          String
+  user            User               @relation(fields: [userId], references: [id])
+  projectId       String
+  project         Project            @relation(fields: [projectId], references: [id])
+  moduleId        String
+  module          ProjectModule      @relation(fields: [moduleId], references: [id])
+  submoduleId     String?
+  submodule       ProjectSubmodule?  @relation(fields: [submoduleId], references: [id])
+  activityType    String
+  taskDescription String             @db.Text
+  workDate        DateTime           @db.Date
+  startTime       String
+  endTime         String
+  totalHours      Decimal            @db.Decimal(5, 2)
+  notes           String?            @db.Text
+  status          TimesheetStatus    @default(DRAFT)
+  reviewedById    String?
+  reviewedAt      DateTime?
+  rejectionReason String?
+
+  /// When approval is due. Computed from project.slaApprovalHours at submit time.
+  approvalDeadline DateTime?
+  /// First time we detected the approval SLA was missed.
+  slaBreachAt      DateTime?
+  /// When the approval was escalated up the hierarchy.
+  escalatedAt      DateTime?
+
+  attachments     Attachment[]
+  escalations     Escalation[]
+
+  createdAt       DateTime           @default(now())
+  updatedAt       DateTime           @updatedAt
+  deletedAt       DateTime?
+
+  @@index([userId, workDate, status])
+  @@index([projectId, workDate])
+  @@index([status, approvalDeadline])
+}
+
+model Attachment {
+  id          String    @id @default(uuid())
+  timesheetId String
+  timesheet   Timesheet @relation(fields: [timesheetId], references: [id], onDelete: Cascade)
+  fileName    String
+  mimeType    String
+  url         String
+  sizeBytes   Int
+  createdAt   DateTime  @default(now())
+}
+
+model Notification {
+  id        String    @id @default(uuid())
+  userId    String
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  title     String
+  body      String    @db.Text
+  /// e.g. timesheet.approved, timesheet.rejected, sla.breach, escalation
+  category  String?   @db.VarChar(80)
+  /// Optional URL inside the app to deep-link to relevant resource.
+  link      String?   @db.VarChar(500)
+  readAt    DateTime?
+  createdAt DateTime  @default(now())
+
+  @@index([userId, readAt])
+  @@index([userId, createdAt])
+}
+
+model AuditLog {
+  id        String   @id @default(uuid())
+  actorId   String?
+  actor     User?    @relation(fields: [actorId], references: [id])
+  action    String
+  entity    String
+  entityId  String?
+  metadata  Json?
+  ipAddress String?
+  createdAt DateTime @default(now())
+
+  @@index([actorId, entity, createdAt])
+}
+
+model FormConfiguration {
+  id        String   @id @default(uuid())
+  key       String   @unique
+  value     Json
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+/// When approval SLA is breached, an Escalation is created targeting the manager's manager
+/// (or an ADMIN fallback). Resolved when the underlying timesheet is approved/rejected.
+model Escalation {
+  id                String    @id @default(uuid())
+  timesheetId       String
+  timesheet         Timesheet @relation(fields: [timesheetId], references: [id], onDelete: Cascade)
+  escalatedFromId   String
+  escalatedFromUser User      @relation("EscalationFrom", fields: [escalatedFromId], references: [id])
+  escalatedToId     String
+  escalatedToUser   User      @relation("EscalationTo", fields: [escalatedToId], references: [id])
+  reason            String    @db.VarChar(500)
+  resolvedAt        DateTime?
+  createdAt         DateTime  @default(now())
+
+  @@index([escalatedToId, resolvedAt])
+  @@index([timesheetId])
+}
+
+/// Per-user opt-ins for each email channel. In-app notifications are always created.
+model NotificationPreference {
+  id                       String   @id @default(uuid())
+  userId                   String   @unique
+  user                     User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  emailTimesheetApproved   Boolean  @default(true)
+  emailTimesheetRejected   Boolean  @default(true)
+  emailTimesheetSubmitted  Boolean  @default(true)
+  emailSlaBreach           Boolean  @default(true)
+  emailDeadlineReminder    Boolean  @default(true)
+  emailEscalation          Boolean  @default(true)
+  emailWeeklyDigest        Boolean  @default(false)
+
+  updatedAt                DateTime @updatedAt
+}
+
+/// Append-only log of every outbound transactional email.
+model EmailLog {
+  id           String      @id @default(uuid())
+  to           String      @db.VarChar(255)
+  subject      String      @db.VarChar(255)
+  template     String      @db.VarChar(80)
+  status       EmailStatus @default(QUEUED)
+  errorMessage String?     @db.Text
+  metadata     Json?
+  createdAt    DateTime    @default(now())
+
+  @@index([to, createdAt])
+  @@index([status, createdAt])
+  @@index([template, createdAt])
+}
+
+/// Admin-editable email templates. Falls back to the compiled defaults if no row exists.
+/// Variable substitution uses {{name}} syntax — variables list is informational for the UI.
+model EmailTemplate {
+  id          String   @id @default(uuid())
+  key         String   @unique @db.VarChar(80)
+  subject     String   @db.VarChar(255)
+  bodyHtml    String   @db.Text
+  description String?  @db.VarChar(500)
+  variables   Json
+  enabled     Boolean  @default(true)
+  updatedAt   DateTime @updatedAt
+  updatedById String?
+}
+
+/// Singleton (id = "global") row that controls which notification categories
+/// are allowed to dispatch email across the workspace, plus reminder timings
+/// and BCC behavior. Only SUPER_ADMIN edits this.
+model GlobalNotificationSettings {
+  id                       String   @id
+  emailTimesheetSubmitted  Boolean  @default(true)
+  emailTimesheetApproved   Boolean  @default(true)
+  emailTimesheetRejected   Boolean  @default(true)
+  emailSlaBreach           Boolean  @default(true)
+  emailDeadlineReminder    Boolean  @default(true)
+  emailEscalation          Boolean  @default(true)
+  emailWeeklyDigest        Boolean  @default(false)
+  emailDailyReminder       Boolean  @default(true)
+  emailDailyEscalation     Boolean  @default(true)
+
+  /// Hour (0–23, server local time) for the "log today's time" reminder.
+  dailyReminderHour        Int      @default(16)
+  /// Hour for the next-morning escalation (employee + manager).
+  escalationReminderHour   Int      @default(9)
+  /// When true (default), reminders only fire Monday–Friday.
+  remindOnWeekdaysOnly     Boolean  @default(true)
+  /// BCC every active SUPER_ADMIN on every outbound email.
+  bccSuperAdminOnAllEmails Boolean  @default(false)
+
+  updatedAt                DateTime @updatedAt
+  updatedById              String?
+}

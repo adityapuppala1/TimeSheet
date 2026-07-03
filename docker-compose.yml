@@ -1,0 +1,75 @@
+services:
+  mysql:
+    image: mysql:8.4
+    command: --default-time-zone=+05:30
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:?MYSQL_ROOT_PASSWORD must be set}
+      MYSQL_DATABASE: ${MYSQL_DATABASE:-timesheet_portal}
+      TZ: ${TZ:-Asia/Kolkata}
+    ports:
+      - "3307:3306"
+    volumes:
+      - mysql-data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  api:
+    build:
+      context: .
+      dockerfile: apps/api/Dockerfile
+    environment:
+      NODE_ENV: production
+      TZ: ${TZ:-Asia/Kolkata}
+      # No fallback secrets — production refuses to boot if these aren't set.
+      # Generate with: openssl rand -base64 48
+      DATABASE_URL: ${DATABASE_URL:?DATABASE_URL must be set}
+      JWT_ACCESS_SECRET: ${JWT_ACCESS_SECRET:?JWT_ACCESS_SECRET must be set}
+      JWT_REFRESH_SECRET: ${JWT_REFRESH_SECRET:?JWT_REFRESH_SECRET must be set}
+      ACCESS_TOKEN_TTL: ${ACCESS_TOKEN_TTL:-15m}
+      REFRESH_TOKEN_TTL_DAYS: ${REFRESH_TOKEN_TTL_DAYS:-14}
+      API_PORT: 4000
+      WEB_ORIGIN: ${WEB_ORIGIN:?WEB_ORIGIN must be set (your production domain)}
+      APP_BASE_URL: ${APP_BASE_URL:?APP_BASE_URL must be set (your production domain)}
+      MAIL_FROM: ${MAIL_FROM:-Timesheet Portal <no-reply@timesheet.local>}
+      SMTP_HOST: ${SMTP_HOST:-}
+      SMTP_PORT: ${SMTP_PORT:-587}
+      SMTP_USER: ${SMTP_USER:-}
+      SMTP_PASS: ${SMTP_PASS:-}
+      SMTP_SECURE: ${SMTP_SECURE:-false}
+      UPLOAD_DIR: /app/uploads
+      SLA_ENABLED: ${SLA_ENABLED:-true}
+    ports:
+      - "4000:4000"
+    volumes:
+      # Persistent uploads — avatars + timesheet attachments survive container restarts.
+      - api-uploads:/app/uploads
+    depends_on:
+      mysql:
+        condition: service_healthy
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://localhost:4000/health').then(r=>r.ok?process.exit(0):process.exit(1)).catch(()=>process.exit(1))"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+    # Run migrations as a separate step before starting the server so a failed
+    # migration crashes the container instead of leaving the API partially up.
+    command: sh -c "npx prisma migrate deploy --schema=apps/api/prisma/schema.prisma && node apps/api/dist/src/server.js"
+
+  web:
+    build:
+      context: .
+      dockerfile: apps/web/Dockerfile
+    ports:
+      - "5173:80"
+    depends_on:
+      - api
+    restart: unless-stopped
+
+volumes:
+  mysql-data:
+  api-uploads:

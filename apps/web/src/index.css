@@ -1,0 +1,173 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    --background: 210 30% 98%;
+    --foreground: 224 38% 12%;
+
+    --card: 0 0% 100%;
+    --card-foreground: 224 38% 12%;
+
+    --popover: 0 0% 100%;
+    --popover-foreground: 224 38% 12%;
+
+    --primary: 186 82% 32%;
+    --primary-foreground: 0 0% 100%;
+
+    --secondary: 214 32% 93%;
+    --secondary-foreground: 224 38% 18%;
+
+    --muted: 214 24% 92%;
+    --muted-foreground: 222 14% 42%;
+
+    --accent: 38 92% 52%;
+    --accent-foreground: 30 60% 14%;
+
+    --destructive: 0 78% 52%;
+    --destructive-foreground: 0 0% 100%;
+
+    --success: 152 64% 38%;
+    --success-foreground: 0 0% 100%;
+
+    --warning: 32 96% 52%;
+    --warning-foreground: 32 90% 14%;
+
+    --info: 215 88% 52%;
+    --info-foreground: 0 0% 100%;
+
+    --border: 216 24% 86%;
+    --input: 216 24% 86%;
+    --ring: 186 82% 32%;
+
+    --radius: 0.625rem;
+  }
+
+  .dark {
+    --background: 225 28% 9%;
+    --foreground: 210 30% 96%;
+
+    --card: 224 24% 12%;
+    --card-foreground: 210 30% 96%;
+
+    --popover: 224 24% 12%;
+    --popover-foreground: 210 30% 96%;
+
+    --primary: 184 74% 44%;
+    --primary-foreground: 220 50% 8%;
+
+    --secondary: 222 22% 18%;
+    --secondary-foreground: 210 30% 96%;
+
+    --muted: 222 22% 18%;
+    --muted-foreground: 214 14% 65%;
+
+    --accent: 38 92% 58%;
+    --accent-foreground: 30 60% 12%;
+
+    --destructive: 0 72% 56%;
+    --destructive-foreground: 0 0% 100%;
+
+    --success: 152 60% 46%;
+    --success-foreground: 0 0% 100%;
+
+    --warning: 32 92% 58%;
+    --warning-foreground: 32 90% 10%;
+
+    --info: 215 90% 60%;
+    --info-foreground: 0 0% 100%;
+
+    --border: 221 20% 24%;
+    --input: 221 20% 24%;
+    --ring: 184 74% 44%;
+  }
+
+  * {
+    @apply border-border;
+    box-sizing: border-box;
+  }
+
+  body {
+    @apply bg-background text-foreground;
+    margin: 0;
+    min-width: 320px;
+    font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    font-feature-settings: "rlig" 1, "calt" 1;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  body::before {
+    content: "";
+    position: fixed;
+    inset: 0;
+    z-index: -1;
+    background:
+      radial-gradient(circle at 12% -10%, hsl(var(--primary) / 0.10), transparent 38%),
+      radial-gradient(circle at 92% 10%, hsl(var(--accent) / 0.12), transparent 36%);
+  }
+
+  button,
+  input,
+  select,
+  textarea {
+    font: inherit;
+  }
+}
+
+@layer components {
+  .focus-ring {
+    @apply focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background;
+  }
+
+  .scrollbar-thin::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+  }
+  .scrollbar-thin::-webkit-scrollbar-thumb {
+    @apply rounded-full bg-border;
+  }
+
+  /* Tiptap content baseline */
+  .tiptap {
+    @apply min-h-32 w-full rounded-md px-3 py-2 text-sm leading-relaxed outline-none;
+  }
+  .tiptap p {
+    @apply my-1;
+  }
+  .tiptap p.is-editor-empty:first-child::before {
+    content: attr(data-placeholder);
+    @apply pointer-events-none float-left h-0 text-muted-foreground;
+  }
+  .tiptap ul {
+    @apply ml-5 list-disc;
+  }
+  .tiptap ol {
+    @apply ml-5 list-decimal;
+  }
+  .tiptap a {
+    @apply text-primary underline underline-offset-4;
+  }
+  .tiptap code {
+    @apply rounded bg-muted px-1.5 py-0.5 text-xs;
+  }
+  .tiptap blockquote {
+    @apply my-2 border-l-4 border-border pl-3 italic text-muted-foreground;
+  }
+  .tiptap h1 { @apply mb-1 mt-3 text-xl font-bold; }
+  .tiptap h2 { @apply mb-1 mt-3 text-lg font-bold; }
+  .tiptap h3 { @apply mb-1 mt-2 text-base font-bold; }
+
+  /* React DayPicker shadcn-style overrides */
+  .rdp-root { --rdp-cell-size: 36px; --rdp-accent-color: hsl(var(--primary)); }
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  a,
+  button,
+  input,
+  select,
+  textarea {
+    transition: background-color 160ms ease, border-color 160ms ease, color 160ms ease, transform 160ms ease, box-shadow 160ms ease;
+  }
+}

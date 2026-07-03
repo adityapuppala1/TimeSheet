@@ -1,0 +1,141 @@
+import fs from "node:fs";
+import path from "node:path";
+import { Router } from "express";
+import { z } from "zod";
+import { env } from "../config/env.js";
+import { prisma } from "../config/prisma.js";
+import { requireAuth } from "../middleware/auth.js";
+import { AppError } from "../middleware/error.js";
+import { avatarUpload } from "../middleware/upload.js";
+import { validate } from "../middleware/validate.js";
+import { audit } from "../services/audit.service.js";
+import { buildProfilePayload, changePassword, login, refresh } from "../services/auth.service.js";
+import { dispatchTransactional } from "../services/notify.service.js";
+import { templates } from "../services/mail-templates.js";
+import { processAvatar } from "../utils/image.js";
+import { sanitizeRichText } from "../utils/sanitize.js";
+
+export const authRouter = Router();
+
+authRouter.post(
+  "/login",
+  validate(z.object({ body: z.object({ email: z.string().email(), password: z.string().min(8), rememberMe: z.boolean().optional() }) })),
+  async (req, res) => res.json(await login(req.body.email, req.body.password, req.body.rememberMe, req.headers["user-agent"], req.ip))
+);
+
+authRouter.post(
+  "/refresh",
+  validate(z.object({ body: z.object({ refreshToken: z.string().min(10) }) })),
+  async (req, res) => res.json(await refresh(req.body.refreshToken))
+);
+
+authRouter.post("/logout", requireAuth, async (req, res) => {
+  await prisma.session.updateMany({ where: { userId: req.user!.id, revokedAt: null }, data: { revokedAt: new Date() } });
+  res.status(204).send();
+});
+
+authRouter.get("/me", requireAuth, async (req, res) => {
+  res.json(await buildProfilePayload(req.user!.id));
+});
+
+authRouter.post("/forgot-password", async (req, res) => {
+  const resetUrl = `${env.APP_BASE_URL.replace(/\/$/, "")}/reset-password`;
+  // We do not look up the user — the 202 response is identical for known and
+  // unknown emails to avoid an enumeration oracle.
+  await dispatchTransactional({
+    to: typeof req.body?.email === "string" ? req.body.email : "",
+    templateKey: "reset",
+    vars: { resetUrl, appUrl: env.APP_BASE_URL },
+    fallback: {
+      subject: "Reset your Timesheet Portal password",
+      html: templates.reset(resetUrl)
+    }
+  });
+  res.status(202).json({ message: "If the account exists, reset instructions were sent." });
+});
+
+authRouter.post("/reset-password", async (_req, res) => res.json({ message: "Password reset token accepted in production implementation." }));
+
+authRouter.post(
+  "/change-password",
+  requireAuth,
+  validate(
+    z.object({
+      body: z.object({
+        currentPassword: z.string().min(8),
+        nextPassword: z.string().min(8)
+      })
+    })
+  ),
+  async (req, res) => {
+    await changePassword(req.user!.id, req.body.currentPassword, req.body.nextPassword);
+    res.status(204).send();
+  }
+);
+
+const profilePatchSchema = z.object({
+  body: z.object({
+    name: z.string().min(2).max(80).optional(),
+    bio: z.string().max(600).optional().nullable(),
+    phoneNumber: z.string().max(40).optional().nullable(),
+    timezone: z.string().max(80).optional().nullable()
+  })
+});
+
+authRouter.patch("/profile", requireAuth, validate(profilePatchSchema), async (req, res) => {
+  const data: any = {};
+  if (typeof req.body.name === "string") data.name = req.body.name.trim();
+  if ("bio" in req.body) {
+    data.bio = req.body.bio === null ? null : sanitizeRichText(req.body.bio ?? "").slice(0, 600) || null;
+  }
+  if ("phoneNumber" in req.body) data.phoneNumber = req.body.phoneNumber === null ? null : (req.body.phoneNumber ?? "").trim() || null;
+  if ("timezone" in req.body) data.timezone = req.body.timezone === null ? null : (req.body.timezone ?? "").trim() || null;
+
+  if (Object.keys(data).length === 0) throw new AppError(422, "No profile fields provided");
+
+  await prisma.user.update({ where: { id: req.user!.id }, data });
+  await audit(req.user!.id, "user.profile_updated", "User", req.user!.id, data);
+  res.json(await buildProfilePayload(req.user!.id));
+});
+
+authRouter.post("/avatar", requireAuth, avatarUpload.single("avatar"), async (req, res) => {
+  const file = (req as any).file as Express.Multer.File | undefined;
+  if (!file?.buffer) throw new AppError(422, "No avatar file provided");
+
+  const destDir = path.join(env.UPLOAD_DIR, "avatars");
+  let processed;
+  try {
+    processed = await processAvatar(file.buffer, req.user!.id, destDir);
+  } catch {
+    throw new AppError(422, "Could not decode image — corrupted or unsupported format");
+  }
+
+  const before = await prisma.user.findUnique({ where: { id: req.user!.id }, select: { avatarUrl: true } });
+  const avatarUrl = `/uploads/avatars/${processed.filename}`;
+
+  await prisma.user.update({ where: { id: req.user!.id }, data: { avatarUrl } });
+  await audit(req.user!.id, "user.avatar_updated", "User", req.user!.id, {
+    width: processed.width,
+    height: processed.height,
+    sizeBytes: processed.sizeBytes,
+    mimeType: processed.mimeType
+  });
+
+  if (before?.avatarUrl && before.avatarUrl.startsWith("/uploads/avatars/")) {
+    const oldPath = path.join(env.UPLOAD_DIR, "avatars", path.basename(before.avatarUrl));
+    fs.promises.unlink(oldPath).catch(() => undefined);
+  }
+
+  res.json(await buildProfilePayload(req.user!.id));
+});
+
+authRouter.delete("/avatar", requireAuth, async (req, res) => {
+  const before = await prisma.user.findUnique({ where: { id: req.user!.id }, select: { avatarUrl: true } });
+  await prisma.user.update({ where: { id: req.user!.id }, data: { avatarUrl: null } });
+  await audit(req.user!.id, "user.avatar_removed", "User", req.user!.id);
+  if (before?.avatarUrl && before.avatarUrl.startsWith("/uploads/avatars/")) {
+    const oldPath = path.join(env.UPLOAD_DIR, "avatars", path.basename(before.avatarUrl));
+    fs.promises.unlink(oldPath).catch(() => undefined);
+  }
+  res.json(await buildProfilePayload(req.user!.id));
+});
