@@ -8,6 +8,9 @@ import {
   ScrollText,
   Settings,
   Shield,
+  Sparkles,
+  Ticket,
+  TrendingUp,
   Users,
   Users2
 } from "lucide-react";
@@ -30,13 +33,16 @@ interface NavItem {
 const nav: NavItem[] = [
   { to: "/app", label: "Dashboard", icon: LayoutDashboard, end: true },
   { to: "/app/timesheet", label: "Log timesheet", icon: CalendarDays, permission: permissions.TIMESHEETS_WRITE },
+  { to: "/app/tickets", label: "Tickets", icon: Ticket, permission: permissions.TICKETS_VIEW },
   { to: "/app/history", label: "History", icon: FileClock },
   { to: "/app/approvals", label: "Approvals", icon: Shield, permission: permissions.TIMESHEETS_APPROVE },
   { to: "/app/team", label: "My team", icon: Users2, permission: permissions.TIMESHEETS_APPROVE },
   { to: "/app/users", label: "Users", icon: Users, permission: permissions.USERS_MANAGE },
   { to: "/app/projects", label: "Projects", icon: FolderKanban, permission: permissions.PROJECTS_MANAGE },
   { to: "/app/reports", label: "Reports", icon: BarChart3, permission: permissions.REPORTS_VIEW },
+  { to: "/app/insights", label: "Insights", icon: TrendingUp, permission: permissions.REPORTS_VIEW },
   { to: "/app/audit", label: "Audit log", icon: ScrollText, permission: permissions.AUDIT_VIEW },
+  { to: "/app/ai-activity", label: "AI activity log", icon: Sparkles, permission: permissions.TICKETS_ASSIGN },
   { to: "/app/email-templates", label: "Email templates", icon: Mail, role: "SUPER_ADMIN" },
   { to: "/app/settings", label: "Workspace settings", icon: Settings }
 ];

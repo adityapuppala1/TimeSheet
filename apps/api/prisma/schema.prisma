@@ -34,6 +34,40 @@ enum EmailStatus {
   FAILED
 }
 
+enum TicketSource {
+  MANUAL
+  EMAIL
+  API
+}
+
+enum EmailMatchType {
+  TO_ADDRESS
+  TO_PLUS_TAG
+  SUBJECT_PREFIX
+}
+
+enum TicketLinkType {
+  BLOCKS
+  DUPLICATE
+  RELATES
+}
+
+enum TicketPriority {
+  LOW
+  MEDIUM
+  HIGH
+  CRITICAL
+}
+
+enum TicketStatus {
+  OPEN
+  IN_PROGRESS
+  IN_REVIEW
+  RESOLVED
+  CLOSED
+  REOPENED
+}
+
 model Role {
   id          String           @id @default(uuid())
   name        RoleName         @unique
@@ -59,23 +93,25 @@ model RolePermission {
 }
 
 model User {
-  id                 String                  @id @default(uuid())
-  name               String
-  email              String                  @unique
-  passwordHash       String
-  status             UserStatus              @default(PENDING_VERIFICATION)
-  roleId             String
-  role               Role                    @relation(fields: [roleId], references: [id])
-  avatarUrl          String?                 @db.VarChar(500)
-  bio                String?                 @db.Text
-  phoneNumber        String?                 @db.VarChar(40)
-  timezone           String?                 @db.VarChar(80)
-  emailVerifiedAt    DateTime?
-  lastLoginAt        DateTime?
+  id              String     @id @default(uuid())
+  name            String
+  email           String     @unique
+  passwordHash    String
+  status          UserStatus @default(PENDING_VERIFICATION)
+  roleId          String
+  role            Role       @relation(fields: [roleId], references: [id])
+  avatarUrl       String?    @db.VarChar(500)
+  bio             String?    @db.Text
+  phoneNumber     String?    @db.VarChar(40)
+  timezone        String?    @db.VarChar(80)
+  emailVerifiedAt DateTime?
+  lastLoginAt     DateTime?
+  /// Admin-only, opt-in. Only read when GlobalTicketSettings.enableCostAnalytics is on.
+  hourlyRate      Decimal?   @db.Decimal(10, 2)
 
-  managerId          String?
-  manager            User?                   @relation("UserManager", fields: [managerId], references: [id], onDelete: SetNull)
-  reports            User[]                  @relation("UserManager")
+  managerId String?
+  manager   User?   @relation("UserManager", fields: [managerId], references: [id], onDelete: SetNull)
+  reports   User[]  @relation("UserManager")
 
   sessions               Session[]
   resetTokens            PasswordResetToken[]
@@ -87,70 +123,89 @@ model User {
   escalationsTo          Escalation[]            @relation("EscalationTo")
   notificationPreference NotificationPreference?
 
-  createdAt          DateTime                @default(now())
-  updatedAt          DateTime                @updatedAt
-  deletedAt          DateTime?
+  reportedTickets           Ticket[]             @relation("TicketReporter")
+  assignedTickets           Ticket[]             @relation("TicketAssignee")
+  ticketComments            TicketComment[]
+  ticketWatches             TicketWatcher[]
+  uploadedTicketAttachments TicketAttachment[]
+  ticketEscalationsFrom     TicketEscalation[]   @relation("TicketEscalationFrom")
+  ticketEscalationsTo       TicketEscalation[]   @relation("TicketEscalationTo")
+  moduleAssigneeRules       ModuleAssigneeRule[]
+
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  deletedAt DateTime?
 
   @@index([roleId, status])
   @@index([managerId])
 }
 
 model Session {
-  id           String   @id @default(uuid())
-  userId       String
-  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
-  refreshHash  String
-  userAgent    String?
-  ipAddress    String?
-  expiresAt    DateTime
-  revokedAt    DateTime?
-  createdAt    DateTime @default(now())
+  id          String    @id @default(uuid())
+  userId      String
+  user        User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  refreshHash String
+  userAgent   String?
+  ipAddress   String?
+  expiresAt   DateTime
+  revokedAt   DateTime?
+  createdAt   DateTime  @default(now())
 
   @@index([userId, expiresAt])
 }
 
 model PasswordResetToken {
-  id        String   @id @default(uuid())
+  id        String    @id @default(uuid())
   userId    String
-  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
-  tokenHash String   @unique
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  tokenHash String    @unique
   expiresAt DateTime
   usedAt    DateTime?
-  createdAt DateTime @default(now())
+  createdAt DateTime  @default(now())
 
   @@index([userId, expiresAt])
 }
 
 model Project {
-  id          String                  @id @default(uuid())
-  code        String                  @unique
+  id          String  @id @default(uuid())
+  code        String  @unique
   name        String
   description String?
-  status      String                  @default("ACTIVE")
+  status      String  @default("ACTIVE")
 
   /// Hours allowed between SUBMITTED and APPROVED before SLA breach + escalation.
-  slaApprovalHours Int                @default(48)
+  slaApprovalHours             Int  @default(48)
   /// Day of month by which employees must have submitted (1-28). Null = no cadence enforcement.
   submissionDeadlineDayOfMonth Int?
 
-  modules     ProjectModule[]
-  assignments UserProjectAssignment[]
-  timesheets  Timesheet[]
-  createdAt   DateTime                @default(now())
-  updatedAt   DateTime                @updatedAt
-  deletedAt   DateTime?
+  /// Last issued ticket sequence number for this project's human-readable key (e.g. `${code}-${ticketSeq}`).
+  /// Incremented transactionally on ticket creation to avoid collisions.
+  ticketSeq Int @default(0)
+
+  modules                ProjectModule[]
+  assignments            UserProjectAssignment[]
+  timesheets             Timesheet[]
+  tickets                Ticket[]
+  emailRoutingRules      EmailRoutingRule[]
+  emailIntakeFallbackFor EmailIntakeSettings[]
+  createdAt              DateTime                @default(now())
+  updatedAt              DateTime                @updatedAt
+  deletedAt              DateTime?
 }
 
 model ProjectModule {
-  id          String             @id @default(uuid())
-  projectId   String
-  project     Project            @relation(fields: [projectId], references: [id], onDelete: Cascade)
-  name        String
-  status      String             @default("ACTIVE")
-  submodules  ProjectSubmodule[]
-  timesheets  Timesheet[]
-  createdAt   DateTime           @default(now())
-  updatedAt   DateTime           @updatedAt
+  id                String              @id @default(uuid())
+  projectId         String
+  project           Project             @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  name              String
+  status            String              @default("ACTIVE")
+  submodules        ProjectSubmodule[]
+  timesheets        Timesheet[]
+  tickets           Ticket[]
+  emailRoutingRules EmailRoutingRule[]
+  assigneeRule      ModuleAssigneeRule?
+  createdAt         DateTime            @default(now())
+  updatedAt         DateTime            @updatedAt
 
   @@unique([projectId, name])
 }
@@ -187,23 +242,25 @@ model ActivityType {
 }
 
 model Timesheet {
-  id              String             @id @default(uuid())
+  id              String            @id @default(uuid())
   userId          String
-  user            User               @relation(fields: [userId], references: [id])
+  user            User              @relation(fields: [userId], references: [id])
   projectId       String
-  project         Project            @relation(fields: [projectId], references: [id])
+  project         Project           @relation(fields: [projectId], references: [id])
   moduleId        String
-  module          ProjectModule      @relation(fields: [moduleId], references: [id])
+  module          ProjectModule     @relation(fields: [moduleId], references: [id])
   submoduleId     String?
-  submodule       ProjectSubmodule?  @relation(fields: [submoduleId], references: [id])
+  submodule       ProjectSubmodule? @relation(fields: [submoduleId], references: [id])
+  ticketId        String?
+  ticket          Ticket?           @relation(fields: [ticketId], references: [id], onDelete: SetNull)
   activityType    String
-  taskDescription String             @db.Text
-  workDate        DateTime           @db.Date
+  taskDescription String            @db.Text
+  workDate        DateTime          @db.Date
   startTime       String
   endTime         String
-  totalHours      Decimal            @db.Decimal(5, 2)
-  notes           String?            @db.Text
-  status          TimesheetStatus    @default(DRAFT)
+  totalHours      Decimal           @db.Decimal(5, 2)
+  notes           String?           @db.Text
+  status          TimesheetStatus   @default(DRAFT)
   reviewedById    String?
   reviewedAt      DateTime?
   rejectionReason String?
@@ -215,16 +272,17 @@ model Timesheet {
   /// When the approval was escalated up the hierarchy.
   escalatedAt      DateTime?
 
-  attachments     Attachment[]
-  escalations     Escalation[]
+  attachments Attachment[]
+  escalations Escalation[]
 
-  createdAt       DateTime           @default(now())
-  updatedAt       DateTime           @updatedAt
-  deletedAt       DateTime?
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  deletedAt DateTime?
 
   @@index([userId, workDate, status])
   @@index([projectId, workDate])
   @@index([status, approvalDeadline])
+  @@index([ticketId])
 }
 
 model Attachment {
@@ -297,19 +355,19 @@ model Escalation {
 
 /// Per-user opt-ins for each email channel. In-app notifications are always created.
 model NotificationPreference {
-  id                       String   @id @default(uuid())
-  userId                   String   @unique
-  user                     User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  id     String @id @default(uuid())
+  userId String @unique
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
 
-  emailTimesheetApproved   Boolean  @default(true)
-  emailTimesheetRejected   Boolean  @default(true)
-  emailTimesheetSubmitted  Boolean  @default(true)
-  emailSlaBreach           Boolean  @default(true)
-  emailDeadlineReminder    Boolean  @default(true)
-  emailEscalation          Boolean  @default(true)
-  emailWeeklyDigest        Boolean  @default(false)
+  emailTimesheetApproved  Boolean @default(true)
+  emailTimesheetRejected  Boolean @default(true)
+  emailTimesheetSubmitted Boolean @default(true)
+  emailSlaBreach          Boolean @default(true)
+  emailDeadlineReminder   Boolean @default(true)
+  emailEscalation         Boolean @default(true)
+  emailWeeklyDigest       Boolean @default(false)
 
-  updatedAt                DateTime @updatedAt
+  updatedAt DateTime @updatedAt
 }
 
 /// Append-only log of every outbound transactional email.
@@ -342,30 +400,320 @@ model EmailTemplate {
   updatedById String?
 }
 
+model Ticket {
+  id        String         @id @default(uuid())
+  /// Human-readable key, e.g. "WEB-123" — `${project.code}-${seq}`, seq issued via Project.ticketSeq.
+  key       String         @unique @db.VarChar(20)
+  projectId String
+  project   Project        @relation(fields: [projectId], references: [id])
+  moduleId  String?
+  module    ProjectModule? @relation(fields: [moduleId], references: [id])
+
+  /// Free string validated at the API layer against active TicketType.name rows —
+  /// mirrors how Timesheet.activityType relates to ActivityType (no hard FK), so
+  /// admins can add/retire types without a schema migration.
+  type        String         @default("BUG") @db.VarChar(60)
+  title       String         @db.VarChar(255)
+  description String?        @db.Text
+  priority    TicketPriority @default(MEDIUM)
+  status      TicketStatus   @default(OPEN)
+  source      TicketSource   @default(MANUAL)
+
+  reporterId String
+  reporter   User    @relation("TicketReporter", fields: [reporterId], references: [id])
+  assigneeId String?
+  assignee   User?   @relation("TicketAssignee", fields: [assigneeId], references: [id])
+
+  /// Real sender when source = EMAIL and they aren't a registered User (reporterId
+  /// points at the seeded "Email Intake" system user in that case).
+  externalReporterEmail String? @db.VarChar(255)
+  externalReporterName  String? @db.VarChar(160)
+
+  /// Computed from priority at creation time (GlobalTicketSettings), mirrors Timesheet.approvalDeadline.
+  dueAt       DateTime?
+  slaBreachAt DateTime?
+  resolvedAt  DateTime?
+  closedAt    DateTime?
+
+  /// Set when an AI classifier (manual suggestion or email intake) produced this ticket's
+  /// type/priority/assignee. Null when a human set every field directly.
+  aiConfidence   Float?
+  /// True when aiConfidence fell below the configured threshold — surfaced to admins/managers
+  /// instead of being silently auto-assigned.
+  needsReview    Boolean  @default(false)
+  estimatedHours Decimal? @db.Decimal(5, 2)
+  /// Admin thumbs-up/down on the AI Activity Log page — "up" | "down", null = no feedback given.
+  aiFeedback     String?  @db.VarChar(10)
+
+  comments       TicketComment[]
+  attachments    TicketAttachment[]
+  watchers       TicketWatcher[]
+  escalations    TicketEscalation[]
+  timesheets     Timesheet[]
+  labels         TicketLabel[]
+  aiUsageLogs    AIUsageLog[]
+  linksFrom      TicketLink[]          @relation("TicketLinkSource")
+  linksTo        TicketLink[]          @relation("TicketLinkTarget")
+  checklistItems TicketChecklistItem[]
+
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  deletedAt DateTime?
+
+  @@index([projectId, status])
+  @@index([assigneeId, status])
+  @@index([status, dueAt])
+  @@index([reporterId])
+}
+
+model TicketComment {
+  id        String   @id @default(uuid())
+  ticketId  String
+  ticket    Ticket   @relation(fields: [ticketId], references: [id], onDelete: Cascade)
+  authorId  String
+  author    User     @relation(fields: [authorId], references: [id])
+  body      String   @db.Text
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([ticketId, createdAt])
+}
+
+model TicketAttachment {
+  id           String   @id @default(uuid())
+  ticketId     String
+  ticket       Ticket   @relation(fields: [ticketId], references: [id], onDelete: Cascade)
+  fileName     String
+  mimeType     String
+  url          String
+  sizeBytes    Int
+  uploadedById String?
+  uploadedBy   User?    @relation(fields: [uploadedById], references: [id])
+  createdAt    DateTime @default(now())
+
+  @@index([ticketId])
+}
+
+model TicketWatcher {
+  id        String   @id @default(uuid())
+  ticketId  String
+  ticket    Ticket   @relation(fields: [ticketId], references: [id], onDelete: Cascade)
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  createdAt DateTime @default(now())
+
+  @@unique([ticketId, userId])
+}
+
+/// Mirrors Escalation's shape exactly; kept separate because Escalation is hard-FK'd to Timesheet.
+model TicketEscalation {
+  id                String    @id @default(uuid())
+  ticketId          String
+  ticket            Ticket    @relation(fields: [ticketId], references: [id], onDelete: Cascade)
+  escalatedFromId   String
+  escalatedFromUser User      @relation("TicketEscalationFrom", fields: [escalatedFromId], references: [id])
+  escalatedToId     String
+  escalatedToUser   User      @relation("TicketEscalationTo", fields: [escalatedToId], references: [id])
+  reason            String    @db.VarChar(500)
+  resolvedAt        DateTime?
+  createdAt         DateTime  @default(now())
+
+  @@index([escalatedToId, resolvedAt])
+  @@index([ticketId])
+}
+
+/// Admin-editable ticket type list (Bug/Task/Improvement by default). Mirrors ActivityType —
+/// Ticket.type is a free string validated against active rows here, not a hard FK.
+model TicketType {
+  id        String   @id @default(uuid())
+  name      String   @unique @db.VarChar(60)
+  color     String?  @db.VarChar(20)
+  isActive  Boolean  @default(true)
+  createdAt DateTime @default(now())
+}
+
+model Label {
+  id        String        @id @default(uuid())
+  name      String        @unique @db.VarChar(60)
+  color     String?       @db.VarChar(20)
+  createdAt DateTime      @default(now())
+  tickets   TicketLabel[]
+}
+
+model TicketLabel {
+  id        String   @id @default(uuid())
+  ticketId  String
+  ticket    Ticket   @relation(fields: [ticketId], references: [id], onDelete: Cascade)
+  labelId   String
+  label     Label    @relation(fields: [labelId], references: [id], onDelete: Cascade)
+  createdAt DateTime @default(now())
+
+  @@unique([ticketId, labelId])
+}
+
+/// Singleton (id = "global"). Workspace-wide ticket SLA hours (replacing the former
+/// TICKET_SLA_*_HOURS env vars, now editable without a server restart) plus opt-in,
+/// off-by-default analytics that touch sensitive data (hourly rates, per-person rankings).
+model GlobalTicketSettings {
+  id                  String   @id
+  slaLowHours         Int      @default(168)
+  slaMediumHours      Int      @default(72)
+  slaHighHours        Int      @default(24)
+  slaCriticalHours    Int      @default(4)
+  enableCostAnalytics Boolean  @default(false)
+  enableLeaderboard   Boolean  @default(false)
+  updatedAt           DateTime @updatedAt
+  updatedById         String?
+}
+
+/// Singleton (id = "global"). Master + per-feature AI toggles. aiEnabled defaults false —
+/// every AI capability stays inert until an admin explicitly opts in (and ANTHROPIC_API_KEY
+/// is configured server-side).
+model GlobalAISettings {
+  id                        String   @id
+  aiEnabled                 Boolean  @default(false)
+  autoTriageEnabled         Boolean  @default(false)
+  /// When true, AI triage suggestions are applied directly on manual ticket creation;
+  /// when false, they're surfaced as a one-click "Accept?" suggestion instead.
+  autoTriageAutoApply       Boolean  @default(false)
+  duplicateDetectionEnabled Boolean  @default(false)
+  writingAssistantEnabled   Boolean  @default(false)
+  commentSummaryEnabled     Boolean  @default(false)
+  workspaceSearchEnabled    Boolean  @default(false)
+  emailIngestionEnabled     Boolean  @default(false)
+  weeklyDigestEnabled       Boolean  @default(false)
+  model                     String   @default("claude-haiku-4-5") @db.VarChar(80)
+  confidenceThreshold       Float    @default(0.6)
+  monthlyBudgetUsd          Decimal? @db.Decimal(10, 2)
+  updatedAt                 DateTime @updatedAt
+  updatedById               String?
+}
+
+/// Append-only log of every AI call, for cost tracking / the monthly budget cap.
+model AIUsageLog {
+  id              String   @id @default(uuid())
+  feature         String   @db.VarChar(60)
+  model           String   @db.VarChar(80)
+  inputTokens     Int
+  outputTokens    Int
+  costUsdEstimate Decimal  @db.Decimal(10, 4)
+  ticketId        String?
+  ticket          Ticket?  @relation(fields: [ticketId], references: [id], onDelete: SetNull)
+  createdAt       DateTime @default(now())
+
+  @@index([feature, createdAt])
+  @@index([createdAt])
+}
+
 /// Singleton (id = "global") row that controls which notification categories
 /// are allowed to dispatch email across the workspace, plus reminder timings
 /// and BCC behavior. Only SUPER_ADMIN edits this.
 model GlobalNotificationSettings {
-  id                       String   @id
-  emailTimesheetSubmitted  Boolean  @default(true)
-  emailTimesheetApproved   Boolean  @default(true)
-  emailTimesheetRejected   Boolean  @default(true)
-  emailSlaBreach           Boolean  @default(true)
-  emailDeadlineReminder    Boolean  @default(true)
-  emailEscalation          Boolean  @default(true)
-  emailWeeklyDigest        Boolean  @default(false)
-  emailDailyReminder       Boolean  @default(true)
-  emailDailyEscalation     Boolean  @default(true)
+  id                       String  @id
+  emailTimesheetSubmitted  Boolean @default(true)
+  emailTimesheetApproved   Boolean @default(true)
+  emailTimesheetRejected   Boolean @default(true)
+  emailSlaBreach           Boolean @default(true)
+  emailDeadlineReminder    Boolean @default(true)
+  emailEscalation          Boolean @default(true)
+  emailWeeklyDigest        Boolean @default(false)
+  emailDailyReminder       Boolean @default(true)
+  emailDailyEscalation     Boolean @default(true)
+  emailTicketAssigned      Boolean @default(true)
+  emailTicketStatusChanged Boolean @default(true)
+  emailTicketCommented     Boolean @default(true)
+  emailTicketSlaBreach     Boolean @default(true)
+  emailTicketEscalation    Boolean @default(true)
+  emailTicketNeedsReview   Boolean @default(true)
 
   /// Hour (0–23, server local time) for the "log today's time" reminder.
-  dailyReminderHour        Int      @default(16)
+  dailyReminderHour        Int     @default(16)
   /// Hour for the next-morning escalation (employee + manager).
-  escalationReminderHour   Int      @default(9)
+  escalationReminderHour   Int     @default(9)
   /// When true (default), reminders only fire Monday–Friday.
-  remindOnWeekdaysOnly     Boolean  @default(true)
+  remindOnWeekdaysOnly     Boolean @default(true)
   /// BCC every active SUPER_ADMIN on every outbound email.
-  bccSuperAdminOnAllEmails Boolean  @default(false)
+  bccSuperAdminOnAllEmails Boolean @default(false)
 
-  updatedAt                DateTime @updatedAt
-  updatedById              String?
+  updatedAt   DateTime @updatedAt
+  updatedById String?
+}
+
+/// Singleton (id = "global"). IMAP mailbox connection + polling cadence for the
+/// email-to-ticket ingestion pipeline. Master switch is GlobalAISettings.emailIngestionEnabled —
+/// this table only holds *how* to connect and where unmatched mail should land.
+model EmailIntakeSettings {
+  id                  String    @id
+  imapHost            String?   @db.VarChar(255)
+  imapPort            Int       @default(993)
+  imapSecure          Boolean   @default(true)
+  imapUser            String?   @db.VarChar(255)
+  /// Never returned to the client — GET responses expose only `imapPasswordSet: boolean`.
+  imapPassword        String?   @db.VarChar(500)
+  pollIntervalMinutes Int       @default(5)
+  fallbackProjectId   String?
+  fallbackProject     Project?  @relation(fields: [fallbackProjectId], references: [id], onDelete: SetNull)
+  lastPolledAt        DateTime?
+  lastPollError       String?   @db.Text
+  updatedAt           DateTime  @updatedAt
+  updatedById         String?
+}
+
+/// Routes an inbound email to a project (+ optional default module) by matching the
+/// To-address, a "+tag" on the To-address, or a subject prefix. Evaluated in createdAt order;
+/// first active match wins. No match falls back to EmailIntakeSettings.fallbackProjectId.
+model EmailRoutingRule {
+  id              String         @id @default(uuid())
+  matchType       EmailMatchType
+  matchValue      String         @db.VarChar(255)
+  projectId       String
+  project         Project        @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  defaultModuleId String?
+  defaultModule   ProjectModule? @relation(fields: [defaultModuleId], references: [id], onDelete: SetNull)
+  isActive        Boolean        @default(true)
+  createdAt       DateTime       @default(now())
+
+  @@index([isActive])
+}
+
+/// Once a module is resolved for an email-sourced ticket (routing rule default or AI
+/// classification), auto-assign it to this user — but only when the ticket didn't
+/// land in needsReview (see GlobalAISettings.confidenceThreshold).
+model ModuleAssigneeRule {
+  id                String        @id @default(uuid())
+  moduleId          String        @unique
+  module            ProjectModule @relation(fields: [moduleId], references: [id], onDelete: Cascade)
+  defaultAssigneeId String
+  defaultAssignee   User          @relation(fields: [defaultAssigneeId], references: [id])
+  createdAt         DateTime      @default(now())
+}
+
+/// Directed relationship between two tickets (e.g. WEB-12 BLOCKS WEB-15). Surfaced as a
+/// small "linked tickets" row in the detail sheet, shown from both sides of the relation.
+model TicketLink {
+  id             String         @id @default(uuid())
+  sourceTicketId String
+  sourceTicket   Ticket         @relation("TicketLinkSource", fields: [sourceTicketId], references: [id], onDelete: Cascade)
+  targetTicketId String
+  targetTicket   Ticket         @relation("TicketLinkTarget", fields: [targetTicketId], references: [id], onDelete: Cascade)
+  type           TicketLinkType
+  createdAt      DateTime       @default(now())
+
+  @@unique([sourceTicketId, targetTicketId, type])
+  @@index([targetTicketId])
+}
+
+/// Simple ordered sub-task list on a ticket. `position` is a dense 0-based index,
+/// renumbered on every reorder so drag-and-drop / up-down moves stay consistent.
+model TicketChecklistItem {
+  id        String   @id @default(uuid())
+  ticketId  String
+  ticket    Ticket   @relation(fields: [ticketId], references: [id], onDelete: Cascade)
+  label     String   @db.VarChar(255)
+  done      Boolean  @default(false)
+  position  Int      @default(0)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([ticketId, position])
 }

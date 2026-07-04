@@ -6,6 +6,7 @@ import {
   CheckCircle2,
   Clock,
   Send,
+  Ticket as TicketIcon,
   TrendingUp,
   Users2
 } from "lucide-react";
@@ -18,7 +19,7 @@ import { Button } from "../components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../components/ui/card";
 import { Progress } from "../components/ui/progress";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "../components/ui/table";
-import { reportApi, timesheetApi } from "../services/api";
+import { reportApi, ticketApi, timesheetApi, type TicketRow } from "../services/api";
 import { useAuthStore } from "../store/auth";
 
 function startOfWeek(date: Date) {
@@ -42,6 +43,11 @@ export function Dashboard() {
   const admin = useQuery({ queryKey: ["admin-summary"], queryFn: reportApi.admin, enabled: isAdmin });
   const timesheets = useQuery({ queryKey: ["timesheets"], queryFn: timesheetApi.list });
   const daily = useQuery({ queryKey: ["daily-status"], queryFn: reportApi.dailyStatus });
+  const myTickets = useQuery({
+    queryKey: ["tickets", "for-dashboard", user?.id],
+    queryFn: () => ticketApi.list({ assigneeId: user!.id, status: "OPEN,IN_PROGRESS,IN_REVIEW,REOPENED" }),
+    enabled: Boolean(user?.id && user.permissions.includes("tickets:view"))
+  });
 
   const all: any[] = Array.isArray(timesheets.data) ? timesheets.data : [];
   const recent = all.slice(0, 5);
@@ -114,6 +120,9 @@ export function Dashboard() {
 
       {/* Personal daily status hero */}
       <DailyStatusBanner status={daily.data} loading={daily.isLoading} />
+
+      {/* Open tickets assigned to me — any role */}
+      <MyTicketsBanner tickets={myTickets.data} loading={myTickets.isLoading} />
 
       {/* Admin / manager: workforce daily logging snapshot */}
       {isAdmin && <WorkforceSnapshot data={admin.data} loading={admin.isLoading} />}
@@ -290,6 +299,27 @@ function DailyStatusBanner({
       <AlertTitle>Today's timesheet is logged</AlertTitle>
       <AlertDescription>
         {status.hours.toFixed(2)} hours captured across {status.entries} {status.entries === 1 ? "entry" : "entries"}. Nice.
+      </AlertDescription>
+    </Alert>
+  );
+}
+
+function MyTicketsBanner({ tickets, loading }: { tickets?: TicketRow[]; loading: boolean }) {
+  if (loading || !tickets || tickets.length === 0) return null;
+  const overdue = tickets.filter((t) => t.slaBreachAt).length;
+
+  return (
+    <Alert variant={overdue > 0 ? "destructive" : "info"}>
+      <TicketIcon />
+      <AlertTitle>
+        {tickets.length} open ticket{tickets.length === 1 ? "" : "s"} assigned to you
+        {overdue > 0 ? ` — ${overdue} overdue` : ""}
+      </AlertTitle>
+      <AlertDescription className="flex flex-wrap items-center gap-3">
+        <span>Bugs and tasks waiting on you.</span>
+        <Button asChild size="sm" variant={overdue > 0 ? "destructive" : "default"}>
+          <Link to="/app/tickets"><TicketIcon className="h-4 w-4" />View tickets</Link>
+        </Button>
       </AlertDescription>
     </Alert>
   );

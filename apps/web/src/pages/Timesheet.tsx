@@ -16,14 +16,16 @@ import { RichTextEditor } from "../components/ui/rich-text-editor";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../components/ui/select";
 import { Separator } from "../components/ui/separator";
 import { toast } from "../components/ui/toaster";
-import { projectApi, timesheetApi } from "../services/api";
+import { projectApi, ticketApi, timesheetApi } from "../services/api";
 
 const MAX_DAILY_HOURS = 12;
+const OPEN_TICKET_STATUSES = "OPEN,IN_PROGRESS,IN_REVIEW,REOPENED";
 
 const schema = z.object({
   projectId: z.string().min(1, "Pick a project"),
   moduleId: z.string().min(1, "Pick a module"),
   submoduleId: z.string().optional(),
+  ticketId: z.string().optional(),
   activityType: z.string().min(1, "Pick an activity"),
   taskDescription: z.string().min(10, "At least 10 characters"),
   workDate: z.string().min(1, "Pick a date"),
@@ -50,6 +52,7 @@ export function Timesheet() {
       projectId: "",
       moduleId: "",
       submoduleId: "",
+      ticketId: "",
       activityType: "Development",
       taskDescription: "",
       notes: "",
@@ -74,6 +77,12 @@ export function Timesheet() {
     [selectedProject, moduleId]
   );
   const total = calculateHours(start || "00:00", end || "00:00");
+
+  const openTickets = useQuery({
+    queryKey: ["tickets", "for-timesheet", projectId],
+    queryFn: () => ticketApi.list({ projectId, status: OPEN_TICKET_STATUSES }),
+    enabled: Boolean(projectId)
+  });
 
   const dayTotal = useMemo(() => {
     const list = Array.isArray(timesheets.data) ? timesheets.data : [];
@@ -108,6 +117,7 @@ export function Timesheet() {
         projectId: form.getValues("projectId"),
         moduleId: form.getValues("moduleId"),
         submoduleId: "",
+        ticketId: "",
         activityType: "Development",
         taskDescription: "",
         notes: "",
@@ -143,14 +153,14 @@ export function Timesheet() {
               className="grid gap-6"
               onSubmit={form.handleSubmit((values) => mutation.mutate({ values, draft: false }))}
             >
-              <section className="grid gap-4 md:grid-cols-3">
+              <section className="grid gap-4 md:grid-cols-4">
                 <FormField
                   control={form.control}
                   name="projectId"
                   render={({ field }) => (
                     <FormItem>
                       <FormLabel>Project</FormLabel>
-                      <Select value={field.value} onValueChange={(v) => { field.onChange(v); form.setValue("moduleId", ""); form.setValue("submoduleId", ""); }}>
+                      <Select value={field.value} onValueChange={(v) => { field.onChange(v); form.setValue("moduleId", ""); form.setValue("submoduleId", ""); form.setValue("ticketId", ""); }}>
                         <FormControl>
                           <SelectTrigger><SelectValue placeholder="Select project" /></SelectTrigger>
                         </FormControl>
@@ -200,6 +210,26 @@ export function Timesheet() {
                           ))}
                         </SelectContent>
                       </Select>
+                    </FormItem>
+                  )}
+                />
+                <FormField
+                  control={form.control}
+                  name="ticketId"
+                  render={({ field }) => (
+                    <FormItem>
+                      <FormLabel>Ticket <span className="text-muted-foreground">(optional)</span></FormLabel>
+                      <Select value={field.value || ""} onValueChange={field.onChange} disabled={!selectedProject}>
+                        <FormControl>
+                          <SelectTrigger><SelectValue placeholder={selectedProject ? "Not linked" : "Pick a project first"} /></SelectTrigger>
+                        </FormControl>
+                        <SelectContent>
+                          {(openTickets.data ?? []).map((t) => (
+                            <SelectItem key={t.id} value={t.id}>{t.key} — {t.title}</SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                      <FormDescription>Attribute this entry's hours to a bug or task for effort reporting.</FormDescription>
                     </FormItem>
                   )}
                 />

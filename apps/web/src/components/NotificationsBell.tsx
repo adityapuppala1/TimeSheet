@@ -1,5 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Bell, CheckCheck, MailOpen } from "lucide-react";
+import { useNavigate } from "react-router-dom";
 import { Button } from "./ui/button";
 import { Popover, PopoverContent, PopoverTrigger } from "./ui/popover";
 import { ScrollArea } from "./ui/scroll-area";
@@ -23,6 +24,7 @@ function formatRelative(value: string) {
 
 export function NotificationsBell() {
   const queryClient = useQueryClient();
+  const navigate = useNavigate();
   const { data } = useQuery({
     queryKey: ["notifications"],
     queryFn: notificationApi.list,
@@ -82,7 +84,10 @@ export function NotificationsBell() {
             <button
               key={item.id}
               type="button"
-              onClick={() => !item.readAt && markRead.mutate(item.id)}
+              onClick={() => {
+                if (!item.readAt) markRead.mutate(item.id);
+                if (item.link) navigate(item.link);
+              }}
               className={cn(
                 "block w-full border-b border-border px-4 py-3 text-left transition hover:bg-muted last:border-b-0",
                 !item.readAt && "bg-primary/5"

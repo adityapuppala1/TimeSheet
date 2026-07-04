@@ -974,10 +974,15 @@ export function ApprovalsPage() {
 /* ============================== REPORTS ============================== */
 export function ReportsPage() {
   const analytics = useQuery({ queryKey: ["admin-summary"], queryFn: reportApi.admin });
+  const ticketAnalytics = useQuery({ queryKey: ["ticket-summary"], queryFn: reportApi.tickets });
   const projectData = (analytics.data?.byProject ?? []).map((row: any) => ({ name: row.project, hours: Number(row._sum?.totalHours ?? 0) }));
+  const priorityData = (ticketAnalytics.data?.byPriority ?? []).map((row) => ({ name: row.priority, count: row._count }));
   const slaBreached = analytics.data?.slaBreached ?? 0;
   const openEscalations = analytics.data?.openEscalations ?? 0;
   const approvedThisWeek = analytics.data?.approvedThisWeek ?? 0;
+  const openTickets = (ticketAnalytics.data?.byStatus ?? [])
+    .filter((row) => row.status !== "RESOLVED" && row.status !== "CLOSED")
+    .reduce((sum, row) => sum + row._count, 0);
 
   return (
     <Workspace title="Reports & Exports" subtitle="Download operational reports and inspect utilization analytics." icon={<FileSpreadsheet className="h-5 w-5" />}>
@@ -1011,6 +1016,34 @@ export function ReportsPage() {
                   contentStyle={{ background: "hsl(var(--popover))", border: "1px solid hsl(var(--border))", borderRadius: 8, color: "hsl(var(--popover-foreground))" }}
                 />
                 <Bar dataKey="hours" fill="hsl(var(--primary))" radius={[6, 6, 0, 0]} />
+              </BarChart>
+            </ResponsiveContainer>
+          </div>
+        </CardContent>
+      </Card>
+
+      <div className="grid gap-4 sm:grid-cols-2 md:grid-cols-4">
+        <StatCard label="Open tickets" value={openTickets} tone={openTickets > 0 ? "warning" : "default"} />
+        <StatCard label="Ticket SLA breaches" value={ticketAnalytics.data?.openSlaBreaches ?? 0} tone={(ticketAnalytics.data?.openSlaBreaches ?? 0) > 0 ? "destructive" : "default"} />
+        <StatCard label="Resolved this week" value={ticketAnalytics.data?.resolvedThisWeek ?? 0} tone="success" />
+        <StatCard label="Avg. resolution time" value={`${ticketAnalytics.data?.avgResolutionHours ?? 0}h`} />
+      </div>
+      <Card>
+        <CardHeader>
+          <CardTitle>Tickets by priority</CardTitle>
+          <CardDescription>Open, in-progress, and closed tickets across the workspace, grouped by priority.</CardDescription>
+        </CardHeader>
+        <CardContent>
+          <div className="h-72">
+            <ResponsiveContainer width="100%" height="100%">
+              <BarChart data={priorityData}>
+                <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" />
+                <XAxis dataKey="name" stroke="hsl(var(--muted-foreground))" fontSize={12} />
+                <YAxis stroke="hsl(var(--muted-foreground))" fontSize={12} allowDecimals={false} />
+                <RTooltip
+                  contentStyle={{ background: "hsl(var(--popover))", border: "1px solid hsl(var(--border))", borderRadius: 8, color: "hsl(var(--popover-foreground))" }}
+                />
+                <Bar dataKey="count" fill="hsl(var(--accent))" radius={[6, 6, 0, 0]} />
               </BarChart>
             </ResponsiveContainer>
           </div>

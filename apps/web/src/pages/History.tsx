@@ -162,6 +162,9 @@ export function History() {
                       {row.module?.name}
                       {row.submodule ? ` / ${row.submodule.name}` : ""}
                     </p>
+                    {row.ticket && (
+                      <Badge variant="outline" className="mt-1 font-mono text-[10px]">{row.ticket.key}</Badge>
+                    )}
                   </TableCell>
                   <TableCell>{row.activityType}</TableCell>
                   <TableCell className="whitespace-nowrap text-muted-foreground">

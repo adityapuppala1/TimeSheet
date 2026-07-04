@@ -6,6 +6,9 @@ import { getTransportStatus } from "./services/mail.service.js";
 import { startDailyReminderWorker } from "./workers/daily-reminder.worker.js";
 import { startDeadlineReminderWorker } from "./workers/deadline-reminder.worker.js";
 import { startEscalationWorker } from "./workers/escalation.worker.js";
+import { startInboundEmailWorker } from "./workers/inbound-email.worker.js";
+import { startTicketEscalationWorker } from "./workers/ticket-escalation.worker.js";
+import { startWeeklyDigestWorker } from "./workers/weekly-digest.worker.js";
 
 /**
  * Fail-fast guards before the server accepts traffic.
@@ -67,6 +70,9 @@ const server: Server = app.listen(env.API_PORT, async () => {
   startEscalationWorker();
   startDeadlineReminderWorker();
   startDailyReminderWorker();
+  startTicketEscalationWorker();
+  startInboundEmailWorker();
+  startWeeklyDigestWorker();
 });
 
 /**

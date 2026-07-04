@@ -4,7 +4,7 @@ import multer from "multer";
 import { env } from "../config/env.js";
 import { AppError } from "./error.js";
 
-const allowedAttachmentExtensions = new Set([
+export const allowedAttachmentExtensions = new Set([
   ".pdf", ".xls", ".xlsx", ".csv", ".jpg", ".jpeg", ".gif", ".png", ".svg", ".zip", ".txt",
   ".py", ".html", ".css", ".js", ".jsx", ".ts", ".tsx", ".json", ".xml", ".yaml", ".yml",
   ".java", ".cs", ".cpp", ".c", ".h", ".php", ".rb", ".go", ".rs", ".sql", ".md", ".doc", ".docx"

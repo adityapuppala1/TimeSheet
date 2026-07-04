@@ -421,5 +421,85 @@ export const SEED_TEMPLATES: Record<string, SeedTemplate> = {
       ].join("\n"),
       footerNote: "Triggered automatically by the workspace's daily-reminder schedule. Edit the timing in Workspace Settings → Reminders."
     })
+  },
+
+  "ticket.assigned": {
+    subject: "Ticket {{ticketKey}} assigned to you",
+    bodyHtml: shell({
+      preheader: "{{assignedBy}} assigned you a {{priority}} priority ticket.",
+      accent: COLORS.primary,
+      body: [
+        heading("A ticket was assigned to you"),
+        lead("Hi {{assigneeName}}, <strong>{{assignedBy}}</strong> assigned you a ticket."),
+        infoCard([
+          { label: "Ticket", value: "{{ticketKey}}", emphasize: true },
+          { label: "Title", value: "{{title}}" },
+          { label: "Priority", value: "{{priority}}" }
+        ]),
+        button("Open ticket", "{{appUrl}}/app/tickets")
+      ].join("\n")
+    })
+  },
+
+  "ticket.status_changed": {
+    subject: "{{ticketKey}} moved to {{to}}",
+    bodyHtml: shell({
+      preheader: "{{changedBy}} moved this ticket from {{from}} to {{to}}.",
+      accent: COLORS.primary,
+      body: [
+        heading("{{ticketKey}} moved to {{to}}"),
+        lead("{{changedBy}} moved \"<strong>{{title}}</strong>\" from {{from}} to <strong>{{to}}</strong>."),
+        button("Open ticket", "{{appUrl}}/app/tickets")
+      ].join("\n")
+    })
+  },
+
+  "ticket.commented": {
+    subject: "New comment on {{ticketKey}}",
+    bodyHtml: shell({
+      preheader: "{{author}} commented on \"{{title}}\".",
+      accent: COLORS.primary,
+      body: [
+        heading("New comment"),
+        lead("{{author}} commented on \"<strong>{{title}}</strong>\" ({{ticketKey}})."),
+        button("View comment", "{{appUrl}}/app/tickets")
+      ].join("\n")
+    })
+  },
+
+  "ticket.sla_breach": {
+    subject: "[SLA breach] {{ticketKey}} — {{title}}",
+    bodyHtml: shell({
+      preheader: "{{hoursOverdue}}h overdue. Please review now.",
+      accent: COLORS.destructive,
+      body: [
+        heading("Ticket SLA breached"),
+        lead("{{assigneeName}}, this ticket has missed its resolution SLA and needs your immediate attention."),
+        infoCard(
+          [
+            { label: "Ticket", value: "{{ticketKey}}", emphasize: true },
+            { label: "Title", value: "{{title}}" },
+            { label: "Priority", value: "{{priority}}" },
+            { label: "Overdue by", value: "{{hoursOverdue}} hours", emphasize: true }
+          ],
+          COLORS.destructive
+        ),
+        button("Review ticket", "{{appUrl}}/app/tickets", COLORS.destructive)
+      ].join("\n"),
+      footerNote: "This is an automated SLA notification. The ticket escalation sweep runs every 15 minutes."
+    })
+  },
+
+  "ticket.escalation": {
+    subject: "[Escalation] {{ticketKey}} — {{title}}",
+    bodyHtml: shell({
+      preheader: "Escalated because {{assigneeName}} missed the resolution SLA.",
+      accent: COLORS.accent,
+      body: [
+        heading("Escalation: please review"),
+        lead("{{targetName}}, \"<strong>{{title}}</strong>\" ({{ticketKey}}) has been escalated to you because its assignee, <strong>{{assigneeName}}</strong>, missed the resolution SLA."),
+        button("Review ticket", "{{appUrl}}/app/tickets", COLORS.accent)
+      ].join("\n")
+    })
   }
 };

@@ -41,7 +41,20 @@ const schema = z.object({
   SLA_ENABLED: z
     .union([z.literal("true"), z.literal("false"), z.literal("1"), z.literal("0")])
     .default("true")
-    .transform((value) => value === "true" || value === "1")
+    .transform((value) => value === "true" || value === "1"),
+
+  TICKET_SLA_ENABLED: z
+    .union([z.literal("true"), z.literal("false"), z.literal("1"), z.literal("0")])
+    .default("true")
+    .transform((value) => value === "true" || value === "1"),
+  TICKET_SLA_CRON_SCHEDULE: z.string().default("*/15 * * * *"),
+  TICKET_SLA_LOW_HOURS: z.coerce.number().default(168),
+  TICKET_SLA_MEDIUM_HOURS: z.coerce.number().default(72),
+  TICKET_SLA_HIGH_HOURS: z.coerce.number().default(24),
+  TICKET_SLA_CRITICAL_HOURS: z.coerce.number().default(4),
+
+  // Optional — AI features stay disabled (GlobalAISettings.aiEnabled defaults false) until this is set.
+  ANTHROPIC_API_KEY: z.string().default("")
 });
 
 export const env = schema.parse(process.env);

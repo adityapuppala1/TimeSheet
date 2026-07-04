@@ -1,4 +1,4 @@
-import { useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import {
@@ -14,7 +14,11 @@ import {
   ScrollText,
   Settings,
   Shield,
+  Sparkles,
   Sun,
+  Ticket,
+  TicketPlus,
+  TrendingUp,
   UserRound,
   Users,
   Users2
@@ -30,9 +34,18 @@ import {
   CommandSeparator,
   CommandShortcut
 } from "./ui/command";
+import { Button } from "./ui/button";
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "./ui/dialog";
+import { Input } from "./ui/input";
+import { ScrollArea } from "./ui/scroll-area";
+import { Skeleton } from "./ui/skeleton";
 import { useAuthStore } from "../store/auth";
-import { authApi } from "../services/api";
+import { aiApi, authApi } from "../services/api";
 import { toast } from "./ui/toaster";
+
+function serverMessage(err: any, fallback: string) {
+  return err?.response?.data?.message ?? fallback;
+}
 
 const THEME_KEY = "timesheet:theme";
 
@@ -48,13 +61,16 @@ interface NavRoute {
 const navRoutes: NavRoute[] = [
   { label: "Dashboard", to: "/app", icon: LayoutDashboard, hint: "Home" },
   { label: "Log Timesheet", to: "/app/timesheet", icon: CalendarDays, permission: permissions.TIMESHEETS_WRITE, hint: "New entry" },
+  { label: "Tickets", to: "/app/tickets", icon: Ticket, permission: permissions.TICKETS_VIEW, hint: "Bugs & tasks" },
   { label: "History", to: "/app/history", icon: FileClock },
   { label: "Approvals", to: "/app/approvals", icon: Shield, permission: permissions.TIMESHEETS_APPROVE },
   { label: "My team", to: "/app/team", icon: Users2, permission: permissions.TIMESHEETS_APPROVE, hint: "SLA & reports" },
   { label: "Users", to: "/app/users", icon: Users, permission: permissions.USERS_MANAGE },
   { label: "Projects", to: "/app/projects", icon: FolderKanban, permission: permissions.PROJECTS_MANAGE },
   { label: "Reports & Analytics", to: "/app/reports", icon: BarChart3, permission: permissions.REPORTS_VIEW },
+  { label: "Insights", to: "/app/insights", icon: TrendingUp, permission: permissions.REPORTS_VIEW, hint: "Velocity, SLA, workload" },
   { label: "Audit Log", to: "/app/audit", icon: ScrollText, permission: permissions.AUDIT_VIEW },
+  { label: "AI Activity Log", to: "/app/ai-activity", icon: Sparkles, permission: permissions.TICKETS_ASSIGN, hint: "AI-created tickets" },
   { label: "Email templates", to: "/app/email-templates", icon: Mail, role: "SUPER_ADMIN", hint: "Edit & test" },
   { label: "Workspace settings", to: "/app/settings", icon: Settings }
 ];
@@ -69,6 +85,8 @@ export function CommandPalette({ open, onOpenChange }: Props) {
   const user = useAuthStore((s) => s.user);
   const logoutStore = useAuthStore((s) => s.logout);
   const [, force] = useState(0);
+  const [askOpen, setAskOpen] = useState(false);
+  const canAskAI = Boolean(user?.permissions.includes(permissions.TICKETS_VIEW));
 
   const visibleRoutes = useMemo(
     () =>
@@ -108,9 +126,10 @@ export function CommandPalette({ open, onOpenChange }: Props) {
   }
 
   return (
-    <CommandDialog open={open} onOpenChange={onOpenChange}>
-      <CommandInput placeholder="Type a command, search a page or action..." />
-      <CommandList>
+    <>
+      <CommandDialog open={open} onOpenChange={onOpenChange}>
+        <CommandInput placeholder="Type a command, search a page or action..." />
+        <CommandList>
         <CommandEmpty>No matching commands.</CommandEmpty>
         <CommandGroup heading="Navigate">
           {visibleRoutes.map((route) => (
@@ -128,6 +147,22 @@ export function CommandPalette({ open, onOpenChange }: Props) {
             <span>New timesheet entry</span>
             <CommandShortcut>⌘ N</CommandShortcut>
           </CommandItem>
+          <CommandItem value="new ticket bug task" onSelect={() => jump("/app/tickets")}>
+            <TicketPlus className="text-muted-foreground" />
+            <span>New ticket</span>
+          </CommandItem>
+          {canAskAI && (
+            <CommandItem
+              value="ask ai search tickets question chat"
+              onSelect={() => {
+                onOpenChange(false);
+                setAskOpen(true);
+              }}
+            >
+              <Sparkles className="text-muted-foreground" />
+              <span>Ask AI</span>
+            </CommandItem>
+          )}
           <CommandItem value="toggle theme dark light" onSelect={toggleTheme}>
             <Sun className="text-muted-foreground dark:hidden" />
             <Moon className="hidden text-muted-foreground dark:block" />
@@ -145,8 +180,77 @@ export function CommandPalette({ open, onOpenChange }: Props) {
             <span>Sign out</span>
           </CommandItem>
         </CommandGroup>
-      </CommandList>
-    </CommandDialog>
+        </CommandList>
+      </CommandDialog>
+      <AskAIDialog open={askOpen} onOpenChange={setAskOpen} />
+    </>
+  );
+}
+
+function AskAIDialog({ open, onOpenChange }: { open: boolean; onOpenChange: (open: boolean) => void }) {
+  const [question, setQuestion] = useState("");
+  const [history, setHistory] = useState<Array<{ id: string; question: string; answer: string }>>([]);
+
+  const ask = useMutation({
+    mutationFn: (q: string) => aiApi.ask(q),
+    onSuccess: (res, q) => {
+      setHistory((h) => [...h, { id: `${Date.now()}-${h.length}`, question: q, answer: res.answer }]);
+      setQuestion("");
+    },
+    onError: (err: any) => toast.error("Could not get an answer", { description: serverMessage(err, "AI may be disabled for this workspace.") })
+  });
+
+  function submit() {
+    const q = question.trim();
+    if (q.length < 3 || ask.isPending) return;
+    ask.mutate(q);
+  }
+
+  return (
+    <Dialog
+      open={open}
+      onOpenChange={(next) => {
+        onOpenChange(next);
+        if (!next) {
+          setHistory([]);
+          setQuestion("");
+        }
+      }}
+    >
+      <DialogContent className="w-[min(95vw,560px)] max-w-none">
+        <DialogHeader>
+          <DialogTitle className="flex items-center gap-2"><Sparkles className="h-5 w-5 text-primary" />Ask AI</DialogTitle>
+          <DialogDescription>Ask a question about your accessible tickets — answers cite ticket keys.</DialogDescription>
+        </DialogHeader>
+        <ScrollArea className="max-h-80 rounded-md border border-border">
+          <div className="grid gap-4 p-3">
+            {history.length === 0 && (
+              <p className="py-6 text-center text-sm text-muted-foreground">
+                Try "What's overdue in Payments?" or "Summarize open critical bugs."
+              </p>
+            )}
+            {history.map((turn) => (
+              <div key={turn.id} className="grid gap-1.5">
+                <p className="text-sm font-semibold">{turn.question}</p>
+                <p className="whitespace-pre-wrap text-sm text-muted-foreground">{turn.answer}</p>
+              </div>
+            ))}
+            {ask.isPending && <Skeleton className="h-4 w-full" />}
+          </div>
+        </ScrollArea>
+        <div className="flex gap-2">
+          <Input
+            value={question}
+            onChange={(e) => setQuestion(e.target.value)}
+            placeholder="Ask about your tickets..."
+            onKeyDown={(e) => {
+              if (e.key === "Enter") submit();
+            }}
+          />
+          <Button onClick={submit} disabled={question.trim().length < 3 || ask.isPending}>Ask</Button>
+        </div>
+      </DialogContent>
+    </Dialog>
   );
 }
 

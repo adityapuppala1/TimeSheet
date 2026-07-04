@@ -15,9 +15,12 @@ const Login = lazy(() => import("./pages/Login").then((m) => ({ default: m.Login
 const ForgotPassword = lazy(() => import("./pages/ForgotPassword").then((m) => ({ default: m.ForgotPassword })));
 const Dashboard = lazy(() => import("./pages/Dashboard").then((m) => ({ default: m.Dashboard })));
 const Timesheet = lazy(() => import("./pages/Timesheet").then((m) => ({ default: m.Timesheet })));
+const Tickets = lazy(() => import("./pages/Tickets").then((m) => ({ default: m.Tickets })));
 const Profile = lazy(() => import("./pages/Profile").then((m) => ({ default: m.Profile })));
 const History = lazy(() => import("./pages/History").then((m) => ({ default: m.History })));
 const AuditLog = lazy(() => import("./pages/AuditLog").then((m) => ({ default: m.AuditLog })));
+const AIActivityLog = lazy(() => import("./pages/AIActivityLog").then((m) => ({ default: m.AIActivityLog })));
+const Insights = lazy(() => import("./pages/Insights").then((m) => ({ default: m.Insights })));
 const Team = lazy(() => import("./pages/Team").then((m) => ({ default: m.Team })));
 const WorkspaceSettingsPage = lazy(() =>
   import("./pages/WorkspaceSettings").then((m) => ({ default: m.WorkspaceSettingsPage }))
@@ -51,6 +54,7 @@ const router = createBrowserRouter([
     children: [
       { index: true, element: <PageShell><Dashboard /></PageShell> },
       { path: "timesheet", element: <PageShell><Timesheet /></PageShell> },
+      { path: "tickets", element: <RequirePermission permission={permissions.TICKETS_VIEW}><PageShell><Tickets /></PageShell></RequirePermission> },
       { path: "history", element: <PageShell><History /></PageShell> },
       { path: "profile", element: <PageShell><Profile /></PageShell> },
       { path: "team", element: <RequirePermission permission={permissions.TIMESHEETS_APPROVE}><PageShell><Team /></PageShell></RequirePermission> },
@@ -58,7 +62,9 @@ const router = createBrowserRouter([
       { path: "users", element: <RequirePermission permission={permissions.USERS_MANAGE}><PageShell><UsersPage /></PageShell></RequirePermission> },
       { path: "projects", element: <RequirePermission permission={permissions.PROJECTS_MANAGE}><PageShell><ProjectsPage /></PageShell></RequirePermission> },
       { path: "reports", element: <RequirePermission permission={permissions.REPORTS_VIEW}><PageShell><ReportsPage /></PageShell></RequirePermission> },
+      { path: "insights", element: <RequirePermission permission={permissions.REPORTS_VIEW}><PageShell><Insights /></PageShell></RequirePermission> },
       { path: "audit", element: <RequirePermission permission={permissions.AUDIT_VIEW}><PageShell><AuditLog /></PageShell></RequirePermission> },
+      { path: "ai-activity", element: <RequirePermission permission={permissions.TICKETS_ASSIGN}><PageShell><AIActivityLog /></PageShell></RequirePermission> },
       { path: "settings", element: <PageShell><WorkspaceSettingsPage /></PageShell> },
       { path: "email-templates", element: <RequireRole role="SUPER_ADMIN"><PageShell><EmailTemplatesPage /></PageShell></RequireRole> }
     ]

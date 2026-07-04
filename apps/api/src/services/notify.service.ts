@@ -1,3 +1,15 @@
+/**
+ * Single fan-out point for every in-app + email notification. `dispatchNotification()` always
+ * writes the in-app `Notification` row (so the bell menu never misses anything), then only
+ * sends the matching email if that category's `GlobalNotificationSettings` field is on —
+ * `SETTINGS_FIELD` is the category -> settings-column map that makes that lookup generic
+ * instead of a giant if/else per category. Adding a new notification (e.g. `digest.weekly`)
+ * means adding one union member, one SETTINGS_FIELD entry, and one GlobalNotificationSettings
+ * column — everything else (the admin toggle UI, the dispatch gating) follows automatically
+ * because WorkspaceSettings.tsx renders its toggle list from `notificationPreferenceKeys`.
+ * `dispatchTransactional()` is the sibling for mail that isn't tied to a registered User at all
+ * (e.g. the email-intake confirmation reply to an external sender's address).
+ */
 import { env } from "../config/env.js";
 import { prisma } from "../config/prisma.js";
 import { sendMail } from "./mail.service.js";
@@ -12,7 +24,14 @@ export type NotificationCategory =
   | "escalation"
   | "deadline.reminder"
   | "reminder.daily"
-  | "reminder.escalation";
+  | "reminder.escalation"
+  | "ticket.assigned"
+  | "ticket.status_changed"
+  | "ticket.commented"
+  | "ticket.sla_breach"
+  | "ticket.escalation"
+  | "ticket.needs_review"
+  | "digest.weekly";
 
 interface EmailPayload {
   templateKey: string;
@@ -39,7 +58,14 @@ const SETTINGS_FIELD: Record<NotificationCategory, string> = {
   "escalation": "emailEscalation",
   "deadline.reminder": "emailDeadlineReminder",
   "reminder.daily": "emailDailyReminder",
-  "reminder.escalation": "emailDailyEscalation"
+  "reminder.escalation": "emailDailyEscalation",
+  "ticket.assigned": "emailTicketAssigned",
+  "ticket.status_changed": "emailTicketStatusChanged",
+  "ticket.commented": "emailTicketCommented",
+  "ticket.sla_breach": "emailTicketSlaBreach",
+  "ticket.escalation": "emailTicketEscalation",
+  "ticket.needs_review": "emailTicketNeedsReview",
+  "digest.weekly": "emailWeeklyDigest"
 };
 
 const GLOBAL_ID = "global";

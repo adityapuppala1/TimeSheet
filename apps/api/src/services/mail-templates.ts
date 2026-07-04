@@ -173,6 +173,98 @@ export const templates = {
       heading(`${params.daysLeft} day${params.daysLeft === 1 ? "" : "s"} left to submit`) +
         paragraph(`Hi ${escape(params.name.split(" ")[0])}, just a heads up — your timesheets are due by day ${params.deadlineDay} of the month.`) +
         paragraph(button("Log time now", appUrl("/app/timesheet"), ACCENT))
+    ),
+
+  ticketAssigned: (params: { assigneeName: string; ticketKey: string; title: string; priority: string; assignedBy: string }) =>
+    shell(
+      { title: `Ticket assigned: ${params.ticketKey}`, preheader: `${params.assignedBy} assigned you a ${params.priority.toLowerCase()} priority ticket.` },
+      heading("A ticket was assigned to you") +
+        paragraph(`Hi ${escape(params.assigneeName.split(" ")[0])}, ${escape(params.assignedBy)} assigned you a ticket.`) +
+        infoCard([
+          ["Ticket", escape(params.ticketKey)],
+          ["Title", escape(params.title)],
+          ["Priority", escape(params.priority)]
+        ]) +
+        paragraph(button("Open ticket", appUrl("/app/tickets")))
+    ),
+
+  ticketStatusChanged: (params: { ticketKey: string; title: string; from: string; to: string; changedBy: string }) =>
+    shell(
+      { title: `${params.ticketKey} moved to ${params.to}`, preheader: `${params.changedBy} moved this ticket from ${params.from} to ${params.to}.`, accentColor: params.to === "RESOLVED" || params.to === "CLOSED" ? SUCCESS : PRIMARY },
+      heading(`${params.ticketKey} moved to ${params.to}`) +
+        paragraph(`${escape(params.changedBy)} moved "<strong>${escape(params.title)}</strong>" from ${escape(params.from)} to <strong>${escape(params.to)}</strong>.`) +
+        paragraph(button("Open ticket", appUrl("/app/tickets"), params.to === "RESOLVED" || params.to === "CLOSED" ? SUCCESS : PRIMARY))
+    ),
+
+  ticketCommented: (params: { ticketKey: string; title: string; author: string }) =>
+    shell(
+      { title: `New comment on ${params.ticketKey}`, preheader: `${params.author} commented on "${params.title}".` },
+      heading("New comment") +
+        paragraph(`${escape(params.author)} commented on "<strong>${escape(params.title)}</strong>" (${escape(params.ticketKey)}).`) +
+        paragraph(button("View comment", appUrl("/app/tickets")))
+    ),
+
+  ticketSlaBreach: (params: { assigneeName: string; ticketKey: string; title: string; priority: string; hoursOverdue: number }) =>
+    shell(
+      { title: `SLA breach — ${params.ticketKey}`, preheader: `${params.hoursOverdue.toFixed(1)}h overdue.`, accentColor: DESTRUCTIVE },
+      heading("Ticket SLA breached") +
+        paragraph(`${escape(params.assigneeName.split(" ")[0])}, this ticket has missed its resolution SLA and needs attention.`) +
+        infoCard(
+          [
+            ["Ticket", escape(params.ticketKey)],
+            ["Title", escape(params.title)],
+            ["Priority", escape(params.priority)],
+            ["Overdue by", `${params.hoursOverdue.toFixed(1)} hours`]
+          ],
+          DESTRUCTIVE
+        ) +
+        paragraph(button("Review ticket", appUrl("/app/tickets"), DESTRUCTIVE))
+    ),
+
+  ticketEscalation: (params: { targetName: string; ticketKey: string; title: string; assigneeName: string }) =>
+    shell(
+      { title: `Ticket escalated: ${params.ticketKey}`, preheader: `Escalated because of a missed SLA.`, accentColor: ACCENT },
+      heading("Escalation: please review") +
+        paragraph(`${escape(params.targetName.split(" ")[0])}, "<strong>${escape(params.title)}</strong>" (${escape(params.ticketKey)}) has been escalated to you because its assignee, ${escape(params.assigneeName)}, missed the resolution SLA.`) +
+        paragraph(button("Review ticket", appUrl("/app/tickets"), ACCENT))
+    ),
+
+  ticketReceivedViaEmail: (params: { senderName: string; ticketKey: string; title: string; priority: string }) =>
+    shell(
+      { title: `We received your report — ${params.ticketKey}`, preheader: "Our team has been notified and will follow up." },
+      heading("Thanks — we've logged this") +
+        paragraph(`Hi ${escape(params.senderName.split(" ")[0])}, your email was automatically turned into a tracked ticket. Our team will follow up as needed.`) +
+        infoCard([
+          ["Ticket", escape(params.ticketKey)],
+          ["Summary", escape(params.title)],
+          ["Priority", escape(params.priority)]
+        ]) +
+        paragraph(`<span style="color:${MUTED};">This is an automated confirmation — no need to reply unless you have more details to add.</span>`)
+    ),
+
+  weeklyDigest: (params: { name: string; weekLabel: string; summary: string }) =>
+    shell(
+      { title: `Your week in review — ${params.weekLabel}`, preheader: "An AI-authored recap of your ticket and timesheet activity." },
+      heading(`Hi ${escape(params.name.split(" ")[0])}, here's your week`) +
+        paragraph(escape(params.summary)) +
+        paragraph(button("Open your dashboard", appUrl("/app"))) +
+        paragraph(`<span style="color:${MUTED};">This recap is AI-generated from your ticket and timesheet activity — turn it off anytime in your notification preferences.</span>`)
+    ),
+
+  ticketNeedsReview: (params: { targetName: string; ticketKey: string; title: string; senderEmail: string; confidence: number }) =>
+    shell(
+      { title: `Needs review: ${params.ticketKey}`, preheader: "An email-sourced ticket needs a human check.", accentColor: ACCENT },
+      heading("An inbound ticket needs review") +
+        paragraph(`${escape(params.targetName.split(" ")[0])}, an email from ${escape(params.senderEmail)} was auto-classified with low confidence and needs a quick human check before it's assigned.`) +
+        infoCard(
+          [
+            ["Ticket", escape(params.ticketKey)],
+            ["Summary", escape(params.title)],
+            ["AI confidence", `${Math.round(params.confidence * 100)}%`]
+          ],
+          ACCENT
+        ) +
+        paragraph(button("Review ticket", appUrl("/app/tickets"), ACCENT))
     )
 };
 

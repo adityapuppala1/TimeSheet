@@ -22,7 +22,8 @@ const inputSchema = z.object({
     workDate: z.string(),
     startTime: z.string().regex(/^\d{2}:\d{2}$/),
     endTime: z.string().regex(/^\d{2}:\d{2}$/),
-    notes: z.string().optional()
+    notes: z.string().optional(),
+    ticketId: z.string().uuid().optional().or(z.literal(""))
   })
 });
 
@@ -39,6 +40,7 @@ timesheetRouter.get("/", async (req, res) => {
       project: true,
       module: true,
       submodule: true,
+      ticket: { select: { id: true, key: true, title: true } },
       attachments: true,
       user: { select: { name: true, email: true, avatarUrl: true } }
     },
@@ -64,6 +66,14 @@ async function saveTimesheet(req: any, status: "DRAFT" | "SUBMITTED") {
       where: { userId: req.user.id, projectId: req.body.projectId }
     });
     if (!assigned) throw new AppError(403, "You are not assigned to this project");
+  }
+
+  const ticketId = req.body.ticketId || null;
+  if (ticketId) {
+    const ticket = await prisma.ticket.findFirst({ where: { id: ticketId, deletedAt: null } });
+    if (!ticket || ticket.projectId !== req.body.projectId) {
+      throw new AppError(422, "Selected ticket does not belong to this project");
+    }
   }
 
   const [startH, startM] = req.body.startTime.split(":").map(Number);
@@ -101,6 +111,7 @@ async function saveTimesheet(req: any, status: "DRAFT" | "SUBMITTED") {
           projectId: req.body.projectId,
           moduleId: req.body.moduleId,
           submoduleId: req.body.submoduleId || null,
+          ticketId,
           activityType: req.body.activityType,
           taskDescription: cleanTaskDescription,
           notes: cleanNotes,
