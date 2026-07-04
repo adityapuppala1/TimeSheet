@@ -36,7 +36,7 @@ export function Login() {
   const mutation = useMutation({
     mutationFn: (values: FormData) => authApi.login(values.email, values.password, Boolean(values.rememberMe)),
     onSuccess: (data) => {
-      setSession(data.user, data.accessToken, data.refreshToken);
+      setSession(data.user, data.accessToken);
       toast.success(`Welcome back, ${data.user.name?.split(" ")[0] ?? "there"}!`, {
         description: "Your secure session is active."
       });
@@ -80,12 +80,12 @@ export function Login() {
                   render={({ field }) => (
                     <FormItem>
                       <FormLabel>Email</FormLabel>
-                      <FormControl>
-                        <div className="relative">
-                          <Mail className="pointer-events-none absolute left-3 top-3 h-4 w-4 text-muted-foreground" />
+                      <div className="relative">
+                        <Mail className="pointer-events-none absolute left-3 top-3 h-4 w-4 text-muted-foreground" />
+                        <FormControl>
                           <Input className="pl-9" autoComplete="username" placeholder="you@company.com" {...field} />
-                        </div>
-                      </FormControl>
+                        </FormControl>
+                      </div>
                       <FormMessage />
                     </FormItem>
                   )}
@@ -97,9 +97,9 @@ export function Login() {
                   render={({ field }) => (
                     <FormItem>
                       <FormLabel>Password</FormLabel>
-                      <FormControl>
-                        <div className="relative">
-                          <Lock className="pointer-events-none absolute left-3 top-3 h-4 w-4 text-muted-foreground" />
+                      <div className="relative">
+                        <Lock className="pointer-events-none absolute left-3 top-3 h-4 w-4 text-muted-foreground" />
+                        <FormControl>
                           <Input
                             className="pl-9 pr-10"
                             type={showPassword ? "text" : "password"}
@@ -107,16 +107,16 @@ export function Login() {
                             placeholder="••••••••"
                             {...field}
                           />
-                          <button
-                            type="button"
-                            onClick={() => setShowPassword((value) => !value)}
-                            aria-label={showPassword ? "Hide password" : "Show password"}
-                            className="absolute right-2 top-2 grid h-6 w-6 place-items-center rounded text-muted-foreground hover:bg-muted hover:text-foreground"
-                          >
-                            {showPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
-                          </button>
-                        </div>
-                      </FormControl>
+                        </FormControl>
+                        <button
+                          type="button"
+                          onClick={() => setShowPassword((value) => !value)}
+                          aria-label={showPassword ? "Hide password" : "Show password"}
+                          className="absolute right-2 top-2 grid h-6 w-6 place-items-center rounded text-muted-foreground hover:bg-muted hover:text-foreground"
+                        >
+                          {showPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                        </button>
+                      </div>
                       <FormMessage />
                     </FormItem>
                   )}

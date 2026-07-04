@@ -1,3 +1,4 @@
+import path from "node:path";
 import compression from "compression";
 import cookieParser from "cookie-parser";
 import cors from "cors";
@@ -21,7 +22,7 @@ import { ticketRouter } from "./controllers/ticket.controller.js";
 import { ticketTypeRouter } from "./controllers/ticket-type.controller.js";
 import { timesheetRouter } from "./controllers/timesheet.controller.js";
 import { userRouter } from "./controllers/user.controller.js";
-import { errorHandler, notFound } from "./middleware/error.js";
+import { AppError, errorHandler, notFound } from "./middleware/error.js";
 
 export const app = express();
 
@@ -50,7 +51,11 @@ app.use(
       if (!origin) return callback(null, true);
       if (allowedOrigins.includes(origin)) return callback(null, true);
       if (isDev && PRIVATE_LAN_RE.test(origin)) return callback(null, true);
-      callback(new Error(`Origin ${origin} not allowed by CORS`));
+      // A plain Error here falls through errorHandler.ts's generic 500 branch (logged as a
+      // server error) even though this is an expected, correctly-enforced rejection, not a
+      // bug — AppError gives disallowed-origin attempts their own clean 403 instead of noise
+      // in the error log that could mask real 500s.
+      callback(new AppError(403, `Origin ${origin} not allowed by CORS`));
     },
     credentials: true
   })
@@ -62,11 +67,34 @@ app.use("/api/auth/login", authLimiter);
 app.use("/api/auth/forgot-password", authLimiter);
 app.use("/api/auth/reset-password", authLimiter);
 
-app.use(rateLimit({ windowMs: 60_000, limit: 120, standardHeaders: true }));
+// 120/min (2 req/s) proved too tight for real usage: a single page load fans out several
+// React Query fetches (projects, tickets, labels, notifications, ...), so a normal admin
+// with a few tabs open — or this app's own Playwright suite — can trip it on legitimate
+// traffic. 300/min keeps abuse protection without false-positiving on real sessions.
+app.use(rateLimit({ windowMs: 60_000, limit: 300, standardHeaders: true }));
 app.use(compression());
 app.use(cookieParser());
 app.use(express.json({ limit: "2mb" }));
-app.use("/uploads", express.static(env.UPLOAD_DIR, { maxAge: "1d", etag: true }));
+// Avatars are re-encoded through sharp on upload (see middleware/upload.ts) and are always
+// real images, so they stay inline-renderable for <img> tags. Registered before the general
+// /uploads handler below so this more specific prefix wins.
+app.use("/uploads/avatars", express.static(path.join(env.UPLOAD_DIR, "avatars"), { maxAge: "1d", etag: true }));
+
+// Ticket/timesheet attachments are user-uploaded and, even after the extension allow-list in
+// upload.ts, are forced to download (Content-Disposition: attachment) rather than render
+// inline — defense-in-depth so an allowed-but-unexpected file type can never execute as a
+// script in the API's origin just by someone opening its /uploads URL directly in a browser.
+app.use(
+  "/uploads",
+  express.static(env.UPLOAD_DIR, {
+    maxAge: "1d",
+    etag: true,
+    setHeaders: (res) => {
+      res.setHeader("Content-Disposition", "attachment");
+      res.setHeader("X-Content-Type-Options", "nosniff");
+    }
+  })
+);
 app.use(morgan("tiny"));
 
 app.get("/health", (_req, res) => res.json({ ok: true }));

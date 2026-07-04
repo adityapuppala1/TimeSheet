@@ -1,3 +1,12 @@
+/**
+ * Auth routes. WHY the refresh token lives in an httpOnly cookie rather than the response
+ * body (the pre-hardening design): a token any JS on the page can read (localStorage, or a
+ * body a client chooses to persist) is a token any XSS payload can steal too. An httpOnly
+ * cookie is invisible to page JS entirely — the browser attaches it automatically on
+ * requests to `/api/auth/*` (see the cookie's `path`), and that's the only way it moves.
+ * The access token is still handed back in the response body (short-lived, 15 min by
+ * default) for the frontend to hold in memory and send as `Authorization: Bearer <token>`.
+ */
 import fs from "node:fs";
 import path from "node:path";
 import { Router } from "express";
@@ -9,7 +18,7 @@ import { AppError } from "../middleware/error.js";
 import { avatarUpload } from "../middleware/upload.js";
 import { validate } from "../middleware/validate.js";
 import { audit } from "../services/audit.service.js";
-import { buildProfilePayload, changePassword, login, refresh } from "../services/auth.service.js";
+import { buildProfilePayload, changePassword, login, refresh, requestPasswordReset, resetPassword } from "../services/auth.service.js";
 import { dispatchTransactional } from "../services/notify.service.js";
 import { templates } from "../services/mail-templates.js";
 import { processAvatar } from "../utils/image.js";
@@ -17,20 +26,66 @@ import { sanitizeRichText } from "../utils/sanitize.js";
 
 export const authRouter = Router();
 
+const REFRESH_COOKIE = "refreshToken";
+
+function refreshCookieOptions(expiresAt?: Date) {
+  return {
+    httpOnly: true,
+    secure: env.NODE_ENV === "production",
+    sameSite: "lax" as const,
+    path: "/api/auth",
+    expires: expiresAt
+  };
+}
+
 authRouter.post(
   "/login",
   validate(z.object({ body: z.object({ email: z.string().email(), password: z.string().min(8), rememberMe: z.boolean().optional() }) })),
-  async (req, res) => res.json(await login(req.body.email, req.body.password, req.body.rememberMe, req.headers["user-agent"], req.ip))
+  async (req, res) => {
+    const result = await login(req.body.email, req.body.password, req.body.rememberMe, req.headers["user-agent"], req.ip);
+    res.cookie(REFRESH_COOKIE, result.refreshToken, refreshCookieOptions(result.refreshTokenExpiresAt));
+    res.json({ accessToken: result.accessToken, user: result.user });
+  }
 );
 
-authRouter.post(
-  "/refresh",
-  validate(z.object({ body: z.object({ refreshToken: z.string().min(10) }) })),
-  async (req, res) => res.json(await refresh(req.body.refreshToken))
-);
+authRouter.post("/refresh", async (req, res) => {
+  const token = req.cookies?.[REFRESH_COOKIE];
+  const result = await refresh(token);
+  res.cookie(REFRESH_COOKIE, result.refreshToken, refreshCookieOptions(result.refreshTokenExpiresAt));
+  res.json({ accessToken: result.accessToken });
+});
 
 authRouter.post("/logout", requireAuth, async (req, res) => {
+  if (req.sessionId) {
+    await prisma.session.update({ where: { id: req.sessionId }, data: { revokedAt: new Date() } }).catch(() => undefined);
+  } else {
+    // Access token predates the sid claim — fall back to the safest option, revoke everything.
+    await prisma.session.updateMany({ where: { userId: req.user!.id, revokedAt: null }, data: { revokedAt: new Date() } });
+  }
+  res.clearCookie(REFRESH_COOKIE, { path: "/api/auth" });
+  res.status(204).send();
+});
+
+/** "Log out everywhere" — distinct from /logout, which only ends the calling device's session. */
+authRouter.post("/logout-all", requireAuth, async (req, res) => {
   await prisma.session.updateMany({ where: { userId: req.user!.id, revokedAt: null }, data: { revokedAt: new Date() } });
+  res.clearCookie(REFRESH_COOKIE, { path: "/api/auth" });
+  res.status(204).send();
+});
+
+authRouter.get("/sessions", requireAuth, async (req, res) => {
+  const sessions = await prisma.session.findMany({
+    where: { userId: req.user!.id, revokedAt: null, expiresAt: { gt: new Date() } },
+    orderBy: { createdAt: "desc" },
+    select: { id: true, userAgent: true, ipAddress: true, createdAt: true, expiresAt: true }
+  });
+  res.json(sessions.map((s) => ({ ...s, current: s.id === req.sessionId })));
+});
+
+authRouter.delete("/sessions/:id", requireAuth, async (req, res) => {
+  const session = await prisma.session.findFirst({ where: { id: String(req.params.id), userId: req.user!.id } });
+  if (!session) throw new AppError(404, "Session not found");
+  await prisma.session.update({ where: { id: session.id }, data: { revokedAt: new Date() } });
   res.status(204).send();
 });
 
@@ -38,23 +93,33 @@ authRouter.get("/me", requireAuth, async (req, res) => {
   res.json(await buildProfilePayload(req.user!.id));
 });
 
-authRouter.post("/forgot-password", async (req, res) => {
-  const resetUrl = `${env.APP_BASE_URL.replace(/\/$/, "")}/reset-password`;
-  // We do not look up the user — the 202 response is identical for known and
-  // unknown emails to avoid an enumeration oracle.
-  await dispatchTransactional({
-    to: typeof req.body?.email === "string" ? req.body.email : "",
-    templateKey: "reset",
-    vars: { resetUrl, appUrl: env.APP_BASE_URL },
-    fallback: {
-      subject: "Reset your Timesheet Portal password",
-      html: templates.reset(resetUrl)
+authRouter.post(
+  "/forgot-password",
+  validate(z.object({ body: z.object({ email: z.string().email() }) })),
+  async (req, res) => {
+    const result = await requestPasswordReset(req.body.email);
+    // Only look up / email a real match, but the response is identical either way —
+    // otherwise the response itself becomes an account-enumeration oracle.
+    if (result) {
+      await dispatchTransactional({
+        to: result.user.email,
+        templateKey: "reset",
+        vars: { resetUrl: result.resetUrl, appUrl: env.APP_BASE_URL },
+        fallback: { subject: "Reset your Timesheet Portal password", html: templates.reset(result.resetUrl) }
+      });
     }
-  });
-  res.status(202).json({ message: "If the account exists, reset instructions were sent." });
-});
+    res.status(202).json({ message: "If the account exists, reset instructions were sent." });
+  }
+);
 
-authRouter.post("/reset-password", async (_req, res) => res.json({ message: "Password reset token accepted in production implementation." }));
+authRouter.post(
+  "/reset-password",
+  validate(z.object({ body: z.object({ token: z.string().min(10), password: z.string().min(8) }) })),
+  async (req, res) => {
+    await resetPassword(req.body.token, req.body.password);
+    res.status(204).send();
+  }
+);
 
 authRouter.post(
   "/change-password",
@@ -68,7 +133,7 @@ authRouter.post(
     })
   ),
   async (req, res) => {
-    await changePassword(req.user!.id, req.body.currentPassword, req.body.nextPassword);
+    await changePassword(req.user!.id, req.body.currentPassword, req.body.nextPassword, req.sessionId);
     res.status(204).send();
   }
 );

@@ -19,6 +19,7 @@ import { permissions } from "@timesheet/shared";
 import { cn } from "../lib/utils";
 import { useAuthStore } from "../store/auth";
 import { Avatar, AvatarFallback, AvatarImage } from "./ui/avatar";
+import { Sheet, SheetContent, SheetTitle } from "./ui/sheet";
 import { fileUrl } from "../services/api";
 
 interface NavItem {
@@ -63,6 +64,49 @@ function isVisible(item: NavItem, user?: { role: string; permissions: string[] }
   return true;
 }
 
+/** Shared between the desktop sidebar and the mobile drawer so the two never drift apart. */
+function NavList({ items, onNavigate }: { items: NavItem[]; onNavigate?: () => void }) {
+  return (
+    <nav className="grid gap-0.5">
+      {items.map((item) => (
+        <NavLink
+          key={item.to}
+          to={item.to}
+          end={item.end ?? false}
+          onClick={onNavigate}
+          className={({ isActive }) =>
+            cn(
+              "group flex items-center gap-3 rounded-md px-3 py-2.5 text-sm font-medium text-muted-foreground transition hover:bg-muted hover:text-foreground",
+              isActive && "bg-primary/10 text-primary hover:bg-primary/15"
+            )
+          }
+        >
+          {({ isActive }) => (
+            <>
+              <span className={cn("grid h-7 w-7 place-items-center rounded-md text-muted-foreground transition", isActive && "bg-primary/15 text-primary")}>
+                <item.icon className="h-4 w-4" />
+              </span>
+              {item.label}
+            </>
+          )}
+        </NavLink>
+      ))}
+    </nav>
+  );
+}
+
+function BrandMark() {
+  return (
+    <div className="mb-8 flex items-center gap-3">
+      <div className="grid h-10 w-10 place-items-center rounded-lg bg-primary text-lg font-black text-primary-foreground shadow-glow">T</div>
+      <div>
+        <p className="text-base font-bold tracking-tight">TimeSphere</p>
+        <p className="text-xs text-muted-foreground">Enterprise Timesheets</p>
+      </div>
+    </div>
+  );
+}
+
 export function Sidebar() {
   const user = useAuthStore((s) => s.user);
   const visible = nav.filter((item) => isVisible(item, user));
@@ -70,39 +114,8 @@ export function Sidebar() {
 
   return (
     <aside className="hidden w-72 shrink-0 border-r border-border bg-card/60 p-4 backdrop-blur-xl lg:flex lg:flex-col">
-      <div className="mb-8 flex items-center gap-3">
-        <div className="grid h-10 w-10 place-items-center rounded-lg bg-primary text-lg font-black text-primary-foreground shadow-glow">T</div>
-        <div>
-          <p className="text-base font-bold tracking-tight">TimeSphere</p>
-          <p className="text-xs text-muted-foreground">Enterprise Timesheets</p>
-        </div>
-      </div>
-
-      <nav className="grid gap-0.5">
-        {visible.map((item) => (
-          <NavLink
-            key={item.to}
-            to={item.to}
-            end={item.end ?? false}
-            className={({ isActive }) =>
-              cn(
-                "group flex items-center gap-3 rounded-md px-3 py-2.5 text-sm font-medium text-muted-foreground transition hover:bg-muted hover:text-foreground",
-                isActive && "bg-primary/10 text-primary hover:bg-primary/15"
-              )
-            }
-          >
-            {({ isActive }) => (
-              <>
-                <span className={cn("grid h-7 w-7 place-items-center rounded-md text-muted-foreground transition", isActive && "bg-primary/15 text-primary")}>
-                  <item.icon className="h-4 w-4" />
-                </span>
-                {item.label}
-              </>
-            )}
-          </NavLink>
-        ))}
-      </nav>
-
+      <BrandMark />
+      <NavList items={visible} />
       <div className="mt-auto rounded-lg border border-border bg-background p-3">
         <div className="flex items-center gap-3">
           <Avatar>
@@ -116,6 +129,27 @@ export function Sidebar() {
         </div>
       </div>
     </aside>
+  );
+}
+
+/**
+ * Off-canvas drawer nav for <lg screens — the desktop sidebar above is `hidden` below
+ * that breakpoint, and the bottom `MobileNav` tab bar only surfaces 5 of the full item
+ * list, so this is the only way to reach Users/Projects/Reports/Insights/Audit Log/etc.
+ * on a phone or tablet. Triggered by the hamburger button in Topbar.tsx.
+ */
+export function MobileDrawerNav({ open, onOpenChange }: { open: boolean; onOpenChange: (open: boolean) => void }) {
+  const user = useAuthStore((s) => s.user);
+  const visible = nav.filter((item) => isVisible(item, user));
+
+  return (
+    <Sheet open={open} onOpenChange={onOpenChange}>
+      <SheetContent side="left" className="flex w-72 max-w-[85vw] flex-col overflow-y-auto">
+        <SheetTitle className="sr-only">Navigation menu</SheetTitle>
+        <BrandMark />
+        <NavList items={visible} onNavigate={() => onOpenChange(false)} />
+      </SheetContent>
+    </Sheet>
   );
 }
 

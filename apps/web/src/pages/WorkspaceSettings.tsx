@@ -1,6 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   aiModels,
+  aiProviderPresets,
   emailMatchTypes,
   notificationPreferenceKeys,
   type EmailMatchType,
@@ -17,6 +18,7 @@ import {
   Clock,
   Hourglass,
   Inbox,
+  KeyRound,
   Loader2,
   Mail,
   MailCheck,
@@ -667,11 +669,14 @@ function AISettingsCard({ readOnly }: { readOnly: boolean }) {
   });
 
   const update = useMutation({
-    mutationFn: (payload: Partial<GlobalAISettings>) => settingsApi.updateAI(payload),
+    mutationFn: (payload: Partial<GlobalAISettings> & { apiKey?: string }) => settingsApi.updateAI(payload),
     onMutate: async (payload) => {
       await queryClient.cancelQueries({ queryKey: ["settings", "ai"] });
       const previous = queryClient.getQueryData<GlobalAISettings>(["settings", "ai"]);
-      if (previous) queryClient.setQueryData(["settings", "ai"], { ...previous, ...payload });
+      // apiKey is write-only and not part of the cached settings shape — don't spread it into
+      // the optimistic cache update, or GlobalAISettings would gain a field it never actually has.
+      const { apiKey: _apiKey, ...optimistic } = payload;
+      if (previous) queryClient.setQueryData(["settings", "ai"], { ...previous, ...optimistic });
       return { previous };
     },
     onError: (err: any, _payload, context) => {
@@ -685,6 +690,24 @@ function AISettingsCard({ readOnly }: { readOnly: boolean }) {
   useEffect(() => {
     if (settings.data) setBudgetDraft(settings.data.monthlyBudgetUsd != null ? String(settings.data.monthlyBudgetUsd) : "");
   }, [settings.data?.monthlyBudgetUsd]);
+
+  const [apiKeyDraft, setApiKeyDraft] = useState("");
+
+  // Which preset the current provider/baseUrl combination matches — purely a UI convenience for
+  // the dropdown; only `provider` and `baseUrl` are ever actually persisted.
+  const activePresetKey =
+    settings.data?.provider === "ANTHROPIC"
+      ? "anthropic"
+      : (aiProviderPresets.find((p) => p.baseUrl && p.baseUrl === settings.data?.baseUrl)?.key ?? "custom");
+
+  function selectPreset(key: string) {
+    if (key === "anthropic") {
+      update.mutate({ provider: "ANTHROPIC" });
+      return;
+    }
+    const preset = aiProviderPresets.find((p) => p.key === key);
+    update.mutate({ provider: "OPENAI_COMPATIBLE", baseUrl: preset?.baseUrl || settings.data?.baseUrl || "" });
+  }
 
   const toggles: Array<{ key: keyof GlobalAISettings; label: string; description: string }> = [
     { key: "autoTriageEnabled", label: "Auto-triage suggestions", description: "Suggest type, priority, and module when a ticket is created." },
@@ -718,9 +741,15 @@ function AISettingsCard({ readOnly }: { readOnly: boolean }) {
                   <ShieldAlert />
                   <AlertTitle>No API key configured</AlertTitle>
                   <AlertDescription>
-                    Set <code className="rounded bg-background/60 px-1">ANTHROPIC_API_KEY</code> in{" "}
-                    <code className="rounded bg-background/60 px-1">apps/api/.env</code> and restart the API — toggles below
-                    will save, but nothing will actually run until then.
+                    {settings.data.provider === "ANTHROPIC" ? (
+                      <>
+                        Set <code className="rounded bg-background/60 px-1">ANTHROPIC_API_KEY</code> in{" "}
+                        <code className="rounded bg-background/60 px-1">apps/api/.env</code>, or save a key below —
+                        toggles will save either way, but nothing will actually run until a key is available.
+                      </>
+                    ) : (
+                      "Save an API key below (or leave it blank for a local provider like Ollama/LM Studio that doesn't need one) — toggles will save, but nothing will actually run until then."
+                    )}
                   </AlertDescription>
                 </Alert>
               )}
@@ -748,16 +777,101 @@ function AISettingsCard({ readOnly }: { readOnly: boolean }) {
                 ))}
               </div>
 
-              <div className="grid gap-4 sm:grid-cols-2">
-                <div className="grid gap-1.5">
-                  <Label>Model</Label>
-                  <Select value={settings.data.model} onValueChange={(v) => update.mutate({ model: v })} disabled={readOnly}>
-                    <SelectTrigger><SelectValue /></SelectTrigger>
-                    <SelectContent>
-                      {aiModels.map((m) => <SelectItem key={m.id} value={m.id}>{m.label}</SelectItem>)}
-                    </SelectContent>
-                  </Select>
+              <div className="grid gap-4 rounded-lg border border-border p-4">
+                <div className="flex items-center gap-2">
+                  <KeyRound className="h-4 w-4 text-primary" />
+                  <p className="text-sm font-semibold">Bring your own key (BYOK)</p>
                 </div>
+                <p className="-mt-2 text-xs text-muted-foreground">
+                  Choose which LLM provider this workspace's AI features call. Every non-Anthropic option here talks to the
+                  same OpenAI-compatible chat API — pick a preset to fill in its base URL, or "Custom endpoint" for anything
+                  else that speaks that protocol (including a self-hosted Ollama or LM Studio).
+                </p>
+                <div className="grid gap-4 sm:grid-cols-2">
+                  <div className="grid gap-1.5">
+                    <Label>Provider</Label>
+                    <Select value={activePresetKey} onValueChange={selectPreset} disabled={readOnly}>
+                      <SelectTrigger><SelectValue /></SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="anthropic">Anthropic</SelectItem>
+                        {aiProviderPresets.map((p) => (
+                          <SelectItem key={p.key} value={p.key}>{p.label}</SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  <div className="grid gap-1.5">
+                    <Label>API key {settings.data.apiKeySet && <span className="font-normal text-muted-foreground">(saved)</span>}</Label>
+                    <div className="flex gap-2">
+                      <Input
+                        type="password"
+                        placeholder={settings.data.apiKeySet ? "•••••••••••••••• (unchanged)" : "Not set"}
+                        value={apiKeyDraft}
+                        disabled={readOnly}
+                        onChange={(e) => setApiKeyDraft(e.target.value)}
+                      />
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        disabled={readOnly || !apiKeyDraft}
+                        onClick={() => {
+                          update.mutate({ apiKey: apiKeyDraft });
+                          setApiKeyDraft("");
+                        }}
+                      >
+                        Save
+                      </Button>
+                      {settings.data.apiKeySet && (
+                        <Button
+                          size="sm"
+                          variant="ghost"
+                          disabled={readOnly}
+                          onClick={() => update.mutate({ apiKey: "" })}
+                        >
+                          Clear
+                        </Button>
+                      )}
+                    </div>
+                  </div>
+                </div>
+
+                {settings.data.provider === "OPENAI_COMPATIBLE" && (
+                  <div className="grid gap-4 sm:grid-cols-2">
+                    <div className="grid gap-1.5">
+                      <Label>Base URL</Label>
+                      <Input
+                        value={settings.data.baseUrl ?? ""}
+                        placeholder="https://api.example.com/v1"
+                        disabled={readOnly}
+                        onChange={(e) => update.mutate({ baseUrl: e.target.value })}
+                      />
+                    </div>
+                    <div className="grid gap-1.5">
+                      <Label>Model</Label>
+                      <Input
+                        value={settings.data.model}
+                        placeholder="e.g. llama3.1, mixtral-8x7b, gpt-4o-mini"
+                        disabled={readOnly}
+                        onChange={(e) => update.mutate({ model: e.target.value })}
+                      />
+                      <p className="text-xs text-muted-foreground">Exact model name as this provider expects it.</p>
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              <div className="grid gap-4 sm:grid-cols-2">
+                {settings.data.provider === "ANTHROPIC" && (
+                  <div className="grid gap-1.5">
+                    <Label>Model</Label>
+                    <Select value={settings.data.model} onValueChange={(v) => update.mutate({ model: v })} disabled={readOnly}>
+                      <SelectTrigger><SelectValue /></SelectTrigger>
+                      <SelectContent>
+                        {aiModels.map((m) => <SelectItem key={m.id} value={m.id}>{m.label}</SelectItem>)}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                )}
                 <div className="grid gap-1.5">
                   <Label>Confidence threshold</Label>
                   <Input

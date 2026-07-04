@@ -4,9 +4,15 @@ import multer from "multer";
 import { env } from "../config/env.js";
 import { AppError } from "./error.js";
 
+/**
+ * `.html`, `.js`, and `.svg` are deliberately excluded even though they're common source-code
+ * extensions: all three can carry an executable `<script>` payload, and a ticket/timesheet
+ * attachment has no legitimate need to be one of them. `/uploads` also serves everything with
+ * `Content-Disposition: attachment` (see app.ts) as defense-in-depth on top of this allow-list.
+ */
 export const allowedAttachmentExtensions = new Set([
-  ".pdf", ".xls", ".xlsx", ".csv", ".jpg", ".jpeg", ".gif", ".png", ".svg", ".zip", ".txt",
-  ".py", ".html", ".css", ".js", ".jsx", ".ts", ".tsx", ".json", ".xml", ".yaml", ".yml",
+  ".pdf", ".xls", ".xlsx", ".csv", ".jpg", ".jpeg", ".gif", ".png", ".zip", ".txt",
+  ".py", ".css", ".jsx", ".ts", ".tsx", ".json", ".xml", ".yaml", ".yml",
   ".java", ".cs", ".cpp", ".c", ".h", ".php", ".rb", ".go", ".rs", ".sql", ".md", ".doc", ".docx"
 ]);
 

@@ -12,11 +12,16 @@
     "lint": "npm run lint -w apps/api && npm run lint -w apps/web",
     "db:generate": "npm run prisma:generate -w apps/api",
     "db:migrate": "npm run prisma:migrate -w apps/api",
-    "seed": "npm run seed -w apps/api"
+    "seed": "npm run seed -w apps/api",
+    "test:e2e": "playwright test",
+    "test:e2e:report": "playwright show-report"
   },
   "devDependencies": {
+    "@playwright/test": "^1.61.1",
     "concurrently": "^9.1.2",
     "typescript": "^5.8.3"
+  },
+  "overrides": {
+    "form-data": "^4.0.6"
   }
 }
-

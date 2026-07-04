@@ -1,7 +1,6 @@
 import type { NextFunction, Request, Response } from "express";
-import jwt from "jsonwebtoken";
-import { env } from "../config/env.js";
 import { prisma } from "../config/prisma.js";
+import { verifyAccessToken } from "../utils/security.js";
 import { AppError } from "./error.js";
 
 export interface RequestUser {
@@ -16,6 +15,8 @@ declare global {
   namespace Express {
     interface Request {
       user?: RequestUser;
+      /** The access token's session id, when present (see utils/security.ts#AccessTokenPayload). */
+      sessionId?: string;
     }
   }
 }
@@ -27,9 +28,9 @@ export async function requireAuth(req: Request, _res: Response, next: NextFuncti
   const token = header.startsWith("Bearer ") ? header.slice(7).trim() : "";
   if (!token) throw new AppError(401, "Authentication required");
 
-  let payload: { sub?: unknown };
+  let payload: { sub?: unknown; sid?: unknown };
   try {
-    payload = jwt.verify(token, env.JWT_ACCESS_SECRET) as { sub?: unknown };
+    payload = verifyAccessToken(token);
   } catch {
     throw new AppError(401, "Session expired");
   }
@@ -38,6 +39,16 @@ export async function requireAuth(req: Request, _res: Response, next: NextFuncti
   // with `sub: "garbage"` triggers a Prisma error → uncaught 500 leak.
   if (typeof payload.sub !== "string" || !UUID_RE.test(payload.sub)) {
     throw new AppError(401, "Invalid session");
+  }
+
+  // Access tokens minted after the session-management hardening pass carry a `sid` claim,
+  // so a single-device logout (which revokes that one Session row) takes effect immediately
+  // instead of waiting up to ACCESS_TOKEN_TTL for the token to expire on its own. Tokens
+  // issued before this change simply have no `sid` and skip this extra check.
+  if (typeof payload.sid === "string") {
+    const session = await prisma.session.findUnique({ where: { id: payload.sid }, select: { revokedAt: true } });
+    if (!session || session.revokedAt) throw new AppError(401, "Session revoked");
+    req.sessionId = payload.sid;
   }
 
   const user = await prisma.user.findUnique({

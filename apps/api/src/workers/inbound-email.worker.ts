@@ -13,6 +13,7 @@ import cron from "node-cron";
 import { prisma } from "../config/prisma.js";
 import { getGlobalAISettings } from "../services/ai.service.js";
 import { getGlobalEmailIntakeSettings, processInboundEmail, type ParsedInboundEmail } from "../services/email-intake.service.js";
+import { decryptSecret } from "../utils/encryption.js";
 
 let started = false;
 let polling = false;
@@ -60,11 +61,24 @@ async function pollOnce() {
     : new Date(0);
   if (new Date() < dueAt) return;
 
+  let imapPassword: string;
+  try {
+    imapPassword = decryptSecret(settings.imapPassword);
+  } catch {
+    // Only reachable if a password was stored before encryption-at-rest was added —
+    // re-saving it from the admin settings UI re-encrypts it correctly.
+    await prisma.emailIntakeSettings.update({
+      where: { id: "global" },
+      data: { lastPolledAt: new Date(), lastPollError: "Stored IMAP password is unreadable — re-enter it in Workspace Settings." }
+    });
+    return;
+  }
+
   const client = new ImapFlow({
     host: settings.imapHost,
     port: settings.imapPort,
     secure: settings.imapSecure,
-    auth: { user: settings.imapUser, pass: settings.imapPassword },
+    auth: { user: settings.imapUser, pass: imapPassword },
     logger: false
   });
 

@@ -80,7 +80,7 @@ export function AuditLog() {
           </Button>
         </CardHeader>
         <CardContent>
-          <div className="grid gap-4 md:grid-cols-4">
+          <div className="grid gap-4 sm:grid-cols-2 md:grid-cols-4">
             <div className="grid gap-1.5">
               <Label>Action</Label>
               <Select value={action} onValueChange={setAction}>

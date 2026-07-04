@@ -82,14 +82,14 @@ export function AIActivityLog() {
       <Card>
         <CardContent className="flex flex-wrap items-center gap-3 pt-6">
           <Select value={projectId} onValueChange={setProjectId}>
-            <SelectTrigger className="w-[180px]"><SelectValue placeholder="All projects" /></SelectTrigger>
+            <SelectTrigger className="w-full sm:w-[180px]"><SelectValue placeholder="All projects" /></SelectTrigger>
             <SelectContent>
               <SelectItem value="all">All projects</SelectItem>
               {(projects.data ?? []).map((p: any) => <SelectItem key={p.id} value={p.id}>{p.name}</SelectItem>)}
             </SelectContent>
           </Select>
           <Select value={source} onValueChange={setSource}>
-            <SelectTrigger className="w-[160px]"><SelectValue placeholder="All sources" /></SelectTrigger>
+            <SelectTrigger className="w-full sm:w-[160px]"><SelectValue placeholder="All sources" /></SelectTrigger>
             <SelectContent>
               <SelectItem value="all">All sources</SelectItem>
               <SelectItem value="EMAIL">Email intake</SelectItem>

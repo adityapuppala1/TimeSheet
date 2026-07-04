@@ -127,7 +127,7 @@ export function Dashboard() {
       {/* Admin / manager: workforce daily logging snapshot */}
       {isAdmin && <WorkforceSnapshot data={admin.data} loading={admin.isLoading} />}
 
-      <div className="grid gap-4 md:grid-cols-4">
+      <div className="grid gap-4 sm:grid-cols-2 md:grid-cols-4">
         {stats.map((stat, index) => (
           <motion.div
             key={stat.label}

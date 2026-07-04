@@ -45,10 +45,11 @@ export function ForgotPassword() {
               }}
             >
               <div className="grid gap-1.5">
-                <Label>Email</Label>
+                <Label htmlFor="forgot-email">Email</Label>
                 <div className="relative">
                   <Mail className="pointer-events-none absolute left-3 top-3 h-4 w-4 text-muted-foreground" />
                   <Input
+                    id="forgot-email"
                     className="pl-9"
                     type="email"
                     placeholder="name@company.com"

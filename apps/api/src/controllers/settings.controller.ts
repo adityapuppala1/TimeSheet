@@ -19,6 +19,7 @@ import { audit } from "../services/audit.service.js";
 import { getGlobalNotificationSettings } from "../services/notify.service.js";
 import { getGlobalAISettings, getMonthlyAIUsageSummary } from "../services/ai.service.js";
 import { getGlobalTicketSettings } from "../services/ticket.service.js";
+import { encryptSecret } from "../utils/encryption.js";
 
 export const settingsRouter = Router();
 settingsRouter.use(requireAuth);
@@ -108,9 +109,17 @@ settingsRouter.patch("/ticketing", requireSuperAdmin, validate(ticketingSchema),
   res.json(updated);
 });
 
+/**
+ * BYOK: `apiKey` is write-only — a saved key is never returned, only `apiKeySet: boolean`
+ * (same masking convention as EmailIntakeSettings.imapPassword). `apiKeyConfigured` stays for
+ * backward compatibility (true when either a stored key OR the env var fallback is usable for
+ * the current provider) since the frontend's existing "is AI actually usable" check reads it.
+ */
 settingsRouter.get("/ai", async (_req, res) => {
-  const settings = await getGlobalAISettings();
-  res.json({ ...settings, apiKeyConfigured: Boolean(env.ANTHROPIC_API_KEY) });
+  const { apiKey, ...settings } = await getGlobalAISettings();
+  const apiKeySet = Boolean(apiKey);
+  const apiKeyConfigured = settings.provider === "ANTHROPIC" ? apiKeySet || Boolean(env.ANTHROPIC_API_KEY) : apiKeySet;
+  res.json({ ...settings, apiKeySet, apiKeyConfigured });
 });
 
 settingsRouter.get("/ai/usage-summary", async (_req, res) => {
@@ -131,18 +140,28 @@ const aiSettingsSchema = z.object({
       weeklyDigestEnabled: z.boolean().optional(),
       model: z.string().min(1).max(80).optional(),
       confidenceThreshold: z.coerce.number().min(0).max(1).optional(),
-      monthlyBudgetUsd: z.coerce.number().min(0).optional().nullable()
+      monthlyBudgetUsd: z.coerce.number().min(0).optional().nullable(),
+      provider: z.enum(["ANTHROPIC", "OPENAI_COMPATIBLE"]).optional(),
+      baseUrl: z.string().max(300).optional().nullable(),
+      // Empty string means "clear the stored key" (switch back to the env var fallback); a
+      // non-empty string is encrypted before it ever touches the database. Omitting the field
+      // entirely leaves whatever key is already stored untouched.
+      apiKey: z.string().max(2000).optional()
     })
     .strict()
 });
 
 settingsRouter.patch("/ai", requireSuperAdmin, validate(aiSettingsSchema), async (req, res) => {
-  const data: Record<string, unknown> = { ...req.body, updatedById: req.user!.id };
+  const { apiKey, ...rest } = req.body as Record<string, unknown> & { apiKey?: string };
+  const data: Record<string, unknown> = { ...rest, updatedById: req.user!.id };
+  if (typeof apiKey === "string") data.apiKey = apiKey.length > 0 ? encryptSecret(apiKey) : null;
+
   const updated = await prisma.globalAISettings.upsert({
     where: { id: "global" },
     update: data,
     create: { id: "global", ...data }
   });
-  await audit(req.user!.id, "settings.ai_updated", "GlobalAISettings", "global", req.body);
-  res.json(updated);
+  await audit(req.user!.id, "settings.ai_updated", "GlobalAISettings", "global", { ...req.body, apiKey: undefined });
+  const { apiKey: _omit, ...safeUpdated } = updated;
+  res.json({ ...safeUpdated, apiKeySet: Boolean(updated.apiKey) });
 });

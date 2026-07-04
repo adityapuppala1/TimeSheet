@@ -1,5 +1,5 @@
-import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { Camera, ImageOff, KeyRound, Loader2, Save, ShieldCheck, Trash2, UserRound } from "lucide-react";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { Camera, ImageOff, KeyRound, Laptop, Loader2, LogOut, Save, ShieldCheck, Trash2, UserRound } from "lucide-react";
 import { useMemo, useRef, useState } from "react";
 import { Alert, AlertDescription, AlertTitle } from "../components/ui/alert";
 import {
@@ -97,12 +97,32 @@ export function Profile() {
       setCurrentPassword("");
       setNextPassword("");
       setConfirmPassword("");
-      toast.success("Password updated", { description: "All active sessions remain valid." });
+      toast.success("Password updated", { description: "Every other device was signed out for safety." });
+      queryClient.invalidateQueries({ queryKey: ["auth", "sessions"] });
     },
     onError: (err: any) =>
       toast.error("Could not update password", {
         description: err?.response?.data?.message ?? "Check your current password and try again."
       })
+  });
+
+  const sessionsQuery = useQuery({ queryKey: ["auth", "sessions"], queryFn: () => authApi.sessions() });
+
+  const revokeSessionMutation = useMutation({
+    mutationFn: (id: string) => authApi.revokeSession(id),
+    onSuccess: () => {
+      toast.success("Session signed out");
+      queryClient.invalidateQueries({ queryKey: ["auth", "sessions"] });
+    },
+    onError: (err: any) => toast.error("Could not sign out that session", { description: err?.response?.data?.message ?? "Try again." })
+  });
+
+  const logoutAllMutation = useMutation({
+    mutationFn: () => authApi.logoutAll(),
+    onSuccess: () => {
+      globalThis.location.href = "/login";
+    },
+    onError: (err: any) => toast.error("Could not sign out everywhere", { description: err?.response?.data?.message ?? "Try again." })
   });
 
   const passwordMismatch = nextPassword.length > 0 && nextPassword !== confirmPassword;
@@ -345,6 +365,72 @@ export function Profile() {
           </CardContent>
         </Card>
       </div>
+
+      <Card>
+        <CardHeader>
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div className="flex items-center gap-3">
+              <div className="grid h-10 w-10 place-items-center rounded-lg bg-primary/10 text-primary">
+                <Laptop className="h-5 w-5" />
+              </div>
+              <div>
+                <CardTitle>Active sessions</CardTitle>
+                <CardDescription>Every device currently signed in to your account.</CardDescription>
+              </div>
+            </div>
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={() => logoutAllMutation.mutate()}
+              disabled={logoutAllMutation.isPending}
+            >
+              <LogOut className="h-4 w-4" />Sign out everywhere
+            </Button>
+          </div>
+        </CardHeader>
+        <CardContent>
+          {sessionsQuery.isLoading ? (
+            <p className="text-sm text-muted-foreground">Loading sessions...</p>
+          ) : sessionsQuery.data && sessionsQuery.data.length > 0 ? (
+            <div className="grid gap-2">
+              {sessionsQuery.data.map((session) => (
+                <div
+                  key={session.id}
+                  className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-border px-3 py-2"
+                >
+                  <div className="min-w-0">
+                    <p className="truncate text-sm font-medium text-foreground">
+                      {session.userAgent ?? "Unknown device"}
+                      {session.current && (
+                        <span className="ml-2 rounded-full bg-primary/10 px-2 py-0.5 text-xs font-semibold text-primary">
+                          This device
+                        </span>
+                      )}
+                    </p>
+                    <p className="truncate text-xs text-muted-foreground">
+                      {session.ipAddress ?? "Unknown IP"} · signed in {new Date(session.createdAt).toLocaleString()}
+                    </p>
+                  </div>
+                  {!session.current && (
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="sm"
+                      onClick={() => revokeSessionMutation.mutate(session.id)}
+                      disabled={revokeSessionMutation.isPending}
+                    >
+                      Sign out
+                    </Button>
+                  )}
+                </div>
+              ))}
+            </div>
+          ) : (
+            <p className="text-sm text-muted-foreground">No active sessions found.</p>
+          )}
+        </CardContent>
+      </Card>
 
       <AlertDialog open={confirmRemoveAvatar} onOpenChange={setConfirmRemoveAvatar}>
         <AlertDialogContent>

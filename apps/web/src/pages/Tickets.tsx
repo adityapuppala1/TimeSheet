@@ -209,28 +209,28 @@ export function Tickets() {
       <Card>
         <CardContent className="flex flex-wrap items-center gap-3 pt-6">
           <Select value={filters.projectId} onValueChange={(v) => setFilters((f) => ({ ...f, projectId: v }))}>
-            <SelectTrigger className="w-[180px]"><SelectValue placeholder="All projects" /></SelectTrigger>
+            <SelectTrigger className="w-full sm:w-[180px]"><SelectValue placeholder="All projects" /></SelectTrigger>
             <SelectContent>
               <SelectItem value="all">All projects</SelectItem>
               {projects.data?.map((p: any) => <SelectItem key={p.id} value={p.id}>{p.name}</SelectItem>)}
             </SelectContent>
           </Select>
           <Select value={filters.status} onValueChange={(v) => setFilters((f) => ({ ...f, status: v }))}>
-            <SelectTrigger className="w-[160px]"><SelectValue placeholder="All statuses" /></SelectTrigger>
+            <SelectTrigger className="w-full sm:w-[160px]"><SelectValue placeholder="All statuses" /></SelectTrigger>
             <SelectContent>
               <SelectItem value="all">All statuses</SelectItem>
               {ticketStatuses.map((s) => <SelectItem key={s} value={s}>{s.replace("_", " ")}</SelectItem>)}
             </SelectContent>
           </Select>
           <Select value={filters.priority} onValueChange={(v) => setFilters((f) => ({ ...f, priority: v }))}>
-            <SelectTrigger className="w-[150px]"><SelectValue placeholder="All priorities" /></SelectTrigger>
+            <SelectTrigger className="w-full sm:w-[150px]"><SelectValue placeholder="All priorities" /></SelectTrigger>
             <SelectContent>
               <SelectItem value="all">All priorities</SelectItem>
               {ticketPriorities.map((p) => <SelectItem key={p} value={p}>{p}</SelectItem>)}
             </SelectContent>
           </Select>
           <Select value={filters.labelId} onValueChange={(v) => setFilters((f) => ({ ...f, labelId: v }))}>
-            <SelectTrigger className="w-[150px]"><SelectValue placeholder="All labels" /></SelectTrigger>
+            <SelectTrigger className="w-full sm:w-[150px]"><SelectValue placeholder="All labels" /></SelectTrigger>
             <SelectContent>
               <SelectItem value="all">All labels</SelectItem>
               {(labels.data ?? []).map((l) => (

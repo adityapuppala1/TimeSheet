@@ -153,7 +153,7 @@ export function Timesheet() {
               className="grid gap-6"
               onSubmit={form.handleSubmit((values) => mutation.mutate({ values, draft: false }))}
             >
-              <section className="grid gap-4 md:grid-cols-4">
+              <section className="grid gap-4 sm:grid-cols-2 md:grid-cols-4">
                 <FormField
                   control={form.control}
                   name="projectId"
@@ -235,7 +235,7 @@ export function Timesheet() {
                 />
               </section>
 
-              <section className="grid gap-4 md:grid-cols-4">
+              <section className="grid gap-4 sm:grid-cols-2 md:grid-cols-4">
                 <FormField
                   control={form.control}
                   name="activityType"

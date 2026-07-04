@@ -75,7 +75,7 @@ export function History() {
         <p className="mt-1 text-sm text-muted-foreground">Filter and review every entry you've logged. Hours roll up live as you adjust filters.</p>
       </div>
 
-      <div className="grid gap-4 md:grid-cols-4">
+      <div className="grid gap-4 sm:grid-cols-2 md:grid-cols-4">
         <Stat label="Entries" value={summary.count} />
         <Stat label="Logged hours" value={summary.hours.toFixed(2)} />
         <Stat label="Approved hours" value={summary.approved.toFixed(2)} tone="success" />

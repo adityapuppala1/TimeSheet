@@ -16,21 +16,69 @@ import { startWeeklyDigestWorker } from "./workers/weekly-digest.worker.js";
  * These prevent obvious misconfigurations from making it into production —
  * e.g. someone deploying with the demo JWT secret strings still set.
  */
+const PRIVATE_LAN_RE =
+  /^https?:\/\/(localhost|127\.0\.0\.1|10\.\d{1,3}\.\d{1,3}\.\d{1,3}|192\.168\.\d{1,3}\.\d{1,3}|172\.(1[6-9]|2\d|3[01])\.\d{1,3}\.\d{1,3})(:\d+)?$/i;
+
+/**
+ * A denylist of exact placeholder strings is brittle — it only catches values nobody
+ * bothered to change at all. This estimates order-0 Shannon entropy (bits/char) instead, so
+ * it also rejects LOW-QUALITY secrets someone typed by hand (repeated characters, a short
+ * alphabet, a memorable phrase) rather than generating with `openssl rand`, regardless of
+ * whether the exact string happens to match a known placeholder.
+ */
+function looksLikeWeakSecret(secret: string): string | null {
+  const commonWords = ["secret", "password", "changeme", "placeholder", "example", "replace-with", "change-before-production"];
+  const lower = secret.toLowerCase();
+  const matchedWord = commonWords.find((word) => lower.includes(word));
+  if (matchedWord) return `contains the common placeholder substring "${matchedWord}"`;
+
+  if (secret.length < 32) return `is only ${secret.length} characters (want 32+)`;
+
+  const uniqueChars = new Set(secret).size;
+  if (uniqueChars < 10) return `only uses ${uniqueChars} distinct characters (looks repetitive)`;
+
+  const frequencies = new Map<string, number>();
+  for (const char of secret) frequencies.set(char, (frequencies.get(char) ?? 0) + 1);
+  const bitsPerChar = [...frequencies.values()].reduce((bits, count) => {
+    const p = count / secret.length;
+    return bits - p * Math.log2(p);
+  }, 0);
+  if (bitsPerChar < 3.5) return `has low character-level entropy (${bitsPerChar.toFixed(1)} bits/char, want 3.5+)`;
+
+  return null;
+}
+
 function assertProductionSafety() {
-  if (env.NODE_ENV !== "production") return;
-  const placeholders = [
-    "replace-with-strong-access-secret",
-    "replace-with-strong-refresh-secret",
-    "dev-access-secret-change-before-production",
-    "dev-refresh-secret-change-before-production"
-  ];
-  if (placeholders.includes(env.JWT_ACCESS_SECRET) || placeholders.includes(env.JWT_REFRESH_SECRET)) {
-    console.error("[boot] FATAL: JWT_ACCESS_SECRET / JWT_REFRESH_SECRET still use placeholder values.");
-    console.error("[boot] Generate strong secrets with: openssl rand -base64 48");
-    process.exit(1);
+  // This warning is intentionally NOT gated on NODE_ENV === "production" — the whole point
+  // is to catch the case where an operator forgot to set it. A real public-facing WEB_ORIGIN
+  // (not localhost/private-LAN) with NODE_ENV left unset or non-"production" silently
+  // disables the CORS private-LAN bypass guard's tightening and this very check, so it's
+  // exactly the situation most worth shouting about.
+  if (env.NODE_ENV !== "production" && !PRIVATE_LAN_RE.test(env.WEB_ORIGIN.split(",")[0]?.trim() ?? "")) {
+    console.warn("=".repeat(70));
+    console.warn(`[boot] WARNING: NODE_ENV="${env.NODE_ENV}" but WEB_ORIGIN ("${env.WEB_ORIGIN}") looks like a real, public domain.`);
+    console.warn("[boot] If this is a real deployment, set NODE_ENV=production so production-only");
+    console.warn("[boot] safety checks (secret strength, cookie Secure flag, CORS strictness) actually run.");
+    console.warn("=".repeat(70));
   }
-  if (env.WEB_ORIGIN.includes("localhost") || env.WEB_ORIGIN.includes("127.0.0.1")) {
-    console.warn("[boot] WARNING: WEB_ORIGIN still references localhost in production mode.");
+
+  if (env.NODE_ENV !== "production") return;
+
+  for (const [name, value] of [
+    ["JWT_ACCESS_SECRET", env.JWT_ACCESS_SECRET],
+    ["JWT_REFRESH_SECRET", env.JWT_REFRESH_SECRET],
+    ["ENCRYPTION_KEY", env.ENCRYPTION_KEY]
+  ] as const) {
+    const weakness = looksLikeWeakSecret(value);
+    if (weakness) {
+      console.error(`[boot] FATAL: ${name} ${weakness}.`);
+      console.error("[boot] Generate a strong one with: openssl rand -hex 32  (or -base64 48 for JWT secrets)");
+      process.exit(1);
+    }
+  }
+
+  if (PRIVATE_LAN_RE.test(env.WEB_ORIGIN.split(",")[0]?.trim() ?? "")) {
+    console.warn("[boot] WARNING: WEB_ORIGIN still references localhost/a private LAN address in production mode.");
   }
 }
 

@@ -141,15 +141,21 @@ model User {
 }
 
 model Session {
-  id          String    @id @default(uuid())
-  userId      String
-  user        User      @relation(fields: [userId], references: [id], onDelete: Cascade)
-  refreshHash String
-  userAgent   String?
-  ipAddress   String?
-  expiresAt   DateTime
-  revokedAt   DateTime?
-  createdAt   DateTime  @default(now())
+  id                 String    @id @default(uuid())
+  userId             String
+  user               User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  refreshHash        String
+  /// The immediately-prior refresh secret's hash, kept valid for a short grace window after
+  /// rotation (see auth.service.ts#refresh) so that two concurrent requests on the same
+  /// still-legitimate session (two tabs, a retried request, a test harness replaying a
+  /// snapshot) don't each look like token theft just because they raced a rotation.
+  previousRefreshHash String?
+  refreshRotatedAt   DateTime?
+  userAgent          String?
+  ipAddress          String?
+  expiresAt          DateTime
+  revokedAt          DateTime?
+  createdAt          DateTime  @default(now())
 
   @@index([userId, expiresAt])
 }
@@ -585,8 +591,26 @@ model GlobalAISettings {
   model                     String   @default("claude-haiku-4-5") @db.VarChar(80)
   confidenceThreshold       Float    @default(0.6)
   monthlyBudgetUsd          Decimal? @db.Decimal(10, 2)
+  /// BYOK: which model family to call. ANTHROPIC uses this row's apiKey (falling back to the
+  /// server's ANTHROPIC_API_KEY env var when unset) against the native Messages API; every
+  /// other supported vendor (OpenAI, Groq, Mistral, DeepSeek, OpenRouter, Gemini, Qwen, Kimi,
+  /// Nvidia NIM, Ollama, LM Studio, or any other custom endpoint) goes through
+  /// OPENAI_COMPATIBLE's generic adapter using this row's baseUrl.
+  provider                  AIProvider @default(ANTHROPIC)
+  /// Only meaningful for OPENAI_COMPATIBLE — e.g. https://api.groq.com/openai/v1 or
+  /// http://localhost:11434/v1 for a local Ollama install.
+  baseUrl                   String?  @db.VarChar(300)
+  /// AES-256-GCM ciphertext (see utils/encryption.ts) — never returned to the client; the API
+  /// exposes only an `apiKeySet: boolean`, same masking convention as
+  /// EmailIntakeSettings.imapPassword.
+  apiKey                    String?  @db.Text
   updatedAt                 DateTime @updatedAt
   updatedById               String?
+}
+
+enum AIProvider {
+  ANTHROPIC
+  OPENAI_COMPATIBLE
 }
 
 /// Append-only log of every AI call, for cost tracking / the monthly budget cap.

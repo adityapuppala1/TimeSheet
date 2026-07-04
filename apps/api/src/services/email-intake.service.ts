@@ -42,6 +42,10 @@ export const EMAIL_INTAKE_SYSTEM_EMAIL = "email-intake@system.local";
 const MAX_CLASSIFIER_IMAGES = 3;
 const IMAGE_MIME_TO_ANTHROPIC = new Set(["image/png", "image/jpeg", "image/gif", "image/webp"]);
 
+/** See classifyTicket's untrustedSource doc — caps how much a single self-reported
+ *  confidence value from email-sourced content can suppress the needsReview gate below. */
+const EMAIL_INTAKE_CONFIDENCE_CEILING = 0.85;
+
 export interface ParsedInboundEmail {
   from: { address: string; name?: string };
   to: string[];
@@ -170,7 +174,8 @@ export async function processInboundEmail(email: ParsedInboundEmail): Promise<Pr
       description: bodyText,
       project,
       typeNames: types.map((t) => t.name),
-      images: imageAttachments.map((a) => ({ mediaType: a.contentType, base64: a.content.toString("base64") }))
+      images: imageAttachments.map((a) => ({ mediaType: a.contentType, base64: a.content.toString("base64") })),
+      untrustedSource: true
     });
   } catch (error) {
     console.error(`[email-intake] classification failed for "${subject}":`, (error as Error).message);
@@ -184,8 +189,15 @@ export async function processInboundEmail(email: ParsedInboundEmail): Promise<Pr
   const type = classification?.type ?? types[0]?.name ?? "BUG";
   const priority = classification?.priority ?? "MEDIUM";
   const moduleId = rule?.defaultModuleId ?? classification?.moduleId ?? null;
+  // The raw self-reported confidence is stored as-is for admin visibility, but the
+  // needsReview GATE uses a capped version — a single free-form number from a model call
+  // whose input included unauthenticated external email content shouldn't, by itself, be
+  // able to fully suppress human review just because a (possibly prompt-injected) response
+  // claimed near-total certainty. A manually-entered ticket's own AI suggestions aren't
+  // capped this way since there's an authenticated user in the loop already.
   const confidence = classification?.confidence ?? null;
-  const needsReview = confidence === null || confidence < aiSettings.confidenceThreshold;
+  const gatingConfidence = confidence === null ? null : Math.min(confidence, EMAIL_INTAKE_CONFIDENCE_CEILING);
+  const needsReview = gatingConfidence === null || gatingConfidence < aiSettings.confidenceThreshold;
 
   const slaSettings = await getGlobalTicketSettings();
   const createdAt = new Date();

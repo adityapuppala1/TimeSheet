@@ -163,6 +163,28 @@ export const aiModels = [
   { id: "claude-opus-4-8", label: "Claude Opus 4.8 — most capable" }
 ] as const;
 
+export const aiProviders = ["ANTHROPIC", "OPENAI_COMPATIBLE"] as const;
+export type AIProvider = (typeof aiProviders)[number];
+
+/** A curated dropdown of well-known OpenAI-compatible endpoints — the admin can still type a
+ *  custom baseUrl for anything not listed (see WorkspaceSettings' AI tab). Zen, OpenCode, and
+ *  OpenGateway are deliberately not presets here: none are a standard hosted-LLM API with a
+ *  stable OpenAI-compatible base URL, so "Custom endpoint" is the honest way to reach them. */
+export const aiProviderPresets: Array<{ key: string; label: string; baseUrl: string; needsKey: boolean }> = [
+  { key: "openai", label: "OpenAI", baseUrl: "https://api.openai.com/v1", needsKey: true },
+  { key: "groq", label: "Groq", baseUrl: "https://api.groq.com/openai/v1", needsKey: true },
+  { key: "mistral", label: "Mistral", baseUrl: "https://api.mistral.ai/v1", needsKey: true },
+  { key: "deepseek", label: "DeepSeek", baseUrl: "https://api.deepseek.com/v1", needsKey: true },
+  { key: "openrouter", label: "OpenRouter", baseUrl: "https://openrouter.ai/api/v1", needsKey: true },
+  { key: "gemini", label: "Gemini", baseUrl: "https://generativelanguage.googleapis.com/v1beta/openai", needsKey: true },
+  { key: "qwen", label: "Qwen (DashScope)", baseUrl: "https://dashscope.aliyuncs.com/compatible-mode/v1", needsKey: true },
+  { key: "kimi", label: "Kimi (Moonshot)", baseUrl: "https://api.moonshot.ai/v1", needsKey: true },
+  { key: "nvidia", label: "Nvidia NIM", baseUrl: "https://integrate.api.nvidia.com/v1", needsKey: true },
+  { key: "ollama", label: "Ollama (local)", baseUrl: "http://localhost:11434/v1", needsKey: false },
+  { key: "lmstudio", label: "LM Studio (local)", baseUrl: "http://localhost:1234/v1", needsKey: false },
+  { key: "custom", label: "Custom endpoint", baseUrl: "", needsKey: true }
+];
+
 /** Master + per-feature AI toggles. `aiEnabled` is the workspace-wide kill switch. */
 export interface GlobalAISettings {
   aiEnabled: boolean;
@@ -179,8 +201,15 @@ export interface GlobalAISettings {
   monthlyBudgetUsd: number | null;
   updatedAt: string;
   updatedById: string | null;
-  /** Read-only. Whether ANTHROPIC_API_KEY is set server-side — toggles do nothing until this is true. */
+  /** BYOK — which model family requests go through. See apps/api/src/services/ai.service.ts#callChat. */
+  provider: AIProvider;
+  /** Only meaningful when provider is OPENAI_COMPATIBLE. */
+  baseUrl: string | null;
+  /** Read-only. Whether a usable key exists — either a saved BYOK key (`apiKeySet`) or, for the
+   *  ANTHROPIC provider only, the server's ANTHROPIC_API_KEY env var. Toggles do nothing until this is true. */
   apiKeyConfigured: boolean;
+  /** Read-only. Whether a BYOK key is saved on this row — the key itself is never returned. */
+  apiKeySet: boolean;
 }
 
 export const emailMatchTypes = ["TO_ADDRESS", "TO_PLUS_TAG", "SUBJECT_PREFIX"] as const;

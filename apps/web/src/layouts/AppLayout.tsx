@@ -7,8 +7,7 @@ export function AppLayout() {
   const user = useAuthStore((s) => s.user);
   const hydrated = useAuthStore((s) => s.hydrated);
   if (!hydrated) return <div className="grid min-h-screen place-items-center bg-background text-sm text-foreground/60">Loading secure workspace...</div>;
-  if (!user && !localStorage.getItem("accessToken")) return <Navigate to="/login" replace />;
-  if (!user) return <div className="grid min-h-screen place-items-center bg-background text-sm text-foreground/60">Restoring session...</div>;
+  if (!user) return <Navigate to="/login" replace />;
 
   return (
     <div className="min-h-screen bg-background">

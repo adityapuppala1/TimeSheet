@@ -13,6 +13,7 @@ import { Skeleton } from "./components/ui/skeleton";
 const Landing = lazy(() => import("./pages/Landing").then((m) => ({ default: m.Landing })));
 const Login = lazy(() => import("./pages/Login").then((m) => ({ default: m.Login })));
 const ForgotPassword = lazy(() => import("./pages/ForgotPassword").then((m) => ({ default: m.ForgotPassword })));
+const ResetPassword = lazy(() => import("./pages/ResetPassword").then((m) => ({ default: m.ResetPassword })));
 const Dashboard = lazy(() => import("./pages/Dashboard").then((m) => ({ default: m.Dashboard })));
 const Timesheet = lazy(() => import("./pages/Timesheet").then((m) => ({ default: m.Timesheet })));
 const Tickets = lazy(() => import("./pages/Tickets").then((m) => ({ default: m.Tickets })));
@@ -48,6 +49,7 @@ const router = createBrowserRouter([
   { path: "/", element: <PageShell><Landing /></PageShell> },
   { path: "/login", element: <PageShell><Login /></PageShell> },
   { path: "/forgot-password", element: <PageShell><ForgotPassword /></PageShell> },
+  { path: "/reset-password", element: <PageShell><ResetPassword /></PageShell> },
   {
     path: "/app",
     element: <AppLayout />,
@@ -87,15 +89,15 @@ export function App() {
 function AuthBootstrap() {
   const setUser = useAuthStore((s) => s.setUser);
   useEffect(() => {
-    if (!localStorage.getItem("accessToken")) {
-      setUser(undefined);
-      return;
-    }
-    authApi.me().then(setUser).catch(() => {
-      localStorage.removeItem("accessToken");
-      localStorage.removeItem("refreshToken");
-      setUser(undefined);
-    });
+    // There's no token in localStorage to check anymore — the refresh token is an httpOnly
+    // cookie invisible to this code, so the only way to know if a session exists is to ask
+    // the API. A failure here (no cookie, expired, revoked) just means "not logged in", not
+    // an error to surface — it's the expected path for every first visit.
+    authApi
+      .refresh()
+      .then(() => authApi.me())
+      .then(setUser)
+      .catch(() => setUser(undefined));
   }, [setUser]);
   return null;
 }

@@ -14,6 +14,7 @@ import { AppError } from "../middleware/error.js";
 import { validate } from "../middleware/validate.js";
 import { audit } from "../services/audit.service.js";
 import { getGlobalEmailIntakeSettings, testImapConnection } from "../services/email-intake.service.js";
+import { decryptSecret, encryptSecret } from "../utils/encryption.js";
 
 export const emailIntakeRouter = Router();
 emailIntakeRouter.use(requireAuth, requireSuperAdmin);
@@ -48,7 +49,7 @@ emailIntakeRouter.patch("/settings", validate(settingsSchema), async (req, res) 
   if (typeof req.body.imapSecure === "boolean") data.imapSecure = req.body.imapSecure;
   if ("imapUser" in req.body) data.imapUser = req.body.imapUser || null;
   // Empty string means "leave the saved password alone" — the client never receives it back to resend.
-  if (typeof req.body.imapPassword === "string" && req.body.imapPassword.length > 0) data.imapPassword = req.body.imapPassword;
+  if (typeof req.body.imapPassword === "string" && req.body.imapPassword.length > 0) data.imapPassword = encryptSecret(req.body.imapPassword);
   if (typeof req.body.pollIntervalMinutes === "number") data.pollIntervalMinutes = req.body.pollIntervalMinutes;
   if ("fallbackProjectId" in req.body) data.fallbackProjectId = req.body.fallbackProjectId || null;
 
@@ -77,7 +78,14 @@ emailIntakeRouter.post("/settings/test-connection", validate(testConnectionSchem
   const port = req.body.port ?? saved.imapPort;
   const secure = req.body.secure ?? saved.imapSecure;
   const user = req.body.user || saved.imapUser;
-  const password = req.body.password || saved.imapPassword;
+  let password = req.body.password;
+  if (!password && saved.imapPassword) {
+    try {
+      password = decryptSecret(saved.imapPassword);
+    } catch {
+      throw new AppError(422, "The saved password can't be read — re-enter it below and try again.");
+    }
+  }
 
   if (!host || !user || !password) {
     throw new AppError(422, "Host, user, and password are required to test the connection.");

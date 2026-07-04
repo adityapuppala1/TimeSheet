@@ -35,21 +35,32 @@ export function fileUrl(path?: string | null): string | undefined {
   return `${SERVER_ORIGIN}${path.startsWith("/") ? "" : "/"}${path}`;
 }
 
-export const api = axios.create({ baseURL: API_BASE_URL });
+/**
+ * The refresh token never touches page JS at all — it's an httpOnly cookie the API sets on
+ * `/auth/login` and `/auth/refresh` (scoped to `path=/api/auth`), so `withCredentials` is
+ * required for the browser to actually send/receive it. Only the short-lived access token is
+ * visible here, and it's held in memory only (see store/auth.ts) — never localStorage — to
+ * shrink the window an XSS payload could steal it in.
+ */
+export const api = axios.create({ baseURL: API_BASE_URL, withCredentials: true });
+
+let inMemoryAccessToken: string | null = null;
+export function setAccessToken(token: string | null) {
+  inMemoryAccessToken = token;
+}
 
 api.interceptors.request.use((config) => {
-  const token = localStorage.getItem("accessToken");
-  if (token) config.headers.Authorization = `Bearer ${token}`;
+  if (inMemoryAccessToken) config.headers.Authorization = `Bearer ${inMemoryAccessToken}`;
   return config;
 });
 
 let refreshPromise: Promise<string> | null = null;
 
 async function refreshAccessToken(): Promise<string> {
-  const refreshToken = localStorage.getItem("refreshToken");
-  if (!refreshToken) throw new Error("no refresh token");
-  const response = await axios.post<{ accessToken: string }>(`${api.defaults.baseURL}/auth/refresh`, { refreshToken });
-  localStorage.setItem("accessToken", response.data.accessToken);
+  const response = await axios.post<{ accessToken: string }>(`${api.defaults.baseURL}/auth/refresh`, undefined, {
+    withCredentials: true
+  });
+  setAccessToken(response.data.accessToken);
   return response.data.accessToken;
 }
 
@@ -76,8 +87,7 @@ api.interceptors.response.use(
       original.headers = { ...original.headers, Authorization: `Bearer ${token}` };
       return api.request(original);
     } catch (refreshError) {
-      localStorage.removeItem("accessToken");
-      localStorage.removeItem("refreshToken");
+      setAccessToken(null);
       throw refreshError;
     }
   }
@@ -85,16 +95,29 @@ api.interceptors.response.use(
 
 export interface LoginResponse {
   accessToken: string;
-  refreshToken: string;
   user: AuthUser;
+}
+
+export interface SessionRow {
+  id: string;
+  userAgent: string | null;
+  ipAddress: string | null;
+  createdAt: string;
+  expiresAt: string;
+  current: boolean;
 }
 
 export const authApi = {
   login: async (email: string, password: string, rememberMe: boolean) =>
     (await api.post<LoginResponse>("/auth/login", { email, password, rememberMe })).data,
+  refresh: refreshAccessToken,
   me: async () => (await api.get<AuthUser>("/auth/me")).data,
   logout: async () => api.post("/auth/logout"),
+  logoutAll: async () => api.post("/auth/logout-all"),
+  sessions: async () => (await api.get<SessionRow[]>("/auth/sessions")).data,
+  revokeSession: async (id: string) => api.delete(`/auth/sessions/${id}`),
   forgotPassword: async (email: string) => (await api.post("/auth/forgot-password", { email })).data,
+  resetPassword: async (token: string, password: string) => (await api.post("/auth/reset-password", { token, password })).data,
   changePassword: async (currentPassword: string, nextPassword: string) =>
     api.post("/auth/change-password", { currentPassword, nextPassword }),
   updateProfile: async (
@@ -314,7 +337,10 @@ export const settingsApi = {
   updateTicketing: async (payload: Partial<GlobalTicketSettings>) =>
     (await api.patch<GlobalTicketSettings>("/settings/ticketing", payload)).data,
   getAI: async () => (await api.get<GlobalAISettings>("/settings/ai")).data,
-  updateAI: async (payload: Partial<GlobalAISettings>) => (await api.patch<GlobalAISettings>("/settings/ai", payload)).data,
+  /** `apiKey` is write-only (not part of GlobalAISettings — the server never echoes it back);
+   *  omit to leave the stored key untouched, pass "" to clear it back to the env-var fallback. */
+  updateAI: async (payload: Partial<GlobalAISettings> & { apiKey?: string }) =>
+    (await api.patch<GlobalAISettings>("/settings/ai", payload)).data,
   getAIUsageSummary: async () => (await api.get<AIUsageSummary>("/settings/ai/usage-summary")).data
 };
 

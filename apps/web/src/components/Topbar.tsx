@@ -1,7 +1,8 @@
 import { useQueryClient } from "@tanstack/react-query";
-import { Command, LogOut, Moon, Search, Sun, UserRound, FileClock } from "lucide-react";
+import { Command, LogOut, Menu, Moon, Search, Sun, UserRound, FileClock } from "lucide-react";
 import { useEffect, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
+import { MobileDrawerNav } from "./Sidebar";
 import { Avatar, AvatarFallback, AvatarImage } from "./ui/avatar";
 import { Button } from "./ui/button";
 import {
@@ -40,6 +41,7 @@ export function Topbar() {
     return document.documentElement.classList.contains("dark");
   });
   const [paletteOpen, setPaletteOpen] = useState(false);
+  const [drawerOpen, setDrawerOpen] = useState(false);
 
   useEffect(() => {
     document.documentElement.classList.toggle("dark", dark);
@@ -68,14 +70,24 @@ export function Topbar() {
   return (
     <>
       <header className="sticky top-0 z-20 flex h-16 items-center gap-2 border-b border-border bg-background/85 px-4 backdrop-blur-xl lg:px-6">
+        <Button
+          variant="ghost"
+          size="icon"
+          className="shrink-0 lg:hidden"
+          onClick={() => setDrawerOpen(true)}
+          aria-label="Menu"
+        >
+          <Menu className="h-5 w-5" />
+        </Button>
+
         <button
           type="button"
           onClick={() => setPaletteOpen(true)}
-          className="focus-ring group relative flex h-10 w-full max-w-xl items-center gap-2 rounded-md border border-input bg-background px-3 text-sm text-muted-foreground transition hover:border-primary/40 hover:text-foreground"
+          className="focus-ring group relative flex h-10 min-w-0 flex-1 max-w-xl items-center gap-2 rounded-md border border-input bg-background px-3 text-sm text-muted-foreground transition hover:border-primary/40 hover:text-foreground"
           aria-label="Open command palette"
         >
-          <Search className="h-4 w-4" />
-          <span className="flex-1 text-left">Search users, projects, actions...</span>
+          <Search className="h-4 w-4 shrink-0" />
+          <span className="flex-1 truncate text-left">Search users, projects, actions...</span>
           <kbd className="hidden items-center gap-1 rounded border border-border bg-muted px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wider sm:inline-flex">
             <Command className="h-3 w-3" /> K
           </kbd>
@@ -135,6 +147,7 @@ export function Topbar() {
       </header>
 
       <CommandPalette open={paletteOpen} onOpenChange={setPaletteOpen} />
+      <MobileDrawerNav open={drawerOpen} onOpenChange={setDrawerOpen} />
     </>
   );
 }

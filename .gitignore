@@ -10,3 +10,9 @@ apps/api/uploads/
 .DS_Store
 apps/*/dist/
 packages/*/dist/
+
+# Playwright — generated test artifacts and per-role session snapshots (live cookies/tokens,
+# regenerated on every test run — never something to commit).
+playwright-report/
+test-results/
+tests/e2e/.auth/
