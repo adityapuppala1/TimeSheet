@@ -1,3 +1,11 @@
+/**
+ * WHAT: the timesheet entry form — project/module/submodule/activity picker, rich-text task
+ * description, optional ticket link, file attachments, save-as-draft or submit-for-approval.
+ * WHY `calculateHours` is shared (`@timesheet/shared`): both this form's live "hours worked"
+ * preview and the backend's persisted `totalHours` must agree exactly, so the calculation lives
+ * in one place both sides import rather than being re-implemented twice and risking drift.
+ * WHO calls the backing API: `controllers/timesheet.controller.ts`'s draft/submit routes.
+ */
 import { zodResolver } from "@hookform/resolvers/zod";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { activityTypes, calculateHours } from "@timesheet/shared";

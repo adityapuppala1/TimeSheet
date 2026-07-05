@@ -1,3 +1,11 @@
+/**
+ * WHAT: a manager's "my team" view — direct reports with timesheet roll-up stats, escalations
+ * targeted at them, and an SLA summary for the manager dashboard.
+ * WHY: `User.managerId` already encodes the reporting chain; this router is the read-only
+ * aggregation over it that `apps/web/src/pages/Team.tsx` renders, computed here rather than
+ * client-side so the numbers stay consistent regardless of how much history a report has.
+ * WHO calls this: `apps/web/src/pages/Team.tsx`.
+ */
 import { Router } from "express";
 import { prisma } from "../config/prisma.js";
 import { requireAuth } from "../middleware/auth.js";

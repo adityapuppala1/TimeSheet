@@ -1,0 +1,200 @@
+/// Control-plane schema — the platform's own database, separate from every tenant database.
+/// WHAT: registry of organizations (tenants), each org's dedicated database connection,
+/// per-org SSO configuration, platform-operator accounts, and plan-tier limits.
+/// WHY a second, separate schema/database rather than a row inside a tenant database (or a
+/// designated "org 0"): the control plane must stay reachable and typed independently of any
+/// single tenant's database health, and keeping every tenant database schema-identical (no
+/// extra platform-only tables in any one of them) is what makes provisioning/migration
+/// automation simple. See apps/api/src/config/control-prisma.ts for the client, and
+/// apps/api/src/config/tenant-context.ts for how a request's tenant database is resolved and
+/// attached for the rest of that request — this schema only describes the control plane
+/// itself, never ticket/timesheet/user content, which all lives per-tenant.
+generator client {
+  provider = "prisma-client-js"
+  output   = "../../src/generated/control-client"
+}
+
+datasource db {
+  provider = "mysql"
+  url      = env("CONTROL_DATABASE_URL")
+}
+
+enum PlanTier {
+  STARTER
+  TEAM
+  ENTERPRISE
+}
+
+enum OrgStatus {
+  PROVISIONING
+  ACTIVE
+  SUSPENDED
+  ARCHIVED
+}
+
+enum SsoProviderType {
+  GOOGLE
+  MICROSOFT
+  SAML
+  LDAP
+}
+
+/// One row per customer company. `slug` is the subdomain (`<slug>.timesphere.app`) used to
+/// resolve which tenant database and SSO configuration a request belongs to, BEFORE the
+/// request is authenticated (see tenant-context.ts).
+model Organization {
+  id        String    @id @default(uuid())
+  name      String    @db.VarChar(200)
+  slug      String    @unique @db.VarChar(63)
+  status    OrgStatus @default(PROVISIONING)
+  planTier  PlanTier  @default(STARTER)
+
+  /// Per-org overrides of the plan tier's defaults (see PlanTierLimit) — null means "use the
+  /// tier default." Only a platform admin can set these (see Phase B6/B7).
+  seatLimitOverride              Int?
+  aiMonthlyBudgetCeilingOverride Decimal? @db.Decimal(10, 2)
+
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+  suspendedAt     DateTime?
+  suspendedReason String?   @db.Text
+
+  database    OrgDatabase?
+  ssoConfigs  OrgSsoConfig[]
+  authMethod  OrgAuthMethod?
+
+  @@index([status])
+}
+
+/// The physical database a tenant's data lives in. `encryptedDsn` uses the same AES-256-GCM
+/// helper already used for GlobalAISettings.apiKey / EmailIntakeSettings.imapPassword
+/// (apps/api/src/utils/encryption.ts) — decrypted only inside the tenant-Prisma-client
+/// factory, never logged, never returned by any API response.
+model OrgDatabase {
+  id             String    @id @default(uuid())
+  organizationId String    @unique
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  encryptedDsn String   @db.Text
+  /// Plaintext host/database name kept alongside the encrypted DSN purely for ops
+  /// dashboards/monitoring — never enough on its own to connect.
+  host         String   @db.VarChar(255)
+  databaseName String   @db.VarChar(128)
+
+  migratedAt     DateTime?
+  /// Name of the last tenant migration applied — compared against the latest migration in
+  /// apps/api/prisma/migrations to detect a tenant that's drifted behind on schema.
+  schemaVersion  String?   @db.VarChar(160)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+/// Per-org, per-provider-type SSO configuration — an org has 0-3 rows, one per provider type
+/// it has configured. `encryptedClientSecret` reuses utils/encryption.ts; `idpCertificate` is
+/// the IdP's PUBLIC signing certificate for SAML, not a secret, so it's stored plaintext.
+model OrgSsoConfig {
+  id             String          @id @default(uuid())
+  organizationId String
+  organization   Organization    @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  providerType   SsoProviderType
+  isEnabled      Boolean         @default(false)
+
+  // OIDC (GOOGLE / MICROSOFT) — each org registers its own OAuth app with the provider.
+  clientId              String? @db.VarChar(255)
+  encryptedClientSecret String? @db.Text
+  /// Azure AD tenant ID — MICROSOFT only.
+  tenantHint            String? @db.VarChar(255)
+
+  // SAML
+  idpEntityId    String? @db.VarChar(500)
+  idpSsoUrl      String? @db.VarChar(500)
+  idpCertificate String? @db.Text
+  /// This app's own per-org SP entity ID, since each org's IdP admin configures a relationship
+  /// uniquely to "their" SP entry even though it's the same running application.
+  spEntityId     String? @db.VarChar(500)
+
+  // LDAP / Active Directory — a direct bind, not a redirect, so there's no client secret to
+  // encrypt in the OIDC sense; the service-account bind credential plays that role instead.
+  ldapUrl                     String?  @db.VarChar(500)
+  ldapBindDn                  String?  @db.VarChar(500)
+  encryptedLdapBindCredential String?  @db.Text
+  ldapSearchBase              String?  @db.VarChar(500)
+  /// Template with a `{{email}}` placeholder substituted at auth time, e.g. `(mail={{email}})`.
+  ldapUserFilter              String?  @db.VarChar(255)
+  ldapTlsRejectUnauthorized   Boolean  @default(true)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([organizationId, providerType])
+}
+
+/// Fast, single-row-read login-method policy — kept separate from OrgSsoConfig so "is
+/// password login even allowed for this org" doesn't require joining/filtering three SSO rows
+/// on every login attempt.
+model OrgAuthMethod {
+  id                   String       @id @default(uuid())
+  organizationId       String       @unique
+  organization         Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  passwordLoginEnabled Boolean      @default(true)
+  /// When true, password login is force-disabled regardless of passwordLoginEnabled — an org
+  /// can require SSO-only.
+  requireSsoOnly       Boolean      @default(false)
+  updatedAt            DateTime     @updatedAt
+}
+
+/// Platform-operator accounts — deliberately a completely separate table/auth path from any
+/// tenant User. A compromised tenant database can never yield platform-admin credentials,
+/// since platform admins don't exist in any tenant database at all.
+model PlatformAdminUser {
+  id           String     @id @default(uuid())
+  email        String     @unique @db.VarChar(255)
+  passwordHash String
+  name         String     @db.VarChar(120)
+  status       PlatformAdminStatus @default(ACTIVE)
+  createdAt    DateTime   @default(now())
+  lastLoginAt  DateTime?
+
+  sessions PlatformAdminSession[]
+}
+
+enum PlatformAdminStatus {
+  ACTIVE
+  INACTIVE
+}
+
+/// Same rotation/reuse-detection shape as the tenant Session model
+/// (apps/api/prisma/schema.prisma's Session) — reused deliberately so
+/// auth.service.ts#refresh's logic can be mirrored rather than reinvented for platform admins.
+model PlatformAdminSession {
+  id                  String    @id @default(uuid())
+  adminUserId         String
+  adminUser           PlatformAdminUser @relation(fields: [adminUserId], references: [id], onDelete: Cascade)
+  refreshHash         String
+  previousRefreshHash String?
+  refreshRotatedAt    DateTime?
+  userAgent           String?
+  ipAddress           String?
+  expiresAt           DateTime
+  revokedAt           DateTime?
+  createdAt           DateTime  @default(now())
+
+  @@index([adminUserId, expiresAt])
+}
+
+/// Static per-tier defaults. Modeled as a table (seeded once, see prisma/control/seed.ts)
+/// rather than a hardcoded config object so a platform admin can tune limits without a
+/// deploy — there's no self-serve billing yet (Track B's confirmed decision: plan-tier flag +
+/// in-app gating only, no payment processor), so this is the only place tier limits live.
+model PlanTierLimit {
+  tier                      PlanTier @id
+  seatLimit                 Int
+  aiMonthlyBudgetCeilingUsd Decimal  @db.Decimal(10, 2)
+  /// Which SSO provider types this tier is even allowed to configure, e.g. Starter might only
+  /// get GOOGLE while Enterprise gets all four.
+  allowedSsoProviders       Json
+  /// Which chat platforms (Slack/Microsoft Teams/Google Chat/Telegram) this tier may connect —
+  /// same enable-gate pattern as allowedSsoProviders, checked in chat-integrations.controller.ts.
+  allowedChatPlatforms      Json @default("[]")
+}

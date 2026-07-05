@@ -1,3 +1,12 @@
+/**
+ * WHAT: the current user's own profile page — edit name/bio/avatar, change password, view and
+ * revoke active sessions/devices, "sign out everywhere," delete account.
+ * WHY sessions are listed here: `store/auth.ts`'s in-memory-only access token means the only
+ * durable record of "which devices are logged in" is the `Session` table server-side — this
+ * page is the user-facing view of exactly that table (their own rows only).
+ * WHO calls the backing API: `controllers/auth.controller.ts`'s `/me`, `/sessions`,
+ * `/change-password`, `/avatar` routes.
+ */
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Camera, ImageOff, KeyRound, Laptop, Loader2, LogOut, Save, ShieldCheck, Trash2, UserRound } from "lucide-react";
 import { useMemo, useRef, useState } from "react";
@@ -399,7 +408,7 @@ export function Profile() {
                   key={session.id}
                   className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-border px-3 py-2"
                 >
-                  <div className="min-w-0">
+                  <div className="min-w-0 flex-1">
                     <p className="truncate text-sm font-medium text-foreground">
                       {session.userAgent ?? "Unknown device"}
                       {session.current && (

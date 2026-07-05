@@ -1,6 +1,21 @@
+/**
+ * WHAT: tenant user authentication — password `login()`, `completeSsoLogin()` (the shared
+ * find-or-create tail for every SSO provider), `establishSession()` (session row + JWT mint,
+ * used by both), refresh-token rotation with reuse detection, password change/reset, and
+ * profile shaping.
+ * WHY: every login method in this app — password or any of Google/Microsoft/SAML/LDAP — ends
+ * at the exact same `establishSession()` call, so there's one session/rotation/revocation model
+ * for the whole app, not a parallel one per auth method. See docs/ARCHITECTURE.md §3.2/§7.2 for
+ * the full picture of how the four SSO flavors normalize into `completeSsoLogin`'s input shape.
+ * WHO calls this: `controllers/auth.controller.ts` (password + LDAP), `controllers/sso.controller.ts`
+ * (Google/Microsoft/SAML).
+ */
 import { prisma } from "../config/prisma.js";
+import { controlPrisma } from "../config/control-prisma.js";
+import { requireTenantContext } from "../config/tenant-context.js";
 import { env } from "../config/env.js";
 import { AppError } from "../middleware/error.js";
+import { getEffectiveSeatLimit } from "./plan-limits.service.js";
 import {
   hashPassword,
   hashToken,
@@ -89,8 +104,40 @@ function clearFailedLogins(email: string) {
 
 /* ================================== Login =================================== */
 
+/**
+ * Shared session-establishment tail — creates the Session row, mints the org-aware
+ * access/refresh token pair, and stamps lastLoginAt. Every login path (password today; a
+ * future SSO callback per Phase B4/B5) terminates here, so they all get the exact same
+ * rotation/grace-window session model automatically rather than each having to replicate it.
+ */
+async function establishSession(
+  user: { id: string },
+  orgId: string,
+  opts: { rememberMe?: boolean; userAgent?: string; ipAddress?: string }
+) {
+  const days = opts.rememberMe ? 30 : env.REFRESH_TOKEN_TTL_DAYS;
+  const refreshSecret = opaqueToken();
+  const expiresAt = new Date(Date.now() + days * 24 * 60 * 60 * 1000);
+  const session = await prisma.session.create({
+    data: { userId: user.id, refreshHash: await hashToken(refreshSecret), userAgent: opts.userAgent, ipAddress: opts.ipAddress, expiresAt }
+  });
+  await prisma.user.update({ where: { id: user.id }, data: { lastLoginAt: new Date() } });
+
+  return {
+    accessToken: signAccessToken(user.id, session.id, orgId),
+    refreshToken: `${signRefreshToken(user.id, session.id, days, orgId)}.${refreshSecret}`,
+    refreshTokenExpiresAt: expiresAt
+  };
+}
+
 export async function login(email: string, password: string, rememberMe = false, userAgent?: string, ipAddress?: string) {
   checkAccountLockout(email);
+
+  const { orgId } = requireTenantContext();
+  const authMethod = await controlPrisma.orgAuthMethod.findUnique({ where: { organizationId: orgId } });
+  if (authMethod && (authMethod.requireSsoOnly || !authMethod.passwordLoginEnabled)) {
+    throw new AppError(403, "Password sign-in is disabled for this workspace — use your organization's SSO login instead.");
+  }
 
   const user = await prisma.user.findUnique({ where: { email }, include: PROFILE_INCLUDE });
   if (!user || user.deletedAt || !(await verifyPassword(password, user.passwordHash))) {
@@ -100,18 +147,80 @@ export async function login(email: string, password: string, rememberMe = false,
   if (user.status !== "ACTIVE") throw new AppError(403, "Account is not active");
   clearFailedLogins(email);
 
-  const days = rememberMe ? 30 : env.REFRESH_TOKEN_TTL_DAYS;
-  const refreshSecret = opaqueToken();
-  const expiresAt = new Date(Date.now() + days * 24 * 60 * 60 * 1000);
-  const session = await prisma.session.create({
-    data: { userId: user.id, refreshHash: await hashToken(refreshSecret), userAgent, ipAddress, expiresAt }
-  });
-  await prisma.user.update({ where: { id: user.id }, data: { lastLoginAt: new Date() } });
+  const session = await establishSession(user, orgId, { rememberMe, userAgent, ipAddress });
 
   return {
-    accessToken: signAccessToken(user.id, session.id),
-    refreshToken: `${signRefreshToken(user.id, session.id, days)}.${refreshSecret}`,
-    refreshTokenExpiresAt: expiresAt,
+    ...session,
+    user: {
+      id: user.id,
+      name: user.name,
+      email: user.email,
+      role: user.role.name,
+      permissions: user.role.permissions.map((p) => p.permission.key),
+      avatarUrl: user.avatarUrl,
+      bio: user.bio,
+      phoneNumber: user.phoneNumber,
+      timezone: user.timezone,
+      managerId: user.managerId,
+      manager: user.manager ?? null
+    } satisfies ProfilePayload
+  };
+}
+
+/* ================================== SSO ====================================== */
+
+/**
+ * Completes an SSO login (Google/Microsoft — see services/sso.service.ts for the OIDC token
+ * exchange itself, which hands this function a verified email/name once it's done). Finds an
+ * existing tenant User by email — so someone who already had a password account and later
+ * enables SSO just starts using it against the same account — or creates a new one on first
+ * SSO login, defaulting to the EMPLOYEE role (an admin can promote them afterward the same
+ * way as any other user). The password hash on an SSO-created account is an unusable random
+ * value, the same pattern already used for the email-intake system account in prisma/seed.ts
+ * — nobody is meant to password-login to it; it exists purely to satisfy User's required
+ * fields and give SSO users an ordinary account row everything else in the app can reference.
+ */
+export async function completeSsoLogin(
+  orgId: string,
+  identity: { email: string; name: string | null },
+  userAgent?: string,
+  ipAddress?: string
+) {
+  let user = await prisma.user.findUnique({ where: { email: identity.email }, include: PROFILE_INCLUDE });
+
+  if (!user) {
+    // Same seat-limit enforcement as user.controller.ts's manual creation path — an SSO-only
+    // org shouldn't be able to grow past its plan's seat limit just because its users
+    // self-provision on first login instead of an admin creating them by hand.
+    const [seatLimit, activeSeats] = await Promise.all([
+      getEffectiveSeatLimit(orgId),
+      prisma.user.count({ where: { status: "ACTIVE", deletedAt: null } })
+    ]);
+    if (activeSeats >= seatLimit) {
+      throw new AppError(402, `This workspace has reached its seat limit (${seatLimit} seats). Contact your workspace admin to request more seats.`);
+    }
+
+    const employeeRole = await prisma.role.findUniqueOrThrow({ where: { name: "EMPLOYEE" } });
+    const created = await prisma.user.create({
+      data: {
+        name: identity.name || identity.email.split("@")[0],
+        email: identity.email,
+        passwordHash: await hashPassword(opaqueToken()),
+        roleId: employeeRole.id,
+        status: "ACTIVE",
+        emailVerifiedAt: new Date()
+      },
+      include: PROFILE_INCLUDE
+    });
+    user = created;
+  }
+
+  if (user.deletedAt || user.status !== "ACTIVE") throw new AppError(403, "Account is not active");
+
+  const session = await establishSession(user, orgId, { userAgent, ipAddress });
+
+  return {
+    ...session,
     user: {
       id: user.id,
       name: user.name,
@@ -166,7 +275,7 @@ export async function refresh(refreshToken: unknown) {
   const secret = refreshToken.slice(lastDot + 1);
   if (!jwtPart || !secret) throw new AppError(401, "Malformed refresh token");
 
-  let payload: { sub: string; sid: string };
+  let payload: { sub: string; sid: string; org?: string };
   try {
     payload = verifyRefreshToken(jwtPart);
   } catch (error) {
@@ -176,6 +285,12 @@ export async function refresh(refreshToken: unknown) {
   }
 
   if (!payload?.sid || !payload?.sub) throw new AppError(401, "Invalid refresh token");
+
+  // Same cross-tenant defense as middleware/auth.ts#requireAuth — a refresh token minted
+  // under one org shouldn't be honored against another, even though the signing secret is
+  // currently shared across all orgs. Tokens minted before this claim existed skip the check.
+  const { orgId } = requireTenantContext();
+  if (payload.org && payload.org !== orgId) throw new AppError(401, "Invalid refresh token");
 
   const session = await prisma.session.findUnique({ where: { id: payload.sid } });
   if (!session || session.revokedAt || session.expiresAt < new Date()) {
@@ -217,8 +332,8 @@ export async function refresh(refreshToken: unknown) {
   const remainingDays = Math.max(1 / 24, (session.expiresAt.getTime() - Date.now()) / (24 * 60 * 60 * 1000));
 
   return {
-    accessToken: signAccessToken(payload.sub, session.id),
-    refreshToken: `${signRefreshToken(payload.sub, session.id, remainingDays)}.${newSecret}`,
+    accessToken: signAccessToken(payload.sub, session.id, orgId),
+    refreshToken: `${signRefreshToken(payload.sub, session.id, remainingDays, orgId)}.${newSecret}`,
     refreshTokenExpiresAt: session.expiresAt
   };
 }

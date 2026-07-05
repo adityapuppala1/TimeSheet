@@ -1,3 +1,11 @@
+/**
+ * WHAT: public "forgot password" form — submits an email to `authApi.forgotPassword`.
+ * WHY it always shows the same generic "check your inbox" toast regardless of whether the
+ * email actually matched an account: a response that reveals whether an address is registered
+ * turns the endpoint into an account-enumeration oracle — see `auth.controller.ts`'s matching
+ * comment on the same rationale server-side.
+ * WHO links here: `Login.tsx`'s "Forgot password?" link.
+ */
 import { useMutation } from "@tanstack/react-query";
 import { motion } from "framer-motion";
 import { ArrowLeft, Mail, Send } from "lucide-react";

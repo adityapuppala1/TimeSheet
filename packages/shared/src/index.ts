@@ -1,3 +1,15 @@
+/**
+ * WHAT: the single `@timesheet/shared` package — every type/constant that both `apps/api` and
+ * `apps/web` need to agree on: roles/permission keys, activity types, ticket status/priority
+ * enums + legal status transitions, plan-tier/chat-platform/email-match-type unions, and the
+ * shape of settings objects like `GlobalAISettings`/`EmailIntakeSettings`/`ChatIntegrationRow`.
+ * WHY this package exists at all: without it, the frontend and backend would each define their
+ * own copy of e.g. `TicketStatus`, and the two copies would silently drift apart the first time
+ * one side added a value the other didn't know about — importing from one shared source makes
+ * that class of bug a compile error instead of a runtime surprise.
+ * WHO imports this: nearly every file in both `apps/api/src` and `apps/web/src` that touches a
+ * role, permission, ticket, or settings type.
+ */
 export const roles = ["SUPER_ADMIN", "ADMIN", "MANAGER", "TEAM_LEAD", "EMPLOYEE"] as const;
 export type RoleName = (typeof roles)[number];
 
@@ -195,6 +207,7 @@ export interface GlobalAISettings {
   commentSummaryEnabled: boolean;
   workspaceSearchEnabled: boolean;
   emailIngestionEnabled: boolean;
+  chatIngestionEnabled: boolean;
   weeklyDigestEnabled: boolean;
   model: string;
   confidenceThreshold: number;
@@ -214,6 +227,12 @@ export interface GlobalAISettings {
 
 export const emailMatchTypes = ["TO_ADDRESS", "TO_PLUS_TAG", "SUBJECT_PREFIX"] as const;
 export type EmailMatchType = (typeof emailMatchTypes)[number];
+
+export const chatPlatforms = ["SLACK", "MICROSOFT_TEAMS", "GOOGLE_CHAT", "TELEGRAM"] as const;
+export type ChatPlatform = (typeof chatPlatforms)[number];
+
+export const chatMatchTypes = ["CHANNEL_ID", "COMMAND_PREFIX"] as const;
+export type ChatMatchType = (typeof chatMatchTypes)[number];
 
 /** Workspace-wide IMAP mailbox connection + polling cadence for email-to-ticket ingestion. */
 export interface EmailIntakeSettings {
@@ -249,6 +268,34 @@ export interface ModuleAssigneeRuleRow {
   module: { id: string; name: string; projectId: string };
   defaultAssigneeId: string;
   defaultAssignee: { id: string; name: string; email: string };
+  createdAt: string;
+}
+
+/** Per-platform chat-connector connection settings (Slack/Teams/Google Chat/Telegram) — same
+ *  write-only-secret masking convention as EmailIntakeSettings above. */
+export interface ChatIntegrationRow {
+  platform: ChatPlatform;
+  isEnabled: boolean;
+  botTokenSet: boolean;
+  signingSecretSet: boolean;
+  teamsAppId: string | null;
+  teamsAppPasswordSet: boolean;
+  googleChatWebhookUrl: string | null;
+  defaultProjectId: string | null;
+  lastEventAt: string | null;
+  lastError: string | null;
+}
+
+export interface ChatRoutingRuleRow {
+  id: string;
+  platform: ChatPlatform;
+  matchType: ChatMatchType;
+  matchValue: string;
+  projectId: string;
+  project: { id: string; name: string; code: string };
+  defaultModuleId: string | null;
+  defaultModule: { id: string; name: string } | null;
+  isActive: boolean;
   createdAt: string;
 }
 

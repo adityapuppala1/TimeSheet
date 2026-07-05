@@ -1,3 +1,12 @@
+/**
+ * WHAT: the registry pairing every email template key with its expected `{{variable}}` names,
+ * a human-readable description, and sample values — used to render live previews and validate
+ * saved templates in the admin Email Templates editor.
+ * WHY: `mail-templates.ts` defines what each template *looks like*; this file defines what
+ * variables it *expects*, kept as one shared source of truth so the editor's preview and the
+ * actual send always agree on what `{{name}}`-style placeholders are valid for a given key.
+ * WHO calls this: `controllers/email-templates.controller.ts`.
+ */
 import { prisma } from "../config/prisma.js";
 import { templates as compiledTemplates } from "./mail-templates.js";
 

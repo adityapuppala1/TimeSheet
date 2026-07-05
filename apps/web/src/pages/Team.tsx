@@ -1,3 +1,11 @@
+/**
+ * WHAT: a manager's "my team" view — direct reports roster, pending approvals, SLA/overdue
+ * indicators, open escalations targeted at them.
+ * WHY it's manager-scoped rather than a general team directory: it's the operational view for
+ * someone who has to act on their reports' timesheets, backed by `controllers/team.controller.ts`'s
+ * `managerId`-filtered queries — not a company-wide org chart.
+ * WHO calls the backing API: `controllers/team.controller.ts`.
+ */
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   AlarmClock,

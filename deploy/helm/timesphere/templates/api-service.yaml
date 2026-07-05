@@ -1,0 +1,15 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "timesphere.fullname" . }}-api
+  labels:
+    {{- include "timesphere.labels" . | nindent 4 }}
+    app.kubernetes.io/component: api
+spec:
+  type: ClusterIP
+  ports:
+    - name: http
+      port: 4000
+      targetPort: http
+  selector:
+    {{- include "timesphere.selectorLabels" (dict "Release" .Release "Chart" .Chart "component" "api") | nindent 4 }}

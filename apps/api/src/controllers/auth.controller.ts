@@ -13,12 +13,15 @@ import { Router } from "express";
 import { z } from "zod";
 import { env } from "../config/env.js";
 import { prisma } from "../config/prisma.js";
+import { controlPrisma } from "../config/control-prisma.js";
+import { requireTenantContext } from "../config/tenant-context.js";
 import { requireAuth } from "../middleware/auth.js";
 import { AppError } from "../middleware/error.js";
 import { avatarUpload } from "../middleware/upload.js";
 import { validate } from "../middleware/validate.js";
 import { audit } from "../services/audit.service.js";
-import { buildProfilePayload, changePassword, login, refresh, requestPasswordReset, resetPassword } from "../services/auth.service.js";
+import { buildProfilePayload, changePassword, completeSsoLogin, login, refresh, requestPasswordReset, resetPassword } from "../services/auth.service.js";
+import { authenticateLdap } from "../services/sso.service.js";
 import { dispatchTransactional } from "../services/notify.service.js";
 import { templates } from "../services/mail-templates.js";
 import { processAvatar } from "../utils/image.js";
@@ -38,11 +41,52 @@ function refreshCookieOptions(expiresAt?: Date) {
   };
 }
 
+/**
+ * Public (unauthenticated) — the login page calls this before rendering, to know which
+ * buttons to show for the org the current subdomain resolved to (see middleware/tenant.ts,
+ * already run for this route since it's a normal /api/auth/* route, unlike the SSO
+ * start/callback routes which bypass it — see controllers/sso.controller.ts's header comment).
+ */
+authRouter.get("/sso-methods", async (_req, res) => {
+  const { orgId } = requireTenantContext();
+  const [configs, authMethod] = await Promise.all([
+    controlPrisma.orgSsoConfig.findMany({ where: { organizationId: orgId, isEnabled: true } }),
+    controlPrisma.orgAuthMethod.findUnique({ where: { organizationId: orgId } })
+  ]);
+  const isFullyConfigured = (c: (typeof configs)[number]) => {
+    if (c.providerType === "SAML") return Boolean(c.idpEntityId && c.idpSsoUrl && c.idpCertificate);
+    if (c.providerType === "LDAP") return Boolean(c.ldapUrl && c.ldapBindDn && c.encryptedLdapBindCredential && c.ldapSearchBase);
+    return Boolean(c.clientId && c.encryptedClientSecret);
+  };
+
+  res.json({
+    passwordEnabled: (authMethod?.passwordLoginEnabled ?? true) && !authMethod?.requireSsoOnly,
+    providers: configs.filter(isFullyConfigured).map((c) => c.providerType)
+  });
+});
+
 authRouter.post(
   "/login",
   validate(z.object({ body: z.object({ email: z.string().email(), password: z.string().min(8), rememberMe: z.boolean().optional() }) })),
   async (req, res) => {
     const result = await login(req.body.email, req.body.password, req.body.rememberMe, req.headers["user-agent"], req.ip);
+    res.cookie(REFRESH_COOKIE, result.refreshToken, refreshCookieOptions(result.refreshTokenExpiresAt));
+    res.json({ accessToken: result.accessToken, user: result.user });
+  }
+);
+
+/** LDAP is the one SSO provider that's a direct bind rather than a redirect (see
+ *  services/sso.service.ts's LDAP section), so unlike Google/Microsoft/SAML it has no separate
+ *  entry in controllers/sso.controller.ts — it's resolved via the normal Host-header tenant
+ *  middleware exactly like password login, and returns the same JSON shape as /login rather
+ *  than a redirect. */
+authRouter.post(
+  "/login/ldap",
+  validate(z.object({ body: z.object({ email: z.string().email(), password: z.string().min(1) }) })),
+  async (req, res) => {
+    const { orgId } = requireTenantContext();
+    const identity = await authenticateLdap(orgId, req.body.email, req.body.password);
+    const result = await completeSsoLogin(orgId, identity, req.headers["user-agent"], req.ip);
     res.cookie(REFRESH_COOKIE, result.refreshToken, refreshCookieOptions(result.refreshTokenExpiresAt));
     res.json({ accessToken: result.accessToken, user: result.user });
   }

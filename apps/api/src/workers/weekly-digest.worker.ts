@@ -11,6 +11,7 @@ import cron from "node-cron";
 import { prisma } from "../config/prisma.js";
 import { generateWeeklyDigest, getGlobalAISettings } from "../services/ai.service.js";
 import { dispatchNotification } from "../services/notify.service.js";
+import { runForEveryOrg } from "./run-for-every-org.js";
 
 let started = false;
 
@@ -94,7 +95,8 @@ export async function runWeeklyDigest(now: Date = new Date()): Promise<{ sent: n
         ticketsResolved: resolvedTickets.length,
         openAssigned,
         hoursLogged: Number(hoursLogged.toFixed(1)),
-        notableTickets
+        notableTickets,
+        userId: user.id
       });
       summary = result.summary;
     } catch (error) {
@@ -130,11 +132,10 @@ export function startWeeklyDigestWorker() {
 
   // Monday 08:00 server-local time.
   cron.schedule("0 8 * * 1", () => {
-    runWeeklyDigest()
-      .then((result) => {
-        if (result.sent > 0) console.info(`[weekly-digest] sent ${result.sent} (${result.skipped} skipped — no activity).`);
-      })
-      .catch((error) => console.error("[weekly-digest] run failed:", (error as Error).message));
+    runForEveryOrg("weekly-digest", async () => {
+      const result = await runWeeklyDigest();
+      if (result.sent > 0) console.info(`[weekly-digest] sent ${result.sent} (${result.skipped} skipped — no activity).`);
+    }).catch((error) => console.error("[weekly-digest] run failed:", (error as Error).message));
   });
 
   console.info("[weekly-digest] worker scheduled (Monday 08:00).");

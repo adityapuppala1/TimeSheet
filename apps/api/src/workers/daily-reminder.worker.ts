@@ -2,6 +2,7 @@ import cron from "node-cron";
 import { env } from "../config/env.js";
 import { prisma } from "../config/prisma.js";
 import { dispatchNotification, getGlobalNotificationSettings } from "../services/notify.service.js";
+import { runForEveryOrg } from "./run-for-every-org.js";
 
 /**
  * Daily reminder + next-day escalation worker.
@@ -254,7 +255,7 @@ export function startDailyReminderWorker() {
 
   // Every hour at :00, plus :30 as a safety net.
   cron.schedule("0,30 * * * *", () => {
-    tick().catch((error) => console.error("[reminder] tick failed:", (error as Error).message));
+    runForEveryOrg("reminder", () => tick()).catch((error) => console.error("[reminder] tick failed:", (error as Error).message));
   });
 
   started = true;

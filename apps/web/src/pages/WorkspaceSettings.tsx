@@ -1,3 +1,18 @@
+/**
+ * WHAT: the large tenant-admin settings page — one tabbed surface over every per-org
+ * configuration this app has: reminders/schedule, email channels, ticketing SLA/types, AI
+ * provider/toggles/model/budget, email intake + routing rules, chat integrations + routing
+ * rules, SSO (Google/Microsoft/SAML/LDAP), BCC/forms.
+ * WHY one page with many tabs, not many separate pages: every tab is SUPER_ADMIN-only and reads/
+ * writes the same small set of tenant-wide singleton settings rows (`GlobalSettings`,
+ * `GlobalAISettings`, `GlobalTicketSettings`, etc.) — one page keeps the "you're editing
+ * workspace-wide config" framing consistent instead of scattering it across the nav.
+ * WHY `readOnly` is threaded through every card instead of hiding non-admin tabs entirely: a
+ * non-SUPER_ADMIN can still usefully SEE the current configuration (e.g. a manager checking
+ * what SLA hours apply) — the cards render normally but every control is disabled.
+ * WHO calls the backing APIs: `controllers/settings.controller.ts`, `email-intake.controller.ts`,
+ * `chat-integrations.controller.ts` — this page is the one UI surface for all three.
+ */
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   aiModels,
@@ -20,6 +35,7 @@ import {
   Inbox,
   KeyRound,
   Loader2,
+  LogIn,
   Mail,
   MailCheck,
   Pencil,
@@ -36,6 +52,7 @@ import {
 } from "lucide-react";
 import type { ReactNode } from "react";
 import { useEffect, useState } from "react";
+import { Bar, BarChart, CartesianGrid, Cell, Line, LineChart, ResponsiveContainer, Tooltip as RTooltip, XAxis, YAxis } from "recharts";
 import { Alert, AlertDescription, AlertTitle } from "../components/ui/alert";
 import { Badge } from "../components/ui/badge";
 import { Button } from "../components/ui/button";
@@ -47,9 +64,24 @@ import { Separator } from "../components/ui/separator";
 import { Skeleton } from "../components/ui/skeleton";
 import { Switch } from "../components/ui/switch";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "../components/ui/tabs";
+import { Textarea } from "../components/ui/textarea";
 import { toast } from "../components/ui/toaster";
-import { emailIntakeApi, labelApi, projectApi, settingsApi, ticketTypeApi, userApi } from "../services/api";
+import { apiUrl, emailIntakeApi, labelApi, projectApi, settingsApi, ticketTypeApi, userApi, type SsoProviderConfig } from "../services/api";
 import { useAuthStore } from "../store/auth";
+import { ChatIntegrationsSettingsCard } from "./settings/ChatIntegrationsSettingsCard";
+
+// Matches the exact chart styling convention used in Insights.tsx (this repo's `dataviz`
+// skill): CSS-variable colors only, fixed categorical order never re-cycled by rank.
+const AXIS_STYLE = { stroke: "hsl(var(--muted-foreground))", fontSize: 12 };
+const TOOLTIP_STYLE = {
+  contentStyle: { background: "hsl(var(--popover))", border: "1px solid hsl(var(--border))", borderRadius: 8, color: "hsl(var(--popover-foreground))" }
+};
+const GRID_STYLE = { strokeDasharray: "3 3", stroke: "hsl(var(--border))" };
+const MODEL_COLORS = ["hsl(var(--primary))", "hsl(var(--info))", "hsl(var(--accent))", "hsl(var(--warning))", "hsl(var(--success))"];
+
+function formatWeek(iso: string) {
+  return new Date(iso).toLocaleDateString(undefined, { month: "short", day: "numeric" });
+}
 
 interface ToggleRow {
   key: keyof NotificationPreferences;
@@ -106,6 +138,8 @@ export function WorkspaceSettingsPage() {
           <TabsTrigger value="ticketing">Ticketing</TabsTrigger>
           <TabsTrigger value="ai">AI</TabsTrigger>
           <TabsTrigger value="email-intake">Email intake</TabsTrigger>
+          <TabsTrigger value="chat-integrations">Chat integrations</TabsTrigger>
+          <TabsTrigger value="sso">Single sign-on</TabsTrigger>
           <TabsTrigger value="bcc">BCC & forms</TabsTrigger>
         </TabsList>
 
@@ -127,6 +161,14 @@ export function WorkspaceSettingsPage() {
 
         <TabsContent value="email-intake">
           <EmailIntakeSettingsCard readOnly={!isSuperAdmin} />
+        </TabsContent>
+
+        <TabsContent value="chat-integrations">
+          <ChatIntegrationsSettingsCard readOnly={!isSuperAdmin} />
+        </TabsContent>
+
+        <TabsContent value="sso">
+          <SsoSettingsCard readOnly={!isSuperAdmin} />
         </TabsContent>
 
         <TabsContent value="bcc">
@@ -667,6 +709,11 @@ function AISettingsCard({ readOnly }: { readOnly: boolean }) {
     queryFn: settingsApi.getAIUsageSummary,
     enabled: Boolean(settings.data?.aiEnabled)
   });
+  const usageTrend = useQuery({
+    queryKey: ["settings", "ai", "usage-trend"],
+    queryFn: () => settingsApi.getAIUsageTrend(8),
+    enabled: Boolean(settings.data?.aiEnabled)
+  });
 
   const update = useMutation({
     mutationFn: (payload: Partial<GlobalAISettings> & { apiKey?: string }) => settingsApi.updateAI(payload),
@@ -717,6 +764,7 @@ function AISettingsCard({ readOnly }: { readOnly: boolean }) {
     { key: "commentSummaryEnabled", label: "Comment thread summaries", description: "AI summary of long comment threads on a ticket." },
     { key: "workspaceSearchEnabled", label: "\"Ask AI\" ticket search", description: "Natural-language Q&A over your accessible tickets from the command palette." },
     { key: "emailIngestionEnabled", label: "Email-to-ticket intake", description: "Parse inbound bug-report emails and auto-create tickets." },
+    { key: "chatIngestionEnabled", label: "Chat-to-ticket intake", description: "Turn Slack/Teams/Google Chat/Telegram messages into auto-created tickets." },
     { key: "weeklyDigestEnabled", label: "AI weekly digest", description: "LLM-authored weekly summary of ticket + timesheet activity." }
   ];
 
@@ -922,13 +970,13 @@ function AISettingsCard({ readOnly }: { readOnly: boolean }) {
         <Card>
           <CardHeader>
             <CardTitle className="text-base">This month's usage</CardTitle>
-            <CardDescription>Estimated cost from {usage.data?.monthStart ?? "this month"}.</CardDescription>
+            <CardDescription>Estimated cost and token consumption from {usage.data?.monthStart ?? "this month"}.</CardDescription>
           </CardHeader>
-          <CardContent className="grid gap-3">
+          <CardContent className="grid gap-5">
             {usage.isLoading && <Skeleton className="h-20 w-full" />}
             {!usage.isLoading && usage.data && (
               <>
-                <div className="grid gap-4 sm:grid-cols-2">
+                <div className="grid gap-4 grid-cols-2 lg:grid-cols-4">
                   <div className="rounded-lg border border-border bg-muted/30 p-4">
                     <p className="text-xs uppercase text-muted-foreground">Estimated spend</p>
                     <p className="mt-1 text-2xl font-black">${usage.data.totalCostUsd.toFixed(2)}</p>
@@ -937,15 +985,68 @@ function AISettingsCard({ readOnly }: { readOnly: boolean }) {
                     <p className="text-xs uppercase text-muted-foreground">AI calls</p>
                     <p className="mt-1 text-2xl font-black">{usage.data.totalCalls}</p>
                   </div>
+                  <div className="rounded-lg border border-border bg-muted/30 p-4">
+                    <p className="text-xs uppercase text-muted-foreground">Input tokens</p>
+                    <p className="mt-1 text-2xl font-black">{usage.data.totalInputTokens.toLocaleString()}</p>
+                  </div>
+                  <div className="rounded-lg border border-border bg-muted/30 p-4">
+                    <p className="text-xs uppercase text-muted-foreground">Output tokens</p>
+                    <p className="mt-1 text-2xl font-black">{usage.data.totalOutputTokens.toLocaleString()}</p>
+                  </div>
                 </div>
+
+                {usageTrend.data && usageTrend.data.some((w) => w.costUsd > 0) && (
+                  <div>
+                    <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground">Spend trend, last 8 weeks</p>
+                    <div className="h-48">
+                      <ResponsiveContainer width="100%" height="100%">
+                        <LineChart data={usageTrend.data} margin={{ left: -20, right: 8 }}>
+                          <CartesianGrid {...GRID_STYLE} vertical={false} />
+                          <XAxis dataKey="weekStart" tickFormatter={formatWeek} tick={AXIS_STYLE} axisLine={false} tickLine={false} />
+                          <YAxis tick={AXIS_STYLE} axisLine={false} tickLine={false} width={56} tickFormatter={(v) => `$${v}`} />
+                          <RTooltip {...TOOLTIP_STYLE} formatter={(v: number) => [`$${v.toFixed(2)}`, "Spend"]} labelFormatter={formatWeek} />
+                          <Line type="monotone" dataKey="costUsd" stroke="hsl(var(--primary))" strokeWidth={2} dot={{ r: 3 }} />
+                        </LineChart>
+                      </ResponsiveContainer>
+                    </div>
+                  </div>
+                )}
+
+                {usage.data.byModel.length > 0 && (
+                  <div>
+                    <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground">Spend by model</p>
+                    <div className="h-48">
+                      <ResponsiveContainer width="100%" height="100%">
+                        <BarChart data={usage.data.byModel} margin={{ left: -20, right: 8 }}>
+                          <CartesianGrid {...GRID_STYLE} vertical={false} />
+                          <XAxis dataKey="model" tick={AXIS_STYLE} axisLine={false} tickLine={false} interval={0} angle={-15} textAnchor="end" height={50} />
+                          <YAxis tick={AXIS_STYLE} axisLine={false} tickLine={false} width={56} tickFormatter={(v) => `$${v}`} />
+                          <RTooltip
+                            {...TOOLTIP_STYLE}
+                            formatter={(v: number, _name, item) => [`$${v.toFixed(2)} · ${item.payload.calls} calls`, item.payload.model]}
+                          />
+                          <Bar dataKey="costUsd" radius={[4, 4, 0, 0]}>
+                            {usage.data.byModel.map((row, index) => (
+                              <Cell key={row.model} fill={MODEL_COLORS[index % MODEL_COLORS.length]} />
+                            ))}
+                          </Bar>
+                        </BarChart>
+                      </ResponsiveContainer>
+                    </div>
+                  </div>
+                )}
+
                 {usage.data.byFeature.length > 0 && (
-                  <div className="divide-y divide-border rounded-lg border border-border">
-                    {usage.data.byFeature.map((f) => (
-                      <div key={f.feature} className="flex items-center justify-between p-3 text-sm">
-                        <span>{f.feature}</span>
-                        <span className="text-muted-foreground">{f.calls} calls · ${f.costUsd.toFixed(2)}</span>
-                      </div>
-                    ))}
+                  <div>
+                    <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground">By feature</p>
+                    <div className="divide-y divide-border rounded-lg border border-border">
+                      {usage.data.byFeature.map((f) => (
+                        <div key={f.feature} className="flex items-center justify-between p-3 text-sm">
+                          <span>{f.feature}</span>
+                          <span className="text-muted-foreground">{f.calls} calls · ${f.costUsd.toFixed(2)}</span>
+                        </div>
+                      ))}
+                    </div>
                   </div>
                 )}
                 {usage.data.byFeature.length === 0 && <p className="text-sm text-muted-foreground">No AI calls yet this month.</p>}
@@ -1384,5 +1485,483 @@ function EmailIntakeSettingsCard({ readOnly }: { readOnly: boolean }) {
         </CardContent>
       </Card>
     </div>
+  );
+}
+
+const SSO_PROVIDER_LABEL: Record<"GOOGLE" | "MICROSOFT", string> = { GOOGLE: "Google", MICROSOFT: "Microsoft / Azure AD" };
+
+/**
+ * Phase B4 — per-org SSO configuration. Each org registers its OWN OAuth app with Google/
+ * Microsoft (there's no shared client id/secret this app provides), so every field here is
+ * that org's own credentials. `clientSecret` is write-only (never echoed back), same masking
+ * convention as the AI tab's BYOK API key and the email-intake IMAP password.
+ */
+function SsoSettingsCard({ readOnly }: { readOnly: boolean }) {
+  const queryClient = useQueryClient();
+  const settings = useQuery({ queryKey: ["settings", "sso"], queryFn: settingsApi.getSso });
+
+  const authMethod = useMutation({
+    mutationFn: (payload: { passwordLoginEnabled?: boolean; requireSsoOnly?: boolean }) => settingsApi.updateAuthMethod(payload),
+    onSuccess: () => {
+      toast.success("Saved");
+      queryClient.invalidateQueries({ queryKey: ["settings", "sso"] });
+    },
+    onError: (err: any) => toast.error("Could not save", { description: err?.response?.data?.message ?? "Try again." })
+  });
+
+  const anyProviderConfigured = (settings.data?.providers ?? []).some((p) => {
+    if (!p.isEnabled) return false;
+    if (p.provider === "SAML") return Boolean(p.idpEntityId && p.idpSsoUrl && p.idpCertificateSet);
+    if (p.provider === "LDAP") return Boolean(p.ldapUrl && p.ldapBindDn && p.ldapBindCredentialSet && p.ldapSearchBase);
+    return Boolean(p.clientId && p.clientSecretSet);
+  });
+
+  return (
+    <div className="grid gap-5">
+      <Card>
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2 text-base">
+            <LogIn className="h-4 w-4 text-primary" />
+            Sign-in methods
+          </CardTitle>
+          <CardDescription>Control whether people can sign in with a password, SSO, or both — for this workspace only.</CardDescription>
+        </CardHeader>
+        <CardContent className="grid gap-4">
+          {settings.isLoading && <Skeleton className="h-20 w-full" />}
+          {!settings.isLoading && settings.data && (
+            <>
+              <div className="flex items-start gap-4 rounded-lg border border-border p-4">
+                <div className="flex-1">
+                  <Label>Allow password sign-in</Label>
+                  <p className="mt-0.5 text-xs text-muted-foreground">Turn off to force everyone through SSO — do this only after confirming at least one provider below works.</p>
+                </div>
+                <Switch
+                  checked={settings.data.passwordLoginEnabled}
+                  disabled={readOnly}
+                  onCheckedChange={(v) => authMethod.mutate({ passwordLoginEnabled: v })}
+                />
+              </div>
+              <div className="flex items-start gap-4 rounded-lg border border-border p-4">
+                <div className="flex-1">
+                  <Label>Require SSO only</Label>
+                  <p className="mt-0.5 text-xs text-muted-foreground">
+                    When on, password sign-in is disabled regardless of the toggle above.
+                  </p>
+                </div>
+                <Switch
+                  checked={settings.data.requireSsoOnly}
+                  disabled={readOnly || !anyProviderConfigured}
+                  onCheckedChange={(v) => authMethod.mutate({ requireSsoOnly: v })}
+                />
+              </div>
+              {settings.data.requireSsoOnly && !anyProviderConfigured && (
+                <Alert variant="warning">
+                  <ShieldAlert />
+                  <AlertTitle>No SSO provider is fully configured</AlertTitle>
+                  <AlertDescription>Configure and enable at least one provider below before requiring SSO-only sign-in.</AlertDescription>
+                </Alert>
+              )}
+            </>
+          )}
+        </CardContent>
+      </Card>
+
+      {(["GOOGLE", "MICROSOFT"] as const).map((provider) => (
+        <SsoProviderCard
+          key={provider}
+          provider={provider}
+          config={settings.data?.providers.find((p) => p.provider === provider)}
+          readOnly={readOnly}
+          isLoading={settings.isLoading}
+        />
+      ))}
+
+      <SamlProviderCard
+        config={settings.data?.providers.find((p) => p.provider === "SAML")}
+        readOnly={readOnly}
+        isLoading={settings.isLoading}
+      />
+
+      <LdapProviderCard
+        config={settings.data?.providers.find((p) => p.provider === "LDAP")}
+        readOnly={readOnly}
+        isLoading={settings.isLoading}
+      />
+    </div>
+  );
+}
+
+function SsoProviderCard({
+  provider,
+  config,
+  readOnly,
+  isLoading
+}: {
+  provider: "GOOGLE" | "MICROSOFT";
+  config?: SsoProviderConfig;
+  readOnly: boolean;
+  isLoading: boolean;
+}) {
+  const queryClient = useQueryClient();
+  const [clientId, setClientId] = useState(config?.clientId ?? "");
+  const [clientSecret, setClientSecret] = useState("");
+  const [tenantHint, setTenantHint] = useState(config?.tenantHint ?? "");
+
+  useEffect(() => {
+    setClientId(config?.clientId ?? "");
+    setTenantHint(config?.tenantHint ?? "");
+  }, [config?.clientId, config?.tenantHint]);
+
+  const save = useMutation({
+    mutationFn: (payload: Partial<SsoProviderConfig> & { clientSecret?: string }) =>
+      settingsApi.updateSso(provider.toLowerCase() as "google" | "microsoft", payload),
+    onSuccess: () => {
+      toast.success("Saved");
+      setClientSecret("");
+      queryClient.invalidateQueries({ queryKey: ["settings", "sso"] });
+    },
+    onError: (err: any) => toast.error("Could not save", { description: err?.response?.data?.message ?? "Try again." })
+  });
+
+  return (
+    <Card>
+      <CardHeader>
+        <div className="flex items-center justify-between gap-3">
+          <div>
+            <CardTitle className="text-base">{SSO_PROVIDER_LABEL[provider]}</CardTitle>
+            <CardDescription>
+              {provider === "GOOGLE"
+                ? "Register an OAuth client in Google Cloud Console; the redirect URI is fixed regardless of which org configures it."
+                : "Register an app registration in Azure AD; set the tenant ID below (or leave blank for multi-tenant \"common\")."}
+            </CardDescription>
+          </div>
+          {config?.isEnabled && config.clientId && config.clientSecretSet && (
+            <span className="inline-flex shrink-0 items-center gap-1 rounded-full bg-success/10 px-2.5 py-1 text-xs font-semibold text-success">
+              <Check className="h-3 w-3" />Active
+            </span>
+          )}
+        </div>
+      </CardHeader>
+      <CardContent className="grid gap-4">
+        {isLoading && <Skeleton className="h-32 w-full" />}
+        {!isLoading && (
+          <>
+            <div className="flex items-start gap-4 rounded-lg border border-border p-4">
+              <div className="flex-1">
+                <Label>Enabled</Label>
+                <p className="mt-0.5 text-xs text-muted-foreground">Show a "{`Continue with ${SSO_PROVIDER_LABEL[provider]}`}" button on the login page.</p>
+              </div>
+              <Switch
+                checked={config?.isEnabled ?? false}
+                disabled={readOnly || !config?.clientId || !config.clientSecretSet}
+                onCheckedChange={(v) => save.mutate({ isEnabled: v })}
+              />
+            </div>
+
+            <div className="grid gap-4 sm:grid-cols-2">
+              <div className="grid gap-1.5">
+                <Label>Client ID</Label>
+                <Input value={clientId} disabled={readOnly} onChange={(e) => setClientId(e.target.value)} placeholder="Your OAuth client ID" />
+              </div>
+              <div className="grid gap-1.5">
+                <Label>Client secret {config?.clientSecretSet && <span className="font-normal text-muted-foreground">(saved)</span>}</Label>
+                <Input
+                  type="password"
+                  value={clientSecret}
+                  disabled={readOnly}
+                  onChange={(e) => setClientSecret(e.target.value)}
+                  placeholder={config?.clientSecretSet ? "•••••••••••••••• (unchanged)" : "Not set"}
+                />
+              </div>
+            </div>
+
+            {provider === "MICROSOFT" && (
+              <div className="grid gap-1.5 sm:w-1/2">
+                <Label>Azure AD tenant ID (optional)</Label>
+                <Input value={tenantHint} disabled={readOnly} onChange={(e) => setTenantHint(e.target.value)} placeholder='Leave blank for multi-tenant "common"' />
+              </div>
+            )}
+
+            <Button
+              size="sm"
+              className="w-fit"
+              disabled={readOnly}
+              onClick={() =>
+                save.mutate({
+                  clientId: clientId || null,
+                  tenantHint: tenantHint || null,
+                  ...(clientSecret ? { clientSecret } : {})
+                })
+              }
+            >
+              <Save className="h-4 w-4" />Save
+            </Button>
+          </>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
+function SamlProviderCard({
+  config,
+  readOnly,
+  isLoading
+}: {
+  config?: SsoProviderConfig;
+  readOnly: boolean;
+  isLoading: boolean;
+}) {
+  const queryClient = useQueryClient();
+  const [idpEntityId, setIdpEntityId] = useState(config?.idpEntityId ?? "");
+  const [idpSsoUrl, setIdpSsoUrl] = useState(config?.idpSsoUrl ?? "");
+  const [idpCertificate, setIdpCertificate] = useState("");
+  const [spEntityId, setSpEntityId] = useState(config?.spEntityId ?? "");
+
+  useEffect(() => {
+    setIdpEntityId(config?.idpEntityId ?? "");
+    setIdpSsoUrl(config?.idpSsoUrl ?? "");
+    setSpEntityId(config?.spEntityId ?? "");
+  }, [config?.idpEntityId, config?.idpSsoUrl, config?.spEntityId]);
+
+  const save = useMutation({
+    mutationFn: (payload: Partial<SsoProviderConfig> & { idpCertificate?: string }) => settingsApi.updateSso("saml", payload),
+    onSuccess: () => {
+      toast.success("Saved");
+      setIdpCertificate("");
+      queryClient.invalidateQueries({ queryKey: ["settings", "sso"] });
+    },
+    onError: (err: any) => toast.error("Could not save", { description: err?.response?.data?.message ?? "Try again." })
+  });
+
+  const acsUrl = apiUrl("/auth/sso/saml/acs");
+  const fullyConfigured = Boolean(config?.idpEntityId && config?.idpSsoUrl && config?.idpCertificateSet);
+
+  return (
+    <Card>
+      <CardHeader>
+        <div className="flex items-center justify-between gap-3">
+          <div>
+            <CardTitle className="text-base">SAML</CardTitle>
+            <CardDescription>
+              Connect any SAML 2.0 identity provider (Okta, OneLogin, ADFS, ...). Give your IdP admin the ACS URL below and paste
+              their IdP's entity ID, SSO URL, and public signing certificate here.
+            </CardDescription>
+          </div>
+          {fullyConfigured && config?.isEnabled && (
+            <span className="inline-flex shrink-0 items-center gap-1 rounded-full bg-success/10 px-2.5 py-1 text-xs font-semibold text-success">
+              <Check className="h-3 w-3" />Active
+            </span>
+          )}
+        </div>
+      </CardHeader>
+      <CardContent className="grid gap-4">
+        {isLoading && <Skeleton className="h-32 w-full" />}
+        {!isLoading && (
+          <>
+            <div className="grid gap-1.5">
+              <Label>ACS URL (give this to your IdP admin)</Label>
+              <Input readOnly value={acsUrl} className="font-mono text-xs" onFocus={(e) => e.target.select()} />
+            </div>
+
+            <div className="flex items-start gap-4 rounded-lg border border-border p-4">
+              <div className="flex-1">
+                <Label>Enabled</Label>
+                <p className="mt-0.5 text-xs text-muted-foreground">Show a "Continue with single sign-on" button on the login page.</p>
+              </div>
+              <Switch
+                checked={config?.isEnabled ?? false}
+                disabled={readOnly || !fullyConfigured}
+                onCheckedChange={(v) => save.mutate({ isEnabled: v })}
+              />
+            </div>
+
+            <div className="grid gap-4 sm:grid-cols-2">
+              <div className="grid gap-1.5">
+                <Label>IdP entity ID</Label>
+                <Input value={idpEntityId} disabled={readOnly} onChange={(e) => setIdpEntityId(e.target.value)} placeholder="https://idp.example.com/entity" />
+              </div>
+              <div className="grid gap-1.5">
+                <Label>IdP SSO URL</Label>
+                <Input value={idpSsoUrl} disabled={readOnly} onChange={(e) => setIdpSsoUrl(e.target.value)} placeholder="https://idp.example.com/sso" />
+              </div>
+            </div>
+
+            <div className="grid gap-1.5">
+              <Label>IdP signing certificate {config?.idpCertificateSet && <span className="font-normal text-muted-foreground">(saved)</span>}</Label>
+              <Textarea
+                value={idpCertificate}
+                disabled={readOnly}
+                onChange={(e) => setIdpCertificate(e.target.value)}
+                rows={4}
+                className="font-mono text-xs"
+                placeholder={config?.idpCertificateSet ? "•••••••••••••••• (unchanged) — paste a new PEM certificate to replace it" : "-----BEGIN CERTIFICATE-----..."}
+              />
+            </div>
+
+            <div className="grid gap-1.5 sm:w-1/2">
+              <Label>SP entity ID (optional)</Label>
+              <Input value={spEntityId} disabled={readOnly} onChange={(e) => setSpEntityId(e.target.value)} placeholder="Defaults to this workspace's metadata URL" />
+            </div>
+
+            <Button
+              size="sm"
+              className="w-fit"
+              disabled={readOnly}
+              onClick={() =>
+                save.mutate({
+                  idpEntityId: idpEntityId || null,
+                  idpSsoUrl: idpSsoUrl || null,
+                  spEntityId: spEntityId || null,
+                  ...(idpCertificate ? { idpCertificate } : {})
+                })
+              }
+            >
+              <Save className="h-4 w-4" />Save
+            </Button>
+          </>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
+/** LDAP/Active Directory — a direct bind rather than a redirect, so the org admin provides a
+ *  service-account bind DN/credential this app uses to look up + verify end users, not an
+ *  OAuth app registration. Same write-only-credential masking convention as the other cards. */
+function LdapProviderCard({
+  config,
+  readOnly,
+  isLoading
+}: {
+  config?: SsoProviderConfig;
+  readOnly: boolean;
+  isLoading: boolean;
+}) {
+  const queryClient = useQueryClient();
+  const [ldapUrl, setLdapUrl] = useState(config?.ldapUrl ?? "");
+  const [ldapBindDn, setLdapBindDn] = useState(config?.ldapBindDn ?? "");
+  const [ldapBindCredential, setLdapBindCredential] = useState("");
+  const [ldapSearchBase, setLdapSearchBase] = useState(config?.ldapSearchBase ?? "");
+  const [ldapUserFilter, setLdapUserFilter] = useState(config?.ldapUserFilter ?? "");
+
+  useEffect(() => {
+    setLdapUrl(config?.ldapUrl ?? "");
+    setLdapBindDn(config?.ldapBindDn ?? "");
+    setLdapSearchBase(config?.ldapSearchBase ?? "");
+    setLdapUserFilter(config?.ldapUserFilter ?? "");
+  }, [config?.ldapUrl, config?.ldapBindDn, config?.ldapSearchBase, config?.ldapUserFilter]);
+
+  const save = useMutation({
+    mutationFn: (payload: Partial<SsoProviderConfig> & { ldapBindCredential?: string }) => settingsApi.updateSso("ldap", payload),
+    onSuccess: () => {
+      toast.success("Saved");
+      setLdapBindCredential("");
+      queryClient.invalidateQueries({ queryKey: ["settings", "sso"] });
+    },
+    onError: (err: any) => toast.error("Could not save", { description: err?.response?.data?.message ?? "Try again." })
+  });
+
+  const fullyConfigured = Boolean(config?.ldapUrl && config?.ldapBindDn && config?.ldapBindCredentialSet && config?.ldapSearchBase);
+
+  return (
+    <Card>
+      <CardHeader>
+        <div className="flex items-center justify-between gap-3">
+          <div>
+            <CardTitle className="text-base">LDAP / Active Directory</CardTitle>
+            <CardDescription>
+              Connect any LDAP directory (Active Directory, OpenLDAP, ...). This app binds as a service account to look up the
+              signing-in user, then rebinds as that user to verify their password.
+            </CardDescription>
+          </div>
+          {fullyConfigured && config?.isEnabled && (
+            <span className="inline-flex shrink-0 items-center gap-1 rounded-full bg-success/10 px-2.5 py-1 text-xs font-semibold text-success">
+              <Check className="h-3 w-3" />Active
+            </span>
+          )}
+        </div>
+      </CardHeader>
+      <CardContent className="grid gap-4">
+        {isLoading && <Skeleton className="h-32 w-full" />}
+        {!isLoading && (
+          <>
+            <div className="flex items-start gap-4 rounded-lg border border-border p-4">
+              <div className="flex-1">
+                <Label>Enabled</Label>
+                <p className="mt-0.5 text-xs text-muted-foreground">Show a username/password LDAP sign-in form on the login page.</p>
+              </div>
+              <Switch
+                checked={config?.isEnabled ?? false}
+                disabled={readOnly || !fullyConfigured}
+                onCheckedChange={(v) => save.mutate({ isEnabled: v })}
+              />
+            </div>
+
+            <div className="grid gap-4 sm:grid-cols-2">
+              <div className="grid gap-1.5">
+                <Label>Server URL</Label>
+                <Input value={ldapUrl} disabled={readOnly} onChange={(e) => setLdapUrl(e.target.value)} placeholder="ldaps://dc.example.com:636" />
+              </div>
+              <div className="grid gap-1.5">
+                <Label>Search base</Label>
+                <Input value={ldapSearchBase} disabled={readOnly} onChange={(e) => setLdapSearchBase(e.target.value)} placeholder="dc=example,dc=com" />
+              </div>
+            </div>
+
+            <div className="grid gap-4 sm:grid-cols-2">
+              <div className="grid gap-1.5">
+                <Label>Bind DN (service account)</Label>
+                <Input
+                  value={ldapBindDn}
+                  disabled={readOnly}
+                  onChange={(e) => setLdapBindDn(e.target.value)}
+                  placeholder="cn=svc-timesphere,dc=example,dc=com"
+                />
+              </div>
+              <div className="grid gap-1.5">
+                <Label>Bind credential {config?.ldapBindCredentialSet && <span className="font-normal text-muted-foreground">(saved)</span>}</Label>
+                <Input
+                  type="password"
+                  value={ldapBindCredential}
+                  disabled={readOnly}
+                  onChange={(e) => setLdapBindCredential(e.target.value)}
+                  placeholder={config?.ldapBindCredentialSet ? "•••••••••••••••• (unchanged)" : "Not set"}
+                />
+              </div>
+            </div>
+
+            <div className="grid gap-1.5 sm:w-1/2">
+              <Label>User filter</Label>
+              <Input
+                value={ldapUserFilter}
+                disabled={readOnly}
+                onChange={(e) => setLdapUserFilter(e.target.value)}
+                placeholder="(mail={{email}})"
+                className="font-mono text-xs"
+              />
+              <p className="text-xs text-muted-foreground">{"{{email}}"} is replaced with the email the person types in at login.</p>
+            </div>
+
+            <Button
+              size="sm"
+              className="w-fit"
+              disabled={readOnly}
+              onClick={() =>
+                save.mutate({
+                  ldapUrl: ldapUrl || null,
+                  ldapBindDn: ldapBindDn || null,
+                  ldapSearchBase: ldapSearchBase || null,
+                  ldapUserFilter: ldapUserFilter || null,
+                  ...(ldapBindCredential ? { ldapBindCredential } : {})
+                })
+              }
+            >
+              <Save className="h-4 w-4" />Save
+            </Button>
+          </>
+        )}
+      </CardContent>
+    </Card>
   );
 }

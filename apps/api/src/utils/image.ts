@@ -1,3 +1,13 @@
+/**
+ * WHAT: `processAvatar()` — re-encodes an uploaded avatar image buffer through `sharp` and
+ * writes the result to disk.
+ * WHY: an uploaded image is untrusted input in more ways than "wrong file type" — see
+ * middleware/upload.ts#avatarUpload's comment for the three concrete risks (leaked EXIF/location
+ * metadata, polyglot files that are simultaneously a valid image and valid JS/HTML, oversized
+ * decompression bombs) this re-encode step closes off, on top of the extension/MIME allow-list.
+ * WHO calls this: `auth.controller.ts`'s avatar upload route, after `avatarUpload` (multer,
+ * memory storage) has already gated on extension/MIME.
+ */
 import fs from "node:fs/promises";
 import path from "node:path";
 import sharp from "sharp";

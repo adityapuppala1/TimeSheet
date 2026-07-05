@@ -1,3 +1,10 @@
+/**
+ * WHAT: public password-reset form — reads the reset token from the URL's `?token=` search
+ * param and submits the new password via `authApi.resetPassword`.
+ * WHY the token lives in the URL, not a form field: it's the link emailed to the user by
+ * `auth.controller.ts`'s `/forgot-password` flow — this page just consumes it.
+ * WHO links here: the "reset your password" email (`services/mail-templates.ts#reset`).
+ */
 import { useMutation } from "@tanstack/react-query";
 import { motion } from "framer-motion";
 import { CheckCircle2, KeyRound } from "lucide-react";

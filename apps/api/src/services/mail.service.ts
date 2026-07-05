@@ -1,3 +1,18 @@
+/**
+ * WHAT: the one place this app actually talks to an SMTP server. Lazily creates+verifies a
+ * nodemailer transport, exposes `sendMail()` (every outbound email in the app goes through this)
+ * and `getTransportStatus()` (powers the admin settings banner warning when SMTP isn't
+ * configured or the From-address looks undeliverable).
+ * WHY: centralizing here means every caller gets the same `EmailLog` audit trail, the same
+ * graceful "SMTP not configured — log to console instead of crashing" fallback, and the same
+ * BCC-super-admin behavior, without re-implementing any of it.
+ * HOW: `getTransport()` builds the transporter once (lazy — so a misconfigured SMTP_HOST
+ * doesn't fail at import time) and verifies it in the background; `classifyFromAddress` proactively
+ * flags common deliverability foot-guns (reserved TLDs, MAIL_FROM/SMTP_USER domain mismatch)
+ * since those cause silent drops that are otherwise very hard to diagnose.
+ * WHO calls this: `notify.service.ts` (the higher-level "should this even send" gate) and
+ * `dispatchTransactional` — nothing else calls `sendMail` directly.
+ */
 import nodemailer, { type Transporter } from "nodemailer";
 import { env } from "../config/env.js";
 import { prisma } from "../config/prisma.js";

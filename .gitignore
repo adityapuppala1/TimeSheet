@@ -11,6 +11,10 @@ apps/api/uploads/
 apps/*/dist/
 packages/*/dist/
 
+# Generated Prisma client for the control-plane schema (apps/api/prisma/control/schema.prisma)
+# — regenerate with `npm run control:generate -w apps/api`, never hand-edited.
+apps/api/src/generated/
+
 # Playwright — generated test artifacts and per-role session snapshots (live cookies/tokens,
 # regenerated on every test run — never something to commit).
 playwright-report/

@@ -1,3 +1,10 @@
+/**
+ * WHAT: filterable table over the tenant `AuditLog` (action/entity/actor), the admin-facing
+ * view of everything `services/audit.service.ts#audit()` writes across the whole backend.
+ * WHY it's just a filter UI and not much else: the log itself is append-only and already
+ * structured (action/entity/entityId/metadata) — this page's job is presentation, not logic.
+ * WHO calls the backing API: `controllers/audit.controller.ts` via `auditApi.list`.
+ */
 import { useQuery } from "@tanstack/react-query";
 import { RotateCcw, Search, ShieldAlert, ShieldCheck, UserCog } from "lucide-react";
 import { useMemo, useState } from "react";

@@ -1,3 +1,18 @@
+/**
+ * WHAT: password hashing (bcrypt) and access/refresh JWT sign/verify helpers for **tenant**
+ * auth — the platform-admin equivalent lives separately in utils/platform-admin-security.ts,
+ * deliberately never sharing a secret or a function with this file.
+ * WHY: every login method (password, Google/Microsoft/SAML/LDAP SSO) ends at the same
+ * `establishSession()` in services/auth.service.ts, which needs one consistent way to mint
+ * tokens — this file is that one way.
+ * HOW: `AccessTokenPayload` carries `sid` (session id, so a single-device logout takes effect
+ * immediately rather than waiting for token expiry) and `org` (cross-checked by
+ * middleware/auth.ts against the tenant the request resolved to) — both optional, for backward
+ * compatibility with tokens minted before those claims existed. Algorithm is pinned to HS256 on
+ * both sign and verify, never inferred from the token itself (defends against the classic
+ * "alg: none" JWT vulnerability class).
+ * WHO calls this: `services/auth.service.ts` (mint), `middleware/auth.ts` (verify).
+ */
 import bcrypt from "bcryptjs";
 import jwt from "jsonwebtoken";
 import { nanoid } from "nanoid";
@@ -23,10 +38,16 @@ export interface AccessTokenPayload {
    *  single-device logout), not just that the user account overall is still active. Optional
    *  only for backward compatibility with access tokens issued before this claim existed. */
   sid?: string;
+  /** Organization id (control-plane Organization.id) this session belongs to — lets requireAuth
+   *  cross-check a token against the tenant the current request actually resolved to, so a
+   *  token minted under one org can't be replayed against another even though every org
+   *  currently shares the same JWT_ACCESS_SECRET. Optional for backward compatibility with
+   *  tokens issued before Phase B3 (the multi-tenancy work) added this claim. */
+  org?: string;
 }
 
-export function signAccessToken(userId: string, sessionId: string) {
-  return jwt.sign({ sid: sessionId }, env.JWT_ACCESS_SECRET, {
+export function signAccessToken(userId: string, sessionId: string, orgId?: string) {
+  return jwt.sign({ sid: sessionId, org: orgId }, env.JWT_ACCESS_SECRET, {
     subject: userId,
     expiresIn: env.ACCESS_TOKEN_TTL as jwt.SignOptions["expiresIn"],
     algorithm: JWT_ALGORITHM,
@@ -44,8 +65,8 @@ export function verifyAccessToken(token: string): AccessTokenPayload {
 }
 
 /** `days` may be fractional (e.g. remaining time on an existing session after a rotation) — jsonwebtoken accepts seconds as a plain number. */
-export function signRefreshToken(userId: string, sessionId: string, days: number = env.REFRESH_TOKEN_TTL_DAYS) {
-  return jwt.sign({ sid: sessionId }, env.JWT_REFRESH_SECRET, {
+export function signRefreshToken(userId: string, sessionId: string, days: number = env.REFRESH_TOKEN_TTL_DAYS, orgId?: string) {
+  return jwt.sign({ sid: sessionId, org: orgId }, env.JWT_REFRESH_SECRET, {
     subject: userId,
     expiresIn: Math.max(60, Math.round(days * 24 * 60 * 60)),
     algorithm: JWT_ALGORITHM,
@@ -54,10 +75,10 @@ export function signRefreshToken(userId: string, sessionId: string, days: number
   });
 }
 
-export function verifyRefreshToken(token: string): { sub: string; sid: string } {
+export function verifyRefreshToken(token: string): { sub: string; sid: string; org?: string } {
   return jwt.verify(token, env.JWT_REFRESH_SECRET, {
     algorithms: [JWT_ALGORITHM],
     issuer: JWT_ISSUER,
     audience: JWT_AUDIENCE
-  }) as { sub: string; sid: string };
+  }) as { sub: string; sid: string; org?: string };
 }

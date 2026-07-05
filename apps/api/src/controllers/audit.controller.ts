@@ -1,3 +1,10 @@
+/**
+ * WHAT: read-only query endpoint over the tenant `AuditLog` table, gated behind the
+ * `AUDIT_VIEW` permission — powers the admin Audit Log page.
+ * WHY: the log itself is written from dozens of scattered call sites via `services/audit.service.ts`;
+ * this is the one place that data is queried back out, filterable by action/entity/actor.
+ * WHO calls this: `apps/web/src/pages/AuditLog.tsx`.
+ */
 import { Router } from "express";
 import { z } from "zod";
 import { permissions } from "@timesheet/shared";

@@ -11,13 +11,17 @@ import { Router } from "express";
 import { z } from "zod";
 import { notificationPreferenceKeys } from "@timesheet/shared";
 import { prisma } from "../config/prisma.js";
+import { controlPrisma } from "../config/control-prisma.js";
+import { requireTenantContext } from "../config/tenant-context.js";
 import { serverTimezone } from "../config/env.js";
 import { requireAuth, requireSuperAdmin } from "../middleware/auth.js";
 import { env } from "../config/env.js";
+import { AppError } from "../middleware/error.js";
 import { validate } from "../middleware/validate.js";
 import { audit } from "../services/audit.service.js";
 import { getGlobalNotificationSettings } from "../services/notify.service.js";
-import { getGlobalAISettings, getMonthlyAIUsageSummary } from "../services/ai.service.js";
+import { getGlobalAISettings, getMonthlyAIUsageSummary, getWeeklyAIUsageTrend } from "../services/ai.service.js";
+import { getAllowedSsoProviders } from "../services/plan-limits.service.js";
 import { getGlobalTicketSettings } from "../services/ticket.service.js";
 import { encryptSecret } from "../utils/encryption.js";
 
@@ -126,6 +130,11 @@ settingsRouter.get("/ai/usage-summary", async (_req, res) => {
   res.json(await getMonthlyAIUsageSummary());
 });
 
+settingsRouter.get("/ai/usage-trend", async (req, res) => {
+  const weeks = Math.min(26, Math.max(1, Number(req.query.weeks) || 8));
+  res.json(await getWeeklyAIUsageTrend(weeks));
+});
+
 const aiSettingsSchema = z.object({
   body: z
     .object({
@@ -164,4 +173,139 @@ settingsRouter.patch("/ai", requireSuperAdmin, validate(aiSettingsSchema), async
   await audit(req.user!.id, "settings.ai_updated", "GlobalAISettings", "global", { ...req.body, apiKey: undefined });
   const { apiKey: _omit, ...safeUpdated } = updated;
   res.json({ ...safeUpdated, apiKeySet: Boolean(updated.apiKey) });
+});
+
+/**
+ * SSO configuration (Phase B4) — lives entirely in the control-plane database (OrgSsoConfig/
+ * OrgAuthMethod), not the tenant database, since it's about how people authenticate INTO this
+ * org, not something the org's own tenant schema needs to know about. `clientSecretSet`
+ * mirrors the same write-only-secret masking convention used everywhere else in this app
+ * (GlobalAISettings.apiKey, EmailIntakeSettings.imapPassword) — the encrypted value is never
+ * returned to the client, only whether one is saved.
+ */
+settingsRouter.get("/sso", requireSuperAdmin, async (_req, res) => {
+  const { orgId } = requireTenantContext();
+  const [configs, authMethod] = await Promise.all([
+    controlPrisma.orgSsoConfig.findMany({ where: { organizationId: orgId } }),
+    controlPrisma.orgAuthMethod.findUnique({ where: { organizationId: orgId } })
+  ]);
+  res.json({
+    providers: configs.map((c) => ({
+      provider: c.providerType,
+      isEnabled: c.isEnabled,
+      clientId: c.clientId,
+      clientSecretSet: Boolean(c.encryptedClientSecret),
+      tenantHint: c.tenantHint,
+      idpEntityId: c.idpEntityId,
+      idpSsoUrl: c.idpSsoUrl,
+      idpCertificateSet: Boolean(c.idpCertificate),
+      spEntityId: c.spEntityId,
+      ldapUrl: c.ldapUrl,
+      ldapBindDn: c.ldapBindDn,
+      ldapBindCredentialSet: Boolean(c.encryptedLdapBindCredential),
+      ldapSearchBase: c.ldapSearchBase,
+      ldapUserFilter: c.ldapUserFilter,
+      ldapTlsRejectUnauthorized: c.ldapTlsRejectUnauthorized
+    })),
+    passwordLoginEnabled: authMethod?.passwordLoginEnabled ?? true,
+    requireSsoOnly: authMethod?.requireSsoOnly ?? false
+  });
+});
+
+const ssoConfigSchema = z.object({
+  params: z.object({ provider: z.enum(["google", "microsoft", "saml", "ldap"]) }),
+  body: z
+    .object({
+      isEnabled: z.boolean().optional(),
+      // OIDC (Google/Microsoft) fields.
+      clientId: z.string().max(255).optional().nullable(),
+      // Empty string clears the stored secret; omit to leave it untouched (same convention as
+      // GlobalAISettings.apiKey above).
+      clientSecret: z.string().max(2000).optional(),
+      tenantHint: z.string().max(255).optional().nullable(),
+      // SAML fields — idpCertificate is the IdP's PUBLIC signing cert, not a secret, so unlike
+      // clientSecret it's stored (and can be read back as "set") without masking.
+      idpEntityId: z.string().max(500).optional().nullable(),
+      idpSsoUrl: z.string().max(500).url().optional().nullable(),
+      idpCertificate: z.string().max(10_000).optional().nullable(),
+      spEntityId: z.string().max(500).optional().nullable(),
+      // LDAP fields — ldapBindCredential follows the same empty-string-clears / omit-leaves
+      // convention as clientSecret above.
+      ldapUrl: z.string().max(500).optional().nullable(),
+      ldapBindDn: z.string().max(500).optional().nullable(),
+      ldapBindCredential: z.string().max(2000).optional(),
+      ldapSearchBase: z.string().max(500).optional().nullable(),
+      ldapUserFilter: z.string().max(255).optional().nullable(),
+      ldapTlsRejectUnauthorized: z.boolean().optional()
+    })
+    .strict()
+});
+
+const SSO_PROVIDER_LABEL: Record<"GOOGLE" | "MICROSOFT" | "SAML" | "LDAP", string> = {
+  GOOGLE: "Google",
+  MICROSOFT: "Microsoft",
+  SAML: "SAML",
+  LDAP: "LDAP"
+};
+
+settingsRouter.patch("/sso/:provider", requireSuperAdmin, validate(ssoConfigSchema), async (req, res) => {
+  const { orgId } = requireTenantContext();
+  const providerType = String(req.params.provider).toUpperCase() as "GOOGLE" | "MICROSOFT" | "SAML" | "LDAP";
+
+  // Plan-tier enforcement (Phase B7): an org can only ENABLE a provider its tier allows —
+  // editing/saving credentials for a not-yet-enabled provider is still allowed (so an org
+  // mid-upgrade can stage config ahead of time), only flipping isEnabled: true is gated.
+  if (req.body.isEnabled === true) {
+    const allowed = await getAllowedSsoProviders(orgId);
+    if (!allowed.includes(providerType)) {
+      throw new AppError(403, `${SSO_PROVIDER_LABEL[providerType]} sign-in isn't available on this workspace's current plan.`);
+    }
+  }
+
+  const { clientSecret, ldapBindCredential, ...rest } = req.body as Record<string, unknown> & {
+    clientSecret?: string;
+    ldapBindCredential?: string;
+  };
+  const data: Record<string, unknown> = { ...rest };
+  if (typeof clientSecret === "string") data.encryptedClientSecret = clientSecret.length > 0 ? encryptSecret(clientSecret) : null;
+  if (typeof ldapBindCredential === "string") data.encryptedLdapBindCredential = ldapBindCredential.length > 0 ? encryptSecret(ldapBindCredential) : null;
+
+  const updated = await controlPrisma.orgSsoConfig.upsert({
+    where: { organizationId_providerType: { organizationId: orgId, providerType } },
+    update: data,
+    create: { organizationId: orgId, providerType, ...data }
+  });
+  await audit(req.user!.id, "settings.sso_updated", "OrgSsoConfig", updated.id, { provider: providerType, ...req.body, clientSecret: undefined, ldapBindCredential: undefined });
+  res.json({
+    provider: updated.providerType,
+    isEnabled: updated.isEnabled,
+    clientId: updated.clientId,
+    clientSecretSet: Boolean(updated.encryptedClientSecret),
+    tenantHint: updated.tenantHint,
+    idpEntityId: updated.idpEntityId,
+    idpSsoUrl: updated.idpSsoUrl,
+    idpCertificateSet: Boolean(updated.idpCertificate),
+    spEntityId: updated.spEntityId,
+    ldapUrl: updated.ldapUrl,
+    ldapBindDn: updated.ldapBindDn,
+    ldapBindCredentialSet: Boolean(updated.encryptedLdapBindCredential),
+    ldapSearchBase: updated.ldapSearchBase,
+    ldapUserFilter: updated.ldapUserFilter,
+    ldapTlsRejectUnauthorized: updated.ldapTlsRejectUnauthorized
+  });
+});
+
+const authMethodSchema = z.object({
+  body: z.object({ passwordLoginEnabled: z.boolean().optional(), requireSsoOnly: z.boolean().optional() }).strict()
+});
+
+settingsRouter.patch("/auth-method", requireSuperAdmin, validate(authMethodSchema), async (req, res) => {
+  const { orgId } = requireTenantContext();
+  const updated = await controlPrisma.orgAuthMethod.upsert({
+    where: { organizationId: orgId },
+    update: req.body,
+    create: { organizationId: orgId, ...req.body }
+  });
+  await audit(req.user!.id, "settings.auth_method_updated", "OrgAuthMethod", updated.id, req.body);
+  res.json({ passwordLoginEnabled: updated.passwordLoginEnabled, requireSsoOnly: updated.requireSsoOnly });
 });

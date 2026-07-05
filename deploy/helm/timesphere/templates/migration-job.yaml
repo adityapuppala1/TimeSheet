@@ -1,0 +1,72 @@
+{{- if .Values.migrationJob.enabled }}
+apiVersion: batch/v1
+kind: Job
+metadata:
+  # A fixed name (not release-revision-suffixed) plus hook-delete-policy below means each
+  # upgrade cleanly replaces the previous run's Job instead of accumulating one per release.
+  name: {{ include "timesphere.fullname" . }}-migrate
+  labels:
+    {{- include "timesphere.labels" . | nindent 4 }}
+    app.kubernetes.io/component: migration
+  annotations:
+    # NOTE on first `helm install` when mysql.enabled=true (this chart's own MySQL
+    # StatefulSet, not an external managed database): Helm runs pre-install hooks BEFORE
+    # creating the chart's own non-hook resources, so the MySQL pod this Job's wait-loop
+    # below polls for doesn't exist yet on a true first install - the Job will exhaust its
+    # retries and fail, and `helm install` will report the failure. This is expected on that
+    # one specific path; fix by running `helm upgrade` once MySQL's pod is Ready (its
+    # pre-upgrade hook then finds a real database to migrate). Deployments against an
+    # already-running external MySQL (mysql.enabled=false, the recommended production setup -
+    # see values.yaml) don't hit this at all, since the database already exists.
+    "helm.sh/hook": pre-install,pre-upgrade
+    "helm.sh/hook-weight": "0"
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+spec:
+  backoffLimit: {{ .Values.migrationJob.backoffLimit }}
+  template:
+    metadata:
+      labels:
+        {{- include "timesphere.labels" . | nindent 8 }}
+        app.kubernetes.io/component: migration
+    spec:
+      restartPolicy: Never
+      {{- if .Values.image.pullSecretName }}
+      imagePullSecrets:
+        - name: {{ .Values.image.pullSecretName }}
+      {{- end }}
+      {{- if .Values.mysql.enabled }}
+      initContainers:
+        - name: wait-for-mysql
+          image: busybox:1.36
+          command:
+            - sh
+            - -c
+            - |
+              i=0
+              until nc -z -w2 {{ include "timesphere.fullname" . }}-mysql 3306; do
+                i=$((i+1))
+                if [ "$i" -ge 60 ]; then
+                  echo "Timed out waiting for MySQL - see this Job's annotation for the known first-install ordering caveat." >&2
+                  exit 1
+                fi
+                echo "Waiting for MySQL... ($i/60)"
+                sleep 5
+              done
+      {{- end }}
+      containers:
+        - name: migrate
+          image: {{ include "timesphere.image" (dict "root" . "component" "api") }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          workingDir: /app
+          command:
+            - sh
+            - -c
+            - |
+              npx prisma migrate deploy --schema=apps/api/prisma/schema.prisma && \
+              npx prisma migrate deploy --schema=apps/api/prisma/control/schema.prisma
+          envFrom:
+            - configMapRef:
+                name: {{ include "timesphere.fullname" . }}-config
+            - secretRef:
+                name: {{ .Values.existingSecretName }}
+{{- end }}

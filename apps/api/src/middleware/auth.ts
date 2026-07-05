@@ -1,5 +1,22 @@
+/**
+ * WHAT: tenant-side auth middleware — `requireAuth` (verifies the access JWT and attaches
+ * `req.user`), plus `requirePermission`/`requireRole`/`requireSuperAdmin` for authorization
+ * once `req.user` exists.
+ * WHY: every tenant route needs the same three checks (valid token, session not revoked, org
+ * claim matches the resolved tenant) — centralizing them here means a controller just declares
+ * `requireAuth` and never re-implements token verification itself.
+ * HOW: reads the `Authorization: Bearer` header, verifies it against `JWT_ACCESS_SECRET`
+ * (utils/security.ts), cross-checks the `org` claim against `tenant-context.ts`'s resolved org,
+ * and (if the token carries a session id) confirms that specific Session row hasn't been
+ * revoked — this is what makes single-device logout take effect immediately rather than
+ * waiting for the access token to expire on its own.
+ * WHO calls this: every authenticated route in every controller (`app.ts` doesn't apply it
+ * globally — each router opts in), and `requireSuperAdmin` specifically gates admin-only
+ * settings endpoints.
+ */
 import type { NextFunction, Request, Response } from "express";
 import { prisma } from "../config/prisma.js";
+import { requireTenantContext } from "../config/tenant-context.js";
 import { verifyAccessToken } from "../utils/security.js";
 import { AppError } from "./error.js";
 
@@ -28,7 +45,7 @@ export async function requireAuth(req: Request, _res: Response, next: NextFuncti
   const token = header.startsWith("Bearer ") ? header.slice(7).trim() : "";
   if (!token) throw new AppError(401, "Authentication required");
 
-  let payload: { sub?: unknown; sid?: unknown };
+  let payload: { sub?: unknown; sid?: unknown; org?: unknown };
   try {
     payload = verifyAccessToken(token);
   } catch {
@@ -39,6 +56,18 @@ export async function requireAuth(req: Request, _res: Response, next: NextFuncti
   // with `sub: "garbage"` triggers a Prisma error → uncaught 500 leak.
   if (typeof payload.sub !== "string" || !UUID_RE.test(payload.sub)) {
     throw new AppError(401, "Invalid session");
+  }
+
+  // Cross-check the token's org claim against whichever tenant this request actually
+  // resolved to (middleware/tenant.ts, already run by this point). Every org currently
+  // shares one JWT_ACCESS_SECRET, so without this check a token minted under one org would
+  // still verify successfully if presented against another — in practice `sub` almost
+  // certainly wouldn't resolve to a real user in a different org's database (UUIDs are
+  // effectively globally unique), but this makes that failure explicit and immediate rather
+  // than relying on that coincidence. Tokens minted before this claim existed have no `org`
+  // and skip the check, same backward-compatibility pattern as the `sid` check below.
+  if (typeof payload.org === "string" && payload.org !== requireTenantContext().orgId) {
+    throw new AppError(401, "Session does not belong to this workspace");
   }
 
   // Access tokens minted after the session-management hardening pass carry a `sid` claim,

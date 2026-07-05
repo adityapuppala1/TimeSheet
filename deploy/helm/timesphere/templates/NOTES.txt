@@ -1,0 +1,33 @@
+TimeSphere ({{ .Chart.AppVersion }}) has been installed as release "{{ .Release.Name }}" in namespace "{{ .Release.Namespace }}".
+
+{{- if .Values.migrationJob.enabled }}
+
+Migration Job: check its status with
+  kubectl get jobs -n {{ .Release.Namespace }} -l app.kubernetes.io/component=migration
+If this is a FIRST install with mysql.enabled=true, that Job may have failed because MySQL's
+own pod didn't exist yet when the pre-install hook ran (see the Job's annotation for why) - run
+`helm upgrade` once the MySQL pod is Ready and the migration will succeed on that pass instead.
+{{- end }}
+
+{{- if .Values.ingress.enabled }}
+
+Web app:        https://{{ .Values.ingress.host }}
+Platform admin: https://{{ .Values.ingress.host }}/platform-admin/login
+{{- else }}
+
+Ingress is disabled - port-forward to reach the app:
+  kubectl port-forward -n {{ .Release.Namespace }} svc/{{ include "timesphere.fullname" . }}-web 8080:80
+  kubectl port-forward -n {{ .Release.Namespace }} svc/{{ include "timesphere.fullname" . }}-api 4000:4000
+{{- end }}
+
+First-time setup still needs the one-time seed (roles/permissions, control-plane plan tiers,
+the platform-admin account) - this chart doesn't run it automatically since it's not idempotent
+in the same "safe to run on every deploy" sense migrations are:
+  kubectl exec -n {{ .Release.Namespace }} deploy/{{ include "timesphere.fullname" . }}-api -- npm run control:seed -w apps/api
+  kubectl exec -n {{ .Release.Namespace }} deploy/{{ include "timesphere.fullname" . }}-api -- npm run seed -w apps/api
+
+Autoscaling:
+  api: {{ .Values.api.autoscaling.enabled }} (min {{ .Values.api.autoscaling.minReplicas }}, max {{ .Values.api.autoscaling.maxReplicas }}, target CPU {{ .Values.api.autoscaling.targetCPUUtilizationPercentage }}%)
+  web: {{ .Values.web.autoscaling.enabled }} (min {{ .Values.web.autoscaling.minReplicas }}, max {{ .Values.web.autoscaling.maxReplicas }}, target CPU {{ .Values.web.autoscaling.targetCPUUtilizationPercentage }}%)
+
+See docs/DEPLOYMENT.md's "Kubernetes deployment" section for the full walkthrough.

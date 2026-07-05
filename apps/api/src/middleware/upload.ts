@@ -1,3 +1,17 @@
+/**
+ * WHAT: multer configuration for the two upload paths in this app — general ticket/timesheet
+ * attachments (`upload`, disk storage) and profile avatars (`avatarUpload`, memory storage so
+ * utils/image.ts can re-encode before writing to disk).
+ * WHY: file uploads are one of the highest-risk inputs an app accepts — an extension/MIME
+ * allow-list here is the first of several layers (see the inline comment on
+ * `allowedAttachmentExtensions` for why `.html`/`.js`/`.svg` are excluded, and app.ts's
+ * `/uploads` static handler for the `Content-Disposition: attachment` defense-in-depth layer).
+ * HOW: exports two configured multer instances plus the shared `allowedAttachmentExtensions`
+ * set (also reused by email-intake.service.ts and chat-intake.service.ts when saving
+ * inbound attachments from external sources).
+ * WHO calls this: any controller route accepting a file (ticket/timesheet attachments,
+ * `auth.controller.ts`'s avatar upload), plus the email/chat intake pipelines for attachments.
+ */
 import fs from "node:fs";
 import path from "node:path";
 import multer from "multer";

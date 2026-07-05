@@ -1,3 +1,14 @@
+/**
+ * WHAT: project/module/submodule CRUD, plus who-can-see-what and who-can-assign-whom for
+ * project member assignments.
+ * WHY: projects are the top-level scoping unit for both timesheets and tickets, and visibility
+ * needs to follow the reporting chain (a manager sees their own + their direct reports'
+ * projects) rather than being all-or-nothing — `visibilityScope`/`canModifyAssignment` are the
+ * two functions that encode those rules once, reused by every route below instead of each
+ * route re-deriving them.
+ * WHO calls this: `apps/web/src/pages/AdminPages.tsx` (ProjectsPage), plus every other page's
+ * project/module dropdowns via `projectApi.list()`.
+ */
 import { Router } from "express";
 import { z } from "zod";
 import { permissions } from "@timesheet/shared";

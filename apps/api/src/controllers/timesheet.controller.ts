@@ -1,3 +1,17 @@
+/**
+ * WHAT: create/list/approve/reject timesheet entries (draft or submitted, with or without file
+ * attachments), including overlap validation, SLA approval-deadline computation, and
+ * notification dispatch at each status transition.
+ * WHY: this is the other half of the app's "own both the work and the time spent on it" thesis
+ * — a submitted entry starts an SLA clock (`services/sla.service.ts`) the same way a ticket's
+ * priority does, and can optionally link to a `Ticket` so time logged against bug-fixing shows
+ * up on that ticket too.
+ * HOW: `saveTimesheet()` wraps the overlap check + insert in a `Serializable` transaction —
+ * without that, two concurrent submits for the same (user, day) could each see "no overlap" and
+ * both insert, since the check-then-insert isn't otherwise atomic.
+ * WHO calls this: `apps/web/src/pages/Timesheet.tsx` (create), `apps/web/src/pages/AdminPages.tsx`
+ * (ApprovalsPage — approve/reject), `apps/web/src/pages/History.tsx` (list).
+ */
 import { Router } from "express";
 import { z } from "zod";
 import { calculateHours, permissions } from "@timesheet/shared";

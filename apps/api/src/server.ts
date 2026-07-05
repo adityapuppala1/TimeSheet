@@ -1,8 +1,25 @@
+/**
+ * WHAT: process entry point — runs boot-time fail-fast safety checks, starts the HTTP server,
+ * logs diagnostics (timezone, DB connectivity, mail transport status), starts every cron
+ * worker, and wires graceful shutdown.
+ * WHY `assertProductionSafety` exists: a placeholder/weak JWT secret or encryption key is the
+ * kind of mistake that's invisible until it's exploited — this refuses to boot in production
+ * with one (entropy-estimated, not just a denylist of known-bad strings, so a hand-typed weak
+ * secret is caught too, not just the literal example values from `.env.example`).
+ * WHY graceful shutdown matters: Docker/Kubernetes sends SIGTERM and waits before SIGKILL —
+ * stopping new connections, draining in-flight requests, then disconnecting Prisma cleanly is
+ * what avoids dropped requests during a rolling deploy.
+ * WHO calls this: nothing — this IS the entry point (`node dist/src/server.js`, or `tsx watch
+ * src/server.ts` in dev).
+ */
 import type { Server } from "node:http";
 import { app } from "./app.js";
+import { controlPrisma } from "./config/control-prisma.js";
 import { env, serverTimezone } from "./config/env.js";
-import { applyDatabaseTimezone, prisma } from "./config/prisma.js";
+import { applyDatabaseTimezone, disconnectAllTenantClients, getTenantClient } from "./config/prisma.js";
+import { decryptSecret } from "./utils/encryption.js";
 import { getTransportStatus } from "./services/mail.service.js";
+import { startChatTelegramWorker } from "./workers/chat-telegram.worker.js";
 import { startDailyReminderWorker } from "./workers/daily-reminder.worker.js";
 import { startDeadlineReminderWorker } from "./workers/deadline-reminder.worker.js";
 import { startEscalationWorker } from "./workers/escalation.worker.js";
@@ -95,8 +112,18 @@ const server: Server = app.listen(env.API_PORT, async () => {
   console.log(`\nAPI listening on http://localhost:${env.API_PORT}`);
   console.log(`[time] Node timezone: ${serverTimezone} (${offsetLabel}) — ${now.toLocaleString()}`);
 
+  // Warm the DEFAULT_ORG_SLUG tenant client at boot (fail loudly here rather than on a
+  // request if the control plane or that org's database is misconfigured), and reuse it for
+  // the db.time diagnostic log that used to run against the single static client.
   try {
-    const tz = await applyDatabaseTimezone();
+    const org = await controlPrisma.organization.findUnique({ where: { slug: env.DEFAULT_ORG_SLUG }, include: { database: true } });
+    if (!org || !org.database) {
+      console.error(`[boot] FATAL: control-plane Organization "${env.DEFAULT_ORG_SLUG}" is missing or has no database record.`);
+      console.error("[boot] Run: npm run control:seed -w apps/api");
+      process.exit(1);
+    }
+    const defaultClient = await getTenantClient(org.id, decryptSecret(org.database.encryptedDsn));
+    const tz = await applyDatabaseTimezone(defaultClient);
     console.log(
       `[db.time] mysql session=${tz.sessionTimeZone ?? "?"}, global=${tz.globalTimeZone ?? "?"}, ` +
         `offset=${tz.offset}, applied(global=${tz.globalApplied}, session=${tz.sessionApplied})`
@@ -120,6 +147,7 @@ const server: Server = app.listen(env.API_PORT, async () => {
   startDailyReminderWorker();
   startTicketEscalationWorker();
   startInboundEmailWorker();
+  startChatTelegramWorker();
   startWeeklyDigestWorker();
 });
 
@@ -148,7 +176,8 @@ function shutdown(signal: NodeJS.Signals) {
   server.close(async (err) => {
     if (err) console.error("[shutdown] server.close error:", err.message);
     try {
-      await prisma.$disconnect();
+      await disconnectAllTenantClients();
+      await controlPrisma.$disconnect();
       console.log("[shutdown] prisma disconnected");
     } catch (error) {
       console.error("[shutdown] prisma disconnect error:", (error as Error).message);

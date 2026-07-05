@@ -744,9 +744,9 @@ function TicketDetailSheet({
           <>
             <SheetHeader>
               <div className="text-xs font-mono text-muted-foreground">{ticket.key}</div>
-              <SheetTitle className="flex items-center gap-2 text-xl">
-                <TypeIcon className="h-5 w-5 text-muted-foreground" />
-                {ticket.title}
+              <SheetTitle className="flex items-start gap-2 text-xl">
+                <TypeIcon className="mt-0.5 h-5 w-5 shrink-0 text-muted-foreground" />
+                <span className="min-w-0 break-words">{ticket.title}</span>
               </SheetTitle>
               <div className="flex flex-wrap items-center gap-2 pt-1">
                 <Badge variant={PRIORITY_VARIANT[ticket.priority]}>{ticket.priority}</Badge>

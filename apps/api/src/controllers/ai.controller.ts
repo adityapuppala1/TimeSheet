@@ -52,7 +52,8 @@ aiRouter.post("/tickets/suggest-triage", requirePermission(permissions.TICKETS_W
     title: req.body.title,
     description: req.body.description,
     project,
-    typeNames: types.map((t) => t.name)
+    typeNames: types.map((t) => t.name),
+    userId: req.user!.id
   });
 
   await audit(req.user!.id, "ai.triage_suggested", "Project", project.id, { title: req.body.title, ...result });
@@ -81,7 +82,7 @@ aiRouter.post("/tickets/duplicates", requirePermission(permissions.TICKETS_WRITE
     take: 100
   });
 
-  const matches = await findDuplicateTickets({ title: req.body.title, description: req.body.description, candidates });
+  const matches = await findDuplicateTickets({ title: req.body.title, description: req.body.description, candidates, userId: req.user!.id });
   res.json({ matches });
 });
 
@@ -93,7 +94,7 @@ const improveSchema = z.object({
 });
 
 aiRouter.post("/text/improve", requirePermission(permissions.TICKETS_WRITE), validate(improveSchema), async (req, res) => {
-  const result = await improveText({ text: req.body.text, context: req.body.context });
+  const result = await improveText({ text: req.body.text, context: req.body.context, userId: req.user!.id });
   res.json(result);
 });
 
@@ -110,7 +111,8 @@ aiRouter.post("/tickets/:id/summarize", requirePermission(permissions.TICKETS_VI
 
   const result = await summarizeComments({
     ticketTitle: ticket.title,
-    comments: ticket.comments.map((c) => ({ authorName: c.author.name, body: c.body, createdAt: c.createdAt }))
+    comments: ticket.comments.map((c) => ({ authorName: c.author.name, body: c.body, createdAt: c.createdAt })),
+    userId: req.user!.id
   });
   res.json(result);
 });
@@ -132,6 +134,6 @@ aiRouter.post("/ask", requirePermission(permissions.TICKETS_VIEW), validate(askS
     return res.json({ answer: "There are no tickets in your accessible projects yet." });
   }
 
-  const result = await answerWorkspaceQuestion({ question: req.body.question, tickets });
+  const result = await answerWorkspaceQuestion({ question: req.body.question, tickets, userId: req.user!.id });
   res.json(result);
 });

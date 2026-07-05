@@ -1,0 +1,15 @@
+apiVersion: v2
+name: timesphere
+description: >-
+  TimeSphere - timesheet, ticketing, and AI-assisted operations platform. One chart serves both
+  deployment shapes described in docs/DEPLOYMENT.md: a single-org install (mysql.enabled=true,
+  one ingress host, DEFAULT_ORG_SLUG resolves every request) or a multi-org SaaS install
+  (external managed MySQL recommended, wildcard ingress host for subdomain-per-org routing).
+type: application
+version: 0.1.0
+appVersion: "1.0.0"
+keywords:
+  - timesheet
+  - ticketing
+  - saas
+  - multi-tenant

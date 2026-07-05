@@ -1,14 +1,25 @@
+/**
+ * WHAT: admin-only user management — create/update/deactivate, role assignment, manager-chain
+ * assignment, password reset, and (re)sending the welcome email.
+ * WHY: user creation is the one place seat-limit enforcement (`plan-limits.service.ts`) has to
+ * run synchronously before the row is inserted — an org at its plan tier's seat cap can't
+ * create another ACTIVE user, checked fresh on every call so a platform admin lowering the
+ * limit takes effect on the very next attempt.
+ * WHO calls this: `apps/web/src/pages/AdminPages.tsx` (UsersPage).
+ */
 import { Router } from "express";
 import { z } from "zod";
 import { permissions } from "@timesheet/shared";
 import { env } from "../config/env.js";
 import { prisma } from "../config/prisma.js";
+import { requireTenantContext } from "../config/tenant-context.js";
 import { requireAuth, requirePermission } from "../middleware/auth.js";
 import { AppError } from "../middleware/error.js";
 import { validate } from "../middleware/validate.js";
 import { audit } from "../services/audit.service.js";
 import { dispatchTransactional } from "../services/notify.service.js";
 import { templates } from "../services/mail-templates.js";
+import { getEffectiveSeatLimit } from "../services/plan-limits.service.js";
 import { hashPassword } from "../utils/security.js";
 
 export const userRouter = Router();
@@ -66,6 +77,20 @@ userRouter.post(
     })
   ),
   async (req, res) => {
+    // Plan-tier seat enforcement — re-checked on every creation (not cached) so a platform
+    // admin lowering a tier's seat limit, or an org outgrowing its plan, takes effect
+    // immediately rather than after some reconciliation job. Counts the same population
+    // platform-admin-analytics.service.ts reports as "seats" (ACTIVE, not soft-deleted), so
+    // the number an org sees in the console and the number enforced here always agree.
+    const { orgId } = requireTenantContext();
+    const [seatLimit, activeSeats] = await Promise.all([
+      getEffectiveSeatLimit(orgId),
+      prisma.user.count({ where: { status: "ACTIVE", deletedAt: null } })
+    ]);
+    if (activeSeats >= seatLimit) {
+      throw new AppError(402, `Seat limit reached (${seatLimit} seats on the current plan). Contact your platform administrator to add more seats.`);
+    }
+
     const role = await prisma.role.findUniqueOrThrow({ where: { name: req.body.role } });
     if (req.body.managerId) {
       const manager = await prisma.user.findUnique({ where: { id: req.body.managerId } });

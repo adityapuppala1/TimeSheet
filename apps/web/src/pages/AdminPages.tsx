@@ -1,3 +1,13 @@
+/**
+ * WHAT: four admin pages in one file — `UsersPage` (user CRUD/roles/manager assignment/invite/
+ * reset), `ProjectsPage` (project CRUD + member assignment), `ApprovalsPage` (manager's
+ * timesheet approve/reject queue), `ReportsPage` (exportable CSV/PDF reports).
+ * WHY grouped in one file rather than four: these four screens share the same "admin console"
+ * visual shell and are only ever reached via the same Admin nav section — splitting them
+ * wouldn't reduce coupling, just add import overhead for no real benefit.
+ * WHO renders this: `App.tsx`'s admin routes (`/app/admin/users`, `/app/admin/projects`,
+ * `/app/admin/approvals`, `/app/admin/reports`).
+ */
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   Archive,

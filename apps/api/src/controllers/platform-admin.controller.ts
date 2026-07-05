@@ -1,0 +1,187 @@
+/**
+ * Platform-admin console routes — mounted in app.ts BEFORE the blanket tenant-resolution
+ * middleware (same reasoning as controllers/sso.controller.ts's header comment): a platform
+ * admin operates ACROSS tenants by definition, so nothing here should ever depend on which
+ * org a Host header happens to resolve to. Auth is entirely separate from tenant auth — see
+ * middleware/platform-admin-auth.ts and utils/platform-admin-security.ts.
+ */
+import { Router } from "express";
+import { z } from "zod";
+import { env } from "../config/env.js";
+import { controlPrisma } from "../config/control-prisma.js";
+import { AppError } from "../middleware/error.js";
+import { requirePlatformAdmin } from "../middleware/platform-admin-auth.js";
+import { validate } from "../middleware/validate.js";
+import { platformAdminLogin, platformAdminRefresh } from "../services/platform-admin-auth.service.js";
+import { getPlatformAnalytics } from "../services/platform-admin-analytics.service.js";
+import { provisionOrganization } from "../services/provisioning.service.js";
+
+export const platformAdminRouter = Router();
+
+const REFRESH_COOKIE = "platformAdminRefreshToken";
+const COOKIE_PATH = "/api/platform-admin/auth";
+
+function refreshCookieOptions(expiresAt?: Date) {
+  return {
+    httpOnly: true,
+    secure: env.NODE_ENV === "production",
+    sameSite: "lax" as const,
+    path: COOKIE_PATH,
+    expires: expiresAt
+  };
+}
+
+/* ================================== Auth ====================================== */
+
+platformAdminRouter.post(
+  "/auth/login",
+  validate(z.object({ body: z.object({ email: z.string().email(), password: z.string().min(8) }) })),
+  async (req, res) => {
+    const result = await platformAdminLogin(req.body.email, req.body.password, req.headers["user-agent"], req.ip);
+    res.cookie(REFRESH_COOKIE, result.refreshToken, refreshCookieOptions(result.refreshTokenExpiresAt));
+    res.json({ accessToken: result.accessToken, admin: result.admin });
+  }
+);
+
+platformAdminRouter.post("/auth/refresh", async (req, res) => {
+  const token = req.cookies?.[REFRESH_COOKIE];
+  const result = await platformAdminRefresh(token);
+  res.cookie(REFRESH_COOKIE, result.refreshToken, refreshCookieOptions(result.refreshTokenExpiresAt));
+  res.json({ accessToken: result.accessToken });
+});
+
+platformAdminRouter.post("/auth/logout", requirePlatformAdmin, async (req, res) => {
+  if (req.platformAdminSessionId) {
+    await controlPrisma.platformAdminSession.update({ where: { id: req.platformAdminSessionId }, data: { revokedAt: new Date() } }).catch(() => undefined);
+  }
+  res.clearCookie(REFRESH_COOKIE, { path: COOKIE_PATH });
+  res.status(204).send();
+});
+
+platformAdminRouter.get("/auth/me", requirePlatformAdmin, async (req, res) => {
+  res.json(req.platformAdmin);
+});
+
+/* ============================== Organizations ================================== */
+
+platformAdminRouter.get("/organizations", requirePlatformAdmin, async (_req, res) => {
+  const orgs = await controlPrisma.organization.findMany({
+    include: { database: { select: { host: true, databaseName: true, migratedAt: true, schemaVersion: true } } },
+    orderBy: { createdAt: "desc" }
+  });
+  res.json(orgs);
+});
+
+const createOrgSchema = z.object({
+  body: z
+    .object({
+      name: z.string().min(2).max(200),
+      slug: z
+        .string()
+        .min(2)
+        .max(63)
+        .regex(/^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/, "Lowercase letters, numbers, and hyphens only — no leading/trailing hyphen"),
+      planTier: z.enum(["STARTER", "TEAM", "ENTERPRISE"]).default("STARTER")
+    })
+    .strict()
+});
+
+// Deliberately control-plane metadata only — NOT full provisioning (creating the physical
+// database, running tenant migrations, seeding roles/an initial admin user). That automation
+// is Phase B8's job; until then, a platform admin creates the Organization row here in
+// PROVISIONING status and hands the org id to ops to finish physical setup (mirrors exactly
+// how Phase B2's second tenant was manually provisioned before any of this console existed).
+platformAdminRouter.post("/organizations", requirePlatformAdmin, validate(createOrgSchema), async (req, res) => {
+  const existing = await controlPrisma.organization.findUnique({ where: { slug: req.body.slug } });
+  if (existing) throw new AppError(409, "An organization with this slug already exists.");
+
+  const org = await controlPrisma.organization.create({
+    data: { name: req.body.name, slug: req.body.slug, planTier: req.body.planTier, status: "PROVISIONING" }
+  });
+  res.status(201).json(org);
+});
+
+platformAdminRouter.get("/organizations/:id", requirePlatformAdmin, async (req, res) => {
+  const org = await controlPrisma.organization.findUnique({
+    where: { id: String(req.params.id) },
+    include: { database: true, ssoConfigs: true, authMethod: true }
+  });
+  if (!org) throw new AppError(404, "Organization not found");
+  const { database, ssoConfigs, ...rest } = org;
+  res.json({
+    ...rest,
+    database: database ? { host: database.host, databaseName: database.databaseName, migratedAt: database.migratedAt, schemaVersion: database.schemaVersion } : null,
+    ssoConfigs: ssoConfigs.map((c) => ({ provider: c.providerType, isEnabled: c.isEnabled }))
+  });
+});
+
+const updateOrgSchema = z.object({
+  body: z
+    .object({
+      name: z.string().min(2).max(200).optional(),
+      planTier: z.enum(["STARTER", "TEAM", "ENTERPRISE"]).optional(),
+      status: z.enum(["PROVISIONING", "ACTIVE", "SUSPENDED", "ARCHIVED"]).optional(),
+      suspendedReason: z.string().max(500).optional().nullable(),
+      seatLimitOverride: z.number().int().positive().optional().nullable(),
+      aiMonthlyBudgetCeilingOverride: z.number().nonnegative().optional().nullable()
+    })
+    .strict()
+});
+
+platformAdminRouter.patch("/organizations/:id", requirePlatformAdmin, validate(updateOrgSchema), async (req, res) => {
+  const data: Record<string, unknown> = { ...req.body };
+  if (req.body.status === "SUSPENDED") data.suspendedAt = new Date();
+  if (req.body.status && req.body.status !== "SUSPENDED") {
+    data.suspendedAt = null;
+    if (!("suspendedReason" in req.body)) data.suspendedReason = null;
+  }
+  const org = await controlPrisma.organization.update({ where: { id: String(req.params.id) }, data }).catch(() => null);
+  if (!org) throw new AppError(404, "Organization not found");
+  res.json(org);
+});
+
+const provisionOrgSchema = z.object({
+  body: z.object({
+    adminEmail: z.string().email(),
+    adminName: z.string().min(2).max(120),
+    adminPassword: z.string().min(8)
+  }).strict()
+});
+
+// Phase B8: turns the control-plane row created above into a real, working tenant — physical
+// database, migrations, baseline seed data, and the one real admin account requested. See
+// services/provisioning.service.ts for the full flow and its retry-safety guarantees.
+platformAdminRouter.post("/organizations/:id/provision", requirePlatformAdmin, validate(provisionOrgSchema), async (req, res) => {
+  const result = await provisionOrganization(String(req.params.id), req.body);
+  res.json(result);
+});
+
+/* ============================== Plan tier limits ================================== */
+
+platformAdminRouter.get("/plan-tier-limits", requirePlatformAdmin, async (_req, res) => {
+  const limits = await controlPrisma.planTierLimit.findMany({ orderBy: { tier: "asc" } });
+  res.json(limits);
+});
+
+const planTierLimitSchema = z.object({
+  params: z.object({ tier: z.enum(["STARTER", "TEAM", "ENTERPRISE"]) }),
+  body: z
+    .object({
+      seatLimit: z.number().int().positive().optional(),
+      aiMonthlyBudgetCeilingUsd: z.number().nonnegative().optional(),
+      allowedSsoProviders: z.array(z.enum(["GOOGLE", "MICROSOFT", "SAML", "LDAP"])).optional(),
+      allowedChatPlatforms: z.array(z.enum(["SLACK", "MICROSOFT_TEAMS", "GOOGLE_CHAT", "TELEGRAM"])).optional()
+    })
+    .strict()
+});
+
+platformAdminRouter.patch("/plan-tier-limits/:tier", requirePlatformAdmin, validate(planTierLimitSchema), async (req, res) => {
+  const updated = await controlPrisma.planTierLimit.update({ where: { tier: req.params.tier as "STARTER" | "TEAM" | "ENTERPRISE" }, data: req.body });
+  res.json(updated);
+});
+
+/* ================================== Analytics =================================== */
+
+platformAdminRouter.get("/analytics", requirePlatformAdmin, async (_req, res) => {
+  res.json(await getPlatformAnalytics());
+});

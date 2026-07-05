@@ -23,5 +23,8 @@
   },
   "overrides": {
     "form-data": "^4.0.6"
+  },
+  "dependencies": {
+    "ldapts": "^8.1.8"
   }
 }

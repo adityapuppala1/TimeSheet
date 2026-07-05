@@ -1,3 +1,12 @@
+/**
+ * WHAT: SUPER_ADMIN-only editor for this org's transactional email templates — edit subject/
+ * body HTML with a live preview, send a single test, run the "test every template" smoke test,
+ * and revert a customized template back to the built-in default.
+ * WHY a preview matters here specifically: `{{variable}}` placeholders only make sense
+ * rendered with real-looking sample data, and a raw HTML text field alone can't show whether an
+ * edit that looked fine in the editor actually renders correctly.
+ * WHO calls the backing API: `controllers/email-templates.controller.ts`.
+ */
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   AlertCircle,

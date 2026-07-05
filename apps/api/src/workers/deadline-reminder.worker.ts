@@ -1,8 +1,17 @@
+/**
+ * WHAT: daily (09:00 server time) cron worker — reminds employees a project's monthly
+ * submission deadline (`Project.submissionDeadlineDayOfMonth`) is 3 or 1 days away, if they
+ * haven't logged any time against it yet this month.
+ * WHY: distinct from `daily-reminder.worker.ts` (a per-day "log today's time" nudge) — this is
+ * specifically about the monthly cutoff, and only fires for projects that opted into one.
+ * WHO calls this: started once from `server.ts`; fans out per-org via `run-for-every-org.ts`.
+ */
 import cron from "node-cron";
 import { env } from "../config/env.js";
 import { prisma } from "../config/prisma.js";
 import { dispatchNotification } from "../services/notify.service.js";
 import { templates } from "../services/mail-templates.js";
+import { runForEveryOrg } from "./run-for-every-org.js";
 
 const REMINDER_OFFSET_DAYS = [3, 1] as const;
 
@@ -85,15 +94,11 @@ export function startDeadlineReminderWorker() {
   const schedule = "0 9 * * *";
   if (!cron.validate(schedule)) return;
 
-  cron.schedule(schedule, async () => {
-    try {
+  cron.schedule(schedule, () => {
+    runForEveryOrg("deadline", async () => {
       const result = await processDeadlineReminders();
-      if (result.sent > 0) {
-        console.info(`[deadline] reminders: ${result.sent} sent.`);
-      }
-    } catch (error) {
-      console.error("[deadline] worker failed:", (error as Error).message);
-    }
+      if (result.sent > 0) console.info(`[deadline] reminders: ${result.sent} sent.`);
+    }).catch((error) => console.error("[deadline] worker failed:", (error as Error).message));
   });
 
   started = true;

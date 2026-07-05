@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { PrismaClient } from "@prisma/client";
 import { activityTypes, permissions } from "@timesheet/shared";
 import { EMAIL_INTAKE_SYSTEM_EMAIL } from "../src/services/email-intake.service.js";
+import { CHAT_INTAKE_SYSTEM_EMAIL } from "../src/services/chat-intake.service.js";
 import { hashPassword } from "../src/utils/security.js";
 import { SEED_TEMPLATES } from "./email-templates-seed.js";
 
@@ -43,12 +44,42 @@ const TEMPLATE_DESCRIPTIONS: Record<string, string> = {
   "ticket.escalation": "Sent to the escalation target when a ticket's SLA breach is escalated."
 };
 
-const prisma = new PrismaClient();
+export interface SeedTenantOptions {
+  /** All three default to the original hardcoded dev/demo values — passing none reproduces
+   *  today's exact seed exactly, for `npm run seed` and any already-provisioned tenant. */
+  adminEmail?: string;
+  adminName?: string;
+  adminPassword?: string;
+  /** Demo manager/employee users + the sample "HICS Operations Platform" project. Defaults to
+   *  true (unchanged local-dev behavior). Phase B8's real-org provisioning flow
+   *  (services/provisioning.service.ts) passes false — a paying customer's brand-new database
+   *  should get exactly the structural data every tenant needs plus the one real admin account
+   *  it asked for, never fake sample people and a fake sample project. */
+  includeDemoData?: boolean;
+}
 
-async function main() {
+/**
+ * Seeds one tenant database's baseline data: roles/permissions, activity types, default ticket
+ * types, the email-intake system account, and every "global" settings singleton at its safe
+ * default — always. One admin user (real details if provided, otherwise the original demo
+ * "Avery Stone" account) is always created too; the demo manager/employee users and sample
+ * project are gated behind `includeDemoData` (see SeedTenantOptions). Takes an arbitrary
+ * `PrismaClient` (rather than a fixed module-level instance) so it can seed EITHER the local
+ * dev database (see `main()` below) OR a brand-new tenant database at org-provisioning time
+ * (Phase B8) — the exact same seed logic either way, since "the whole DB is this org's" holds
+ * equally in both cases under the database-per-tenant model.
+ */
+export async function seedTenant(client: PrismaClient, options: SeedTenantOptions = {}) {
+  const {
+    adminEmail = "superadmin@timesheet.local",
+    adminName = "Avery Stone",
+    adminPassword = "Admin@12345",
+    includeDemoData = true
+  } = options;
+
   const permissionRows = await Promise.all(
     Object.values(permissions).map((key) =>
-      prisma.permission.upsert({ where: { key }, update: {}, create: { key, description: key } })
+      client.permission.upsert({ where: { key }, update: {}, create: { key, description: key } })
     )
   );
 
@@ -75,13 +106,13 @@ async function main() {
   };
 
   for (const [name, rolePermissions] of Object.entries(grants)) {
-    const role = await prisma.role.upsert({
+    const role = await client.role.upsert({
       where: { name: name as any },
       update: {},
       create: { name: name as any, description: name.replace("_", " ") }
     });
-    await prisma.rolePermission.deleteMany({ where: { roleId: role.id } });
-    await prisma.rolePermission.createMany({
+    await client.rolePermission.deleteMany({ where: { roleId: role.id } });
+    await client.rolePermission.createMany({
       data: permissionRows
         .filter((p) => rolePermissions.includes(p.key))
         .map((p) => ({ roleId: role.id, permissionId: p.id }))
@@ -89,7 +120,7 @@ async function main() {
   }
 
   for (const name of activityTypes) {
-    await prisma.activityType.upsert({ where: { name }, update: {}, create: { name } });
+    await client.activityType.upsert({ where: { name }, update: {}, create: { name } });
   }
 
   const ticketTypeDefaults = [
@@ -98,20 +129,20 @@ async function main() {
     { name: "IMPROVEMENT", color: "#8B5CF6" }
   ];
   for (const t of ticketTypeDefaults) {
-    await prisma.ticketType.upsert({ where: { name: t.name }, update: {}, create: t });
+    await client.ticketType.upsert({ where: { name: t.name }, update: {}, create: t });
   }
 
-  const adminRole = await prisma.role.findUniqueOrThrow({ where: { name: "SUPER_ADMIN" } });
-  const managerRole = await prisma.role.findUniqueOrThrow({ where: { name: "MANAGER" } });
-  const employeeRole = await prisma.role.findUniqueOrThrow({ where: { name: "EMPLOYEE" } });
-  const passwordHash = await hashPassword("Admin@12345");
+  const adminRole = await client.role.findUniqueOrThrow({ where: { name: "SUPER_ADMIN" } });
+  const managerRole = await client.role.findUniqueOrThrow({ where: { name: "MANAGER" } });
+  const employeeRole = await client.role.findUniqueOrThrow({ where: { name: "EMPLOYEE" } });
+  const passwordHash = await hashPassword(adminPassword);
 
-  const admin = await prisma.user.upsert({
-    where: { email: "superadmin@timesheet.local" },
+  const admin = await client.user.upsert({
+    where: { email: adminEmail },
     update: {},
     create: {
-      name: "Avery Stone",
-      email: "superadmin@timesheet.local",
+      name: adminName,
+      email: adminEmail,
       passwordHash,
       roleId: adminRole.id,
       status: "ACTIVE",
@@ -121,42 +152,81 @@ async function main() {
     }
   });
 
-  const manager = await prisma.user.upsert({
-    where: { email: "manager@timesheet.local" },
-    update: { managerId: admin.id },
-    create: {
-      name: "Mira Kapoor",
-      email: "manager@timesheet.local",
-      passwordHash,
-      roleId: managerRole.id,
-      status: "ACTIVE",
-      managerId: admin.id,
-      bio: "Engineering manager. Reviews approvals daily and runs weekly utilization syncs.",
-      timezone: "Asia/Kolkata",
-      emailVerifiedAt: new Date()
-    }
-  });
+  if (includeDemoData) {
+    const manager = await client.user.upsert({
+      where: { email: "manager@timesheet.local" },
+      update: { managerId: admin.id },
+      create: {
+        name: "Mira Kapoor",
+        email: "manager@timesheet.local",
+        passwordHash,
+        roleId: managerRole.id,
+        status: "ACTIVE",
+        managerId: admin.id,
+        bio: "Engineering manager. Reviews approvals daily and runs weekly utilization syncs.",
+        timezone: "Asia/Kolkata",
+        emailVerifiedAt: new Date()
+      }
+    });
 
-  const employee = await prisma.user.upsert({
-    where: { email: "employee@timesheet.local" },
-    update: { managerId: manager.id },
-    create: {
-      name: "Dev Patel",
-      email: "employee@timesheet.local",
-      passwordHash,
-      roleId: employeeRole.id,
-      status: "ACTIVE",
-      managerId: manager.id,
-      bio: "Full-stack engineer working on the operations platform.",
-      timezone: "Asia/Kolkata",
-      emailVerifiedAt: new Date()
+    const employee = await client.user.upsert({
+      where: { email: "employee@timesheet.local" },
+      update: { managerId: manager.id },
+      create: {
+        name: "Dev Patel",
+        email: "employee@timesheet.local",
+        passwordHash,
+        roleId: employeeRole.id,
+        status: "ACTIVE",
+        managerId: manager.id,
+        bio: "Full-stack engineer working on the operations platform.",
+        timezone: "Asia/Kolkata",
+        emailVerifiedAt: new Date()
+      }
+    });
+
+    const project = await client.project.upsert({
+      where: { code: "HICS-OPS" },
+      update: {},
+      create: {
+        code: "HICS-OPS",
+        name: "HICS Operations Platform",
+        description: "Internal operations and productivity suite",
+        slaApprovalHours: 48,
+        submissionDeadlineDayOfMonth: 5
+      }
+    });
+    const core = await client.projectModule.upsert({
+      where: { projectId_name: { projectId: project.id, name: "Timesheets" } },
+      update: {},
+      create: { projectId: project.id, name: "Timesheets" }
+    });
+    await client.projectSubmodule.upsert({
+      where: { moduleId_name: { moduleId: core.id, name: "Daily Entry" } },
+      update: {},
+      create: { moduleId: core.id, name: "Daily Entry" }
+    });
+    await client.projectSubmodule.upsert({
+      where: { moduleId_name: { moduleId: core.id, name: "Approvals" } },
+      update: {},
+      create: { moduleId: core.id, name: "Approvals" }
+    });
+
+    // Assign all three seeded users to the demo project so the new
+    // visibility-by-assignment behaviour works out of the box.
+    for (const user of [admin, manager, employee]) {
+      await client.userProjectAssignment.upsert({
+        where: { userId_projectId: { userId: user.id, projectId: project.id } },
+        update: {},
+        create: { userId: user.id, projectId: project.id }
+      });
     }
-  });
+  }
 
   // System account that satisfies Ticket.reporterId's required FK for email-sourced tickets.
   // Unusable random password each seed run — nobody is meant to log in as this account; the
   // real sender's identity lives in Ticket.externalReporterEmail/Name.
-  await prisma.user.upsert({
+  await client.user.upsert({
     where: { email: EMAIL_INTAKE_SYSTEM_EMAIL },
     update: {},
     create: {
@@ -170,45 +240,24 @@ async function main() {
     }
   });
 
-  const project = await prisma.project.upsert({
-    where: { code: "HICS-OPS" },
+  // Same role for chat-sourced tickets (Slack/Teams/Google Chat/Telegram) — see
+  // chat-intake.service.ts's header comment.
+  await client.user.upsert({
+    where: { email: CHAT_INTAKE_SYSTEM_EMAIL },
     update: {},
     create: {
-      code: "HICS-OPS",
-      name: "HICS Operations Platform",
-      description: "Internal operations and productivity suite",
-      slaApprovalHours: 48,
-      submissionDeadlineDayOfMonth: 5
+      name: "Chat Intake",
+      email: CHAT_INTAKE_SYSTEM_EMAIL,
+      passwordHash: await hashPassword(randomUUID()),
+      roleId: employeeRole.id,
+      status: "ACTIVE",
+      bio: "System account — reporter of record for tickets auto-created from chat platforms.",
+      emailVerifiedAt: new Date()
     }
   });
-  const core = await prisma.projectModule.upsert({
-    where: { projectId_name: { projectId: project.id, name: "Timesheets" } },
-    update: {},
-    create: { projectId: project.id, name: "Timesheets" }
-  });
-  await prisma.projectSubmodule.upsert({
-    where: { moduleId_name: { moduleId: core.id, name: "Daily Entry" } },
-    update: {},
-    create: { moduleId: core.id, name: "Daily Entry" }
-  });
-  await prisma.projectSubmodule.upsert({
-    where: { moduleId_name: { moduleId: core.id, name: "Approvals" } },
-    update: {},
-    create: { moduleId: core.id, name: "Approvals" }
-  });
-
-  // Assign all three seeded users to the demo project so the new
-  // visibility-by-assignment behaviour works out of the box.
-  for (const user of [admin, manager, employee]) {
-    await prisma.userProjectAssignment.upsert({
-      where: { userId_projectId: { userId: user.id, projectId: project.id } },
-      update: {},
-      create: { userId: user.id, projectId: project.id }
-    });
-  }
 
   // Global notification settings singleton.
-  await prisma.globalNotificationSettings.upsert({
+  await client.globalNotificationSettings.upsert({
     where: { id: "global" },
     update: {},
     create: { id: "global" }
@@ -216,7 +265,7 @@ async function main() {
 
   // Ticket SLA hours + AI feature toggles singletons. AI stays off (aiEnabled: false)
   // until an admin explicitly opts in from Workspace Settings.
-  await prisma.globalTicketSettings.upsert({
+  await client.globalTicketSettings.upsert({
     where: { id: "global" },
     update: {},
     create: {
@@ -227,7 +276,7 @@ async function main() {
       slaCriticalHours: Number(process.env.TICKET_SLA_CRITICAL_HOURS ?? 4)
     }
   });
-  await prisma.globalAISettings.upsert({
+  await client.globalAISettings.upsert({
     where: { id: "global" },
     update: {},
     create: { id: "global" }
@@ -236,7 +285,7 @@ async function main() {
   // Pre-fill every email template with a polished cross-client design. Admins
   // can later open Email Templates and tweak / send-test / revert any of them.
   for (const [key, template] of Object.entries(SEED_TEMPLATES)) {
-    await prisma.emailTemplate.upsert({
+    await client.emailTemplate.upsert({
       where: { key },
       update: {
         subject: template.subject,
@@ -257,4 +306,12 @@ async function main() {
   }
 }
 
-main().finally(() => prisma.$disconnect());
+// Local dev entry point — seeds whatever DATABASE_URL currently points at, exactly as before
+// this function was made reusable for tenant provisioning. Guarded so that OTHER scripts can
+// `import { seedTenant } from "./seed.js"` (e.g. to seed a brand-new tenant database at
+// org-provisioning time) without ALSO triggering this side effect just by importing it.
+const isEntryPoint = Boolean(process.argv[1]) && import.meta.url === `file:///${process.argv[1].replaceAll("\\", "/").replace(/^\//, "")}`;
+if (isEntryPoint) {
+  const prisma = new PrismaClient();
+  seedTenant(prisma).finally(() => prisma.$disconnect());
+}

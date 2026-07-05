@@ -13,6 +13,8 @@
 import { useQuery } from "@tanstack/react-query";
 import { AlertTriangle, BarChart3, Clock, DollarSign, MessageSquare, RotateCcw, Trophy } from "lucide-react";
 import {
+  Area,
+  AreaChart,
   Bar,
   BarChart,
   CartesianGrid,
@@ -40,6 +42,26 @@ const GRID_STYLE = { strokeDasharray: "3 3", stroke: "hsl(var(--border))" };
 const SERIES_COLOR = { created: "hsl(var(--primary))", resolved: "hsl(var(--info))", estimated: "hsl(var(--primary))", actual: "hsl(var(--info))" };
 // Status colors (state, not identity) — reserved, never reused as a generic categorical hue.
 const STATUS_COLOR = { compliant: "hsl(var(--success))", breached: "hsl(var(--destructive))" };
+// Ticket lifecycle status colors — same "state, not identity" convention: OPEN/IN_PROGRESS/
+// IN_REVIEW read as in-flight (info/primary/warning), RESOLVED reads as success, CLOSED reads
+// as neutral/archived (muted), REOPENED reuses the destructive/warning-adjacent hue since it's
+// the same "something went wrong" signal the reopen-rate stat tile already flags.
+const TICKET_STATUS_COLOR: Record<string, string> = {
+  OPEN: "hsl(var(--info))",
+  IN_PROGRESS: "hsl(var(--primary))",
+  IN_REVIEW: "hsl(var(--warning))",
+  RESOLVED: "hsl(var(--success))",
+  CLOSED: "hsl(var(--muted-foreground))",
+  REOPENED: "hsl(var(--destructive))"
+};
+const TICKET_STATUS_LABEL: Record<string, string> = {
+  OPEN: "Open",
+  IN_PROGRESS: "In progress",
+  IN_REVIEW: "In review",
+  RESOLVED: "Resolved",
+  CLOSED: "Closed",
+  REOPENED: "Reopened"
+};
 
 function formatWeek(iso: string) {
   return new Date(iso).toLocaleDateString(undefined, { month: "short", day: "numeric" });
@@ -70,6 +92,7 @@ function heatColor(value: number, max: number): string {
 
 export function Insights() {
   const insights = useQuery({ queryKey: ["reports", "ticket-insights"], queryFn: reportApi.ticketInsights });
+  const ticketSummary = useQuery({ queryKey: ["reports", "ticket-summary"], queryFn: reportApi.tickets });
   const ticketSettings = useQuery({ queryKey: ["settings", "ticketing"], queryFn: settingsApi.getTicketing });
 
   const costInsights = useQuery({
@@ -126,6 +149,53 @@ export function Insights() {
             />
           </div>
 
+          {ticketSummary.data && ticketSummary.data.byStatus.length > 0 && (
+            <Card>
+              <CardHeader>
+                <CardTitle className="text-base">Ticket status mix</CardTitle>
+                <CardDescription>Every open ticket's lifecycle stage, at a glance.</CardDescription>
+              </CardHeader>
+              <CardContent>
+                <div className="h-16">
+                  <ResponsiveContainer width="100%" height="100%">
+                    <BarChart
+                      layout="vertical"
+                      data={[
+                        ticketSummary.data.byStatus.reduce<Record<string, number | string>>(
+                          (row, s) => ({ ...row, [s.status]: s._count }),
+                          { name: "Tickets" }
+                        )
+                      ]}
+                      margin={{ left: 0, right: 0, top: 0, bottom: 0 }}
+                    >
+                      <XAxis type="number" hide />
+                      <YAxis type="category" dataKey="name" hide />
+                      <RTooltip {...TOOLTIP_STYLE} formatter={(value: number, name) => [value, TICKET_STATUS_LABEL[name as string] ?? name]} />
+                      {Object.keys(TICKET_STATUS_COLOR).map((status, index, arr) => (
+                        <Bar
+                          key={status}
+                          dataKey={status}
+                          name={status}
+                          stackId="mix"
+                          fill={TICKET_STATUS_COLOR[status]}
+                          radius={index === 0 ? [4, 0, 0, 4] : index === arr.length - 1 ? [0, 4, 4, 0] : [0, 0, 0, 0]}
+                        />
+                      ))}
+                    </BarChart>
+                  </ResponsiveContainer>
+                </div>
+                <div className="mt-3 flex flex-wrap gap-x-4 gap-y-1.5 text-xs text-muted-foreground">
+                  {ticketSummary.data.byStatus.map((s) => (
+                    <span key={s.status} className="inline-flex items-center gap-1.5">
+                      <span className="h-2 w-2 shrink-0 rounded-full" style={{ background: TICKET_STATUS_COLOR[s.status] }} />
+                      {TICKET_STATUS_LABEL[s.status] ?? s.status} ({s._count})
+                    </span>
+                  ))}
+                </div>
+              </CardContent>
+            </Card>
+          )}
+
           <Card>
             <CardHeader>
               <CardTitle className="text-base">Ticket velocity</CardTitle>
@@ -143,6 +213,35 @@ export function Insights() {
                     <Line type="monotone" dataKey="created" name="Created" stroke={SERIES_COLOR.created} strokeWidth={2} dot={{ r: 4 }} />
                     <Line type="monotone" dataKey="resolved" name="Resolved" stroke={SERIES_COLOR.resolved} strokeWidth={2} dot={{ r: 4 }} />
                   </LineChart>
+                </ResponsiveContainer>
+              </div>
+            </CardContent>
+          </Card>
+
+          <Card>
+            <CardHeader>
+              <CardTitle className="text-base">Cumulative flow</CardTitle>
+              <CardDescription>Running totals of created vs. resolved — the gap between the two lines is your current backlog size.</CardDescription>
+            </CardHeader>
+            <CardContent>
+              <div className="h-72">
+                <ResponsiveContainer width="100%" height="100%">
+                  <AreaChart
+                    data={data.velocity.reduce<Array<{ label: string; created: number; resolved: number }>>((rows, w) => {
+                      const prevCreated = rows.at(-1)?.created ?? 0;
+                      const prevResolved = rows.at(-1)?.resolved ?? 0;
+                      rows.push({ label: formatWeek(w.weekStart), created: prevCreated + w.created, resolved: prevResolved + w.resolved });
+                      return rows;
+                    }, [])}
+                  >
+                    <CartesianGrid {...GRID_STYLE} />
+                    <XAxis dataKey="label" {...AXIS_STYLE} />
+                    <YAxis {...AXIS_STYLE} allowDecimals={false} />
+                    <RTooltip {...TOOLTIP_STYLE} />
+                    <Legend wrapperStyle={{ fontSize: 12, color: "hsl(var(--muted-foreground))" }} />
+                    <Area type="monotone" dataKey="created" name="Created (cumulative)" stroke={SERIES_COLOR.created} fill={SERIES_COLOR.created} fillOpacity={0.15} strokeWidth={2} />
+                    <Area type="monotone" dataKey="resolved" name="Resolved (cumulative)" stroke={SERIES_COLOR.resolved} fill={SERIES_COLOR.resolved} fillOpacity={0.25} strokeWidth={2} />
+                  </AreaChart>
                 </ResponsiveContainer>
               </div>
             </CardContent>

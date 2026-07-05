@@ -1,3 +1,16 @@
+/**
+ * WHAT: three sanitize-html configurations for three different trust levels of HTML this app
+ * stores/renders: `sanitizeRichText` (Tiptap-authored ticket/comment/timesheet content),
+ * `htmlToText` (plain-text extraction for CSV exports/search), `sanitizeEmailHtml` (admin-authored
+ * transactional email templates, which need a much wider tag/attribute allow-list to render
+ * correctly across email clients, including preserving Outlook MSO conditional comments).
+ * WHY: one shared allow-list per trust level, rather than each caller inventing its own idea of
+ * "safe HTML" — a gap in one place would be a gap everywhere that reuses it.
+ * WHO calls this: `sanitizeRichText` — ticket/comment/timesheet controllers before persisting
+ * user-authored rich text; `sanitizeEmailHtml` — `template-store.service.ts`/
+ * `email-templates.controller.ts` before saving an admin-edited template; `htmlToText` —
+ * `ai.service.ts` (building AI prompts from HTML content) and CSV export code.
+ */
 import sanitizeHtml from "sanitize-html";
 
 /**

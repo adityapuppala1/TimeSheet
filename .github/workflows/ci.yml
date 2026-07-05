@@ -1,0 +1,147 @@
+name: CI
+
+# Runs on every push and PR. Three jobs, deliberately scoped to what each platform can actually
+# verify: GitHub Actions' `services:` containers (needed for a real MySQL instance) only run on
+# Linux runners, so the full build+migrate+seed+Playwright pipeline runs on ubuntu-latest only.
+# windows-latest still earns its place in this workflow — it's the platform install.sh/install.ps1
+# and this whole codebase actually get developed on day-to-day (see docs/DEPLOYMENT.md), so a
+# separate cross-platform job proves the app itself typechecks/builds cleanly there too, and a
+# syntax-only pass over both installer scripts runs on the OS each one is native to.
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+    branches: ["**"]
+
+env:
+  NODE_VERSION: "22"
+
+jobs:
+  build-test-ubuntu:
+    name: Build, typecheck, and e2e (ubuntu)
+    runs-on: ubuntu-latest
+    services:
+      mysql:
+        image: mysql:8.4
+        env:
+          MYSQL_ROOT_PASSWORD: root_ci_password
+          MYSQL_DATABASE: ci_placeholder
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd="mysqladmin ping -h localhost -proot_ci_password"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=10
+    env:
+      NODE_ENV: test
+      DATABASE_URL: "mysql://root:root_ci_password@127.0.0.1:3306/ci_tenant"
+      CONTROL_DATABASE_URL: "mysql://root:root_ci_password@127.0.0.1:3306/ci_control"
+      JWT_ACCESS_SECRET: "ci-only-access-secret-not-for-real-use-0123456789"
+      JWT_REFRESH_SECRET: "ci-only-refresh-secret-not-for-real-use-0123456789"
+      PLATFORM_ADMIN_JWT_SECRET: "ci-only-platform-admin-secret-not-for-real-use-0123456789"
+      ENCRYPTION_KEY: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcd"
+      WEB_ORIGIN: "http://localhost:5173"
+      APP_BASE_URL: "http://localhost:5173"
+      DEFAULT_ORG_SLUG: "default"
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Typecheck (api + web)
+        run: npm run lint
+
+      - name: Build (shared + api + web)
+        run: npm run build
+
+      - name: Create CI databases
+        run: |
+          mysql -h127.0.0.1 -uroot -proot_ci_password -e "CREATE DATABASE IF NOT EXISTS ci_tenant; CREATE DATABASE IF NOT EXISTS ci_control;"
+
+      - name: Migrate + generate both Prisma schemas
+        working-directory: apps/api
+        run: |
+          npx prisma migrate deploy --schema=prisma/schema.prisma
+          npx prisma generate --schema=prisma/schema.prisma
+          npx prisma migrate deploy --schema=prisma/control/schema.prisma
+          npx prisma generate --schema=prisma/control/schema.prisma
+
+      - name: Seed tenant + control-plane data
+        working-directory: apps/api
+        run: |
+          npx tsx prisma/seed.ts
+          npx tsx prisma/control/seed.ts
+
+      - name: Install Playwright browsers
+        run: npx playwright install --with-deps chromium
+
+      - name: Run e2e suite
+        run: npm run test:e2e
+        env:
+          CI: "true"
+
+      - name: Upload Playwright report
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report
+          path: playwright-report/
+          retention-days: 14
+
+  build-cross-platform:
+    name: Typecheck + build (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Typecheck (api + web)
+        run: npm run lint
+
+      - name: Build (shared + api + web)
+        run: npm run build
+
+  validate-installers:
+    name: Validate installer scripts
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Syntax-check install.sh (bash -n, no execution)
+        run: bash -n install.sh
+
+  validate-installer-windows:
+    name: Validate install.ps1 (PowerShell parser, no execution)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Parse install.ps1 without running it
+        shell: pwsh
+        run: |
+          $tokens = $null
+          $errors = $null
+          [System.Management.Automation.Language.Parser]::ParseFile("install.ps1", [ref]$tokens, [ref]$errors) | Out-Null
+          if ($errors.Count -gt 0) {
+            $errors | ForEach-Object { Write-Error $_.Message }
+            exit 1
+          }
+          Write-Host "install.ps1 parses cleanly."

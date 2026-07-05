@@ -1,0 +1,16 @@
+{{- if .Values.mysql.enabled }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "timesphere.fullname" . }}-mysql
+  labels:
+    {{- include "timesphere.labels" . | nindent 4 }}
+    app.kubernetes.io/component: mysql
+spec:
+  clusterIP: None
+  ports:
+    - name: mysql
+      port: 3306
+  selector:
+    {{- include "timesphere.selectorLabels" (dict "Release" .Release "Chart" .Chart "component" "mysql") | nindent 4 }}
+{{- end }}

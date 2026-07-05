@@ -14,6 +14,7 @@ import { prisma } from "../config/prisma.js";
 import { getGlobalAISettings } from "../services/ai.service.js";
 import { getGlobalEmailIntakeSettings, processInboundEmail, type ParsedInboundEmail } from "../services/email-intake.service.js";
 import { decryptSecret } from "../utils/encryption.js";
+import { runForEveryOrg } from "./run-for-every-org.js";
 
 let started = false;
 let polling = false;
@@ -31,7 +32,7 @@ export function startInboundEmailWorker() {
     if (polling) return;
     polling = true;
     try {
-      await pollOnce();
+      await runForEveryOrg("email-intake", pollOnce);
     } catch (error) {
       console.error("[email-intake] poll failed:", (error as Error).message);
     } finally {

@@ -1,3 +1,14 @@
+/**
+ * WHAT: the built-in default HTML for every transactional email this app sends (welcome,
+ * password reset, timesheet status changes, SLA/escalation, reminders, ticket lifecycle
+ * notifications) — one branded shell + one render function per template key.
+ * WHY: these are the fallback bodies used whenever an org hasn't customized a template (see
+ * `template-store.service.ts`/`email-templates.controller.ts`, which let a SUPER_ADMIN override
+ * any of these per-org) — so a brand-new org always has working, reasonably-designed email
+ * without configuring anything first.
+ * WHO calls this: `services/notify.service.ts`'s `fallback.html` argument at every dispatch
+ * call site across the codebase, and `template-store.service.ts` (for the variable list per key).
+ */
 import { env } from "../config/env.js";
 
 const BRAND = "TimeSphere";

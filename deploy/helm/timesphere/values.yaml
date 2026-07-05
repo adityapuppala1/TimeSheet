@@ -1,0 +1,100 @@
+# Default values for the timesphere chart. Override with -f my-values.yaml or --set.
+# See docs/DEPLOYMENT.md's "Kubernetes deployment" section for the full walkthrough.
+
+image:
+  # Matches .github/workflows/cd.yml's naming: ghcr.io/<owner>/<repo>-api and -web.
+  # Swap registry/repository if you publish elsewhere (ECR/GCR/ACR/Docker Hub).
+  registry: ghcr.io
+  repository: your-org/your-repo
+  tag: latest
+  pullPolicy: IfNotPresent
+  pullSecretName: ""
+
+# The Secret (created by you, NOT this chart - see secrets.example.yaml) holding every value
+# apps/api/src/config/env.ts requires with no default: DATABASE_URL, CONTROL_DATABASE_URL,
+# JWT_ACCESS_SECRET, JWT_REFRESH_SECRET, PLATFORM_ADMIN_JWT_SECRET, ENCRYPTION_KEY, and
+# (if mysql.enabled) MYSQL_ROOT_PASSWORD. Keeping secret creation out of `helm install` is
+# deliberate - a chart value or a `helm history` entry is not where long-lived credentials
+# belong; use your cluster's actual secret manager (sealed-secrets, External Secrets, Vault, or
+# plain `kubectl create secret` for a first pass) and just point this chart at the result.
+existingSecretName: timesphere-secrets
+
+api:
+  replicaCount: 2
+  resources:
+    requests: { cpu: 250m, memory: 256Mi }
+    limits: { cpu: "1", memory: 512Mi }
+  # Real autoscaling - this is the capability docker-compose.yml has no equivalent for (its one
+  # manual lever is `docker compose up --scale api=N`). HPA here reacts to load automatically.
+  autoscaling:
+    enabled: true
+    minReplicas: 2
+    maxReplicas: 10
+    targetCPUUtilizationPercentage: 70
+    targetMemoryUtilizationPercentage: 80
+  # VerticalPodAutoscaler is a separate CRD not every cluster has installed - left off by
+  # default so a plain `helm install` never fails on a missing CRD. Turn on only after
+  # `kubectl get crd verticalpodautoscalers.autoscaling.k8s.io` confirms it's present.
+  verticalAutoscaling:
+    enabled: false
+    updateMode: "Off" # Off | Initial | Auto
+  # A ReadWriteOnce PVC, mounted by every api pod - fine for a single node or a storage class
+  # that happens to co-locate them, but ticket/timesheet attachments won't be visible across
+  # nodes with a real multi-node HPA fleet unless your storage class supports ReadWriteMany
+  # (most cloud block storage doesn't; NFS/EFS/Azure Files do). For genuine horizontal scaling
+  # in production, point UPLOAD_DIR-equivalent storage at S3-compatible object storage instead -
+  # not something this chart does for you yet.
+  uploadsVolumeSize: 10Gi
+
+web:
+  replicaCount: 2
+  resources:
+    requests: { cpu: 100m, memory: 64Mi }
+    limits: { cpu: 500m, memory: 128Mi }
+  autoscaling:
+    enabled: true
+    minReplicas: 2
+    maxReplicas: 6
+    targetCPUUtilizationPercentage: 70
+
+# Self-hosted MySQL via a StatefulSet - fine for Shape 1 (on-prem/single-org) or evaluation.
+# For Shape 2 (SaaS, many tenant databases) a managed MySQL service (RDS/Cloud SQL/Azure
+# Database for MySQL) is strongly recommended instead: set mysql.enabled=false and point
+# DATABASE_URL/CONTROL_DATABASE_URL/TENANT_DB_PROVISION_BASE_URL in your Secret at it.
+mysql:
+  enabled: true
+  image: mysql:8.4
+  storageSize: 20Gi
+  storageClassName: ""
+  resources:
+    requests: { cpu: 500m, memory: 1Gi }
+    limits: { cpu: "2", memory: 2Gi }
+
+ingress:
+  enabled: true
+  className: nginx
+  # Shape 1: a single real hostname. Shape 2: also set wildcardHost for subdomain-per-org
+  # routing (middleware/tenant.ts resolves org purely from the Host header's subdomain).
+  host: timesphere.example.com
+  wildcardHost: ""
+  tls:
+    enabled: true
+    secretName: timesphere-tls
+  annotations:
+    cert-manager.io/cluster-issuer: letsencrypt-prod
+
+# Non-secret environment - everything with a default in env.ts is safe to leave unset here.
+env:
+  nodeEnv: production
+  defaultOrgSlug: default
+  webOrigin: https://timesphere.example.com
+  appBaseUrl: https://timesphere.example.com
+  tz: Asia/Kolkata
+
+# Runs `prisma migrate deploy` against BOTH schemas as a Helm hook Job before the api
+# Deployment rolls out new pods - the Kubernetes equivalent of docker-compose.yml's inline
+# migrate-then-start command, but as its own short-lived Job rather than baked into every
+# container's startup (so a failed migration blocks the rollout instead of half-succeeding).
+migrationJob:
+  enabled: true
+  backoffLimit: 2

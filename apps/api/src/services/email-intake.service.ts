@@ -27,7 +27,7 @@ import { env } from "../config/env.js";
 import { prisma } from "../config/prisma.js";
 import { allowedAttachmentExtensions } from "../middleware/upload.js";
 import { audit } from "./audit.service.js";
-import { classifyTicket, getGlobalAISettings } from "./ai.service.js";
+import { classifyTicket, getGlobalAISettings, EXTERNAL_INTAKE_CONFIDENCE_CEILING } from "./ai.service.js";
 import { dispatchNotification, dispatchTransactional, templates } from "./notify.service.js";
 import { computeTicketDueDate, getGlobalTicketSettings, issueTicketKey } from "./ticket.service.js";
 import { sanitizeRichText } from "../utils/sanitize.js";
@@ -41,10 +41,6 @@ export const EMAIL_INTAKE_SYSTEM_EMAIL = "email-intake@system.local";
 
 const MAX_CLASSIFIER_IMAGES = 3;
 const IMAGE_MIME_TO_ANTHROPIC = new Set(["image/png", "image/jpeg", "image/gif", "image/webp"]);
-
-/** See classifyTicket's untrustedSource doc — caps how much a single self-reported
- *  confidence value from email-sourced content can suppress the needsReview gate below. */
-const EMAIL_INTAKE_CONFIDENCE_CEILING = 0.85;
 
 export interface ParsedInboundEmail {
   from: { address: string; name?: string };
@@ -196,7 +192,7 @@ export async function processInboundEmail(email: ParsedInboundEmail): Promise<Pr
   // claimed near-total certainty. A manually-entered ticket's own AI suggestions aren't
   // capped this way since there's an authenticated user in the loop already.
   const confidence = classification?.confidence ?? null;
-  const gatingConfidence = confidence === null ? null : Math.min(confidence, EMAIL_INTAKE_CONFIDENCE_CEILING);
+  const gatingConfidence = confidence === null ? null : Math.min(confidence, EXTERNAL_INTAKE_CONFIDENCE_CEILING);
   const needsReview = gatingConfidence === null || gatingConfidence < aiSettings.confidenceThreshold;
 
   const slaSettings = await getGlobalTicketSettings();

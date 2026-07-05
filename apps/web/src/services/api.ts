@@ -1,6 +1,10 @@
 import axios, { type AxiosRequestConfig } from "axios";
 import type {
   AuthUser,
+  ChatIntegrationRow,
+  ChatMatchType,
+  ChatPlatform,
+  ChatRoutingRuleRow,
   EmailIntakeSettings,
   EmailMatchType,
   EmailRoutingRuleRow,
@@ -33,6 +37,13 @@ export function fileUrl(path?: string | null): string | undefined {
   if (!path) return undefined;
   if (path.startsWith("http://") || path.startsWith("https://")) return path;
   return `${SERVER_ORIGIN}${path.startsWith("/") ? "" : "/"}${path}`;
+}
+
+/** Full-page-navigation API URLs (e.g. an SSO start link, not a fetch call) — resolves the
+ *  same way `api`'s axios instance does (relative `/api` in dev via the Vite proxy, or the
+ *  absolute VITE_API_URL in a split-deployment production build). */
+export function apiUrl(path: string): string {
+  return `${API_BASE_URL}${path.startsWith("/") ? "" : "/"}${path}`;
 }
 
 /**
@@ -107,10 +118,19 @@ export interface SessionRow {
   current: boolean;
 }
 
+export interface SsoMethods {
+  passwordEnabled: boolean;
+  providers: Array<"GOOGLE" | "MICROSOFT" | "SAML" | "LDAP">;
+}
+
 export const authApi = {
   login: async (email: string, password: string, rememberMe: boolean) =>
     (await api.post<LoginResponse>("/auth/login", { email, password, rememberMe })).data,
+  /** LDAP is a direct bind, not a redirect (see auth.controller.ts's "/login/ldap"), so it
+   *  returns the same JSON shape as /login rather than navigating away to an IdP. */
+  loginLdap: async (email: string, password: string) => (await api.post<LoginResponse>("/auth/login/ldap", { email, password })).data,
   refresh: refreshAccessToken,
+  ssoMethods: async () => (await api.get<SsoMethods>("/auth/sso-methods")).data,
   me: async () => (await api.get<AuthUser>("/auth/me")).data,
   logout: async () => api.post("/auth/logout"),
   logoutAll: async () => api.post("/auth/logout-all"),
@@ -326,7 +346,15 @@ export interface AIUsageSummary {
   monthStart: string;
   totalCostUsd: number;
   totalCalls: number;
+  totalInputTokens: number;
+  totalOutputTokens: number;
   byFeature: Array<{ feature: string; costUsd: number; calls: number }>;
+  byModel: Array<{ model: string; costUsd: number; inputTokens: number; outputTokens: number; calls: number }>;
+}
+
+export interface AIUsageWeek {
+  weekStart: string;
+  costUsd: number;
 }
 
 export const settingsApi = {
@@ -341,8 +369,47 @@ export const settingsApi = {
    *  omit to leave the stored key untouched, pass "" to clear it back to the env-var fallback. */
   updateAI: async (payload: Partial<GlobalAISettings> & { apiKey?: string }) =>
     (await api.patch<GlobalAISettings>("/settings/ai", payload)).data,
-  getAIUsageSummary: async () => (await api.get<AIUsageSummary>("/settings/ai/usage-summary")).data
+  getAIUsageSummary: async () => (await api.get<AIUsageSummary>("/settings/ai/usage-summary")).data,
+  getAIUsageTrend: async (weeks = 8) => (await api.get<AIUsageWeek[]>("/settings/ai/usage-trend", { params: { weeks } })).data,
+  getSso: async () => (await api.get<SsoSettings>("/settings/sso")).data,
+  /** `clientSecret`/`idpCertificate` are write-only, same masked-field convention as
+   *  GlobalAISettings.apiKey — omit to leave the stored value untouched, pass "" to clear it.
+   *  (`idpCertificate` isn't secret — it's the IdP's PUBLIC cert — but it's still large/opaque
+   *  enough that round-tripping it back into the form on every load isn't worth doing.) */
+  updateSso: async (
+    provider: "google" | "microsoft" | "saml" | "ldap",
+    payload: Partial<SsoProviderConfig> & { clientSecret?: string; idpCertificate?: string; ldapBindCredential?: string }
+  ) => (await api.patch<SsoProviderConfig>(`/settings/sso/${provider}`, payload)).data,
+  updateAuthMethod: async (payload: { passwordLoginEnabled?: boolean; requireSsoOnly?: boolean }) =>
+    (await api.patch<{ passwordLoginEnabled: boolean; requireSsoOnly: boolean }>("/settings/auth-method", payload)).data
 };
+
+export interface SsoProviderConfig {
+  provider: "GOOGLE" | "MICROSOFT" | "SAML" | "LDAP";
+  isEnabled: boolean;
+  // OIDC (Google/Microsoft)
+  clientId: string | null;
+  clientSecretSet: boolean;
+  tenantHint: string | null;
+  // SAML
+  idpEntityId: string | null;
+  idpSsoUrl: string | null;
+  idpCertificateSet: boolean;
+  spEntityId: string | null;
+  // LDAP
+  ldapUrl: string | null;
+  ldapBindDn: string | null;
+  ldapBindCredentialSet: boolean;
+  ldapSearchBase: string | null;
+  ldapUserFilter: string | null;
+  ldapTlsRejectUnauthorized: boolean;
+}
+
+export interface SsoSettings {
+  providers: SsoProviderConfig[];
+  passwordLoginEnabled: boolean;
+  requireSsoOnly: boolean;
+}
 
 export interface EmailTemplateRow {
   key: string;
@@ -609,6 +676,33 @@ export const emailIntakeApi = {
     save: async (payload: { moduleId: string; defaultAssigneeId: string }) =>
       (await api.post<ModuleAssigneeRuleRow>("/email-intake/assignee-rules", payload)).data,
     remove: async (id: string) => api.delete(`/email-intake/assignee-rules/${id}`)
+  }
+};
+
+/** Admin-only: per-platform chat-connector settings (Slack/Teams/Google Chat/Telegram) and
+ *  their routing rules — same shape as emailIntakeApi above. */
+export const chatIntegrationsApi = {
+  getSettings: async () => (await api.get<{ allowedPlatforms: ChatPlatform[]; integrations: ChatIntegrationRow[] }>("/chat-integrations/settings")).data,
+  updateSettings: async (
+    platform: ChatPlatform,
+    payload: Partial<{
+      isEnabled: boolean;
+      botToken: string;
+      signingSecret: string;
+      teamsAppId: string | null;
+      teamsAppPassword: string;
+      googleChatWebhookUrl: string | null;
+      defaultProjectId: string | null;
+    }>
+  ) => (await api.patch<ChatIntegrationRow>(`/chat-integrations/settings/${platform}`, payload)).data,
+
+  routingRules: {
+    list: async () => (await api.get<ChatRoutingRuleRow[]>("/chat-integrations/routing-rules")).data,
+    create: async (payload: { platform: ChatPlatform; matchType: ChatMatchType; matchValue: string; projectId: string; defaultModuleId?: string }) =>
+      (await api.post<ChatRoutingRuleRow>("/chat-integrations/routing-rules", payload)).data,
+    update: async (id: string, payload: Partial<{ matchType: ChatMatchType; matchValue: string; projectId: string; defaultModuleId: string | null; isActive: boolean }>) =>
+      (await api.patch<ChatRoutingRuleRow>(`/chat-integrations/routing-rules/${id}`, payload)).data,
+    remove: async (id: string) => api.delete(`/chat-integrations/routing-rules/${id}`)
   }
 };
 

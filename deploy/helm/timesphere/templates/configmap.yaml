@@ -1,0 +1,14 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "timesphere.fullname" . }}-config
+  labels:
+    {{- include "timesphere.labels" . | nindent 4 }}
+data:
+  NODE_ENV: {{ .Values.env.nodeEnv | quote }}
+  TZ: {{ .Values.env.tz | quote }}
+  DEFAULT_ORG_SLUG: {{ .Values.env.defaultOrgSlug | quote }}
+  WEB_ORIGIN: {{ .Values.env.webOrigin | quote }}
+  APP_BASE_URL: {{ .Values.env.appBaseUrl | quote }}
+  API_PORT: "4000"
+  UPLOAD_DIR: "/app/uploads"

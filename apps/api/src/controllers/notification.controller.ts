@@ -1,3 +1,12 @@
+/**
+ * WHAT: a signed-in user's own in-app notification inbox — list (with unread count) and
+ * mark-one/mark-all read.
+ * WHY: separate from the workspace-wide notification *settings* (which category emails send at
+ * all — that's SUPER_ADMIN-only, in settings.controller.ts) — this is purely "what's in my
+ * bell icon," scoped to `req.user.id`, no permission beyond being logged in.
+ * WHO calls this: `apps/web/src/components/NotificationsBell.tsx`. Rows themselves are created
+ * by `services/notify.service.ts#dispatchNotification` from all over the app.
+ */
 import { Router } from "express";
 import { z } from "zod";
 import { prisma } from "../config/prisma.js";

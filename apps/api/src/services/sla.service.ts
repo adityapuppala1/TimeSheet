@@ -1,3 +1,17 @@
+/**
+ * WHAT: timesheet-approval SLA logic — computing a submission's approval deadline
+ * (`computeApprovalDeadline`), sweeping for breaches and escalating them
+ * (`processSlaSweep`), and clearing open escalations once a timesheet leaves SUBMITTED
+ * (`resolveEscalationsFor`). This is the timesheet-side SLA system — the ticket-side equivalent
+ * lives separately in `ticket-sla.service.ts`.
+ * WHY: an approval that nobody acts on shouldn't just sit silently — this is what notices a
+ * breach and routes it up the reporting chain (manager's manager, then any ADMIN/SUPER_ADMIN)
+ * automatically.
+ * HOW: `processSlaSweep` is idempotent per breach — `Timesheet.slaBreachAt` is the marker, so
+ * re-running the sweep never double-escalates the same overdue entry.
+ * WHO calls this: `workers/escalation.worker.ts` (the cron entry point), `controllers/timesheet.controller.ts`
+ * (`computeApprovalDeadline` at submit time, `resolveEscalationsFor` at approve/reject time).
+ */
 import { prisma } from "../config/prisma.js";
 import { env } from "../config/env.js";
 import { dispatchNotification } from "./notify.service.js";

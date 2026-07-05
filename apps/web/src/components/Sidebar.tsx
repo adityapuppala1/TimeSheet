@@ -1,3 +1,13 @@
+/**
+ * WHAT: the app's left navigation — exports `Sidebar` (persistent, desktop/laptop/4K) and
+ * `MobileNav`/`MobileDrawerNav` (the phone/tablet equivalents, a bottom bar + slide-out drawer).
+ * WHY three variants of the same nav: the responsive-layout requirement (phone through 4K,
+ * verified by the Playwright suite) means the persistent sidebar pattern doesn't work below a
+ * certain width — rather than one component with a lot of conditional CSS, each viewport class
+ * gets its own small component sharing the same permission-filtered link list.
+ * WHO renders this: `layouts/AppLayout.tsx` (`Sidebar` + `MobileNav`), `components/Topbar.tsx`
+ * (`MobileDrawerNav`, opened by the hamburger button).
+ */
 import {
   BarChart3,
   CalendarDays,

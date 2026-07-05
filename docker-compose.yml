@@ -26,8 +26,17 @@ services:
       # No fallback secrets — production refuses to boot if these aren't set.
       # Generate with: openssl rand -base64 48
       DATABASE_URL: ${DATABASE_URL:?DATABASE_URL must be set}
+      # The control-plane database (org registry, SSO config, plan tiers, platform-admin
+      # accounts) — required even for this single-org shape, see README's Multi-tenancy
+      # section. A database on this same mysql container works fine.
+      CONTROL_DATABASE_URL: ${CONTROL_DATABASE_URL:?CONTROL_DATABASE_URL must be set}
+      DEFAULT_ORG_SLUG: ${DEFAULT_ORG_SLUG:-default}
       JWT_ACCESS_SECRET: ${JWT_ACCESS_SECRET:?JWT_ACCESS_SECRET must be set}
       JWT_REFRESH_SECRET: ${JWT_REFRESH_SECRET:?JWT_REFRESH_SECRET must be set}
+      # Deliberately a separate secret from the two above — signs /platform-admin tokens only.
+      PLATFORM_ADMIN_JWT_SECRET: ${PLATFORM_ADMIN_JWT_SECRET:?PLATFORM_ADMIN_JWT_SECRET must be set}
+      # 32 random bytes, hex-encoded (64 hex chars). Generate with: openssl rand -hex 32
+      ENCRYPTION_KEY: ${ENCRYPTION_KEY:?ENCRYPTION_KEY must be set}
       ACCESS_TOKEN_TTL: ${ACCESS_TOKEN_TTL:-15m}
       REFRESH_TOKEN_TTL_DAYS: ${REFRESH_TOKEN_TTL_DAYS:-14}
       API_PORT: 4000
@@ -47,6 +56,7 @@ services:
       TICKET_SLA_MEDIUM_HOURS: ${TICKET_SLA_MEDIUM_HOURS:-72}
       TICKET_SLA_HIGH_HOURS: ${TICKET_SLA_HIGH_HOURS:-24}
       TICKET_SLA_CRITICAL_HOURS: ${TICKET_SLA_CRITICAL_HOURS:-4}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
     ports:
       - "4000:4000"
     volumes:
@@ -64,7 +74,19 @@ services:
       start_period: 30s
     # Run migrations as a separate step before starting the server so a failed
     # migration crashes the container instead of leaving the API partially up.
-    command: sh -c "npx prisma migrate deploy --schema=apps/api/prisma/schema.prisma && node apps/api/dist/src/server.js"
+    #
+    # This migrates exactly one database — DATABASE_URL — which is correct for THIS compose
+    # file's deployment shape: on-prem / single-org, one Organization row (DEFAULT_ORG_SLUG)
+    # pointing at this one MySQL container. A SaaS multi-org deployment has many tenant
+    # databases instead, potentially on different servers than this one, so migrating "the"
+    # database isn't well-defined there — that shape runs `npm run migrate:tenants` from
+    # apps/api (see scripts/migrate-all-tenants.ts) against the control plane instead, as part
+    # of its own deploy process, not from this file.
+    # Migrates BOTH schemas — the tenant schema (this org's own data) and the control-plane
+    # schema (org registry/plan tiers/platform-admin accounts), which must exist even in this
+    # single-org shape. Neither step seeds data — that's a one-time bootstrap operation run
+    # separately after first boot (see docs/DEPLOYMENT.md), not something to repeat every restart.
+    command: sh -c "npx prisma migrate deploy --schema=apps/api/prisma/schema.prisma && npx prisma migrate deploy --schema=apps/api/prisma/control/schema.prisma && node apps/api/dist/src/server.js"
 
   web:
     build:

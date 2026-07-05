@@ -8,6 +8,7 @@
 import cron from "node-cron";
 import { env } from "../config/env.js";
 import { processTicketSlaSweep } from "../services/ticket-sla.service.js";
+import { runForEveryOrg } from "./run-for-every-org.js";
 
 let started = false;
 
@@ -22,15 +23,11 @@ export function startTicketEscalationWorker() {
     return;
   }
 
-  cron.schedule(env.TICKET_SLA_CRON_SCHEDULE, async () => {
-    try {
+  cron.schedule(env.TICKET_SLA_CRON_SCHEDULE, () => {
+    runForEveryOrg("ticket-sla", async () => {
       const result = await processTicketSlaSweep();
-      if (result.breaches > 0) {
-        console.info(`[ticket-sla] sweep: ${result.breaches} breach(es), ${result.escalations} escalation(s).`);
-      }
-    } catch (error) {
-      console.error("[ticket-sla] sweep failed:", (error as Error).message);
-    }
+      if (result.breaches > 0) console.info(`[ticket-sla] sweep: ${result.breaches} breach(es), ${result.escalations} escalation(s).`);
+    }).catch((error) => console.error("[ticket-sla] sweep failed:", (error as Error).message));
   });
 
   started = true;

@@ -1,3 +1,17 @@
+/**
+ * WHAT: loads `.env`, validates every environment variable this API depends on against a Zod
+ * schema, and exports the single typed `env` object everything else imports.
+ * WHY: a missing/malformed env var should fail loudly at boot (a clear Zod error naming exactly
+ * which variable and why), not surface later as a cryptic runtime error three services deep —
+ * `schema.parse(process.env)` at the bottom of this file is what enforces that.
+ * HOW: only six variables have no default (`DATABASE_URL`, `CONTROL_DATABASE_URL`,
+ * `JWT_ACCESS_SECRET`, `JWT_REFRESH_SECRET`, `PLATFORM_ADMIN_JWT_SECRET`, `ENCRYPTION_KEY`) —
+ * everything else degrades to a sane default so a fresh checkout boots without needing every
+ * knob configured. `server.ts#assertProductionSafety` adds a second, stricter layer on top of
+ * this (secret-strength entropy checks) that only runs when `NODE_ENV=production`.
+ * WHO calls this: every file in the API imports `{ env }` from here — it's the one place
+ * `process.env` is read directly.
+ */
 import dotenv from "dotenv";
 import { z } from "zod";
 
@@ -18,8 +32,28 @@ const schema = z.object({
   NODE_ENV: z.string().default("development"),
   TZ: z.string().default("Asia/Kolkata"),
   DATABASE_URL: z.string().min(1),
+  // The platform's own database (org registry, SSO config, plan tiers, platform-admin
+  // accounts) — separate from every tenant's own database. See apps/api/prisma/control/schema.prisma
+  // and apps/api/src/config/control-prisma.ts. Not yet consumed by the request path (that's
+  // Phase B1's tenant-resolution middleware) — Phase B0 only needs it reachable for seeding.
+  CONTROL_DATABASE_URL: z.string().min(1),
+  // The Organization.slug used when a request's Host header doesn't carry a real subdomain
+  // (localhost, a bare IP, an on-prem deployment's own domain with no subdomain routing set
+  // up). A single-tenant on-prem deployment only ever has this one org and never needs real
+  // subdomain routing at all — see prisma/control/seed.ts, which seeds an org with this slug.
+  DEFAULT_ORG_SLUG: z.string().min(1).default("default"),
+  // The MySQL server new tenant databases get physically created on when a platform admin
+  // provisions an org through the console (Phase B8) — a DSN with credentials but no database
+  // name, e.g. "mysql://root:@localhost:3306". Optional: a deployment that provisions tenant
+  // databases some other way (a separate ops process, a different server per customer) simply
+  // leaves this unset, and the provisioning endpoint returns a clear error instead of guessing.
+  TENANT_DB_PROVISION_BASE_URL: z.string().optional(),
   JWT_ACCESS_SECRET: z.string().min(16),
   JWT_REFRESH_SECRET: z.string().min(16),
+  // Deliberately separate from JWT_ACCESS_SECRET/JWT_REFRESH_SECRET (which every tenant
+  // currently shares) — a platform-admin token must never verify successfully even if a
+  // tenant secret ever leaked, since platform admins can see/administer every org.
+  PLATFORM_ADMIN_JWT_SECRET: z.string().min(16),
   // 32 raw bytes, hex-encoded (64 hex chars) — AES-256-GCM key for utils/encryption.ts.
   // Generate one with: openssl rand -hex 32
   ENCRYPTION_KEY: z.string().regex(/^[0-9a-f]{64}$/i, "ENCRYPTION_KEY must be a 64-character hex string (32 bytes) — generate one with: openssl rand -hex 32"),

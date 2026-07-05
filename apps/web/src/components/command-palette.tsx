@@ -1,3 +1,12 @@
+/**
+ * WHAT: the Cmd/Ctrl-K command palette — permission-filtered route search/navigation, quick
+ * actions, and an "Ask AI" natural-language search dialog over the ticket backlog. Also exports
+ * `useCommandPaletteHotkey`, the keyboard-shortcut listener that opens it.
+ * WHY permission-filtered: the same palette renders for every role, but a route/action a user
+ * can't actually use (e.g. Admin Pages for an EMPLOYEE) is filtered out entirely rather than
+ * shown-disabled — a command palette listing things you can't do isn't useful.
+ * WHO renders this: `components/Topbar.tsx`.
+ */
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";

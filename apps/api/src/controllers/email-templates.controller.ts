@@ -1,3 +1,16 @@
+/**
+ * WHAT: SUPER_ADMIN-only editor for this org's transactional email templates (subject/body,
+ * with `{{variable}}` placeholders) — view/edit/revert-to-default, send a single test, or
+ * smoke-test every template at once.
+ * WHY: `services/mail-templates.ts` ships a sensible default HTML for every template key; this
+ * router is what lets an org customize that default (stored as an `EmailTemplate` row) without
+ * a code change, and safely preview the result before it ever reaches a real recipient.
+ * HOW: edited HTML is re-sanitized (`utils/sanitize.ts#sanitizeEmailHtml`) before saving — admin
+ * authorship is a lower-risk input than external content, but it's still HTML headed for an
+ * email client, not a sandboxed browser tab. Test sends use `skipBcc: true` so debug traffic
+ * never fans out to every super admin via the workspace's BCC setting.
+ * WHO calls this: `apps/web/src/pages/EmailTemplates.tsx`.
+ */
 import { Router } from "express";
 import { z } from "zod";
 import { prisma } from "../config/prisma.js";

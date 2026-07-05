@@ -1,3 +1,11 @@
+/**
+ * WHAT: the top app bar — mobile menu toggle, search/command-palette trigger, theme toggle, and
+ * the user menu (profile/logout), composing `NotificationsBell` and `CommandPalette`.
+ * WHY it composes rather than the pages doing so individually: every authenticated page shares
+ * this exact bar (rendered once by `AppLayout`), so cross-page concerns like "is the command
+ * palette open" and "which theme is active" live here instead of being duplicated per page.
+ * WHO renders this: `layouts/AppLayout.tsx`.
+ */
 import { useQueryClient } from "@tanstack/react-query";
 import { Command, LogOut, Menu, Moon, Search, Sun, UserRound, FileClock } from "lucide-react";
 import { useEffect, useState } from "react";

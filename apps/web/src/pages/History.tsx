@@ -1,3 +1,11 @@
+/**
+ * WHAT: read-only, filterable list of a user's past timesheet entries (date range, project,
+ * status), via `timesheetApi.list`.
+ * WHY read-only: editing an already-submitted/approved entry has real audit/SLA implications
+ * (see `sla.service.ts`) — this page is deliberately just for reviewing history, not amending it;
+ * `Timesheet.tsx` is where new entries are logged.
+ * WHO calls the backing API: `controllers/timesheet.controller.ts`'s list route.
+ */
 import { useQuery } from "@tanstack/react-query";
 import { CalendarRange, Clock, FileText, Filter, Layers, Paperclip, RotateCcw, Search } from "lucide-react";
 import { useMemo, useState } from "react";

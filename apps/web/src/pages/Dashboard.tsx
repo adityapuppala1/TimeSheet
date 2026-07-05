@@ -1,3 +1,12 @@
+/**
+ * WHAT: the post-login landing page — KPI cards plus a couple of recharts panels summarizing
+ * timesheet/ticket activity, fed by `reportApi`/`ticketApi`/`timesheetApi`.
+ * WHY it exists separately from Insights.tsx: this is a fast, at-a-glance "how's everything
+ * doing right now" view for daily use; Insights.tsx is the deeper analytics/trend-analysis
+ * page for periodic review — different jobs, different pages, even though both chart the same
+ * underlying data.
+ * WHO renders this: `App.tsx`'s `/app` (index) route.
+ */
 import { useQuery } from "@tanstack/react-query";
 import { motion } from "framer-motion";
 import {

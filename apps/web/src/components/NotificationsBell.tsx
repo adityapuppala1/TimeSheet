@@ -1,3 +1,12 @@
+/**
+ * WHAT: the bell icon + popover showing the signed-in user's own in-app notifications, with
+ * mark-read/mark-all-read actions.
+ * WHY separate from the workspace notification *settings* page: this is purely "what's in my
+ * inbox," backed by `controllers/notification.controller.ts`'s user-scoped routes — it has
+ * nothing to do with which categories are allowed to email at all (that's SUPER_ADMIN-only,
+ * configured elsewhere).
+ * WHO renders this: `components/Topbar.tsx`.
+ */
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Bell, CheckCheck, MailOpen } from "lucide-react";
 import { useNavigate } from "react-router-dom";
@@ -94,7 +103,7 @@ export function NotificationsBell() {
               )}
             >
               <div className="flex items-start justify-between gap-3">
-                <p className="text-sm font-semibold">{item.title}</p>
+                <p className="min-w-0 flex-1 break-words text-sm font-semibold">{item.title}</p>
                 {!item.readAt && <span className="mt-1 h-2 w-2 shrink-0 rounded-full bg-primary" aria-hidden />}
               </div>
               <p className="mt-1 line-clamp-3 text-xs text-muted-foreground">{item.body}</p>

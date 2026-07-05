@@ -38,6 +38,19 @@ enum TicketSource {
   MANUAL
   EMAIL
   API
+  CHAT
+}
+
+enum ChatPlatform {
+  SLACK
+  MICROSOFT_TEAMS
+  GOOGLE_CHAT
+  TELEGRAM
+}
+
+enum ChatMatchType {
+  CHANNEL_ID
+  COMMAND_PREFIX
 }
 
 enum EmailMatchType {
@@ -131,6 +144,7 @@ model User {
   ticketEscalationsFrom     TicketEscalation[]   @relation("TicketEscalationFrom")
   ticketEscalationsTo       TicketEscalation[]   @relation("TicketEscalationTo")
   moduleAssigneeRules       ModuleAssigneeRule[]
+  aiUsageLogs               AIUsageLog[]
 
   createdAt DateTime  @default(now())
   updatedAt DateTime  @updatedAt
@@ -141,21 +155,21 @@ model User {
 }
 
 model Session {
-  id                 String    @id @default(uuid())
-  userId             String
-  user               User      @relation(fields: [userId], references: [id], onDelete: Cascade)
-  refreshHash        String
+  id                  String    @id @default(uuid())
+  userId              String
+  user                User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  refreshHash         String
   /// The immediately-prior refresh secret's hash, kept valid for a short grace window after
   /// rotation (see auth.service.ts#refresh) so that two concurrent requests on the same
   /// still-legitimate session (two tabs, a retried request, a test harness replaying a
   /// snapshot) don't each look like token theft just because they raced a rotation.
   previousRefreshHash String?
-  refreshRotatedAt   DateTime?
-  userAgent          String?
-  ipAddress          String?
-  expiresAt          DateTime
-  revokedAt          DateTime?
-  createdAt          DateTime  @default(now())
+  refreshRotatedAt    DateTime?
+  userAgent           String?
+  ipAddress           String?
+  expiresAt           DateTime
+  revokedAt           DateTime?
+  createdAt           DateTime  @default(now())
 
   @@index([userId, expiresAt])
 }
@@ -188,15 +202,17 @@ model Project {
   /// Incremented transactionally on ticket creation to avoid collisions.
   ticketSeq Int @default(0)
 
-  modules                ProjectModule[]
-  assignments            UserProjectAssignment[]
-  timesheets             Timesheet[]
-  tickets                Ticket[]
-  emailRoutingRules      EmailRoutingRule[]
-  emailIntakeFallbackFor EmailIntakeSettings[]
-  createdAt              DateTime                @default(now())
-  updatedAt              DateTime                @updatedAt
-  deletedAt              DateTime?
+  modules                   ProjectModule[]
+  assignments               UserProjectAssignment[]
+  timesheets                Timesheet[]
+  tickets                   Ticket[]
+  emailRoutingRules         EmailRoutingRule[]
+  emailIntakeFallbackFor    EmailIntakeSettings[]
+  chatRoutingRules          ChatRoutingRule[]
+  chatIntegrationDefaultFor ChatIntegration[]
+  createdAt                 DateTime                @default(now())
+  updatedAt                 DateTime                @updatedAt
+  deletedAt                 DateTime?
 }
 
 model ProjectModule {
@@ -209,6 +225,7 @@ model ProjectModule {
   timesheets        Timesheet[]
   tickets           Ticket[]
   emailRoutingRules EmailRoutingRule[]
+  chatRoutingRules  ChatRoutingRule[]
   assigneeRule      ModuleAssigneeRule?
   createdAt         DateTime            @default(now())
   updatedAt         DateTime            @updatedAt
@@ -435,6 +452,14 @@ model Ticket {
   externalReporterEmail String? @db.VarChar(255)
   externalReporterName  String? @db.VarChar(160)
 
+  /// Same role as the externalReporter* fields above, but for source = CHAT — the reporterId
+  /// still points at a seeded system user (see prisma/seed.ts's chat-intake system account),
+  /// while these carry who actually sent the message on the originating chat platform.
+  externalChatPlatform  ChatPlatform?
+  externalChatUserId    String?       @db.VarChar(255)
+  externalChatUserName  String?       @db.VarChar(160)
+  externalChatChannelId String?       @db.VarChar(255)
+
   /// Computed from priority at creation time (GlobalTicketSettings), mirrors Timesheet.approvalDeadline.
   dueAt       DateTime?
   slaBreachAt DateTime?
@@ -576,21 +601,22 @@ model GlobalTicketSettings {
 /// every AI capability stays inert until an admin explicitly opts in (and ANTHROPIC_API_KEY
 /// is configured server-side).
 model GlobalAISettings {
-  id                        String   @id
-  aiEnabled                 Boolean  @default(false)
-  autoTriageEnabled         Boolean  @default(false)
+  id                        String     @id
+  aiEnabled                 Boolean    @default(false)
+  autoTriageEnabled         Boolean    @default(false)
   /// When true, AI triage suggestions are applied directly on manual ticket creation;
   /// when false, they're surfaced as a one-click "Accept?" suggestion instead.
-  autoTriageAutoApply       Boolean  @default(false)
-  duplicateDetectionEnabled Boolean  @default(false)
-  writingAssistantEnabled   Boolean  @default(false)
-  commentSummaryEnabled     Boolean  @default(false)
-  workspaceSearchEnabled    Boolean  @default(false)
-  emailIngestionEnabled     Boolean  @default(false)
-  weeklyDigestEnabled       Boolean  @default(false)
-  model                     String   @default("claude-haiku-4-5") @db.VarChar(80)
-  confidenceThreshold       Float    @default(0.6)
-  monthlyBudgetUsd          Decimal? @db.Decimal(10, 2)
+  autoTriageAutoApply       Boolean    @default(false)
+  duplicateDetectionEnabled Boolean    @default(false)
+  writingAssistantEnabled   Boolean    @default(false)
+  commentSummaryEnabled     Boolean    @default(false)
+  workspaceSearchEnabled    Boolean    @default(false)
+  emailIngestionEnabled     Boolean    @default(false)
+  chatIngestionEnabled      Boolean    @default(false)
+  weeklyDigestEnabled       Boolean    @default(false)
+  model                     String     @default("claude-haiku-4-5") @db.VarChar(80)
+  confidenceThreshold       Float      @default(0.6)
+  monthlyBudgetUsd          Decimal?   @db.Decimal(10, 2)
   /// BYOK: which model family to call. ANTHROPIC uses this row's apiKey (falling back to the
   /// server's ANTHROPIC_API_KEY env var when unset) against the native Messages API; every
   /// other supported vendor (OpenAI, Groq, Mistral, DeepSeek, OpenRouter, Gemini, Qwen, Kimi,
@@ -599,12 +625,12 @@ model GlobalAISettings {
   provider                  AIProvider @default(ANTHROPIC)
   /// Only meaningful for OPENAI_COMPATIBLE — e.g. https://api.groq.com/openai/v1 or
   /// http://localhost:11434/v1 for a local Ollama install.
-  baseUrl                   String?  @db.VarChar(300)
+  baseUrl                   String?    @db.VarChar(300)
   /// AES-256-GCM ciphertext (see utils/encryption.ts) — never returned to the client; the API
   /// exposes only an `apiKeySet: boolean`, same masking convention as
   /// EmailIntakeSettings.imapPassword.
-  apiKey                    String?  @db.Text
-  updatedAt                 DateTime @updatedAt
+  apiKey                    String?    @db.Text
+  updatedAt                 DateTime   @updatedAt
   updatedById               String?
 }
 
@@ -623,10 +649,16 @@ model AIUsageLog {
   costUsdEstimate Decimal  @db.Decimal(10, 4)
   ticketId        String?
   ticket          Ticket?  @relation(fields: [ticketId], references: [id], onDelete: SetNull)
+  /// The user whose action triggered this AI call (nullable: some triggers, like the
+  /// scheduled weekly digest worker, have no request-bound user).
+  userId          String?
+  user            User?    @relation(fields: [userId], references: [id], onDelete: SetNull)
   createdAt       DateTime @default(now())
 
   @@index([feature, createdAt])
   @@index([createdAt])
+  @@index([model, createdAt])
+  @@index([userId])
 }
 
 /// Singleton (id = "global") row that controls which notification categories
@@ -710,6 +742,62 @@ model ModuleAssigneeRule {
   defaultAssigneeId String
   defaultAssignee   User          @relation(fields: [defaultAssigneeId], references: [id])
   createdAt         DateTime      @default(now())
+}
+
+/// One row per (platform) this org has connected — same "one wide table, nullable
+/// per-platform columns" convention as the control plane's OrgSsoConfig, since each platform's
+/// credential shape is different (Slack bot token + signing secret; Teams app id + password;
+/// Google Chat verification token + outgoing webhook URL; Telegram bot token). Master switch is
+/// GlobalAISettings.chatIngestionEnabled — this table only holds per-platform connection info,
+/// mirroring EmailIntakeSettings' relationship to emailIngestionEnabled.
+model ChatIntegration {
+  id        String       @id @default(uuid())
+  platform  ChatPlatform @unique
+  isEnabled Boolean      @default(false)
+
+  /// Slack (bot token) / Telegram (bot token) — never returned to the client.
+  encryptedBotToken         String? @db.Text
+  /// Slack request-signing secret, or a simple shared verification token for Google Chat's
+  /// HTTP endpoint — same masking convention, exposed only as a boolean "set" flag.
+  encryptedSigningSecret    String? @db.Text
+  /// Microsoft Teams (Bot Framework) app registration — appId is not secret, appPassword is.
+  teamsAppId                String? @db.VarChar(255)
+  encryptedTeamsAppPassword String? @db.Text
+  /// Google Chat's simplest outbound path — an org-configured "Incoming Webhook" URL for the
+  /// target space. Not secret in the encryption-at-rest sense (it's already a bearer-style
+  /// unguessable URL Google issues), so stored plain like SAML's idpCertificate.
+  googleChatWebhookUrl      String? @db.VarChar(500)
+
+  defaultProjectId String?
+  defaultProject   Project? @relation(fields: [defaultProjectId], references: [id], onDelete: SetNull)
+
+  /// Telegram's long-poll cursor — the highest `update_id` already processed, so the next poll
+  /// only fetches new messages.
+  telegramUpdateOffset Int?
+
+  lastEventAt DateTime?
+  lastError   String?   @db.Text
+  updatedAt   DateTime  @updatedAt
+  updatedById String?
+}
+
+/// Routes an inbound chat message to a project (+ optional default module) — same shape and
+/// evaluation order (createdAt, first active match wins) as EmailRoutingRule. CHANNEL_ID matches
+/// the platform's own channel/space identifier; COMMAND_PREFIX matches a leading "/ticket ..."
+/// style command in the message text.
+model ChatRoutingRule {
+  id              String         @id @default(uuid())
+  platform        ChatPlatform
+  matchType       ChatMatchType
+  matchValue      String         @db.VarChar(255)
+  projectId       String
+  project         Project        @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  defaultModuleId String?
+  defaultModule   ProjectModule? @relation(fields: [defaultModuleId], references: [id], onDelete: SetNull)
+  isActive        Boolean        @default(true)
+  createdAt       DateTime       @default(now())
+
+  @@index([platform, isActive])
 }
 
 /// Directed relationship between two tickets (e.g. WEB-12 BLOCKS WEB-15). Surfaced as a

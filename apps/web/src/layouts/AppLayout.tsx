@@ -1,3 +1,12 @@
+/**
+ * WHAT: the authenticated tenant-app shell — Sidebar + Topbar + routed page content, guarding
+ * every child route behind a valid session.
+ * WHY the `hydrated` check before the `user` check: `useAuthStore` starts with no user and
+ * asynchronously tries to restore a session on load (access token lives in memory only, see
+ * `store/auth.ts`) — redirecting to `/login` before that restore attempt finishes would bounce
+ * an already-logged-in user on every page refresh.
+ * WHO renders this: `App.tsx`, as the element for every `/app/*` route.
+ */
 import { Navigate, Outlet } from "react-router-dom";
 import { MobileNav, Sidebar } from "../components/Sidebar";
 import { Topbar } from "../components/Topbar";
