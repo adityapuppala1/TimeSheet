@@ -55,6 +55,19 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      # Prisma client code (both schemas) is generated, never checked in — `npm ci` alone
+      # doesn't produce it, and `apps/api`'s own build/typecheck imports it directly
+      # (`@prisma/client`, plus the control-plane client's generated path). This needs no
+      # database connection, only the schema files, so it runs before Typecheck/Build below
+      # rather than after — generating it any later means tsc fails on a fresh checkout with
+      # "cannot find module" errors that never show up on a dev machine that already has both
+      # clients generated from prior local work.
+      - name: Generate Prisma clients (both schemas)
+        working-directory: apps/api
+        run: |
+          npx prisma generate --schema=prisma/schema.prisma
+          npx prisma generate --schema=prisma/control/schema.prisma
+
       - name: Typecheck (api + web)
         run: npm run lint
 
@@ -65,13 +78,11 @@ jobs:
         run: |
           mysql -h127.0.0.1 -uroot -proot_ci_password -e "CREATE DATABASE IF NOT EXISTS ci_tenant; CREATE DATABASE IF NOT EXISTS ci_control;"
 
-      - name: Migrate + generate both Prisma schemas
+      - name: Migrate both schemas
         working-directory: apps/api
         run: |
           npx prisma migrate deploy --schema=prisma/schema.prisma
-          npx prisma generate --schema=prisma/schema.prisma
           npx prisma migrate deploy --schema=prisma/control/schema.prisma
-          npx prisma generate --schema=prisma/control/schema.prisma
 
       - name: Seed tenant + control-plane data
         working-directory: apps/api
@@ -102,6 +113,12 @@ jobs:
       matrix:
         os: [ubuntu-latest, windows-latest]
     runs-on: ${{ matrix.os }}
+    # `prisma generate` (below) doesn't connect to a database, but it does validate that the
+    # schema's referenced env vars are at least defined — this job never touches a real MySQL
+    # instance, so these are unused placeholder values, just enough to satisfy that check.
+    env:
+      DATABASE_URL: "mysql://unused:unused@localhost:3306/unused"
+      CONTROL_DATABASE_URL: "mysql://unused:unused@localhost:3306/unused"
     steps:
       - uses: actions/checkout@v4
 
@@ -112,6 +129,14 @@ jobs:
 
       - name: Install dependencies
         run: npm ci
+
+      # Same reason as the ubuntu job above — tsc needs the generated Prisma clients to
+      # resolve `@prisma/client`'s types before it can typecheck/build apps/api at all.
+      - name: Generate Prisma clients (both schemas)
+        working-directory: apps/api
+        run: |
+          npx prisma generate --schema=prisma/schema.prisma
+          npx prisma generate --schema=prisma/control/schema.prisma
 
       - name: Typecheck (api + web)
         run: npm run lint
