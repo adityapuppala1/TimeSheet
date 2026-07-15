@@ -31,7 +31,7 @@ export const emailTemplatesRouter = Router();
 emailTemplatesRouter.use(requireAuth, requireSuperAdmin);
 
 emailTemplatesRouter.get("/transport-status", async (_req, res) => {
-  res.json(getTransportStatus());
+  res.json(await getTransportStatus());
 });
 
 emailTemplatesRouter.get("/", async (_req, res) => {

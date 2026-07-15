@@ -24,6 +24,7 @@ import { audit } from "../services/audit.service.js";
 import { dispatchNotification } from "../services/notify.service.js";
 import { templates } from "../services/mail-templates.js";
 import { computeApprovalDeadline, resolveEscalationsFor } from "../services/sla.service.js";
+import { dispatchOutboundWebhooks } from "../services/webhook-dispatch.service.js";
 import { sanitizeRichText } from "../utils/sanitize.js";
 
 const inputSchema = z.object({
@@ -154,6 +155,7 @@ async function saveTimesheet(req: any, status: "DRAFT" | "SUBMITTED") {
   await audit(req.user.id, `timesheet.${status.toLowerCase()}`, "Timesheet", timesheet.id);
 
   if (status === "SUBMITTED") {
+    await dispatchOutboundWebhooks("timesheet.submitted", { timesheet });
     const dateLabel = workDate.toISOString().slice(0, 10);
     const managerName = timesheet.user.manager?.name ?? null;
 
@@ -212,12 +214,19 @@ timesheetRouter.post("/submit-with-files", requirePermission(permissions.TIMESHE
 });
 
 timesheetRouter.patch("/:id/approve", requirePermission(permissions.TIMESHEETS_APPROVE), async (req, res) => {
+  const existing = await prisma.timesheet.findFirst({ where: { id: String(req.params.id), deletedAt: null } });
+  if (!existing) throw new AppError(404, "Timesheet not found");
+  if (existing.status !== "SUBMITTED") {
+    throw new AppError(422, `Cannot approve a timesheet in ${existing.status} status — only SUBMITTED entries can be approved.`);
+  }
+
   const item = await prisma.timesheet.update({
-    where: { id: String(req.params.id) },
+    where: { id: existing.id },
     data: { status: "APPROVED", reviewedAt: new Date(), reviewedById: req.user!.id },
     include: { project: true, user: true }
   });
   await resolveEscalationsFor(item.id);
+  await dispatchOutboundWebhooks("timesheet.approved", { timesheet: item });
 
   const dateLabel = item.workDate.toISOString().slice(0, 10);
   const reviewer = req.user!.name ?? req.user!.email;
@@ -251,8 +260,15 @@ timesheetRouter.patch("/:id/approve", requirePermission(permissions.TIMESHEETS_A
 timesheetRouter.patch("/:id/reject", requirePermission(permissions.TIMESHEETS_APPROVE), async (req, res) => {
   const reason = typeof req.body?.reason === "string" ? req.body.reason : "";
   if (!reason.trim()) throw new AppError(422, "Rejection reason is required");
+
+  const existing = await prisma.timesheet.findFirst({ where: { id: String(req.params.id), deletedAt: null } });
+  if (!existing) throw new AppError(404, "Timesheet not found");
+  if (existing.status !== "SUBMITTED") {
+    throw new AppError(422, `Cannot reject a timesheet in ${existing.status} status — only SUBMITTED entries can be rejected.`);
+  }
+
   const item = await prisma.timesheet.update({
-    where: { id: String(req.params.id) },
+    where: { id: existing.id },
     data: { status: "REJECTED", reviewedAt: new Date(), reviewedById: req.user!.id, rejectionReason: reason.trim() },
     include: { project: true, user: true }
   });

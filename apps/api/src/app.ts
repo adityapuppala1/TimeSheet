@@ -27,6 +27,10 @@ import { auditRouter } from "./controllers/audit.controller.js";
 import { authRouter } from "./controllers/auth.controller.js";
 import { chatIntegrationsRouter } from "./controllers/chat-integrations.controller.js";
 import { chatWebhookRouter } from "./controllers/chat-webhook.controller.js";
+import { devopsWebhookRouter } from "./controllers/devops-webhook.controller.js";
+import { gitConnectionRouter } from "./controllers/git-connection.controller.js";
+import { gitWebhookRouter } from "./controllers/git-webhook.controller.js";
+import { publicApiRouter } from "./controllers/public-api.controller.js";
 import { emailIntakeRouter } from "./controllers/email-intake.controller.js";
 import { emailTemplatesRouter } from "./controllers/email-templates.controller.js";
 import { labelRouter } from "./controllers/label.controller.js";
@@ -88,13 +92,30 @@ app.use(
 // signature against the exact raw bytes) ever saw it. Also mounted before tenant resolution
 // for the same reason SSO/platform-admin are below: these routes resolve their own org from
 // the URL path, not a subdomain — see controllers/chat-webhook.controller.ts's header comment.
-app.use("/api/chat", chatWebhookRouter);
+// These handlers always respond directly (never call next()), so they never reach the
+// blanket 300/min limiter mounted below — without this, they'd be the only routes in the
+// app with no rate limit at all, despite doing a DB lookup + secret decryption per request.
+// Per-IP (not per-org: :orgSlug is a route param inside chatWebhookRouter, not yet parsed at
+// this mount point) — 120/min is generous enough for legitimate high-frequency bot traffic
+// from a single chat platform's egress IPs while still bounding abuse.
+const chatWebhookLimiter = rateLimit({ windowMs: 60_000, limit: 120, standardHeaders: true });
+app.use("/api/chat", chatWebhookLimiter, chatWebhookRouter);
+
+// GitHub repo push/PR webhooks — also needs express.raw() (see git-webhook.controller.ts's own
+// route-level middleware) so it must be mounted before the global express.json() below, same
+// reasoning as chatWebhookRouter immediately above.
+const gitWebhookLimiter = rateLimit({ windowMs: 60_000, limit: 120, standardHeaders: true });
+app.use("/api/git", gitWebhookLimiter, gitWebhookRouter);
 
 // Lower-rate limiter for auth endpoints (login bruteforce defence).
 const authLimiter = rateLimit({ windowMs: 60_000, limit: 20, standardHeaders: true });
 app.use("/api/auth/login", authLimiter);
 app.use("/api/auth/forgot-password", authLimiter);
 app.use("/api/auth/reset-password", authLimiter);
+// Platform-admin login is the single highest-privilege account type in the system (cross-org
+// CRUD, plan-tier edits) — it must never be less protected than a regular tenant login, but
+// it's mounted after the blanket limiter below so it needs its own explicit guard here too.
+app.use("/api/platform-admin/auth/login", authLimiter);
 
 // 120/min (2 req/s) proved too tight for real usage: a single page load fans out several
 // React Query fetches (projects, tickets, labels, notifications, ...), so a normal admin
@@ -139,6 +160,19 @@ app.use("/api/auth/sso", ssoRouter);
 // Its own auth entirely (middleware/platform-admin-auth.ts), never the tenant requireAuth.
 app.use("/api/platform-admin", platformAdminRouter);
 
+// Ingest-only security/CI webhook receiver (SAST/DAST/SSAT/SSCT findings, test runs) — see
+// controllers/devops-webhook.controller.ts's header comment. Same "external caller has no
+// Host-header subdomain" reasoning as chatWebhookRouter above, and the same per-IP rate-limit
+// rationale (a public POST endpoint doing DB writes needs a limiter even though it's mounted
+// before the blanket one below).
+const devopsWebhookLimiter = rateLimit({ windowMs: 60_000, limit: 120, standardHeaders: true });
+app.use("/api/devops", devopsWebhookLimiter, devopsWebhookRouter);
+
+// GitHub OAuth callback — see controllers/git-connection.controller.ts's header comment for
+// why this needs the same pre-tenant-resolution mounting as SSO above (one fixed callback URL,
+// org identity carried in the signed `state` param instead of the Host header).
+app.use("/api/git", gitConnectionRouter);
+
 // Every other /api/* route needs to know which tenant it's serving before it can touch
 // `prisma` — mounted after /health, /uploads, and the SSO routes (none of which need the
 // normal resolved-tenant path) and before every controller router below (all of which do).
@@ -160,6 +194,11 @@ app.use("/api/audit", auditRouter);
 app.use("/api/team", teamRouter);
 app.use("/api/settings", settingsRouter);
 app.use("/api/email-templates", emailTemplatesRouter);
+// Bearer-API-key auth, not JWT — see middleware/public-api-auth.ts's header for why this is
+// still mounted after resolveTenant (unlike the CI/chat webhook receivers above) rather than
+// before it. Its own lighter rate limit reflects "external integration polling," not "human
+// clicking a UI."
+app.use("/api/public/v1", rateLimit({ windowMs: 60_000, limit: 120, standardHeaders: true }), publicApiRouter);
 
 app.use(notFound);
 app.use(errorHandler);

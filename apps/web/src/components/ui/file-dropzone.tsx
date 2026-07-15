@@ -108,7 +108,7 @@ export function FileDropzone({
                 type="button"
                 variant="ghost"
                 size="icon"
-                className="h-6 w-6"
+                className="h-9 w-9"
                 onClick={(e) => {
                   e.stopPropagation();
                   remove(index);

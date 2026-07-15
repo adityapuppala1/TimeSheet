@@ -207,6 +207,28 @@ export const templates = {
         paragraph(button("Open ticket", appUrl("/app/tickets"), params.to === "RESOLVED" || params.to === "CLOSED" ? SUCCESS : PRIMARY))
     ),
 
+  /** See services/security-report.service.ts#sendTicketClosedDigest — one email, closer + their
+   *  manager as primary recipients, this ticket's own tenant admins in Cc (set by the caller,
+   *  not this template). `findingsText` is pre-rendered plain text turned into <br>-joined HTML
+   *  here rather than re-deriving structure, so the PDF export and this email can never disagree
+   *  on what counts as "the findings" — both read from the same buildTicketSecurityReport call. */
+  ticketClosedDigest: (params: { ticketKey: string; title: string; closedBy: string; riskVerdict: string; findingsText: string; testStatus: string }) =>
+    shell(
+      {
+        title: `Security digest — ${params.ticketKey}`,
+        preheader: params.riskVerdict,
+        accentColor: params.riskVerdict.startsWith("Needs attention") ? DESTRUCTIVE : SUCCESS
+      },
+      heading(`${params.ticketKey} closed — security digest`) +
+        paragraph(`${escape(params.closedBy)} closed "<strong>${escape(params.title)}</strong>". Summary of ingested security findings and test status below.`) +
+        infoCard([
+          ["Verdict", escape(params.riskVerdict)],
+          ["Latest test run", escape(params.testStatus)]
+        ], params.riskVerdict.startsWith("Needs attention") ? DESTRUCTIVE : SUCCESS) +
+        paragraph(`<strong>Findings</strong><br />${escape(params.findingsText).replace(/\n/g, "<br />")}`) +
+        paragraph(button("Open ticket", appUrl("/app/tickets")))
+    ),
+
   ticketCommented: (params: { ticketKey: string; title: string; author: string }) =>
     shell(
       { title: `New comment on ${params.ticketKey}`, preheader: `${params.author} commented on "${params.title}".` },

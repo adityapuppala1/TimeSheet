@@ -13,13 +13,18 @@ digests) are only possible because they live in the same system.
 | Area | What it does |
 |---|---|
 | **Timesheets** | Daily time entry against project/module/submodule/activity, manager approval workflow, SLA-driven escalation up the reporting chain, daily reminder + next-morning escalation emails, CSV/PDF export. |
-| **Ticketing** | Bugs/tasks/improvements with admin-editable types & labels, priority/status workflow (with a Kanban board and drag-and-drop), assignment, comments, attachments, watchers, cross-ticket links (Blocks/Duplicate of/Relates to), sub-task checklists, SLA due-dates with automatic breach escalation. Tickets and timesheets link to each other — time can be logged directly against a ticket. |
+| **Ticketing** | Bugs/tasks/improvements with admin-editable types & labels, priority/status workflow (with a Kanban board and drag-and-drop, optional **"Group by manager" swimlanes**), assignment, comments, attachments, watchers, cross-ticket links (Blocks/Duplicate of/Relates to), sub-task checklists, SLA due-dates with automatic breach escalation, and a **Dev tab** for linking a repository/branch/PR (open/merged/closed status) to a ticket — manually, or picked live from a connected GitHub account. An optional **CI gate** (off by default) blocks a ticket from moving to Resolved while its latest ingested CI test run is failing, and the Kanban card shows a red badge for the same reason. |
+| **Live git integration (GitHub)** | Each org connects its own GitHub account via OAuth (bring your own GitHub OAuth App — same model as Google/Microsoft SSO below, no TimeSphere-operated client ever touches your repos). The ticket Dev tab lists live repos/branches/open PRs to pick from, and a per-repo GitHub webhook auto-syncs `TicketBranch` rows as commits land and PRs open/merge/close (matched to a ticket by a ticket-key-shaped token in the branch name, e.g. `WEB-123-fix-login`) — plus, opt-in, an AI-authored PR-review summary comment when a linked PR opens. GitLab/Bitbucket remain unbuilt — see [docs/ROADMAP.md](docs/ROADMAP.md). |
+| **Public REST API + outbound webhooks** | Bearer-API-key access to `GET/POST/PATCH /api/public/v1/*` (list/get/create tickets, change ticket status, add a comment, list timesheets) for external integrations — generate named, revocable, READ- or WRITE-scoped keys from Workspace Settings. Status changes enforce the exact same transition-legality and CI-gate rules the UI does. Outbound webhooks POST an HMAC-SHA256-signed JSON payload (same trust model as GitHub/Stripe webhooks) when a ticket is created, changes status, or closes, or a timesheet is submitted/approved. See [docs/API.md](docs/API.md#public-api). |
 | **AI, BYOK multi-provider (opt-in)** | Auto-triage suggestions on ticket creation, duplicate-ticket detection, a writing assistant ("Improve with AI") for descriptions/comments, AI comment-thread summaries, natural-language "Ask AI" search over the ticket backlog (command palette), and a Monday-morning AI-authored weekly digest email. Every capability is gated behind a master switch **and** its own per-feature toggle in Workspace Settings — nothing calls out to any provider until an admin explicitly turns it on and a key is configured. **Bring-your-own-key**: pick Anthropic (native) or any OpenAI-compatible provider — OpenAI, Groq, Mistral, DeepSeek, OpenRouter, Gemini, Qwen, Kimi, Nvidia NIM, a local Ollama/LM Studio install, or a custom endpoint — from Workspace Settings → AI; the key is encrypted at rest and never returned to the client. Every AI call is cost-estimated and logged (`AIUsageLog`) against a configurable monthly budget cap. |
 | **Email-to-ticket intake** | Point an IMAP mailbox at the app; inbound bug-report emails (including screenshot attachments, read directly by the configured model's vision input) are auto-classified into a properly-typed, prioritized, project/module-routed ticket, auto-assigned via admin-configured rules, and the sender gets an automatic confirmation reply. Untrusted email content is delimited and instructed as data-not-instructions before it reaches the model, and its self-reported confidence is capped before it can suppress human review. Low-confidence classifications are flagged **needs review** instead of silently mis-assigned. An **AI Activity Log** page shows every AI-touched ticket with a thumbs up/down feedback control. |
 | **Insights & analytics** | Ticket velocity, SLA compliance trend, cycle-time distribution, bug hotspots by module, a per-assignee workload heatmap, estimate-vs-actual variance, reopen rate, and first-response time — plus two opt-in-and-off-by-default panels (cost-per-ticket, team leaderboard) since they touch compensation-adjacent or individually-ranked data. |
 | **Admin configurability** | Nearly everything above is editable from **Workspace Settings** without a server restart: notification channels & reminder schedule, ticket SLA hours per priority, ticket types, labels, AI provider/toggles/model/budget, email-intake mailbox connection + routing rules + module-assignee rules, and per-notification-category email opt-ins. |
 | **RBAC & audit** | Role-based permissions (`SUPER_ADMIN` / `ADMIN` / `MANAGER` / `TEAM_LEAD` / `EMPLOYEE`), a tamper-evident audit log of every administrative/approval/AI action, and a per-ticket Activity tab that's just that same audit log filtered to one entity. |
-| **Session management & security** | httpOnly, `SameSite=Lax` refresh-token cookie (never exposed to page JS) with rotation-and-reuse-detection, a per-user active-sessions list with per-device or "sign out everywhere" revocation, per-account login lockout on top of per-IP rate limiting, a real hashed/expiring/single-use password-reset flow, AES-256-GCM encryption at rest for stored secrets (IMAP password, BYOK API keys, OIDC client secrets), and a fully responsive layout (phone through 4K) verified by an automated Playwright suite. See [Security](#security) below for the full VAPT assessment. |
+| **Session management & security** | httpOnly, `SameSite=Lax` refresh-token cookie (never exposed to page JS) with rotation-and-reuse-detection, a per-user active-sessions list with per-device or "sign out everywhere" revocation, per-account login lockout on top of per-IP rate limiting, a real hashed/expiring/single-use password-reset flow, AES-256-GCM encryption at rest for stored secrets (IMAP password, BYOK API keys, OIDC client secrets), and a fully responsive layout (phone through 4K) — wide tables (Tickets list, Team page) fall back to a stacked card view below the `sm` breakpoint instead of a horizontal scroll — verified by an automated Playwright suite covering every route and every settings/ticket-sheet tab. See [Security](#security) below for the full VAPT assessment. |
+| **Security & DevOps ingestion (SAST/DAST/SSAT/SSCT/VAPT)** | Ingest-only, tool-agnostic: your own CI (GitHub Actions, GitLab CI, Jenkins, Bitbucket, or anything else) POSTs findings/test-run results to a per-org bearer-token-protected webhook — this app never runs a scanner itself. VAPT (a periodic, human-led pentest, not a per-PR check) uploads as a structured JSON report instead, from Workspace Settings. Findings roll up into a per-ticket **Security** tab (risk verdict, PDF export) and, if enabled, a ticket-close digest email to the closer, their manager, and the org's admins. See [docs/SECURITY_DEVOPS_INTEGRATIONS.md](docs/SECURITY_DEVOPS_INTEGRATIONS.md). |
+| **Reporting-line views** | An interactive, pan/zoomable **org-chart tree** on the Team page (D3-hierarchy layout, built from the existing `User.managerId` relation, no new schema — privileged roles see the whole company, everyone else their own subtree), color/icon-coded per role (Super Admin/Admin/Manager/Team Lead/Employee) with each person's **designation** shown alongside their name, and matching **Kanban swimlanes** ("Group by manager") on the ticket board. |
+| **Live trend analytics** | Every KPI stat card across Dashboard, History, My team, and Reports shows a today-vs-yesterday (or this-week-vs-last-week, for weekly metrics) trend badge — an up/down/flat arrow, colored green/red based on whether that direction is actually good for that metric — computed server-side (or client-side for History) and auto-refreshed every 30s, no configuration needed. |
 | **SSO (Google, Microsoft, SAML, LDAP)** | Each organization's own admin turns on exactly the sign-in methods their team uses — password, Google, Microsoft/Azure AD, any SAML 2.0 IdP (Okta, OneLogin, ADFS...), or LDAP/Active Directory — independently of every other organization, down to requiring SSO-only. One fixed callback URL works for every OIDC/SAML org: identity travels through a signed state parameter, not a per-org redirect URI. LDAP is a direct bind (no redirect), rendered as an inline login form instead. |
 | **Chat-to-ticket connectors (Slack, Microsoft Teams, Google Chat, Telegram)** | The same "message arrives, AI-triaged ticket appears" pipeline as email intake, generalized across four chat platforms. Slack/Teams/Google Chat are push-only APIs (a webhook URL, signature-verified per platform); Telegram is polled, avoiding the need for a public endpoint. The bot replies back into the originating chat once a ticket's created. Which platforms an org may connect is capped by plan tier, same as SSO providers. |
 | **Multi-tenant SaaS platform** | Runs as either a single-org on-prem deployment or a true multi-org SaaS platform on the same codebase. Each organization gets its own physically separate MySQL database (never a shared table filtered by a tenant column) — see [Multi-tenancy](#multi-tenancy) below. |
@@ -97,18 +102,48 @@ docs/
 
 3. **Make sure MySQL is running** (start it from the XAMPP Control Panel if you're using XAMPP's MySQL).
 
+   **One-liner for everything below** (generate both Prisma clients, self-heal-create both
+   databases, apply every migration, seed control plane + tenant demo data):
+
+   ```bash
+   npm run setup
+   ```
+
+   This runs `npm install`, `npm run db:generate`, `npm run doctor:heal` (validates `.env`,
+   auto-creates `timesheet_portal`/`timesphere_control` if they don't exist, then runs
+   `prisma migrate deploy` for both schemas), and `npm run seed`. Safe to re-run — creating an
+   already-existing database or re-running a migration that already applied is a no-op, and
+   seeding is idempotent. If you'd rather run each step yourself (or just want to see what
+   `setup` is doing), the equivalent steps are below.
+
+   **Run the doctor script before going any further:**
+
+   ```bash
+   npm run doctor -w apps/api
+   # or, to auto-create missing databases and apply pending migrations:
+   npm run doctor:heal -w apps/api
+   ```
+
+   This is the single highest-value step in this whole guide. It validates `.env` against the
+   same schema the server boots with, then actually opens a TCP connection to `DATABASE_URL`
+   and `CONTROL_DATABASE_URL` and runs a test query — catching the #1 first-run failure (the
+   DB host/port/password in `.env` pointing at nothing, or at the wrong MySQL instance) with one
+   specific, actionable message instead of a cryptic Prisma error three steps later. The
+   `doctor:heal` variant goes further and actually fixes the two most common blockers — creating
+   the databases if the server's reachable but they don't exist yet, and running
+   `prisma migrate deploy` for both schemas — instead of just diagnosing them. See
+   [Preventing setup issues](#preventing-setup-issues) for why this exists and what it checks.
+
 4. **Generate the Prisma clients** (tenant schema + the separate control-plane schema):
 
    ```bash
    npm run db:generate
-   npm run control:generate -w apps/api
    ```
 
 5. **Create the databases and apply migrations:**
 
    ```bash
    npm run db:migrate
-   npm run control:migrate -w apps/api
    ```
 
    This creates the `timesheet_portal` and `timesphere_control` databases (if they don't exist)
@@ -117,16 +152,15 @@ docs/
 6. **Seed the control plane, then the tenant's demo data:**
 
    ```bash
-   npm run control:seed -w apps/api
    npm run seed
    ```
 
-   `control:seed` registers one `Organization` (slug from `DEFAULT_ORG_SLUG`, default `default`)
-   pointing at `DATABASE_URL`, seeds the three plan tiers' default limits, and creates one
-   `PlatformAdminUser` (credentials below). `seed` then seeds that org's own database: roles/permissions,
-   three demo users (below), a demo project, default ticket types (Bug/Task/Improvement), and
-   every notification/ticketing/AI settings singleton at its safe default (AI **off** until you
-   opt in).
+   This seeds the control plane first, then the tenant: `control:seed` registers one
+   `Organization` (slug from `DEFAULT_ORG_SLUG`, default `default`) pointing at `DATABASE_URL`,
+   seeds the three plan tiers' default limits, and creates one `PlatformAdminUser` (credentials
+   below); the tenant seed then fills in roles/permissions, three demo users (below), a demo
+   project, default ticket types (Bug/Task/Improvement), and every notification/ticketing/AI
+   settings singleton at its safe default (AI **off** until you opt in).
 
 7. **Run the app:**
 
@@ -175,6 +209,58 @@ Not every OpenAI-compatible endpoint supports the same structured-output request
 runtimes like Ollama/LM Studio in particular often don't) — triage and duplicate-detection ask
 for JSON via the prompt itself when needed and validate the response locally either way, so a
 provider that lacks native structured output degrades gracefully instead of hard-failing.
+
+## Preventing setup issues
+
+Every first-run failure this project has actually hit traces back to one pattern: a config
+value that's *well-formed* (right shape, passes validation) but *wrong* (points at a server,
+port, or key that doesn't match what's actually running). Zod catches the first kind at boot;
+it cannot catch the second. Two things close that gap:
+
+- **`npm run doctor -w apps/api`** — run this before `db:migrate`/`dev` on any fresh checkout or
+  new environment (local, CI, staging, a new prod host). It (1) loads and validates `.env`
+  through the real schema, (2) opens an actual TCP connection to `DATABASE_URL` and
+  `CONTROL_DATABASE_URL` — not just "is the string non-empty" — and (3) runs a real `SELECT 1`
+  through Prisma to confirm the credentials are also correct, not just the host/port. Each check
+  fails fast with the specific fix, not a stack trace. **`npm run doctor:heal -w apps/api`** runs
+  the same checks and then auto-fixes what it can: creates `DATABASE_URL`/`CONTROL_DATABASE_URL`'s
+  databases if the server's reachable but they don't exist, and runs `prisma migrate deploy` for
+  both schemas. It never touches `.env` or connection settings — only DB-side state — so it's
+  safe to run repeatedly and safe to wire into a CI/setup step.
+- **`.env.example`'s defaults match the primary documented path** (local/no-Docker against
+  XAMPP: port `3306`, empty password), with an explicit callout that Docker Compose's MySQL
+  container is a *different* server on a *different* port (`3307`, password `password`). The
+  historical bug this fixes: the template used to default to Compose's port/password pair, so
+  copying it verbatim for a local install produced exactly the failure `doctor` above now
+  catches in one command — the API would boot far enough to look alive, then fail confusingly
+  the first time it actually touched the database.
+
+Two narrower defaults worth knowing about for the same reason:
+
+- **`ENCRYPTION_KEY` has no working default on purpose.** The schema requires an exact
+  64-character hex string (`/^[0-9a-f]{64}$/i`) and the template ships an obviously-invalid
+  placeholder — so `.env.example` copied without editing fails loudly at boot instead of
+  encrypting real secrets (IMAP passwords, BYOK API keys) under a key nobody wrote down. Always
+  generate a fresh one per environment with `openssl rand -hex 32` and never reuse one across
+  local/staging/prod.
+- **Never copy a live `.env` between environments.** Every secret in it
+  (`JWT_ACCESS_SECRET`/`JWT_REFRESH_SECRET`/`PLATFORM_ADMIN_JWT_SECRET`/`ENCRYPTION_KEY`) should
+  be freshly generated per environment. Production additionally gets a boot-time
+  entropy/charset check on the JWT secrets (`server.ts#assertProductionSafety`) that rejects
+  weak or template-looking values — see [Security](#security).
+
+If you ever do end up with data encrypted under the wrong `ENCRYPTION_KEY` (for example, a key
+was rotated without re-encrypting existing rows), every AES-256-GCM `decryptSecret()` call
+against that data throws `Unsupported state or unable to authenticate data` — that specific
+error message means "this ciphertext was not encrypted with the key currently in `.env`", not a
+corrupted database. The one row this matters for at boot time is
+`OrgDatabase.encryptedDsn` in the control-plane database (checked by `server.ts` when it warms
+the default tenant's Prisma client) — if you rotate `ENCRYPTION_KEY` after tenant DSNs have
+already been provisioned, re-encrypt every `OrgDatabase.encryptedDsn` row under the new key
+(read the old plaintext DSN out of your deploy records, or reconstruct it from `host` +
+`databaseName` on that same row, then `encryptSecret()` it again) — there's no automated
+migration for this because the plaintext DSN is intentionally never stored anywhere to migrate
+from.
 
 ## Deploy
 
@@ -261,7 +347,83 @@ Full setup instructions for both shapes (env vars, control-plane migration/seed,
 second organization, keeping every tenant's schema current via `npm run migrate:tenants`) live in
 **[docs/DEPLOYMENT.md](docs/DEPLOYMENT.md)**.
 
+### How a tenant's login actually resolves to their own org
+
+Concretely, step by step, for a user at `acme.timesphere.app`:
+
+1. **The browser sends the `Host` header before any credential does.** `resolveOrgSlug()`
+   (`apps/api/src/middleware/tenant.ts`) reads `req.headers.host`, takes the first label
+   (`acme`), and that's the org slug — no login has happened yet, and none needs to for this
+   step. A bare local/on-prem host (`localhost`, an IP, a domain with no subdomain) falls back
+   to `DEFAULT_ORG_SLUG` instead — this is the entire mechanism that makes a single-org on-prem
+   deployment "just" a SaaS deployment with one org in it, not a separate code path.
+2. **That slug is looked up in the control-plane database**, a small, separate MySQL database
+   (`CONTROL_DATABASE_URL`) holding the `Organization` registry, each org's `OrgDatabase`
+   connection record (its physical DSN, AES-256-GCM encrypted), SSO config, and plan-tier
+   limits. `resolveActiveOrgBySlug()` also rejects the request here if the org is suspended or
+   not yet provisioned — before any DB query against tenant data is even attempted.
+3. **The org's own database connection is decrypted and opened** (or reused from a small
+   per-org connection pool — `getTenantClient()` in `apps/api/src/config/prisma.ts`), and the
+   rest of the request runs inside an `AsyncLocalStorage` context carrying that org's Prisma
+   client. Every controller/service in the codebase just does `import { prisma } from
+   "../config/prisma.js"` and queries normally — that import is a `Proxy` that transparently
+   forwards to whichever tenant's client is active for the current request. There is no
+   `WHERE organizationId = ?` anywhere in tenant-facing queries, because there's no other
+   tenant's rows in that database connection to accidentally query.
+4. **Login itself then runs entirely inside that org's context.** Password auth checks
+   `User` rows in *that* org's database only — the same email can exist as a completely
+   different account in another org's database, and there's no collision because they're
+   different databases, not different rows in a shared `User` table. SSO (Google/Microsoft/SAML)
+   and LDAP work the same way: each org's admin independently turns on and configures its own
+   providers (`OrgSsoConfig`/`OrgAuthMethod` in the control-plane DB) under
+   **Workspace Settings → Security**, so `acme`'s "Google SSO" and `beta`'s "Google SSO" are
+   two unrelated OAuth client configs that happen to use the same protocol.
+5. **The resulting JWT is org-bound, not just user-bound.** `signAccessToken`/`signRefreshToken`
+   embed the resolving org's ID in the token payload, and every subsequent request re-resolves
+   the org from the `Host` header and checks `payload.org !== orgId` before trusting the token
+   (`auth.service.ts`) — so a token minted while talking to `acme.timesphere.app` is rejected
+   outright if replayed against `beta.timesphere.app`, even before any per-user permission check
+   runs.
+
+### AI, and every other per-org setting, cannot leak across tenants — by construction, not by filter
+
+This is worth being explicit about because it's a materially stronger guarantee than the usual
+"multi-tenant SaaS" pattern: **`GlobalAISettings` — provider, model, the BYOK API key, which
+per-feature toggles are on, the monthly budget cap, the confidence threshold — is a table in the
+tenant's own schema** (`apps/api/prisma/schema.prisma`), not a row in a shared settings table
+keyed by `organizationId`. The same is true of every other admin-configurable surface: ticket
+types, labels, SLA hours, email-intake routing rules, chat-connector config, notification
+settings. There is structurally no shared table for any of this to leak through — reading
+`beta`'s AI config while a request is scoped to `acme` isn't a permission check that could have
+a bug in it, it's a different physical MySQL connection that `acme`'s request never opens.
+Concretely, this means:
+
+- Org A's Anthropic/OpenAI/Groq/etc. API key is encrypted at rest in Org A's own database, under
+  the deployment-wide `ENCRYPTION_KEY` — but even with that key, there is nothing to decrypt in
+  Org B's database, because Org B's key (if any) is a separate encrypted value in a separate
+  database with its own connection credentials.
+- Org A's AI usage/spend (`AIUsageLog`, checked against `GlobalAISettings.monthlyBudgetUsd`) is
+  entirely Org A's own data — one org's usage can never push another org's budget cap.
+- Turning AI (or SSO, or a chat connector) on/off, choosing a provider, or hitting a plan-tier
+  seat/AI-budget ceiling (`PlanTierLimit`, enforced live on every relevant request via
+  `services/plan-limits.service.ts`, not just at signup) is entirely per-org — one org's
+  admin has no code path that reaches another org's settings, because there's no org-selector
+  parameter to that code path at all; the active tenant is fixed for the lifetime of the
+  request by step 3 above.
+
+The one place that legitimately sees across every org is the separate `/platform-admin`
+console — its own login, its own JWT secret (`PLATFORM_ADMIN_JWT_SECRET`, deliberately distinct
+from the two tenant JWT secrets so a leaked tenant secret can't mint a platform-admin token), and
+by convention its endpoints return aggregate numbers (seat counts, plan tier, suspend/archive
+status) rather than row-level tenant content like ticket bodies or timesheet entries.
+
 ## Troubleshooting
+
+**First step for any of these: run `npm run doctor -w apps/api` (or `npm run doctor:heal -w apps/api`
+to also auto-create missing databases and apply pending migrations).** It catches the most common
+root cause (wrong DB host/port/password in `.env`, usually Docker Compose's values used against
+a local server or vice versa — see [Preventing setup issues](#preventing-setup-issues)) with one
+specific message instead of you working backward from one of the errors below.
 
 - **`Error: Cannot find package '...packages/shared/dist/index.js'`** — `packages/shared` hasn't been built. Run `npm install` (which now runs this automatically via `postinstall`) or manually: `npm run build -w packages/shared`.
 - **`Environment variable not found: DATABASE_URL` / zod "Required" errors on boot** — your `.env` is in the wrong place. It must be at `apps/api/.env`, not the repo root.
@@ -389,6 +551,9 @@ See `.env.example` for all supported variables. Remember: the actual file the AP
 - [docs/API.md](docs/API.md) — endpoint reference.
 - [docs/DATABASE.md](docs/DATABASE.md) — schema reference.
 - [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) — on-prem vs. SaaS deployment shapes, CI/CD, one-click install, Kubernetes.
+- [docs/INSTALLATION.md](docs/INSTALLATION.md) — the complete step-by-step install guide (one-click Docker, manual local, Kubernetes), self-diagnosis, a FAQ, and how to configure everything after install without a code change.
+- [docs/ROADMAP.md](docs/ROADMAP.md) — what differentiates this product today, next-feature themes (AI workflow automation, conversational analytics, integrations, billing), and how each maps to plan tiers.
+- [docs/SECURITY_DEVOPS_INTEGRATIONS.md](docs/SECURITY_DEVOPS_INTEGRATIONS.md) — connect GitHub Actions, GitLab CI, Jenkins, Bitbucket, or any internal git/CI system to the security-findings ingestion webhook (SAST/DAST/SSAT/SSCT), with copy-pasteable pipeline examples.
 
 ### A note on code comments in this repo
 

@@ -21,6 +21,7 @@
  * belongs to a project the caller can see.
  */
 import { Router } from "express";
+import PDFDocument from "pdfkit";
 import { z } from "zod";
 import { permissions, ticketStatusTransitions, type TicketStatus } from "@timesheet/shared";
 import { prisma } from "../config/prisma.js";
@@ -31,7 +32,10 @@ import { validate } from "../middleware/validate.js";
 import { audit } from "../services/audit.service.js";
 import { dispatchNotification } from "../services/notify.service.js";
 import { templates } from "../services/mail-templates.js";
+import { buildTicketSecurityReport, sendTicketClosedDigest } from "../services/security-report.service.js";
+import { dispatchOutboundWebhooks } from "../services/webhook-dispatch.service.js";
 import {
+  assertTicketVisible,
   assertValidTicketType,
   canModifyTicket,
   canReopenClosedTicket,
@@ -101,9 +105,17 @@ ticketRouter.get("/", requirePermission(permissions.TICKETS_VIEW), async (req, r
       project: { select: { id: true, code: true, name: true } },
       module: { select: { id: true, name: true } },
       reporter: { select: USER_SUMMARY },
-      assignee: { select: USER_SUMMARY },
+      // Kanban swimlanes group cards by assignee.manager (see TicketKanban.tsx) — the list
+      // endpoint is the one this view reads from, so it's the one that needs the extra
+      // manager fields; the detail endpoint below (GET /:id) doesn't, so it keeps plain
+      // USER_SUMMARY rather than carrying this along everywhere.
+      assignee: { select: { ...USER_SUMMARY, managerId: true, manager: { select: { id: true, name: true } } } },
       labels: { include: { label: true } },
-      _count: { select: { comments: true, attachments: true } }
+      _count: { select: { comments: true, attachments: true } },
+      // Kanban's red "CI failing" badge (see docs/ROADMAP.md's "Auto testing on branch/PR
+      // push" theme) needs only the single latest run's status, not the full history — `take: 1`
+      // keeps this a cheap per-ticket lookup instead of loading every TestRun row.
+      testRuns: { select: { status: true }, orderBy: { createdAt: "desc" }, take: 1 }
     },
     orderBy: { createdAt: "desc" },
     take: 200
@@ -129,6 +141,7 @@ ticketRouter.get("/:id", requirePermission(permissions.TICKETS_VIEW), async (req
         orderBy: { workDate: "desc" }
       },
       checklistItems: { orderBy: { position: "asc" } },
+      branches: { include: { addedBy: { select: USER_SUMMARY } }, orderBy: { createdAt: "desc" } },
       linksFrom: { include: { targetTicket: { select: TICKET_LINK_SUMMARY } } },
       linksTo: { include: { sourceTicket: { select: TICKET_LINK_SUMMARY } } }
     }
@@ -197,6 +210,7 @@ ticketRouter.post("/", requirePermission(permissions.TICKETS_WRITE), validate(cr
   });
 
   await audit(req.user!.id, "ticket.created", "Ticket", ticket.id, { key: ticket.key });
+  await dispatchOutboundWebhooks("ticket.created", { ticket });
 
   if (ticket.assignee && ticket.assignee.id !== req.user!.id) {
     await dispatchNotification({
@@ -314,6 +328,26 @@ ticketRouter.patch("/:id/status", requirePermission(permissions.TICKETS_WRITE), 
     throw new AppError(403, "Only an assigner or admin can reopen a closed ticket");
   }
 
+  // CI gate — see docs/ROADMAP.md's "Auto testing on branch/PR push" theme. Off by default
+  // (GlobalTicketSettings.blockResolveOnFailingTests) so orgs that don't ingest test runs, or
+  // that want this as a warning rather than a hard stop, are unaffected. Only the ticket's
+  // single latest TestRun matters — an older passing run doesn't excuse a newer failure.
+  if (nextStatus === "RESOLVED") {
+    const ticketSettings = await prisma.globalTicketSettings.findUnique({ where: { id: "global" } });
+    if (ticketSettings?.blockResolveOnFailingTests) {
+      const latestRun = await prisma.testRun.findFirst({
+        where: { ticketId: existing.id },
+        orderBy: { createdAt: "desc" }
+      });
+      if (latestRun?.status === "FAILED") {
+        throw new AppError(
+          422,
+          `Cannot resolve ${existing.key} — its latest CI run (${latestRun.provider}) is failing. Fix the build or ask an admin to disable the CI gate in Workspace Settings.`
+        );
+      }
+    }
+  }
+
   const data: Record<string, unknown> = { status: nextStatus };
   if (nextStatus === "RESOLVED") data.resolvedAt = new Date();
   if (nextStatus === "CLOSED") data.closedAt = new Date();
@@ -333,6 +367,8 @@ ticketRouter.patch("/:id/status", requirePermission(permissions.TICKETS_WRITE), 
     }
   });
   await audit(req.user!.id, "ticket.status_changed", "Ticket", ticket.id, { from: currentStatus, to: nextStatus });
+  await dispatchOutboundWebhooks("ticket.status_changed", { ticket, from: currentStatus, to: nextStatus });
+  if (nextStatus === "CLOSED") await dispatchOutboundWebhooks("ticket.closed", { ticket });
 
   const recipients = new Set<string>();
   if (existing.reporterId !== req.user!.id) recipients.add(existing.reporterId);
@@ -361,6 +397,17 @@ ticketRouter.patch("/:id/status", requirePermission(permissions.TICKETS_WRITE), 
         }
       }
     });
+  }
+
+  // Security/test-status digest — see services/security-report.service.ts. Separate from the
+  // generic status-changed notification loop above (different recipients: closer + their
+  // manager + this org's admins, not reporter/assignee/watchers) and gated on its own toggle,
+  // so an org that hasn't connected a scan source never gets an empty digest.
+  if (nextStatus === "CLOSED") {
+    await sendTicketClosedDigest(
+      { id: ticket.id, key: ticket.key, title: ticket.title },
+      { id: req.user!.id, name: req.user!.name, email: req.user!.email }
+    );
   }
 
   res.json(ticket);
@@ -452,10 +499,94 @@ ticketRouter.get("/:id/activity", requirePermission(permissions.TICKETS_VIEW), a
   res.json(activity);
 });
 
+/* ---------- Security & test-status report ---------- */
+// See services/security-report.service.ts's header comment — SecurityFinding/TestRun rows are
+// ingest-only (controllers/devops-webhook.controller.ts), this just reads and renders them.
+
+ticketRouter.get("/:id/security-report", requirePermission(permissions.TICKETS_VIEW), async (req, res) => {
+  const ticketId = String(req.params.id);
+  const ticket = await prisma.ticket.findFirst({ where: { id: ticketId, deletedAt: null }, select: { projectId: true } });
+  if (!ticket) throw new AppError(404, "Ticket not found");
+  await assertTicketVisible(req, ticket.projectId);
+
+  res.json(await buildTicketSecurityReport(ticketId));
+});
+
+ticketRouter.get("/:id/security-report.pdf", requirePermission(permissions.TICKETS_VIEW), async (req, res) => {
+  const ticketId = String(req.params.id);
+  const ticket = await prisma.ticket.findFirst({ where: { id: ticketId, deletedAt: null }, select: { projectId: true, key: true } });
+  if (!ticket) throw new AppError(404, "Ticket not found");
+  await assertTicketVisible(req, ticket.projectId);
+
+  const report = await buildTicketSecurityReport(ticketId);
+
+  res.setHeader("Content-Type", "application/pdf");
+  res.setHeader("Content-Disposition", `attachment; filename="${ticket.key}-security-report.pdf"`);
+
+  const doc = new PDFDocument({ size: "A4", margin: 36 });
+  doc.pipe(res);
+
+  doc.fontSize(20).fillColor("#0F9AA8").text("TimeSphere");
+  doc.fontSize(10).fillColor("#64748B").text(`Generated ${report.generatedAt.toLocaleString()}`);
+  doc.moveDown(0.5);
+  doc.fontSize(16).fillColor("#0F172A").text(`${report.ticket.key} — Security & Test Report`);
+  doc.fontSize(11).fillColor("#64748B").text(report.ticket.title);
+  doc.moveDown(0.5);
+
+  const verdictColor = report.riskVerdict.startsWith("Needs attention") ? "#DC2626" : "#16A34A";
+  doc.fontSize(12).fillColor(verdictColor).text(report.riskVerdict);
+  doc.fontSize(10).fillColor("#0F172A").text(`Latest test run: ${report.latestTestRun?.status ?? "none recorded"}`);
+  doc.moveDown(0.75);
+
+  const SEVERITY_COLOR: Record<string, string> = { CRITICAL: "#DC2626", HIGH: "#D97706", MEDIUM: "#0F9AA8", LOW: "#64748B" };
+  const TYPE_LABEL: Record<string, string> = {
+    SAST: "Static analysis (SAST)",
+    DAST: "Dynamic analysis (DAST)",
+    SSAT: "Secrets scanning (SSAT)",
+    SSCT: "Supply-chain testing (SSCT)",
+    VAPT: "Penetration test (VAPT)"
+  };
+
+  if (report.findings.length === 0) {
+    doc.fontSize(11).fillColor("#64748B").text("No findings have been ingested for this ticket.");
+  }
+
+  for (const type of ["SAST", "DAST", "SSAT", "SSCT", "VAPT"] as const) {
+    const items = report.findingsByType[type];
+    if (items.length === 0) continue;
+
+    if (doc.y > 720) doc.addPage();
+    doc.moveDown(0.5);
+    doc.fontSize(13).fillColor("#0F172A").text(TYPE_LABEL[type]);
+    doc.strokeColor("#E2E8F0").lineWidth(0.5).moveTo(36, doc.y).lineTo(560, doc.y).stroke();
+    doc.moveDown(0.3);
+
+    for (const finding of items) {
+      if (doc.y > 740) doc.addPage();
+      const rowY = doc.y;
+      doc.fontSize(9).fillColor(SEVERITY_COLOR[finding.severity] ?? "#0F172A").text(finding.severity, 36, rowY, { continued: true, width: 70 });
+      doc.fillColor("#0F172A").text(`  ${finding.title}`, { continued: true });
+      doc.fillColor("#64748B").text(`  (${finding.tool}${finding.status !== "OPEN" ? `, ${finding.status}` : ""})`);
+      if (finding.filePath) {
+        doc.fontSize(8).fillColor("#94A3B8").text(`${finding.filePath}${finding.lineNumber ? `:${finding.lineNumber}` : ""}`, 46);
+      }
+      doc.moveDown(0.25);
+    }
+  }
+
+  doc.moveDown(1);
+  doc.fontSize(8).fillColor("#94A3B8").text("Ingest-only report — findings reflect whatever CI/security tools this workspace has connected.", { align: "center" });
+  doc.end();
+});
+
 /* ---------- Watchers ---------- */
 
 ticketRouter.post("/:id/watchers", requirePermission(permissions.TICKETS_VIEW), async (req, res) => {
   const ticketId = String(req.params.id);
+  const ticket = await prisma.ticket.findFirst({ where: { id: ticketId, deletedAt: null }, select: { projectId: true } });
+  if (!ticket) throw new AppError(404, "Ticket not found");
+  await assertTicketVisible(req, ticket.projectId);
+
   const userId = typeof req.body?.userId === "string" && req.body.userId ? req.body.userId : req.user!.id;
   if (userId !== req.user!.id && !canReopenClosedTicket(req)) {
     throw new AppError(403, "You can only add yourself as a watcher");
@@ -472,6 +603,10 @@ ticketRouter.post("/:id/watchers", requirePermission(permissions.TICKETS_VIEW), 
 
 ticketRouter.delete("/:id/watchers/:userId", requirePermission(permissions.TICKETS_VIEW), async (req, res) => {
   const ticketId = String(req.params.id);
+  const ticket = await prisma.ticket.findFirst({ where: { id: ticketId, deletedAt: null }, select: { projectId: true } });
+  if (!ticket) throw new AppError(404, "Ticket not found");
+  await assertTicketVisible(req, ticket.projectId);
+
   const userId = String(req.params.userId);
   if (userId !== req.user!.id && !canReopenClosedTicket(req)) {
     throw new AppError(403, "You can only remove yourself as a watcher");
@@ -485,6 +620,10 @@ ticketRouter.delete("/:id/watchers/:userId", requirePermission(permissions.TICKE
 
 ticketRouter.post("/:id/labels", requirePermission(permissions.TICKETS_WRITE), async (req, res) => {
   const ticketId = String(req.params.id);
+  const ticket = await prisma.ticket.findFirst({ where: { id: ticketId, deletedAt: null }, select: { projectId: true } });
+  if (!ticket) throw new AppError(404, "Ticket not found");
+  await assertTicketVisible(req, ticket.projectId);
+
   const labelId = typeof req.body?.labelId === "string" ? req.body.labelId : "";
   if (!labelId) throw new AppError(422, "labelId is required");
 
@@ -500,6 +639,10 @@ ticketRouter.post("/:id/labels", requirePermission(permissions.TICKETS_WRITE), a
 
 ticketRouter.delete("/:id/labels/:labelId", requirePermission(permissions.TICKETS_WRITE), async (req, res) => {
   const ticketId = String(req.params.id);
+  const ticket = await prisma.ticket.findFirst({ where: { id: ticketId, deletedAt: null }, select: { projectId: true } });
+  if (!ticket) throw new AppError(404, "Ticket not found");
+  await assertTicketVisible(req, ticket.projectId);
+
   const labelId = String(req.params.labelId);
   await prisma.ticketLabel.deleteMany({ where: { ticketId, labelId } });
   await audit(req.user!.id, "ticket.label_removed", "Ticket", ticketId, { labelId });
@@ -520,6 +663,7 @@ ticketRouter.post("/:id/links", requirePermission(permissions.TICKETS_WRITE), va
   const sourceId = String(req.params.id);
   const source = await prisma.ticket.findFirst({ where: { id: sourceId, deletedAt: null } });
   if (!source) throw new AppError(404, "Ticket not found");
+  await assertTicketVisible(req, source.projectId);
 
   const target = await prisma.ticket.findFirst({ where: { key: req.body.targetKey.trim().toUpperCase(), deletedAt: null } });
   if (!target) throw new AppError(404, `No ticket found with key "${req.body.targetKey}"`);
@@ -540,6 +684,10 @@ ticketRouter.post("/:id/links", requirePermission(permissions.TICKETS_WRITE), va
 
 ticketRouter.delete("/:id/links/:linkId", requirePermission(permissions.TICKETS_WRITE), async (req, res) => {
   const ticketId = String(req.params.id);
+  const ticket = await prisma.ticket.findFirst({ where: { id: ticketId, deletedAt: null }, select: { projectId: true } });
+  if (!ticket) throw new AppError(404, "Ticket not found");
+  await assertTicketVisible(req, ticket.projectId);
+
   const linkId = String(req.params.linkId);
   const link = await prisma.ticketLink.findFirst({
     where: { id: linkId, OR: [{ sourceTicketId: ticketId }, { targetTicketId: ticketId }] }
@@ -547,6 +695,90 @@ ticketRouter.delete("/:id/links/:linkId", requirePermission(permissions.TICKETS_
   if (!link) throw new AppError(404, "Link not found");
   await prisma.ticketLink.delete({ where: { id: linkId } });
   await audit(req.user!.id, "ticket.link_removed", "Ticket", ticketId, { linkId });
+  res.status(204).send();
+});
+
+/* ---------- Branches (manual repo/branch/PR linking) ---------- */
+// Deliberately manual, not synced live from GitHub/GitLab/etc. — see prisma/schema.prisma's
+// TicketBranch model comment and docs/ROADMAP.md's "Git repo & branch mapping" theme for why a
+// live git-provider App integration (OAuth, webhook-driven auto-sync) is a separate, larger
+// scope of work than this. This is "record which branch/PR is fixing this ticket," typed in by
+// whoever's working it — the same trust model as every other ticket field a project member can
+// edit, not an integration with an external system's auth.
+
+const createBranchSchema = z.object({
+  params: z.object({ id: z.string().uuid() }),
+  body: z.object({
+    repository: z.string().min(1).max(255),
+    branch: z.string().min(1).max(255),
+    prUrl: z.string().max(500).optional(),
+    prStatus: z.enum(["NONE", "OPEN", "MERGED", "CLOSED"]).optional()
+  })
+});
+
+ticketRouter.post("/:id/branches", requirePermission(permissions.TICKETS_WRITE), validate(createBranchSchema), async (req, res) => {
+  const ticketId = String(req.params.id);
+  const ticket = await prisma.ticket.findFirst({ where: { id: ticketId, deletedAt: null }, select: { projectId: true } });
+  if (!ticket) throw new AppError(404, "Ticket not found");
+  await assertTicketVisible(req, ticket.projectId);
+
+  const created = await prisma.ticketBranch.create({
+    data: {
+      ticketId,
+      repository: req.body.repository.trim(),
+      branch: req.body.branch.trim(),
+      prUrl: req.body.prUrl || null,
+      prStatus: req.body.prStatus ?? (req.body.prUrl ? "OPEN" : "NONE"),
+      addedById: req.user!.id
+    },
+    include: { addedBy: { select: USER_SUMMARY } }
+  });
+  await audit(req.user!.id, "ticket.branch_added", "Ticket", ticketId, { branch: created.branch, repository: created.repository });
+  res.status(201).json(created);
+});
+
+const updateBranchSchema = z.object({
+  params: z.object({ id: z.string().uuid(), branchId: z.string().uuid() }),
+  body: z
+    .object({
+      prUrl: z.string().max(500).optional().nullable(),
+      prStatus: z.enum(["NONE", "OPEN", "MERGED", "CLOSED"]).optional()
+    })
+    .strict()
+});
+
+ticketRouter.patch("/:id/branches/:branchId", requirePermission(permissions.TICKETS_WRITE), validate(updateBranchSchema), async (req, res) => {
+  const ticketId = String(req.params.id);
+  const ticket = await prisma.ticket.findFirst({ where: { id: ticketId, deletedAt: null }, select: { projectId: true } });
+  if (!ticket) throw new AppError(404, "Ticket not found");
+  await assertTicketVisible(req, ticket.projectId);
+
+  const branch = await prisma.ticketBranch.findFirst({ where: { id: String(req.params.branchId), ticketId } });
+  if (!branch) throw new AppError(404, "Branch link not found");
+
+  const data: Record<string, unknown> = {};
+  if ("prUrl" in req.body) data.prUrl = req.body.prUrl || null;
+  if (typeof req.body.prStatus === "string") data.prStatus = req.body.prStatus;
+
+  const updated = await prisma.ticketBranch.update({
+    where: { id: branch.id },
+    data,
+    include: { addedBy: { select: USER_SUMMARY } }
+  });
+  res.json(updated);
+});
+
+ticketRouter.delete("/:id/branches/:branchId", requirePermission(permissions.TICKETS_WRITE), async (req, res) => {
+  const ticketId = String(req.params.id);
+  const ticket = await prisma.ticket.findFirst({ where: { id: ticketId, deletedAt: null }, select: { projectId: true } });
+  if (!ticket) throw new AppError(404, "Ticket not found");
+  await assertTicketVisible(req, ticket.projectId);
+
+  const branch = await prisma.ticketBranch.findFirst({ where: { id: String(req.params.branchId), ticketId } });
+  if (!branch) throw new AppError(404, "Branch link not found");
+
+  await prisma.ticketBranch.delete({ where: { id: branch.id } });
+  await audit(req.user!.id, "ticket.branch_removed", "Ticket", ticketId, { branchId: branch.id });
   res.status(204).send();
 });
 
@@ -561,6 +793,7 @@ ticketRouter.post("/:id/checklist", requirePermission(permissions.TICKETS_WRITE)
   const ticketId = String(req.params.id);
   const ticket = await prisma.ticket.findFirst({ where: { id: ticketId, deletedAt: null } });
   if (!ticket) throw new AppError(404, "Ticket not found");
+  await assertTicketVisible(req, ticket.projectId);
 
   const last = await prisma.ticketChecklistItem.findFirst({ where: { ticketId }, orderBy: { position: "desc" } });
   const created = await prisma.ticketChecklistItem.create({
@@ -581,19 +814,35 @@ const patchChecklistSchema = z.object({
 });
 
 ticketRouter.patch("/:id/checklist/:itemId", requirePermission(permissions.TICKETS_WRITE), validate(patchChecklistSchema), async (req, res) => {
+  const ticketId = String(req.params.id);
+  const ticket = await prisma.ticket.findFirst({ where: { id: ticketId, deletedAt: null }, select: { projectId: true } });
+  if (!ticket) throw new AppError(404, "Ticket not found");
+  await assertTicketVisible(req, ticket.projectId);
+
+  const item = await prisma.ticketChecklistItem.findFirst({ where: { id: String(req.params.itemId), ticketId } });
+  if (!item) throw new AppError(404, "Checklist item not found");
+
   const data: Record<string, unknown> = {};
   if (typeof req.body.label === "string") data.label = req.body.label.trim();
   if (typeof req.body.done === "boolean") data.done = req.body.done;
 
   const updated = await prisma.ticketChecklistItem.update({
-    where: { id: String(req.params.itemId) },
+    where: { id: item.id },
     data
   });
   res.json(updated);
 });
 
 ticketRouter.delete("/:id/checklist/:itemId", requirePermission(permissions.TICKETS_WRITE), async (req, res) => {
-  await prisma.ticketChecklistItem.delete({ where: { id: String(req.params.itemId) } });
+  const ticketId = String(req.params.id);
+  const ticket = await prisma.ticket.findFirst({ where: { id: ticketId, deletedAt: null }, select: { projectId: true } });
+  if (!ticket) throw new AppError(404, "Ticket not found");
+  await assertTicketVisible(req, ticket.projectId);
+
+  const item = await prisma.ticketChecklistItem.findFirst({ where: { id: String(req.params.itemId), ticketId } });
+  if (!item) throw new AppError(404, "Checklist item not found");
+
+  await prisma.ticketChecklistItem.delete({ where: { id: item.id } });
   res.status(204).send();
 });
 
@@ -604,6 +853,10 @@ const reorderChecklistSchema = z.object({
 
 ticketRouter.patch("/:id/checklist-reorder", requirePermission(permissions.TICKETS_WRITE), validate(reorderChecklistSchema), async (req, res) => {
   const ticketId = String(req.params.id);
+  const ticket = await prisma.ticket.findFirst({ where: { id: ticketId, deletedAt: null }, select: { projectId: true } });
+  if (!ticket) throw new AppError(404, "Ticket not found");
+  await assertTicketVisible(req, ticket.projectId);
+
   const itemIds = req.body.itemIds as string[];
 
   const owned = await prisma.ticketChecklistItem.findMany({ where: { ticketId, id: { in: itemIds } }, select: { id: true } });
@@ -619,8 +872,13 @@ ticketRouter.patch("/:id/checklist-reorder", requirePermission(permissions.TICKE
 /* ---------- Comments ---------- */
 
 ticketRouter.get("/:id/comments", requirePermission(permissions.TICKETS_VIEW), async (req, res) => {
+  const ticketId = String(req.params.id);
+  const ticket = await prisma.ticket.findFirst({ where: { id: ticketId, deletedAt: null }, select: { projectId: true } });
+  if (!ticket) throw new AppError(404, "Ticket not found");
+  await assertTicketVisible(req, ticket.projectId);
+
   const comments = await prisma.ticketComment.findMany({
-    where: { ticketId: String(req.params.id) },
+    where: { ticketId },
     include: { author: { select: USER_SUMMARY } },
     orderBy: { createdAt: "asc" }
   });
@@ -638,6 +896,7 @@ ticketRouter.post("/:id/comments", requirePermission(permissions.TICKETS_WRITE),
     include: { watchers: true }
   });
   if (!ticket) throw new AppError(404, "Ticket not found");
+  await assertTicketVisible(req, ticket.projectId);
 
   const cleanBody = sanitizeRichText(req.body.body);
   const comment = await prisma.ticketComment.create({
@@ -681,6 +940,7 @@ ticketRouter.post(
   async (req, res) => {
     const ticket = await prisma.ticket.findFirst({ where: { id: String(req.params.id), deletedAt: null } });
     if (!ticket) throw new AppError(404, "Ticket not found");
+    await assertTicketVisible(req, ticket.projectId);
 
     const files = (req.files ?? []) as Express.Multer.File[];
     if (!files.length) throw new AppError(422, "No files uploaded");
@@ -705,8 +965,13 @@ ticketRouter.post(
 );
 
 ticketRouter.delete("/:id/attachments/:attachmentId", requirePermission(permissions.TICKETS_WRITE), async (req, res) => {
+  const ticketId = String(req.params.id);
+  const ticket = await prisma.ticket.findFirst({ where: { id: ticketId, deletedAt: null }, select: { projectId: true } });
+  if (!ticket) throw new AppError(404, "Ticket not found");
+  await assertTicketVisible(req, ticket.projectId);
+
   const attachment = await prisma.ticketAttachment.findFirst({
-    where: { id: String(req.params.attachmentId), ticketId: String(req.params.id) }
+    where: { id: String(req.params.attachmentId), ticketId }
   });
   if (!attachment) throw new AppError(404, "Attachment not found");
   if (attachment.uploadedById !== req.user!.id && !req.user!.permissions.includes(permissions.TICKETS_MANAGE)) {

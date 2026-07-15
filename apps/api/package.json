@@ -4,6 +4,8 @@
   "type": "module",
   "scripts": {
     "dev": "tsx watch src/server.ts",
+    "doctor": "tsx scripts/doctor.ts",
+    "doctor:heal": "tsx scripts/doctor.ts --heal",
     "build": "tsc -p tsconfig.json",
     "start": "node dist/src/server.js",
     "lint": "tsc -p tsconfig.json --noEmit",

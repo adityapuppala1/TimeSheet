@@ -9,6 +9,7 @@
  * `/app/admin/approvals`, `/app/admin/reports`).
  */
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import type { ColumnDef } from "@tanstack/react-table";
 import {
   Archive,
   Check,
@@ -22,6 +23,7 @@ import {
   RotateCcw,
   ShieldX,
   Trash2,
+  UploadCloud,
   Users2,
   UsersRound,
   X
@@ -42,7 +44,9 @@ import {
 import { Avatar, AvatarFallback, AvatarImage } from "../components/ui/avatar";
 import { Badge } from "../components/ui/badge";
 import { Button } from "../components/ui/button";
+import { CsvBulkUploadDialog } from "../components/CsvBulkUploadDialog";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../components/ui/card";
+import { DataTable } from "../components/ui/data-table";
 import {
   Dialog,
   DialogContent,
@@ -55,10 +59,12 @@ import { Input } from "../components/ui/input";
 import { Label } from "../components/ui/label";
 import { ScrollArea } from "../components/ui/scroll-area";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../components/ui/select";
+import { StatCard } from "../components/ui/stat-card";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "../components/ui/table";
 import { Textarea } from "../components/ui/textarea";
 import { toast } from "../components/ui/toaster";
 import { Tooltip, TooltipContent, TooltipTrigger } from "../components/ui/tooltip";
+import { computeTrend } from "../lib/trend";
 import {
   fileUrl,
   projectApi,
@@ -71,6 +77,57 @@ import {
 import { useAuthStore } from "../store/auth";
 
 const roles = ["SUPER_ADMIN", "ADMIN", "MANAGER", "TEAM_LEAD", "EMPLOYEE"];
+
+const BULK_USER_COLUMNS: Array<{ key: "name" | "email" | "role" | "managerEmail" | "designation" | "password"; label: string; required?: boolean }> = [
+  { key: "name", label: "Name", required: true },
+  { key: "email", label: "Email", required: true },
+  { key: "role", label: "Role", required: true },
+  { key: "managerEmail", label: "Manager email" },
+  { key: "designation", label: "Designation" },
+  { key: "password", label: "Password" }
+];
+
+const BULK_USER_SAMPLE_CSV = `# TimeSphere bulk user upload — instructions
+# 1. Keep the header row exactly as-is: name,email,role,managerEmail,designation,password
+# 2. role must be one of: SUPER_ADMIN, ADMIN, MANAGER, TEAM_LEAD, EMPLOYEE
+# 3. managerEmail is optional — leave blank for no manager. It can reference someone
+#    ELSE in this same file (e.g. a manager and their reports uploaded together) —
+#    upload order inside the file does not matter.
+# 4. designation is optional free text (e.g. "Senior Backend Engineer") — it's just a
+#    display label shown alongside the person's name; it has no effect on permissions.
+# 5. password is optional — leave blank to auto-generate a random one (the user resets
+#    it via the "Forgot password" flow, or an admin uses "Reset password" afterward).
+# 6. Delete these instruction lines (or leave them — lines starting with # are ignored)
+#    and replace the example rows below with your own data, then upload.
+name,email,role,managerEmail,designation,password
+Priya Sharma,priya.sharma@example.com,MANAGER,,Engineering Manager,
+Rahul Verma,rahul.verma@example.com,EMPLOYEE,priya.sharma@example.com,Backend Engineer,
+Ananya Iyer,ananya.iyer@example.com,EMPLOYEE,priya.sharma@example.com,Frontend Engineer,
+`;
+
+const BULK_PROJECT_COLUMNS: Array<{ key: "projectCode" | "projectName" | "moduleName" | "submoduleName"; label: string; required?: boolean }> = [
+  { key: "projectCode", label: "Project code", required: true },
+  { key: "projectName", label: "Project name", required: true },
+  { key: "moduleName", label: "Module name" },
+  { key: "submoduleName", label: "Submodule name" }
+];
+
+const BULK_PROJECT_SAMPLE_CSV = `# TimeSphere bulk project/module/submodule upload — instructions
+# 1. Keep the header row exactly as-is: projectCode,projectName,moduleName,submoduleName
+# 2. One row per (project, module, submodule) combination — repeat projectCode/projectName
+#    on every row for that project, same way a spreadsheet handles a one-to-many hierarchy.
+# 3. moduleName and submoduleName are optional — leave both blank to create just the
+#    project itself; leave submoduleName blank to create a module with no submodules yet.
+# 4. Safe to re-run: uploading the same project/module/submodule again does nothing (it
+#    already exists), so you can add new rows to a previously-uploaded file and re-upload.
+# 5. Delete these instruction lines (or leave them — lines starting with # are ignored)
+#    and replace the example rows below with your own data, then upload.
+projectCode,projectName,moduleName,submoduleName
+WEB,Web Platform,Frontend,Checkout
+WEB,Web Platform,Frontend,Login
+WEB,Web Platform,Backend,
+MOB,Mobile App,,
+`;
 
 function serverMessage(err: any, fallback: string) {
   return err?.response?.data?.message ?? fallback;
@@ -90,10 +147,11 @@ function initialsFor(name?: string) {
 export function UsersPage() {
   const queryClient = useQueryClient();
   const users = useQuery({ queryKey: ["users"], queryFn: userApi.list });
-  const [draft, setDraft] = useState({ name: "", email: "", role: "EMPLOYEE", password: "Admin@12345", managerId: "none" });
+  const [draft, setDraft] = useState({ name: "", email: "", role: "EMPLOYEE", password: "Admin@12345", managerId: "none", designation: "" });
   const [editing, setEditing] = useState<UserRow | null>(null);
   const [pendingDelete, setPendingDelete] = useState<{ id: string; name: string } | null>(null);
   const [pendingReset, setPendingReset] = useState<{ id: string; name: string } | null>(null);
+  const [bulkUploadOpen, setBulkUploadOpen] = useState(false);
 
   const eligibleManagers = useMemo(
     () => (users.data ?? []).filter((u: any) => ["MANAGER", "TEAM_LEAD", "ADMIN", "SUPER_ADMIN"].includes(u.role?.name)),
@@ -112,7 +170,7 @@ export function UsersPage() {
           duration: 10_000
         });
       }
-      setDraft({ name: "", email: "", role: "EMPLOYEE", password: "Admin@12345", managerId: "none" });
+      setDraft({ name: "", email: "", role: "EMPLOYEE", password: "Admin@12345", managerId: "none", designation: "" });
       queryClient.invalidateQueries({ queryKey: ["users"] });
     },
     onError: (err: any) => toast.error("Unable to create user", { description: serverMessage(err, "Try again.") })
@@ -164,16 +222,134 @@ export function UsersPage() {
       email: draft.email,
       role: draft.role,
       password: draft.password,
-      managerId: draft.managerId === "none" ? null : draft.managerId
+      managerId: draft.managerId === "none" ? null : draft.managerId,
+      designation: draft.designation.trim() || null
     });
   }
+
+  const userColumns = useMemo<ColumnDef<any, any>[]>(
+    () => [
+      {
+        id: "person",
+        accessorFn: (row: any) => row.name,
+        header: "Person",
+        cell: ({ row }) => {
+          const avatarSrc = fileUrl(row.original.avatarUrl);
+          return (
+            <div className="flex items-center gap-2">
+              <Avatar className="h-7 w-7">
+                {avatarSrc ? <AvatarImage src={avatarSrc} alt={row.original.name} /> : null}
+                <AvatarFallback>{initialsFor(row.original.name)}</AvatarFallback>
+              </Avatar>
+              <div className="min-w-0">
+                <p className="truncate font-medium">{row.original.name}</p>
+                {row.original.designation && <p className="truncate text-xs text-muted-foreground">{row.original.designation}</p>}
+              </div>
+            </div>
+          );
+        }
+      },
+      { accessorKey: "email", header: "Email", cell: (info) => <span className="text-muted-foreground">{info.getValue()}</span> },
+      {
+        id: "role",
+        accessorFn: (row: any) => row.role?.name,
+        header: "Role",
+        cell: ({ row }) => <Badge variant="info">{row.original.role?.name?.replace("_", " ")}</Badge>
+      },
+      {
+        id: "manager",
+        accessorFn: (row: any) => row.manager?.name ?? "",
+        header: "Manager",
+        cell: ({ row }) => <span className="text-muted-foreground">{row.original.manager?.name ?? "—"}</span>
+      },
+      {
+        accessorKey: "status",
+        header: "Status",
+        cell: (info) => <Badge variant={info.getValue() === "ACTIVE" ? "success" : "warning"}>{info.getValue() as string}</Badge>
+      },
+      {
+        id: "actions",
+        header: () => <span className="block text-right">Actions</span>,
+        enableSorting: false,
+        cell: ({ row }) => {
+          const user = row.original;
+          return (
+            <div className="flex justify-end gap-1">
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button variant="ghost" size="icon" className="h-9 w-9" onClick={() => setEditing(user)}>
+                    <Pencil className="h-4 w-4" />
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent>Edit details</TooltipContent>
+              </Tooltip>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    className="h-9 w-9"
+                    disabled={resendWelcome.isPending && resendWelcome.variables === user.id}
+                    onClick={() => resendWelcome.mutate(user.id)}
+                  >
+                    <Mail className="h-4 w-4" />
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent>Resend welcome email</TooltipContent>
+              </Tooltip>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    className="h-9 w-9"
+                    onClick={() => update.mutate({ id: user.id, payload: { status: user.status === "ACTIVE" ? "INACTIVE" : "ACTIVE" } })}
+                  >
+                    {user.status === "ACTIVE" ? <X className="h-4 w-4" /> : <Check className="h-4 w-4" />}
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent>{user.status === "ACTIVE" ? "Deactivate" : "Activate"}</TooltipContent>
+              </Tooltip>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button variant="ghost" size="icon" className="h-9 w-9" onClick={() => setPendingReset({ id: user.id, name: user.name })}>
+                    <RotateCcw className="h-4 w-4" />
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent>Reset password</TooltipContent>
+              </Tooltip>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    className="h-9 w-9 text-destructive hover:bg-destructive/10 hover:text-destructive"
+                    onClick={() => setPendingDelete({ id: user.id, name: user.name })}
+                  >
+                    <Trash2 className="h-4 w-4" />
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent>Delete user</TooltipContent>
+              </Tooltip>
+            </div>
+          );
+        }
+      }
+    ],
+    [resendWelcome, update]
+  );
 
   return (
     <Workspace title="User Management" subtitle="Create, edit, deactivate, reset, and map users into the manager hierarchy." icon={<Users2 className="h-5 w-5" />}>
       <Card>
-        <CardHeader>
-          <CardTitle>Invite a teammate</CardTitle>
-          <CardDescription>New users get the default password and must change it on first login.</CardDescription>
+        <CardHeader className="flex-row items-start justify-between gap-3 space-y-0">
+          <div className="min-w-0">
+            <CardTitle>Invite a teammate</CardTitle>
+            <CardDescription>New users get the default password and must change it on first login.</CardDescription>
+          </div>
+          <Button type="button" variant="outline" size="sm" onClick={() => setBulkUploadOpen(true)}>
+            <UploadCloud className="h-3.5 w-3.5" />Bulk upload
+          </Button>
         </CardHeader>
         <CardContent>
           <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-6">
@@ -202,6 +378,13 @@ export function UsersPage() {
                 </SelectContent>
               </Select>
             </FieldShell>
+            <FieldShell label="Designation">
+              <Input
+                value={draft.designation}
+                onChange={(e) => setDraft({ ...draft, designation: e.target.value })}
+                placeholder="e.g. Senior Backend Engineer"
+              />
+            </FieldShell>
             <FieldShell label="Temporary password">
               <Input value={draft.password} onChange={(e) => setDraft({ ...draft, password: e.target.value })} />
             </FieldShell>
@@ -215,106 +398,15 @@ export function UsersPage() {
       </Card>
 
       <Card>
-        <CardContent className="p-0">
-          <Table>
-            <TableHeader>
-              <TableRow>
-                <TableHead>Person</TableHead>
-                <TableHead>Email</TableHead>
-                <TableHead>Role</TableHead>
-                <TableHead>Manager</TableHead>
-                <TableHead>Status</TableHead>
-                <TableHead className="text-right">Actions</TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {(users.data ?? []).map((row: any) => {
-                const avatarSrc = fileUrl(row.avatarUrl);
-                return (
-                  <TableRow key={row.id}>
-                    <TableCell>
-                      <div className="flex items-center gap-2">
-                        <Avatar className="h-7 w-7">
-                          {avatarSrc ? <AvatarImage src={avatarSrc} alt={row.name} /> : null}
-                          <AvatarFallback>{initialsFor(row.name)}</AvatarFallback>
-                        </Avatar>
-                        <span className="font-medium">{row.name}</span>
-                      </div>
-                    </TableCell>
-                    <TableCell className="text-muted-foreground">{row.email}</TableCell>
-                    <TableCell><Badge variant="info">{row.role?.name?.replace("_", " ")}</Badge></TableCell>
-                    <TableCell className="text-muted-foreground">{row.manager?.name ?? "—"}</TableCell>
-                    <TableCell>
-                      <Badge variant={row.status === "ACTIVE" ? "success" : "warning"}>{row.status}</Badge>
-                    </TableCell>
-                    <TableCell className="text-right">
-                      <div className="flex justify-end gap-1">
-                        <Tooltip>
-                          <TooltipTrigger asChild>
-                            <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => setEditing(row)}>
-                              <Pencil className="h-4 w-4" />
-                            </Button>
-                          </TooltipTrigger>
-                          <TooltipContent>Edit details</TooltipContent>
-                        </Tooltip>
-                        <Tooltip>
-                          <TooltipTrigger asChild>
-                            <Button
-                              variant="ghost"
-                              size="icon"
-                              className="h-8 w-8"
-                              disabled={resendWelcome.isPending && resendWelcome.variables === row.id}
-                              onClick={() => resendWelcome.mutate(row.id)}
-                            >
-                              <Mail className="h-4 w-4" />
-                            </Button>
-                          </TooltipTrigger>
-                          <TooltipContent>Resend welcome email</TooltipContent>
-                        </Tooltip>
-                        <Tooltip>
-                          <TooltipTrigger asChild>
-                            <Button
-                              variant="ghost"
-                              size="icon"
-                              className="h-8 w-8"
-                              onClick={() => update.mutate({ id: row.id, payload: { status: row.status === "ACTIVE" ? "INACTIVE" : "ACTIVE" } })}
-                            >
-                              {row.status === "ACTIVE" ? <X className="h-4 w-4" /> : <Check className="h-4 w-4" />}
-                            </Button>
-                          </TooltipTrigger>
-                          <TooltipContent>{row.status === "ACTIVE" ? "Deactivate" : "Activate"}</TooltipContent>
-                        </Tooltip>
-                        <Tooltip>
-                          <TooltipTrigger asChild>
-                            <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => setPendingReset({ id: row.id, name: row.name })}>
-                              <RotateCcw className="h-4 w-4" />
-                            </Button>
-                          </TooltipTrigger>
-                          <TooltipContent>Reset password</TooltipContent>
-                        </Tooltip>
-                        <Tooltip>
-                          <TooltipTrigger asChild>
-                            <Button
-                              variant="ghost"
-                              size="icon"
-                              className="h-8 w-8 text-destructive hover:bg-destructive/10 hover:text-destructive"
-                              onClick={() => setPendingDelete({ id: row.id, name: row.name })}
-                            >
-                              <Trash2 className="h-4 w-4" />
-                            </Button>
-                          </TooltipTrigger>
-                          <TooltipContent>Delete user</TooltipContent>
-                        </Tooltip>
-                      </div>
-                    </TableCell>
-                  </TableRow>
-                );
-              })}
-              {(users.data ?? []).length === 0 && (
-                <TableRow><TableCell colSpan={6} className="py-10 text-center text-muted-foreground">No users yet.</TableCell></TableRow>
-              )}
-            </TableBody>
-          </Table>
+        <CardContent className="p-4">
+          <DataTable
+            columns={userColumns}
+            data={users.data ?? []}
+            isLoading={users.isLoading}
+            searchPlaceholder="Search users..."
+            emptyMessage="No users yet."
+            pageSize={20}
+          />
         </CardContent>
       </Card>
 
@@ -326,6 +418,30 @@ export function UsersPage() {
           if (!editing) return;
           update.mutate({ id: editing.id, payload }, { onSuccess: () => setEditing(null) });
         }}
+      />
+
+      <CsvBulkUploadDialog
+        open={bulkUploadOpen}
+        onOpenChange={setBulkUploadOpen}
+        title="Bulk upload users"
+        description="Upload a CSV to create many users at once, with manager mapping resolved by email — no need to create managers first."
+        columns={BULK_USER_COLUMNS}
+        sampleCsv={BULK_USER_SAMPLE_CSV}
+        sampleFileName="timesphere-users-sample.csv"
+        validateRow={(row) => (roles.includes(row.role?.trim()) ? null : `Invalid role "${row.role}" — must be one of ${roles.join(", ")}`)}
+        onUpload={(rows) =>
+          userApi.bulkCreate(
+            rows.map((r) => ({
+              name: r.name,
+              email: r.email,
+              role: r.role.trim(),
+              managerEmail: r.managerEmail || undefined,
+              designation: r.designation || undefined,
+              password: r.password || undefined
+            }))
+          )
+        }
+        onUploaded={() => queryClient.invalidateQueries({ queryKey: ["users"] })}
       />
 
       <AlertDialog open={!!pendingDelete} onOpenChange={(open) => !open && setPendingDelete(null)}>
@@ -382,7 +498,8 @@ function UserEditDialog({
     email: "",
     role: "EMPLOYEE",
     status: "ACTIVE" as "ACTIVE" | "INACTIVE" | "PENDING_VERIFICATION",
-    managerId: "none"
+    managerId: "none",
+    designation: ""
   });
   // Key the form re-initialization on the user's stable id, not the whole
   // user object. This way a background refetch of the users list (which
@@ -395,7 +512,8 @@ function UserEditDialog({
         email: user.email,
         role: user.role.name,
         status: user.status,
-        managerId: user.managerId ?? "none"
+        managerId: user.managerId ?? "none",
+        designation: user.designation ?? ""
       });
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -446,6 +564,15 @@ function UserEditDialog({
                 </div>
               </div>
               <div className="grid gap-1.5">
+                <Label htmlFor="ue-designation">Designation</Label>
+                <Input
+                  id="ue-designation"
+                  value={form.designation}
+                  onChange={(e) => setForm({ ...form, designation: e.target.value })}
+                  placeholder="e.g. Senior Backend Engineer"
+                />
+              </div>
+              <div className="grid gap-1.5">
                 <Label>Reports to</Label>
                 <Select value={form.managerId} onValueChange={(value) => setForm({ ...form, managerId: value })}>
                   <SelectTrigger><SelectValue placeholder="No manager" /></SelectTrigger>
@@ -469,7 +596,8 @@ function UserEditDialog({
                     email: form.email.trim(),
                     role: form.role,
                     status: form.status,
-                    managerId: form.managerId === "none" ? null : form.managerId
+                    managerId: form.managerId === "none" ? null : form.managerId,
+                    designation: form.designation.trim() || null
                   })
                 }
                 disabled={!form.name.trim() || !form.email.trim()}
@@ -493,6 +621,7 @@ export function ProjectsPage() {
   const [submoduleDraft, setSubmoduleDraft] = useState({ moduleId: "", name: "" });
   const [pendingArchive, setPendingArchive] = useState<{ id: string; name: string } | null>(null);
   const [managingTeam, setManagingTeam] = useState<{ id: string; name: string } | null>(null);
+  const [bulkUploadOpen, setBulkUploadOpen] = useState(false);
 
   const create = useMutation({
     mutationFn: projectApi.create,
@@ -535,14 +664,85 @@ export function ProjectsPage() {
     p.modules.map((m: any) => ({ ...m, projectName: p.name }))
   );
 
+  const projectColumns = useMemo<ColumnDef<any, any>[]>(
+    () => [
+      { accessorKey: "code", header: "Code", cell: (info) => <span className="font-mono text-xs">{info.getValue()}</span> },
+      { accessorKey: "name", header: "Name", cell: (info) => <span className="font-medium">{info.getValue()}</span> },
+      {
+        accessorKey: "status",
+        header: "Status",
+        cell: (info) => <Badge variant={info.getValue() === "ACTIVE" ? "success" : "warning"}>{info.getValue() as string}</Badge>
+      },
+      {
+        id: "hierarchy",
+        accessorFn: (row: any) => row.modules?.length ?? 0,
+        header: "Hierarchy",
+        cell: ({ row }) => (
+          <span className="text-muted-foreground"><Layers className="mr-1 inline h-3 w-3" />{row.original.modules?.length ?? 0} modules</span>
+        )
+      },
+      {
+        id: "team",
+        accessorFn: (row: any) => row.assignments?.length ?? 0,
+        header: "Team",
+        enableSorting: false,
+        cell: ({ row }) => (
+          <div className="flex -space-x-2">
+            {(row.original.assignments ?? []).slice(0, 4).map((a: any) => {
+              const src = fileUrl(a.user?.avatarUrl);
+              return (
+                <Avatar key={a.user?.id} className="h-7 w-7 ring-2 ring-background">
+                  {src ? <AvatarImage src={src} alt={a.user?.name} /> : null}
+                  <AvatarFallback className="text-[10px]">{initialsFor(a.user?.name)}</AvatarFallback>
+                </Avatar>
+              );
+            })}
+            {(row.original.assignments?.length ?? 0) > 4 && (
+              <div className="grid h-7 w-7 place-items-center rounded-full bg-muted text-[10px] font-semibold ring-2 ring-background">
+                +{row.original.assignments.length - 4}
+              </div>
+            )}
+            {(row.original.assignments?.length ?? 0) === 0 && <span className="text-xs text-muted-foreground">No one assigned</span>}
+          </div>
+        )
+      },
+      {
+        id: "actions",
+        header: () => <span className="block text-right">Actions</span>,
+        enableSorting: false,
+        cell: ({ row }) => (
+          <div className="flex justify-end gap-1">
+            <Button variant="ghost" size="sm" onClick={() => setManagingTeam({ id: row.original.id, name: row.original.name })}>
+              <UsersRound className="h-3.5 w-3.5" />Manage team
+            </Button>
+            <Button
+              variant="ghost"
+              size="sm"
+              className="text-destructive hover:bg-destructive/10 hover:text-destructive"
+              onClick={() => setPendingArchive({ id: row.original.id, name: row.original.name })}
+            >
+              <Archive className="h-3.5 w-3.5" />Archive
+            </Button>
+          </div>
+        )
+      }
+    ],
+    []
+  );
+
   return (
     <Workspace title="Project Management" subtitle="Create projects, modules, submodules, and assign who can log time on each." icon={<FolderTree className="h-5 w-5" />}>
       <Card>
-        <CardHeader>
-          <CardTitle>Create a project</CardTitle>
-          <CardDescription>
-            Pick a short code (e.g. <span className="font-mono">HICS-OPS</span>) — it appears across reports, exports, and audit trails.
-          </CardDescription>
+        <CardHeader className="flex-row items-start justify-between gap-3 space-y-0">
+          <div className="min-w-0">
+            <CardTitle>Create a project</CardTitle>
+            <CardDescription>
+              Pick a short code (e.g. <span className="font-mono">HICS-OPS</span>) — it appears across reports, exports, and audit trails.
+            </CardDescription>
+          </div>
+          <Button type="button" variant="outline" size="sm" onClick={() => setBulkUploadOpen(true)}>
+            <UploadCloud className="h-3.5 w-3.5" />Bulk upload
+          </Button>
         </CardHeader>
         <CardContent className="grid gap-4">
           <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-[1fr_1.4fr_2fr_auto]">
@@ -587,72 +787,41 @@ export function ProjectsPage() {
       </Card>
 
       <Card>
-        <CardContent className="p-0">
-          <Table>
-            <TableHeader>
-              <TableRow>
-                <TableHead>Code</TableHead>
-                <TableHead>Name</TableHead>
-                <TableHead>Status</TableHead>
-                <TableHead>Hierarchy</TableHead>
-                <TableHead>Team</TableHead>
-                <TableHead className="text-right">Actions</TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {(projects.data ?? []).map((row: any) => (
-                <TableRow key={row.id}>
-                  <TableCell className="font-mono text-xs">{row.code}</TableCell>
-                  <TableCell className="font-medium">{row.name}</TableCell>
-                  <TableCell><Badge variant={row.status === "ACTIVE" ? "success" : "warning"}>{row.status}</Badge></TableCell>
-                  <TableCell className="text-muted-foreground"><Layers className="mr-1 inline h-3 w-3" />{row.modules?.length ?? 0} modules</TableCell>
-                  <TableCell>
-                    <div className="flex -space-x-2">
-                      {(row.assignments ?? []).slice(0, 4).map((a: any) => {
-                        const src = fileUrl(a.user?.avatarUrl);
-                        return (
-                          <Avatar key={a.user?.id} className="h-7 w-7 ring-2 ring-background">
-                            {src ? <AvatarImage src={src} alt={a.user?.name} /> : null}
-                            <AvatarFallback className="text-[10px]">{initialsFor(a.user?.name)}</AvatarFallback>
-                          </Avatar>
-                        );
-                      })}
-                      {(row.assignments?.length ?? 0) > 4 && (
-                        <div className="grid h-7 w-7 place-items-center rounded-full bg-muted text-[10px] font-semibold ring-2 ring-background">
-                          +{row.assignments.length - 4}
-                        </div>
-                      )}
-                      {(row.assignments?.length ?? 0) === 0 && (
-                        <span className="text-xs text-muted-foreground">No one assigned</span>
-                      )}
-                    </div>
-                  </TableCell>
-                  <TableCell className="text-right">
-                    <div className="flex justify-end gap-1">
-                      <Button variant="ghost" size="sm" onClick={() => setManagingTeam({ id: row.id, name: row.name })}>
-                        <UsersRound className="h-3.5 w-3.5" />Manage team
-                      </Button>
-                      <Button
-                        variant="ghost"
-                        size="sm"
-                        className="text-destructive hover:bg-destructive/10 hover:text-destructive"
-                        onClick={() => setPendingArchive({ id: row.id, name: row.name })}
-                      >
-                        <Archive className="h-3.5 w-3.5" />Archive
-                      </Button>
-                    </div>
-                  </TableCell>
-                </TableRow>
-              ))}
-              {(projects.data ?? []).length === 0 && (
-                <TableRow><TableCell colSpan={6} className="py-10 text-center text-muted-foreground">No projects yet.</TableCell></TableRow>
-              )}
-            </TableBody>
-          </Table>
+        <CardContent className="p-4">
+          <DataTable
+            columns={projectColumns}
+            data={projects.data ?? []}
+            isLoading={projects.isLoading}
+            searchPlaceholder="Search projects..."
+            emptyMessage="No projects yet."
+            pageSize={20}
+          />
         </CardContent>
       </Card>
 
       <ProjectTeamDialog project={managingTeam} onClose={() => setManagingTeam(null)} />
+
+      <CsvBulkUploadDialog
+        open={bulkUploadOpen}
+        onOpenChange={setBulkUploadOpen}
+        title="Bulk upload projects"
+        description="Upload a CSV to create many projects, modules, and submodules at once — one row per (project, module, submodule) combination. Safe to re-run."
+        columns={BULK_PROJECT_COLUMNS}
+        sampleCsv={BULK_PROJECT_SAMPLE_CSV}
+        sampleFileName="timesphere-projects-sample.csv"
+        validateRow={() => null}
+        onUpload={(rows) =>
+          projectApi.bulkCreate(
+            rows.map((r) => ({
+              projectCode: r.projectCode,
+              projectName: r.projectName,
+              moduleName: r.moduleName || undefined,
+              submoduleName: r.submoduleName || undefined
+            }))
+          )
+        }
+        onUploaded={() => queryClient.invalidateQueries({ queryKey: ["projects"] })}
+      />
 
       <AlertDialog open={!!pendingArchive} onOpenChange={(open) => !open && setPendingArchive(null)}>
         <AlertDialogContent>
@@ -857,7 +1026,7 @@ function UserChip({
         type="button"
         size="icon"
         variant={variant === "destructive" ? "ghost" : "ghost"}
-        className={`h-7 w-7 ${variant === "destructive" ? "text-destructive hover:bg-destructive/10 hover:text-destructive" : "text-primary hover:bg-primary/10 hover:text-primary"}`}
+        className={`h-9 w-9 ${variant === "destructive" ? "text-destructive hover:bg-destructive/10 hover:text-destructive" : "text-primary hover:bg-primary/10 hover:text-primary"}`}
         aria-label={actionLabel}
         title={actionLabel}
         onClick={onAction}
@@ -896,56 +1065,55 @@ export function ApprovalsPage() {
 
   const pending = (timesheets.data ?? []).filter((row: any) => row.status === "SUBMITTED");
 
+  const approvalColumns = useMemo<ColumnDef<any, any>[]>(
+    () => [
+      { id: "employee", accessorFn: (row: any) => row.user?.name, header: "Employee", cell: ({ row }) => <span className="font-medium">{row.original.user?.name}</span> },
+      {
+        id: "date",
+        accessorFn: (row: any) => row.workDate,
+        header: "Date",
+        cell: ({ row }) => <span className="text-muted-foreground">{String(row.original.workDate).slice(0, 10)}</span>
+      },
+      { id: "project", accessorFn: (row: any) => row.project?.name, header: "Project" },
+      { accessorKey: "activityType", header: "Activity" },
+      {
+        id: "hours",
+        accessorFn: (row: any) => Number(row.totalHours),
+        header: "Hours",
+        cell: ({ row }) => <span className="font-semibold">{Number(row.original.totalHours).toFixed(2)}</span>
+      },
+      { accessorKey: "status", header: "Status", cell: (info) => <Badge variant="warning">{info.getValue() as string}</Badge> },
+      {
+        id: "decision",
+        header: () => <span className="block text-right">Decision</span>,
+        enableSorting: false,
+        cell: ({ row }) => (
+          <div className="flex justify-end gap-2">
+            <Button variant="success" size="sm" onClick={() => approve.mutate(row.original.id)}>
+              <Check className="h-4 w-4" />Approve
+            </Button>
+            <Button variant="outline" size="sm" onClick={() => setRejectTarget({ id: row.original.id, user: row.original.user?.name })}>
+              <ShieldX className="h-4 w-4" />Reject
+            </Button>
+          </div>
+        )
+      }
+    ],
+    [approve]
+  );
+
   return (
     <Workspace title="Timesheet Approvals" subtitle="Review submitted work logs with attachments and audit-friendly actions." icon={<Check className="h-5 w-5" />}>
       <Card>
-        <CardContent className="p-0">
-          <Table>
-            <TableHeader>
-              <TableRow>
-                <TableHead>Employee</TableHead>
-                <TableHead>Date</TableHead>
-                <TableHead>Project</TableHead>
-                <TableHead>Activity</TableHead>
-                <TableHead>Hours</TableHead>
-                <TableHead>Status</TableHead>
-                <TableHead className="text-right">Decision</TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {pending.map((row: any) => (
-                <TableRow key={row.id}>
-                  <TableCell className="font-medium">{row.user?.name}</TableCell>
-                  <TableCell className="text-muted-foreground">{String(row.workDate).slice(0, 10)}</TableCell>
-                  <TableCell>{row.project?.name}</TableCell>
-                  <TableCell>{row.activityType}</TableCell>
-                  <TableCell className="font-semibold">{Number(row.totalHours).toFixed(2)}</TableCell>
-                  <TableCell><Badge variant="warning">{row.status}</Badge></TableCell>
-                  <TableCell className="text-right">
-                    <div className="flex justify-end gap-2">
-                      <Button variant="success" size="sm" onClick={() => approve.mutate(row.id)}>
-                        <Check className="h-4 w-4" />Approve
-                      </Button>
-                      <Button variant="outline" size="sm" onClick={() => setRejectTarget({ id: row.id, user: row.user?.name })}>
-                        <ShieldX className="h-4 w-4" />Reject
-                      </Button>
-                    </div>
-                  </TableCell>
-                </TableRow>
-              ))}
-              {pending.length === 0 && (
-                <TableRow>
-                  <TableCell colSpan={7} className="py-12 text-center">
-                    <div className="grid justify-items-center gap-2 text-muted-foreground">
-                      <div className="grid h-12 w-12 place-items-center rounded-full bg-success/15 text-success"><Check className="h-6 w-6" /></div>
-                      <p className="font-semibold text-foreground">All clear</p>
-                      <p className="text-xs">No timesheets awaiting your review.</p>
-                    </div>
-                  </TableCell>
-                </TableRow>
-              )}
-            </TableBody>
-          </Table>
+        <CardContent className="p-4">
+          <DataTable
+            columns={approvalColumns}
+            data={pending}
+            isLoading={timesheets.isLoading}
+            enableSearch={false}
+            emptyMessage="Nothing pending — you're all caught up."
+            pageSize={20}
+          />
         </CardContent>
       </Card>
 
@@ -983,8 +1151,8 @@ export function ApprovalsPage() {
 
 /* ============================== REPORTS ============================== */
 export function ReportsPage() {
-  const analytics = useQuery({ queryKey: ["admin-summary"], queryFn: reportApi.admin });
-  const ticketAnalytics = useQuery({ queryKey: ["ticket-summary"], queryFn: reportApi.tickets });
+  const analytics = useQuery({ queryKey: ["admin-summary"], queryFn: reportApi.admin, refetchInterval: 30_000 });
+  const ticketAnalytics = useQuery({ queryKey: ["ticket-summary"], queryFn: reportApi.tickets, refetchInterval: 30_000 });
   const projectData = (analytics.data?.byProject ?? []).map((row: any) => ({ name: row.project, hours: Number(row._sum?.totalHours ?? 0) }));
   const priorityData = (ticketAnalytics.data?.byPriority ?? []).map((row) => ({ name: row.priority, count: row._count }));
   const slaBreached = analytics.data?.slaBreached ?? 0;
@@ -996,13 +1164,47 @@ export function ReportsPage() {
 
   return (
     <Workspace title="Reports & Exports" subtitle="Download operational reports and inspect utilization analytics." icon={<FileSpreadsheet className="h-5 w-5" />}>
-      <div className="grid gap-4 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-6">
-        <StatCard label="Users" value={analytics.data?.users ?? 0} />
-        <StatCard label="Projects" value={analytics.data?.projects ?? 0} />
-        <StatCard label="Pending approvals" value={analytics.data?.pendingApprovals ?? 0} tone={(analytics.data?.pendingApprovals ?? 0) > 0 ? "warning" : "default"} />
-        <StatCard label="Approved this week" value={approvedThisWeek} tone="success" />
-        <StatCard label="SLA breaches" value={slaBreached} tone={slaBreached > 0 ? "warning" : "default"} />
-        <StatCard label="Open escalations" value={openEscalations} tone={openEscalations > 0 ? "warning" : "default"} />
+      <div className="grid grid-cols-2 gap-2.5 sm:gap-3 md:grid-cols-3 xl:grid-cols-6">
+        <StatCard
+          label="Users"
+          value={analytics.data?.users ?? 0}
+          trend={computeTrend(analytics.data?.users ?? 0, analytics.data?.usersYesterday ?? 0, true)}
+          trendLabel="vs yesterday"
+        />
+        <StatCard
+          label="Projects"
+          value={analytics.data?.projects ?? 0}
+          trend={computeTrend(analytics.data?.projects ?? 0, analytics.data?.projectsYesterday ?? 0, true)}
+          trendLabel="vs yesterday"
+        />
+        <StatCard
+          label="Pending approvals"
+          value={analytics.data?.pendingApprovals ?? 0}
+          tone={(analytics.data?.pendingApprovals ?? 0) > 0 ? "warning" : "default"}
+          trend={computeTrend(analytics.data?.pendingApprovals ?? 0, analytics.data?.pendingApprovalsYesterday ?? 0, false)}
+          trendLabel="vs yesterday"
+        />
+        <StatCard
+          label="Approved this week"
+          value={approvedThisWeek}
+          tone="success"
+          trend={computeTrend(approvedThisWeek, analytics.data?.approvedLastWeek ?? 0, true)}
+          trendLabel="vs last week"
+        />
+        <StatCard
+          label="SLA breaches"
+          value={slaBreached}
+          tone={slaBreached > 0 ? "warning" : "default"}
+          trend={computeTrend(slaBreached, analytics.data?.slaBreachedYesterday ?? 0, false)}
+          trendLabel="vs yesterday"
+        />
+        <StatCard
+          label="Open escalations"
+          value={openEscalations}
+          tone={openEscalations > 0 ? "warning" : "default"}
+          trend={computeTrend(openEscalations, analytics.data?.openEscalationsYesterday ?? 0, false)}
+          trendLabel="vs yesterday"
+        />
       </div>
       <Card>
         <CardHeader className="flex-col items-start justify-between gap-3 space-y-0 sm:flex-row sm:items-center">
@@ -1032,11 +1234,32 @@ export function ReportsPage() {
         </CardContent>
       </Card>
 
-      <div className="grid gap-4 sm:grid-cols-2 md:grid-cols-4">
+      <div className="grid grid-cols-2 gap-2.5 sm:gap-3 md:grid-cols-4">
         <StatCard label="Open tickets" value={openTickets} tone={openTickets > 0 ? "warning" : "default"} />
-        <StatCard label="Ticket SLA breaches" value={ticketAnalytics.data?.openSlaBreaches ?? 0} tone={(ticketAnalytics.data?.openSlaBreaches ?? 0) > 0 ? "destructive" : "default"} />
-        <StatCard label="Resolved this week" value={ticketAnalytics.data?.resolvedThisWeek ?? 0} tone="success" />
-        <StatCard label="Avg. resolution time" value={`${ticketAnalytics.data?.avgResolutionHours ?? 0}h`} />
+        <StatCard
+          label="Ticket SLA breaches"
+          value={ticketAnalytics.data?.openSlaBreaches ?? 0}
+          tone={(ticketAnalytics.data?.openSlaBreaches ?? 0) > 0 ? "destructive" : "default"}
+          trend={computeTrend(ticketAnalytics.data?.openSlaBreaches ?? 0, ticketAnalytics.data?.openSlaBreachesYesterday ?? 0, false)}
+          trendLabel="vs yesterday"
+        />
+        <StatCard
+          label="Resolved this week"
+          value={ticketAnalytics.data?.resolvedThisWeek ?? 0}
+          tone="success"
+          trend={computeTrend(ticketAnalytics.data?.resolvedThisWeek ?? 0, ticketAnalytics.data?.resolvedLastWeek ?? 0, true)}
+          trendLabel="vs last week"
+        />
+        <StatCard
+          label="Avg. resolution time"
+          value={`${ticketAnalytics.data?.avgResolutionHours ?? 0}h`}
+          trend={computeTrend(
+            ticketAnalytics.data?.avgResolutionHours ?? 0,
+            ticketAnalytics.data?.avgResolutionHoursLastWeek ?? 0,
+            false
+          )}
+          trendLabel="vs last week"
+        />
       </div>
       <Card>
         <CardHeader>
@@ -1110,14 +1333,3 @@ function FieldShell({ label, children }: { label: string; children: ReactNode })
   );
 }
 
-function StatCard({ label, value, tone = "default" }: { label: string; value: number | string; tone?: "default" | "warning" | "success" | "destructive" }) {
-  const toneClass = tone === "warning" ? "text-warning" : tone === "success" ? "text-success" : tone === "destructive" ? "text-destructive" : "";
-  return (
-    <Card>
-      <CardContent className="pt-6">
-        <p className="text-sm text-muted-foreground">{label}</p>
-        <p className={`mt-2 text-3xl font-black tracking-tight ${toneClass}`}>{value}</p>
-      </CardContent>
-    </Card>
-  );
-}

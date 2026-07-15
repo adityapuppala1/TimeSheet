@@ -3,6 +3,8 @@ import { PrismaClient } from "@prisma/client";
 import { activityTypes, permissions } from "@timesheet/shared";
 import { EMAIL_INTAKE_SYSTEM_EMAIL } from "../src/services/email-intake.service.js";
 import { CHAT_INTAKE_SYSTEM_EMAIL } from "../src/services/chat-intake.service.js";
+import { SECURITY_INGESTION_SYSTEM_EMAIL } from "../src/services/security-report.service.js";
+import { GIT_INTEGRATION_SYSTEM_EMAIL } from "../src/services/git-provider.service.js";
 import { hashPassword } from "../src/utils/security.js";
 import { SEED_TEMPLATES } from "./email-templates-seed.js";
 
@@ -252,6 +254,38 @@ export async function seedTenant(client: PrismaClient, options: SeedTenantOption
       roleId: employeeRole.id,
       status: "ACTIVE",
       bio: "System account — reporter of record for tickets auto-created from chat platforms.",
+      emailVerifiedAt: new Date()
+    }
+  });
+
+  // Same role for tickets auto-created from a CRITICAL/HIGH security finding — see
+  // security-report.service.ts's header comment.
+  await client.user.upsert({
+    where: { email: SECURITY_INGESTION_SYSTEM_EMAIL },
+    update: {},
+    create: {
+      name: "Security Ingestion",
+      email: SECURITY_INGESTION_SYSTEM_EMAIL,
+      passwordHash: await hashPassword(randomUUID()),
+      roleId: employeeRole.id,
+      status: "ACTIVE",
+      bio: "System account — reporter of record for tickets auto-created from an ingested CRITICAL/HIGH security finding.",
+      emailVerifiedAt: new Date()
+    }
+  });
+
+  // Author of record for TicketBranch auto-sync + AI PR-review summary comments posted by
+  // controllers/git-webhook.controller.ts — see git-provider.service.ts's header comment.
+  await client.user.upsert({
+    where: { email: GIT_INTEGRATION_SYSTEM_EMAIL },
+    update: {},
+    create: {
+      name: "GitHub Integration",
+      email: GIT_INTEGRATION_SYSTEM_EMAIL,
+      passwordHash: await hashPassword(randomUUID()),
+      roleId: employeeRole.id,
+      status: "ACTIVE",
+      bio: "System account — author of record for branch/PR sync and AI PR-review summaries from the connected GitHub account.",
       emailVerifiedAt: new Date()
     }
   });

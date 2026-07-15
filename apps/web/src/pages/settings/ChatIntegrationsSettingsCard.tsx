@@ -379,7 +379,7 @@ function RoutingRuleRow({
       {!readOnly && (
         <>
           <Switch checked={rule.isActive} onCheckedChange={(v) => toggle.mutate(v)} />
-          <Button variant="ghost" size="icon" className="h-7 w-7 text-destructive" onClick={() => remove.mutate()}>
+          <Button variant="ghost" size="icon" className="h-9 w-9 text-destructive" onClick={() => remove.mutate()}>
             <Trash2 className="h-3.5 w-3.5" />
           </Button>
         </>

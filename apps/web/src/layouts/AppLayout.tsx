@@ -24,7 +24,10 @@ export function AppLayout() {
         <Sidebar />
         <main className="min-w-0 flex-1">
           <Topbar />
-          <div className="mx-auto w-full max-w-7xl p-4 lg:p-6">
+          {/* pb-20 reserves clearance for MobileNav below (fixed, ~56-60px tall, <lg only) —
+              without it the last ~56px of every page's content renders underneath the fixed
+              bar on phone/tablet (e.g. a page-bottom submit button becomes unreachable). */}
+          <div className="mx-auto w-full max-w-7xl p-4 pb-20 lg:p-6 lg:pb-6">
             <Outlet />
           </div>
           <MobileNav />

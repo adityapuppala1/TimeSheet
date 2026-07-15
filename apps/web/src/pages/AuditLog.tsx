@@ -6,17 +6,16 @@
  * WHO calls the backing API: `controllers/audit.controller.ts` via `auditApi.list`.
  */
 import { useQuery } from "@tanstack/react-query";
-import { RotateCcw, Search, ShieldAlert, ShieldCheck, UserCog } from "lucide-react";
+import type { ColumnDef } from "@tanstack/react-table";
+import { RotateCcw, ShieldAlert, ShieldCheck, UserCog } from "lucide-react";
 import { useMemo, useState } from "react";
 import { Badge } from "../components/ui/badge";
 import { Button } from "../components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "../components/ui/card";
-import { Input } from "../components/ui/input";
+import { DataTable } from "../components/ui/data-table";
 import { Label } from "../components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../components/ui/select";
-import { Skeleton } from "../components/ui/skeleton";
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "../components/ui/table";
-import { auditApi } from "../services/api";
+import { auditApi, type AuditEntry } from "../services/api";
 
 const actionIcon: Record<string, typeof ShieldCheck> = {
   "timesheet.approved": ShieldCheck,
@@ -30,7 +29,6 @@ const actionIcon: Record<string, typeof ShieldCheck> = {
 export function AuditLog() {
   const [action, setAction] = useState("all");
   const [entity, setEntity] = useState("all");
-  const [search, setSearch] = useState("");
 
   const filterAction = action === "all" ? undefined : action;
   const filterEntity = entity === "all" ? undefined : entity;
@@ -40,16 +38,7 @@ export function AuditLog() {
     queryFn: () => auditApi.list({ action: filterAction, entity: filterEntity, take: 200 })
   });
 
-  const rows = useMemo(() => {
-    const list = data ?? [];
-    if (!search) return list;
-    const needle = search.toLowerCase();
-    return list.filter((row) =>
-      [row.action, row.entity, row.entityId, row.actor?.name, row.actor?.email]
-        .filter(Boolean)
-        .some((value) => String(value).toLowerCase().includes(needle))
-    );
-  }, [data, search]);
+  const rows = data ?? [];
 
   const knownActions = useMemo(() => {
     const set = new Set<string>();
@@ -70,6 +59,48 @@ export function AuditLog() {
     return "muted";
   }
 
+  const auditColumns = useMemo<ColumnDef<AuditEntry, any>[]>(
+    () => [
+      {
+        id: "when",
+        accessorFn: (row) => row.createdAt,
+        header: "When",
+        cell: ({ row }) => <span className="whitespace-nowrap text-xs text-muted-foreground">{new Date(row.original.createdAt).toLocaleString()}</span>
+      },
+      {
+        id: "actor",
+        accessorFn: (row) => row.actor?.name ?? "System",
+        header: "Actor",
+        cell: ({ row }) => (
+          <div>
+            <p className="font-medium">{row.original.actor?.name ?? "System"}</p>
+            <p className="text-xs text-muted-foreground">{row.original.actor?.email ?? "—"}</p>
+          </div>
+        )
+      },
+      {
+        accessorKey: "action",
+        header: "Action",
+        cell: ({ row }) => {
+          const Icon = actionIcon[row.original.action] ?? ShieldCheck;
+          return (
+            <Badge variant={variantFor(row.original.action)} className="gap-1">
+              <Icon className="h-3 w-3" /> {row.original.action}
+            </Badge>
+          );
+        }
+      },
+      { accessorKey: "entity", header: "Entity" },
+      {
+        id: "entityId",
+        accessorFn: (row) => row.entityId ?? "",
+        header: "Entity ID",
+        cell: ({ row }) => <span className="font-mono text-xs text-muted-foreground">{row.original.entityId ?? "—"}</span>
+      }
+    ],
+    []
+  );
+
   return (
     <div className="grid gap-5">
       <div>
@@ -82,12 +113,12 @@ export function AuditLog() {
       <Card>
         <CardHeader className="flex-row items-center justify-between space-y-0 pb-3">
           <CardTitle className="text-base">Filters</CardTitle>
-          <Button variant="ghost" size="sm" onClick={() => { setAction("all"); setEntity("all"); setSearch(""); }}>
+          <Button variant="ghost" size="sm" onClick={() => { setAction("all"); setEntity("all"); }}>
             <RotateCcw className="h-3.5 w-3.5" />Reset
           </Button>
         </CardHeader>
         <CardContent>
-          <div className="grid gap-4 sm:grid-cols-2 md:grid-cols-4">
+          <div className="grid gap-4 sm:grid-cols-2">
             <div className="grid gap-1.5">
               <Label>Action</Label>
               <Select value={action} onValueChange={setAction}>
@@ -108,66 +139,24 @@ export function AuditLog() {
                 </SelectContent>
               </Select>
             </div>
-            <div className="grid gap-1.5 md:col-span-2">
-              <Label>Search actor or entityId</Label>
-              <div className="relative">
-                <Search className="pointer-events-none absolute left-3 top-3 h-4 w-4 text-muted-foreground" />
-                <Input className="pl-9" value={search} onChange={(event) => setSearch(event.target.value)} placeholder="user name, email, entity id..." />
-              </div>
-            </div>
           </div>
         </CardContent>
       </Card>
 
       <Card>
-        <CardContent className="p-0">
-          <Table>
-            <TableHeader>
-              <TableRow>
-                <TableHead>When</TableHead>
-                <TableHead>Actor</TableHead>
-                <TableHead>Action</TableHead>
-                <TableHead>Entity</TableHead>
-                <TableHead>Entity ID</TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {isLoading && Array.from({ length: 5 }).map((_, i) => (
-                <TableRow key={`skel-${i}`}>
-                  {Array.from({ length: 5 }).map((__, j) => (
-                    <TableCell key={j}><Skeleton className="h-4 w-full" /></TableCell>
-                  ))}
-                </TableRow>
-              ))}
-              {isError && (
-                <TableRow><TableCell colSpan={5} className="py-10 text-center text-destructive">Unable to load audit log.</TableCell></TableRow>
-              )}
-              {!isLoading && !isError && rows.map((row) => {
-                const Icon = actionIcon[row.action] ?? ShieldCheck;
-                return (
-                  <TableRow key={row.id} className="align-top">
-                    <TableCell className="whitespace-nowrap text-xs text-muted-foreground">
-                      {new Date(row.createdAt).toLocaleString()}
-                    </TableCell>
-                    <TableCell>
-                      <p className="font-medium">{row.actor?.name ?? "System"}</p>
-                      <p className="text-xs text-muted-foreground">{row.actor?.email ?? "—"}</p>
-                    </TableCell>
-                    <TableCell>
-                      <Badge variant={variantFor(row.action)} className="gap-1">
-                        <Icon className="h-3 w-3" /> {row.action}
-                      </Badge>
-                    </TableCell>
-                    <TableCell>{row.entity}</TableCell>
-                    <TableCell className="font-mono text-xs text-muted-foreground">{row.entityId ?? "—"}</TableCell>
-                  </TableRow>
-                );
-              })}
-              {!isLoading && !isError && rows.length === 0 && (
-                <TableRow><TableCell colSpan={5} className="py-10 text-center text-muted-foreground">No audit entries match the filters.</TableCell></TableRow>
-              )}
-            </TableBody>
-          </Table>
+        <CardContent className="p-4">
+          {isError ? (
+            <p className="py-10 text-center text-destructive">Unable to load audit log.</p>
+          ) : (
+            <DataTable
+              columns={auditColumns}
+              data={rows}
+              isLoading={isLoading}
+              searchPlaceholder="Search actor, entity, entity ID..."
+              emptyMessage="No audit entries match the filters."
+              pageSize={20}
+            />
+          )}
         </CardContent>
       </Card>
     </div>

@@ -51,7 +51,7 @@ const features = [
   {
     icon: LayoutGrid,
     title: "Jira-style ticketing",
-    body: "Kanban board with drag-and-drop, labels, cross-ticket links, sub-task checklists, and SLA due-dates that escalate automatically."
+    body: "Kanban board with drag-and-drop and manager swimlanes, labels, cross-ticket links, a Dev tab for linking a repo/branch/PR, sub-task checklists, and SLA due-dates that escalate automatically."
   },
   {
     icon: Bot,
@@ -87,6 +87,31 @@ const features = [
     icon: Lock,
     title: "Session security",
     body: "httpOnly rotating sessions, an active-devices list you control, per-account lockout, and encrypted secrets at rest."
+  },
+  {
+    icon: GitBranch,
+    title: "Security & DevOps ingestion",
+    body: "Your own CI POSTs SAST/DAST/secrets/supply-chain findings to a per-org webhook — this app never runs a scanner itself. VAPT reports upload as structured JSON. Every ticket gets a Security tab with a PDF export and, optionally, a close-out digest email."
+  },
+  {
+    icon: Users,
+    title: "Reporting-line views",
+    body: "An org-chart tree on the Team page and \"Group by manager\" Kanban swimlanes, both built from the same reporting-line data — no extra setup, no separate permission model."
+  },
+  {
+    icon: CheckCircle2,
+    title: "CI gate on Resolved",
+    body: "An optional, off-by-default guardrail: a ticket can't move to Resolved while its latest ingested CI run is failing — visible as a red badge on the Kanban card before anyone even opens it."
+  },
+  {
+    icon: KeyRound,
+    title: "Public API & webhooks",
+    body: "Bearer-key access to list/create tickets and list timesheets, plus HMAC-signed outbound webhooks on ticket and timesheet events — the integration surface for Zapier, Make, or your own scripts."
+  },
+  {
+    icon: GitBranch,
+    title: "Live GitHub connection",
+    body: "Bring your own GitHub OAuth App and the ticket Dev tab lists live repos, branches, and pull requests to pick from — no TimeSphere-operated client ever touches your repositories."
   }
 ];
 

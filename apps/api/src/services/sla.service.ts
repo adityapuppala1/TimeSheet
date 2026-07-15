@@ -86,27 +86,33 @@ export async function processSlaSweep(now: Date = new Date()) {
     const hoursOverdue = ts.approvalDeadline ? (now.getTime() - ts.approvalDeadline.getTime()) / (1000 * 60 * 60) : 0;
     const dateLabel = ts.workDate.toISOString().slice(0, 10);
 
-    await prisma.timesheet.update({
-      where: { id: ts.id },
-      data: { slaBreachAt: now }
-    });
-
     const escalationTarget = await findEscalationTarget(ts.userId);
     const fromUser = ts.user.manager ?? ts.user;
 
+    // slaBreachAt (the idempotency marker that keeps a re-run of this sweep from
+    // double-escalating the same entry) is only written together with the Escalation row it
+    // gates, inside one transaction — not as a separate write beforehand. Previously
+    // slaBreachAt was set first and the Escalation created afterward; a crash or DB error in
+    // between left the breach permanently marked "handled" with no escalation ever created,
+    // a silent miss the next sweep could never catch (slaBreachAt being non-null is exactly
+    // what tells it to skip this row). Notifications (email/in-app) stay outside the
+    // transaction — they're best-effort external I/O that souldn't hold a DB transaction open,
+    // and notify.service.ts already swallows its own email-send failures without throwing.
     if (escalationTarget) {
-      await prisma.escalation.create({
-        data: {
-          timesheetId: ts.id,
-          escalatedFromId: fromUser.id,
-          escalatedToId: escalationTarget.id,
-          reason: `Approval SLA breached by ${hoursOverdue.toFixed(1)}h.`
-        }
-      });
-      await prisma.timesheet.update({
-        where: { id: ts.id },
-        data: { escalatedAt: now }
-      });
+      await prisma.$transaction([
+        prisma.escalation.create({
+          data: {
+            timesheetId: ts.id,
+            escalatedFromId: fromUser.id,
+            escalatedToId: escalationTarget.id,
+            reason: `Approval SLA breached by ${hoursOverdue.toFixed(1)}h.`
+          }
+        }),
+        prisma.timesheet.update({
+          where: { id: ts.id },
+          data: { slaBreachAt: now, escalatedAt: now }
+        })
+      ]);
       escalations += 1;
 
       await dispatchNotification({
@@ -148,7 +154,12 @@ export async function processSlaSweep(now: Date = new Date()) {
         });
       }
     } else {
-      // No target — still flag in-app for the immediate manager.
+      // No target — only one write needed here (no Escalation row), so it's already atomic
+      // on its own; still flag in-app for the immediate manager.
+      await prisma.timesheet.update({
+        where: { id: ts.id },
+        data: { slaBreachAt: now }
+      });
       const fallbackId = ts.user.manager?.id ?? ts.user.id;
       await dispatchNotification({
         userId: fallbackId,

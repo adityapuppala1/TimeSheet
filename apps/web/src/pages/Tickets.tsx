@@ -14,11 +14,15 @@
  * checks only hide buttons that would 403 anyway, they're not the security boundary.
  */
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import type { ColumnDef } from "@tanstack/react-table";
 import {
   permissions,
+  ticketBranchPrStatuses,
   ticketPriorities,
   ticketStatusTransitions,
   ticketStatuses,
+  type SecurityFindingSeverity,
+  type TicketBranchPrStatus,
   type TicketPriority,
   type TicketStatus
 } from "@timesheet/shared";
@@ -31,14 +35,17 @@ import {
   ChevronUp,
   Eye,
   EyeOff,
+  GitBranch,
   LayoutGrid,
   Link2,
   ListChecks,
+  Download,
   Mail,
   MessageSquare,
   Paperclip,
   Plus,
   ScrollText,
+  ShieldAlert,
   Sparkles,
   Tag,
   Ticket as TicketIcon,
@@ -54,6 +61,7 @@ import { Badge, type BadgeProps } from "../components/ui/badge";
 import { Button } from "../components/ui/button";
 import { Card, CardContent } from "../components/ui/card";
 import { Checkbox } from "../components/ui/checkbox";
+import { DataTable } from "../components/ui/data-table";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "../components/ui/dialog";
 import { FileDropzone } from "../components/ui/file-dropzone";
 import { Input } from "../components/ui/input";
@@ -73,18 +81,21 @@ import {
   fileUrl,
   labelApi,
   projectApi,
+  settingsApi,
   ticketApi,
   ticketTypeApi,
   type AIDuplicateMatch,
   type AITriageSuggestion,
   type TicketAttachmentRow,
+  type TicketBranchRow,
   type TicketChecklistItemRow,
   type TicketComment,
   type TicketDetail,
   type TicketLinkRow,
   type TicketLinkType,
   type TicketRow,
-  type TicketTimesheetRow
+  type TicketTimesheetRow,
+  type SecurityFindingRow
 } from "../services/api";
 import { useAuthStore } from "../store/auth";
 
@@ -139,6 +150,127 @@ function plainTextToHtml(text: string) {
     .map((para) => `<p>${escapeHtml(para).replace(/\n/g, "<br>")}</p>`)
     .join("");
 }
+
+/** Column defs for the desktop list view's DataTable — module-level since these don't depend on
+ *  component state, just the row shape and the module-level helpers/variant maps above. */
+const ticketColumns: ColumnDef<TicketRow, any>[] = [
+  { accessorKey: "key", header: "Key", cell: (info) => <span className="font-mono text-xs text-muted-foreground">{info.getValue()}</span> },
+  {
+    accessorKey: "title",
+    header: "Title",
+    cell: ({ row }) => (
+      <div className="flex max-w-[280px] items-center gap-1.5">
+        {row.original.source === "EMAIL" && (
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Mail className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+            </TooltipTrigger>
+            <TooltipContent>Created from an inbound email</TooltipContent>
+          </Tooltip>
+        )}
+        <span className="truncate font-medium">{row.original.title}</span>
+        {row.original.needsReview && (
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Badge variant="warning" className="shrink-0 gap-1"><Sparkles className="h-3 w-3" />Review</Badge>
+            </TooltipTrigger>
+            <TooltipContent>AI classification confidence was below threshold</TooltipContent>
+          </Tooltip>
+        )}
+      </div>
+    )
+  },
+  {
+    id: "project",
+    accessorFn: (row) => row.project.name,
+    header: "Project",
+    cell: (info) => <span className="text-muted-foreground">{info.getValue()}</span>
+  },
+  {
+    accessorKey: "type",
+    header: "Type",
+    cell: ({ row }) => {
+      const TypeIcon = iconForType(row.original.type);
+      return (
+        <span className="inline-flex items-center gap-1.5 text-sm">
+          <TypeIcon className="h-3.5 w-3.5 text-muted-foreground" />{row.original.type}
+        </span>
+      );
+    }
+  },
+  {
+    accessorKey: "priority",
+    header: "Priority",
+    cell: (info) => <Badge variant={PRIORITY_VARIANT[info.getValue() as TicketPriority]}>{info.getValue()}</Badge>
+  },
+  {
+    accessorKey: "status",
+    header: "Status",
+    cell: (info) => {
+      const status = info.getValue() as TicketStatus;
+      return <Badge variant={STATUS_VARIANT[status]}>{status.replace("_", " ")}</Badge>;
+    }
+  },
+  {
+    id: "labels",
+    accessorFn: (row) => row.labels.map((tl) => tl.label.name).join(", "),
+    header: "Labels",
+    enableSorting: false,
+    cell: ({ row }) => (
+      <div className="flex flex-wrap gap-1">
+        {row.original.labels.map((tl) => (
+          <span
+            key={tl.id}
+            className="inline-flex items-center gap-1 rounded-full border border-border px-1.5 py-0.5 text-[10px] font-medium"
+          >
+            <span className="h-1.5 w-1.5 rounded-full" style={{ backgroundColor: tl.label.color ?? "#94A3B8" }} />
+            {tl.label.name}
+          </span>
+        ))}
+        {row.original.labels.length === 0 && <span className="text-xs text-muted-foreground">—</span>}
+      </div>
+    )
+  },
+  {
+    id: "assignee",
+    accessorFn: (row) => row.assignee?.name ?? "",
+    header: "Assignee",
+    cell: ({ row }) => {
+      const assignee = row.original.assignee;
+      const avatarSrc = fileUrl(assignee?.avatarUrl);
+      return assignee ? (
+        <div className="flex items-center gap-2">
+          <Avatar className="h-9 w-9">
+            {avatarSrc ? <AvatarImage src={avatarSrc} alt={assignee.name} /> : null}
+            <AvatarFallback className="text-[10px]">{initialsFor(assignee.name)}</AvatarFallback>
+          </Avatar>
+          <span className="truncate text-sm">{assignee.name}</span>
+        </div>
+      ) : (
+        <span className="text-xs text-muted-foreground">Unassigned</span>
+      );
+    }
+  },
+  {
+    accessorKey: "dueAt",
+    header: "Due",
+    cell: ({ row }) => {
+      const overdue = Boolean(row.original.slaBreachAt);
+      return overdue ? (
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <span className="inline-flex items-center gap-1 text-xs font-semibold text-destructive">
+              <AlertTriangle className="h-3.5 w-3.5" />Overdue
+            </span>
+          </TooltipTrigger>
+          <TooltipContent>Due {formatDate(row.original.dueAt)}</TooltipContent>
+        </Tooltip>
+      ) : (
+        <span className="text-xs text-muted-foreground">{formatDate(row.original.dueAt)}</span>
+      );
+    }
+  }
+];
 
 export function Tickets() {
   const user = useAuthStore((s) => s.user);
@@ -268,119 +400,89 @@ export function Tickets() {
       {viewMode === "list" && (
       <Card>
         <CardContent className="p-0">
-          <Table>
-            <TableHeader>
-              <TableRow>
-                <TableHead>Key</TableHead>
-                <TableHead>Title</TableHead>
-                <TableHead>Project</TableHead>
-                <TableHead>Type</TableHead>
-                <TableHead>Priority</TableHead>
-                <TableHead>Status</TableHead>
-                <TableHead>Labels</TableHead>
-                <TableHead>Assignee</TableHead>
-                <TableHead>Due</TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {tickets.isLoading &&
-                Array.from({ length: 4 }).map((_, i) => (
-                  <TableRow key={`skel-${i}`}>
-                    {Array.from({ length: 9 }).map((__, j) => (
-                      <TableCell key={j}><Skeleton className="h-4 w-full" /></TableCell>
-                    ))}
-                  </TableRow>
-                ))}
-              {!tickets.isLoading &&
-                (tickets.data ?? []).map((row: TicketRow) => {
-                  const TypeIcon = iconForType(row.type);
-                  const overdue = Boolean(row.slaBreachAt);
-                  const avatarSrc = fileUrl(row.assignee?.avatarUrl);
-                  return (
-                    <TableRow key={row.id} className="cursor-pointer" onClick={() => openTicket(row.id)}>
-                      <TableCell className="font-mono text-xs text-muted-foreground">{row.key}</TableCell>
-                      <TableCell className="max-w-[280px]">
-                        <div className="flex items-center gap-1.5">
-                          {row.source === "EMAIL" && (
-                            <Tooltip>
-                              <TooltipTrigger asChild>
-                                <Mail className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
-                              </TooltipTrigger>
-                              <TooltipContent>Created from an inbound email</TooltipContent>
-                            </Tooltip>
-                          )}
-                          <span className="truncate font-medium">{row.title}</span>
-                          {row.needsReview && (
-                            <Tooltip>
-                              <TooltipTrigger asChild>
-                                <Badge variant="warning" className="shrink-0 gap-1"><Sparkles className="h-3 w-3" />Review</Badge>
-                              </TooltipTrigger>
-                              <TooltipContent>AI classification confidence was below threshold</TooltipContent>
-                            </Tooltip>
-                          )}
-                        </div>
-                      </TableCell>
-                      <TableCell className="text-muted-foreground">{row.project.name}</TableCell>
-                      <TableCell>
-                        <span className="inline-flex items-center gap-1.5 text-sm">
-                          <TypeIcon className="h-3.5 w-3.5 text-muted-foreground" />{row.type}
+          {/* Mobile card list — a 9-column table has no readable layout below ~sm; a phone user
+              scrolling it sideways sees 1-2 columns at a time with no context. This renders the
+              exact same row data as self-contained cards instead, `sm:hidden` (the table below
+              takes over at sm+ with `hidden sm:block`) — see docs/ROADMAP.md's backlog note on
+              "wide-table -> mobile card-view fallback". */}
+          <div className="grid gap-2 p-3 sm:hidden">
+            {tickets.isLoading &&
+              Array.from({ length: 4 }).map((_, i) => <Skeleton key={`skel-card-${i}`} className="h-24 w-full" />)}
+            {!tickets.isLoading &&
+              (tickets.data ?? []).map((row: TicketRow) => {
+                const TypeIcon = iconForType(row.type);
+                const overdue = Boolean(row.slaBreachAt);
+                const avatarSrc = fileUrl(row.assignee?.avatarUrl);
+                return (
+                  <button
+                    key={row.id}
+                    type="button"
+                    onClick={() => openTicket(row.id)}
+                    className="grid gap-2 rounded-lg border border-border bg-card p-3 text-left text-sm shadow-sm"
+                  >
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="font-mono text-xs text-muted-foreground">{row.key}</span>
+                      <div className="flex items-center gap-1.5">
+                        {row.source === "EMAIL" && <Mail className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />}
+                        <Badge variant={PRIORITY_VARIANT[row.priority]}>{row.priority}</Badge>
+                        <Badge variant={STATUS_VARIANT[row.status]}>{row.status.replace("_", " ")}</Badge>
+                      </div>
+                    </div>
+                    <p className="truncate font-medium leading-snug">{row.title}</p>
+                    <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted-foreground">
+                      <span className="inline-flex items-center gap-1"><TypeIcon className="h-3.5 w-3.5" />{row.type}</span>
+                      <span className="truncate">{row.project.name}</span>
+                      {overdue ? (
+                        <span className="inline-flex items-center gap-1 font-semibold text-destructive">
+                          <AlertTriangle className="h-3.5 w-3.5" />Overdue
                         </span>
-                      </TableCell>
-                      <TableCell><Badge variant={PRIORITY_VARIANT[row.priority]}>{row.priority}</Badge></TableCell>
-                      <TableCell><Badge variant={STATUS_VARIANT[row.status]}>{row.status.replace("_", " ")}</Badge></TableCell>
-                      <TableCell>
-                        <div className="flex flex-wrap gap-1">
-                          {row.labels.map((tl) => (
-                            <span
-                              key={tl.id}
-                              className="inline-flex items-center gap-1 rounded-full border border-border px-1.5 py-0.5 text-[10px] font-medium"
-                            >
-                              <span className="h-1.5 w-1.5 rounded-full" style={{ backgroundColor: tl.label.color ?? "#94A3B8" }} />
-                              {tl.label.name}
-                            </span>
-                          ))}
-                          {row.labels.length === 0 && <span className="text-xs text-muted-foreground">—</span>}
+                      ) : (
+                        row.dueAt && <span>Due {formatDate(row.dueAt)}</span>
+                      )}
+                    </div>
+                    <div className="flex items-center justify-between gap-2">
+                      <div className="flex flex-wrap gap-1">
+                        {row.labels.slice(0, 3).map((tl) => (
+                          <span
+                            key={tl.id}
+                            className="inline-flex items-center gap-1 rounded-full border border-border px-1.5 py-0.5 text-[10px] font-medium"
+                          >
+                            <span className="h-1.5 w-1.5 rounded-full" style={{ backgroundColor: tl.label.color ?? "#94A3B8" }} />
+                            {tl.label.name}
+                          </span>
+                        ))}
+                      </div>
+                      {row.assignee ? (
+                        <div className="flex shrink-0 items-center gap-1.5">
+                          <Avatar className="h-6 w-6">
+                            {avatarSrc ? <AvatarImage src={avatarSrc} alt={row.assignee.name} /> : null}
+                            <AvatarFallback className="text-[10px]">{initialsFor(row.assignee.name)}</AvatarFallback>
+                          </Avatar>
+                          <span className="truncate text-xs">{row.assignee.name}</span>
                         </div>
-                      </TableCell>
-                      <TableCell>
-                        {row.assignee ? (
-                          <div className="flex items-center gap-2">
-                            <Avatar className="h-6 w-6">
-                              {avatarSrc ? <AvatarImage src={avatarSrc} alt={row.assignee.name} /> : null}
-                              <AvatarFallback className="text-[10px]">{initialsFor(row.assignee.name)}</AvatarFallback>
-                            </Avatar>
-                            <span className="truncate text-sm">{row.assignee.name}</span>
-                          </div>
-                        ) : (
-                          <span className="text-xs text-muted-foreground">Unassigned</span>
-                        )}
-                      </TableCell>
-                      <TableCell>
-                        {overdue ? (
-                          <Tooltip>
-                            <TooltipTrigger asChild>
-                              <span className="inline-flex items-center gap-1 text-xs font-semibold text-destructive">
-                                <AlertTriangle className="h-3.5 w-3.5" />Overdue
-                              </span>
-                            </TooltipTrigger>
-                            <TooltipContent>Due {formatDate(row.dueAt)}</TooltipContent>
-                          </Tooltip>
-                        ) : (
-                          <span className="text-xs text-muted-foreground">{formatDate(row.dueAt)}</span>
-                        )}
-                      </TableCell>
-                    </TableRow>
-                  );
-                })}
-              {!tickets.isLoading && (tickets.data ?? []).length === 0 && (
-                <TableRow>
-                  <TableCell colSpan={9} className="py-12 text-center text-muted-foreground">
-                    No tickets match these filters yet.
-                  </TableCell>
-                </TableRow>
-              )}
-            </TableBody>
-          </Table>
+                      ) : (
+                        <span className="shrink-0 text-xs text-muted-foreground">Unassigned</span>
+                      )}
+                    </div>
+                  </button>
+                );
+              })}
+            {!tickets.isLoading && (tickets.data ?? []).length === 0 && (
+              <p className="py-12 text-center text-sm text-muted-foreground">No tickets match these filters yet.</p>
+            )}
+          </div>
+
+          <div className="hidden p-3 sm:block">
+            <DataTable
+              columns={ticketColumns}
+              data={tickets.data ?? []}
+              isLoading={tickets.isLoading}
+              onRowClick={(row) => openTicket(row.id)}
+              searchPlaceholder="Search these results..."
+              emptyMessage="No tickets match these filters yet."
+              pageSize={20}
+            />
+          </div>
         </CardContent>
       </Card>
       )}
@@ -423,6 +525,11 @@ function CreateTicketDialog({
   const [suggestion, setSuggestion] = useState<AITriageSuggestion | null>(null);
   const [duplicates, setDuplicates] = useState<AIDuplicateMatch[]>([]);
   const [aiConfidence, setAiConfidence] = useState<number | null>(null);
+  const [autoApplied, setAutoApplied] = useState(false);
+  // "Auto-apply triage suggestions" (Workspace Settings -> AI) -- when on, pre-fill the
+  // suggestion directly instead of showing an accept/dismiss chip. Fields stay editable either
+  // way; this only changes whether a click is required before they're filled in.
+  const aiSettings = useQuery({ queryKey: ["settings", "ai"], queryFn: settingsApi.getAI, staleTime: 60_000 });
 
   const selectedProject = projects.find((p: any) => p.id === draft.projectId);
   const members = useQuery({
@@ -437,6 +544,7 @@ function CreateTicketDialog({
     setSuggestion(null);
     setDuplicates([]);
     setAiConfidence(null);
+    setAutoApplied(false);
   }
 
   const create = useMutation({
@@ -473,8 +581,16 @@ function CreateTicketDialog({
       };
     },
     onSuccess: (result) => {
-      setSuggestion(result.triage);
       setDuplicates(result.matches);
+      if (result.triage && aiSettings.data?.autoTriageAutoApply) {
+        setDraft((d) => ({ ...d, type: result.triage!.type, priority: result.triage!.priority, moduleId: result.triage!.moduleId ?? d.moduleId }));
+        setAiConfidence(result.triage.confidence);
+        setSuggestion(null);
+        setAutoApplied(true);
+      } else {
+        setSuggestion(result.triage);
+        setAutoApplied(false);
+      }
       if (!result.triage && result.matches.length === 0 && result.error) {
         toast.error("AI assist unavailable", { description: serverMessage(result.error, "AI may be disabled for this workspace.") });
       }
@@ -588,6 +704,13 @@ function CreateTicketDialog({
                 <Button type="button" size="sm" onClick={acceptSuggestion}>Accept</Button>
                 <Button type="button" size="sm" variant="ghost" onClick={() => setSuggestion(null)}>Dismiss</Button>
               </div>
+            </div>
+          )}
+
+          {autoApplied && aiConfidence !== null && (
+            <div className="flex items-center gap-1.5 rounded-md border border-primary/30 bg-primary/5 px-3 py-2 text-xs text-primary">
+              <Sparkles className="h-3.5 w-3.5" />
+              Type/priority auto-applied by AI ({Math.round(aiConfidence * 100)}% confidence) — edit the fields above if it got something wrong.
             </div>
           )}
 
@@ -838,7 +961,7 @@ function TicketDetailSheet({
               <div className="flex items-center justify-between rounded-md border border-border p-3">
                 <div className="flex -space-x-2">
                   {ticket.watchers.slice(0, 6).map((w) => (
-                    <Avatar key={w.userId} className="h-6 w-6 ring-2 ring-background">
+                    <Avatar key={w.userId} className="h-9 w-9 ring-2 ring-background">
                       <AvatarFallback className="text-[10px]">{initialsFor(w.user.name)}</AvatarFallback>
                     </Avatar>
                   ))}
@@ -860,6 +983,8 @@ function TicketDetailSheet({
                   <TabsTrigger value="links"><Link2 className="h-3.5 w-3.5" />Linked ({ticket.links.length})</TabsTrigger>
                   <TabsTrigger value="attachments"><Paperclip className="h-3.5 w-3.5" />Files ({ticket.attachments.length})</TabsTrigger>
                   <TabsTrigger value="time"><TimerReset className="h-3.5 w-3.5" />Time logged</TabsTrigger>
+                  <TabsTrigger value="dev"><GitBranch className="h-3.5 w-3.5" />Dev ({ticket.branches.length})</TabsTrigger>
+                  <TabsTrigger value="security"><ShieldAlert className="h-3.5 w-3.5" />Security</TabsTrigger>
                   <TabsTrigger value="activity"><ScrollText className="h-3.5 w-3.5" />Activity</TabsTrigger>
                 </TabsList>
                 <TabsContent value="comments">
@@ -876,6 +1001,12 @@ function TicketDetailSheet({
                 </TabsContent>
                 <TabsContent value="time">
                   <TimeLoggedPanel timesheets={ticket.timesheets} />
+                </TabsContent>
+                <TabsContent value="dev">
+                  <BranchesPanel ticketId={ticket.id} branches={ticket.branches} onChanged={invalidate} />
+                </TabsContent>
+                <TabsContent value="security">
+                  <SecurityPanel ticketId={ticket.id} />
                 </TabsContent>
                 <TabsContent value="activity">
                   <ActivityPanel ticketId={ticket.id} />
@@ -1037,13 +1168,13 @@ function ChecklistPanel({
             <Checkbox checked={item.done} onCheckedChange={(v) => toggle.mutate({ itemId: item.id, done: Boolean(v) })} />
             <span className={`flex-1 text-sm ${item.done ? "text-muted-foreground line-through" : ""}`}>{item.label}</span>
             <div className="flex items-center">
-              <Button variant="ghost" size="icon" className="h-6 w-6" disabled={index === 0} onClick={() => move(index, -1)}>
+              <Button variant="ghost" size="icon" className="h-9 w-9" disabled={index === 0} onClick={() => move(index, -1)}>
                 <ChevronUp className="h-3.5 w-3.5" />
               </Button>
-              <Button variant="ghost" size="icon" className="h-6 w-6" disabled={index === items.length - 1} onClick={() => move(index, 1)}>
+              <Button variant="ghost" size="icon" className="h-9 w-9" disabled={index === items.length - 1} onClick={() => move(index, 1)}>
                 <ChevronDown className="h-3.5 w-3.5" />
               </Button>
-              <Button variant="ghost" size="icon" className="h-6 w-6 text-destructive" onClick={() => remove.mutate(item.id)}>
+              <Button variant="ghost" size="icon" className="h-9 w-9 text-destructive" onClick={() => remove.mutate(item.id)}>
                 <Trash2 className="h-3.5 w-3.5" />
               </Button>
             </div>
@@ -1113,7 +1244,7 @@ function LinksPanel({
               <ArrowUpRight className="h-3 w-3 shrink-0 text-muted-foreground" />
             </button>
             <Badge variant={STATUS_VARIANT[link.ticket.status]}>{link.ticket.status.replace("_", " ")}</Badge>
-            <Button variant="ghost" size="icon" className="h-6 w-6 text-destructive" onClick={() => remove.mutate(link.id)}>
+            <Button variant="ghost" size="icon" className="h-9 w-9 text-destructive" onClick={() => remove.mutate(link.id)}>
               <Trash2 className="h-3.5 w-3.5" />
             </Button>
           </div>
@@ -1139,6 +1270,158 @@ function LinksPanel({
         />
         <Button size="sm" disabled={!draft.targetKey.trim() || add.isPending} onClick={() => add.mutate()}>
           <Link2 className="h-4 w-4" />Link
+        </Button>
+      </div>
+    </div>
+  );
+}
+
+const BRANCH_PR_STATUS_VARIANT: Record<TicketBranchPrStatus, BadgeProps["variant"]> = {
+  NONE: "muted",
+  OPEN: "info",
+  MERGED: "success",
+  CLOSED: "destructive"
+};
+
+/** Repo/branch/PR linking. Manual free-text entry is the baseline (same pattern
+ *  SecurityFinding/TestRun already use for repository/branch); when this org has connected
+ *  GitHub (Workspace Settings -> Security & DevOps -> Git provider), a "Pick from GitHub"
+ *  section fetches live repos/branches/PRs instead, still writing into the same TicketBranch
+ *  row — see docs/ROADMAP.md's "Live git-provider App integration" item. */
+function BranchesPanel({
+  ticketId,
+  branches,
+  onChanged
+}: {
+  ticketId: string;
+  branches: TicketBranchRow[];
+  onChanged: () => void;
+}) {
+  const [draft, setDraft] = useState({ repository: "", branch: "", prUrl: "" });
+  const gitStatus = useQuery({ queryKey: ["settings", "git"], queryFn: settingsApi.getGitConnection });
+  const [pickerRepo, setPickerRepo] = useState<string>("");
+  const repos = useQuery({
+    queryKey: ["git", "repos"],
+    queryFn: settingsApi.listGitRepos,
+    enabled: Boolean(gitStatus.data?.connected)
+  });
+  const pulls = useQuery({
+    queryKey: ["git", "pulls", pickerRepo],
+    queryFn: () => settingsApi.listGitPulls(pickerRepo),
+    enabled: Boolean(pickerRepo)
+  });
+
+  const add = useMutation({
+    mutationFn: () =>
+      ticketApi.branches.add(ticketId, {
+        repository: draft.repository.trim(),
+        branch: draft.branch.trim(),
+        prUrl: draft.prUrl.trim() || undefined
+      }),
+    onSuccess: () => {
+      setDraft({ repository: "", branch: "", prUrl: "" });
+      onChanged();
+    },
+    onError: (err: any) => toast.error("Could not link branch", { description: serverMessage(err, "Try again.") })
+  });
+  const update = useMutation({
+    mutationFn: ({ branchId, prStatus }: { branchId: string; prStatus: TicketBranchPrStatus }) =>
+      ticketApi.branches.update(ticketId, branchId, { prStatus }),
+    onSuccess: () => onChanged(),
+    onError: (err: any) => toast.error("Could not update status", { description: serverMessage(err, "Try again.") })
+  });
+  const remove = useMutation({
+    mutationFn: (branchId: string) => ticketApi.branches.remove(ticketId, branchId),
+    onSuccess: () => onChanged(),
+    onError: (err: any) => toast.error("Could not remove branch", { description: serverMessage(err, "Try again.") })
+  });
+
+  return (
+    <div className="grid gap-3">
+      <div className="grid gap-1.5">
+        {branches.map((b) => (
+          <div key={b.id} className="flex items-center gap-2 rounded-md border border-border px-2 py-1.5 text-sm">
+            <GitBranch className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+            <span className="truncate font-mono text-xs text-muted-foreground">{b.repository}</span>
+            <span className="truncate font-medium">{b.branch}</span>
+            {b.prUrl ? (
+              <a href={b.prUrl} target="_blank" rel="noreferrer" className="flex items-center gap-1 truncate text-primary hover:underline">
+                PR<ArrowUpRight className="h-3 w-3 shrink-0" />
+              </a>
+            ) : (
+              <span className="text-xs text-muted-foreground">No PR link</span>
+            )}
+            <Select value={b.prStatus} onValueChange={(v) => update.mutate({ branchId: b.id, prStatus: v as TicketBranchPrStatus })}>
+              <SelectTrigger className="ml-auto h-8 w-28"><SelectValue /></SelectTrigger>
+              <SelectContent>
+                {ticketBranchPrStatuses.map((s) => (
+                  <SelectItem key={s} value={s}>
+                    <Badge variant={BRANCH_PR_STATUS_VARIANT[s]}>{s}</Badge>
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            <Button variant="ghost" size="icon" className="h-9 w-9 text-destructive" onClick={() => remove.mutate(b.id)}>
+              <Trash2 className="h-3.5 w-3.5" />
+            </Button>
+          </div>
+        ))}
+        {branches.length === 0 && <p className="py-4 text-center text-sm text-muted-foreground">No branches or PRs linked yet.</p>}
+      </div>
+      {gitStatus.data?.connected && (
+        <div className="grid gap-2 rounded-md border border-dashed border-border p-3">
+          <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Pick from GitHub ({gitStatus.data.accountLogin})</p>
+          <div className="flex gap-2">
+            <Select value={pickerRepo} onValueChange={setPickerRepo}>
+              <SelectTrigger className="flex-1"><SelectValue placeholder={repos.isLoading ? "Loading repos…" : "Choose a repository"} /></SelectTrigger>
+              <SelectContent>
+                {(repos.data ?? []).map((r) => (
+                  <SelectItem key={r.fullName} value={r.fullName}>{r.fullName}</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+          {pickerRepo && (
+            <div className="grid gap-1.5">
+              {pulls.isLoading && <p className="text-xs text-muted-foreground">Loading pull requests…</p>}
+              {(pulls.data ?? []).map((pr) => (
+                <button
+                  key={pr.number}
+                  type="button"
+                  className="flex items-center gap-2 rounded-md border border-border px-2 py-1.5 text-left text-sm hover:bg-muted/50"
+                  title="Fills the fields below — click Link to save"
+                  onClick={() => setDraft({ repository: pickerRepo, branch: pr.branch, prUrl: pr.url })}
+                >
+                  <Badge variant={pr.status === "OPEN" ? "info" : pr.status === "MERGED" ? "success" : "muted"}>{pr.status}</Badge>
+                  <span className="truncate">#{pr.number} {pr.title}</span>
+                  <span className="ml-auto shrink-0 font-mono text-xs text-muted-foreground">{pr.branch}</span>
+                </button>
+              ))}
+              {!pulls.isLoading && (pulls.data ?? []).length === 0 && (
+                <p className="text-xs text-muted-foreground">No pull requests found for this repository.</p>
+              )}
+            </div>
+          )}
+        </div>
+      )}
+      <div className="flex gap-2">
+        <Input
+          value={draft.repository}
+          onChange={(e) => setDraft((d) => ({ ...d, repository: e.target.value }))}
+          placeholder="Repository (e.g. org/repo)"
+        />
+        <Input
+          value={draft.branch}
+          onChange={(e) => setDraft((d) => ({ ...d, branch: e.target.value }))}
+          placeholder="Branch"
+        />
+        <Input
+          value={draft.prUrl}
+          onChange={(e) => setDraft((d) => ({ ...d, prUrl: e.target.value }))}
+          placeholder="PR URL (optional)"
+        />
+        <Button size="sm" disabled={!draft.repository.trim() || !draft.branch.trim() || add.isPending} onClick={() => add.mutate()}>
+          <GitBranch className="h-4 w-4" />Link
         </Button>
       </div>
     </div>
@@ -1185,7 +1468,7 @@ function AttachmentsPanel({
             <a href={fileUrl(a.url)} target="_blank" rel="noreferrer" className="truncate text-primary hover:underline">
               {a.fileName}
             </a>
-            <Button variant="ghost" size="icon" className="h-7 w-7 text-destructive" onClick={() => remove.mutate(a.id)}>
+            <Button variant="ghost" size="icon" className="h-9 w-9 text-destructive" onClick={() => remove.mutate(a.id)}>
               <Trash2 className="h-3.5 w-3.5" />
             </Button>
           </div>
@@ -1213,6 +1496,106 @@ function TimeLoggedPanel({ timesheets }: { timesheets: TicketTimesheetRow[] }) {
           <span>{total.toFixed(2)}h</span>
         </div>
       )}
+    </div>
+  );
+}
+
+const SEVERITY_VARIANT: Record<SecurityFindingSeverity, BadgeProps["variant"]> = {
+  CRITICAL: "destructive",
+  HIGH: "warning",
+  MEDIUM: "info",
+  LOW: "muted"
+};
+
+const FINDING_TYPE_LABEL: Record<SecurityFindingRow["type"], string> = {
+  SAST: "Static analysis (SAST)",
+  DAST: "Dynamic analysis (DAST)",
+  SSAT: "Secrets scanning (SSAT)",
+  SSCT: "Supply-chain testing (SSCT)",
+  VAPT: "Penetration test (VAPT)"
+};
+
+/** Ingest-only — see docs/ROADMAP.md's "Security assessment suite". Every finding/test-run row
+ *  here was POSTed by an external CI/security tool via /api/devops/:orgSlug/*, never generated
+ *  by TimeSphere itself; this panel just renders services/security-report.service.ts's output. */
+function SecurityPanel({ ticketId }: { ticketId: string }) {
+  const report = useQuery({ queryKey: ["ticket", ticketId, "security-report"], queryFn: () => ticketApi.securityReport.get(ticketId) });
+  const [downloading, setDownloading] = useState(false);
+
+  async function downloadPdf() {
+    setDownloading(true);
+    try {
+      const blob = await ticketApi.securityReport.downloadPdf(ticketId);
+      const url = URL.createObjectURL(blob);
+      const anchor = document.createElement("a");
+      anchor.href = url;
+      anchor.download = `${report.data?.ticket.key ?? "ticket"}-security-report.pdf`;
+      anchor.click();
+      URL.revokeObjectURL(url);
+    } catch (err: any) {
+      toast.error("Download failed", { description: serverMessage(err, "Try again.") });
+    } finally {
+      setDownloading(false);
+    }
+  }
+
+  if (report.isLoading) return <Skeleton className="h-24 w-full" />;
+  const data = report.data;
+  if (!data) return <p className="text-sm text-muted-foreground">Could not load the security report.</p>;
+
+  if (data.findings.length === 0 && !data.latestTestRun) {
+    return (
+      <p className="text-sm text-muted-foreground">
+        No findings or test runs have been ingested for this ticket yet. Connect a CI/security tool from{" "}
+        <strong>Workspace Settings → Security &amp; DevOps</strong> and reference this ticket's key ({data.ticket.key}) in what it POSTs.
+      </p>
+    );
+  }
+
+  const verdictNeedsAttention = data.riskVerdict.startsWith("Needs attention");
+
+  return (
+    <div className="grid gap-3">
+      <div className={`flex items-center justify-between rounded-md border px-3 py-2 ${verdictNeedsAttention ? "border-destructive/30 bg-destructive/5" : "border-success/30 bg-success/5"}`}>
+        <div className="flex items-center gap-2 text-sm font-semibold">
+          <ShieldAlert className={`h-4 w-4 ${verdictNeedsAttention ? "text-destructive" : "text-success"}`} />
+          {data.riskVerdict}
+        </div>
+        <Button size="sm" variant="outline" onClick={downloadPdf} disabled={downloading}>
+          <Download className="h-3.5 w-3.5" />PDF report
+        </Button>
+      </div>
+
+      {data.latestTestRun && (
+        <div className="flex items-center justify-between rounded-md border border-border px-3 py-2 text-sm">
+          <span className="text-muted-foreground">Latest test run ({data.latestTestRun.provider})</span>
+          <Badge variant={data.latestTestRun.status === "PASSED" ? "success" : data.latestTestRun.status === "FAILED" ? "destructive" : "info"}>
+            {data.latestTestRun.status}
+          </Badge>
+        </div>
+      )}
+
+      {(["SAST", "DAST", "SSAT", "SSCT", "VAPT"] as const).map((type) => {
+        const items = data.findingsByType[type] ?? [];
+        if (items.length === 0) return null;
+        return (
+          <div key={type} className="grid gap-1.5">
+            <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">{FINDING_TYPE_LABEL[type]}</p>
+            {items.map((finding) => (
+              <div key={finding.id} className="grid gap-0.5 rounded-md border border-border px-3 py-2">
+                <div className="flex items-center gap-2">
+                  <Badge variant={SEVERITY_VARIANT[finding.severity]}>{finding.severity}</Badge>
+                  <span className="text-sm font-medium">{finding.title}</span>
+                  <span className="ml-auto text-xs text-muted-foreground">{finding.tool}{finding.status !== "OPEN" ? ` · ${finding.status}` : ""}</span>
+                </div>
+                {finding.filePath && (
+                  <p className="text-xs text-muted-foreground">{finding.filePath}{finding.lineNumber ? `:${finding.lineNumber}` : ""}</p>
+                )}
+              </div>
+            ))}
+          </div>
+        );
+      })}
     </div>
   );
 }

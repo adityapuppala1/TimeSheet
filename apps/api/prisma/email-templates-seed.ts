@@ -501,5 +501,80 @@ export const SEED_TEMPLATES: Record<string, SeedTemplate> = {
         button("Review ticket", "{{appUrl}}/app/tickets", COLORS.accent)
       ].join("\n")
     })
+  },
+
+  "ticket.received_via_email": {
+    subject: "We received your report — {{ticketKey}}",
+    bodyHtml: shell({
+      preheader: "Our team has been notified and will follow up.",
+      accent: COLORS.primary,
+      body: [
+        heading("Thanks — we've logged this"),
+        lead("Hi {{senderName}}, your email was automatically turned into a tracked ticket. Our team will follow up as needed."),
+        infoCard([
+          { label: "Ticket", value: "{{ticketKey}}", emphasize: true },
+          { label: "Summary", value: "{{title}}" },
+          { label: "Priority", value: "{{priority}}" }
+        ]),
+        muted("This is an automated confirmation — no need to reply unless you have more details to add.")
+      ].join("\n")
+    })
+  },
+
+  "ticket.needs_review": {
+    subject: "Needs review: {{ticketKey}}",
+    bodyHtml: shell({
+      preheader: "An email-sourced ticket needs a human check.",
+      accent: COLORS.accent,
+      body: [
+        heading("An inbound ticket needs review"),
+        lead("{{targetName}}, an email from {{senderEmail}} was auto-classified with low confidence and needs a quick human check before it's assigned."),
+        infoCard(
+          [
+            { label: "Ticket", value: "{{ticketKey}}", emphasize: true },
+            { label: "Summary", value: "{{title}}" },
+            { label: "AI confidence", value: "{{confidence}}" }
+          ],
+          COLORS.accent
+        ),
+        button("Review ticket", "{{appUrl}}/app/ai-activity", COLORS.accent)
+      ].join("\n")
+    })
+  },
+
+  "digest.weekly": {
+    subject: "Your week in review — {{weekLabel}}",
+    bodyHtml: shell({
+      preheader: "An AI-authored recap of your ticket and timesheet activity.",
+      accent: COLORS.info,
+      body: [
+        heading("Hi {{name}}, here's your week"),
+        lead("{{summary}}"),
+        button("Open your dashboard", "{{appUrl}}/app", COLORS.info),
+        muted("This recap is AI-generated from your ticket and timesheet activity — turn it off anytime in your notification preferences.")
+      ].join("\n")
+    })
+  },
+
+  "ticket.closed_digest": {
+    subject: "[{{ticketKey}}] Security digest — {{riskVerdict}}",
+    bodyHtml: shell({
+      preheader: "{{riskVerdict}}",
+      accent: COLORS.destructive,
+      body: [
+        heading("{{ticketKey}} closed — security digest"),
+        lead("{{closedBy}} closed \"<strong>{{title}}</strong>\". Summary of ingested security findings and test status below."),
+        infoCard(
+          [
+            { label: "Verdict", value: "{{riskVerdict}}", emphasize: true },
+            { label: "Latest test run", value: "{{testStatus}}" }
+          ],
+          COLORS.destructive
+        ),
+        calloutBox("Findings", "{{findingsText}}", COLORS.destructive),
+        button("Open ticket", "{{appUrl}}/app/tickets", COLORS.destructive)
+      ].join("\n"),
+      footerNote: "Ingest-only — findings reflect whatever CI/security tools this workspace has connected. See Workspace Settings → Security & DevOps."
+    })
   }
 };

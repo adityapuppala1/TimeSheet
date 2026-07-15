@@ -11,7 +11,19 @@ export const TabsList = React.forwardRef<
   <TabsPrimitive.List
     ref={ref}
     className={cn(
-      "inline-flex h-10 items-center justify-center rounded-md bg-muted p-1 text-muted-foreground",
+      // overflow-x-auto (new) so a TabsList wider than its container scrolls horizontally
+      // instead of being silently clipped by html/body's `overflow-x: clip` (index.css) —
+      // without this, tabs past the visible width are unreachable on narrow viewports, not
+      // just visually cramped. Fixes every TabsList consumer at once (ticket detail sheet,
+      // WorkspaceSettings, etc.). Stays inline-flex (not flex) so a short TabsList still
+      // shrink-wraps to its content
+      // instead of stretching to fill its container — inline-flex's shrink-to-fit sizing
+      // already caps at the container's available width, which combined with overflow-x-auto
+      // is what makes internal scrolling kick in instead of growing past the container.
+      // justify-start, not justify-center: flexbox "unsafe" centering clips the start of
+      // overflowing content in a scroll container (a well-known CSS footgun) — start-aligned
+      // avoids that while looking identical for any TabsList that fits without overflowing.
+      "inline-flex h-10 max-w-full items-center justify-start gap-1 overflow-x-auto whitespace-nowrap rounded-md bg-muted p-1 text-muted-foreground [scrollbar-width:none] [&::-webkit-scrollbar]:hidden",
       className
     )}
     {...props}
@@ -26,7 +38,7 @@ export const TabsTrigger = React.forwardRef<
   <TabsPrimitive.Trigger
     ref={ref}
     className={cn(
-      "focus-ring inline-flex items-center justify-center gap-2 whitespace-nowrap rounded-sm px-3 py-1.5 text-sm font-medium transition data-[state=active]:bg-background data-[state=active]:text-foreground data-[state=active]:shadow-sm",
+      "focus-ring inline-flex shrink-0 items-center justify-center gap-2 whitespace-nowrap rounded-sm px-3 py-1.5 text-sm font-medium transition data-[state=active]:bg-background data-[state=active]:text-foreground data-[state=active]:shadow-sm",
       className
     )}
     {...props}

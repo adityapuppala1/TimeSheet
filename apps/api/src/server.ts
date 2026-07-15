@@ -17,6 +17,7 @@ import { app } from "./app.js";
 import { controlPrisma } from "./config/control-prisma.js";
 import { env, serverTimezone } from "./config/env.js";
 import { applyDatabaseTimezone, disconnectAllTenantClients, getTenantClient } from "./config/prisma.js";
+import { tenantContext } from "./config/tenant-context.js";
 import { decryptSecret } from "./utils/encryption.js";
 import { getTransportStatus } from "./services/mail.service.js";
 import { startChatTelegramWorker } from "./workers/chat-telegram.worker.js";
@@ -114,7 +115,10 @@ const server: Server = app.listen(env.API_PORT, async () => {
 
   // Warm the DEFAULT_ORG_SLUG tenant client at boot (fail loudly here rather than on a
   // request if the control plane or that org's database is misconfigured), and reuse it for
-  // the db.time diagnostic log that used to run against the single static client.
+  // the db.time diagnostic log that used to run against the single static client. Also used
+  // to give getTransportStatus() below a tenant context to read GlobalMailSettings from — it
+  // now checks the DB (Workspace Settings → Mail server) in addition to env vars, and `prisma`
+  // is only resolvable inside a request/tenantContext.run(), never at bare module scope.
   try {
     const org = await controlPrisma.organization.findUnique({ where: { slug: env.DEFAULT_ORG_SLUG }, include: { database: true } });
     if (!org || !org.database) {
@@ -123,23 +127,26 @@ const server: Server = app.listen(env.API_PORT, async () => {
       process.exit(1);
     }
     const defaultClient = await getTenantClient(org.id, decryptSecret(org.database.encryptedDsn));
-    const tz = await applyDatabaseTimezone(defaultClient);
-    console.log(
-      `[db.time] mysql session=${tz.sessionTimeZone ?? "?"}, global=${tz.globalTimeZone ?? "?"}, ` +
-        `offset=${tz.offset}, applied(global=${tz.globalApplied}, session=${tz.sessionApplied})`
-    );
-    if (tz.now) console.log(`[db.time] mysql NOW(): ${tz.now}`);
-    for (const message of tz.errors) console.warn(`[db.time] ${message}`);
+
+    await tenantContext.run({ orgId: org.id, orgSlug: org.slug, client: defaultClient }, async () => {
+      const tz = await applyDatabaseTimezone(defaultClient);
+      console.log(
+        `[db.time] mysql session=${tz.sessionTimeZone ?? "?"}, global=${tz.globalTimeZone ?? "?"}, ` +
+          `offset=${tz.offset}, applied(global=${tz.globalApplied}, session=${tz.sessionApplied})`
+      );
+      if (tz.now) console.log(`[db.time] mysql NOW(): ${tz.now}`);
+      for (const message of tz.errors) console.warn(`[db.time] ${message}`);
+
+      const mail = await getTransportStatus();
+      if (mail.configured) {
+        console.log(`[mail] configured (${mail.configSource}): ${mail.host}:${mail.port} (secure=${mail.secure}) — from "${mail.from}"`);
+      } else {
+        console.warn("[mail] SMTP NOT configured — emails will be marked FAILED with a clear note in EmailLog.");
+        console.warn("[mail] Set it from Workspace Settings → Mail server, or SMTP_HOST/PORT/USER/PASS in apps/api/.env and restart.");
+      }
+    });
   } catch (error) {
     console.warn(`[db.time] timezone alignment failed: ${(error as Error).message}`);
-  }
-
-  const mail = getTransportStatus();
-  if (mail.configured) {
-    console.log(`[mail] configured: ${mail.host}:${mail.port} (secure=${mail.secure}) — from "${mail.from}"`);
-  } else {
-    console.warn("[mail] SMTP NOT configured — emails will be marked FAILED with a clear note in EmailLog.");
-    console.warn('[mail] Set SMTP_HOST, SMTP_PORT, SMTP_USER, SMTP_PASS in apps/api/.env and restart.');
   }
 
   startEscalationWorker();

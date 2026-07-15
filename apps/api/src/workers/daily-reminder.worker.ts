@@ -23,6 +23,12 @@ import { runForEveryOrg } from "./run-for-every-org.js";
  */
 
 let started = false;
+// See workers/escalation.worker.ts's comment on the equivalent flag. `tick()` also has its
+// own per-hour idempotency check (lastFiredHour / alreadyNotifiedToday), but that guards
+// against double-*sending*, not against two ticks' user-iteration loops running concurrently
+// if one is still mid-flight when the next :00/:30 fires — this flag is the belt to that
+// suspenders.
+let running = false;
 
 function isSameLocalDay(a: Date, b: Date): boolean {
   return a.getFullYear() === b.getFullYear() && a.getMonth() === b.getMonth() && a.getDate() === b.getDate();
@@ -255,7 +261,13 @@ export function startDailyReminderWorker() {
 
   // Every hour at :00, plus :30 as a safety net.
   cron.schedule("0,30 * * * *", () => {
-    runForEveryOrg("reminder", () => tick()).catch((error) => console.error("[reminder] tick failed:", (error as Error).message));
+    if (running) return;
+    running = true;
+    runForEveryOrg("reminder", () => tick())
+      .catch((error) => console.error("[reminder] tick failed:", (error as Error).message))
+      .finally(() => {
+        running = false;
+      });
   });
 
   started = true;

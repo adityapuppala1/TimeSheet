@@ -31,7 +31,8 @@ export type NotificationCategory =
   | "ticket.sla_breach"
   | "ticket.escalation"
   | "ticket.needs_review"
-  | "digest.weekly";
+  | "digest.weekly"
+  | "ticket.closed_digest";
 
 interface EmailPayload {
   templateKey: string;
@@ -65,7 +66,8 @@ const SETTINGS_FIELD: Record<NotificationCategory, string> = {
   "ticket.sla_breach": "emailTicketSlaBreach",
   "ticket.escalation": "emailTicketEscalation",
   "ticket.needs_review": "emailTicketNeedsReview",
-  "digest.weekly": "emailWeeklyDigest"
+  "digest.weekly": "emailWeeklyDigest",
+  "ticket.closed_digest": "emailTicketClosedDigest"
 };
 
 const GLOBAL_ID = "global";
@@ -114,10 +116,15 @@ export async function dispatchNotification(args: DispatchArgs) {
 }
 
 export async function dispatchTransactional(args: {
+  /** May be a comma-separated list of addresses (nodemailer/most SMTP servers accept this
+   *  directly as the `to` header) — used by the ticket-closed digest to put the closer and
+   *  their manager both as primary recipients rather than cc'ing one of them. */
   to: string;
   templateKey: string;
   vars: Record<string, string | number | undefined | null>;
   fallback: { subject: string; html: string };
+  /** Real Cc, not the hidden super-admin bcc — see mail.service.ts#SendArgs.cc. */
+  cc?: string[];
 }) {
   if (!args.to) {
     return { ok: false, status: "SKIPPED" as const, errorMessage: "Recipient missing" };
@@ -126,6 +133,7 @@ export async function dispatchTransactional(args: {
   const rendered = await renderEmailTemplate(args.templateKey, enrichedVars, args.fallback);
   return sendMail({
     to: args.to,
+    cc: args.cc,
     subject: rendered.subject,
     html: rendered.html,
     template: args.templateKey

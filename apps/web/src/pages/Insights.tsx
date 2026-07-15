@@ -11,6 +11,7 @@
  * intensity scale.
  */
 import { useQuery } from "@tanstack/react-query";
+import type { ColumnDef } from "@tanstack/react-table";
 import { AlertTriangle, BarChart3, Clock, DollarSign, MessageSquare, RotateCcw, Trophy } from "lucide-react";
 import {
   Area,
@@ -28,9 +29,74 @@ import {
 } from "recharts";
 import { Badge } from "../components/ui/badge";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../components/ui/card";
+import { DataTable } from "../components/ui/data-table";
 import { Skeleton } from "../components/ui/skeleton";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "../components/ui/table";
 import { reportApi, settingsApi } from "../services/api";
+
+const estimateVsActualColumns: ColumnDef<any, any>[] = [
+  {
+    id: "ticket",
+    accessorFn: (row: any) => row.ticketKey,
+    header: "Ticket",
+    cell: ({ row }) => (
+      <>
+        <span className="font-mono text-xs text-muted-foreground">{row.original.ticketKey}</span>{" "}
+        <span className="truncate">{row.original.title}</span>
+      </>
+    )
+  },
+  {
+    id: "estimated",
+    accessorFn: (row: any) => row.estimatedHours,
+    header: "Estimated",
+    cell: ({ row }) => `${row.original.estimatedHours.toFixed(1)}h`
+  },
+  {
+    id: "actual",
+    accessorFn: (row: any) => row.actualHours,
+    header: "Actual",
+    cell: ({ row }) => `${row.original.actualHours.toFixed(1)}h`
+  },
+  {
+    id: "variance",
+    accessorFn: (row: any) => row.varianceHours,
+    header: "Variance",
+    cell: ({ row }) => (
+      <span className={row.original.varianceHours > 0 ? "text-destructive" : "text-success"}>
+        {row.original.varianceHours > 0 ? "+" : ""}
+        {row.original.varianceHours.toFixed(1)}h
+      </span>
+    )
+  }
+];
+
+const costColumns: ColumnDef<any, any>[] = [
+  {
+    id: "ticket",
+    accessorFn: (row: any) => row.ticketKey,
+    header: "Ticket",
+    cell: ({ row }) => (
+      <>
+        <span className="font-mono text-xs text-muted-foreground">{row.original.ticketKey}</span> {row.original.title}
+      </>
+    )
+  },
+  { id: "hours", accessorFn: (row: any) => row.hours, header: "Hours", cell: ({ row }) => `${row.original.hours.toFixed(1)}h` },
+  { id: "cost", accessorFn: (row: any) => row.costUsd, header: "Cost", cell: ({ row }) => `$${row.original.costUsd.toFixed(2)}` }
+];
+
+const leaderboardColumns: ColumnDef<any, any>[] = [
+  {
+    id: "rank",
+    accessorFn: (row: any) => row.rank,
+    header: "Rank",
+    cell: ({ row }) => (row.original.rank === 1 ? <Badge variant="success">#1</Badge> : <span className="text-muted-foreground">#{row.original.rank}</span>)
+  },
+  { id: "teammate", accessorFn: (row: any) => row.assigneeName, header: "Teammate", cell: ({ row }) => <span className="font-medium">{row.original.assigneeName}</span> },
+  { id: "resolved", accessorFn: (row: any) => row.resolvedCount, header: "Resolved" },
+  { id: "avgCycle", accessorFn: (row: any) => row.avgCycleHours, header: "Avg. cycle time", cell: ({ row }) => `${row.original.avgCycleHours}h` }
+];
 
 const AXIS_STYLE = { stroke: "hsl(var(--muted-foreground))", fontSize: 12 };
 const TOOLTIP_STYLE = {
@@ -360,33 +426,8 @@ export function Insights() {
                 <CardTitle className="text-base">Estimate vs. actual</CardTitle>
                 <CardDescription>Tickets with an estimate and logged time, ranked by the biggest variance.</CardDescription>
               </CardHeader>
-              <CardContent className="p-0">
-                <Table>
-                  <TableHeader>
-                    <TableRow>
-                      <TableHead>Ticket</TableHead>
-                      <TableHead>Estimated</TableHead>
-                      <TableHead>Actual</TableHead>
-                      <TableHead>Variance</TableHead>
-                    </TableRow>
-                  </TableHeader>
-                  <TableBody>
-                    {data.estimateVsActual.slice(0, 15).map((row) => (
-                      <TableRow key={row.ticketKey}>
-                        <TableCell>
-                          <span className="font-mono text-xs text-muted-foreground">{row.ticketKey}</span>{" "}
-                          <span className="truncate">{row.title}</span>
-                        </TableCell>
-                        <TableCell>{row.estimatedHours.toFixed(1)}h</TableCell>
-                        <TableCell>{row.actualHours.toFixed(1)}h</TableCell>
-                        <TableCell className={row.varianceHours > 0 ? "text-destructive" : "text-success"}>
-                          {row.varianceHours > 0 ? "+" : ""}
-                          {row.varianceHours.toFixed(1)}h
-                        </TableCell>
-                      </TableRow>
-                    ))}
-                  </TableBody>
-                </Table>
+              <CardContent className="p-4">
+                <DataTable columns={estimateVsActualColumns} data={data.estimateVsActual} enableSearch={false} pageSize={10} />
               </CardContent>
             </Card>
           )}
@@ -414,26 +455,7 @@ export function Insights() {
                   </div>
                 </div>
                 {costInsights.data.rows.length > 0 && (
-                  <Table>
-                    <TableHeader>
-                      <TableRow>
-                        <TableHead>Ticket</TableHead>
-                        <TableHead>Hours</TableHead>
-                        <TableHead>Cost</TableHead>
-                      </TableRow>
-                    </TableHeader>
-                    <TableBody>
-                      {costInsights.data.rows.slice(0, 10).map((row) => (
-                        <TableRow key={row.ticketKey}>
-                          <TableCell>
-                            <span className="font-mono text-xs text-muted-foreground">{row.ticketKey}</span> {row.title}
-                          </TableCell>
-                          <TableCell>{row.hours.toFixed(1)}h</TableCell>
-                          <TableCell>${row.costUsd.toFixed(2)}</TableCell>
-                        </TableRow>
-                      ))}
-                    </TableBody>
-                  </Table>
+                  <DataTable columns={costColumns} data={costInsights.data.rows} enableSearch={false} pageSize={10} />
                 )}
               </>
             )}
@@ -447,31 +469,15 @@ export function Insights() {
             <CardTitle className="flex items-center gap-2 text-base"><Trophy className="h-4 w-4 text-primary" />Team leaderboard</CardTitle>
             <CardDescription>Opt-in — resolved-ticket counts and average cycle time, for recognition.</CardDescription>
           </CardHeader>
-          <CardContent className="p-0">
+          <CardContent className="p-4 pt-0">
             {leaderboard.isLoading && <Skeleton className="h-24 w-full" />}
             {leaderboard.data && leaderboard.data.rows.length > 0 && (
-              <Table>
-                <TableHeader>
-                  <TableRow>
-                    <TableHead>Rank</TableHead>
-                    <TableHead>Teammate</TableHead>
-                    <TableHead>Resolved</TableHead>
-                    <TableHead>Avg. cycle time</TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {leaderboard.data.rows.map((row, i) => (
-                    <TableRow key={row.assigneeId}>
-                      <TableCell>
-                        {i === 0 ? <Badge variant="success">#1</Badge> : <span className="text-muted-foreground">#{i + 1}</span>}
-                      </TableCell>
-                      <TableCell className="font-medium">{row.assigneeName}</TableCell>
-                      <TableCell>{row.resolvedCount}</TableCell>
-                      <TableCell>{row.avgCycleHours}h</TableCell>
-                    </TableRow>
-                  ))}
-                </TableBody>
-              </Table>
+              <DataTable
+                columns={leaderboardColumns}
+                data={leaderboard.data.rows.map((row, i) => ({ ...row, rank: i + 1 }))}
+                enableSearch={false}
+                pageSize={10}
+              />
             )}
             {leaderboard.data && leaderboard.data.rows.length === 0 && (
               <p className="py-6 text-center text-sm text-muted-foreground">No resolved tickets yet.</p>

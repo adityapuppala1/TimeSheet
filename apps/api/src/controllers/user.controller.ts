@@ -72,7 +72,8 @@ userRouter.post(
         email: z.string().email(),
         role: z.string(),
         password: z.string().min(8),
-        managerId: z.string().uuid().optional().nullable()
+        managerId: z.string().uuid().optional().nullable(),
+        designation: z.string().max(120).optional().nullable()
       })
     })
   ),
@@ -104,6 +105,7 @@ userRouter.post(
         status: "ACTIVE",
         passwordHash: await hashPassword(req.body.password),
         managerId: req.body.managerId ?? undefined,
+        designation: req.body.designation ?? undefined,
         notificationPreference: { create: {} }
       }
     });
@@ -130,13 +132,122 @@ userRouter.post(
   }
 );
 
+const bulkRowSchema = z.object({
+  name: z.string().min(2),
+  email: z.string().email(),
+  role: z.string().min(1),
+  password: z.string().min(8).optional(),
+  managerEmail: z.string().email().optional().or(z.literal("")),
+  designation: z.string().max(120).optional().or(z.literal(""))
+});
+
+const bulkUsersSchema = z.object({
+  body: z.object({ rows: z.array(bulkRowSchema).min(1).max(500) })
+});
+
+/**
+ * Bulk user import — same shape every bulk-import feature in this app follows (see the CSV
+ * template's own header comment for the exact columns): parse client-side (the frontend uses
+ * papaparse so malformed CSV never reaches here), POST the already-parsed rows, get back one
+ * result per row so a partial failure (one bad email, one duplicate) doesn't block the rest.
+ *
+ * WHY two passes instead of one: `managerEmail` can reference someone else *in the same file*
+ * (a manager and their reports uploaded together) — resolving managers only after every row's
+ * user has been created means upload order within the CSV never matters.
+ */
+userRouter.post("/bulk", validate(bulkUsersSchema), async (req, res) => {
+  const rows = req.body.rows as Array<{
+    name: string;
+    email: string;
+    role: string;
+    password?: string;
+    managerEmail?: string;
+    designation?: string;
+  }>;
+
+  const { orgId } = requireTenantContext();
+  const [seatLimit, activeSeats, roles] = await Promise.all([
+    getEffectiveSeatLimit(orgId),
+    prisma.user.count({ where: { status: "ACTIVE", deletedAt: null } }),
+    prisma.role.findMany()
+  ]);
+  const roleByName = new Map<string, (typeof roles)[number]>(roles.map((r) => [r.name, r]));
+
+  if (activeSeats + rows.length > seatLimit) {
+    throw new AppError(
+      402,
+      `This upload would create ${rows.length} users, exceeding the seat limit (${seatLimit} seats, ${activeSeats} already used). Reduce the file or contact your platform administrator.`
+    );
+  }
+
+  const results: Array<{ row: number; email: string; success: boolean; error?: string; userId?: string }> = [];
+  const emailToId = new Map<string, string>();
+
+  // Pass 1 — create every valid row without a manager link yet.
+  for (let i = 0; i < rows.length; i++) {
+    const row = rows[i];
+    try {
+      const role = roleByName.get(row.role);
+      if (!role) throw new Error(`Unknown role "${row.role}"`);
+      const existing = await prisma.user.findUnique({ where: { email: row.email } });
+      if (existing) throw new Error("A user with this email already exists");
+
+      const user = await prisma.user.create({
+        data: {
+          name: row.name,
+          email: row.email,
+          roleId: role.id,
+          status: "ACTIVE",
+          passwordHash: await hashPassword(row.password && row.password.length >= 8 ? row.password : `Bulk-${Math.random().toString(36).slice(2)}!A1`),
+          designation: row.designation || undefined,
+          notificationPreference: { create: {} }
+        }
+      });
+      emailToId.set(row.email.toLowerCase(), user.id);
+      results.push({ row: i, email: row.email, success: true, userId: user.id });
+    } catch (error) {
+      results.push({ row: i, email: row.email, success: false, error: (error as Error).message });
+    }
+  }
+
+  // Pass 2 — resolve managerEmail for every successfully-created row, against both this batch
+  // and pre-existing users, then link and (best-effort, never blocks the response) send the
+  // welcome email — same sendWelcomeEmail() the single-create route uses.
+  for (let i = 0; i < rows.length; i++) {
+    const row = rows[i];
+    const result = results[i];
+    if (!result.success || !row.managerEmail) continue;
+    try {
+      const managerId = emailToId.get(row.managerEmail.toLowerCase()) ?? (await prisma.user.findUnique({ where: { email: row.managerEmail } }))?.id;
+      if (!managerId) throw new Error(`Manager "${row.managerEmail}" not found (create them first, or fix the email)`);
+      await prisma.user.update({ where: { id: result.userId! }, data: { managerId } });
+    } catch (error) {
+      result.error = `User created, but manager link failed: ${(error as Error).message}`;
+    }
+  }
+
+  const createdUsers = results.filter((r) => r.success).map((r) => ({ id: r.userId!, name: rows[r.row].name, email: r.email }));
+  for (const user of createdUsers) {
+    sendWelcomeEmail(user).catch(() => undefined);
+  }
+
+  await audit(req.user!.id, "user.bulk_imported", "User", undefined, {
+    total: rows.length,
+    created: results.filter((r) => r.success).length,
+    failed: results.filter((r) => !r.success).length
+  });
+
+  res.status(201).json({ results });
+});
+
 const patchSchema = z.object({
   body: z.object({
     name: z.string().min(2).optional(),
     email: z.string().email().optional(),
     status: z.enum(["ACTIVE", "INACTIVE", "PENDING_VERIFICATION"]).optional(),
     role: z.string().optional(),
-    managerId: z.string().uuid().nullable().optional()
+    managerId: z.string().uuid().nullable().optional(),
+    designation: z.string().max(120).nullable().optional()
   })
 });
 
@@ -147,10 +258,12 @@ userRouter.patch("/:id", validate(patchSchema), async (req, res) => {
     status?: "ACTIVE" | "INACTIVE" | "PENDING_VERIFICATION";
     roleId?: string;
     managerId?: string | null;
+    designation?: string | null;
   } = {};
   if (req.body.name) data.name = req.body.name;
   if (req.body.email) data.email = req.body.email;
   if (req.body.status) data.status = req.body.status;
+  if ("designation" in req.body) data.designation = req.body.designation ?? null;
   if (req.body.role) {
     const role = await prisma.role.findUniqueOrThrow({ where: { name: req.body.role } });
     data.roleId = role.id;

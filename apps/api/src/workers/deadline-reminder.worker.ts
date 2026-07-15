@@ -16,6 +16,9 @@ import { runForEveryOrg } from "./run-for-every-org.js";
 const REMINDER_OFFSET_DAYS = [3, 1] as const;
 
 let started = false;
+// See workers/escalation.worker.ts's comment on the equivalent flag — same overlap hazard,
+// same fix.
+let running = false;
 
 /**
  * Send "submission deadline is approaching" reminders.
@@ -95,10 +98,16 @@ export function startDeadlineReminderWorker() {
   if (!cron.validate(schedule)) return;
 
   cron.schedule(schedule, () => {
+    if (running) return;
+    running = true;
     runForEveryOrg("deadline", async () => {
       const result = await processDeadlineReminders();
       if (result.sent > 0) console.info(`[deadline] reminders: ${result.sent} sent.`);
-    }).catch((error) => console.error("[deadline] worker failed:", (error as Error).message));
+    })
+      .catch((error) => console.error("[deadline] worker failed:", (error as Error).message))
+      .finally(() => {
+        running = false;
+      });
   });
 
   started = true;

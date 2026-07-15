@@ -92,6 +92,47 @@ export const ticketStatusTransitions: Record<TicketStatus, TicketStatus[]> = {
   REOPENED: ["IN_PROGRESS"]
 };
 
+/** Ingest-only security-assessment types — see docs/ROADMAP.md's "Security assessment suite"
+ *  section. SSAT = secrets scanning, SSCT = software supply-chain testing (SBOM/provenance),
+ *  distinct from a plain CVE-only dependency check. VAPT is deliberately absent here — it's a
+ *  periodic human-led assessment, not a per-finding type an automated webhook posts. */
+/** Includes VAPT even though the CI ingestion webhook never accepts it as input (see
+ *  devops-webhook.controller.ts's own hardcoded, VAPT-excluding type list) — this constant is
+ *  the *display*-side source of truth (report rendering, the ticket Security tab), where a VAPT
+ *  finding (uploaded via Workspace Settings, not the webhook) needs to render identically to
+ *  the other 4 types. */
+export const securityFindingTypes = ["SAST", "DAST", "SSAT", "SSCT", "VAPT"] as const;
+export type SecurityFindingType = (typeof securityFindingTypes)[number];
+
+export const securityFindingSeverities = ["LOW", "MEDIUM", "HIGH", "CRITICAL"] as const;
+export type SecurityFindingSeverity = (typeof securityFindingSeverities)[number];
+
+export const securityFindingStatuses = ["OPEN", "ACKNOWLEDGED", "FIXED", "ACCEPTED_RISK"] as const;
+export type SecurityFindingStatus = (typeof securityFindingStatuses)[number];
+
+export const testRunStatuses = ["PASSED", "FAILED", "RUNNING"] as const;
+export type TestRunStatus = (typeof testRunStatuses)[number];
+
+/** Manual repo/branch/PR linking on a ticket — see prisma/schema.prisma's TicketBranch model
+ *  comment for why this is manual, not synced live from a git provider. */
+export const ticketBranchPrStatuses = ["NONE", "OPEN", "MERGED", "CLOSED"] as const;
+export type TicketBranchPrStatus = (typeof ticketBranchPrStatuses)[number];
+
+/** Public REST API + outbound webhooks — see docs/ROADMAP.md's theme of the same name and
+ *  docs/API.md's "Public API" section. Kept in sync manually with
+ *  apps/api/src/services/webhook-dispatch.service.ts#WEBHOOK_EVENTS (that file is the source of
+ *  truth server-side; this copy is what the settings UI's event checkboxes render from). */
+export const outboundWebhookEvents = [
+  "ticket.created",
+  "ticket.status_changed",
+  "ticket.closed",
+  "timesheet.submitted",
+  "timesheet.approved"
+] as const;
+export type OutboundWebhookEvent = (typeof outboundWebhookEvents)[number];
+export const apiKeyScopes = ["READ", "WRITE"] as const;
+export type ApiKeyScope = (typeof apiKeyScopes)[number];
+
 export interface TicketInput {
   projectId: string;
   moduleId?: string;
@@ -119,6 +160,8 @@ export interface NotificationPreferences {
   emailTicketSlaBreach: boolean;
   emailTicketEscalation: boolean;
   emailTicketNeedsReview: boolean;
+  /** Ticket-close security/test-status digest — see docs/ROADMAP.md's security assessment suite. */
+  emailTicketClosedDigest: boolean;
 }
 
 export const notificationPreferenceKeys: ReadonlyArray<keyof NotificationPreferences> = [
@@ -136,7 +179,8 @@ export const notificationPreferenceKeys: ReadonlyArray<keyof NotificationPrefere
   "emailTicketCommented",
   "emailTicketSlaBreach",
   "emailTicketEscalation",
-  "emailTicketNeedsReview"
+  "emailTicketNeedsReview",
+  "emailTicketClosedDigest"
 ];
 
 /** Workspace-wide settings: notification toggles + reminder schedule + BCC behavior. */
@@ -164,6 +208,9 @@ export interface GlobalTicketSettings {
   enableCostAnalytics: boolean;
   /** Off by default — per-person resolution/velocity rankings. */
   enableLeaderboard: boolean;
+  /** Off by default. When true, a ticket can't move to RESOLVED while its latest ingested
+   *  TestRun is FAILED — see docs/ROADMAP.md's "Auto testing on branch/PR push" theme. */
+  blockResolveOnFailingTests: boolean;
   updatedAt: string;
   updatedById: string | null;
 }
@@ -209,6 +256,12 @@ export interface GlobalAISettings {
   emailIngestionEnabled: boolean;
   chatIngestionEnabled: boolean;
   weeklyDigestEnabled: boolean;
+  /** Gates ai.service.ts#classifyCiFailure — an AI-authored root-cause comment posted when a
+   *  CI test run fails with a failure-log excerpt attached. See docs/ROADMAP.md. */
+  ciFailureTriageEnabled: boolean;
+  /** Gates ai.service.ts#summarizePullRequest — an AI-authored review-summary comment posted
+   *  when a linked PR opens (git-webhook.controller.ts). Needs a live GitHub connection. */
+  aiPrReviewSummaryEnabled: boolean;
   model: string;
   confidenceThreshold: number;
   monthlyBudgetUsd: number | null;

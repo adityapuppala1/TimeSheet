@@ -23,7 +23,18 @@ import { getGlobalNotificationSettings } from "../services/notify.service.js";
 import { getGlobalAISettings, getMonthlyAIUsageSummary, getWeeklyAIUsageTrend } from "../services/ai.service.js";
 import { getAllowedSsoProviders } from "../services/plan-limits.service.js";
 import { getGlobalTicketSettings } from "../services/ticket.service.js";
-import { encryptSecret } from "../utils/encryption.js";
+import { decryptSecret, encryptSecret } from "../utils/encryption.js";
+import { getTransportStatus, invalidateMailTransportCache } from "../services/mail.service.js";
+import { WEBHOOK_EVENTS } from "../services/webhook-dispatch.service.js";
+import {
+  buildGitHubAuthorizeUrl,
+  listGitHubBranches,
+  listGitHubPullRequests,
+  listGitHubRepos,
+  signGitConnectState
+} from "../services/git-provider.service.js";
+import crypto from "node:crypto";
+import nodemailer from "nodemailer";
 
 export const settingsRouter = Router();
 settingsRouter.use(requireAuth);
@@ -97,7 +108,8 @@ const ticketingSchema = z.object({
       slaHighHours: z.coerce.number().int().min(1).max(2000).optional(),
       slaCriticalHours: z.coerce.number().int().min(1).max(2000).optional(),
       enableCostAnalytics: z.boolean().optional(),
-      enableLeaderboard: z.boolean().optional()
+      enableLeaderboard: z.boolean().optional(),
+      blockResolveOnFailingTests: z.boolean().optional()
     })
     .strict()
 });
@@ -147,6 +159,8 @@ const aiSettingsSchema = z.object({
       workspaceSearchEnabled: z.boolean().optional(),
       emailIngestionEnabled: z.boolean().optional(),
       weeklyDigestEnabled: z.boolean().optional(),
+      ciFailureTriageEnabled: z.boolean().optional(),
+      aiPrReviewSummaryEnabled: z.boolean().optional(),
       model: z.string().min(1).max(80).optional(),
       confidenceThreshold: z.coerce.number().min(0).max(1).optional(),
       monthlyBudgetUsd: z.coerce.number().min(0).optional().nullable(),
@@ -308,4 +322,453 @@ settingsRouter.patch("/auth-method", requireSuperAdmin, validate(authMethodSchem
   });
   await audit(req.user!.id, "settings.auth_method_updated", "OrgAuthMethod", updated.id, req.body);
   res.json({ passwordLoginEnabled: updated.passwordLoginEnabled, requireSsoOnly: updated.requireSsoOnly });
+});
+
+/**
+ * Security/CI ingestion (docs/ROADMAP.md's "Security assessment suite") — the bearer token
+ * controllers/devops-webhook.controller.ts checks on every POST to /api/devops/:orgSlug/*.
+ * Same write-only-secret convention as GlobalAISettings.apiKey/EmailIntakeSettings.imapPassword:
+ * the plaintext is shown to the admin exactly once (right after generating/rotating it) and
+ * never again — only `tokenSet: boolean` comes back from GET.
+ */
+settingsRouter.get("/security-ingestion", requireSuperAdmin, async (_req, res) => {
+  const { orgSlug } = requireTenantContext();
+  const settings = await prisma.ingestionSettings.findUnique({ where: { id: "global" } });
+  res.json({
+    tokenSet: Boolean(settings?.encryptedToken),
+    orgSlug,
+    findingsWebhookPath: `/api/devops/${orgSlug}/findings`,
+    testRunsWebhookPath: `/api/devops/${orgSlug}/test-runs`,
+    fallbackProjectId: settings?.fallbackProjectId ?? null,
+    autoReopenEnabled: settings?.autoReopenEnabled ?? false
+  });
+});
+
+const ingestionFallbackProjectSchema = z.object({
+  body: z.object({ fallbackProjectId: z.string().uuid().nullable() }).strict()
+});
+
+/** A CRITICAL/HIGH finding with no explicit ticketKey auto-creates a ticket here — see
+ *  services/security-report.service.ts#maybeAutoCreateTicketForFinding. Null disables
+ *  auto-ticket-creation entirely (findings are still stored, just never turned into tickets). */
+settingsRouter.patch("/security-ingestion/fallback-project", requireSuperAdmin, validate(ingestionFallbackProjectSchema), async (req, res) => {
+  const updated = await prisma.ingestionSettings.upsert({
+    where: { id: "global" },
+    update: { fallbackProjectId: req.body.fallbackProjectId },
+    create: { id: "global", fallbackProjectId: req.body.fallbackProjectId }
+  });
+  await audit(req.user!.id, "settings.security_ingestion_fallback_project_updated", "IngestionSettings", "global", { fallbackProjectId: req.body.fallbackProjectId });
+  res.json({ fallbackProjectId: updated.fallbackProjectId });
+});
+
+const autoReopenSchema = z.object({
+  body: z.object({ autoReopenEnabled: z.boolean() }).strict()
+});
+
+/** See services/security-report.service.ts#maybeReopenTicketOnRegression — deterministic
+ *  (matches on a CI-supplied ticketKey), off by default, its own explicit opt-in. */
+settingsRouter.patch("/security-ingestion/auto-reopen", requireSuperAdmin, validate(autoReopenSchema), async (req, res) => {
+  const updated = await prisma.ingestionSettings.upsert({
+    where: { id: "global" },
+    update: { autoReopenEnabled: req.body.autoReopenEnabled },
+    create: { id: "global", autoReopenEnabled: req.body.autoReopenEnabled }
+  });
+  await audit(req.user!.id, "settings.security_ingestion_auto_reopen_updated", "IngestionSettings", "global", { autoReopenEnabled: req.body.autoReopenEnabled });
+  res.json({ autoReopenEnabled: updated.autoReopenEnabled });
+});
+
+const vaptFindingSchema = z.object({
+  title: z.string().min(1).max(255),
+  severity: z.enum(["LOW", "MEDIUM", "HIGH", "CRITICAL"]),
+  description: z.string().max(20000).optional(),
+  cwe: z.string().max(40).optional(),
+  filePath: z.string().max(500).optional(),
+  lineNumber: z.coerce.number().int().positive().optional(),
+  ticketKey: z.string().max(20).optional()
+});
+
+const vaptReportSchema = z.object({
+  body: z.object({
+    // Free text identifying who/what ran the assessment (a named consultant, a pentest firm,
+    // an internal red-team exercise) — stored as SecurityFinding.tool, same field the CI
+    // ingestion path uses for "semgrep"/"gitleaks"/etc., so a VAPT finding renders in the
+    // ticket Security tab / PDF report identically to an automated one.
+    assessor: z.string().min(1).max(120),
+    findings: z.array(vaptFindingSchema).min(1).max(500)
+  })
+});
+
+/**
+ * VAPT (Vulnerability Assessment & Penetration Testing) is the one security-assessment type
+ * that never arrives through the CI ingestion webhook (devops-webhook.controller.ts) — it's a
+ * periodic, human-led assessment, not a per-push automated scan (see
+ * docs/SECURITY_DEVOPS_INTEGRATIONS.md §4). An admin uploads its findings here as structured
+ * JSON (exported/converted from whatever the assessor delivered — a PDF report itself isn't
+ * parsed, since extracting structured findings from an arbitrary PDF layout is unreliable
+ * without a fixed template) — created rows land in the exact same `SecurityFinding` table as
+ * the automated types, so the per-ticket report/PDF/digest render them identically.
+ */
+settingsRouter.post("/security-ingestion/vapt-report", requireSuperAdmin, validate(vaptReportSchema), async (req, res) => {
+  const { assessor, findings } = req.body as z.infer<typeof vaptReportSchema>["body"];
+
+  let ticketAttached = 0;
+  const created = await Promise.all(
+    findings.map(async (f) => {
+      let ticketId: string | null = null;
+      if (f.ticketKey) {
+        const ticket = await prisma.ticket.findFirst({
+          where: { deletedAt: null, key: f.ticketKey.toUpperCase() },
+          select: { id: true }
+        });
+        ticketId = ticket?.id ?? null;
+        if (ticketId) ticketAttached += 1;
+      }
+      return prisma.securityFinding.create({
+        data: {
+          ticketId,
+          type: "VAPT",
+          tool: assessor,
+          severity: f.severity,
+          title: f.title,
+          description: f.description,
+          cwe: f.cwe,
+          filePath: f.filePath,
+          lineNumber: f.lineNumber
+        }
+      });
+    })
+  );
+
+  await audit(req.user!.id, "settings.vapt_report_uploaded", "SecurityFinding", undefined, {
+    assessor,
+    count: created.length,
+    ticketAttached
+  });
+  res.status(201).json({ created: created.length, ticketAttached });
+});
+
+settingsRouter.post("/security-ingestion/rotate-token", requireSuperAdmin, async (req, res) => {
+  const token = crypto.randomBytes(32).toString("hex");
+  await prisma.ingestionSettings.upsert({
+    where: { id: "global" },
+    update: { encryptedToken: encryptSecret(token) },
+    create: { id: "global", encryptedToken: encryptSecret(token) }
+  });
+  await audit(req.user!.id, "settings.security_ingestion_token_rotated", "IngestionSettings", "global");
+  // The only response across this whole app that ever returns a secret in plaintext — by
+  // design, this is the one moment the admin can see it; GET above only ever reports
+  // tokenSet: true afterward. Rotating invalidates whatever CI/scanner config used the old
+  // token, same trade-off as rotating any other webhook secret in this app.
+  res.json({ token });
+});
+
+settingsRouter.delete("/security-ingestion/token", requireSuperAdmin, async (req, res) => {
+  await prisma.ingestionSettings.upsert({
+    where: { id: "global" },
+    update: { encryptedToken: null },
+    create: { id: "global", encryptedToken: null }
+  });
+  await audit(req.user!.id, "settings.security_ingestion_disabled", "IngestionSettings", "global");
+  res.status(204).send();
+});
+
+/**
+ * Outbound SMTP ("Mail server") — same masked-secret pattern as email-intake.controller.ts's
+ * IMAP settings (GET returns `passwordSet: boolean`, never the plaintext; PATCH only overwrites
+ * the password when a non-empty string is sent). See services/mail.service.ts's header comment
+ * for how this relates to the .env SMTP_* fallback and the transport cache invalidation below.
+ */
+function serializeMailSettings(settings: { password: string | null; [key: string]: unknown }) {
+  const { password, ...rest } = settings;
+  return { ...rest, passwordSet: Boolean(password) };
+}
+
+settingsRouter.get("/mail", requireSuperAdmin, async (_req, res) => {
+  const settings = await prisma.globalMailSettings.upsert({
+    where: { id: "global" },
+    update: {},
+    create: { id: "global" }
+  });
+  res.json(serializeMailSettings(settings));
+});
+
+settingsRouter.get("/mail/transport-status", async (_req, res) => {
+  res.json(await getTransportStatus());
+});
+
+const mailSettingsSchema = z.object({
+  body: z
+    .object({
+      host: z.string().max(255).optional().nullable(),
+      port: z.coerce.number().int().min(1).max(65535).optional(),
+      secure: z.boolean().optional(),
+      user: z.string().max(255).optional().nullable(),
+      // Empty string clears the stored password (falls back to no-auth or the .env password,
+      // same convention as EmailIntakeSettings.imapPassword); omit to leave it untouched.
+      password: z.string().max(500).optional(),
+      fromAddress: z.string().max(255).optional().nullable()
+    })
+    .strict()
+});
+
+settingsRouter.patch("/mail", requireSuperAdmin, validate(mailSettingsSchema), async (req, res) => {
+  const data: Record<string, unknown> = { updatedById: req.user!.id };
+  if ("host" in req.body) data.host = req.body.host || null;
+  if (typeof req.body.port === "number") data.port = req.body.port;
+  if (typeof req.body.secure === "boolean") data.secure = req.body.secure;
+  if ("user" in req.body) data.user = req.body.user || null;
+  if (typeof req.body.password === "string") data.password = req.body.password.length > 0 ? encryptSecret(req.body.password) : null;
+  if ("fromAddress" in req.body) data.fromAddress = req.body.fromAddress || null;
+
+  const updated = await prisma.globalMailSettings.upsert({
+    where: { id: "global" },
+    update: data,
+    create: { id: "global", ...data }
+  });
+  invalidateMailTransportCache();
+  await audit(req.user!.id, "settings.mail_updated", "GlobalMailSettings", "global", { ...req.body, password: undefined });
+  res.json(serializeMailSettings(updated));
+});
+
+const mailTestConnectionSchema = z.object({
+  body: z.object({
+    host: z.string().min(1).optional(),
+    port: z.coerce.number().int().min(1).max(65535).optional(),
+    secure: z.boolean().optional(),
+    user: z.string().min(1).optional(),
+    password: z.string().min(1).optional()
+  })
+});
+
+settingsRouter.post("/mail/test-connection", requireSuperAdmin, validate(mailTestConnectionSchema), async (req, res) => {
+  const saved = await prisma.globalMailSettings.findUnique({ where: { id: "global" } });
+  const host = req.body.host || saved?.host;
+  const port = req.body.port ?? saved?.port ?? 587;
+  const secure = req.body.secure ?? saved?.secure ?? false;
+  const user = req.body.user || saved?.user || undefined;
+  let password = req.body.password;
+  if (!password && saved?.password) {
+    try {
+      password = decryptSecret(saved.password);
+    } catch {
+      throw new AppError(422, "The saved password can't be read — re-enter it below and try again.");
+    }
+  }
+
+  if (!host) throw new AppError(422, "Host is required to test the connection.");
+
+  try {
+    const transport = nodemailer.createTransport({ host, port, secure, auth: user ? { user, pass: password } : undefined });
+    await transport.verify();
+    res.json({ ok: true, message: `Connected to ${host}:${port}.` });
+  } catch (error) {
+    res.json({ ok: false, message: (error as Error).message });
+  }
+});
+
+// ---------- Public API keys & outbound webhooks ----------
+// See docs/ROADMAP.md's "Public REST API + outbound webhooks" theme, controllers/
+// public-api.controller.ts (the API keys authenticate against), and services/
+// webhook-dispatch.service.ts (what the webhooks receive). Admin-only, same as every other
+// settings surface in this file.
+
+settingsRouter.get("/api-keys", requireSuperAdmin, async (_req, res) => {
+  const keys = await prisma.apiKey.findMany({
+    orderBy: { createdAt: "desc" },
+    select: {
+      id: true,
+      name: true,
+      keyPrefix: true,
+      scope: true,
+      lastUsedAt: true,
+      createdAt: true,
+      revokedAt: true,
+      createdBy: { select: { id: true, name: true } }
+    }
+  });
+  res.json(keys);
+});
+
+const createApiKeySchema = z.object({
+  body: z.object({ name: z.string().min(1).max(120), scope: z.enum(["READ", "WRITE"]).default("READ") })
+});
+
+settingsRouter.post("/api-keys", requireSuperAdmin, validate(createApiKeySchema), async (req, res) => {
+  const plaintext = `tsk_${crypto.randomBytes(24).toString("hex")}`;
+  const keyHash = crypto.createHash("sha256").update(plaintext).digest("hex");
+  const created = await prisma.apiKey.create({
+    data: {
+      name: req.body.name,
+      scope: req.body.scope,
+      keyHash,
+      keyPrefix: plaintext.slice(0, 12),
+      createdById: req.user!.id
+    }
+  });
+  await audit(req.user!.id, "settings.api_key_created", "ApiKey", created.id, { name: created.name, scope: created.scope });
+  // Same one-time-plaintext-reveal pattern as /security-ingestion/rotate-token above — this
+  // response is the only place the full key is ever visible again.
+  res.status(201).json({ id: created.id, name: created.name, scope: created.scope, key: plaintext });
+});
+
+settingsRouter.delete("/api-keys/:id", requireSuperAdmin, async (req, res) => {
+  const existing = await prisma.apiKey.findUnique({ where: { id: String(req.params.id) } });
+  if (!existing) throw new AppError(404, "API key not found");
+  await prisma.apiKey.update({ where: { id: existing.id }, data: { revokedAt: new Date() } });
+  await audit(req.user!.id, "settings.api_key_revoked", "ApiKey", existing.id, { name: existing.name });
+  res.status(204).send();
+});
+
+settingsRouter.get("/webhooks", requireSuperAdmin, async (_req, res) => {
+  const webhooks = await prisma.outboundWebhook.findMany({
+    orderBy: { createdAt: "desc" },
+    select: {
+      id: true,
+      name: true,
+      url: true,
+      events: true,
+      isActive: true,
+      lastDeliveryAt: true,
+      lastDeliveryStatus: true,
+      createdAt: true,
+      createdBy: { select: { id: true, name: true } }
+    }
+  });
+  res.json(webhooks);
+});
+
+const createWebhookSchema = z.object({
+  body: z.object({
+    name: z.string().min(1).max(120),
+    url: z.string().url(),
+    events: z.array(z.enum(WEBHOOK_EVENTS)).min(1)
+  })
+});
+
+settingsRouter.post("/webhooks", requireSuperAdmin, validate(createWebhookSchema), async (req, res) => {
+  const secret = crypto.randomBytes(32).toString("hex");
+  const created = await prisma.outboundWebhook.create({
+    data: { name: req.body.name, url: req.body.url, events: req.body.events, secret, createdById: req.user!.id }
+  });
+  await audit(req.user!.id, "settings.webhook_created", "OutboundWebhook", created.id, { name: created.name, url: created.url });
+  // Same one-time-reveal as API keys above — the signing secret is needed once, to configure
+  // HMAC verification on the receiving end (see docs/API.md's "Public API" section).
+  res.status(201).json({ id: created.id, name: created.name, url: created.url, events: created.events, secret });
+});
+
+const updateWebhookSchema = z.object({
+  body: z.object({ isActive: z.boolean().optional(), events: z.array(z.enum(WEBHOOK_EVENTS)).min(1).optional() }).strict()
+});
+
+settingsRouter.patch("/webhooks/:id", requireSuperAdmin, validate(updateWebhookSchema), async (req, res) => {
+  const existing = await prisma.outboundWebhook.findUnique({ where: { id: String(req.params.id) } });
+  if (!existing) throw new AppError(404, "Webhook not found");
+  const updated = await prisma.outboundWebhook.update({ where: { id: existing.id }, data: req.body });
+  await audit(req.user!.id, "settings.webhook_updated", "OutboundWebhook", existing.id, req.body);
+  res.json({ id: updated.id, name: updated.name, url: updated.url, events: updated.events, isActive: updated.isActive });
+});
+
+settingsRouter.delete("/webhooks/:id", requireSuperAdmin, async (req, res) => {
+  const existing = await prisma.outboundWebhook.findUnique({ where: { id: String(req.params.id) } });
+  if (!existing) throw new AppError(404, "Webhook not found");
+  await prisma.outboundWebhook.delete({ where: { id: existing.id } });
+  await audit(req.user!.id, "settings.webhook_deleted", "OutboundWebhook", existing.id, { name: existing.name });
+  res.status(204).send();
+});
+
+// ---------- Live git-provider (GitHub) connection ----------
+// See docs/ROADMAP.md's "Live git-provider App integration" item and
+// services/git-provider.service.ts's header for the OAuth design (each org brings its own
+// GitHub OAuth App, same as OrgSsoConfig does for Google/Microsoft). The actual OAuth callback
+// lives in controllers/git-connection.controller.ts (mounted pre-tenant-resolution, since
+// GitHub's redirect carries org identity in a signed `state` param, not the Host header) —
+// everything here is post-login, admin-only configuration and read-only GitHub API proxying.
+
+settingsRouter.get("/git", requireSuperAdmin, async (req, res) => {
+  const connection = await prisma.gitConnection.findUnique({ where: { id: "global" } });
+  const { orgSlug } = requireTenantContext();
+  res.json({
+    connected: Boolean(connection?.encryptedAccessToken),
+    clientIdSet: Boolean(connection?.clientId),
+    accountLogin: connection?.accountLogin ?? null,
+    connectedAt: connection?.connectedAt ?? null,
+    webhookSecretSet: Boolean(connection?.encryptedWebhookSecret),
+    // Not a secret itself — safe to always return, unlike the webhook secret below. Shown so
+    // the admin can copy-paste it into each repo's GitHub webhook config without guessing the
+    // URL shape (see controllers/git-webhook.controller.ts's own comment on why this is a
+    // per-repo webhook, not one org-wide URL GitHub calls automatically).
+    webhookUrl: `${req.protocol}://${req.get("host")}/api/git/webhook/${orgSlug}`
+  });
+});
+
+settingsRouter.post("/git/webhook-secret/rotate", requireSuperAdmin, async (req, res) => {
+  const secret = crypto.randomBytes(32).toString("hex");
+  await prisma.gitConnection.upsert({
+    where: { id: "global" },
+    update: { encryptedWebhookSecret: encryptSecret(secret) },
+    create: { id: "global", encryptedWebhookSecret: encryptSecret(secret) }
+  });
+  await audit(req.user!.id, "settings.git_webhook_secret_rotated", "GitConnection", "global");
+  // Same one-time-plaintext-reveal trade-off as /security-ingestion/rotate-token — this is a
+  // secret pasted into potentially many external GitHub repo webhook configs, not held only by
+  // this app, so rotating it means updating every repo's webhook secret on GitHub's side too.
+  res.json({ secret });
+});
+
+const gitAppCredentialsSchema = z.object({
+  body: z.object({ clientId: z.string().min(1).max(255), clientSecret: z.string().min(1).max(255) })
+});
+
+settingsRouter.patch("/git/app-credentials", requireSuperAdmin, validate(gitAppCredentialsSchema), async (req, res) => {
+  await prisma.gitConnection.upsert({
+    where: { id: "global" },
+    update: { clientId: req.body.clientId, encryptedClientSecret: encryptSecret(req.body.clientSecret) },
+    create: { id: "global", clientId: req.body.clientId, encryptedClientSecret: encryptSecret(req.body.clientSecret) }
+  });
+  await audit(req.user!.id, "settings.git_app_credentials_saved", "GitConnection", "global");
+  res.json({ clientIdSet: true });
+});
+
+settingsRouter.get("/git/connect", requireSuperAdmin, async (req, res) => {
+  const connection = await prisma.gitConnection.findUnique({ where: { id: "global" } });
+  if (!connection?.clientId) {
+    throw new AppError(422, "Save your GitHub OAuth App's client ID/secret first (above), then connect.");
+  }
+  const { orgId } = requireTenantContext();
+  const state = signGitConnectState({ orgId, userId: req.user!.id });
+  res.json({ url: buildGitHubAuthorizeUrl(connection.clientId, state) });
+});
+
+settingsRouter.delete("/git", requireSuperAdmin, async (req, res) => {
+  await prisma.gitConnection.updateMany({
+    where: { id: "global" },
+    data: { encryptedAccessToken: null, accountLogin: null, connectedById: null, connectedAt: null }
+  });
+  await audit(req.user!.id, "settings.git_disconnected", "GitConnection", "global");
+  res.status(204).send();
+});
+
+async function requireGitAccessToken(): Promise<string> {
+  const connection = await prisma.gitConnection.findUnique({ where: { id: "global" } });
+  if (!connection?.encryptedAccessToken) throw new AppError(422, "Connect GitHub from Workspace Settings -> Security & DevOps first.");
+  return decryptSecret(connection.encryptedAccessToken);
+}
+
+settingsRouter.get("/git/repos", requireAuth, async (_req, res) => {
+  const token = await requireGitAccessToken();
+  res.json(await listGitHubRepos(token));
+});
+
+settingsRouter.get("/git/branches", requireAuth, async (req, res) => {
+  const repo = typeof req.query.repo === "string" ? req.query.repo : "";
+  if (!repo) throw new AppError(422, "Query param 'repo' (owner/name) is required.");
+  const token = await requireGitAccessToken();
+  res.json(await listGitHubBranches(token, repo));
+});
+
+settingsRouter.get("/git/pulls", requireAuth, async (req, res) => {
+  const repo = typeof req.query.repo === "string" ? req.query.repo : "";
+  if (!repo) throw new AppError(422, "Query param 'repo' (owner/name) is required.");
+  const token = await requireGitAccessToken();
+  res.json(await listGitHubPullRequests(token, repo));
 });

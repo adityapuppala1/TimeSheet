@@ -190,7 +190,7 @@ function Btn({
       aria-label={label}
       title={label}
       className={cn(
-        "inline-flex h-7 w-7 items-center justify-center rounded-sm text-muted-foreground transition hover:bg-background hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50",
+        "inline-flex h-9 w-9 items-center justify-center rounded-sm text-muted-foreground transition hover:bg-background hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50",
         active && "bg-background text-primary shadow-sm"
       )}
     >

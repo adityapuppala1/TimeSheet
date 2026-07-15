@@ -12,6 +12,10 @@ import { processSlaSweep } from "../services/sla.service.js";
 import { runForEveryOrg } from "./run-for-every-org.js";
 
 let started = false;
+// Guards against a slow sweep still running when the next cron tick fires — without this,
+// two overlapping sweeps could both fetch the same not-yet-breached rows before either has
+// written slaBreachAt, double-creating Escalation rows and double-sending breach emails.
+let running = false;
 
 export function startEscalationWorker() {
   if (started) return;
@@ -25,10 +29,16 @@ export function startEscalationWorker() {
   }
 
   cron.schedule(env.SLA_CRON_SCHEDULE, () => {
+    if (running) return;
+    running = true;
     runForEveryOrg("sla", async () => {
       const result = await processSlaSweep();
       if (result.breaches > 0) console.info(`[sla] sweep: ${result.breaches} breach(es), ${result.escalations} escalation(s).`);
-    }).catch((error) => console.error("[sla] sweep failed:", (error as Error).message));
+    })
+      .catch((error) => console.error("[sla] sweep failed:", (error as Error).message))
+      .finally(() => {
+        running = false;
+      });
   });
 
   started = true;

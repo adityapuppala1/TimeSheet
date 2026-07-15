@@ -138,50 +138,51 @@ export function EmailTemplatesPage() {
 
       <TransportStatusBanner status={transport.data} loading={transport.isLoading} />
 
-      <Card>
-        <CardContent className="p-0">
-          {templates.isLoading &&
-            Array.from({ length: 5 }).map((_, i) => (
-              <div key={`s-${i}`} className="flex items-center gap-3 border-b border-border p-4 last:border-0">
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
+        {templates.isLoading &&
+          Array.from({ length: 6 }).map((_, i) => (
+            <Card key={`s-${i}`}>
+              <CardContent className="grid gap-2 pt-6">
                 <Skeleton className="h-8 w-8 rounded-md" />
-                <div className="flex-1 space-y-2">
-                  <Skeleton className="h-4 w-1/3" />
-                  <Skeleton className="h-3 w-2/3" />
-                </div>
-                <Skeleton className="h-6 w-16" />
-              </div>
-            ))}
-          {!templates.isLoading &&
-            (templates.data ?? []).map((row) => (
-              <button
-                key={row.key}
-                type="button"
-                onClick={() => setEditing(row)}
-                className="flex w-full items-center gap-4 border-b border-border p-4 text-left transition hover:bg-muted/40 last:border-0"
-              >
+                <Skeleton className="h-4 w-2/3" />
+                <Skeleton className="h-3 w-full" />
+              </CardContent>
+            </Card>
+          ))}
+        {!templates.isLoading &&
+          (templates.data ?? []).map((row) => (
+            <button
+              key={row.key}
+              type="button"
+              onClick={() => setEditing(row)}
+              className="grid gap-2.5 rounded-lg border border-border bg-card p-4 text-left shadow-sm transition hover:border-primary/40 hover:shadow-md"
+            >
+              <div className="flex items-start justify-between gap-2">
                 <div className="grid h-9 w-9 shrink-0 place-items-center rounded-md bg-primary/10 text-primary">
                   <Mail className="h-4 w-4" />
                 </div>
-                <div className="min-w-0 flex-1">
-                  <div className="flex flex-wrap items-center gap-2">
-                    <p className="font-semibold tracking-tight">{row.key}</p>
-                    {row.hasOverride ? (
-                      <Badge variant="info" className="gap-1"><PencilLine className="h-3 w-3" />Customized</Badge>
-                    ) : (
-                      <Badge variant="muted">Defaults</Badge>
-                    )}
-                    {!row.enabled && <Badge variant="warning">Disabled</Badge>}
-                  </div>
-                  <p className="mt-0.5 line-clamp-1 text-xs text-muted-foreground">{row.description}</p>
-                  <p className="mt-1 hidden text-xs text-muted-foreground sm:block">
-                    Variables: {row.variables.map((v) => `{{${v}}}`).join(" · ")}
-                  </p>
-                </div>
                 <ChevronRight className="h-4 w-4 shrink-0 text-muted-foreground" />
-              </button>
-            ))}
-        </CardContent>
-      </Card>
+              </div>
+              <div className="min-w-0">
+                <div className="flex flex-wrap items-center gap-1.5">
+                  <p className="truncate font-semibold tracking-tight">{row.key}</p>
+                  {!row.enabled && <Badge variant="warning">Disabled</Badge>}
+                </div>
+                <p className="mt-1 line-clamp-2 text-xs text-muted-foreground">{row.description}</p>
+              </div>
+              <div className="flex flex-wrap items-center gap-1.5">
+                {row.hasOverride ? (
+                  <Badge variant="info" className="gap-1"><PencilLine className="h-3 w-3" />Customized</Badge>
+                ) : (
+                  <Badge variant="muted">Defaults</Badge>
+                )}
+              </div>
+              <p className="truncate text-[11px] text-muted-foreground">
+                {row.variables.map((v) => `{{${v}}}`).join(" · ")}
+              </p>
+            </button>
+          ))}
+      </div>
 
       <EditorDialog template={editing} onClose={() => setEditing(null)} />
     </div>

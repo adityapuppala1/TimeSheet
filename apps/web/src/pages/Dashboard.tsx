@@ -8,6 +8,7 @@
  * WHO renders this: `App.tsx`'s `/app` (index) route.
  */
 import { useQuery } from "@tanstack/react-query";
+import type { ColumnDef } from "@tanstack/react-table";
 import { motion } from "framer-motion";
 import {
   AlertTriangle,
@@ -26,8 +27,10 @@ import { Alert, AlertDescription, AlertTitle } from "../components/ui/alert";
 import { Badge } from "../components/ui/badge";
 import { Button } from "../components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../components/ui/card";
+import { DataTable } from "../components/ui/data-table";
 import { Progress } from "../components/ui/progress";
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "../components/ui/table";
+import { StatCard, TrendBadge } from "../components/ui/stat-card";
+import { computeTrend, type Trend } from "../lib/trend";
 import { reportApi, ticketApi, timesheetApi, type TicketRow } from "../services/api";
 import { useAuthStore } from "../store/auth";
 
@@ -46,10 +49,32 @@ const statusVariant: Record<string, "success" | "warning" | "destructive" | "mut
   REJECTED: "destructive"
 };
 
+const recentActivityColumns: ColumnDef<any, any>[] = [
+  { id: "date", accessorFn: (row: any) => row.workDate, header: "Date", cell: ({ row }) => <span className="whitespace-nowrap font-medium">{String(row.original.workDate).slice(0, 10)}</span> },
+  { id: "project", accessorFn: (row: any) => row.project?.name, header: "Project" },
+  { accessorKey: "activityType", header: "Activity" },
+  {
+    id: "hours",
+    accessorFn: (row: any) => Number(row.totalHours),
+    header: () => <span className="block text-right">Hours</span>,
+    cell: ({ row }) => <span className="block text-right font-semibold">{Number(row.original.totalHours).toFixed(2)}</span>
+  },
+  {
+    accessorKey: "status",
+    header: "Status",
+    cell: (info) => <Badge variant={statusVariant[info.getValue() as string] ?? "muted"}>{info.getValue() as string}</Badge>
+  }
+];
+
 export function Dashboard() {
   const user = useAuthStore((s) => s.user);
   const isAdmin = user?.permissions.includes("reports:view");
-  const admin = useQuery({ queryKey: ["admin-summary"], queryFn: reportApi.admin, enabled: isAdmin });
+  const admin = useQuery({
+    queryKey: ["admin-summary"],
+    queryFn: reportApi.admin,
+    enabled: isAdmin,
+    refetchInterval: 30_000
+  });
   const timesheets = useQuery({ queryKey: ["timesheets"], queryFn: timesheetApi.list });
   const daily = useQuery({ queryKey: ["daily-status"], queryFn: reportApi.dailyStatus });
   const myTickets = useQuery({
@@ -101,12 +126,26 @@ export function Dashboard() {
     return rows.map((row: any) => ({ name: row.project, value: Number(row._sum?.totalHours ?? 0) }));
   }, [admin.data]);
 
-  const stats: Array<{ label: string; value: string | number; tone?: "success" | "warning" }> = isAdmin
+  const stats: Array<{ label: string; value: string | number; tone?: "success" | "warning"; trend?: Trend | null }> = isAdmin
     ? [
-        { label: "Users", value: admin.data?.users ?? 0 },
-        { label: "Projects", value: admin.data?.projects ?? 0 },
-        { label: "Approved hours", value: Number(admin.data?.approvedHours ?? 0), tone: "success" },
-        { label: "Pending approvals", value: admin.data?.pendingApprovals ?? 0, tone: "warning" }
+        { label: "Users", value: admin.data?.users ?? 0, trend: computeTrend(admin.data?.users ?? 0, admin.data?.usersYesterday ?? 0, true) },
+        {
+          label: "Projects",
+          value: admin.data?.projects ?? 0,
+          trend: computeTrend(admin.data?.projects ?? 0, admin.data?.projectsYesterday ?? 0, true)
+        },
+        {
+          label: "Approved hours",
+          value: Number(admin.data?.approvedHours ?? 0),
+          tone: "success",
+          trend: computeTrend(Number(admin.data?.approvedHours ?? 0), Number(admin.data?.approvedHoursYesterday ?? 0), true)
+        },
+        {
+          label: "Pending approvals",
+          value: admin.data?.pendingApprovals ?? 0,
+          tone: "warning",
+          trend: computeTrend(admin.data?.pendingApprovals ?? 0, admin.data?.pendingApprovalsYesterday ?? 0, false)
+        }
       ]
     : [
         { label: "Today", value: todayHours.toFixed(2) },
@@ -136,7 +175,7 @@ export function Dashboard() {
       {/* Admin / manager: workforce daily logging snapshot */}
       {isAdmin && <WorkforceSnapshot data={admin.data} loading={admin.isLoading} />}
 
-      <div className="grid gap-4 sm:grid-cols-2 md:grid-cols-4">
+      <div className="grid grid-cols-2 gap-2.5 sm:gap-3 md:grid-cols-4">
         {stats.map((stat, index) => (
           <motion.div
             key={stat.label}
@@ -144,14 +183,7 @@ export function Dashboard() {
             animate={{ opacity: 1, y: 0 }}
             transition={{ duration: 0.25, delay: index * 0.05 }}
           >
-            <Card>
-              <CardContent className="pt-6">
-                <p className="text-sm text-muted-foreground">{stat.label}</p>
-                <p className={`mt-2 text-3xl font-black tracking-tight ${stat.tone === "success" ? "text-success" : stat.tone === "warning" ? "text-warning" : ""}`}>
-                  {String(stat.value)}
-                </p>
-              </CardContent>
-            </Card>
+            <StatCard label={stat.label} value={String(stat.value)} tone={stat.tone} trend={stat.trend} trendLabel="vs yesterday" />
           </motion.div>
         ))}
       </div>
@@ -211,42 +243,21 @@ export function Dashboard() {
           <CardTitle className="text-base">Recent activity</CardTitle>
           <CardDescription>Latest entries across your timesheets.</CardDescription>
         </CardHeader>
-        <CardContent className="p-0">
-          <Table>
-            <TableHeader>
-              <TableRow>
-                <TableHead>Date</TableHead>
-                <TableHead>Project</TableHead>
-                <TableHead>Activity</TableHead>
-                <TableHead className="text-right">Hours</TableHead>
-                <TableHead>Status</TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {recent.map((row: any) => (
-                <TableRow key={row.id}>
-                  <TableCell className="whitespace-nowrap font-medium">{String(row.workDate).slice(0, 10)}</TableCell>
-                  <TableCell>{row.project?.name}</TableCell>
-                  <TableCell>{row.activityType}</TableCell>
-                  <TableCell className="text-right font-semibold">{Number(row.totalHours).toFixed(2)}</TableCell>
-                  <TableCell><Badge variant={statusVariant[row.status] ?? "muted"}>{row.status}</Badge></TableCell>
-                </TableRow>
-              ))}
-              {!recent.length && (
-                <TableRow>
-                  <TableCell colSpan={5} className="py-12 text-center">
-                    <div className="grid place-items-center gap-2 text-muted-foreground">
-                      <CalendarPlus2 className="h-6 w-6" />
-                      <p>No timesheets logged yet.</p>
-                      <Link to="/app/timesheet" className="text-sm font-semibold text-primary hover:underline">
-                        Log your first entry →
-                      </Link>
-                    </div>
-                  </TableCell>
-                </TableRow>
-              )}
-            </TableBody>
-          </Table>
+        <CardContent className="p-4">
+          <DataTable
+            columns={recentActivityColumns}
+            data={recent}
+            enableSearch={false}
+            pageSize={5}
+            emptyMessage="No timesheets logged yet."
+          />
+          {!recent.length && (
+            <div className="pb-4 text-center">
+              <Link to="/app/timesheet" className="text-sm font-semibold text-primary hover:underline">
+                Log your first entry →
+              </Link>
+            </div>
+          )}
         </CardContent>
       </Card>
     </div>
@@ -343,10 +354,18 @@ function WorkforceSnapshot({ data, loading }: { data?: any; loading: boolean }) 
   const escalations = Number(data.todayEscalationsSent ?? 0);
   const percent = active > 0 ? Math.round((logged / active) * 100) : 0;
 
+  const loggedYesterday = Number(data.loggedYesterday ?? 0);
+  const ytdAvgLoggedPerDay = Number(data.ytdAvgLoggedPerDay ?? 0);
+  const vsYesterday = computeTrend(logged, loggedYesterday, true);
+  const vsYtdAvg = computeTrend(logged, ytdAvgLoggedPerDay, true);
+  const notFilledTrend = computeTrend(notLogged, active - loggedYesterday, false);
+  const remindersTrend = computeTrend(reminders, Number(data.todayDailyRemindersSentYesterday ?? 0), false);
+  const escalationsTrend = computeTrend(escalations, Number(data.todayEscalationsSentYesterday ?? 0), false);
+
   return (
     <Card>
-      <CardHeader className="flex-row items-center justify-between space-y-0 pb-3">
-        <div>
+      <CardHeader className="flex flex-wrap items-center justify-between gap-3 space-y-0 pb-3">
+        <div className="min-w-0">
           <CardTitle className="flex items-center gap-2 text-base">
             <Users2 className="h-4 w-4 text-primary" />
             Today across the workforce
@@ -357,37 +376,27 @@ function WorkforceSnapshot({ data, loading }: { data?: any; loading: boolean }) 
       </CardHeader>
       <CardContent className="grid gap-4">
         <Progress value={percent} className={percent < 50 ? "[&>div]:bg-destructive" : percent < 80 ? "[&>div]:bg-warning" : ""} />
-        <div className="grid gap-3 sm:grid-cols-4">
-          <MiniStat label="Filled today" value={logged} tone="success" icon={<CheckCircle2 className="h-4 w-4" />} />
-          <MiniStat label="Not filled" value={notLogged} tone={notLogged > 0 ? "warning" : "default"} icon={<Clock className="h-4 w-4" />} />
-          <MiniStat label="Reminders sent" value={reminders} icon={<Send className="h-4 w-4" />} />
-          <MiniStat label="Escalations sent" value={escalations} tone={escalations > 0 ? "destructive" : "default"} icon={<AlertTriangle className="h-4 w-4" />} />
+        {(vsYesterday || vsYtdAvg) && (
+          <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-muted-foreground">
+            {vsYesterday && (
+              <span className="inline-flex items-center gap-1">
+                vs. yesterday ({loggedYesterday}) <TrendBadge trend={vsYesterday} />
+              </span>
+            )}
+            {vsYtdAvg && (
+              <span className="inline-flex items-center gap-1">
+                vs. YTD daily avg ({ytdAvgLoggedPerDay.toFixed(1)}) <TrendBadge trend={vsYtdAvg} />
+              </span>
+            )}
+          </div>
+        )}
+        <div className="grid grid-cols-2 gap-2.5 sm:grid-cols-4 sm:gap-3">
+          <StatCard label="Filled today" value={logged} tone="success" icon={<CheckCircle2 className="h-4 w-4" />} trend={vsYesterday} trendLabel="vs yesterday" />
+          <StatCard label="Not filled" value={notLogged} tone={notLogged > 0 ? "warning" : "default"} icon={<Clock className="h-4 w-4" />} trend={notFilledTrend} trendLabel="vs yesterday" />
+          <StatCard label="Reminders sent" value={reminders} icon={<Send className="h-4 w-4" />} trend={remindersTrend} trendLabel="vs yesterday" />
+          <StatCard label="Escalations sent" value={escalations} tone={escalations > 0 ? "destructive" : "default"} icon={<AlertTriangle className="h-4 w-4" />} trend={escalationsTrend} trendLabel="vs yesterday" />
         </div>
       </CardContent>
     </Card>
-  );
-}
-
-function MiniStat({
-  label,
-  value,
-  tone = "default",
-  icon
-}: {
-  label: string;
-  value: number;
-  tone?: "default" | "success" | "warning" | "destructive";
-  icon: React.ReactNode;
-}) {
-  const toneClass =
-    tone === "success" ? "text-success" : tone === "warning" ? "text-warning" : tone === "destructive" ? "text-destructive" : "";
-  return (
-    <div className="rounded-lg border border-border bg-card p-3">
-      <div className="flex items-center justify-between text-muted-foreground">
-        <p className="text-xs font-semibold uppercase tracking-wide">{label}</p>
-        <span className={`opacity-80 ${toneClass}`}>{icon}</span>
-      </div>
-      <p className={`mt-1.5 text-2xl font-black tracking-tight ${toneClass}`}>{value}</p>
-    </div>
   );
 }

@@ -6,52 +6,126 @@
  * WHY: centralizing here means every caller gets the same `EmailLog` audit trail, the same
  * graceful "SMTP not configured — log to console instead of crashing" fallback, and the same
  * BCC-super-admin behavior, without re-implementing any of it.
- * HOW: `getTransport()` builds the transporter once (lazy — so a misconfigured SMTP_HOST
- * doesn't fail at import time) and verifies it in the background; `classifyFromAddress` proactively
- * flags common deliverability foot-guns (reserved TLDs, MAIL_FROM/SMTP_USER domain mismatch)
- * since those cause silent drops that are otherwise very hard to diagnose.
+ * HOW: SMTP config is resolved from `GlobalMailSettings` (Workspace Settings → Mail server,
+ * admin-configurable, password encrypted at rest) with `apps/api/.env`'s `SMTP_*` vars as the
+ * fallback when no DB row is configured — the same "DB row, else env var" relationship
+ * `ai.service.ts#resolveApiKey` already has between `GlobalAISettings.apiKey` and
+ * `ANTHROPIC_API_KEY`, so an existing on-prem deployment that only ever set `.env` keeps working
+ * completely unconfigured. `getTransport()` builds+caches the transporter keyed on a hash of the
+ * resolved config so a settings change is picked up on the next send without a restart — see
+ * `invalidateMailTransportCache()`, called by `controllers/settings.controller.ts` after a save.
+ * `classifyFromAddress` proactively flags common deliverability foot-guns (reserved TLDs,
+ * MAIL_FROM/SMTP_USER domain mismatch) since those cause silent drops that are otherwise very
+ * hard to diagnose.
  * WHO calls this: `notify.service.ts` (the higher-level "should this even send" gate) and
  * `dispatchTransactional` — nothing else calls `sendMail` directly.
  */
 import nodemailer, { type Transporter } from "nodemailer";
 import { env } from "../config/env.js";
 import { prisma } from "../config/prisma.js";
+import { decryptSecret } from "../utils/encryption.js";
 
 export { templates } from "./mail-templates.js";
 
+interface ResolvedMailConfig {
+  host: string;
+  port: number;
+  secure: boolean;
+  user: string;
+  pass: string;
+  from: string;
+  /** Which layer actually supplied `host` — surfaced in getTransportStatus() so the admin UI
+   *  can say "using your saved Mail server settings" vs. "using apps/api/.env". */
+  source: "database" | "env";
+}
+
+/** DB row (if any), decrypted, else the env-var fallback — see this file's header comment. */
+async function resolveMailConfig(): Promise<ResolvedMailConfig> {
+  const settings = await prisma.globalMailSettings.findUnique({ where: { id: "global" } }).catch(() => null);
+  if (settings?.host) {
+    let pass = "";
+    if (settings.password) {
+      try {
+        pass = decryptSecret(settings.password);
+      } catch {
+        // Undecryptable (e.g. ENCRYPTION_KEY rotated without re-encrypting) — treat as
+        // "not set" rather than crash the whole transport; verification will surface the
+        // resulting auth failure clearly instead of a silent decrypt error.
+      }
+    }
+    return {
+      host: settings.host,
+      port: settings.port,
+      secure: settings.secure,
+      user: settings.user ?? "",
+      pass,
+      from: settings.fromAddress || env.MAIL_FROM,
+      source: "database"
+    };
+  }
+  return {
+    host: env.SMTP_HOST,
+    port: env.SMTP_PORT,
+    secure: env.SMTP_SECURE,
+    user: env.SMTP_USER,
+    pass: env.SMTP_PASS,
+    from: env.MAIL_FROM,
+    source: "env"
+  };
+}
+
 let transporter: Transporter | null = null;
-let transportReady = false;
+let cachedConfigKey: string | null = null;
 let transportVerified: boolean | null = null;
 let transportVerifyError: string | null = null;
+let lastResolvedConfig: ResolvedMailConfig | null = null;
 
-function getTransport(): Transporter | null {
-  if (transportReady) return transporter;
-  transportReady = true;
+function configKey(config: ResolvedMailConfig): string {
+  return JSON.stringify({ host: config.host, port: config.port, secure: config.secure, user: config.user, pass: config.pass, from: config.from });
+}
 
-  if (!env.SMTP_HOST) {
+/** Call after saving GlobalMailSettings so the next send picks up the new config immediately —
+ *  without this, the cached transporter (built from the old config) would keep being reused
+ *  until the API process restarts. */
+export function invalidateMailTransportCache(): void {
+  cachedConfigKey = null;
+}
+
+async function getTransport(): Promise<Transporter | null> {
+  const config = await resolveMailConfig();
+  lastResolvedConfig = config;
+  const key = configKey(config);
+
+  if (key === cachedConfigKey) return transporter;
+  cachedConfigKey = key;
+
+  if (!config.host) {
+    transporter = null;
     console.warn(
-      "[mail] SMTP_HOST is empty — emails will NOT be delivered. Set SMTP_HOST/PORT/USER/PASS in apps/api/.env and restart."
+      "[mail] No SMTP host configured — emails will NOT be delivered. Set it from Workspace Settings → Mail server, or SMTP_HOST/PORT/USER/PASS in apps/api/.env."
     );
     return null;
   }
 
   transporter = nodemailer.createTransport({
-    host: env.SMTP_HOST,
-    port: env.SMTP_PORT,
-    secure: env.SMTP_SECURE,
-    auth: env.SMTP_USER ? { user: env.SMTP_USER, pass: env.SMTP_PASS } : undefined
+    host: config.host,
+    port: config.port,
+    secure: config.secure,
+    auth: config.user ? { user: config.user, pass: config.pass } : undefined
   });
 
+  transportVerified = null;
+  transportVerifyError = null;
   transporter
     .verify()
     .then(() => {
       transportVerified = true;
-      console.info(`[mail] SMTP transport ready (${env.SMTP_HOST}:${env.SMTP_PORT}, secure=${env.SMTP_SECURE}).`);
+      console.info(`[mail] SMTP transport ready (${config.host}:${config.port}, secure=${config.secure}, source=${config.source}).`);
     })
     .catch((error) => {
       transportVerified = false;
       transportVerifyError = (error as Error).message;
-      console.warn(`[mail] SMTP verification failed (${env.SMTP_HOST}:${env.SMTP_PORT}): ${transportVerifyError}`);
+      console.warn(`[mail] SMTP verification failed (${config.host}:${config.port}): ${transportVerifyError}`);
     });
 
   return transporter;
@@ -79,7 +153,7 @@ function classifyFromAddress(from: string, smtpUser: string): {
   const { address, domain } = extractEmail(from);
 
   if (!domain) {
-    issues.push("MAIL_FROM has no parseable address. Use 'Display Name <user@domain.com>' format.");
+    issues.push("The From address has no parseable address. Use 'Display Name <user@domain.com>' format.");
     return { fromAddress: null, fromDomain: null, userDomain: null, issues };
   }
 
@@ -87,22 +161,22 @@ function classifyFromAddress(from: string, smtpUser: string): {
   for (const tld of NON_DELIVERABLE_TLDS) {
     if (domain.endsWith(tld)) {
       issues.push(
-        `MAIL_FROM domain "${domain}" uses ${tld} — a reserved TLD that real mail servers silently drop or send to spam. ` +
-        "Change MAIL_FROM to use a domain you own and have verified with your SMTP provider."
+        `From-address domain "${domain}" uses ${tld} — a reserved TLD that real mail servers silently drop or send to spam. ` +
+        "Use a domain you own and have verified with your SMTP provider."
       );
       break;
     }
   }
 
-  // Mismatch: SMTP_USER and MAIL_FROM on different domains
+  // Mismatch: SMTP user and From address on different domains
   let userDomain: string | null = null;
   if (smtpUser && smtpUser.includes("@")) {
     userDomain = smtpUser.split("@").pop()!.toLowerCase();
     if (userDomain !== domain) {
       issues.push(
-        `MAIL_FROM domain "${domain}" does not match SMTP_USER domain "${userDomain}". ` +
+        `From-address domain "${domain}" does not match the SMTP account's domain "${userDomain}". ` +
         "Many providers (Gmail, Office365, SendGrid, Mailgun, SES) reject or silently quarantine mismatched senders unless the From domain is explicitly verified. " +
-        `Either change MAIL_FROM to use @${userDomain}, or add ${domain} as a verified sender with your SMTP provider.`
+        `Either change the From address to use @${userDomain}, or add ${domain} as a verified sender with your SMTP provider.`
       );
     }
   }
@@ -110,16 +184,20 @@ function classifyFromAddress(from: string, smtpUser: string): {
   return { fromAddress: address, fromDomain: domain, userDomain, issues };
 }
 
-/** Public-facing snapshot of mail-transport state. Used by the admin UI banner. */
-export function getTransportStatus() {
-  const fromCheck = classifyFromAddress(env.MAIL_FROM, env.SMTP_USER);
+/** Public-facing snapshot of mail-transport state. Used by the admin UI banner. Triggers
+ *  transport (re)build/verification as a side effect, same as sendMail would. */
+export async function getTransportStatus() {
+  await getTransport(); // resolves config as a side effect (no-op rebuild if unchanged) and ensures verify has been attempted at least once
+  const config = lastResolvedConfig!;
+  const fromCheck = classifyFromAddress(config.from, config.user);
   return {
-    configured: Boolean(env.SMTP_HOST),
-    host: env.SMTP_HOST || null,
-    port: env.SMTP_HOST ? env.SMTP_PORT : null,
-    secure: env.SMTP_HOST ? env.SMTP_SECURE : null,
-    user: env.SMTP_USER || null,
-    from: env.MAIL_FROM,
+    configured: Boolean(config.host),
+    configSource: config.source,
+    host: config.host || null,
+    port: config.host ? config.port : null,
+    secure: config.host ? config.secure : null,
+    user: config.user || null,
+    from: config.from,
     fromAddress: fromCheck.fromAddress,
     fromDomain: fromCheck.fromDomain,
     userDomain: fromCheck.userDomain,
@@ -142,6 +220,14 @@ interface SendArgs {
    * workspace settings configured.
    */
   skipBcc?: boolean;
+  /**
+   * Real Cc recipients — visible to every recipient, unlike `bcc` above (which is always
+   * the hidden super-admin audit copy). Added for the ticket-closed-digest email (cc's the
+   * closing ticket's own tenant admins) — see services/security-report.service.ts. Every
+   * caller-supplied address here must already be filtered to the current tenant by the
+   * caller; this function does not re-check tenant scope, it only forwards the list.
+   */
+  cc?: string[];
 }
 
 export interface SendResult {
@@ -181,22 +267,31 @@ export async function sendMail(
 
   const bcc = args.skipBcc ? [] : await getBccList(args.to);
 
+  // `to` may itself be a comma-separated list of multiple primary recipients (the ticket-closed
+  // digest puts both the closer and their manager there) — split it so cc-dedup checks every
+  // primary address, not just the raw (possibly multi-address) string as one unit.
+  const toAddresses = new Set(args.to.split(",").map((address) => address.trim().toLowerCase()).filter(Boolean));
+  const cc = Array.from(new Set(args.cc?.map((address) => address.trim()).filter(Boolean) ?? [])).filter(
+    (address) => !toAddresses.has(address.toLowerCase())
+  );
+
   const log = await prisma.emailLog.create({
     data: {
       to: args.to,
       subject: args.subject,
       template: args.template,
-      metadata: { ...(args.metadata ?? {}), bcc } as any,
+      metadata: { ...(args.metadata ?? {}), bcc, cc } as any,
       status: "QUEUED"
     }
   });
 
-  const transport = getTransport();
+  const transport = await getTransport();
+  const from = lastResolvedConfig?.from ?? env.MAIL_FROM;
 
   if (!transport) {
     const errorMessage =
-      "SMTP_HOST is not configured. The email was NOT delivered. Add SMTP credentials to apps/api/.env and restart the API.";
-    console.warn(`[mail] (NOT DELIVERED) "${args.subject}" -> ${args.to} — ${errorMessage}`);
+      "No SMTP host configured. The email was NOT delivered. Configure one from Workspace Settings → Mail server, or set SMTP_HOST/PORT/USER/PASS in apps/api/.env and restart.";
+    console.warn(`[mail] (NOT DELIVERED) "${args.subject}" -> ${args.to}${cc.length ? ` (cc: ${cc.join(", ")})` : ""} — ${errorMessage}`);
     if (process.env.NODE_ENV !== "test") {
       console.info("---- email body (preview only, not sent) ----");
       console.info(args.html);
@@ -211,21 +306,22 @@ export async function sendMail(
 
   try {
     const info = await transport.sendMail({
-      from: env.MAIL_FROM,
+      from,
       to: args.to,
+      cc: cc.length ? cc : undefined,
       bcc: bcc.length ? bcc : undefined,
       subject: args.subject,
       html: args.html
     });
     const messageId = info.messageId;
     console.info(
-      `[mail] SENT "${args.subject}" -> ${args.to} (messageId=${messageId}${
+      `[mail] SENT "${args.subject}" -> ${args.to}${cc.length ? ` (cc: ${cc.join(", ")})` : ""} (messageId=${messageId}${
         info.response ? `, response=${info.response.toString().slice(0, 80)}` : ""
       })`
     );
     await prisma.emailLog.update({
       where: { id: log.id },
-      data: { status: "SENT", metadata: { ...(args.metadata ?? {}), bcc, messageId, response: info.response } as any }
+      data: { status: "SENT", metadata: { ...(args.metadata ?? {}), bcc, cc, messageId, response: info.response } as any }
     });
     return { ok: true, status: "SENT", emailLogId: log.id, messageId };
   } catch (error) {

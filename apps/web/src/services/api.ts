@@ -1,5 +1,7 @@
 import axios, { type AxiosRequestConfig } from "axios";
+import type { BulkUploadResult } from "../components/CsvBulkUploadDialog";
 import type {
+  ApiKeyScope,
   AuthUser,
   ChatIntegrationRow,
   ChatMatchType,
@@ -12,6 +14,12 @@ import type {
   GlobalSettings,
   GlobalTicketSettings,
   ModuleAssigneeRuleRow,
+  OutboundWebhookEvent,
+  SecurityFindingSeverity,
+  SecurityFindingStatus,
+  SecurityFindingType,
+  TestRunStatus,
+  TicketBranchPrStatus,
   TicketPriority,
   TicketStatus,
   TicketType
@@ -213,7 +221,9 @@ export const projectApi = {
   assign: async (projectId: string, userId: string) =>
     (await api.post(`/projects/${projectId}/assignments`, { userId })).data,
   unassign: async (projectId: string, userId: string) =>
-    api.delete(`/projects/${projectId}/assignments/${userId}`)
+    api.delete(`/projects/${projectId}/assignments/${userId}`),
+  bulkCreate: async (rows: Array<{ projectCode: string; projectName: string; moduleName?: string; submoduleName?: string }>) =>
+    (await api.post<{ results: BulkUploadResult[] }>("/projects/bulk", { rows })).data
 };
 
 export const timesheetApi = {
@@ -243,9 +253,12 @@ export interface TicketSummary {
   byPriority: Array<{ priority: TicketPriority; _count: number }>;
   byAssignee: Array<{ assigneeId: string; assignee: string; _count: number }>;
   openSlaBreaches: number;
+  openSlaBreachesYesterday: number;
   createdThisWeek: number;
   resolvedThisWeek: number;
+  resolvedLastWeek: number;
   avgResolutionHours: number;
+  avgResolutionHoursLastWeek: number;
 }
 
 export interface TicketInsights {
@@ -298,6 +311,7 @@ export interface UserRow {
   status: "ACTIVE" | "INACTIVE" | "PENDING_VERIFICATION";
   avatarUrl: string | null;
   bio: string | null;
+  designation: string | null;
   managerId: string | null;
   manager?: { id: string; name: string; email: string } | null;
   role: { name: string };
@@ -321,7 +335,10 @@ export const userApi = {
   resetPassword: async (id: string, password: string) =>
     (await api.post(`/users/${id}/reset-password`, { password })).data,
   resendWelcome: async (id: string) =>
-    (await api.post<{ sent: boolean; to: string; emailLogId: string | null }>(`/users/${id}/resend-welcome`)).data
+    (await api.post<{ sent: boolean; to: string; emailLogId: string | null }>(`/users/${id}/resend-welcome`)).data,
+  bulkCreate: async (
+    rows: Array<{ name: string; email: string; role: string; password?: string; managerEmail?: string; designation?: string }>
+  ) => (await api.post<{ results: BulkUploadResult[] }>("/users/bulk", { rows })).data
 };
 
 export interface TeamReport {
@@ -335,11 +352,34 @@ export interface TeamReport {
   stats: { total: number; pending: number; approved: number; rejected: number; slaBreached: number; approvedHours: number };
 }
 
+export interface OrgChartNode {
+  id: string;
+  name: string;
+  email: string;
+  avatarUrl: string | null;
+  designation: string | null;
+  role: string;
+  reports: OrgChartNode[];
+}
+
 export const teamApi = {
   reports: async () => (await api.get<TeamReport[]>("/team/reports")).data,
   escalations: async () => (await api.get("/team/escalations")).data,
   slaSummary: async () =>
-    (await api.get<{ submitted: number; breached: number; approvedThisWeek: number; openEscalations: number }>("/team/sla-summary")).data
+    (
+      await api.get<{
+        submitted: number;
+        submittedYesterday: number;
+        breached: number;
+        breachedYesterday: number;
+        approvedThisWeek: number;
+        approvedLastWeek: number;
+        openEscalations: number;
+        openEscalationsYesterday: number;
+      }>("/team/sla-summary")
+    ).data,
+  /** Privileged roles see the whole company tree; everyone else sees only their own subtree. */
+  orgChart: async () => (await api.get<OrgChartNode[]>("/team/org-chart")).data
 };
 
 export interface AIUsageSummary {
@@ -381,8 +421,149 @@ export const settingsApi = {
     payload: Partial<SsoProviderConfig> & { clientSecret?: string; idpCertificate?: string; ldapBindCredential?: string }
   ) => (await api.patch<SsoProviderConfig>(`/settings/sso/${provider}`, payload)).data,
   updateAuthMethod: async (payload: { passwordLoginEnabled?: boolean; requireSsoOnly?: boolean }) =>
-    (await api.patch<{ passwordLoginEnabled: boolean; requireSsoOnly: boolean }>("/settings/auth-method", payload)).data
+    (await api.patch<{ passwordLoginEnabled: boolean; requireSsoOnly: boolean }>("/settings/auth-method", payload)).data,
+  getSecurityIngestion: async () =>
+    (
+      await api.get<{
+        tokenSet: boolean;
+        orgSlug: string;
+        findingsWebhookPath: string;
+        testRunsWebhookPath: string;
+        fallbackProjectId: string | null;
+        autoReopenEnabled: boolean;
+      }>("/settings/security-ingestion")
+    ).data,
+  /** Returns the new token in plaintext — the ONE time it's ever visible; see
+   *  settings.controller.ts's POST /security-ingestion/rotate-token for why. */
+  rotateSecurityIngestionToken: async () => (await api.post<{ token: string }>("/settings/security-ingestion/rotate-token")).data,
+  disableSecurityIngestion: async () => api.delete("/settings/security-ingestion/token"),
+  /** Where a CRITICAL/HIGH finding with no explicit ticketKey auto-creates a ticket — null
+   *  disables auto-ticket-creation. See security-report.service.ts#maybeAutoCreateTicketForFinding. */
+  updateSecurityIngestionFallbackProject: async (fallbackProjectId: string | null) =>
+    (await api.patch<{ fallbackProjectId: string | null }>("/settings/security-ingestion/fallback-project", { fallbackProjectId })).data,
+  /** Deterministic auto-reopen when a FAILED test run references a RESOLVED/CLOSED ticket — see
+   *  security-report.service.ts#maybeReopenTicketOnRegression. */
+  updateSecurityIngestionAutoReopen: async (autoReopenEnabled: boolean) =>
+    (await api.patch<{ autoReopenEnabled: boolean }>("/settings/security-ingestion/auto-reopen", { autoReopenEnabled })).data,
+  /** VAPT findings never go through the CI ingestion webhook (see docs/SECURITY_DEVOPS_INTEGRATIONS.md
+   *  §4) — this uploads a structured JSON report directly, parsed into the same SecurityFinding
+   *  rows as the automated types. */
+  uploadVaptReport: async (payload: {
+    assessor: string;
+    findings: Array<{
+      title: string;
+      severity: "LOW" | "MEDIUM" | "HIGH" | "CRITICAL";
+      description?: string;
+      cwe?: string;
+      filePath?: string;
+      lineNumber?: number;
+      ticketKey?: string;
+    }>;
+  }) => (await api.post<{ created: number; ticketAttached: number }>("/settings/security-ingestion/vapt-report", payload)).data,
+  getMail: async () => (await api.get<GlobalMailSettingsRow>("/settings/mail")).data,
+  getMailTransportStatus: async () => (await api.get<MailTransportStatus>("/settings/mail/transport-status")).data,
+  /** `password` is write-only (masked convention, same as every other secret in this app) —
+   *  omit to leave the stored password untouched, pass "" to clear it back to the .env fallback. */
+  updateMail: async (payload: Partial<Omit<GlobalMailSettingsRow, "passwordSet">> & { password?: string }) =>
+    (await api.patch<GlobalMailSettingsRow>("/settings/mail", payload)).data,
+  testMailConnection: async (payload?: { host?: string; port?: number; secure?: boolean; user?: string; password?: string }) =>
+    (await api.post<{ ok: boolean; message: string }>("/settings/mail/test-connection", payload ?? {})).data,
+
+  // Public API keys & outbound webhooks — see docs/ROADMAP.md's "Public REST API + outbound
+  // webhooks" theme. Both "create" endpoints return the plaintext secret exactly once.
+  listApiKeys: async () => (await api.get<ApiKeyRow[]>("/settings/api-keys")).data,
+  createApiKey: async (payload: { name: string; scope: ApiKeyScope }) =>
+    (await api.post<ApiKeyCreated>("/settings/api-keys", payload)).data,
+  revokeApiKey: async (id: string) => api.delete(`/settings/api-keys/${id}`),
+
+  listWebhooks: async () => (await api.get<OutboundWebhookRow[]>("/settings/webhooks")).data,
+  createWebhook: async (payload: { name: string; url: string; events: OutboundWebhookEvent[] }) =>
+    (await api.post<OutboundWebhookCreated>("/settings/webhooks", payload)).data,
+  updateWebhook: async (id: string, payload: { isActive?: boolean; events?: OutboundWebhookEvent[] }) =>
+    (await api.patch<OutboundWebhookRow>(`/settings/webhooks/${id}`, payload)).data,
+  deleteWebhook: async (id: string) => api.delete(`/settings/webhooks/${id}`),
+
+  // Live git-provider (GitHub) connection — see docs/ROADMAP.md's "Live git-provider App
+  // integration" item. /git/connect returns a URL to navigate the browser to (a normal fetch,
+  // not a plain <a href>, since it needs the Authorization header to build the signed state).
+  getGitConnection: async () => (await api.get<GitConnectionStatus>("/settings/git")).data,
+  saveGitAppCredentials: async (payload: { clientId: string; clientSecret: string }) =>
+    (await api.patch<{ clientIdSet: boolean }>("/settings/git/app-credentials", payload)).data,
+  getGitConnectUrl: async () => (await api.get<{ url: string }>("/settings/git/connect")).data,
+  disconnectGit: async () => api.delete("/settings/git"),
+  rotateGitWebhookSecret: async () => (await api.post<{ secret: string }>("/settings/git/webhook-secret/rotate")).data,
+  listGitRepos: async () => (await api.get<GitHubRepoSummary[]>("/settings/git/repos")).data,
+  listGitBranches: async (repo: string) => (await api.get<string[]>("/settings/git/branches", { params: { repo } })).data,
+  listGitPulls: async (repo: string) => (await api.get<GitHubPullRequestSummary[]>("/settings/git/pulls", { params: { repo } })).data
 };
+
+export interface GitConnectionStatus {
+  connected: boolean;
+  clientIdSet: boolean;
+  accountLogin: string | null;
+  connectedAt: string | null;
+  webhookSecretSet: boolean;
+  webhookUrl: string;
+}
+export interface GitHubRepoSummary {
+  fullName: string;
+  defaultBranch: string;
+}
+export interface GitHubPullRequestSummary {
+  number: number;
+  title: string;
+  url: string;
+  status: "OPEN" | "MERGED" | "CLOSED";
+  branch: string;
+}
+
+export interface ApiKeyRow {
+  id: string;
+  name: string;
+  keyPrefix: string;
+  scope: ApiKeyScope;
+  lastUsedAt: string | null;
+  createdAt: string;
+  revokedAt: string | null;
+  createdBy: { id: string; name: string } | null;
+}
+export interface ApiKeyCreated {
+  id: string;
+  name: string;
+  scope: ApiKeyScope;
+  /** Shown exactly once — the server never returns it again after this response. */
+  key: string;
+}
+
+export interface OutboundWebhookRow {
+  id: string;
+  name: string;
+  url: string;
+  events: OutboundWebhookEvent[];
+  isActive: boolean;
+  lastDeliveryAt: string | null;
+  lastDeliveryStatus: string | null;
+  createdAt: string;
+  createdBy: { id: string; name: string } | null;
+}
+export interface OutboundWebhookCreated {
+  id: string;
+  name: string;
+  url: string;
+  events: OutboundWebhookEvent[];
+  /** Shown exactly once — used to verify the X-TimeSphere-Signature HMAC header. */
+  secret: string;
+}
+
+export interface GlobalMailSettingsRow {
+  host: string | null;
+  port: number;
+  secure: boolean;
+  user: string | null;
+  passwordSet: boolean;
+  fromAddress: string | null;
+  updatedAt: string | null;
+}
 
 export interface SsoProviderConfig {
   provider: "GOOGLE" | "MICROSOFT" | "SAML" | "LDAP";
@@ -435,6 +616,8 @@ export interface EmailLogRow {
 
 export interface MailTransportStatus {
   configured: boolean;
+  /** Which layer actually supplied the config — a saved GlobalMailSettings row, or apps/api/.env. */
+  configSource: "database" | "env";
   host: string | null;
   port: number | null;
   secure: boolean | null;
@@ -475,6 +658,14 @@ export interface TicketUserSummary {
   name: string;
   email: string;
   avatarUrl: string | null;
+}
+
+/** Only populated on the ticket LIST endpoint's `assignee` (not the detail endpoint) — see
+ *  ticket.controller.ts's GET / handler comment. Used to group the Kanban board into
+ *  swimlanes by reporting line (TicketKanban.tsx). */
+export interface TicketAssigneeSummary extends TicketUserSummary {
+  managerId?: string | null;
+  manager?: { id: string; name: string } | null;
 }
 
 export interface LabelRow {
@@ -518,9 +709,12 @@ export interface TicketRow {
   project: { id: string; code: string; name: string };
   module: { id: string; name: string } | null;
   reporter: TicketUserSummary;
-  assignee: TicketUserSummary | null;
+  assignee: TicketAssigneeSummary | null;
   labels: TicketLabelRow[];
   _count: { comments: number; attachments: number };
+  /** Latest ingested CI run only (see docs/ROADMAP.md's "Auto testing on branch/PR push"
+   *  theme) — empty when no CI has ever POSTed a test-run result for this ticket. */
+  testRuns: { status: TestRunStatus }[];
 }
 
 export interface TicketComment {
@@ -569,6 +763,57 @@ export interface TicketChecklistItemRow {
   position: number;
 }
 
+export interface SecurityFindingRow {
+  id: string;
+  type: SecurityFindingType;
+  tool: string;
+  severity: SecurityFindingSeverity;
+  status: SecurityFindingStatus;
+  title: string;
+  description: string | null;
+  cwe: string | null;
+  filePath: string | null;
+  lineNumber: number | null;
+  repository: string | null;
+  branch: string | null;
+  prUrl: string | null;
+  createdAt: string;
+}
+
+export interface TestRunRow {
+  id: string;
+  provider: string;
+  branch: string | null;
+  prUrl: string | null;
+  status: TestRunStatus;
+  passCount: number | null;
+  failCount: number | null;
+  durationMs: number | null;
+  logUrl: string | null;
+  createdAt: string;
+}
+
+/** Mirrors services/security-report.service.ts#TicketSecurityReport on the API side. */
+export interface TicketSecurityReport {
+  ticket: { id: string; key: string; title: string };
+  findings: SecurityFindingRow[];
+  findingsByType: Record<SecurityFindingType, SecurityFindingRow[]>;
+  openCountBySeverity: Record<SecurityFindingSeverity, number>;
+  latestTestRun: TestRunRow | null;
+  riskVerdict: string;
+  generatedAt: string;
+}
+
+export interface TicketBranchRow {
+  id: string;
+  repository: string;
+  branch: string;
+  prUrl: string | null;
+  prStatus: TicketBranchPrStatus;
+  addedBy: TicketUserSummary | null;
+  createdAt: string;
+}
+
 export interface TicketDetail extends TicketRow {
   description: string | null;
   watchers: TicketWatcherRow[];
@@ -577,6 +822,7 @@ export interface TicketDetail extends TicketRow {
   timesheets: TicketTimesheetRow[];
   links: TicketLinkRow[];
   checklistItems: TicketChecklistItemRow[];
+  branches: TicketBranchRow[];
 }
 
 export const ticketApi = {
@@ -637,6 +883,22 @@ export const ticketApi = {
     remove: async (id: string, itemId: string) => api.delete(`/tickets/${id}/checklist/${itemId}`),
     reorder: async (id: string, itemIds: string[]) =>
       (await api.patch<TicketChecklistItemRow[]>(`/tickets/${id}/checklist-reorder`, { itemIds })).data
+  },
+  securityReport: {
+    get: async (id: string) => (await api.get<TicketSecurityReport>(`/tickets/${id}/security-report`)).data,
+    // Access token lives in memory only (see store/auth.ts) — a plain <a href> to the PDF
+    // endpoint would hit it with no Authorization header, so this downloads via the same
+    // authenticated axios instance + blob pattern reportApi.download uses, not a direct link.
+    downloadPdf: async (id: string) => (await api.get(`/tickets/${id}/security-report.pdf`, { responseType: "blob" })).data
+  },
+  /** Manual repo/branch/PR linking — see prisma/schema.prisma's TicketBranch model comment for
+   *  why this isn't synced live from a git provider. */
+  branches: {
+    add: async (id: string, payload: { repository: string; branch: string; prUrl?: string; prStatus?: TicketBranchPrStatus }) =>
+      (await api.post<TicketBranchRow>(`/tickets/${id}/branches`, payload)).data,
+    update: async (id: string, branchId: string, payload: { prUrl?: string | null; prStatus?: TicketBranchPrStatus }) =>
+      (await api.patch<TicketBranchRow>(`/tickets/${id}/branches/${branchId}`, payload)).data,
+    remove: async (id: string, branchId: string) => api.delete(`/tickets/${id}/branches/${branchId}`)
   }
 };
 

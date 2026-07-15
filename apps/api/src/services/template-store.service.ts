@@ -33,7 +33,8 @@ export const TEMPLATE_VARIABLES: Record<string, string[]> = {
   "ticket.escalation": ["targetName", "ticketKey", "title", "assigneeName", "appUrl"],
   "ticket.received_via_email": ["senderName", "ticketKey", "title", "priority", "appUrl"],
   "ticket.needs_review": ["targetName", "ticketKey", "title", "senderEmail", "confidence", "appUrl"],
-  "digest.weekly": ["name", "weekLabel", "summary", "appUrl"]
+  "digest.weekly": ["name", "weekLabel", "summary", "appUrl"],
+  "ticket.closed_digest": ["ticketKey", "title", "closedBy", "riskVerdict", "findingsText", "testStatus", "appUrl"]
 };
 
 export const TEMPLATE_DESCRIPTIONS: Record<string, string> = {
@@ -56,7 +57,8 @@ export const TEMPLATE_DESCRIPTIONS: Record<string, string> = {
   "ticket.escalation": "Sent to the escalation target when a ticket's SLA breach is escalated.",
   "ticket.received_via_email": "Confirmation sent to an external sender whose email was auto-converted into a ticket.",
   "ticket.needs_review": "Sent to project admins/managers when an email-sourced ticket's AI confidence is below the threshold.",
-  "digest.weekly": "Monday-morning AI-authored recap of a person's ticket + timesheet activity for the past week."
+  "digest.weekly": "Monday-morning AI-authored recap of a person's ticket + timesheet activity for the past week.",
+  "ticket.closed_digest": "Security/test-status digest sent when a ticket with ingested findings closes — to the closer + their manager, cc this workspace's admins."
 };
 
 export const TEMPLATE_KEYS = Object.keys(TEMPLATE_VARIABLES);
@@ -166,6 +168,12 @@ export function sampleVariables(key: string): Record<string, string> {
       name: "Dev Patel", weekLabel: "Jun 29 - Jul 5",
       summary: "It was a solid week — you resolved 4 tickets and logged 32.5 hours, mostly on the Payments module. HICS-OPS-12 (checkout timeout) is still open and worth a look Monday morning.",
       appUrl: "https://timesphere.local"
+    },
+    "ticket.closed_digest": {
+      ticketKey: "HICS-OPS-140", title: "Security ingestion test ticket", closedBy: "Avery Stone",
+      riskVerdict: "Needs attention — 1 open CRITICAL finding, 1 open HIGH finding, latest test run FAILED.",
+      findingsText: "Static analysis (SAST):<br />  - [CRITICAL] SQL injection in login handler (semgrep)<br /><br />Secrets scanning (SSAT):<br />  - [HIGH] Hardcoded AWS key (gitleaks)",
+      testStatus: "FAILED", appUrl: "https://timesphere.local"
     }
   };
   return samples[key] ?? {};

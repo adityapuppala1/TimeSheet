@@ -88,6 +88,19 @@ export async function ticketProjectScope(req: any): Promise<{ unrestricted: bool
   return { unrestricted: false, projectIds: Array.from(new Set(assignments.map((a) => a.projectId))) };
 }
 
+/**
+ * Throws 403 unless `req.user` is allowed to see `projectId` under `ticketProjectScope`.
+ * Every route that reads or writes a ticket sub-resource (comments, attachments, watchers,
+ * labels, links, checklist) must call this with the parent ticket's projectId — the
+ * sub-resource routes only check a coarse tickets:view/write permission, which every
+ * non-viewer role holds tenant-wide, so without this a user could read/write sub-resources
+ * on a ticket in a project they can't otherwise see at all via GET /api/tickets.
+ */
+export async function assertTicketVisible(req: any, projectId: string): Promise<void> {
+  const scope = await ticketProjectScope(req);
+  if (!scope.unrestricted && !scope.projectIds.includes(projectId)) throw new AppError(403, "Forbidden");
+}
+
 export async function isProjectMember(userId: string, projectId: string): Promise<boolean> {
   const assignment = await prisma.userProjectAssignment.findFirst({ where: { userId, projectId } });
   return Boolean(assignment);

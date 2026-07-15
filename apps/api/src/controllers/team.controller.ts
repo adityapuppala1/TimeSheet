@@ -9,6 +9,13 @@
 import { Router } from "express";
 import { prisma } from "../config/prisma.js";
 import { requireAuth } from "../middleware/auth.js";
+import { CHAT_INTAKE_SYSTEM_EMAIL } from "../services/chat-intake.service.js";
+import { EMAIL_INTAKE_SYSTEM_EMAIL } from "../services/email-intake.service.js";
+import { SECURITY_INGESTION_SYSTEM_EMAIL } from "../services/security-report.service.js";
+
+/** Unusable-password reporter-of-record accounts (see each constant's own file) — never real
+ *  people, so they'd otherwise show up as noise root nodes in the org chart below. */
+const SYSTEM_ACCOUNT_EMAILS = new Set([CHAT_INTAKE_SYSTEM_EMAIL, EMAIL_INTAKE_SYSTEM_EMAIL, SECURITY_INGESTION_SYSTEM_EMAIL]);
 
 export const teamRouter = Router();
 teamRouter.use(requireAuth);
@@ -91,18 +98,119 @@ teamRouter.get("/sla-summary", async (req, res) => {
   ).map((u) => u.id);
 
   if (myReportIds.length === 0) {
-    return res.json({ submitted: 0, breached: 0, approvedThisWeek: 0, openEscalations: 0 });
+    return res.json({
+      submitted: 0,
+      submittedYesterday: 0,
+      breached: 0,
+      breachedYesterday: 0,
+      approvedThisWeek: 0,
+      approvedLastWeek: 0,
+      openEscalations: 0,
+      openEscalationsYesterday: 0
+    });
   }
 
   const weekAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
-  const [submitted, breached, approvedThisWeek, openEscalations] = await Promise.all([
-    prisma.timesheet.count({ where: { userId: { in: myReportIds }, status: "SUBMITTED", deletedAt: null } }),
-    prisma.timesheet.count({ where: { userId: { in: myReportIds }, slaBreachAt: { not: null }, deletedAt: null } }),
-    prisma.timesheet.count({
-      where: { userId: { in: myReportIds }, status: "APPROVED", reviewedAt: { gte: weekAgo }, deletedAt: null }
-    }),
-    prisma.escalation.count({ where: { escalatedToId: req.user!.id, resolvedAt: null } })
-  ]);
+  const twoWeeksAgo = new Date(Date.now() - 14 * 24 * 60 * 60 * 1000);
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
 
-  res.json({ submitted, breached, approvedThisWeek, openEscalations });
+  const [submitted, submittedYesterday, breached, breachedYesterday, approvedThisWeek, approvedLastWeek, openEscalations, openEscalationsYesterday] =
+    await Promise.all([
+      prisma.timesheet.count({ where: { userId: { in: myReportIds }, status: "SUBMITTED", deletedAt: null } }),
+      prisma.timesheet.count({
+        where: { userId: { in: myReportIds }, status: "SUBMITTED", deletedAt: null, createdAt: { lt: today } }
+      }),
+      prisma.timesheet.count({ where: { userId: { in: myReportIds }, slaBreachAt: { not: null }, deletedAt: null } }),
+      prisma.timesheet.count({
+        where: { userId: { in: myReportIds }, deletedAt: null, slaBreachAt: { not: null, lt: today } }
+      }),
+      prisma.timesheet.count({
+        where: { userId: { in: myReportIds }, status: "APPROVED", reviewedAt: { gte: weekAgo }, deletedAt: null }
+      }),
+      prisma.timesheet.count({
+        where: {
+          userId: { in: myReportIds },
+          status: "APPROVED",
+          reviewedAt: { gte: twoWeeksAgo, lt: weekAgo },
+          deletedAt: null
+        }
+      }),
+      prisma.escalation.count({ where: { escalatedToId: req.user!.id, resolvedAt: null } }),
+      prisma.escalation.count({ where: { escalatedToId: req.user!.id, resolvedAt: null, createdAt: { lt: today } } })
+    ]);
+
+  res.json({
+    submitted,
+    submittedYesterday,
+    breached,
+    breachedYesterday,
+    approvedThisWeek,
+    approvedLastWeek,
+    openEscalations,
+    openEscalationsYesterday
+  });
+});
+
+/**
+ * GET /api/team/org-chart
+ * Reporting-line tree built from the existing User.managerId self-relation — no new schema,
+ * just a new read over data that already exists (see docs/ROADMAP.md's "TL/Manager mapping —
+ * new surfaces on existing data"). Privileged roles (SUPER_ADMIN/ADMIN) see the whole company
+ * tree (every user with no manager, and their descendants); everyone else sees only their own
+ * subtree (themselves + direct + indirect reports) — the same privileged-vs-scoped split
+ * `ticketProjectScope` already uses elsewhere, just applied to the manager chain instead of
+ * project assignments.
+ */
+interface OrgChartUser {
+  id: string;
+  name: string;
+  email: string;
+  avatarUrl: string | null;
+  designation: string | null;
+  managerId: string | null;
+  role: { name: string };
+}
+
+teamRouter.get("/org-chart", async (req, res) => {
+  const allUsers: OrgChartUser[] = await prisma.user.findMany({
+    where: { deletedAt: null, status: "ACTIVE" },
+    select: {
+      id: true,
+      name: true,
+      email: true,
+      avatarUrl: true,
+      designation: true,
+      managerId: true,
+      role: { select: { name: true } }
+    },
+    orderBy: { name: "asc" }
+  });
+  const users = allUsers.filter((u) => !SYSTEM_ACCOUNT_EMAILS.has(u.email));
+
+  const byManager = new Map<string | null, OrgChartUser[]>();
+  for (const user of users) {
+    const key = user.managerId;
+    const bucket = byManager.get(key);
+    if (bucket) bucket.push(user);
+    else byManager.set(key, [user]);
+  }
+
+  function buildNode(user: OrgChartUser): unknown {
+    const reports = (byManager.get(user.id) ?? []).map(buildNode);
+    return {
+      id: user.id,
+      name: user.name,
+      email: user.email,
+      avatarUrl: user.avatarUrl,
+      designation: user.designation,
+      role: user.role.name,
+      reports
+    };
+  }
+
+  const privileged = ["SUPER_ADMIN", "ADMIN"].includes(req.user!.role);
+  const roots = privileged ? byManager.get(null) ?? [] : users.filter((u) => u.id === req.user!.id);
+
+  res.json(roots.map(buildNode));
 });

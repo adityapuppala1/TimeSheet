@@ -14,6 +14,10 @@ import { dispatchNotification } from "../services/notify.service.js";
 import { runForEveryOrg } from "./run-for-every-org.js";
 
 let started = false;
+// See workers/escalation.worker.ts's comment on the equivalent flag — same overlap hazard,
+// same fix (this one runs weekly so the risk window is smaller, but per-user AI generation
+// calls make a single run slow enough to be worth guarding anyway).
+let running = false;
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
@@ -132,10 +136,16 @@ export function startWeeklyDigestWorker() {
 
   // Monday 08:00 server-local time.
   cron.schedule("0 8 * * 1", () => {
+    if (running) return;
+    running = true;
     runForEveryOrg("weekly-digest", async () => {
       const result = await runWeeklyDigest();
       if (result.sent > 0) console.info(`[weekly-digest] sent ${result.sent} (${result.skipped} skipped — no activity).`);
-    }).catch((error) => console.error("[weekly-digest] run failed:", (error as Error).message));
+    })
+      .catch((error) => console.error("[weekly-digest] run failed:", (error as Error).message))
+      .finally(() => {
+        running = false;
+      });
   });
 
   console.info("[weekly-digest] worker scheduled (Monday 08:00).");

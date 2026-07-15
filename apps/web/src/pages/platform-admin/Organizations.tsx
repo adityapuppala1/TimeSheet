@@ -9,20 +9,28 @@
  * WHO calls the backing API: `controllers/platform-admin.controller.ts`, via `platformAdminOrgApi`.
  */
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import type { ColumnDef } from "@tanstack/react-table";
 import { useState } from "react";
 import { Plus } from "lucide-react";
 import { Badge } from "../../components/ui/badge";
 import { Button } from "../../components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../../components/ui/card";
+import { DataTable } from "../../components/ui/data-table";
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "../../components/ui/dialog";
 import { Input } from "../../components/ui/input";
 import { Label } from "../../components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../../components/ui/select";
 import { Skeleton } from "../../components/ui/skeleton";
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "../../components/ui/table";
 import { Textarea } from "../../components/ui/textarea";
 import { toast } from "../../components/ui/toaster";
 import { platformAdminOrgApi, type OrgListRow, type OrgStatus, type PlanTier } from "../../services/platform-admin-api";
+
+// Dark slate/amber chrome, distinct from the app's normal theme (this console is always dark
+// regardless of the tenant app's light/dark toggle) — DataTable's default classes use the
+// semantic border-border/text-muted-foreground tokens, so this page overrides them via
+// className/rowClassName to keep the same visual language the rest of this file already uses.
+const DARK_TABLE_CLASSNAME = "[&_thead_tr]:border-slate-800 [&_th]:text-slate-400 [&>div]:border-slate-800";
+const DARK_ROW_CLASSNAME = "border-slate-800 hover:bg-slate-800/40";
 
 const STATUS_VARIANT: Record<OrgStatus, "success" | "warning" | "destructive" | "muted"> = {
   ACTIVE: "success",
@@ -37,6 +45,40 @@ export function PlatformAdminOrganizations() {
   const [createOpen, setCreateOpen] = useState(false);
   const [editing, setEditing] = useState<OrgListRow | null>(null);
   const [provisioning, setProvisioning] = useState<OrgListRow | null>(null);
+
+  const columns: ColumnDef<OrgListRow, any>[] = [
+    { accessorKey: "name", header: "Name", cell: (info) => <span className="font-medium text-slate-100">{info.getValue()}</span> },
+    { accessorKey: "slug", header: "Slug", cell: (info) => <span className="font-mono text-xs text-slate-400">{info.getValue()}</span> },
+    { accessorKey: "status", header: "Status", cell: (info) => <Badge variant={STATUS_VARIANT[info.getValue() as OrgStatus]}>{info.getValue() as string}</Badge> },
+    { accessorKey: "planTier", header: "Plan", cell: (info) => <Badge variant="info">{info.getValue() as string}</Badge> },
+    {
+      id: "database",
+      accessorFn: (row) => (row.database ? `${row.database.host} / ${row.database.databaseName}` : "Not provisioned"),
+      header: "Database",
+      cell: ({ row }) => (
+        <span className="text-xs text-slate-400">
+          {row.original.database ? `${row.original.database.host} / ${row.original.database.databaseName}` : "Not provisioned"}
+        </span>
+      )
+    },
+    {
+      id: "actions",
+      header: () => <span className="block text-right">Actions</span>,
+      enableSorting: false,
+      cell: ({ row }) => (
+        <div className="flex justify-end gap-2">
+          {row.original.status === "PROVISIONING" && (
+            <Button size="sm" className="bg-amber-500 text-slate-950 hover:bg-amber-400" onClick={() => setProvisioning(row.original)}>
+              Provision
+            </Button>
+          )}
+          <Button size="sm" variant="outline" className="border-slate-700 text-slate-300 hover:bg-slate-800 hover:text-slate-100" onClick={() => setEditing(row.original)}>
+            Manage
+          </Button>
+        </div>
+      )
+    }
+  ];
 
   return (
     <div className="grid gap-6">
@@ -58,46 +100,15 @@ export function PlatformAdminOrganizations() {
         <CardContent>
           {orgs.isLoading && <Skeleton className="h-40 w-full bg-slate-800" />}
           {!orgs.isLoading && orgs.data && (
-            <Table>
-              <TableHeader>
-                <TableRow className="border-slate-800 hover:bg-transparent">
-                  <TableHead className="text-slate-400">Name</TableHead>
-                  <TableHead className="text-slate-400">Slug</TableHead>
-                  <TableHead className="text-slate-400">Status</TableHead>
-                  <TableHead className="text-slate-400">Plan</TableHead>
-                  <TableHead className="text-slate-400">Database</TableHead>
-                  <TableHead className="text-right text-slate-400">Actions</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {orgs.data.map((org) => (
-                  <TableRow key={org.id} className="border-slate-800 hover:bg-slate-800/40">
-                    <TableCell className="font-medium text-slate-100">{org.name}</TableCell>
-                    <TableCell className="font-mono text-xs text-slate-400">{org.slug}</TableCell>
-                    <TableCell><Badge variant={STATUS_VARIANT[org.status]}>{org.status}</Badge></TableCell>
-                    <TableCell><Badge variant="info">{org.planTier}</Badge></TableCell>
-                    <TableCell className="text-xs text-slate-400">{org.database ? `${org.database.host} / ${org.database.databaseName}` : "Not provisioned"}</TableCell>
-                    <TableCell className="text-right">
-                      <div className="flex justify-end gap-2">
-                        {org.status === "PROVISIONING" && (
-                          <Button size="sm" className="bg-amber-500 text-slate-950 hover:bg-amber-400" onClick={() => setProvisioning(org)}>
-                            Provision
-                          </Button>
-                        )}
-                        <Button size="sm" variant="outline" className="border-slate-700 text-slate-300 hover:bg-slate-800 hover:text-slate-100" onClick={() => setEditing(org)}>
-                          Manage
-                        </Button>
-                      </div>
-                    </TableCell>
-                  </TableRow>
-                ))}
-                {orgs.data.length === 0 && (
-                  <TableRow className="border-slate-800">
-                    <TableCell colSpan={6} className="text-center text-slate-500">No organizations yet.</TableCell>
-                  </TableRow>
-                )}
-              </TableBody>
-            </Table>
+            <DataTable
+              columns={columns}
+              data={orgs.data}
+              className={DARK_TABLE_CLASSNAME}
+              rowClassName={DARK_ROW_CLASSNAME}
+              searchPlaceholder="Search organizations..."
+              emptyMessage="No organizations yet."
+              pageSize={20}
+            />
           )}
         </CardContent>
       </Card>

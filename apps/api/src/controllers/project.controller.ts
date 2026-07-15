@@ -140,6 +140,82 @@ projectRouter.post("/modules/:id/submodules", requirePermission(permissions.PROJ
   res.status(201).json(created);
 });
 
+const bulkProjectRowSchema = z.object({
+  projectCode: z.string().min(1).max(64),
+  projectName: z.string().min(1).max(160),
+  moduleName: z.string().max(160).optional().or(z.literal("")),
+  submoduleName: z.string().max(160).optional().or(z.literal(""))
+});
+
+const bulkProjectsSchema = z.object({
+  body: z.object({ rows: z.array(bulkProjectRowSchema).min(1).max(1000) })
+});
+
+/**
+ * Bulk project/module/submodule import — one CSV row per (project, module, submodule)
+ * combination, same "repeat the parent columns on every child row" shape a spreadsheet-literate
+ * admin already expects from Excel-style hierarchical data entry (see the sample sheet's own
+ * instructions). Idempotent by design: `Project.code`/`(projectId,name)`/`(moduleId,name)` are
+ * all unique constraints, so upserting means re-uploading the same file (or a superset of it,
+ * e.g. "everything plus 3 new modules") never creates duplicates — safe to re-run.
+ */
+projectRouter.post("/bulk", requirePermission(permissions.PROJECTS_MANAGE), validate(bulkProjectsSchema), async (req, res) => {
+  const rows = req.body.rows as Array<{ projectCode: string; projectName: string; moduleName?: string; submoduleName?: string }>;
+  const results: Array<{ row: number; success: boolean; error?: string }> = [];
+  const projectIdByCode = new Map<string, string>();
+  const moduleIdByKey = new Map<string, string>();
+
+  for (let i = 0; i < rows.length; i++) {
+    const row = rows[i];
+    try {
+      let projectId = projectIdByCode.get(row.projectCode);
+      if (!projectId) {
+        const project = await prisma.project.upsert({
+          where: { code: row.projectCode },
+          update: {},
+          create: { code: row.projectCode, name: row.projectName }
+        });
+        projectId = project.id;
+        projectIdByCode.set(row.projectCode, projectId);
+      }
+
+      if (row.moduleName) {
+        const moduleKey = `${projectId}::${row.moduleName}`;
+        let moduleId = moduleIdByKey.get(moduleKey);
+        if (!moduleId) {
+          const projectModule = await prisma.projectModule.upsert({
+            where: { projectId_name: { projectId, name: row.moduleName } },
+            update: {},
+            create: { projectId, name: row.moduleName }
+          });
+          moduleId = projectModule.id;
+          moduleIdByKey.set(moduleKey, moduleId);
+        }
+
+        if (row.submoduleName) {
+          await prisma.projectSubmodule.upsert({
+            where: { moduleId_name: { moduleId, name: row.submoduleName } },
+            update: {},
+            create: { moduleId, name: row.submoduleName }
+          });
+        }
+      }
+
+      results.push({ row: i, success: true });
+    } catch (error) {
+      results.push({ row: i, success: false, error: (error as Error).message });
+    }
+  }
+
+  await audit(req.user!.id, "project.bulk_imported", "Project", undefined, {
+    total: rows.length,
+    succeeded: results.filter((r) => r.success).length,
+    failed: results.filter((r) => !r.success).length
+  });
+
+  res.status(201).json({ results });
+});
+
 /* ---------- Assignments ---------- */
 
 /**

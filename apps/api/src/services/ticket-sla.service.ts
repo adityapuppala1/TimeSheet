@@ -58,10 +58,34 @@ export async function processTicketSlaSweep(now: Date = new Date()) {
   let escalations = 0;
   for (const ticket of overdue) {
     const hoursOverdue = ticket.dueAt ? (now.getTime() - ticket.dueAt.getTime()) / (1000 * 60 * 60) : 0;
-
-    await prisma.ticket.update({ where: { id: ticket.id }, data: { slaBreachAt: now } });
-
     const owner = ticket.assignee ?? ticket.reporter;
+
+    // slaBreachAt gates whether this sweep ever looks at this ticket again (the WHERE clause
+    // above excludes anything with it set) — so it must only be written together with the
+    // TicketEscalation row it implies, inside one transaction, not beforehand. Previously it
+    // was set unconditionally before the escalation was even computed; a crash in between
+    // permanently skipped that ticket's escalation on every future sweep with no way to
+    // detect the miss. Notifications stay outside the transaction — best-effort external I/O.
+    const target = await findEscalationTarget(owner.id);
+    const willEscalate = target && target.id !== owner.id;
+
+    if (willEscalate) {
+      await prisma.$transaction([
+        prisma.ticketEscalation.create({
+          data: {
+            ticketId: ticket.id,
+            escalatedFromId: owner.id,
+            escalatedToId: target.id,
+            reason: `Resolution SLA breached by ${hoursOverdue.toFixed(1)}h.`
+          }
+        }),
+        prisma.ticket.update({ where: { id: ticket.id }, data: { slaBreachAt: now } })
+      ]);
+      escalations += 1;
+    } else {
+      await prisma.ticket.update({ where: { id: ticket.id }, data: { slaBreachAt: now } });
+    }
+
     if (ticket.assignee) {
       await dispatchNotification({
         userId: ticket.assignee.id,
@@ -92,18 +116,7 @@ export async function processTicketSlaSweep(now: Date = new Date()) {
       });
     }
 
-    const target = await findEscalationTarget(owner.id);
-    if (target && target.id !== owner.id) {
-      await prisma.ticketEscalation.create({
-        data: {
-          ticketId: ticket.id,
-          escalatedFromId: owner.id,
-          escalatedToId: target.id,
-          reason: `Resolution SLA breached by ${hoursOverdue.toFixed(1)}h.`
-        }
-      });
-      escalations += 1;
-
+    if (willEscalate && target) {
       await dispatchNotification({
         userId: target.id,
         category: "ticket.escalation",

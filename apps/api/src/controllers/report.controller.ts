@@ -75,36 +75,70 @@ reportRouter.get("/daily-status", async (req, res) => {
 reportRouter.get("/admin-summary", requirePermission(permissions.REPORTS_VIEW), async (_req, res) => {
   const weekAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
   const today = todayUtcDate();
+  const yesterday = new Date(today);
+  yesterday.setUTCDate(yesterday.getUTCDate() - 1);
+  const yearStart = new Date(Date.UTC(today.getUTCFullYear(), 0, 1));
   const sinceLocal = startOfLocalDay();
+
+  const sinceYesterdayLocal = new Date(sinceLocal);
+  sinceYesterdayLocal.setDate(sinceYesterdayLocal.getDate() - 1);
 
   const [
     users,
+    usersYesterday,
     activeWorkforce,
     projects,
+    projectsYesterday,
     approved,
+    approvedYesterday,
     pending,
+    pendingYesterday,
     slaBreached,
+    slaBreachedYesterday,
     openEscalations,
+    openEscalationsYesterday,
     approvedThisWeek,
+    approvedLastWeek,
     loggedTodayDistinct,
+    loggedYesterdayDistinct,
     todayDailyRemindersSent,
+    todayDailyRemindersSentYesterday,
     todayEscalationsSent,
+    todayEscalationsSentYesterday,
+    ytdEntries,
     byProject,
     byStatus,
     byActivity
   ] = await Promise.all([
     prisma.user.count({ where: { deletedAt: null } }),
+    prisma.user.count({ where: { deletedAt: null, createdAt: { lt: sinceLocal } } }),
     prisma.user.count({
       where: { deletedAt: null, status: "ACTIVE", role: { name: { in: ["EMPLOYEE", "TEAM_LEAD"] } } }
     }),
     prisma.project.count({ where: { deletedAt: null } }),
+    prisma.project.count({ where: { deletedAt: null, createdAt: { lt: sinceLocal } } }),
     prisma.timesheet.aggregate({ where: { status: "APPROVED", deletedAt: null }, _sum: { totalHours: true } }),
+    prisma.timesheet.aggregate({
+      where: { status: "APPROVED", deletedAt: null, reviewedAt: { lt: sinceLocal } },
+      _sum: { totalHours: true }
+    }),
     prisma.timesheet.count({ where: { status: "SUBMITTED", deletedAt: null } }),
+    prisma.timesheet.count({ where: { status: "SUBMITTED", deletedAt: null, createdAt: { lt: sinceLocal } } }),
     prisma.timesheet.count({ where: { slaBreachAt: { not: null }, deletedAt: null } }),
+    prisma.timesheet.count({ where: { deletedAt: null, slaBreachAt: { not: null, lt: sinceLocal } } }),
     prisma.escalation.count({ where: { resolvedAt: null } }),
+    prisma.escalation.count({ where: { resolvedAt: null, createdAt: { lt: sinceLocal } } }),
     prisma.timesheet.count({ where: { status: "APPROVED", reviewedAt: { gte: weekAgo }, deletedAt: null } }),
+    prisma.timesheet.count({
+      where: { status: "APPROVED", reviewedAt: { gte: new Date(weekAgo.getTime() - WEEK_MS), lt: weekAgo }, deletedAt: null }
+    }),
     prisma.timesheet.findMany({
       where: { workDate: today, deletedAt: null },
+      select: { userId: true },
+      distinct: ["userId"]
+    }),
+    prisma.timesheet.findMany({
+      where: { workDate: yesterday, deletedAt: null },
       select: { userId: true },
       distinct: ["userId"]
     }),
@@ -112,7 +146,23 @@ reportRouter.get("/admin-summary", requirePermission(permissions.REPORTS_VIEW), 
       where: { category: "reminder.daily", createdAt: { gte: sinceLocal } }
     }),
     prisma.notification.count({
+      where: { category: "reminder.daily", createdAt: { gte: sinceYesterdayLocal, lt: sinceLocal } }
+    }),
+    prisma.notification.count({
       where: { category: "reminder.escalation", createdAt: { gte: sinceLocal } }
+    }),
+    prisma.notification.count({
+      where: { category: "reminder.escalation", createdAt: { gte: sinceYesterdayLocal, lt: sinceLocal } }
+    }),
+    // Year-to-date average — the baseline "today vs typical day" is measured against, not just
+    // yesterday (a single prior day is noisy; e.g. a Monday after a weekend always looks like a
+    // spike vs Sunday). Counts distinct (user, workDate) pairs so a person logging 3 entries in
+    // one day still counts once toward "a day someone filled something," same definition as
+    // loggedToday/loggedYesterday above.
+    prisma.timesheet.findMany({
+      where: { workDate: { gte: yearStart, lt: today }, deletedAt: null },
+      select: { userId: true, workDate: true },
+      distinct: ["userId", "workDate"]
     }),
     prisma.timesheet.groupBy({ by: ["projectId"], where: { deletedAt: null }, _sum: { totalHours: true }, _count: true }),
     prisma.timesheet.groupBy({ by: ["status"], where: { deletedAt: null }, _sum: { totalHours: true }, _count: true }),
@@ -126,20 +176,37 @@ reportRouter.get("/admin-summary", requirePermission(permissions.REPORTS_VIEW), 
 
   const loggedToday = loggedTodayDistinct.length;
   const notLoggedToday = Math.max(0, activeWorkforce - loggedToday);
+  const loggedYesterday = loggedYesterdayDistinct.length;
+
+  // Days actually elapsed this year up to (not including) today, floored at 1 to avoid a
+  // divide-by-zero on Jan 1st when there's no prior YTD data yet.
+  const ytdDaysElapsed = Math.max(1, Math.round((today.getTime() - yearStart.getTime()) / 86_400_000));
+  const ytdAvgLoggedPerDay = ytdEntries.length / ytdDaysElapsed;
 
   res.json({
     users,
+    usersYesterday,
     projects,
+    projectsYesterday,
     approvedHours: approved._sum.totalHours ?? 0,
+    approvedHoursYesterday: approvedYesterday._sum.totalHours ?? 0,
     pendingApprovals: pending,
+    pendingApprovalsYesterday: pendingYesterday,
     slaBreached,
+    slaBreachedYesterday,
     openEscalations,
+    openEscalationsYesterday,
     approvedThisWeek,
+    approvedLastWeek,
     activeWorkforce,
     loggedToday,
     notLoggedToday,
+    loggedYesterday,
+    ytdAvgLoggedPerDay,
     todayDailyRemindersSent,
+    todayDailyRemindersSentYesterday,
     todayEscalationsSent,
+    todayEscalationsSentYesterday,
     byProject: byProject.map((row) => ({ ...row, project: projectNames.find((p) => p.id === row.projectId)?.name ?? "Unknown" })),
     byStatus,
     byActivity
@@ -152,22 +219,42 @@ reportRouter.get("/admin-summary", requirePermission(permissions.REPORTS_VIEW), 
  */
 reportRouter.get("/ticket-summary", requirePermission(permissions.REPORTS_VIEW), async (_req, res) => {
   const weekAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
+  const twoWeeksAgo = new Date(Date.now() - 14 * 24 * 60 * 60 * 1000);
+  const sinceLocal = startOfLocalDay();
 
-  const [byStatus, byPriority, byAssignee, openSlaBreaches, createdThisWeek, resolvedThisWeek, recentlyResolved] =
-    await Promise.all([
-      prisma.ticket.groupBy({ by: ["status"], where: { deletedAt: null }, _count: true }),
-      prisma.ticket.groupBy({ by: ["priority"], where: { deletedAt: null }, _count: true }),
-      prisma.ticket.groupBy({ by: ["assigneeId"], where: { deletedAt: null, assigneeId: { not: null } }, _count: true }),
-      prisma.ticket.count({ where: { deletedAt: null, slaBreachAt: { not: null }, status: { notIn: ["RESOLVED", "CLOSED"] } } }),
-      prisma.ticket.count({ where: { deletedAt: null, createdAt: { gte: weekAgo } } }),
-      prisma.ticket.count({ where: { deletedAt: null, resolvedAt: { gte: weekAgo } } }),
-      prisma.ticket.findMany({
-        where: { deletedAt: null, resolvedAt: { not: null } },
-        select: { createdAt: true, resolvedAt: true },
-        orderBy: { resolvedAt: "desc" },
-        take: 200
-      })
-    ]);
+  const [
+    byStatus,
+    byPriority,
+    byAssignee,
+    openSlaBreaches,
+    openSlaBreachesYesterday,
+    createdThisWeek,
+    resolvedThisWeek,
+    resolvedLastWeek,
+    recentlyResolved,
+    recentlyResolvedLastWeek
+  ] = await Promise.all([
+    prisma.ticket.groupBy({ by: ["status"], where: { deletedAt: null }, _count: true }),
+    prisma.ticket.groupBy({ by: ["priority"], where: { deletedAt: null }, _count: true }),
+    prisma.ticket.groupBy({ by: ["assigneeId"], where: { deletedAt: null, assigneeId: { not: null } }, _count: true }),
+    prisma.ticket.count({ where: { deletedAt: null, slaBreachAt: { not: null }, status: { notIn: ["RESOLVED", "CLOSED"] } } }),
+    prisma.ticket.count({
+      where: { deletedAt: null, status: { notIn: ["RESOLVED", "CLOSED"] }, slaBreachAt: { not: null, lt: sinceLocal } }
+    }),
+    prisma.ticket.count({ where: { deletedAt: null, createdAt: { gte: weekAgo } } }),
+    prisma.ticket.count({ where: { deletedAt: null, resolvedAt: { gte: weekAgo } } }),
+    prisma.ticket.count({ where: { deletedAt: null, resolvedAt: { gte: twoWeeksAgo, lt: weekAgo } } }),
+    prisma.ticket.findMany({
+      where: { deletedAt: null, resolvedAt: { not: null } },
+      select: { createdAt: true, resolvedAt: true },
+      orderBy: { resolvedAt: "desc" },
+      take: 200
+    }),
+    prisma.ticket.findMany({
+      where: { deletedAt: null, resolvedAt: { gte: twoWeeksAgo, lt: weekAgo } },
+      select: { createdAt: true, resolvedAt: true }
+    })
+  ]);
 
   // Prisma groupBy can't include relations, so resolve assignee names with a second query
   // — the same manual-join pattern /admin-summary uses for byProject.
@@ -182,6 +269,13 @@ reportRouter.get("/ticket-summary", requirePermission(permissions.REPORTS_VIEW),
           0
         ) / recentlyResolved.length
       : 0;
+  const avgResolutionHoursLastWeek =
+    recentlyResolvedLastWeek.length > 0
+      ? recentlyResolvedLastWeek.reduce(
+          (sum, t) => sum + (t.resolvedAt!.getTime() - t.createdAt.getTime()) / (1000 * 60 * 60),
+          0
+        ) / recentlyResolvedLastWeek.length
+      : 0;
 
   res.json({
     total: byStatus.reduce((sum, row) => sum + row._count, 0),
@@ -192,9 +286,12 @@ reportRouter.get("/ticket-summary", requirePermission(permissions.REPORTS_VIEW),
       assignee: assignees.find((a) => a.id === row.assigneeId)?.name ?? "Unknown"
     })),
     openSlaBreaches,
+    openSlaBreachesYesterday,
     createdThisWeek,
     resolvedThisWeek,
-    avgResolutionHours: Number(avgResolutionHours.toFixed(1))
+    resolvedLastWeek,
+    avgResolutionHours: Number(avgResolutionHours.toFixed(1)),
+    avgResolutionHoursLastWeek: Number(avgResolutionHoursLastWeek.toFixed(1))
   });
 });
 

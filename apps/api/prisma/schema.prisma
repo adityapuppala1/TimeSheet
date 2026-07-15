@@ -117,6 +117,12 @@ model User {
   bio             String?    @db.Text
   phoneNumber     String?    @db.VarChar(40)
   timezone        String?    @db.VarChar(80)
+  /// Free-text job title (e.g. "Senior Backend Engineer") — distinct from `role` (the RBAC
+  /// role: SUPER_ADMIN/ADMIN/MANAGER/TEAM_LEAD/EMPLOYEE, which governs permissions). A person's
+  /// designation has no bearing on what they can do in the app; it's display-only context shown
+  /// alongside their name (Users table, org chart) so "who does what" reads clearly even when
+  /// several people share the same RBAC role.
+  designation     String?    @db.VarChar(120)
   emailVerifiedAt DateTime?
   lastLoginAt     DateTime?
   /// Admin-only, opt-in. Only read when GlobalTicketSettings.enableCostAnalytics is on.
@@ -145,6 +151,10 @@ model User {
   ticketEscalationsTo       TicketEscalation[]   @relation("TicketEscalationTo")
   moduleAssigneeRules       ModuleAssigneeRule[]
   aiUsageLogs               AIUsageLog[]
+  ticketBranchesAdded       TicketBranch[]
+  apiKeysCreated            ApiKey[]
+  outboundWebhooksCreated   OutboundWebhook[]
+  gitConnectionsMade        GitConnection[]
 
   createdAt DateTime  @default(now())
   updatedAt DateTime  @updatedAt
@@ -210,6 +220,7 @@ model Project {
   emailIntakeFallbackFor    EmailIntakeSettings[]
   chatRoutingRules          ChatRoutingRule[]
   chatIntegrationDefaultFor ChatIntegration[]
+  ingestionFallbackFor      IngestionSettings[]
   createdAt                 DateTime                @default(now())
   updatedAt                 DateTime                @updatedAt
   deletedAt                 DateTime?
@@ -476,16 +487,19 @@ model Ticket {
   /// Admin thumbs-up/down on the AI Activity Log page — "up" | "down", null = no feedback given.
   aiFeedback     String?  @db.VarChar(10)
 
-  comments       TicketComment[]
-  attachments    TicketAttachment[]
-  watchers       TicketWatcher[]
-  escalations    TicketEscalation[]
-  timesheets     Timesheet[]
-  labels         TicketLabel[]
-  aiUsageLogs    AIUsageLog[]
-  linksFrom      TicketLink[]          @relation("TicketLinkSource")
-  linksTo        TicketLink[]          @relation("TicketLinkTarget")
-  checklistItems TicketChecklistItem[]
+  comments         TicketComment[]
+  attachments      TicketAttachment[]
+  watchers         TicketWatcher[]
+  escalations      TicketEscalation[]
+  timesheets       Timesheet[]
+  labels           TicketLabel[]
+  aiUsageLogs      AIUsageLog[]
+  linksFrom        TicketLink[]          @relation("TicketLinkSource")
+  linksTo          TicketLink[]          @relation("TicketLinkTarget")
+  checklistItems   TicketChecklistItem[]
+  securityFindings SecurityFinding[]
+  testRuns         TestRun[]
+  branches         TicketBranch[]
 
   createdAt DateTime  @default(now())
   updatedAt DateTime  @updatedAt
@@ -593,8 +607,13 @@ model GlobalTicketSettings {
   slaCriticalHours    Int      @default(4)
   enableCostAnalytics Boolean  @default(false)
   enableLeaderboard   Boolean  @default(false)
-  updatedAt           DateTime @updatedAt
-  updatedById         String?
+  /// See docs/ROADMAP.md's "Auto testing on branch/PR push" theme. When true, a ticket whose
+  /// latest ingested TestRun is FAILED cannot transition to RESOLVED (ticket.controller.ts's
+  /// status route enforces this). Default false — orgs that don't ingest test runs yet, or
+  /// that want this as a warning rather than a hard gate, are unaffected either way.
+  blockResolveOnFailingTests Boolean  @default(false)
+  updatedAt                  DateTime @updatedAt
+  updatedById                 String?
 }
 
 /// Singleton (id = "global"). Master + per-feature AI toggles. aiEnabled defaults false —
@@ -614,6 +633,16 @@ model GlobalAISettings {
   emailIngestionEnabled     Boolean    @default(false)
   chatIngestionEnabled      Boolean    @default(false)
   weeklyDigestEnabled       Boolean    @default(false)
+  /// Gates ai.service.ts#classifyCiFailure — an AI-authored root-cause comment posted on a
+  /// ticket when a CI test run fails with `failureText` attached (see
+  /// devops-webhook.controller.ts's /test-runs route). Separate from `autoReopenEnabled`
+  /// (IngestionSettings) which is deterministic and doesn't call AI at all.
+  ciFailureTriageEnabled    Boolean    @default(false)
+  /// Gates ai.service.ts#summarizePullRequest — an AI-authored summary comment posted on a
+  /// ticket when a linked PR opens (controllers/git-webhook.controller.ts's "opened" handler).
+  /// Needs the live GitHub connection (GitConnection) AND a repo webhook configured — see
+  /// docs/ROADMAP.md's "AI PR-review summaries" item.
+  aiPrReviewSummaryEnabled  Boolean    @default(false)
   model                     String     @default("claude-haiku-4-5") @db.VarChar(80)
   confidenceThreshold       Float      @default(0.6)
   monthlyBudgetUsd          Decimal?   @db.Decimal(10, 2)
@@ -681,6 +710,10 @@ model GlobalNotificationSettings {
   emailTicketSlaBreach     Boolean @default(true)
   emailTicketEscalation    Boolean @default(true)
   emailTicketNeedsReview   Boolean @default(true)
+  /// Sends the security/test-status digest (findings + latest TestRun) to whoever closed a
+  /// ticket, their manager, and this org's own admins — see services/security-report.service.ts.
+  /// Off by default: irrelevant noise for an org that hasn't connected any scan source yet.
+  emailTicketClosedDigest  Boolean @default(false)
 
   /// Hour (0–23, server local time) for the "log today's time" reminder.
   dailyReminderHour        Int     @default(16)
@@ -698,6 +731,27 @@ model GlobalNotificationSettings {
 /// Singleton (id = "global"). IMAP mailbox connection + polling cadence for the
 /// email-to-ticket ingestion pipeline. Master switch is GlobalAISettings.emailIngestionEnabled —
 /// this table only holds *how* to connect and where unmatched mail should land.
+/// Singleton (id = "global"), same upsert-by-constant-id pattern as GlobalAISettings/
+/// EmailIntakeSettings. Outbound SMTP transport configuration — admin-configurable from
+/// Workspace Settings → Mail server instead of only via apps/api/.env's SMTP_* vars. A null
+/// `host` means "not configured here" and `services/mail.service.ts` falls back to the env
+/// vars (so an existing on-prem deployment relying on .env keeps working unconfigured, same
+/// fallback relationship GlobalAISettings.apiKey has with ANTHROPIC_API_KEY).
+model GlobalMailSettings {
+  id     String  @id
+  host   String? @db.VarChar(255)
+  port   Int     @default(587)
+  secure Boolean @default(false)
+  user   String? @db.VarChar(255)
+  /// Never returned to the client — GET responses expose only `passwordSet: boolean`. Encrypted
+  /// the same way as EmailIntakeSettings.imapPassword (AES-256-GCM via utils/encryption.ts).
+  password    String? @db.VarChar(500)
+  fromAddress String? @db.VarChar(255)
+
+  updatedAt   DateTime @updatedAt
+  updatedById String?
+}
+
 model EmailIntakeSettings {
   id                  String    @id
   imapHost            String?   @db.VarChar(255)
@@ -815,6 +869,37 @@ model TicketLink {
   @@index([targetTicketId])
 }
 
+enum TicketBranchPrStatus {
+  NONE
+  OPEN
+  MERGED
+  CLOSED
+}
+
+/// Manual git repo/branch/PR linking — "which branch/PR is fixing this ticket", entered
+/// directly by whoever's working the ticket, not synced live from GitHub/GitLab/etc. See
+/// docs/ROADMAP.md's "Git repo & branch mapping" theme: a live git-provider App integration
+/// (OAuth, webhook-driven auto-sync) is a genuinely separate, larger scope of work than this —
+/// this is the data-model/manual-tracking slice of that theme, not the automated one. A
+/// SecurityFinding/TestRun row can reference the same repository/branch as free text (see those
+/// models) without a formal relation to this table, since ingestion is tool-agnostic and can't
+/// guarantee its branch name matches what a human typed here.
+model TicketBranch {
+  id         String                @id @default(uuid())
+  ticketId   String
+  ticket     Ticket                @relation(fields: [ticketId], references: [id], onDelete: Cascade)
+  repository String                @db.VarChar(255)
+  branch     String                @db.VarChar(255)
+  prUrl      String?               @db.VarChar(500)
+  prStatus   TicketBranchPrStatus  @default(NONE)
+  addedById  String?
+  addedBy    User?                 @relation(fields: [addedById], references: [id], onDelete: SetNull)
+  createdAt  DateTime              @default(now())
+  updatedAt  DateTime              @updatedAt
+
+  @@index([ticketId])
+}
+
 /// Simple ordered sub-task list on a ticket. `position` is a dense 0-based index,
 /// renumbered on every reorder so drag-and-drop / up-down moves stay consistent.
 model TicketChecklistItem {
@@ -828,4 +913,201 @@ model TicketChecklistItem {
   updatedAt DateTime @updatedAt
 
   @@index([ticketId, position])
+}
+
+/// Ingest-only, tool-agnostic (see docs/ROADMAP.md's "Security assessment suite" section) —
+/// TimeSphere never runs a scanner itself, it stores what external CI/security tools POST to
+/// controllers/devops-webhook.controller.ts. SAST/DAST/SSAT(secrets)/SSCT(supply-chain) findings
+/// all land here as one table (not one per type) because the per-ticket report and the
+/// ticket-close digest email both need to render every type side by side. VAPT is the one
+/// exception to "ingested via the CI webhook" — it's a periodic, human-led assessment, not a
+/// per-push automated scan, so it arrives via a structured-JSON upload in Workspace Settings
+/// instead (see settings.controller.ts's POST /security-ingestion/vapt-report) — but lands in
+/// this same table so the per-ticket report/digest render it identically to the other 4 types.
+enum SecurityFindingType {
+  SAST
+  DAST
+  SSAT
+  SSCT
+  VAPT
+}
+
+enum SecurityFindingSeverity {
+  LOW
+  MEDIUM
+  HIGH
+  CRITICAL
+}
+
+enum SecurityFindingStatus {
+  OPEN
+  ACKNOWLEDGED
+  FIXED
+  ACCEPTED_RISK
+}
+
+model SecurityFinding {
+  id       String  @id @default(uuid())
+  ticketId String?
+  ticket   Ticket? @relation(fields: [ticketId], references: [id], onDelete: SetNull)
+
+  type        SecurityFindingType
+  /// Free text, e.g. "semgrep", "gitleaks", "syft" — deliberately not an enum since the whole
+  /// point of ingest-only is supporting whatever scanner an org already runs.
+  tool        String                  @db.VarChar(80)
+  severity    SecurityFindingSeverity
+  status      SecurityFindingStatus   @default(OPEN)
+  title       String                  @db.VarChar(255)
+  description String?                 @db.Text
+  cwe         String?                 @db.VarChar(40)
+  filePath    String?                 @db.VarChar(500)
+  lineNumber  Int?
+
+  /// Free text — no live git-provider integration yet (see roadmap's "Git repo & branch
+  /// mapping" theme, a separate later phase), so a webhook payload just carries these as
+  /// strings rather than resolving them against a Repository/PullRequest table.
+  repository String? @db.VarChar(255)
+  branch     String? @db.VarChar(255)
+  prUrl      String? @db.VarChar(500)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([ticketId])
+  @@index([type, severity, status])
+}
+
+enum TestRunStatus {
+  PASSED
+  FAILED
+  RUNNING
+}
+
+/// CI test-run results, same ingest-only model as SecurityFinding — see that model's header
+/// comment. A ticket's latest TestRun (by createdAt) is what ticket.controller.ts's status
+/// route consults before allowing a RESOLVED transition (see docs/ROADMAP.md theme #2).
+model TestRun {
+  id       String  @id @default(uuid())
+  ticketId String?
+  ticket   Ticket? @relation(fields: [ticketId], references: [id], onDelete: SetNull)
+
+  /// Free text, e.g. "github-actions", "gitlab-ci" — same "any tool can POST here" reasoning
+  /// as SecurityFinding.tool.
+  provider   String        @db.VarChar(80)
+  branch     String?       @db.VarChar(255)
+  prUrl      String?       @db.VarChar(500)
+  status     TestRunStatus
+  passCount  Int?
+  failCount  Int?
+  durationMs Int?
+  logUrl     String?       @db.VarChar(500)
+
+  createdAt DateTime @default(now())
+
+  @@index([ticketId, createdAt])
+}
+
+/// Singleton (id = "global"), same upsert-by-constant-id pattern as GlobalAISettings/
+/// EmailIntakeSettings. Holds the bearer token controllers/devops-webhook.controller.ts checks
+/// before accepting a POST to /api/devops/:orgSlug/* — null encryptedToken means ingestion has
+/// never been enabled for this org, so the webhook 404s rather than accepting unauthenticated
+/// writes. Encrypted the same way as EmailIntakeSettings.imapPassword (AES-256-GCM via
+/// utils/encryption.ts) — see that model's controller for the encrypt-on-save/mask-in-response/
+/// decrypt-on-use pattern this copies.
+model IngestionSettings {
+  id             String  @id
+  encryptedToken String?
+  /// Where a CRITICAL/HIGH finding with no explicit ticketKey auto-creates a ticket (see
+  /// devops-webhook.controller.ts). Null = auto-ticket-creation is off; the finding is still
+  /// stored, just not turned into a ticket.
+  fallbackProjectId String?
+  fallbackProject   Project? @relation(fields: [fallbackProjectId], references: [id], onDelete: SetNull)
+  /// When a FAILED TestRun references (via ticketKey) a RESOLVED/CLOSED ticket, automatically
+  /// transition it back to REOPENED — see devops-webhook.controller.ts's /test-runs route.
+  /// Deterministic (matches on the CI-supplied ticketKey directly), not an AI decision — unlike
+  /// GlobalAISettings.ciFailureTriageEnabled, this needs no AI budget/provider configured.
+  /// Off by default: silently reopening a ticket is exactly the kind of automated state change
+  /// that should be an explicit admin opt-in, not a surprise.
+  autoReopenEnabled Boolean @default(false)
+
+  updatedAt DateTime @updatedAt
+}
+
+/// Live git-provider OAuth connection — see docs/ROADMAP.md's "Live git-provider App
+/// integration" item (the successor to the manual TicketBranch linking above). Singleton
+/// (id = "global"), same upsert-by-constant-id pattern as IngestionSettings/GlobalAISettings —
+/// one connected GitHub account per org for this phase, not per-project. `clientId`/
+/// `encryptedClientSecret` are the org admin's OWN GitHub OAuth App credentials (same
+/// bring-your-own-app-registration model OrgSsoConfig uses for Google/Microsoft SSO) — this
+/// deployment never ships a shared GitHub App, so no GitHub org's data ever transits a
+/// TimeSphere-operated OAuth client. `encryptedAccessToken` is the resulting user-to-server
+/// token once the admin completes the OAuth handshake (services/git-provider.service.ts).
+model GitConnection {
+  id                     String    @id
+  provider               String    @default("GITHUB") @db.VarChar(20)
+  clientId               String?   @db.VarChar(255)
+  encryptedClientSecret  String?   @db.VarChar(1000)
+  encryptedAccessToken   String?   @db.VarChar(1000)
+  /// Shared secret this org's admin pastes into EACH repo's GitHub webhook config (Settings ->
+  /// repo -> Webhooks -> Secret) — GitHub Apps get one org-wide webhook, but a plain OAuth App
+  /// only supports per-repo webhooks, so this one secret is reused across every repo the admin
+  /// wires up. Same "shown once, rotating invalidates every existing config using it" trade-off
+  /// as IngestionSettings.encryptedToken (see controllers/settings.controller.ts's
+  /// /git/webhook-secret/rotate route) — there is no way around that for a secret configured
+  /// into N external systems rather than held by this app alone.
+  encryptedWebhookSecret String?   @db.VarChar(1000)
+  /// The connected GitHub login (user or org) — display-only, refreshed on connect.
+  accountLogin           String?   @db.VarChar(255)
+  connectedById          String?
+  connectedBy            User?     @relation(fields: [connectedById], references: [id], onDelete: SetNull)
+  connectedAt            DateTime?
+  updatedAt              DateTime  @updatedAt
+}
+
+/// Public REST API key — see docs/ROADMAP.md's "Public REST API + outbound webhooks" theme
+/// and docs/API.md's "Public API" section. Unlike IngestionSettings' one-token-per-org model,
+/// an org can hold several named keys (one per external integration, independently revocable).
+/// Only `keyHash` (SHA-256) is stored — same "never store the secret itself" posture as
+/// Session.refreshHash and PasswordResetToken.tokenHash. `keyPrefix` (the first 8 chars of the
+/// plaintext key) is stored in the clear purely so the UI can show "tsk_a1b2c3d4…" for the admin
+/// to recognize which key is which without ever re-displaying the full value.
+model ApiKey {
+  id        String    @id @default(uuid())
+  name      String    @db.VarChar(120)
+  keyHash   String    @unique @db.VarChar(64)
+  keyPrefix String    @db.VarChar(12)
+  /// READ: GET endpoints only. WRITE: also allows POST /public/v1/tickets. No finer-grained
+  /// scoping yet — see docs/ROADMAP.md for why a fuller scopes list is future work, not this
+  /// phase.
+  scope     String    @default("READ") @db.VarChar(10)
+  lastUsedAt DateTime?
+  createdById String?
+  createdBy   User?    @relation(fields: [createdById], references: [id], onDelete: SetNull)
+  createdAt   DateTime @default(now())
+  revokedAt   DateTime?
+
+  @@index([keyHash])
+}
+
+/// Outbound event notifications for external systems (Zapier, Make, a customer's own
+/// integration) — the egress half of the "Public REST API + outbound webhooks" theme, the
+/// ingress half being ApiKey above. Every delivery is HMAC-SHA256 signed with `secret` (see
+/// services/webhook-dispatch.service.ts) so a receiver can verify a payload actually came from
+/// this deployment, the same trust model GitHub/Stripe webhooks use.
+model OutboundWebhook {
+  id       String   @id @default(uuid())
+  name     String   @db.VarChar(120)
+  url      String   @db.VarChar(500)
+  secret   String   @db.VarChar(64)
+  /// e.g. ["ticket.created","ticket.status_changed","ticket.closed","timesheet.submitted",
+  /// "timesheet.approved"] — see webhook-dispatch.service.ts's WEBHOOK_EVENTS for the full list.
+  /// Stored as a JSON array rather than a join table since the set is small and never queried
+  /// by event across webhooks (each dispatch loop scans this org's own handful of webhooks).
+  events   Json
+  isActive Boolean  @default(true)
+  lastDeliveryAt     DateTime?
+  lastDeliveryStatus String?   @db.VarChar(20)
+  createdById String?
+  createdBy   User?    @relation(fields: [createdById], references: [id], onDelete: SetNull)
+  createdAt   DateTime @default(now())
 }

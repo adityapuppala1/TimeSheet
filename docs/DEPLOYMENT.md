@@ -326,6 +326,40 @@ helm template my-release deploy/helm/timesphere --set mysql.enabled=false --set 
 Both commands need no cluster access at all — useful for CI or a quick sanity check before an
 actual `helm install`/`helm upgrade`.
 
+## Cloud provider notes (AWS / GCP / on-prem)
+
+Nothing in this codebase is cloud-specific — both the Docker Compose shape and the Helm chart
+above are the actual deployment artifacts; "AWS" or "GCP" just means *where* those run and which
+managed services back MySQL/ingress/secrets. There is no provider-specific code path to maintain.
+
+| Concern | On-prem / bare metal | AWS | Google Cloud |
+|---|---|---|---|
+| Compute | `docker compose up` (Shape 1) directly on a VM, or your own Kubernetes | EKS + this Helm chart, or ECS Fargate with the same two container images | GKE + this Helm chart, or Cloud Run (one service per image; see caveat below) |
+| Database | MySQL/MariaDB you already run (XAMPP for dev, a real MySQL server for prod) | RDS for MySQL / Aurora MySQL — set `mysql.enabled: false` in the chart, point `DATABASE_URL`/`CONTROL_DATABASE_URL` at the RDS endpoint | Cloud SQL for MySQL — same `mysql.enabled: false` pattern, point at the Cloud SQL connection string (via the Cloud SQL Auth Proxy sidecar, or a private IP) |
+| Container registry | N/A (build locally) or a self-hosted registry | ECR — change `cd.yml`'s `env.REGISTRY` and login step to `aws-actions/amazon-ecr-login` | Artifact Registry — change `cd.yml`'s `env.REGISTRY` and login step to `google-github-actions/auth` + `docker login` against `*-docker.pkg.dev` |
+| Secrets | `.env` file (Compose) / `secrets.example.yaml` → `kubectl apply` (K8s) | AWS Secrets Manager or SSM Parameter Store, synced into the cluster via External Secrets Operator, or injected as ECS task-definition secrets | Google Secret Manager, synced the same way via External Secrets Operator, or mounted directly in Cloud Run |
+| Ingress/TLS | your own reverse proxy (nginx/Caddy) in front of Compose, or an ingress controller in K8s | ALB Ingress Controller (or the chart's own `ingress.*` values against any ingress controller you run on EKS) + ACM for TLS | GKE Ingress (or the same chart `ingress.*` values) + Google-managed certificates |
+| Autoscaling | manual (`docker compose up --scale api=N`) | the chart's HPA (works identically on EKS — it's just Kubernetes) | same — HPA is portable, not GCP-specific |
+| CI/CD | `.github/workflows/ci.yml` unchanged | same, `cd.yml` pushes to ECR instead of GHCR | same, `cd.yml` pushes to Artifact Registry instead of GHCR |
+
+**Cloud Run caveat**: Cloud Run (and Fargate, similarly) works for the stateless `web` and `api`
+images, but this app runs its own migration step (`prisma migrate deploy`) and one-time seed as
+separate commands, not baked into request-serving startup — on Cloud Run/Fargate, run those as a
+one-off Job/task (Cloud Run Jobs, or an ECS `RunTask` with the same image and `npm run` command)
+before pointing traffic at a new revision, the same role the Helm chart's `pre-install` hook Job
+plays on Kubernetes.
+
+**Worker/background processing**: there is currently no separate worker process — scheduled jobs
+(daily reminder emails, deadline reminders, SLA escalation sweeps, inbound-email polling,
+Telegram polling, the AI weekly digest) run as in-process `node-cron` schedules inside the `api`
+container/pod itself (see `apps/api/src/workers/*.worker.ts`). This means **exactly one replica
+of `api` should run the cron
+schedules** in a horizontally-scaled deployment, or jobs fire once per replica — set
+`api.replicaCount: 1` (Compose: don't `--scale api=N`) if you scale beyond one instance, or gate
+the cron registration behind a leader-election/singleton lock if you need both HA and >1 replica
+(not implemented today — see [docs/ROADMAP.md](ROADMAP.md) for the relevant epic if you need this
+split into a dedicated worker process/pod).
+
 ## Environment variable reference
 
 See `.env.example` for the full list with inline comments. The multi-tenancy-specific ones,

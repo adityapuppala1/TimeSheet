@@ -69,6 +69,9 @@ import { toast } from "../components/ui/toaster";
 import { apiUrl, emailIntakeApi, labelApi, projectApi, settingsApi, ticketTypeApi, userApi, type SsoProviderConfig } from "../services/api";
 import { useAuthStore } from "../store/auth";
 import { ChatIntegrationsSettingsCard } from "./settings/ChatIntegrationsSettingsCard";
+import { MailServerSettingsCard } from "./settings/MailServerSettingsCard";
+import { PublicApiSettingsCard } from "./settings/PublicApiSettingsCard";
+import { SecurityDevOpsSettingsCard } from "./settings/SecurityDevOpsSettingsCard";
 
 // Matches the exact chart styling convention used in Insights.tsx (this repo's `dataviz`
 // skill): CSS-variable colors only, fixed categorical order never re-cycled by rank.
@@ -135,10 +138,13 @@ export function WorkspaceSettingsPage() {
         <TabsList className="w-full justify-start sm:w-auto">
           <TabsTrigger value="reminders">Reminders & schedule</TabsTrigger>
           <TabsTrigger value="emails">Email channels</TabsTrigger>
+          <TabsTrigger value="mail-server">Mail server</TabsTrigger>
           <TabsTrigger value="ticketing">Ticketing</TabsTrigger>
           <TabsTrigger value="ai">AI</TabsTrigger>
           <TabsTrigger value="email-intake">Email intake</TabsTrigger>
           <TabsTrigger value="chat-integrations">Chat integrations</TabsTrigger>
+          <TabsTrigger value="security-devops">Security & DevOps</TabsTrigger>
+          <TabsTrigger value="public-api">Public API</TabsTrigger>
           <TabsTrigger value="sso">Single sign-on</TabsTrigger>
           <TabsTrigger value="bcc">BCC & forms</TabsTrigger>
         </TabsList>
@@ -149,6 +155,10 @@ export function WorkspaceSettingsPage() {
 
         <TabsContent value="emails">
           <EmailChannelsCard readOnly={!isSuperAdmin} />
+        </TabsContent>
+
+        <TabsContent value="mail-server">
+          <MailServerSettingsCard readOnly={!isSuperAdmin} />
         </TabsContent>
 
         <TabsContent value="ticketing">
@@ -165,6 +175,14 @@ export function WorkspaceSettingsPage() {
 
         <TabsContent value="chat-integrations">
           <ChatIntegrationsSettingsCard readOnly={!isSuperAdmin} />
+        </TabsContent>
+
+        <TabsContent value="security-devops">
+          <SecurityDevOpsSettingsCard readOnly={!isSuperAdmin} />
+        </TabsContent>
+
+        <TabsContent value="public-api">
+          <PublicApiSettingsCard readOnly={!isSuperAdmin} />
         </TabsContent>
 
         <TabsContent value="sso">
@@ -620,6 +638,20 @@ function TicketingSettingsCard({ readOnly }: { readOnly: boolean }) {
                 </div>
                 <Switch checked={settings.data?.enableLeaderboard ?? false} disabled={readOnly} onCheckedChange={(v) => update.mutate({ enableLeaderboard: v })} />
               </div>
+              <div className="flex items-start gap-4 rounded-lg border border-border bg-muted/30 p-4">
+                <div className="flex-1">
+                  <Label>Block resolve on failing CI</Label>
+                  <p className="mt-0.5 text-xs text-muted-foreground">
+                    A ticket can't move to Resolved while its latest ingested test run (Security & DevOps webhook) is
+                    failing. Off by default — has no effect until your CI actually posts test runs.
+                  </p>
+                </div>
+                <Switch
+                  checked={settings.data?.blockResolveOnFailingTests ?? false}
+                  disabled={readOnly}
+                  onCheckedChange={(v) => update.mutate({ blockResolveOnFailingTests: v })}
+                />
+              </div>
             </>
           )}
         </CardContent>
@@ -765,7 +797,9 @@ function AISettingsCard({ readOnly }: { readOnly: boolean }) {
     { key: "workspaceSearchEnabled", label: "\"Ask AI\" ticket search", description: "Natural-language Q&A over your accessible tickets from the command palette." },
     { key: "emailIngestionEnabled", label: "Email-to-ticket intake", description: "Parse inbound bug-report emails and auto-create tickets." },
     { key: "chatIngestionEnabled", label: "Chat-to-ticket intake", description: "Turn Slack/Teams/Google Chat/Telegram messages into auto-created tickets." },
-    { key: "weeklyDigestEnabled", label: "AI weekly digest", description: "LLM-authored weekly summary of ticket + timesheet activity." }
+    { key: "weeklyDigestEnabled", label: "AI weekly digest", description: "LLM-authored weekly summary of ticket + timesheet activity." },
+    { key: "ciFailureTriageEnabled", label: "CI-failure triage", description: "AI-authored root-cause/severity comment when a CI test run fails with a log excerpt attached (Security & DevOps tab)." },
+    { key: "aiPrReviewSummaryEnabled", label: "AI PR-review summaries", description: "AI-authored summary comment on a ticket when its linked PR opens on a connected GitHub repo (Security & DevOps tab)." }
   ];
 
   return (
@@ -1400,10 +1434,10 @@ function EmailIntakeSettingsCard({ readOnly }: { readOnly: boolean }) {
                 {!readOnly && (
                   <>
                     <Switch checked={rule.isActive} onCheckedChange={(v) => toggleRule.mutate({ id: rule.id, isActive: v })} />
-                    <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => startEditRule(rule)}>
+                    <Button variant="ghost" size="icon" className="h-9 w-9" onClick={() => startEditRule(rule)}>
                       <Pencil className="h-3.5 w-3.5" />
                     </Button>
-                    <Button variant="ghost" size="icon" className="h-7 w-7 text-destructive" onClick={() => removeRule.mutate(rule.id)}>
+                    <Button variant="ghost" size="icon" className="h-9 w-9 text-destructive" onClick={() => removeRule.mutate(rule.id)}>
                       <Trash2 className="h-3.5 w-3.5" />
                     </Button>
                   </>
@@ -1474,7 +1508,7 @@ function EmailIntakeSettingsCard({ readOnly }: { readOnly: boolean }) {
                 <span className="flex-1">{rule.module.name}</span>
                 <span className="text-muted-foreground">&rarr; {rule.defaultAssignee.name}</span>
                 {!readOnly && (
-                  <Button variant="ghost" size="icon" className="h-7 w-7 text-destructive" onClick={() => removeAssigneeRule.mutate(rule.id)}>
+                  <Button variant="ghost" size="icon" className="h-9 w-9 text-destructive" onClick={() => removeAssigneeRule.mutate(rule.id)}>
                     <Trash2 className="h-3.5 w-3.5" />
                   </Button>
                 )}

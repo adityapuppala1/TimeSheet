@@ -1,11 +1,69 @@
 import { useQuery } from "@tanstack/react-query";
+import type { ColumnDef } from "@tanstack/react-table";
 import { AlertTriangle, Building2, DollarSign, Users } from "lucide-react";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../../components/ui/card";
+import { DataTable } from "../../components/ui/data-table";
 import { Skeleton } from "../../components/ui/skeleton";
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "../../components/ui/table";
 import { platformAdminAnalyticsApi } from "../../services/platform-admin-api";
 
 const currency = new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" });
+
+// Same dark slate/amber chrome override as Organizations.tsx — see that file's comment.
+const DARK_TABLE_CLASSNAME = "[&_thead_tr]:border-slate-800 [&_th]:text-slate-400 [&>div]:border-slate-800";
+const DARK_ROW_CLASSNAME = "border-slate-800 hover:bg-slate-800/40";
+
+interface OrgAnalyticsRow {
+  orgId: string;
+  name: string;
+  reachable: boolean;
+  seatCount: number;
+  ticketCountsByStatus: Record<string, number>;
+  aiSpendThisMonthUsd: number;
+  lastActivityAt: string | null;
+}
+
+const columns: ColumnDef<OrgAnalyticsRow, any>[] = [
+  {
+    accessorKey: "name",
+    header: "Organization",
+    cell: ({ row }) => (
+      <span className="font-medium text-slate-100">
+        {row.original.name}
+        {!row.original.reachable && (
+          <span className="ml-2 inline-flex items-center gap-1 text-xs text-amber-400">
+            <AlertTriangle className="h-3 w-3" />unreachable
+          </span>
+        )}
+      </span>
+    )
+  },
+  { accessorKey: "seatCount", header: "Seats", cell: (info) => <span className="text-slate-300">{info.getValue()}</span> },
+  {
+    id: "openTickets",
+    accessorFn: (row) => (row.ticketCountsByStatus.OPEN ?? 0) + (row.ticketCountsByStatus.IN_PROGRESS ?? 0),
+    header: "Open tickets",
+    cell: (info) => <span className="text-slate-300">{info.getValue()}</span>
+  },
+  {
+    id: "totalTickets",
+    accessorFn: (row) => Object.values(row.ticketCountsByStatus).reduce((a, b) => a + b, 0),
+    header: "Total tickets",
+    cell: (info) => <span className="text-slate-300">{info.getValue()}</span>
+  },
+  {
+    accessorKey: "aiSpendThisMonthUsd",
+    header: "AI spend",
+    cell: (info) => <span className="text-slate-300">{currency.format(info.getValue() as number)}</span>
+  },
+  {
+    accessorKey: "lastActivityAt",
+    header: "Last activity",
+    cell: (info) => {
+      const value = info.getValue() as string | null;
+      return <span className="text-xs text-slate-500">{value ? new Date(value).toLocaleDateString() : "—"}</span>;
+    }
+  }
+];
 
 /** The only screen in the console that surfaces cross-tenant NUMBERS (seat counts, ticket
  *  counts by status, AI spend) — never row-level content. Backed by the single
@@ -36,46 +94,15 @@ export function PlatformAdminAnalytics() {
               <CardDescription className="text-slate-400">This month, aggregated per org.</CardDescription>
             </CardHeader>
             <CardContent>
-              <Table>
-                <TableHeader>
-                  <TableRow className="border-slate-800 hover:bg-transparent">
-                    <TableHead className="text-slate-400">Organization</TableHead>
-                    <TableHead className="text-slate-400">Seats</TableHead>
-                    <TableHead className="text-slate-400">Open tickets</TableHead>
-                    <TableHead className="text-slate-400">Total tickets</TableHead>
-                    <TableHead className="text-slate-400">AI spend</TableHead>
-                    <TableHead className="text-slate-400">Last activity</TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {analytics.data.orgs.map((org) => {
-                    const totalTickets = Object.values(org.ticketCountsByStatus).reduce((a, b) => a + b, 0);
-                    const openTickets = (org.ticketCountsByStatus.OPEN ?? 0) + (org.ticketCountsByStatus.IN_PROGRESS ?? 0);
-                    return (
-                      <TableRow key={org.orgId} className="border-slate-800 hover:bg-slate-800/40">
-                        <TableCell className="font-medium text-slate-100">
-                          {org.name}
-                          {!org.reachable && (
-                            <span className="ml-2 inline-flex items-center gap-1 text-xs text-amber-400">
-                              <AlertTriangle className="h-3 w-3" />unreachable
-                            </span>
-                          )}
-                        </TableCell>
-                        <TableCell className="text-slate-300">{org.seatCount}</TableCell>
-                        <TableCell className="text-slate-300">{openTickets}</TableCell>
-                        <TableCell className="text-slate-300">{totalTickets}</TableCell>
-                        <TableCell className="text-slate-300">{currency.format(org.aiSpendThisMonthUsd)}</TableCell>
-                        <TableCell className="text-xs text-slate-500">{org.lastActivityAt ? new Date(org.lastActivityAt).toLocaleDateString() : "—"}</TableCell>
-                      </TableRow>
-                    );
-                  })}
-                  {analytics.data.orgs.length === 0 && (
-                    <TableRow className="border-slate-800">
-                      <TableCell colSpan={6} className="text-center text-slate-500">No organizations yet.</TableCell>
-                    </TableRow>
-                  )}
-                </TableBody>
-              </Table>
+              <DataTable
+                columns={columns}
+                data={analytics.data.orgs}
+                className={DARK_TABLE_CLASSNAME}
+                rowClassName={DARK_ROW_CLASSNAME}
+                searchPlaceholder="Search organizations..."
+                emptyMessage="No organizations yet."
+                pageSize={20}
+              />
             </CardContent>
           </Card>
         </>

@@ -8,7 +8,8 @@
  * `/change-password`, `/avatar` routes.
  */
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Camera, ImageOff, KeyRound, Laptop, Loader2, LogOut, Save, ShieldCheck, Trash2, UserRound } from "lucide-react";
+import type { ColumnDef } from "@tanstack/react-table";
+import { Camera, ImageOff, KeyRound, Laptop, Loader2, LogOut, Save, Shield, ShieldCheck, Smartphone, Tablet, Trash2, UserRound } from "lucide-react";
 import { useMemo, useRef, useState } from "react";
 import { Alert, AlertDescription, AlertTitle } from "../components/ui/alert";
 import {
@@ -22,15 +23,20 @@ import {
   AlertDialogTitle
 } from "../components/ui/alert-dialog";
 import { Avatar, AvatarFallback, AvatarImage } from "../components/ui/avatar";
+import { Badge } from "../components/ui/badge";
 import { Button } from "../components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../components/ui/card";
+import { DataTable } from "../components/ui/data-table";
 import { Input } from "../components/ui/input";
 import { Label } from "../components/ui/label";
 import { Separator } from "../components/ui/separator";
 import { Textarea } from "../components/ui/textarea";
 import { toast } from "../components/ui/toaster";
-import { authApi, fileUrl } from "../services/api";
+import { parseUserAgent } from "../lib/user-agent";
+import { authApi, fileUrl, type SessionRow } from "../services/api";
 import { useAuthStore } from "../store/auth";
+
+const DEVICE_ICON = { desktop: Laptop, mobile: Smartphone, tablet: Tablet } as const;
 
 const ALLOWED_TYPES = ["image/png", "image/jpeg", "image/jpg", "image/gif"];
 const MAX_AVATAR_MB = 5;
@@ -125,6 +131,73 @@ export function Profile() {
     },
     onError: (err: any) => toast.error("Could not sign out that session", { description: err?.response?.data?.message ?? "Try again." })
   });
+
+  const sessionColumns = useMemo<ColumnDef<SessionRow, any>[]>(
+    () => [
+      {
+        id: "device",
+        accessorFn: (row) => parseUserAgent(row.userAgent).browser,
+        header: "Device",
+        cell: ({ row }) => {
+          const { browser, os, deviceType } = parseUserAgent(row.original.userAgent);
+          const DeviceIcon = DEVICE_ICON[deviceType];
+          return (
+            <div className="flex items-center gap-2">
+              <DeviceIcon className="h-4 w-4 shrink-0 text-muted-foreground" />
+              <div className="min-w-0">
+                <p className="truncate font-medium">
+                  {browser} on {os}
+                </p>
+                {row.original.current && <Badge variant="info" className="mt-0.5">This device</Badge>}
+              </div>
+            </div>
+          );
+        }
+      },
+      {
+        id: "ipAddress",
+        accessorFn: (row) => row.ipAddress ?? "Unknown IP",
+        header: "IP address",
+        cell: ({ row }) => <span className="font-mono text-xs text-muted-foreground">{row.original.ipAddress ?? "Unknown IP"}</span>
+      },
+      {
+        id: "signedIn",
+        accessorFn: (row) => row.createdAt,
+        header: "Signed in",
+        cell: ({ row }) => <span className="text-xs text-muted-foreground">{new Date(row.original.createdAt).toLocaleString()}</span>
+      },
+      {
+        id: "expires",
+        accessorFn: (row) => row.expiresAt,
+        header: "Expires",
+        cell: ({ row }) => <span className="text-xs text-muted-foreground">{new Date(row.original.expiresAt).toLocaleString()}</span>
+      },
+      {
+        id: "actions",
+        header: () => <span className="block text-right">Actions</span>,
+        enableSorting: false,
+        cell: ({ row }) =>
+          row.original.current ? (
+            <div className="flex items-center justify-end gap-1 text-xs text-muted-foreground">
+              <Shield className="h-3.5 w-3.5" />Current session
+            </div>
+          ) : (
+            <div className="text-right">
+              <Button
+                type="button"
+                variant="ghost"
+                size="sm"
+                onClick={() => revokeSessionMutation.mutate(row.original.id)}
+                disabled={revokeSessionMutation.isPending}
+              >
+                Sign out
+              </Button>
+            </div>
+          )
+      }
+    ],
+    [revokeSessionMutation]
+  );
 
   const logoutAllMutation = useMutation({
     mutationFn: () => authApi.logoutAll(),
@@ -399,45 +472,14 @@ export function Profile() {
           </div>
         </CardHeader>
         <CardContent>
-          {sessionsQuery.isLoading ? (
-            <p className="text-sm text-muted-foreground">Loading sessions...</p>
-          ) : sessionsQuery.data && sessionsQuery.data.length > 0 ? (
-            <div className="grid gap-2">
-              {sessionsQuery.data.map((session) => (
-                <div
-                  key={session.id}
-                  className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-border px-3 py-2"
-                >
-                  <div className="min-w-0 flex-1">
-                    <p className="truncate text-sm font-medium text-foreground">
-                      {session.userAgent ?? "Unknown device"}
-                      {session.current && (
-                        <span className="ml-2 rounded-full bg-primary/10 px-2 py-0.5 text-xs font-semibold text-primary">
-                          This device
-                        </span>
-                      )}
-                    </p>
-                    <p className="truncate text-xs text-muted-foreground">
-                      {session.ipAddress ?? "Unknown IP"} · signed in {new Date(session.createdAt).toLocaleString()}
-                    </p>
-                  </div>
-                  {!session.current && (
-                    <Button
-                      type="button"
-                      variant="ghost"
-                      size="sm"
-                      onClick={() => revokeSessionMutation.mutate(session.id)}
-                      disabled={revokeSessionMutation.isPending}
-                    >
-                      Sign out
-                    </Button>
-                  )}
-                </div>
-              ))}
-            </div>
-          ) : (
-            <p className="text-sm text-muted-foreground">No active sessions found.</p>
-          )}
+          <DataTable
+            columns={sessionColumns}
+            data={sessionsQuery.data ?? []}
+            isLoading={sessionsQuery.isLoading}
+            searchPlaceholder="Search sessions..."
+            emptyMessage="No active sessions found."
+            pageSize={10}
+          />
         </CardContent>
       </Card>
 
