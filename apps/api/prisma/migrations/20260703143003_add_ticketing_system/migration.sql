@@ -1,15 +1,15 @@
 -- AlterTable
-ALTER TABLE `globalnotificationsettings` ADD COLUMN `emailTicketAssigned` BOOLEAN NOT NULL DEFAULT true,
+ALTER TABLE `GlobalNotificationSettings` ADD COLUMN `emailTicketAssigned` BOOLEAN NOT NULL DEFAULT true,
     ADD COLUMN `emailTicketCommented` BOOLEAN NOT NULL DEFAULT true,
     ADD COLUMN `emailTicketEscalation` BOOLEAN NOT NULL DEFAULT true,
     ADD COLUMN `emailTicketSlaBreach` BOOLEAN NOT NULL DEFAULT true,
     ADD COLUMN `emailTicketStatusChanged` BOOLEAN NOT NULL DEFAULT true;
 
 -- AlterTable
-ALTER TABLE `project` ADD COLUMN `ticketSeq` INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE `Project` ADD COLUMN `ticketSeq` INTEGER NOT NULL DEFAULT 0;
 
 -- AlterTable
-ALTER TABLE `timesheet` ADD COLUMN `ticketId` VARCHAR(191) NULL;
+ALTER TABLE `Timesheet` ADD COLUMN `ticketId` VARCHAR(191) NULL;
 
 -- CreateTable
 CREATE TABLE `Ticket` (

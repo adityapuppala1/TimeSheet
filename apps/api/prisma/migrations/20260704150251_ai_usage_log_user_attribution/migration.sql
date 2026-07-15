@@ -1,5 +1,5 @@
 -- AlterTable
-ALTER TABLE `aiusagelog` ADD COLUMN `userId` VARCHAR(191) NULL;
+ALTER TABLE `AIUsageLog` ADD COLUMN `userId` VARCHAR(191) NULL;
 
 -- CreateIndex
 CREATE INDEX `AIUsageLog_model_createdAt_idx` ON `AIUsageLog`(`model`, `createdAt`);

@@ -1,11 +1,11 @@
 /*
   Warnings:
 
-  - You are about to alter the column `type` on the `ticket` table. The data in that column could be lost. The data in that column will be cast from `Enum(EnumId(2))` to `VarChar(60)`.
+  - You are about to alter the column `type` on the `Ticket` table. The data in that column could be lost. The data in that column will be cast from `Enum(EnumId(2))` to `VarChar(60)`.
 
 */
 -- AlterTable
-ALTER TABLE `ticket` ADD COLUMN `aiConfidence` DOUBLE NULL,
+ALTER TABLE `Ticket` ADD COLUMN `aiConfidence` DOUBLE NULL,
     ADD COLUMN `estimatedHours` DECIMAL(5, 2) NULL,
     ADD COLUMN `externalReporterEmail` VARCHAR(255) NULL,
     ADD COLUMN `externalReporterName` VARCHAR(160) NULL,
@@ -14,7 +14,7 @@ ALTER TABLE `ticket` ADD COLUMN `aiConfidence` DOUBLE NULL,
     MODIFY `type` VARCHAR(60) NOT NULL DEFAULT 'BUG';
 
 -- AlterTable
-ALTER TABLE `user` ADD COLUMN `hourlyRate` DECIMAL(10, 2) NULL;
+ALTER TABLE `User` ADD COLUMN `hourlyRate` DECIMAL(10, 2) NULL;
 
 -- CreateTable
 CREATE TABLE `TicketType` (

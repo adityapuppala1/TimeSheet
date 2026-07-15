@@ -1,8 +1,8 @@
 -- AlterTable
-ALTER TABLE `globalaisettings` ADD COLUMN `chatIngestionEnabled` BOOLEAN NOT NULL DEFAULT false;
+ALTER TABLE `GlobalAISettings` ADD COLUMN `chatIngestionEnabled` BOOLEAN NOT NULL DEFAULT false;
 
 -- AlterTable
-ALTER TABLE `ticket` ADD COLUMN `externalChatChannelId` VARCHAR(255) NULL,
+ALTER TABLE `Ticket` ADD COLUMN `externalChatChannelId` VARCHAR(255) NULL,
     ADD COLUMN `externalChatPlatform` ENUM('SLACK', 'MICROSOFT_TEAMS', 'GOOGLE_CHAT', 'TELEGRAM') NULL,
     ADD COLUMN `externalChatUserId` VARCHAR(255) NULL,
     ADD COLUMN `externalChatUserName` VARCHAR(160) NULL,

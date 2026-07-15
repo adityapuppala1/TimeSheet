@@ -1,5 +1,5 @@
 -- AlterTable
-ALTER TABLE `globalnotificationsettings` ADD COLUMN `emailTicketClosedDigest` BOOLEAN NOT NULL DEFAULT false;
+ALTER TABLE `GlobalNotificationSettings` ADD COLUMN `emailTicketClosedDigest` BOOLEAN NOT NULL DEFAULT false;
 
 -- CreateTable
 CREATE TABLE `SecurityFinding` (

@@ -1,2 +1,2 @@
 -- AlterTable
-ALTER TABLE `globalticketsettings` ADD COLUMN `blockResolveOnFailingTests` BOOLEAN NOT NULL DEFAULT false;
+ALTER TABLE `GlobalTicketSettings` ADD COLUMN `blockResolveOnFailingTests` BOOLEAN NOT NULL DEFAULT false;

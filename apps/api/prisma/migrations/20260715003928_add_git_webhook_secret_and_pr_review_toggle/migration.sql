@@ -1,5 +1,5 @@
 -- AlterTable
-ALTER TABLE `gitconnection` ADD COLUMN `encryptedWebhookSecret` VARCHAR(1000) NULL;
+ALTER TABLE `GitConnection` ADD COLUMN `encryptedWebhookSecret` VARCHAR(1000) NULL;
 
 -- AlterTable
-ALTER TABLE `globalaisettings` ADD COLUMN `aiPrReviewSummaryEnabled` BOOLEAN NOT NULL DEFAULT false;
+ALTER TABLE `GlobalAISettings` ADD COLUMN `aiPrReviewSummaryEnabled` BOOLEAN NOT NULL DEFAULT false;

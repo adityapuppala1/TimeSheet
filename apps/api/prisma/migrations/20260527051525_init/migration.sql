@@ -1,19 +1,19 @@
 -- AlterTable
-ALTER TABLE `notification` ADD COLUMN `category` VARCHAR(80) NULL,
+ALTER TABLE `Notification` ADD COLUMN `category` VARCHAR(80) NULL,
     ADD COLUMN `link` VARCHAR(500) NULL,
     MODIFY `body` TEXT NOT NULL;
 
 -- AlterTable
-ALTER TABLE `project` ADD COLUMN `slaApprovalHours` INTEGER NOT NULL DEFAULT 48,
+ALTER TABLE `Project` ADD COLUMN `slaApprovalHours` INTEGER NOT NULL DEFAULT 48,
     ADD COLUMN `submissionDeadlineDayOfMonth` INTEGER NULL;
 
 -- AlterTable
-ALTER TABLE `timesheet` ADD COLUMN `approvalDeadline` DATETIME(3) NULL,
+ALTER TABLE `Timesheet` ADD COLUMN `approvalDeadline` DATETIME(3) NULL,
     ADD COLUMN `escalatedAt` DATETIME(3) NULL,
     ADD COLUMN `slaBreachAt` DATETIME(3) NULL;
 
 -- AlterTable
-ALTER TABLE `user` ADD COLUMN `avatarUrl` VARCHAR(500) NULL,
+ALTER TABLE `User` ADD COLUMN `avatarUrl` VARCHAR(500) NULL,
     ADD COLUMN `bio` TEXT NULL,
     ADD COLUMN `managerId` VARCHAR(191) NULL,
     ADD COLUMN `phoneNumber` VARCHAR(40) NULL,

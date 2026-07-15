@@ -1,8 +1,8 @@
 -- AlterTable
-ALTER TABLE `globalnotificationsettings` ADD COLUMN `emailTicketNeedsReview` BOOLEAN NOT NULL DEFAULT true;
+ALTER TABLE `GlobalNotificationSettings` ADD COLUMN `emailTicketNeedsReview` BOOLEAN NOT NULL DEFAULT true;
 
 -- AlterTable
-ALTER TABLE `ticket` ADD COLUMN `aiFeedback` VARCHAR(10) NULL;
+ALTER TABLE `Ticket` ADD COLUMN `aiFeedback` VARCHAR(10) NULL;
 
 -- CreateTable
 CREATE TABLE `EmailIntakeSettings` (
