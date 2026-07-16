@@ -312,6 +312,9 @@ export interface UserRow {
   avatarUrl: string | null;
   bio: string | null;
   designation: string | null;
+  /// GitHub login (no leading @) — lets security-ingestion's CODEOWNERS/last-committer
+  /// auto-assignment resolve a finding back to this user. Set from the Users page.
+  githubUsername: string | null;
   managerId: string | null;
   manager?: { id: string; name: string; email: string } | null;
   role: { name: string };
@@ -337,7 +340,15 @@ export const userApi = {
   resendWelcome: async (id: string) =>
     (await api.post<{ sent: boolean; to: string; emailLogId: string | null }>(`/users/${id}/resend-welcome`)).data,
   bulkCreate: async (
-    rows: Array<{ name: string; email: string; role: string; password?: string; managerEmail?: string; designation?: string }>
+    rows: Array<{
+      name: string;
+      email: string;
+      role: string;
+      password?: string;
+      managerEmail?: string;
+      designation?: string;
+      githubUsername?: string;
+    }>
   ) => (await api.post<{ results: BulkUploadResult[] }>("/users/bulk", { rows })).data
 };
 
@@ -429,8 +440,10 @@ export const settingsApi = {
         orgSlug: string;
         findingsWebhookPath: string;
         testRunsWebhookPath: string;
+        sarifFindingsWebhookPath: string;
         fallbackProjectId: string | null;
         autoReopenEnabled: boolean;
+        codeownersAssignEnabled: boolean;
       }>("/settings/security-ingestion")
     ).data,
   /** Returns the new token in plaintext — the ONE time it's ever visible; see
@@ -445,6 +458,12 @@ export const settingsApi = {
    *  security-report.service.ts#maybeReopenTicketOnRegression. */
   updateSecurityIngestionAutoReopen: async (autoReopenEnabled: boolean) =>
     (await api.patch<{ autoReopenEnabled: boolean }>("/settings/security-ingestion/auto-reopen", { autoReopenEnabled })).data,
+  /** Fallback assignee resolution (CODEOWNERS, then last committer) for an auto-created security
+   *  ticket when no ModuleAssigneeRule matches — see
+   *  security-report.service.ts#maybeAssignFindingViaCodeowners. Needs a connected GitConnection
+   *  and at least one User.githubUsername set to ever resolve anyone. */
+  updateSecurityIngestionCodeownersAssign: async (codeownersAssignEnabled: boolean) =>
+    (await api.patch<{ codeownersAssignEnabled: boolean }>("/settings/security-ingestion/codeowners-assign", { codeownersAssignEnabled })).data,
   /** VAPT findings never go through the CI ingestion webhook (see docs/SECURITY_DEVOPS_INTEGRATIONS.md
    *  §4) — this uploads a structured JSON report directly, parsed into the same SecurityFinding
    *  rows as the automated types. */

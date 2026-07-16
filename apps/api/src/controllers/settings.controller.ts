@@ -340,7 +340,9 @@ settingsRouter.get("/security-ingestion", requireSuperAdmin, async (_req, res) =
     findingsWebhookPath: `/api/devops/${orgSlug}/findings`,
     testRunsWebhookPath: `/api/devops/${orgSlug}/test-runs`,
     fallbackProjectId: settings?.fallbackProjectId ?? null,
-    autoReopenEnabled: settings?.autoReopenEnabled ?? false
+    autoReopenEnabled: settings?.autoReopenEnabled ?? false,
+    codeownersAssignEnabled: settings?.codeownersAssignEnabled ?? false,
+    sarifFindingsWebhookPath: `/api/devops/${orgSlug}/findings/sarif`
   });
 });
 
@@ -375,6 +377,26 @@ settingsRouter.patch("/security-ingestion/auto-reopen", requireSuperAdmin, valid
   });
   await audit(req.user!.id, "settings.security_ingestion_auto_reopen_updated", "IngestionSettings", "global", { autoReopenEnabled: req.body.autoReopenEnabled });
   res.json({ autoReopenEnabled: updated.autoReopenEnabled });
+});
+
+const codeownersAssignSchema = z.object({
+  body: z.object({ codeownersAssignEnabled: z.boolean() }).strict()
+});
+
+/** See services/security-report.service.ts#maybeAssignFindingViaCodeowners — fallback assignee
+ *  resolution (CODEOWNERS, then last committer) for an auto-created security ticket when no
+ *  ModuleAssigneeRule matches. Needs a connected GitConnection and at least one
+ *  User.githubUsername set to ever actually resolve anyone — off by default. */
+settingsRouter.patch("/security-ingestion/codeowners-assign", requireSuperAdmin, validate(codeownersAssignSchema), async (req, res) => {
+  const updated = await prisma.ingestionSettings.upsert({
+    where: { id: "global" },
+    update: { codeownersAssignEnabled: req.body.codeownersAssignEnabled },
+    create: { id: "global", codeownersAssignEnabled: req.body.codeownersAssignEnabled }
+  });
+  await audit(req.user!.id, "settings.security_ingestion_codeowners_assign_updated", "IngestionSettings", "global", {
+    codeownersAssignEnabled: req.body.codeownersAssignEnabled
+  });
+  res.json({ codeownersAssignEnabled: updated.codeownersAssignEnabled });
 });
 
 const vaptFindingSchema = z.object({

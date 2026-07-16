@@ -23,6 +23,7 @@ import { tenantContext } from "../config/tenant-context.js";
 import { resolveActiveOrgBySlug } from "../middleware/tenant.js";
 import { AppError } from "../middleware/error.js";
 import {
+  maybeAssignFindingViaCodeowners,
   maybeAutoCreateTicketForFinding,
   maybePostCiFailureTriageComment,
   maybeReopenTicketOnRegression
@@ -94,45 +95,201 @@ const findingsBatchSchema = z.object({
   body: z.object({ findings: z.array(findingSchema).min(1).max(500) })
 });
 
+type FindingInput = z.infer<typeof findingSchema>;
+
+/** Shared by both /findings (native JSON) and /findings/sarif (translated below) so the two
+ *  ingestion paths can never drift on create-then-maybe-auto-create-ticket behavior. */
+async function ingestFindingsBatch(findings: FindingInput[]): Promise<number> {
+  const created = await Promise.all(
+    findings.map(async (f) => {
+      const ticketId = await resolveTicketId(f.ticketKey);
+      const finding = await prisma.securityFinding.create({
+        data: {
+          ticketId,
+          type: f.type,
+          tool: f.tool,
+          severity: f.severity,
+          title: f.title,
+          description: f.description,
+          cwe: f.cwe,
+          filePath: f.filePath,
+          lineNumber: f.lineNumber,
+          repository: f.repository,
+          branch: f.branch,
+          prUrl: f.prUrl
+        }
+      });
+      if (!ticketId) {
+        // No ticket to attach to — see security-report.service.ts#maybeAutoCreateTicketForFinding
+        // for the severity/fallback-project gating. Never throws: a misconfigured fallback
+        // project shouldn't fail the whole ingestion batch, it should just leave this finding
+        // ticket-less.
+        await maybeAutoCreateTicketForFinding(finding).catch((error) =>
+          console.warn(`[devops-webhook] auto-ticket-creation failed for finding ${finding.id}: ${(error as Error).message}`)
+        );
+      } else {
+        // A finding landed against an *existing* ticket — if that ticket is currently
+        // RESOLVED/CLOSED, this is a regression (the issue came back, or a new one was found on
+        // the same ticket's repo/branch) and should reopen it, same trigger as a failing TestRun
+        // below. maybeReopenTicketOnRegression no-ops unless IngestionSettings.autoReopenEnabled
+        // is on, so this is safe to call unconditionally.
+        await maybeReopenTicketOnRegression(ticketId, `A new ${finding.severity} ${finding.type} finding from ${finding.tool}`).catch((error) =>
+          console.warn(`[devops-webhook] auto-reopen check failed for ticket ${ticketId}: ${(error as Error).message}`)
+        );
+      }
+      return finding;
+    })
+  );
+  return created.length;
+}
+
 devopsWebhookRouter.post("/:orgSlug/findings", async (req, res, next) => {
   try {
     await withOrgTenant(req.params.orgSlug, async () => {
       await requireValidIngestionToken(req);
       const parsed = findingsBatchSchema.safeParse({ body: req.body });
       if (!parsed.success) throw new AppError(422, `Invalid findings payload: ${parsed.error.issues.map((i) => i.message).join("; ")}`);
+      const count = await ingestFindingsBatch(parsed.data.body.findings);
+      res.status(201).json({ created: count });
+    });
+  } catch (error) {
+    next(error);
+  }
+});
 
-      const created = await Promise.all(
-        parsed.data.body.findings.map(async (f) => {
-          const ticketId = await resolveTicketId(f.ticketKey);
-          const finding = await prisma.securityFinding.create({
-            data: {
-              ticketId,
-              type: f.type,
-              tool: f.tool,
-              severity: f.severity,
-              title: f.title,
-              description: f.description,
-              cwe: f.cwe,
-              filePath: f.filePath,
-              lineNumber: f.lineNumber,
-              repository: f.repository,
-              branch: f.branch,
-              prUrl: f.prUrl
-            }
-          });
-          // Only for findings that arrived with no ticket to attach to — see
-          // security-report.service.ts#maybeAutoCreateTicketForFinding for the severity/
-          // fallback-project gating. Never throws: a misconfigured fallback project shouldn't
-          // fail the whole ingestion batch, it should just leave that finding ticket-less.
-          if (!ticketId) {
-            await maybeAutoCreateTicketForFinding(finding).catch((error) =>
-              console.warn(`[devops-webhook] auto-ticket-creation failed for finding ${finding.id}: ${(error as Error).message}`)
-            );
-          }
-          return finding;
-        })
-      );
-      res.status(201).json({ created: created.length });
+// --- SARIF 2.1.0 ingestion --------------------------------------------------------------------
+// Accepts the standard output format GitHub Code Scanning / codeql-action, `semgrep --sarif`, and
+// Azure DevOps' native scan tasks all already produce, so those tools need zero hand-written `jq`
+// translation to plug into TimeSphere — unlike the /findings route above, which expects the
+// findings already in TimeSphere's own shape. See docs/SECURITY_DEVOPS_INTEGRATIONS.md.
+
+const SARIF_LEVEL_TO_SEVERITY: Record<string, (typeof securityFindingSeverities)[number]> = {
+  error: "HIGH",
+  warning: "MEDIUM",
+  note: "LOW",
+  none: "LOW"
+};
+
+/** GitHub's CodeQL/Advanced-Security convention: a numeric CVSS-like score in
+ *  `result.properties["security-severity"]` (string or number, 0-10) — present far more often
+ *  than a plain SARIF `level`, and a better severity signal when it is, so it's checked first. */
+function severityFromSarifResult(result: Record<string, unknown>): (typeof securityFindingSeverities)[number] {
+  const props = (result.properties ?? {}) as Record<string, unknown>;
+  const rawScore = props["security-severity"] ?? props.securitySeverity;
+  const numericScore = typeof rawScore === "string" ? Number(rawScore) : typeof rawScore === "number" ? rawScore : undefined;
+  if (typeof numericScore === "number" && !Number.isNaN(numericScore)) {
+    if (numericScore >= 9) return "CRITICAL";
+    if (numericScore >= 7) return "HIGH";
+    if (numericScore >= 4) return "MEDIUM";
+    return "LOW";
+  }
+  const level = String((result as { level?: unknown }).level ?? "warning").toLowerCase();
+  return SARIF_LEVEL_TO_SEVERITY[level] ?? "MEDIUM";
+}
+
+/** Best-effort CWE extraction from the SARIF rule's own tags (e.g. `"external/cwe/cwe-89"`,
+ *  CodeQL/Semgrep's convention) — absent entirely for tools that don't tag rules this way, which
+ *  is fine, `cwe` is an optional field on `SecurityFinding` either way. */
+function cweFromSarifRule(run: Record<string, unknown>, ruleId: string | undefined): string | undefined {
+  if (!ruleId) return undefined;
+  const rules = ((run.tool as Record<string, unknown> | undefined)?.driver as Record<string, unknown> | undefined)?.rules as
+    | Array<Record<string, unknown>>
+    | undefined;
+  const rule = rules?.find((r) => r.id === ruleId);
+  const tags = ((rule?.properties as Record<string, unknown> | undefined)?.tags ?? []) as unknown[];
+  for (const tag of tags) {
+    const match = String(tag).match(/cwe-(\d+)/i);
+    if (match) return `CWE-${match[1]}`;
+  }
+  return undefined;
+}
+
+/** Flattens every run/result in a SARIF 2.1.0 log into TimeSphere's own finding shape. Contextual
+ *  fields SARIF has no room for (repository/branch/prUrl/ticketKey, which tool ran, whether this
+ *  is a SAST/DAST/SSAT/SSCT scan) come from `defaults` — the CI job supplies them once per
+ *  request, not per-result, since they're the same for every result in one scan's output. */
+function mapSarifToFindingInputs(
+  sarif: Record<string, unknown>,
+  defaults: { type: FindingInput["type"]; repository?: string; branch?: string; prUrl?: string; ticketKey?: string }
+): FindingInput[] {
+  const out: FindingInput[] = [];
+  const runs = (sarif.runs ?? []) as Array<Record<string, unknown>>;
+  for (const run of runs) {
+    const toolName = String(((run.tool as Record<string, unknown> | undefined)?.driver as Record<string, unknown> | undefined)?.name ?? "sarif");
+    const results = (run.results ?? []) as Array<Record<string, unknown>>;
+    for (const result of results) {
+      const ruleId = result.ruleId as string | undefined;
+      const message = (result.message as Record<string, unknown> | undefined)?.text as string | undefined;
+      const locations = (result.locations ?? []) as Array<Record<string, unknown>>;
+      const physical = (locations[0]?.physicalLocation ?? {}) as Record<string, unknown>;
+      const artifactUri = ((physical.artifactLocation as Record<string, unknown> | undefined)?.uri as string | undefined) ?? undefined;
+      const startLine = (physical.region as Record<string, unknown> | undefined)?.startLine as number | undefined;
+
+      out.push({
+        type: defaults.type,
+        tool: toolName.slice(0, 80),
+        severity: severityFromSarifResult(result),
+        title: (message ?? ruleId ?? "SARIF finding").slice(0, 255),
+        description: message?.slice(0, 20000),
+        cwe: cweFromSarifRule(run, ruleId),
+        filePath: artifactUri?.slice(0, 500),
+        lineNumber: typeof startLine === "number" && startLine > 0 ? startLine : undefined,
+        repository: defaults.repository,
+        branch: defaults.branch,
+        prUrl: defaults.prUrl,
+        ticketKey: defaults.ticketKey
+      });
+    }
+  }
+  return out;
+}
+
+const sarifRequestSchema = z.object({
+  body: z.object({
+    // Accept either a wrapper (`{ sarif, type, repository, ... }`) or, if the whole POST body
+    // *is* a raw SARIF log (a tool's `--sarif` flag piped straight into `curl -d @-`), fields
+    // fall back to query params instead — see the handler below.
+    sarif: z.record(z.string(), z.unknown()).optional(),
+    version: z.string().optional(), // present at top level when the body IS the raw SARIF log
+    runs: z.array(z.record(z.string(), z.unknown())).optional(), // ditto
+    type: z.enum(CI_INGESTIBLE_FINDING_TYPES).optional(),
+    repository: z.string().max(255).optional(),
+    branch: z.string().max(255).optional(),
+    prUrl: z.string().max(500).optional(),
+    ticketKey: z.string().max(20).optional()
+  })
+});
+
+devopsWebhookRouter.post("/:orgSlug/findings/sarif", async (req, res, next) => {
+  try {
+    await withOrgTenant(req.params.orgSlug, async () => {
+      await requireValidIngestionToken(req);
+      const parsed = sarifRequestSchema.safeParse({ body: req.body });
+      if (!parsed.success) throw new AppError(422, `Invalid SARIF payload: ${parsed.error.issues.map((i) => i.message).join("; ")}`);
+      const body = parsed.data.body;
+
+      // The body IS a raw SARIF log (has its own top-level `runs`) vs. a wrapper carrying
+      // `{ sarif: {...}, ...context }` — support both since some CI setups pipe a scanner's
+      // `--sarif` output directly with no way to inject sibling fields into the same JSON.
+      const sarifDoc = body.sarif ?? (body.runs ? { runs: body.runs } : undefined);
+      if (!sarifDoc) throw new AppError(422, "No SARIF document found — send either a raw SARIF log as the body, or { sarif: {...}, ... }.");
+
+      const typeParam = (req.query.type as string | undefined)?.toUpperCase();
+      const isValidTypeParam = typeParam !== undefined && (CI_INGESTIBLE_FINDING_TYPES as readonly string[]).includes(typeParam);
+      const resolvedType: FindingInput["type"] = body.type ?? (isValidTypeParam ? (typeParam as FindingInput["type"]) : "SAST");
+
+      const inputs = mapSarifToFindingInputs(sarifDoc, {
+        type: resolvedType,
+        repository: body.repository ?? (req.query.repository as string | undefined),
+        branch: body.branch ?? (req.query.branch as string | undefined),
+        prUrl: body.prUrl ?? (req.query.prUrl as string | undefined),
+        ticketKey: body.ticketKey ?? (req.query.ticketKey as string | undefined)
+      });
+      if (inputs.length === 0) return res.status(201).json({ created: 0, note: "SARIF log parsed but contained zero results." });
+      if (inputs.length > 500) throw new AppError(422, "SARIF log contains more than 500 results — split into multiple requests.");
+
+      const count = await ingestFindingsBatch(inputs);
+      res.status(201).json({ created: count });
     });
   } catch (error) {
     next(error);
@@ -181,7 +338,7 @@ devopsWebhookRouter.post("/:orgSlug/test-runs", async (req, res, next) => {
       });
 
       if (body.status === "FAILED" && ticketId) {
-        await maybeReopenTicketOnRegression(ticketId, body.provider).catch((error) =>
+        await maybeReopenTicketOnRegression(ticketId, `A failed ${body.provider} test run`).catch((error) =>
           console.warn(`[devops-webhook] auto-reopen check failed for ticket ${ticketId}: ${(error as Error).message}`)
         );
         if (body.failureText) {

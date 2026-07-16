@@ -73,7 +73,8 @@ userRouter.post(
         role: z.string(),
         password: z.string().min(8),
         managerId: z.string().uuid().optional().nullable(),
-        designation: z.string().max(120).optional().nullable()
+        designation: z.string().max(120).optional().nullable(),
+        githubUsername: z.string().max(120).optional().nullable()
       })
     })
   ),
@@ -106,6 +107,7 @@ userRouter.post(
         passwordHash: await hashPassword(req.body.password),
         managerId: req.body.managerId ?? undefined,
         designation: req.body.designation ?? undefined,
+        githubUsername: req.body.githubUsername ?? undefined,
         notificationPreference: { create: {} }
       }
     });
@@ -138,7 +140,8 @@ const bulkRowSchema = z.object({
   role: z.string().min(1),
   password: z.string().min(8).optional(),
   managerEmail: z.string().email().optional().or(z.literal("")),
-  designation: z.string().max(120).optional().or(z.literal(""))
+  designation: z.string().max(120).optional().or(z.literal("")),
+  githubUsername: z.string().max(120).optional().or(z.literal(""))
 });
 
 const bulkUsersSchema = z.object({
@@ -163,6 +166,7 @@ userRouter.post("/bulk", validate(bulkUsersSchema), async (req, res) => {
     password?: string;
     managerEmail?: string;
     designation?: string;
+    githubUsername?: string;
   }>;
 
   const { orgId } = requireTenantContext();
@@ -200,6 +204,7 @@ userRouter.post("/bulk", validate(bulkUsersSchema), async (req, res) => {
           status: "ACTIVE",
           passwordHash: await hashPassword(row.password && row.password.length >= 8 ? row.password : `Bulk-${Math.random().toString(36).slice(2)}!A1`),
           designation: row.designation || undefined,
+          githubUsername: row.githubUsername || undefined,
           notificationPreference: { create: {} }
         }
       });
@@ -247,7 +252,8 @@ const patchSchema = z.object({
     status: z.enum(["ACTIVE", "INACTIVE", "PENDING_VERIFICATION"]).optional(),
     role: z.string().optional(),
     managerId: z.string().uuid().nullable().optional(),
-    designation: z.string().max(120).nullable().optional()
+    designation: z.string().max(120).nullable().optional(),
+    githubUsername: z.string().max(120).nullable().optional()
   })
 });
 
@@ -259,11 +265,13 @@ userRouter.patch("/:id", validate(patchSchema), async (req, res) => {
     roleId?: string;
     managerId?: string | null;
     designation?: string | null;
+    githubUsername?: string | null;
   } = {};
   if (req.body.name) data.name = req.body.name;
   if (req.body.email) data.email = req.body.email;
   if (req.body.status) data.status = req.body.status;
   if ("designation" in req.body) data.designation = req.body.designation ?? null;
+  if ("githubUsername" in req.body) data.githubUsername = req.body.githubUsername ?? null;
   if (req.body.role) {
     const role = await prisma.role.findUniqueOrThrow({ where: { name: req.body.role } });
     data.roleId = role.id;

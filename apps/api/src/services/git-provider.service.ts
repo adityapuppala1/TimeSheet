@@ -147,6 +147,109 @@ export async function fetchGitHubPullRequestFiles(
   return files.map((f) => ({ path: f.filename, patch: f.patch }));
 }
 
+/** Fetches a repo file's raw text content at `ref` (branch/SHA, defaults to the repo's default
+ *  branch), or `null` if it doesn't exist — used for CODEOWNERS lookup below. GitHub's contents
+ *  API base64-encodes file content; `githubGet` can't be reused as-is since a 404 here is an
+ *  expected "no CODEOWNERS file" outcome, not an error worth throwing `AppError` for. */
+async function fetchGitHubFileContent(accessToken: string, fullName: string, path: string, ref?: string): Promise<string | null> {
+  const query = ref ? `?ref=${encodeURIComponent(ref)}` : "";
+  const response = await fetch(`${GITHUB_API_BASE}/repos/${fullName}/contents/${path}${query}`, {
+    headers: {
+      Authorization: `Bearer ${accessToken}`,
+      Accept: "application/vnd.github+json",
+      "X-GitHub-Api-Version": "2022-11-28"
+    }
+  });
+  if (response.status === 404) return null;
+  if (!response.ok) return null; // best-effort — a transient GitHub error here shouldn't block the finding-ingestion request that triggered this lookup
+  const data = (await response.json()) as { content?: string; encoding?: string };
+  if (!data.content || data.encoding !== "base64") return null;
+  return Buffer.from(data.content, "base64").toString("utf8");
+}
+
+/** CODEOWNERS lives in one of three conventional locations (root, `.github/`, `docs/`) — GitHub
+ *  checks all three itself for its own native review-assignment feature, so this mirrors that. */
+const CODEOWNERS_PATHS = ["CODEOWNERS", ".github/CODEOWNERS", "docs/CODEOWNERS"];
+
+export async function fetchGitHubCodeowners(accessToken: string, fullName: string, ref?: string): Promise<string | null> {
+  for (const path of CODEOWNERS_PATHS) {
+    const content = await fetchGitHubFileContent(accessToken, fullName, path, ref);
+    if (content) return content;
+  }
+  return null;
+}
+
+/** Parses CODEOWNERS' line format (`pattern owner1 owner2 ...`, `#`-comments, blank lines
+ *  ignored) and returns the raw owner tokens (still `@handle` or `team@org` form, un-stripped)
+ *  for whichever pattern most specifically matches `filePath` — CODEOWNERS uses "last matching
+ *  pattern wins" precedence (same as `.gitignore`), so this scans top-to-bottom and keeps
+ *  overwriting the result rather than stopping at the first match. Deliberately a small,
+ *  dependency-free glob subset (`*`, `**`, trailing `/`) rather than pulling in a full glob
+ *  library — CODEOWNERS files in practice use a handful of simple patterns, not exotic globs. */
+export function parseCodeownersOwners(codeownersText: string, filePath: string): string[] {
+  const normalizedPath = filePath.replace(/^\/+/, "");
+  let matched: string[] = [];
+  for (const rawLine of codeownersText.split("\n")) {
+    const line = rawLine.trim();
+    if (!line || line.startsWith("#")) continue;
+    const [pattern, ...owners] = line.split(/\s+/);
+    if (owners.length === 0) continue;
+    if (codeownersPatternMatches(pattern, normalizedPath)) matched = owners;
+  }
+  return matched;
+}
+
+function codeownersPatternMatches(pattern: string, filePath: string): boolean {
+  let p = pattern.replace(/^\/+/, "");
+  const isDirPattern = p.endsWith("/");
+  if (isDirPattern) p = p.slice(0, -1);
+  // Translate the CODEOWNERS/gitignore-style glob subset into a regex: `**` = any depth,
+  // `*` = any chars except `/`, everything else escaped literally.
+  const regexSource =
+    "^" +
+    p
+      .split("**")
+      .map((segment) =>
+        segment
+          .split("*")
+          .map((literal) => literal.replace(/[.+^${}()|[\]\\]/g, "\\$&"))
+          .join("[^/]*")
+      )
+      .join(".*") +
+    (isDirPattern ? "(/.*)?$" : "$");
+  try {
+    return new RegExp(regexSource).test(filePath);
+  } catch {
+    return false; // a malformed pattern shouldn't crash finding ingestion, just fail to match
+  }
+}
+
+export interface GitHubLastCommitAuthor {
+  login: string | null;
+  email: string | null;
+}
+
+/** Best-effort "who last touched this file" fallback for when CODEOWNERS has no match (or no
+ *  file exists) — `author.login` is the GitHub login when the commit author has a linked GitHub
+ *  account; falls back to `commit.author.email` (always present) when they don't, which is still
+ *  useful for matching against a TimeSphere user's own email as a last resort. */
+export async function fetchGitHubLastCommitAuthor(
+  accessToken: string,
+  fullName: string,
+  filePath: string,
+  branch?: string
+): Promise<GitHubLastCommitAuthor | null> {
+  const params = new URLSearchParams({ path: filePath, per_page: "1" });
+  if (branch) params.set("sha", branch);
+  const commits = await githubGet<Array<{ author: { login: string } | null; commit: { author: { email: string } | null } }>>(
+    accessToken,
+    `/repos/${fullName}/commits?${params.toString()}`
+  ).catch(() => null);
+  const first = commits?.[0];
+  if (!first) return null;
+  return { login: first.author?.login ?? null, email: first.commit.author?.email ?? null };
+}
+
 /** Attribution for webhook-driven writes (TicketBranch upserts, AI PR-review comments) — same
  *  seeded-system-account pattern as EMAIL_INTAKE_SYSTEM_EMAIL/CHAT_INTAKE_SYSTEM_EMAIL/
  *  SECURITY_INGESTION_SYSTEM_EMAIL (see prisma/seed.ts). Kept distinct from those three so the

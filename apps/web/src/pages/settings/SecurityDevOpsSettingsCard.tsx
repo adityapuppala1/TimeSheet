@@ -125,6 +125,12 @@ export function SecurityDevOpsSettingsCard({ readOnly }: { readOnly: boolean }) 
     onError: () => toast.error("Could not update auto-reopen", { description: "Try again." })
   });
 
+  const toggleCodeownersAssign = useMutation({
+    mutationFn: (enabled: boolean) => settingsApi.updateSecurityIngestionCodeownersAssign(enabled),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["settings", "security-ingestion"] }),
+    onError: () => toast.error("Could not update CODEOWNERS assignment", { description: "Try again." })
+  });
+
   const [vaptAssessor, setVaptAssessor] = useState("");
   const [vaptJson, setVaptJson] = useState("");
   const uploadVapt = useMutation({
@@ -214,6 +220,7 @@ export function SecurityDevOpsSettingsCard({ readOnly }: { readOnly: boolean }) 
               </div>
 
               <CopyableUrl label="Findings webhook (SAST / DAST / SSAT / SSCT)" url={webhookUrl(ingestion.data.findingsWebhookPath)} />
+              <CopyableUrl label="SARIF findings webhook (GitHub Code Scanning / CodeQL / Azure DevOps)" url={webhookUrl(ingestion.data.sarifFindingsWebhookPath)} />
               <CopyableUrl label="Test-run webhook" url={webhookUrl(ingestion.data.testRunsWebhookPath)} />
 
               <Alert>
@@ -223,6 +230,18 @@ export function SecurityDevOpsSettingsCard({ readOnly }: { readOnly: boolean }) 
                   <code>"ticketKey": "WEB-123"</code>) attach to that ticket's Security tab automatically; omit it for a repo-wide scan
                   not tied to one ticket yet. VAPT reports (periodic, human-led) aren't sent here. See{" "}
                   <code>docs/SECURITY_DEVOPS_INTEGRATIONS.md</code> for GitHub Actions / GitLab CI / Jenkins / Bitbucket / internal-git examples.
+                </AlertDescription>
+              </Alert>
+
+              <Alert>
+                <Sparkles className="h-4 w-4" />
+                <AlertTitle className="text-sm">Already producing SARIF? Skip the translation step</AlertTitle>
+                <AlertDescription className="text-xs">
+                  GitHub Code Scanning, <code>codeql-action</code>, <code>semgrep --sarif</code>, and Azure DevOps' native scan tasks all
+                  output SARIF 2.1.0 — POST that file as-is to the SARIF webhook above (same bearer token) and it's translated
+                  automatically, no <code>jq</code> mapping needed. Send either the raw SARIF log, or{" "}
+                  <code>{`{ sarif: {...}, type, repository, branch, prUrl, ticketKey }`}</code> to attach repo/PR/ticket context the SARIF
+                  format itself has no room for.
                 </AlertDescription>
               </Alert>
 
@@ -309,8 +328,9 @@ export function SecurityDevOpsSettingsCard({ readOnly }: { readOnly: boolean }) 
         <CardHeader>
           <CardTitle className="text-base">Auto-reopen on regression</CardTitle>
           <CardDescription>
-            When a FAILED test run references (via <code>ticketKey</code>) a ticket that's already RESOLVED or CLOSED, reopen it
-            automatically. Deterministic — no AI involved — and always audit-logged with the assignee notified, since this is the one
+            When a FAILED test run, or a new/reintroduced finding, references (via <code>ticketKey</code>) a ticket that's already
+            RESOLVED or CLOSED, reopen it automatically — the same behavior Black Duck's Jira plugin calls "auto-reopen on policy
+            violation." Deterministic — no AI involved — and always audit-logged with the assignee notified, since this is the one
             place an automated process changes ticket state without a human click.
           </CardDescription>
         </CardHeader>
@@ -326,6 +346,39 @@ export function SecurityDevOpsSettingsCard({ readOnly }: { readOnly: boolean }) 
                 checked={Boolean(ingestion.data?.autoReopenEnabled)}
                 onCheckedChange={(value) => toggleAutoReopen.mutate(value)}
                 disabled={readOnly || toggleAutoReopen.isPending}
+              />
+            </div>
+          )}
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2 text-base">
+            <GitBranch className="h-4 w-4 text-primary" />
+            CODEOWNERS-based auto-assignment
+          </CardTitle>
+          <CardDescription>
+            When an auto-created security ticket (above) has no module-assignee-rule match, resolve an assignee from the finding's
+            repo <code>CODEOWNERS</code> file for its file path, or failing that the last GitHub committer on that file — matched to a
+            TimeSphere user via their <strong>GitHub username</strong> (set per user on the Users page). Requires a connected GitHub
+            account below.
+          </CardDescription>
+        </CardHeader>
+        <CardContent>
+          {ingestion.isLoading && <Skeleton className="h-10 w-full" />}
+          {!ingestion.isLoading && (
+            <div className="flex flex-wrap items-center justify-between gap-3 rounded-md border border-border px-3 py-2.5">
+              <div className="min-w-0">
+                <p className="text-sm font-medium">Assign via CODEOWNERS / last committer</p>
+                <p className="text-xs text-muted-foreground">
+                  Off by default — needs a connected GitHub account and at least one user's GitHub username set to do anything.
+                </p>
+              </div>
+              <Switch
+                checked={Boolean(ingestion.data?.codeownersAssignEnabled)}
+                onCheckedChange={(value) => toggleCodeownersAssign.mutate(value)}
+                disabled={readOnly || toggleCodeownersAssign.isPending}
               />
             </div>
           )}

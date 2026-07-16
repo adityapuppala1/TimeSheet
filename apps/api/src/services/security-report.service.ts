@@ -18,8 +18,10 @@ import { prisma } from "../config/prisma.js";
 import { requireTenantContext } from "../config/tenant-context.js";
 import { classifyCiFailure } from "./ai.service.js";
 import { audit } from "./audit.service.js";
+import { fetchGitHubCodeowners, fetchGitHubLastCommitAuthor, parseCodeownersOwners } from "./git-provider.service.js";
 import { dispatchNotification, dispatchTransactional, getGlobalNotificationSettings, templates } from "./notify.service.js";
 import { computeTicketDueDate, getGlobalTicketSettings, issueTicketKey } from "./ticket.service.js";
+import { decryptSecret } from "../utils/encryption.js";
 
 /** Mirrors EMAIL_INTAKE_SYSTEM_EMAIL/CHAT_INTAKE_SYSTEM_EMAIL — a dedicated, unusable-password
  *  system account that satisfies Ticket.reporterId's required FK for findings-sourced tickets.
@@ -292,6 +294,24 @@ export async function maybeAutoCreateTicketForFinding(finding: {
 
   await prisma.securityFinding.update({ where: { id: finding.id }, data: { ticketId: ticket.id } });
 
+  async function notifyAutoAssigned(assignee: { id: string; name: string }, via: string): Promise<void> {
+    await dispatchNotification({
+      userId: assignee.id,
+      category: "ticket.assigned",
+      title: `Ticket assigned: ${ticket.key}`,
+      body: `Auto-assigned (${via}) from an ingested ${finding.severity} ${finding.type} finding: "${ticket.title}".`,
+      link: `/app/tickets?open=${ticket.id}`,
+      email: {
+        templateKey: "ticket.assigned",
+        vars: { assigneeName: assignee.name, ticketKey: ticket.key, title: ticket.title, priority, assignedBy: "Security Ingestion" },
+        fallback: {
+          subject: `Ticket ${ticket.key} assigned to you`,
+          html: templates.ticketAssigned({ assigneeName: assignee.name, ticketKey: ticket.key, title: ticket.title, priority, assignedBy: "Security Ingestion" })
+        }
+      }
+    });
+  }
+
   // Auto-assign the same way email intake does — via the fallback project's own
   // ModuleAssigneeRule, if one of its modules has a default assignee configured. No specific
   // module is implied by a finding, so this checks every module on the fallback project and
@@ -302,37 +322,105 @@ export async function maybeAutoCreateTicketForFinding(finding: {
   if (moduleWithRule) {
     await prisma.ticket.update({ where: { id: ticket.id }, data: { assigneeId: moduleWithRule.defaultAssigneeId, moduleId: moduleWithRule.moduleId } });
     const assignee = await prisma.user.findUnique({ where: { id: moduleWithRule.defaultAssigneeId }, select: { id: true, name: true } });
-    if (assignee) {
-      await dispatchNotification({
-        userId: assignee.id,
-        category: "ticket.assigned",
-        title: `Ticket assigned: ${ticket.key}`,
-        body: `Auto-assigned from an ingested ${finding.severity} ${finding.type} finding: "${ticket.title}".`,
-        link: `/app/tickets?open=${ticket.id}`,
-        email: {
-          templateKey: "ticket.assigned",
-          vars: { assigneeName: assignee.name, ticketKey: ticket.key, title: ticket.title, priority, assignedBy: "Security Ingestion" },
-          fallback: {
-            subject: `Ticket ${ticket.key} assigned to you`,
-            html: templates.ticketAssigned({ assigneeName: assignee.name, ticketKey: ticket.key, title: ticket.title, priority, assignedBy: "Security Ingestion" })
-          }
-        }
+    if (assignee) await notifyAutoAssigned(assignee, "module rule");
+  } else {
+    // No module-level rule configured — fall back to CODEOWNERS/last-committer resolution
+    // (opt-in: only runs when IngestionSettings.codeownersAssignEnabled is on, since it makes a
+    // live GitHub API call per unmatched finding and needs User.githubUsername populated to be
+    // useful at all).
+    const ingestionSettings = await prisma.ingestionSettings.findUnique({ where: { id: "global" } });
+    if (ingestionSettings?.codeownersAssignEnabled) {
+      const codeownerAssignee = await maybeAssignFindingViaCodeowners(finding).catch((error) => {
+        console.warn(`[security-report] CODEOWNERS assignment lookup failed for finding ${finding.id}: ${(error as Error).message}`);
+        return null;
       });
+      if (codeownerAssignee) {
+        await prisma.ticket.update({ where: { id: ticket.id }, data: { assigneeId: codeownerAssignee.id } });
+        await notifyAutoAssigned(codeownerAssignee, "CODEOWNERS/last committer");
+      }
     }
   }
 }
 
 /**
- * Fires from devops-webhook.controller.ts's /test-runs route on a FAILED run that references a
- * ticket. If that ticket is currently RESOLVED/CLOSED and `IngestionSettings.autoReopenEnabled`
- * is on, transitions it back to REOPENED — the one place in this app an automated process
- * changes ticket state with no human click, which is exactly why it's its own explicit opt-in
- * (not folded into any other toggle) and always stamps an audit-log entry + notifies the
- * assignee, matching the "every automated decision is auditable" principle the rest of the AI
- * surface already follows. Deterministic — matches on the CI-supplied ticketKey directly, no AI
- * call involved (that's classifyCiFailure below, a separate opt-in).
+ * Fallback assignee resolution for an auto-created security ticket when no `ModuleAssigneeRule`
+ * matched — tries the finding's repo CODEOWNERS entry for its `filePath` first, then the last
+ * GitHub committer on that file, mapping either's GitHub login to a TimeSphere user via
+ * `User.githubUsername` (falling back to matching the last-committer's commit-author email
+ * against `User.email`, since not every committer necessarily has a linked GitHub login set on
+ * their TimeSphere account). Requires this org to have a live `GitConnection` (Workspace
+ * Settings → Security & DevOps → Git provider) — a no-op, not an error, if one isn't connected,
+ * consistent with every other "requires optional config" gate in this pipeline. Modeled on how
+ * GitHub's own code-scanning alert assignment resolves an owner — see docs/ROADMAP.md's
+ * "Competitive parity" section.
  */
-export async function maybeReopenTicketOnRegression(ticketId: string, provider: string): Promise<void> {
+export async function maybeAssignFindingViaCodeowners(finding: {
+  repository: string | null;
+  branch: string | null;
+  filePath: string | null;
+}): Promise<{ id: string; name: string } | null> {
+  if (!finding.repository || !finding.filePath) return null;
+
+  const connection = await prisma.gitConnection.findUnique({ where: { id: "global" } });
+  if (!connection?.encryptedAccessToken) return null;
+  const accessToken = decryptSecret(connection.encryptedAccessToken);
+
+  const codeowners = await fetchGitHubCodeowners(accessToken, finding.repository, finding.branch ?? undefined).catch(() => null);
+  if (codeowners) {
+    const owners = parseCodeownersOwners(codeowners, finding.filePath);
+    for (const owner of owners) {
+      // Strips a leading "@" and, for team entries ("@org/team-slug"), keeps only the trailing
+      // segment as a best-effort individual-handle match — this pass doesn't resolve team
+      // membership, only direct @handle owners; a team-only CODEOWNERS line falls through to
+      // the last-committer fallback below instead of silently matching the wrong person.
+      const handle = owner.replace(/^@/, "").split("/").pop();
+      if (!handle || owner.includes("/")) continue;
+      const user = await prisma.user.findFirst({
+        where: { githubUsername: handle, status: "ACTIVE", deletedAt: null },
+        select: { id: true, name: true }
+      });
+      if (user) return user;
+    }
+  }
+
+  const lastCommit = await fetchGitHubLastCommitAuthor(accessToken, finding.repository, finding.filePath, finding.branch ?? undefined).catch(
+    () => null
+  );
+  if (lastCommit?.login) {
+    const user = await prisma.user.findFirst({
+      where: { githubUsername: lastCommit.login, status: "ACTIVE", deletedAt: null },
+      select: { id: true, name: true }
+    });
+    if (user) return user;
+  }
+  if (lastCommit?.email) {
+    const user = await prisma.user.findFirst({
+      where: { email: lastCommit.email, status: "ACTIVE", deletedAt: null },
+      select: { id: true, name: true }
+    });
+    if (user) return user;
+  }
+
+  return null;
+}
+
+/**
+ * Fires from devops-webhook.controller.ts's /test-runs route on a FAILED run, and its /findings
+ * route on a new/reintroduced finding, whenever either references a ticket. If that ticket is
+ * currently RESOLVED/CLOSED and `IngestionSettings.autoReopenEnabled` is on, transitions it back
+ * to REOPENED — the one place in this app an automated process changes ticket state with no
+ * human click, which is exactly why it's its own explicit opt-in (not folded into any other
+ * toggle) and always stamps an audit-log entry + notifies the assignee, matching the "every
+ * automated decision is auditable" principle the rest of the AI surface already follows.
+ * Deterministic — matches on the CI-supplied ticketKey directly, no AI call involved (that's
+ * classifyCiFailure below, a separate opt-in). `reason` is a short human-readable trigger
+ * description (e.g. "A failed github-actions test run", "A new CRITICAL SAST finding from
+ * semgrep") — shown verbatim in the audit log and the assignee's notification, so whoever's
+ * looking at "why did this reopen" always sees the actual regression source, not a generic label.
+ * Mirrors Black Duck's Jira-plugin auto-reopen-on-policy-violation behavior — see
+ * docs/ROADMAP.md's "Competitive parity" section for the full comparison this was modeled on.
+ */
+export async function maybeReopenTicketOnRegression(ticketId: string, reason: string): Promise<void> {
   const settings = await prisma.ingestionSettings.findUnique({ where: { id: "global" } });
   if (!settings?.autoReopenEnabled) return;
 
@@ -345,14 +433,14 @@ export async function maybeReopenTicketOnRegression(ticketId: string, provider: 
   if (!allowed.includes("REOPENED")) return; // stays consistent with the one source of truth for legal transitions, even though both current states already allow it
 
   await prisma.ticket.update({ where: { id: ticket.id }, data: { status: "REOPENED", resolvedAt: null, closedAt: null } });
-  await audit(undefined, "ticket.auto_reopened", "Ticket", ticket.id, { reason: `FAILED test run from ${provider}`, from: currentStatus });
+  await audit(undefined, "ticket.auto_reopened", "Ticket", ticket.id, { reason, from: currentStatus });
 
   if (ticket.assigneeId) {
     await dispatchNotification({
       userId: ticket.assigneeId,
       category: "ticket.status_changed",
-      title: `${ticket.key} auto-reopened — CI regression`,
-      body: `A failed ${provider} test run against this ticket reopened it automatically.`,
+      title: `${ticket.key} auto-reopened`,
+      body: `${reason} reopened this ticket automatically.`,
       link: `/app/tickets?open=${ticket.id}`
     });
   }

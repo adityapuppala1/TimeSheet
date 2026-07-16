@@ -78,31 +78,39 @@ import { useAuthStore } from "../store/auth";
 
 const roles = ["SUPER_ADMIN", "ADMIN", "MANAGER", "TEAM_LEAD", "EMPLOYEE"];
 
-const BULK_USER_COLUMNS: Array<{ key: "name" | "email" | "role" | "managerEmail" | "designation" | "password"; label: string; required?: boolean }> = [
+const BULK_USER_COLUMNS: Array<{
+  key: "name" | "email" | "role" | "managerEmail" | "designation" | "githubUsername" | "password";
+  label: string;
+  required?: boolean;
+}> = [
   { key: "name", label: "Name", required: true },
   { key: "email", label: "Email", required: true },
   { key: "role", label: "Role", required: true },
   { key: "managerEmail", label: "Manager email" },
   { key: "designation", label: "Designation" },
+  { key: "githubUsername", label: "GitHub username" },
   { key: "password", label: "Password" }
 ];
 
 const BULK_USER_SAMPLE_CSV = `# TimeSphere bulk user upload — instructions
-# 1. Keep the header row exactly as-is: name,email,role,managerEmail,designation,password
+# 1. Keep the header row exactly as-is: name,email,role,managerEmail,designation,githubUsername,password
 # 2. role must be one of: SUPER_ADMIN, ADMIN, MANAGER, TEAM_LEAD, EMPLOYEE
 # 3. managerEmail is optional — leave blank for no manager. It can reference someone
 #    ELSE in this same file (e.g. a manager and their reports uploaded together) —
 #    upload order inside the file does not matter.
 # 4. designation is optional free text (e.g. "Senior Backend Engineer") — it's just a
 #    display label shown alongside the person's name; it has no effect on permissions.
-# 5. password is optional — leave blank to auto-generate a random one (the user resets
+# 5. githubUsername is optional (no leading @) — lets security-ingestion's CODEOWNERS/
+#    last-committer auto-assignment (Workspace Settings → Security & DevOps) resolve a
+#    finding back to this person.
+# 6. password is optional — leave blank to auto-generate a random one (the user resets
 #    it via the "Forgot password" flow, or an admin uses "Reset password" afterward).
-# 6. Delete these instruction lines (or leave them — lines starting with # are ignored)
+# 7. Delete these instruction lines (or leave them — lines starting with # are ignored)
 #    and replace the example rows below with your own data, then upload.
-name,email,role,managerEmail,designation,password
-Priya Sharma,priya.sharma@example.com,MANAGER,,Engineering Manager,
-Rahul Verma,rahul.verma@example.com,EMPLOYEE,priya.sharma@example.com,Backend Engineer,
-Ananya Iyer,ananya.iyer@example.com,EMPLOYEE,priya.sharma@example.com,Frontend Engineer,
+name,email,role,managerEmail,designation,githubUsername,password
+Priya Sharma,priya.sharma@example.com,MANAGER,,Engineering Manager,priyasharma,
+Rahul Verma,rahul.verma@example.com,EMPLOYEE,priya.sharma@example.com,Backend Engineer,rahulverma,
+Ananya Iyer,ananya.iyer@example.com,EMPLOYEE,priya.sharma@example.com,Frontend Engineer,ananyaiyer,
 `;
 
 const BULK_PROJECT_COLUMNS: Array<{ key: "projectCode" | "projectName" | "moduleName" | "submoduleName"; label: string; required?: boolean }> = [
@@ -147,7 +155,15 @@ function initialsFor(name?: string) {
 export function UsersPage() {
   const queryClient = useQueryClient();
   const users = useQuery({ queryKey: ["users"], queryFn: userApi.list });
-  const [draft, setDraft] = useState({ name: "", email: "", role: "EMPLOYEE", password: "Admin@12345", managerId: "none", designation: "" });
+  const [draft, setDraft] = useState({
+    name: "",
+    email: "",
+    role: "EMPLOYEE",
+    password: "Admin@12345",
+    managerId: "none",
+    designation: "",
+    githubUsername: ""
+  });
   const [editing, setEditing] = useState<UserRow | null>(null);
   const [pendingDelete, setPendingDelete] = useState<{ id: string; name: string } | null>(null);
   const [pendingReset, setPendingReset] = useState<{ id: string; name: string } | null>(null);
@@ -170,7 +186,7 @@ export function UsersPage() {
           duration: 10_000
         });
       }
-      setDraft({ name: "", email: "", role: "EMPLOYEE", password: "Admin@12345", managerId: "none", designation: "" });
+      setDraft({ name: "", email: "", role: "EMPLOYEE", password: "Admin@12345", managerId: "none", designation: "", githubUsername: "" });
       queryClient.invalidateQueries({ queryKey: ["users"] });
     },
     onError: (err: any) => toast.error("Unable to create user", { description: serverMessage(err, "Try again.") })
@@ -223,7 +239,8 @@ export function UsersPage() {
       role: draft.role,
       password: draft.password,
       managerId: draft.managerId === "none" ? null : draft.managerId,
-      designation: draft.designation.trim() || null
+      designation: draft.designation.trim() || null,
+      githubUsername: draft.githubUsername.trim() || null
     });
   }
 
@@ -385,6 +402,13 @@ export function UsersPage() {
                 placeholder="e.g. Senior Backend Engineer"
               />
             </FieldShell>
+            <FieldShell label="GitHub username">
+              <Input
+                value={draft.githubUsername}
+                onChange={(e) => setDraft({ ...draft, githubUsername: e.target.value })}
+                placeholder="e.g. octocat (no @)"
+              />
+            </FieldShell>
             <FieldShell label="Temporary password">
               <Input value={draft.password} onChange={(e) => setDraft({ ...draft, password: e.target.value })} />
             </FieldShell>
@@ -437,6 +461,7 @@ export function UsersPage() {
               role: r.role.trim(),
               managerEmail: r.managerEmail || undefined,
               designation: r.designation || undefined,
+              githubUsername: r.githubUsername || undefined,
               password: r.password || undefined
             }))
           )
@@ -499,7 +524,8 @@ function UserEditDialog({
     role: "EMPLOYEE",
     status: "ACTIVE" as "ACTIVE" | "INACTIVE" | "PENDING_VERIFICATION",
     managerId: "none",
-    designation: ""
+    designation: "",
+    githubUsername: ""
   });
   // Key the form re-initialization on the user's stable id, not the whole
   // user object. This way a background refetch of the users list (which
@@ -513,7 +539,8 @@ function UserEditDialog({
         role: user.role.name,
         status: user.status,
         managerId: user.managerId ?? "none",
-        designation: user.designation ?? ""
+        designation: user.designation ?? "",
+        githubUsername: user.githubUsername ?? ""
       });
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -563,14 +590,25 @@ function UserEditDialog({
                   </Select>
                 </div>
               </div>
-              <div className="grid gap-1.5">
-                <Label htmlFor="ue-designation">Designation</Label>
-                <Input
-                  id="ue-designation"
-                  value={form.designation}
-                  onChange={(e) => setForm({ ...form, designation: e.target.value })}
-                  placeholder="e.g. Senior Backend Engineer"
-                />
+              <div className="grid gap-3 sm:grid-cols-2">
+                <div className="grid gap-1.5">
+                  <Label htmlFor="ue-designation">Designation</Label>
+                  <Input
+                    id="ue-designation"
+                    value={form.designation}
+                    onChange={(e) => setForm({ ...form, designation: e.target.value })}
+                    placeholder="e.g. Senior Backend Engineer"
+                  />
+                </div>
+                <div className="grid gap-1.5">
+                  <Label htmlFor="ue-github">GitHub username</Label>
+                  <Input
+                    id="ue-github"
+                    value={form.githubUsername}
+                    onChange={(e) => setForm({ ...form, githubUsername: e.target.value })}
+                    placeholder="e.g. octocat (no @)"
+                  />
+                </div>
               </div>
               <div className="grid gap-1.5">
                 <Label>Reports to</Label>
@@ -597,7 +635,8 @@ function UserEditDialog({
                     role: form.role,
                     status: form.status,
                     managerId: form.managerId === "none" ? null : form.managerId,
-                    designation: form.designation.trim() || null
+                    designation: form.designation.trim() || null,
+                    githubUsername: form.githubUsername.trim() || null
                   })
                 }
                 disabled={!form.name.trim() || !form.email.trim()}

@@ -123,6 +123,13 @@ model User {
   /// alongside their name (Users table, org chart) so "who does what" reads clearly even when
   /// several people share the same RBAC role.
   designation     String?    @db.VarChar(120)
+  /// GitHub login (no leading @), admin-set — lets the security-ingestion pipeline resolve a
+  /// finding's CODEOWNERS entry or last-committer to a real TimeSphere user for auto-assignment
+  /// (security-report.service.ts#maybeAssignFindingViaCodeowners). Optional and unrelated to
+  /// GitConnection (that's the org's OAuth App credential; this is one person's identity on
+  /// whatever repo the org connected). No uniqueness constraint — nothing in this app requires
+  /// one GitHub login map to exactly one user, though in practice it always will.
+  githubUsername  String?    @db.VarChar(120)
   emailVerifiedAt DateTime?
   lastLoginAt     DateTime?
   /// Admin-only, opt-in. Only read when GlobalTicketSettings.enableCostAnalytics is on.
@@ -1029,6 +1036,14 @@ model IngestionSettings {
   /// Off by default: silently reopening a ticket is exactly the kind of automated state change
   /// that should be an explicit admin opt-in, not a surprise.
   autoReopenEnabled Boolean @default(false)
+  /// Opt-in fallback assignment for an auto-created security ticket (see fallbackProjectId above)
+  /// when no ModuleAssigneeRule matches: resolve an assignee via the finding's repo CODEOWNERS
+  /// entry, or failing that the last GitHub committer on that file — see
+  /// security-report.service.ts#maybeAssignFindingViaCodeowners. Off by default: it makes a live
+  /// GitHub API call per unmatched finding (needs a connected GitConnection to do anything) and
+  /// needs at least one User.githubUsername populated to ever actually resolve someone, so it's
+  /// a no-op cost until an admin has both configured — not worth defaulting on.
+  codeownersAssignEnabled Boolean @default(false)
 
   updatedAt DateTime @updatedAt
 }

@@ -168,6 +168,67 @@ the org's whole security posture, just what's relevant to *this* ticket:
   ticket-lifecycle email does today (assignment, status change, comments) — one new template
   (`ticket.security_digest`), no new mail infrastructure.
 
+**3b. Competitive parity & AI differentiation (Black Duck / OpenText Fortify benchmark)**
+
+Researched 2026-07-15 against Black Duck SCA and OpenText Fortify (Remediation Aviator) — see
+that session's chat for full source links. Verdict: the ingest-only, tool-agnostic architecture
+above is already a better fit for a mid-market SaaS than either vendor's scanner-bundled
+platform, and `autoReopenEnabled`/`ciFailureTriageEnabled`/`ModuleAssigneeRule`-based assignment
+already match features both vendors sell as premium add-ons. The real gaps are SARIF ingestion
+friction, exploitability-aware risk scoring, an analytics surface, and SBOM/license depth. Phased
+so each phase ships, tests green, and is usable standalone before the next starts — no phase
+depends on a later one being done to be valuable on its own.
+
+*Phase 1 — fast wins, reuse existing patterns (ingestion + assignment):*
+- [ ] **SARIF ingestion adapter** — `POST /api/devops/:orgSlug/findings/sarif` (or content-type
+  sniffing on the existing `/findings` route) accepts a raw SARIF 2.1.0 document and maps its
+  `runs[].results[]` into the existing `SecurityFinding` shape — GitHub Code Scanning,
+  `codeql-action`, `semgrep --sarif`, and Azure DevOps' native scan output all land with zero
+  hand-written `jq` translation, closing the single biggest onboarding-friction gap vs.
+  GitHub/Azure's built-in code scanning.
+- [ ] **Finding-level auto-reopen** — extend `autoReopenEnabled`'s trigger beyond failing
+  `TestRun`s to "a new/reintroduced finding lands against a RESOLVED/CLOSED ticket's linked
+  repo+branch," mirroring Black Duck's Jira-plugin `BOM_EDIT`-triggered reopen. Same
+  `security-report.service.ts` function (`maybeAutoReopen` or equivalent), one more call site.
+- [x] **Severity/policy-based ticket auto-creation** — already shipped: any CRITICAL/HIGH finding
+  with no `ticketKey` match auto-creates a `SECURITY`-type ticket (`maybeAutoCreateTicketForFinding`
+  in `security-report.service.ts`), assignee resolved through the existing `ModuleAssigneeRule`
+  chain, same `dispatchTransactional` notify path already wired. Verified during this phase's
+  research pass — no new code needed here.
+- [ ] **CODEOWNERS/last-committer assignment fallback** — when no `ModuleAssigneeRule` matches a
+  finding's `filePath`, resolve an assignee via the repo's `CODEOWNERS` file or the last
+  committer on that file (both fetched through the existing `GitConnection` OAuth token, cached
+  per repo) before falling back to unassigned. This is the concrete "assign to the relevant
+  person" ask — closer to GitHub's own code-scanning alert assignment than either vendor's
+  Jira-plugin approach.
+
+*Phase 2 — analytics surface (net-new page, medium effort, depends on Phase 1's data existing):*
+- [ ] **Security & DevOps analytics page** (`/app/security-insights`, `REPORTS_VIEW`-gated):
+  findings-over-time trend, open-by-severity breakdown, mean-time-to-remediate, top repos/modules
+  by finding count, SAST/DAST/SSAT/SSCT split — built entirely on the `StatCard`/`computeTrend`/
+  `DataTable` shared components already shipped, so this is now cheap.
+- [ ] **Org-wide risk score** — weighted formula (critical×10 + high×5 + medium×2 + low×1,
+  age-decayed) as one more Dashboard `StatCard` for admins.
+
+*Phase 3 — AI differentiation (the actual moat: TimeSphere owns timesheet + org data neither
+vendor has):*
+- [ ] **AI exploitability triage on findings** — sibling toggle to `ciFailureTriageEnabled`
+  scoped to `SecurityFinding` rows: the LLM reads the finding + surrounding code context (via the
+  existing `GitConnection` token) and classifies true/false-positive + suggests a fix, same shape
+  as Fortify Aviator but built on `ai.service.ts`'s existing BYOK pipeline — incremental, not a
+  new subsystem.
+- [ ] **Velocity-aware assignee suggestion** — factor a developer's *actual historical
+  remediation time* (derivable from Timesheet entries logged against past security tickets, per
+  module) into the CODEOWNERS/rule-based suggestion above. Neither Black Duck nor Fortify can do
+  this because neither owns timesheet data — this is the product's real differentiator.
+- [ ] **AI weekly security digest**, generalizing `weekly-digest.worker.ts`'s existing pattern:
+  open-findings trend, newly-critical items, tickets stuck past SLA, sent to admins alongside the
+  existing AI weekly ticket digest.
+- [ ] **SBOM ingestion** (`POST /api/devops/:orgSlug/sbom`, SPDX/CycloneDX) — a basic "dependency
+  inventory + known-CVE cross-reference" view, deliberately not attempting Black Duck's full
+  license-obligation-text depth (low ROI for this product's target market — legal-team-grade
+  tooling most mid-market customers won't use).
+
 **4. AI auto bug/issue detection + auto-reopen**
 - The highest-leverage AI feature in this cluster: point the same BYOK `ai.service.ts` pipeline
   that already classifies inbound email/chat messages at **CI failure logs and error-tracking
