@@ -130,6 +130,11 @@ model User {
   /// whatever repo the org connected). No uniqueness constraint — nothing in this app requires
   /// one GitHub login map to exactly one user, though in practice it always will.
   githubUsername  String?    @db.VarChar(120)
+  /// The IdP's own opaque id for this user (SCIM's `externalId`), set only for users provisioned
+  /// via SCIM (scim.controller.ts). Unique so a single IdP push always maps to exactly one row;
+  /// null for every manually-created/SSO-first-login user, which is fine — MySQL unique indexes
+  /// allow any number of NULLs.
+  scimExternalId  String?    @unique @db.VarChar(255)
   emailVerifiedAt DateTime?
   lastLoginAt     DateTime?
   /// Admin-only, opt-in. Only read when GlobalTicketSettings.enableCostAnalytics is on.
@@ -1158,6 +1163,22 @@ model IngestionSettings {
   codeownersAssignEnabled Boolean  @default(false)
 
   updatedAt DateTime @updatedAt
+}
+
+/// Inbound SCIM 2.0 provisioning (see docs/ROADMAP.md's "Integrations" theme and
+/// scim.controller.ts). Same singleton-plus-bearer-token model as IngestionSettings — an IdP
+/// (Okta, Azure AD/Entra, OneLogin, ...) is configured with this org's SCIM base URL
+/// (`/api/scim/:orgSlug/v2`) and the plaintext token shown once at generation time; every
+/// subsequent SCIM request from the IdP carries that token as its bearer credential, checked
+/// with `crypto.timingSafeEqual` the same way devops-webhook.controller.ts checks
+/// IngestionSettings' token. Deliberately NOT tied to SsoConfig/OrgSsoConfig: an org can run
+/// SCIM provisioning against an IdP without necessarily using that same IdP for SSO login (or
+/// vice versa) — the two are related in practice but not coupled in this schema.
+model ScimSettings {
+  id             String   @id
+  encryptedToken String?
+  isEnabled      Boolean  @default(false)
+  updatedAt      DateTime @updatedAt
 }
 
 /// Live git-provider OAuth connection — see docs/ROADMAP.md's "Live git-provider App

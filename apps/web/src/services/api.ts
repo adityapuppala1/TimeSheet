@@ -546,6 +546,14 @@ export const settingsApi = {
    *  and at least one User.githubUsername set to ever resolve anyone. */
   updateSecurityIngestionCodeownersAssign: async (codeownersAssignEnabled: boolean) =>
     (await api.patch<{ codeownersAssignEnabled: boolean }>("/settings/security-ingestion/codeowners-assign", { codeownersAssignEnabled })).data,
+  /** Inbound SCIM 2.0 provisioning — see scim.controller.ts. `baseUrl` is what the admin pastes
+   *  into their IdP's SCIM connector config, alongside a rotated bearer token. */
+  getScim: async () => (await api.get<{ tokenSet: boolean; isEnabled: boolean; baseUrl: string }>("/settings/scim")).data,
+  updateScimEnabled: async (isEnabled: boolean) => (await api.patch<{ isEnabled: boolean }>("/settings/scim/enabled", { isEnabled })).data,
+  /** Returns the new token in plaintext — the ONE time it's ever visible, same trade-off as
+   *  rotateSecurityIngestionToken above. */
+  rotateScimToken: async () => (await api.post<{ token: string }>("/settings/scim/rotate-token")).data,
+  disableScim: async () => api.delete("/settings/scim/token"),
   /** VAPT findings never go through the CI ingestion webhook (see docs/SECURITY_DEVOPS_INTEGRATIONS.md
    *  §4) — this uploads a structured JSON report directly, parsed into the same SecurityFinding
    *  rows as the automated types. */

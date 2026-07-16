@@ -70,10 +70,17 @@ step ships/tests/ships before the next starts, same discipline as the DevOps clu
   `webhook-dispatch.service.ts`) — see [docs/API.md § Public API](API.md#public-api).
 - [ ] **Calendar sync** (Google/Outlook) — deadline-aware scheduling, reads the SLA due dates that
   already exist on tickets. Needs the org's own Google/Microsoft OAuth App credentials (same BYOK
-  model as SSO/GitHub — no TimeSphere-operated client ever touches a customer's calendar).
-- [ ] **SCIM provisioning** — enterprise directory-sync user lifecycle, pairing with the SAML/LDAP
-  SSO that already exists per-org (SSO today authenticates but doesn't provision). Needs the
-  identity provider's SCIM bearer token, admin-configured per org.
+  model as SSO/GitHub — no TimeSphere-operated client ever touches a customer's calendar). Not
+  built yet — the Workspace Settings → Integrations tab has a placeholder card pointing here.
+- [x] **SCIM provisioning** — inbound SCIM 2.0 (`scim.controller.ts`, `/api/scim/:orgSlug/v2/Users`),
+  pairing with the SAML/LDAP SSO that already exists per-org (SSO authenticates; this provisions).
+  Covers create/list-with-filter/get/patch-deactivate/delete on the Users resource; Groups and the
+  ServiceProviderConfig discovery endpoint aren't implemented. Same per-org bearer-token model as
+  the DevOps ingestion webhooks (Workspace Settings → Integrations), admin-generated and rotatable.
+  Live-tested end-to-end against a hand-built SCIM client (create/list/get/patch/delete all
+  verified) since no real IdP credentials are available in this environment — the wire format
+  matches RFC 7644 exactly, so a real IdP (Okta, Azure AD/Entra) integration is just pointing it
+  at the base URL, not further code changes.
 
 ### Monetization readiness
 - [ ] Self-serve Stripe billing wired to the existing `PlanTierLimit` model — turns the current

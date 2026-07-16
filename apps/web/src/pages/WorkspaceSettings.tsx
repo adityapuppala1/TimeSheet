@@ -82,6 +82,7 @@ import { useAuthStore } from "../store/auth";
 import { ChatIntegrationsSettingsCard } from "./settings/ChatIntegrationsSettingsCard";
 import { MailServerSettingsCard } from "./settings/MailServerSettingsCard";
 import { PublicApiSettingsCard } from "./settings/PublicApiSettingsCard";
+import { IntegrationsSettingsCard } from "./settings/IntegrationsSettingsCard";
 import { SecurityDevOpsSettingsCard } from "./settings/SecurityDevOpsSettingsCard";
 
 // Matches the exact chart styling convention used in Insights.tsx (this repo's `dataviz`
@@ -155,6 +156,7 @@ export function WorkspaceSettingsPage() {
           <TabsTrigger value="email-intake">Email intake</TabsTrigger>
           <TabsTrigger value="chat-integrations">Chat integrations</TabsTrigger>
           <TabsTrigger value="security-devops">Security & DevOps</TabsTrigger>
+          <TabsTrigger value="integrations">Integrations</TabsTrigger>
           <TabsTrigger value="public-api">Public API</TabsTrigger>
           <TabsTrigger value="sso">Single sign-on</TabsTrigger>
           <TabsTrigger value="bcc">BCC & forms</TabsTrigger>
@@ -190,6 +192,10 @@ export function WorkspaceSettingsPage() {
 
         <TabsContent value="security-devops">
           <SecurityDevOpsSettingsCard readOnly={!isSuperAdmin} />
+        </TabsContent>
+
+        <TabsContent value="integrations">
+          <IntegrationsSettingsCard readOnly={!isSuperAdmin} />
         </TabsContent>
 
         <TabsContent value="public-api">

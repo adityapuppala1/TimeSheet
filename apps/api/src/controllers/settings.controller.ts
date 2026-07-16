@@ -558,6 +558,55 @@ settingsRouter.delete("/security-ingestion/token", requireSuperAdmin, async (req
 });
 
 /**
+ * Inbound SCIM 2.0 provisioning — same GET-status/rotate-token/delete-token shape as
+ * security-ingestion above, targeting ScimSettings instead of IngestionSettings. See
+ * scim.controller.ts for the actual /Users endpoints an IdP calls with this token.
+ */
+settingsRouter.get("/scim", requireSuperAdmin, async (_req, res) => {
+  const { orgSlug } = requireTenantContext();
+  const settings = await prisma.scimSettings.findUnique({ where: { id: "global" } });
+  res.json({
+    tokenSet: Boolean(settings?.encryptedToken),
+    isEnabled: settings?.isEnabled ?? false,
+    baseUrl: `/api/scim/${orgSlug}/v2`
+  });
+});
+
+const scimEnabledSchema = z.object({ body: z.object({ isEnabled: z.boolean() }).strict() });
+
+settingsRouter.patch("/scim/enabled", requireSuperAdmin, validate(scimEnabledSchema), async (req, res) => {
+  const updated = await prisma.scimSettings.upsert({
+    where: { id: "global" },
+    update: { isEnabled: req.body.isEnabled },
+    create: { id: "global", isEnabled: req.body.isEnabled }
+  });
+  await audit(req.user!.id, "settings.scim_enabled_updated", "ScimSettings", "global", { isEnabled: req.body.isEnabled });
+  res.json({ isEnabled: updated.isEnabled });
+});
+
+settingsRouter.post("/scim/rotate-token", requireSuperAdmin, async (req, res) => {
+  const token = crypto.randomBytes(32).toString("hex");
+  await prisma.scimSettings.upsert({
+    where: { id: "global" },
+    update: { encryptedToken: encryptSecret(token) },
+    create: { id: "global", encryptedToken: encryptSecret(token) }
+  });
+  await audit(req.user!.id, "settings.scim_token_rotated", "ScimSettings", "global");
+  // Same one-time-plaintext-reveal trade-off as /security-ingestion/rotate-token above.
+  res.json({ token });
+});
+
+settingsRouter.delete("/scim/token", requireSuperAdmin, async (req, res) => {
+  await prisma.scimSettings.upsert({
+    where: { id: "global" },
+    update: { encryptedToken: null, isEnabled: false },
+    create: { id: "global", encryptedToken: null, isEnabled: false }
+  });
+  await audit(req.user!.id, "settings.scim_disabled", "ScimSettings", "global");
+  res.status(204).send();
+});
+
+/**
  * Outbound SMTP ("Mail server") — same masked-secret pattern as email-intake.controller.ts's
  * IMAP settings (GET returns `passwordSet: boolean`, never the plaintext; PATCH only overwrites
  * the password when a non-empty string is sent). See services/mail.service.ts's header comment

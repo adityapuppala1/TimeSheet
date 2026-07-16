@@ -31,6 +31,7 @@ import { devopsWebhookRouter } from "./controllers/devops-webhook.controller.js"
 import { gitConnectionRouter } from "./controllers/git-connection.controller.js";
 import { gitWebhookRouter } from "./controllers/git-webhook.controller.js";
 import { publicApiRouter } from "./controllers/public-api.controller.js";
+import { scimRouter } from "./controllers/scim.controller.js";
 import { emailIntakeRouter } from "./controllers/email-intake.controller.js";
 import { emailTemplatesRouter } from "./controllers/email-templates.controller.js";
 import { labelRouter } from "./controllers/label.controller.js";
@@ -167,6 +168,11 @@ app.use("/api/platform-admin", platformAdminRouter);
 // before the blanket one below).
 const devopsWebhookLimiter = rateLimit({ windowMs: 60_000, limit: 120, standardHeaders: true });
 app.use("/api/devops", devopsWebhookLimiter, devopsWebhookRouter);
+
+// Inbound SCIM 2.0 provisioning — see controllers/scim.controller.ts's header comment. Same
+// "external caller (the IdP) has no Host-header subdomain" reasoning as the receivers above.
+const scimLimiter = rateLimit({ windowMs: 60_000, limit: 120, standardHeaders: true });
+app.use("/api/scim", scimLimiter, scimRouter);
 
 // GitHub OAuth callback — see controllers/git-connection.controller.ts's header comment for
 // why this needs the same pre-tenant-resolution mounting as SSO above (one fixed callback URL,
