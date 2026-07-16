@@ -200,7 +200,8 @@ type AIFeatureToggle =
   | "ciFailureTriageEnabled"
   | "aiPrReviewSummaryEnabled"
   | "findingTriageEnabled"
-  | "securityWeeklyDigestEnabled";
+  | "securityWeeklyDigestEnabled"
+  | "statusReportEnabled";
 
 /** Throws a 403 unless AI is enabled workspace-wide AND the specific feature's toggle is on. */
 export async function assertAIFeatureEnabled(feature: AIFeatureToggle): Promise<Awaited<ReturnType<typeof getGlobalAISettings>>> {
@@ -1087,4 +1088,54 @@ export async function generateSecurityWeeklyDigest(params: {
   });
 
   return { summary: result.text };
+}
+
+/**
+ * On-demand "generate a stakeholder update" for one project — reuses generateWeeklyDigest's
+ * prompt shape (given numbers only, no invented analysis) but is triggered synchronously from
+ * the Project page rather than a cron worker, and scoped to a project instead of a person.
+ */
+export async function generateStatusReport(params: {
+  projectName: string;
+  periodLabel: string;
+  ticketsCreated: number;
+  ticketsResolved: number;
+  openCount: number;
+  overdueCount: number;
+  hoursLogged: number;
+  notableTickets: Array<{ key: string; title: string; status: string }>;
+  userId?: string;
+}): Promise<{ report: string }> {
+  const { settings } = await preflight("statusReportEnabled");
+
+  const ticketLines = params.notableTickets.map((t) => `- [${t.key}] ${t.title} (${t.status})`).join("\n") || "(none)";
+  const prompt = [
+    `Write a short stakeholder status update (4-7 sentences, plain prose, no headings/bullets in the output) for the project "${params.projectName}" covering ${params.periodLabel}.`,
+    "",
+    `Tickets created: ${params.ticketsCreated}`,
+    `Tickets resolved: ${params.ticketsResolved}`,
+    `Currently open: ${params.openCount}`,
+    `Overdue: ${params.overdueCount}`,
+    `Hours logged: ${params.hoursLogged}`,
+    "Notable tickets:",
+    ticketLines,
+    "",
+    "Write for a non-technical stakeholder reading this outside the team — plain language, no jargon. Be factual, don't invent numbers beyond what's given, and call out overdue items if any exist rather than glossing over them."
+  ].join("\n");
+
+  const result = await callChat(settings, {
+    model: settings.model,
+    maxTokens: 500,
+    prompt: `${prompt}\n\nRespond with ONLY the status update paragraph(s) — no preamble, no subject line.`
+  });
+
+  await logAIUsage({
+    feature: "status_report",
+    model: settings.model,
+    inputTokens: result.usage.inputTokens,
+    outputTokens: result.usage.outputTokens,
+    userId: params.userId
+  });
+
+  return { report: result.text };
 }

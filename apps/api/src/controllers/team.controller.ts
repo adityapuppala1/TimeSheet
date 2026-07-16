@@ -214,3 +214,84 @@ teamRouter.get("/org-chart", async (req, res) => {
 
   res.json(roots.map(buildNode));
 });
+
+/**
+ * GET /api/team/timesheet-anomalies
+ * Opt-in manager insight — flags unusual hour patterns among direct reports, not an automatic
+ * block (same human-review posture low-confidence email/chat triage already uses elsewhere in
+ * this app). Two deterministic checks, no AI/LLM call needed since this is threshold arithmetic
+ * over data already logged, not a language-understanding task:
+ *  - BURNOUT: a direct report logged 55+ hours in any of the last 4 ISO weeks (sustained
+ *    overtime signal).
+ *  - IMPLAUSIBLE: a direct report logged more than 16 hours on a single day (a plain physical
+ *    upper bound — flags likely data-entry errors or padded entries, not an accusation).
+ * Thresholds are fixed constants for this first pass, not admin-configurable yet — tune them
+ * from real usage before exposing a settings UI for numbers nobody has validated.
+ */
+const BURNOUT_WEEKLY_HOURS_THRESHOLD = 55;
+const IMPLAUSIBLE_DAILY_HOURS_THRESHOLD = 16;
+
+function isoWeekKey(date: Date): string {
+  const d = new Date(Date.UTC(date.getFullYear(), date.getMonth(), date.getDate()));
+  const day = (d.getUTCDay() + 6) % 7; // Mon=0..Sun=6
+  d.setUTCDate(d.getUTCDate() - day); // Monday of that week
+  return d.toISOString().slice(0, 10);
+}
+
+teamRouter.get("/timesheet-anomalies", async (req, res) => {
+  const myReportIds = (
+    await prisma.user.findMany({
+      where: { managerId: req.user!.id, deletedAt: null },
+      select: { id: true }
+    })
+  ).map((u) => u.id);
+
+  if (myReportIds.length === 0) return res.json({ burnout: [], implausible: [] });
+
+  const fourWeeksAgo = new Date(Date.now() - 28 * 24 * 60 * 60 * 1000);
+  const entries = await prisma.timesheet.findMany({
+    where: { userId: { in: myReportIds }, deletedAt: null, workDate: { gte: fourWeeksAgo } },
+    select: { userId: true, workDate: true, totalHours: true, user: { select: { name: true } } }
+  });
+
+  const weeklyByUser = new Map<string, Map<string, number>>();
+  const dailyByUser = new Map<string, Map<string, number>>();
+  for (const entry of entries) {
+    const hours = Number(entry.totalHours);
+    const weekKey = isoWeekKey(entry.workDate);
+    const dayKey = entry.workDate.toISOString().slice(0, 10);
+
+    const weekMap = weeklyByUser.get(entry.userId) ?? new Map<string, number>();
+    weekMap.set(weekKey, (weekMap.get(weekKey) ?? 0) + hours);
+    weeklyByUser.set(entry.userId, weekMap);
+
+    const dayMap = dailyByUser.get(entry.userId) ?? new Map<string, number>();
+    dayMap.set(dayKey, (dayMap.get(dayKey) ?? 0) + hours);
+    dailyByUser.set(entry.userId, dayMap);
+  }
+
+  const namesById = new Map(entries.map((e) => [e.userId, e.user.name]));
+
+  const burnout: Array<{ userId: string; name: string; weekStart: string; hours: number }> = [];
+  for (const [userId, weekMap] of weeklyByUser) {
+    for (const [weekStart, hours] of weekMap) {
+      if (hours >= BURNOUT_WEEKLY_HOURS_THRESHOLD) {
+        burnout.push({ userId, name: namesById.get(userId) ?? "Unknown", weekStart, hours: Number(hours.toFixed(1)) });
+      }
+    }
+  }
+
+  const implausible: Array<{ userId: string; name: string; date: string; hours: number }> = [];
+  for (const [userId, dayMap] of dailyByUser) {
+    for (const [date, hours] of dayMap) {
+      if (hours > IMPLAUSIBLE_DAILY_HOURS_THRESHOLD) {
+        implausible.push({ userId, name: namesById.get(userId) ?? "Unknown", date, hours: Number(hours.toFixed(1)) });
+      }
+    }
+  }
+
+  burnout.sort((a, b) => b.hours - a.hours);
+  implausible.sort((a, b) => b.hours - a.hours);
+
+  res.json({ burnout, implausible });
+});

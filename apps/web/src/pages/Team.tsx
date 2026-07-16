@@ -378,8 +378,59 @@ export function Team() {
         </CardContent>
       </Card>
 
+      <AnomaliesCard />
       <OrgChartCard />
     </div>
+  );
+}
+
+/** Opt-in insight, never a block — sustained-overtime (burnout) and implausible-single-day
+ *  (likely data-entry error) flags among direct reports, computed server-side from thresholds
+ *  over already-logged hours (no AI call — see team.controller.ts's doc comment on why this is
+ *  deterministic arithmetic, not a language-understanding task). Renders nothing when there's
+ *  nothing to flag, same "silence on a quiet result" posture the AI weekly digests use. */
+function AnomaliesCard() {
+  const anomalies = useQuery({ queryKey: ["team", "timesheet-anomalies"], queryFn: teamApi.timesheetAnomalies });
+  const hasAny = (anomalies.data?.burnout.length ?? 0) > 0 || (anomalies.data?.implausible.length ?? 0) > 0;
+
+  if (!anomalies.isLoading && !hasAny) return null;
+
+  return (
+    <Card className="border-warning/40">
+      <CardHeader>
+        <CardTitle className="flex items-center gap-2 text-base">
+          <AlertTriangle className="h-4 w-4 text-warning" /> Timesheet anomalies
+        </CardTitle>
+        <CardDescription>
+          Unusual hour patterns among your direct reports, last 4 weeks — informational only, nothing is blocked or flagged to them.
+        </CardDescription>
+      </CardHeader>
+      <CardContent className="grid gap-3">
+        {anomalies.isLoading && <Skeleton className="h-16 w-full" />}
+        {!anomalies.isLoading && (anomalies.data?.burnout.length ?? 0) > 0 && (
+          <div className="grid gap-1.5">
+            <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Sustained overtime</p>
+            {anomalies.data!.burnout.map((b, i) => (
+              <p key={i} className="text-sm">
+                <span className="font-medium">{b.name}</span> logged <span className="font-semibold text-warning">{b.hours}h</span> the
+                week of {new Date(b.weekStart).toLocaleDateString(undefined, { month: "short", day: "numeric" })}
+              </p>
+            ))}
+          </div>
+        )}
+        {!anomalies.isLoading && (anomalies.data?.implausible.length ?? 0) > 0 && (
+          <div className="grid gap-1.5">
+            <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Implausible daily total</p>
+            {anomalies.data!.implausible.map((a, i) => (
+              <p key={i} className="text-sm">
+                <span className="font-medium">{a.name}</span> logged <span className="font-semibold text-destructive">{a.hours}h</span> on{" "}
+                {new Date(a.date).toLocaleDateString(undefined, { month: "short", day: "numeric" })}
+              </p>
+            ))}
+          </div>
+        )}
+      </CardContent>
+    </Card>
   );
 }
 

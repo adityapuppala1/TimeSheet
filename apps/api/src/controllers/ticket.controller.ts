@@ -35,6 +35,7 @@ import { templates } from "../services/mail-templates.js";
 import { buildTicketSecurityReport, sendTicketClosedDigest } from "../services/security-report.service.js";
 import { dispatchOutboundWebhooks } from "../services/webhook-dispatch.service.js";
 import {
+  applyTicketRules,
   assertTicketVisible,
   assertValidTicketType,
   canModifyTicket,
@@ -121,6 +122,67 @@ ticketRouter.get("/", requirePermission(permissions.TICKETS_VIEW), async (req, r
     take: 200
   });
   res.json(tickets);
+});
+
+/**
+ * Workload+expertise-ranked assignee suggestion — a deterministic ranking over data the
+ * Insights workload heatmap already aggregates (open ticket count, past resolved tickets in
+ * this project/module), NOT an LLM call: "who's free and has done this kind of work before" is
+ * a data query, not a language-understanding task, so this skips ai.service.ts's cost/budget
+ * pipeline entirely — no AI toggle needed for it to work. Rendered as a dismissible suggestion
+ * chip on ticket creation (never a silent auto-assign), same posture as the AI triage suggestion
+ * chip it sits next to in the UI. Registered BEFORE `/:id` below — Express matches routes in
+ * registration order, so `/:id` would otherwise swallow `/suggest-assignee` as if "id" were the
+ * literal string "suggest-assignee".
+ */
+ticketRouter.get("/suggest-assignee", requirePermission(permissions.TICKETS_WRITE), async (req, res) => {
+  const projectId = String(req.query.projectId ?? "");
+  const moduleId = req.query.moduleId ? String(req.query.moduleId) : undefined;
+  if (!projectId) throw new AppError(422, "projectId is required");
+
+  const members = await prisma.userProjectAssignment.findMany({
+    where: { projectId },
+    select: { user: { select: { id: true, name: true, status: true, deletedAt: true } } }
+  });
+  const candidates = members.map((m) => m.user).filter((u) => u.status === "ACTIVE" && !u.deletedAt);
+  if (candidates.length === 0) return res.json({ suggestions: [] });
+
+  const candidateIds = candidates.map((c) => c.id);
+  const [openCounts, expertiseCounts] = await Promise.all([
+    prisma.ticket.groupBy({
+      by: ["assigneeId"],
+      where: { assigneeId: { in: candidateIds }, deletedAt: null, status: { notIn: ["RESOLVED", "CLOSED"] } },
+      _count: true
+    }),
+    prisma.ticket.groupBy({
+      by: ["assigneeId"],
+      where: {
+        assigneeId: { in: candidateIds },
+        deletedAt: null,
+        status: { in: ["RESOLVED", "CLOSED"] },
+        projectId,
+        ...(moduleId ? { moduleId } : {})
+      },
+      _count: true
+    })
+  ]);
+  const openById = new Map(openCounts.map((r) => [r.assigneeId, r._count]));
+  const expertiseById = new Map(expertiseCounts.map((r) => [r.assigneeId, r._count]));
+
+  const ranked = candidates
+    .map((c) => {
+      const openTicketCount = openById.get(c.id) ?? 0;
+      const resolvedHereCount = expertiseById.get(c.id) ?? 0;
+      // Favor prior experience in this exact project/module, penalize current open load —
+      // weighting is deliberately simple (not tuned against real usage data yet) so it's easy
+      // to explain in the UI ("2 open, 5 resolved here") rather than an opaque single number.
+      const score = resolvedHereCount * 2 - openTicketCount;
+      return { userId: c.id, name: c.name, openTicketCount, resolvedHereCount, score };
+    })
+    .sort((a, b) => b.score - a.score)
+    .slice(0, 3);
+
+  res.json({ suggestions: ranked });
 });
 
 ticketRouter.get("/:id", requirePermission(permissions.TICKETS_VIEW), async (req, res) => {
@@ -212,29 +274,74 @@ ticketRouter.post("/", requirePermission(permissions.TICKETS_WRITE), validate(cr
   await audit(req.user!.id, "ticket.created", "Ticket", ticket.id, { key: ticket.key });
   await dispatchOutboundWebhooks("ticket.created", { ticket });
 
-  if (ticket.assignee && ticket.assignee.id !== req.user!.id) {
+  // Rules engine (Workspace Settings → Ticketing → Automation) — only runs when the creator
+  // didn't already pick an assignee, so an explicit human choice always wins over an automated
+  // default; a rule is a fallback, not an override. Manual-creation-only, same as
+  // applyTicketRules's own doc comment explains (email/chat intake keep their existing routing).
+  let finalTicket = ticket;
+  if (!assigneeId) {
+    const appliedRule = await applyTicketRules({
+      id: ticket.id,
+      key: ticket.key,
+      title: ticket.title,
+      projectId: ticket.projectId,
+      priority: ticket.priority,
+      source: ticket.source,
+      externalReporterEmail: ticket.externalReporterEmail
+    }).catch((error) => {
+      console.warn(`[ticket.controller] rules engine failed for ticket ${ticket.id}: ${(error as Error).message}`);
+      return null;
+    });
+    if (appliedRule) {
+      await audit(req.user!.id, "ticket.rule_applied", "Ticket", ticket.id, { ruleId: appliedRule.ruleId, ruleName: appliedRule.ruleName });
+      if (appliedRule.assigneeId) {
+        finalTicket = await prisma.ticket.findUniqueOrThrow({
+          where: { id: ticket.id },
+          include: {
+            project: { select: { id: true, code: true, name: true } },
+            module: { select: { id: true, name: true } },
+            reporter: { select: USER_SUMMARY },
+            assignee: { select: USER_SUMMARY }
+          }
+        });
+      }
+      if (appliedRule.notifyUserId) {
+        // In-app only (no email field) — a rule "notify" is a lightweight heads-up, not the
+        // same weight as an actual assignment, so it doesn't need its own email template.
+        await dispatchNotification({
+          userId: appliedRule.notifyUserId,
+          category: "ticket.assigned",
+          title: `Rule matched on ${ticket.key}`,
+          body: `"${appliedRule.ruleName}" matched "${ticket.title}" — flagged for your attention.`,
+          link: `/app/tickets?open=${ticket.id}`
+        });
+      }
+    }
+  }
+
+  if (finalTicket.assignee && finalTicket.assignee.id !== req.user!.id) {
     await dispatchNotification({
-      userId: ticket.assignee.id,
+      userId: finalTicket.assignee.id,
       category: "ticket.assigned",
-      title: `Ticket assigned: ${ticket.key}`,
-      body: `${req.user!.name} assigned "${ticket.title}" to you.`,
-      link: `/app/tickets?open=${ticket.id}`,
+      title: `Ticket assigned: ${finalTicket.key}`,
+      body: `${req.user!.name} assigned "${finalTicket.title}" to you.`,
+      link: `/app/tickets?open=${finalTicket.id}`,
       email: {
         templateKey: "ticket.assigned",
         vars: {
-          assigneeName: ticket.assignee.name,
-          ticketKey: ticket.key,
-          title: ticket.title,
-          priority: ticket.priority,
+          assigneeName: finalTicket.assignee.name,
+          ticketKey: finalTicket.key,
+          title: finalTicket.title,
+          priority: finalTicket.priority,
           assignedBy: req.user!.name
         },
         fallback: {
-          subject: `Ticket ${ticket.key} assigned to you`,
+          subject: `Ticket ${finalTicket.key} assigned to you`,
           html: templates.ticketAssigned({
-            assigneeName: ticket.assignee.name,
-            ticketKey: ticket.key,
-            title: ticket.title,
-            priority: ticket.priority,
+            assigneeName: finalTicket.assignee.name,
+            ticketKey: finalTicket.key,
+            title: finalTicket.title,
+            priority: finalTicket.priority,
             assignedBy: req.user!.name
           })
         }
@@ -242,7 +349,7 @@ ticketRouter.post("/", requirePermission(permissions.TICKETS_WRITE), validate(cr
     });
   }
 
-  res.status(201).json(ticket);
+  res.status(201).json(finalTicket);
 });
 
 const patchSchema = z.object({

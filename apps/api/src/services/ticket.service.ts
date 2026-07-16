@@ -128,3 +128,65 @@ export function canReopenClosedTicket(req: any): boolean {
     req.user.permissions.includes(permissions.TICKETS_MANAGE)
   );
 }
+
+/**
+ * General-purpose if/then automation on manually-created tickets — see prisma/schema.prisma's
+ * TicketRule doc comment for the full model rationale. Evaluated once, right after a ticket is
+ * created via the manual-creation route (ticket.controller.ts's POST /) — email/chat intake keep
+ * using their own existing routing (EmailRoutingRule/ChatRoutingRule/ModuleAssigneeRule), so this
+ * never runs for those sources; a rule with `conditionSource: EMAIL` is honored on the rare
+ * "someone manually re-creates what looks like an email-sourced ticket" case, not real inbound
+ * mail (which never reaches this function).
+ *
+ * Rules are evaluated in `order` ascending; the FIRST rule whose every set condition matches
+ * wins (same semantics `ModuleAssigneeRule` lookups already use elsewhere) — later rules are not
+ * merged in, so an admin ordering two overlapping rules gets a single predictable outcome instead
+ * of last-write-wins field-by-field surprises.
+ */
+export interface AppliedTicketRule {
+  ruleId: string;
+  ruleName: string;
+  assigneeId: string | null;
+  notifyUserId: string | null;
+}
+
+export async function applyTicketRules(ticket: {
+  id: string;
+  key: string;
+  title: string;
+  projectId: string;
+  priority: TicketPriority;
+  source: string;
+  externalReporterEmail: string | null;
+}): Promise<AppliedTicketRule | null> {
+  const rules = await prisma.ticketRule.findMany({ where: { isActive: true }, orderBy: { order: "asc" } });
+  if (rules.length === 0) return null;
+
+  const senderDomain = ticket.externalReporterEmail?.split("@")[1]?.toLowerCase();
+
+  const matched = rules.find((rule) => {
+    if (rule.conditionProjectId && rule.conditionProjectId !== ticket.projectId) return false;
+    if (rule.conditionPriority && rule.conditionPriority !== ticket.priority) return false;
+    if (rule.conditionSource && rule.conditionSource !== ticket.source) return false;
+    if (rule.conditionSenderDomain && rule.conditionSenderDomain.toLowerCase() !== senderDomain) return false;
+    return true;
+  });
+  if (!matched) return null;
+
+  if (matched.actionAssigneeId) {
+    await prisma.ticket.update({ where: { id: ticket.id }, data: { assigneeId: matched.actionAssigneeId } });
+  }
+  if (matched.actionLabelId) {
+    await prisma.ticketLabel.upsert({
+      where: { ticketId_labelId: { ticketId: ticket.id, labelId: matched.actionLabelId } },
+      update: {},
+      create: { ticketId: ticket.id, labelId: matched.actionLabelId }
+    });
+  }
+
+  // Notification/email dispatch is the caller's job (ticket.controller.ts's POST / handler) —
+  // it already knows how to send the "you've been assigned" email for a create-time assigneeId,
+  // so returning the matched rule here lets it reuse that exact same code path for a
+  // rule-assigned ticket instead of this function duplicating it.
+  return { ruleId: matched.id, ruleName: matched.name, assigneeId: matched.actionAssigneeId, notifyUserId: matched.actionNotifyUserId };
+}

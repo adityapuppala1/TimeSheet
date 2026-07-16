@@ -275,6 +275,9 @@ export interface GlobalAISettings {
   /** Gates ai.service.ts#generateSecurityWeeklyDigest — an org-wide security summary emailed to
    *  every ADMIN/SUPER_ADMIN weekly. See workers/security-weekly-digest.worker.ts. */
   securityWeeklyDigestEnabled: boolean;
+  /** Gates ai.service.ts#generateStatusReport — on-demand project stakeholder update, triggered
+   *  synchronously from the Project page rather than a cron worker. */
+  statusReportEnabled: boolean;
   model: string;
   confidenceThreshold: number;
   monthlyBudgetUsd: number | null;

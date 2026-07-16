@@ -332,6 +332,8 @@ export const reportApi = {
   sbomInventory: async () => (await api.get<SbomInventory>("/reports/sbom-inventory")).data,
   costInsights: async () => (await api.get<CostInsights>("/reports/cost-insights")).data,
   leaderboard: async () => (await api.get<{ rows: LeaderboardRow[] }>("/reports/leaderboard")).data,
+  statusReport: async (projectId: string, periodDays = 7) =>
+    (await api.post<{ report: string; projectName: string; periodLabel: string }>("/reports/status-report", { projectId, periodDays })).data,
   download: async (type: "csv" | "pdf") => (await api.get(`/reports/export.${type}`, { responseType: "blob" })).data
 };
 
@@ -421,7 +423,16 @@ export const teamApi = {
       }>("/team/sla-summary")
     ).data,
   /** Privileged roles see the whole company tree; everyone else sees only their own subtree. */
-  orgChart: async () => (await api.get<OrgChartNode[]>("/team/org-chart")).data
+  orgChart: async () => (await api.get<OrgChartNode[]>("/team/org-chart")).data,
+  /** Opt-in manager insight — sustained-overtime and implausible-daily-total flags among direct
+   *  reports. Informational only, never blocks anything — see team.controller.ts's doc comment. */
+  timesheetAnomalies: async () =>
+    (
+      await api.get<{
+        burnout: Array<{ userId: string; name: string; weekStart: string; hours: number }>;
+        implausible: Array<{ userId: string; name: string; date: string; hours: number }>;
+      }>("/team/timesheet-anomalies")
+    ).data
 };
 
 export interface AIUsageSummary {
@@ -439,6 +450,39 @@ export interface AIUsageWeek {
   costUsd: number;
 }
 
+/// General-purpose if/then automation on manually-created tickets — see
+/// prisma/schema.prisma's TicketRule doc comment (apps/api) for the full evaluation model.
+export interface TicketRuleRow {
+  id: string;
+  name: string;
+  isActive: boolean;
+  order: number;
+  conditionProjectId: string | null;
+  conditionProject: { id: string; name: string; code: string } | null;
+  conditionPriority: "LOW" | "MEDIUM" | "HIGH" | "CRITICAL" | null;
+  conditionSource: "MANUAL" | "EMAIL" | "API" | "CHAT" | null;
+  conditionSenderDomain: string | null;
+  actionAssigneeId: string | null;
+  actionAssignee: { id: string; name: string } | null;
+  actionLabelId: string | null;
+  actionLabel: { id: string; name: string; color: string | null } | null;
+  actionNotifyUserId: string | null;
+  actionNotifyUser: { id: string; name: string } | null;
+}
+
+export interface TicketRuleInput {
+  name: string;
+  isActive?: boolean;
+  order?: number;
+  conditionProjectId?: string | null;
+  conditionPriority?: "LOW" | "MEDIUM" | "HIGH" | "CRITICAL" | null;
+  conditionSource?: "MANUAL" | "EMAIL" | "API" | "CHAT" | null;
+  conditionSenderDomain?: string | null;
+  actionAssigneeId?: string | null;
+  actionLabelId?: string | null;
+  actionNotifyUserId?: string | null;
+}
+
 export const settingsApi = {
   getNotifications: async () => (await api.get<GlobalSettings>("/settings/notifications")).data,
   updateNotifications: async (payload: Partial<GlobalSettings>) =>
@@ -446,6 +490,11 @@ export const settingsApi = {
   getTicketing: async () => (await api.get<GlobalTicketSettings>("/settings/ticketing")).data,
   updateTicketing: async (payload: Partial<GlobalTicketSettings>) =>
     (await api.patch<GlobalTicketSettings>("/settings/ticketing", payload)).data,
+  listTicketRules: async () => (await api.get<TicketRuleRow[]>("/settings/ticket-rules")).data,
+  createTicketRule: async (payload: TicketRuleInput) => (await api.post<TicketRuleRow>("/settings/ticket-rules", payload)).data,
+  updateTicketRule: async (id: string, payload: Partial<TicketRuleInput>) =>
+    (await api.patch<TicketRuleRow>(`/settings/ticket-rules/${id}`, payload)).data,
+  deleteTicketRule: async (id: string) => api.delete(`/settings/ticket-rules/${id}`),
   getAI: async () => (await api.get<GlobalAISettings>("/settings/ai")).data,
   /** `apiKey` is write-only (not part of GlobalAISettings — the server never echoes it back);
    *  omit to leave the stored key untouched, pass "" to clear it back to the env-var fallback. */
@@ -884,7 +933,17 @@ export interface TicketDetail extends TicketRow {
   branches: TicketBranchRow[];
 }
 
+export interface AssigneeSuggestion {
+  userId: string;
+  name: string;
+  openTicketCount: number;
+  resolvedHereCount: number;
+  score: number;
+}
+
 export const ticketApi = {
+  suggestAssignee: async (projectId: string, moduleId?: string) =>
+    (await api.get<{ suggestions: AssigneeSuggestion[] }>("/tickets/suggest-assignee", { params: { projectId, moduleId } })).data,
   list: async (params?: {
     status?: string;
     priority?: string;

@@ -22,6 +22,7 @@ import {
   Plus,
   RotateCcw,
   ShieldX,
+  Sparkles,
   Trash2,
   UploadCloud,
   Users2,
@@ -1321,7 +1322,95 @@ export function ReportsPage() {
           </div>
         </CardContent>
       </Card>
+      <StatusReportCard />
     </Workspace>
+  );
+}
+
+/** On-demand AI stakeholder update for one project — see ai.service.ts#generateStatusReport.
+ *  Silently omitted if the workspace hasn't turned the feature on (403 from the endpoint is
+ *  shown as a friendly inline message instead of a toast, since "not enabled yet" isn't really
+ *  an error). */
+function StatusReportCard() {
+  const projects = useQuery({ queryKey: ["projects"], queryFn: projectApi.list });
+  const [projectId, setProjectId] = useState("");
+  const [periodDays, setPeriodDays] = useState("7");
+  const [result, setResult] = useState<{ report: string; projectName: string; periodLabel: string } | null>(null);
+  const [disabled, setDisabled] = useState(false);
+
+  const generate = useMutation({
+    mutationFn: () => reportApi.statusReport(projectId, Number(periodDays)),
+    onSuccess: (data) => {
+      setResult(data);
+      setDisabled(false);
+    },
+    onError: (err: any) => {
+      if (err?.response?.status === 403) {
+        setDisabled(true);
+        return;
+      }
+      toast.error("Couldn't generate the update", { description: serverMessage(err, "Try again.") });
+    }
+  });
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle className="flex items-center gap-2">
+          <Sparkles className="h-4 w-4 text-primary" />
+          AI-drafted status report
+        </CardTitle>
+        <CardDescription>Generate a plain-language stakeholder update for one project on demand.</CardDescription>
+      </CardHeader>
+      <CardContent className="grid gap-3">
+        {disabled && (
+          <p className="rounded-md border border-dashed border-border bg-muted/30 p-3 text-sm text-muted-foreground">
+            This feature is off for this workspace. An admin can turn it on under Workspace Settings → AI features.
+          </p>
+        )}
+        <div className="flex flex-wrap items-end gap-2.5">
+          <div className="grid gap-1.5">
+            <Label>Project</Label>
+            <Select value={projectId} onValueChange={setProjectId}>
+              <SelectTrigger className="w-56">
+                <SelectValue placeholder="Select a project" />
+              </SelectTrigger>
+              <SelectContent>
+                {(projects.data ?? []).map((p: any) => (
+                  <SelectItem key={p.id} value={p.id}>
+                    {p.name}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+          <div className="grid gap-1.5">
+            <Label>Period</Label>
+            <Select value={periodDays} onValueChange={setPeriodDays}>
+              <SelectTrigger className="w-40">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="7">Past week</SelectItem>
+                <SelectItem value="14">Past 2 weeks</SelectItem>
+                <SelectItem value="30">Past month</SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
+          <Button disabled={!projectId || generate.isPending} onClick={() => generate.mutate()}>
+            {generate.isPending ? "Generating..." : "Generate update"}
+          </Button>
+        </div>
+        {result && (
+          <div className="rounded-md border border-primary/30 bg-primary/5 p-4 text-sm leading-relaxed">
+            <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-primary">
+              {result.projectName} — {result.periodLabel}
+            </p>
+            <p className="whitespace-pre-wrap">{result.report}</p>
+          </div>
+        )}
+      </CardContent>
+    </Card>
   );
 }
 

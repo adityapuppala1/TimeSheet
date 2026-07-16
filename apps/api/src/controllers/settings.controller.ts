@@ -126,6 +126,64 @@ settingsRouter.patch("/ticketing", requireSuperAdmin, validate(ticketingSchema),
 });
 
 /**
+ * Ticket rules engine CRUD — see prisma/schema.prisma's TicketRule doc comment and
+ * ticket.service.ts#applyTicketRules for how these evaluate. `order` controls evaluation
+ * sequence (first match wins); ascending on every read so the UI can render/reorder plainly.
+ */
+settingsRouter.get("/ticket-rules", async (_req, res) => {
+  const rules = await prisma.ticketRule.findMany({
+    orderBy: { order: "asc" },
+    include: {
+      conditionProject: { select: { id: true, name: true, code: true } },
+      actionAssignee: { select: { id: true, name: true } },
+      actionLabel: { select: { id: true, name: true, color: true } },
+      actionNotifyUser: { select: { id: true, name: true } }
+    }
+  });
+  res.json(rules);
+});
+
+const ticketRuleSchema = z.object({
+  body: z
+    .object({
+      name: z.string().min(1).max(120),
+      isActive: z.boolean().optional(),
+      order: z.coerce.number().int().min(0).optional(),
+      conditionProjectId: z.string().uuid().nullable().optional(),
+      conditionPriority: z.enum(["LOW", "MEDIUM", "HIGH", "CRITICAL"]).nullable().optional(),
+      conditionSource: z.enum(["MANUAL", "EMAIL", "API", "CHAT"]).nullable().optional(),
+      conditionSenderDomain: z.string().max(255).nullable().optional(),
+      actionAssigneeId: z.string().uuid().nullable().optional(),
+      actionLabelId: z.string().uuid().nullable().optional(),
+      actionNotifyUserId: z.string().uuid().nullable().optional()
+    })
+    .strict()
+});
+
+settingsRouter.post("/ticket-rules", requireSuperAdmin, validate(ticketRuleSchema), async (req, res) => {
+  const rule = await prisma.ticketRule.create({ data: req.body });
+  await audit(req.user!.id, "settings.ticket_rule_created", "TicketRule", rule.id, req.body);
+  res.status(201).json(rule);
+});
+
+const ticketRuleUpdateSchema = z.object({
+  params: z.object({ id: z.string().uuid() }),
+  body: ticketRuleSchema.shape.body.partial()
+});
+
+settingsRouter.patch("/ticket-rules/:id", requireSuperAdmin, validate(ticketRuleUpdateSchema), async (req, res) => {
+  const rule = await prisma.ticketRule.update({ where: { id: String(req.params.id) }, data: req.body });
+  await audit(req.user!.id, "settings.ticket_rule_updated", "TicketRule", rule.id, req.body);
+  res.json(rule);
+});
+
+settingsRouter.delete("/ticket-rules/:id", requireSuperAdmin, async (req, res) => {
+  await prisma.ticketRule.delete({ where: { id: String(req.params.id) } });
+  await audit(req.user!.id, "settings.ticket_rule_deleted", "TicketRule", String(req.params.id));
+  res.status(204).send();
+});
+
+/**
  * BYOK: `apiKey` is write-only — a saved key is never returned, only `apiKeySet: boolean`
  * (same masking convention as EmailIntakeSettings.imapPassword). `apiKeyConfigured` stays for
  * backward compatibility (true when either a stored key OR the env var fallback is usable for
@@ -163,6 +221,7 @@ const aiSettingsSchema = z.object({
       aiPrReviewSummaryEnabled: z.boolean().optional(),
       findingTriageEnabled: z.boolean().optional(),
       securityWeeklyDigestEnabled: z.boolean().optional(),
+      statusReportEnabled: z.boolean().optional(),
       model: z.string().min(1).max(80).optional(),
       confidenceThreshold: z.coerce.number().min(0).max(1).optional(),
       monthlyBudgetUsd: z.coerce.number().min(0).optional().nullable(),

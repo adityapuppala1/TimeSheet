@@ -538,6 +538,11 @@ function CreateTicketDialog({
     enabled: Boolean(draft.projectId)
   });
   const ticketTypesQuery = useQuery({ queryKey: ["ticket-types"], queryFn: () => ticketTypeApi.list() });
+  const assigneeSuggestions = useQuery({
+    queryKey: ["ticket-suggest-assignee", draft.projectId, draft.moduleId],
+    queryFn: () => ticketApi.suggestAssignee(draft.projectId, draft.moduleId || undefined),
+    enabled: Boolean(draft.projectId) && !draft.assigneeId
+  });
 
   function resetDraft() {
     setDraft({ projectId: "", moduleId: "", type: "BUG", title: "", description: "", priority: "MEDIUM", assigneeId: "" });
@@ -755,6 +760,23 @@ function CreateTicketDialog({
               </Select>
             </div>
           </div>
+
+          {!draft.assigneeId && (assigneeSuggestions.data?.suggestions.length ?? 0) > 0 && (
+            <div className="flex flex-wrap items-center gap-2 rounded-md border border-primary/30 bg-primary/5 p-2.5 text-xs">
+              <span className="inline-flex items-center gap-1 font-semibold text-primary"><Sparkles className="h-3 w-3" />Suggested:</span>
+              {assigneeSuggestions.data!.suggestions.map((s) => (
+                <button
+                  key={s.userId}
+                  type="button"
+                  onClick={() => setDraft((d) => ({ ...d, assigneeId: s.userId }))}
+                  className="inline-flex items-center gap-1 rounded-full border border-border bg-background px-2.5 py-1 font-medium transition hover:border-primary hover:text-primary"
+                >
+                  {s.name}
+                  <span className="text-muted-foreground">({s.openTicketCount} open, {s.resolvedHereCount} resolved here)</span>
+                </button>
+              ))}
+            </div>
+          )}
         </div>
         <DialogFooter>
           <Button

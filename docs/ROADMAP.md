@@ -36,37 +36,49 @@ easy to retrofit into a competitor later:
 Each is framed as an extension of an existing mechanism, not a new one.
 
 ### AI workflow automation
-- **Rules engine on top of auto-triage** — if/then conditions on ticket fields (project,
-  label, priority, sender domain) → auto-assign/label/notify. Extends the existing
-  `ModuleAssigneeRule` pattern (already used for email/chat intake routing) into a
-  general-purpose ticket rule, rather than inventing a new automation DSL.
-- **AI-suggested auto-assignment** — recommend an assignee from historical workload +
-  expertise, using the same data that already powers the Insights workload heatmap. Starts as
-  a suggestion chip (matching the existing auto-triage suggest-vs-auto-apply pattern), not a
-  silent auto-assign, consistent with the "AI decision is auditable" principle already in the
-  README's AI section.
-- **Timesheet anomaly detection** — flag unusual hour patterns (burnout signals: sustained
-  overtime; fraud signals: implausible daily totals) as an opt-in insight for managers, not an
-  automatic block — same human-review posture as low-confidence email triage.
-- **AI-drafted status reports** — extends the existing Monday weekly-digest pipeline
-  (`weekly-digest.worker.ts`) to an on-demand "generate a stakeholder update" action, reusing
-  the same prompt-construction and cost-logging path.
+
+Audited 2026-07-17: none of the four items below existed yet (`ModuleAssigneeRule` is intake-
+routing only, not a general ticket rules engine; `answerWorkspaceQuestion` is ticket-backlog-only,
+not Insights-grounded; no anomaly detection or on-demand status report existed). Phased so each
+step ships/tests/ships before the next starts, same discipline as the DevOps cluster above.
+
+*Phase A — reuses existing infra, no new external credentials:*
+- [x] **Rules engine on ticket fields** — new `TicketRule` model (condition: project/label/
+  priority/source/senderDomain match; action: assign/label/notify), evaluated at the same choke
+  point `ModuleAssigneeRule` already runs at (ticket-creation path), generalizing rather than
+  replacing it. Admin CRUD lives in Workspace Settings → Ticketing.
+- [x] **AI-suggested auto-assignment** — deterministic ranking (not an LLM call — see
+  `ticket.controller.ts`'s `/suggest-assignee` route doc comment for why) from historical workload +
+  expertise, rendered as a suggestion chip on ticket creation.
+- [x] **Timesheet anomaly detection** — `GET /team/timesheet-anomalies`, opt-in manager insight
+  (sustained overtime ≥55h/week, implausible daily total >16h) surfaced as a card on the Team page —
+  informational only, same human-review posture low-confidence email triage already uses.
+- [x] **AI-drafted status reports** — on-demand "generate a stakeholder update" for one project
+  (`ai.service.ts#generateStatusReport`, `POST /reports/status-report`), triggerable from the
+  Reports page rather than only firing on a schedule. Gated by its own `statusReportEnabled` toggle.
 
 ### Conversational analytics
-Extend the existing "Ask AI" command-palette search (today: natural-language Q&A over the
-ticket backlog) into a conversational layer over the Insights dashboard's data — SLA trend,
-velocity, cost-per-ticket, workload — via tool-calling through the same `ai.service.ts` choke
-point. The value: "why did our SLA compliance drop last month?" gets a grounded answer instead
-of requiring someone to read four separate charts.
+- [ ] Extend `answerWorkspaceQuestion` (today: ticket-backlog Q&A only) into a conversational
+  layer over the Insights dashboard's own aggregates (SLA trend, velocity, cost-per-ticket,
+  workload) via tool-calling through the same `ai.service.ts` choke point — "why did our SLA
+  compliance drop last month?" gets a grounded answer instead of requiring four separate charts.
 
 ### Integrations
-- **Public REST API + outbound webhooks** — the single biggest structural gap today: nothing
-  external can react to a ticket/timesheet event. This is also the prerequisite for
-  Zapier/Make and most enterprise procurement checklists.
-- **Calendar sync** (Google/Outlook) — deadline-aware scheduling, reads SLA due dates that
-  already exist on tickets.
-- **SCIM provisioning** — enterprise directory-sync user lifecycle, a natural pairing with the
-  SAML/LDAP SSO that already exists per-org; SSO today authenticates but doesn't provision.
+- [x] **Public REST API + outbound webhooks** — already shipped (`public-api.controller.ts`,
+  `webhook-dispatch.service.ts`) — see [docs/API.md § Public API](API.md#public-api).
+- [ ] **Calendar sync** (Google/Outlook) — deadline-aware scheduling, reads the SLA due dates that
+  already exist on tickets. Needs the org's own Google/Microsoft OAuth App credentials (same BYOK
+  model as SSO/GitHub — no TimeSphere-operated client ever touches a customer's calendar).
+- [ ] **SCIM provisioning** — enterprise directory-sync user lifecycle, pairing with the SAML/LDAP
+  SSO that already exists per-org (SSO today authenticates but doesn't provision). Needs the
+  identity provider's SCIM bearer token, admin-configured per org.
+
+### Monetization readiness
+- [ ] Self-serve Stripe billing wired to the existing `PlanTierLimit` model — turns the current
+  "a platform admin manually assigns a tier" flow into a real upgrade/downgrade funnel. Needs a
+  real Stripe account + API keys (test-mode keys are fine for initial build) before this can be
+  live-tested end-to-end; the webhook-receiver/checkout-session code can be built and unit-tested
+  without them, but a real Stripe test account is required to verify the actual payment flow.
 
 ### Engineering & DevOps integration suite
 

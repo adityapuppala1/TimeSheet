@@ -162,6 +162,8 @@ model User {
   apiKeysCreated            ApiKey[]
   outboundWebhooksCreated   OutboundWebhook[]
   gitConnectionsMade        GitConnection[]
+  ticketRuleAssignments     TicketRule[]         @relation("TicketRuleAssignee")
+  ticketRuleNotifications   TicketRule[]         @relation("TicketRuleNotify")
 
   createdAt DateTime  @default(now())
   updatedAt DateTime  @updatedAt
@@ -228,6 +230,7 @@ model Project {
   chatRoutingRules          ChatRoutingRule[]
   chatIntegrationDefaultFor ChatIntegration[]
   ingestionFallbackFor      IngestionSettings[]
+  ticketRules               TicketRule[]
   createdAt                 DateTime                @default(now())
   updatedAt                 DateTime                @updatedAt
   deletedAt                 DateTime?
@@ -486,19 +489,19 @@ model Ticket {
 
   /// Set when an AI classifier (manual suggestion or email intake) produced this ticket's
   /// type/priority/assignee. Null when a human set every field directly.
-  aiConfidence   Float?
+  aiConfidence     Float?
   /// True when aiConfidence fell below the configured threshold — surfaced to admins/managers
   /// instead of being silently auto-assigned.
-  needsReview    Boolean  @default(false)
-  estimatedHours Decimal? @db.Decimal(5, 2)
+  needsReview      Boolean  @default(false)
+  estimatedHours   Decimal? @db.Decimal(5, 2)
   /// Admin thumbs-up/down on the AI Activity Log page — "up" | "down", null = no feedback given.
-  aiFeedback     String?  @db.VarChar(10)
+  aiFeedback       String?  @db.VarChar(10)
   /// Set when this ticket was created from (or later matched) an ingested error-tracking event
   /// (Sentry/Rollbar/raw — see devops-webhook.controller.ts's /error-events route). A later
   /// event carrying the SAME fingerprint against a RESOLVED/CLOSED ticket auto-reopens it via
   /// the existing maybeReopenTicketOnRegression, even with no explicit ticketKey in the new
   /// event — "the same crash came back" is detectable without a human re-linking it by hand.
-  errorFingerprint String? @db.VarChar(128)
+  errorFingerprint String?  @db.VarChar(128)
 
   comments         TicketComment[]
   attachments      TicketAttachment[]
@@ -592,11 +595,12 @@ model TicketType {
 }
 
 model Label {
-  id        String        @id @default(uuid())
-  name      String        @unique @db.VarChar(60)
-  color     String?       @db.VarChar(20)
-  createdAt DateTime      @default(now())
-  tickets   TicketLabel[]
+  id          String        @id @default(uuid())
+  name        String        @unique @db.VarChar(60)
+  color       String?       @db.VarChar(20)
+  createdAt   DateTime      @default(now())
+  tickets     TicketLabel[]
+  ticketRules TicketRule[]
 }
 
 model TicketLabel {
@@ -614,77 +618,82 @@ model TicketLabel {
 /// TICKET_SLA_*_HOURS env vars, now editable without a server restart) plus opt-in,
 /// off-by-default analytics that touch sensitive data (hourly rates, per-person rankings).
 model GlobalTicketSettings {
-  id                  String   @id
-  slaLowHours         Int      @default(168)
-  slaMediumHours      Int      @default(72)
-  slaHighHours        Int      @default(24)
-  slaCriticalHours    Int      @default(4)
-  enableCostAnalytics Boolean  @default(false)
-  enableLeaderboard   Boolean  @default(false)
+  id                         String   @id
+  slaLowHours                Int      @default(168)
+  slaMediumHours             Int      @default(72)
+  slaHighHours               Int      @default(24)
+  slaCriticalHours           Int      @default(4)
+  enableCostAnalytics        Boolean  @default(false)
+  enableLeaderboard          Boolean  @default(false)
   /// See docs/ROADMAP.md's "Auto testing on branch/PR push" theme. When true, a ticket whose
   /// latest ingested TestRun is FAILED cannot transition to RESOLVED (ticket.controller.ts's
   /// status route enforces this). Default false — orgs that don't ingest test runs yet, or
   /// that want this as a warning rather than a hard gate, are unaffected either way.
   blockResolveOnFailingTests Boolean  @default(false)
   updatedAt                  DateTime @updatedAt
-  updatedById                 String?
+  updatedById                String?
 }
 
 /// Singleton (id = "global"). Master + per-feature AI toggles. aiEnabled defaults false —
 /// every AI capability stays inert until an admin explicitly opts in (and ANTHROPIC_API_KEY
 /// is configured server-side).
 model GlobalAISettings {
-  id                        String     @id
-  aiEnabled                 Boolean    @default(false)
-  autoTriageEnabled         Boolean    @default(false)
+  id                          String     @id
+  aiEnabled                   Boolean    @default(false)
+  autoTriageEnabled           Boolean    @default(false)
   /// When true, AI triage suggestions are applied directly on manual ticket creation;
   /// when false, they're surfaced as a one-click "Accept?" suggestion instead.
-  autoTriageAutoApply       Boolean    @default(false)
-  duplicateDetectionEnabled Boolean    @default(false)
-  writingAssistantEnabled   Boolean    @default(false)
-  commentSummaryEnabled     Boolean    @default(false)
-  workspaceSearchEnabled    Boolean    @default(false)
-  emailIngestionEnabled     Boolean    @default(false)
-  chatIngestionEnabled      Boolean    @default(false)
-  weeklyDigestEnabled       Boolean    @default(false)
+  autoTriageAutoApply         Boolean    @default(false)
+  duplicateDetectionEnabled   Boolean    @default(false)
+  writingAssistantEnabled     Boolean    @default(false)
+  commentSummaryEnabled       Boolean    @default(false)
+  workspaceSearchEnabled      Boolean    @default(false)
+  emailIngestionEnabled       Boolean    @default(false)
+  chatIngestionEnabled        Boolean    @default(false)
+  weeklyDigestEnabled         Boolean    @default(false)
   /// Gates ai.service.ts#classifyCiFailure — an AI-authored root-cause comment posted on a
   /// ticket when a CI test run fails with `failureText` attached (see
   /// devops-webhook.controller.ts's /test-runs route). Separate from `autoReopenEnabled`
   /// (IngestionSettings) which is deterministic and doesn't call AI at all.
-  ciFailureTriageEnabled    Boolean    @default(false)
+  ciFailureTriageEnabled      Boolean    @default(false)
   /// Gates ai.service.ts#summarizePullRequest — an AI-authored summary comment posted on a
   /// ticket when a linked PR opens (controllers/git-webhook.controller.ts's "opened" handler).
   /// Needs the live GitHub connection (GitConnection) AND a repo webhook configured — see
   /// docs/ROADMAP.md's "AI PR-review summaries" item.
-  aiPrReviewSummaryEnabled  Boolean    @default(false)
+  aiPrReviewSummaryEnabled    Boolean    @default(false)
   /// Gates ai.service.ts#classifySecurityFinding — sibling of ciFailureTriageEnabled, scoped to
   /// ingested SecurityFinding rows instead of CI test-run failures. Only CRITICAL/HIGH findings
   /// are triaged (same severity bar IngestionSettings.fallbackProjectId's auto-ticket-creation
   /// uses) to bound AI spend. See docs/ROADMAP.md's "Competitive parity" Phase 3.
-  findingTriageEnabled      Boolean    @default(false)
+  findingTriageEnabled        Boolean    @default(false)
   /// Gates ai.service.ts#generateSecurityWeeklyDigest — an AI-authored org-wide security summary
   /// (open-findings trend, newly-critical items, tickets past SLA) emailed to every ADMIN/
   /// SUPER_ADMIN weekly, generalizing weeklyDigestEnabled's per-user pattern to an admin audience.
   /// See workers/security-weekly-digest.worker.ts.
-  securityWeeklyDigestEnabled Boolean  @default(false)
-  model                     String     @default("claude-haiku-4-5") @db.VarChar(80)
-  confidenceThreshold       Float      @default(0.6)
-  monthlyBudgetUsd          Decimal?   @db.Decimal(10, 2)
+  securityWeeklyDigestEnabled Boolean    @default(false)
+  /// Gates ai.service.ts#generateStatusReport — on-demand "generate a stakeholder update" for
+  /// one project, triggered synchronously from the Project page rather than a cron worker.
+  /// Reuses generateWeeklyDigest's prompt shape (given numbers only, no invented analysis) but
+  /// is project-scoped and callable any time, not per-user and not on a schedule.
+  statusReportEnabled         Boolean    @default(false)
+  model                       String     @default("claude-haiku-4-5") @db.VarChar(80)
+  confidenceThreshold         Float      @default(0.6)
+  monthlyBudgetUsd            Decimal?   @db.Decimal(10, 2)
   /// BYOK: which model family to call. ANTHROPIC uses this row's apiKey (falling back to the
   /// server's ANTHROPIC_API_KEY env var when unset) against the native Messages API; every
   /// other supported vendor (OpenAI, Groq, Mistral, DeepSeek, OpenRouter, Gemini, Qwen, Kimi,
   /// Nvidia NIM, Ollama, LM Studio, or any other custom endpoint) goes through
   /// OPENAI_COMPATIBLE's generic adapter using this row's baseUrl.
-  provider                  AIProvider @default(ANTHROPIC)
+  provider                    AIProvider @default(ANTHROPIC)
   /// Only meaningful for OPENAI_COMPATIBLE — e.g. https://api.groq.com/openai/v1 or
   /// http://localhost:11434/v1 for a local Ollama install.
-  baseUrl                   String?    @db.VarChar(300)
+  baseUrl                     String?    @db.VarChar(300)
   /// AES-256-GCM ciphertext (see utils/encryption.ts) — never returned to the client; the API
   /// exposes only an `apiKeySet: boolean`, same masking convention as
   /// EmailIntakeSettings.imapPassword.
-  apiKey                    String?    @db.Text
-  updatedAt                 DateTime   @updatedAt
-  updatedById               String?
+  apiKey                      String?    @db.Text
+  updatedAt                   DateTime   @updatedAt
+  updatedById                 String?
 }
 
 enum AIProvider {
@@ -718,26 +727,26 @@ model AIUsageLog {
 /// are allowed to dispatch email across the workspace, plus reminder timings
 /// and BCC behavior. Only SUPER_ADMIN edits this.
 model GlobalNotificationSettings {
-  id                       String  @id
-  emailTimesheetSubmitted  Boolean @default(true)
-  emailTimesheetApproved   Boolean @default(true)
-  emailTimesheetRejected   Boolean @default(true)
-  emailSlaBreach           Boolean @default(true)
-  emailDeadlineReminder    Boolean @default(true)
-  emailEscalation          Boolean @default(true)
-  emailWeeklyDigest        Boolean @default(false)
-  emailDailyReminder       Boolean @default(true)
-  emailDailyEscalation     Boolean @default(true)
-  emailTicketAssigned      Boolean @default(true)
-  emailTicketStatusChanged Boolean @default(true)
-  emailTicketCommented     Boolean @default(true)
-  emailTicketSlaBreach     Boolean @default(true)
-  emailTicketEscalation    Boolean @default(true)
-  emailTicketNeedsReview   Boolean @default(true)
+  id                        String  @id
+  emailTimesheetSubmitted   Boolean @default(true)
+  emailTimesheetApproved    Boolean @default(true)
+  emailTimesheetRejected    Boolean @default(true)
+  emailSlaBreach            Boolean @default(true)
+  emailDeadlineReminder     Boolean @default(true)
+  emailEscalation           Boolean @default(true)
+  emailWeeklyDigest         Boolean @default(false)
+  emailDailyReminder        Boolean @default(true)
+  emailDailyEscalation      Boolean @default(true)
+  emailTicketAssigned       Boolean @default(true)
+  emailTicketStatusChanged  Boolean @default(true)
+  emailTicketCommented      Boolean @default(true)
+  emailTicketSlaBreach      Boolean @default(true)
+  emailTicketEscalation     Boolean @default(true)
+  emailTicketNeedsReview    Boolean @default(true)
   /// Sends the security/test-status digest (findings + latest TestRun) to whoever closed a
   /// ticket, their manager, and this org's own admins — see services/security-report.service.ts.
   /// Off by default: irrelevant noise for an org that hasn't connected any scan source yet.
-  emailTicketClosedDigest  Boolean @default(false)
+  emailTicketClosedDigest   Boolean @default(false)
   /// Sends the AI weekly security digest (see workers/security-weekly-digest.worker.ts) to every
   /// ADMIN/SUPER_ADMIN. Gated alongside GlobalAISettings.securityWeeklyDigestEnabled — the AI
   /// toggle decides whether the worker runs at all, this decides whether email actually sends,
@@ -767,11 +776,11 @@ model GlobalNotificationSettings {
 /// vars (so an existing on-prem deployment relying on .env keeps working unconfigured, same
 /// fallback relationship GlobalAISettings.apiKey has with ANTHROPIC_API_KEY).
 model GlobalMailSettings {
-  id     String  @id
-  host   String? @db.VarChar(255)
-  port   Int     @default(587)
-  secure Boolean @default(false)
-  user   String? @db.VarChar(255)
+  id          String  @id
+  host        String? @db.VarChar(255)
+  port        Int     @default(587)
+  secure      Boolean @default(false)
+  user        String? @db.VarChar(255)
   /// Never returned to the client — GET responses expose only `passwordSet: boolean`. Encrypted
   /// the same way as EmailIntakeSettings.imapPassword (AES-256-GCM via utils/encryption.ts).
   password    String? @db.VarChar(500)
@@ -825,6 +834,44 @@ model ModuleAssigneeRule {
   defaultAssigneeId String
   defaultAssignee   User          @relation(fields: [defaultAssigneeId], references: [id])
   createdAt         DateTime      @default(now())
+}
+
+/// General-purpose if/then automation on manually-created tickets — generalizes
+/// ModuleAssigneeRule (which is intake-routing-specific, keyed one-to-one on a module) into a
+/// broader rule an admin can shape from Workspace Settings → Ticketing → Automation. Email/chat
+/// intake keep using their own existing routing (EmailRoutingRule/ChatRoutingRule/
+/// ModuleAssigneeRule) — this only evaluates on the manual-creation path
+/// (ticket.controller.ts's POST /), since that's the one surface with no routing rule today.
+/// Conditions are AND'd (every set field must match; an unset field means "any"); actions are
+/// all applied together when a rule matches. Evaluated in `order` ascending, first match wins —
+/// same "first match, not merge-all-matches" semantics ModuleAssigneeRule's lookup already uses,
+/// so admins reason about rule order the same way in both places.
+model TicketRule {
+  id       String  @id @default(uuid())
+  name     String  @db.VarChar(120)
+  isActive Boolean @default(true)
+  order    Int     @default(0)
+
+  conditionProjectId    String?
+  conditionProject      Project?        @relation(fields: [conditionProjectId], references: [id], onDelete: Cascade)
+  conditionPriority     TicketPriority?
+  conditionSource       TicketSource?
+  /// Case-insensitive suffix match against the reporter's email domain — only ever matches
+  /// EMAIL/CHAT-sourced tickets (manual creation has no "sender domain" concept), included
+  /// anyway since a rule combining `source: EMAIL` + a domain is a common real pattern.
+  conditionSenderDomain String?         @db.VarChar(255)
+
+  actionAssigneeId   String?
+  actionAssignee     User?   @relation("TicketRuleAssignee", fields: [actionAssigneeId], references: [id], onDelete: SetNull)
+  actionLabelId      String?
+  actionLabel        Label?  @relation(fields: [actionLabelId], references: [id], onDelete: SetNull)
+  actionNotifyUserId String?
+  actionNotifyUser   User?   @relation("TicketRuleNotify", fields: [actionNotifyUserId], references: [id], onDelete: SetNull)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([isActive, order])
 }
 
 /// One row per (platform) this org has connected — same "one wide table, nullable
@@ -914,17 +961,17 @@ enum TicketBranchPrStatus {
 /// models) without a formal relation to this table, since ingestion is tool-agnostic and can't
 /// guarantee its branch name matches what a human typed here.
 model TicketBranch {
-  id         String                @id @default(uuid())
+  id         String               @id @default(uuid())
   ticketId   String
-  ticket     Ticket                @relation(fields: [ticketId], references: [id], onDelete: Cascade)
-  repository String                @db.VarChar(255)
-  branch     String                @db.VarChar(255)
-  prUrl      String?               @db.VarChar(500)
-  prStatus   TicketBranchPrStatus  @default(NONE)
+  ticket     Ticket               @relation(fields: [ticketId], references: [id], onDelete: Cascade)
+  repository String               @db.VarChar(255)
+  branch     String               @db.VarChar(255)
+  prUrl      String?              @db.VarChar(500)
+  prStatus   TicketBranchPrStatus @default(NONE)
   addedById  String?
-  addedBy    User?                 @relation(fields: [addedById], references: [id], onDelete: SetNull)
-  createdAt  DateTime              @default(now())
-  updatedAt  DateTime              @updatedAt
+  addedBy    User?                @relation(fields: [addedById], references: [id], onDelete: SetNull)
+  createdAt  DateTime             @default(now())
+  updatedAt  DateTime             @updatedAt
 
   @@index([ticketId])
 }
@@ -1013,10 +1060,10 @@ model SecurityFinding {
   /// ai.service.ts#classifySecurityFinding. Null until triaged (or if the toggle is off/the
   /// finding's severity didn't qualify — only CRITICAL/HIGH are triaged, same bar
   /// maybeAutoCreateTicketForFinding uses, to bound AI spend to what actually matters).
-  aiVerdict         SecurityFindingAiVerdict?
-  aiExploitability  String?                    @db.Text
-  aiFixSuggestion   String?                    @db.Text
-  aiTriagedAt       DateTime?
+  aiVerdict        SecurityFindingAiVerdict?
+  aiExploitability String?                   @db.Text
+  aiFixSuggestion  String?                   @db.Text
+  aiTriagedAt      DateTime?
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -1087,20 +1134,20 @@ model SbomComponent {
 /// utils/encryption.ts) — see that model's controller for the encrypt-on-save/mask-in-response/
 /// decrypt-on-use pattern this copies.
 model IngestionSettings {
-  id             String  @id
-  encryptedToken String?
+  id                      String   @id
+  encryptedToken          String?
   /// Where a CRITICAL/HIGH finding with no explicit ticketKey auto-creates a ticket (see
   /// devops-webhook.controller.ts). Null = auto-ticket-creation is off; the finding is still
   /// stored, just not turned into a ticket.
-  fallbackProjectId String?
-  fallbackProject   Project? @relation(fields: [fallbackProjectId], references: [id], onDelete: SetNull)
+  fallbackProjectId       String?
+  fallbackProject         Project? @relation(fields: [fallbackProjectId], references: [id], onDelete: SetNull)
   /// When a FAILED TestRun references (via ticketKey) a RESOLVED/CLOSED ticket, automatically
   /// transition it back to REOPENED — see devops-webhook.controller.ts's /test-runs route.
   /// Deterministic (matches on the CI-supplied ticketKey directly), not an AI decision — unlike
   /// GlobalAISettings.ciFailureTriageEnabled, this needs no AI budget/provider configured.
   /// Off by default: silently reopening a ticket is exactly the kind of automated state change
   /// that should be an explicit admin opt-in, not a surprise.
-  autoReopenEnabled Boolean @default(false)
+  autoReopenEnabled       Boolean  @default(false)
   /// Opt-in fallback assignment for an auto-created security ticket (see fallbackProjectId above)
   /// when no ModuleAssigneeRule matches: resolve an assignee via the finding's repo CODEOWNERS
   /// entry, or failing that the last GitHub committer on that file — see
@@ -1108,7 +1155,7 @@ model IngestionSettings {
   /// GitHub API call per unmatched finding (needs a connected GitConnection to do anything) and
   /// needs at least one User.githubUsername populated to ever actually resolve someone, so it's
   /// a no-op cost until an admin has both configured — not worth defaulting on.
-  codeownersAssignEnabled Boolean @default(false)
+  codeownersAssignEnabled Boolean  @default(false)
 
   updatedAt DateTime @updatedAt
 }
@@ -1152,18 +1199,18 @@ model GitConnection {
 /// plaintext key) is stored in the clear purely so the UI can show "tsk_a1b2c3d4…" for the admin
 /// to recognize which key is which without ever re-displaying the full value.
 model ApiKey {
-  id        String    @id @default(uuid())
-  name      String    @db.VarChar(120)
-  keyHash   String    @unique @db.VarChar(64)
-  keyPrefix String    @db.VarChar(12)
+  id          String    @id @default(uuid())
+  name        String    @db.VarChar(120)
+  keyHash     String    @unique @db.VarChar(64)
+  keyPrefix   String    @db.VarChar(12)
   /// READ: GET endpoints only. WRITE: also allows POST /public/v1/tickets. No finer-grained
   /// scoping yet — see docs/ROADMAP.md for why a fuller scopes list is future work, not this
   /// phase.
-  scope     String    @default("READ") @db.VarChar(10)
-  lastUsedAt DateTime?
+  scope       String    @default("READ") @db.VarChar(10)
+  lastUsedAt  DateTime?
   createdById String?
-  createdBy   User?    @relation(fields: [createdById], references: [id], onDelete: SetNull)
-  createdAt   DateTime @default(now())
+  createdBy   User?     @relation(fields: [createdById], references: [id], onDelete: SetNull)
+  createdAt   DateTime  @default(now())
   revokedAt   DateTime?
 
   @@index([keyHash])
@@ -1175,19 +1222,19 @@ model ApiKey {
 /// services/webhook-dispatch.service.ts) so a receiver can verify a payload actually came from
 /// this deployment, the same trust model GitHub/Stripe webhooks use.
 model OutboundWebhook {
-  id       String   @id @default(uuid())
-  name     String   @db.VarChar(120)
-  url      String   @db.VarChar(500)
-  secret   String   @db.VarChar(64)
+  id                 String    @id @default(uuid())
+  name               String    @db.VarChar(120)
+  url                String    @db.VarChar(500)
+  secret             String    @db.VarChar(64)
   /// e.g. ["ticket.created","ticket.status_changed","ticket.closed","timesheet.submitted",
   /// "timesheet.approved"] — see webhook-dispatch.service.ts's WEBHOOK_EVENTS for the full list.
   /// Stored as a JSON array rather than a join table since the set is small and never queried
   /// by event across webhooks (each dispatch loop scans this org's own handful of webhooks).
-  events   Json
-  isActive Boolean  @default(true)
+  events             Json
+  isActive           Boolean   @default(true)
   lastDeliveryAt     DateTime?
   lastDeliveryStatus String?   @db.VarChar(20)
-  createdById String?
-  createdBy   User?    @relation(fields: [createdById], references: [id], onDelete: SetNull)
-  createdAt   DateTime @default(now())
+  createdById        String?
+  createdBy          User?     @relation(fields: [createdById], references: [id], onDelete: SetNull)
+  createdAt          DateTime  @default(now())
 }

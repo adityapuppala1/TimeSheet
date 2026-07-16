@@ -18,6 +18,7 @@ import { prisma } from "../config/prisma.js";
 import { requireAuth, requirePermission } from "../middleware/auth.js";
 import { AppError } from "../middleware/error.js";
 import { htmlToText } from "../utils/sanitize.js";
+import { generateStatusReport } from "../services/ai.service.js";
 
 export const reportRouter = Router();
 reportRouter.use(requireAuth);
@@ -735,6 +736,62 @@ reportRouter.get("/leaderboard", requirePermission(permissions.REPORTS_VIEW), as
     .sort((a, b) => b.resolvedCount - a.resolvedCount);
 
   res.json({ rows });
+});
+
+/**
+ * On-demand "generate a stakeholder update" for one project. Synchronous (no worker/cron
+ * involved) — the numbers are cheap to compute and the AI call is a single short completion,
+ * so this runs inline within the request like /export.pdf does. Gated by
+ * GlobalAISettings.statusReportEnabled via ai.service.ts#generateStatusReport's own preflight.
+ */
+reportRouter.post("/status-report", requirePermission(permissions.REPORTS_VIEW), async (req, res) => {
+  const projectId = String(req.body?.projectId ?? "");
+  const periodDays = Math.min(Math.max(Number(req.body?.periodDays) || 7, 1), 90);
+  if (!projectId) throw new AppError(422, "projectId is required");
+
+  const project = await prisma.project.findUnique({ where: { id: projectId }, select: { id: true, name: true } });
+  if (!project) throw new AppError(404, "Project not found");
+
+  const periodStart = new Date(Date.now() - periodDays * 24 * 60 * 60 * 1000);
+  const periodLabel =
+    periodDays === 7 ? "the past week" : periodDays === 30 ? "the past month" : `the past ${periodDays} days`;
+  const sinceLocal = startOfLocalDay();
+
+  const [ticketsCreated, resolvedTickets, openTickets, overdueCount, hoursAgg] = await Promise.all([
+    prisma.ticket.count({ where: { projectId, deletedAt: null, createdAt: { gte: periodStart } } }),
+    prisma.ticket.findMany({
+      where: { projectId, deletedAt: null, resolvedAt: { gte: periodStart } },
+      select: { key: true, title: true, status: true },
+      take: 5
+    }),
+    prisma.ticket.findMany({
+      where: { projectId, deletedAt: null, status: { notIn: ["RESOLVED", "CLOSED"] } },
+      select: { key: true, title: true, status: true }
+    }),
+    prisma.ticket.count({
+      where: { projectId, deletedAt: null, status: { notIn: ["RESOLVED", "CLOSED"] }, slaBreachAt: { not: null, lt: sinceLocal } }
+    }),
+    prisma.timesheet.aggregate({
+      where: { projectId, deletedAt: null, workDate: { gte: new Date(Date.UTC(periodStart.getFullYear(), periodStart.getMonth(), periodStart.getDate())) } },
+      _sum: { totalHours: true }
+    })
+  ]);
+
+  const notableTickets = resolvedTickets.length > 0 ? resolvedTickets : openTickets.slice(0, 5);
+
+  const { report } = await generateStatusReport({
+    projectName: project.name,
+    periodLabel,
+    ticketsCreated,
+    ticketsResolved: resolvedTickets.length,
+    openCount: openTickets.length,
+    overdueCount,
+    hoursLogged: Number(Number(hoursAgg._sum.totalHours ?? 0).toFixed(1)),
+    notableTickets,
+    userId: req.user!.id
+  });
+
+  res.json({ report, projectName: project.name, periodLabel });
 });
 
 reportRouter.get("/export.csv", requirePermission(permissions.REPORTS_VIEW), async (_req, res) => {

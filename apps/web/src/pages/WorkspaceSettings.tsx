@@ -48,7 +48,8 @@ import {
   Sparkles,
   Timer,
   Trash2,
-  X
+  X,
+  Zap
 } from "lucide-react";
 import type { ReactNode } from "react";
 import { useEffect, useState } from "react";
@@ -66,7 +67,17 @@ import { Switch } from "../components/ui/switch";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "../components/ui/tabs";
 import { Textarea } from "../components/ui/textarea";
 import { toast } from "../components/ui/toaster";
-import { apiUrl, emailIntakeApi, labelApi, projectApi, settingsApi, ticketTypeApi, userApi, type SsoProviderConfig } from "../services/api";
+import {
+  apiUrl,
+  emailIntakeApi,
+  labelApi,
+  projectApi,
+  settingsApi,
+  ticketTypeApi,
+  userApi,
+  type SsoProviderConfig,
+  type TicketRuleInput
+} from "../services/api";
 import { useAuthStore } from "../store/auth";
 import { ChatIntegrationsSettingsCard } from "./settings/ChatIntegrationsSettingsCard";
 import { MailServerSettingsCard } from "./settings/MailServerSettingsCard";
@@ -729,7 +740,226 @@ function TicketingSettingsCard({ readOnly }: { readOnly: boolean }) {
           </div>
         </CardContent>
       </Card>
+
+      <TicketRulesCard readOnly={readOnly} />
     </div>
+  );
+}
+
+function TicketRulesCard({ readOnly }: { readOnly: boolean }) {
+  const queryClient = useQueryClient();
+  const rules = useQuery({ queryKey: ["settings", "ticket-rules"], queryFn: settingsApi.listTicketRules });
+  const projects = useQuery({ queryKey: ["projects"], queryFn: projectApi.list });
+  const users = useQuery({ queryKey: ["users"], queryFn: userApi.list });
+  const labels = useQuery({ queryKey: ["labels"], queryFn: labelApi.list });
+
+  const emptyDraft: TicketRuleInput = {
+    name: "",
+    conditionProjectId: null,
+    conditionPriority: null,
+    conditionSource: null,
+    actionAssigneeId: null,
+    actionLabelId: null,
+    actionNotifyUserId: null
+  };
+  const [draft, setDraft] = useState<TicketRuleInput>(emptyDraft);
+
+  const invalidate = () => queryClient.invalidateQueries({ queryKey: ["settings", "ticket-rules"] });
+
+  const create = useMutation({
+    mutationFn: () => settingsApi.createTicketRule({ ...draft, order: rules.data?.length ?? 0 }),
+    onSuccess: () => {
+      toast.success("Rule added");
+      setDraft(emptyDraft);
+      invalidate();
+    },
+    onError: (err: any) => toast.error("Could not add rule", { description: err?.response?.data?.message ?? "Try again." })
+  });
+  const toggleActive = useMutation({
+    mutationFn: ({ id, isActive }: { id: string; isActive: boolean }) => settingsApi.updateTicketRule(id, { isActive }),
+    onSuccess: invalidate,
+    onError: () => toast.error("Could not update rule", { description: "Try again." })
+  });
+  const remove = useMutation({
+    mutationFn: (id: string) => settingsApi.deleteTicketRule(id),
+    onSuccess: () => {
+      toast.success("Rule deleted");
+      invalidate();
+    },
+    onError: () => toast.error("Could not delete rule", { description: "Try again." })
+  });
+
+  const hasAnyAction = Boolean(draft.actionAssigneeId || draft.actionLabelId || draft.actionNotifyUserId);
+  const hasAnyCondition = Boolean(draft.conditionProjectId || draft.conditionPriority || draft.conditionSource || draft.conditionSenderDomain);
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle className="flex items-center gap-2 text-base">
+          <Zap className="h-4 w-4 text-primary" />
+          Automation rules
+        </CardTitle>
+        <CardDescription>
+          If/then automation on manually-created tickets — the first rule (in order below) whose every condition matches gets its
+          actions applied. Only runs when the creator didn't already pick an assignee themselves; a rule is a fallback default, not
+          an override. Email/chat intake keep using their own existing routing rules.
+        </CardDescription>
+      </CardHeader>
+      <CardContent className="grid gap-4">
+        {rules.isLoading && <Skeleton className="h-24 w-full" />}
+
+        {!rules.isLoading && (
+          <div className="grid gap-2">
+            {(rules.data ?? []).length === 0 && <p className="text-sm text-muted-foreground">No automation rules yet.</p>}
+            {(rules.data ?? []).map((rule, index) => (
+              <div key={rule.id} className="flex flex-wrap items-center justify-between gap-3 rounded-md border border-border px-3 py-2.5">
+                <div className="min-w-0 flex-1">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <span className="text-xs font-mono text-muted-foreground">#{index + 1}</span>
+                    <p className="text-sm font-medium">{rule.name}</p>
+                    {!rule.isActive && <Badge variant="muted">Inactive</Badge>}
+                  </div>
+                  <p className="mt-0.5 text-xs text-muted-foreground">
+                    If{" "}
+                    {[
+                      rule.conditionProject && `project = ${rule.conditionProject.name}`,
+                      rule.conditionPriority && `priority = ${rule.conditionPriority}`,
+                      rule.conditionSource && `source = ${rule.conditionSource}`,
+                      rule.conditionSenderDomain && `sender domain = ${rule.conditionSenderDomain}`
+                    ]
+                      .filter(Boolean)
+                      .join(" AND ") || "any ticket"}
+                    {" → "}
+                    {[
+                      rule.actionAssignee && `assign to ${rule.actionAssignee.name}`,
+                      rule.actionLabel && `label "${rule.actionLabel.name}"`,
+                      rule.actionNotifyUser && `notify ${rule.actionNotifyUser.name}`
+                    ]
+                      .filter(Boolean)
+                      .join(", ") || "no action"}
+                  </p>
+                </div>
+                {!readOnly && (
+                  <div className="flex items-center gap-2">
+                    <Switch
+                      checked={rule.isActive}
+                      onCheckedChange={(value) => toggleActive.mutate({ id: rule.id, isActive: value })}
+                      disabled={toggleActive.isPending}
+                    />
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      className="h-8 w-8 text-destructive hover:bg-destructive/10 hover:text-destructive"
+                      onClick={() => remove.mutate(rule.id)}
+                      disabled={remove.isPending}
+                    >
+                      <Trash2 className="h-4 w-4" />
+                    </Button>
+                  </div>
+                )}
+              </div>
+            ))}
+          </div>
+        )}
+
+        {!readOnly && (
+          <>
+            <Separator />
+            <div className="grid gap-3">
+              <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">New rule</p>
+              <div className="grid gap-1.5">
+                <Label className="text-xs">Name</Label>
+                <Input value={draft.name} onChange={(e) => setDraft({ ...draft, name: e.target.value })} placeholder="e.g. Route payments bugs to Priya" />
+              </div>
+              <div className="grid gap-3 sm:grid-cols-4">
+                <div className="grid gap-1.5">
+                  <Label className="text-xs">If project</Label>
+                  <Select value={draft.conditionProjectId ?? "__any__"} onValueChange={(v) => setDraft({ ...draft, conditionProjectId: v === "__any__" ? null : v })}>
+                    <SelectTrigger><SelectValue placeholder="Any" /></SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="__any__">Any</SelectItem>
+                      {(projects.data ?? []).map((p: any) => <SelectItem key={p.id} value={p.id}>{p.name}</SelectItem>)}
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div className="grid gap-1.5">
+                  <Label className="text-xs">If priority</Label>
+                  <Select value={draft.conditionPriority ?? "__any__"} onValueChange={(v) => setDraft({ ...draft, conditionPriority: v === "__any__" ? null : (v as TicketRuleInput["conditionPriority"]) })}>
+                    <SelectTrigger><SelectValue placeholder="Any" /></SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="__any__">Any</SelectItem>
+                      {["LOW", "MEDIUM", "HIGH", "CRITICAL"].map((p) => <SelectItem key={p} value={p}>{p}</SelectItem>)}
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div className="grid gap-1.5">
+                  <Label className="text-xs">If source</Label>
+                  <Select value={draft.conditionSource ?? "__any__"} onValueChange={(v) => setDraft({ ...draft, conditionSource: v === "__any__" ? null : (v as TicketRuleInput["conditionSource"]) })}>
+                    <SelectTrigger><SelectValue placeholder="Any" /></SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="__any__">Any</SelectItem>
+                      {["MANUAL", "EMAIL", "API", "CHAT"].map((s) => <SelectItem key={s} value={s}>{s}</SelectItem>)}
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div className="grid gap-1.5">
+                  <Label className="text-xs">If sender domain</Label>
+                  <Input
+                    value={draft.conditionSenderDomain ?? ""}
+                    onChange={(e) => setDraft({ ...draft, conditionSenderDomain: e.target.value || null })}
+                    placeholder="e.g. acme.com"
+                  />
+                </div>
+              </div>
+              <div className="grid gap-3 sm:grid-cols-3">
+                <div className="grid gap-1.5">
+                  <Label className="text-xs">Then assign to</Label>
+                  <Select value={draft.actionAssigneeId ?? "__none__"} onValueChange={(v) => setDraft({ ...draft, actionAssigneeId: v === "__none__" ? null : v })}>
+                    <SelectTrigger><SelectValue placeholder="No change" /></SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="__none__">No change</SelectItem>
+                      {(users.data ?? []).map((u: any) => <SelectItem key={u.id} value={u.id}>{u.name}</SelectItem>)}
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div className="grid gap-1.5">
+                  <Label className="text-xs">Then label</Label>
+                  <Select value={draft.actionLabelId ?? "__none__"} onValueChange={(v) => setDraft({ ...draft, actionLabelId: v === "__none__" ? null : v })}>
+                    <SelectTrigger><SelectValue placeholder="No label" /></SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="__none__">No label</SelectItem>
+                      {(labels.data ?? []).map((l: any) => <SelectItem key={l.id} value={l.id}>{l.name}</SelectItem>)}
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div className="grid gap-1.5">
+                  <Label className="text-xs">Then notify</Label>
+                  <Select value={draft.actionNotifyUserId ?? "__none__"} onValueChange={(v) => setDraft({ ...draft, actionNotifyUserId: v === "__none__" ? null : v })}>
+                    <SelectTrigger><SelectValue placeholder="No one" /></SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="__none__">No one</SelectItem>
+                      {(users.data ?? []).map((u: any) => <SelectItem key={u.id} value={u.id}>{u.name}</SelectItem>)}
+                    </SelectContent>
+                  </Select>
+                </div>
+              </div>
+              <div>
+                <Button
+                  size="sm"
+                  disabled={!draft.name.trim() || !hasAnyAction || create.isPending}
+                  onClick={() => create.mutate()}
+                >
+                  <Plus className="h-4 w-4" />Add rule
+                </Button>
+                {!hasAnyCondition && draft.name.trim() && (
+                  <span className="ml-2 text-xs text-muted-foreground">No conditions set — this rule matches every ticket.</span>
+                )}
+              </div>
+            </div>
+          </>
+        )}
+      </CardContent>
+    </Card>
   );
 }
 
@@ -801,7 +1031,8 @@ function AISettingsCard({ readOnly }: { readOnly: boolean }) {
     { key: "ciFailureTriageEnabled", label: "CI-failure triage", description: "AI-authored root-cause/severity comment when a CI test run fails with a log excerpt attached (Security & DevOps tab)." },
     { key: "aiPrReviewSummaryEnabled", label: "AI PR-review summaries", description: "AI-authored summary comment on a ticket when its linked PR opens on a connected GitHub repo (Security & DevOps tab)." },
     { key: "findingTriageEnabled", label: "Security finding exploitability triage", description: "AI classifies each CRITICAL/HIGH ingested finding as a true/false positive and suggests a fix (Security & DevOps tab, and the ticket's Security tab if attached)." },
-    { key: "securityWeeklyDigestEnabled", label: "AI weekly security digest", description: "Monday-morning org-wide security recap (open findings, risk score, tickets past SLA) emailed to every admin. Also needs the matching toggle in Reminders & schedule." }
+    { key: "securityWeeklyDigestEnabled", label: "AI weekly security digest", description: "Monday-morning org-wide security recap (open findings, risk score, tickets past SLA) emailed to every admin. Also needs the matching toggle in Reminders & schedule." },
+    { key: "statusReportEnabled", label: "AI-drafted status reports", description: "On-demand \"generate a stakeholder update\" button on a project's Reports tab — plain-language recap of tickets and hours for that project." }
   ];
 
   return (
