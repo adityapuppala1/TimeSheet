@@ -119,21 +119,79 @@ aiRouter.post("/tickets/:id/summarize", requirePermission(permissions.TICKETS_VI
 
 const askSchema = z.object({ body: z.object({ question: z.string().min(3).max(500) }) });
 
+/**
+ * Cheap aggregates for the Insights-dashboard's own top-line numbers (velocity, SLA compliance,
+ * workload, cost), scoped the same way the ticket list above is — so "Ask AI" can answer
+ * trend/aggregate questions grounded in real numbers, not just the raw ticket list. Deliberately
+ * lighter than /reports/ticket-insights (no 8-week history, no cycle-time buckets): this runs
+ * synchronously on every question, so it stays a handful of cheap counts, not the full dashboard
+ * computation.
+ */
+async function buildInsightsSnapshotText(scope: Awaited<ReturnType<typeof ticketProjectScope>>): Promise<string> {
+  const projectFilter = scope.unrestricted ? {} : { projectId: { in: scope.projectIds } };
+  const weekAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
+  const twoWeeksAgo = new Date(Date.now() - 14 * 24 * 60 * 60 * 1000);
+
+  const [openCount, resolvedThisWeek, resolvedLastWeek, slaBreaches, byAssignee, costSettings] = await Promise.all([
+    prisma.ticket.count({ where: { deletedAt: null, ...projectFilter, status: { notIn: ["RESOLVED", "CLOSED"] } } }),
+    prisma.ticket.count({ where: { deletedAt: null, ...projectFilter, resolvedAt: { gte: weekAgo } } }),
+    prisma.ticket.count({ where: { deletedAt: null, ...projectFilter, resolvedAt: { gte: twoWeeksAgo, lt: weekAgo } } }),
+    prisma.ticket.count({
+      where: { deletedAt: null, ...projectFilter, status: { notIn: ["RESOLVED", "CLOSED"] }, slaBreachAt: { not: null } }
+    }),
+    prisma.ticket.groupBy({
+      by: ["assigneeId"],
+      where: { deletedAt: null, ...projectFilter, assigneeId: { not: null }, status: { notIn: ["RESOLVED", "CLOSED"] } },
+      _count: true,
+      orderBy: { _count: { assigneeId: "desc" } },
+      take: 5
+    }),
+    prisma.globalTicketSettings.findUnique({ where: { id: "global" }, select: { enableCostAnalytics: true } })
+  ]);
+
+  const assigneeIds = byAssignee.map((r) => r.assigneeId).filter((id): id is string => Boolean(id));
+  const assignees = await prisma.user.findMany({ where: { id: { in: assigneeIds } }, select: { id: true, name: true } });
+  const workloadLine = byAssignee
+    .map((r) => `${assignees.find((a) => a.id === r.assigneeId)?.name ?? "Unknown"}: ${r._count} open`)
+    .join(", ");
+
+  const lines = [
+    `Open tickets: ${openCount}`,
+    `Resolved this week: ${resolvedThisWeek} (last week: ${resolvedLastWeek})`,
+    `Open SLA breaches: ${slaBreaches}`,
+    `Top workload (open tickets by assignee): ${workloadLine || "(none assigned)"}`
+  ];
+
+  if (costSettings?.enableCostAnalytics) {
+    const timesheets = await prisma.timesheet.findMany({
+      where: { deletedAt: null, ticketId: { not: null }, ...(scope.unrestricted ? {} : { ticket: { projectId: { in: scope.projectIds } } }) },
+      select: { totalHours: true, user: { select: { hourlyRate: true } } }
+    });
+    const totalCostUsd = timesheets.reduce((sum, t) => sum + Number(t.user.hourlyRate ?? 0) * Number(t.totalHours), 0);
+    lines.push(`Total logged cost across tickets: $${totalCostUsd.toFixed(2)}`);
+  }
+
+  return lines.join("\n");
+}
+
 aiRouter.post("/ask", requirePermission(permissions.TICKETS_VIEW), validate(askSchema), async (req, res) => {
   const scope = await ticketProjectScope(req);
-  const tickets = await prisma.ticket.findMany({
-    where: {
-      deletedAt: null,
-      ...(scope.unrestricted ? {} : { projectId: { in: scope.projectIds } })
-    },
-    select: { key: true, title: true, status: true, priority: true, description: true },
-    orderBy: { updatedAt: "desc" },
-    take: 150
-  });
+  const [tickets, insightsSnapshot] = await Promise.all([
+    prisma.ticket.findMany({
+      where: {
+        deletedAt: null,
+        ...(scope.unrestricted ? {} : { projectId: { in: scope.projectIds } })
+      },
+      select: { key: true, title: true, status: true, priority: true, description: true },
+      orderBy: { updatedAt: "desc" },
+      take: 150
+    }),
+    buildInsightsSnapshotText(scope)
+  ]);
   if (tickets.length === 0) {
     return res.json({ answer: "There are no tickets in your accessible projects yet." });
   }
 
-  const result = await answerWorkspaceQuestion({ question: req.body.question, tickets, userId: req.user!.id });
+  const result = await answerWorkspaceQuestion({ question: req.body.question, tickets, insightsSnapshot, userId: req.user!.id });
   res.json(result);
 });

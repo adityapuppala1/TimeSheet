@@ -962,10 +962,20 @@ export async function summarizeComments(params: {
   return { summary: result.text };
 }
 
-/** Answers a free-text question about the caller's accessible tickets, citing ticket keys. */
+/**
+ * Answers a free-text question about the caller's accessible tickets, citing ticket keys.
+ * `insightsSnapshot` (optional) is a pre-formatted text block of Insights-dashboard aggregates
+ * (velocity, SLA compliance, workload, cost) computed by the caller (ai.controller.ts) — passed
+ * straight through as extra grounding context so questions like "why did our SLA compliance
+ * drop" can be answered from real numbers instead of only the raw ticket list. Kept as a plain
+ * text block rather than a tool-calling loop: the aggregates are cheap to compute up front and
+ * small enough to just include, so a multi-turn tool loop would add latency/cost for no benefit
+ * at this data volume.
+ */
 export async function answerWorkspaceQuestion(params: {
   question: string;
   tickets: Array<{ key: string; title: string; status: string; priority: string; description: string | null }>;
+  insightsSnapshot?: string;
   userId?: string;
 }): Promise<{ answer: string }> {
   const { settings } = await preflight("workspaceSearchEnabled");
@@ -977,10 +987,14 @@ export async function answerWorkspaceQuestion(params: {
     })
     .join("\n");
 
+  const snapshotBlock = params.insightsSnapshot
+    ? `\n\nWorkspace analytics snapshot (use this for trend/aggregate questions — velocity, SLA, workload, cost):\n${params.insightsSnapshot}`
+    : "";
+
   const result = await callChat(settings, {
     model: settings.model,
     maxTokens: 1024,
-    prompt: `You're answering a question about a team's ticket backlog. Use only the tickets listed below — cite ticket keys like [WEB-12] when referencing them. If the answer isn't in the provided tickets, say so plainly.\n\nTickets:\n${context}\n\nQuestion: ${params.question}`
+    prompt: `You're answering a question about a team's ticket backlog and workspace analytics. Use only the tickets and analytics listed below — cite ticket keys like [WEB-12] when referencing a specific ticket, and cite numbers directly when referencing analytics. If the answer isn't in the provided data, say so plainly.\n\nTickets:\n${context}${snapshotBlock}\n\nQuestion: ${params.question}`
   });
 
   await logAIUsage({

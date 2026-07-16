@@ -58,10 +58,12 @@ step ships/tests/ships before the next starts, same discipline as the DevOps clu
   Reports page rather than only firing on a schedule. Gated by its own `statusReportEnabled` toggle.
 
 ### Conversational analytics
-- [ ] Extend `answerWorkspaceQuestion` (today: ticket-backlog Q&A only) into a conversational
-  layer over the Insights dashboard's own aggregates (SLA trend, velocity, cost-per-ticket,
-  workload) via tool-calling through the same `ai.service.ts` choke point — "why did our SLA
-  compliance drop last month?" gets a grounded answer instead of requiring four separate charts.
+- [x] Extended `answerWorkspaceQuestion` (previously ticket-backlog Q&A only) with a scoped
+  analytics snapshot (open count, velocity this week vs last, open SLA breaches, top-5 workload,
+  cost totals if `enableCostAnalytics` is on) computed synchronously and passed as grounding
+  context — not a tool-calling loop, since the aggregates are cheap enough to just include up
+  front at this data volume. "Ask AI" (`workspaceSearchEnabled`) can now answer questions like
+  "what's our SLA breach count" grounded in real numbers, not just the raw ticket list.
 
 ### Integrations
 - [x] **Public REST API + outbound webhooks** — already shipped (`public-api.controller.ts`,

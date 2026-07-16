@@ -1024,7 +1024,7 @@ function AISettingsCard({ readOnly }: { readOnly: boolean }) {
     { key: "duplicateDetectionEnabled", label: "Duplicate detection", description: "Flag likely-duplicate tickets when a new one is created." },
     { key: "writingAssistantEnabled", label: "Writing assistant", description: "\"Improve with AI\" button in ticket and comment editors." },
     { key: "commentSummaryEnabled", label: "Comment thread summaries", description: "AI summary of long comment threads on a ticket." },
-    { key: "workspaceSearchEnabled", label: "\"Ask AI\" ticket search", description: "Natural-language Q&A over your accessible tickets from the command palette." },
+    { key: "workspaceSearchEnabled", label: "\"Ask AI\" ticket search", description: "Natural-language Q&A over your accessible tickets and workspace analytics (velocity, SLA, workload, cost) from the command palette." },
     { key: "emailIngestionEnabled", label: "Email-to-ticket intake", description: "Parse inbound bug-report emails and auto-create tickets." },
     { key: "chatIngestionEnabled", label: "Chat-to-ticket intake", description: "Turn Slack/Teams/Google Chat/Telegram messages into auto-created tickets." },
     { key: "weeklyDigestEnabled", label: "AI weekly digest", description: "LLM-authored weekly summary of ticket + timesheet activity." },
