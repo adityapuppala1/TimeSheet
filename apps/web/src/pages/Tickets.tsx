@@ -1591,6 +1591,24 @@ function SecurityPanel({ ticketId }: { ticketId: string }) {
                 {finding.filePath && (
                   <p className="text-xs text-muted-foreground">{finding.filePath}{finding.lineNumber ? `:${finding.lineNumber}` : ""}</p>
                 )}
+                {finding.aiVerdict && (
+                  <div className="mt-1 grid gap-0.5 rounded-md border border-dashed border-primary/30 bg-primary/5 px-2.5 py-2 text-xs">
+                    <div className="flex items-center gap-1.5 font-semibold text-primary">
+                      <Sparkles className="h-3 w-3" />
+                      AI triage:{" "}
+                      <Badge
+                        variant={finding.aiVerdict === "TRUE_POSITIVE" ? "destructive" : finding.aiVerdict === "FALSE_POSITIVE" ? "success" : "warning"}
+                        className="text-[10px]"
+                      >
+                        {finding.aiVerdict === "TRUE_POSITIVE" ? "True positive" : finding.aiVerdict === "FALSE_POSITIVE" ? "Likely false positive" : "Needs review"}
+                      </Badge>
+                    </div>
+                    {finding.aiExploitability && <p className="text-muted-foreground">{finding.aiExploitability}</p>}
+                    {finding.aiFixSuggestion && (
+                      <p className="text-muted-foreground"><span className="font-medium text-foreground">Fix: </span>{finding.aiFixSuggestion}</p>
+                    )}
+                  </div>
+                )}
               </div>
             ))}
           </div>

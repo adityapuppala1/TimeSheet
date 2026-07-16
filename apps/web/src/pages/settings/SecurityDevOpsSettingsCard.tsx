@@ -192,9 +192,16 @@ export function SecurityDevOpsSettingsCard({ readOnly }: { readOnly: boolean }) 
     onError: () => toast.error("Could not update the digest setting", { description: "Try again." })
   });
 
+  const toggleSecurityWeeklyDigest = useMutation({
+    mutationFn: (value: boolean) => settingsApi.updateNotifications({ emailSecurityWeeklyDigest: value } as Partial<NotificationPreferences>),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["settings", "notifications"] }),
+    onError: () => toast.error("Could not update the digest setting", { description: "Try again." })
+  });
+
   // Defensive — matches this app's existing convention of the shared package being the single
   // source of truth for which toggle keys exist (see WorkspaceSettings.tsx's emailRows list).
   const digestKeySupported = notificationPreferenceKeys.includes("emailTicketClosedDigest");
+  const securityWeeklyDigestKeySupported = notificationPreferenceKeys.includes("emailSecurityWeeklyDigest");
 
   return (
     <div className="grid gap-5">
@@ -222,6 +229,7 @@ export function SecurityDevOpsSettingsCard({ readOnly }: { readOnly: boolean }) 
               <CopyableUrl label="Findings webhook (SAST / DAST / SSAT / SSCT)" url={webhookUrl(ingestion.data.findingsWebhookPath)} />
               <CopyableUrl label="SARIF findings webhook (GitHub Code Scanning / CodeQL / Azure DevOps)" url={webhookUrl(ingestion.data.sarifFindingsWebhookPath)} />
               <CopyableUrl label="Test-run webhook" url={webhookUrl(ingestion.data.testRunsWebhookPath)} />
+              <CopyableUrl label="SBOM webhook (SPDX / CycloneDX)" url={webhookUrl(ingestion.data.sbomWebhookPath)} />
 
               <Alert>
                 <AlertTitle className="text-sm">Authenticate every POST with a bearer token</AlertTitle>
@@ -361,8 +369,9 @@ export function SecurityDevOpsSettingsCard({ readOnly }: { readOnly: boolean }) 
           <CardDescription>
             When an auto-created security ticket (above) has no module-assignee-rule match, resolve an assignee from the finding's
             repo <code>CODEOWNERS</code> file for its file path, or failing that the last GitHub committer on that file — matched to a
-            TimeSphere user via their <strong>GitHub username</strong> (set per user on the Users page). Requires a connected GitHub
-            account below.
+            TimeSphere user via their <strong>GitHub username</strong> (set per user on the Users page). When a <code>CODEOWNERS</code>{" "}
+            line lists several people, the one who has historically resolved security tickets fastest is picked. Requires a connected
+            GitHub account below.
           </CardDescription>
         </CardHeader>
         <CardContent>
@@ -478,6 +487,36 @@ export function SecurityDevOpsSettingsCard({ readOnly }: { readOnly: boolean }) 
                 checked={Boolean(notifications.data?.emailTicketClosedDigest)}
                 onCheckedChange={(value) => toggleDigest.mutate(value)}
                 disabled={readOnly || toggleDigest.isPending}
+              />
+            </div>
+          )}
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-base">AI weekly security digest</CardTitle>
+          <CardDescription>
+            Every Monday morning, an AI-authored org-wide recap (open findings, risk score trend, tickets past SLA) is emailed to
+            every admin — needs both the AI toggle (Workspace Settings → AI → "AI weekly security digest") and this delivery toggle
+            on.
+          </CardDescription>
+        </CardHeader>
+        <CardContent>
+          {notifications.isLoading && <Skeleton className="h-10 w-full" />}
+          {!notifications.isLoading && securityWeeklyDigestKeySupported && (
+            <div className="flex flex-wrap items-center justify-between gap-3 rounded-md border border-border px-3 py-2.5">
+              <div className="flex min-w-0 flex-1 items-center gap-2.5">
+                <Sparkles className="h-4 w-4 shrink-0 text-info" />
+                <div className="min-w-0">
+                  <p className="text-sm font-medium">Email the weekly security digest to admins</p>
+                  <p className="text-xs text-muted-foreground">Off by default — skips weeks with nothing to report.</p>
+                </div>
+              </div>
+              <Switch
+                checked={Boolean(notifications.data?.emailSecurityWeeklyDigest)}
+                onCheckedChange={(value) => toggleSecurityWeeklyDigest.mutate(value)}
+                disabled={readOnly || toggleSecurityWeeklyDigest.isPending}
               />
             </div>
           )}

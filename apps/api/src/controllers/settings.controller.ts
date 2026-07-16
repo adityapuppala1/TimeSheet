@@ -161,6 +161,8 @@ const aiSettingsSchema = z.object({
       weeklyDigestEnabled: z.boolean().optional(),
       ciFailureTriageEnabled: z.boolean().optional(),
       aiPrReviewSummaryEnabled: z.boolean().optional(),
+      findingTriageEnabled: z.boolean().optional(),
+      securityWeeklyDigestEnabled: z.boolean().optional(),
       model: z.string().min(1).max(80).optional(),
       confidenceThreshold: z.coerce.number().min(0).max(1).optional(),
       monthlyBudgetUsd: z.coerce.number().min(0).optional().nullable(),
@@ -342,7 +344,8 @@ settingsRouter.get("/security-ingestion", requireSuperAdmin, async (_req, res) =
     fallbackProjectId: settings?.fallbackProjectId ?? null,
     autoReopenEnabled: settings?.autoReopenEnabled ?? false,
     codeownersAssignEnabled: settings?.codeownersAssignEnabled ?? false,
-    sarifFindingsWebhookPath: `/api/devops/${orgSlug}/findings/sarif`
+    sarifFindingsWebhookPath: `/api/devops/${orgSlug}/findings/sarif`,
+    sbomWebhookPath: `/api/devops/${orgSlug}/sbom`
   });
 });
 

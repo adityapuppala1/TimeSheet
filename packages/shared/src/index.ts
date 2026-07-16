@@ -110,6 +110,9 @@ export type SecurityFindingSeverity = (typeof securityFindingSeverities)[number]
 export const securityFindingStatuses = ["OPEN", "ACKNOWLEDGED", "FIXED", "ACCEPTED_RISK"] as const;
 export type SecurityFindingStatus = (typeof securityFindingStatuses)[number];
 
+export const securityFindingAiVerdicts = ["TRUE_POSITIVE", "FALSE_POSITIVE", "NEEDS_REVIEW"] as const;
+export type SecurityFindingAiVerdict = (typeof securityFindingAiVerdicts)[number];
+
 export const testRunStatuses = ["PASSED", "FAILED", "RUNNING"] as const;
 export type TestRunStatus = (typeof testRunStatuses)[number];
 
@@ -162,6 +165,9 @@ export interface NotificationPreferences {
   emailTicketNeedsReview: boolean;
   /** Ticket-close security/test-status digest — see docs/ROADMAP.md's security assessment suite. */
   emailTicketClosedDigest: boolean;
+  /** AI weekly org-wide security digest to every ADMIN/SUPER_ADMIN — see
+   *  workers/security-weekly-digest.worker.ts. Gated alongside GlobalAISettings.securityWeeklyDigestEnabled. */
+  emailSecurityWeeklyDigest: boolean;
 }
 
 export const notificationPreferenceKeys: ReadonlyArray<keyof NotificationPreferences> = [
@@ -180,7 +186,8 @@ export const notificationPreferenceKeys: ReadonlyArray<keyof NotificationPrefere
   "emailTicketSlaBreach",
   "emailTicketEscalation",
   "emailTicketNeedsReview",
-  "emailTicketClosedDigest"
+  "emailTicketClosedDigest",
+  "emailSecurityWeeklyDigest"
 ];
 
 /** Workspace-wide settings: notification toggles + reminder schedule + BCC behavior. */
@@ -262,6 +269,12 @@ export interface GlobalAISettings {
   /** Gates ai.service.ts#summarizePullRequest — an AI-authored review-summary comment posted
    *  when a linked PR opens (git-webhook.controller.ts). Needs a live GitHub connection. */
   aiPrReviewSummaryEnabled: boolean;
+  /** Gates ai.service.ts#classifySecurityFinding — sibling of ciFailureTriageEnabled, scoped to
+   *  ingested SecurityFinding rows (CRITICAL/HIGH only) instead of CI test-run failures. */
+  findingTriageEnabled: boolean;
+  /** Gates ai.service.ts#generateSecurityWeeklyDigest — an org-wide security summary emailed to
+   *  every ADMIN/SUPER_ADMIN weekly. See workers/security-weekly-digest.worker.ts. */
+  securityWeeklyDigestEnabled: boolean;
   model: string;
   confidenceThreshold: number;
   monthlyBudgetUsd: number | null;

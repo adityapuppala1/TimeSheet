@@ -27,6 +27,7 @@ import { startEscalationWorker } from "./workers/escalation.worker.js";
 import { startInboundEmailWorker } from "./workers/inbound-email.worker.js";
 import { startTicketEscalationWorker } from "./workers/ticket-escalation.worker.js";
 import { startWeeklyDigestWorker } from "./workers/weekly-digest.worker.js";
+import { startSecurityWeeklyDigestWorker } from "./workers/security-weekly-digest.worker.js";
 
 /**
  * Fail-fast guards before the server accepts traffic.
@@ -156,6 +157,7 @@ const server: Server = app.listen(env.API_PORT, async () => {
   startInboundEmailWorker();
   startChatTelegramWorker();
   startWeeklyDigestWorker();
+  startSecurityWeeklyDigestWorker();
 });
 
 /**

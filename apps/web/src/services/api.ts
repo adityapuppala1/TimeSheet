@@ -305,6 +305,23 @@ export interface SecurityInsights {
   riskScoreYesterday: number;
 }
 
+export interface SbomInventory {
+  totalComponents: number;
+  vulnerableCount: number;
+  vulnerableComponents: Array<{
+    id: string;
+    name: string;
+    version: string;
+    ecosystem: string | null;
+    license: string | null;
+    knownCve: string | null;
+    repository: string | null;
+    createdAt: string;
+  }>;
+  byEcosystem: Array<{ ecosystem: string; count: number }>;
+  byRepository: Array<{ repository: string; count: number }>;
+}
+
 export const reportApi = {
   admin: async () => (await api.get("/reports/admin-summary")).data,
   employee: async () => (await api.get("/reports/employee-summary")).data,
@@ -312,6 +329,7 @@ export const reportApi = {
   tickets: async () => (await api.get<TicketSummary>("/reports/ticket-summary")).data,
   ticketInsights: async () => (await api.get<TicketInsights>("/reports/ticket-insights")).data,
   securityInsights: async () => (await api.get<SecurityInsights>("/reports/security-insights")).data,
+  sbomInventory: async () => (await api.get<SbomInventory>("/reports/sbom-inventory")).data,
   costInsights: async () => (await api.get<CostInsights>("/reports/cost-insights")).data,
   leaderboard: async () => (await api.get<{ rows: LeaderboardRow[] }>("/reports/leaderboard")).data,
   download: async (type: "csv" | "pdf") => (await api.get(`/reports/export.${type}`, { responseType: "blob" })).data
@@ -454,6 +472,7 @@ export const settingsApi = {
         findingsWebhookPath: string;
         testRunsWebhookPath: string;
         sarifFindingsWebhookPath: string;
+        sbomWebhookPath: string;
         fallbackProjectId: string | null;
         autoReopenEnabled: boolean;
         codeownersAssignEnabled: boolean;
@@ -809,6 +828,13 @@ export interface SecurityFindingRow {
   repository: string | null;
   branch: string | null;
   prUrl: string | null;
+  /// Opt-in AI exploitability triage (Workspace Settings → AI → "Security finding exploitability
+  /// triage") — null until triaged, or if the toggle is off, or the finding's severity is below
+  /// CRITICAL/HIGH (see security-report.service.ts#maybeTriageFindingWithAI).
+  aiVerdict: "TRUE_POSITIVE" | "FALSE_POSITIVE" | "NEEDS_REVIEW" | null;
+  aiExploitability: string | null;
+  aiFixSuggestion: string | null;
+  aiTriagedAt: string | null;
   createdAt: string;
 }
 

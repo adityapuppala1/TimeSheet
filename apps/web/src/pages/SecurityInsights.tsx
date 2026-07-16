@@ -10,7 +10,7 @@
  * WHO calls the backing API: `controllers/report.controller.ts`'s `GET /reports/security-insights`.
  */
 import { useQuery } from "@tanstack/react-query";
-import { AlertTriangle, Clock, ShieldAlert, ShieldCheck, TrendingUp } from "lucide-react";
+import { AlertTriangle, Boxes, Clock, ShieldAlert, ShieldCheck, TrendingUp } from "lucide-react";
 import { Area, AreaChart, Bar, BarChart, CartesianGrid, ResponsiveContainer, Tooltip as RTooltip, XAxis, YAxis } from "recharts";
 import { Badge } from "../components/ui/badge";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../components/ui/card";
@@ -46,6 +46,11 @@ export function SecurityInsightsPage() {
   const insights = useQuery({
     queryKey: ["reports", "security-insights"],
     queryFn: reportApi.securityInsights,
+    refetchInterval: 60_000
+  });
+  const sbom = useQuery({
+    queryKey: ["reports", "sbom-inventory"],
+    queryFn: reportApi.sbomInventory,
     refetchInterval: 60_000
   });
 
@@ -218,6 +223,62 @@ export function SecurityInsightsPage() {
                     </TableBody>
                   </Table>
                 </div>
+              )}
+            </CardContent>
+          </Card>
+
+          <Card>
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2 text-base">
+                <Boxes className="h-4 w-4 text-primary" />
+                Software supply chain (SBOM)
+              </CardTitle>
+              <CardDescription>
+                Dependency inventory from ingested SPDX/CycloneDX documents — Workspace Settings → Security &amp; DevOps → SBOM
+                webhook. Not a live vulnerability scanner: only components a scan tool itself flagged show a known CVE here.
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="grid gap-4">
+              {sbom.isLoading && <Skeleton className="h-20 w-full" />}
+              {!sbom.isLoading && sbom.data && sbom.data.totalComponents === 0 && (
+                <p className="text-sm text-muted-foreground">No SBOM has been ingested yet.</p>
+              )}
+              {!sbom.isLoading && sbom.data && sbom.data.totalComponents > 0 && (
+                <>
+                  <div className="grid grid-cols-2 gap-2.5 sm:gap-3 md:grid-cols-2">
+                    <StatCard label="Tracked components" value={sbom.data.totalComponents} icon={<Boxes className="h-4 w-4" />} />
+                    <StatCard
+                      label="Known-vulnerable"
+                      value={sbom.data.vulnerableCount}
+                      icon={<AlertTriangle className="h-4 w-4" />}
+                      tone={sbom.data.vulnerableCount > 0 ? "destructive" : "success"}
+                    />
+                  </div>
+                  {sbom.data.vulnerableComponents.length > 0 && (
+                    <div className="overflow-x-auto">
+                      <Table>
+                        <TableHeader>
+                          <TableRow>
+                            <TableHead>Component</TableHead>
+                            <TableHead>Ecosystem</TableHead>
+                            <TableHead>License</TableHead>
+                            <TableHead>Known CVE</TableHead>
+                          </TableRow>
+                        </TableHeader>
+                        <TableBody>
+                          {sbom.data.vulnerableComponents.slice(0, 20).map((c) => (
+                            <TableRow key={c.id}>
+                              <TableCell className="font-mono text-xs">{c.name}@{c.version}</TableCell>
+                              <TableCell className="text-xs text-muted-foreground">{c.ecosystem ?? "—"}</TableCell>
+                              <TableCell className="text-xs text-muted-foreground">{c.license ?? "—"}</TableCell>
+                              <TableCell><Badge variant="destructive">{c.knownCve}</Badge></TableCell>
+                            </TableRow>
+                          ))}
+                        </TableBody>
+                      </Table>
+                    </div>
+                  )}
+                </>
               )}
             </CardContent>
           </Card>

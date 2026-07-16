@@ -32,7 +32,8 @@ export type NotificationCategory =
   | "ticket.escalation"
   | "ticket.needs_review"
   | "digest.weekly"
-  | "ticket.closed_digest";
+  | "ticket.closed_digest"
+  | "digest.security_weekly";
 
 interface EmailPayload {
   templateKey: string;
@@ -67,7 +68,8 @@ const SETTINGS_FIELD: Record<NotificationCategory, string> = {
   "ticket.escalation": "emailTicketEscalation",
   "ticket.needs_review": "emailTicketNeedsReview",
   "digest.weekly": "emailWeeklyDigest",
-  "ticket.closed_digest": "emailTicketClosedDigest"
+  "ticket.closed_digest": "emailTicketClosedDigest",
+  "digest.security_weekly": "emailSecurityWeeklyDigest"
 };
 
 const GLOBAL_ID = "global";

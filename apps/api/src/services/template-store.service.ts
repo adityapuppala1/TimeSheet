@@ -34,7 +34,8 @@ export const TEMPLATE_VARIABLES: Record<string, string[]> = {
   "ticket.received_via_email": ["senderName", "ticketKey", "title", "priority", "appUrl"],
   "ticket.needs_review": ["targetName", "ticketKey", "title", "senderEmail", "confidence", "appUrl"],
   "digest.weekly": ["name", "weekLabel", "summary", "appUrl"],
-  "ticket.closed_digest": ["ticketKey", "title", "closedBy", "riskVerdict", "findingsText", "testStatus", "appUrl"]
+  "ticket.closed_digest": ["ticketKey", "title", "closedBy", "riskVerdict", "findingsText", "testStatus", "appUrl"],
+  "digest.security_weekly": ["weekLabel", "summary", "riskScore", "appUrl"]
 };
 
 export const TEMPLATE_DESCRIPTIONS: Record<string, string> = {
@@ -58,7 +59,8 @@ export const TEMPLATE_DESCRIPTIONS: Record<string, string> = {
   "ticket.received_via_email": "Confirmation sent to an external sender whose email was auto-converted into a ticket.",
   "ticket.needs_review": "Sent to project admins/managers when an email-sourced ticket's AI confidence is below the threshold.",
   "digest.weekly": "Monday-morning AI-authored recap of a person's ticket + timesheet activity for the past week.",
-  "ticket.closed_digest": "Security/test-status digest sent when a ticket with ingested findings closes — to the closer + their manager, cc this workspace's admins."
+  "ticket.closed_digest": "Security/test-status digest sent when a ticket with ingested findings closes — to the closer + their manager, cc this workspace's admins.",
+  "digest.security_weekly": "Monday-morning AI-authored org-wide security recap (open findings, risk score, tickets past SLA) sent to every ADMIN/SUPER_ADMIN."
 };
 
 export const TEMPLATE_KEYS = Object.keys(TEMPLATE_VARIABLES);
@@ -174,6 +176,11 @@ export function sampleVariables(key: string): Record<string, string> {
       riskVerdict: "Needs attention — 1 open CRITICAL finding, 1 open HIGH finding, latest test run FAILED.",
       findingsText: "Static analysis (SAST):<br />  - [CRITICAL] SQL injection in login handler (semgrep)<br /><br />Secrets scanning (SSAT):<br />  - [HIGH] Hardcoded AWS key (gitleaks)",
       testStatus: "FAILED", appUrl: "https://timesphere.local"
+    },
+    "digest.security_weekly": {
+      weekLabel: "Jun 29 - Jul 5",
+      summary: "Risk dropped this week — 2 CRITICAL findings from last week were resolved and no new CRITICAL/HIGH issues landed. One security-linked ticket is still past its SLA and worth a look Monday morning.",
+      riskScore: "18", appUrl: "https://timesphere.local"
     }
   };
   return samples[key] ?? {};

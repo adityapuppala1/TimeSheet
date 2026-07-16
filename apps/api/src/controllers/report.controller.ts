@@ -628,6 +628,40 @@ reportRouter.get("/security-insights", requirePermission(permissions.REPORTS_VIE
   });
 });
 
+/**
+ * SBOM dependency inventory — basic "what's in our supply chain, and is any of it known-
+ * vulnerable" view, fed by ingested SPDX/CycloneDX documents (devops-webhook.controller.ts's
+ * /sbom route). Deliberately not attempting Black Duck's full license-obligation-text depth —
+ * see docs/ROADMAP.md's "Competitive parity" Phase 3.
+ */
+reportRouter.get("/sbom-inventory", requirePermission(permissions.REPORTS_VIEW), async (_req, res) => {
+  const [totalComponents, vulnerableComponents, byEcosystem, byRepository] = await Promise.all([
+    prisma.sbomComponent.count(),
+    prisma.sbomComponent.findMany({
+      where: { knownCve: { not: null } },
+      select: { id: true, name: true, version: true, ecosystem: true, license: true, knownCve: true, repository: true, createdAt: true },
+      orderBy: { createdAt: "desc" },
+      take: 100
+    }),
+    prisma.sbomComponent.groupBy({ by: ["ecosystem"], _count: true, orderBy: { _count: { ecosystem: "desc" } }, take: 10 }),
+    prisma.sbomComponent.groupBy({
+      by: ["repository"],
+      where: { repository: { not: null } },
+      _count: true,
+      orderBy: { _count: { repository: "desc" } },
+      take: 10
+    })
+  ]);
+
+  res.json({
+    totalComponents,
+    vulnerableCount: vulnerableComponents.length,
+    vulnerableComponents,
+    byEcosystem: byEcosystem.map((row) => ({ ecosystem: row.ecosystem ?? "Unknown", count: row._count })),
+    byRepository: byRepository.map((row) => ({ repository: row.repository ?? "Unknown", count: row._count }))
+  });
+});
+
 /** Opt-in cost-per-ticket analytics — gated behind GlobalTicketSettings.enableCostAnalytics (needs User.hourlyRate). */
 reportRouter.get("/cost-insights", requirePermission(permissions.REPORTS_VIEW), async (_req, res) => {
   const settings = await prisma.globalTicketSettings.findUnique({ where: { id: "global" } });

@@ -799,7 +799,9 @@ function AISettingsCard({ readOnly }: { readOnly: boolean }) {
     { key: "chatIngestionEnabled", label: "Chat-to-ticket intake", description: "Turn Slack/Teams/Google Chat/Telegram messages into auto-created tickets." },
     { key: "weeklyDigestEnabled", label: "AI weekly digest", description: "LLM-authored weekly summary of ticket + timesheet activity." },
     { key: "ciFailureTriageEnabled", label: "CI-failure triage", description: "AI-authored root-cause/severity comment when a CI test run fails with a log excerpt attached (Security & DevOps tab)." },
-    { key: "aiPrReviewSummaryEnabled", label: "AI PR-review summaries", description: "AI-authored summary comment on a ticket when its linked PR opens on a connected GitHub repo (Security & DevOps tab)." }
+    { key: "aiPrReviewSummaryEnabled", label: "AI PR-review summaries", description: "AI-authored summary comment on a ticket when its linked PR opens on a connected GitHub repo (Security & DevOps tab)." },
+    { key: "findingTriageEnabled", label: "Security finding exploitability triage", description: "AI classifies each CRITICAL/HIGH ingested finding as a true/false positive and suggests a fix (Security & DevOps tab, and the ticket's Security tab if attached)." },
+    { key: "securityWeeklyDigestEnabled", label: "AI weekly security digest", description: "Monday-morning org-wide security recap (open findings, risk score, tickets past SLA) emailed to every admin. Also needs the matching toggle in Reminders & schedule." }
   ];
 
   return (

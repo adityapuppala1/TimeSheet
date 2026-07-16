@@ -284,6 +284,16 @@ export const templates = {
         paragraph(`<span style="color:${MUTED};">This recap is AI-generated from your ticket and timesheet activity — turn it off anytime in your notification preferences.</span>`)
     ),
 
+  securityWeeklyDigest: (params: { weekLabel: string; summary: string; riskScore: number }) =>
+    shell(
+      { title: `Security digest — week of ${params.weekLabel}`, preheader: "AI-authored recap of this week's security findings and risk trend." },
+      heading(`Security posture — week of ${escape(params.weekLabel)}`) +
+        infoCard([["Risk score", String(params.riskScore)]], params.riskScore > 30 ? DESTRUCTIVE : params.riskScore > 10 ? ACCENT : SUCCESS) +
+        paragraph(escape(params.summary)) +
+        paragraph(button("Open Security insights", appUrl("/app/security-insights"))) +
+        paragraph(`<span style="color:${MUTED};">AI-generated from this week's ingested findings — turn it off anytime in Workspace Settings → AI.</span>`)
+    ),
+
   ticketNeedsReview: (params: { targetName: string; ticketKey: string; title: string; senderEmail: string; confidence: number }) =>
     shell(
       { title: `Needs review: ${params.ticketKey}`, preheader: "An email-sourced ticket needs a human check.", accentColor: ACCENT },

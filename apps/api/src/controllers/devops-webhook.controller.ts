@@ -26,7 +26,8 @@ import {
   maybeAssignFindingViaCodeowners,
   maybeAutoCreateTicketForFinding,
   maybePostCiFailureTriageComment,
-  maybeReopenTicketOnRegression
+  maybeReopenTicketOnRegression,
+  maybeTriageFindingWithAI
 } from "../services/security-report.service.js";
 import { decryptSecret } from "../utils/encryption.js";
 
@@ -137,6 +138,12 @@ async function ingestFindingsBatch(findings: FindingInput[]): Promise<number> {
           console.warn(`[devops-webhook] auto-reopen check failed for ticket ${ticketId}: ${(error as Error).message}`)
         );
       }
+      // Opt-in AI exploitability triage (GlobalAISettings.findingTriageEnabled) — CRITICAL/HIGH
+      // only, see security-report.service.ts#maybeTriageFindingWithAI. Never throws: a disabled
+      // toggle or AI-budget cap shouldn't fail ingestion, just skip the triage for this finding.
+      await maybeTriageFindingWithAI(finding).catch((error) =>
+        console.warn(`[devops-webhook] AI triage failed for finding ${finding.id}: ${(error as Error).message}`)
+      );
       return finding;
     })
   );
@@ -355,3 +362,118 @@ devopsWebhookRouter.post("/:orgSlug/test-runs", async (req, res, next) => {
   }
 });
 
+
+// --- SBOM ingestion (SPDX / CycloneDX) --------------------------------------------------------
+// Basic "dependency inventory + known-CVE cross-reference" — deliberately not attempting Black
+// Duck's full license-obligation-text depth (see docs/ROADMAP.md's "Competitive parity" Phase 3).
+
+interface SbomComponentInput {
+  name: string;
+  version: string;
+  ecosystem: string | null;
+  license: string | null;
+  knownCve: string | null;
+}
+
+/** `pkg:npm/lodash@4.17.21` -> "npm". Purl's type segment is a reliable ecosystem signal both
+ *  SPDX (via externalRefs) and CycloneDX (via each component's own `purl`) commonly carry. */
+function ecosystemFromPurl(purl: string | undefined): string | null {
+  const match = purl?.match(/^pkg:([a-zA-Z0-9.+-]+)\//);
+  return match ? match[1] : null;
+}
+
+function parseCycloneDx(doc: Record<string, unknown>): SbomComponentInput[] {
+  const components = (doc.components ?? []) as Array<Record<string, unknown>>;
+  const vulnerabilities = (doc.vulnerabilities ?? []) as Array<Record<string, unknown>>;
+
+  // Best-effort CVE cross-reference: CycloneDX's `vulnerabilities[].affects[].ref` points at a
+  // component's `bom-ref`; map ref -> first vulnerability id found for it.
+  const cveByRef = new Map<string, string>();
+  for (const vuln of vulnerabilities) {
+    const id = vuln.id as string | undefined;
+    const affects = (vuln.affects ?? []) as Array<Record<string, unknown>>;
+    for (const affected of affects) {
+      const ref = affected.ref as string | undefined;
+      if (ref && id && !cveByRef.has(ref)) cveByRef.set(ref, id);
+    }
+  }
+
+  return components
+    .filter((c) => typeof c.name === "string" && typeof c.version === "string")
+    .map((c) => {
+      const purl = c.purl as string | undefined;
+      const licenses = (c.licenses ?? []) as Array<Record<string, unknown>>;
+      const licenseEntry = licenses[0]?.license as Record<string, unknown> | undefined;
+      const license = (licenseEntry?.id as string | undefined) ?? (licenseEntry?.name as string | undefined) ?? null;
+      const bomRef = c["bom-ref"] as string | undefined;
+      return {
+        name: String(c.name).slice(0, 255),
+        version: String(c.version).slice(0, 80),
+        ecosystem: ecosystemFromPurl(purl),
+        license: license?.slice(0, 120) ?? null,
+        knownCve: (bomRef && cveByRef.get(bomRef)) ?? null
+      };
+    });
+}
+
+function parseSpdx(doc: Record<string, unknown>): SbomComponentInput[] {
+  const packages = (doc.packages ?? []) as Array<Record<string, unknown>>;
+  return packages
+    .filter((p) => typeof p.name === "string")
+    .map((p) => {
+      const externalRefs = (p.externalRefs ?? []) as Array<Record<string, unknown>>;
+      const purlRef = externalRefs.find((r) => r.referenceType === "purl")?.referenceLocator as string | undefined;
+      const license = p.licenseConcluded as string | undefined;
+      return {
+        name: String(p.name).slice(0, 255),
+        version: String(p.versionInfo ?? "unknown").slice(0, 80),
+        ecosystem: ecosystemFromPurl(purlRef),
+        license: license && license !== "NOASSERTION" ? license.slice(0, 120) : null,
+        knownCve: null
+      };
+    });
+}
+
+const sbomRequestSchema = z.object({
+  body: z.object({
+    sbom: z.record(z.string(), z.unknown()).optional(),
+    // Fields present at top level when the body IS the raw SBOM doc rather than a wrapper.
+    spdxVersion: z.string().optional(),
+    bomFormat: z.string().optional(),
+    packages: z.array(z.record(z.string(), z.unknown())).optional(),
+    components: z.array(z.record(z.string(), z.unknown())).optional(),
+    repository: z.string().max(255).optional()
+  })
+});
+
+devopsWebhookRouter.post("/:orgSlug/sbom", async (req, res, next) => {
+  try {
+    await withOrgTenant(req.params.orgSlug, async () => {
+      await requireValidIngestionToken(req);
+      const parsed = sbomRequestSchema.safeParse({ body: req.body });
+      if (!parsed.success) throw new AppError(422, `Invalid SBOM payload: ${parsed.error.issues.map((i) => i.message).join("; ")}`);
+      const body = parsed.data.body;
+
+      const doc = body.sbom ?? (body.packages || body.components ? (req.body as Record<string, unknown>) : undefined);
+      if (!doc) throw new AppError(422, "No SBOM document found — send either a raw SPDX/CycloneDX log as the body, or { sbom: {...}, ... }.");
+
+      const isSpdx = typeof doc.spdxVersion === "string" || Array.isArray(doc.packages);
+      const isCycloneDx = doc.bomFormat === "CycloneDX" || Array.isArray(doc.components);
+      if (!isSpdx && !isCycloneDx) throw new AppError(422, "Could not detect SBOM format — expected SPDX (spdxVersion/packages) or CycloneDX (bomFormat/components).");
+
+      const parsedComponents = isSpdx ? parseSpdx(doc) : parseCycloneDx(doc);
+      if (parsedComponents.length === 0) return res.status(201).json({ created: 0, note: "SBOM parsed but contained zero components." });
+      if (parsedComponents.length > 2000) throw new AppError(422, "SBOM contains more than 2000 components — split into multiple requests.");
+
+      const format = isSpdx ? "SPDX" : "CycloneDX";
+      const repository = body.repository;
+      await prisma.sbomComponent.createMany({
+        data: parsedComponents.map((c) => ({ ...c, format, repository }))
+      });
+
+      res.status(201).json({ created: parsedComponents.length, format });
+    });
+  } catch (error) {
+    next(error);
+  }
+});

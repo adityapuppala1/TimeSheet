@@ -650,6 +650,16 @@ model GlobalAISettings {
   /// Needs the live GitHub connection (GitConnection) AND a repo webhook configured — see
   /// docs/ROADMAP.md's "AI PR-review summaries" item.
   aiPrReviewSummaryEnabled  Boolean    @default(false)
+  /// Gates ai.service.ts#classifySecurityFinding — sibling of ciFailureTriageEnabled, scoped to
+  /// ingested SecurityFinding rows instead of CI test-run failures. Only CRITICAL/HIGH findings
+  /// are triaged (same severity bar IngestionSettings.fallbackProjectId's auto-ticket-creation
+  /// uses) to bound AI spend. See docs/ROADMAP.md's "Competitive parity" Phase 3.
+  findingTriageEnabled      Boolean    @default(false)
+  /// Gates ai.service.ts#generateSecurityWeeklyDigest — an AI-authored org-wide security summary
+  /// (open-findings trend, newly-critical items, tickets past SLA) emailed to every ADMIN/
+  /// SUPER_ADMIN weekly, generalizing weeklyDigestEnabled's per-user pattern to an admin audience.
+  /// See workers/security-weekly-digest.worker.ts.
+  securityWeeklyDigestEnabled Boolean  @default(false)
   model                     String     @default("claude-haiku-4-5") @db.VarChar(80)
   confidenceThreshold       Float      @default(0.6)
   monthlyBudgetUsd          Decimal?   @db.Decimal(10, 2)
@@ -721,6 +731,11 @@ model GlobalNotificationSettings {
   /// ticket, their manager, and this org's own admins — see services/security-report.service.ts.
   /// Off by default: irrelevant noise for an org that hasn't connected any scan source yet.
   emailTicketClosedDigest  Boolean @default(false)
+  /// Sends the AI weekly security digest (see workers/security-weekly-digest.worker.ts) to every
+  /// ADMIN/SUPER_ADMIN. Gated alongside GlobalAISettings.securityWeeklyDigestEnabled — the AI
+  /// toggle decides whether the worker runs at all, this decides whether email actually sends,
+  /// same two-layer gating emailWeeklyDigest/weeklyDigestEnabled already use.
+  emailSecurityWeeklyDigest Boolean @default(false)
 
   /// Hour (0–23, server local time) for the "log today's time" reminder.
   dailyReminderHour        Int     @default(16)
@@ -953,6 +968,16 @@ enum SecurityFindingStatus {
   ACCEPTED_RISK
 }
 
+/// AI's exploitability verdict on a finding — see ai.service.ts#classifySecurityFinding.
+/// TRUE_POSITIVE/FALSE_POSITIVE mirror how Fortify Remediation Aviator classifies SAST results;
+/// NEEDS_REVIEW is the same "AI wasn't confident enough" outcome auto-triage/duplicate-detection
+/// already use elsewhere in this app rather than forcing a guess.
+enum SecurityFindingAiVerdict {
+  TRUE_POSITIVE
+  FALSE_POSITIVE
+  NEEDS_REVIEW
+}
+
 model SecurityFinding {
   id       String  @id @default(uuid())
   ticketId String?
@@ -976,6 +1001,15 @@ model SecurityFinding {
   repository String? @db.VarChar(255)
   branch     String? @db.VarChar(255)
   prUrl      String? @db.VarChar(500)
+
+  /// Opt-in AI exploitability triage (GlobalAISettings.findingTriageEnabled) — see
+  /// ai.service.ts#classifySecurityFinding. Null until triaged (or if the toggle is off/the
+  /// finding's severity didn't qualify — only CRITICAL/HIGH are triaged, same bar
+  /// maybeAutoCreateTicketForFinding uses, to bound AI spend to what actually matters).
+  aiVerdict         SecurityFindingAiVerdict?
+  aiExploitability  String?                    @db.Text
+  aiFixSuggestion   String?                    @db.Text
+  aiTriagedAt       DateTime?
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -1012,6 +1046,30 @@ model TestRun {
   createdAt DateTime @default(now())
 
   @@index([ticketId, createdAt])
+}
+
+/// A single component row from an ingested SBOM (SPDX or CycloneDX) — see
+/// devops-webhook.controller.ts's /sbom route. Deliberately not attempting Black Duck's full
+/// license-obligation-text depth (see docs/ROADMAP.md's "Competitive parity" Phase 3) — this is
+/// a basic "dependency inventory + known-CVE cross-reference" view, not a compliance tool.
+model SbomComponent {
+  id         String  @id @default(uuid())
+  /// Free text, same reasoning as SecurityFinding.repository — no live Repository table yet.
+  repository String? @db.VarChar(255)
+  name       String  @db.VarChar(255)
+  version    String  @db.VarChar(80)
+  /// e.g. "npm", "pypi", "maven", "cargo" — free text, whatever the SBOM tool reports.
+  ecosystem  String? @db.VarChar(80)
+  license    String? @db.VarChar(120)
+  /// Populated only if the ingesting tool flagged this component against a known CVE — this app
+  /// doesn't itself cross-reference a vulnerability database, it trusts what the SBOM says.
+  knownCve   String? @db.VarChar(40)
+  format     String  @db.VarChar(20)
+
+  createdAt DateTime @default(now())
+
+  @@index([repository])
+  @@index([name])
 }
 
 /// Singleton (id = "global"), same upsert-by-constant-id pattern as GlobalAISettings/

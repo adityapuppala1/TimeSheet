@@ -215,20 +215,31 @@ depends on a later one being done to be valuable on its own.
 
 *Phase 3 — AI differentiation (the actual moat: TimeSphere owns timesheet + org data neither
 vendor has):*
-- [ ] **AI exploitability triage on findings** — sibling toggle to `ciFailureTriageEnabled`
-  scoped to `SecurityFinding` rows: the LLM reads the finding + surrounding code context (via the
-  existing `GitConnection` token) and classifies true/false-positive + suggests a fix, same shape
-  as Fortify Aviator but built on `ai.service.ts`'s existing BYOK pipeline — incremental, not a
-  new subsystem.
-- [ ] **Velocity-aware assignee suggestion** — factor a developer's *actual historical
-  remediation time* (derivable from Timesheet entries logged against past security tickets, per
-  module) into the CODEOWNERS/rule-based suggestion above. Neither Black Duck nor Fortify can do
-  this because neither owns timesheet data — this is the product's real differentiator.
-- [ ] **AI weekly security digest**, generalizing `weekly-digest.worker.ts`'s existing pattern:
-  open-findings trend, newly-critical items, tickets stuck past SLA, sent to admins alongside the
-  existing AI weekly ticket digest.
-- [ ] **SBOM ingestion** (`POST /api/devops/:orgSlug/sbom`, SPDX/CycloneDX) — a basic "dependency
-  inventory + known-CVE cross-reference" view, deliberately not attempting Black Duck's full
+- [x] **AI exploitability triage on findings** — sibling toggle to `ciFailureTriageEnabled`
+  (`GlobalAISettings.findingTriageEnabled`), scoped to `SecurityFinding` rows (CRITICAL/HIGH
+  only, bounding spend): `ai.service.ts#classifySecurityFinding` classifies TRUE_POSITIVE/
+  FALSE_POSITIVE/NEEDS_REVIEW + suggests a fix, same shape as Fortify Aviator but built on the
+  existing BYOK pipeline. Writes onto the `SecurityFinding` row itself (new `aiVerdict`/
+  `aiExploitability`/`aiFixSuggestion`/`aiTriagedAt` columns) so it shows regardless of whether
+  the finding has a ticket, plus posts as a ticket comment when it does. Renders on the ticket
+  Security tab.
+- [x] **Velocity-aware assignee suggestion** — when a CODEOWNERS line lists several people,
+  `pickFastestAssignee` (security-report.service.ts) picks whoever has historically resolved
+  security-linked tickets fastest (mean `Ticket.createdAt`→`resolvedAt` across their own
+  RESOLVED/CLOSED tickets carrying a `SecurityFinding`), falling back to the first candidate on a
+  cold start. Neither Black Duck nor Fortify can do this because neither owns ticket-resolution
+  history — this is the product's real differentiator.
+- [x] **AI weekly security digest** — new `workers/security-weekly-digest.worker.ts` (Monday
+  08:30, 30 min after the per-user digest), generalizing `weekly-digest.worker.ts`'s pattern:
+  open-findings trend, newly-critical items this week, resolved-this-week, risk-score delta,
+  tickets stuck past SLA, top repos — one org-wide email to every ADMIN/SUPER_ADMIN. Two-layer
+  gated like the existing weekly digest (`GlobalAISettings.securityWeeklyDigestEnabled` decides
+  whether it runs at all, `GlobalNotificationSettings.emailSecurityWeeklyDigest` whether it
+  actually emails), skips weeks with nothing to report.
+- [x] **SBOM ingestion** (`POST /api/devops/:orgSlug/sbom`, SPDX/CycloneDX, new `SbomComponent`
+  table) — a basic "dependency inventory + known-CVE cross-reference" view (ecosystem parsed
+  from `purl`, CVE cross-referenced from CycloneDX's `vulnerabilities[].affects` where present),
+  surfaced on the Security insights page. Deliberately not attempting Black Duck's full
   license-obligation-text depth (low ROI for this product's target market — legal-team-grade
   tooling most mid-market customers won't use).
 

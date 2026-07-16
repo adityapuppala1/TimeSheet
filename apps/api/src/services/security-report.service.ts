@@ -16,7 +16,7 @@
 import { ticketStatusTransitions, type SecurityFindingSeverity, type SecurityFindingType, type TicketPriority, type TicketStatus } from "@timesheet/shared";
 import { prisma } from "../config/prisma.js";
 import { requireTenantContext } from "../config/tenant-context.js";
-import { classifyCiFailure } from "./ai.service.js";
+import { classifyCiFailure, classifySecurityFinding } from "./ai.service.js";
 import { audit } from "./audit.service.js";
 import { fetchGitHubCodeowners, fetchGitHubLastCommitAuthor, parseCodeownersOwners } from "./git-provider.service.js";
 import { dispatchNotification, dispatchTransactional, getGlobalNotificationSettings, templates } from "./notify.service.js";
@@ -354,6 +354,39 @@ export async function maybeAutoCreateTicketForFinding(finding: {
  * GitHub's own code-scanning alert assignment resolves an owner — see docs/ROADMAP.md's
  * "Competitive parity" section.
  */
+/**
+ * Velocity-aware tie-break among several CODEOWNERS candidates — picks whoever has historically
+ * resolved security-linked tickets fastest (mean hours from Ticket.createdAt to resolvedAt,
+ * across their own RESOLVED/CLOSED tickets that carry at least one SecurityFinding). This is the
+ * product's actual differentiator over Black Duck/Fortify (see docs/ROADMAP.md's "Competitive
+ * parity" Phase 3): neither of those tools owns timesheet/ticket-resolution history, so neither
+ * can factor real remediation speed into an assignment suggestion — TimeSphere already has the
+ * data because it's the same system that tracks the work.
+ * Falls back to the first candidate (preserves prior deterministic behavior) when nobody has
+ * enough history to compare, so this never blocks assignment on a cold-start org.
+ */
+async function pickFastestAssignee(candidates: Array<{ id: string; name: string }>): Promise<{ id: string; name: string }> {
+  if (candidates.length <= 1) return candidates[0];
+
+  const stats = await Promise.all(
+    candidates.map(async (user) => {
+      const resolvedTickets = await prisma.ticket.findMany({
+        where: { assigneeId: user.id, status: { in: ["RESOLVED", "CLOSED"] }, resolvedAt: { not: null }, securityFindings: { some: {} } },
+        select: { createdAt: true, resolvedAt: true }
+      });
+      if (resolvedTickets.length === 0) return { user, avgResolutionHours: null as number | null };
+      const avgResolutionHours =
+        resolvedTickets.reduce((sum, t) => sum + (t.resolvedAt!.getTime() - t.createdAt.getTime()) / (1000 * 60 * 60), 0) / resolvedTickets.length;
+      return { user, avgResolutionHours };
+    })
+  );
+
+  const withHistory = stats.filter((s): s is { user: { id: string; name: string }; avgResolutionHours: number } => s.avgResolutionHours !== null);
+  if (withHistory.length === 0) return candidates[0];
+  withHistory.sort((a, b) => a.avgResolutionHours - b.avgResolutionHours);
+  return withHistory[0].user;
+}
+
 export async function maybeAssignFindingViaCodeowners(finding: {
   repository: string | null;
   branch: string | null;
@@ -368,6 +401,11 @@ export async function maybeAssignFindingViaCodeowners(finding: {
   const codeowners = await fetchGitHubCodeowners(accessToken, finding.repository, finding.branch ?? undefined).catch(() => null);
   if (codeowners) {
     const owners = parseCodeownersOwners(codeowners, finding.filePath);
+    // Resolve EVERY matching CODEOWNERS handle to a TimeSphere user (not just the first) — when
+    // a line lists several owners (a common pattern: "src/auth/** @alice @bob @carol"), picking
+    // whoever historically resolves security tickets fastest is a better default than picking
+    // whoever happened to be listed first. See pickFastestAssignee below.
+    const candidates: Array<{ id: string; name: string }> = [];
     for (const owner of owners) {
       // Strips a leading "@" and, for team entries ("@org/team-slug"), keeps only the trailing
       // segment as a best-effort individual-handle match — this pass doesn't resolve team
@@ -379,8 +417,9 @@ export async function maybeAssignFindingViaCodeowners(finding: {
         where: { githubUsername: handle, status: "ACTIVE", deletedAt: null },
         select: { id: true, name: true }
       });
-      if (user) return user;
+      if (user) candidates.push(user);
     }
+    if (candidates.length > 0) return pickFastestAssignee(candidates);
   }
 
   const lastCommit = await fetchGitHubLastCommitAuthor(accessToken, finding.repository, finding.filePath, finding.branch ?? undefined).catch(
@@ -471,4 +510,66 @@ export async function maybePostCiFailureTriageComment(
   ].join("");
 
   await prisma.ticketComment.create({ data: { ticketId, authorId: systemUser.id, body } });
+}
+
+/**
+ * Opt-in AI exploitability triage on a just-ingested finding — sibling of
+ * maybePostCiFailureTriageComment, gated by GlobalAISettings.findingTriageEnabled instead of
+ * ciFailureTriageEnabled. Only CRITICAL/HIGH findings are triaged (same severity bar
+ * maybeAutoCreateTicketForFinding uses) to bound AI spend to what actually matters — a LOW
+ * finding getting an AI opinion isn't worth the cost. Writes the verdict/explanation/fix
+ * suggestion onto the SecurityFinding row itself (so it shows on the ticket Security tab and
+ * counts toward analytics regardless of whether this finding has a ticket attached), and — only
+ * when it does have a ticket — also posts it as a comment, same visibility model
+ * maybePostCiFailureTriageComment already established for CI-failure triage.
+ * `classifySecurityFinding` (ai.service.ts) does its own enabled/budget preflight and throws if
+ * the toggle is off — the caller in devops-webhook.controller.ts wraps this in a `.catch()` that
+ * just logs, so a disabled toggle is a silent no-op, not an ingestion failure.
+ */
+export async function maybeTriageFindingWithAI(finding: {
+  id: string;
+  ticketId: string | null;
+  type: SecurityFindingType;
+  tool: string;
+  severity: SecurityFindingSeverity;
+  title: string;
+  description: string | null;
+  filePath: string | null;
+  cwe: string | null;
+}): Promise<void> {
+  if (finding.severity !== "CRITICAL" && finding.severity !== "HIGH") return;
+
+  const result = await classifySecurityFinding({
+    type: finding.type,
+    tool: finding.tool,
+    severity: finding.severity,
+    title: finding.title,
+    description: finding.description,
+    filePath: finding.filePath,
+    cwe: finding.cwe
+  });
+
+  await prisma.securityFinding.update({
+    where: { id: finding.id },
+    data: {
+      aiVerdict: result.verdict,
+      aiExploitability: result.exploitability,
+      aiFixSuggestion: result.fixSuggestion,
+      aiTriagedAt: new Date()
+    }
+  });
+
+  if (!finding.ticketId) return;
+  const systemUser = await prisma.user.findUnique({ where: { email: SECURITY_INGESTION_SYSTEM_EMAIL } });
+  if (!systemUser) return;
+
+  const verdictLabel = result.verdict === "TRUE_POSITIVE" ? "True positive" : result.verdict === "FALSE_POSITIVE" ? "Likely false positive" : "Needs human review";
+  const body = [
+    `<p><strong>AI exploitability triage</strong> — "${escapeHtml(finding.title)}":</p>`,
+    `<p>Verdict: <strong>${verdictLabel}</strong></p>`,
+    `<p>${escapeHtml(result.exploitability)}</p>`,
+    `<p><strong>Suggested fix:</strong> ${escapeHtml(result.fixSuggestion)}</p>`
+  ].join("");
+
+  await prisma.ticketComment.create({ data: { ticketId: finding.ticketId, authorId: systemUser.id, body } });
 }
