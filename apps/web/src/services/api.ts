@@ -483,6 +483,21 @@ export interface TicketRuleInput {
   actionNotifyUserId?: string | null;
 }
 
+/** Self-serve Stripe billing — see billing.controller.ts. */
+export const billingApi = {
+  status: async () =>
+    (
+      await api.get<{
+        planTier: "STARTER" | "TEAM" | "ENTERPRISE";
+        hasStripeCustomer: boolean;
+        seatLimit: number;
+        activeSeats: number;
+        checkoutAvailable: { TEAM: boolean; ENTERPRISE: boolean };
+      }>("/billing/status")
+    ).data,
+  checkoutSession: async (tier: "TEAM" | "ENTERPRISE") => (await api.post<{ url: string }>("/billing/checkout-session", { tier })).data
+};
+
 export const settingsApi = {
   getNotifications: async () => (await api.get<GlobalSettings>("/settings/notifications")).data,
   updateNotifications: async (payload: Partial<GlobalSettings>) =>

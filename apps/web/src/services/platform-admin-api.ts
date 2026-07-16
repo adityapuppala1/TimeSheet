@@ -162,3 +162,25 @@ export const platformAdminPlanTierApi = {
 export const platformAdminAnalyticsApi = {
   get: async () => (await platformAdminApi.get<PlatformAnalytics>("/analytics")).data
 };
+
+/** Platform-wide Stripe configuration — see platform-admin.controller.ts's Billing section. */
+export const platformAdminBillingApi = {
+  get: async () =>
+    (
+      await platformAdminApi.get<{
+        secretKeySet: boolean;
+        webhookSigningSecretSet: boolean;
+        priceIdTeam: string | null;
+        priceIdEnterprise: string | null;
+      }>("/billing-settings")
+    ).data,
+  update: async (payload: Partial<{ secretKey: string; webhookSigningSecret: string; priceIdTeam: string | null; priceIdEnterprise: string | null }>) =>
+    (
+      await platformAdminApi.patch<{
+        secretKeySet: boolean;
+        webhookSigningSecretSet: boolean;
+        priceIdTeam: string | null;
+        priceIdEnterprise: string | null;
+      }>("/billing-settings", payload)
+    ).data
+};

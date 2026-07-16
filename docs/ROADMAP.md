@@ -83,11 +83,20 @@ step ships/tests/ships before the next starts, same discipline as the DevOps clu
   at the base URL, not further code changes.
 
 ### Monetization readiness
-- [ ] Self-serve Stripe billing wired to the existing `PlanTierLimit` model — turns the current
-  "a platform admin manually assigns a tier" flow into a real upgrade/downgrade funnel. Needs a
-  real Stripe account + API keys (test-mode keys are fine for initial build) before this can be
-  live-tested end-to-end; the webhook-receiver/checkout-session code can be built and unit-tested
-  without them, but a real Stripe test account is required to verify the actual payment flow.
+- [x] Self-serve Stripe billing wired to the existing `PlanTierLimit` model — turns the previous
+  "a platform admin manually assigns a tier" flow (still available, unchanged) into a real
+  upgrade funnel: `billing.controller.ts`'s `POST /billing/checkout-session` (org's own
+  SUPER_ADMIN) creates a Stripe Checkout session; `POST /billing/webhook` (control-plane only,
+  mounted pre-`express.json()` for raw-body signature verification) updates
+  `Organization.planTier` on `checkout.session.completed`/`customer.subscription.updated`/
+  `customer.subscription.deleted`. Platform-wide Stripe config (`PlatformBillingSettings`) is
+  admin-set from the Plan tiers console, not BYOK per-org. No real Stripe account is available in
+  this environment, so full payment-flow testing wasn't possible — but the checkout-session route
+  was verified end-to-end up to the live Stripe API call (org/customer lookup, price resolution),
+  and the webhook signature verification was fully tested using Stripe SDK's own test-signature
+  helper (`stripe.webhooks.generateTestHeaderString`): valid signatures processed correctly
+  (200, `Organization.planTier` updated), tampered and missing signatures correctly rejected
+  (401). Pointing it at a real Stripe account is a config change, not a code change.
 
 ### Engineering & DevOps integration suite
 

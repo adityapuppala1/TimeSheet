@@ -15,6 +15,7 @@ import { validate } from "../middleware/validate.js";
 import { platformAdminLogin, platformAdminRefresh } from "../services/platform-admin-auth.service.js";
 import { getPlatformAnalytics } from "../services/platform-admin-analytics.service.js";
 import { provisionOrganization } from "../services/provisioning.service.js";
+import { encryptSecret } from "../utils/encryption.js";
 
 export const platformAdminRouter = Router();
 
@@ -178,6 +179,57 @@ const planTierLimitSchema = z.object({
 platformAdminRouter.patch("/plan-tier-limits/:tier", requirePlatformAdmin, validate(planTierLimitSchema), async (req, res) => {
   const updated = await controlPrisma.planTierLimit.update({ where: { tier: req.params.tier as "STARTER" | "TEAM" | "ENTERPRISE" }, data: req.body });
   res.json(updated);
+});
+
+/* ============================== Billing (Stripe) ================================== */
+
+/**
+ * Platform-wide Stripe configuration — one merchant-of-record account, not BYOK per-org (see
+ * PlatformBillingSettings' schema doc comment). A platform admin creates a Restricted API Key
+ * (Checkout Sessions + Customers + Subscriptions, write) and a webhook endpoint pointed at
+ * `/api/billing/webhook` in the Stripe dashboard, then pastes both here alongside the two Price
+ * IDs (TEAM/ENTERPRISE) created for this app's plan tiers. Same masked-secret GET/rotate shape
+ * as every other credential in this app — the secret key and webhook signing secret are never
+ * echoed back once set.
+ */
+platformAdminRouter.get("/billing-settings", requirePlatformAdmin, async (_req, res) => {
+  const settings = await controlPrisma.platformBillingSettings.findUnique({ where: { id: "global" } });
+  res.json({
+    secretKeySet: Boolean(settings?.encryptedSecretKey),
+    webhookSigningSecretSet: Boolean(settings?.encryptedWebhookSigningSecret),
+    priceIdTeam: settings?.priceIdTeam ?? null,
+    priceIdEnterprise: settings?.priceIdEnterprise ?? null
+  });
+});
+
+const billingSettingsSchema = z.object({
+  body: z
+    .object({
+      // Empty string clears the stored value; omitting the field leaves it untouched — same
+      // convention as GlobalAISettings.apiKey in settings.controller.ts.
+      secretKey: z.string().max(500).optional(),
+      webhookSigningSecret: z.string().max(500).optional(),
+      priceIdTeam: z.string().max(255).optional().nullable(),
+      priceIdEnterprise: z.string().max(255).optional().nullable()
+    })
+    .strict()
+});
+
+platformAdminRouter.patch("/billing-settings", requirePlatformAdmin, validate(billingSettingsSchema), async (req, res) => {
+  const data: Record<string, unknown> = {};
+  if (typeof req.body.secretKey === "string") data.encryptedSecretKey = req.body.secretKey.length > 0 ? encryptSecret(req.body.secretKey) : null;
+  if (typeof req.body.webhookSigningSecret === "string")
+    data.encryptedWebhookSigningSecret = req.body.webhookSigningSecret.length > 0 ? encryptSecret(req.body.webhookSigningSecret) : null;
+  if (req.body.priceIdTeam !== undefined) data.priceIdTeam = req.body.priceIdTeam;
+  if (req.body.priceIdEnterprise !== undefined) data.priceIdEnterprise = req.body.priceIdEnterprise;
+
+  const updated = await controlPrisma.platformBillingSettings.upsert({ where: { id: "global" }, update: data, create: { id: "global", ...data } });
+  res.json({
+    secretKeySet: Boolean(updated.encryptedSecretKey),
+    webhookSigningSecretSet: Boolean(updated.encryptedWebhookSigningSecret),
+    priceIdTeam: updated.priceIdTeam,
+    priceIdEnterprise: updated.priceIdEnterprise
+  });
 });
 
 /* ================================== Analytics =================================== */

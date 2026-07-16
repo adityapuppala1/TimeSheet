@@ -82,6 +82,7 @@ import { useAuthStore } from "../store/auth";
 import { ChatIntegrationsSettingsCard } from "./settings/ChatIntegrationsSettingsCard";
 import { MailServerSettingsCard } from "./settings/MailServerSettingsCard";
 import { PublicApiSettingsCard } from "./settings/PublicApiSettingsCard";
+import { BillingSettingsCard } from "./settings/BillingSettingsCard";
 import { IntegrationsSettingsCard } from "./settings/IntegrationsSettingsCard";
 import { SecurityDevOpsSettingsCard } from "./settings/SecurityDevOpsSettingsCard";
 
@@ -157,6 +158,7 @@ export function WorkspaceSettingsPage() {
           <TabsTrigger value="chat-integrations">Chat integrations</TabsTrigger>
           <TabsTrigger value="security-devops">Security & DevOps</TabsTrigger>
           <TabsTrigger value="integrations">Integrations</TabsTrigger>
+          <TabsTrigger value="billing">Billing</TabsTrigger>
           <TabsTrigger value="public-api">Public API</TabsTrigger>
           <TabsTrigger value="sso">Single sign-on</TabsTrigger>
           <TabsTrigger value="bcc">BCC & forms</TabsTrigger>
@@ -196,6 +198,10 @@ export function WorkspaceSettingsPage() {
 
         <TabsContent value="integrations">
           <IntegrationsSettingsCard readOnly={!isSuperAdmin} />
+        </TabsContent>
+
+        <TabsContent value="billing">
+          <BillingSettingsCard readOnly={!isSuperAdmin} />
         </TabsContent>
 
         <TabsContent value="public-api">

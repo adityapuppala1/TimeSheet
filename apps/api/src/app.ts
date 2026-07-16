@@ -25,6 +25,7 @@ import { env } from "./config/env.js";
 import { aiRouter } from "./controllers/ai.controller.js";
 import { auditRouter } from "./controllers/audit.controller.js";
 import { authRouter } from "./controllers/auth.controller.js";
+import { billingRouter, billingWebhookRouter } from "./controllers/billing.controller.js";
 import { chatIntegrationsRouter } from "./controllers/chat-integrations.controller.js";
 import { chatWebhookRouter } from "./controllers/chat-webhook.controller.js";
 import { devopsWebhookRouter } from "./controllers/devops-webhook.controller.js";
@@ -108,6 +109,12 @@ app.use("/api/chat", chatWebhookLimiter, chatWebhookRouter);
 const gitWebhookLimiter = rateLimit({ windowMs: 60_000, limit: 120, standardHeaders: true });
 app.use("/api/git", gitWebhookLimiter, gitWebhookRouter);
 
+// Stripe webhook — same "signature computed over raw bytes, must precede express.json()"
+// reasoning as gitWebhookRouter above. Control-plane only (Organization.planTier), never
+// touches a tenant database, so it needs no tenant resolution at all.
+const billingWebhookLimiter = rateLimit({ windowMs: 60_000, limit: 60, standardHeaders: true });
+app.use("/api/billing", billingWebhookLimiter, billingWebhookRouter);
+
 // Lower-rate limiter for auth endpoints (login bruteforce defence).
 const authLimiter = rateLimit({ windowMs: 60_000, limit: 20, standardHeaders: true });
 app.use("/api/auth/login", authLimiter);
@@ -185,6 +192,7 @@ app.use("/api/git", gitConnectionRouter);
 app.use("/api", resolveTenant);
 
 app.use("/api/auth", authRouter);
+app.use("/api/billing", billingRouter);
 app.use("/api/users", userRouter);
 app.use("/api/projects", projectRouter);
 app.use("/api/timesheets", timesheetRouter);

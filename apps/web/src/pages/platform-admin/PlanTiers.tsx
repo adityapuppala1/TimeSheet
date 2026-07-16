@@ -19,7 +19,7 @@ import { Input } from "../../components/ui/input";
 import { Label } from "../../components/ui/label";
 import { Skeleton } from "../../components/ui/skeleton";
 import { toast } from "../../components/ui/toaster";
-import { platformAdminPlanTierApi, type ChatPlatform, type PlanTierLimitRow, type SsoProvider } from "../../services/platform-admin-api";
+import { platformAdminBillingApi, platformAdminPlanTierApi, type ChatPlatform, type PlanTierLimitRow, type SsoProvider } from "../../services/platform-admin-api";
 
 const TIER_LABEL: Record<PlanTierLimitRow["tier"], string> = { STARTER: "Starter", TEAM: "Team", ENTERPRISE: "Enterprise" };
 const ALL_PROVIDERS: SsoProvider[] = ["GOOGLE", "MICROSOFT", "SAML", "LDAP"];
@@ -42,6 +42,8 @@ export function PlatformAdminPlanTiers() {
         <p className="mt-1 text-sm text-slate-400">Default seat limits, AI budget ceilings, and allowed SSO providers per tier — an organization's own overrides (set on its record) take precedence over these.</p>
       </div>
 
+      <StripeBillingCard />
+
       {limits.isLoading && <Skeleton className="h-64 w-full bg-slate-800" />}
       {!limits.isLoading && limits.data && (
         <div className="grid gap-5 lg:grid-cols-3">
@@ -51,6 +53,96 @@ export function PlatformAdminPlanTiers() {
         </div>
       )}
     </div>
+  );
+}
+
+/** Platform-wide Stripe configuration — one merchant-of-record account across every org (see
+ *  billing.controller.ts's header comment). Secret key/webhook signing secret are masked
+ *  write-only fields, same convention as every other credential in this app. */
+function StripeBillingCard() {
+  const queryClient = useQueryClient();
+  const billing = useQuery({ queryKey: ["platform-admin", "billing-settings"], queryFn: platformAdminBillingApi.get });
+  const [secretKey, setSecretKey] = useState("");
+  const [webhookSigningSecret, setWebhookSigningSecret] = useState("");
+  const [priceIdTeam, setPriceIdTeam] = useState("");
+  const [priceIdEnterprise, setPriceIdEnterprise] = useState("");
+
+  useEffect(() => {
+    if (billing.data) {
+      setPriceIdTeam(billing.data.priceIdTeam ?? "");
+      setPriceIdEnterprise(billing.data.priceIdEnterprise ?? "");
+    }
+  }, [billing.data]);
+
+  const save = useMutation({
+    mutationFn: () =>
+      platformAdminBillingApi.update({
+        ...(secretKey ? { secretKey } : {}),
+        ...(webhookSigningSecret ? { webhookSigningSecret } : {}),
+        priceIdTeam: priceIdTeam || null,
+        priceIdEnterprise: priceIdEnterprise || null
+      }),
+    onSuccess: () => {
+      setSecretKey("");
+      setWebhookSigningSecret("");
+      queryClient.invalidateQueries({ queryKey: ["platform-admin", "billing-settings"] });
+      toast.success("Billing settings saved");
+    },
+    onError: () => toast.error("Could not save", { description: "Try again." })
+  });
+
+  return (
+    <Card className="border-slate-800 bg-slate-900">
+      <CardHeader>
+        <CardTitle className="text-base text-slate-100">Stripe billing</CardTitle>
+        <CardDescription className="text-slate-400">
+          One Stripe account across every org on this deployment — orgs never bring their own key. Create a Restricted API Key
+          (Checkout Sessions + Customers + Subscriptions, write) and a webhook endpoint pointed at{" "}
+          <code className="text-xs">/api/billing/webhook</code>, then paste both here alongside the two Price IDs created for the Team
+          and Enterprise tiers.
+        </CardDescription>
+      </CardHeader>
+      <CardContent className="grid gap-4">
+        {billing.isLoading && <Skeleton className="h-32 w-full bg-slate-800" />}
+        {!billing.isLoading && billing.data && (
+          <>
+            <div className="flex flex-wrap items-center gap-2 text-xs text-slate-400">
+              <Badge variant={billing.data.secretKeySet ? "success" : "muted"}>{billing.data.secretKeySet ? "Secret key set" : "No secret key"}</Badge>
+              <Badge variant={billing.data.webhookSigningSecretSet ? "success" : "muted"}>
+                {billing.data.webhookSigningSecretSet ? "Webhook secret set" : "No webhook secret"}
+              </Badge>
+            </div>
+            <div className="grid gap-3 sm:grid-cols-2">
+              <div className="grid gap-1.5">
+                <Label className="text-slate-300">Secret key</Label>
+                <Input type="password" placeholder="sk_live_..." value={secretKey} onChange={(e) => setSecretKey(e.target.value)} className="bg-slate-950" />
+              </div>
+              <div className="grid gap-1.5">
+                <Label className="text-slate-300">Webhook signing secret</Label>
+                <Input
+                  type="password"
+                  placeholder="whsec_..."
+                  value={webhookSigningSecret}
+                  onChange={(e) => setWebhookSigningSecret(e.target.value)}
+                  className="bg-slate-950"
+                />
+              </div>
+              <div className="grid gap-1.5">
+                <Label className="text-slate-300">Team tier Price ID</Label>
+                <Input placeholder="price_..." value={priceIdTeam} onChange={(e) => setPriceIdTeam(e.target.value)} className="bg-slate-950" />
+              </div>
+              <div className="grid gap-1.5">
+                <Label className="text-slate-300">Enterprise tier Price ID</Label>
+                <Input placeholder="price_..." value={priceIdEnterprise} onChange={(e) => setPriceIdEnterprise(e.target.value)} className="bg-slate-950" />
+              </div>
+            </div>
+            <Button size="sm" className="w-fit" onClick={() => save.mutate()} disabled={save.isPending}>
+              Save
+            </Button>
+          </>
+        )}
+      </CardContent>
+    </Card>
   );
 }
 

@@ -54,6 +54,14 @@ model Organization {
   seatLimitOverride              Int?
   aiMonthlyBudgetCeilingOverride Decimal? @db.Decimal(10, 2)
 
+  /// Self-serve billing (see docs/ROADMAP.md's "Monetization readiness" theme and
+  /// billing.controller.ts) — set once the org's own SUPER_ADMIN completes a Stripe Checkout
+  /// session. Null for every org that's never gone through checkout (manually-provisioned or
+  /// still on STARTER), which is the common case today. One Stripe customer per org, one active
+  /// subscription per org — this app doesn't support multiple concurrent subscriptions per org.
+  stripeCustomerId     String? @unique @db.VarChar(255)
+  stripeSubscriptionId String? @unique @db.VarChar(255)
+
   createdAt       DateTime  @default(now())
   updatedAt       DateTime  @updatedAt
   suspendedAt     DateTime?
@@ -185,8 +193,9 @@ model PlatformAdminSession {
 
 /// Static per-tier defaults. Modeled as a table (seeded once, see prisma/control/seed.ts)
 /// rather than a hardcoded config object so a platform admin can tune limits without a
-/// deploy — there's no self-serve billing yet (Track B's confirmed decision: plan-tier flag +
-/// in-app gating only, no payment processor), so this is the only place tier limits live.
+/// deploy. `PlatformBillingSettings` below maps each paid tier to a Stripe Price ID for the
+/// self-serve checkout flow (billing.controller.ts) — a platform admin can still assign/override
+/// a tier by hand (the original flow) for orgs that never go through Stripe at all.
 model PlanTierLimit {
   tier                      PlanTier @id
   seatLimit                 Int
@@ -197,4 +206,21 @@ model PlanTierLimit {
   /// Which chat platforms (Slack/Microsoft Teams/Google Chat/Telegram) this tier may connect —
   /// same enable-gate pattern as allowedSsoProviders, checked in chat-integrations.controller.ts.
   allowedChatPlatforms      Json @default("[]")
+}
+
+/// Platform-wide Stripe configuration (id = "global") — one Stripe account across every org on
+/// this deployment, not BYOK per-org (unlike SSO/GitHub/Calendar, billing is TimeSphere's own
+/// merchant-of-record relationship, not something each customer brings their own credentials
+/// for). `encryptedSecretKey`/`encryptedWebhookSigningSecret` use the same AES-256-GCM helper as
+/// every other secret in this app. `priceIdTeam`/`priceIdEnterprise` map this app's two paid
+/// PlanTiers to the Stripe Price objects a platform admin creates in the Stripe dashboard —
+/// billing.controller.ts's webhook handler reads a completed session's price ID back through
+/// this same mapping to know which tier to set on Organization.planTier.
+model PlatformBillingSettings {
+  id                          String   @id
+  encryptedSecretKey          String?
+  encryptedWebhookSigningSecret String?
+  priceIdTeam                 String?  @db.VarChar(255)
+  priceIdEnterprise           String?  @db.VarChar(255)
+  updatedAt                   DateTime @updatedAt
 }
