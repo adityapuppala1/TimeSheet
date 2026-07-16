@@ -238,7 +238,35 @@ translate into the payload shape above works. Common choices per category:
 | SSAT (secrets) | Gitleaks, TruffleHog, detect-secrets |
 | SSCT (supply chain) | Syft + Grype, Socket, `npm audit --json`, Dependabot's alert API, Trivy |
 
-## 6. Troubleshooting
+## 6. Error-tracking (Sentry / Rollbar / raw) — auto-reopen by crash fingerprint
+
+`POST /api/devops/<org-slug>/error-events`, same bearer token:
+
+```json
+{
+  "source": "SENTRY",
+  "fingerprint": "a1b2c3d4-issue-grouping-hash",
+  "message": "TypeError: Cannot read properties of undefined (reading 'id')",
+  "stackTrace": "at handleLogin (src/auth.ts:42:18)\n...",
+  "level": "error",
+  "ticketKey": "WEB-123"
+}
+```
+
+- `fingerprint` is Sentry's issue-grouping hash, Rollbar's item `fingerprint`, or (for a raw/
+  manual post) any stable string you consider "the same failure" — a hash of the top stack frame
+  works well.
+- `ticketKey` is optional. If you omit it and a RESOLVED/CLOSED ticket was previously linked to
+  the *same* `fingerprint` (from an earlier event that did carry a `ticketKey`, or from this
+  ticket being created from a findings/test-run event), the ticket **auto-reopens** — "the same
+  crash came back" is detected without anyone re-linking it by hand. Requires
+  `IngestionSettings.autoReopenEnabled` (Workspace Settings → Security & DevOps), same toggle
+  every other regression trigger in this app uses.
+- `stackTrace`, if supplied, gets the same AI root-cause/severity triage comment CI test-run
+  failures get (`GlobalAISettings.ciFailureTriageEnabled`) — one classifier reused for both, since
+  "summarize this failure text" is the same task either way.
+
+## 7. Troubleshooting
 
 - **401 Invalid ingestion token** — the token was rotated since your CI secret was set, or it
   was never generated. Re-check Workspace Settings → Security & DevOps.

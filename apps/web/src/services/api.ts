@@ -473,6 +473,7 @@ export const settingsApi = {
         testRunsWebhookPath: string;
         sarifFindingsWebhookPath: string;
         sbomWebhookPath: string;
+        errorEventsWebhookPath: string;
         fallbackProjectId: string | null;
         autoReopenEnabled: boolean;
         codeownersAssignEnabled: boolean;

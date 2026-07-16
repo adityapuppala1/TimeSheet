@@ -243,22 +243,22 @@ vendor has):*
   license-obligation-text depth (low ROI for this product's target market — legal-team-grade
   tooling most mid-market customers won't use).
 
-**4. AI auto bug/issue detection + auto-reopen**
-- The highest-leverage AI feature in this cluster: point the same BYOK `ai.service.ts` pipeline
-  that already classifies inbound email/chat messages at **CI failure logs and error-tracking
-  events** (Sentry/Rollbar webhook, or raw CI log text) — classify severity, likely root cause,
-  and whether this matches an *already-resolved* ticket (using the existing duplicate-detection
-  embedding/similarity approach in `findDuplicateTickets`).
-- **Auto-reopen**: if a new failure/error matches a `RESOLVED`/`CLOSED` ticket's fingerprint
-  (same stack trace hash, same file/line, same failing test name), the ticket is automatically
-  transitioned back to `REOPENED` — this is the one case in the whole app where an AI action
-  changes ticket state without a human click, so it needs its own explicit opt-in toggle (not
-  folded into the existing "auto-triage auto-apply" setting) and always stamps an audit-log
-  entry + notifies the original assignee, consistent with "every AI decision is auditable."
-- Also generalizes the existing weekly-digest/status-report AI features: an **AI PR-review
-  summary** (what changed, risk areas, does it address the linked ticket's description) posted
-  as a ticket comment when a PR opens — same `dispatchNotification`/comment-creation code path
-  a human comment already uses, just authored by the AI service instead of a person.
+**4. AI auto bug/issue detection + auto-reopen** ✅ shipped (Phase 4, 2026-07-16)
+- [x] **Error-tracking ingestion + fingerprint-based auto-reopen** —
+  `POST /api/devops/:orgSlug/error-events` accepts Sentry/Rollbar's outbound webhook shape (or a
+  raw `{source, fingerprint, message, stackTrace?, level?, ticketKey?}` payload from any other
+  system). A new event with no explicit `ticketKey` still auto-reopens a RESOLVED/CLOSED ticket
+  if its `fingerprint` matches the fingerprint stored on that ticket from an earlier event (new
+  `Ticket.errorFingerprint` column, first-write-wins) — reuses the exact same
+  `maybeReopenTicketOnRegression` + `IngestionSettings.autoReopenEnabled` gate every other
+  regression trigger in this app already goes through, so "the same crash came back" needed zero
+  new state-machine logic. When a `stackTrace` is supplied, reuses `maybePostCiFailureTriageComment`
+  (the existing CI-failure AI triage, gated by `GlobalAISettings.ciFailureTriageEnabled`) rather
+  than building a second AI classifier for what's structurally the same "summarize this failure
+  text" task.
+- [x] **AI PR-review summary** — already shipped in an earlier phase
+  (`ai.service.ts#summarizePullRequest`, `GlobalAISettings.aiPrReviewSummaryEnabled`,
+  `git-webhook.controller.ts`'s PR-opened handler) — confirmed still working, no new code needed.
 
 **5. TL/Manager mapping — new surfaces on existing data**
 - An **org-chart / reporting-line view** (Team page today shows direct reports + escalations in

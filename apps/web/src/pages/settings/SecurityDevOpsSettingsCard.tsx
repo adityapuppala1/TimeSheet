@@ -10,7 +10,7 @@
  * copy it into your CI config now, or rotate again if you lose it.
  */
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Check, Copy, FileUp, GitBranch, KeyRound, ShieldOff, ShieldQuestion, Sparkles, Ticket, Unlink } from "lucide-react";
+import { Check, Copy, FileUp, GitBranch, KeyRound, ShieldAlert, ShieldOff, ShieldQuestion, Sparkles, Ticket, Unlink } from "lucide-react";
 import { useState } from "react";
 import { notificationPreferenceKeys, type NotificationPreferences } from "@timesheet/shared";
 import { Alert, AlertDescription, AlertTitle } from "../../components/ui/alert";
@@ -230,6 +230,7 @@ export function SecurityDevOpsSettingsCard({ readOnly }: { readOnly: boolean }) 
               <CopyableUrl label="SARIF findings webhook (GitHub Code Scanning / CodeQL / Azure DevOps)" url={webhookUrl(ingestion.data.sarifFindingsWebhookPath)} />
               <CopyableUrl label="Test-run webhook" url={webhookUrl(ingestion.data.testRunsWebhookPath)} />
               <CopyableUrl label="SBOM webhook (SPDX / CycloneDX)" url={webhookUrl(ingestion.data.sbomWebhookPath)} />
+              <CopyableUrl label="Error-tracking webhook (Sentry / Rollbar / raw)" url={webhookUrl(ingestion.data.errorEventsWebhookPath)} />
 
               <Alert>
                 <AlertTitle className="text-sm">Authenticate every POST with a bearer token</AlertTitle>
@@ -250,6 +251,18 @@ export function SecurityDevOpsSettingsCard({ readOnly }: { readOnly: boolean }) 
                   automatically, no <code>jq</code> mapping needed. Send either the raw SARIF log, or{" "}
                   <code>{`{ sarif: {...}, type, repository, branch, prUrl, ticketKey }`}</code> to attach repo/PR/ticket context the SARIF
                   format itself has no room for.
+                </AlertDescription>
+              </Alert>
+
+              <Alert>
+                <ShieldAlert className="h-4 w-4" />
+                <AlertTitle className="text-sm">Error-tracking: auto-reopen by crash fingerprint, not just ticket key</AlertTitle>
+                <AlertDescription className="text-xs">
+                  Point Sentry/Rollbar's outbound webhook (or your own error-tracking setup) at the error-tracking webhook above with{" "}
+                  <code>{`{ source, fingerprint, message, stackTrace?, level?, ticketKey? }`}</code>. If <code>ticketKey</code> is omitted
+                  and a RESOLVED/CLOSED ticket was previously linked to that same <code>fingerprint</code>, it reopens automatically —
+                  "the same crash came back" is detected without anyone re-linking it by hand. Needs the auto-reopen toggle below turned
+                  on, same as every other regression trigger on this page.
                 </AlertDescription>
               </Alert>
 

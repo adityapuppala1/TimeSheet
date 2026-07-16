@@ -345,7 +345,8 @@ settingsRouter.get("/security-ingestion", requireSuperAdmin, async (_req, res) =
     autoReopenEnabled: settings?.autoReopenEnabled ?? false,
     codeownersAssignEnabled: settings?.codeownersAssignEnabled ?? false,
     sarifFindingsWebhookPath: `/api/devops/${orgSlug}/findings/sarif`,
-    sbomWebhookPath: `/api/devops/${orgSlug}/sbom`
+    sbomWebhookPath: `/api/devops/${orgSlug}/sbom`,
+    errorEventsWebhookPath: `/api/devops/${orgSlug}/error-events`
   });
 });
 

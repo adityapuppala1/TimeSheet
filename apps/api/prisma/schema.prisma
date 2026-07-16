@@ -493,6 +493,12 @@ model Ticket {
   estimatedHours Decimal? @db.Decimal(5, 2)
   /// Admin thumbs-up/down on the AI Activity Log page — "up" | "down", null = no feedback given.
   aiFeedback     String?  @db.VarChar(10)
+  /// Set when this ticket was created from (or later matched) an ingested error-tracking event
+  /// (Sentry/Rollbar/raw — see devops-webhook.controller.ts's /error-events route). A later
+  /// event carrying the SAME fingerprint against a RESOLVED/CLOSED ticket auto-reopens it via
+  /// the existing maybeReopenTicketOnRegression, even with no explicit ticketKey in the new
+  /// event — "the same crash came back" is detectable without a human re-linking it by hand.
+  errorFingerprint String? @db.VarChar(128)
 
   comments         TicketComment[]
   attachments      TicketAttachment[]
@@ -516,6 +522,7 @@ model Ticket {
   @@index([assigneeId, status])
   @@index([status, dueAt])
   @@index([reporterId])
+  @@index([errorFingerprint])
 }
 
 model TicketComment {

@@ -477,3 +477,79 @@ devopsWebhookRouter.post("/:orgSlug/sbom", async (req, res, next) => {
     next(error);
   }
 });
+
+// --- Error-tracking ingestion (Sentry / Rollbar / raw) + fingerprint-based auto-reopen --------
+// The last piece of the "AI auto bug/issue detection + auto-reopen" roadmap item: an error event
+// with no explicit ticketKey can still auto-reopen a RESOLVED/CLOSED ticket if its `fingerprint`
+// matches the fingerprint stored on that ticket from an earlier event — "the same crash came
+// back" is detectable without a human re-linking it by hand.
+
+const errorEventSchema = z.object({
+  body: z.object({
+    source: z.enum(["SENTRY", "ROLLBAR", "RAW"]).default("RAW"),
+    // Sentry/Rollbar both supply a stable grouping key (Sentry: issue fingerprint/culprit hash;
+    // Rollbar: item "fingerprint") — for a raw/manual CI-log post with no such key, the caller
+    // can hash whatever it considers the identity of "this same failure" itself and send that.
+    fingerprint: z.string().min(1).max(128),
+    message: z.string().min(1).max(500),
+    stackTrace: z.string().max(20000).optional(),
+    level: z.string().max(20).optional(),
+    ticketKey: z.string().max(20).optional()
+  })
+});
+
+devopsWebhookRouter.post("/:orgSlug/error-events", async (req, res, next) => {
+  try {
+    await withOrgTenant(req.params.orgSlug, async () => {
+      await requireValidIngestionToken(req);
+      const parsed = errorEventSchema.safeParse({ body: req.body });
+      if (!parsed.success) throw new AppError(422, `Invalid error-event payload: ${parsed.error.issues.map((i) => i.message).join("; ")}`);
+      const body = parsed.data.body;
+
+      let ticketId = await resolveTicketId(body.ticketKey);
+      let matchedBy: "ticketKey" | "fingerprint" | null = ticketId ? "ticketKey" : null;
+
+      if (!ticketId) {
+        // No explicit key — fall back to fingerprint match against whatever ticket this exact
+        // crash signature was last linked to, most-recently-updated first (a fingerprint can in
+        // principle get reused if reset by a data import, so "most recent" is the sane tie-break).
+        const matched = await prisma.ticket.findFirst({
+          where: { errorFingerprint: body.fingerprint, deletedAt: null },
+          orderBy: { updatedAt: "desc" },
+          select: { id: true }
+        });
+        if (matched) {
+          ticketId = matched.id;
+          matchedBy = "fingerprint";
+        }
+      }
+
+      let reopened = false;
+      if (ticketId) {
+        // Remember this fingerprint on the ticket (first-write-wins — a ticket keeps the
+        // fingerprint of whichever crash it was first linked to) so a LATER event with no
+        // ticketKey can still find its way back here via the fingerprint branch above.
+        await prisma.ticket.updateMany({ where: { id: ticketId, errorFingerprint: null }, data: { errorFingerprint: body.fingerprint } });
+
+        const ticketBefore = await prisma.ticket.findFirst({ where: { id: ticketId, deletedAt: null }, select: { status: true } });
+        if (ticketBefore && (ticketBefore.status === "RESOLVED" || ticketBefore.status === "CLOSED")) {
+          await maybeReopenTicketOnRegression(
+            ticketId,
+            `A new ${body.source === "RAW" ? "" : `${body.source} `}error event matching this ticket's known crash fingerprint`
+          ).catch((error) => console.warn(`[devops-webhook] auto-reopen check failed for ticket ${ticketId}: ${(error as Error).message}`));
+          reopened = true;
+        }
+
+        if (body.stackTrace) {
+          await maybePostCiFailureTriageComment(ticketId, `${body.message}\n\n${body.stackTrace}`, body.source, body.ticketKey).catch((error) =>
+            console.warn(`[devops-webhook] AI error-event triage failed for ticket ${ticketId}: ${(error as Error).message}`)
+          );
+        }
+      }
+
+      res.status(201).json({ matched: Boolean(ticketId), matchedBy, ticketId, reopened });
+    });
+  } catch (error) {
+    next(error);
+  }
+});
