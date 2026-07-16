@@ -203,12 +203,15 @@ depends on a later one being done to be valuable on its own.
   Jira-plugin approach.
 
 *Phase 2 — analytics surface (net-new page, medium effort, depends on Phase 1's data existing):*
-- [ ] **Security & DevOps analytics page** (`/app/security-insights`, `REPORTS_VIEW`-gated):
-  findings-over-time trend, open-by-severity breakdown, mean-time-to-remediate, top repos/modules
-  by finding count, SAST/DAST/SSAT/SSCT split — built entirely on the `StatCard`/`computeTrend`/
-  `DataTable` shared components already shipped, so this is now cheap.
-- [ ] **Org-wide risk score** — weighted formula (critical×10 + high×5 + medium×2 + low×1,
-  age-decayed) as one more Dashboard `StatCard` for admins.
+- [x] **Security & DevOps analytics page** (`/app/security-insights`, `REPORTS_VIEW`-gated):
+  findings-over-time trend (8-week `AreaChart`), open-by-severity breakdown, mean-time-to-remediate
+  (approximated from `updatedAt - createdAt` — no dedicated resolvedAt column on `SecurityFinding`
+  yet), top repositories by open-finding count, SAST/DAST/SSAT/SSCT/VAPT split (`BarChart`) — built
+  on the `StatCard`/`computeTrend` shared components, backed by `GET /reports/security-insights`.
+  Nav entry + command-palette entry added alongside the existing Insights page.
+- [x] **Org-wide risk score** — weighted, age-decayed formula (critical×10/high×5/medium×2/low×1,
+  halving influence every 30 days a finding stays open, floored at 25%) as a Dashboard `StatCard`
+  for admins, plus its own tile on the Security insights page.
 
 *Phase 3 — AI differentiation (the actual moat: TimeSphere owns timesheet + org data neither
 vendor has):*

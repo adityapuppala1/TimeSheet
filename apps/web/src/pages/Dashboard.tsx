@@ -75,6 +75,12 @@ export function Dashboard() {
     enabled: isAdmin,
     refetchInterval: 30_000
   });
+  const security = useQuery({
+    queryKey: ["reports", "security-insights"],
+    queryFn: reportApi.securityInsights,
+    enabled: isAdmin,
+    refetchInterval: 60_000
+  });
   const timesheets = useQuery({ queryKey: ["timesheets"], queryFn: timesheetApi.list });
   const daily = useQuery({ queryKey: ["daily-status"], queryFn: reportApi.dailyStatus });
   const myTickets = useQuery({
@@ -126,7 +132,7 @@ export function Dashboard() {
     return rows.map((row: any) => ({ name: row.project, value: Number(row._sum?.totalHours ?? 0) }));
   }, [admin.data]);
 
-  const stats: Array<{ label: string; value: string | number; tone?: "success" | "warning"; trend?: Trend | null }> = isAdmin
+  const stats: Array<{ label: string; value: string | number; tone?: "success" | "warning" | "destructive"; trend?: Trend | null }> = isAdmin
     ? [
         { label: "Users", value: admin.data?.users ?? 0, trend: computeTrend(admin.data?.users ?? 0, admin.data?.usersYesterday ?? 0, true) },
         {
@@ -145,6 +151,12 @@ export function Dashboard() {
           value: admin.data?.pendingApprovals ?? 0,
           tone: "warning",
           trend: computeTrend(admin.data?.pendingApprovals ?? 0, admin.data?.pendingApprovalsYesterday ?? 0, false)
+        },
+        {
+          label: "Security risk score",
+          value: security.data?.riskScore ?? 0,
+          tone: (security.data?.riskScore ?? 0) > 30 ? "destructive" : (security.data?.riskScore ?? 0) > 10 ? "warning" : "success",
+          trend: computeTrend(security.data?.riskScore ?? 0, security.data?.riskScoreYesterday ?? 0, false)
         }
       ]
     : [

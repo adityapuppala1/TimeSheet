@@ -36,6 +36,7 @@ const History = lazy(() => import("./pages/History").then((m) => ({ default: m.H
 const AuditLog = lazy(() => import("./pages/AuditLog").then((m) => ({ default: m.AuditLog })));
 const AIActivityLog = lazy(() => import("./pages/AIActivityLog").then((m) => ({ default: m.AIActivityLog })));
 const Insights = lazy(() => import("./pages/Insights").then((m) => ({ default: m.Insights })));
+const SecurityInsightsPage = lazy(() => import("./pages/SecurityInsights").then((m) => ({ default: m.SecurityInsightsPage })));
 const Team = lazy(() => import("./pages/Team").then((m) => ({ default: m.Team })));
 const WorkspaceSettingsPage = lazy(() =>
   import("./pages/WorkspaceSettings").then((m) => ({ default: m.WorkspaceSettingsPage }))
@@ -84,6 +85,7 @@ const router = createBrowserRouter([
       { path: "projects", element: <RequirePermission permission={permissions.PROJECTS_MANAGE}><PageShell><ProjectsPage /></PageShell></RequirePermission> },
       { path: "reports", element: <RequirePermission permission={permissions.REPORTS_VIEW}><PageShell><ReportsPage /></PageShell></RequirePermission> },
       { path: "insights", element: <RequirePermission permission={permissions.REPORTS_VIEW}><PageShell><Insights /></PageShell></RequirePermission> },
+      { path: "security-insights", element: <RequirePermission permission={permissions.REPORTS_VIEW}><PageShell><SecurityInsightsPage /></PageShell></RequirePermission> },
       { path: "audit", element: <RequirePermission permission={permissions.AUDIT_VIEW}><PageShell><AuditLog /></PageShell></RequirePermission> },
       { path: "ai-activity", element: <RequirePermission permission={permissions.TICKETS_ASSIGN}><PageShell><AIActivityLog /></PageShell></RequirePermission> },
       { path: "settings", element: <PageShell><WorkspaceSettingsPage /></PageShell> },

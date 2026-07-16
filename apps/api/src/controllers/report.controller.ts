@@ -525,6 +525,109 @@ reportRouter.get("/ticket-insights", requirePermission(permissions.REPORTS_VIEW)
   });
 });
 
+const SECURITY_SEVERITIES = ["CRITICAL", "HIGH", "MEDIUM", "LOW"] as const;
+const SECURITY_TYPES = ["SAST", "DAST", "SSAT", "SSCT", "VAPT"] as const;
+const OPEN_FINDING_STATUSES = ["OPEN", "ACKNOWLEDGED"] as const;
+const RESOLVED_FINDING_STATUSES = ["FIXED", "ACCEPTED_RISK"] as const;
+
+/** Weighted, age-decayed org-wide risk score — see docs/ROADMAP.md's "Competitive parity"
+ *  section (Phase 2). Deliberately simple (not trying to match Black Duck's CVSS-aware BDSA
+ *  scoring): critical/high/medium/low weights roughly mirror how urgently each severity should
+ *  be worked, and the age decay (halving influence every 30 days a finding stays open) means a
+ *  score reflects "how much open risk right now," not a monotonically growing backlog count. */
+function computeRiskScore(openFindings: Array<{ severity: (typeof SECURITY_SEVERITIES)[number]; createdAt: Date }>): number {
+  const WEIGHT: Record<(typeof SECURITY_SEVERITIES)[number], number> = { CRITICAL: 10, HIGH: 5, MEDIUM: 2, LOW: 1 };
+  const now = Date.now();
+  const HALF_LIFE_MS = 30 * 24 * 60 * 60 * 1000;
+  return Math.round(
+    openFindings.reduce((sum, f) => {
+      const ageMs = Math.max(0, now - f.createdAt.getTime());
+      const decay = Math.pow(0.5, ageMs / HALF_LIFE_MS);
+      return sum + WEIGHT[f.severity] * Math.max(decay, 0.25); // floor at 25% — an old CRITICAL is still worth flagging, not zeroed out
+    }, 0)
+  );
+}
+
+/**
+ * Security & DevOps analytics — findings-over-time trend, open-by-severity/type breakdown,
+ * mean-time-to-remediate, top repos by finding count, and the org-wide risk score. Powers the
+ * Security insights page (Phase 2 of the "Competitive parity" roadmap section) the same way
+ * /ticket-insights powers the Insights page — one batched call, everything the page needs.
+ *
+ * WHY "mean time to remediate" uses `updatedAt - createdAt` rather than a dedicated
+ * resolvedAt-style column: SecurityFinding has no separate status-change timestamp (unlike
+ * Ticket.resolvedAt) — updatedAt is bumped on any field change, so this is an approximation,
+ * not an exact remediation-time measurement. Documented here rather than silently treated as
+ * precise; a dedicated `resolvedAt` column is a reasonable follow-up if this proves too noisy.
+ */
+reportRouter.get("/security-insights", requirePermission(permissions.REPORTS_VIEW), async (_req, res) => {
+  const weeks = recentWeekStarts(8);
+  const rangeStart = weeks[0];
+  const sinceLocal = startOfLocalDay();
+  const yesterdayLocal = new Date(sinceLocal);
+  yesterdayLocal.setDate(yesterdayLocal.getDate() - 1);
+
+  const [
+    openFindings,
+    findingsInRange,
+    resolvedFindings,
+    byType,
+    topRepos,
+    openYesterday
+  ] = await Promise.all([
+    prisma.securityFinding.findMany({
+      where: { status: { in: [...OPEN_FINDING_STATUSES] } },
+      select: { severity: true, createdAt: true }
+    }),
+    prisma.securityFinding.findMany({
+      where: { createdAt: { gte: rangeStart } },
+      select: { createdAt: true, severity: true }
+    }),
+    prisma.securityFinding.findMany({
+      where: { status: { in: [...RESOLVED_FINDING_STATUSES] }, updatedAt: { gte: rangeStart } },
+      select: { createdAt: true, updatedAt: true }
+    }),
+    prisma.securityFinding.groupBy({ by: ["type"], where: { status: { in: [...OPEN_FINDING_STATUSES] } }, _count: true }),
+    prisma.securityFinding.groupBy({
+      by: ["repository"],
+      where: { status: { in: [...OPEN_FINDING_STATUSES] }, repository: { not: null } },
+      _count: true,
+      orderBy: { _count: { repository: "desc" } },
+      take: 10
+    }),
+    prisma.securityFinding.count({ where: { status: { in: [...OPEN_FINDING_STATUSES] }, createdAt: { lt: sinceLocal } } })
+  ]);
+
+  const openBySeverity = Object.fromEntries(
+    SECURITY_SEVERITIES.map((s) => [s, openFindings.filter((f) => f.severity === s).length])
+  ) as Record<(typeof SECURITY_SEVERITIES)[number], number>;
+
+  const findingsOverTime = weeks.map((weekStart) => ({
+    weekStart: weekStart.toISOString().slice(0, 10),
+    count: findingsInRange.filter((f) => weekIndexFor(f.createdAt, weeks) === weeks.indexOf(weekStart)).length
+  }));
+
+  const meanTimeToRemediateHours =
+    resolvedFindings.length > 0
+      ? resolvedFindings.reduce((sum, f) => sum + (f.updatedAt.getTime() - f.createdAt.getTime()) / (1000 * 60 * 60), 0) / resolvedFindings.length
+      : 0;
+
+  const riskScore = computeRiskScore(openFindings);
+  const riskScoreYesterday = computeRiskScore(openFindings.filter((f) => f.createdAt < sinceLocal));
+
+  res.json({
+    totalOpen: openFindings.length,
+    totalOpenYesterday: openYesterday,
+    openBySeverity,
+    byType: SECURITY_TYPES.map((type) => ({ type, count: byType.find((row) => row.type === type)?._count ?? 0 })),
+    findingsOverTime,
+    meanTimeToRemediateHours: Number(meanTimeToRemediateHours.toFixed(1)),
+    topRepositories: topRepos.map((row) => ({ repository: row.repository ?? "Unknown", count: row._count })),
+    riskScore,
+    riskScoreYesterday
+  });
+});
+
 /** Opt-in cost-per-ticket analytics — gated behind GlobalTicketSettings.enableCostAnalytics (needs User.hourlyRate). */
 reportRouter.get("/cost-insights", requirePermission(permissions.REPORTS_VIEW), async (_req, res) => {
   const settings = await prisma.globalTicketSettings.findUnique({ where: { id: "global" } });

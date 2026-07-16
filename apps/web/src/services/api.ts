@@ -293,12 +293,25 @@ export interface LeaderboardRow {
   avgCycleHours: number;
 }
 
+export interface SecurityInsights {
+  totalOpen: number;
+  totalOpenYesterday: number;
+  openBySeverity: Record<"CRITICAL" | "HIGH" | "MEDIUM" | "LOW", number>;
+  byType: Array<{ type: "SAST" | "DAST" | "SSAT" | "SSCT" | "VAPT"; count: number }>;
+  findingsOverTime: Array<{ weekStart: string; count: number }>;
+  meanTimeToRemediateHours: number;
+  topRepositories: Array<{ repository: string; count: number }>;
+  riskScore: number;
+  riskScoreYesterday: number;
+}
+
 export const reportApi = {
   admin: async () => (await api.get("/reports/admin-summary")).data,
   employee: async () => (await api.get("/reports/employee-summary")).data,
   dailyStatus: async () => (await api.get<DailyStatus>("/reports/daily-status")).data,
   tickets: async () => (await api.get<TicketSummary>("/reports/ticket-summary")).data,
   ticketInsights: async () => (await api.get<TicketInsights>("/reports/ticket-insights")).data,
+  securityInsights: async () => (await api.get<SecurityInsights>("/reports/security-insights")).data,
   costInsights: async () => (await api.get<CostInsights>("/reports/cost-insights")).data,
   leaderboard: async () => (await api.get<{ rows: LeaderboardRow[] }>("/reports/leaderboard")).data,
   download: async (type: "csv" | "pdf") => (await api.get(`/reports/export.${type}`, { responseType: "blob" })).data
