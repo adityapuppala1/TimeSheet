@@ -26,6 +26,7 @@ import { Separator } from "../components/ui/separator";
 import { toast } from "../components/ui/toaster";
 import { faceApi, projectApi, ticketApi, timesheetApi } from "../services/api";
 import { FaceVerificationDialog } from "../components/FaceVerificationDialog";
+import { useFaceStatus } from "../lib/use-face-status";
 
 const MAX_DAILY_HOURS = 12;
 const OPEN_TICKET_STATUSES = "OPEN,IN_PROGRESS,IN_REVIEW,REOPENED";
@@ -152,7 +153,7 @@ export function Timesheet() {
 
   // Whether THIS user must pass a face check before submitting. Read from the server rather
   // than assumed, since it depends on the workspace policy plus a per-user override.
-  const faceStatus = useQuery({ queryKey: ["face", "status"], queryFn: faceApi.status });
+  const faceStatus = useFaceStatus();
   const [faceDialogOpen, setFaceDialogOpen] = useState(false);
   const [pendingValues, setPendingValues] = useState<FormData | null>(null);
 

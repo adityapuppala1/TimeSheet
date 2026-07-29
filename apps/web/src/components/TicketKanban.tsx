@@ -17,6 +17,8 @@ import { useState } from "react";
 import { ticketStatuses, type TicketStatus } from "@timesheet/shared";
 import { iconForType, initialsFor, PRIORITY_VARIANT, serverMessage, STATUS_VARIANT } from "../pages/Tickets";
 import { fileUrl, ticketApi, type TicketRow } from "../services/api";
+import { useFaceStatus } from "../lib/use-face-status";
+import { FaceVerificationDialog } from "./FaceVerificationDialog";
 import { Avatar, AvatarFallback, AvatarImage } from "./ui/avatar";
 import { Badge } from "./ui/badge";
 import { Button } from "./ui/button";
@@ -174,10 +176,17 @@ export function TicketKanban({ tickets, onOpenTicket }: { tickets: TicketRow[]; 
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 8 } }));
 
   const moveStatus = useMutation({
-    mutationFn: ({ id, status }: { id: string; status: TicketStatus }) => ticketApi.updateStatus(id, status),
+    mutationFn: ({ id, status, faceVerificationId }: { id: string; status: TicketStatus; faceVerificationId?: string }) =>
+      ticketApi.updateStatus(id, status, faceVerificationId),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ["tickets"] }),
     onError: (err: any) => toast.error("Couldn't move ticket", { description: serverMessage(err, "That status change isn't allowed.") })
   });
+
+  // Face (identity) verification for drag-moves — same requireForTicket policy as the detail
+  // drawer's status select. The drop is parked while the check runs, then replayed with the
+  // verification id.
+  const faceStatus = useFaceStatus();
+  const [pendingMove, setPendingMove] = useState<{ id: string; status: TicketStatus } | null>(null);
 
   const activeTicket = tickets.find((t) => t.id === activeId) ?? null;
 
@@ -201,6 +210,10 @@ export function TicketKanban({ tickets, onOpenTicket }: { tickets: TicketRow[]; 
     // manager's lane doesn't reassign the ticket, only a status column change does anything).
     const newStatus = String(over.id).split("::").pop() as TicketStatus;
     if (!ticket || ticket.status === newStatus) return;
+    if (faceStatus.data?.requiredForTicket) {
+      setPendingMove({ id: ticket.id, status: newStatus });
+      return;
+    }
     moveStatus.mutate({ id: ticket.id, status: newStatus });
   }
 
@@ -252,6 +265,18 @@ export function TicketKanban({ tickets, onOpenTicket }: { tickets: TicketRow[]; 
         </div>
         <DragOverlay>{activeTicket ? <div className="w-72"><TicketCard ticket={activeTicket} /></div> : null}</DragOverlay>
       </DndContext>
+
+      <FaceVerificationDialog
+        open={pendingMove !== null}
+        onOpenChange={(open) => !open && setPendingMove(null)}
+        context="TICKET"
+        actionLabel="move this ticket"
+        onVerified={(verificationId) => {
+          const move = pendingMove;
+          setPendingMove(null);
+          if (move) moveStatus.mutate({ ...move, faceVerificationId: verificationId });
+        }}
+      />
     </div>
   );
 }

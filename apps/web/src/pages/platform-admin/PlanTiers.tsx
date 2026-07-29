@@ -152,13 +152,15 @@ function TierCard({ tier }: { tier: PlanTierLimitRow }) {
   const [budget, setBudget] = useState(tier.aiMonthlyBudgetCeilingUsd);
   const [providers, setProviders] = useState<SsoProvider[]>(tier.allowedSsoProviders);
   const [chatPlatforms, setChatPlatforms] = useState<ChatPlatform[]>(tier.allowedChatPlatforms);
+  const [faceVerification, setFaceVerification] = useState(tier.faceVerificationEnabled);
 
   useEffect(() => {
     setSeatLimit(tier.seatLimit.toString());
     setBudget(tier.aiMonthlyBudgetCeilingUsd);
     setProviders(tier.allowedSsoProviders);
     setChatPlatforms(tier.allowedChatPlatforms);
-  }, [tier.seatLimit, tier.aiMonthlyBudgetCeilingUsd, tier.allowedSsoProviders, tier.allowedChatPlatforms]);
+    setFaceVerification(tier.faceVerificationEnabled);
+  }, [tier.seatLimit, tier.aiMonthlyBudgetCeilingUsd, tier.allowedSsoProviders, tier.allowedChatPlatforms, tier.faceVerificationEnabled]);
 
   const save = useMutation({
     mutationFn: () =>
@@ -166,7 +168,8 @@ function TierCard({ tier }: { tier: PlanTierLimitRow }) {
         seatLimit: Number(seatLimit),
         aiMonthlyBudgetCeilingUsd: Number(budget),
         allowedSsoProviders: providers,
-        allowedChatPlatforms: chatPlatforms
+        allowedChatPlatforms: chatPlatforms,
+        faceVerificationEnabled: faceVerification
       }),
     onSuccess: () => {
       toast.success("Saved");
@@ -225,6 +228,17 @@ function TierCard({ tier }: { tier: PlanTierLimitRow }) {
               </label>
             ))}
           </div>
+        </div>
+        <div className="grid gap-1.5">
+          <Label className="text-slate-300">Features</Label>
+          <label className="flex items-center gap-2 text-sm text-slate-300">
+            <Checkbox checked={faceVerification} onCheckedChange={(checked) => setFaceVerification(Boolean(checked))} />
+            Face (identity) verification
+          </label>
+          <p className="text-xs text-slate-500">
+            Unchecking on a tier with live orgs stops enforcement immediately (fail-open) and starts each org's 30-day
+            biometric-data purge grace window.
+          </p>
         </div>
         <Button size="sm" className="w-fit bg-amber-500 text-slate-950 hover:bg-amber-400" disabled={save.isPending} onClick={() => save.mutate()}>
           Save

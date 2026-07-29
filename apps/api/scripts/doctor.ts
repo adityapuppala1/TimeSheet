@@ -459,7 +459,84 @@ async function main(): Promise<void> {
     return;
   }
 
+  await checkFaceReadiness(env!);
+
   console.log("\n[doctor] All checks passed — safe to run `npm run db:migrate` / `npm run dev`.\n");
+}
+
+/**
+ * Face-verification preflight. These surface at setup time the three failure modes that
+ * otherwise appear only when a real employee tries to verify on a Friday evening:
+ *  - the camera never opens because the app isn't served over HTTPS (getUserMedia requires a
+ *    secure context — https or localhost — and browsers fail SILENTLY, no error names the cause);
+ *  - the face image directory isn't writable by the API process;
+ *  - the ML models can't load / take absurdly long on this hardware (checked only under
+ *    --face, because loading ~10MB of models costs a couple of seconds and most doctor runs are
+ *    diagnosing database problems).
+ * Advisory (warn, not fail): the feature is off by default, and a broken face stack must not
+ * block diagnosing the database issues people actually run doctor for.
+ */
+async function checkFaceReadiness(env: { APP_BASE_URL: string; UPLOAD_DIR: string }): Promise<void> {
+  info("\nFace verification preflight (advisory):");
+
+  const base = env.APP_BASE_URL;
+  const isSecureContext = base.startsWith("https://") || /^https?:\/\/(localhost|127\.0\.0\.1)([:/]|$)/.test(base);
+  if (isSecureContext) {
+    ok(`APP_BASE_URL (${base}) is a secure context — browsers will allow camera access`);
+  } else {
+    warn(
+      `APP_BASE_URL is ${base} — browsers only allow camera access (getUserMedia) over HTTPS or on localhost.\n` +
+        `  Deployed at a plain-HTTP LAN address, the face-capture camera will SILENTLY never appear.\n` +
+        `  Put the app behind HTTPS (a real certificate, or an internal CA on a LAN) before enabling face verification.`
+    );
+  }
+
+  const faceDir = path.join(env.UPLOAD_DIR, "face");
+  try {
+    fs.mkdirSync(faceDir, { recursive: true });
+    const probeFile = path.join(faceDir, `.doctor-probe-${Date.now()}`);
+    fs.writeFileSync(probeFile, "ok");
+    fs.rmSync(probeFile, { force: true });
+    ok(`Face image directory writable — ${faceDir}`);
+  } catch (error) {
+    warn(`Face image directory ${faceDir} is not writable: ${(error as Error).message}\n  Captures and enrollments will fail to store until this is fixed.`);
+  }
+
+  const freeGb = os.freemem() / 1024 ** 3;
+  if (freeGb < 1) {
+    warn(
+      `Only ${freeGb.toFixed(1)} GB of memory is currently free. The face models hold ~0.5 GB per API process ` +
+        `once loaded (plus GC headroom) — budget at least 1 GB free before enabling face verification.`
+    );
+  } else {
+    ok(`Memory headroom — ${freeGb.toFixed(1)} GB free (face models need ~1 GB per API process)`);
+  }
+
+  if (process.argv.includes("--face")) {
+    info("  --face: loading the ML models (once per process, same cost the first real request pays)...");
+    const startedAt = Date.now();
+    try {
+      const { getHuman, analyzeFace } = await import("../src/services/face.service.js");
+      await getHuman();
+      const loadMs = Date.now() - startedAt;
+      // A tiny black frame — proves the full pipeline (sharp decode → tensor → detect) runs,
+      // not just that files exist. "No face found" is the expected, correct result.
+      const sharp = (await import("sharp")).default;
+      const blank = await sharp({ create: { width: 64, height: 64, channels: 3, background: { r: 0, g: 0, b: 0 } } })
+        .jpeg()
+        .toBuffer();
+      const inferStart = Date.now();
+      await analyzeFace(blank);
+      ok(`Face models load and run — load ${loadMs} ms, inference ${Date.now() - inferStart} ms`);
+      if (loadMs > 15_000) {
+        warn(`Model load took ${Math.round(loadMs / 1000)}s — expect slow first verifications on this hardware.`);
+      }
+    } catch (error) {
+      warn(`Face models failed to load: ${(error as Error).message.split("\n")[0]}\n  Face verification will 500 until this is resolved (reinstall node_modules?).`);
+    }
+  } else {
+    info("  (run with --face to also load the ML models and time an inference)");
+  }
 }
 
 main();

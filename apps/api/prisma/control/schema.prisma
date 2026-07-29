@@ -206,6 +206,11 @@ model PlanTierLimit {
   /// Which chat platforms (Slack/Microsoft Teams/Google Chat/Telegram) this tier may connect —
   /// same enable-gate pattern as allowedSsoProviders, checked in chat-integrations.controller.ts.
   allowedChatPlatforms      Json @default("[]")
+  /// Whether this tier may use face (identity) verification — Enterprise-only by seed default.
+  /// Enabling/enrolling/verifying fail CLOSED against this; enforcement on submissions fails
+  /// OPEN (see face.service.ts#isFaceVerificationRequired) so a downgraded/lapsed org's staff
+  /// are never locked out of logging their own time by a billing change.
+  faceVerificationEnabled   Boolean @default(false)
 }
 
 /// Platform-wide Stripe configuration (id = "global") — one Stripe account across every org on

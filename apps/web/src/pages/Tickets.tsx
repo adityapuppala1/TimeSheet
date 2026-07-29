@@ -46,6 +46,7 @@ import {
   Plus,
   ScrollText,
   ShieldAlert,
+  ShieldCheck,
   Sparkles,
   Tag,
   Ticket as TicketIcon,
@@ -78,6 +79,7 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "../components/ui/toolti
 import { safeHtml } from "../lib/safe-html";
 import { aiApi, faceApi, fileUrl, labelApi, projectApi, settingsApi, ticketApi, ticketTypeApi, type AIDuplicateMatch, type AITriageSuggestion, type SecurityFindingRow, type TicketAttachmentRow, type TicketBranchRow, type TicketChecklistItemRow, type TicketComment, type TicketDetail, type TicketLinkRow, type TicketLinkType, type TicketRow, type TicketTimesheetRow } from "../services/api";
 import { FaceVerificationDialog } from "../components/FaceVerificationDialog";
+import { useFaceStatus } from "../lib/use-face-status";
 import { useAuthStore } from "../store/auth";
 
 /** Icon for the 3 seeded defaults; any admin-added custom type falls back to a generic tag. */
@@ -558,7 +560,7 @@ function CreateTicketDialog({
   });
 
   // Face (identity) verification, when the workspace requires it for ticket creation.
-  const faceStatus = useQuery({ queryKey: ["face", "status"], queryFn: faceApi.status });
+  const faceStatus = useFaceStatus();
   const [faceDialogOpen, setFaceDialogOpen] = useState(false);
   const requestCreate = () => {
     if (faceStatus.data?.requiredForTicket) {
@@ -834,13 +836,28 @@ function TicketDetailSheet({
   }
 
   const statusMutation = useMutation({
-    mutationFn: (status: TicketStatus) => ticketApi.updateStatus(ticketId as string, status),
+    mutationFn: ({ status, faceVerificationId }: { status: TicketStatus; faceVerificationId?: string }) =>
+      ticketApi.updateStatus(ticketId as string, status, faceVerificationId),
     onSuccess: () => {
       toast.success("Status updated");
       invalidate();
     },
     onError: (err: any) => toast.error("Could not update status", { description: serverMessage(err, "Try again.") })
   });
+
+  // Face (identity) verification for status transitions — same requireForTicket policy that
+  // covers creation. The chosen status is parked while the check runs, then submitted with the
+  // verification id; also triggered reactively when the server answers 428 (policy changed
+  // after this page loaded — the server is the authority, not the cached status query).
+  const faceStatus = useFaceStatus();
+  const [pendingStatus, setPendingStatus] = useState<TicketStatus | null>(null);
+  const requestStatusChange = (status: TicketStatus) => {
+    if (faceStatus.data?.requiredForTicket) {
+      setPendingStatus(status);
+      return;
+    }
+    statusMutation.mutate({ status });
+  };
 
   const assignMutation = useMutation({
     mutationFn: (assigneeId: string | null) => ticketApi.assign(ticketId as string, assigneeId),
@@ -902,6 +919,16 @@ function TicketDetailSheet({
                 {ticket.slaBreachAt && (
                   <Badge variant="destructive"><AlertTriangle className="mr-1 h-3 w-3" />SLA breached</Badge>
                 )}
+                {ticket.identityVerified && (
+                  /* The trust mark this feature exists to produce: the last action on this
+                     ticket that demanded a face check passed one. */
+                  <Badge
+                    variant="success"
+                    title={ticket.identityVerifiedAt ? `Identity confirmed ${new Date(ticket.identityVerifiedAt).toLocaleString()}` : undefined}
+                  >
+                    <ShieldCheck className="mr-1 h-3 w-3" />Identity verified
+                  </Badge>
+                )}
               </div>
             </SheetHeader>
 
@@ -911,7 +938,7 @@ function TicketDetailSheet({
                   <Label className="text-xs uppercase text-muted-foreground">Status</Label>
                   <Select
                     value={ticket.status}
-                    onValueChange={(v) => statusMutation.mutate(v as TicketStatus)}
+                    onValueChange={(v) => requestStatusChange(v as TicketStatus)}
                     disabled={statusMutation.isPending}
                   >
                     <SelectTrigger><SelectValue /></SelectTrigger>
@@ -1041,6 +1068,18 @@ function TicketDetailSheet({
           </>
         )}
       </SheetContent>
+
+      <FaceVerificationDialog
+        open={pendingStatus !== null}
+        onOpenChange={(open) => !open && setPendingStatus(null)}
+        context="TICKET"
+        actionLabel="change this ticket's status"
+        onVerified={(verificationId) => {
+          const status = pendingStatus;
+          setPendingStatus(null);
+          if (status) statusMutation.mutate({ status, faceVerificationId: verificationId });
+        }}
+      />
     </Sheet>
   );
 }

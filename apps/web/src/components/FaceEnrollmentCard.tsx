@@ -12,10 +12,11 @@
  * for the overwhelming majority of deployments that never turn this on.
  */
 import { useState } from "react";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { CheckCircle2, ScanFace, ShieldAlert, Trash2 } from "lucide-react";
+import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { CheckCircle2, Download, ScanFace, ShieldAlert, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 import { faceApi } from "../services/api";
+import { useFaceStatus } from "../lib/use-face-status";
 import { Button } from "./ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "./ui/card";
 import { Checkbox } from "./ui/checkbox";
@@ -36,7 +37,7 @@ import {
 
 export function FaceEnrollmentCard() {
   const queryClient = useQueryClient();
-  const status = useQuery({ queryKey: ["face", "status"], queryFn: faceApi.status });
+  const status = useFaceStatus();
   const [consented, setConsented] = useState(false);
   const [capturing, setCapturing] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -69,9 +70,10 @@ export function FaceEnrollmentCard() {
   if (status.isLoading) return <Skeleton className="h-48 w-full" />;
   const s = status.data;
   // Nothing to show if the workspace hasn't enabled this, and nothing to ask of a user the
-  // policy doesn't cover.
+  // policy doesn't cover. Approval coverage counts — an approver-only manager still needs
+  // somewhere to enroll.
   if (!s?.enabled) return null;
-  const covered = s.requiredForTimesheet || s.requiredForTicket;
+  const covered = s.requiredForTimesheet || s.requiredForTicket || s.requiredForApproval;
   if (!covered && !s.enrolled) return null;
 
   const enrolledAndCurrent = s.enrolled && !s.needsReEnrollment;
@@ -84,12 +86,15 @@ export function FaceEnrollmentCard() {
           Face verification
         </CardTitle>
         <CardDescription>
-          Your workspace asks you to confirm your identity with a quick camera check when you
-          {s.requiredForTimesheet && s.requiredForTicket
-            ? " submit a timesheet or create a ticket"
-            : s.requiredForTimesheet
-              ? " submit a timesheet"
-              : " create a ticket"}
+          Your workspace asks you to confirm your identity with a quick camera check when you{" "}
+          {[
+            s.requiredForTimesheet ? "submit a timesheet" : null,
+            s.requiredForTicket ? "work on tickets" : null,
+            s.requiredForApproval ? "approve timesheets" : null
+          ]
+            .filter(Boolean)
+            .join(", ")
+            .replace(/, ([^,]*)$/, " or $1") || "perform protected actions"}
           .
         </CardDescription>
       </CardHeader>
@@ -129,6 +134,29 @@ export function FaceEnrollmentCard() {
                 <Button variant="outline" onClick={() => setCapturing(true)} className="w-full sm:w-auto">
                   <ScanFace className="mr-2 h-4 w-4" />
                   Retake photo
+                </Button>
+                <Button
+                  variant="outline"
+                  className="w-full sm:w-auto"
+                  onClick={async () => {
+                    // Data-subject access, self-service: everything held about your face
+                    // verification (metadata only — never the template), as a JSON download.
+                    try {
+                      const data = await faceApi.exportMyData();
+                      const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" });
+                      const url = URL.createObjectURL(blob);
+                      const a = document.createElement("a");
+                      a.href = url;
+                      a.download = `face-data-export-${new Date().toISOString().slice(0, 10)}.json`;
+                      a.click();
+                      URL.revokeObjectURL(url);
+                    } catch {
+                      toast.error("Could not export your face data");
+                    }
+                  }}
+                >
+                  <Download className="mr-2 h-4 w-4" />
+                  Download my data
                 </Button>
                 <DeleteFaceDataButton onConfirm={() => remove.mutate()} pending={remove.isPending} />
               </div>

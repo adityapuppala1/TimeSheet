@@ -33,7 +33,14 @@ export type NotificationCategory =
   | "ticket.needs_review"
   | "digest.weekly"
   | "ticket.closed_digest"
-  | "digest.security_weekly";
+  | "digest.security_weekly"
+  | "face.enrollment_required"
+  | "face.enrollment_reminder"
+  | "face.verification_flagged"
+  | "face.review_overdue"
+  | "face.data_deleted"
+  | "face.entitlement_lost"
+  | "digest.identity_weekly";
 
 interface EmailPayload {
   templateKey: string;
@@ -69,7 +76,14 @@ const SETTINGS_FIELD: Record<NotificationCategory, string> = {
   "ticket.needs_review": "emailTicketNeedsReview",
   "digest.weekly": "emailWeeklyDigest",
   "ticket.closed_digest": "emailTicketClosedDigest",
-  "digest.security_weekly": "emailSecurityWeeklyDigest"
+  "digest.security_weekly": "emailSecurityWeeklyDigest",
+  "face.enrollment_required": "emailFaceEnrollmentRequired",
+  "face.enrollment_reminder": "emailFaceEnrollmentReminder",
+  "face.verification_flagged": "emailFaceVerificationFlagged",
+  "face.review_overdue": "emailFaceReviewOverdue",
+  "face.data_deleted": "emailFaceDataDeleted",
+  "face.entitlement_lost": "emailFaceEntitlementLost",
+  "digest.identity_weekly": "emailIdentityWeeklyDigest"
 };
 
 const GLOBAL_ID = "global";

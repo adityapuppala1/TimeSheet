@@ -179,6 +179,7 @@ model User {
   faceEnrollment            FaceEnrollment?
   faceVerifications         FaceVerificationAttempt[] @relation("FaceVerificationSubject")
   faceVerificationsReviewed FaceVerificationAttempt[] @relation("FaceVerificationReviewer")
+  faceChallenges            FaceChallenge[]
 
   createdAt DateTime  @default(now())
   updatedAt DateTime  @updatedAt
@@ -691,6 +692,12 @@ model GlobalAISettings {
   /// Reuses generateWeeklyDigest's prompt shape (given numbers only, no invented analysis) but
   /// is project-scoped and callable any time, not per-user and not on a schedule.
   statusReportEnabled         Boolean    @default(false)
+  /// Gates ai.service.ts#summarizeFaceReviewAttempt — an on-demand AI draft of a flagged
+  /// identity-check review: recent attempt history, device/network novelty, and timing pattern,
+  /// condensed to a summary + recommendation for the reviewing admin. Only ever sees attempt
+  /// METADATA (outcomes, scores, timestamps, device labels) — never a captured image or an
+  /// embedding, which stay on this server unconditionally.
+  faceReviewSummaryEnabled    Boolean    @default(false)
   model                       String     @default("claude-haiku-4-5") @db.VarChar(80)
   confidenceThreshold         Float      @default(0.6)
   monthlyBudgetUsd            Decimal?   @db.Decimal(10, 2)
@@ -767,6 +774,21 @@ model GlobalNotificationSettings {
   /// toggle decides whether the worker runs at all, this decides whether email actually sends,
   /// same two-layer gating emailWeeklyDigest/weeklyDigestEnabled already use.
   emailSecurityWeeklyDigest Boolean @default(false)
+
+  /// Face (identity) verification lifecycle — see docs/FACE_VERIFICATION.md. The enrollment
+  /// pair exists because without them a user's first hint that an admin flagged them is a
+  /// BLOCKED submission on a Friday evening; the flagged/overdue pair mirrors the SLA
+  /// breach→escalation ladder for identity-review hygiene. `emailIdentityWeeklyDigest` is off
+  /// by default like the other digests. NO email in this group ever contains a captured image,
+  /// a similarity score, or a template — they say THAT something needs attention and link into
+  /// the app, where authorization is actually checked.
+  emailFaceEnrollmentRequired Boolean @default(true)
+  emailFaceEnrollmentReminder Boolean @default(true)
+  emailFaceVerificationFlagged Boolean @default(true)
+  emailFaceReviewOverdue      Boolean @default(true)
+  emailFaceDataDeleted        Boolean @default(true)
+  emailFaceEntitlementLost    Boolean @default(true)
+  emailIdentityWeeklyDigest   Boolean @default(false)
 
   /// Hour (0–23, server local time) for the "log today's time" reminder.
   dailyReminderHour        Int     @default(16)
@@ -1285,9 +1307,29 @@ model GlobalFaceVerificationSettings {
   /// Master switch. Everything below is inert while this is false.
   enabled Boolean @default(false)
 
-  /// Which actions demand a fresh face check.
+  /// Which actions demand a fresh face check. `requireForTicket` covers both creating a ticket
+  /// and moving it between statuses (the workflow-authoritative transitions); comments and field
+  /// edits are deliberately NOT gated — they're collaborative actions, and a webcam prompt per
+  /// inline edit would be hostile without adding assurance. `requireForApproval` gates the
+  /// APPROVER on timesheet approval — arguably the higher-value target, since approval is where
+  /// the hours become payable.
   requireForTimesheet Boolean @default(true)
   requireForTicket    Boolean @default(false)
+  requireForApproval  Boolean @default(false)
+
+  /// Challenge–response liveness (anti-injection). When on, a verification needs TWO frames — a
+  /// neutral one and one performing a server-chosen random head movement (see
+  /// face.service.ts#issueChallenge) — which defeats replaying a pre-recorded video through a
+  /// virtual camera: the attacker can't know which movement will be demanded. When off,
+  /// verification is the original single-frame check.
+  challengeEnabled Boolean @default(true)
+
+  /// Set by the retention worker when it first observes that this org's plan tier no longer
+  /// allows face verification (downgrade). Enforcement stops immediately (fail-open in
+  /// isFaceVerificationRequired); stored biometric data is kept through a 30-day grace window —
+  /// long enough to re-subscribe without re-enrolling everyone — then purged. Cleared if the
+  /// entitlement comes back.
+  entitlementLostAt DateTime?
 
   /// ALL = every active user must enroll and verify.
   /// SELECTED = only users with User.faceVerificationRequired = true (the safe default, so
@@ -1376,10 +1418,11 @@ model FaceVerificationAttempt {
   userId String
   user   User   @relation("FaceVerificationSubject", fields: [userId], references: [id], onDelete: Cascade)
 
-  /// TIMESHEET | TICKET
+  /// TIMESHEET | TICKET | APPROVAL
   context String @db.VarChar(20)
 
-  /// PASSED | NO_FACE | MULTIPLE_FACES | NO_MATCH | SPOOF_SUSPECTED | NOT_ENROLLED | ERROR
+  /// PASSED | NO_FACE | MULTIPLE_FACES | NO_MATCH | SPOOF_SUSPECTED | CHALLENGE_FAILED |
+  /// NOT_ENROLLED | ERROR
   outcome String @db.VarChar(30)
 
   /// The raw scores behind the decision, always recorded (even on failure) so a disputed
@@ -1407,10 +1450,52 @@ model FaceVerificationAttempt {
 
   ipAddress String?  @db.VarChar(64)
   userAgent String?  @db.Text
+
+  /// Anti-injection evidence, recorded per attempt so the review log can show it and so real
+  /// data accumulates before any of it becomes a hard block:
+  /// - deviceLabel: the camera's MediaDeviceInfo.label as self-reported by the browser.
+  /// - virtualCameraSuspected: label matched a known virtual-camera product (OBS, ManyCam, …).
+  ///   A SIGNAL, not a verdict — labels are client-controlled and trivially spoofable, so this
+  ///   flags for review rather than blocking.
+  /// - unfamiliarNetwork: this attempt's IP matches none of the user's recent PASSED attempts.
+  deviceLabel            String? @db.VarChar(255)
+  virtualCameraSuspected Boolean @default(false)
+  unfamiliarNetwork      Boolean @default(false)
+
+  /// Challenge–response measurements (null when the challenge feature was off for this attempt).
+  /// The deltas are |rotation change| between the neutral and gesture frames, in radians, and
+  /// frameSimilarity is the embedding similarity BETWEEN the two frames. Deltas are enforced
+  /// axis-wise (see face.service.ts#verifyChallengePose); frameSimilarity is recorded but not
+  /// yet enforced — same-person similarity under a strong head turn hasn't been calibrated on
+  /// real captures, and a guessed floor would brick honest verifications.
+  challengeInstruction String? @db.VarChar(20)
+  challengeYawDelta    Float?
+  challengePitchDelta  Float?
+  frameSimilarity      Float?
+
   createdAt DateTime @default(now())
 
   @@index([userId, createdAt])
   @@index([flaggedForReview, createdAt])
   @@index([outcome, createdAt])
   @@index([purgedAt])
+}
+
+/// A short-lived, single-use liveness challenge: "prove this capture is happening NOW by
+/// performing this randomly-chosen head movement." Issued by POST /face/challenge, redeemed by
+/// POST /face/verify. Rows are cleaned up by the retention worker a day after expiry — they
+/// contain no biometric data, only the instruction that was demanded.
+model FaceChallenge {
+  id          String    @id @default(uuid())
+  userId      String
+  user        User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  context     String    @db.VarChar(20)
+  /// TURN_LEFT | TURN_RIGHT | LOOK_UP
+  instruction String    @db.VarChar(20)
+  createdAt   DateTime  @default(now())
+  expiresAt   DateTime
+  usedAt      DateTime?
+
+  @@index([userId, createdAt])
+  @@index([expiresAt])
 }

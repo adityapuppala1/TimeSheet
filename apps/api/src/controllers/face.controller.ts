@@ -15,7 +15,6 @@
  * (verification), Workspace Settings → Face verification (review log).
  */
 import fs from "node:fs";
-import fsp from "node:fs/promises";
 import path from "node:path";
 import { Router } from "express";
 import { z } from "zod";
@@ -25,17 +24,28 @@ import { AppError } from "../middleware/error.js";
 import { faceCaptureUpload, preserveTenantContext } from "../middleware/upload.js";
 import { validate } from "../middleware/validate.js";
 import { audit } from "../services/audit.service.js";
+import { dispatchNotification } from "../services/notify.service.js";
+import { templates } from "../services/mail-templates.js";
+import { summarizeFaceReviewAttempt } from "../services/ai.service.js";
 import {
   analyzeFace,
+  assertFaceEntitlement,
+  CHALLENGE_PROMPTS,
   decodeEmbedding,
   DEFAULT_CONSENT_TEXT,
   encodeEmbedding,
   FACE_MODEL_VERSION,
   faceStorageDir,
   getFaceSettings,
+  isFaceFeatureAllowedForOrg,
   isFaceVerificationRequired,
+  issueChallenge,
+  redeemChallenge,
+  removeUserFaceDirectories,
   similarity,
   storeFaceImage,
+  verifyChallengePose,
+  type FaceAnalysis,
   type FaceContext,
   type FaceOutcome
 } from "../services/face.service.js";
@@ -45,9 +55,22 @@ faceRouter.use(requireAuth);
 
 const requireAdmin = requireRole(["SUPER_ADMIN", "ADMIN"]);
 
+/** Camera products that present a virtual device. Matching one is a review SIGNAL, never a
+ *  block — the label is client-reported and trivially spoofable in both directions, so blocking
+ *  on it would only stop honest streamers while teaching attackers to blank the label. */
+const VIRTUAL_CAMERA_PATTERN = /obs|virtual|manycam|snap\s*camera|xsplit|droidcam|iriun|epoccam|camtwist|splitcam/i;
+
 function requireCapture(req: { file?: Express.Multer.File }): Buffer {
   if (!req.file?.buffer?.length) throw new AppError(422, "No face capture was received.");
   return req.file.buffer;
+}
+
+/** Multi-frame uploads arrive as `capture` array (challenge on: [neutral, gesture]; off: one). */
+function requireFrames(req: { files?: unknown }): Buffer[] {
+  const files = (Array.isArray(req.files) ? req.files : []) as Express.Multer.File[];
+  const buffers = files.filter((f) => f?.buffer?.length).map((f) => f.buffer);
+  if (buffers.length === 0) throw new AppError(422, "No face capture was received.");
+  return buffers;
 }
 
 /**
@@ -62,15 +85,20 @@ faceRouter.get("/status", async (req, res) => {
     select: { id: true, createdAt: true, consentAt: true, modelVersion: true }
   });
 
-  const [timesheetRequired, ticketRequired] = await Promise.all([
+  const [timesheetRequired, ticketRequired, approvalRequired, allowedByPlan] = await Promise.all([
     isFaceVerificationRequired(req.user!.id, "TIMESHEET"),
-    isFaceVerificationRequired(req.user!.id, "TICKET")
+    isFaceVerificationRequired(req.user!.id, "TICKET"),
+    isFaceVerificationRequired(req.user!.id, "APPROVAL"),
+    isFaceFeatureAllowedForOrg()
   ]);
 
   res.json({
     enabled: settings.enabled,
+    allowedByPlan,
     requiredForTimesheet: timesheetRequired,
     requiredForTicket: ticketRequired,
+    requiredForApproval: approvalRequired,
+    challengeEnabled: settings.challengeEnabled,
     enrolled: Boolean(enrollment),
     // An embedding from an older model can't be compared against a new one, so the UI must
     // prompt for re-enrollment rather than letting every check mysteriously fail.
@@ -80,6 +108,27 @@ faceRouter.get("/status", async (req, res) => {
     consentText: settings.consentText?.trim() || DEFAULT_CONSENT_TEXT,
     imageRetentionDays: settings.imageRetentionDays,
     maxAttempts: settings.maxAttempts
+  });
+});
+
+const challengeSchema = z.object({ body: z.object({ context: z.enum(["TIMESHEET", "TICKET", "APPROVAL"]) }) });
+
+/**
+ * POST /face/challenge — issues the liveness challenge a verification must satisfy while
+ * challenge–response is on (see face.service.ts's challenge section for the attack model).
+ * Returns the instruction to display; the subsequent /verify redeems it, single-use.
+ */
+faceRouter.post("/challenge", validate(challengeSchema), async (req, res) => {
+  const settings = await getFaceSettings();
+  if (!settings.enabled) throw new AppError(403, "Face verification is not enabled for this workspace.");
+  await assertFaceEntitlement();
+
+  const challenge = await issueChallenge(req.user!.id, req.body.context as FaceContext);
+  res.status(201).json({
+    challengeId: challenge.id,
+    instruction: challenge.instruction,
+    prompt: CHALLENGE_PROMPTS[challenge.instruction],
+    expiresInSeconds: challenge.expiresInSeconds
   });
 });
 
@@ -96,6 +145,8 @@ const enrollSchema = z.object({ body: z.object({ consent: z.string() }) });
 faceRouter.post("/enroll", preserveTenantContext(faceCaptureUpload.single("capture")), validate(enrollSchema), async (req, res) => {
   const settings = await getFaceSettings();
   if (!settings.enabled) throw new AppError(403, "Face verification is not enabled for this workspace.");
+  // Fail CLOSED: no new biometric data may be collected without the plan entitlement.
+  await assertFaceEntitlement();
   if (req.body.consent !== "true") {
     throw new AppError(422, "Enrollment requires explicit consent to process your face data.");
   }
@@ -145,25 +196,58 @@ faceRouter.post("/enroll", preserveTenantContext(faceCaptureUpload.single("captu
   res.status(201).json({ enrolled: true, consentAt: new Date().toISOString() });
 });
 
-const verifySchema = z.object({ body: z.object({ context: z.enum(["TIMESHEET", "TICKET"]) }) });
+const verifySchema = z.object({
+  body: z.object({
+    context: z.enum(["TIMESHEET", "TICKET", "APPROVAL"]),
+    /// Required while GlobalFaceVerificationSettings.challengeEnabled — from POST /face/challenge.
+    challengeId: z.string().uuid().optional().or(z.literal("")),
+    /// The active camera's MediaDeviceInfo.label, self-reported by the browser. Recorded as a
+    /// review signal (virtual-camera heuristic) — never trusted, never blocking.
+    deviceLabel: z.string().max(255).optional()
+  })
+});
 
 /**
  * POST /face/verify — the actual check. Returns a short-lived, single-use `verificationId` that
- * the subsequent timesheet/ticket submit must present (see
+ * the subsequent timesheet/ticket submit (or timesheet approval) must present (see
  * face.service.ts#consumeVerification).
+ *
+ * While challenge–response is on, the upload is TWO frames — [neutral, gesture] — and a valid
+ * unexpired challengeId; the pose delta between them is what defeats a virtual camera replaying
+ * a recorded video (see the challenge section in face.service.ts).
  *
  * Every outcome is persisted, including failures: "this account failed identity check four
  * times in a row" is precisely the signal this feature exists to surface, so it must survive
  * even when the user simply gives up and closes the dialog.
  */
-faceRouter.post("/verify", preserveTenantContext(faceCaptureUpload.single("capture")), validate(verifySchema), async (req, res) => {
+faceRouter.post("/verify", preserveTenantContext(faceCaptureUpload.array("capture", 2)), validate(verifySchema), async (req, res) => {
   const settings = await getFaceSettings();
   if (!settings.enabled) throw new AppError(403, "Face verification is not enabled for this workspace.");
+  // Fail CLOSED here too: a verification that can never be consumed (the submit gates are
+  // entitlement-fail-open) would only produce confusing dead passes.
+  await assertFaceEntitlement();
 
   const context = req.body.context as FaceContext;
   const userId = req.user!.id;
 
+  const deviceLabel = typeof req.body.deviceLabel === "string" && req.body.deviceLabel.trim() ? req.body.deviceLabel.trim() : null;
+  const virtualCameraSuspected = Boolean(deviceLabel && VIRTUAL_CAMERA_PATTERN.test(deviceLabel));
+
+  // Network-continuity signal: does this attempt's IP match ANY of the user's recent passes?
+  // Only meaningful once a baseline exists (3+ prior passes), and only a signal even then —
+  // people work from trains and cafés.
+  const recentPasses = await prisma.faceVerificationAttempt.findMany({
+    where: { userId, outcome: "PASSED", createdAt: { gte: new Date(Date.now() - 30 * 24 * 60 * 60 * 1000) } },
+    select: { ipAddress: true },
+    orderBy: { createdAt: "desc" },
+    take: 50
+  });
+  const knownIps = new Set(recentPasses.map((a) => a.ipAddress).filter(Boolean));
+  const unfamiliarNetwork = recentPasses.length >= 3 && Boolean(req.ip) && !knownIps.has(req.ip!);
+
   const enrollment = await prisma.faceEnrollment.findUnique({ where: { userId } });
+
+  let challengeMetrics: { instruction: string; yawDelta: number | null; pitchDelta: number | null; frameSimilarity: number | null } | null = null;
 
   const record = async (
     outcome: FaceOutcome,
@@ -186,7 +270,12 @@ faceRouter.post("/verify", preserveTenantContext(faceCaptureUpload.single("captu
     const imagePath =
       buffer && settings.imageRetentionDays > 0 ? await storeFaceImage(userId, "attempt", buffer) : null;
 
-    return prisma.faceVerificationAttempt.create({
+    const flaggedForReview =
+      // Repeated failures escalate as before; a suspected virtual camera flags IMMEDIATELY even
+      // on a pass — a pass through an injection tool is precisely the pass worth a human look.
+      (outcome !== "PASSED" && recentFailures + 1 >= settings.maxAttempts) || virtualCameraSuspected;
+
+    const attempt = await prisma.faceVerificationAttempt.create({
       data: {
         userId,
         context,
@@ -195,11 +284,23 @@ faceRouter.post("/verify", preserveTenantContext(faceCaptureUpload.single("captu
         antispoofReal: scores.antispoofReal ?? null,
         livenessScore: scores.livenessScore ?? null,
         imagePath,
-        flaggedForReview: outcome !== "PASSED" && recentFailures + 1 >= settings.maxAttempts,
+        flaggedForReview,
         ipAddress: req.ip ?? null,
-        userAgent: req.headers["user-agent"] ?? null
+        userAgent: req.headers["user-agent"] ?? null,
+        deviceLabel,
+        virtualCameraSuspected,
+        unfamiliarNetwork,
+        challengeInstruction: challengeMetrics?.instruction ?? null,
+        challengeYawDelta: challengeMetrics?.yawDelta ?? null,
+        challengePitchDelta: challengeMetrics?.pitchDelta ?? null,
+        frameSimilarity: challengeMetrics?.frameSimilarity ?? null
       }
     });
+
+    if (flaggedForReview) {
+      await notifyFlagged(userId, outcome, recentFailures + 1, context).catch(() => undefined);
+    }
+    return attempt;
   };
 
   if (!enrollment) {
@@ -211,8 +312,42 @@ faceRouter.post("/verify", preserveTenantContext(faceCaptureUpload.single("captu
     throw new AppError(428, "Your face enrollment is out of date and needs to be redone in your profile.");
   }
 
-  const buffer = requireCapture(req);
+  const frames = requireFrames(req);
+  const buffer = frames[0];
   const analysis = await analyzeFace(buffer);
+  let gestureAnalysis: FaceAnalysis | null = null;
+
+  // ---- Challenge–response (anti-injection) ----
+  if (settings.challengeEnabled) {
+    const instruction = await redeemChallenge({ challengeId: req.body.challengeId || null, userId, context });
+    if (!instruction || frames.length < 2) {
+      const attempt = await record("CHALLENGE_FAILED", {}, buffer);
+      return res.status(422).json({
+        outcome: "CHALLENGE_FAILED",
+        attemptId: attempt.id,
+        message: "The liveness step didn't complete — please start the check again and follow the on-screen movement."
+      });
+    }
+
+    gestureAnalysis = await analyzeFace(frames[1]);
+    const pose = verifyChallengePose(instruction, analysis, gestureAnalysis);
+    const frameSimilarity =
+      analysis.embedding.length && gestureAnalysis.embedding.length
+        ? await similarity(analysis.embedding, gestureAnalysis.embedding)
+        : null;
+    challengeMetrics = { instruction, yawDelta: pose.yawDelta, pitchDelta: pose.pitchDelta, frameSimilarity };
+
+    // The gesture frame must also be a single live face — otherwise frame 2 could be anything.
+    if (!pose.ok || gestureAnalysis.faceCount !== 1) {
+      const attempt = await record("CHALLENGE_FAILED", { antispoofReal: analysis.antispoofReal, livenessScore: analysis.livenessScore }, buffer);
+      return res.status(422).json({
+        outcome: "CHALLENGE_FAILED",
+        attemptId: attempt.id,
+        flagged: attempt.flaggedForReview,
+        message: "We couldn't see the requested head movement — face the camera, then make the movement clearly and try again."
+      });
+    }
+  }
 
   if (analysis.faceCount === 0) {
     const attempt = await record("NO_FACE", { antispoofReal: analysis.antispoofReal, livenessScore: analysis.livenessScore }, buffer);
@@ -234,7 +369,14 @@ faceRouter.post("/verify", preserveTenantContext(faceCaptureUpload.single("captu
   // Anti-spoofing is checked BEFORE the match: a printed photo of the right person would
   // otherwise sail through on similarity alone, which is the exact attack this feature exists
   // to stop. Failing this is reported as its own outcome so it's visible in the review log.
-  if (analysis.antispoofReal < settings.antispoofThreshold || analysis.livenessScore < settings.livenessThreshold) {
+  // While the challenge ran, BOTH frames must clear the bar — a spoofed gesture frame is a
+  // spoofed check.
+  const spoofSuspected =
+    analysis.antispoofReal < settings.antispoofThreshold ||
+    analysis.livenessScore < settings.livenessThreshold ||
+    (gestureAnalysis !== null &&
+      (gestureAnalysis.antispoofReal < settings.antispoofThreshold || gestureAnalysis.livenessScore < settings.livenessThreshold));
+  if (spoofSuspected) {
     const attempt = await record(
       "SPOOF_SUSPECTED",
       { antispoofReal: analysis.antispoofReal, livenessScore: analysis.livenessScore },
@@ -268,13 +410,60 @@ faceRouter.post("/verify", preserveTenantContext(faceCaptureUpload.single("captu
   });
 });
 
+/**
+ * Manager first, then this workspace's admins — the escalation audience for "someone repeatedly
+ * failed to prove they're this person" (or passed through a suspected virtual camera). In-app
+ * always; email per the workspace's notification toggles. Never includes scores or images.
+ */
+async function notifyFlagged(subjectUserId: string, outcome: FaceOutcome, failureCount: number, context: FaceContext): Promise<void> {
+  const subject = await prisma.user.findUnique({
+    where: { id: subjectUserId },
+    select: { name: true, managerId: true }
+  });
+  if (!subject) return;
+
+  const admins = await prisma.user.findMany({
+    where: { role: { name: { in: ["SUPER_ADMIN", "ADMIN"] } }, status: "ACTIVE", deletedAt: null },
+    select: { id: true, name: true }
+  });
+  const recipients = new Map<string, string>(admins.map((a) => [a.id, a.name]));
+  if (subject.managerId && !recipients.has(subject.managerId)) {
+    const manager = await prisma.user.findUnique({ where: { id: subject.managerId }, select: { id: true, name: true } });
+    if (manager) recipients.set(manager.id, manager.name);
+  }
+  recipients.delete(subjectUserId);
+
+  const reason =
+    outcome === "PASSED"
+      ? "passed an identity check through a suspected virtual camera"
+      : `failed ${failureCount} identity ${failureCount === 1 ? "check" : "checks"} in a row`;
+
+  for (const [recipientId, recipientName] of recipients) {
+    await dispatchNotification({
+      userId: recipientId,
+      category: "face.verification_flagged",
+      title: "Identity check flagged for review",
+      body: `${subject.name} ${reason}. The attempt is in the face verification review log.`,
+      link: "/app/settings",
+      email: {
+        templateKey: "face.verification_flagged",
+        vars: { targetName: recipientName, employeeName: subject.name, failureCount, context },
+        fallback: {
+          subject: "Identity check flagged for review",
+          html: templates.faceVerificationFlagged({ targetName: recipientName, employeeName: subject.name, failureCount, context })
+        }
+      }
+    });
+  }
+}
+
 /** Deletes the caller's own biometric data — the "withdraw consent" path every biometric
  *  privacy regime requires to exist and to be self-service. */
 faceRouter.delete("/enrollment", async (req, res) => {
   const enrollment = await prisma.faceEnrollment.findUnique({ where: { userId: req.user!.id } });
   if (!enrollment) throw new AppError(404, "You don't have a face enrollment to delete.");
 
-  await deleteEnrollmentAndData(req.user!.id);
+  await deleteEnrollmentAndData(req.user!.id, { byAdmin: false });
   await audit(req.user!.id, "face.enrollment_deleted", "FaceEnrollment", req.user!.id, { self: true });
   res.json({ deleted: true });
 });
@@ -285,23 +474,86 @@ faceRouter.delete("/enrollment/:userId", requireAdmin, async (req, res) => {
   const enrollment = await prisma.faceEnrollment.findUnique({ where: { userId: targetId } });
   if (!enrollment) throw new AppError(404, "That user doesn't have a face enrollment.");
 
-  await deleteEnrollmentAndData(targetId);
+  await deleteEnrollmentAndData(targetId, { byAdmin: true });
   await audit(req.user!.id, "face.enrollment_deleted", "FaceEnrollment", targetId, { self: false });
   res.json({ deleted: true });
 });
 
 /** Removes the DB row AND the images on disk. Deleting only the row would leave the actual
- *  biometric images sitting in the volume, which is not what "delete my face data" means. */
-async function deleteEnrollmentAndData(userId: string): Promise<void> {
+ *  biometric images sitting in the volume, which is not what "delete my face data" means.
+ *  The confirmation notification doubles as the deletion record every biometric-privacy regime
+ *  wants to see exist. */
+async function deleteEnrollmentAndData(userId: string, opts: { byAdmin: boolean }): Promise<void> {
   await prisma.faceEnrollment.deleteMany({ where: { userId } });
   await prisma.faceVerificationAttempt.updateMany({
     where: { userId, imagePath: { not: null } },
     data: { imagePath: null, purgedAt: new Date() }
   });
-  await fsp.rm(path.join(faceStorageDir(), userId), { recursive: true, force: true }).catch(() => {
-    // Best-effort: a locked/missing directory must not fail the user's deletion request.
-  });
+  await removeUserFaceDirectories(userId);
+
+  const user = await prisma.user.findUnique({ where: { id: userId }, select: { name: true } });
+  if (user) {
+    await dispatchNotification({
+      userId,
+      category: "face.data_deleted",
+      title: "Your face data was deleted",
+      body: `${opts.byAdmin ? "An administrator" : "You"} deleted your face verification data. The stored template and any retained captures are permanently gone.`,
+      link: "/app/profile",
+      email: {
+        templateKey: "face.data_deleted",
+        vars: { name: user.name },
+        fallback: {
+          subject: "Your face data was deleted",
+          html: templates.faceDataDeleted({ name: user.name, byAdmin: opts.byAdmin })
+        }
+      }
+    }).catch(() => undefined);
+  }
 }
+
+/**
+ * GET /face/export — the data-subject-access answer for this feature, self-service. Everything
+ * the system holds ABOUT the caller's face verification, minus the biometrics themselves: the
+ * template is never exported (it's the credential — exporting it would hand out the thing being
+ * protected), and images are fetched individually through the authenticated image routes.
+ */
+faceRouter.get("/export", async (req, res) => {
+  const userId = req.user!.id;
+  const [enrollment, attempts] = await Promise.all([
+    prisma.faceEnrollment.findUnique({
+      where: { userId },
+      select: { createdAt: true, updatedAt: true, consentAt: true, consentText: true, consentIp: true, modelVersion: true, referenceImagePath: true }
+    }),
+    prisma.faceVerificationAttempt.findMany({
+      where: { userId },
+      orderBy: { createdAt: "desc" },
+      select: {
+        id: true, context: true, outcome: true, similarity: true, antispoofReal: true, livenessScore: true,
+        deviceLabel: true, virtualCameraSuspected: true, unfamiliarNetwork: true,
+        challengeInstruction: true, ipAddress: true, createdAt: true, consumedAt: true,
+        timesheetId: true, ticketId: true, imagePath: true, purgedAt: true
+      }
+    })
+  ]);
+
+  res.setHeader("Content-Disposition", `attachment; filename="face-data-export-${new Date().toISOString().slice(0, 10)}.json"`);
+  res.json({
+    exportedAt: new Date().toISOString(),
+    subject: { id: userId, email: req.user!.email },
+    enrollment: enrollment
+      ? {
+          enrolledAt: enrollment.createdAt,
+          updatedAt: enrollment.updatedAt,
+          consentAt: enrollment.consentAt,
+          consentText: enrollment.consentText,
+          consentIp: enrollment.consentIp,
+          modelVersion: enrollment.modelVersion,
+          referenceImageStored: Boolean(enrollment.referenceImagePath)
+        }
+      : null,
+    attempts: attempts.map(({ imagePath, ...rest }) => ({ ...rest, imageStored: Boolean(imagePath) }))
+  });
+});
 
 const attemptsQuerySchema = z.object({
   query: z.object({
@@ -338,6 +590,10 @@ faceRouter.get("/attempts", requireAdmin, validate(attemptsQuerySchema), async (
       reviewNote: true,
       createdAt: true,
       consumedAt: true,
+      deviceLabel: true,
+      virtualCameraSuspected: true,
+      unfamiliarNetwork: true,
+      challengeInstruction: true,
       user: { select: { id: true, name: true, email: true, avatarUrl: true } },
       reviewedBy: { select: { id: true, name: true } }
     }
@@ -367,6 +623,72 @@ faceRouter.patch("/attempts/:id/review", requireAdmin, validate(reviewSchema), a
   });
   await audit(req.user!.id, "face.attempt_reviewed", "FaceVerificationAttempt", attempt.id, { note: req.body.note ?? null });
   res.json({ id: updated.id, reviewedAt: updated.reviewedAt });
+});
+
+/**
+ * POST /face/attempts/:id/ai-summary — AI-drafted review brief for one flagged attempt. Gated
+ * by GlobalAISettings.faceReviewSummaryEnabled and the org's AI budget (both enforced inside
+ * ai.service.ts). Only attempt METADATA leaves the server — never an image or a template.
+ */
+faceRouter.post("/attempts/:id/ai-summary", requireAdmin, async (req, res) => {
+  const summary = await summarizeFaceReviewAttempt({ attemptId: String(req.params.id) });
+  if (!summary) throw new AppError(502, "The AI response could not be parsed — try again.");
+  res.json(summary);
+});
+
+/**
+ * GET /face/stats — the evidence an admin tunes thresholds against: the actual similarity
+ * distribution of THIS workforce's attempts (bucketed, split by outcome), totals by outcome,
+ * and the anti-injection signal counts. The histogram exists because "is 0.75 the right
+ * threshold?" is answered by looking for the valley between the passed and rejected clusters —
+ * a statistics question the review log's raw rows can't show at a glance.
+ */
+faceRouter.get("/stats", requireAdmin, async (_req, res) => {
+  const since = new Date(Date.now() - 90 * 24 * 60 * 60 * 1000);
+  const attempts = await prisma.faceVerificationAttempt.findMany({
+    where: { createdAt: { gte: since } },
+    select: { outcome: true, similarity: true, virtualCameraSuspected: true, unfamiliarNetwork: true, flaggedForReview: true },
+    orderBy: { createdAt: "desc" },
+    take: 5000
+  });
+
+  const outcomes: Record<string, number> = {};
+  let virtualCamera = 0;
+  let unfamiliar = 0;
+  let flaggedPending = 0;
+
+  // 0.40 → 1.00 in 0.05 steps — similarity below 0.4 is noise (no-face/error paths).
+  const BUCKET_START = 0.4;
+  const BUCKET_SIZE = 0.05;
+  const bucketCount = Math.round((1.0 - BUCKET_START) / BUCKET_SIZE);
+  const histogram = Array.from({ length: bucketCount }, (_, i) => ({
+    from: Number((BUCKET_START + i * BUCKET_SIZE).toFixed(2)),
+    to: Number((BUCKET_START + (i + 1) * BUCKET_SIZE).toFixed(2)),
+    passed: 0,
+    rejected: 0
+  }));
+
+  for (const attempt of attempts) {
+    outcomes[attempt.outcome] = (outcomes[attempt.outcome] ?? 0) + 1;
+    if (attempt.virtualCameraSuspected) virtualCamera++;
+    if (attempt.unfamiliarNetwork) unfamiliar++;
+    if (attempt.flaggedForReview) flaggedPending++;
+    if (attempt.similarity != null && (attempt.outcome === "PASSED" || attempt.outcome === "NO_MATCH")) {
+      const index = Math.min(bucketCount - 1, Math.max(0, Math.floor((attempt.similarity - BUCKET_START) / BUCKET_SIZE)));
+      if (attempt.outcome === "PASSED") histogram[index].passed++;
+      else histogram[index].rejected++;
+    }
+  }
+
+  res.json({
+    since: since.toISOString(),
+    total: attempts.length,
+    outcomes,
+    flaggedPending,
+    virtualCameraSuspected: virtualCamera,
+    unfamiliarNetwork: unfamiliar,
+    histogram
+  });
 });
 
 /**

@@ -8,7 +8,7 @@
  */
 import { useQuery } from "@tanstack/react-query";
 import type { ColumnDef } from "@tanstack/react-table";
-import { Clock, FileText, Filter, Layers, Paperclip, RotateCcw } from "lucide-react";
+import { Clock, FileText, Filter, Layers, Paperclip, RotateCcw, ShieldCheck } from "lucide-react";
 import { useMemo, useState } from "react";
 import { Badge } from "../components/ui/badge";
 import { Button } from "../components/ui/button";
@@ -155,7 +155,21 @@ export function History() {
       {
         accessorKey: "status",
         header: "Status",
-        cell: (info) => <Badge variant={statusVariant[info.getValue() as string] ?? "muted"}>{info.getValue() as string}</Badge>
+        cell: ({ row }) => (
+          <div className="flex flex-wrap items-center gap-1">
+            <Badge variant={statusVariant[row.original.status] ?? "muted"}>{row.original.status}</Badge>
+            {row.original.identityVerified && (
+              /* The submitter's own receipt that their identity check was accepted — the
+                 in-dialog confirmation vanishes; this persists. */
+              <Badge
+                variant="success"
+                title={row.original.identityVerifiedAt ? `Identity confirmed ${new Date(row.original.identityVerifiedAt).toLocaleString()}` : "Identity confirmed"}
+              >
+                <ShieldCheck className="mr-0.5 h-3 w-3" />ID
+              </Badge>
+            )}
+          </div>
+        )
       },
       {
         id: "task",

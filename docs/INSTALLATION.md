@@ -171,6 +171,12 @@ seems broken. It checks, in order, and stops at the first failure with a specifi
 5. `DATABASE_URL` and `CONTROL_DATABASE_URL` are actually reachable (real TCP connection, not
    just "is the string non-empty").
 6. The credentials in `DATABASE_URL` are actually accepted (a real `SELECT 1`).
+7. **Face-verification preflight** (advisory — warns, never fails): `APP_BASE_URL` is a secure
+   context (browsers only grant camera access over HTTPS or `localhost`, and fail *silently*
+   otherwise — the number-one "camera never appears" cause on LAN deployments), the face image
+   directory is writable, and enough memory is free for the ~500MB the models hold per process.
+   Add `--face` (`npm run doctor -w apps/api -- --face`) to also load the real ML models and
+   time an inference on this hardware.
 
 Because step 4 runs *before* the pass/fail decision, a failure can tell you the answer instead of
 just the symptom. Configured for 3307 but MySQL is really on 3306? You get:

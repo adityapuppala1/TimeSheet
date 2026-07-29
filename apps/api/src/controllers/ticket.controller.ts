@@ -47,7 +47,7 @@ import {
   ticketProjectScope
 } from "../services/ticket.service.js";
 import { sanitizeRichText } from "../utils/sanitize.js";
-import { consumeVerification, isFaceVerificationRequired } from "../services/face.service.js";
+import { bindVerificationToRecord, consumeVerification, isFaceVerificationRequired } from "../services/face.service.js";
 
 const USER_SUMMARY = { id: true, name: true, email: true, avatarUrl: true } as const;
 const TICKET_LINK_SUMMARY = { id: true, key: true, title: true, status: true, priority: true } as const;
@@ -214,7 +214,19 @@ ticketRouter.get("/:id", requirePermission(permissions.TICKETS_VIEW), async (req
   const scope = await ticketProjectScope(req);
   if (!scope.unrestricted && !scope.projectIds.includes(ticket.projectId)) throw new AppError(403, "Forbidden");
 
-  res.json(serializeTicketLinks(ticket));
+  // Verified badge: the most recent identity check spent on this ticket (creation or a status
+  // transition). Detail-only — the ticket LIST stays undecorated to keep it one query.
+  const lastVerification = await prisma.faceVerificationAttempt.findFirst({
+    where: { ticketId: ticket.id, outcome: "PASSED", consumedAt: { not: null } },
+    orderBy: { createdAt: "desc" },
+    select: { createdAt: true, userId: true }
+  });
+
+  res.json({
+    ...serializeTicketLinks(ticket),
+    identityVerified: Boolean(lastVerification),
+    identityVerifiedAt: lastVerification?.createdAt ?? null
+  });
 });
 
 const createSchema = z.object({
@@ -247,9 +259,11 @@ ticketRouter.post("/", requirePermission(permissions.TICKETS_WRITE), validate(cr
   await assertValidTicketType(req.body.type);
 
   // Identity gate — before the transaction below, so a failed check can never leave a
-  // partially-created ticket (or burn a ticket key) behind.
+  // partially-created ticket (or burn a ticket key) behind. The consumed attempt is bound to
+  // the ticket after creation so the verified badge can join attempt → ticket.
+  let consumedVerificationId: string | null = null;
   if (await isFaceVerificationRequired(req.user!.id, "TICKET")) {
-    await consumeVerification({
+    consumedVerificationId = await consumeVerification({
       verificationId: req.body.faceVerificationId,
       userId: req.user!.id,
       context: "TICKET"
@@ -285,6 +299,10 @@ ticketRouter.post("/", requirePermission(permissions.TICKETS_WRITE), validate(cr
       }
     });
   });
+
+  if (consumedVerificationId) {
+    await bindVerificationToRecord(consumedVerificationId, { ticketId: ticket.id });
+  }
 
   await audit(req.user!.id, "ticket.created", "Ticket", ticket.id, { key: ticket.key });
   await dispatchOutboundWebhooks("ticket.created", { ticket });
@@ -429,7 +447,12 @@ ticketRouter.patch("/:id/ai-feedback", requirePermission(permissions.TICKETS_ASS
 
 const statusSchema = z.object({
   params: z.object({ id: z.string().uuid() }),
-  body: z.object({ status: z.enum(["OPEN", "IN_PROGRESS", "IN_REVIEW", "RESOLVED", "CLOSED", "REOPENED"]) })
+  body: z.object({
+    status: z.enum(["OPEN", "IN_PROGRESS", "IN_REVIEW", "RESOLVED", "CLOSED", "REOPENED"]),
+    /// See createSchema.faceVerificationId — status transitions are gated by the same
+    /// requireForTicket policy as creation. Comments and field edits deliberately are NOT.
+    faceVerificationId: z.string().uuid().optional().or(z.literal(""))
+  })
 });
 
 ticketRouter.patch("/:id/status", requirePermission(permissions.TICKETS_WRITE), validate(statusSchema), async (req, res) => {
@@ -448,6 +471,19 @@ ticketRouter.patch("/:id/status", requirePermission(permissions.TICKETS_WRITE), 
   }
   if (currentStatus === "CLOSED" && nextStatus === "REOPENED" && !canReopenClosedTicket(req)) {
     throw new AppError(403, "Only an assigner or admin can reopen a closed ticket");
+  }
+
+  // Identity gate — status transitions are the workflow-authoritative ticket actions ("who
+  // actually resolved this?"), so they're covered by the same requireForTicket policy as
+  // creation. Before every other write/side effect, and bound to the ticket immediately since
+  // it already exists.
+  if (await isFaceVerificationRequired(req.user!.id, "TICKET")) {
+    await consumeVerification({
+      verificationId: req.body.faceVerificationId,
+      userId: req.user!.id,
+      context: "TICKET",
+      ticketId: existing.id
+    });
   }
 
   // CI gate — see docs/ROADMAP.md's "Auto testing on branch/PR push" theme. Off by default

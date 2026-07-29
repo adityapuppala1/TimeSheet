@@ -40,44 +40,83 @@ Base URL: `/api`
 
 ## Face (identity) verification
 
-Optional and off by default — see [FACE_VERIFICATION.md](FACE_VERIFICATION.md) for the design,
-calibration, and the biometric-privacy obligations it carries.
+Optional, off by default, and **Enterprise-plan gated** — see
+[FACE_VERIFICATION.md](FACE_VERIFICATION.md) for the design, calibration, the challenge–response
+anti-injection step, and the biometric-privacy obligations it carries. Without the plan
+entitlement, enabling/enrolling/verifying return **403** (fail closed) while enforcement on
+submissions silently stops (fail open — a lapsed payment must never lock a workforce out).
 
-All routes require a normal authenticated session. Captures are sent as `multipart/form-data`
-with a single `capture` file part (PNG/JPEG, ≤4MB).
+All routes require a normal authenticated session, and `/api/face/*` carries its own
+60/min-per-IP rate limit (each verify is CPU-bound wasm inference). Captures are sent as
+`multipart/form-data` under the `capture` field (PNG/JPEG, ≤4MB each): one file normally, TWO
+(`[neutral, gesture]`) while the movement challenge is on.
 
 - `GET /face/status` — what the caller needs to render the right UI: whether the policy covers
-  them (`requiredForTimesheet` / `requiredForTicket`), whether they've enrolled, the consent
-  text to display, and the retention window. Only ever describes the caller.
+  them (`requiredForTimesheet` / `requiredForTicket` / `requiredForApproval`), the plan
+  entitlement (`allowedByPlan`), whether the two-frame challenge applies (`challengeEnabled`),
+  whether they've enrolled, the consent text to display, and the retention window. Only ever
+  describes the caller.
+- `POST /face/challenge` — `{ context }` → `{ challengeId, instruction, prompt,
+  expiresInSeconds }`. Issues the single-use, 90-second liveness challenge (a random head
+  movement) a verification must satisfy while `challengeEnabled` is on.
 - `POST /face/enroll` — `capture` + `consent=true`. **Consent is a hard precondition**, not a
   logged checkbox: without it the request is rejected 422. The exact wording shown at the time
   is stored on the enrollment row, since an admin can edit the settings text later.
-- `POST /face/verify` — `capture` + `context=TIMESHEET|TICKET`. On success returns
-  `{ outcome: "PASSED", verificationId, expiresInSeconds }`. **The `verificationId` is
-  single-use and short-lived** — pass it as `faceVerificationId` on the subsequent
-  `POST /timesheets/submit` or `POST /tickets`. A failure returns HTTP 422 with a structured
-  body (`outcome`, `message`, `attemptId`, `flagged`) rather than an opaque error, so the UI can
-  explain *why* — `NO_FACE`, `MULTIPLE_FACES`, `NO_MATCH`, `SPOOF_SUSPECTED`, `NOT_ENROLLED`.
+- `POST /face/verify` — `capture` frame(s) + `context=TIMESHEET|TICKET|APPROVAL`, plus
+  `challengeId` (required while the challenge is on) and an optional `deviceLabel` (the
+  camera's self-reported name — recorded as a virtual-camera review signal, never trusted).
+  On success returns `{ outcome: "PASSED", verificationId, expiresInSeconds }`. **The
+  `verificationId` is single-use and short-lived** — pass it as `faceVerificationId` on the
+  subsequent protected request. A failure returns HTTP 422 with a structured body (`outcome`,
+  `message`, `attemptId`, `flagged`) rather than an opaque error, so the UI can explain *why* —
+  `NO_FACE`, `MULTIPLE_FACES`, `NO_MATCH`, `SPOOF_SUSPECTED`, `CHALLENGE_FAILED`,
+  `NOT_ENROLLED`.
 - `DELETE /face/enrollment` — the caller deletes their own face data (template **and** images).
-  The "withdraw consent" path biometric-privacy regimes require to be self-service.
+  The "withdraw consent" path biometric-privacy regimes require to be self-service. Sends the
+  subject a confirmation notification (deletion evidence).
 - `DELETE /face/enrollment/:userId` — same, performed by an ADMIN/SUPER_ADMIN (offboarding).
+- `GET /face/export` — self-service data-subject export: enrollment metadata, the exact consent
+  wording agreed to, and every attempt with scores/signals, as a JSON download. Never includes
+  the embedding or filesystem paths.
 - `GET /face/attempts?userId=&outcome=&flaggedOnly=&take=` — ADMIN/SUPER_ADMIN review log.
-  Returns `hasImage: boolean`, never the server filesystem path.
+  Rows carry the anti-injection signals (`deviceLabel`, `virtualCameraSuspected`,
+  `unfamiliarNetwork`, `challengeInstruction`) and `hasImage: boolean` — never the server
+  filesystem path.
 - `PATCH /face/attempts/:id/review` — ADMIN/SUPER_ADMIN clears a review flag, optional `note`.
+- `POST /face/attempts/:id/ai-summary` — ADMIN/SUPER_ADMIN; AI-drafted review brief
+  (`{ summary, risk, recommendation }`). Gated by `GlobalAISettings.faceReviewSummaryEnabled` +
+  the AI budget; only attempt *metadata* enters the prompt.
+- `GET /face/stats` — ADMIN/SUPER_ADMIN; last-90-days outcome totals, signal counts, and the
+  similarity histogram (passed vs rejected per 0.05 bucket) the threshold should be tuned from.
 - `GET /face/image/attempt/:id` and `GET /face/image/enrollment/:userId` — streams stored
   imagery. Served from the API (not the public `/uploads` mount, which has no auth at all) and
   readable only by the subject or an admin; `Cache-Control: private, no-store`.
 
 Settings live under the usual settings surface:
 
-- `GET /settings/face-verification` — auth-only (the client needs the consent text/retention).
-- `PATCH /settings/face-verification` — SUPER_ADMIN. Thresholds are bounded server-side
-  (`matchThreshold` 0.3–0.99) — a threshold of 0 would match anyone and 1 would match nobody.
+- `GET /settings/face-verification` — auth-only (the client needs the consent text/retention);
+  includes the computed `allowedByPlan`.
+- `PATCH /settings/face-verification` — SUPER_ADMIN. Setting `enabled: true` requires the plan
+  entitlement (403 otherwise); every other field stays editable so an org mid-upgrade can stage
+  configuration. Thresholds are bounded server-side (`matchThreshold` 0.3–0.99) — a threshold
+  of 0 would match anyone and 1 would match nobody. A PATCH that activates coverage also
+  notifies covered-but-unenrolled users (deduped, 72h).
 
-**Enforcement.** When the policy covers a user, `POST /timesheets/submit` and `POST /tickets`
-require a valid `faceVerificationId` and return **428 Precondition Required** without one (or
-with one that's expired, already spent, for a different user, or for a different context).
-Drafts are never gated — only `SUBMITTED`.
+**Enforcement.** When the policy covers a user, the protected requests require a valid
+`faceVerificationId` and return **428 Precondition Required** without one (or with one that's
+expired, already spent, for a different user, or for a different context):
+
+| Request | Context consumed |
+|---|---|
+| `POST /timesheets/submit` (and `submit-with-files`) | `TIMESHEET` — drafts are never gated |
+| `PATCH /timesheets/:id/approve` | `APPROVAL` — checks the **approver**; reject is ungated |
+| `POST /tickets` | `TICKET` |
+| `PATCH /tickets/:id/status` | `TICKET` — comments and field edits are never gated |
+
+**Verified badges.** `GET /timesheets` rows carry `identityVerified` / `identityVerifiedAt` /
+`identityVerificationApplies` (the policy covers this row's author — lets the UI mark
+covered-but-unverified rows distinctly from not-covered ones), and `GET /tickets/:id` carries
+`identityVerified` / `identityVerifiedAt` for the most recent check spent on the ticket.
 
 ## Reports
 

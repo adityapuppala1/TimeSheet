@@ -308,6 +308,79 @@ export const templates = {
           ACCENT
         ) +
         paragraph(button("Review ticket", appUrl("/app/tickets"), ACCENT))
+    ),
+
+  /* ---- Face (identity) verification lifecycle. Deliberately data-light: none of these ever
+     contain a captured image, a similarity score, or anything biometric — email gets forwarded,
+     archived, and read on unmanaged devices, so they say THAT something needs attention and
+     link into the app, where authorization is actually checked. ---- */
+
+  faceEnrollmentRequired: (params: { name: string; reminder?: boolean }) =>
+    shell(
+      { title: "Set up face verification", preheader: "Your workspace requires an identity check for some actions." },
+      heading(`Hi ${escape(params.name.split(" ")[0])}, one quick setup step`) +
+        paragraph(
+          params.reminder
+            ? "A reminder: your workspace requires a face identity check for some of your actions, and you haven't enrolled yet. Until you do, those submissions will be held up."
+            : "Your workspace now requires a quick face identity check for some of your actions (like submitting a timesheet). Enrolling takes under a minute — you'll review and agree to a consent notice first."
+        ) +
+        paragraph(button("Enroll in your profile", appUrl("/app/profile"))) +
+        paragraph(`<span style="color:${MUTED};">Why this exists: it confirms the person submitting is the account owner. Your face data is encrypted, never shared, and you can delete it from your profile at any time.</span>`)
+    ),
+
+  faceVerificationFlagged: (params: { targetName: string; employeeName: string; failureCount: number; context: string }) =>
+    shell(
+      { title: "Identity check flagged for review", preheader: "Repeated failed identity checks need a look.", accentColor: ACCENT },
+      heading("An identity check needs review") +
+        paragraph(`${escape(params.targetName.split(" ")[0])}, ${escape(params.employeeName)} has failed ${params.failureCount} identity ${params.failureCount === 1 ? "check" : "checks"} in a row while trying to ${params.context === "TIMESHEET" ? "submit a timesheet" : params.context === "APPROVAL" ? "approve a timesheet" : "work on a ticket"}.`) +
+        paragraph("Honest failures happen — bad lighting, new glasses, a dirty lens. Repeated ones are exactly what this control exists to surface. The review log shows the scores and captures behind each attempt.") +
+        paragraph(button("Open the review log", appUrl("/app/settings"), ACCENT))
+    ),
+
+  faceReviewOverdue: (params: { targetName: string; pendingCount: number; oldestAgeHours: number }) =>
+    shell(
+      { title: "Flagged identity checks awaiting review", preheader: "Flagged attempts have sat unreviewed.", accentColor: ACCENT },
+      heading("Flagged identity checks are waiting") +
+        paragraph(`${escape(params.targetName.split(" ")[0])}, ${params.pendingCount} flagged identity ${params.pendingCount === 1 ? "attempt has" : "attempts have"} been waiting for review — the oldest for about ${params.oldestAgeHours} hours. A flag nobody reads is not a control.`) +
+        paragraph(button("Review them now", appUrl("/app/settings"), ACCENT))
+    ),
+
+  faceDataDeleted: (params: { name: string; byAdmin: boolean }) =>
+    shell(
+      { title: "Your face data was deleted", preheader: "Confirmation of biometric data deletion." },
+      heading("Your face data has been deleted") +
+        paragraph(
+          `${escape(params.name.split(" ")[0])}, ${params.byAdmin ? "an administrator has deleted" : "you deleted"} your face verification enrollment. The stored face template and any retained captures have been permanently removed.`
+        ) +
+        paragraph("If face verification is still required for your actions, you'll be asked to enroll again (with fresh consent) before your next covered submission.") +
+        paragraph(`<span style="color:${MUTED};">This confirmation is part of your workspace's biometric-data record keeping. No action is needed.</span>`)
+    ),
+
+  faceEntitlementLost: (params: { targetName: string; graceDays: number }) =>
+    shell(
+      { title: "Face verification is no longer in your plan", preheader: "Enforcement paused; stored face data will be purged.", accentColor: ACCENT },
+      heading("Face verification lost its plan entitlement") +
+        paragraph(`${escape(params.targetName.split(" ")[0])}, this workspace's current plan no longer includes face verification. Identity checks have stopped being enforced as of now — nobody is locked out.`) +
+        paragraph(`Stored face templates and captures will be kept for ${params.graceDays} days so an upgrade can restore the feature without re-enrolling everyone. After that they are permanently purged — retaining biometric data for a feature you can't use isn't defensible under data-protection rules.`) +
+        paragraph(button("Review plan & billing", appUrl("/app/settings"), ACCENT))
+    ),
+
+  identityWeeklyDigest: (params: { targetName: string; weekLabel: string; total: number; passed: number; failed: number; flaggedPending: number; notes: string }) =>
+    shell(
+      { title: `Identity assurance — week of ${params.weekLabel}`, preheader: "Weekly face verification recap." },
+      heading(`Identity assurance — week of ${escape(params.weekLabel)}`) +
+        infoCard(
+          [
+            ["Checks run", String(params.total)],
+            ["Passed", String(params.passed)],
+            ["Failed", String(params.failed)],
+            ["Flagged awaiting review", String(params.flaggedPending)]
+          ],
+          params.flaggedPending > 0 ? ACCENT : SUCCESS
+        ) +
+        (params.notes ? paragraph(escape(params.notes)) : "") +
+        paragraph(button("Open the review log", appUrl("/app/settings"))) +
+        paragraph(`<span style="color:${MUTED};">Computed directly from this week's verification attempts — no AI involved. Turn it off in Workspace Settings → Notifications.</span>`)
     )
 };
 

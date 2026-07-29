@@ -19,7 +19,13 @@ import { env } from "../config/env.js";
 import { AppError } from "../middleware/error.js";
 import { validate } from "../middleware/validate.js";
 import { audit } from "../services/audit.service.js";
-import { getFaceSettings } from "../services/face.service.js";
+import {
+  assertFaceEntitlement,
+  findCoveredUnenrolledUserIds,
+  getFaceSettings,
+  isFaceFeatureAllowedForOrg,
+  notifyEnrollmentRequired
+} from "../services/face.service.js";
 import { getGlobalNotificationSettings } from "../services/notify.service.js";
 import { getGlobalAISettings, getMonthlyAIUsageSummary, getWeeklyAIUsageTrend } from "../services/ai.service.js";
 import { getAllowedSsoProviders } from "../services/plan-limits.service.js";
@@ -223,6 +229,7 @@ const aiSettingsSchema = z.object({
       findingTriageEnabled: z.boolean().optional(),
       securityWeeklyDigestEnabled: z.boolean().optional(),
       statusReportEnabled: z.boolean().optional(),
+      faceReviewSummaryEnabled: z.boolean().optional(),
       model: z.string().min(1).max(80).optional(),
       confidenceThreshold: z.coerce.number().min(0).max(1).optional(),
       monthlyBudgetUsd: z.coerce.number().min(0).optional().nullable(),
@@ -916,7 +923,8 @@ settingsRouter.get("/git/pulls", requireAuth, async (req, res) => {
  * to display; PATCH is super-admin like every other workspace-configuration section.
  */
 settingsRouter.get("/face-verification", async (_req, res) => {
-  res.json(await getFaceSettings());
+  const [settings, allowedByPlan] = await Promise.all([getFaceSettings(), isFaceFeatureAllowedForOrg()]);
+  res.json({ ...settings, allowedByPlan });
 });
 
 const faceVerificationSchema = z.object({
@@ -925,6 +933,8 @@ const faceVerificationSchema = z.object({
       enabled: z.boolean().optional(),
       requireForTimesheet: z.boolean().optional(),
       requireForTicket: z.boolean().optional(),
+      requireForApproval: z.boolean().optional(),
+      challengeEnabled: z.boolean().optional(),
       enforcementMode: z.enum(["ALL", "SELECTED"]).optional(),
       // Bounded well away from 0/1: a threshold of 0 matches literally anyone and 1 matches
       // nobody, and both are foot-guns an admin should not be able to set by typing in a box.
@@ -940,6 +950,13 @@ const faceVerificationSchema = z.object({
 });
 
 settingsRouter.patch("/face-verification", requireSuperAdmin, validate(faceVerificationSchema), async (req, res) => {
+  // Plan-tier enforcement, same convention as SSO/chat: only ENABLING is gated (fail closed) —
+  // editing thresholds/consent while below Enterprise stays allowed so an org mid-upgrade can
+  // stage its configuration ahead of time.
+  if (req.body.enabled === true) {
+    await assertFaceEntitlement();
+  }
+
   const data: Record<string, unknown> = { ...req.body, updatedById: req.user!.id };
   const updated = await prisma.globalFaceVerificationSettings.upsert({
     where: { id: "global" },
@@ -947,5 +964,18 @@ settingsRouter.patch("/face-verification", requireSuperAdmin, validate(faceVerif
     create: { id: "global", ...data }
   });
   await audit(req.user!.id, "settings.face_verification_updated", "GlobalFaceVerificationSettings", "global", req.body);
+
+  // Tell newly-covered, not-yet-enrolled users BEFORE their first blocked submission does.
+  // Deduped inside (72h window), so repeated saves don't spam; fire-and-forget so a slow SMTP
+  // server can't hold the settings PATCH open.
+  const policyTouched =
+    "enabled" in req.body || "enforcementMode" in req.body ||
+    "requireForTimesheet" in req.body || "requireForTicket" in req.body || "requireForApproval" in req.body;
+  if (policyTouched && updated.enabled) {
+    findCoveredUnenrolledUserIds()
+      .then((ids) => notifyEnrollmentRequired(ids, "face.enrollment_required"))
+      .catch(() => undefined);
+  }
+
   res.json(updated);
 });

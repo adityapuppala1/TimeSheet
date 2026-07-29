@@ -26,7 +26,7 @@ import { templates } from "../services/mail-templates.js";
 import { computeApprovalDeadline, resolveEscalationsFor } from "../services/sla.service.js";
 import { dispatchOutboundWebhooks } from "../services/webhook-dispatch.service.js";
 import { sanitizeRichText } from "../utils/sanitize.js";
-import { consumeVerification, isFaceVerificationRequired } from "../services/face.service.js";
+import { bindVerificationToRecord, consumeVerification, getTimesheetVerificationBadges, isFaceVerificationRequired } from "../services/face.service.js";
 
 const inputSchema = z.object({
   body: z.object({
@@ -68,7 +68,19 @@ timesheetRouter.get("/", async (req, res) => {
     orderBy: [{ workDate: "desc" }, { startTime: "desc" }],
     take: 100
   });
-  res.json(timesheets);
+
+  // Verified-badge decoration: which rows carry a spent PASSED identity check, and whose
+  // authors the policy covers — so a manager can tell "verified", "predates the policy", and
+  // "not covered" apart at a glance instead of reading absence as ambiguity.
+  const badges = await getTimesheetVerificationBadges(timesheets.map((t) => ({ id: t.id, userId: t.userId })));
+  res.json(
+    timesheets.map((t) => ({
+      ...t,
+      identityVerified: badges.get(t.id)?.identityVerified ?? false,
+      identityVerifiedAt: badges.get(t.id)?.identityVerifiedAt ?? null,
+      identityVerificationApplies: badges.get(t.id)?.identityVerificationApplies ?? false
+    }))
+  );
 });
 
 async function saveTimesheet(req: any, status: "DRAFT" | "SUBMITTED") {
@@ -85,8 +97,11 @@ async function saveTimesheet(req: any, status: "DRAFT" | "SUBMITTED") {
   // capture every time someone saves a half-finished row would be hostile without adding any
   // assurance — what matters is who stands behind the entry when it enters the approval queue.
   // Deliberately BEFORE any write, so a failed check cannot leave a half-created timesheet.
+  // The consumed attempt id is bound to the row AFTER creation (it can't exist earlier) so the
+  // verified badge can join attempt → timesheet.
+  let consumedVerificationId: string | null = null;
   if (status === "SUBMITTED" && (await isFaceVerificationRequired(req.user.id, "TIMESHEET"))) {
-    await consumeVerification({
+    consumedVerificationId = await consumeVerification({
       verificationId: req.body.faceVerificationId,
       userId: req.user.id,
       context: "TIMESHEET"
@@ -170,6 +185,10 @@ async function saveTimesheet(req: any, status: "DRAFT" | "SUBMITTED") {
     { isolationLevel: "Serializable", timeout: 8000 }
   );
 
+  if (consumedVerificationId) {
+    await bindVerificationToRecord(consumedVerificationId, { timesheetId: timesheet.id });
+  }
+
   await audit(req.user.id, `timesheet.${status.toLowerCase()}`, "Timesheet", timesheet.id);
 
   if (status === "SUBMITTED") {
@@ -236,6 +255,19 @@ timesheetRouter.patch("/:id/approve", requirePermission(permissions.TIMESHEETS_A
   if (!existing) throw new AppError(404, "Timesheet not found");
   if (existing.status !== "SUBMITTED") {
     throw new AppError(422, `Cannot approve a timesheet in ${existing.status} status — only SUBMITTED entries can be approved.`);
+  }
+
+  // Identity gate on the APPROVER — approval is where the hours become payable, which makes it
+  // at least as worth protecting as submission. Checked before the status write so a failed
+  // check changes nothing. (Rejection is deliberately ungated: it moves no money, and demanding
+  // a webcam capture to DECLINE something only discourages review.)
+  if (await isFaceVerificationRequired(req.user!.id, "APPROVAL")) {
+    await consumeVerification({
+      verificationId: typeof req.body?.faceVerificationId === "string" ? req.body.faceVerificationId : undefined,
+      userId: req.user!.id,
+      context: "APPROVAL",
+      timesheetId: existing.id
+    });
   }
 
   const item = await prisma.timesheet.update({

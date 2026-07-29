@@ -574,11 +574,61 @@ visible — this file is a living reference, not a changelog.
   owns; this is a `saveTimesheet` extraction, not new logic, and was deliberately left for that
   follow-up rather than duplicated under time pressure (see `public-api.controller.ts`'s header
   comment).
-- **Wiring the new `apps/api/tests/` suite into CI** — `.github/workflows/ci.yml` doesn't run
-  `npm run test`/`test:integration -w apps/api` yet; it's a new job (integration tier needs the
-  same MySQL service container the Playwright job already provisions) rather than a change to
-  the existing one.
+- ~~Wiring the new `apps/api/tests/` suite into CI~~ — done 2026-07-29 in the V4 documentation
+  pass: `.github/workflows/ci.yml` now runs the unit tier before DB setup (fastest failure
+  signal) and the integration tier after the seeded MySQL service container, ahead of
+  Playwright.
 - **Expanding unit-test coverage beyond AI/billing/SCIM** — `security-report.service.ts` (the
-  security-findings ingestion/triage/auto-reopen logic) and 10 of the 13 `ai.service.ts`
+  security-findings ingestion/triage/auto-reopen logic) and 10 of the 14 `ai.service.ts`
   capability functions have no dedicated tests yet; the mocking patterns in
   `apps/api/tests/unit/*.test.ts`'s header comments generalize directly.
+
+### Face verification hardening (2026-07-29, from the post-ship review plan)
+
+The full plan (Enterprise packaging → trust surfaces → anti-injection → review analytics) was
+implemented in one pass; the phases below record what each piece was *for*. Everything verified
+by the extended live suite (`npm run verify:face:e2e`, 39 checks) plus 16 new unit tests.
+
+**Done:**
+- ~~Enterprise-only packaging~~ — `PlanTierLimit.faceVerificationEnabled` (seeded `true` only
+  for ENTERPRISE), platform-admin toggle, and the deliberate failure-direction split:
+  enable/enroll/verify fail **closed** (403), enforcement fails **open** — a lapsed payment
+  must never lock a workforce out of logging time. Downgrade starts a 30-day grace window
+  (admins notified), after which the retention worker purges all biometric data and disables
+  the feature.
+- ~~The trust gap~~ — "Identity verified" badges on timesheet rows, the approvals queue
+  (including an explicit *covered-but-unverified* state so absence is never ambiguous), and
+  ticket headers; consumed attempts are now actually **bound** to the record they protected
+  (`bindVerificationToRecord` — previously the ids were never linked, so no join existed).
+- ~~Nobody learns from a blocked submission~~ — enrollment-required notifications (in-app +
+  templated email) fired from the settings PATCH, the per-user flag flip, and a deduped daily
+  reminder; plus the dashboard first-run checklist whose face item stays visible through
+  dismissal while enrollment genuinely blocks a workflow.
+- ~~Coverage holes~~ — ticket **status transitions** gated under `requireForTicket` (comments
+  and edits deliberately never gated), timesheet **approval** gated on the approver under new
+  `requireForApproval` (rejection deliberately ungated — it moves no money), org-scoped image
+  storage (`face/<orgId>/<userId>/`), and a dedicated 60/min rate limit on `/api/face/*`.
+- ~~Anti-injection (the virtual-camera replay gap)~~ — challenge–response liveness: a random
+  server-chosen head movement (single-use, 90s) measured as a pose delta between two frames,
+  axis-based rather than direction-based until real-camera calibration data justifies sign
+  enforcement (the deltas are persisted per attempt for exactly that purpose). Plus
+  virtual-camera device-label and network-novelty **signals** — recorded and flagged for human
+  review, never blocking, because both are client-influenced.
+- ~~Evidence surfaces~~ — the match-score histogram (`GET /face/stats`) admins tune the
+  threshold against, AI review briefs (`faceReviewSummaryEnabled`, metadata-only prompt),
+  the deterministic weekly identity digest, overdue-review nudges, and self-service
+  data-subject export (`GET /face/export`).
+
+**Still open (deliberately):**
+- **Challenge direction enforcement** — turn-left vs turn-right sign checking, once persisted
+  `challengeYawDelta` data from real cameras establishes the sign convention safely.
+- **Frame-consistency floor** — `frameSimilarity` between the neutral and gesture frames is
+  recorded but not enforced; same-person similarity under a strong head turn needs real
+  calibration before a floor won't brick honest users.
+- **Playwright camera-flow coverage** — Chromium's `--use-fake-device-for-media-stream` +
+  `--use-file-for-fake-video-capture` can feed a canned video into the real dialog; today the
+  camera UI itself is exercised only manually (the server pipeline is covered by the live
+  suite).
+- **Dedicated face worker pool / object storage** — the Large-tier deployment shape in
+  [DEPLOYMENT.md § Sizing](DEPLOYMENT.md#sizing-measured-not-guessed); an ingress split, not a
+  code change, so tracked rather than built.

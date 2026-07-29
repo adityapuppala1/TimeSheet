@@ -13,8 +13,8 @@ export function createFakeTenantClient(): PrismaClient {
     globalAISettings: { upsert: vi.fn() },
     aIUsageLog: { create: vi.fn(), aggregate: vi.fn() },
     scimSettings: { findUnique: vi.fn() },
-    globalFaceVerificationSettings: { upsert: vi.fn() },
-    faceEnrollment: { findUnique: vi.fn(), upsert: vi.fn(), deleteMany: vi.fn() },
+    globalFaceVerificationSettings: { upsert: vi.fn(), update: vi.fn() },
+    faceEnrollment: { findUnique: vi.fn(), upsert: vi.fn(), deleteMany: vi.fn(), count: vi.fn(), findMany: vi.fn() },
     faceVerificationAttempt: {
       findUnique: vi.fn(),
       findMany: vi.fn(),
@@ -23,6 +23,8 @@ export function createFakeTenantClient(): PrismaClient {
       update: vi.fn(),
       updateMany: vi.fn()
     },
+    faceChallenge: { create: vi.fn(), findUnique: vi.fn(), updateMany: vi.fn(), deleteMany: vi.fn() },
+    notification: { create: vi.fn(), findFirst: vi.fn(), count: vi.fn() },
     user: {
       findUnique: vi.fn(),
       findFirst: vi.fn(),

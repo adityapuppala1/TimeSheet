@@ -35,7 +35,16 @@ export const TEMPLATE_VARIABLES: Record<string, string[]> = {
   "ticket.needs_review": ["targetName", "ticketKey", "title", "senderEmail", "confidence", "appUrl"],
   "digest.weekly": ["name", "weekLabel", "summary", "appUrl"],
   "ticket.closed_digest": ["ticketKey", "title", "closedBy", "riskVerdict", "findingsText", "testStatus", "appUrl"],
-  "digest.security_weekly": ["weekLabel", "summary", "riskScore", "appUrl"]
+  "digest.security_weekly": ["weekLabel", "summary", "riskScore", "appUrl"],
+
+  // Face (identity) verification — see docs/FACE_VERIFICATION.md. Deliberately variable-light:
+  // these emails never carry scores, images, or anything biometric.
+  "face.enrollment_required": ["name", "appUrl"],
+  "face.verification_flagged": ["targetName", "employeeName", "failureCount", "context", "appUrl"],
+  "face.review_overdue": ["targetName", "pendingCount", "oldestAgeHours", "appUrl"],
+  "face.data_deleted": ["name", "appUrl"],
+  "face.entitlement_lost": ["targetName", "graceDays", "appUrl"],
+  "digest.identity_weekly": ["targetName", "weekLabel", "total", "passed", "failed", "flaggedPending", "notes", "appUrl"]
 };
 
 export const TEMPLATE_DESCRIPTIONS: Record<string, string> = {
@@ -60,7 +69,14 @@ export const TEMPLATE_DESCRIPTIONS: Record<string, string> = {
   "ticket.needs_review": "Sent to project admins/managers when an email-sourced ticket's AI confidence is below the threshold.",
   "digest.weekly": "Monday-morning AI-authored recap of a person's ticket + timesheet activity for the past week.",
   "ticket.closed_digest": "Security/test-status digest sent when a ticket with ingested findings closes — to the closer + their manager, cc this workspace's admins.",
-  "digest.security_weekly": "Monday-morning AI-authored org-wide security recap (open findings, risk score, tickets past SLA) sent to every ADMIN/SUPER_ADMIN."
+  "digest.security_weekly": "Monday-morning AI-authored org-wide security recap (open findings, risk score, tickets past SLA) sent to every ADMIN/SUPER_ADMIN.",
+
+  "face.enrollment_required": "Sent when the face-verification policy starts covering someone who hasn't enrolled (and as the follow-up reminder).",
+  "face.verification_flagged": "Sent to the person's manager and workspace admins when repeated failed identity checks flag an attempt for review.",
+  "face.review_overdue": "Sent to admins when flagged identity checks have sat unreviewed for more than 48 hours.",
+  "face.data_deleted": "Confirmation to the person whose face enrollment/captures were deleted (self-service or by an admin).",
+  "face.entitlement_lost": "Sent to admins when the org's plan tier stops including face verification — enforcement pauses and a purge grace window starts.",
+  "digest.identity_weekly": "Monday-morning deterministic identity-assurance recap (checks run, failures, flagged pending) sent to every ADMIN/SUPER_ADMIN."
 };
 
 export const TEMPLATE_KEYS = Object.keys(TEMPLATE_VARIABLES);

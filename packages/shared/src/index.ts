@@ -168,6 +168,16 @@ export interface NotificationPreferences {
   /** AI weekly org-wide security digest to every ADMIN/SUPER_ADMIN — see
    *  workers/security-weekly-digest.worker.ts. Gated alongside GlobalAISettings.securityWeeklyDigestEnabled. */
   emailSecurityWeeklyDigest: boolean;
+  /** Face (identity) verification lifecycle — see docs/FACE_VERIFICATION.md. None of these ever
+   *  carry a captured image or a score; they link into the app where authorization is checked. */
+  emailFaceEnrollmentRequired: boolean;
+  emailFaceEnrollmentReminder: boolean;
+  emailFaceVerificationFlagged: boolean;
+  emailFaceReviewOverdue: boolean;
+  emailFaceDataDeleted: boolean;
+  emailFaceEntitlementLost: boolean;
+  /** Weekly identity-assurance digest to every ADMIN/SUPER_ADMIN — deterministic stats, no AI. */
+  emailIdentityWeeklyDigest: boolean;
 }
 
 export const notificationPreferenceKeys: ReadonlyArray<keyof NotificationPreferences> = [
@@ -187,7 +197,14 @@ export const notificationPreferenceKeys: ReadonlyArray<keyof NotificationPrefere
   "emailTicketEscalation",
   "emailTicketNeedsReview",
   "emailTicketClosedDigest",
-  "emailSecurityWeeklyDigest"
+  "emailSecurityWeeklyDigest",
+  "emailFaceEnrollmentRequired",
+  "emailFaceEnrollmentReminder",
+  "emailFaceVerificationFlagged",
+  "emailFaceReviewOverdue",
+  "emailFaceDataDeleted",
+  "emailFaceEntitlementLost",
+  "emailIdentityWeeklyDigest"
 ];
 
 /** Workspace-wide settings: notification toggles + reminder schedule + BCC behavior. */
@@ -278,6 +295,9 @@ export interface GlobalAISettings {
   /** Gates ai.service.ts#generateStatusReport — on-demand project stakeholder update, triggered
    *  synchronously from the Project page rather than a cron worker. */
   statusReportEnabled: boolean;
+  /** Gates ai.service.ts#summarizeFaceReviewAttempt — on-demand AI brief for a flagged
+   *  identity-check review. Attempt metadata only; captured images/templates never leave the server. */
+  faceReviewSummaryEnabled: boolean;
   model: string;
   confidenceThreshold: number;
   monthlyBudgetUsd: number | null;

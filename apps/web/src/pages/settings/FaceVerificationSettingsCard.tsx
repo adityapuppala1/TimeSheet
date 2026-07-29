@@ -8,11 +8,12 @@
  */
 import { useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { AlertTriangle, Eye, Save, ScanFace, ShieldCheck } from "lucide-react";
+import { AlertTriangle, BarChart3, Eye, Lock, Save, ScanFace, ShieldCheck, Sparkles, VideoOff, Wifi } from "lucide-react";
 import { toast } from "sonner";
-import { faceApi, settingsApi, type FaceAttemptRow } from "../../services/api";
+import { faceApi, settingsApi, type FaceAttemptRow, type FaceReviewAiSummary } from "../../services/api";
 import { Button } from "../../components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../../components/ui/card";
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "../../components/ui/dialog";
 import { Input } from "../../components/ui/input";
 import { Label } from "../../components/ui/label";
 import { Skeleton } from "../../components/ui/skeleton";
@@ -24,6 +25,7 @@ const OUTCOME_TONE: Record<string, string> = {
   PASSED: "bg-emerald-500/10 text-emerald-600 dark:text-emerald-400",
   NO_MATCH: "bg-destructive/10 text-destructive",
   SPOOF_SUSPECTED: "bg-destructive/10 text-destructive",
+  CHALLENGE_FAILED: "bg-destructive/10 text-destructive",
   MULTIPLE_FACES: "bg-amber-500/10 text-amber-600 dark:text-amber-400",
   NO_FACE: "bg-amber-500/10 text-amber-600 dark:text-amber-400",
   NOT_ENROLLED: "bg-muted text-muted-foreground",
@@ -71,6 +73,7 @@ export function FaceVerificationSettingsCard({ readOnly = false }: { readOnly?: 
   if (settings.isLoading) return <Skeleton className="h-64 w-full" />;
   const s = settings.data;
   const enabled = s?.enabled ?? false;
+  const allowedByPlan = s?.allowedByPlan ?? false;
 
   return (
     <div className="space-y-4">
@@ -79,13 +82,34 @@ export function FaceVerificationSettingsCard({ readOnly = false }: { readOnly?: 
           <CardTitle className="flex items-center gap-2">
             <ScanFace className="h-5 w-5" />
             Face verification
+            {!allowedByPlan && (
+              <Badge variant="outline" className="ml-1 font-normal">
+                <Lock className="mr-1 h-3 w-3" />
+                Enterprise
+              </Badge>
+            )}
           </CardTitle>
           <CardDescription>
-            Require a live camera check confirming the person submitting a timesheet or ticket is the account holder — closing the
-            gap where one employee submits on another's behalf.
+            Require a live camera check confirming the person submitting a timesheet or ticket — or approving a timesheet — is the
+            account holder, closing the gap where one employee acts on another's behalf.
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
+          {!allowedByPlan && (
+            /* Entitlement gate, matching the SSO/chat convention: configuration below stays
+               editable (an org mid-upgrade can stage everything), only ENABLING is blocked. */
+            <div className="flex items-start gap-2 rounded-lg border border-primary/40 bg-primary/5 p-3 text-sm">
+              <Lock className="mt-0.5 h-4 w-4 shrink-0 text-primary" />
+              <p>
+                Face verification is an <strong>Enterprise plan</strong> feature.
+                {enabled
+                  ? " Your plan no longer includes it: identity checks have stopped being enforced, and stored face data will be purged after a 30-day grace period unless the plan is upgraded."
+                  : " You can stage the configuration below now — enabling it activates the moment your workspace is on Enterprise."}{" "}
+                Upgrade from the <strong>Billing</strong> tab.
+              </p>
+            </div>
+          )}
+
           {/* Biometric data carries real legal obligations. Saying so at the point of decision is
               far more useful than burying it in docs the person flipping this switch won't read. */}
           <div className="flex items-start gap-2 rounded-lg border border-amber-500/40 bg-amber-500/10 p-3 text-sm text-amber-700 dark:text-amber-400">
@@ -102,7 +126,7 @@ export function FaceVerificationSettingsCard({ readOnly = false }: { readOnly?: 
               <Label>Enable face verification</Label>
               <p className="text-sm text-muted-foreground">Everything below is inactive while this is off.</p>
             </div>
-            <Switch checked={enabled} disabled={readOnly} onCheckedChange={(v) => update.mutate({ enabled: v })} />
+            <Switch checked={enabled} disabled={readOnly || (!enabled && !allowedByPlan)} onCheckedChange={(v) => update.mutate({ enabled: v })} />
           </div>
 
           <div className="grid gap-3 sm:grid-cols-2">
@@ -118,12 +142,37 @@ export function FaceVerificationSettingsCard({ readOnly = false }: { readOnly?: 
             </div>
             <div className="flex items-center justify-between rounded-lg border border-border bg-muted/30 p-4">
               <div className="space-y-0.5 pr-4">
-                <Label>Require on ticket create</Label>
+                <Label>Require on ticket actions</Label>
+                <p className="text-sm text-muted-foreground">Creating a ticket and moving it between statuses. Comments and edits are never gated.</p>
               </div>
               <Switch
                 checked={s?.requireForTicket ?? false}
                 disabled={readOnly || !enabled}
                 onCheckedChange={(v) => update.mutate({ requireForTicket: v })}
+              />
+            </div>
+            <div className="flex items-center justify-between rounded-lg border border-border bg-muted/30 p-4">
+              <div className="space-y-0.5 pr-4">
+                <Label>Require on timesheet approval</Label>
+                <p className="text-sm text-muted-foreground">Checks the approver — approval is where hours become payable.</p>
+              </div>
+              <Switch
+                checked={s?.requireForApproval ?? false}
+                disabled={readOnly || !enabled}
+                onCheckedChange={(v) => update.mutate({ requireForApproval: v })}
+              />
+            </div>
+            <div className="flex items-center justify-between rounded-lg border border-border bg-muted/30 p-4">
+              <div className="space-y-0.5 pr-4">
+                <Label>Movement challenge (anti-replay)</Label>
+                <p className="text-sm text-muted-foreground">
+                  Each check also demands a short random head movement, defeating replayed videos through virtual cameras.
+                </p>
+              </div>
+              <Switch
+                checked={s?.challengeEnabled ?? true}
+                disabled={readOnly || !enabled}
+                onCheckedChange={(v) => update.mutate({ challengeEnabled: v })}
               />
             </div>
           </div>
@@ -220,8 +269,72 @@ export function FaceVerificationSettingsCard({ readOnly = false }: { readOnly?: 
         </CardContent>
       </Card>
 
+      {enabled && <FaceStatsCard />}
       <FaceReviewLog readOnly={readOnly} />
     </div>
+  );
+}
+
+/**
+ * The evidence a threshold decision should rest on: this workforce's actual similarity
+ * distribution, split into passed vs rejected. A well-separated pair of clusters with the
+ * threshold in the valley between them is what "correctly calibrated" looks like; overlap means
+ * the threshold is cutting into real people. CSS bars, deliberately — a dependency-free chart
+ * is plenty for 12 buckets.
+ */
+function FaceStatsCard() {
+  const stats = useQuery({ queryKey: ["face", "stats"], queryFn: faceApi.stats });
+  const data = stats.data;
+  if (stats.isLoading) return <Skeleton className="h-40 w-full" />;
+  if (!data || data.total === 0) return null;
+
+  const maxCount = Math.max(1, ...data.histogram.map((b) => b.passed + b.rejected));
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle className="flex items-center gap-2">
+          <BarChart3 className="h-5 w-5" />
+          Match-score distribution
+        </CardTitle>
+        <CardDescription>
+          Last 90 days, {data.total} attempts. Tune the match threshold into the gap between the rejected (red) and passed (green)
+          clusters — if the colours overlap, the threshold is cutting into real people.
+        </CardDescription>
+      </CardHeader>
+      <CardContent className="space-y-4">
+        <div className="flex items-end gap-1 overflow-x-auto rounded-lg border border-border bg-muted/30 p-3" style={{ minHeight: "7rem" }}>
+          {data.histogram.map((bucket) => {
+            const total = bucket.passed + bucket.rejected;
+            const height = total === 0 ? 2 : Math.max(6, Math.round((total / maxCount) * 88));
+            const passedShare = total === 0 ? 0 : bucket.passed / total;
+            return (
+              <div key={bucket.from} className="flex min-w-8 flex-1 flex-col items-center justify-end gap-1" title={`${bucket.from}–${bucket.to}: ${bucket.passed} passed, ${bucket.rejected} rejected`}>
+                <div className="flex w-full flex-col justify-end overflow-hidden rounded-sm" style={{ height }}>
+                  <div className="w-full bg-emerald-500/80" style={{ height: `${passedShare * 100}%` }} />
+                  <div className="w-full bg-red-500/70" style={{ height: `${(1 - passedShare) * 100}%` }} />
+                </div>
+                <span className="text-[10px] tabular-nums text-muted-foreground">{bucket.from.toFixed(2)}</span>
+              </div>
+            );
+          })}
+        </div>
+
+        <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+          {[
+            ["Flagged pending", data.flaggedPending],
+            ["Virtual camera", data.virtualCameraSuspected],
+            ["New network", data.unfamiliarNetwork],
+            ["Total checks", data.total]
+          ].map(([label, value]) => (
+            <div key={label} className="rounded-lg border border-border bg-muted/30 p-3 text-center">
+              <p className="text-lg font-bold tabular-nums">{value}</p>
+              <p className="text-xs text-muted-foreground">{label}</p>
+            </div>
+          ))}
+        </div>
+      </CardContent>
+    </Card>
   );
 }
 
@@ -291,9 +404,21 @@ function FaceReviewLog({ readOnly }: { readOnly: boolean }) {
                       <td className="p-2 text-muted-foreground">{new Date(a.createdAt).toLocaleString()}</td>
                       <td className="p-2 text-muted-foreground">{a.context}</td>
                       <td className="p-2">
-                        <Badge className={OUTCOME_TONE[a.outcome] ?? ""} variant="secondary">
-                          {a.outcome.replaceAll("_", " ").toLowerCase()}
-                        </Badge>
+                        <div className="flex flex-wrap items-center gap-1">
+                          <Badge className={OUTCOME_TONE[a.outcome] ?? ""} variant="secondary">
+                            {a.outcome.replaceAll("_", " ").toLowerCase()}
+                          </Badge>
+                          {a.virtualCameraSuspected && (
+                            <span title={`Suspected virtual camera${a.deviceLabel ? `: ${a.deviceLabel}` : ""}`}>
+                              <VideoOff className="h-3.5 w-3.5 text-destructive" />
+                            </span>
+                          )}
+                          {a.unfamiliarNetwork && (
+                            <span title="First time verifying from this network">
+                              <Wifi className="h-3.5 w-3.5 text-amber-500" />
+                            </span>
+                          )}
+                        </div>
                       </td>
                       <td className="p-2 tabular-nums">{a.similarity != null ? a.similarity.toFixed(3) : "—"}</td>
                       <td className="p-2 tabular-nums">{a.livenessScore != null ? a.livenessScore.toFixed(2) : "—"}</td>
@@ -350,6 +475,27 @@ function FaceReviewLog({ readOnly }: { readOnly: boolean }) {
 }
 
 function AttemptActions({ attempt, readOnly, onReview }: { attempt: FaceAttemptRow; readOnly: boolean; onReview: () => void }) {
+  const [aiOpen, setAiOpen] = useState(false);
+  const [aiResult, setAiResult] = useState<FaceReviewAiSummary | null>(null);
+
+  const aiSummary = useMutation({
+    mutationFn: () => faceApi.aiSummary(attempt.id),
+    onSuccess: (result) => {
+      setAiResult(result);
+      setAiOpen(true);
+    },
+    onError: (err: { response?: { data?: { message?: string } } }) =>
+      toast.error("Could not generate a summary", {
+        description: err?.response?.data?.message ?? "AI may be disabled for this workspace (Workspace Settings → AI)."
+      })
+  });
+
+  const RISK_TONE: Record<FaceReviewAiSummary["risk"], string> = {
+    LOW: "bg-emerald-500/10 text-emerald-600 dark:text-emerald-400",
+    MEDIUM: "bg-amber-500/10 text-amber-600 dark:text-amber-400",
+    HIGH: "bg-destructive/10 text-destructive"
+  };
+
   return (
     <div className="flex items-center justify-end gap-1">
       {attempt.hasImage && (
@@ -363,11 +509,49 @@ function AttemptActions({ attempt, readOnly, onReview }: { attempt: FaceAttemptR
           <Eye className="h-4 w-4" />
         </Button>
       )}
+      {!readOnly && (
+        <Button
+          variant="ghost"
+          size="icon"
+          className="h-9 w-9"
+          title="AI review summary — history, signals, and a recommendation (needs the AI toggle in the AI tab)"
+          disabled={aiSummary.isPending}
+          onClick={() => aiSummary.mutate()}
+        >
+          <Sparkles className={`h-4 w-4 ${aiSummary.isPending ? "animate-pulse" : ""}`} />
+        </Button>
+      )}
       {attempt.flaggedForReview && !readOnly && (
         <Button variant="outline" size="sm" onClick={onReview}>
           Mark reviewed
         </Button>
       )}
+
+      <Dialog open={aiOpen} onOpenChange={setAiOpen}>
+        <DialogContent className="w-[calc(100vw-2rem)] max-w-lg">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <Sparkles className="h-4 w-4 text-primary" />
+              AI review summary
+            </DialogTitle>
+            <DialogDescription>
+              Drafted from this person's attempt history and signals — metadata only, never images. The decision stays yours.
+            </DialogDescription>
+          </DialogHeader>
+          {aiResult && (
+            <div className="space-y-3 text-sm">
+              <Badge className={RISK_TONE[aiResult.risk]} variant="secondary">
+                {aiResult.risk} risk
+              </Badge>
+              <p>{aiResult.summary}</p>
+              <div className="rounded-lg border border-border bg-muted/30 p-3">
+                <p className="text-xs font-semibold uppercase text-muted-foreground">Recommendation</p>
+                <p className="mt-1">{aiResult.recommendation}</p>
+              </div>
+            </div>
+          )}
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

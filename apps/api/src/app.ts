@@ -208,7 +208,12 @@ app.use("/api/notifications", notificationRouter);
 app.use("/api/audit", auditRouter);
 app.use("/api/team", teamRouter);
 app.use("/api/settings", settingsRouter);
-app.use("/api/face", faceRouter);
+// Tighter than the global 300/min: every /verify costs ~150-400ms of CPU-bound wasm inference
+// PER FRAME, which makes unthrottled retries a self-inflicted DoS as much as a brute-force
+// surface. 60/min per IP comfortably covers honest use (status + challenge + two-frame verify
+// is ~4 requests per attempt, retries included) while capping what one client can burn to
+// well under a core.
+app.use("/api/face", rateLimit({ windowMs: 60_000, limit: 60, standardHeaders: true }), faceRouter);
 app.use("/api/email-templates", emailTemplatesRouter);
 // Bearer-API-key auth, not JWT — see middleware/public-api-auth.ts's header for why this is
 // still mounted after resolveTenant (unlike the CI/chat webhook receivers above) rather than

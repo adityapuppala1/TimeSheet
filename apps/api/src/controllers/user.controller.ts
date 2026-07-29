@@ -19,6 +19,7 @@ import { validate } from "../middleware/validate.js";
 import { audit } from "../services/audit.service.js";
 import { dispatchTransactional } from "../services/notify.service.js";
 import { templates } from "../services/mail-templates.js";
+import { findCoveredUnenrolledUserIds, notifyEnrollmentRequired } from "../services/face.service.js";
 import { getEffectiveSeatLimit } from "../services/plan-limits.service.js";
 import { hashPassword } from "../utils/security.js";
 
@@ -287,8 +288,26 @@ userRouter.patch("/:id", validate(patchSchema), async (req, res) => {
     }
     data.managerId = req.body.managerId ?? null;
   }
+
+  // Capture the before-state of the face flag so the enrollment prompt only fires on the
+  // false→true transition — not on every unrelated PATCH that happens to echo the field back.
+  const previous =
+    data.faceVerificationRequired === true
+      ? await prisma.user.findUnique({ where: { id: String(req.params.id) }, select: { faceVerificationRequired: true } })
+      : null;
+
   const user = await prisma.user.update({ where: { id: String(req.params.id) }, data, include: { role: true } });
   await audit(req.user!.id, "user.updated", "User", user.id, req.body);
+
+  // The person just became individually covered by the face policy — tell them now, not at
+  // their next blocked submission. notifyEnrollmentRequired no-ops unless the policy is live
+  // (feature enabled + an action requires it + plan entitlement) and they're unenrolled.
+  if (previous && !previous.faceVerificationRequired) {
+    findCoveredUnenrolledUserIds()
+      .then((ids) => (ids.includes(user.id) ? notifyEnrollmentRequired([user.id]) : 0))
+      .catch(() => undefined);
+  }
+
   res.json(user);
 });
 

@@ -91,6 +91,8 @@ export interface PlanTierLimitRow {
   aiMonthlyBudgetCeilingUsd: string;
   allowedSsoProviders: Array<SsoProvider>;
   allowedChatPlatforms: Array<ChatPlatform>;
+  /** Whether this tier includes face (identity) verification — Enterprise-only by seed default. */
+  faceVerificationEnabled: boolean;
 }
 
 export interface OrgAnalyticsSummary {
@@ -155,6 +157,7 @@ export const platformAdminPlanTierApi = {
       aiMonthlyBudgetCeilingUsd: number;
       allowedSsoProviders: Array<SsoProvider>;
       allowedChatPlatforms: Array<ChatPlatform>;
+      faceVerificationEnabled: boolean;
     }>
   ) => (await platformAdminApi.patch<PlanTierLimitRow>(`/plan-tier-limits/${tier}`, payload)).data
 };

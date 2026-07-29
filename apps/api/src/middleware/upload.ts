@@ -94,7 +94,9 @@ const allowedCaptureMimes = new Set(["image/png", "image/jpeg", "image/jpg"]);
 
 export const faceCaptureUpload = multer({
   storage: multer.memoryStorage(),
-  limits: { fileSize: 4 * 1024 * 1024, files: 1 },
+  // files: 2 — the challenge–response flow uploads [neutral, gesture]. Enrollment still calls
+  // .single(), whose maxCount of 1 is enforced by the route regardless of this instance cap.
+  limits: { fileSize: 4 * 1024 * 1024, files: 2 },
   fileFilter: (_req, file, cb) => {
     const ext = path.extname(file.originalname).toLowerCase();
     // The browser's canvas.toBlob() gives us a real filename+mime; a missing extension is fine

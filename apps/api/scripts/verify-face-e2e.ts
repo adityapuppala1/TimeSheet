@@ -38,9 +38,12 @@ async function patchSettings(token: string, body: Record<string, unknown>) {
   return res.json();
 }
 
-async function postCapture(token: string, route: string, jpeg: Buffer, fields: Record<string, string>) {
+async function postCapture(token: string, route: string, jpeg: Buffer | Buffer[], fields: Record<string, string>) {
   const form = new FormData();
-  form.append("capture", new Blob([new Uint8Array(jpeg)], { type: "image/jpeg" }), "capture.jpg");
+  const frames = Array.isArray(jpeg) ? jpeg : [jpeg];
+  for (const [index, frame] of frames.entries()) {
+    form.append("capture", new Blob([new Uint8Array(frame)], { type: "image/jpeg" }), `capture-${index}.jpg`);
+  }
   for (const [k, v] of Object.entries(fields)) form.append(k, v);
   const res = await fetch(`${BASE}/api${route}`, { method: "POST", headers: auth(token), body: form });
   return { status: res.status, body: await res.json().catch(() => ({})) };
@@ -68,11 +71,14 @@ async function main() {
   check("not required when disabled", status.requiredForTimesheet === false);
 
   console.log("\n=== 2. enable for ALL, employee now required ===");
-  await patchSettings(admin, { enabled: true, requireForTimesheet: true, enforcementMode: "ALL" });
+  // challengeEnabled off for the single-frame sections below; the challenge flow gets its own
+  // dedicated section (7b) that turns it back on.
+  await patchSettings(admin, { enabled: true, requireForTimesheet: true, enforcementMode: "ALL", challengeEnabled: false });
   status = await (await fetch(`${BASE}/api/face/status`, { headers: auth(employee) })).json();
   check("required after enabling", status.requiredForTimesheet === true);
   check("not yet enrolled", status.enrolled === false);
   check("consent text present", typeof status.consentText === "string" && status.consentText.length > 20);
+  check("plan entitlement reported (default org is ENTERPRISE)", status.allowedByPlan === true);
 
   console.log("\n=== 3. timesheet submit is BLOCKED without verification ===");
   const slotHour = 5 + Math.floor(Math.random() * 14);
@@ -116,14 +122,101 @@ async function main() {
   const verificationId = pass.body?.verificationId;
   check("returned a verification id", typeof verificationId === "string");
 
-  console.log("\n=== 8. submit WITH the verification succeeds ===");
-  const ok = await fetch(`${BASE}/api/timesheets/submit`, {
+  console.log("\n=== 7b. challenge–response (anti-injection) ===");
+  await patchSettings(admin, { challengeEnabled: true });
+  const challengeRes = await fetch(`${BASE}/api/face/challenge`, {
     method: "POST",
     headers: { ...auth(employee), "content-type": "application/json" },
-    body: JSON.stringify({ ...submitBody, faceVerificationId: verificationId })
+    body: JSON.stringify({ context: "TIMESHEET" })
   });
-  const okBody = await ok.json().catch(() => ({}));
-  check("submit accepted", ok.status === 201 || ok.status === 200, `status ${ok.status} ${JSON.stringify(okBody).slice(0, 200)}`);
+  const challenge = await challengeRes.json();
+  check("challenge issued", challengeRes.status === 201 && typeof challenge.challengeId === "string", JSON.stringify(challenge).slice(0, 120));
+  check("challenge names an instruction", ["TURN_LEFT", "TURN_RIGHT", "LOOK_UP"].includes(challenge.instruction));
+
+  // No challengeId at all → refused outright, even with a matching live face.
+  const noChallenge = await postCapture(employee, "/face/verify", personA, { context: "TIMESHEET" });
+  check("verify without a challenge is refused", noChallenge.body?.outcome === "CHALLENGE_FAILED", `outcome=${noChallenge.body?.outcome}`);
+
+  // A static replay — two IDENTICAL frames — cannot satisfy any movement instruction. This is
+  // the exact defeat of a virtual camera looping a recorded still/video of the right person.
+  const staticReplay = await postCapture(employee, "/face/verify", [personA, personA], {
+    context: "TIMESHEET",
+    challengeId: challenge.challengeId
+  });
+  check("static two-frame replay fails the pose check", staticReplay.body?.outcome === "CHALLENGE_FAILED", `outcome=${staticReplay.body?.outcome}`);
+
+  // Challenges are single-use: the redeem above spent it, a second try must not work.
+  const reusedChallenge = await postCapture(employee, "/face/verify", [personA, personA], {
+    context: "TIMESHEET",
+    challengeId: challenge.challengeId
+  });
+  check("a challenge cannot be redeemed twice", reusedChallenge.body?.outcome === "CHALLENGE_FAILED");
+
+  await patchSettings(admin, { challengeEnabled: false });
+
+  console.log("\n=== 7c. virtual-camera signal is recorded and flagged, never blocking ===");
+  const obsPass = await postCapture(employee, "/face/verify", personA, {
+    context: "TIMESHEET",
+    deviceLabel: "OBS Virtual Camera"
+  });
+  check("suspected virtual camera still PASSES (signal, not verdict)", obsPass.body?.outcome === "PASSED", `outcome=${obsPass.body?.outcome}`);
+  const flaggedRows = await (await fetch(`${BASE}/api/face/attempts?flaggedOnly=true&take=10`, { headers: auth(admin) })).json();
+  const obsRow = Array.isArray(flaggedRows) ? flaggedRows.find((r: any) => r.virtualCameraSuspected) : null;
+  check("…but lands in the flagged review queue with the device label", Boolean(obsRow && obsRow.deviceLabel === "OBS Virtual Camera"));
+
+  console.log("\n=== 8. submit WITH the verification succeeds ===");
+  // Re-runs of this script (and other suites) leave real rows on today's date, so a random
+  // hour can genuinely collide (409 overlap). The verification id survives a 409 — the gate
+  // consumes it only ONCE... actually no: consumeVerification runs BEFORE the overlap check,
+  // so a 409 has already spent the id. Each retry therefore needs a fresh verification.
+  let ok: Response | null = null;
+  let okBody: any = {};
+  let retryVerificationId = verificationId;
+  for (let attempt = 0; attempt < 8; attempt++) {
+    const hour = attempt === 0 ? slotHour : 5 + Math.floor(Math.random() * 14);
+    const minute = attempt === 0 ? 0 : [0, 15, 30][Math.floor(Math.random() * 3)];
+    ok = await fetch(`${BASE}/api/timesheets/submit`, {
+      method: "POST",
+      headers: { ...auth(employee), "content-type": "application/json" },
+      body: JSON.stringify({
+        ...submitBody,
+        startTime: `${String(hour).padStart(2, "0")}:${String(minute).padStart(2, "0")}`,
+        endTime: `${String(hour).padStart(2, "0")}:${String(minute + 14).padStart(2, "0")}`,
+        faceVerificationId: retryVerificationId
+      })
+    });
+    okBody = await ok.json().catch(() => ({}));
+    if (ok.status !== 409) break;
+    // Slot collision spent the verification — take a fresh one for the next try.
+    const fresh = await postCapture(employee, "/face/verify", personA, { context: "TIMESHEET" });
+    retryVerificationId = fresh.body?.verificationId;
+  }
+  check("submit accepted", ok !== null && (ok.status === 201 || ok.status === 200), `status ${ok?.status} ${JSON.stringify(okBody).slice(0, 200)}`);
+
+  console.log("\n=== 8b. the submitted row carries the verified badge ===");
+  const myRows = await (await fetch(`${BASE}/api/timesheets`, { headers: auth(employee) })).json();
+  const submittedRow = Array.isArray(myRows) ? myRows.find((r: any) => r.id === okBody.id) : null;
+  check("list reports identityVerified on the row", submittedRow?.identityVerified === true, JSON.stringify({ found: Boolean(submittedRow), v: submittedRow?.identityVerified }));
+
+  console.log("\n=== 8c. approval gate checks the APPROVER ===");
+  await patchSettings(admin, { requireForApproval: true });
+  const manager = await login("manager@timesheet.local", "Admin@12345");
+  const approveBlocked = await fetch(`${BASE}/api/timesheets/${okBody.id}/approve`, {
+    method: "PATCH",
+    headers: { ...auth(manager), "content-type": "application/json" },
+    body: JSON.stringify({})
+  });
+  check("approve without verification rejected with 428", approveBlocked.status === 428, `got ${approveBlocked.status}`);
+
+  // The employee's PASSED timesheet verification must not be spendable by the manager for an
+  // approval — wrong user AND wrong context.
+  const wrongOwner = await fetch(`${BASE}/api/timesheets/${okBody.id}/approve`, {
+    method: "PATCH",
+    headers: { ...auth(manager), "content-type": "application/json" },
+    body: JSON.stringify({ faceVerificationId: verificationId })
+  });
+  check("someone else's verification is refused for approval", wrongOwner.status === 428, `got ${wrongOwner.status}`);
+  await patchSettings(admin, { requireForApproval: false });
 
   console.log("\n=== 9. the SAME verification cannot be replayed ===");
   const replay = await fetch(`${BASE}/api/timesheets/submit`, {
@@ -168,6 +261,21 @@ async function main() {
   const forbidden = await fetch(`${BASE}/api/face/attempts`, { headers: auth(employee) });
   check("employee blocked from log", forbidden.status === 403, `got ${forbidden.status}`);
 
+  console.log("\n=== 13b. stats + self-service export ===");
+  const stats = await (await fetch(`${BASE}/api/face/stats`, { headers: auth(admin) })).json();
+  check("stats totals populated", typeof stats.total === "number" && stats.total > 0, `total=${stats.total}`);
+  check("stats histogram has buckets", Array.isArray(stats.histogram) && stats.histogram.length > 0);
+  const statsForbidden = await fetch(`${BASE}/api/face/stats`, { headers: auth(employee) });
+  check("stats is admin-only", statsForbidden.status === 403, `got ${statsForbidden.status}`);
+
+  const exported = await (await fetch(`${BASE}/api/face/export`, { headers: auth(employee) })).json();
+  check("export includes the consent record", typeof exported?.enrollment?.consentText === "string");
+  check("export lists the caller's attempts", Array.isArray(exported?.attempts) && exported.attempts.length > 0);
+  check(
+    "export never contains the biometric template or file paths",
+    !JSON.stringify(exported).includes("encryptedEmbedding") && !JSON.stringify(exported).includes("imagePath")
+  );
+
   console.log("\n=== 14. self-service delete removes the enrollment ===");
   const del = await fetch(`${BASE}/api/face/enrollment`, { method: "DELETE", headers: auth(employee) });
   check("deleted", del.status === 200, `status ${del.status}`);
@@ -179,6 +287,8 @@ async function main() {
     enabled: original.enabled,
     requireForTimesheet: original.requireForTimesheet,
     requireForTicket: original.requireForTicket,
+    requireForApproval: original.requireForApproval,
+    challengeEnabled: original.challengeEnabled,
     enforcementMode: original.enforcementMode,
     matchThreshold: original.matchThreshold,
     antispoofThreshold: original.antispoofThreshold,

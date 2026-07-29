@@ -37,3 +37,18 @@ export async function getAllowedChatPlatforms(orgId: string): Promise<string[]> 
   const { tierLimit } = await getOrgAndTierLimit(orgId);
   return tierLimit.allowedChatPlatforms as string[];
 }
+
+/**
+ * Whether this org's tier includes face (identity) verification — Enterprise-only by seed
+ * default. Two DIFFERENT failure directions hang off this one boolean, deliberately:
+ * - configuration/enrollment/verification fail CLOSED (403 — you can't start using a feature
+ *   your plan doesn't include), while
+ * - enforcement on submissions fails OPEN (isFaceVerificationRequired returns false), because a
+ *   lapsed payment must stop DEMANDING face checks, not lock a whole workforce out of logging
+ *   their own time.
+ * Getting those backwards turns a billing event into a company-wide outage.
+ */
+export async function isFaceVerificationAllowed(orgId: string): Promise<boolean> {
+  const { tierLimit } = await getOrgAndTierLimit(orgId);
+  return Boolean(tierLimit.faceVerificationEnabled);
+}

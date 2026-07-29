@@ -21,6 +21,7 @@ import {
   Pencil,
   Plus,
   RotateCcw,
+  ShieldCheck,
   ShieldX,
   Sparkles,
   Trash2,
@@ -68,6 +69,7 @@ import { toast } from "../components/ui/toaster";
 import { Tooltip, TooltipContent, TooltipTrigger } from "../components/ui/tooltip";
 import { computeTrend } from "../lib/trend";
 import {
+  faceApi,
   fileUrl,
   projectApi,
   reportApi,
@@ -76,6 +78,8 @@ import {
   type ProjectAssignmentMember,
   type UserRow
 } from "../services/api";
+import { FaceVerificationDialog } from "../components/FaceVerificationDialog";
+import { useFaceStatus } from "../lib/use-face-status";
 import { useAuthStore } from "../store/auth";
 
 const roles = ["SUPER_ADMIN", "ADMIN", "MANAGER", "TEAM_LEAD", "EMPLOYEE"];
@@ -1116,13 +1120,27 @@ export function ApprovalsPage() {
   const [rejectReason, setRejectReason] = useState("");
 
   const approve = useMutation({
-    mutationFn: timesheetApi.approve,
+    mutationFn: ({ id, faceVerificationId }: { id: string; faceVerificationId?: string }) =>
+      timesheetApi.approve(id, faceVerificationId),
     onSuccess: () => {
       toast.success("Approved", { description: "Employee will receive an in-app + email confirmation." });
       queryClient.invalidateQueries({ queryKey: ["timesheets"] });
     },
     onError: (err: any) => toast.error("Approval failed", { description: serverMessage(err, "Try again.") })
   });
+
+  // Face (identity) verification on the APPROVER, when the workspace requires it — approval is
+  // where hours become payable. The row is parked while the check runs. Rejection is ungated
+  // (see the server-side comment in timesheet.controller.ts).
+  const faceStatus = useFaceStatus();
+  const [pendingApproveId, setPendingApproveId] = useState<string | null>(null);
+  const requestApprove = (id: string) => {
+    if (faceStatus.data?.requiredForApproval) {
+      setPendingApproveId(id);
+      return;
+    }
+    approve.mutate({ id });
+  };
   const reject = useMutation({
     mutationFn: ({ id, reason }: { id: string; reason: string }) => timesheetApi.reject(id, reason),
     onSuccess: () => {
@@ -1155,12 +1173,35 @@ export function ApprovalsPage() {
       },
       { accessorKey: "status", header: "Status", cell: (info) => <Badge variant="warning">{info.getValue() as string}</Badge> },
       {
+        id: "identity",
+        header: "Identity",
+        enableSorting: false,
+        // Three distinguishable states so absence is never ambiguous: verified (face check spent
+        // on this row), "unverified" (the policy covers this person but the row predates it or
+        // slipped through a gap — worth a manager's glance), or a quiet dash (not covered).
+        cell: ({ row }) =>
+          row.original.identityVerified ? (
+            <Badge
+              variant="success"
+              title={row.original.identityVerifiedAt ? `Face check passed ${new Date(row.original.identityVerifiedAt).toLocaleString()}` : undefined}
+            >
+              <ShieldCheck className="mr-1 h-3 w-3" />Verified
+            </Badge>
+          ) : row.original.identityVerificationApplies ? (
+            <Badge variant="outline" title="This person is covered by face verification, but this entry carries no identity check (it may predate the policy).">
+              Unverified
+            </Badge>
+          ) : (
+            <span className="text-muted-foreground">—</span>
+          )
+      },
+      {
         id: "decision",
         header: () => <span className="block text-right">Decision</span>,
         enableSorting: false,
         cell: ({ row }) => (
           <div className="flex justify-end gap-2">
-            <Button variant="success" size="sm" onClick={() => approve.mutate(row.original.id)}>
+            <Button variant="success" size="sm" onClick={() => requestApprove(row.original.id)}>
               <Check className="h-4 w-4" />Approve
             </Button>
             <Button variant="outline" size="sm" onClick={() => setRejectTarget({ id: row.original.id, user: row.original.user?.name })}>
@@ -1170,7 +1211,8 @@ export function ApprovalsPage() {
         )
       }
     ],
-    [approve]
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- requestApprove closes over stable refs
+    [approve, faceStatus.data?.requiredForApproval]
   );
 
   return (
@@ -1216,6 +1258,18 @@ export function ApprovalsPage() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      <FaceVerificationDialog
+        open={pendingApproveId !== null}
+        onOpenChange={(open) => !open && setPendingApproveId(null)}
+        context="APPROVAL"
+        actionLabel="approve this timesheet"
+        onVerified={(verificationId) => {
+          const id = pendingApproveId;
+          setPendingApproveId(null);
+          if (id) approve.mutate({ id, faceVerificationId: verificationId });
+        }}
+      />
     </Workspace>
   );
 }

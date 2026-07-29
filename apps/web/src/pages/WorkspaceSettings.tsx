@@ -42,6 +42,7 @@ import {
   PlugZap,
   Plus,
   Save,
+  ScanFace,
   ShieldAlert,
   ShieldCheck,
   ShieldX,
@@ -117,7 +118,16 @@ const emailRows: ToggleRow[] = [
   { key: "emailDailyEscalation", label: "Next-morning escalation (9 AM)", description: "Email both the employee and their manager when yesterday's log was missed.", icon: <Timer className="h-4 w-4 text-destructive" /> },
   { key: "emailDeadlineReminder", label: "Monthly deadline reminder", description: "Email employees a few days before the monthly cutoff.", icon: <CalendarClock className="h-4 w-4 text-warning" /> },
   { key: "emailWeeklyDigest", label: "Weekly digest", description: "AI-authored Monday-morning recap of your ticket and timesheet activity. Requires the AI weekly digest toggle in the AI tab.", icon: <BellRing className="h-4 w-4 text-info" /> },
-  { key: "emailTicketNeedsReview", label: "Email-sourced ticket needs review", description: "Alert project admins/managers when an inbound email is classified with low confidence.", icon: <Sparkles className="h-4 w-4 text-warning" /> }
+  { key: "emailTicketNeedsReview", label: "Email-sourced ticket needs review", description: "Alert project admins/managers when an inbound email is classified with low confidence.", icon: <Sparkles className="h-4 w-4 text-warning" /> },
+  // Face (identity) verification lifecycle — none of these ever carry a captured image or a
+  // score; they link into the app, where authorization is checked.
+  { key: "emailFaceEnrollmentRequired", label: "Face enrollment required", description: "Tell someone the identity policy now covers them — before a blocked submission does.", icon: <ScanFace className="h-4 w-4 text-primary" /> },
+  { key: "emailFaceEnrollmentReminder", label: "Face enrollment reminder", description: "Daily follow-up (at most one per 3 days) while a covered person hasn't enrolled.", icon: <ScanFace className="h-4 w-4 text-warning" /> },
+  { key: "emailFaceVerificationFlagged", label: "Identity check flagged", description: "Alert the person's manager and admins when repeated failed checks flag an attempt for review.", icon: <ShieldAlert className="h-4 w-4 text-destructive" /> },
+  { key: "emailFaceReviewOverdue", label: "Identity review overdue", description: "Nudge admins when flagged attempts sit unreviewed for 48+ hours.", icon: <Hourglass className="h-4 w-4 text-warning" /> },
+  { key: "emailFaceDataDeleted", label: "Face data deleted", description: "Confirm to the person when their biometric data is deleted (self-service or by an admin).", icon: <ShieldCheck className="h-4 w-4 text-success" /> },
+  { key: "emailFaceEntitlementLost", label: "Face verification plan change", description: "Tell admins when the plan stops including face verification and the purge grace window starts.", icon: <ShieldX className="h-4 w-4 text-destructive" /> },
+  { key: "emailIdentityWeeklyDigest", label: "Weekly identity digest", description: "Monday-morning recap of identity checks, failures, and pending reviews for every admin. Stats only — no AI.", icon: <BellRing className="h-4 w-4 text-info" /> }
 ];
 
 const HOURS_24 = Array.from({ length: 24 }, (_, i) => i);
@@ -1050,7 +1060,8 @@ function AISettingsCard({ readOnly }: { readOnly: boolean }) {
     { key: "aiPrReviewSummaryEnabled", label: "AI PR-review summaries", description: "AI-authored summary comment on a ticket when its linked PR opens on a connected GitHub repo (Security & DevOps tab)." },
     { key: "findingTriageEnabled", label: "Security finding exploitability triage", description: "AI classifies each CRITICAL/HIGH ingested finding as a true/false positive and suggests a fix (Security & DevOps tab, and the ticket's Security tab if attached)." },
     { key: "securityWeeklyDigestEnabled", label: "AI weekly security digest", description: "Monday-morning org-wide security recap (open findings, risk score, tickets past SLA) emailed to every admin. Also needs the matching toggle in Reminders & schedule." },
-    { key: "statusReportEnabled", label: "AI-drafted status reports", description: "On-demand \"generate a stakeholder update\" button on a project's Reports tab — plain-language recap of tickets and hours for that project." }
+    { key: "statusReportEnabled", label: "AI-drafted status reports", description: "On-demand \"generate a stakeholder update\" button on a project's Reports tab — plain-language recap of tickets and hours for that project." },
+    { key: "faceReviewSummaryEnabled", label: "AI identity-review summaries", description: "One-click review brief for a flagged face-verification attempt (Face verification tab) — attempt history, device/network signals, and a recommendation. Uses attempt metadata only; captured images never leave this server." }
   ];
 
   return (

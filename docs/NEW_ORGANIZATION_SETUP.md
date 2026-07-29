@@ -219,6 +219,13 @@ under full-suite load. Not urgent to fix (it's test flakiness, not a production 
 addressed, the fix is either raising that assertion's timeout or switching the describe block to
 a shared `storageState` fixture like the rest of the suite.
 
+The same full-suite-load class of flake has once (2026-07-29) hit
+`responsive › no horizontal overflow with a long ticket title open in the detail sheet` — the
+failure was a `TypeError` in the test's own raw-HTTP setup (an API call rejected under load, so
+`projects[0]` was undefined), not an actual overflow, and it passes in isolation every time. As
+mitigation, the face-status polling every app page previously did on mount was consolidated
+behind a shared 60s-stale query (`lib/use-face-status.ts`) to cut per-page request pressure.
+
 The e2e suite covers 5 spec files (auth, responsive, settings, tickets, timesheet) — broad UI/flow
 coverage, but it never exercised the AI/billing/SCIM services directly.
 

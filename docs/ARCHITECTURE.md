@@ -170,31 +170,53 @@ or doesn't.
 
 ### 3.7 Face (identity) verification — server-authoritative by construction
 
-Optional, off by default. Confirms the person submitting a timesheet/ticket is the account
-holder. Three design constraints drive the whole shape of it:
+Optional, off by default, Enterprise-tier gated. Confirms the person submitting a
+timesheet/ticket — or moving a ticket through its workflow, or **approving** a timesheet — is
+the account holder. Four design constraints drive the whole shape of it:
 
-1. **Every decision is made server-side.** The browser only uploads a JPEG — there is no
+1. **Every decision is made server-side.** The browser only uploads JPEGs — there is no
    face-matching code in the web bundle at all. This is not a performance choice: a client that
    decides its own verification outcome is not a security control, because any employee could
    POST a "passed" result from devtools. `services/face.service.ts` owns detection, anti-spoof,
-   liveness, and comparison.
+   liveness, pose measurement, and comparison.
 2. **Anti-spoof is checked BEFORE the match.** Otherwise holding a printed photo of the right
    colleague up to the webcam passes on similarity alone — the exact attack the feature exists
    to stop.
 3. **A passed check is a single-use, short-lived token.** `POST /api/face/verify` returns a
    `verificationId` that `consumeVerification()` redeems at submit time — same user, same
    context, not already spent, not expired. A conditional `updateMany` arbitrates concurrent
-   double-submits, so exactly one wins.
+   double-submits, so exactly one wins. Gates on CREATE routes consume *before* the row exists
+   and bind the attempt to it afterwards (`bindVerificationToRecord`) — that binding is what
+   the "Identity verified" badges join on.
+4. **Anti-injection is challenge–response, not frame forensics.** A virtual camera replaying a
+   recorded video defeats per-frame anti-spoof honestly (each frame IS a live-looking face). So
+   the server issues a random head-movement instruction (single-use, 90s) and measures the
+   actual pose delta between a neutral and a gesture frame — a movement chosen *after* the
+   recording existed is the one thing a replay cannot perform. Device-label and
+   network-novelty heuristics are recorded as review *signals*, never verdicts (both are
+   client-influenced and spoofable; a suspected virtual camera flags the attempt for human
+   review even when it passes).
+
+**The plan entitlement splits its failure directions deliberately**
+(`plan-limits.service.ts#isFaceVerificationAllowed`): configuration/enrollment/verification
+fail **closed** (403 — no new biometric collection without the entitlement), while enforcement
+on submissions fails **open** (`isFaceVerificationRequired` returns false) — a lapsed payment
+must stop *demanding* checks, not lock a workforce out of logging time. Downgrade data handling
+(30-day grace, then purge) lives in the retention worker.
 
 Biometric data is treated as its own category throughout: templates are AES-256-GCM encrypted
 (same helper as API keys), and captured images live **outside** the public `/uploads` static
 mount — that mount has no authentication at all, so anything under it is world-readable to
 anyone who guesses a filename. Face imagery is served only by `GET /api/face/image/...`, which
-checks session, tenant, and subject-or-admin. `workers/face-retention.worker.ts` enforces the
-retention window, because a retention policy nothing enforces is just a document.
+checks session, tenant, and subject-or-admin, and is stored org-scoped
+(`face/<orgId>/<userId>/`) so an org's imagery can be purged as a directory.
+`workers/face-retention.worker.ts` runs the whole daily lifecycle — image retention, downgrade
+grace/purge, enrollment reminders, overdue-review nudges, challenge cleanup — because a policy
+nothing enforces is just a document; `workers/identity-weekly-digest.worker.ts` sends admins
+the deterministic Monday recap (no AI writes emails about named employees' identity checks).
 
-See [FACE_VERIFICATION.md](FACE_VERIFICATION.md) for calibration, thresholds, and the
-regulatory obligations (GDPR Art.9, Illinois BIPA, India DPDP) it carries.
+See [FACE_VERIFICATION.md](FACE_VERIFICATION.md) for calibration, thresholds, the threat-model
+table, and the regulatory obligations (GDPR Art.9, Illinois BIPA, India DPDP) it carries.
 
 ---
 
@@ -290,9 +312,10 @@ service depends on `config/prisma.ts`; not repeated below unless it's the point 
 
 | File | Purpose | Depends on | Depended on by |
 |---|---|---|---|
-| `services/face.service.ts` | The one face choke point — lazy model loading, embedding extraction, anti-spoof/liveness scoring, match comparison, and the enforcement helpers (`isFaceVerificationRequired`, `consumeVerification`). Its header documents three non-obvious loading workarounds that must not be "simplified" away. | `@vladmandic/human` (node-wasm build), `@tensorflow/tfjs-*`, `sharp`, `utils/encryption.ts` | `controllers/face.controller.ts`, `timesheet.controller.ts`, `ticket.controller.ts`, `workers/face-retention.worker.ts` |
-| `controllers/face.controller.ts` | HTTP surface: consent-gated enrollment, verification, self-service + admin deletion, the admin review log, and authenticated image streaming. | `face.service.ts`, `middleware/upload.ts` | `app.ts` |
-| `workers/face-retention.worker.ts` | Daily 03:15 purge of captured images past `imageRetentionDays` — deletes the file and nulls the reference, keeping the (non-biometric) attempt record as audit trail. | `run-for-every-org.ts`, `face.service.ts` | `server.ts` |
+| `services/face.service.ts` | The one face choke point — lazy model loading, embedding extraction, anti-spoof/liveness scoring, pose measurement, match comparison, the enforcement helpers (`isFaceVerificationRequired`, `consumeVerification`, `bindVerificationToRecord`), the challenge–response primitives (`issueChallenge`/`redeemChallenge`/`verifyChallengePose`), the plan-entitlement asserts, the badge decorator, and the enrollment-notification helper. Its header documents three non-obvious loading workarounds that must not be "simplified" away. | `@vladmandic/human` (node-wasm build), `@tensorflow/tfjs-*`, `sharp`, `utils/encryption.ts`, `plan-limits.service.ts`, `notify.service.ts` | `controllers/face.controller.ts`, `timesheet.controller.ts`, `ticket.controller.ts`, `settings.controller.ts`, `user.controller.ts`, both face workers |
+| `controllers/face.controller.ts` | HTTP surface: consent-gated enrollment, challenge issuance, multi-frame verification with review signals, self-service + admin deletion, data-subject export, the admin review log + AI summary + stats histogram, and authenticated image streaming. | `face.service.ts`, `ai.service.ts`, `middleware/upload.ts` | `app.ts` (behind its own 60/min rate limit) |
+| `workers/face-retention.worker.ts` | The daily 03:15 face lifecycle: image retention purge, downgrade grace/purge (`entitlementLostAt` → 30 days → purge + disable), enrollment reminders, overdue-review nudges, expired-challenge cleanup. | `run-for-every-org.ts`, `face.service.ts`, `notify.service.ts` | `server.ts` |
+| `workers/identity-weekly-digest.worker.ts` | Monday 08:45 deterministic identity-assurance recap to every ADMIN/SUPER_ADMIN — deliberately not AI-generated. | `run-for-every-org.ts`, `face.service.ts`, `notify.service.ts` | `server.ts` |
 | `middleware/upload.ts#preserveTenantContext` | Re-enters the tenant `AsyncLocalStorage` store after multer. **Load-bearing for every upload route, not just face** — see its header for the size-dependent bug it fixes. | `config/tenant-context.ts` | `auth`, `ticket`, `timesheet`, `face` controllers |
 
 ### Security assessment ingestion & outbound mail

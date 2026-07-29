@@ -47,13 +47,17 @@ async function main() {
   });
   await controlPrisma.planTierLimit.upsert({
     where: { tier: "ENTERPRISE" },
-    update: {},
+    // The one targeted `update`: existing deployments predate the faceVerificationEnabled
+    // column (added Enterprise-only), and without this a re-seed would leave their ENTERPRISE
+    // row on the column default (false) — silently disabling a feature that worked yesterday.
+    update: { faceVerificationEnabled: true },
     create: {
       tier: "ENTERPRISE",
       seatLimit: 1_000_000,
       aiMonthlyBudgetCeilingUsd: 5000,
       allowedSsoProviders: ["GOOGLE", "MICROSOFT", "SAML", "LDAP"],
-      allowedChatPlatforms: ["SLACK", "MICROSOFT_TEAMS", "GOOGLE_CHAT", "TELEGRAM"]
+      allowedChatPlatforms: ["SLACK", "MICROSOFT_TEAMS", "GOOGLE_CHAT", "TELEGRAM"],
+      faceVerificationEnabled: true
     }
   });
   console.log("Seeded PlanTierLimit rows (STARTER, TEAM, ENTERPRISE).");

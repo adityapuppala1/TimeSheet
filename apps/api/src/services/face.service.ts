@@ -30,6 +30,7 @@
  * WHO calls this: controllers/face.controller.ts (enroll/verify), and the timesheet/ticket
  * controllers indirectly via `consumeVerification`.
  */
+import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -37,8 +38,12 @@ import { createRequire } from "node:module";
 import sharp from "sharp";
 import { env } from "../config/env.js";
 import { prisma } from "../config/prisma.js";
+import { requireTenantContext } from "../config/tenant-context.js";
 import { AppError } from "../middleware/error.js";
 import { decryptSecret, encryptSecret } from "../utils/encryption.js";
+import { isFaceVerificationAllowed } from "./plan-limits.service.js";
+import { dispatchNotification } from "./notify.service.js";
+import { templates } from "./mail-templates.js";
 
 const require = createRequire(import.meta.url);
 
@@ -55,6 +60,7 @@ export type FaceOutcome =
   | "MULTIPLE_FACES"
   | "NO_MATCH"
   | "SPOOF_SUSPECTED"
+  | "CHALLENGE_FAILED"
   | "NOT_ENROLLED"
   | "ERROR";
 
@@ -65,6 +71,11 @@ export interface FaceAnalysis {
   /** Human's liveness score — higher means "a live person was in front of the lens". */
   livenessScore: number;
   faceCount: number;
+  /** Head rotation in radians from Human's facemesh (0 when it couldn't be computed). Used by
+   *  the challenge–response check, which compares the DELTA between two frames — so the
+   *  absolute sign convention doesn't need to be trusted (see verifyChallengePose). */
+  yaw: number;
+  pitch: number;
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -184,7 +195,7 @@ export async function analyzeFace(imageBuffer: Buffer): Promise<FaceAnalysis> {
     const result = await human.detect(batched);
     const faces = (result.face ?? []).filter((f: { embedding?: number[] }) => f.embedding?.length);
 
-    if (faces.length === 0) return { embedding: [], antispoofReal: 0, livenessScore: 0, faceCount: 0 };
+    if (faces.length === 0) return { embedding: [], antispoofReal: 0, livenessScore: 0, faceCount: 0, yaw: 0, pitch: 0 };
 
     // Largest face wins when several are present — the subject is the one closest to the lens.
     // `faceCount` is still reported so the caller can reject a multi-person frame outright
@@ -194,11 +205,14 @@ export async function analyzeFace(imageBuffer: Buffer): Promise<FaceAnalysis> {
       return area(candidate) > area(biggest) ? candidate : biggest;
     }, faces[0]);
 
+    const angle = primary.rotation?.angle ?? {};
     return {
       embedding: Array.from(primary.embedding as number[]),
       antispoofReal: typeof primary.real === "number" ? primary.real : 0,
       livenessScore: typeof primary.live === "number" ? primary.live : 0,
-      faceCount: faces.length
+      faceCount: faces.length,
+      yaw: Number.isFinite(angle.yaw) ? angle.yaw : 0,
+      pitch: Number.isFinite(angle.pitch) ? angle.pitch : 0
     };
   } finally {
     human.tf.dispose(batched);
@@ -228,10 +242,11 @@ export async function getFaceSettings() {
 
 export const DEFAULT_CONSENT_TEXT =
   "I consent to my employer capturing and processing an image of my face to verify my identity " +
-  "when I submit timesheets or tickets. I understand a mathematical representation (template) of " +
-  "my face will be stored securely for this purpose, that captured images are retained only for " +
-  "the period shown above, and that I may withdraw this consent at any time — which permanently " +
-  "deletes my stored face data.";
+  "when I perform protected actions in this workspace, such as submitting timesheets, creating " +
+  "or progressing tickets, or approving timesheets. I understand a mathematical representation " +
+  "(template) of my face will be stored securely for this purpose, that captured images are " +
+  "retained only for the period shown above, and that I may withdraw this consent at any time " +
+  "— which permanently deletes my stored face data.";
 
 /** Face images NEVER go under the public `/uploads` static mount: app.ts serves that with no
  *  authentication at all, so anyone who guesses a filename could read them cross-tenant. They
@@ -240,8 +255,25 @@ export function faceStorageDir(): string {
   return path.join(env.UPLOAD_DIR, "face");
 }
 
+/** Org-scoped: face/<orgId>/<userId>/. The orgId level exists so one organization's biometric
+ *  imagery can be located (and purged) as a unit — when an org is deleted or its entitlement
+ *  grace period ends, "remove this org's face data" must be a directory, not a DB join. */
+function userFaceDir(userId: string): string {
+  return path.join(faceStorageDir(), requireTenantContext().orgId, userId);
+}
+
+/** Removes a user's stored face imagery — both the current org-scoped location and the legacy
+ *  pre-org-scoping one (face/<userId>/), so deletion honours data written by older versions. */
+export async function removeUserFaceDirectories(userId: string): Promise<void> {
+  const candidates = [userFaceDir(userId), path.join(faceStorageDir(), userId)];
+  for (const dir of candidates) {
+    // Best-effort: a locked/missing directory must not fail the user's deletion request.
+    await fs.rm(dir, { recursive: true, force: true }).catch(() => undefined);
+  }
+}
+
 export async function storeFaceImage(userId: string, kind: "reference" | "attempt", buffer: Buffer): Promise<string> {
-  const dir = path.join(faceStorageDir(), userId);
+  const dir = userFaceDir(userId);
   await fs.mkdir(dir, { recursive: true });
   // Re-encoded (not the raw upload): strips metadata and normalises the format on disk.
   const jpeg = await sharp(buffer, { failOn: "error" })
@@ -265,21 +297,47 @@ export function decodeEmbedding(encrypted: string): number[] {
 }
 
 // ---------------------------------------------------------------------------------------------
+// Entitlement (plan tier)
+// ---------------------------------------------------------------------------------------------
+
+/** Whether the CURRENT org's plan tier includes face verification at all (Enterprise-only by
+ *  seed default). See plan-limits.service.ts#isFaceVerificationAllowed for the fail-open vs
+ *  fail-closed split that hangs off this. */
+export async function isFaceFeatureAllowedForOrg(): Promise<boolean> {
+  return isFaceVerificationAllowed(requireTenantContext().orgId);
+}
+
+/** The fail-CLOSED half: turning the feature on, enrolling, and verifying all require the
+ *  entitlement. (Enforcement on submissions is the fail-OPEN half — see below.) */
+export async function assertFaceEntitlement(): Promise<void> {
+  if (!(await isFaceFeatureAllowedForOrg())) {
+    throw new AppError(403, "Face verification isn't included in this workspace's current plan — it requires the Enterprise tier.");
+  }
+}
+
+// ---------------------------------------------------------------------------------------------
 // Enforcement
 // ---------------------------------------------------------------------------------------------
 
-export type FaceContext = "TIMESHEET" | "TICKET";
+export type FaceContext = "TIMESHEET" | "TICKET" | "APPROVAL";
 
 /**
  * Whether THIS user must pass a face check for THIS action right now. Read live on every
  * relevant request (never cached) for the same reason plan-tier limits are: an admin turning the
  * requirement on or off should take effect on the very next submission, not next login.
+ *
+ * The entitlement check fails OPEN on purpose: if the org's tier stops including face
+ * verification (downgrade, lapsed payment), this must stop DEMANDING checks immediately —
+ * otherwise a billing event locks every covered employee out of logging their own time. The
+ * settings checks run first so the common all-off case never touches the control plane.
  */
 export async function isFaceVerificationRequired(userId: string, context: FaceContext): Promise<boolean> {
   const settings = await getFaceSettings();
   if (!settings.enabled) return false;
   if (context === "TIMESHEET" && !settings.requireForTimesheet) return false;
   if (context === "TICKET" && !settings.requireForTicket) return false;
+  if (context === "APPROVAL" && !settings.requireForApproval) return false;
+  if (!(await isFaceFeatureAllowedForOrg())) return false;
   if (settings.enforcementMode === "ALL") return true;
 
   const user = await prisma.user.findUnique({ where: { id: userId }, select: { faceVerificationRequired: true } });
@@ -293,6 +351,11 @@ export async function isFaceVerificationRequired(userId: string, context: FaceCo
  *
  * Throws (rather than returning false) so every caller fails closed — a gate that can be
  * accidentally ignored by not checking a boolean is not a gate.
+ *
+ * Returns the consumed attempt's id. Callers that gate a CREATE (timesheet submit, ticket
+ * create) must consume BEFORE the row exists — so they take the id and bind it afterwards via
+ * bindVerificationToRecord(). Callers gating an action on an EXISTING row pass the id here
+ * directly.
  */
 export async function consumeVerification(params: {
   verificationId: string | undefined | null;
@@ -300,7 +363,7 @@ export async function consumeVerification(params: {
   context: FaceContext;
   timesheetId?: string;
   ticketId?: string;
-}): Promise<void> {
+}): Promise<string> {
   const settings = await getFaceSettings();
 
   if (!params.verificationId) {
@@ -332,4 +395,249 @@ export async function consumeVerification(params: {
   if (claimed.count === 0) {
     throw new AppError(428, "That identity check has already been used — please verify again.");
   }
+  return attempt.id;
+}
+
+/** Binds a just-consumed verification to the record it protected, for gates that run BEFORE the
+ *  record exists. Best-effort by design: the identity check already succeeded and the record is
+ *  already committed — failing the user's submission over evidence bookkeeping would be
+ *  backwards. Without this, the verified badge could never join attempt → row. */
+export async function bindVerificationToRecord(attemptId: string, record: { timesheetId?: string; ticketId?: string }): Promise<void> {
+  await prisma.faceVerificationAttempt
+    .updateMany({ where: { id: attemptId }, data: record })
+    .catch(() => undefined);
+}
+
+// ---------------------------------------------------------------------------------------------
+// Challenge–response liveness (anti-injection)
+// ---------------------------------------------------------------------------------------------
+//
+// THE ATTACK THIS EXISTS FOR: a virtual camera (OBS et al.) replaying a recorded video of the
+// real employee. Every frame of that video is a genuine, live-looking face — antispoof and
+// liveness pass honestly, because they judge the FRAME, not the moment. What a replay cannot do
+// is perform a head movement the server only chose AFTER the recording existed. So: the server
+// issues a random instruction with a 90-second, single-use lifetime; the client submits a
+// neutral frame plus a frame performing it; and the server measures the actual head-pose change
+// between the two.
+//
+// WHY the check is axis-based (|delta| on the demanded axis, and that axis must dominate)
+// rather than sign-based ("left" vs "right"): Human's yaw sign convention interacts with
+// mirrored preview UX and hasn't been calibrated against real cameras — a wrong guess about
+// sign would fail every honest user, which bricks the feature. Axis + magnitude + dominance
+// already defeats a static replay; the measured deltas are persisted on every attempt
+// (challengeYawDelta/challengePitchDelta) precisely so sign enforcement can be turned on later
+// from real evidence instead of an assumption.
+
+export type ChallengeInstruction = "TURN_LEFT" | "TURN_RIGHT" | "LOOK_UP";
+
+const CHALLENGE_INSTRUCTIONS: readonly ChallengeInstruction[] = ["TURN_LEFT", "TURN_RIGHT", "LOOK_UP"];
+
+export const CHALLENGE_TTL_SECONDS = 90;
+
+/** Minimum |rotation delta| in radians between the two frames. Yaw ≈20° — an unmistakable turn
+ *  that's still comfortable; pitch's bar is lower (≈13°) because necks physically pitch less
+ *  than they yaw. */
+const CHALLENGE_YAW_MIN = 0.35;
+const CHALLENGE_PITCH_MIN = 0.22;
+
+export async function issueChallenge(userId: string, context: FaceContext): Promise<{ id: string; instruction: ChallengeInstruction; expiresInSeconds: number }> {
+  // crypto.randomInt, not Math.random — this is a security nonce's unpredictability, small
+  // option space or not.
+  const instruction = CHALLENGE_INSTRUCTIONS[crypto.randomInt(CHALLENGE_INSTRUCTIONS.length)];
+  const challenge = await prisma.faceChallenge.create({
+    data: { userId, context, instruction, expiresAt: new Date(Date.now() + CHALLENGE_TTL_SECONDS * 1000) }
+  });
+  return { id: challenge.id, instruction, expiresInSeconds: CHALLENGE_TTL_SECONDS };
+}
+
+/**
+ * Redeems a challenge — single-use, owner-bound, context-bound, unexpired. Returns the
+ * instruction to enforce, or null when any of that fails (the caller records CHALLENGE_FAILED).
+ * The conditional updateMany is the same race guard consumeVerification uses: two concurrent
+ * verifies presenting the same challenge can't both redeem it.
+ */
+export async function redeemChallenge(params: {
+  challengeId: string | null | undefined;
+  userId: string;
+  context: FaceContext;
+}): Promise<ChallengeInstruction | null> {
+  if (!params.challengeId) return null;
+  const claimed = await prisma.faceChallenge.updateMany({
+    where: {
+      id: params.challengeId,
+      userId: params.userId,
+      context: params.context,
+      usedAt: null,
+      expiresAt: { gt: new Date() }
+    },
+    data: { usedAt: new Date() }
+  });
+  if (claimed.count === 0) return null;
+  const row = await prisma.faceChallenge.findUnique({ where: { id: params.challengeId } });
+  return (row?.instruction as ChallengeInstruction) ?? null;
+}
+
+export interface ChallengePoseResult {
+  ok: boolean;
+  yawDelta: number;
+  pitchDelta: number;
+}
+
+/** Pure function — measures whether the gesture frame actually performed the instruction
+ *  relative to the neutral frame. See the section comment for why axis+dominance, not sign. */
+export function verifyChallengePose(instruction: ChallengeInstruction, neutral: FaceAnalysis, gesture: FaceAnalysis): ChallengePoseResult {
+  const yawDelta = Math.abs(gesture.yaw - neutral.yaw);
+  const pitchDelta = Math.abs(gesture.pitch - neutral.pitch);
+  const ok =
+    instruction === "LOOK_UP"
+      ? pitchDelta >= CHALLENGE_PITCH_MIN && pitchDelta >= yawDelta
+      : yawDelta >= CHALLENGE_YAW_MIN && yawDelta >= pitchDelta;
+  return { ok, yawDelta, pitchDelta };
+}
+
+/** Human-readable instruction text, shared by the API response so every client says exactly
+ *  what the server will enforce. */
+export const CHALLENGE_PROMPTS: Record<ChallengeInstruction, string> = {
+  TURN_LEFT: "Slowly turn your head to one side",
+  TURN_RIGHT: "Slowly turn your head to one side",
+  LOOK_UP: "Slowly tilt your head up"
+};
+
+// ---------------------------------------------------------------------------------------------
+// Coverage + lifecycle notifications
+// ---------------------------------------------------------------------------------------------
+
+/** Users the current policy covers who have NOT enrolled — the population every enrollment
+ *  notification targets. Empty when the feature is off, no action demands a check, or the plan
+ *  entitlement is gone (no nagging about a feature the org can't use). */
+export async function findCoveredUnenrolledUserIds(): Promise<string[]> {
+  const settings = await getFaceSettings();
+  if (!settings.enabled) return [];
+  if (!settings.requireForTimesheet && !settings.requireForTicket && !settings.requireForApproval) return [];
+  if (!(await isFaceFeatureAllowedForOrg())) return [];
+
+  const users = await prisma.user.findMany({
+    where: {
+      status: "ACTIVE",
+      deletedAt: null,
+      faceEnrollment: null,
+      ...(settings.enforcementMode === "ALL" ? {} : { faceVerificationRequired: true })
+    },
+    select: { id: true }
+  });
+  return users.map((u) => u.id);
+}
+
+/**
+ * Tells users the policy now covers them BEFORE a blocked submission does. Without this, the
+ * first a person hears of an admin flagging them is a refused timesheet at 6pm on a Friday —
+ * which converts a security control into a support ticket, every single time.
+ *
+ * Deduped per-user via the Notification table (72h window across BOTH enrollment categories),
+ * so the admin toggling settings back and forth, the user-management flag, and the daily
+ * reminder worker can all call this without spamming anyone.
+ */
+export async function notifyEnrollmentRequired(
+  userIds: string[],
+  category: "face.enrollment_required" | "face.enrollment_reminder" = "face.enrollment_required"
+): Promise<number> {
+  if (userIds.length === 0) return 0;
+  const dedupeSince = new Date(Date.now() - 72 * 60 * 60 * 1000);
+  let sent = 0;
+
+  for (const userId of userIds) {
+    const recent = await prisma.notification.findFirst({
+      where: {
+        userId,
+        category: { in: ["face.enrollment_required", "face.enrollment_reminder"] },
+        createdAt: { gte: dedupeSince }
+      },
+      select: { id: true }
+    });
+    if (recent) continue;
+
+    const user = await prisma.user.findUnique({ where: { id: userId }, select: { name: true } });
+    if (!user) continue;
+
+    await dispatchNotification({
+      userId,
+      category,
+      title: "Set up face verification",
+      body:
+        category === "face.enrollment_required"
+          ? "Your workspace now requires an identity check for some of your actions. Enroll your face in your profile so your next submission isn't held up."
+          : "Reminder: face verification is required for some of your actions and you haven't enrolled yet. It takes under a minute in your profile.",
+      link: "/app/profile",
+      email: {
+        templateKey: "face.enrollment_required",
+        vars: { name: user.name },
+        fallback: {
+          subject: "Action needed: set up face verification",
+          html: templates.faceEnrollmentRequired({ name: user.name, reminder: category === "face.enrollment_reminder" })
+        }
+      }
+    });
+    sent++;
+  }
+  return sent;
+}
+
+// ---------------------------------------------------------------------------------------------
+// Verified-badge decoration
+// ---------------------------------------------------------------------------------------------
+
+export interface VerificationBadge {
+  /** A consumed, PASSED verification is bound to this row. */
+  identityVerified: boolean;
+  identityVerifiedAt: Date | null;
+  /** Whether the policy WOULD demand a check from this row's author right now — lets the UI
+   *  mark covered-but-unverified rows (submitted before the policy, or through a gap) instead
+   *  of leaving the absence of a badge ambiguous. */
+  identityVerificationApplies: boolean;
+}
+
+/**
+ * Batch decoration for timesheet lists: which rows carry a spent PASSED verification, and whose
+ * authors the policy currently covers. One settings read + two batched queries regardless of
+ * page size — this runs on every history/approvals list, so per-row isFaceVerificationRequired
+ * calls (each hitting the control plane) would be an N+1 against a different database.
+ */
+export async function getTimesheetVerificationBadges(
+  rows: Array<{ id: string; userId: string }>
+): Promise<Map<string, VerificationBadge>> {
+  const result = new Map<string, VerificationBadge>();
+  if (rows.length === 0) return result;
+
+  const attempts = await prisma.faceVerificationAttempt.findMany({
+    where: { timesheetId: { in: rows.map((r) => r.id) }, outcome: "PASSED", consumedAt: { not: null }, context: "TIMESHEET" },
+    select: { timesheetId: true, createdAt: true },
+    orderBy: { createdAt: "desc" }
+  });
+  const verifiedAt = new Map<string, Date>();
+  for (const attempt of attempts) {
+    if (attempt.timesheetId && !verifiedAt.has(attempt.timesheetId)) verifiedAt.set(attempt.timesheetId, attempt.createdAt);
+  }
+
+  const settings = await getFaceSettings();
+  let coveredUsers: Set<string> | "all" | "none" = "none";
+  if (settings.enabled && settings.requireForTimesheet && (await isFaceFeatureAllowedForOrg())) {
+    if (settings.enforcementMode === "ALL") {
+      coveredUsers = "all";
+    } else {
+      const flagged = await prisma.user.findMany({
+        where: { id: { in: [...new Set(rows.map((r) => r.userId))] }, faceVerificationRequired: true },
+        select: { id: true }
+      });
+      coveredUsers = new Set(flagged.map((u) => u.id));
+    }
+  }
+
+  for (const row of rows) {
+    const at = verifiedAt.get(row.id) ?? null;
+    let applies = false;
+    if (coveredUsers === "all") applies = true;
+    else if (coveredUsers !== "none") applies = coveredUsers.has(row.userId);
+    result.set(row.id, { identityVerified: at !== null, identityVerifiedAt: at, identityVerificationApplies: applies });
+  }
+  return result;
 }

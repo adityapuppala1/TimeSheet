@@ -12,12 +12,21 @@
  * alignment oval is drawn in percentage units so it tracks the video at any size; and controls
  * stack vertically under `sm` and sit inline above it.
  */
-import { useCallback, useEffect, useRef, useState } from "react";
+import { forwardRef, useCallback, useEffect, useImperativeHandle, useRef, useState } from "react";
 import { Camera, CameraOff, RefreshCw, ShieldCheck } from "lucide-react";
 import { Button } from "./ui/button";
 import { cn } from "../lib/utils";
 
 export type FaceCaptureState = "idle" | "starting" | "ready" | "captured" | "denied" | "unavailable";
+
+/** Imperative surface for multi-frame flows (the challenge–response dialog): lets the parent
+ *  grab an EXTRA frame from the live stream without the user pressing anything, and read the
+ *  active camera's label (sent to the server as the virtual-camera review signal). */
+export interface FaceCaptureHandle {
+  captureFrame: () => Promise<Blob | null>;
+  getDeviceLabel: () => string | null;
+  isLive: () => boolean;
+}
 
 interface FaceCaptureProps {
   /** Called with the captured still. The parent owns upload + result handling. */
@@ -30,9 +39,14 @@ interface FaceCaptureProps {
   hintTone?: "info" | "error" | "success";
   captureLabel?: string;
   className?: string;
+  /** Large overlay text on the live preview (the challenge instruction + countdown). */
+  overlayText?: string | null;
 }
 
-export function FaceCapture({ onCapture, busy = false, hint, hintTone = "info", captureLabel = "Capture", className }: FaceCaptureProps) {
+export const FaceCapture = forwardRef<FaceCaptureHandle, FaceCaptureProps>(function FaceCapture(
+  { onCapture, busy = false, hint, hintTone = "info", captureLabel = "Capture", className, overlayText = null }: FaceCaptureProps,
+  ref
+) {
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
   const [state, setState] = useState<FaceCaptureState>("idle");
@@ -81,25 +95,36 @@ export function FaceCapture({ onCapture, busy = false, hint, hintTone = "info", 
   // reads as spyware, and on mobile it keeps the sensor powered.
   useEffect(() => () => stop(), [stop]);
 
-  const capture = useCallback(() => {
+  /** Grabs one un-mirrored JPEG frame off the live stream, or null when the camera isn't up. */
+  const grabFrame = useCallback((): Promise<Blob | null> => {
     const video = videoRef.current;
-    if (!video || !video.videoWidth) return;
+    if (!video || !video.videoWidth) return Promise.resolve(null);
     const canvas = document.createElement("canvas");
     canvas.width = video.videoWidth;
     canvas.height = video.videoHeight;
     const ctx = canvas.getContext("2d");
-    if (!ctx) return;
+    if (!ctx) return Promise.resolve(null);
     // The preview is mirrored for a natural "looking in a mirror" feel, but the frame we send
     // must NOT be — the server compares it against an un-mirrored enrollment image.
     ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-    canvas.toBlob(
-      (blob) => {
-        if (blob) onCapture(blob);
-      },
-      "image/jpeg",
-      0.9
-    );
-  }, [onCapture]);
+    return new Promise((resolve) => canvas.toBlob((blob) => resolve(blob), "image/jpeg", 0.9));
+  }, []);
+
+  const capture = useCallback(() => {
+    void grabFrame().then((blob) => {
+      if (blob) onCapture(blob);
+    });
+  }, [grabFrame, onCapture]);
+
+  useImperativeHandle(
+    ref,
+    () => ({
+      captureFrame: grabFrame,
+      getDeviceLabel: () => streamRef.current?.getVideoTracks()[0]?.label ?? null,
+      isLive: () => state === "ready"
+    }),
+    [grabFrame, state]
+  );
 
   const live = state === "ready";
   const showStart = state === "idle" || state === "denied" || state === "unavailable";
@@ -122,6 +147,13 @@ export function FaceCapture({ onCapture, busy = false, hint, hintTone = "info", 
             /* Alignment guide, percentage-sized so it tracks the video at every viewport. */
             <div aria-hidden className="pointer-events-none absolute inset-0 flex items-center justify-center">
               <div className="h-[78%] w-[58%] rounded-[50%] border-2 border-dashed border-white/70 shadow-[0_0_0_9999px_rgba(0,0,0,0.28)]" />
+            </div>
+          )}
+
+          {live && overlayText && (
+            /* Challenge instruction + countdown, announced for screen readers too. */
+            <div role="status" className="pointer-events-none absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/75 to-transparent px-3 pb-3 pt-8 text-center">
+              <p className="text-sm font-semibold text-white drop-shadow sm:text-base">{overlayText}</p>
             </div>
           )}
 
@@ -192,4 +224,4 @@ export function FaceCapture({ onCapture, busy = false, hint, hintTone = "info", 
       </div>
     </div>
   );
-}
+});

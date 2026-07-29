@@ -235,7 +235,8 @@ export const timesheetApi = {
         headers: { "Content-Type": "multipart/form-data" }
       })
     ).data,
-  approve: async (id: string) => (await api.patch(`/timesheets/${id}/approve`)).data,
+  approve: async (id: string, faceVerificationId?: string) =>
+    (await api.patch(`/timesheets/${id}/approve`, faceVerificationId ? { faceVerificationId } : {})).data,
   reject: async (id: string, reason: string) => (await api.patch(`/timesheets/${id}/reject`, { reason })).data
 };
 
@@ -960,6 +961,9 @@ export interface TicketDetail extends TicketRow {
   links: TicketLinkRow[];
   checklistItems: TicketChecklistItemRow[];
   branches: TicketBranchRow[];
+  /** The most recent face check spent on this ticket (creation or a status transition). */
+  identityVerified: boolean;
+  identityVerifiedAt: string | null;
 }
 
 export interface AssigneeSuggestion {
@@ -986,8 +990,8 @@ export const ticketApi = {
   get: async (id: string) => (await api.get<TicketDetail>(`/tickets/${id}`)).data,
   create: async (payload: unknown) => (await api.post<TicketDetail>("/tickets", payload)).data,
   update: async (id: string, payload: unknown) => (await api.patch<TicketDetail>(`/tickets/${id}`, payload)).data,
-  updateStatus: async (id: string, status: TicketStatus) =>
-    (await api.patch<TicketDetail>(`/tickets/${id}/status`, { status })).data,
+  updateStatus: async (id: string, status: TicketStatus, faceVerificationId?: string) =>
+    (await api.patch<TicketDetail>(`/tickets/${id}/status`, { status, ...(faceVerificationId ? { faceVerificationId } : {}) })).data,
   assign: async (id: string, assigneeId: string | null) =>
     (await api.patch<TicketDetail>(`/tickets/${id}/assign`, { assigneeId })).data,
   setAiFeedback: async (id: string, feedback: AiFeedbackValue) =>
@@ -1157,8 +1161,13 @@ export const labelApi = {
 export interface FaceVerificationSettings {
   id: string;
   enabled: boolean;
+  /** Whether this org's plan tier includes the feature at all (Enterprise-only by default).
+   *  GET-only — computed from the control plane, not a stored setting. */
+  allowedByPlan?: boolean;
   requireForTimesheet: boolean;
   requireForTicket: boolean;
+  requireForApproval: boolean;
+  challengeEnabled: boolean;
   enforcementMode: "ALL" | "SELECTED";
   matchThreshold: number;
   antispoofThreshold: number;
@@ -1167,14 +1176,20 @@ export interface FaceVerificationSettings {
   verificationTtlSeconds: number;
   imageRetentionDays: number;
   consentText: string | null;
+  entitlementLostAt: string | null;
   updatedAt: string;
   updatedById: string | null;
 }
 
 export interface FaceStatus {
   enabled: boolean;
+  allowedByPlan: boolean;
   requiredForTimesheet: boolean;
   requiredForTicket: boolean;
+  requiredForApproval: boolean;
+  /** Challenge–response liveness on: verification captures TWO frames (neutral + a server-chosen
+   *  head movement) — the dialog orchestrates that automatically. */
+  challengeEnabled: boolean;
   enrolled: boolean;
   /** Enrollment exists but was made with an older model — embeddings aren't comparable across
    *  model versions, so the user must re-enroll or every check would fail. */
@@ -1186,7 +1201,37 @@ export interface FaceStatus {
   maxAttempts: number;
 }
 
-export type FaceOutcome = "PASSED" | "NO_FACE" | "MULTIPLE_FACES" | "NO_MATCH" | "SPOOF_SUSPECTED" | "NOT_ENROLLED" | "ERROR";
+export type FaceOutcome = "PASSED" | "NO_FACE" | "MULTIPLE_FACES" | "NO_MATCH" | "SPOOF_SUSPECTED" | "CHALLENGE_FAILED" | "NOT_ENROLLED" | "ERROR";
+
+export interface FaceChallenge {
+  challengeId: string;
+  instruction: "TURN_LEFT" | "TURN_RIGHT" | "LOOK_UP";
+  prompt: string;
+  expiresInSeconds: number;
+}
+
+export interface FaceStatsBucket {
+  from: number;
+  to: number;
+  passed: number;
+  rejected: number;
+}
+
+export interface FaceStats {
+  since: string;
+  total: number;
+  outcomes: Record<string, number>;
+  flaggedPending: number;
+  virtualCameraSuspected: number;
+  unfamiliarNetwork: number;
+  histogram: FaceStatsBucket[];
+}
+
+export interface FaceReviewAiSummary {
+  summary: string;
+  risk: "LOW" | "MEDIUM" | "HIGH";
+  recommendation: string;
+}
 
 export interface FaceVerifyResult {
   outcome: FaceOutcome;
@@ -1200,7 +1245,7 @@ export interface FaceVerifyResult {
 export interface FaceAttemptRow {
   id: string;
   userId: string;
-  context: "TIMESHEET" | "TICKET";
+  context: "TIMESHEET" | "TICKET" | "APPROVAL";
   outcome: FaceOutcome;
   similarity: number | null;
   antispoofReal: number | null;
@@ -1212,6 +1257,10 @@ export interface FaceAttemptRow {
   reviewNote: string | null;
   createdAt: string;
   consumedAt: string | null;
+  deviceLabel: string | null;
+  virtualCameraSuspected: boolean;
+  unfamiliarNetwork: boolean;
+  challengeInstruction: string | null;
   user: { id: string; name: string; email: string; avatarUrl: string | null };
   reviewedBy: { id: string; name: string } | null;
 }
@@ -1224,12 +1273,23 @@ export const faceApi = {
     form.append("consent", "true");
     return (await api.post<{ enrolled: boolean; consentAt: string }>("/face/enroll", form, { headers: { "Content-Type": "multipart/form-data" } })).data;
   },
+  /** Issues the liveness challenge a verification must satisfy while challenge–response is on. */
+  challenge: async (context: "TIMESHEET" | "TICKET" | "APPROVAL") =>
+    (await api.post<FaceChallenge>("/face/challenge", { context })).data,
   /** Resolves with the outcome either way — a failed check is a 422 carrying a structured
-   *  body, not an exception the caller should have to unwrap. */
-  verify: async (capture: Blob, context: "TIMESHEET" | "TICKET"): Promise<FaceVerifyResult> => {
+   *  body, not an exception the caller should have to unwrap. `frames` is [neutral] when the
+   *  challenge feature is off, [neutral, gesture] when on. */
+  verify: async (params: {
+    frames: Blob[];
+    context: "TIMESHEET" | "TICKET" | "APPROVAL";
+    challengeId?: string;
+    deviceLabel?: string | null;
+  }): Promise<FaceVerifyResult> => {
     const form = new FormData();
-    form.append("capture", capture, "capture.jpg");
-    form.append("context", context);
+    params.frames.forEach((frame, index) => form.append("capture", frame, `capture-${index}.jpg`));
+    form.append("context", params.context);
+    if (params.challengeId) form.append("challengeId", params.challengeId);
+    if (params.deviceLabel) form.append("deviceLabel", params.deviceLabel.slice(0, 255));
     try {
       return (await api.post<FaceVerifyResult>("/face/verify", form, { headers: { "Content-Type": "multipart/form-data" } })).data;
     } catch (error) {
@@ -1244,5 +1304,10 @@ export const faceApi = {
     (await api.get<FaceAttemptRow[]>("/face/attempts", { params })).data,
   reviewAttempt: async (id: string, note?: string) =>
     (await api.patch<{ id: string; reviewedAt: string }>(`/face/attempts/${id}/review`, { note })).data,
-  attemptImageUrl: (id: string) => `${api.defaults.baseURL}/face/image/attempt/${id}`
+  attemptImageUrl: (id: string) => `${api.defaults.baseURL}/face/image/attempt/${id}`,
+  stats: async () => (await api.get<FaceStats>("/face/stats")).data,
+  aiSummary: async (attemptId: string) => (await api.post<FaceReviewAiSummary>(`/face/attempts/${attemptId}/ai-summary`)).data,
+  /** Self-service data-subject export — everything held about the caller's face verification,
+   *  minus the biometrics themselves. */
+  exportMyData: async () => (await api.get<Record<string, unknown>>("/face/export")).data
 };

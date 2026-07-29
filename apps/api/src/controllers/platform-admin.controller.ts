@@ -171,7 +171,8 @@ const planTierLimitSchema = z.object({
       seatLimit: z.number().int().positive().optional(),
       aiMonthlyBudgetCeilingUsd: z.number().nonnegative().optional(),
       allowedSsoProviders: z.array(z.enum(["GOOGLE", "MICROSOFT", "SAML", "LDAP"])).optional(),
-      allowedChatPlatforms: z.array(z.enum(["SLACK", "MICROSOFT_TEAMS", "GOOGLE_CHAT", "TELEGRAM"])).optional()
+      allowedChatPlatforms: z.array(z.enum(["SLACK", "MICROSOFT_TEAMS", "GOOGLE_CHAT", "TELEGRAM"])).optional(),
+      faceVerificationEnabled: z.boolean().optional()
     })
     .strict()
 });

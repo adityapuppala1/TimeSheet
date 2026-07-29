@@ -29,6 +29,7 @@ import { startTicketEscalationWorker } from "./workers/ticket-escalation.worker.
 import { startWeeklyDigestWorker } from "./workers/weekly-digest.worker.js";
 import { startSecurityWeeklyDigestWorker } from "./workers/security-weekly-digest.worker.js";
 import { startFaceRetentionWorker } from "./workers/face-retention.worker.js";
+import { startIdentityWeeklyDigestWorker } from "./workers/identity-weekly-digest.worker.js";
 
 /**
  * Fail-fast guards before the server accepts traffic.
@@ -160,6 +161,7 @@ const server: Server = app.listen(env.API_PORT, async () => {
   startWeeklyDigestWorker();
   startSecurityWeeklyDigestWorker();
   startFaceRetentionWorker();
+  startIdentityWeeklyDigestWorker();
 });
 
 /**

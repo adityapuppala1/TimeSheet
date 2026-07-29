@@ -396,7 +396,9 @@ plays on Kubernetes.
 
 **Worker/background processing**: there is currently no separate worker process — scheduled jobs
 (daily reminder emails, deadline reminders, SLA escalation sweeps, inbound-email polling,
-Telegram polling, the AI weekly digest, the face-capture retention purge) run as in-process `node-cron` schedules inside the `api`
+Telegram polling, the AI weekly digest, the face lifecycle sweep — retention purge, downgrade
+grace/purge, enrollment reminders, overdue-review nudges — and the weekly identity digest) run
+as in-process `node-cron` schedules inside the `api`
 container/pod itself (see `apps/api/src/workers/*.worker.ts`). This means **exactly one replica
 of `api` should run the cron
 schedules** in a horizontally-scaled deployment, or jobs fire once per replica — set
@@ -404,6 +406,29 @@ schedules** in a horizontally-scaled deployment, or jobs fire once per replica �
 the cron registration behind a leader-election/singleton lock if you need both HA and >1 replica
 (not implemented today — see [docs/ROADMAP.md](ROADMAP.md) for the relevant epic if you need this
 split into a dedicated worker process/pod).
+
+## Sizing (measured, not guessed)
+
+Baseline numbers, measured on a laptop-class CPU with the real face models over 40 consecutive
+inferences: ~150ms median per verification frame, ~6/sec serial throughput per worker, models
+holding ~350MB steady / ~650MB peak RSS once loaded. Cloud vCPUs are typically slower — budget
+300–500ms per frame. Face demand is human-paced and bursty (one submission per user per day is
+one check), so **CPU is essentially never the constraint; memory is**: the models load lazily
+*per process* and stay resident, so every API process that ever serves a face request
+permanently holds ~500MB. That is what drives the tiers below.
+
+| Tier | Users | Shape | Notes |
+|---|---|---|---|
+| Pilot | < 25 | One VM, 2 vCPU / 4 GB — app + MySQL via Compose | Face verification is why 4 GB rather than 2. Single point of failure, accepted. |
+| Small | ≤ 100 | App 2 vCPU / 8 GB + managed MySQL 2 vCPU / 4 GB | Splitting the DB off buys real backups/PITR and restarts that don't take the data with them. |
+| Mid | ≤ 1,000 | 2× app (4 vCPU / 8 GB) behind an LB, managed MySQL 4 vCPU / 16 GB, **shared volume for `UPLOAD_DIR`**, Redis for sessions | The shared volume is not optional with >1 app node — an image written by node A is otherwise a 404 from node B. Remember the single-cron-replica rule above. |
+| Large | 5,000+ | 4+ app nodes without face traffic + a separate 2-node pool serving `/api/face/*`, MySQL 8 vCPU / 32 GB + replica, S3-compatible object storage | Keeps the general API lean instead of every worker carrying 500MB of models, and a burst of captures can't starve ordinary requests. Not implemented as config today — it's an ingress-routing split. |
+
+Face image storage is cheap enough to ignore: each stored capture is a ~50KB JPEG, so
+`users × submissions/day × retentionDays × 50KB` — 200 users at 30-day retention is ~300MB.
+Setting `imageRetentionDays: 0` stores templates only. **No GPU** — at these latencies against
+human-paced demand it solves nothing, and it would reintroduce the native compiled dependency
+the wasm build deliberately avoids.
 
 ## Environment variable reference
 
