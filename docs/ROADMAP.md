@@ -361,6 +361,29 @@ Tracked here so nothing surfaced during the security/responsive audit gets silen
 visible — this file is a living reference, not a changelog.
 
 **Resolved:**
+- ~~`doctor` false-failed on any MySQL password containing `@`~~ (2026-07-29) — reported from a
+  real second machine: `npm run setup` died with
+  `nothing is listening on 161233@localhost:3306`. Root cause: `parseHostPort` used
+  `/@([^:/]+):(\d+)/`, which grabs the FIRST `@`, so a password like `Hics@161233` made the host
+  parse as `161233@localhost`. Verified against Prisma directly that the `.env` was actually
+  **correct** — an unencoded `@` in a password returns P1000 (auth reached the server), not P1001
+  (host unreachable), proving Prisma splits userinfo at the last `@` like every WHATWG parser.
+  So the pre-flight check was the only broken thing, and it blocked setup before the real
+  connection was ever tried. Rewritten to split the DSN the same way Prisma does, and it now
+  prints the resolved host/port/database so a misparse can't hide again.
+- ~~`doctor` couldn't tell you where MySQL actually was~~ (2026-07-29) — same report, broader
+  problem: "whenever I'm running on different systems I get this." The doctor now reports
+  OS/arch/Node, scans ports 3306/3307/3308/3309 and reads each listener's **MySQL handshake
+  packet** to confirm it's really MySQL/MariaDB (and print its version) rather than just "a port
+  is open", and — when the configured port is dead but another one is alive — says exactly which
+  port to switch to. When nothing is running at all it detects what's installed (Windows
+  services, XAMPP/WAMP paths, `brew services`, `systemctl` units) and prints the start command
+  for that specific machine. New opt-in `npm run doctor:fix-env -w apps/api` applies the port
+  correction to `.env` automatically, rewriting only `host:port` and preserving credentials,
+  database names, comments, quoting and CRLF line endings byte-for-byte (verified with a
+  round-trip test on both CRLF and LF fixtures — an earlier draft of this fix silently converted
+  edited lines to LF, producing a mixed-ending file, which is exactly the sort of thing an
+  auto-editor must not do).
 - ~~Docker one-click installer couldn't use an external MySQL server~~ (2026-07-29) — previously,
   bringing your own MySQL server to the Docker install path meant manually editing
   `docker-compose.yml` yourself (removing the `mysql` service, rewriting the DSNs). Both

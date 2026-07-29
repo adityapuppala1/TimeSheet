@@ -70,6 +70,8 @@ These are the actual failure modes you're likely to hit, in the order you'd hit 
 | API container never becomes healthy / installer says "Still not healthy" after the restart attempt | Usually either a slow first pull of the `mysql:8.4` image on a slow connection, or a real error in the API's boot sequence. | `docker compose logs api` shows the actual error. If you see nothing but a long pull progress bar, just wait — first run legitimately takes a few minutes. |
 | Seeding fails all 3 attempts | Either a real problem (check `docker compose logs api`), or — if you're re-running the installer against an already-set-up deployment — this is often just "already seeded," which is expected and harmless (seeding is an upsert, not an insert). | Re-run manually to see the real error: `docker compose exec api npm run control:seed -w apps/api` then `docker compose exec api npm run seed -w apps/api`. |
 | Windows: `npm install`/Docker build fails with `EPERM: operation not permitted` on a file inside `node_modules` | Windows Defender (or another antivirus) has a file open/locked mid-write — a real, if intermittent, Windows-specific flake, not a bug in this repo. | Re-run the failed command — it usually succeeds on retry once the AV scan finishes. If it keeps happening, add this repo's folder to your antivirus's exclusion list. |
+| `npm run setup` fails at the doctor step with `nothing is listening on <garbage>@localhost:3306` — where `<garbage>` is part of your password | A real bug, fixed 2026-07-29: the doctor parsed the DSN by grabbing the **first** `@`, so a MySQL password containing `@` (e.g. `Hics@161233`) made it read the host as `161233@localhost`. Prisma itself always handled this correctly (it splits at the last `@`), so the `.env` was fine — only the pre-flight check was wrong, and it false-failed before the real connection was ever attempted. | `git pull` to get the fixed doctor. The parser now matches Prisma's own semantics and prints the host/port/database it resolved, so this can't be silently misread again. |
+| `npm run setup` fails at the doctor step and you're not sure where MySQL actually is | Different machines put MySQL in different places — XAMPP on 3306, this repo's Docker Compose on 3307, a second local instance on 3308. | Just run `npm run doctor -w apps/api`. It scans 3306/3307/3308/3309, identifies each real MySQL by its handshake (with version), and tells you exactly which port to use — or, if nothing's running, what's installed on the machine and the command to start it. `npm run doctor:fix-env -w apps/api` applies the port correction to `.env` for you. |
 
 ### What happens, step by step
 
@@ -148,33 +150,59 @@ Equivalent step-by-step, if you'd rather run each yourself or see what's happeni
 ## Self-diagnosis: `npm run doctor`
 
 ```bash
-npm run doctor -w apps/api
-# or, to also auto-fix what it finds:
-npm run doctor:heal -w apps/api
+npm run doctor -w apps/api          # diagnose only — never writes anything
+npm run doctor:heal -w apps/api     # + create the databases and run migrations
+npm run doctor:fix-env -w apps/api  # + also correct a wrong host:port in .env (see below)
 ```
 
 Run this **before** `db:migrate`/`dev` on any fresh checkout, and **first** whenever something
 seems broken. It checks, in order, and stops at the first failure with a specific fix:
 
-1. `.env` exists and passes the same Zod schema the server boots with.
-2. `DATABASE_URL` and `CONTROL_DATABASE_URL` are actually reachable (real TCP connection, not
-   just "is the string non-empty") — the #1 real-world failure is Docker Compose's MySQL port
-   (`3307`) and a local/XAMPP MySQL port (`3306`) getting swapped.
-3. The credentials in `DATABASE_URL` are actually accepted (a real `SELECT 1`).
+1. Reports the OS/architecture/Node version it's running on, so a "works on my machine" report
+   carries the environment with it.
+2. `.env` exists and passes the same Zod schema the server boots with.
+3. Parses `DATABASE_URL`/`CONTROL_DATABASE_URL` the same way Prisma does (userinfo splits at the
+   **last** `@`), then prints the host/port/database it actually resolved — so a password
+   containing `@` can't silently be misread as part of the hostname. It also flags a password
+   containing `#` or `%`, which genuinely do need percent-encoding (`%23`, `%25`).
+4. **Scans this machine for running MySQL servers** on ports 3306/3307/3308/3309, reading each
+   one's handshake packet to confirm it's really MySQL/MariaDB and report its version — "port
+   3306 is open" and "your database is there" are not the same claim.
+5. `DATABASE_URL` and `CONTROL_DATABASE_URL` are actually reachable (real TCP connection, not
+   just "is the string non-empty").
+6. The credentials in `DATABASE_URL` are actually accepted (a real `SELECT 1`).
 
-The `:heal` variant runs two more steps instead of just stopping once the checks above pass:
+Because step 4 runs *before* the pass/fail decision, a failure can tell you the answer instead of
+just the symptom. Configured for 3307 but MySQL is really on 3306? You get:
 
-4. Creates the `DATABASE_URL`/`CONTROL_DATABASE_URL` databases if the server's reachable but they
+```
+FAIL: DATABASE_URL — nothing is listening on localhost:3307.
+
+But MySQL IS running on port 3306 (5.5.5-10.4.32-MariaDB). Your .env is pointed at the wrong port.
+Fix it automatically:   npm run doctor:fix-env -w apps/api
+```
+
+And if nothing is running anywhere, it looks for what this machine actually has installed —
+Windows services matching `mysql`/`mariadb`, a XAMPP/WAMP/MySQL install path, `brew services` on
+macOS, `systemctl` units on Linux — and prints the specific command to start it.
+
+The `:heal` variant runs two more steps once the checks above pass:
+
+7. Creates the `DATABASE_URL`/`CONTROL_DATABASE_URL` databases if the server's reachable but they
    don't exist yet (`CREATE DATABASE IF NOT EXISTS`).
-5. Runs `prisma migrate deploy` for both the tenant and control-plane schemas.
+8. Runs `prisma migrate deploy` for both the tenant and control-plane schemas.
 
-It never modifies `.env` or connection settings — only DB-side state — and every step is
-idempotent, so it's safe to run repeatedly (a CI step, a cron job, or just habit).
+`doctor` and `doctor:heal` never modify `.env` — only DB-side state. **`doctor:fix-env` is the one
+mode that edits it**, deliberately opt-in and deliberately narrow: it rewrites *only* the
+`host:port` inside `DATABASE_URL`/`CONTROL_DATABASE_URL`, and only when discovery has proven MySQL
+is listening elsewhere. Credentials, database names, comments, quoting style, and line endings
+(including CRLF on Windows) are all preserved byte-for-byte. Every step is idempotent, so all
+three are safe to run repeatedly (a CI step, a cron job, or just habit).
 
 The installer's own self-heal check (missing `.env` keys) and `doctor`'s checks are
 complementary: the installer catches "this `.env` is incomplete," `doctor` catches "this `.env`
-is complete but wrong" (bad host, bad port, bad password), and `doctor:heal` goes one step
-further and fixes the DB-side half of that automatically.
+is complete but wrong" (bad host, bad port, bad password), and `doctor:heal`/`doctor:fix-env` go
+one step further and fix what can be fixed automatically.
 
 ---
 
