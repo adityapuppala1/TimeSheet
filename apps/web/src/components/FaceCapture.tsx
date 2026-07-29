@@ -28,6 +28,18 @@ export interface FaceCaptureHandle {
   isLive: () => boolean;
 }
 
+/** Chrome's Shape Detection API — the progressive-enhancement half of hands-free capture.
+ *  Detection here is ONLY "when to press the shutter"; every security judgement stays
+ *  server-side, so a platform without this simply falls back to the manual button. */
+interface BrowserFaceDetector {
+  detect: (source: HTMLVideoElement) => Promise<Array<{ boundingBox: { x: number; y: number; width: number; height: number } }>>;
+}
+declare global {
+  interface Window {
+    FaceDetector?: new (options?: { fastMode?: boolean; maxDetectedFaces?: number }) => BrowserFaceDetector;
+  }
+}
+
 interface FaceCaptureProps {
   /** Called with the captured still. The parent owns upload + result handling. */
   onCapture: (blob: Blob) => void;
@@ -41,16 +53,37 @@ interface FaceCaptureProps {
   className?: string;
   /** Large overlay text on the live preview (the challenge instruction + countdown). */
   overlayText?: string | null;
+  /** Request the camera immediately on mount instead of waiting for a click — the Face-ID
+   *  "it's already looking at you" feel. The browser's permission prompt still applies. */
+  autoStart?: boolean;
+  /** Hands-free shutter: scan the live stream and fire onCapture by itself once a single,
+   *  centered, large-enough face holds still for a few consecutive ticks. Only activates where
+   *  window.FaceDetector exists (Chromium's Shape Detection API); elsewhere the manual button
+   *  remains, unchanged. Re-arms automatically when `busy` drops back to false. */
+  autoCapture?: boolean;
 }
 
 export const FaceCapture = forwardRef<FaceCaptureHandle, FaceCaptureProps>(function FaceCapture(
-  { onCapture, busy = false, hint, hintTone = "info", captureLabel = "Capture", className, overlayText = null }: FaceCaptureProps,
+  {
+    onCapture,
+    busy = false,
+    hint,
+    hintTone = "info",
+    captureLabel = "Capture",
+    className,
+    overlayText = null,
+    autoStart = false,
+    autoCapture = false
+  }: FaceCaptureProps,
   ref
 ) {
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
   const [state, setState] = useState<FaceCaptureState>("idle");
   const [error, setError] = useState<string | null>(null);
+  /** Hands-free scan phase: null = not scanning, "searching" = no usable face yet,
+   *  "locking" = face seen, holding for stability before the shutter fires. */
+  const [scanPhase, setScanPhase] = useState<"searching" | "locking" | null>(null);
 
   const stop = useCallback(() => {
     streamRef.current?.getTracks().forEach((track) => track.stop());
@@ -95,6 +128,16 @@ export const FaceCapture = forwardRef<FaceCaptureHandle, FaceCaptureProps>(funct
   // reads as spyware, and on mobile it keeps the sensor powered.
   useEffect(() => () => stop(), [stop]);
 
+  // Face-ID feel, part 1: the camera comes to YOU. Runs once on mount; a permission denial
+  // falls through to the normal error state with its "try again" button.
+  const autoStartedRef = useRef(false);
+  useEffect(() => {
+    if (autoStart && !autoStartedRef.current) {
+      autoStartedRef.current = true;
+      void start();
+    }
+  }, [autoStart, start]);
+
   /** Grabs one un-mirrored JPEG frame off the live stream, or null when the camera isn't up. */
   const grabFrame = useCallback((): Promise<Blob | null> => {
     const video = videoRef.current;
@@ -115,6 +158,68 @@ export const FaceCapture = forwardRef<FaceCaptureHandle, FaceCaptureProps>(funct
       if (blob) onCapture(blob);
     });
   }, [grabFrame, onCapture]);
+
+  // Face-ID feel, part 2: hands-free shutter. A detection loop watches the live stream and
+  // fires ONE capture once a single face is (a) big enough to be the subject rather than a
+  // bystander, (b) roughly centered in the guide oval, and (c) stable for 3 consecutive ticks
+  // (~1s) — the same "hold still… got it" cadence phone face-unlock trains people to expect.
+  // Detection here decides only WHEN to press the shutter; whether the face is the right one
+  // is still entirely the server's call. No FaceDetector support → this effect stays inert and
+  // the manual button carries on.
+  const supportsAutoCapture = autoCapture && typeof window !== "undefined" && Boolean(window.FaceDetector);
+  useEffect(() => {
+    if (!supportsAutoCapture || state !== "ready" || busy) {
+      setScanPhase(null);
+      return;
+    }
+
+    let cancelled = false;
+    let stableTicks = 0;
+    let fired = false;
+    const detector = new window.FaceDetector!({ fastMode: true, maxDetectedFaces: 2 });
+    setScanPhase("searching");
+
+    const interval = setInterval(async () => {
+      const video = videoRef.current;
+      if (cancelled || fired || !video || !video.videoWidth) return;
+      try {
+        const faces = await detector.detect(video);
+        if (cancelled || fired) return;
+
+        const usable =
+          faces.length === 1 &&
+          (() => {
+            const box = faces[0].boundingBox;
+            const areaShare = (box.width * box.height) / (video.videoWidth * video.videoHeight);
+            const cx = (box.x + box.width / 2) / video.videoWidth;
+            const cy = (box.y + box.height / 2) / video.videoHeight;
+            // ≥8% of the frame ≈ arm's-length selfie distance; center within the middle band.
+            return areaShare >= 0.08 && cx > 0.25 && cx < 0.75 && cy > 0.2 && cy < 0.8;
+          })();
+
+        if (usable) {
+          stableTicks += 1;
+          setScanPhase("locking");
+          if (stableTicks >= 3) {
+            fired = true;
+            setScanPhase(null);
+            capture();
+          }
+        } else {
+          stableTicks = 0;
+          setScanPhase("searching");
+        }
+      } catch {
+        // A detector error (unsupported source, transient) just means this tick is skipped —
+        // the manual button is always there.
+      }
+    }, 350);
+
+    return () => {
+      cancelled = true;
+      clearInterval(interval);
+    };
+  }, [supportsAutoCapture, state, busy, capture]);
 
   useImperativeHandle(
     ref,
@@ -144,9 +249,25 @@ export const FaceCapture = forwardRef<FaceCaptureHandle, FaceCaptureProps>(funct
           />
 
           {live && (
-            /* Alignment guide, percentage-sized so it tracks the video at every viewport. */
+            /* Alignment guide, percentage-sized so it tracks the video at every viewport.
+               Turns solid + primary while the hands-free scanner is locking on — the visual
+               "I see you, hold still" cue. motion-safe keeps the pulse away from
+               prefers-reduced-motion users. */
             <div aria-hidden className="pointer-events-none absolute inset-0 flex items-center justify-center">
-              <div className="h-[78%] w-[58%] rounded-[50%] border-2 border-dashed border-white/70 shadow-[0_0_0_9999px_rgba(0,0,0,0.28)]" />
+              <div
+                className={cn(
+                  "h-[78%] w-[58%] rounded-[50%] border-2 shadow-[0_0_0_9999px_rgba(0,0,0,0.28)] transition-colors",
+                  scanPhase === "locking" ? "border-solid border-primary motion-safe:animate-pulse" : "border-dashed border-white/70"
+                )}
+              />
+            </div>
+          )}
+
+          {live && !overlayText && scanPhase && (
+            <div role="status" className="pointer-events-none absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/75 to-transparent px-3 pb-3 pt-8 text-center">
+              <p className="text-sm font-semibold text-white drop-shadow">
+                {scanPhase === "locking" ? "Hold still…" : "Looking for you — face the camera"}
+              </p>
             </div>
           )}
 

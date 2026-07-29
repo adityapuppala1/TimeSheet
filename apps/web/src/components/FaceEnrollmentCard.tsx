@@ -116,12 +116,16 @@ export function FaceEnrollmentCard() {
             {capturing ? (
               <div className="space-y-3">
                 <p className="text-sm text-muted-foreground">Retake your reference photo — this replaces the current one.</p>
+                {/* autoStart only — enrollment stays a deliberate click, never an auto-shutter:
+                    this is the frame every future check compares against, and consent just
+                    happened seconds ago. */}
                 <FaceCapture
                   onCapture={(blob) => enroll.mutate(blob)}
                   busy={enroll.isPending}
                   hint={error ?? undefined}
                   hintTone="error"
                   captureLabel="Save new photo"
+                  autoStart
                 />
                 <div className="flex justify-center">
                   <Button variant="ghost" onClick={() => setCapturing(false)}>
@@ -188,6 +192,7 @@ export function FaceEnrollmentCard() {
                 hint={error ?? "Look straight at the camera in good light, with just your face in frame."}
                 hintTone={error ? "error" : "info"}
                 captureLabel="Save my photo"
+                autoStart
               />
             ) : (
               <p className="text-center text-sm text-muted-foreground">Tick the box above to turn on your camera.</p>

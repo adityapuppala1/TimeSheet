@@ -52,6 +52,11 @@ const FRIENDLY: Record<FaceOutcome, string> = {
  *  physically turn a head, short enough that holding the pose isn't uncomfortable. */
 const GESTURE_COUNTDOWN_SECONDS = 3;
 
+/** Hands-free attempts before the dialog falls back to the manual button. A ceiling, because
+ *  an auto-retrying scanner pointed at the WRONG face would otherwise hammer the rate limit
+ *  and pile failure rows into the review log with zero user intent behind them. */
+const MAX_AUTO_ATTEMPTS = 2;
+
 export function FaceVerificationDialog({ open, onOpenChange, context, onVerified, actionLabel = "continue" }: FaceVerificationDialogProps) {
   const captureRef = useRef<FaceCaptureHandle | null>(null);
   const cancelledRef = useRef(false);
@@ -79,6 +84,10 @@ export function FaceVerificationDialog({ open, onOpenChange, context, onVerified
       cancelledRef.current = true;
     }
   }, [open]);
+
+  // Hands-free while the first attempts are honest misses; manual after the ceiling so a
+  // wrong-face loop can't keep firing on its own.
+  const autoScanActive = attempts < MAX_AUTO_ATTEMPTS;
 
   const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
 
@@ -158,8 +167,8 @@ export function FaceVerificationDialog({ open, onOpenChange, context, onVerified
           <DialogDescription>
             Your workspace requires a quick identity check before you {actionLabel}.
             {challengeOn
-              ? " Look at the camera, capture, then follow the short on-screen movement."
-              : " Look at the camera and capture a photo."}
+              ? " Look at the camera — the check starts by itself, then follow the short on-screen movement."
+              : " Look at the camera — the photo is taken automatically when you're in frame."}
           </DialogDescription>
         </DialogHeader>
 
@@ -167,10 +176,15 @@ export function FaceVerificationDialog({ open, onOpenChange, context, onVerified
           ref={captureRef}
           onCapture={handleCapture}
           busy={busy}
-          hint={message ?? undefined}
+          hint={
+            message ??
+            (attempts >= MAX_AUTO_ATTEMPTS ? "Auto-scan paused after repeated misses — use the button when you're ready." : undefined)
+          }
           hintTone={tone}
           captureLabel={challengeOn ? "Start check" : "Verify me"}
           overlayText={overlay}
+          autoStart
+          autoCapture={autoScanActive}
         />
 
         {flagged && (

@@ -29,6 +29,8 @@ import { startTicketEscalationWorker } from "./workers/ticket-escalation.worker.
 import { startWeeklyDigestWorker } from "./workers/weekly-digest.worker.js";
 import { startSecurityWeeklyDigestWorker } from "./workers/security-weekly-digest.worker.js";
 import { startFaceRetentionWorker } from "./workers/face-retention.worker.js";
+import { runForEveryOrg } from "./workers/run-for-every-org.js";
+import { warmFaceModelsIfEnabled } from "./services/face.service.js";
 import { startIdentityWeeklyDigestWorker } from "./workers/identity-weekly-digest.worker.js";
 
 /**
@@ -162,6 +164,13 @@ const server: Server = app.listen(env.API_PORT, async () => {
   startSecurityWeeklyDigestWorker();
   startFaceRetentionWorker();
   startIdentityWeeklyDigestWorker();
+
+  // Detached: loads the face models at boot IF any org has the feature enabled, so the first
+  // verification after a restart doesn't pay the multi-second cold model load. Deployments
+  // with the feature off pay nothing (see warmFaceModelsIfEnabled's header).
+  void warmFaceModelsIfEnabled(runForEveryOrg).catch((error) =>
+    console.warn(`[face] boot warm-up skipped: ${(error as Error).message}`)
+  );
 });
 
 /**

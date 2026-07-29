@@ -25,6 +25,8 @@ import {
   CalendarClock,
   CalendarPlus2,
   CheckCircle2,
+  ChevronLeft,
+  ChevronRight,
   Clock,
   FolderKanban,
   Gauge,
@@ -33,7 +35,7 @@ import {
   TrendingUp,
   Users2
 } from "lucide-react";
-import { useMemo } from "react";
+import { useMemo, useState } from "react";
 import { Link } from "react-router";
 import { Area, AreaChart, Bar, BarChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 import { Alert, AlertDescription, AlertTitle } from "../components/ui/alert";
@@ -60,6 +62,25 @@ function startOfWeek(date: Date) {
 function toMinutes(time: string): number {
   const [h, m] = String(time).split(":").map(Number);
   return (h || 0) * 60 + (m || 0);
+}
+
+/**
+ * "YYYY-MM-DD" from a Date's LOCAL calendar components. Never use toISOString() for day
+ * equality: local midnight in any UTC+N timezone converts to the PREVIOUS UTC day, which is
+ * exactly the bug that made "today's timeline" render empty in IST while the (server-computed)
+ * daily banner correctly said hours were logged.
+ */
+function localDateKey(d: Date): string {
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+}
+
+/** The stored workDate is UTC midnight of the intended CALENDAR day, so the day is the first 10
+ *  chars of the ISO string — and range comparisons must use a LOCAL date built from those parts
+ *  (parsing the ISO directly lands on the wrong local day in UTC-negative timezones). */
+function workDateParts(workDate: string): { key: string; local: Date } {
+  const key = String(workDate).slice(0, 10);
+  const [y, m, d] = key.split("-").map(Number);
+  return { key, local: new Date(y, (m || 1) - 1, d || 1) };
 }
 
 interface TimesheetRowLite {
@@ -103,7 +124,7 @@ export function Dashboard() {
   const derived = useMemo(() => {
     const now = new Date();
     const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-    const todayKey = today.toISOString().slice(0, 10);
+    const todayKey = localDateKey(today);
     const weekStart = startOfWeek(today);
     const lastWeekStart = new Date(weekStart.getTime() - 7 * 24 * 60 * 60 * 1000);
     const monthStart = new Date(now.getFullYear(), now.getMonth(), 1);
@@ -111,14 +132,14 @@ export function Dashboard() {
     const dayLabels = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
     const buckets = new Map<string, number>(dayLabels.map((l) => [l, 0]));
 
-    let todayH = 0;
     let weekH = 0;
     let lastWeekH = 0;
     let monthH = 0;
     let pendingCount = 0;
     const weekByStatus = { APPROVED: 0, SUBMITTED: 0, REJECTED: 0, DRAFT: 0 } as Record<string, number>;
     const monthByStatus = { APPROVED: 0, SUBMITTED: 0, REJECTED: 0, DRAFT: 0 } as Record<string, number>;
-    const todayEntries: TimesheetRowLite[] = [];
+    /** Every loaded entry grouped by calendar day — the timeline's date picker reads this. */
+    const entriesByDate = new Map<string, TimesheetRowLite[]>();
 
     interface ProjectRoll {
       id: string;
@@ -133,16 +154,15 @@ export function Dashboard() {
 
     for (const row of all) {
       const hours = Number(row.totalHours ?? 0);
-      const work = new Date(String(row.workDate));
-      if (Number.isNaN(work.getTime())) continue;
-      const workDay = new Date(work.getFullYear(), work.getMonth(), work.getDate());
-      const dateKey = String(row.workDate).slice(0, 10);
+      const { key: dateKey, local: workDay } = workDateParts(String(row.workDate));
+      if (Number.isNaN(workDay.getTime())) continue;
 
       if (row.status === "SUBMITTED") pendingCount += 1;
-      if (dateKey === todayKey) {
-        todayH += hours;
-        todayEntries.push(row);
-      }
+
+      const dayList = entriesByDate.get(dateKey) ?? [];
+      dayList.push(row);
+      entriesByDate.set(dateKey, dayList);
+
       if (workDay >= weekStart && workDay <= today) {
         weekH += hours;
         weekByStatus[row.status] = (weekByStatus[row.status] ?? 0) + hours;
@@ -172,17 +192,19 @@ export function Dashboard() {
       }
     }
 
-    todayEntries.sort((a, b) => toMinutes(a.startTime) - toMinutes(b.startTime));
+    for (const list of entriesByDate.values()) list.sort((a, b) => toMinutes(a.startTime) - toMinutes(b.startTime));
 
+    const todayEntries = entriesByDate.get(todayKey) ?? [];
     return {
-      todayHours: todayH,
+      todayKey,
+      todayHours: todayEntries.reduce((sum, e) => sum + Number(e.totalHours ?? 0), 0),
       weekHours: weekH,
       lastWeekHours: lastWeekH,
       monthHours: monthH,
       pendingCount,
       weekByStatus,
       monthByStatus,
-      todayEntries,
+      entriesByDate,
       projectRows: [...projects.values()].sort((a, b) => b.monthHours - a.monthHours),
       trend: dayLabels.map((day) => ({ day, hours: Number((buckets.get(day) ?? 0).toFixed(2)) }))
     };
@@ -283,8 +305,8 @@ export function Dashboard() {
         </HeroCard>
       </div>
 
-      {/* ---- Today's timeline — real entries on a real clock ---- */}
-      <TodayTimeline entries={derived.todayEntries} loading={timesheets.isLoading} todayHours={derived.todayHours} />
+      {/* ---- Day timeline — real entries on a real clock, any loaded date ---- */}
+      <DayTimeline entriesByDate={derived.entriesByDate} todayKey={derived.todayKey} loading={timesheets.isLoading} />
 
       {/* Admin / manager: workforce daily logging snapshot */}
       {isAdmin && <WorkforceSnapshot data={admin.data} loading={admin.isLoading} />}
@@ -577,14 +599,37 @@ function TickMeter({ label, percent, detail, tone }: { label: string; percent: n
   );
 }
 
-/* ============================== Today's timeline ============================== */
+/* ============================== Day timeline ============================== */
 
 /**
  * The user's actual day on an actual clock — possible only because entries carry real
  * start/end times and the server rejects overlapping ranges, so this is guaranteed to be a
  * clean single track. Blocks are colored by STATUS and always carry their text label.
+ * The date picker walks any day present in the loaded list (the API returns the latest 100
+ * entries, so recent weeks are all navigable).
  */
-function TodayTimeline({ entries, loading, todayHours }: { entries: TimesheetRowLite[]; loading: boolean; todayHours: number }) {
+function DayTimeline({
+  entriesByDate,
+  todayKey,
+  loading
+}: {
+  entriesByDate: Map<string, TimesheetRowLite[]>;
+  todayKey: string;
+  loading: boolean;
+}) {
+  const [selectedKey, setSelectedKey] = useState(todayKey);
+  const isToday = selectedKey === todayKey;
+  const entries = entriesByDate.get(selectedKey) ?? [];
+  const dayHours = entries.reduce((sum, e) => sum + Number(e.totalHours ?? 0), 0);
+
+  const shiftDay = (delta: number) => {
+    const [y, m, d] = selectedKey.split("-").map(Number);
+    const next = new Date(y, (m || 1) - 1, (d || 1) + delta);
+    const nextKey = localDateKey(next);
+    if (nextKey > todayKey) return; // no future days
+    setSelectedKey(nextKey);
+  };
+
   const now = new Date();
   const nowMinutes = now.getHours() * 60 + now.getMinutes();
 
@@ -608,18 +653,57 @@ function TodayTimeline({ entries, loading, todayHours }: { entries: TimesheetRow
     DRAFT: "border-border bg-muted text-muted-foreground"
   };
 
+  const [sy, sm, sd] = selectedKey.split("-").map(Number);
+  const selectedLabel = new Date(sy, (sm || 1) - 1, sd || 1).toLocaleDateString(undefined, {
+    weekday: "short",
+    day: "numeric",
+    month: "short"
+  });
+
   return (
     <Card>
       <CardHeader className="flex flex-wrap items-center justify-between gap-2 space-y-0 pb-3">
         <div>
           <CardTitle className="flex items-center gap-2 text-base">
             <CalendarClock className="h-4 w-4 text-primary" />
-            Today's timeline
+            Day timeline
           </CardTitle>
-          <CardDescription>Your logged entries on the clock — colors follow entry status.</CardDescription>
+          <CardDescription>Your logged entries on the clock — colors follow entry status. Covers your latest 100 entries.</CardDescription>
         </div>
-        <div className="flex items-center gap-2">
-          <Badge variant={todayHours > 0 ? "success" : "muted"}>{todayHours.toFixed(2)}h today</Badge>
+        <div className="flex flex-wrap items-center gap-2">
+          <Badge variant={dayHours > 0 ? "success" : "muted"}>
+            {dayHours.toFixed(2)}h {isToday ? "today" : `on ${selectedLabel}`}
+          </Badge>
+          <div className="flex items-center gap-1 rounded-lg border border-border p-0.5">
+            <Button variant="ghost" size="icon" className="h-7 w-7" aria-label="Previous day" onClick={() => shiftDay(-1)}>
+              <ChevronLeft className="h-4 w-4" />
+            </Button>
+            <input
+              type="date"
+              aria-label="Timeline date"
+              value={selectedKey}
+              max={todayKey}
+              onChange={(e) => {
+                if (e.target.value && e.target.value <= todayKey) setSelectedKey(e.target.value);
+              }}
+              className="h-7 rounded-md border-0 bg-transparent px-1 text-sm tabular-nums text-foreground outline-none [color-scheme:light] dark:[color-scheme:dark]"
+            />
+            <Button
+              variant="ghost"
+              size="icon"
+              className="h-7 w-7"
+              aria-label="Next day"
+              disabled={isToday}
+              onClick={() => shiftDay(1)}
+            >
+              <ChevronRight className="h-4 w-4" />
+            </Button>
+          </div>
+          {!isToday && (
+            <Button variant="outline" size="sm" onClick={() => setSelectedKey(todayKey)}>
+              Today
+            </Button>
+          )}
           <Button asChild size="sm" variant="outline">
             <Link to="/app/timesheet"><CalendarPlus2 className="h-3.5 w-3.5" />Add</Link>
           </Button>
@@ -640,14 +724,14 @@ function TodayTimeline({ entries, loading, todayHours }: { entries: TimesheetRow
                 ))}
               </div>
 
-              <div className="relative h-16 rounded-lg border border-border bg-muted/20">
+              <div className="relative h-16 rounded-lg border border-border bg-muted/20" data-testid="day-timeline-track">
                 {/* Grid lines every 2h, recessive */}
                 {hourTicks.map((m) => (
                   <span key={m} className="absolute inset-y-0 border-l border-dashed border-border/60" style={{ left: `${pct(m)}%` }} aria-hidden />
                 ))}
 
-                {/* "Now" marker, only while today is inside the window */}
-                {nowMinutes >= windowStart && nowMinutes <= windowEnd && (
+                {/* "Now" marker — only meaningful on today's view */}
+                {isToday && nowMinutes >= windowStart && nowMinutes <= windowEnd && (
                   <span className="absolute inset-y-0 z-10 w-0.5 bg-primary" style={{ left: `${pct(nowMinutes)}%` }} title="Now" aria-label="Current time" />
                 )}
 
@@ -660,6 +744,7 @@ function TodayTimeline({ entries, loading, todayHours }: { entries: TimesheetRow
                     <Link
                       key={entry.id}
                       to="/app/history"
+                      data-testid="timeline-entry"
                       className={`absolute top-2 bottom-2 flex items-center overflow-hidden rounded-md border px-2 text-xs font-medium ring-2 ring-background transition-transform hover:scale-[1.02] ${blockTone[entry.status] ?? blockTone.DRAFT}`}
                       style={{ left: `${pct(start)}%`, width: `${width}%` }}
                       title={`${entry.startTime}–${entry.endTime} · ${label} · ${entry.status}`}
@@ -670,11 +755,13 @@ function TodayTimeline({ entries, loading, todayHours }: { entries: TimesheetRow
                 })}
 
                 {entries.length === 0 && (
-                  <div className="absolute inset-0 flex items-center justify-center gap-2 text-sm text-muted-foreground">
-                    Nothing logged yet today.
-                    <Link to="/app/timesheet" className="font-semibold text-primary hover:underline">
-                      Log your first entry →
-                    </Link>
+                  <div className="absolute inset-0 flex items-center justify-center gap-2 px-4 text-center text-sm text-muted-foreground">
+                    {isToday ? "Nothing logged yet today." : `Nothing logged on ${selectedLabel}.`}
+                    {isToday && (
+                      <Link to="/app/timesheet" className="font-semibold text-primary hover:underline">
+                        Log your first entry →
+                      </Link>
+                    )}
                   </div>
                 )}
               </div>

@@ -503,6 +503,28 @@ export const CHALLENGE_PROMPTS: Record<ChallengeInstruction, string> = {
   LOOK_UP: "Slowly tilt your head up"
 };
 
+/**
+ * Boot-time model warm-up — the server half of making verification feel Face-ID instant.
+ * Model loading is deliberately lazy (most deployments never enable the feature, and the
+ * models hold ~500MB per process), so WITHOUT this the first real verification after every
+ * restart pays the multi-second cold load. This threads the needle: it checks each org's
+ * settings at boot and loads the models exactly once IF any org actually has the feature on —
+ * deployments that never use face still pay nothing. Called detached from server.ts.
+ */
+export async function warmFaceModelsIfEnabled(runForEveryOrg: (label: string, fn: () => Promise<void>) => Promise<void>): Promise<void> {
+  let anyEnabled = false;
+  await runForEveryOrg("face-warmup", async () => {
+    if (anyEnabled) return;
+    const settings = await prisma.globalFaceVerificationSettings.findUnique({ where: { id: FACE_GLOBAL_ID } });
+    if (settings?.enabled) anyEnabled = true;
+  });
+  if (!anyEnabled) return;
+
+  const startedAt = Date.now();
+  await getHuman();
+  console.log(`[face] models warmed at boot in ${Date.now() - startedAt} ms — first verification won't pay the cold load`);
+}
+
 // ---------------------------------------------------------------------------------------------
 // Coverage + lifecycle notifications
 // ---------------------------------------------------------------------------------------------

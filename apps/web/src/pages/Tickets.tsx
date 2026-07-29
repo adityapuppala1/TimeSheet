@@ -898,6 +898,11 @@ function TicketDetailSheet({
   return (
     <Sheet open={Boolean(ticketId)} onOpenChange={(open) => !open && onClose()}>
       <SheetContent className="w-full overflow-y-auto sm:max-w-xl">
+        {/* Radix requires a title WHENEVER the sheet is open — including the loading phase
+            before `ticket` exists, which is exactly when the visible SheetTitle below hasn't
+            rendered yet (this was the source of the recurring DialogTitle console warning).
+            Unmounts once the real title takes over, so there's never a duplicate. */}
+        {!ticket && <SheetTitle className="sr-only">{detail.isLoading ? "Loading ticket" : "Ticket details"}</SheetTitle>}
         {detail.isLoading && (
           <div className="grid gap-3 pt-6">
             <Skeleton className="h-6 w-1/2" />

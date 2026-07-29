@@ -583,6 +583,29 @@ visible — this file is a living reference, not a changelog.
   capability functions have no dedicated tests yet; the mocking patterns in
   `apps/api/tests/unit/*.test.ts`'s header comments generalize directly.
 
+### Dashboard follow-ups + hands-free verification (2026-07-29, same-day fixes)
+
+- ~~Day timeline rendered empty in UTC+N timezones~~ — a shipped timezone bug: "today's" key
+  was built via `toISOString()` (UTC), which resolves local midnight to the PREVIOUS day in
+  any UTC+N timezone, so the banner said hours were logged while the timeline showed nothing.
+  Day matching now uses local-calendar keys end to end (`localDateKey`/`workDateParts`), and
+  the regression is pinned by a real e2e test (`tests/e2e/dashboard.spec.ts`) that creates an
+  entry for today and asserts the block renders.
+- ~~Timeline was today-only~~ — added a date picker (native input + prev/next + "Today") that
+  walks any day present in the loaded list (the latest 100 entries).
+- ~~DialogTitle warning kept appearing~~ — second source found: the ticket detail sheet opens
+  BEFORE its data loads, and its visible `SheetTitle` only renders with the data — so during
+  the skeleton phase the open sheet had no title. An sr-only title now covers the untitled
+  phase and unmounts when the real one takes over.
+- **Hands-free ("Face ID feel") verification** — the dialog auto-starts the camera, and on
+  Chromium (Shape Detection API) auto-fires the shutter once a single centered face holds
+  still ~1s, with a two-attempt ceiling before falling back to the manual button; the server
+  pre-warms the ML models at boot when the feature is enabled so the first check skips the
+  cold load. Client detection only times the shutter — matching stays server-side. True
+  Hello/Face-ID hardware (IR depth, secure enclave) is a platform boundary browsers can't
+  cross; documented honestly in FACE_VERIFICATION.md, including why WebAuthn is a complement
+  (device credential), not a substitute (identity check).
+
 ### Dashboard redesign + request-path latency fix (2026-07-29)
 
 - ~~Every notification-bearing action stalled for seconds~~ — root cause: `dispatchNotification`

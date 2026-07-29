@@ -316,6 +316,41 @@ A flag that nobody reads is not a control, so the review pipeline is push, not p
 - **Model upgrades force re-enrollment.** Embeddings aren't comparable across model versions, so
   `FaceEnrollment.modelVersion` is checked and the UI prompts rather than silently failing.
 
+### How close is this to Windows Hello / Face ID?
+
+The honest comparison, because it changes what you should expect from each layer:
+
+| | Windows Hello / Face ID | This feature |
+|---|---|---|
+| Sensor | Infrared / structured-light **depth** camera — a photo or screen is flat and fails at the sensor | Ordinary RGB webcam — flatness is inferred by the anti-spoof model instead |
+| Matching | On-device, inside a secure enclave / TPM | Server-side, against the org's own encrypted enrollment (deliberate: the *employer* must be able to trust the result, which on-device matching can't give them) |
+| Liveness | Hardware depth + IR | Anti-spoof + liveness models, plus the random movement challenge |
+| Feel | Zero-click, instant | Zero-click where supported (below); ~1–2s server round-trip |
+
+A browser cannot reach IR emitters, depth streams, or the secure enclave — that's a platform
+boundary, not an implementation gap. (WebAuthn/passkeys *can* delegate to Hello/Face ID, but
+that proves "someone unlocked this enrolled device," not "this face matches the employee the
+server enrolled" — a device credential, not an identity check, so it's a complement rather
+than a substitute here.)
+
+What IS reachable is the *experience*, and the app now ships it:
+
+- **The camera comes to you** — the verification dialog requests the webcam the moment it
+  opens (the browser's permission prompt still applies, once).
+- **Hands-free shutter** — on Chromium browsers with the Shape Detection API
+  (`window.FaceDetector`), the dialog scans the live preview and fires by itself once a
+  single, centered, close-enough face holds still for ~1 second — the guide oval locks solid
+  and pulses, exactly the phone-unlock cadence. Client detection only decides *when to press
+  the shutter*; every security judgement stays server-side. No API support → the manual
+  button, unchanged.
+- **Auto-retry with a ceiling** — two hands-free attempts, then it falls back to the manual
+  button, so a scanner pointed at the wrong face can't hammer the rate limit or flood the
+  review log on its own.
+- **No cold start** — the server pre-loads the ML models at boot *when the feature is enabled*
+  (`warmFaceModelsIfEnabled`), so the first verification after a restart answers in the same
+  few hundred milliseconds as every later one. Deployments with the feature off still load
+  nothing.
+
 ### What this does and doesn't stop
 
 Honest threat model, worth internalising before relying on it in a dispute:

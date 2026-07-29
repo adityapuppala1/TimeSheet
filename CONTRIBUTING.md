@@ -16,6 +16,12 @@ actual handshake, not just an open port), and tells you the specific fix. `npm r
 Demo logins after seeding: `superadmin@timesheet.local` / `Admin@12345` (also `manager@…`,
 `employee@…`).
 
+**Don't rename or repurpose the seeded demo accounts in a dev workspace** — the Playwright
+suites log in with those exact emails, so editing one (e.g. personalising the superadmin into
+your own account) makes every suite fail at auth setup, and five retries later the login
+lockout turns the symptom into 429s. Make yourself a *new* SUPER_ADMIN user instead and leave
+the seeded three as fixtures.
+
 ## Before you open a PR
 
 ```bash
