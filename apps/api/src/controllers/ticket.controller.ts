@@ -560,12 +560,14 @@ ticketRouter.patch("/:id/status", requirePermission(permissions.TICKETS_WRITE), 
   // Security/test-status digest — see services/security-report.service.ts. Separate from the
   // generic status-changed notification loop above (different recipients: closer + their
   // manager + this org's admins, not reporter/assignee/watchers) and gated on its own toggle,
-  // so an org that hasn't connected a scan source never gets an empty digest.
+  // so an org that hasn't connected a scan source never gets an empty digest. Detached: it
+  // renders a report and sends real SMTP mail, none of which the close response depends on —
+  // awaiting it made closing a ticket hang for seconds.
   if (nextStatus === "CLOSED") {
-    await sendTicketClosedDigest(
+    void sendTicketClosedDigest(
       { id: ticket.id, key: ticket.key, title: ticket.title },
       { id: req.user!.id, name: req.user!.name, email: req.user!.email }
-    );
+    ).catch((error) => console.error(`[ticket] closed digest failed for ${ticket.key}:`, (error as Error).message));
   }
 
   res.json(ticket);

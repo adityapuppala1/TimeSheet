@@ -1,20 +1,33 @@
 /**
- * WHAT: the post-login landing page — KPI cards plus a couple of recharts panels summarizing
- * timesheet/ticket activity, fed by `reportApi`/`ticketApi`/`timesheetApi`.
+ * WHAT: the post-login landing page — a Trackline-style overview built from four bands:
+ * three hero cards (week-at-a-glance segmented bar, weekday activity chart, progress meters),
+ * a "today" timeline of the user's actual logged entries, the role-aware operational banners,
+ * and a per-project rollup table.
+ * WHY this shape: everything on it answers "how am I doing right now" from data the app
+ * already returns (the timesheet list, daily status, ticket list, admin summary) — no
+ * dashboard-only endpoints. The timeline is the one genuinely novel surface, and it exists
+ * because timesheet entries carry real start/end times AND the server forbids overlaps, which
+ * guarantees a clean single-track day view with zero collision handling.
  * WHY it exists separately from Insights.tsx: this is a fast, at-a-glance "how's everything
  * doing right now" view for daily use; Insights.tsx is the deeper analytics/trend-analysis
- * page for periodic review — different jobs, different pages, even though both chart the same
- * underlying data.
+ * page for periodic review — different jobs, different pages.
+ * Chart conventions (see the dataviz notes in the PR that introduced this layout): every chart
+ * here is single-series (titled, so no legend); the only adjacent color trio is the
+ * approved/pending/rejected STATUS bar, which always ships with labeled value rows and 2px
+ * segment gaps so state is never encoded by color alone.
  * WHO renders this: `App.tsx`'s `/app` (index) route.
  */
 import { useQuery } from "@tanstack/react-query";
-import type { ColumnDef } from "@tanstack/react-table";
 import { motion } from "framer-motion";
 import {
   AlertTriangle,
+  ArrowRight,
+  CalendarClock,
   CalendarPlus2,
   CheckCircle2,
   Clock,
+  FolderKanban,
+  Gauge,
   Send,
   Ticket as TicketIcon,
   TrendingUp,
@@ -28,8 +41,8 @@ import { SetupChecklistCard } from "../components/SetupChecklistCard";
 import { Badge } from "../components/ui/badge";
 import { Button } from "../components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../components/ui/card";
-import { DataTable } from "../components/ui/data-table";
 import { Progress } from "../components/ui/progress";
+import { Skeleton } from "../components/ui/skeleton";
 import { StatCard, TrendBadge } from "../components/ui/stat-card";
 import { computeTrend, type Trend } from "../lib/trend";
 import { reportApi, ticketApi, timesheetApi, type TicketRow } from "../services/api";
@@ -43,29 +56,23 @@ function startOfWeek(date: Date) {
   return d;
 }
 
-const statusVariant: Record<string, "success" | "warning" | "destructive" | "muted"> = {
-  APPROVED: "success",
-  SUBMITTED: "warning",
-  DRAFT: "muted",
-  REJECTED: "destructive"
-};
+/** Minutes since midnight from an "HH:MM" time string. */
+function toMinutes(time: string): number {
+  const [h, m] = String(time).split(":").map(Number);
+  return (h || 0) * 60 + (m || 0);
+}
 
-const recentActivityColumns: ColumnDef<any, any>[] = [
-  { id: "date", accessorFn: (row: any) => row.workDate, header: "Date", cell: ({ row }) => <span className="whitespace-nowrap font-medium">{String(row.original.workDate).slice(0, 10)}</span> },
-  { id: "project", accessorFn: (row: any) => row.project?.name, header: "Project" },
-  { accessorKey: "activityType", header: "Activity" },
-  {
-    id: "hours",
-    accessorFn: (row: any) => Number(row.totalHours),
-    header: () => <span className="block text-right">Hours</span>,
-    cell: ({ row }) => <span className="block text-right font-semibold">{Number(row.original.totalHours).toFixed(2)}</span>
-  },
-  {
-    accessorKey: "status",
-    header: "Status",
-    cell: (info) => <Badge variant={statusVariant[info.getValue() as string] ?? "muted"}>{info.getValue() as string}</Badge>
-  }
-];
+interface TimesheetRowLite {
+  id: string;
+  workDate: string;
+  startTime: string;
+  endTime: string;
+  totalHours: number | string;
+  status: string;
+  activityType?: string;
+  identityVerified?: boolean;
+  project?: { id?: string; name?: string; code?: string };
+}
 
 export function Dashboard() {
   const user = useAuthStore((s) => s.user);
@@ -90,40 +97,93 @@ export function Dashboard() {
     enabled: Boolean(user?.id && user.permissions.includes("tickets:view"))
   });
 
-  const all: any[] = Array.isArray(timesheets.data) ? timesheets.data : [];
-  const recent = all.slice(0, 5);
+  const all: TimesheetRowLite[] = Array.isArray(timesheets.data) ? timesheets.data : [];
 
-  const { todayHours, weekHours, monthHours, pendingCount, trend } = useMemo(() => {
+  /** One pass over the (max 100-row) timesheet list feeds every personal surface below. */
+  const derived = useMemo(() => {
     const now = new Date();
     const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+    const todayKey = today.toISOString().slice(0, 10);
     const weekStart = startOfWeek(today);
+    const lastWeekStart = new Date(weekStart.getTime() - 7 * 24 * 60 * 60 * 1000);
     const monthStart = new Date(now.getFullYear(), now.getMonth(), 1);
-    const buckets = new Map<string, number>();
+
     const dayLabels = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
-    for (const label of dayLabels) buckets.set(label, 0);
+    const buckets = new Map<string, number>(dayLabels.map((l) => [l, 0]));
+
     let todayH = 0;
     let weekH = 0;
+    let lastWeekH = 0;
     let monthH = 0;
-    let pending = 0;
+    let pendingCount = 0;
+    const weekByStatus = { APPROVED: 0, SUBMITTED: 0, REJECTED: 0, DRAFT: 0 } as Record<string, number>;
+    const monthByStatus = { APPROVED: 0, SUBMITTED: 0, REJECTED: 0, DRAFT: 0 } as Record<string, number>;
+    const todayEntries: TimesheetRowLite[] = [];
+
+    interface ProjectRoll {
+      id: string;
+      name: string;
+      code?: string;
+      monthHours: number;
+      approvedHours: number;
+      entries: number;
+      lastDate: string;
+    }
+    const projects = new Map<string, ProjectRoll>();
+
     for (const row of all) {
       const hours = Number(row.totalHours ?? 0);
       const work = new Date(String(row.workDate));
       if (Number.isNaN(work.getTime())) continue;
       const workDay = new Date(work.getFullYear(), work.getMonth(), work.getDate());
-      if (row.status === "SUBMITTED") pending += 1;
-      if (workDay.getTime() === today.getTime()) todayH += hours;
+      const dateKey = String(row.workDate).slice(0, 10);
+
+      if (row.status === "SUBMITTED") pendingCount += 1;
+      if (dateKey === todayKey) {
+        todayH += hours;
+        todayEntries.push(row);
+      }
       if (workDay >= weekStart && workDay <= today) {
         weekH += hours;
+        weekByStatus[row.status] = (weekByStatus[row.status] ?? 0) + hours;
         const label = dayLabels[(workDay.getDay() + 6) % 7];
         buckets.set(label, (buckets.get(label) ?? 0) + hours);
       }
-      if (workDay >= monthStart && workDay <= today) monthH += hours;
+      if (workDay >= lastWeekStart && workDay < weekStart) lastWeekH += hours;
+      if (workDay >= monthStart && workDay <= today) {
+        monthH += hours;
+        monthByStatus[row.status] = (monthByStatus[row.status] ?? 0) + hours;
+
+        const key = row.project?.id ?? row.project?.name ?? "unknown";
+        const roll = projects.get(key) ?? {
+          id: key,
+          name: row.project?.name ?? "—",
+          code: row.project?.code,
+          monthHours: 0,
+          approvedHours: 0,
+          entries: 0,
+          lastDate: dateKey
+        };
+        roll.monthHours += hours;
+        if (row.status === "APPROVED") roll.approvedHours += hours;
+        roll.entries += 1;
+        if (dateKey > roll.lastDate) roll.lastDate = dateKey;
+        projects.set(key, roll);
+      }
     }
+
+    todayEntries.sort((a, b) => toMinutes(a.startTime) - toMinutes(b.startTime));
+
     return {
       todayHours: todayH,
       weekHours: weekH,
+      lastWeekHours: lastWeekH,
       monthHours: monthH,
-      pendingCount: pending,
+      pendingCount,
+      weekByStatus,
+      monthByStatus,
+      todayEntries,
+      projectRows: [...projects.values()].sort((a, b) => b.monthHours - a.monthHours),
       trend: dayLabels.map((day) => ({ day, hours: Number((buckets.get(day) ?? 0).toFixed(2)) }))
     };
   }, [all]);
@@ -133,50 +193,61 @@ export function Dashboard() {
     return rows.map((row: any) => ({ name: row.project, value: Number(row._sum?.totalHours ?? 0) }));
   }, [admin.data]);
 
-  const stats: Array<{ label: string; value: string | number; tone?: "success" | "warning" | "destructive"; trend?: Trend | null }> = isAdmin
-    ? [
-        { label: "Users", value: admin.data?.users ?? 0, trend: computeTrend(admin.data?.users ?? 0, admin.data?.usersYesterday ?? 0, true) },
-        {
-          label: "Projects",
-          value: admin.data?.projects ?? 0,
-          trend: computeTrend(admin.data?.projects ?? 0, admin.data?.projectsYesterday ?? 0, true)
-        },
-        {
-          label: "Approved hours",
-          value: Number(admin.data?.approvedHours ?? 0),
-          tone: "success",
-          trend: computeTrend(Number(admin.data?.approvedHours ?? 0), Number(admin.data?.approvedHoursYesterday ?? 0), true)
-        },
-        {
-          label: "Pending approvals",
-          value: admin.data?.pendingApprovals ?? 0,
-          tone: "warning",
-          trend: computeTrend(admin.data?.pendingApprovals ?? 0, admin.data?.pendingApprovalsYesterday ?? 0, false)
-        },
-        {
-          label: "Security risk score",
-          value: security.data?.riskScore ?? 0,
-          tone: (security.data?.riskScore ?? 0) > 30 ? "destructive" : (security.data?.riskScore ?? 0) > 10 ? "warning" : "success",
-          trend: computeTrend(security.data?.riskScore ?? 0, security.data?.riskScoreYesterday ?? 0, false)
-        }
-      ]
-    : [
-        { label: "Today", value: todayHours.toFixed(2) },
-        { label: "This week", value: weekHours.toFixed(2) },
-        { label: "This month", value: monthHours.toFixed(2) },
-        { label: "Pending", value: pendingCount, tone: "warning" }
-      ];
+  const openTicketsByProject = useMemo(() => {
+    const counts = new Map<string, number>();
+    for (const ticket of myTickets.data ?? []) {
+      const key = (ticket as TicketRow & { project?: { id?: string } }).project?.id;
+      if (key) counts.set(key, (counts.get(key) ?? 0) + 1);
+    }
+    return counts;
+  }, [myTickets.data]);
+
+  const adminStats: Array<{ label: string; value: string | number; tone?: "success" | "warning" | "destructive"; trend?: Trend | null }> = [
+    { label: "Users", value: admin.data?.users ?? 0, trend: computeTrend(admin.data?.users ?? 0, admin.data?.usersYesterday ?? 0, true) },
+    { label: "Projects", value: admin.data?.projects ?? 0, trend: computeTrend(admin.data?.projects ?? 0, admin.data?.projectsYesterday ?? 0, true) },
+    {
+      label: "Approved hours",
+      value: Number(admin.data?.approvedHours ?? 0),
+      tone: "success",
+      trend: computeTrend(Number(admin.data?.approvedHours ?? 0), Number(admin.data?.approvedHoursYesterday ?? 0), true)
+    },
+    {
+      label: "Pending approvals",
+      value: admin.data?.pendingApprovals ?? 0,
+      tone: "warning",
+      trend: computeTrend(admin.data?.pendingApprovals ?? 0, admin.data?.pendingApprovalsYesterday ?? 0, false)
+    },
+    {
+      label: "Security risk score",
+      value: security.data?.riskScore ?? 0,
+      tone: (security.data?.riskScore ?? 0) > 30 ? "destructive" : (security.data?.riskScore ?? 0) > 10 ? "warning" : "success",
+      trend: computeTrend(security.data?.riskScore ?? 0, security.data?.riskScoreYesterday ?? 0, false)
+    }
+  ];
+
+  const todayLabel = new Date().toLocaleDateString(undefined, { weekday: "long", day: "numeric", month: "long" });
+  const firstName = user?.name?.split(" ")[0] ?? "there";
 
   return (
     <div className="grid gap-5">
       <div className="flex flex-wrap items-end justify-between gap-3">
         <div>
-          <h1 className="text-2xl font-black tracking-tight">{isAdmin ? "Admin command center" : "My timesheet dashboard"}</h1>
-          <p className="mt-1 text-sm text-muted-foreground">Role-aware productivity, utilization, submissions, and operational signals.</p>
+          <h1 className="text-2xl font-black tracking-tight">{isAdmin ? "Admin command center" : `Good day, ${firstName}`}</h1>
+          <p className="mt-1 flex items-center gap-1.5 text-sm text-muted-foreground">
+            <CalendarClock className="h-3.5 w-3.5" />
+            {todayLabel} — role-aware productivity, submissions, and operational signals.
+          </p>
         </div>
-        <Button asChild>
-          <Link to="/app/timesheet"><CalendarPlus2 className="h-4 w-4" />Log new entry</Link>
-        </Button>
+        <div className="flex gap-2">
+          {isAdmin && (
+            <Button asChild variant="outline">
+              <Link to="/app/approvals"><CheckCircle2 className="h-4 w-4" />Approvals</Link>
+            </Button>
+          )}
+          <Button asChild>
+            <Link to="/app/timesheet"><CalendarPlus2 className="h-4 w-4" />Log new entry</Link>
+          </Button>
+        </div>
       </div>
 
       {/* First-run checklist — self-hides once complete (or dismissed, unless a REQUIRED face
@@ -189,21 +260,49 @@ export function Dashboard() {
       {/* Open tickets assigned to me — any role */}
       <MyTicketsBanner tickets={myTickets.data} loading={myTickets.isLoading} />
 
+      {/* ---- Hero band: week at a glance / activity / progress ---- */}
+      <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
+        <HeroCard delay={0}>
+          <WeekAtAGlance
+            loading={timesheets.isLoading}
+            weekHours={derived.weekHours}
+            byStatus={derived.weekByStatus}
+            pendingCount={derived.pendingCount}
+          />
+        </HeroCard>
+        <HeroCard delay={0.05}>
+          <ActivityCard loading={timesheets.isLoading} trend={derived.trend} weekHours={derived.weekHours} lastWeekHours={derived.lastWeekHours} />
+        </HeroCard>
+        <HeroCard delay={0.1} className="md:col-span-2 xl:col-span-1">
+          <ProgressCard
+            loading={timesheets.isLoading}
+            weekHours={derived.weekHours}
+            monthByStatus={derived.monthByStatus}
+            monthHours={derived.monthHours}
+          />
+        </HeroCard>
+      </div>
+
+      {/* ---- Today's timeline — real entries on a real clock ---- */}
+      <TodayTimeline entries={derived.todayEntries} loading={timesheets.isLoading} todayHours={derived.todayHours} />
+
       {/* Admin / manager: workforce daily logging snapshot */}
       {isAdmin && <WorkforceSnapshot data={admin.data} loading={admin.isLoading} />}
 
-      <div className="grid grid-cols-2 gap-2.5 sm:gap-3 md:grid-cols-4">
-        {stats.map((stat, index) => (
-          <motion.div
-            key={stat.label}
-            initial={{ opacity: 0, y: 8 }}
-            animate={{ opacity: 1, y: 0 }}
-            transition={{ duration: 0.25, delay: index * 0.05 }}
-          >
-            <StatCard label={stat.label} value={String(stat.value)} tone={stat.tone} trend={stat.trend} trendLabel="vs yesterday" />
-          </motion.div>
-        ))}
-      </div>
+      {isAdmin && (
+        <div className="grid grid-cols-2 gap-2.5 sm:gap-3 md:grid-cols-5">
+          {adminStats.map((stat, index) => (
+            <motion.div
+              key={stat.label}
+              initial={{ opacity: 0, y: 8 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ duration: 0.25, delay: index * 0.05 }}
+            >
+              <StatCard label={stat.label} value={String(stat.value)} tone={stat.tone} trend={stat.trend} trendLabel="vs yesterday" />
+            </motion.div>
+          ))}
+        </div>
+      )}
 
       <div className="grid gap-5 lg:grid-cols-[1.3fr_0.7fr]">
         <Card>
@@ -214,9 +313,9 @@ export function Dashboard() {
             <CardDescription>Your logged hours, Mon–Sun.</CardDescription>
           </CardHeader>
           <CardContent>
-            <div className="h-72">
+            <div className="h-64">
               <ResponsiveContainer width="100%" height="100%">
-                <AreaChart data={trend}>
+                <AreaChart data={derived.trend}>
                   <defs>
                     <linearGradient id="primaryGrad" x1="0" y1="0" x2="0" y2="1">
                       <stop offset="0%" stopColor="hsl(var(--primary))" stopOpacity={0.4} />
@@ -240,7 +339,7 @@ export function Dashboard() {
             <CardDescription>{isAdmin ? "Across the workspace." : "Sign in as an admin for full breakdown."}</CardDescription>
           </CardHeader>
           <CardContent>
-            <div className="h-72">
+            <div className="h-64">
               <ResponsiveContainer width="100%" height="100%">
                 <BarChart data={projectTrend}>
                   <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" />
@@ -255,31 +354,458 @@ export function Dashboard() {
         </Card>
       </div>
 
-      <Card>
-        <CardHeader>
-          <CardTitle className="text-base">Recent activity</CardTitle>
-          <CardDescription>Latest entries across your timesheets.</CardDescription>
-        </CardHeader>
-        <CardContent className="p-4">
-          <DataTable
-            columns={recentActivityColumns}
-            data={recent}
-            enableSearch={false}
-            pageSize={5}
-            emptyMessage="No timesheets logged yet."
-          />
-          {!recent.length && (
-            <div className="pb-4 text-center">
-              <Link to="/app/timesheet" className="text-sm font-semibold text-primary hover:underline">
-                Log your first entry →
-              </Link>
-            </div>
-          )}
-        </CardContent>
-      </Card>
+      {/* ---- Per-project rollup — the Trackline "Project List", from data already loaded ---- */}
+      <ProjectRollup rows={derived.projectRows} openTicketsByProject={openTicketsByProject} loading={timesheets.isLoading} />
     </div>
   );
 }
+
+/* ================================ Hero band ================================ */
+
+function HeroCard({ children, delay, className }: { children: React.ReactNode; delay: number; className?: string }) {
+  return (
+    <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.3, delay }} className={className}>
+      {children}
+    </motion.div>
+  );
+}
+
+const WEEK_SEGMENTS = [
+  { key: "APPROVED", label: "Approved", bar: "bg-success", dot: "bg-success" },
+  { key: "SUBMITTED", label: "Pending review", bar: "bg-warning", dot: "bg-warning" },
+  { key: "REJECTED", label: "Rejected", bar: "bg-destructive", dot: "bg-destructive" },
+  { key: "DRAFT", label: "Draft", bar: "bg-muted-foreground/40", dot: "bg-muted-foreground/40" }
+] as const;
+
+/** Trackline's "Overall Tasks" card, for hours: headline number + a segmented STATUS bar.
+ *  Every segment also gets a labeled value row below — state is never color-alone (the
+ *  green↔amber pair sits in the CVD warn band, which is only acceptable with exactly this
+ *  kind of secondary encoding). */
+function WeekAtAGlance({
+  loading,
+  weekHours,
+  byStatus,
+  pendingCount
+}: {
+  loading: boolean;
+  weekHours: number;
+  byStatus: Record<string, number>;
+  pendingCount: number;
+}) {
+  if (loading) return <Skeleton className="h-full min-h-56 w-full" />;
+  const total = weekHours || 1;
+  const segments = WEEK_SEGMENTS.map((s) => ({ ...s, hours: byStatus[s.key] ?? 0 })).filter((s) => s.hours > 0);
+
+  return (
+    <Card className="h-full">
+      <CardHeader className="pb-3">
+        <CardTitle className="flex items-center gap-2 text-base">
+          <Clock className="h-4 w-4 text-primary" />
+          This week
+        </CardTitle>
+        <CardDescription>Your logged hours by state, Monday to today.</CardDescription>
+      </CardHeader>
+      <CardContent className="grid gap-4">
+        <div className="flex items-baseline justify-between">
+          <p className="text-3xl font-black tabular-nums tracking-tight">{weekHours.toFixed(1)}h</p>
+          {pendingCount > 0 && <Badge variant="warning">{pendingCount} awaiting review</Badge>}
+        </div>
+
+        {/* 2px gaps between segments are part of the encoding, not decoration. */}
+        {segments.length > 0 ? (
+          <div className="flex h-2.5 w-full gap-0.5 overflow-hidden rounded-full">
+            {segments.map((s) => (
+              <div key={s.key} className={`${s.bar} rounded-sm`} style={{ width: `${(s.hours / total) * 100}%` }} title={`${s.label}: ${s.hours.toFixed(1)}h`} />
+            ))}
+          </div>
+        ) : (
+          <div className="h-2.5 w-full rounded-full bg-muted" />
+        )}
+
+        <div className="grid gap-1.5">
+          {WEEK_SEGMENTS.map((s) => (
+            <div key={s.key} className="flex items-center justify-between text-sm">
+              <span className="flex items-center gap-2">
+                <span className={`h-2 w-2 rounded-full ${s.dot}`} aria-hidden />
+                {s.label}
+              </span>
+              <span className="font-semibold tabular-nums">{(byStatus[s.key] ?? 0).toFixed(1)}h</span>
+            </div>
+          ))}
+        </div>
+
+        <Link to="/app/history" className="mt-auto inline-flex items-center gap-1 text-sm font-semibold text-primary hover:underline">
+          View history <ArrowRight className="h-3.5 w-3.5" />
+        </Link>
+      </CardContent>
+    </Card>
+  );
+}
+
+/** Trackline's "Project Track": a compact single-series weekday chart + the week-over-week
+ *  insight strip. Single series → the title names it, no legend. */
+function ActivityCard({
+  loading,
+  trend,
+  weekHours,
+  lastWeekHours
+}: {
+  loading: boolean;
+  trend: Array<{ day: string; hours: number }>;
+  weekHours: number;
+  lastWeekHours: number;
+}) {
+  if (loading) return <Skeleton className="h-full min-h-56 w-full" />;
+  const delta = computeTrend(weekHours, lastWeekHours, true);
+  const up = weekHours >= lastWeekHours;
+
+  return (
+    <Card className="flex h-full flex-col">
+      <CardHeader className="pb-3">
+        <div className="flex items-start justify-between gap-2">
+          <div>
+            <CardTitle className="flex items-center gap-2 text-base">
+              <TrendingUp className="h-4 w-4 text-primary" />
+              Daily rhythm
+            </CardTitle>
+            <CardDescription>Hours logged per weekday, this week.</CardDescription>
+          </div>
+          {delta && <TrendBadge trend={delta} label="vs last week" />}
+        </div>
+      </CardHeader>
+      <CardContent className="flex flex-1 flex-col gap-3">
+        <div className="h-36 flex-1">
+          <ResponsiveContainer width="100%" height="100%">
+            <BarChart data={trend} margin={{ top: 4, right: 0, bottom: 0, left: -28 }}>
+              <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" vertical={false} />
+              <XAxis dataKey="day" stroke="hsl(var(--muted-foreground))" fontSize={11} tickLine={false} axisLine={false} />
+              <YAxis stroke="hsl(var(--muted-foreground))" fontSize={11} tickLine={false} axisLine={false} />
+              <Tooltip
+                cursor={{ fill: "hsl(var(--muted) / 0.5)" }}
+                contentStyle={{ background: "hsl(var(--popover))", border: "1px solid hsl(var(--border))", borderRadius: 8, color: "hsl(var(--popover-foreground))" }}
+              />
+              <Bar dataKey="hours" fill="hsl(var(--primary))" radius={[4, 4, 0, 0]} maxBarSize={22} />
+            </BarChart>
+          </ResponsiveContainer>
+        </div>
+
+        {/* The Trackline-style insight strip — computed, never invented. */}
+        {(weekHours > 0 || lastWeekHours > 0) && (
+          <div
+            className={`flex items-center justify-between gap-2 rounded-lg px-3 py-2 text-sm ${
+              up ? "bg-success/10 text-success" : "bg-warning/10 text-warning"
+            }`}
+          >
+            <span>
+              {up
+                ? lastWeekHours === 0
+                  ? "First hours of a fresh week — nice start!"
+                  : `Up ${(weekHours - lastWeekHours).toFixed(1)}h on last week — great momentum!`
+                : `${(lastWeekHours - weekHours).toFixed(1)}h behind last week's pace so far.`}
+            </span>
+            <ArrowRight className="h-4 w-4 shrink-0" />
+          </div>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
+/** Trackline's "Project Progress" tick-meters, on the two rates that matter here: progress
+ *  toward a 40h logged week, and how much of this month's logged time has been approved. */
+function ProgressCard({
+  loading,
+  weekHours,
+  monthByStatus,
+  monthHours
+}: {
+  loading: boolean;
+  weekHours: number;
+  monthByStatus: Record<string, number>;
+  monthHours: number;
+}) {
+  if (loading) return <Skeleton className="h-full min-h-56 w-full" />;
+  const weekTarget = 40;
+  const weekPct = Math.min(100, Math.round((weekHours / weekTarget) * 100));
+  const approvalPct = monthHours > 0 ? Math.round(((monthByStatus.APPROVED ?? 0) / monthHours) * 100) : 0;
+
+  return (
+    <Card className="h-full">
+      <CardHeader className="pb-3">
+        <CardTitle className="flex items-center gap-2 text-base">
+          <Gauge className="h-4 w-4 text-primary" />
+          Progress
+        </CardTitle>
+        <CardDescription>Week target and month approval rate.</CardDescription>
+      </CardHeader>
+      <CardContent className="grid gap-5">
+        <TickMeter label={`Week target (${weekTarget}h)`} percent={weekPct} detail={`${weekHours.toFixed(1)}h logged`} tone="primary" />
+        <TickMeter
+          label="Approved this month"
+          percent={approvalPct}
+          detail={`${(monthByStatus.APPROVED ?? 0).toFixed(1)}h of ${monthHours.toFixed(1)}h`}
+          tone="success"
+        />
+        <p className="text-xs text-muted-foreground">
+          Approval rate counts hours a manager has signed off. Pending hours move here once reviewed.
+        </p>
+      </CardContent>
+    </Card>
+  );
+}
+
+/** The Trackline dotted meter: ~36 thin ticks, filled left-to-right. Sequential (one hue) —
+ *  magnitude, not identity — with the number said in text right beside it. */
+function TickMeter({ label, percent, detail, tone }: { label: string; percent: number; detail: string; tone: "primary" | "success" }) {
+  const TICKS = 36;
+  const filled = Math.round((percent / 100) * TICKS);
+  const fill = tone === "primary" ? "bg-primary" : "bg-success";
+
+  return (
+    <div className="grid gap-1.5">
+      <div className="flex items-baseline justify-between gap-2">
+        <p className="text-sm font-medium">{label}</p>
+        <p className="text-lg font-black tabular-nums">{percent}%</p>
+      </div>
+      <div className="flex items-end gap-[3px]" role="img" aria-label={`${label}: ${percent}%`}>
+        {Array.from({ length: TICKS }, (_, i) => (
+          <span key={i} className={`h-4 w-1 rounded-full ${i < filled ? fill : "bg-muted"}`} />
+        ))}
+      </div>
+      <p className="text-xs text-muted-foreground">{detail}</p>
+    </div>
+  );
+}
+
+/* ============================== Today's timeline ============================== */
+
+/**
+ * The user's actual day on an actual clock — possible only because entries carry real
+ * start/end times and the server rejects overlapping ranges, so this is guaranteed to be a
+ * clean single track. Blocks are colored by STATUS and always carry their text label.
+ */
+function TodayTimeline({ entries, loading, todayHours }: { entries: TimesheetRowLite[]; loading: boolean; todayHours: number }) {
+  const now = new Date();
+  const nowMinutes = now.getHours() * 60 + now.getMinutes();
+
+  // Window defaults to the 07:00–19:00 working day and stretches to fit early/late entries.
+  let windowStart = 7 * 60;
+  let windowEnd = 19 * 60;
+  for (const entry of entries) {
+    windowStart = Math.min(windowStart, Math.floor(toMinutes(entry.startTime) / 60) * 60);
+    windowEnd = Math.max(windowEnd, Math.ceil(toMinutes(entry.endTime) / 60) * 60);
+  }
+  const span = windowEnd - windowStart;
+  const pct = (minutes: number) => ((minutes - windowStart) / span) * 100;
+
+  const hourTicks: number[] = [];
+  for (let m = windowStart; m <= windowEnd; m += 120) hourTicks.push(m);
+
+  const blockTone: Record<string, string> = {
+    APPROVED: "border-success/50 bg-success/15 text-success",
+    SUBMITTED: "border-warning/50 bg-warning/15 text-warning",
+    REJECTED: "border-destructive/50 bg-destructive/15 text-destructive",
+    DRAFT: "border-border bg-muted text-muted-foreground"
+  };
+
+  return (
+    <Card>
+      <CardHeader className="flex flex-wrap items-center justify-between gap-2 space-y-0 pb-3">
+        <div>
+          <CardTitle className="flex items-center gap-2 text-base">
+            <CalendarClock className="h-4 w-4 text-primary" />
+            Today's timeline
+          </CardTitle>
+          <CardDescription>Your logged entries on the clock — colors follow entry status.</CardDescription>
+        </div>
+        <div className="flex items-center gap-2">
+          <Badge variant={todayHours > 0 ? "success" : "muted"}>{todayHours.toFixed(2)}h today</Badge>
+          <Button asChild size="sm" variant="outline">
+            <Link to="/app/timesheet"><CalendarPlus2 className="h-3.5 w-3.5" />Add</Link>
+          </Button>
+        </div>
+      </CardHeader>
+      <CardContent>
+        {loading ? (
+          <Skeleton className="h-24 w-full" />
+        ) : (
+          <div className="overflow-x-auto">
+            <div className="min-w-[560px]">
+              {/* Hour axis */}
+              <div className="relative h-5 text-[11px] text-muted-foreground">
+                {hourTicks.map((m) => (
+                  <span key={m} className="absolute -translate-x-1/2 tabular-nums" style={{ left: `${pct(m)}%` }}>
+                    {String(Math.floor(m / 60)).padStart(2, "0")}:00
+                  </span>
+                ))}
+              </div>
+
+              <div className="relative h-16 rounded-lg border border-border bg-muted/20">
+                {/* Grid lines every 2h, recessive */}
+                {hourTicks.map((m) => (
+                  <span key={m} className="absolute inset-y-0 border-l border-dashed border-border/60" style={{ left: `${pct(m)}%` }} aria-hidden />
+                ))}
+
+                {/* "Now" marker, only while today is inside the window */}
+                {nowMinutes >= windowStart && nowMinutes <= windowEnd && (
+                  <span className="absolute inset-y-0 z-10 w-0.5 bg-primary" style={{ left: `${pct(nowMinutes)}%` }} title="Now" aria-label="Current time" />
+                )}
+
+                {entries.map((entry) => {
+                  const start = toMinutes(entry.startTime);
+                  const end = toMinutes(entry.endTime);
+                  const width = Math.max(pct(end) - pct(start), 2);
+                  const label = `${entry.project?.name ?? entry.activityType ?? "Entry"} · ${Number(entry.totalHours).toFixed(2)}h`;
+                  return (
+                    <Link
+                      key={entry.id}
+                      to="/app/history"
+                      className={`absolute top-2 bottom-2 flex items-center overflow-hidden rounded-md border px-2 text-xs font-medium ring-2 ring-background transition-transform hover:scale-[1.02] ${blockTone[entry.status] ?? blockTone.DRAFT}`}
+                      style={{ left: `${pct(start)}%`, width: `${width}%` }}
+                      title={`${entry.startTime}–${entry.endTime} · ${label} · ${entry.status}`}
+                    >
+                      <span className="truncate">{label}</span>
+                    </Link>
+                  );
+                })}
+
+                {entries.length === 0 && (
+                  <div className="absolute inset-0 flex items-center justify-center gap-2 text-sm text-muted-foreground">
+                    Nothing logged yet today.
+                    <Link to="/app/timesheet" className="font-semibold text-primary hover:underline">
+                      Log your first entry →
+                    </Link>
+                  </div>
+                )}
+              </div>
+
+              {/* Status key — labels, not color-alone */}
+              {entries.length > 0 && (
+                <div className="mt-2 flex flex-wrap gap-3 text-xs text-muted-foreground">
+                  {WEEK_SEGMENTS.map((s) => (
+                    <span key={s.key} className="inline-flex items-center gap-1.5">
+                      <span className={`h-2 w-2 rounded-full ${s.dot}`} aria-hidden />
+                      {s.label}
+                    </span>
+                  ))}
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
+/* ============================== Project rollup ============================== */
+
+function ProjectRollup({
+  rows,
+  openTicketsByProject,
+  loading
+}: {
+  rows: Array<{ id: string; name: string; code?: string; monthHours: number; approvedHours: number; entries: number; lastDate: string }>;
+  openTicketsByProject: Map<string, number>;
+  loading: boolean;
+}) {
+  return (
+    <Card>
+      <CardHeader className="pb-3">
+        <CardTitle className="flex items-center gap-2 text-base">
+          <FolderKanban className="h-4 w-4 text-primary" />
+          My projects this month
+        </CardTitle>
+        <CardDescription>Hours, approval progress, and open tickets per project you've logged against.</CardDescription>
+      </CardHeader>
+      <CardContent>
+        {loading ? (
+          <Skeleton className="h-32 w-full" />
+        ) : rows.length === 0 ? (
+          <div className="py-8 text-center text-sm text-muted-foreground">
+            No entries this month yet.{" "}
+            <Link to="/app/timesheet" className="font-semibold text-primary hover:underline">
+              Log your first entry →
+            </Link>
+          </div>
+        ) : (
+          <>
+            {/* Desktop table / mobile cards — same dual rendering the Tickets page uses. */}
+            <div className="hidden overflow-x-auto sm:block">
+              <table className="w-full text-sm">
+                <thead className="text-left text-muted-foreground">
+                  <tr>
+                    <th className="p-2 font-medium">Project</th>
+                    <th className="p-2 text-right font-medium">Hours</th>
+                    <th className="p-2 text-right font-medium">Entries</th>
+                    <th className="p-2 text-right font-medium">Open tickets</th>
+                    <th className="p-2 font-medium">Last entry</th>
+                    <th className="w-[26%] p-2 font-medium">Approved</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {rows.map((row) => {
+                    const approvedPct = row.monthHours > 0 ? Math.round((row.approvedHours / row.monthHours) * 100) : 0;
+                    const open = openTicketsByProject.get(row.id) ?? 0;
+                    return (
+                      <tr key={row.id} className="border-t border-border">
+                        <td className="p-2">
+                          <span className="font-medium">{row.name}</span>
+                          {row.code && <span className="ml-2 font-mono text-xs text-muted-foreground">{row.code}</span>}
+                        </td>
+                        <td className="p-2 text-right font-semibold tabular-nums">{row.monthHours.toFixed(1)}</td>
+                        <td className="p-2 text-right tabular-nums text-muted-foreground">{row.entries}</td>
+                        <td className="p-2 text-right">
+                          {open > 0 ? (
+                            <Badge variant="info"><TicketIcon className="mr-1 h-3 w-3" />{open}</Badge>
+                          ) : (
+                            <span className="text-muted-foreground">—</span>
+                          )}
+                        </td>
+                        <td className="p-2 text-muted-foreground">{row.lastDate}</td>
+                        <td className="p-2">
+                          <div className="flex items-center gap-2">
+                            <Progress value={approvedPct} className="h-1.5" />
+                            <span className="w-9 text-right text-xs font-semibold tabular-nums">{approvedPct}%</span>
+                          </div>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+
+            <div className="grid gap-2 sm:hidden">
+              {rows.map((row) => {
+                const approvedPct = row.monthHours > 0 ? Math.round((row.approvedHours / row.monthHours) * 100) : 0;
+                const open = openTicketsByProject.get(row.id) ?? 0;
+                return (
+                  <div key={row.id} className="rounded-lg border border-border p-3">
+                    <div className="flex items-center justify-between gap-2">
+                      <p className="min-w-0 truncate font-medium">{row.name}</p>
+                      <span className="font-semibold tabular-nums">{row.monthHours.toFixed(1)}h</span>
+                    </div>
+                    <div className="mt-2 flex items-center gap-2">
+                      <Progress value={approvedPct} className="h-1.5" />
+                      <span className="text-xs font-semibold tabular-nums">{approvedPct}%</span>
+                    </div>
+                    <div className="mt-2 flex items-center justify-between text-xs text-muted-foreground">
+                      <span>{row.entries} entries · last {row.lastDate}</span>
+                      {open > 0 && <Badge variant="info">{open} open</Badge>}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
+/* ============================== Banners (unchanged behavior) ============================== */
 
 function DailyStatusBanner({
   status,
@@ -393,27 +919,26 @@ function WorkforceSnapshot({ data, loading }: { data?: any; loading: boolean }) 
       </CardHeader>
       <CardContent className="grid gap-4">
         <Progress value={percent} className={percent < 50 ? "[&>div]:bg-destructive" : percent < 80 ? "[&>div]:bg-warning" : ""} />
-        {(vsYesterday || vsYtdAvg) && (
-          <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-muted-foreground">
-            {vsYesterday && (
-              <span className="inline-flex items-center gap-1">
-                vs. yesterday ({loggedYesterday}) <TrendBadge trend={vsYesterday} />
-              </span>
-            )}
-            {vsYtdAvg && (
-              <span className="inline-flex items-center gap-1">
-                vs. YTD daily avg ({ytdAvgLoggedPerDay.toFixed(1)}) <TrendBadge trend={vsYtdAvg} />
-              </span>
-            )}
-          </div>
-        )}
-        <div className="grid grid-cols-2 gap-2.5 sm:grid-cols-4 sm:gap-3">
-          <StatCard label="Filled today" value={logged} tone="success" icon={<CheckCircle2 className="h-4 w-4" />} trend={vsYesterday} trendLabel="vs yesterday" />
-          <StatCard label="Not filled" value={notLogged} tone={notLogged > 0 ? "warning" : "default"} icon={<Clock className="h-4 w-4" />} trend={notFilledTrend} trendLabel="vs yesterday" />
-          <StatCard label="Reminders sent" value={reminders} icon={<Send className="h-4 w-4" />} trend={remindersTrend} trendLabel="vs yesterday" />
-          <StatCard label="Escalations sent" value={escalations} tone={escalations > 0 ? "destructive" : "default"} icon={<AlertTriangle className="h-4 w-4" />} trend={escalationsTrend} trendLabel="vs yesterday" />
+        <div className="grid grid-cols-2 gap-2.5 text-sm sm:grid-cols-5">
+          <SnapshotStat label="Logged today" value={logged} trend={vsYesterday} trendLabel="vs yesterday" />
+          <SnapshotStat label="Not yet filled" value={notLogged} trend={notFilledTrend} trendLabel="vs yesterday" />
+          <SnapshotStat label="Reminders sent" value={reminders} trend={remindersTrend} trendLabel="vs yesterday" />
+          <SnapshotStat label="Escalations" value={escalations} trend={escalationsTrend} trendLabel="vs yesterday" />
+          <SnapshotStat label="vs YTD avg/day" value={`${ytdAvgLoggedPerDay.toFixed(1)}`} trend={vsYtdAvg} trendLabel="today vs avg" />
         </div>
       </CardContent>
     </Card>
+  );
+}
+
+function SnapshotStat({ label, value, trend, trendLabel }: { label: string; value: string | number; trend: Trend | null; trendLabel: string }) {
+  return (
+    <div className="rounded-lg border border-border bg-muted/30 p-2.5">
+      <p className="text-xs text-muted-foreground">{label}</p>
+      <div className="mt-1 flex items-center justify-between gap-1">
+        <p className="text-lg font-bold tabular-nums">{value}</p>
+        {trend && <TrendBadge trend={trend} label={trendLabel} />}
+      </div>
+    </div>
   );
 }

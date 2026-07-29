@@ -583,6 +583,28 @@ visible — this file is a living reference, not a changelog.
   capability functions have no dedicated tests yet; the mocking patterns in
   `apps/api/tests/unit/*.test.ts`'s header comments generalize directly.
 
+### Dashboard redesign + request-path latency fix (2026-07-29)
+
+- ~~Every notification-bearing action stalled for seconds~~ — root cause: `dispatchNotification`
+  awaited real SMTP round-trips (1–3s per recipient) inside user request paths, and
+  `dispatchOutboundWebhooks` awaited external endpoints (up to 5s); a face verify that notified
+  four reviewers measured **8.7s** wall-clock. Both side-effect legs are now detached (the
+  in-app Notification row and all DB writes stay awaited; `sendMail` can't throw and records
+  every attempt in EmailLog either way). Measured after: timesheet submit **49ms**, ticket
+  status change **50ms**, with the emails confirmed SENT ~2s post-response. The ticket-closed
+  security digest was detached the same way.
+- ~~Radix `DialogContent requires a DialogTitle` console warnings~~ — the command palette's
+  dialog now carries an sr-only title (and clears `aria-describedby`).
+- ~~Dashboard~~ — rebuilt as a Trackline-inspired overview: three hero cards (segmented
+  week-by-status bar with labeled value rows, single-series weekday activity chart with a
+  computed week-over-week insight strip, tick-meter progress toward the 40h week + month
+  approval rate), a **today timeline** placing the user's real entries on a real clock (the
+  server's overlap rejection guarantees a collision-free single track), and a per-project
+  month rollup with approval progress and open-ticket counts — all from data the page already
+  loaded, no new endpoints. Status colors only ever appear with text labels and 2px segment
+  gaps (the green↔amber pair sits in the CVD warn band, acceptable only with exactly that
+  secondary encoding — validated with a palette checker, not eyeballed).
+
 ### Face verification hardening (2026-07-29, from the post-ship review plan)
 
 The full plan (Enterprise packaging → trust surfaces → anti-injection → review analytics) was

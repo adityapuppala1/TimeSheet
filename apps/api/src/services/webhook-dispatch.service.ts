@@ -45,7 +45,13 @@ export async function dispatchOutboundWebhooks(event: WebhookEvent, payload: Rec
 
   const body = JSON.stringify({ event, deliveredAt: new Date().toISOString(), data: payload });
 
-  await Promise.allSettled(
+  // Deliveries are DETACHED: this resolves once the fan-out is scheduled, not once external
+  // servers have answered. The header comment has always described this as fire-and-forget, but
+  // the deliveries used to be awaited — which parked every ticket/timesheet mutation behind up
+  // to DELIVERY_TIMEOUT_MS (5s) of someone else's slow endpoint. Nothing in any caller's
+  // response depends on delivery; the outcome lands on the webhook row either way, and the
+  // tenant context carries into the detached work via AsyncLocalStorage.
+  void Promise.allSettled(
     subscribed.map(async (hook) => {
       const signature = sign(hook.secret, body);
       let status = "failed";
