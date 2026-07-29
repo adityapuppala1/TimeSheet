@@ -1,12 +1,14 @@
 name: CI
 
-# Runs on every push and PR. Three jobs, deliberately scoped to what each platform can actually
+# Runs on every push and PR. Four jobs, deliberately scoped to what each platform can actually
 # verify: GitHub Actions' `services:` containers (needed for a real MySQL instance) only run on
 # Linux runners, so the full build+migrate+seed+Playwright pipeline runs on ubuntu-latest only.
 # windows-latest still earns its place in this workflow — it's the platform install.sh/install.ps1
 # and this whole codebase actually get developed on day-to-day (see docs/DEPLOYMENT.md), so a
 # separate cross-platform job proves the app itself typechecks/builds cleanly there too, and a
 # syntax-only pass over both installer scripts runs on the OS each one is native to.
+# Test tiers run in cost order inside the ubuntu job: mocked unit tests (no DB) first for the
+# fastest failure signal, then integration tests against a real MySQL, then Playwright.
 on:
   push:
     branches: ["**"]
@@ -74,6 +76,12 @@ jobs:
       - name: Build (shared + api + web)
         run: npm run build
 
+      # Runs before any database setup on purpose: the unit tier is fully mocked (no DB, no
+      # network, no LLM/Stripe calls), so it's the fastest signal in the pipeline and shouldn't
+      # wait behind migrate/seed to tell you something's broken.
+      - name: Unit tests (vitest)
+        run: npm run test -w apps/api
+
       - name: Create CI databases
         run: |
           mysql -h127.0.0.1 -uroot -proot_ci_password -e "CREATE DATABASE IF NOT EXISTS ci_tenant; CREATE DATABASE IF NOT EXISTS ci_control;"
@@ -89,6 +97,13 @@ jobs:
         run: |
           npx tsx prisma/seed.ts
           npx tsx prisma/control/seed.ts
+
+      # The integration tier derives its own throwaway `<db>_test` databases from
+      # DATABASE_URL/CONTROL_DATABASE_URL and creates/migrates/seeds/drops them itself, so it
+      # needs the MySQL service above but deliberately never touches the ci_tenant/ci_control
+      # databases the Playwright suite runs against.
+      - name: Integration tests (vitest, real MySQL)
+        run: npm run test:integration -w apps/api
 
       - name: Install Playwright browsers
         run: npx playwright install --with-deps chromium

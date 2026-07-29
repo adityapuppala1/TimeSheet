@@ -13,6 +13,16 @@ export function createFakeTenantClient(): PrismaClient {
     globalAISettings: { upsert: vi.fn() },
     aIUsageLog: { create: vi.fn(), aggregate: vi.fn() },
     scimSettings: { findUnique: vi.fn() },
+    globalFaceVerificationSettings: { upsert: vi.fn() },
+    faceEnrollment: { findUnique: vi.fn(), upsert: vi.fn(), deleteMany: vi.fn() },
+    faceVerificationAttempt: {
+      findUnique: vi.fn(),
+      findMany: vi.fn(),
+      create: vi.fn(),
+      count: vi.fn(),
+      update: vi.fn(),
+      updateMany: vi.fn()
+    },
     user: {
       findUnique: vi.fn(),
       findFirst: vi.fn(),

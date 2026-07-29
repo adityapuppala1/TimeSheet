@@ -74,6 +74,7 @@ userRouter.post(
         password: z.string().min(8),
         managerId: z.string().uuid().optional().nullable(),
         designation: z.string().max(120).optional().nullable(),
+        faceVerificationRequired: z.boolean().optional(),
         githubUsername: z.string().max(120).optional().nullable()
       })
     })
@@ -107,6 +108,7 @@ userRouter.post(
         passwordHash: await hashPassword(req.body.password),
         managerId: req.body.managerId ?? undefined,
         designation: req.body.designation ?? undefined,
+        faceVerificationRequired: req.body.faceVerificationRequired ?? undefined,
         githubUsername: req.body.githubUsername ?? undefined,
         notificationPreference: { create: {} }
       }
@@ -253,6 +255,7 @@ const patchSchema = z.object({
     role: z.string().optional(),
     managerId: z.string().uuid().nullable().optional(),
     designation: z.string().max(120).nullable().optional(),
+    faceVerificationRequired: z.boolean().optional(),
     githubUsername: z.string().max(120).nullable().optional()
   })
 });
@@ -265,12 +268,14 @@ userRouter.patch("/:id", validate(patchSchema), async (req, res) => {
     roleId?: string;
     managerId?: string | null;
     designation?: string | null;
+    faceVerificationRequired?: boolean;
     githubUsername?: string | null;
   } = {};
   if (req.body.name) data.name = req.body.name;
   if (req.body.email) data.email = req.body.email;
   if (req.body.status) data.status = req.body.status;
   if ("designation" in req.body) data.designation = req.body.designation ?? null;
+  if ("faceVerificationRequired" in req.body) data.faceVerificationRequired = Boolean(req.body.faceVerificationRequired);
   if ("githubUsername" in req.body) data.githubUsername = req.body.githubUsername ?? null;
   if (req.body.role) {
     const role = await prisma.role.findUniqueOrThrow({ where: { name: req.body.role } });

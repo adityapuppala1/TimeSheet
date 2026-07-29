@@ -361,6 +361,31 @@ Tracked here so nothing surfaced during the security/responsive audit gets silen
 visible — this file is a living reference, not a changelog.
 
 **Resolved:**
+- ~~Multer uploads silently lost tenant context above ~500KB~~ (2026-07-29) — **a real,
+  previously-shipping production bug**, found while building face verification and confirmed to
+  affect routes that predate it. `middleware/tenant.ts` establishes the tenant via
+  `tenantContext.run(ctx, () => next())`, but multer parses the body off the request STREAM, and
+  Node only propagates an AsyncLocalStorage store into callbacks scheduled from inside the
+  context — a stream event emitted from the socket's own I/O context is not one. Small uploads
+  were already buffered and kept the store; larger ones needed extra socket reads and lost it,
+  so the first `prisma.*` access threw "No tenant context is active". Measured: a 31KB avatar
+  succeeded, an 876KB avatar returned **HTTP 500** — meaning every real phone-camera photo was
+  failing on a route whose own limit allows 5MB (ticket attachments allow 25MB). Fixed with
+  `middleware/upload.ts#preserveTenantContext`, which captures the store before multer and
+  re-enters it for the rest of the chain; applied to all six multer call sites (avatar, ticket
+  attachments, both timesheet-with-files routes, both face routes). Verified: 875KB and 3.5MB
+  avatars now return 200.
+- ~~Face (identity) verification~~ (2026-07-29) — new feature, see
+  [docs/FACE_VERIFICATION.md](FACE_VERIFICATION.md). Server-side face matching (browser is a
+  dumb camera; a client that decides its own verification outcome is not a control), with
+  anti-spoof + liveness so a printed photo can't defeat it. Off by default, master switch plus
+  per-user opt-in, calibrated threshold (different people 0.23-0.67, same person ~0.83, default
+  0.75), consent-gated enrollment with the shown wording stored verbatim, encrypted embeddings,
+  images served only through an authenticated route (never the unauthenticated `/uploads` mount),
+  and an enforced retention/purge worker. Uses `@vladmandic/human`'s node-wasm build so there is
+  no native compile step and the Alpine image builds unchanged. Verified by 12 unit tests plus an
+  18-check live HTTP script (`npm run verify:face:e2e -w apps/api`) covering gate-blocks-submit,
+  enroll, verify, replay rejection, wrong-face rejection, RBAC and deletion.
 - ~~`doctor` false-failed on any MySQL password containing `@`~~ (2026-07-29) — reported from a
   real second machine: `npm run setup` died with
   `nothing is listening on 161233@localhost:3306`. Root cause: `parseHostPort` used

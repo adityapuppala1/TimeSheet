@@ -17,7 +17,7 @@ import { controlPrisma } from "../config/control-prisma.js";
 import { requireTenantContext } from "../config/tenant-context.js";
 import { requireAuth } from "../middleware/auth.js";
 import { AppError } from "../middleware/error.js";
-import { avatarUpload } from "../middleware/upload.js";
+import { avatarUpload, preserveTenantContext } from "../middleware/upload.js";
 import { validate } from "../middleware/validate.js";
 import { audit } from "../services/audit.service.js";
 import { buildProfilePayload, changePassword, completeSsoLogin, login, refresh, requestPasswordReset, resetPassword } from "../services/auth.service.js";
@@ -207,7 +207,7 @@ authRouter.patch("/profile", requireAuth, validate(profilePatchSchema), async (r
   res.json(await buildProfilePayload(req.user!.id));
 });
 
-authRouter.post("/avatar", requireAuth, avatarUpload.single("avatar"), async (req, res) => {
+authRouter.post("/avatar", requireAuth, preserveTenantContext(avatarUpload.single("avatar")), async (req, res) => {
   const file = (req as any).file as Express.Multer.File | undefined;
   if (!file?.buffer) throw new AppError(422, "No avatar file provided");
 

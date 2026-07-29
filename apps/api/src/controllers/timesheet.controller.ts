@@ -18,7 +18,7 @@ import { calculateHours, permissions } from "@timesheet/shared";
 import { prisma } from "../config/prisma.js";
 import { requireAuth, requirePermission } from "../middleware/auth.js";
 import { AppError } from "../middleware/error.js";
-import { upload } from "../middleware/upload.js";
+import { preserveTenantContext, upload } from "../middleware/upload.js";
 import { validate } from "../middleware/validate.js";
 import { audit } from "../services/audit.service.js";
 import { dispatchNotification } from "../services/notify.service.js";
@@ -26,6 +26,7 @@ import { templates } from "../services/mail-templates.js";
 import { computeApprovalDeadline, resolveEscalationsFor } from "../services/sla.service.js";
 import { dispatchOutboundWebhooks } from "../services/webhook-dispatch.service.js";
 import { sanitizeRichText } from "../utils/sanitize.js";
+import { consumeVerification, isFaceVerificationRequired } from "../services/face.service.js";
 
 const inputSchema = z.object({
   body: z.object({
@@ -38,7 +39,12 @@ const inputSchema = z.object({
     startTime: z.string().regex(/^\d{2}:\d{2}$/),
     endTime: z.string().regex(/^\d{2}:\d{2}$/),
     notes: z.string().optional(),
-    ticketId: z.string().uuid().optional().or(z.literal(""))
+    ticketId: z.string().uuid().optional().or(z.literal("")),
+    /// Id of a PASSED, unconsumed face-verification attempt (POST /api/face/verify). Only
+    /// required when the workspace's face-verification policy covers this user + action —
+    /// services/face.service.ts#isFaceVerificationRequired decides, and the gate in
+    /// saveTimesheet enforces it. Ignored entirely for drafts.
+    faceVerificationId: z.string().uuid().optional().or(z.literal(""))
   })
 });
 
@@ -74,6 +80,18 @@ async function saveTimesheet(req: any, status: "DRAFT" | "SUBMITTED") {
   if (workDate > todayUtc) throw new AppError(422, "Future dates are not allowed");
   if (hours <= 0) throw new AppError(422, "End time must be after start time");
   if (hours > 12) throw new AppError(422, "A single entry cannot exceed 12 hours");
+
+  // Identity gate. Only on SUBMITTED: a draft is private working state, and demanding a webcam
+  // capture every time someone saves a half-finished row would be hostile without adding any
+  // assurance — what matters is who stands behind the entry when it enters the approval queue.
+  // Deliberately BEFORE any write, so a failed check cannot leave a half-created timesheet.
+  if (status === "SUBMITTED" && (await isFaceVerificationRequired(req.user.id, "TIMESHEET"))) {
+    await consumeVerification({
+      verificationId: req.body.faceVerificationId,
+      userId: req.user.id,
+      context: "TIMESHEET"
+    });
+  }
 
   // Enforce project-assignment scope for non-privileged users.
   if (!["SUPER_ADMIN", "ADMIN"].includes(req.user.role)) {
@@ -203,12 +221,12 @@ timesheetRouter.post("/submit", requirePermission(permissions.TIMESHEETS_WRITE),
   res.status(201).json(await saveTimesheet(req, "SUBMITTED"));
 });
 
-timesheetRouter.post("/draft-with-files", requirePermission(permissions.TIMESHEETS_WRITE), upload.array("attachments"), async (req, res) => {
+timesheetRouter.post("/draft-with-files", requirePermission(permissions.TIMESHEETS_WRITE), preserveTenantContext(upload.array("attachments")), async (req, res) => {
   inputSchema.parse({ body: req.body });
   res.status(201).json(await saveTimesheet(req, "DRAFT"));
 });
 
-timesheetRouter.post("/submit-with-files", requirePermission(permissions.TIMESHEETS_WRITE), upload.array("attachments"), async (req, res) => {
+timesheetRouter.post("/submit-with-files", requirePermission(permissions.TIMESHEETS_WRITE), preserveTenantContext(upload.array("attachments")), async (req, res) => {
   inputSchema.parse({ body: req.body });
   res.status(201).json(await saveTimesheet(req, "SUBMITTED"));
 });

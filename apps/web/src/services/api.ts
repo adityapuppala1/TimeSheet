@@ -348,6 +348,9 @@ export interface UserRow {
   /// GitHub login (no leading @) — lets security-ingestion's CODEOWNERS/last-committer
   /// auto-assignment resolve a finding back to this user. Set from the Users page.
   githubUsername: string | null;
+  /// Admin-set per-user opt-in for face (identity) verification. Only consulted while the
+  /// workspace-level switch is on AND its enforcement mode is SELECTED.
+  faceVerificationRequired: boolean;
   managerId: string | null;
   manager?: { id: string; name: string; email: string } | null;
   role: { name: string };
@@ -502,6 +505,9 @@ export const settingsApi = {
   getNotifications: async () => (await api.get<GlobalSettings>("/settings/notifications")).data,
   updateNotifications: async (payload: Partial<GlobalSettings>) =>
     (await api.patch<GlobalSettings>("/settings/notifications", payload)).data,
+  getFaceVerification: async () => (await api.get<FaceVerificationSettings>("/settings/face-verification")).data,
+  updateFaceVerification: async (payload: Partial<FaceVerificationSettings>) =>
+    (await api.patch<FaceVerificationSettings>("/settings/face-verification", payload)).data,
   getTicketing: async () => (await api.get<GlobalTicketSettings>("/settings/ticketing")).data,
   updateTicketing: async (payload: Partial<GlobalTicketSettings>) =>
     (await api.patch<GlobalTicketSettings>("/settings/ticketing", payload)).data,
@@ -1142,4 +1148,101 @@ export const labelApi = {
   update: async (id: string, payload: { name?: string; color?: string | null }) =>
     (await api.patch<LabelRow>(`/labels/${id}`, payload)).data,
   remove: async (id: string) => api.delete(`/labels/${id}`)
+};
+
+// ---------------------------------------------------------------------------------------------
+// Face (identity) verification
+// ---------------------------------------------------------------------------------------------
+
+export interface FaceVerificationSettings {
+  id: string;
+  enabled: boolean;
+  requireForTimesheet: boolean;
+  requireForTicket: boolean;
+  enforcementMode: "ALL" | "SELECTED";
+  matchThreshold: number;
+  antispoofThreshold: number;
+  livenessThreshold: number;
+  maxAttempts: number;
+  verificationTtlSeconds: number;
+  imageRetentionDays: number;
+  consentText: string | null;
+  updatedAt: string;
+  updatedById: string | null;
+}
+
+export interface FaceStatus {
+  enabled: boolean;
+  requiredForTimesheet: boolean;
+  requiredForTicket: boolean;
+  enrolled: boolean;
+  /** Enrollment exists but was made with an older model — embeddings aren't comparable across
+   *  model versions, so the user must re-enroll or every check would fail. */
+  needsReEnrollment: boolean;
+  enrolledAt: string | null;
+  consentAt: string | null;
+  consentText: string;
+  imageRetentionDays: number;
+  maxAttempts: number;
+}
+
+export type FaceOutcome = "PASSED" | "NO_FACE" | "MULTIPLE_FACES" | "NO_MATCH" | "SPOOF_SUSPECTED" | "NOT_ENROLLED" | "ERROR";
+
+export interface FaceVerifyResult {
+  outcome: FaceOutcome;
+  verificationId?: string;
+  expiresInSeconds?: number;
+  attemptId?: string;
+  flagged?: boolean;
+  message?: string;
+}
+
+export interface FaceAttemptRow {
+  id: string;
+  userId: string;
+  context: "TIMESHEET" | "TICKET";
+  outcome: FaceOutcome;
+  similarity: number | null;
+  antispoofReal: number | null;
+  livenessScore: number | null;
+  hasImage: boolean;
+  purgedAt: string | null;
+  flaggedForReview: boolean;
+  reviewedAt: string | null;
+  reviewNote: string | null;
+  createdAt: string;
+  consumedAt: string | null;
+  user: { id: string; name: string; email: string; avatarUrl: string | null };
+  reviewedBy: { id: string; name: string } | null;
+}
+
+export const faceApi = {
+  status: async () => (await api.get<FaceStatus>("/face/status")).data,
+  enroll: async (capture: Blob) => {
+    const form = new FormData();
+    form.append("capture", capture, "capture.jpg");
+    form.append("consent", "true");
+    return (await api.post<{ enrolled: boolean; consentAt: string }>("/face/enroll", form, { headers: { "Content-Type": "multipart/form-data" } })).data;
+  },
+  /** Resolves with the outcome either way — a failed check is a 422 carrying a structured
+   *  body, not an exception the caller should have to unwrap. */
+  verify: async (capture: Blob, context: "TIMESHEET" | "TICKET"): Promise<FaceVerifyResult> => {
+    const form = new FormData();
+    form.append("capture", capture, "capture.jpg");
+    form.append("context", context);
+    try {
+      return (await api.post<FaceVerifyResult>("/face/verify", form, { headers: { "Content-Type": "multipart/form-data" } })).data;
+    } catch (error) {
+      const data = (error as { response?: { data?: FaceVerifyResult } }).response?.data;
+      if (data?.outcome) return data;
+      throw error;
+    }
+  },
+  deleteMyEnrollment: async () => (await api.delete<{ deleted: boolean }>("/face/enrollment")).data,
+  deleteEnrollmentFor: async (userId: string) => (await api.delete<{ deleted: boolean }>(`/face/enrollment/${userId}`)).data,
+  listAttempts: async (params?: { userId?: string; outcome?: string; flaggedOnly?: boolean; take?: number }) =>
+    (await api.get<FaceAttemptRow[]>("/face/attempts", { params })).data,
+  reviewAttempt: async (id: string, note?: string) =>
+    (await api.patch<{ id: string; reviewedAt: string }>(`/face/attempts/${id}/review`, { note })).data,
+  attemptImageUrl: (id: string) => `${api.defaults.baseURL}/face/image/attempt/${id}`
 };

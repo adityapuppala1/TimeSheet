@@ -1,0 +1,37 @@
+name: Feature request
+description: Suggest a capability or an improvement
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        **Check [docs/ROADMAP.md](../blob/main/docs/ROADMAP.md) first** — it tracks what's already
+        planned, what was deliberately scoped out and why, and what's already been built. A good
+        number of requests are already there.
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: What problem does this solve?
+      description: |
+        The situation, not the solution. "Managers can't tell who hasn't submitted this week
+        without opening each person" is more useful than "add a dashboard widget" — it leaves
+        room for a better answer than the one you had in mind.
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: What you have in mind
+      description: Optional. If you already have a shape for it, describe it.
+
+  - type: textarea
+    id: existing
+    attributes:
+      label: What it should extend
+      description: |
+        Optional, but genuinely helpful. This codebase strongly prefers extending an existing
+        choke point over adding a parallel system — e.g. a new AI capability goes through
+        `ai.service.ts`, a new toggle follows the `Global*Settings` singleton pattern, a new
+        scheduled job uses `runForEveryOrg`. If you know what it'd hang off, say so.

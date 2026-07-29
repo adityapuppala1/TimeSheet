@@ -106,39 +106,46 @@ model RolePermission {
 }
 
 model User {
-  id              String     @id @default(uuid())
-  name            String
-  email           String     @unique
-  passwordHash    String
-  status          UserStatus @default(PENDING_VERIFICATION)
-  roleId          String
-  role            Role       @relation(fields: [roleId], references: [id])
-  avatarUrl       String?    @db.VarChar(500)
-  bio             String?    @db.Text
-  phoneNumber     String?    @db.VarChar(40)
-  timezone        String?    @db.VarChar(80)
+  id                       String     @id @default(uuid())
+  name                     String
+  email                    String     @unique
+  passwordHash             String
+  status                   UserStatus @default(PENDING_VERIFICATION)
+  roleId                   String
+  role                     Role       @relation(fields: [roleId], references: [id])
+  avatarUrl                String?    @db.VarChar(500)
+  bio                      String?    @db.Text
+  phoneNumber              String?    @db.VarChar(40)
+  timezone                 String?    @db.VarChar(80)
   /// Free-text job title (e.g. "Senior Backend Engineer") — distinct from `role` (the RBAC
   /// role: SUPER_ADMIN/ADMIN/MANAGER/TEAM_LEAD/EMPLOYEE, which governs permissions). A person's
   /// designation has no bearing on what they can do in the app; it's display-only context shown
   /// alongside their name (Users table, org chart) so "who does what" reads clearly even when
   /// several people share the same RBAC role.
-  designation     String?    @db.VarChar(120)
+  designation              String?    @db.VarChar(120)
   /// GitHub login (no leading @), admin-set — lets the security-ingestion pipeline resolve a
   /// finding's CODEOWNERS entry or last-committer to a real TimeSphere user for auto-assignment
   /// (security-report.service.ts#maybeAssignFindingViaCodeowners). Optional and unrelated to
   /// GitConnection (that's the org's OAuth App credential; this is one person's identity on
   /// whatever repo the org connected). No uniqueness constraint — nothing in this app requires
   /// one GitHub login map to exactly one user, though in practice it always will.
-  githubUsername  String?    @db.VarChar(120)
+  githubUsername           String?    @db.VarChar(120)
   /// The IdP's own opaque id for this user (SCIM's `externalId`), set only for users provisioned
   /// via SCIM (scim.controller.ts). Unique so a single IdP push always maps to exactly one row;
   /// null for every manually-created/SSO-first-login user, which is fine — MySQL unique indexes
   /// allow any number of NULLs.
-  scimExternalId  String?    @unique @db.VarChar(255)
-  emailVerifiedAt DateTime?
-  lastLoginAt     DateTime?
+  scimExternalId           String?    @unique @db.VarChar(255)
+  emailVerifiedAt          DateTime?
+  lastLoginAt              DateTime?
   /// Admin-only, opt-in. Only read when GlobalTicketSettings.enableCostAnalytics is on.
-  hourlyRate      Decimal?   @db.Decimal(10, 2)
+  hourlyRate               Decimal?   @db.Decimal(10, 2)
+  /// Admin-set per-user override for face (identity) verification, in the same
+  /// "global switch + per-user opt-in" shape as `hourlyRate`/`enableCostAnalytics`: only read
+  /// when GlobalFaceVerificationSettings.enabled is on, and only consulted when that row's
+  /// enforcementMode is SELECTED (in ALL mode every non-exempt user is covered regardless).
+  /// Defaults false so enabling the workspace switch never silently starts demanding a webcam
+  /// from an entire company at once.
+  faceVerificationRequired Boolean    @default(false)
 
   managerId String?
   manager   User?   @relation("UserManager", fields: [managerId], references: [id], onDelete: SetNull)
@@ -154,21 +161,24 @@ model User {
   escalationsTo          Escalation[]            @relation("EscalationTo")
   notificationPreference NotificationPreference?
 
-  reportedTickets           Ticket[]             @relation("TicketReporter")
-  assignedTickets           Ticket[]             @relation("TicketAssignee")
+  reportedTickets           Ticket[]                  @relation("TicketReporter")
+  assignedTickets           Ticket[]                  @relation("TicketAssignee")
   ticketComments            TicketComment[]
   ticketWatches             TicketWatcher[]
   uploadedTicketAttachments TicketAttachment[]
-  ticketEscalationsFrom     TicketEscalation[]   @relation("TicketEscalationFrom")
-  ticketEscalationsTo       TicketEscalation[]   @relation("TicketEscalationTo")
+  ticketEscalationsFrom     TicketEscalation[]        @relation("TicketEscalationFrom")
+  ticketEscalationsTo       TicketEscalation[]        @relation("TicketEscalationTo")
   moduleAssigneeRules       ModuleAssigneeRule[]
   aiUsageLogs               AIUsageLog[]
   ticketBranchesAdded       TicketBranch[]
   apiKeysCreated            ApiKey[]
   outboundWebhooksCreated   OutboundWebhook[]
   gitConnectionsMade        GitConnection[]
-  ticketRuleAssignments     TicketRule[]         @relation("TicketRuleAssignee")
-  ticketRuleNotifications   TicketRule[]         @relation("TicketRuleNotify")
+  ticketRuleAssignments     TicketRule[]              @relation("TicketRuleAssignee")
+  ticketRuleNotifications   TicketRule[]              @relation("TicketRuleNotify")
+  faceEnrollment            FaceEnrollment?
+  faceVerifications         FaceVerificationAttempt[] @relation("FaceVerificationSubject")
+  faceVerificationsReviewed FaceVerificationAttempt[] @relation("FaceVerificationReviewer")
 
   createdAt DateTime  @default(now())
   updatedAt DateTime  @updatedAt
@@ -1258,4 +1268,149 @@ model OutboundWebhook {
   createdById        String?
   createdBy          User?     @relation(fields: [createdById], references: [id], onDelete: SetNull)
   createdAt          DateTime  @default(now())
+}
+
+/// Singleton (id = "global"). Face (identity) verification — confirms the person submitting a
+/// timesheet or ticket is the account holder, closing the "buddy punching" gap where a
+/// colleague works on someone else's behalf using a shared/borrowed session.
+///
+/// Off by default, and deliberately so: this collects BIOMETRIC data, which is a special
+/// category under GDPR Art.9, a written-consent-and-retention-policy matter under Illinois BIPA
+/// (statutory damages per violation) and Texas CUBI, and sensitive personal data under India's
+/// DPDP Act. Turning it on without the consent flow (see FaceEnrollment.consentAt) is a legal
+/// exposure, not just a config choice — which is why enrollment refuses to proceed without
+/// recorded consent rather than treating it as an optional nicety.
+model GlobalFaceVerificationSettings {
+  id      String  @id
+  /// Master switch. Everything below is inert while this is false.
+  enabled Boolean @default(false)
+
+  /// Which actions demand a fresh face check.
+  requireForTimesheet Boolean @default(true)
+  requireForTicket    Boolean @default(false)
+
+  /// ALL = every active user must enroll and verify.
+  /// SELECTED = only users with User.faceVerificationRequired = true (the safe default, so
+  /// switching `enabled` on doesn't instantly lock out a whole company mid-week).
+  enforcementMode String @default("SELECTED") @db.VarChar(20)
+
+  /// Cosine-ish similarity (0..1) from Human's faceres embeddings that counts as "same person".
+  /// Calibrated against this model's real behaviour, not guessed: two DIFFERENT people score
+  /// ~0.60-0.67, the same person across different captures ~0.83, an identical image 1.00. 0.75
+  /// sits in that gap. Every attempt stores its own `similarity`, so an admin can look at the
+  /// real distribution for their own workforce (Face verification log) and tune this rather than
+  /// trusting a default picked on someone else's faces.
+  matchThreshold Float @default(0.75)
+
+  /// Human's antispoof ("real") and liveness ("live") scores, 0..1. These are what stop the
+  /// obvious defeat of the whole feature — holding a printed photo or a phone showing the
+  /// colleague's face up to the webcam. Both must clear their floor for a PASS.
+  antispoofThreshold Float @default(0.5)
+  livenessThreshold  Float @default(0.6)
+
+  /// Consecutive failures before the attempt is flagged for admin review. Real face matching
+  /// fails on bad lighting/new glasses/a dirty lens, so this blocks-then-escalates rather than
+  /// hard-locking someone out of logging their own work.
+  maxAttempts Int @default(3)
+
+  /// How long a PASSED verification stays spendable, in seconds. Short by design: the point is
+  /// to prove who is at the keyboard *right now*, so a capture can't be taken in the morning and
+  /// reused all day.
+  verificationTtlSeconds Int @default(300)
+
+  /// Captured attempt images are deleted after this many days (0 = never store images at all,
+  /// embeddings only). Bounds the biometric data actually sitting on disk while still leaving a
+  /// window to investigate a disputed timesheet. Enforced by workers/face-retention.worker.ts.
+  imageRetentionDays Int @default(30)
+
+  /// Shown verbatim on the enrollment consent screen and copied onto each FaceEnrollment row, so
+  /// there is a durable record of exactly what wording a person agreed to (BIPA-style
+  /// "informed written consent" is about the specific disclosure, not a generic checkbox).
+  consentText String? @db.Text
+
+  updatedAt   DateTime @updatedAt
+  updatedById String?
+}
+
+/// One per user — the reference face this person is matched against. Created only through the
+/// consent-gated enrollment route; deleting it (self-service or admin) is the "withdraw my
+/// biometric data" path every biometric privacy regime requires.
+model FaceEnrollment {
+  id     String @id @default(uuid())
+  userId String @unique
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  /// AES-256-GCM ciphertext (utils/encryption.ts) of the base64'd Float32 embedding — never the
+  /// raw vector. An embedding is biometric data in its own right under GDPR/BIPA, so it gets the
+  /// same at-rest treatment as an API key rather than sitting in a plaintext column.
+  /// Consequence, accepted deliberately: matching decrypts in Node and compares in-process, so
+  /// there is no SQL-side vector search. Fine here — a verification compares against exactly ONE
+  /// enrolled row (this user's), never a whole-table nearest-neighbour scan.
+  encryptedEmbedding String @db.Text
+
+  /// Which model produced the embedding. Embeddings are not comparable across model versions, so
+  /// a model upgrade must force re-enrollment instead of silently comparing incompatible vectors
+  /// and rejecting everyone.
+  modelVersion String @db.VarChar(60)
+
+  /// Stored under UPLOAD_DIR/face/<userId>/, served ONLY through an authenticated API route —
+  /// never under the public /uploads static mount, which has no access control at all.
+  referenceImagePath String? @db.VarChar(500)
+
+  /// Consent record. `consentText` is the exact wording shown at the time, not a pointer to
+  /// today's settings value (which an admin can edit later).
+  consentAt   DateTime
+  consentText String   @db.Text
+  consentIp   String?  @db.VarChar(64)
+
+  enrolledById String?
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+}
+
+/// One row per verification attempt — the audit trail, and the thing a timesheet/ticket submit
+/// spends to prove identity was checked. Kept even for failures: "this person failed identity
+/// check four times at 2am" is exactly the signal this feature exists to surface.
+model FaceVerificationAttempt {
+  id     String @id @default(uuid())
+  userId String
+  user   User   @relation("FaceVerificationSubject", fields: [userId], references: [id], onDelete: Cascade)
+
+  /// TIMESHEET | TICKET
+  context String @db.VarChar(20)
+
+  /// PASSED | NO_FACE | MULTIPLE_FACES | NO_MATCH | SPOOF_SUSPECTED | NOT_ENROLLED | ERROR
+  outcome String @db.VarChar(30)
+
+  /// The raw scores behind the decision, always recorded (even on failure) so a disputed
+  /// rejection can be reviewed against numbers rather than re-run from memory.
+  similarity    Float?
+  antispoofReal Float?
+  livenessScore Float?
+
+  /// Captured frame, nulled by the retention worker after imageRetentionDays. Same
+  /// authenticated-route-only rule as FaceEnrollment.referenceImagePath.
+  imagePath String?   @db.VarChar(500)
+  purgedAt  DateTime?
+
+  /// Set when a PASSED attempt is redeemed by a timesheet/ticket submit. Single-use: a
+  /// verification cannot be replayed across two submissions.
+  consumedAt  DateTime?
+  timesheetId String?   @db.VarChar(64)
+  ticketId    String?   @db.VarChar(64)
+
+  flaggedForReview Boolean   @default(false)
+  reviewedById     String?
+  reviewedBy       User?     @relation("FaceVerificationReviewer", fields: [reviewedById], references: [id], onDelete: SetNull)
+  reviewedAt       DateTime?
+  reviewNote       String?   @db.Text
+
+  ipAddress String?  @db.VarChar(64)
+  userAgent String?  @db.Text
+  createdAt DateTime @default(now())
+
+  @@index([userId, createdAt])
+  @@index([flaggedForReview, createdAt])
+  @@index([outcome, createdAt])
+  @@index([purgedAt])
 }

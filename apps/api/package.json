@@ -20,13 +20,19 @@
     "send-test": "tsx scripts/send-test-email.ts",
     "test": "vitest run --config vitest.config.ts",
     "test:watch": "vitest --config vitest.config.ts",
-    "test:integration": "vitest run --config vitest.integration.config.ts"
+    "test:integration": "vitest run --config vitest.integration.config.ts",
+    "verify:face": "tsx scripts/verify-face-service.ts",
+    "verify:face:e2e": "tsx scripts/verify-face-e2e.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.110.0",
     "@node-saml/node-saml": "^5.1.0",
     "@prisma/client": "^6.7.0",
+    "@tensorflow/tfjs-backend-wasm": "^4.22.0",
+    "@tensorflow/tfjs-converter": "^4.22.0",
+    "@tensorflow/tfjs-core": "^4.22.0",
     "@timesheet/shared": "1.0.0",
+    "@vladmandic/human": "^3.3.6",
     "bcryptjs": "^3.0.2",
     "compression": "^1.8.0",
     "cookie-parser": "^1.4.7",

@@ -24,7 +24,8 @@ import { RichTextEditor } from "../components/ui/rich-text-editor";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../components/ui/select";
 import { Separator } from "../components/ui/separator";
 import { toast } from "../components/ui/toaster";
-import { projectApi, ticketApi, timesheetApi } from "../services/api";
+import { faceApi, projectApi, ticketApi, timesheetApi } from "../services/api";
+import { FaceVerificationDialog } from "../components/FaceVerificationDialog";
 
 const MAX_DAILY_HOURS = 12;
 const OPEN_TICKET_STATUSES = "OPEN,IN_PROGRESS,IN_REVIEW,REOPENED";
@@ -104,11 +105,15 @@ export function Timesheet() {
   const capPercent = Math.min(100, Math.round((projectedDayTotal / MAX_DAILY_HOURS) * 100));
 
   const mutation = useMutation({
-    mutationFn: ({ values, draft }: { values: FormData; draft: boolean }) => {
+    mutationFn: ({ values, draft, faceVerificationId }: { values: FormData; draft: boolean; faceVerificationId?: string }) => {
       const payload = {
         ...values,
         taskDescription: values.taskDescription, // stays HTML — server keeps as text
-        notes: values.notes ?? ""
+        notes: values.notes ?? "",
+        // Single-use token proving a live identity check just passed. Only present when the
+        // workspace policy covers this user; the server re-checks whether it was required at
+        // all, so omitting it can never bypass the gate.
+        ...(faceVerificationId ? { faceVerificationId } : {})
       };
       if (files.length) {
         const fd = new window.FormData();
@@ -145,6 +150,23 @@ export function Timesheet() {
     }
   });
 
+  // Whether THIS user must pass a face check before submitting. Read from the server rather
+  // than assumed, since it depends on the workspace policy plus a per-user override.
+  const faceStatus = useQuery({ queryKey: ["face", "status"], queryFn: faceApi.status });
+  const [faceDialogOpen, setFaceDialogOpen] = useState(false);
+  const [pendingValues, setPendingValues] = useState<FormData | null>(null);
+
+  /** Submit path for "Submit for approval". Drafts bypass this entirely — they're private
+   *  working state, and the server only gates SUBMITTED. */
+  const requestSubmit = (values: FormData) => {
+    if (faceStatus.data?.requiredForTimesheet) {
+      setPendingValues(values);
+      setFaceDialogOpen(true);
+      return;
+    }
+    mutation.mutate({ values, draft: false });
+  };
+
   return (
     <div className="grid gap-5">
       <div>
@@ -159,7 +181,7 @@ export function Timesheet() {
           <Form {...form}>
             <form
               className="grid gap-6"
-              onSubmit={form.handleSubmit((values) => mutation.mutate({ values, draft: false }))}
+              onSubmit={form.handleSubmit((values) => requestSubmit(values))}
             >
               <section className="grid gap-4 sm:grid-cols-2 md:grid-cols-4">
                 <FormField
@@ -412,6 +434,20 @@ export function Timesheet() {
           </Form>
         </CardContent>
       </Card>
+
+      <FaceVerificationDialog
+        open={faceDialogOpen}
+        onOpenChange={(open) => {
+          setFaceDialogOpen(open);
+          if (!open) setPendingValues(null);
+        }}
+        context="TIMESHEET"
+        actionLabel="submit this timesheet"
+        onVerified={(verificationId) => {
+          if (pendingValues) mutation.mutate({ values: pendingValues, draft: false, faceVerificationId: verificationId });
+          setPendingValues(null);
+        }}
+      />
     </div>
   );
 }

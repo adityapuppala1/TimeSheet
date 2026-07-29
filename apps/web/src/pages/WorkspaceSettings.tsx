@@ -85,6 +85,7 @@ import { PublicApiSettingsCard } from "./settings/PublicApiSettingsCard";
 import { BillingSettingsCard } from "./settings/BillingSettingsCard";
 import { IntegrationsSettingsCard } from "./settings/IntegrationsSettingsCard";
 import { SecurityDevOpsSettingsCard } from "./settings/SecurityDevOpsSettingsCard";
+import { FaceVerificationSettingsCard } from "./settings/FaceVerificationSettingsCard";
 
 // Matches the exact chart styling convention used in Insights.tsx (this repo's `dataviz`
 // skill): CSS-variable colors only, fixed categorical order never re-cycled by rank.
@@ -157,6 +158,7 @@ export function WorkspaceSettingsPage() {
           <TabsTrigger value="email-intake">Email intake</TabsTrigger>
           <TabsTrigger value="chat-integrations">Chat integrations</TabsTrigger>
           <TabsTrigger value="security-devops">Security & DevOps</TabsTrigger>
+          <TabsTrigger value="face-verification">Face verification</TabsTrigger>
           <TabsTrigger value="integrations">Integrations</TabsTrigger>
           <TabsTrigger value="billing">Billing</TabsTrigger>
           <TabsTrigger value="public-api">Public API</TabsTrigger>
@@ -190,6 +192,10 @@ export function WorkspaceSettingsPage() {
 
         <TabsContent value="chat-integrations">
           <ChatIntegrationsSettingsCard readOnly={!isSuperAdmin} />
+        </TabsContent>
+
+        <TabsContent value="face-verification">
+          <FaceVerificationSettingsCard readOnly={!isSuperAdmin} />
         </TabsContent>
 
         <TabsContent value="security-devops">

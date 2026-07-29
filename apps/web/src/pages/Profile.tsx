@@ -22,6 +22,7 @@ import {
   AlertDialogHeader,
   AlertDialogTitle
 } from "../components/ui/alert-dialog";
+import { FaceEnrollmentCard } from "../components/FaceEnrollmentCard";
 import { Avatar, AvatarFallback, AvatarImage } from "../components/ui/avatar";
 import { Badge } from "../components/ui/badge";
 import { Button } from "../components/ui/button";
@@ -482,6 +483,10 @@ export function Profile() {
           />
         </CardContent>
       </Card>
+
+      {/* Renders nothing unless the workspace has face verification enabled and this user is
+          covered by it — see FaceEnrollmentCard. */}
+      <FaceEnrollmentCard />
 
       <AlertDialog open={confirmRemoveAvatar} onOpenChange={setConfirmRemoveAvatar}>
         <AlertDialogContent>

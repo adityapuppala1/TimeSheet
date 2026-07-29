@@ -1,0 +1,66 @@
+name: Bug report
+description: Something behaves differently than it should
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Before filing: if setup or install is failing, run `npm run doctor -w apps/api` first —
+        it diagnoses the overwhelming majority of environment problems (wrong MySQL port, wrong
+        credentials, MySQL not running) and tells you the exact fix. See
+        [docs/INSTALLATION.md](../blob/main/docs/INSTALLATION.md#self-diagnosis-npm-run-doctor).
+
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened
+      description: What you saw, and what you expected instead.
+      placeholder: |
+        Expected: submitting a timesheet saves it.
+        Actual: HTTP 500, "No tenant context is active".
+    validations:
+      required: true
+
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Steps to reproduce
+      description: The shortest reliable path to it. If it's intermittent, say so and roughly how often.
+      placeholder: |
+        1. Log in as an EMPLOYEE
+        2. Go to Timesheet, attach a ~2MB photo
+        3. Submit
+    validations:
+      required: true
+
+  - type: dropdown
+    id: deployment
+    attributes:
+      label: How are you running it?
+      options:
+        - Manual/local (no Docker)
+        - Docker Compose (bundled MySQL)
+        - Docker Compose (my own external MySQL)
+        - Kubernetes (Helm chart)
+        - Other / not sure
+    validations:
+      required: true
+
+  - type: input
+    id: versions
+    attributes:
+      label: Environment
+      description: OS, Node version, and browser if it's a UI issue.
+      placeholder: "Windows 11, Node 22.14, Chrome 141"
+    validations:
+      required: true
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant logs
+      description: |
+        API output (`docker compose logs api`, or the terminal running `npm run dev`) and/or the
+        browser console. **Redact secrets first** — `.env` values, tokens, and connection strings
+        with real passwords.
+      render: shell

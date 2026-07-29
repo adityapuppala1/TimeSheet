@@ -84,7 +84,7 @@ database is my company" needed almost no changes to become multi-tenant — see 
 | `docs/` | This file, `DEPLOYMENT.md` (operational how-to), and diagrams. |
 | `install.sh` / `install.ps1` | One-click Docker Compose installers (Shape 1 — see §8). |
 | `tests/e2e` | Playwright end-to-end suite (repo root — exercises both `apps/api` and `apps/web` together). |
-| `apps/api/tests` | Vitest unit (`tests/unit`, mocked, no real DB) + integration (`tests/integration`, real throwaway MySQL) tests, scoped to `apps/api` alone — AI service, Stripe billing, SCIM. |
+| `apps/api/tests` | Vitest unit (`tests/unit`, mocked, no real DB) + integration (`tests/integration`, real throwaway MySQL) tests, scoped to `apps/api` alone — AI service, Stripe billing, SCIM, face verification. |
 
 ---
 
@@ -167,6 +167,34 @@ plan-tier limits, and cross-org analytics. `services/platform-admin-analytics.se
 convention to aggregate/count queries — never row-level ticket/comment content. That convention
 is the concrete, auditable point where the "no cross-tenant data leakage" guarantee either holds
 or doesn't.
+
+### 3.7 Face (identity) verification — server-authoritative by construction
+
+Optional, off by default. Confirms the person submitting a timesheet/ticket is the account
+holder. Three design constraints drive the whole shape of it:
+
+1. **Every decision is made server-side.** The browser only uploads a JPEG — there is no
+   face-matching code in the web bundle at all. This is not a performance choice: a client that
+   decides its own verification outcome is not a security control, because any employee could
+   POST a "passed" result from devtools. `services/face.service.ts` owns detection, anti-spoof,
+   liveness, and comparison.
+2. **Anti-spoof is checked BEFORE the match.** Otherwise holding a printed photo of the right
+   colleague up to the webcam passes on similarity alone — the exact attack the feature exists
+   to stop.
+3. **A passed check is a single-use, short-lived token.** `POST /api/face/verify` returns a
+   `verificationId` that `consumeVerification()` redeems at submit time — same user, same
+   context, not already spent, not expired. A conditional `updateMany` arbitrates concurrent
+   double-submits, so exactly one wins.
+
+Biometric data is treated as its own category throughout: templates are AES-256-GCM encrypted
+(same helper as API keys), and captured images live **outside** the public `/uploads` static
+mount — that mount has no authentication at all, so anything under it is world-readable to
+anyone who guesses a filename. Face imagery is served only by `GET /api/face/image/...`, which
+checks session, tenant, and subject-or-admin. `workers/face-retention.worker.ts` enforces the
+retention window, because a retention policy nothing enforces is just a document.
+
+See [FACE_VERIFICATION.md](FACE_VERIFICATION.md) for calibration, thresholds, and the
+regulatory obligations (GDPR Art.9, Illinois BIPA, India DPDP) it carries.
 
 ---
 
@@ -257,6 +285,15 @@ service depends on `config/prisma.ts`; not repeated below unless it's the point 
 | `workers/chat-telegram.worker.ts` | Telegram long-polling (the one chat platform that supports polling, avoiding a public endpoint requirement). | `run-for-every-org.ts`, `chat-intake.service.ts` | `server.ts` |
 | `controllers/chat-integrations.controller.ts` | Org-admin settings CRUD for chat platform credentials + routing rules, plan-tier gated. | `plan-limits.service.ts` | `app.ts` |
 | `workers/inbound-email.worker.ts` | IMAP polling (chosen over a webhook so this app needs no public domain by default). | `run-for-every-org.ts`, `email-intake.service.ts` | `server.ts` |
+
+### Face (identity) verification
+
+| File | Purpose | Depends on | Depended on by |
+|---|---|---|---|
+| `services/face.service.ts` | The one face choke point — lazy model loading, embedding extraction, anti-spoof/liveness scoring, match comparison, and the enforcement helpers (`isFaceVerificationRequired`, `consumeVerification`). Its header documents three non-obvious loading workarounds that must not be "simplified" away. | `@vladmandic/human` (node-wasm build), `@tensorflow/tfjs-*`, `sharp`, `utils/encryption.ts` | `controllers/face.controller.ts`, `timesheet.controller.ts`, `ticket.controller.ts`, `workers/face-retention.worker.ts` |
+| `controllers/face.controller.ts` | HTTP surface: consent-gated enrollment, verification, self-service + admin deletion, the admin review log, and authenticated image streaming. | `face.service.ts`, `middleware/upload.ts` | `app.ts` |
+| `workers/face-retention.worker.ts` | Daily 03:15 purge of captured images past `imageRetentionDays` — deletes the file and nulls the reference, keeping the (non-biometric) attempt record as audit trail. | `run-for-every-org.ts`, `face.service.ts` | `server.ts` |
+| `middleware/upload.ts#preserveTenantContext` | Re-enters the tenant `AsyncLocalStorage` store after multer. **Load-bearing for every upload route, not just face** — see its header for the size-dependent bug it fixes. | `config/tenant-context.ts` | `auth`, `ticket`, `timesheet`, `face` controllers |
 
 ### Security assessment ingestion & outbound mail
 

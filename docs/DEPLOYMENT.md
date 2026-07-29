@@ -122,6 +122,11 @@ specifically for "I want Docker for the app, but my own database."
    commands from step 4.
 7. Configure SMTP (`SMTP_*`) for real email delivery, enable MySQL backups, and point your log
    aggregator at the container/process output.
+8. If you plan to enable **face verification**, note that it writes to `UPLOAD_DIR/face/` — the
+   same volume as other uploads, so back it up (or deliberately don't, since it's biometric
+   data with its own retention policy) and make sure the deployment is served over HTTPS, as
+   browsers refuse camera access on an insecure origin. See
+   [docs/FACE_VERIFICATION.md](FACE_VERIFICATION.md).
 
 ### Why a control plane exists even in this single-org shape
 
@@ -391,7 +396,7 @@ plays on Kubernetes.
 
 **Worker/background processing**: there is currently no separate worker process — scheduled jobs
 (daily reminder emails, deadline reminders, SLA escalation sweeps, inbound-email polling,
-Telegram polling, the AI weekly digest) run as in-process `node-cron` schedules inside the `api`
+Telegram polling, the AI weekly digest, the face-capture retention purge) run as in-process `node-cron` schedules inside the `api`
 container/pod itself (see `apps/api/src/workers/*.worker.ts`). This means **exactly one replica
 of `api` should run the cron
 schedules** in a horizontally-scaled deployment, or jobs fire once per replica — set

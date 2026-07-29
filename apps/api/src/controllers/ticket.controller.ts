@@ -27,7 +27,7 @@ import { permissions, ticketStatusTransitions, type TicketStatus } from "@timesh
 import { prisma } from "../config/prisma.js";
 import { requireAuth, requirePermission } from "../middleware/auth.js";
 import { AppError } from "../middleware/error.js";
-import { upload } from "../middleware/upload.js";
+import { preserveTenantContext, upload } from "../middleware/upload.js";
 import { validate } from "../middleware/validate.js";
 import { audit } from "../services/audit.service.js";
 import { dispatchNotification } from "../services/notify.service.js";
@@ -47,6 +47,7 @@ import {
   ticketProjectScope
 } from "../services/ticket.service.js";
 import { sanitizeRichText } from "../utils/sanitize.js";
+import { consumeVerification, isFaceVerificationRequired } from "../services/face.service.js";
 
 const USER_SUMMARY = { id: true, name: true, email: true, avatarUrl: true } as const;
 const TICKET_LINK_SUMMARY = { id: true, key: true, title: true, status: true, priority: true } as const;
@@ -225,7 +226,11 @@ const createSchema = z.object({
     description: z.string().max(20000).optional(),
     priority: z.enum(["LOW", "MEDIUM", "HIGH", "CRITICAL"]).default("MEDIUM"),
     assigneeId: z.string().uuid().optional().or(z.literal("")),
-    aiConfidence: z.number().min(0).max(1).optional()
+    aiConfidence: z.number().min(0).max(1).optional(),
+    /// Id of a PASSED, unconsumed face-verification attempt (POST /api/face/verify). Only
+    /// required when the workspace's face-verification policy covers this user + action —
+    /// services/face.service.ts#isFaceVerificationRequired decides.
+    faceVerificationId: z.string().uuid().optional().or(z.literal(""))
   })
 });
 
@@ -240,6 +245,16 @@ ticketRouter.post("/", requirePermission(permissions.TICKETS_WRITE), validate(cr
     throw new AppError(422, "Assignee is not a member of this project");
   }
   await assertValidTicketType(req.body.type);
+
+  // Identity gate — before the transaction below, so a failed check can never leave a
+  // partially-created ticket (or burn a ticket key) behind.
+  if (await isFaceVerificationRequired(req.user!.id, "TICKET")) {
+    await consumeVerification({
+      verificationId: req.body.faceVerificationId,
+      userId: req.user!.id,
+      context: "TICKET"
+    });
+  }
 
   const cleanDescription = req.body.description ? sanitizeRichText(req.body.description) : null;
   const priority = req.body.priority;
@@ -1043,7 +1058,7 @@ ticketRouter.post("/:id/comments", requirePermission(permissions.TICKETS_WRITE),
 ticketRouter.post(
   "/:id/attachments",
   requirePermission(permissions.TICKETS_WRITE),
-  upload.array("attachments"),
+  preserveTenantContext(upload.array("attachments")),
   async (req, res) => {
     const ticket = await prisma.ticket.findFirst({ where: { id: String(req.params.id), deletedAt: null } });
     if (!ticket) throw new AppError(404, "Ticket not found");

@@ -15,6 +15,8 @@
 import fs from "node:fs";
 import path from "node:path";
 import multer from "multer";
+import type { RequestHandler } from "express";
+import { tenantContext } from "../config/tenant-context.js";
 import { env } from "../config/env.js";
 import { AppError } from "./error.js";
 
@@ -75,3 +77,65 @@ export const avatarUpload = multer({
     cb(null, true);
   }
 });
+
+/**
+ * Webcam captures for face (identity) verification — memory storage, because the buffer goes
+ * straight into `face.service.ts#analyzeFace` and is only written to disk (re-encoded, in a
+ * non-public directory) if the settings say to retain it.
+ *
+ * Tighter than `avatarUpload` on purpose: these frames are always produced by our own
+ * `canvas.toBlob()` capture, never chosen from a file picker, so the accepted shape is narrow —
+ * JPEG/PNG only (no GIF, which has no business being a camera still) and 4MB, which is
+ * comfortably above a 640px JPEG while leaving no room for someone to POST a large payload at
+ * an endpoint that runs ML inference on whatever it's given.
+ */
+const allowedCaptureExtensions = new Set([".png", ".jpg", ".jpeg"]);
+const allowedCaptureMimes = new Set(["image/png", "image/jpeg", "image/jpg"]);
+
+export const faceCaptureUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 4 * 1024 * 1024, files: 1 },
+  fileFilter: (_req, file, cb) => {
+    const ext = path.extname(file.originalname).toLowerCase();
+    // The browser's canvas.toBlob() gives us a real filename+mime; a missing extension is fine
+    // as long as the MIME is right (some clients send "blob" with no extension).
+    const extOk = ext === "" || allowedCaptureExtensions.has(ext);
+    if (!extOk || !allowedCaptureMimes.has(file.mimetype)) {
+      return cb(new AppError(422, "Face capture must be a PNG or JPEG image"));
+    }
+    cb(null, true);
+  }
+});
+
+/**
+ * Wraps a multer middleware so the tenant AsyncLocalStorage context survives it.
+ *
+ * WHY THIS IS NECESSARY (a real, previously-shipping bug — do not remove):
+ * `middleware/tenant.ts` establishes the tenant via `tenantContext.run(ctx, () => next())`, and
+ * everything downstream reads `prisma` through that store. Multer parses the body off the
+ * request STREAM, and Node only propagates an AsyncLocalStorage store into callbacks scheduled
+ * from inside the context — a stream event emitted from the socket's own I/O context is not
+ * one. So multer's `done()` (and therefore every handler after it) can run with the store
+ * MISSING, and the first `prisma.*` access throws "No tenant context is active".
+ *
+ * The failure is SIZE-DEPENDENT, which is what made it so easy to miss: a small upload is
+ * already buffered when multer attaches, finishes in the current tick, and keeps the context;
+ * a larger one needs additional socket reads and loses it. Measured on this codebase: a 31KB
+ * avatar succeeded while an 876KB avatar returned HTTP 500 — i.e. every real photo from a
+ * phone camera was failing, on a route whose own limit allows 5MB (and 25MB for ticket
+ * attachments).
+ *
+ * The fix is to capture the store before multer runs and re-enter it for the rest of the
+ * chain. Applied to every multer route, not just the face ones, because they all shared this.
+ */
+export function preserveTenantContext(handler: RequestHandler): RequestHandler {
+  return (req, res, next) => {
+    const store = tenantContext.getStore();
+    handler(req, res, (err?: unknown) => {
+      // No store to begin with (a route mounted before tenant resolution, e.g. the SCIM/webhook
+      // surfaces) — nothing to restore, behave exactly as before.
+      if (!store) return next(err as Error | undefined);
+      tenantContext.run(store, () => next(err as Error | undefined));
+    });
+  };
+}

@@ -58,6 +58,7 @@ import {
 } from "../components/ui/dialog";
 import { Input } from "../components/ui/input";
 import { Label } from "../components/ui/label";
+import { Switch } from "../components/ui/switch";
 import { ScrollArea } from "../components/ui/scroll-area";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../components/ui/select";
 import { StatCard } from "../components/ui/stat-card";
@@ -163,7 +164,8 @@ export function UsersPage() {
     password: "Admin@12345",
     managerId: "none",
     designation: "",
-    githubUsername: ""
+    githubUsername: "",
+    faceVerificationRequired: false
   });
   const [editing, setEditing] = useState<UserRow | null>(null);
   const [pendingDelete, setPendingDelete] = useState<{ id: string; name: string } | null>(null);
@@ -187,7 +189,7 @@ export function UsersPage() {
           duration: 10_000
         });
       }
-      setDraft({ name: "", email: "", role: "EMPLOYEE", password: "Admin@12345", managerId: "none", designation: "", githubUsername: "" });
+      setDraft({ name: "", email: "", role: "EMPLOYEE", password: "Admin@12345", managerId: "none", designation: "", githubUsername: "", faceVerificationRequired: false });
       queryClient.invalidateQueries({ queryKey: ["users"] });
     },
     onError: (err: any) => toast.error("Unable to create user", { description: serverMessage(err, "Try again.") })
@@ -241,6 +243,7 @@ export function UsersPage() {
       password: draft.password,
       managerId: draft.managerId === "none" ? null : draft.managerId,
       designation: draft.designation.trim() || null,
+      faceVerificationRequired: draft.faceVerificationRequired,
       githubUsername: draft.githubUsername.trim() || null
     });
   }
@@ -410,6 +413,17 @@ export function UsersPage() {
                 placeholder="e.g. octocat (no @)"
               />
             </FieldShell>
+            <FieldShell label="Require face verification">
+              <div className="flex h-10 items-center gap-2">
+                <Switch
+                  checked={draft.faceVerificationRequired}
+                  onCheckedChange={(v) => setDraft({ ...draft, faceVerificationRequired: v })}
+                />
+                <span className="text-xs text-muted-foreground">
+                  Camera identity check on submit (only while enabled workspace-wide)
+                </span>
+              </div>
+            </FieldShell>
             <FieldShell label="Temporary password">
               <Input value={draft.password} onChange={(e) => setDraft({ ...draft, password: e.target.value })} />
             </FieldShell>
@@ -526,7 +540,8 @@ function UserEditDialog({
     status: "ACTIVE" as "ACTIVE" | "INACTIVE" | "PENDING_VERIFICATION",
     managerId: "none",
     designation: "",
-    githubUsername: ""
+    githubUsername: "",
+    faceVerificationRequired: false
   });
   // Key the form re-initialization on the user's stable id, not the whole
   // user object. This way a background refetch of the users list (which
@@ -541,7 +556,8 @@ function UserEditDialog({
         status: user.status,
         managerId: user.managerId ?? "none",
         designation: user.designation ?? "",
-        githubUsername: user.githubUsername ?? ""
+        githubUsername: user.githubUsername ?? "",
+        faceVerificationRequired: user.faceVerificationRequired ?? false
       });
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -610,6 +626,20 @@ function UserEditDialog({
                     placeholder="e.g. octocat (no @)"
                   />
                 </div>
+                <div className="flex items-center justify-between rounded-lg border border-border bg-muted/30 p-3 sm:col-span-2">
+                  <div className="space-y-0.5 pr-4">
+                    <Label htmlFor="ue-face">Require face verification</Label>
+                    <p className="text-xs text-muted-foreground">
+                      Ask this person to confirm their identity with a camera check when submitting. Only applies while face
+                      verification is enabled in Workspace Settings and set to &ldquo;selected users&rdquo;.
+                    </p>
+                  </div>
+                  <Switch
+                    id="ue-face"
+                    checked={form.faceVerificationRequired}
+                    onCheckedChange={(v) => setForm({ ...form, faceVerificationRequired: v })}
+                  />
+                </div>
               </div>
               <div className="grid gap-1.5">
                 <Label>Reports to</Label>
@@ -637,7 +667,8 @@ function UserEditDialog({
                     status: form.status,
                     managerId: form.managerId === "none" ? null : form.managerId,
                     designation: form.designation.trim() || null,
-                    githubUsername: form.githubUsername.trim() || null
+                    githubUsername: form.githubUsername.trim() || null,
+                    faceVerificationRequired: form.faceVerificationRequired
                   })
                 }
                 disabled={!form.name.trim() || !form.email.trim()}

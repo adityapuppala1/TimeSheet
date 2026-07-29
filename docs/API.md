@@ -38,6 +38,47 @@ Base URL: `/api`
 - `PATCH /timesheets/:id/approve`
 - `PATCH /timesheets/:id/reject`
 
+## Face (identity) verification
+
+Optional and off by default — see [FACE_VERIFICATION.md](FACE_VERIFICATION.md) for the design,
+calibration, and the biometric-privacy obligations it carries.
+
+All routes require a normal authenticated session. Captures are sent as `multipart/form-data`
+with a single `capture` file part (PNG/JPEG, ≤4MB).
+
+- `GET /face/status` — what the caller needs to render the right UI: whether the policy covers
+  them (`requiredForTimesheet` / `requiredForTicket`), whether they've enrolled, the consent
+  text to display, and the retention window. Only ever describes the caller.
+- `POST /face/enroll` — `capture` + `consent=true`. **Consent is a hard precondition**, not a
+  logged checkbox: without it the request is rejected 422. The exact wording shown at the time
+  is stored on the enrollment row, since an admin can edit the settings text later.
+- `POST /face/verify` — `capture` + `context=TIMESHEET|TICKET`. On success returns
+  `{ outcome: "PASSED", verificationId, expiresInSeconds }`. **The `verificationId` is
+  single-use and short-lived** — pass it as `faceVerificationId` on the subsequent
+  `POST /timesheets/submit` or `POST /tickets`. A failure returns HTTP 422 with a structured
+  body (`outcome`, `message`, `attemptId`, `flagged`) rather than an opaque error, so the UI can
+  explain *why* — `NO_FACE`, `MULTIPLE_FACES`, `NO_MATCH`, `SPOOF_SUSPECTED`, `NOT_ENROLLED`.
+- `DELETE /face/enrollment` — the caller deletes their own face data (template **and** images).
+  The "withdraw consent" path biometric-privacy regimes require to be self-service.
+- `DELETE /face/enrollment/:userId` — same, performed by an ADMIN/SUPER_ADMIN (offboarding).
+- `GET /face/attempts?userId=&outcome=&flaggedOnly=&take=` — ADMIN/SUPER_ADMIN review log.
+  Returns `hasImage: boolean`, never the server filesystem path.
+- `PATCH /face/attempts/:id/review` — ADMIN/SUPER_ADMIN clears a review flag, optional `note`.
+- `GET /face/image/attempt/:id` and `GET /face/image/enrollment/:userId` — streams stored
+  imagery. Served from the API (not the public `/uploads` mount, which has no auth at all) and
+  readable only by the subject or an admin; `Cache-Control: private, no-store`.
+
+Settings live under the usual settings surface:
+
+- `GET /settings/face-verification` — auth-only (the client needs the consent text/retention).
+- `PATCH /settings/face-verification` — SUPER_ADMIN. Thresholds are bounded server-side
+  (`matchThreshold` 0.3–0.99) — a threshold of 0 would match anyone and 1 would match nobody.
+
+**Enforcement.** When the policy covers a user, `POST /timesheets/submit` and `POST /tickets`
+require a valid `faceVerificationId` and return **428 Precondition Required** without one (or
+with one that's expired, already spent, for a different user, or for a different context).
+Drafts are never gated — only `SUBMITTED`.
+
 ## Reports
 
 - `GET /reports/employee-summary`

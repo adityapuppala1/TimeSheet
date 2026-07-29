@@ -76,27 +76,8 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "../components/ui/tabs"
 import { toast } from "../components/ui/toaster";
 import { Tooltip, TooltipContent, TooltipTrigger } from "../components/ui/tooltip";
 import { safeHtml } from "../lib/safe-html";
-import {
-  aiApi,
-  fileUrl,
-  labelApi,
-  projectApi,
-  settingsApi,
-  ticketApi,
-  ticketTypeApi,
-  type AIDuplicateMatch,
-  type AITriageSuggestion,
-  type TicketAttachmentRow,
-  type TicketBranchRow,
-  type TicketChecklistItemRow,
-  type TicketComment,
-  type TicketDetail,
-  type TicketLinkRow,
-  type TicketLinkType,
-  type TicketRow,
-  type TicketTimesheetRow,
-  type SecurityFindingRow
-} from "../services/api";
+import { aiApi, faceApi, fileUrl, labelApi, projectApi, settingsApi, ticketApi, ticketTypeApi, type AIDuplicateMatch, type AITriageSuggestion, type SecurityFindingRow, type TicketAttachmentRow, type TicketBranchRow, type TicketChecklistItemRow, type TicketComment, type TicketDetail, type TicketLinkRow, type TicketLinkType, type TicketRow, type TicketTimesheetRow } from "../services/api";
+import { FaceVerificationDialog } from "../components/FaceVerificationDialog";
 import { useAuthStore } from "../store/auth";
 
 /** Icon for the 3 seeded defaults; any admin-added custom type falls back to a generic tag. */
@@ -553,7 +534,7 @@ function CreateTicketDialog({
   }
 
   const create = useMutation({
-    mutationFn: () =>
+    mutationFn: (faceVerificationId?: string) =>
       ticketApi.create({
         projectId: draft.projectId,
         moduleId: draft.moduleId || undefined,
@@ -562,7 +543,10 @@ function CreateTicketDialog({
         description: draft.description || undefined,
         priority: draft.priority,
         assigneeId: draft.assigneeId || undefined,
-        aiConfidence: aiConfidence ?? undefined
+        aiConfidence: aiConfidence ?? undefined,
+        // Single-use proof of a live identity check; only sent when the workspace policy
+        // covers this user. The server independently decides whether it was required.
+        ...(faceVerificationId ? { faceVerificationId } : {})
       }),
     onSuccess: (ticket) => {
       toast.success("Ticket created", { description: ticket.key });
@@ -572,6 +556,17 @@ function CreateTicketDialog({
     },
     onError: (err: any) => toast.error("Could not create ticket", { description: serverMessage(err, "Try again.") })
   });
+
+  // Face (identity) verification, when the workspace requires it for ticket creation.
+  const faceStatus = useQuery({ queryKey: ["face", "status"], queryFn: faceApi.status });
+  const [faceDialogOpen, setFaceDialogOpen] = useState(false);
+  const requestCreate = () => {
+    if (faceStatus.data?.requiredForTicket) {
+      setFaceDialogOpen(true);
+      return;
+    }
+    create.mutate(undefined);
+  };
 
   const aiAssist = useMutation({
     mutationFn: async () => {
@@ -788,11 +783,19 @@ function CreateTicketDialog({
           >
             Cancel
           </Button>
-          <Button onClick={() => create.mutate()} disabled={!draft.projectId || draft.title.trim().length < 3 || create.isPending}>
+          <Button onClick={requestCreate} disabled={!draft.projectId || draft.title.trim().length < 3 || create.isPending}>
             <Plus className="h-4 w-4" />Create ticket
           </Button>
         </DialogFooter>
       </DialogContent>
+
+      <FaceVerificationDialog
+        open={faceDialogOpen}
+        onOpenChange={setFaceDialogOpen}
+        context="TICKET"
+        actionLabel="create this ticket"
+        onVerified={(verificationId) => create.mutate(verificationId)}
+      />
     </Dialog>
   );
 }

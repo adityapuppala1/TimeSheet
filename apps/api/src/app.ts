@@ -34,6 +34,7 @@ import { gitWebhookRouter } from "./controllers/git-webhook.controller.js";
 import { publicApiRouter } from "./controllers/public-api.controller.js";
 import { scimRouter } from "./controllers/scim.controller.js";
 import { emailIntakeRouter } from "./controllers/email-intake.controller.js";
+import { faceRouter } from "./controllers/face.controller.js";
 import { emailTemplatesRouter } from "./controllers/email-templates.controller.js";
 import { labelRouter } from "./controllers/label.controller.js";
 import { notificationRouter } from "./controllers/notification.controller.js";
@@ -207,6 +208,7 @@ app.use("/api/notifications", notificationRouter);
 app.use("/api/audit", auditRouter);
 app.use("/api/team", teamRouter);
 app.use("/api/settings", settingsRouter);
+app.use("/api/face", faceRouter);
 app.use("/api/email-templates", emailTemplatesRouter);
 // Bearer-API-key auth, not JWT — see middleware/public-api-auth.ts's header for why this is
 // still mounted after resolveTenant (unlike the CI/chat webhook receivers above) rather than

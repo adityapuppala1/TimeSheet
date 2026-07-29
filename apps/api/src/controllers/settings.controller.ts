@@ -19,6 +19,7 @@ import { env } from "../config/env.js";
 import { AppError } from "../middleware/error.js";
 import { validate } from "../middleware/validate.js";
 import { audit } from "../services/audit.service.js";
+import { getFaceSettings } from "../services/face.service.js";
 import { getGlobalNotificationSettings } from "../services/notify.service.js";
 import { getGlobalAISettings, getMonthlyAIUsageSummary, getWeeklyAIUsageTrend } from "../services/ai.service.js";
 import { getAllowedSsoProviders } from "../services/plan-limits.service.js";
@@ -905,4 +906,46 @@ settingsRouter.get("/git/pulls", requireAuth, async (req, res) => {
   if (!repo) throw new AppError(422, "Query param 'repo' (owner/name) is required.");
   const token = await requireGitAccessToken();
   res.json(await listGitHubPullRequests(token, repo));
+});
+
+/**
+ * Face (identity) verification — see services/face.service.ts for why the thresholds have the
+ * defaults they do and why this is off by default (it collects biometric data, which is a
+ * special category under GDPR Art.9 and regulated by Illinois BIPA / India's DPDP Act).
+ * GET is auth-only so any user's client can read the consent text and retention window it has
+ * to display; PATCH is super-admin like every other workspace-configuration section.
+ */
+settingsRouter.get("/face-verification", async (_req, res) => {
+  res.json(await getFaceSettings());
+});
+
+const faceVerificationSchema = z.object({
+  body: z
+    .object({
+      enabled: z.boolean().optional(),
+      requireForTimesheet: z.boolean().optional(),
+      requireForTicket: z.boolean().optional(),
+      enforcementMode: z.enum(["ALL", "SELECTED"]).optional(),
+      // Bounded well away from 0/1: a threshold of 0 matches literally anyone and 1 matches
+      // nobody, and both are foot-guns an admin should not be able to set by typing in a box.
+      matchThreshold: z.coerce.number().min(0.3).max(0.99).optional(),
+      antispoofThreshold: z.coerce.number().min(0).max(0.99).optional(),
+      livenessThreshold: z.coerce.number().min(0).max(0.99).optional(),
+      maxAttempts: z.coerce.number().int().min(1).max(10).optional(),
+      verificationTtlSeconds: z.coerce.number().int().min(30).max(3600).optional(),
+      imageRetentionDays: z.coerce.number().int().min(0).max(3650).optional(),
+      consentText: z.string().max(5000).nullable().optional()
+    })
+    .strict()
+});
+
+settingsRouter.patch("/face-verification", requireSuperAdmin, validate(faceVerificationSchema), async (req, res) => {
+  const data: Record<string, unknown> = { ...req.body, updatedById: req.user!.id };
+  const updated = await prisma.globalFaceVerificationSettings.upsert({
+    where: { id: "global" },
+    update: data,
+    create: { id: "global", ...data }
+  });
+  await audit(req.user!.id, "settings.face_verification_updated", "GlobalFaceVerificationSettings", "global", req.body);
+  res.json(updated);
 });
