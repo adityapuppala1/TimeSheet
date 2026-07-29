@@ -361,6 +361,35 @@ Tracked here so nothing surfaced during the security/responsive audit gets silen
 visible — this file is a living reference, not a changelog.
 
 **Resolved:**
+- ~~Dependency vulnerability remediation~~ (2026-07-29) — `npm audit` went from 12 vulnerabilities
+  (6 high, 4 moderate, 2 low) to 0. `morgan`/`linkify-it`/`dompurify`/`postcss`/`uuid` fixed via
+  plain `npm audit fix`; `sharp` bumped 0.34→0.35.3 (libvips CVEs, functionally re-verified via a
+  script exercising `processAvatar()` directly against synthetic EXIF-bearing images); `ldapts`
+  bumped to `^8.2.0` (root `package.json` already wanted this, but `apps/api/package.json`'s own
+  range was stale at `^7.3.1`, silently overriding it — a real pre-existing inconsistency, not
+  just an outdated lockfile).
+- ~~react-router v7→v8 migration~~ (2026-07-29) — the last remaining `npm audit` advisory
+  (`react-router-dom`'s CSRF-bypass CVE) required a full migration since `react-router-dom` was
+  discontinued at v8, not just deprecated: moved all 15 `apps/web/src` files importing it to
+  `react-router` directly, plus the version floor it requires (Vite 6→8, React 19.1→19.2.8).
+  Caught and fixed a stale-Vite-dependency-cache runtime regression (blank page,
+  `require_react is not a function`) along the way that neither `tsc` nor `vite build` surfaced —
+  only a real browser run did; see `docs/NEW_ORGANIZATION_SETUP.md` §3a for the full writeup.
+  Full Playwright suite re-run before and after: identical pass/fail counts both times.
+- ~~Docker non-root user~~ (2026-07-29) — `apps/api/Dockerfile`'s final stage now creates and
+  runs as an unprivileged `app` user instead of the container default root, with `--chown` on
+  every `COPY` and `/app/uploads` pre-created with correct ownership before the compose volume
+  mounts over it. Not build-verified against a real `docker compose up` yet (no Docker available
+  in the environment this was made in) — do that before relying on it in production.
+- ~~First unit/integration test suite~~ (2026-07-29) — `apps/api/tests/` (Vitest): 38 unit tests
+  (no real DB, mocked LLM SDK/Stripe/control-plane client) covering AI service gating +
+  `classifyTicket`, the Stripe webhook's signature verification and all three event branches, and
+  SCIM auth/request-parsing; 7 integration tests against a real throwaway MySQL database
+  (created/migrated/seeded via the existing `seedTenant()`/dropped per run) covering SCIM's real
+  seat-limit/duplicate-email/status-transition behavior and the webhook's real
+  `Organization.planTier` persistence. A first representative pass, not exhaustive coverage —
+  `security-report.service.ts` and 10 of the 13 AI capability functions still have none, and none
+  of it runs in `.github/workflows/ci.yml` yet.
 - ~~Touch-target sizing sweep~~ — every icon-button previously sized `h-6`/`h-7 w-6`/`w-7`
   (24–28px) across Tickets (checklist/links/attachments), Users, the rich-text-editor toolbar,
   the file-dropzone remove button, and workspace-settings routing-rule rows is now `h-9 w-9`
@@ -460,3 +489,11 @@ visible — this file is a living reference, not a changelog.
   owns; this is a `saveTimesheet` extraction, not new logic, and was deliberately left for that
   follow-up rather than duplicated under time pressure (see `public-api.controller.ts`'s header
   comment).
+- **Wiring the new `apps/api/tests/` suite into CI** — `.github/workflows/ci.yml` doesn't run
+  `npm run test`/`test:integration -w apps/api` yet; it's a new job (integration tier needs the
+  same MySQL service container the Playwright job already provisions) rather than a change to
+  the existing one.
+- **Expanding unit-test coverage beyond AI/billing/SCIM** — `security-report.service.ts` (the
+  security-findings ingestion/triage/auto-reopen logic) and 10 of the 13 `ai.service.ts`
+  capability functions have no dedicated tests yet; the mocking patterns in
+  `apps/api/tests/unit/*.test.ts`'s header comments generalize directly.

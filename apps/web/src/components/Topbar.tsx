@@ -9,7 +9,7 @@
 import { useQueryClient } from "@tanstack/react-query";
 import { Command, LogOut, Menu, Moon, Search, Sun, UserRound, FileClock } from "lucide-react";
 import { useEffect, useState } from "react";
-import { Link, useNavigate } from "react-router-dom";
+import { Link, useNavigate } from "react-router";
 import { MobileDrawerNav } from "./Sidebar";
 import { Avatar, AvatarFallback, AvatarImage } from "./ui/avatar";
 import { Button } from "./ui/button";

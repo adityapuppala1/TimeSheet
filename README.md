@@ -447,6 +447,21 @@ saves the resulting session for the other specs to reuse — see `tests/e2e/auth
 some specs deliberately log in fresh instead (it comes down to the refresh-token rotation
 described in Security below).
 
+**Unit/integration tests** (`apps/api/tests/`, Vitest) cover the three services with the least
+end-to-end UI surface to exercise them through — AI (feature-toggle/budget gating, a mocked-SDK
+`classifyTicket` round trip), Stripe billing (webhook signature verification + all three event
+branches), and SCIM provisioning (auth, request parsing, seat-limit/duplicate-email/status-transition
+enforcement):
+
+```bash
+npm run test -w apps/api               # unit tier — mocked, no real DB, ~1s
+npm run test:integration -w apps/api   # integration tier — real throwaway MySQL, created/migrated/seeded/dropped per run, ~13s
+```
+
+Not yet exhaustive (10 of 13 AI capability functions and the security-findings services have no
+dedicated tests yet) or wired into CI — see each test file's header comment for the mocking
+approach used per area, and `docs/NEW_ORGANIZATION_SETUP.md` for the fuller writeup.
+
 ## Security
 
 This app has gone through an internal VAPT (Vulnerability Assessment + Penetration Test) pass —
@@ -552,6 +567,7 @@ See `.env.example` for all supported variables. Remember: the actual file the AP
 - [docs/DATABASE.md](docs/DATABASE.md) — schema reference.
 - [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) — on-prem vs. SaaS deployment shapes, CI/CD, one-click install, Kubernetes.
 - [docs/INSTALLATION.md](docs/INSTALLATION.md) — the complete step-by-step install guide (one-click Docker, manual local, Kubernetes), self-diagnosis, a FAQ, and how to configure everything after install without a code change.
+- [docs/NEW_ORGANIZATION_SETUP.md](docs/NEW_ORGANIZATION_SETUP.md) — the "day 2" runbook: a one-time production-hardening checklist (secrets, TLS, dependency patching, backups, log aggregation), then the repeatable steps to bring a brand-new organization online and verify it's ready to go live.
 - [docs/ROADMAP.md](docs/ROADMAP.md) — what differentiates this product today, next-feature themes (AI workflow automation, conversational analytics, integrations, billing), and how each maps to plan tiers.
 - [docs/SECURITY_DEVOPS_INTEGRATIONS.md](docs/SECURITY_DEVOPS_INTEGRATIONS.md) — connect GitHub Actions, GitLab CI, Jenkins, Bitbucket, or any internal git/CI system to the security-findings ingestion webhook (SAST/DAST/SSAT/SSCT), with copy-pasteable pipeline examples.
 

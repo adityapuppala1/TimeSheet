@@ -14,6 +14,10 @@ SSO config, plan tiers, platform-admin accounts — see `apps/api/prisma/control
 and whether more than one `Organization` row exists in it. Pick the section below that matches
 what you're deploying.
 
+Once the platform itself is deployed, see
+[docs/NEW_ORGANIZATION_SETUP.md](NEW_ORGANIZATION_SETUP.md) for the production-hardening
+checklist and the repeatable runbook for bringing a real organization online.
+
 ---
 
 ## Shape 1 — On-prem / single-org

@@ -25,7 +25,7 @@ import {
   Users,
   Users2
 } from "lucide-react";
-import { NavLink } from "react-router-dom";
+import { NavLink } from "react-router";
 import { permissions } from "@timesheet/shared";
 import { cn } from "../lib/utils";
 import { useAuthStore } from "../store/auth";

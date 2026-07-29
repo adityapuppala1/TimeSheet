@@ -10,7 +10,7 @@ import { useMutation } from "@tanstack/react-query";
 import { motion } from "framer-motion";
 import { ArrowLeft, Mail, Send } from "lucide-react";
 import { useState } from "react";
-import { Link } from "react-router-dom";
+import { Link } from "react-router";
 import { Alert, AlertDescription, AlertTitle } from "../components/ui/alert";
 import { Button } from "../components/ui/button";
 import { Card, CardContent } from "../components/ui/card";

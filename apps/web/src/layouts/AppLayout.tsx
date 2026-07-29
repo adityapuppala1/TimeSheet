@@ -7,7 +7,7 @@
  * an already-logged-in user on every page refresh.
  * WHO renders this: `App.tsx`, as the element for every `/app/*` route.
  */
-import { Navigate, Outlet } from "react-router-dom";
+import { Navigate, Outlet } from "react-router";
 import { MobileNav, Sidebar } from "../components/Sidebar";
 import { Topbar } from "../components/Topbar";
 import { useAuthStore } from "../store/auth";

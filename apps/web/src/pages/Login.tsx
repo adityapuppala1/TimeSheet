@@ -14,7 +14,7 @@ import { motion } from "framer-motion";
 import { ArrowRight, Eye, EyeOff, Lock, Mail, ShieldCheck } from "lucide-react";
 import { useState } from "react";
 import { useForm } from "react-hook-form";
-import { Link, useNavigate } from "react-router-dom";
+import { Link, useNavigate } from "react-router";
 import { z } from "zod";
 import { Button } from "../components/ui/button";
 import { Card, CardContent } from "../components/ui/card";

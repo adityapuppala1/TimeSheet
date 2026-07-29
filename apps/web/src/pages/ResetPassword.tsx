@@ -9,7 +9,7 @@ import { useMutation } from "@tanstack/react-query";
 import { motion } from "framer-motion";
 import { CheckCircle2, KeyRound } from "lucide-react";
 import { useState } from "react";
-import { Link, useNavigate, useSearchParams } from "react-router-dom";
+import { Link, useNavigate, useSearchParams } from "react-router";
 import { Alert, AlertDescription, AlertTitle } from "../components/ui/alert";
 import { Button } from "../components/ui/button";
 import { Card, CardContent } from "../components/ui/card";

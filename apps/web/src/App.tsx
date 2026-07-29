@@ -12,7 +12,7 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { ReactNode } from "react";
 import { lazy, Suspense, useEffect } from "react";
-import { createBrowserRouter, Navigate, RouterProvider } from "react-router-dom";
+import { createBrowserRouter, Navigate, RouterProvider } from "react-router";
 import { permissions, type Permission } from "@timesheet/shared";
 import { AppLayout } from "./layouts/AppLayout";
 import { PlatformAdminLayout } from "./layouts/PlatformAdminLayout";

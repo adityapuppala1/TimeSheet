@@ -1,6 +1,6 @@
 import { LayoutDashboard, LogOut, Building2, SlidersHorizontal, ShieldCheck, Menu } from "lucide-react";
 import { useState } from "react";
-import { NavLink, Outlet, useNavigate } from "react-router-dom";
+import { NavLink, Outlet, useNavigate } from "react-router";
 import { Button } from "../components/ui/button";
 import { Sheet, SheetContent, SheetTitle } from "../components/ui/sheet";
 import { platformAdminAuthApi } from "../services/platform-admin-api";

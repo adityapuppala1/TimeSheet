@@ -54,7 +54,7 @@ import {
   X
 } from "lucide-react";
 import { useState } from "react";
-import { useSearchParams } from "react-router-dom";
+import { useSearchParams } from "react-router";
 import { TicketKanban } from "../components/TicketKanban";
 import { Avatar, AvatarFallback, AvatarImage } from "../components/ui/avatar";
 import { Badge, type BadgeProps } from "../components/ui/badge";

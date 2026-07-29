@@ -83,7 +83,8 @@ database is my company" needed almost no changes to become multi-tenant — see 
 | `.github/workflows` | CI (`ci.yml`) and CD (`cd.yml`) — see §8. |
 | `docs/` | This file, `DEPLOYMENT.md` (operational how-to), and diagrams. |
 | `install.sh` / `install.ps1` | One-click Docker Compose installers (Shape 1 — see §8). |
-| `tests/e2e` | Playwright end-to-end suite. |
+| `tests/e2e` | Playwright end-to-end suite (repo root — exercises both `apps/api` and `apps/web` together). |
+| `apps/api/tests` | Vitest unit (`tests/unit`, mocked, no real DB) + integration (`tests/integration`, real throwaway MySQL) tests, scoped to `apps/api` alone — AI service, Stripe billing, SCIM. |
 
 ---
 
