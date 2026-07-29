@@ -159,7 +159,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Parse install.ps1 without running it
+      - name: Parse install.ps1 without running it (PowerShell 7 / pwsh)
         shell: pwsh
         run: |
           $tokens = $null
@@ -169,4 +169,26 @@ jobs:
             $errors | ForEach-Object { Write-Error $_.Message }
             exit 1
           }
-          Write-Host "install.ps1 parses cleanly."
+          Write-Host "install.ps1 parses cleanly under pwsh."
+
+      # Deliberately a SEPARATE step from the pwsh one above, using `shell: powershell`
+      # (Windows PowerShell 5.1, the OS-bundled default every real end-user actually runs this
+      # script with — see docs/INSTALLATION.md's own "PowerShell 5.1+ (built in)" prerequisite)
+      # rather than pwsh (PowerShell 7/Core). The two engines default to different text
+      # encodings for a BOM-less script file — pwsh assumes UTF-8, Windows PowerShell 5.1
+      # assumes the system codepage — so a non-ASCII character (an em-dash, a smart quote) in a
+      # BOM-less .ps1 file can parse perfectly under pwsh while genuinely failing to parse under
+      # powershell.exe. That exact gap let install.ps1 ship with a real parse error invisible to
+      # this job until someone actually ran it with plain `powershell.exe` — see install.ps1's
+      # own file-encoding fix (UTF-8 BOM) for the concrete case this step now guards against.
+      - name: Parse install.ps1 without running it (Windows PowerShell 5.1)
+        shell: powershell
+        run: |
+          $tokens = $null
+          $errors = $null
+          [System.Management.Automation.Language.Parser]::ParseFile("install.ps1", [ref]$tokens, [ref]$errors) | Out-Null
+          if ($errors.Count -gt 0) {
+            $errors | ForEach-Object { Write-Error $_.Message }
+            exit 1
+          }
+          Write-Host "install.ps1 parses cleanly under Windows PowerShell 5.1."

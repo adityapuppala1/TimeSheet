@@ -361,6 +361,31 @@ Tracked here so nothing surfaced during the security/responsive audit gets silen
 visible — this file is a living reference, not a changelog.
 
 **Resolved:**
+- ~~`install.ps1` silently broken under real Windows PowerShell 5.1~~ (2026-07-29) — a genuine,
+  previously-undetected bug: the script contains non-ASCII characters (em-dashes) and had no
+  UTF-8 BOM, so Windows PowerShell 5.1 (`powershell.exe`, the OS-bundled default every real user
+  actually has — not PowerShell 7's `pwsh`) defaulted to the system codepage instead of UTF-8 and
+  corrupted string parsing, producing `Missing closing '}'`/`string is missing the terminator`
+  errors before the script could even start. Invisible to CI because
+  `.github/workflows/ci.yml`'s validation step used `shell: pwsh`, which doesn't have this
+  encoding-detection quirk — confirmed by actually invoking the real script end-to-end, not just
+  re-reading it. Fixed by adding a UTF-8 BOM to `install.ps1`; CI now also validates under
+  `shell: powershell` (Windows PowerShell 5.1) so this class of bug can't regress silently again.
+- ~~Wrong port checked for MySQL conflicts~~ (2026-07-29) — both `install.ps1` and `install.sh`
+  checked host port 3306 for conflicts, but `docker-compose.yml` actually publishes MySQL on host
+  port 3307 (deliberately, so it never collides with a local/XAMPP MySQL on the default 3306).
+  The check was checking a port Compose never binds and would never flag the port that actually
+  matters. Fixed in both scripts.
+- ~~`install.sh` CRLF line endings with no `.gitattributes`~~ (2026-07-29) — the committed blob is
+  LF, but any Windows user with `git config core.autocrlf true` (Git for Windows' own suggested
+  default) gets a CRLF working-tree copy on checkout, which breaks bash outright
+  (`$'\r': command not found` / "bad interpreter"). Added `.gitattributes` forcing `*.sh text
+  eol=lf`, verified by forcing a fresh checkout on a machine with `autocrlf=true` and confirming
+  the result is LF.
+- ~~Misleading "docker compose not available" error message~~ (2026-07-29) — both scripts'
+  catch-all message for a failed `docker compose version` check told users to "update Docker
+  Desktop," which is misleading in the actual most-common case: Docker Desktop is installed but
+  not yet running. Reworded to lead with that likelier cause in both scripts.
 - ~~Dependency vulnerability remediation~~ (2026-07-29) — `npm audit` went from 12 vulnerabilities
   (6 high, 4 moderate, 2 low) to 0. `morgan`/`linkify-it`/`dompurify`/`postcss`/`uuid` fixed via
   plain `npm audit fix`; `sharp` bumped 0.34→0.35.3 (libvips CVEs, functionally re-verified via a

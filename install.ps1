@@ -1,4 +1,4 @@
-<#
+﻿<#
 .SYNOPSIS
   One-click installer for TimeSphere's on-prem/single-org Docker Compose shape (see
   docs/DEPLOYMENT.md's "Shape 1"). Native PowerShell - no Node required just to bootstrap.
@@ -44,13 +44,15 @@ if (-not $dockerCmd) {
   Write-Fail "Install Docker Desktop (https://docs.docker.com/desktop/install/windows-install/), then re-run this script."
 }
 try { docker compose version | Out-Null } catch {
-  Write-Fail "The 'docker compose' plugin isn't available. Update Docker Desktop to a recent version."
+  Write-Fail "Couldn't run 'docker compose'. Most likely cause: Docker Desktop is installed but not running yet — start it from the Start menu and wait for it to say `"Docker Desktop is running`" before re-running this script. If it IS running, your Docker Desktop version may be old enough to lack the Compose plugin — update it."
 }
 Write-Host "Docker with Compose plugin found."
 
 # Auto-heal: fail fast with a clear message if a port docker-compose.yml needs is already taken,
-# rather than letting 'docker compose up' bind-fail deep in its own logs.
-foreach ($port in @(4000, 5173, 3306)) {
+# rather than letting 'docker compose up' bind-fail deep in its own logs. 3307, not MySQL's
+# usual 3306 — docker-compose.yml deliberately maps its MySQL container to host port 3307 so it
+# never collides with a local/XAMPP MySQL a developer already has running on the default 3306.
+foreach ($port in @(4000, 5173, 3307)) {
   $inUse = Get-NetTCPConnection -LocalPort $port -State Listen -ErrorAction SilentlyContinue
   if ($inUse) {
     Write-Warn "Port $port looks already in use on this machine. If it's not an old TimeSphere stack (check: docker compose ps), stop whatever's using it or edit the port mapping in docker-compose.yml before continuing."

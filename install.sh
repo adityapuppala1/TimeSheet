@@ -77,14 +77,16 @@ if ! command -v docker >/dev/null 2>&1; then
   fi
 fi
 if ! docker compose version >/dev/null 2>&1; then
-  fail "The 'docker compose' plugin isn't available. Install it: https://docs.docker.com/compose/install/"
+  fail "Couldn't run 'docker compose'. Most likely cause: the Docker daemon isn't running yet (start Docker Desktop, or 'sudo systemctl start docker' on Linux) — wait for it to be ready and re-run this script. If it IS running, the Compose plugin may genuinely be missing/outdated: https://docs.docker.com/compose/install/"
 fi
 log "Docker $(docker --version | sed 's/Docker version //') with Compose plugin found."
 
 # Auto-heal: refuse to fight for ports the host is already using for something else — better to
 # fail fast here with a clear message than have `docker compose up` silently bind-fail deep in
 # its own logs. WEB_ORIGIN/APP_BASE_URL are user-editable above and don't have to be localhost,
-# but the ports docker-compose.yml publishes (4000/5173/3306) are fixed, so check those.
+# but the ports docker-compose.yml publishes (4000/5173/3307 — not MySQL's usual 3306, deliberately,
+# so this never collides with a local/XAMPP MySQL already running on the default port) are fixed,
+# so check those.
 check_port_free() {
   local port="$1"
   if command -v lsof >/dev/null 2>&1; then
@@ -94,7 +96,7 @@ check_port_free() {
   fi
   return 0 # can't check on this system — don't block install over it
 }
-for PORT in 4000 5173 3306; do
+for PORT in 4000 5173 3307; do
   if ! check_port_free "$PORT"; then
     warn "Port $PORT looks already in use on this machine. If it's not an old TimeSphere stack (check: docker compose ps), stop whatever's using it or edit the port mapping in docker-compose.yml before continuing."
   fi

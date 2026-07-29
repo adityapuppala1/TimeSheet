@@ -39,20 +39,45 @@ your machine outside this repo either way.
 ### Run it
 
 ```bash
-# macOS / Linux
+# macOS / Linux — from a normal terminal, in the repo root
+chmod +x install.sh   # only needed once, if the file isn't already executable
 ./install.sh
+```
 
-# Windows PowerShell
+```powershell
+# Windows — from an ordinary PowerShell prompt (Start menu → "Windows PowerShell"), in the repo root
 .\install.ps1
 ```
+
+Either script is interactive (it'll prompt you for a couple of values — see step 3 below) and
+takes a few minutes on first run while Docker pulls/builds images. Let it run to completion
+rather than closing the terminal partway through.
+
+### Common errors when running the installer
+
+These are the actual failure modes you're likely to hit, in the order you'd hit them:
+
+| Error | Cause | Fix |
+|---|---|---|
+| PowerShell: `install.ps1 cannot be loaded because running scripts is disabled on this system` | Windows' default script execution policy (`Restricted`) blocks any local `.ps1` file, signed or not — this is a Windows default, not something specific to this repo. | Either run `powershell -ExecutionPolicy Bypass -File .\install.ps1` once, or (if you'll run PowerShell scripts regularly) `Set-ExecutionPolicy -Scope CurrentUser RemoteSigned` in an admin PowerShell, then re-run normally. |
+| PowerShell: `install.ps1 is not digitally signed` / a red "cannot be loaded" wall of text mentioning a security warning | Same execution-policy family of error as above, sometimes phrased differently depending on Windows version/policy. | Same fix as above. |
+| PowerShell: `Missing closing '}' in statement block or type definition` / `The string is missing the terminator: "` when you've done nothing but run `.\install.ps1` | A real bug, fixed 2026-07-29: `install.ps1` contains non-ASCII characters (em-dashes) and previously had no UTF-8 byte-order mark. Windows PowerShell 5.1 — the OS-bundled `powershell.exe`, not PowerShell 7's `pwsh` — defaults to the system codepage instead of UTF-8 for a BOM-less script file, which corrupted string parsing. This is fixed at the file level (a UTF-8 BOM was added) and CI now validates `install.ps1` under both `pwsh` and Windows PowerShell 5.1 so this class of bug can't silently return. | `git pull` to get the fixed file. If you're still hitting this on a version after 2026-07-29, please report it — it means the fix regressed. |
+| bash: `install.sh: line 2: $'\r': command not found`, or `bad interpreter: /bin/bash^M` | The file has Windows-style CRLF line endings instead of Unix LF — happens if you cloned with `git config core.autocrlf true` (Git for Windows' own suggested default) before this repo's `.gitattributes` (which forces `install.sh` to always check out as LF) existed in your local copy. | `git pull` to get the current `.gitattributes`, then re-checkout the file: `git rm --cached install.sh && git checkout install.sh`. Or, one-off: `sed -i 's/\r$//' install.sh` (Git Bash/WSL) before running it. |
+| bash: `install.sh: Permission denied` | The file isn't marked executable — normal for a fresh checkout on some setups. | `chmod +x install.sh`, then `./install.sh` again. |
+| `Couldn't run 'docker compose'` / `Cannot connect to the Docker daemon` | By far the most common one: **Docker Desktop is installed but not actually running.** Being installed and being started are different things. | Start Docker Desktop from the Start menu / Applications folder and wait until it says "Docker Desktop is running" (the whale icon stops animating), then re-run the installer. |
+| Docker Desktop itself refuses to start, mentioning WSL 2 or virtualization | Docker Desktop's own prerequisites aren't met — WSL 2 not installed, or virtualization disabled in BIOS/UEFI. | Follow Docker Desktop's own on-screen fix link, or see [Docker's WSL 2 backend docs](https://docs.docker.com/desktop/wsl/). This is a Docker Desktop prerequisite, not something this installer can work around. |
+| `Port 3307/4000/5173 looks already in use` | Something else on your machine is already bound to a port this stack needs. Note: this is **3307**, not MySQL's usual 3306 — docker-compose.yml deliberately uses 3307 on purpose specifically so it never collides with a local/XAMPP MySQL you might already have running on 3306, so seeing an XAMPP MySQL on 3306 is not itself a conflict. | Check what's actually on that port (`docker compose ps` first, in case it's an old TimeSphere stack you forgot about) — stop it, or edit the port mapping in `docker-compose.yml`. |
+| API container never becomes healthy / installer says "Still not healthy" after the restart attempt | Usually either a slow first pull of the `mysql:8.4` image on a slow connection, or a real error in the API's boot sequence. | `docker compose logs api` shows the actual error. If you see nothing but a long pull progress bar, just wait — first run legitimately takes a few minutes. |
+| Seeding fails all 3 attempts | Either a real problem (check `docker compose logs api`), or — if you're re-running the installer against an already-set-up deployment — this is often just "already seeded," which is expected and harmless (seeding is an upsert, not an insert). | Re-run manually to see the real error: `docker compose exec api npm run control:seed -w apps/api` then `docker compose exec api npm run seed -w apps/api`. |
+| Windows: `npm install`/Docker build fails with `EPERM: operation not permitted` on a file inside `node_modules` | Windows Defender (or another antivirus) has a file open/locked mid-write — a real, if intermittent, Windows-specific flake, not a bug in this repo. | Re-run the failed command — it usually succeeds on retry once the AV scan finishes. If it keeps happening, add this repo's folder to your antivirus's exclusion list. |
 
 ### What happens, step by step
 
 1. **Dependency check** — confirms Docker + the Compose plugin are present; offers to
    auto-install Docker for you (see above) if not, or prints the OS-specific command.
-2. **Port check (auto-heal)** — warns if ports `4000`/`5173`/`3306` already look bound to
+2. **Port check (auto-heal)** — warns if ports `4000`/`5173`/`3307` already look bound to
    something else on this machine, before Compose gets a chance to bind-fail on them deep in its
-   own logs.
+   own logs. 3307, not MySQL's usual 3306 — see the port-conflict row in the table above for why.
 3. **`.env` handling** (human-in-the-loop, security-relevant): 
    - If `.env` doesn't exist yet, you're prompted for exactly two values (web URL, API URL —
      both default to `localhost` for a trial run) and then, **optionally**, your outbound SMTP

@@ -1,0 +1,6 @@
+# install.sh must always check out with LF line endings, regardless of the cloning machine's
+# core.autocrlf setting. A CRLF shebang line breaks bash outright on Windows/Git Bash/WSL
+# ("$'\r': command not found", or "bad interpreter" if the \r lands in the #! line itself) —
+# and `core.autocrlf=true` is Git for Windows' own suggested default during install, so this is
+# the single most common install-time gotcha for this repo without this rule.
+*.sh text eol=lf
