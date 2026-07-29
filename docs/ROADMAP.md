@@ -361,6 +361,18 @@ Tracked here so nothing surfaced during the security/responsive audit gets silen
 visible — this file is a living reference, not a changelog.
 
 **Resolved:**
+- ~~Docker one-click installer couldn't use an external MySQL server~~ (2026-07-29) — previously,
+  bringing your own MySQL server to the Docker install path meant manually editing
+  `docker-compose.yml` yourself (removing the `mysql` service, rewriting the DSNs). Both
+  installers now ask "Where should the database live?" up front; choosing your own server
+  prompts for host/port/user/password/db-names, URL-encodes the credentials into
+  `DATABASE_URL`/`CONTROL_DATABASE_URL` (verified round-trip-correct against a password
+  containing `@:/#%`), and switches to a new standalone `docker-compose.external-db.yml` (same
+  `api`/`web` services, no bundled `mysql` service or its `depends_on`) for every subsequent step.
+  Re-running the installer later against the same `.env` detects the choice automatically (via
+  `MYSQL_ROOT_PASSWORD`'s presence/absence) without re-prompting. The manual/local install path
+  already supported any real MySQL server with zero changes needed — this closes the equivalent
+  gap on the Docker path specifically.
 - ~~`install.ps1` silently broken under real Windows PowerShell 5.1~~ (2026-07-29) — a genuine,
   previously-undetected bug: the script contains non-ASCII characters (em-dashes) and had no
   UTF-8 BOM, so Windows PowerShell 5.1 (`powershell.exe`, the OS-bundled default every real user

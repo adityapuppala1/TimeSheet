@@ -48,17 +48,6 @@ try { docker compose version | Out-Null } catch {
 }
 Write-Host "Docker with Compose plugin found."
 
-# Auto-heal: fail fast with a clear message if a port docker-compose.yml needs is already taken,
-# rather than letting 'docker compose up' bind-fail deep in its own logs. 3307, not MySQL's
-# usual 3306 — docker-compose.yml deliberately maps its MySQL container to host port 3307 so it
-# never collides with a local/XAMPP MySQL a developer already has running on the default 3306.
-foreach ($port in @(4000, 5173, 3307)) {
-  $inUse = Get-NetTCPConnection -LocalPort $port -State Listen -ErrorAction SilentlyContinue
-  if ($inUse) {
-    Write-Warn "Port $port looks already in use on this machine. If it's not an old TimeSphere stack (check: docker compose ps), stop whatever's using it or edit the port mapping in docker-compose.yml before continuing."
-  }
-}
-
 # Self-heal check: an existing .env from an older version of this script, or one hand-edited
 # and accidentally missing a line, gets diagnosed here instead of failing opaquely inside
 # Compose (docker-compose.yml's `api` service uses ${VAR:?error} syntax for these - no default).
@@ -76,6 +65,8 @@ function New-RandomHex32() {
   return ($buffer | ForEach-Object { $_.ToString("x2") }) -join ""
 }
 
+function UrlEncode([string]$Value) { [System.Uri]::EscapeDataString($Value) }
+
 $EnvFile = Join-Path $RootDir ".env"
 if (Test-Path $EnvFile) {
   Write-Step ".env already exists - checking it has every required key (self-heal check, values are never modified)..."
@@ -88,7 +79,12 @@ if (Test-Path $EnvFile) {
     Write-Fail "Refusing to start the stack with an incomplete .env - see the missing keys above."
   }
   Write-Step ".env has every required key - leaving it as-is. Delete it first if you want fresh generated secrets."
-  $WebOrigin = "http://localhost:5173"
+  # MYSQL_ROOT_PASSWORD only ever gets written when a previous run chose the bundled-Docker-MySQL
+  # path (see the else branch below) - its absence is exactly how a re-run recognizes "this
+  # deployment uses its own external MySQL server" without asking again.
+  $ComposeFile = if ($envText -match "(?m)^MYSQL_ROOT_PASSWORD=") { "docker-compose.yml" } else { "docker-compose.external-db.yml" }
+  $webOriginMatch = [regex]::Match($envText, "(?m)^WEB_ORIGIN=(.*)$")
+  $WebOrigin = if ($webOriginMatch.Success) { $webOriginMatch.Groups[1].Value.Trim() } else { "http://localhost:5173" }
 } else {
   Write-Step "Generating .env with strong random secrets..."
 
@@ -98,10 +94,48 @@ if (Test-Path $EnvFile) {
   $AppBaseUrlInput = Read-Host "Public URL for the API (used as the SSO callback base) [$WebOrigin]"
   $AppBaseUrl = if ([string]::IsNullOrWhiteSpace($AppBaseUrlInput)) { $WebOrigin } else { $AppBaseUrlInput }
 
-  # Hex, not base64: this value gets embedded unencoded in a mysql:// DSN below, and base64's
-  # alphabet includes '/' and '+' - either would corrupt the URL (a literal '/' reads as a path
-  # separator). Hex is alphanumeric-only, so it's always URL-safe regardless of what it rolls.
-  $MysqlRootPassword = New-RandomHex32
+  Write-Host ""
+  Write-Host "Where should the database live?"
+  Write-Host "  [1] Set one up for me in Docker (default - fastest for a trial, nothing else to configure)"
+  Write-Host "  [2] I already have a MySQL server I want to use (a real on-prem box, RDS, Cloud SQL, etc.)"
+  $DbChoiceInput = Read-Host "Choice [1]"
+  $UseExternalDb = ($DbChoiceInput.Trim() -eq "2")
+
+  if ($UseExternalDb) {
+    Write-Host ""
+    Write-Host "Your MySQL server needs to already exist and be reachable from wherever this container runs."
+    Write-Host "This installer will try to create the two databases below on it (CREATE DATABASE IF NOT EXISTS) -"
+    Write-Host "the account you give it needs privileges for that, or you can pre-create them yourself."
+    $ExtHost = Read-Host "MySQL host"
+    while ([string]::IsNullOrWhiteSpace($ExtHost)) { $ExtHost = Read-Host "MySQL host (required)" }
+    $ExtPortInput = Read-Host "MySQL port [3306]"
+    $ExtPort = if ([string]::IsNullOrWhiteSpace($ExtPortInput)) { "3306" } else { $ExtPortInput }
+    $ExtUser = Read-Host "MySQL username"
+    while ([string]::IsNullOrWhiteSpace($ExtUser)) { $ExtUser = Read-Host "MySQL username (required)" }
+    $ExtPasswordSecure = Read-Host "MySQL password (input hidden)" -AsSecureString
+    $ExtPassword = [System.Runtime.InteropServices.Marshal]::PtrToStringAuto([System.Runtime.InteropServices.Marshal]::SecureStringToBSTR($ExtPasswordSecure))
+    $ExtDbNameInput = Read-Host "Tenant database name [timesheet_portal]"
+    $ExtDbName = if ([string]::IsNullOrWhiteSpace($ExtDbNameInput)) { "timesheet_portal" } else { $ExtDbNameInput }
+    $ExtControlDbNameInput = Read-Host "Control-plane database name [timesphere_control]"
+    $ExtControlDbName = if ([string]::IsNullOrWhiteSpace($ExtControlDbNameInput)) { "timesphere_control" } else { $ExtControlDbNameInput }
+
+    # URL-encode user/password - either can legitimately contain characters (@, :, /, #, %) that
+    # would otherwise corrupt the mysql:// DSN's own structure (e.g. a literal '@' in a password
+    # reads as "end of credentials, start of host" to any URL parser, Prisma's included).
+    $ExtUserEnc = UrlEncode $ExtUser
+    $ExtPasswordEnc = UrlEncode $ExtPassword
+    $DatabaseUrl = "mysql://${ExtUserEnc}:${ExtPasswordEnc}@${ExtHost}:${ExtPort}/${ExtDbName}"
+    $ControlDatabaseUrl = "mysql://${ExtUserEnc}:${ExtPasswordEnc}@${ExtHost}:${ExtPort}/${ExtControlDbName}"
+    $DbEnvLines = "DATABASE_URL=$DatabaseUrl`nCONTROL_DATABASE_URL=$ControlDatabaseUrl"
+    $ComposeFile = "docker-compose.external-db.yml"
+  } else {
+    # Hex, not base64: this value gets embedded unencoded in a mysql:// DSN below, and base64's
+    # alphabet includes '/' and '+' - either would corrupt the URL (a literal '/' reads as a path
+    # separator). Hex is alphanumeric-only, so it's always URL-safe regardless of what it rolls.
+    $MysqlRootPassword = New-RandomHex32
+    $DbEnvLines = "MYSQL_ROOT_PASSWORD=$MysqlRootPassword`nMYSQL_DATABASE=timesheet_portal`nDATABASE_URL=mysql://root:$MysqlRootPassword@mysql:3306/timesheet_portal`nCONTROL_DATABASE_URL=mysql://root:$MysqlRootPassword@mysql:3306/timesphere_control"
+    $ComposeFile = "docker-compose.yml"
+  }
   $GeneratedAt = (Get-Date).ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ssZ")
 
   # Optional, human-in-the-loop: SMTP can also be configured later from Workspace Settings ->
@@ -132,11 +166,8 @@ if (Test-Path $EnvFile) {
 
   $envContent = @"
 # Generated by install.ps1 on $GeneratedAt -see docs/DEPLOYMENT.md for what each of these does.
-# docker-compose.yml reads this file automatically.
-MYSQL_ROOT_PASSWORD=$MysqlRootPassword
-MYSQL_DATABASE=timesheet_portal
-DATABASE_URL=mysql://root:$MysqlRootPassword@mysql:3306/timesheet_portal
-CONTROL_DATABASE_URL=mysql://root:$MysqlRootPassword@mysql:3306/timesphere_control
+# $ComposeFile reads this file automatically.
+$DbEnvLines
 DEFAULT_ORG_SLUG=default
 JWT_ACCESS_SECRET=$(New-RandomBase64 48)
 JWT_REFRESH_SECRET=$(New-RandomBase64 48)
@@ -158,8 +189,22 @@ SMTP_SECURE=$SmtpSecure
   Write-Host ".env written to $EnvFile"
 }
 
+# Auto-heal: fail fast with a clear message if a port this compose file needs is already taken,
+# rather than letting 'docker compose up' bind-fail deep in its own logs. Only checks 3307 (not
+# MySQL's usual 3306, deliberately - docker-compose.yml maps its bundled MySQL container to host
+# port 3307 so it never collides with a local/XAMPP MySQL on 3306) when actually using that
+# bundled container - docker-compose.external-db.yml never binds a MySQL port on the host at all.
+$PortsToCheck = if ($ComposeFile -eq "docker-compose.yml") { @(4000, 5173, 3307) } else { @(4000, 5173) }
+foreach ($port in $PortsToCheck) {
+  $inUse = Get-NetTCPConnection -LocalPort $port -State Listen -ErrorAction SilentlyContinue
+  if ($inUse) {
+    Write-Warn "Port $port looks already in use on this machine. If it's not an old TimeSphere stack (check: docker compose -f $ComposeFile ps), stop whatever's using it or edit the port mapping in $ComposeFile before continuing."
+  }
+}
+
 Write-Step "Building and starting the stack (this can take a few minutes on first run)..."
-docker compose up -d --build
+Write-Host "Using $ComposeFile$(if ($ComposeFile -eq 'docker-compose.external-db.yml') { ' (your own MySQL server, no bundled mysql container)' })"
+docker compose -f $ComposeFile up -d --build
 
 Write-Step "Waiting for the API to become healthy..."
 $apiReady = $false
@@ -173,10 +218,10 @@ for ($i = 0; $i -lt 60; $i++) {
 
 if (-not $apiReady) {
   Write-Warn "API didn't report healthy within 3 minutes - checking container status and attempting a self-heal restart..."
-  docker compose ps
+  docker compose -f $ComposeFile ps
   # Auto-heal: a container that crashed on boot (transient migration lock, or mysql not yet
   # ready when api first connected) usually recovers with a restart - reuses built images, fast.
-  docker compose restart api
+  docker compose -f $ComposeFile restart api
   $apiReady = $false
   for ($i = 0; $i -lt 30; $i++) {
     try {
@@ -188,8 +233,12 @@ if (-not $apiReady) {
   if ($apiReady) {
     Write-Host "API recovered after restart."
   } else {
-    Write-Warn "Still not healthy - check 'docker compose logs api' for the actual error."
-    Write-Warn "Migrations run automatically on boot; a slow first-pull of the mysql:8.4 image is the usual cause on a fresh install."
+    Write-Warn "Still not healthy - check 'docker compose -f $ComposeFile logs api' for the actual error."
+    if ($ComposeFile -eq "docker-compose.yml") {
+      Write-Warn "Migrations run automatically on boot; a slow first-pull of the mysql:8.4 image is the usual cause on a fresh install."
+    } else {
+      Write-Warn "Migrations run automatically on boot; double-check your external MySQL server is actually reachable from this machine/container (host, port, firewall, and that the account you gave it can log in)."
+    }
   }
 } else {
   Write-Host "API is healthy."
@@ -200,9 +249,9 @@ Write-Step "Running the one-time seed (roles, permissions, control-plane plan ti
 # init-file replay for a few seconds after /health reports ready (TCP-reachable != fully migrated).
 $seedOk = $false
 for ($attempt = 1; $attempt -le 3; $attempt++) {
-  docker compose exec -T api npm run control:seed -w apps/api
+  docker compose -f $ComposeFile exec -T api npm run control:seed -w apps/api
   if ($LASTEXITCODE -eq 0) {
-    docker compose exec -T api npm run seed -w apps/api
+    docker compose -f $ComposeFile exec -T api npm run seed -w apps/api
     if ($LASTEXITCODE -eq 0) { $seedOk = $true; break }
   }
   Write-Warn "Seed attempt $attempt/3 failed - this is often `"already seeded`" (safe to ignore) or a DB-not-ready race. Retrying in 5s..."
@@ -211,8 +260,8 @@ for ($attempt = 1; $attempt -le 3; $attempt++) {
 if ($seedOk) {
   Write-Host "Seed complete."
 } else {
-  Write-Warn "Seeding didn't succeed after 3 attempts - if this is a fresh install, check 'docker compose logs api' and re-run manually:"
-  Write-Warn "  docker compose exec api npm run control:seed -w apps/api; docker compose exec api npm run seed -w apps/api"
+  Write-Warn "Seeding didn't succeed after 3 attempts - if this is a fresh install, check 'docker compose -f $ComposeFile logs api' and re-run manually:"
+  Write-Warn "  docker compose -f $ComposeFile exec api npm run control:seed -w apps/api; docker compose -f $ComposeFile exec api npm run seed -w apps/api"
   Write-Warn "If it's an already-seeded re-run, this is expected and safe to ignore."
 }
 

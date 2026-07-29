@@ -48,6 +48,42 @@ already-configured deployment just brings the stack up again; it won't regenerat
 touch an existing `.env`. Falls back to the manual steps below if you'd rather control each step
 (a real production rollout, a non-Docker deploy target, etc.).
 
+### Bringing your own MySQL server
+
+If you don't want the bundled `mysql` container — you already run a real MySQL server (an
+on-prem box, RDS, Cloud SQL, PlanetScale, etc.) and want the app containers to use it instead —
+both installers ask about this up front:
+
+```
+Where should the database live?
+  [1] Set one up for me in Docker (default — fastest for a trial, nothing else to configure)
+  [2] I already have a MySQL server I want to use (a real on-prem box, RDS, Cloud SQL, etc.)
+```
+
+Choosing **[2]** prompts for host, port, username, password, and the two database names (tenant +
+control-plane), then:
+
+- Writes `DATABASE_URL`/`CONTROL_DATABASE_URL` in `.env` pointing at your server instead of the
+  bundled container — the username/password are URL-encoded automatically, so a password
+  containing `@`, `:`, `/`, `#`, or `%` won't corrupt the connection string.
+- Uses `docker-compose.external-db.yml` instead of `docker-compose.yml` — the same `api`/`web`
+  services, minus the `mysql` service and its `depends_on` (there's nothing bundled to depend on).
+  The installer tracks this choice and keeps using the right file on every subsequent step
+  (health check, restart, seed) automatically.
+- Re-running the installer later against that same `.env` recognizes the choice automatically
+  (by checking whether `MYSQL_ROOT_PASSWORD` — only ever written by the bundled-MySQL path — is
+  present) and keeps using `docker-compose.external-db.yml` without re-prompting.
+
+Two things this doesn't do for you, on purpose: it doesn't create the databases on your server if
+your account lacks `CREATE DATABASE` privileges (the app's own migration step tries
+`CREATE DATABASE IF NOT EXISTS` and will fail clearly if it can't — pre-create the two databases
+yourself in that case), and it doesn't touch your server's own backup/networking/firewall
+configuration — that's on you, same as any other production database you already operate.
+
+If you'd rather skip Docker for the app containers too, the [manual install](#manual-setup)
+section below already works with any MySQL server by design — this installer prompt exists
+specifically for "I want Docker for the app, but my own database."
+
 ### Manual setup
 
 1. Provision one MySQL 8 server, reachable from wherever the API runs.

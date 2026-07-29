@@ -212,10 +212,15 @@ request.
 **Do I need Docker?** No — see [Manual local install](#manual-local-install-no-docker). Docker
 is the fastest path, not the only one.
 
-**Can I use MySQL I already have running, instead of the one in Docker Compose?** Yes for the
-manual install path — just point `DATABASE_URL`/`CONTROL_DATABASE_URL` at it. For the Docker
-Compose path, either edit `docker-compose.yml` to remove the `mysql` service and point at your
-external server, or use the manual install path instead.
+**Can I use MySQL I already have running, instead of the one in Docker Compose?** Yes, on both
+paths — no manual editing needed. For the manual install path, just point `DATABASE_URL`/
+`CONTROL_DATABASE_URL` at it (any real MySQL server works, not just XAMPP — see
+[docs/DEPLOYMENT.md § Bringing your own MySQL server](DEPLOYMENT.md#bringing-your-own-mysql-server)).
+For the Docker one-click installer, when it asks "Where should the database live?", choose
+**"I already have a MySQL server I want to use"** and give it your host/port/username/password —
+it'll skip provisioning the bundled `mysql` container entirely and use
+`docker-compose.external-db.yml` instead. Re-running the installer later against that same `.env`
+remembers your choice automatically (no re-prompting).
 
 **Can I skip SMTP entirely?** Yes. With no SMTP configured (neither `.env` nor the Mail server
 settings page), emails are logged to the console and recorded as `FAILED` in `EmailLog` instead
