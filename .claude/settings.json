@@ -1,0 +1,15 @@
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Grep",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python -m graphify hook-guard search"
+          }
+        ]
+      }
+    ]
+  }
+}

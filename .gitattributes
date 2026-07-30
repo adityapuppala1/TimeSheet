@@ -4,3 +4,4 @@
 # and `core.autocrlf=true` is Git for Windows' own suggested default during install, so this is
 # the single most common install-time gotcha for this repo without this rule.
 *.sh text eol=lf
+graphify-out/graph.json merge=graphify

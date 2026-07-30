@@ -20,3 +20,10 @@ apps/api/src/generated/
 playwright-report/
 test-results/
 tests/e2e/.auth/
+
+# graphify knowledge graph — derived artifacts, rebuilt from source by the post-commit hook.
+# Deliberately NOT tracked: graph.json (3MB) + graph.html (2.5MB) are regenerated on every
+# commit, so tracking them would add ~5MB of churn per commit to the repo history. Anyone with
+# graphify installed reproduces the whole thing with `/graphify .`. The .graphifyignore that
+# shapes WHAT gets graphed IS tracked, since that's shared configuration, not output.
+graphify-out/
