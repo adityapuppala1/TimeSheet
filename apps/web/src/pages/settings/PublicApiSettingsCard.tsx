@@ -9,7 +9,7 @@
  * copy it now, or revoke/regenerate if you lose it.
  */
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Check, Copy, KeyRound, Plus, Trash2, Webhook } from "lucide-react";
+import { AlertTriangle, Check, ChevronDown, ChevronRight, Copy, KeyRound, Plus, RotateCcw, Trash2, Webhook } from "lucide-react";
 import { useState } from "react";
 import { apiKeyScopes, outboundWebhookEvents, type ApiKeyScope, type OutboundWebhookEvent } from "@timesheet/shared";
 import { Badge } from "../../components/ui/badge";
@@ -21,7 +21,7 @@ import { Label } from "../../components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../../components/ui/select";
 import { Skeleton } from "../../components/ui/skeleton";
 import { toast } from "../../components/ui/toaster";
-import { SERVER_ORIGIN, settingsApi } from "../../services/api";
+import { SERVER_ORIGIN, settingsApi, type WebhookDeliveryRow } from "../../services/api";
 
 const EVENT_LABEL: Record<OutboundWebhookEvent, string> = {
   "ticket.created": "Ticket created",
@@ -48,6 +48,89 @@ function CopyableSecret({ value }: { value: string }) {
       >
         {copied ? <Check className="h-3.5 w-3.5" /> : <Copy className="h-3.5 w-3.5" />}
       </Button>
+    </div>
+  );
+}
+
+const DELIVERY_STATUS_TONE: Record<WebhookDeliveryRow["status"], string> = {
+  pending: "bg-amber-500/10 text-amber-600 dark:text-amber-400",
+  exhausted: "bg-destructive/10 text-destructive",
+  delivered: "bg-emerald-500/10 text-emerald-600 dark:text-emerald-400"
+};
+
+/** Collapsed by default — most webhooks have nothing to show here, and this is a secondary
+ *  concern next to the delivery-status summary already on the row. See
+ *  workers/webhook-retry.worker.ts for what "pending" (awaiting the next automatic retry) vs.
+ *  "exhausted" (hit the attempt cap, needs a human's attention) actually mean. */
+function WebhookDeliveries({ webhookId, readOnly }: { webhookId: string; readOnly: boolean }) {
+  const queryClient = useQueryClient();
+  const [open, setOpen] = useState(false);
+  const deliveries = useQuery({
+    queryKey: ["settings", "webhooks", webhookId, "deliveries"],
+    queryFn: () => settingsApi.listWebhookDeliveries(webhookId),
+    enabled: open
+  });
+  const retry = useMutation({
+    mutationFn: (deliveryId: string) => settingsApi.retryWebhookDelivery(webhookId, deliveryId),
+    onSuccess: (result) => {
+      toast[result.status === "delivered" ? "success" : "error"](
+        result.status === "delivered" ? "Delivered" : "Still failing — scheduled for another automatic retry"
+      );
+      queryClient.invalidateQueries({ queryKey: ["settings", "webhooks", webhookId, "deliveries"] });
+    },
+    onError: () => toast.error("Could not retry delivery", { description: "Try again." })
+  });
+
+  const rows = deliveries.data ?? [];
+
+  return (
+    <div className="mt-1">
+      <button
+        type="button"
+        className="flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground"
+        onClick={() => setOpen((o) => !o)}
+      >
+        {open ? <ChevronDown className="h-3 w-3" /> : <ChevronRight className="h-3 w-3" />}
+        Failed deliveries
+      </button>
+      {open && (
+        <div className="mt-1.5 grid gap-1.5">
+          {deliveries.isLoading && <Skeleton className="h-8 w-full" />}
+          {!deliveries.isLoading && rows.length === 0 && (
+            <p className="text-xs text-muted-foreground">Nothing pending or exhausted — every recent delivery succeeded.</p>
+          )}
+          {rows.map((d) => (
+            <div key={d.id} className="flex flex-wrap items-center gap-2 rounded-md border border-border bg-muted/30 px-2 py-1.5 text-xs">
+              <Badge className={DELIVERY_STATUS_TONE[d.status]} variant="secondary">
+                {d.status}
+              </Badge>
+              <span className="font-medium">{d.event}</span>
+              <span className="text-muted-foreground">attempt {d.attempt}</span>
+              {d.lastError && (
+                <span className="min-w-0 flex-1 truncate text-muted-foreground" title={d.lastError}>
+                  <AlertTriangle className="mr-1 inline h-3 w-3 text-destructive" />
+                  {d.lastError}
+                </span>
+              )}
+              {d.nextAttemptAt && d.status === "pending" && (
+                <span className="text-muted-foreground">next try {new Date(d.nextAttemptAt).toLocaleTimeString()}</span>
+              )}
+              {!readOnly && (
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className="ml-auto h-6 px-2"
+                  disabled={retry.isPending}
+                  onClick={() => retry.mutate(d.id)}
+                >
+                  <RotateCcw className="h-3 w-3" />
+                  Retry now
+                </Button>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
     </div>
   );
 }
@@ -232,6 +315,7 @@ export function PublicApiSettingsCard({ readOnly }: { readOnly: boolean }) {
                         <Badge key={e} variant="muted">{EVENT_LABEL[e]}</Badge>
                       ))}
                     </div>
+                    <WebhookDeliveries webhookId={hook.id} readOnly={readOnly} />
                   </div>
                 ))}
                 {(webhooks.data ?? []).length === 0 && (

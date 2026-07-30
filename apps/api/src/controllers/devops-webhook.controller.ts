@@ -24,6 +24,7 @@ import { resolveActiveOrgBySlug } from "../middleware/tenant.js";
 import { AppError } from "../middleware/error.js";
 import {
   maybeAssignFindingViaCodeowners,
+  maybeAutoCreateTicketForCiFailure,
   maybeAutoCreateTicketForFinding,
   maybePostCiFailureTriageComment,
   maybeReopenTicketOnRegression,
@@ -353,6 +354,17 @@ devopsWebhookRouter.post("/:orgSlug/test-runs", async (req, res, next) => {
             console.warn(`[devops-webhook] AI CI-failure triage failed for ticket ${ticketId}: ${(error as Error).message}`)
           );
         }
+      } else if (body.status === "FAILED" && !ticketId) {
+        // No ticket reference at all — the gap the branch above doesn't cover (that one only
+        // acts on an EXISTING ticket). Opt-in, see maybeAutoCreateTicketForCiFailure's own header
+        // for the flaky-test dedup guard.
+        await maybeAutoCreateTicketForCiFailure({
+          provider: body.provider,
+          branch: body.branch ?? null,
+          prUrl: body.prUrl ?? null,
+          logUrl: body.logUrl ?? null,
+          failureText: body.failureText
+        }).catch((error) => console.warn(`[devops-webhook] auto-create-ticket-for-CI-failure check failed: ${(error as Error).message}`));
       }
 
       res.status(201).json(created);

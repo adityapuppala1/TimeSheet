@@ -121,6 +121,119 @@ jobs:
           path: playwright-report/
           retention-days: 14
 
+      # Reports this job's own outcome as a TestRun through the app's own ingestion webhook
+      # (devops-webhook.controller.ts — the same endpoint docs/SECURITY_DEVOPS_INTEGRATIONS.md
+      # tells CUSTOMERS to POST to). `job.status` reflects this job's status up to this point
+      # even inside an `always()` step, same pattern as a Slack-on-failure notification step.
+      # Skipped entirely until TIMESPHERE_INGEST_TOKEN is configured (see security-scan-dogfood
+      # job below for the one-time setup), so this is a no-op on forks/until an admin opts in.
+      - name: Report test-run status to TimeSphere
+        if: always() && secrets.TIMESPHERE_INGEST_TOKEN != ''
+        run: |
+          STATUS="PASSED"
+          if [ "${{ job.status }}" != "success" ]; then STATUS="FAILED"; fi
+          curl -sf -X POST "$TIMESPHERE_INGEST_URL/api/devops/$TIMESPHERE_ORG_SLUG/test-runs" \
+            -H "Authorization: Bearer $TIMESPHERE_INGEST_TOKEN" -H "Content-Type: application/json" \
+            --data "{\"provider\":\"github-actions\",\"branch\":\"${{ github.ref_name }}\",\"status\":\"$STATUS\"}" \
+            || echo "::warning::Failed to report test-run status to TimeSphere (non-fatal)"
+        env:
+          TIMESPHERE_INGEST_TOKEN: ${{ secrets.TIMESPHERE_INGEST_TOKEN }}
+          TIMESPHERE_INGEST_URL: ${{ secrets.TIMESPHERE_INGEST_URL }}
+          TIMESPHERE_ORG_SLUG: ${{ secrets.TIMESPHERE_ORG_SLUG }}
+
+  # Dogfoods TimeSphere's own ingest-only security pipeline against its own source — the exact
+  # endpoints docs/SECURITY_DEVOPS_INTEGRATIONS.md documents for customers, exercised for real
+  # here for the first time. Entirely opt-in: skipped whole-job until an admin generates an
+  # ingestion token (Workspace Settings -> Security -> CI/CD ingestion -> rotate token) and adds
+  # it plus the target host/org as repo secrets (TIMESPHERE_INGEST_TOKEN/_URL/_ORG_SLUG) — so
+  # this is a safe no-op on every fork and on this repo until someone deliberately turns it on.
+  # `continue-on-error: true` because this job's whole point is informational dogfooding, not a
+  # merge gate — a scanner hiccup or a real finding must never block a PR.
+  security-scan-dogfood:
+    name: Dogfood security scanning (SAST + SCA + SBOM)
+    runs-on: ubuntu-latest
+    if: ${{ secrets.TIMESPHERE_INGEST_TOKEN != '' }}
+    continue-on-error: true
+    env:
+      TIMESPHERE_INGEST_TOKEN: ${{ secrets.TIMESPHERE_INGEST_TOKEN }}
+      TIMESPHERE_INGEST_URL: ${{ secrets.TIMESPHERE_INGEST_URL }}
+      TIMESPHERE_ORG_SLUG: ${{ secrets.TIMESPHERE_ORG_SLUG }}
+      REPO: ${{ github.repository }}
+      BRANCH: ${{ github.ref_name }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      # --- SAST: CodeQL, output kept local (upload: false) since results go to TimeSphere, not
+      #     GitHub's own code-scanning tab — this repo may not have GitHub Advanced Security.
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@v3
+        with:
+          languages: javascript-typescript
+
+      - name: Run CodeQL analysis
+        uses: github/codeql-action/analyze@v3
+        with:
+          output: codeql-results
+          upload: false
+
+      - name: Post CodeQL findings to TimeSphere
+        run: |
+          shopt -s nullglob
+          for f in codeql-results/*.sarif; do
+            curl -sf -X POST "$TIMESPHERE_INGEST_URL/api/devops/$TIMESPHERE_ORG_SLUG/findings/sarif?type=SAST&repository=$REPO&branch=$BRANCH" \
+              -H "Authorization: Bearer $TIMESPHERE_INGEST_TOKEN" -H "Content-Type: application/json" \
+              --data @"$f" || echo "::warning::Failed to post CodeQL SARIF ($f) to TimeSphere (non-fatal)"
+          done
+
+      # --- SAST: Semgrep's free ruleset, the exact tool docs/SECURITY_DEVOPS_INTEGRATIONS.md
+      #     already documents as the canonical example — this makes that example a proven one.
+      - name: Run Semgrep
+        run: |
+          docker run --rm -v "$PWD:/src" semgrep/semgrep semgrep --config auto --sarif --output /src/semgrep.sarif /src || true
+
+      - name: Post Semgrep findings to TimeSphere
+        run: |
+          if [ -f semgrep.sarif ]; then
+            curl -sf -X POST "$TIMESPHERE_INGEST_URL/api/devops/$TIMESPHERE_ORG_SLUG/findings/sarif?type=SAST&repository=$REPO&branch=$BRANCH" \
+              -H "Authorization: Bearer $TIMESPHERE_INGEST_TOKEN" -H "Content-Type: application/json" \
+              --data @semgrep.sarif || echo "::warning::Failed to post Semgrep SARIF to TimeSphere (non-fatal)"
+          fi
+
+      # --- SSCT: npm audit has no SARIF output, so a small mapper translates it to the native
+      #     findings-batch shape (scripts/ci/npm-audit-to-findings.mjs).
+      - name: Run npm audit
+        run: npm audit --json > npm-audit.json || true
+
+      - name: Map and post npm audit findings to TimeSphere
+        run: |
+          node scripts/ci/npm-audit-to-findings.mjs npm-audit.json "$REPO" "$BRANCH" > npm-audit-findings.json
+          if [ -s npm-audit-findings.json ] && [ "$(node -e "console.log(JSON.parse(require('fs').readFileSync('npm-audit-findings.json','utf8')).findings.length)")" != "0" ]; then
+            curl -sf -X POST "$TIMESPHERE_INGEST_URL/api/devops/$TIMESPHERE_ORG_SLUG/findings" \
+              -H "Authorization: Bearer $TIMESPHERE_INGEST_TOKEN" -H "Content-Type: application/json" \
+              --data @npm-audit-findings.json || echo "::warning::Failed to post npm audit findings to TimeSphere (non-fatal)"
+          fi
+
+      # --- SBOM: a real dependency inventory, not a stub — feeds the app's own SBOM inventory
+      #     report the moment it's ingested.
+      - name: Generate SBOM (CycloneDX)
+        run: npx --yes @cyclonedx/cyclonedx-npm --output-file sbom.json || true
+
+      - name: Post SBOM to TimeSphere
+        run: |
+          if [ -f sbom.json ]; then
+            curl -sf -X POST "$TIMESPHERE_INGEST_URL/api/devops/$TIMESPHERE_ORG_SLUG/sbom?repository=$REPO" \
+              -H "Authorization: Bearer $TIMESPHERE_INGEST_TOKEN" -H "Content-Type: application/json" \
+              --data @sbom.json || echo "::warning::Failed to post SBOM to TimeSphere (non-fatal)"
+          fi
+
   build-cross-platform:
     name: Typecheck + build (${{ matrix.os }})
     strategy:

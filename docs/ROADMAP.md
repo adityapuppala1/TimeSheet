@@ -823,3 +823,76 @@ by the extended live suite (`npm run verify:face:e2e`, 39 checks) plus 16 new un
 - **Dedicated face worker pool / object storage** — the Large-tier deployment shape in
   [DEPLOYMENT.md § Sizing](DEPLOYMENT.md#sizing-measured-not-guessed); an ingress split, not a
   code change, so tracked rather than built.
+
+### Dogfooding the security ingestion pipeline in TimeSphere's own CI (2026-07-30)
+
+The ingest-only security architecture (`devops-webhook.controller.ts`, documented for customers
+in [SECURITY_DEVOPS_INTEGRATIONS.md](SECURITY_DEVOPS_INTEGRATIONS.md)) had never been exercised
+against TimeSphere's own source — `.github/workflows/ci.yml` ran zero security scanning. Phase 1
+of a broader "make the SaaS smarter" plan (workflows/security/scanning/branch automation/AI —
+full plan reasoning kept alongside this entry, not just the outcome):
+
+- ~~No security scanning of the app's own code~~ — new `security-scan-dogfood` job runs CodeQL
+  and Semgrep (both SARIF → `POST /:orgSlug/findings/sarif`, zero new backend code needed —
+  `mapSarifToFindingInputs` already existed and had never been exercised for real), `npm audit`
+  (new `scripts/ci/npm-audit-to-findings.mjs` mapper → the native findings-batch endpoint, since
+  npm audit has no SARIF output), and a CycloneDX SBOM (`POST /:orgSlug/sbom` — the parser was
+  real, just never fed real data). The existing `build-test-ubuntu` job now also reports its own
+  pass/fail as a `TestRun` (`POST /:orgSlug/test-runs`).
+- Entirely opt-in and safe-by-default: the whole job is gated on
+  `secrets.TIMESPHERE_INGEST_TOKEN != ''`, so it's a no-op on every fork and on this repo until an
+  admin deliberately generates a token (Workspace Settings → Security → CI/CD ingestion → rotate
+  token) and adds `TIMESPHERE_INGEST_TOKEN`/`TIMESPHERE_INGEST_URL`/`TIMESPHERE_ORG_SLUG` as repo
+  secrets, pointed at a real deployed instance. `continue-on-error: true` on the whole job — this
+  is informational dogfooding, never a merge gate.
+- No new `GlobalAISettings` toggle needed: `findingTriageEnabled` and `securityWeeklyDigestEnabled`
+  already fire automatically the moment real findings land, since `ingestFindingsBatch` calls the
+  AI-triage and auto-ticket-creation functions unconditionally per finding. This is genuinely the
+  first time that pipeline runs against real, non-synthetic findings.
+
+**The rest of the same plan (Phases 2/3) shipped the same day — see the next two entries below.**
+Still open: deeper AI (cross-signal bug-pattern digest, AI-reasoned assignee suggestion, a
+stale-ticket nudge, and — last, most conservative — inline AI PR review comments beyond the
+existing PR summary).
+
+### Phase 2: closing the automation gaps (2026-07-30)
+
+- ~~Branch linking only worked git → ticket~~ — new `POST /tickets/:id/branches/auto` creates a
+  real branch via the existing (previously read-only) GitHub OAuth integration
+  (`git-provider.service.ts#createGitHubBranch`), named `<ticket-key>/<slugified-title>`. The `/`
+  separator is deliberate, not cosmetic: hyphen-joining the key straight into the slug (the
+  obvious choice) makes `git-webhook.controller.ts`'s ticket-key regex greedily swallow the WHOLE
+  branch name as one token whenever a title happens to end in digits (a version, an incident
+  number — not rare in bug titles), silently breaking the auto-link back. Verified against exactly
+  that failure case before shipping. Degrades gracefully in two ways: no GitHub connection, or no
+  `repository` supplied, returns the suggested name only (client fills the manual-link form); a
+  fallback branch also works with zero GitHub connection at all.
+- ~~A CI failure with no ticket at all just sat in the log~~ —
+  `maybeAutoCreateTicketForCiFailure` (opt-in, `IngestionSettings.autoCreateTicketOnCiFailureEnabled`,
+  off by default) closes the gap `maybeReopenTicketOnRegression` never covered (that one only acts
+  on an *existing* ticket). Flaky-test guard, verified end-to-end: a repeat failure on the same
+  provider+branch within 24h gets a comment on the ticket already created instead of a duplicate;
+  a failure already flagged as likely-flaky (AI CI-failure triage, when a failure-log excerpt was
+  supplied) skips creating a ticket on its first sighting at all.
+- ~~Outbound webhooks were fire-and-forget with no retry~~ — a failed delivery now persists as a
+  `WebhookDelivery` row (payload included, since a retry minutes later can't reconstruct "what the
+  ticket looked like at dispatch time" from current state) and `workers/webhook-retry.worker.ts`
+  (every 5 minutes) retries with backoff (1m/5m/15m/60m, ~80 minutes of coverage) before marking
+  it `exhausted`. No new job-queue dependency — same cron-sweep pattern every other worker here
+  already uses. Workspace Settings → Public API shows each webhook's pending/exhausted deliveries
+  with a manual "Retry now." Verified live: a webhook pointed at an unreachable host correctly
+  records the failure with the real network error, and manual retry re-attempts it.
+
+### Phase 3: unified ticket lineage (2026-07-30)
+
+- ~~Ticket ↔ branch/PR ↔ CI run ↔ security finding were four separate panels~~ — new
+  `ticket-lineage.service.ts` (`GET /tickets/:id/lineage`) merges them into one chronological
+  timeline, same shared-builder pattern as `buildTicketSecurityReport`. Pure read-side aggregation
+  — no new ingestion, every row already existed and was already linked by `ticketId`. New
+  "Lineage" tab in the ticket detail sheet. This is the literal "map" the original ask ("logging
+  and mapping") was pointing at. Verified live: a ticket carrying a linked branch/PR, a `PASSED`
+  test run, and a `HIGH` finding all merge into one correctly-ordered, correctly-toned timeline.
+  Deliberately does not include webhook-delivery events yet — a *successful* delivery is never
+  persisted anywhere per-event (only the aggregate status on the webhook row), so "every webhook
+  event fired about this ticket" isn't reconstructable without logging every attempt, not just
+  failures; revisit if that gap turns out to matter in practice.

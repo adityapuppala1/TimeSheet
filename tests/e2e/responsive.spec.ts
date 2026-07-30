@@ -126,7 +126,7 @@ test("every tab in Workspace Settings (8 tabs) is reachable", async ({ page }) =
   await assertEveryTabIsReachable(page);
 });
 
-test("every tab in the ticket detail sheet (6 tabs) is reachable", async ({ page }) => {
+test("every tab in the ticket detail sheet (7 tabs) is reachable", async ({ page }) => {
   const { accessToken } = await (await page.request.post("/api/auth/refresh")).json();
   const headers = { Authorization: `Bearer ${accessToken}` };
   const projects = await (await page.request.get("/api/projects", { headers })).json();

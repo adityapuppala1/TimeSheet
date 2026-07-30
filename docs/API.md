@@ -264,9 +264,16 @@ if (!crypto.timingSafeEqual(Buffer.from(expected), Buffer.from(receivedSignature
 }
 ```
 
-Delivery is best-effort (5s timeout, no retry queue in this phase) — if your endpoint is down,
-that one event's webhook call is lost, though the underlying ticket/timesheet data was already
-committed regardless. The webhook's row in Workspace Settings shows the outcome of its most
-recent delivery attempt (`delivered`, `http_4xx`/`http_5xx`, or `failed`) so you can tell at a
-glance whether your endpoint is currently reachable.
+Delivery is best-effort (5s timeout per attempt) — the underlying ticket/timesheet data is
+committed regardless of whether your endpoint answers. The webhook's row in Workspace Settings
+shows the outcome of its most recent attempt (`delivered`, `http_4xx`/`http_5xx`, or `failed`) so
+you can tell at a glance whether your endpoint is currently reachable.
+
+**A failed delivery is retried automatically**, not dropped: up to 4 retries with backoff (1m,
+5m, 15m, 60m — roughly 80 minutes of coverage for a brief outage on your end), after which it's
+marked `exhausted` rather than retried forever. `GET /settings/webhooks/:id/deliveries`
+(SUPER_ADMIN) lists a webhook's still-pending or exhausted deliveries; `POST
+/settings/webhooks/:id/deliveries/:deliveryId/retry` retries one immediately (resetting its
+attempt count, since a human retrying implies they believe the endpoint is fixed now) — both also
+surfaced in Workspace Settings → Public API under each webhook's "Failed deliveries."
 

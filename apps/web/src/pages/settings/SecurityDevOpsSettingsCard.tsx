@@ -131,6 +131,12 @@ export function SecurityDevOpsSettingsCard({ readOnly }: { readOnly: boolean }) 
     onError: () => toast.error("Could not update CODEOWNERS assignment", { description: "Try again." })
   });
 
+  const toggleAutoCreateTicketOnCiFailure = useMutation({
+    mutationFn: (enabled: boolean) => settingsApi.updateSecurityIngestionAutoCreateTicketOnCiFailure(enabled),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["settings", "security-ingestion"] }),
+    onError: () => toast.error("Could not update CI-failure ticket creation", { description: "Try again." })
+  });
+
   const [vaptAssessor, setVaptAssessor] = useState("");
   const [vaptJson, setVaptJson] = useState("");
   const uploadVapt = useMutation({
@@ -367,6 +373,35 @@ export function SecurityDevOpsSettingsCard({ readOnly }: { readOnly: boolean }) 
                 checked={Boolean(ingestion.data?.autoReopenEnabled)}
                 onCheckedChange={(value) => toggleAutoReopen.mutate(value)}
                 disabled={readOnly || toggleAutoReopen.isPending}
+              />
+            </div>
+          )}
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-base">Create a ticket from an untracked CI failure</CardTitle>
+          <CardDescription>
+            A FAILED test run reported with no <code>ticketKey</code> at all today just sits in the log — this creates one in the
+            fallback project above, the same way an untracked CRITICAL/HIGH finding does. Guarded against flaky-test spam: a repeat
+            failure on the same provider/branch within 24h gets a comment on the existing ticket instead of a duplicate, and (when AI
+            CI-failure triage is on and a failure log was supplied) a failure already flagged as likely-flaky skips ticket creation
+            entirely on its first sighting.
+          </CardDescription>
+        </CardHeader>
+        <CardContent>
+          {ingestion.isLoading && <Skeleton className="h-10 w-full" />}
+          {!ingestion.isLoading && (
+            <div className="flex flex-wrap items-center justify-between gap-3 rounded-md border border-border px-3 py-2.5">
+              <div className="min-w-0">
+                <p className="text-sm font-medium">Auto-create a ticket for untracked CI failures</p>
+                <p className="text-xs text-muted-foreground">Off by default — needs a fallback project configured above.</p>
+              </div>
+              <Switch
+                checked={Boolean(ingestion.data?.autoCreateTicketOnCiFailureEnabled)}
+                onCheckedChange={(value) => toggleAutoCreateTicketOnCiFailure.mutate(value)}
+                disabled={readOnly || toggleAutoCreateTicketOnCiFailure.isPending}
               />
             </div>
           )}

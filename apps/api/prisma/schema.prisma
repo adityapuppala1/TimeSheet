@@ -1199,6 +1199,12 @@ model IngestionSettings {
   /// needs at least one User.githubUsername populated to ever actually resolve someone, so it's
   /// a no-op cost until an admin has both configured — not worth defaulting on.
   codeownersAssignEnabled Boolean  @default(false)
+  /// A FAILED TestRun with NO ticket reference at all auto-creates one in fallbackProjectId — see
+  /// security-report.service.ts#maybeAutoCreateTicketForCiFailure. Separate from autoReopenEnabled
+  /// (that one only ever acts on an ticket that already exists) and off by default for the same
+  /// reason: an automated ticket-creation is a real state change an admin should opt into, not a
+  /// surprise the first time CI fails without a ticketKey attached.
+  autoCreateTicketOnCiFailureEnabled Boolean @default(false)
 
   updatedAt DateTime @updatedAt
 }
@@ -1296,6 +1302,36 @@ model OutboundWebhook {
   createdById        String?
   createdBy          User?     @relation(fields: [createdById], references: [id], onDelete: SetNull)
   createdAt          DateTime  @default(now())
+  deliveries         WebhookDelivery[]
+}
+
+/// Durable record of a FAILED outbound-webhook delivery — see webhook-dispatch.service.ts's
+/// header comment for why this exists: fire-and-forget with no retry meant one bad minute on a
+/// customer's endpoint silently dropped an event forever, with nothing but a "last call failed"
+/// flag on the webhook row to show for it. Only failures get a row here (a success is already
+/// fully reflected by OutboundWebhook.lastDeliveryAt/lastDeliveryStatus — duplicating that would
+/// just grow this table for no reason). `payload` is the exact JSON body that failed, persisted
+/// because a retry minutes later can't reconstruct "what the ticket looked like at dispatch
+/// time" from current state.
+model WebhookDelivery {
+  id            String    @id @default(uuid())
+  webhookId     String
+  webhook       OutboundWebhook @relation(fields: [webhookId], references: [id], onDelete: Cascade)
+  event         String    @db.VarChar(60)
+  payload       Json
+  /// How many delivery attempts have been made so far, this one included.
+  attempt       Int       @default(1)
+  /// "pending" (awaiting nextAttemptAt) | "delivered" (a retry succeeded) | "exhausted" (hit the
+  /// attempt cap — see workers/webhook-retry.worker.ts's MAX_ATTEMPTS).
+  status        String    @db.VarChar(20) @default("pending")
+  lastError     String?   @db.VarChar(500)
+  /// Null once status is no longer "pending" — nothing left to schedule.
+  nextAttemptAt DateTime?
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  @@index([webhookId])
+  @@index([status, nextAttemptAt])
 }
 
 /// Singleton (id = "global"). Face (identity) verification — confirms the person submitting a

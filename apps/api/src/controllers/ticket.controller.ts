@@ -33,7 +33,9 @@ import { audit } from "../services/audit.service.js";
 import { dispatchNotification } from "../services/notify.service.js";
 import { templates } from "../services/mail-templates.js";
 import { buildTicketSecurityReport, sendTicketClosedDigest } from "../services/security-report.service.js";
+import { buildTicketLineage } from "../services/ticket-lineage.service.js";
 import { dispatchOutboundWebhooks } from "../services/webhook-dispatch.service.js";
+import { createGitHubBranch, getGitAccessTokenOrNull, listGitHubRepos } from "../services/git-provider.service.js";
 import {
   applyTicketRules,
   assertTicketVisible,
@@ -672,6 +674,19 @@ ticketRouter.get("/:id/security-report", requirePermission(permissions.TICKETS_V
   res.json(await buildTicketSecurityReport(ticketId));
 });
 
+/* ---------- Lineage (ticket <-> branch/PR/CI/finding, one timeline) ---------- */
+// Pure read-side aggregation over data every other route/ingestion path already writes — see
+// services/ticket-lineage.service.ts's header for why this doesn't introduce a new data source.
+
+ticketRouter.get("/:id/lineage", requirePermission(permissions.TICKETS_VIEW), async (req, res) => {
+  const ticketId = String(req.params.id);
+  const ticket = await prisma.ticket.findFirst({ where: { id: ticketId, deletedAt: null }, select: { projectId: true } });
+  if (!ticket) throw new AppError(404, "Ticket not found");
+  await assertTicketVisible(req, ticket.projectId);
+
+  res.json(await buildTicketLineage(ticketId));
+});
+
 ticketRouter.get("/:id/security-report.pdf", requirePermission(permissions.TICKETS_VIEW), async (req, res) => {
   const ticketId = String(req.params.id);
   const ticket = await prisma.ticket.findFirst({ where: { id: ticketId, deletedAt: null }, select: { projectId: true, key: true } });
@@ -895,6 +910,79 @@ ticketRouter.post("/:id/branches", requirePermission(permissions.TICKETS_WRITE),
   });
   await audit(req.user!.id, "ticket.branch_added", "Ticket", ticketId, { branch: created.branch, repository: created.repository });
   res.status(201).json(created);
+});
+
+/**
+ * `WEB-123` + "Fix login redirect loop" -> "web-123/fix-login-redirect-loop", capped well under
+ * GitHub's 250-char ref-name limit.
+ *
+ * WHY a `/` between the key and the slug rather than another hyphen: git-webhook.controller.ts's
+ * TICKET_KEY_RE greedily backtracks to find a trailing `-\d+` — hyphen-joining the key straight
+ * into the slug means a title ending in digits (a version, an incident number, a bare id — not
+ * rare in bug titles) makes the regex swallow the WHOLE branch name as one "ticket key" instead
+ * of stopping at the real one, silently breaking the auto-link. A `/` is a non-word character
+ * (unlike `-`, which the pattern already treats as an internal joiner), so it forces the regex's
+ * trailing `\b` to land right after the key every time — verified against `WEB-123/…-1785396099`-
+ * style titles specifically because that failure mode doesn't show up on hand-picked examples.
+ */
+function slugBranchName(ticketKey: string, title: string): string {
+  const slug = title
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 60);
+  return `${ticketKey.toLowerCase()}${slug ? `/${slug}` : ""}`;
+}
+
+const autoBranchSchema = z.object({
+  params: z.object({ id: z.string().uuid() }),
+  body: z.object({
+    // Free-text "owner/repo", same convention as the manual route above — no live Repository
+    // table exists yet (see TicketBranch's schema comment). Omitting it (or an unconnected
+    // GitHub) just returns the suggested name for copy-paste instead of creating anything.
+    repository: z.string().max(255).optional(),
+    baseBranch: z.string().max(255).optional()
+  })
+});
+
+/**
+ * Suggests (and, when GitHub is connected, actually creates) a branch name for this ticket — the
+ * one direction TicketBranch linking didn't have yet (git push -> ticket already auto-links via
+ * git-webhook.controller.ts; this is ticket -> git). Reuses the existing read-only GitHub OAuth
+ * integration's token rather than adding new auth — see git-provider.service.ts#createGitHubBranch.
+ * Degrades gracefully in three ways so a missing connection/repo never turns into a hard error:
+ * no GitHub connection -> name only; no `repository` supplied -> name only; `baseBranch` omitted
+ * -> resolved from the repo's own default branch.
+ */
+ticketRouter.post("/:id/branches/auto", requirePermission(permissions.TICKETS_WRITE), validate(autoBranchSchema), async (req, res) => {
+  const ticketId = String(req.params.id);
+  const ticket = await prisma.ticket.findFirst({ where: { id: ticketId, deletedAt: null }, select: { key: true, title: true, projectId: true } });
+  if (!ticket) throw new AppError(404, "Ticket not found");
+  await assertTicketVisible(req, ticket.projectId);
+
+  const suggestedName = slugBranchName(ticket.key, ticket.title);
+  const repository = req.body.repository?.trim();
+
+  const token = repository ? await getGitAccessTokenOrNull() : null;
+  if (!token || !repository) {
+    return res.json({ created: false, suggestedName });
+  }
+
+  let baseBranch = req.body.baseBranch?.trim();
+  if (!baseBranch) {
+    const repos = await listGitHubRepos(token);
+    baseBranch = repos.find((r) => r.fullName === repository)?.defaultBranch;
+    if (!baseBranch) throw new AppError(422, `Couldn't find "${repository}" among this connection's GitHub repos — pass baseBranch explicitly, or check the repository name.`);
+  }
+
+  await createGitHubBranch(token, repository, suggestedName, baseBranch);
+
+  const created = await prisma.ticketBranch.create({
+    data: { ticketId, repository, branch: suggestedName, prStatus: "NONE", addedById: req.user!.id },
+    include: { addedBy: { select: USER_SUMMARY } }
+  });
+  await audit(req.user!.id, "ticket.branch_auto_created", "Ticket", ticketId, { branch: suggestedName, repository });
+  res.status(201).json({ created: true, branch: created });
 });
 
 const updateBranchSchema = z.object({

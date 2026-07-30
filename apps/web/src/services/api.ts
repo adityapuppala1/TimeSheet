@@ -548,6 +548,7 @@ export const settingsApi = {
         fallbackProjectId: string | null;
         autoReopenEnabled: boolean;
         codeownersAssignEnabled: boolean;
+        autoCreateTicketOnCiFailureEnabled: boolean;
       }>("/settings/security-ingestion")
     ).data,
   /** Returns the new token in plaintext — the ONE time it's ever visible; see
@@ -568,6 +569,14 @@ export const settingsApi = {
    *  and at least one User.githubUsername set to ever resolve anyone. */
   updateSecurityIngestionCodeownersAssign: async (codeownersAssignEnabled: boolean) =>
     (await api.patch<{ codeownersAssignEnabled: boolean }>("/settings/security-ingestion/codeowners-assign", { codeownersAssignEnabled })).data,
+  /** A FAILED test run with NO ticket reference at all auto-creates one (with a flaky-test dedup
+   *  guard) — see security-report.service.ts#maybeAutoCreateTicketForCiFailure. */
+  updateSecurityIngestionAutoCreateTicketOnCiFailure: async (autoCreateTicketOnCiFailureEnabled: boolean) =>
+    (
+      await api.patch<{ autoCreateTicketOnCiFailureEnabled: boolean }>("/settings/security-ingestion/auto-create-ticket-on-ci-failure", {
+        autoCreateTicketOnCiFailureEnabled
+      })
+    ).data,
   /** Inbound SCIM 2.0 provisioning — see scim.controller.ts. `baseUrl` is what the admin pastes
    *  into their IdP's SCIM connector config, alongside a rotated bearer token. */
   getScim: async () => (await api.get<{ tokenSet: boolean; isEnabled: boolean; baseUrl: string }>("/settings/scim")).data,
@@ -613,6 +622,12 @@ export const settingsApi = {
   updateWebhook: async (id: string, payload: { isActive?: boolean; events?: OutboundWebhookEvent[] }) =>
     (await api.patch<OutboundWebhookRow>(`/settings/webhooks/${id}`, payload)).data,
   deleteWebhook: async (id: string) => api.delete(`/settings/webhooks/${id}`),
+  /** Deliveries still pending an automatic retry, or that exhausted their attempts — see
+   *  workers/webhook-retry.worker.ts. A delivered attempt never needed a row, so it never
+   *  appears here. */
+  listWebhookDeliveries: async (webhookId: string) => (await api.get<WebhookDeliveryRow[]>(`/settings/webhooks/${webhookId}/deliveries`)).data,
+  retryWebhookDelivery: async (webhookId: string, deliveryId: string) =>
+    (await api.post<WebhookDeliveryRow>(`/settings/webhooks/${webhookId}/deliveries/${deliveryId}/retry`)).data,
 
   // Live git-provider (GitHub) connection — see docs/ROADMAP.md's "Live git-provider App
   // integration" item. /git/connect returns a URL to navigate the browser to (a normal fetch,
@@ -676,6 +691,16 @@ export interface OutboundWebhookRow {
   lastDeliveryStatus: string | null;
   createdAt: string;
   createdBy: { id: string; name: string } | null;
+}
+export interface WebhookDeliveryRow {
+  id: string;
+  event: string;
+  attempt: number;
+  status: "pending" | "delivered" | "exhausted";
+  lastError: string | null;
+  nextAttemptAt: string | null;
+  createdAt: string;
+  updatedAt: string;
 }
 export interface OutboundWebhookCreated {
   id: string;
@@ -942,6 +967,18 @@ export interface TicketSecurityReport {
   generatedAt: string;
 }
 
+export interface TicketLineageEvent {
+  type: "branch_linked" | "pr_status" | "test_run" | "security_finding";
+  at: string;
+  summary: string;
+  detail?: string;
+  tone: "success" | "failure" | "neutral";
+}
+export interface TicketLineage {
+  ticket: { id: string; key: string; title: string };
+  events: TicketLineageEvent[];
+}
+
 export interface TicketBranchRow {
   id: string;
   repository: string;
@@ -1042,6 +1079,10 @@ export const ticketApi = {
     // authenticated axios instance + blob pattern reportApi.download uses, not a direct link.
     downloadPdf: async (id: string) => (await api.get(`/tickets/${id}/security-report.pdf`, { responseType: "blob" })).data
   },
+  /** One chronological timeline of everything bound to this ticket — branches/PRs, CI runs,
+   *  security findings — see ticket-lineage.service.ts. Pure aggregation of data the Dev/Security
+   *  tabs already show separately; this is the merged view. */
+  lineage: async (id: string) => (await api.get<TicketLineage>(`/tickets/${id}/lineage`)).data,
   /** Manual repo/branch/PR linking — see prisma/schema.prisma's TicketBranch model comment for
    *  why this isn't synced live from a git provider. */
   branches: {
@@ -1049,7 +1090,12 @@ export const ticketApi = {
       (await api.post<TicketBranchRow>(`/tickets/${id}/branches`, payload)).data,
     update: async (id: string, branchId: string, payload: { prUrl?: string | null; prStatus?: TicketBranchPrStatus }) =>
       (await api.patch<TicketBranchRow>(`/tickets/${id}/branches/${branchId}`, payload)).data,
-    remove: async (id: string, branchId: string) => api.delete(`/tickets/${id}/branches/${branchId}`)
+    remove: async (id: string, branchId: string) => api.delete(`/tickets/${id}/branches/${branchId}`),
+    /** Suggests (and, with a repository + a connected GitHub, actually creates) a conventional
+     *  branch name for this ticket — the ticket -> git direction, complementing the auto-linking
+     *  the push webhook already does in the other direction. */
+    auto: async (id: string, payload: { repository?: string; baseBranch?: string }) =>
+      (await api.post<{ created: boolean; suggestedName?: string; branch?: TicketBranchRow }>(`/tickets/${id}/branches/auto`, payload)).data
   }
 };
 

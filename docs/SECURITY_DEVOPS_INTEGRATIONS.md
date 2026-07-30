@@ -76,6 +76,15 @@ itself.
 `status` is `PASSED` / `FAILED` / `RUNNING`. A ticket can't move to `RESOLVED` while its latest
 linked test run is `FAILED` (configurable — see the roadmap doc's theme #2).
 
+**A `FAILED` run with no `ticketKey` at all** can auto-create one, instead of the failure just
+sitting in the log with nothing tracking it — opt-in via
+`IngestionSettings.autoCreateTicketOnCiFailureEnabled` (Workspace Settings → Security & DevOps),
+off by default, and requires a fallback project to be configured the same way findings-sourced
+tickets do. Guarded against flaky-test spam: a repeat failure on the same `provider`+`branch`
+within 24h gets a comment on the ticket that was already created instead of a duplicate, and (with
+AI CI-failure triage on and a `failureText` excerpt supplied) a failure already flagged as likely
+flaky skips ticket creation entirely on its first sighting.
+
 ## 3. Per-CI-system examples
 
 Each example assumes your scanner already ran and wrote its native output to a file
@@ -119,6 +128,12 @@ jobs:
             -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
             -d "{\"provider\":\"github-actions\",\"status\":\"${{ job.status == 'success' && 'PASSED' || 'FAILED' }}\",\"branch\":\"${{ github.head_ref }}\",\"logUrl\":\"${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}\"}"
 ```
+
+**This isn't just an illustration** — this repo's own `.github/workflows/ci.yml` runs the real
+thing (`security-scan-dogfood` job): CodeQL and Semgrep via SARIF, `npm audit` via a small mapper
+(`scripts/ci/npm-audit-to-findings.mjs`), and a CycloneDX SBOM, all posted through these exact
+endpoints. It's off by default (gated on `TIMESPHERE_INGEST_TOKEN` being set) so it never runs on
+a fork or before an admin opts in — read it directly for a working, maintained reference.
 
 ### GitLab CI
 

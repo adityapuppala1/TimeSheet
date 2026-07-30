@@ -19,7 +19,9 @@
  */
 import jwt from "jsonwebtoken";
 import { env } from "../config/env.js";
+import { prisma } from "../config/prisma.js";
 import { AppError } from "../middleware/error.js";
+import { decryptSecret } from "../utils/encryption.js";
 
 const STATE_TTL_SECONDS = 10 * 60;
 const GITHUB_AUTHORIZE_URL = "https://github.com/login/oauth/authorize";
@@ -93,6 +95,17 @@ export async function fetchGitHubLogin(accessToken: string): Promise<string> {
   return user.login;
 }
 
+/** Non-throwing token lookup for callers that can gracefully degrade when GitHub isn't connected
+ *  (e.g. suggesting a branch name instead of creating one) — settings.controller.ts's own
+ *  `requireGitAccessToken` throws 422 instead, which is correct for its routes (GitHub-picker
+ *  autocomplete is useless without a connection) but wrong for a feature that still works, just
+ *  less automatically, without one. */
+export async function getGitAccessTokenOrNull(): Promise<string | null> {
+  const connection = await prisma.gitConnection.findUnique({ where: { id: "global" } });
+  if (!connection?.encryptedAccessToken) return null;
+  return decryptSecret(connection.encryptedAccessToken);
+}
+
 export interface GitHubRepoSummary {
   fullName: string;
   defaultBranch: string;
@@ -109,6 +122,39 @@ export async function listGitHubRepos(accessToken: string): Promise<GitHubRepoSu
 export async function listGitHubBranches(accessToken: string, fullName: string): Promise<string[]> {
   const branches = await githubGet<Array<{ name: string }>>(accessToken, `/repos/${fullName}/branches?per_page=100`);
   return branches.map((b) => b.name);
+}
+
+/**
+ * Creates a real branch in `fullName` (owner/repo) off `baseBranch`'s current tip — the one
+ * WRITE path this integration didn't have yet; every other exported function here is read-only.
+ * Two REST calls: read the base ref's SHA, then create a new ref pointing at it. Used by ticket
+ * -> branch automation (ticket.controller.ts's `POST /:id/branches/auto`); the scope granted at
+ * connect time (`buildGitHubAuthorizeUrl`'s "repo" scope, above) already covers ref creation, so
+ * no new consent/reconnect is needed for orgs that connected before this existed.
+ */
+export async function createGitHubBranch(accessToken: string, fullName: string, newBranch: string, baseBranch: string): Promise<void> {
+  const baseRef = await githubGet<{ object: { sha: string } }>(
+    accessToken,
+    `/repos/${fullName}/git/ref/heads/${encodeURIComponent(baseBranch)}`
+  );
+
+  const response = await fetch(`${GITHUB_API_BASE}/repos/${fullName}/git/refs`, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${accessToken}`,
+      Accept: "application/vnd.github+json",
+      "X-GitHub-Api-Version": "2022-11-28",
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify({ ref: `refs/heads/${newBranch}`, sha: baseRef.object.sha })
+  });
+  if (response.ok) return;
+
+  const body = (await response.json().catch(() => ({}))) as { message?: string };
+  if (response.status === 422 && (body.message ?? "").includes("Reference already exists")) {
+    throw new AppError(409, `Branch "${newBranch}" already exists in ${fullName}.`);
+  }
+  throw new AppError(response.status, `GitHub API error creating branch: ${body.message ?? response.statusText}`);
 }
 
 export interface GitHubPullRequestSummary {

@@ -5,10 +5,12 @@
  * to every active OutboundWebhook subscribed to that event in the current tenant, HMAC-signing
  * each payload the same way GitHub/Stripe do so receivers can verify authenticity.
  *
- * WHY fire-and-forget per delivery rather than a queue/retry system: this is a first phase (see
- * roadmap) — an org's own endpoint being briefly down loses that one event's webhook call, not
- * anything TimeSphere itself depends on (the in-app data is already committed before this runs).
- * A durable retry queue is future work if/when a customer actually needs delivery guarantees.
+ * RELIABILITY: a failed delivery is persisted as a `WebhookDelivery` row (not just a
+ * `lastDeliveryStatus` flag) so `workers/webhook-retry.worker.ts` can retry it with backoff, up
+ * to a capped attempt count — an org's endpoint having one bad minute no longer silently drops
+ * the event forever. Deliberately NOT a general-purpose job queue (no BullMQ/pg-boss dependency
+ * added): this is the same cron-sweep pattern every other worker in this codebase already uses,
+ * scoped to exactly this one problem.
  */
 import crypto from "node:crypto";
 import { prisma } from "../config/prisma.js";
@@ -33,11 +35,45 @@ function sign(secret: string, rawBody: string): string {
   return crypto.createHmac("sha256", secret).update(rawBody).digest("hex");
 }
 
+export interface DeliveryOutcome {
+  /** "delivered" | "http_<status>" | "failed" (network error/timeout). */
+  status: string;
+  ok: boolean;
+  error?: string;
+}
+
+/** The one place an HTTP delivery attempt actually happens — shared by the initial fire-and-
+ *  forget dispatch below and the retry worker, so "what counts as success" can never drift
+ *  between the two call sites. */
+export async function attemptWebhookDelivery(url: string, secret: string, event: string, body: string): Promise<DeliveryOutcome> {
+  const signature = sign(secret, body);
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), DELIVERY_TIMEOUT_MS);
+  try {
+    const response = await fetch(url, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "X-TimeSphere-Event": event,
+        "X-TimeSphere-Signature": `sha256=${signature}`
+      },
+      body,
+      signal: controller.signal
+    });
+    return response.ok ? { status: "delivered", ok: true } : { status: `http_${response.status}`, ok: false };
+  } catch (error) {
+    return { status: "failed", ok: false, error: (error as Error).message.slice(0, 500) };
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
 /** Fires `event` at every active webhook in the current tenant subscribed to it. Best-effort —
  *  one endpoint timing out or 500ing never throws back to the caller, since ticket/timesheet
- *  mutations must not fail because an external integration's server is down. Each delivery's
- *  outcome is recorded on the webhook row (lastDeliveryAt/lastDeliveryStatus) so an admin can
- *  see "last call failed" from Workspace Settings without needing a separate delivery log. */
+ *  mutations must not fail because an external integration's server is down. Every attempt's
+ *  outcome lands on the webhook row (lastDeliveryAt/lastDeliveryStatus) for an at-a-glance
+ *  status; a FAILED attempt additionally persists a `WebhookDelivery` row so it can be retried
+ *  automatically instead of being lost the moment this function returns. */
 export async function dispatchOutboundWebhooks(event: WebhookEvent, payload: Record<string, unknown>): Promise<void> {
   const webhooks = await prisma.outboundWebhook.findMany({ where: { isActive: true } });
   const subscribed = webhooks.filter((hook) => Array.isArray(hook.events) && (hook.events as string[]).includes(event));
@@ -46,39 +82,42 @@ export async function dispatchOutboundWebhooks(event: WebhookEvent, payload: Rec
   const body = JSON.stringify({ event, deliveredAt: new Date().toISOString(), data: payload });
 
   // Deliveries are DETACHED: this resolves once the fan-out is scheduled, not once external
-  // servers have answered. The header comment has always described this as fire-and-forget, but
-  // the deliveries used to be awaited — which parked every ticket/timesheet mutation behind up
-  // to DELIVERY_TIMEOUT_MS (5s) of someone else's slow endpoint. Nothing in any caller's
-  // response depends on delivery; the outcome lands on the webhook row either way, and the
-  // tenant context carries into the detached work via AsyncLocalStorage.
+  // servers have answered. Nothing in any caller's response depends on delivery; the outcome
+  // lands on the webhook row (and, on failure, a WebhookDelivery row) either way, and the tenant
+  // context carries into the detached work via AsyncLocalStorage.
   void Promise.allSettled(
     subscribed.map(async (hook) => {
-      const signature = sign(hook.secret, body);
-      let status = "failed";
-      try {
-        const controller = new AbortController();
-        const timeout = setTimeout(() => controller.abort(), DELIVERY_TIMEOUT_MS);
-        try {
-          const response = await fetch(hook.url, {
-            method: "POST",
-            headers: {
-              "Content-Type": "application/json",
-              "X-TimeSphere-Event": event,
-              "X-TimeSphere-Signature": `sha256=${signature}`
-            },
-            body,
-            signal: controller.signal
-          });
-          status = response.ok ? "delivered" : `http_${response.status}`;
-        } finally {
-          clearTimeout(timeout);
-        }
-      } catch {
-        status = "failed";
-      }
+      const outcome = await attemptWebhookDelivery(hook.url, hook.secret, event, body);
       await prisma.outboundWebhook
-        .update({ where: { id: hook.id }, data: { lastDeliveryAt: new Date(), lastDeliveryStatus: status } })
+        .update({ where: { id: hook.id }, data: { lastDeliveryAt: new Date(), lastDeliveryStatus: outcome.status } })
         .catch(() => undefined);
+      if (!outcome.ok) {
+        await prisma.webhookDelivery
+          .create({
+            data: {
+              webhookId: hook.id,
+              event,
+              payload: JSON.parse(body),
+              attempt: 1,
+              status: "pending",
+              lastError: outcome.error ?? outcome.status,
+              nextAttemptAt: nextRetryAt(1)
+            }
+          })
+          .catch(() => undefined);
+      }
     })
   );
 }
+
+/** Exponential backoff: 1m, 5m, 15m, 60m — the 5th attempt (if it also fails) exhausts the
+ *  budget rather than scheduling a 6th. Deliberately short overall (~80 minutes end to end):
+ *  this is recovering from a receiver's brief outage, not queuing for a day-long one. */
+const RETRY_DELAYS_MS = [60_000, 5 * 60_000, 15 * 60_000, 60 * 60_000];
+
+export function nextRetryAt(attemptJustMade: number): Date | null {
+  const delay = RETRY_DELAYS_MS[attemptJustMade - 1];
+  return delay ? new Date(Date.now() + delay) : null;
+}
+
+export const MAX_DELIVERY_ATTEMPTS = RETRY_DELAYS_MS.length + 1;

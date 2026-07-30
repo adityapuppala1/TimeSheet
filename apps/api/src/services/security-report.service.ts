@@ -513,6 +513,127 @@ export async function maybePostCiFailureTriageComment(
 }
 
 /**
+ * Fires from devops-webhook.controller.ts's /test-runs route on a FAILED run with NO ticket
+ * reference at all — the gap `maybeReopenTicketOnRegression` doesn't cover (that one only acts on
+ * an EXISTING ticket). Same fallback-project/system-user pattern as
+ * `maybeAutoCreateTicketForFinding`, but its own opt-in
+ * (`IngestionSettings.autoCreateTicketOnCiFailureEnabled`, off by default) — unlike a security
+ * finding, which already carries a scanner's own severity classification, a bare CI failure has
+ * no confidence signal of its own until AI triage runs, and that's optional here.
+ *
+ * Flaky-test guard, two layers so this can't spam a ticket per re-run of the same broken test:
+ * 1. Deterministic (always applied, no AI needed): if a ticket was already auto-created for this
+ *    exact provider+branch in the last 24h, this is a REPEAT failure — append a comment to it
+ *    instead of creating a duplicate, regardless of what AI triage says (a still-broken build is
+ *    exactly the "still broken" signal worth appending, flaky or not).
+ * 2. AI-assisted (only when `ciFailureTriageEnabled` AND a `failureText` excerpt was supplied):
+ *    `classifyCiFailure`'s `isLikelyFlaky` skips creating a FIRST ticket at all — a test already
+ *    known to be flaky doesn't deserve a fresh ticket the moment nobody's tracking it yet, since
+ *    that trains whoever triages it to start ignoring "CI failed" tickets on sight.
+ */
+export async function maybeAutoCreateTicketForCiFailure(testRun: {
+  provider: string;
+  branch: string | null;
+  prUrl: string | null;
+  logUrl: string | null;
+  failureText?: string;
+}): Promise<void> {
+  const ingestionSettings = await prisma.ingestionSettings.findUnique({ where: { id: "global" } });
+  if (!ingestionSettings?.autoCreateTicketOnCiFailureEnabled) return;
+
+  const projectId = ingestionSettings.fallbackProjectId;
+  if (!projectId) return;
+  const project = await prisma.project.findFirst({ where: { id: projectId, deletedAt: null }, include: { modules: true } });
+  if (!project) return;
+
+  const systemUser = await prisma.user.findUnique({ where: { email: SECURITY_INGESTION_SYSTEM_EMAIL } });
+  if (!systemUser) return;
+
+  const titlePrefix = `[CI] ${testRun.provider} failed on ${testRun.branch ?? "unknown branch"}`;
+
+  let isLikelyFlaky = false;
+  let rootCause: string | null = null;
+  if (testRun.failureText) {
+    const classification = await classifyCiFailure({ failureText: testRun.failureText, provider: testRun.provider }).catch(() => null);
+    if (classification) {
+      isLikelyFlaky = classification.isLikelyFlaky;
+      rootCause = classification.rootCause;
+    }
+  }
+
+  const recentCutoff = new Date(Date.now() - 24 * 60 * 60 * 1000);
+  const recentTicket = await prisma.ticket.findFirst({
+    where: { projectId: project.id, title: { startsWith: titlePrefix }, createdAt: { gte: recentCutoff }, deletedAt: null },
+    orderBy: { createdAt: "desc" }
+  });
+
+  if (recentTicket) {
+    const note = rootCause
+      ? `Failed again (${testRun.provider}). AI triage: ${rootCause}${isLikelyFlaky ? " — looks flaky." : ""}`
+      : `Failed again (${testRun.provider}).`;
+    await prisma.ticketComment.create({ data: { ticketId: recentTicket.id, authorId: systemUser.id, body: `<p>${escapeHtml(note)}</p>` } });
+    return;
+  }
+
+  if (isLikelyFlaky) return;
+
+  const priority: TicketPriority = "MEDIUM";
+  const slaSettings = await getGlobalTicketSettings();
+  const createdAt = new Date();
+  const description = [rootCause, testRun.logUrl ? `Log: ${testRun.logUrl}` : null, testRun.prUrl ? `PR: ${testRun.prUrl}` : null, `Reported by ${testRun.provider}.`]
+    .filter(Boolean)
+    .join("\n\n");
+
+  const ticket = await prisma.$transaction(async (tx) => {
+    const key = await issueTicketKey(tx, project.id);
+    return tx.ticket.create({
+      data: {
+        key,
+        projectId: project.id,
+        type: "BUG",
+        title: titlePrefix,
+        description,
+        priority,
+        source: "API",
+        reporterId: systemUser.id,
+        aiConfidence: null,
+        needsReview: false,
+        dueAt: computeTicketDueDate(createdAt, priority, slaSettings)
+      }
+    });
+  });
+
+  // Auto-assign via the fallback project's module rule — same convention as
+  // maybeAutoCreateTicketForFinding, duplicated rather than extracted since that function's
+  // version is entangled with finding-specific notification copy and a CODEOWNERS fallback that
+  // doesn't apply here (a CI failure has no single file to attribute).
+  const moduleWithRule = await prisma.moduleAssigneeRule.findFirst({ where: { moduleId: { in: project.modules.map((m) => m.id) } } });
+  if (moduleWithRule) {
+    await prisma.ticket.update({ where: { id: ticket.id }, data: { assigneeId: moduleWithRule.defaultAssigneeId, moduleId: moduleWithRule.moduleId } });
+    const assignee = await prisma.user.findUnique({ where: { id: moduleWithRule.defaultAssigneeId }, select: { id: true, name: true } });
+    if (assignee) {
+      await dispatchNotification({
+        userId: assignee.id,
+        category: "ticket.assigned",
+        title: `Ticket assigned: ${ticket.key}`,
+        body: `Auto-assigned from a failed CI run (${testRun.provider}): "${ticket.title}".`,
+        link: `/app/tickets?open=${ticket.id}`,
+        email: {
+          templateKey: "ticket.assigned",
+          vars: { assigneeName: assignee.name, ticketKey: ticket.key, title: ticket.title, priority, assignedBy: "CI Ingestion" },
+          fallback: {
+            subject: `Ticket ${ticket.key} assigned to you`,
+            html: templates.ticketAssigned({ assigneeName: assignee.name, ticketKey: ticket.key, title: ticket.title, priority, assignedBy: "CI Ingestion" })
+          }
+        }
+      });
+    }
+  }
+
+  await audit(undefined, "ticket.auto_created_from_ci_failure", "Ticket", ticket.id, { provider: testRun.provider, branch: testRun.branch });
+}
+
+/**
  * Opt-in AI exploitability triage on a just-ingested finding — sibling of
  * maybePostCiFailureTriageComment, gated by GlobalAISettings.findingTriageEnabled instead of
  * ciFailureTriageEnabled. Only CRITICAL/HIGH findings are triaged (same severity bar

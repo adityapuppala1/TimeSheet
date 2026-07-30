@@ -52,6 +52,7 @@ import {
   Ticket as TicketIcon,
   TimerReset,
   Trash2,
+  Waypoints,
   X
 } from "lucide-react";
 import { useState } from "react";
@@ -77,7 +78,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "../components/ui/tabs"
 import { toast } from "../components/ui/toaster";
 import { Tooltip, TooltipContent, TooltipTrigger } from "../components/ui/tooltip";
 import { safeHtml } from "../lib/safe-html";
-import { aiApi, faceApi, fileUrl, labelApi, projectApi, settingsApi, ticketApi, ticketTypeApi, type AIDuplicateMatch, type AITriageSuggestion, type SecurityFindingRow, type TicketAttachmentRow, type TicketBranchRow, type TicketChecklistItemRow, type TicketComment, type TicketDetail, type TicketLinkRow, type TicketLinkType, type TicketRow, type TicketTimesheetRow } from "../services/api";
+import { aiApi, faceApi, fileUrl, labelApi, projectApi, settingsApi, ticketApi, ticketTypeApi, type AIDuplicateMatch, type AITriageSuggestion, type SecurityFindingRow, type TicketAttachmentRow, type TicketBranchRow, type TicketChecklistItemRow, type TicketComment, type TicketDetail, type TicketLineageEvent, type TicketLinkRow, type TicketLinkType, type TicketRow, type TicketTimesheetRow } from "../services/api";
 import { FaceVerificationDialog } from "../components/FaceVerificationDialog";
 import { useFaceStatus } from "../lib/use-face-status";
 import { useAuthStore } from "../store/auth";
@@ -1042,6 +1043,7 @@ function TicketDetailSheet({
                   <TabsTrigger value="time"><TimerReset className="h-3.5 w-3.5" />Time logged</TabsTrigger>
                   <TabsTrigger value="dev"><GitBranch className="h-3.5 w-3.5" />Dev ({ticket.branches.length})</TabsTrigger>
                   <TabsTrigger value="security"><ShieldAlert className="h-3.5 w-3.5" />Security</TabsTrigger>
+                  <TabsTrigger value="lineage"><Waypoints className="h-3.5 w-3.5" />Lineage</TabsTrigger>
                   <TabsTrigger value="activity"><ScrollText className="h-3.5 w-3.5" />Activity</TabsTrigger>
                 </TabsList>
                 <TabsContent value="comments">
@@ -1064,6 +1066,9 @@ function TicketDetailSheet({
                 </TabsContent>
                 <TabsContent value="security">
                   <SecurityPanel ticketId={ticket.id} />
+                </TabsContent>
+                <TabsContent value="lineage">
+                  <LineagePanel ticketId={ticket.id} />
                 </TabsContent>
                 <TabsContent value="activity">
                   <ActivityPanel ticketId={ticket.id} />
@@ -1404,6 +1409,23 @@ function BranchesPanel({
     onSuccess: () => onChanged(),
     onError: (err: any) => toast.error("Could not remove branch", { description: serverMessage(err, "Try again.") })
   });
+  // Ticket -> git direction: suggests (or, given a repo + a connected GitHub, actually creates)
+  // a branch named to match what the push webhook already auto-links back from (see
+  // ticket.controller.ts#slugBranchName). Degrades to name-only when no repo is picked yet or
+  // GitHub isn't connected — never a hard error either way.
+  const autoBranch = useMutation({
+    mutationFn: () => ticketApi.branches.auto(ticketId, { repository: pickerRepo || undefined }),
+    onSuccess: (result) => {
+      if (result.created) {
+        toast.success(`Created branch ${result.branch?.branch}`);
+        onChanged();
+      } else if (result.suggestedName) {
+        setDraft((d) => ({ ...d, repository: pickerRepo || d.repository, branch: result.suggestedName! }));
+        toast.info("Branch name suggested — pick a repository above to create it for real, or just Link this name.");
+      }
+    },
+    onError: (err: any) => toast.error("Could not create branch", { description: serverMessage(err, "Try again.") })
+  });
 
   return (
     <div className="grid gap-3">
@@ -1449,6 +1471,15 @@ function BranchesPanel({
                 ))}
               </SelectContent>
             </Select>
+            <Button
+              size="sm"
+              variant="outline"
+              disabled={!pickerRepo || autoBranch.isPending}
+              title="Creates a real branch on GitHub, named to match this ticket, off the repo's default branch"
+              onClick={() => autoBranch.mutate()}
+            >
+              <GitBranch className="h-4 w-4" />Create branch
+            </Button>
           </div>
           {pickerRepo && (
             <div className="grid gap-1.5">
@@ -1493,6 +1524,18 @@ function BranchesPanel({
           <GitBranch className="h-4 w-4" />Link
         </Button>
       </div>
+      {!gitStatus.data?.connected && (
+        <Button
+          size="sm"
+          variant="ghost"
+          className="justify-self-start text-muted-foreground"
+          disabled={autoBranch.isPending}
+          title="No GitHub connection — fills a conventional branch name below for you to create by hand"
+          onClick={() => autoBranch.mutate()}
+        >
+          <GitBranch className="h-4 w-4" />Suggest a branch name
+        </Button>
+      )}
     </div>
   );
 }
@@ -1680,6 +1723,54 @@ function SecurityPanel({ ticketId }: { ticketId: string }) {
                 )}
               </div>
             ))}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+const LINEAGE_EVENT_ICON: Record<TicketLineageEvent["type"], typeof GitBranch> = {
+  branch_linked: GitBranch,
+  pr_status: ArrowUpRight,
+  test_run: ListChecks,
+  security_finding: ShieldAlert
+};
+const LINEAGE_TONE_CLASS: Record<TicketLineageEvent["tone"], string> = {
+  success: "border-success/30 bg-success/5 text-success",
+  failure: "border-destructive/30 bg-destructive/5 text-destructive",
+  neutral: "border-border bg-muted/30 text-muted-foreground"
+};
+
+/** One merged timeline across branches/PRs, CI runs, and security findings — the same data the
+ *  Dev and Security tabs already show, cross-referenced by hand today. Read-only aggregation;
+ *  see ticket-lineage.service.ts for why nothing here is a new data source. */
+function LineagePanel({ ticketId }: { ticketId: string }) {
+  const lineage = useQuery({ queryKey: ["ticket", ticketId, "lineage"], queryFn: () => ticketApi.lineage(ticketId) });
+
+  if (lineage.isLoading) return <Skeleton className="h-32 w-full" />;
+  const events = lineage.data?.events ?? [];
+  if (events.length === 0) {
+    return (
+      <p className="py-6 text-center text-sm text-muted-foreground">
+        Nothing to show yet — link a branch/PR (Dev tab) or connect CI/security ingestion (Workspace Settings → Security &amp; DevOps)
+        referencing this ticket's key to build a timeline here.
+      </p>
+    );
+  }
+
+  return (
+    <div className="grid gap-1.5">
+      {events.map((event, index) => {
+        const Icon = LINEAGE_EVENT_ICON[event.type];
+        return (
+          <div key={index} className={`flex items-start gap-2 rounded-md border px-3 py-2 text-sm ${LINEAGE_TONE_CLASS[event.tone]}`}>
+            <Icon className="mt-0.5 h-4 w-4 shrink-0" />
+            <div className="min-w-0 flex-1">
+              <p className="font-medium text-foreground">{event.summary}</p>
+              {event.detail && <p className="truncate text-xs">{event.detail}</p>}
+            </div>
+            <span className="shrink-0 text-xs">{new Date(event.at).toLocaleString()}</span>
           </div>
         );
       })}

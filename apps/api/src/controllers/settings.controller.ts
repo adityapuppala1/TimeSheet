@@ -32,7 +32,7 @@ import { getAllowedSsoProviders } from "../services/plan-limits.service.js";
 import { getGlobalTicketSettings } from "../services/ticket.service.js";
 import { decryptSecret, encryptSecret } from "../utils/encryption.js";
 import { getTransportStatus, invalidateMailTransportCache } from "../services/mail.service.js";
-import { WEBHOOK_EVENTS } from "../services/webhook-dispatch.service.js";
+import { attemptWebhookDelivery, nextRetryAt, WEBHOOK_EVENTS } from "../services/webhook-dispatch.service.js";
 import {
   buildGitHubAuthorizeUrl,
   listGitHubBranches,
@@ -412,6 +412,7 @@ settingsRouter.get("/security-ingestion", requireSuperAdmin, async (_req, res) =
     fallbackProjectId: settings?.fallbackProjectId ?? null,
     autoReopenEnabled: settings?.autoReopenEnabled ?? false,
     codeownersAssignEnabled: settings?.codeownersAssignEnabled ?? false,
+    autoCreateTicketOnCiFailureEnabled: settings?.autoCreateTicketOnCiFailureEnabled ?? false,
     sarifFindingsWebhookPath: `/api/devops/${orgSlug}/findings/sarif`,
     sbomWebhookPath: `/api/devops/${orgSlug}/sbom`,
     errorEventsWebhookPath: `/api/devops/${orgSlug}/error-events`
@@ -470,6 +471,30 @@ settingsRouter.patch("/security-ingestion/codeowners-assign", requireSuperAdmin,
   });
   res.json({ codeownersAssignEnabled: updated.codeownersAssignEnabled });
 });
+
+const autoCreateTicketOnCiFailureSchema = z.object({
+  body: z.object({ autoCreateTicketOnCiFailureEnabled: z.boolean() }).strict()
+});
+
+/** See services/security-report.service.ts#maybeAutoCreateTicketForCiFailure — a FAILED test run
+ *  with no ticket reference at all auto-creates one, with a flaky-test dedup guard. Off by
+ *  default, same posture as autoReopenEnabled above. */
+settingsRouter.patch(
+  "/security-ingestion/auto-create-ticket-on-ci-failure",
+  requireSuperAdmin,
+  validate(autoCreateTicketOnCiFailureSchema),
+  async (req, res) => {
+    const updated = await prisma.ingestionSettings.upsert({
+      where: { id: "global" },
+      update: { autoCreateTicketOnCiFailureEnabled: req.body.autoCreateTicketOnCiFailureEnabled },
+      create: { id: "global", autoCreateTicketOnCiFailureEnabled: req.body.autoCreateTicketOnCiFailureEnabled }
+    });
+    await audit(req.user!.id, "settings.security_ingestion_auto_create_ticket_on_ci_failure_updated", "IngestionSettings", "global", {
+      autoCreateTicketOnCiFailureEnabled: req.body.autoCreateTicketOnCiFailureEnabled
+    });
+    res.json({ autoCreateTicketOnCiFailureEnabled: updated.autoCreateTicketOnCiFailureEnabled });
+  }
+);
 
 const vaptFindingSchema = z.object({
   title: z.string().min(1).max(255),
@@ -817,6 +842,43 @@ settingsRouter.delete("/webhooks/:id", requireSuperAdmin, async (req, res) => {
   await prisma.outboundWebhook.delete({ where: { id: existing.id } });
   await audit(req.user!.id, "settings.webhook_deleted", "OutboundWebhook", existing.id, { name: existing.name });
   res.status(204).send();
+});
+
+/** Recent non-delivered attempts (pending retry, or exhausted) — see
+ *  workers/webhook-retry.worker.ts and webhook-dispatch.service.ts for the retry mechanism this
+ *  surfaces. A successfully-delivered attempt never needed a row here in the first place. */
+settingsRouter.get("/webhooks/:id/deliveries", requireSuperAdmin, async (req, res) => {
+  const webhook = await prisma.outboundWebhook.findUnique({ where: { id: String(req.params.id) } });
+  if (!webhook) throw new AppError(404, "Webhook not found");
+  const deliveries = await prisma.webhookDelivery.findMany({
+    where: { webhookId: webhook.id, status: { in: ["pending", "exhausted"] } },
+    orderBy: { createdAt: "desc" },
+    take: 50
+  });
+  res.json(deliveries);
+});
+
+/** Manual retry — for an admin who doesn't want to wait for the next 5-minute sweep, or for a
+ *  delivery that already exhausted its automatic attempts (this resets the attempt count, since
+ *  a human retrying implies they believe the receiving end is fixed now). */
+settingsRouter.post("/webhooks/:id/deliveries/:deliveryId/retry", requireSuperAdmin, async (req, res) => {
+  const webhook = await prisma.outboundWebhook.findUnique({ where: { id: String(req.params.id) } });
+  if (!webhook) throw new AppError(404, "Webhook not found");
+  const delivery = await prisma.webhookDelivery.findFirst({ where: { id: String(req.params.deliveryId), webhookId: webhook.id } });
+  if (!delivery) throw new AppError(404, "Delivery not found");
+
+  const body = JSON.stringify(delivery.payload);
+  const outcome = await attemptWebhookDelivery(webhook.url, webhook.secret, delivery.event, body);
+  await prisma.outboundWebhook.update({ where: { id: webhook.id }, data: { lastDeliveryAt: new Date(), lastDeliveryStatus: outcome.status } });
+
+  const updated = outcome.ok
+    ? await prisma.webhookDelivery.update({ where: { id: delivery.id }, data: { status: "delivered", lastError: null } })
+    : await prisma.webhookDelivery.update({
+        where: { id: delivery.id },
+        data: { attempt: 1, status: "pending", nextAttemptAt: nextRetryAt(1), lastError: outcome.error ?? outcome.status }
+      });
+  await audit(req.user!.id, "settings.webhook_delivery_retried", "WebhookDelivery", delivery.id, { outcome: outcome.status });
+  res.json(updated);
 });
 
 // ---------- Live git-provider (GitHub) connection ----------
