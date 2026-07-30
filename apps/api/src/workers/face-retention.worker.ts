@@ -34,6 +34,12 @@
  *  5. CHALLENGE CLEANUP — deletes FaceChallenge rows a day past expiry. They hold no biometric
  *     data (just "which movement was demanded"), this is pure table hygiene.
  *
+ *  6. AUTO-TRIAGE — opt-in (`GlobalFaceVerificationSettings.autoTriageHonestFailures`). Clears
+ *     review flags on attempts whose evidence says "honest failure" (see
+ *     `autoTriageHonestFailures` in face.service.ts for exactly what qualifies — it never touches
+ *     anything carrying a virtual-camera or provenance signal). The same routine is reachable
+ *     on demand via `POST /face/auto-triage` for an admin who doesn't want to wait for 03:15.
+ *
  * WHO calls this: server.ts at boot, alongside every other cron worker.
  */
 import fsp from "node:fs/promises";
@@ -41,6 +47,7 @@ import cron from "node-cron";
 import { prisma } from "../config/prisma.js";
 import { requireTenantContext } from "../config/tenant-context.js";
 import {
+  autoTriageHonestFailures,
   findCoveredUnenrolledUserIds,
   getFaceSettings,
   isFaceFeatureAllowedForOrg,
@@ -236,6 +243,14 @@ export async function runFaceLifecycleSweep(): Promise<void> {
       const covered = await findCoveredUnenrolledUserIds();
       await notifyEnrollmentRequired(covered, "face.enrollment_reminder");
       await sweepOverdueReviews();
+
+      // Stage 6 — opt-in only; see the header for exactly what this does and doesn't touch.
+      if (settings.autoTriageHonestFailures) {
+        const { resolved } = await autoTriageHonestFailures();
+        if (resolved > 0) {
+          console.log(`[face-retention] ${requireTenantContext().orgSlug}: auto-triaged ${resolved} honest failure(s)`);
+        }
+      }
     }
   }
 

@@ -628,40 +628,77 @@ Two bugs the tests caught in this work, both preserved as regression tests:
   "too dark"; and **framing was disqualifying**, which refuses usable captures since the model
   crops to the face box. Now: face-region exposure, and centring is a client nudge only.
 
-**Still open — Phases C, D, E** (full research + reasoning in the plan
-artifact from this session; summary here so it isn't lost with the chat):
+**Deliberately not doing (all phases):** iBeta Level 3 (an IDV-vendor problem, not an
+employee-verification one), training our own face model (worse results, and it makes us the
+holder of a biometric training set), and continuous/always-on monitoring (converts a
+proportionate check into surveillance and destroys the privacy positioning). **An LLM must never
+be the matcher** — non-deterministic, unauditable in a dispute, and it would mean shipping faces
+to a third party.
 
-- **Accuracy is three axes, not one** — matching (FNMR/FMR), presentation-attack detection
-  (`ISO 30107-3`, APCER/BPCER), and injection-attack detection (`CEN/TS 18099`, with
-  `ISO/IEC 25456` forthcoming). Current state is roughly untested-L1 PAD with heuristic IAD, and
-  **matching is the weakest axis** — single-template enrollment means one bad enrollment frame
-  handicaps every future check permanently.
-- **Phase A (do first): accuracy** — multi-frame enrollment (3–5 templates), capture quality gate
-  with progressive feedback *before* matching (today a blurry frame becomes `NO_MATCH`, which
-  reads to the user as an accusation), best-frame selection, per-user adaptive thresholds, and an
-  FNMR / retake-rate / time-to-verify dashboard. All derivable from rows already stored.
-- **Phase B: perception** — rolling best-frame capture, challenge overlapped with upload, explicit
-  budget of <1s p50 camera-ready → verdict.
-- **Phase C: real injection defence** — frame provenance/timing and session-integrity signals
-  instead of a device-label regex; nonce signed into the capture; WebAuthn/passkey as a *second
-  factor* on approvals (it proves device possession, never whose face — complement, not
-  substitute).
-- **Phase D: the AI layer** — explainable adjudication of flagged attempts (image-inclusive mode
-  strictly opt-in per org, since it crosses the biometrics-stay-on-our-infrastructure line),
-  behavioural anomaly narratives, agentic triage of honest failures, policy copilot grounded in
-  each org's own histogram. **An LLM must never be the matcher** — non-deterministic,
-  unauditable in a dispute, and it would mean shipping faces to a third party.
-- **Phase E: earn the claim** — run a PAD test against L1/L2-style artefact fixtures (the one
-  place competitors are genuinely ahead), ship a customer-facing identity evidence pack.
-- **Deliberately not doing:** iBeta Level 3 (an IDV-vendor problem, not an employee-verification
-  one), training our own face model (worse results, and it makes us the holder of a biometric
-  training set), and continuous/always-on monitoring (converts a proportionate check into
-  surveillance and destroys the privacy positioning).
-- **Positioning:** face recognition is table stakes — Jibble/Connecteam/Truein/Hubstaff all ship
-  it, some on free tiers. The defensible wedge is **verified work, not verified attendance**:
-  identity bound to the unit of billable work *and* to its approval, which an attendance product
-  structurally cannot do because it has no work object. Supporting claims: dispute-ready evidence
-  packs, and biometrics never reaching a third-party processor.
+**Positioning:** face recognition is table stakes — Jibble/Connecteam/Truein/Hubstaff all ship
+it, some on free tiers. The defensible wedge is **verified work, not verified attendance**:
+identity bound to the unit of billable work *and* to its approval, which an attendance product
+structurally cannot do because it has no work object. Supporting claims: dispute-ready evidence
+packs, and biometrics never reaching a third-party processor.
+
+### Phase C, D, E of the biometric roadmap — shipped (2026-07-30)
+
+The three remaining phases of the plan above, all implemented in one pass and verified by the
+extended e2e suite plus 11 new unit tests (81/81 total) and the new PAD self-test harness.
+
+- ~~Real injection defence relied only on a device-label regex~~ — **capture provenance**: the
+  client now reports `neutralCapturedAt`/`gestureCapturedAt` (its own clock) alongside the two
+  challenge frames, and the server compares them against the challenge's actual `issuedAt`
+  (`assessProvenance` in `face.service.ts`). Flags reversed frames, implausibly fast frame
+  intervals (<500ms), a capture claiming to predate its own challenge by more than the 2-minute
+  clock-skew tolerance (the strongest single replay indicator available), and gross client/server
+  clock disagreement. Like every other timing/device signal here, **it's a review flag, never a
+  block** — client clocks are self-reported and trivially falsifiable. Verified live: an honest
+  capture stays unflagged, a capture backdated 5 minutes before its challenge is flagged with a
+  note naming the mismatch, and neither changes the immediate outcome.
+  - *Not done from the original Phase C sketch:* a signed capture nonce and WebAuthn/passkey as a
+    second factor on approvals — timing provenance covers the same replay scenario with no new
+    client cryptography, so the added complexity wasn't justified yet; revisit if real-world
+    replay attempts show up that timing alone doesn't catch.
+- ~~No AI layer, and threshold tuning was manual histogram-reading~~ — **policy copilot**
+  (`GET /face/policy-recommendation`): a threshold recommendation computed **arithmetically** from
+  this workspace's own passed/rejected similarity clusters (widest-gap method, refuses below 30
+  judged attempts or when the clusters overlap — that's an enrollment problem, not a tuning one).
+  An optional LLM narration of the same numbers layers on top
+  (`GlobalAISettings.facePolicyCopilotEnabled`) — it explains the number, never sets it, and is
+  `null` when AI is off. **Auto-triage of honest failures** (`autoTriageHonestFailures`, opt-in):
+  clears review flags only on `NO_FACE`/`MULTIPLE_FACES`/`LOW_QUALITY`/`CHALLENGE_FAILED`
+  outcomes with zero virtual-camera or provenance suspicion, where the same person passed within
+  the hour — runs nightly as stage 6 of the `face-retention` worker, or on demand via
+  `POST /face/auto-triage`. Every auto-resolved row is stamped `autoResolvedReason` so the audit
+  trail shows it was software, not a human, that closed it.
+  - *Not done from the original Phase D sketch:* image-inclusive AI adjudication mode. Left out
+    deliberately — it crosses the "biometrics never reach a third party" line this feature's
+    privacy positioning depends on, and the metadata-only AI review summary (shipped earlier)
+    already covers the "help a human triage a flagged attempt" need without that trade-off.
+- ~~No customer-facing claim beyond "a check happened"~~ — the **identity evidence pack**
+  (`GET /face/evidence/timesheet/:id`): one timesheet, every identity check bound to it
+  (submitter's and approver's, with scores/thresholds/provenance), the consent record(s), and the
+  policy in effect at export time — the artefact this feature's whole competitive positioning
+  rests on, since attendance-only products have no work object to bind a check to. Excludes
+  embeddings and filesystem paths, same rule as `/face/export`.
+  - *Not done from the original Phase E sketch:* an accredited iBeta/ISO 30107-3 lab test. What
+    shipped instead is `scripts/verify-face-pad.ts`, a repeatable **self-test** that synthesises a
+    screen-replay and a printed-photo presentation in-process and asserts a genuine capture still
+    passes. Documented explicitly, in the script itself and here, as **not** a certification —
+    synthetic digital proxies are strictly easier to spoof than physical artefacts built to an
+    accredited lab's cost budget, so a pass here means "the obvious cheap attacks are caught,"
+    never "certified." That distinction matters enough to repeat: don't represent this script's
+    output as a lab result to a customer's security team.
+
+**Still open, deliberately:**
+- **A signed capture nonce / WebAuthn as a second approval factor** — superseded for now by
+  timing provenance (see above); revisit only if evidence shows a gap it doesn't cover.
+- **Accredited PAD/IAD certification** (iBeta Level 1/2, `ISO/IEC 30107-3`, `CEN/TS 18099`) — the
+  one place competitors with dedicated IDV infrastructure are genuinely ahead; requires a physical
+  lab, not something an in-repo script can produce.
+- **Challenge direction enforcement, the frame-consistency floor, and Playwright camera-flow
+  coverage** — carried over unchanged from the Phase A+B entry above.
 
 ### Responsive pass + two rate-limiter root causes (2026-07-30)
 

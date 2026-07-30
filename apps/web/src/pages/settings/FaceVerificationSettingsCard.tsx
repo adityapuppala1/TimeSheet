@@ -8,9 +8,24 @@
  */
 import { useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { AlertTriangle, BarChart3, ChevronLeft, ChevronRight, Eye, Lock, Save, ScanFace, ShieldCheck, Sparkles, VideoOff, Wifi } from "lucide-react";
+import {
+  AlertTriangle,
+  BarChart3,
+  ChevronLeft,
+  ChevronRight,
+  Eye,
+  Lock,
+  Save,
+  ScanFace,
+  ShieldAlert,
+  ShieldCheck,
+  Sparkles,
+  VideoOff,
+  Wand2,
+  Wifi
+} from "lucide-react";
 import { toast } from "sonner";
-import { faceApi, settingsApi, type FaceAttemptRow, type FaceReviewAiSummary } from "../../services/api";
+import { faceApi, settingsApi, type FaceAttemptRow, type FaceReviewAiSummary, type FaceThresholdRecommendation } from "../../services/api";
 import { Button } from "../../components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../../components/ui/card";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "../../components/ui/dialog";
@@ -174,6 +189,20 @@ export function FaceVerificationSettingsCard({ readOnly = false }: { readOnly?: 
                 checked={s?.challengeEnabled ?? true}
                 disabled={readOnly || !enabled}
                 onCheckedChange={(v) => update.mutate({ challengeEnabled: v })}
+              />
+            </div>
+            <div className="flex items-center justify-between rounded-lg border border-border bg-muted/30 p-4">
+              <div className="space-y-0.5 pr-4">
+                <Label>Auto-resolve honest failures</Label>
+                <p className="text-sm text-muted-foreground">
+                  Clears a flagged attempt on its own only when the same person clearly passed within the hour and nothing about
+                  it looked like an injection attempt. Never touches a suspected virtual camera or timing mismatch.
+                </p>
+              </div>
+              <Switch
+                checked={s?.autoTriageHonestFailures ?? false}
+                disabled={readOnly || !enabled}
+                onCheckedChange={(v) => update.mutate({ autoTriageHonestFailures: v })}
               />
             </div>
           </div>
@@ -378,8 +407,71 @@ function FaceStatsCard() {
             </p>
           </div>
         )}
+
+        <PolicyCopilot />
       </CardContent>
     </Card>
+  );
+}
+
+/**
+ * The "policy copilot": a threshold recommendation computed arithmetically from this workspace's
+ * own passed/rejected distribution (see recommendMatchThreshold's header for the method), with an
+ * optional AI narration of those same numbers layered on top. The recommendation is fully useful
+ * with AI switched off — the button works with or without the AI tab enabled.
+ */
+function PolicyCopilot() {
+  const [result, setResult] = useState<FaceThresholdRecommendation | null>(null);
+  const recommend = useMutation({
+    mutationFn: faceApi.policyRecommendation,
+    onSuccess: setResult,
+    onError: () => toast.error("Could not compute a recommendation")
+  });
+
+  return (
+    <div className="rounded-lg border border-border bg-muted/30 p-4">
+      <div className="flex items-center justify-between gap-2">
+        <div>
+          <p className="text-sm font-medium">Policy copilot</p>
+          <p className="text-xs text-muted-foreground">A threshold recommendation computed from this workspace's own scores.</p>
+        </div>
+        <Button variant="outline" size="sm" disabled={recommend.isPending} onClick={() => recommend.mutate()}>
+          <Wand2 className={`mr-2 h-3.5 w-3.5 ${recommend.isPending ? "animate-pulse" : ""}`} />
+          Get recommendation
+        </Button>
+      </div>
+      {result && (
+        <div className="mt-3 space-y-2 text-sm">
+          <p>{result.summary}</p>
+          {result.recommendedThreshold != null && (
+            <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+              <div className="rounded-lg border border-border bg-background p-2 text-center">
+                <p className="text-xs text-muted-foreground">Current</p>
+                <p className="font-bold tabular-nums">{result.currentThreshold.toFixed(2)}</p>
+              </div>
+              <div className="rounded-lg border border-primary/40 bg-primary/5 p-2 text-center">
+                <p className="text-xs text-muted-foreground">Recommended</p>
+                <p className="font-bold tabular-nums">{result.recommendedThreshold.toFixed(2)}</p>
+              </div>
+              <div className="rounded-lg border border-border bg-background p-2 text-center">
+                <p className="text-xs text-muted-foreground">Reject rate now</p>
+                <p className="font-bold tabular-nums">{result.currentRejectRatePct ?? "—"}%</p>
+              </div>
+              <div className="rounded-lg border border-border bg-background p-2 text-center">
+                <p className="text-xs text-muted-foreground">Projected</p>
+                <p className="font-bold tabular-nums">{result.projectedRejectRatePct ?? "—"}%</p>
+              </div>
+            </div>
+          )}
+          {result.narrative && (
+            <div className="rounded-lg border border-border bg-background p-3">
+              <p className="text-xs font-semibold uppercase text-muted-foreground">AI narration</p>
+              <p className="mt-1 text-sm">{result.narrative}</p>
+            </div>
+          )}
+        </div>
+      )}
+    </div>
   );
 }
 
@@ -441,14 +533,39 @@ function FaceReviewLog({ readOnly }: { readOnly: boolean }) {
     onError: () => toast.error("Could not update")
   });
 
+  const autoTriage = useMutation({
+    mutationFn: faceApi.autoTriage,
+    onSuccess: ({ resolved }) => {
+      toast.success(resolved > 0 ? `Cleared ${resolved} honest failure${resolved === 1 ? "" : "s"}` : "Nothing to clear right now");
+      queryClient.invalidateQueries({ queryKey: ["face", "attempts"] });
+    },
+    onError: () => toast.error("Could not run auto-triage")
+  });
+
   return (
     <Card>
       <CardHeader>
-        <CardTitle className="flex items-center gap-2">
-          <ShieldCheck className="h-5 w-5" />
-          Verification log
-        </CardTitle>
-        <CardDescription>Recent identity checks and their scores. Use this to calibrate the match threshold.</CardDescription>
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <div>
+            <CardTitle className="flex items-center gap-2">
+              <ShieldCheck className="h-5 w-5" />
+              Verification log
+            </CardTitle>
+            <CardDescription>Recent identity checks and their scores. Use this to calibrate the match threshold.</CardDescription>
+          </div>
+          {!readOnly && (
+            <Button
+              variant="outline"
+              size="sm"
+              disabled={autoTriage.isPending}
+              onClick={() => autoTriage.mutate()}
+              title="Clears flags on failures where the same person clearly passed within the hour and nothing looked like an injection attempt"
+            >
+              <Wand2 className={`mr-2 h-3.5 w-3.5 ${autoTriage.isPending ? "animate-pulse" : ""}`} />
+              Auto-triage now
+            </Button>
+          )}
+        </div>
       </CardHeader>
       <CardContent className="space-y-3">
         <div className="flex items-center justify-between rounded-lg border border-border bg-muted/30 p-3">
@@ -503,6 +620,16 @@ function FaceReviewLog({ readOnly }: { readOnly: boolean }) {
                               <Wifi className="h-3.5 w-3.5 text-amber-500" />
                             </span>
                           )}
+                          {a.provenanceSuspect && (
+                            <span title={a.provenanceNote ?? "Capture timing didn't line up with its challenge — worth a look"}>
+                              <ShieldAlert className="h-3.5 w-3.5 text-amber-500" />
+                            </span>
+                          )}
+                          {a.autoResolvedReason && (
+                            <span title={a.autoResolvedReason}>
+                              <Wand2 className="h-3.5 w-3.5 text-muted-foreground" />
+                            </span>
+                          )}
                         </div>
                       </td>
                       <td className="p-2 tabular-nums">{a.similarity != null ? a.similarity.toFixed(3) : "—"}</td>
@@ -533,6 +660,11 @@ function FaceReviewLog({ readOnly }: { readOnly: boolean }) {
                       {a.unfamiliarNetwork && (
                         <span title="First time verifying from this network">
                           <Wifi className="h-3.5 w-3.5 text-amber-500" />
+                        </span>
+                      )}
+                      {a.provenanceSuspect && (
+                        <span title={a.provenanceNote ?? "Capture timing didn't line up with its challenge — worth a look"}>
+                          <ShieldAlert className="h-3.5 w-3.5 text-amber-500" />
                         </span>
                       )}
                       <Badge className={OUTCOME_TONE[a.outcome] ?? ""} variant="secondary">

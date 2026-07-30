@@ -18,7 +18,17 @@ const DEMO_USERS = {
   // viewport projects (see responsive.spec.ts's header comment).
   "superadmin-settings": { email: "superadmin@timesheet.local", password: "Admin@12345" },
   manager: { email: "manager@timesheet.local", password: "Admin@12345" },
-  employee: { email: "employee@timesheet.local", password: "Admin@12345" }
+  // Dedicated to timesheet.spec.ts. dashboard.spec.ts logs in as the same real account under
+  // its OWN snapshot ("employee-dashboard") rather than sharing this one — both specs call
+  // POST /auth/refresh directly (see each spec's cleanup step), which rotates that SESSION's
+  // refresh secret. Two specs sharing one snapshot file race to invalidate each other the
+  // moment the suite's total runtime crosses the 30s rotation-grace window (auth.service.ts's
+  // REFRESH_GRACE_PERIOD_MS) — this bit us for real: timesheet.spec.ts started failing with
+  // "redirected to /login" once dashboard.spec.ts ran earlier in the same full sequential suite
+  // and rotated the shared secret out from under it. Separate logins mean separate sessions
+  // (distinct `sid`), so one spec's refresh can never revoke the other's.
+  employee: { email: "employee@timesheet.local", password: "Admin@12345" },
+  "employee-dashboard": { email: "employee@timesheet.local", password: "Admin@12345" }
 } as const;
 
 for (const [role, creds] of Object.entries(DEMO_USERS)) {

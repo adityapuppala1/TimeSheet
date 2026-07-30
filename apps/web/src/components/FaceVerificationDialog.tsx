@@ -102,6 +102,10 @@ export function FaceVerificationDialog({ open, onOpenChange, context, onVerified
       startedAtRef.current = Date.now();
       try {
         const frames: Blob[] = [neutralFrame];
+        // Provenance evidence (Phase C): when each frame was captured, by the client's clock.
+        // A replayed recording can only have been captured BEFORE its challenge existed.
+        const neutralCapturedAt = Date.now();
+        let gestureCapturedAt: number | undefined;
         let challengeId: string | undefined;
 
         if (challengeOn) {
@@ -117,6 +121,7 @@ export function FaceVerificationDialog({ open, onOpenChange, context, onVerified
           }
           setOverlay("Hold it…");
           const gestureFrame = await captureRef.current?.captureFrame();
+          gestureCapturedAt = Date.now();
           setOverlay(null);
           if (cancelledRef.current) return;
           if (!gestureFrame) {
@@ -132,7 +137,9 @@ export function FaceVerificationDialog({ open, onOpenChange, context, onVerified
           context,
           challengeId,
           deviceLabel: captureRef.current?.getDeviceLabel(),
-          clientDurationMs: startedAtRef.current ? Date.now() - startedAtRef.current : undefined
+          clientDurationMs: startedAtRef.current ? Date.now() - startedAtRef.current : undefined,
+          neutralCapturedAt,
+          gestureCapturedAt
         });
         if (cancelledRef.current) return;
 

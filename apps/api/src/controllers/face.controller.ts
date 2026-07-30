@@ -26,10 +26,12 @@ import { validate } from "../middleware/validate.js";
 import { audit } from "../services/audit.service.js";
 import { dispatchNotification } from "../services/notify.service.js";
 import { templates } from "../services/mail-templates.js";
-import { summarizeFaceReviewAttempt } from "../services/ai.service.js";
+import { explainThresholdRecommendation, summarizeFaceReviewAttempt } from "../services/ai.service.js";
 import {
   analyzeFace,
   assertFaceEntitlement,
+  assessProvenance,
+  autoTriageHonestFailures,
   CHALLENGE_PROMPTS,
   DEFAULT_CONSENT_TEXT,
   effectiveMatchThreshold,
@@ -41,6 +43,7 @@ import {
   isFaceVerificationRequired,
   issueChallenge,
   matchAgainstEnrollment,
+  recommendMatchThreshold,
   redeemChallenge,
   removeUserFaceDirectories,
   scoreQuality,
@@ -253,7 +256,11 @@ const verifySchema = z.object({
     deviceLabel: z.string().max(255).optional(),
     /// Client-perceived round trip so far (camera-ready → submit), in ms. Only the browser can
     /// measure what the human actually waited for; bounded so a bogus value can't skew the p95.
-    clientDurationMs: z.coerce.number().int().min(0).max(600_000).optional()
+    clientDurationMs: z.coerce.number().int().min(0).max(600_000).optional(),
+    /// Client clock (epoch ms) at each frame capture — the provenance evidence. Self-reported and
+    /// therefore never trusted for enforcement; see face.service.ts#assessProvenance.
+    neutralCapturedAt: z.coerce.number().int().min(0).optional(),
+    gestureCapturedAt: z.coerce.number().int().min(0).optional()
   })
 });
 
@@ -299,6 +306,8 @@ faceRouter.post("/verify", preserveTenantContext(faceCaptureUpload.array("captur
   const enrollment = await prisma.faceEnrollment.findUnique({ where: { userId } });
 
   let challengeMetrics: { instruction: string; yawDelta: number | null; pitchDelta: number | null; frameSimilarity: number | null } | null = null;
+  let provenance: ReturnType<typeof assessProvenance> | null = null;
+  let redeemedChallengeId: string | null = null;
 
   const record = async (
     outcome: FaceOutcome,
@@ -328,7 +337,11 @@ faceRouter.post("/verify", preserveTenantContext(faceCaptureUpload.array("captur
     const flaggedForReview =
       // Repeated failures escalate as before; a suspected virtual camera flags IMMEDIATELY even
       // on a pass — a pass through an injection tool is precisely the pass worth a human look.
-      (outcome !== "PASSED" && outcome !== "LOW_QUALITY" && recentFailures + 1 >= settings.maxAttempts) || virtualCameraSuspected;
+      (outcome !== "PASSED" && outcome !== "LOW_QUALITY" && recentFailures + 1 >= settings.maxAttempts) ||
+      virtualCameraSuspected ||
+      // Timing evidence that doesn't hold together flags immediately, pass or fail — a capture
+      // that predates its own challenge is the single strongest replay indicator available.
+      (provenance?.suspect ?? false);
 
     const attempt = await prisma.faceVerificationAttempt.create({
       data: {
@@ -351,7 +364,12 @@ faceRouter.post("/verify", preserveTenantContext(faceCaptureUpload.array("captur
         frameSimilarity: challengeMetrics?.frameSimilarity ?? null,
         qualityScore: qualityScore ?? null,
         effectiveThreshold: effectiveThreshold ?? null,
-        durationMs: clientDurationMs
+        durationMs: clientDurationMs,
+        challengeId: redeemedChallengeId,
+        captureLagMs: provenance?.captureLagMs ?? null,
+        frameIntervalMs: provenance?.frameIntervalMs ?? null,
+        provenanceSuspect: provenance?.suspect ?? false,
+        provenanceNote: provenance?.note ?? null
       }
     });
 
@@ -377,7 +395,17 @@ faceRouter.post("/verify", preserveTenantContext(faceCaptureUpload.array("captur
 
   // ---- Challenge–response (anti-injection) ----
   if (settings.challengeEnabled) {
-    const instruction = await redeemChallenge({ challengeId: req.body.challengeId || null, userId, context });
+    const redeemed = await redeemChallenge({ challengeId: req.body.challengeId || null, userId, context, withIssuedAt: true });
+    const instruction = redeemed?.instruction ?? null;
+    if (redeemed) {
+      redeemedChallengeId = req.body.challengeId || null;
+      provenance = assessProvenance({
+        neutralCapturedAt: req.body.neutralCapturedAt != null ? Number(req.body.neutralCapturedAt) : null,
+        gestureCapturedAt: req.body.gestureCapturedAt != null ? Number(req.body.gestureCapturedAt) : null,
+        challengeIssuedAt: redeemed.issuedAt,
+        receivedAt: new Date()
+      });
+    }
     if (!instruction || frames.length < 2) {
       const attempt = await record("CHALLENGE_FAILED", {}, buffer);
       return res.status(422).json({
@@ -697,6 +725,12 @@ faceRouter.get("/attempts", requireAdmin, validate(attemptsQuerySchema), async (
       virtualCameraSuspected: true,
       unfamiliarNetwork: true,
       challengeInstruction: true,
+      challengeId: true,
+      captureLagMs: true,
+      frameIntervalMs: true,
+      provenanceSuspect: true,
+      provenanceNote: true,
+      autoResolvedReason: true,
       user: { select: { id: true, name: true, email: true, avatarUrl: true } },
       reviewedBy: { select: { id: true, name: true } }
     }
@@ -828,6 +862,134 @@ faceRouter.get("/stats", requireAdmin, async (_req, res) => {
       timeToVerifyMsP95: percentile(0.95),
       samples: { judged, lowQuality, timed: durations.length }
     }
+  });
+});
+
+/**
+ * GET /face/policy-recommendation — the "policy copilot". The recommended threshold is computed
+ * arithmetically from this workspace's own distribution (see recommendMatchThreshold), so this
+ * endpoint is fully useful with AI switched off. When the AI toggle IS on, an LLM narration of the
+ * same numbers is attached — it explains, it never decides.
+ */
+faceRouter.get("/policy-recommendation", requireAdmin, async (_req, res) => {
+  const recommendation = await recommendMatchThreshold();
+
+  let narrative: string | null = null;
+  try {
+    narrative = await explainThresholdRecommendation(recommendation);
+  } catch {
+    // AI off, over budget, or unparseable — the deterministic recommendation stands alone.
+    narrative = null;
+  }
+
+  res.json({ ...recommendation, narrative });
+});
+
+/**
+ * POST /face/auto-triage — clears review flags whose evidence says "honest failure". Manual
+ * trigger for the same routine the daily worker runs, so an admin drowning in stale flags doesn't
+ * have to wait for 03:15. No-ops unless the workspace opted in.
+ */
+faceRouter.post("/auto-triage", requireAdmin, async (req, res) => {
+  const { resolved } = await autoTriageHonestFailures();
+  if (resolved > 0) {
+    await audit(req.user!.id, "face.auto_triaged", "FaceVerificationAttempt", undefined, { resolved });
+  }
+  res.json({ resolved });
+});
+
+/**
+ * GET /face/evidence/timesheet/:id — the dispute-ready evidence pack (Phase E).
+ *
+ * WHY this is the differentiating artefact: attendance products return a verdict; this returns the
+ * REASONING behind a specific unit of billable work — who submitted it and what proved their
+ * identity, who approved it and what proved theirs, the scores and thresholds each was judged
+ * against, and the consent record behind the biometric processing. That's what settles a client
+ * billing dispute or answers a data-protection challenge, and it's only possible because identity
+ * proofs are bound to work items rather than to a clock-in moment.
+ *
+ * Deliberately excludes embeddings and filesystem paths (same rule as /face/export): the evidence
+ * is the reasoning, never the credential.
+ */
+faceRouter.get("/evidence/timesheet/:id", requireAdmin, async (req, res) => {
+  const timesheetId = String(req.params.id);
+  const timesheet = await prisma.timesheet.findFirst({
+    where: { id: timesheetId, deletedAt: null },
+    select: {
+      id: true, workDate: true, startTime: true, endTime: true, totalHours: true, status: true,
+      taskDescription: true, createdAt: true, reviewedAt: true,
+      reviewedById: true,
+      user: { select: { id: true, name: true, email: true } },
+      project: { select: { code: true, name: true } }
+    }
+  });
+  if (!timesheet) throw new AppError(404, "Timesheet not found.");
+
+  // Timesheet.reviewedById is a plain scalar (no relation on the model), so the approver is
+  // resolved with its own lookup rather than a nested select.
+  const approver = timesheet.reviewedById
+    ? await prisma.user.findUnique({ where: { id: timesheet.reviewedById }, select: { id: true, name: true, email: true } })
+    : null;
+
+  const attempts = await prisma.faceVerificationAttempt.findMany({
+    where: { timesheetId },
+    orderBy: { createdAt: "asc" },
+    select: {
+      id: true, userId: true, context: true, outcome: true, similarity: true, effectiveThreshold: true,
+      antispoofReal: true, livenessScore: true, qualityScore: true, challengeInstruction: true,
+      challengeYawDelta: true, challengePitchDelta: true, captureLagMs: true, frameIntervalMs: true,
+      provenanceSuspect: true, provenanceNote: true, deviceLabel: true, virtualCameraSuspected: true,
+      unfamiliarNetwork: true, ipAddress: true, createdAt: true, consumedAt: true, imagePath: true,
+      user: { select: { name: true, email: true } }
+    }
+  });
+
+  // Consent is part of the evidence: a biometric check without a recorded lawful basis is not
+  // evidence of anything defensible.
+  const subjectIds = [...new Set(attempts.map((a) => a.userId))];
+  const consents = await prisma.faceEnrollment.findMany({
+    where: { userId: { in: subjectIds } },
+    select: { userId: true, consentAt: true, consentText: true, modelVersion: true, createdAt: true }
+  });
+
+  const settings = await getFaceSettings();
+
+  res.setHeader("Content-Disposition", `attachment; filename="identity-evidence-${timesheetId.slice(0, 8)}.json"`);
+  res.json({
+    generatedAt: new Date().toISOString(),
+    generatedBy: { id: req.user!.id, email: req.user!.email },
+    scope: "One timesheet entry and every identity check bound to it.",
+    work: {
+      id: timesheet.id,
+      project: timesheet.project ? `${timesheet.project.code ?? ""} ${timesheet.project.name}`.trim() : null,
+      workDate: timesheet.workDate,
+      hours: Number(timesheet.totalHours),
+      timeRange: `${timesheet.startTime}–${timesheet.endTime}`,
+      status: timesheet.status,
+      submittedBy: timesheet.user,
+      submittedAt: timesheet.createdAt,
+      approvedBy: approver,
+      approvedAt: timesheet.reviewedAt
+    },
+    identityChecks: attempts.map(({ imagePath, ...a }) => ({
+      ...a,
+      imageRetained: Boolean(imagePath),
+      imageUrl: imagePath ? `/api/face/image/attempt/${a.id}` : null
+    })),
+    consentRecords: consents,
+    policyAtExport: {
+      matchThreshold: settings.matchThreshold,
+      antispoofThreshold: settings.antispoofThreshold,
+      livenessThreshold: settings.livenessThreshold,
+      challengeEnabled: settings.challengeEnabled,
+      imageRetentionDays: settings.imageRetentionDays,
+      modelVersion: FACE_MODEL_VERSION
+    },
+    notes: [
+      "Similarity is compared against effectiveThreshold, which may be stricter than the workspace matchThreshold for users with a consistent capture history (never looser).",
+      "Face templates and server filesystem paths are deliberately excluded — the evidence is the reasoning, not the credential.",
+      "provenanceSuspect and virtualCameraSuspected are review signals, not automated verdicts; a true value means a human should look, not that fraud occurred."
+    ]
   });
 });
 

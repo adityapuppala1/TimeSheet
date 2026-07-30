@@ -1152,6 +1152,23 @@ export function ApprovalsPage() {
     onError: (err: any) => toast.error("Rejection failed", { description: serverMessage(err, "Try again.") })
   });
 
+  // Same authenticated-blob pattern as the report DownloadButton below — the route needs a
+  // bearer token, which a bare <a href>/window.open can't attach.
+  const downloadEvidencePack = async (timesheetId: string) => {
+    try {
+      const blob = await faceApi.downloadEvidencePack(timesheetId);
+      const url = URL.createObjectURL(blob);
+      const anchor = document.createElement("a");
+      anchor.href = url;
+      anchor.download = `identity-evidence-${timesheetId.slice(0, 8)}.json`;
+      anchor.click();
+      URL.revokeObjectURL(url);
+      toast.success("Evidence pack downloaded");
+    } catch (err: any) {
+      toast.error("Could not download evidence pack", { description: serverMessage(err, "Try again.") });
+    }
+  };
+
   const pending = (timesheets.data ?? []).filter((row: any) => row.status === "SUBMITTED");
 
   const approvalColumns = useMemo<ColumnDef<any, any>[]>(
@@ -1181,12 +1198,23 @@ export function ApprovalsPage() {
         // slipped through a gap — worth a manager's glance), or a quiet dash (not covered).
         cell: ({ row }) =>
           row.original.identityVerified ? (
-            <Badge
-              variant="success"
-              title={row.original.identityVerifiedAt ? `Face check passed ${new Date(row.original.identityVerifiedAt).toLocaleString()}` : undefined}
-            >
-              <ShieldCheck className="mr-1 h-3 w-3" />Verified
-            </Badge>
+            <div className="flex items-center gap-1">
+              <Badge
+                variant="success"
+                title={row.original.identityVerifiedAt ? `Face check passed ${new Date(row.original.identityVerifiedAt).toLocaleString()}` : undefined}
+              >
+                <ShieldCheck className="mr-1 h-3 w-3" />Verified
+              </Badge>
+              <Button
+                variant="ghost"
+                size="icon"
+                className="h-7 w-7"
+                title="Download the dispute-ready identity evidence pack for this entry"
+                onClick={() => downloadEvidencePack(row.original.id)}
+              >
+                <Download className="h-3.5 w-3.5" />
+              </Button>
+            </div>
           ) : row.original.identityVerificationApplies ? (
             <Badge variant="outline" title="This person is covered by face verification, but this entry carries no identity check (it may predate the policy).">
               Unverified
@@ -1212,7 +1240,7 @@ export function ApprovalsPage() {
       }
     ],
     // eslint-disable-next-line react-hooks/exhaustive-deps -- requestApprove closes over stable refs
-    [approve, faceStatus.data?.requiredForApproval]
+    [approve, faceStatus.data?.requiredForApproval, downloadEvidencePack]
   );
 
   return (

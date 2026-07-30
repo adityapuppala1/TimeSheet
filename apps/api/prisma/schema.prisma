@@ -698,6 +698,12 @@ model GlobalAISettings {
   /// METADATA (outcomes, scores, timestamps, device labels) — never a captured image or an
   /// embedding, which stay on this server unconditionally.
   faceReviewSummaryEnabled    Boolean    @default(false)
+  /// Gates ai.service.ts#recommendMatchThreshold — the "policy copilot". Turns "is 0.75 right for
+  /// us?" into a grounded answer using THIS org's own similarity distribution. The recommended
+  /// number is computed deterministically (see the service); the LLM only writes the explanation,
+  /// because picking a threshold is a statistics problem and a model's opinion about it would be
+  /// less reliable and less auditable than arithmetic.
+  facePolicyCopilotEnabled    Boolean    @default(false)
   model                       String     @default("claude-haiku-4-5") @db.VarChar(80)
   confidenceThreshold         Float      @default(0.6)
   monthlyBudgetUsd            Decimal?   @db.Decimal(10, 2)
@@ -1370,6 +1376,14 @@ model GlobalFaceVerificationSettings {
   /// "informed written consent" is about the specific disclosure, not a generic checkbox).
   consentText String? @db.Text
 
+  /// Automatically clear a review flag when the evidence says "honest failure" (a lighting/
+  /// framing problem, a single no-face blink) rather than a genuine identity signal. OFF by
+  /// default: an admin should opt into having a machine close their review items, and the
+  /// reason is always recorded on the attempt (autoResolvedReason) so an auto-close can never be
+  /// mistaken for a human having looked. Never auto-closes anything carrying an injection
+  /// signal — those are exactly the ones a person must see.
+  autoTriageHonestFailures Boolean @default(false)
+
   updatedAt   DateTime @updatedAt
   updatedById String?
 }
@@ -1518,6 +1532,31 @@ model FaceVerificationAttempt {
   /// server can time its own inference but only the client can measure what the human waited
   /// for, and that is the number the "does this feel instant" budget is set against.
   durationMs Int?
+
+  /// ---- Capture provenance (Phase C, injection-attack detection) ----
+  /// The challenge this capture claims to answer, kept as a real reference so an attempt can be
+  /// traced back to the exact nonce that was issued rather than just its instruction text.
+  challengeId String? @db.VarChar(64)
+  /// ms between the challenge being ISSUED and the frame being captured, from the client's own
+  /// clock. A replayed recording can only ever have been captured before the challenge existed,
+  /// so a negative or implausibly small value is the signal that matters here.
+  captureLagMs Int?
+  /// ms between the neutral and gesture frames, client-reported. A looped video tends to produce
+  /// suspiciously uniform intervals; a human produces jitter.
+  frameIntervalMs Int?
+  /// Set when the timing evidence doesn't hold together (capture claimed before its challenge,
+  /// impossible interval, clock far out of step with the server). Like the virtual-camera flag
+  /// this is a REVIEW signal, never an automatic rejection: client clocks are genuinely wrong on
+  /// real machines, and blocking on a skewed clock would lock out honest users.
+  provenanceSuspect Boolean @default(false)
+  /// Human-readable reason for provenanceSuspect, so the review log explains itself.
+  provenanceNote String? @db.VarChar(200)
+
+  /// ---- Review lifecycle (Phase D) ----
+  /// Set when the flag was cleared automatically as an honest failure (bad light, one blink)
+  /// rather than by a human. Kept distinct from reviewedById so "nobody actually looked at this"
+  /// stays visible in the audit trail instead of being indistinguishable from a real review.
+  autoResolvedReason String? @db.VarChar(200)
 
   createdAt DateTime @default(now())
 

@@ -110,6 +110,25 @@ for a human**, never as automated verdicts, because both are client-influenced a
   passes** — a pass through an injection tool is precisely the pass worth a human look.
 - `unfamiliarNetwork` — this attempt's IP matches none of the user's recent passed attempts
   (only meaningful once they have a baseline of 3+ passes; people do work from trains).
+- `provenanceSuspect` — the client-reported capture timestamps don't line up with when the
+  challenge they answered was actually issued. The client sends `neutralCapturedAt` and
+  `gestureCapturedAt` (its own clock, epoch ms) alongside the two frames; the server compares
+  them against `challenge.issuedAt` and against each other (`assessProvenance` in
+  `face.service.ts`). Flags, with a `provenanceNote` explaining which check tripped:
+  - the gesture frame's timestamp is *before* the neutral frame's (frames can't be reordered by a
+    live capture),
+  - the two frames are implausibly close together (<500ms — faster than the ~3s the real UI
+    waits before grabbing the gesture frame),
+  - the capture claims to predate its own challenge by more than 2 minutes (well past ordinary
+    clock skew) — the single strongest replay indicator available, since it means the footage
+    existed before the server even chose what movement to demand, or
+  - the client clock disagrees with the server by more than 10 minutes (not proof of anything,
+    but it means every other timing signal on this attempt is untrustworthy, and saying so is
+    more honest than silently trusting it).
+
+  Client clocks are self-reported and trivially falsifiable, so — like the two signals above —
+  this **never blocks** a verification on its own; it only ever adds a flag to the review queue,
+  even on an attempt that otherwise passed.
 
 ### The models
 
@@ -273,7 +292,10 @@ Real matching fails on bad lighting, new glasses, or a dirty webcam, so the copy
 the user.
 
 Outcomes recorded: `PASSED`, `NO_FACE`, `MULTIPLE_FACES`, `NO_MATCH`, `SPOOF_SUSPECTED`,
-`CHALLENGE_FAILED`, `NOT_ENROLLED`, `ERROR`.
+`CHALLENGE_FAILED`, `LOW_QUALITY`, `NOT_ENROLLED`, `ERROR`. `LOW_QUALITY` (an unjudgeable frame —
+too dark, face too small or off-centre) is judged for *before* matching and deliberately excluded
+from the failure streak: "we couldn't see you, please retake" is not an accusation, and counting
+it toward `maxAttempts` would flag honest people for standing in bad light.
 
 ### The review loop
 
@@ -292,6 +314,70 @@ A flag that nobody reads is not a control, so the review pipeline is push, not p
   timing pattern, cross-referenced against the person's timesheet pattern, ending in a
   LOW/MEDIUM/HIGH read and one concrete next step. **Only attempt metadata enters the prompt**
   — captured images and embeddings never leave the server, and the human still decides.
+- **Auto-triage of honest failures** (opt-in, off by default: the *Auto-resolve honest failures*
+  switch on this settings card) — clears a flag on its own only when the evidence says the
+  failure was honest: outcome is `NO_FACE` / `MULTIPLE_FACES` / `LOW_QUALITY` / `CHALLENGE_FAILED`
+  (never `NO_MATCH` or `SPOOF_SUSPECTED` — those are exactly the outcomes that might be real),
+  carries no virtual-camera or provenance suspicion, and the same person **passed within the
+  following hour**. Every auto-resolved row is stamped with `autoResolvedReason` so the audit
+  trail always shows *why* it closed, distinct from a human's review note. Runs as stage 6 of the
+  daily `face-retention` worker (03:15), or on demand via the *Auto-triage now* button
+  (`POST /api/face/auto-triage`) for an admin who doesn't want to wait.
+
+---
+
+## Policy copilot: a grounded threshold recommendation
+
+Manually reading a histogram to decide "should I move the threshold?" doesn't scale past a
+handful of admins, so the settings card has a **Get recommendation** button
+(`GET /api/face/policy-recommendation`) that does the same reasoning a careful admin would, on
+this workspace's own judged attempts:
+
+1. Take every `PASSED`/`NO_MATCH` attempt with a recorded similarity score (last 2000).
+2. Refuse to say anything below 30 judged attempts (or 10 passes) — that's noise, not evidence.
+3. Find the **widest gap** between the top of the rejected cluster (95th percentile of `NO_MATCH`
+   scores) and the bottom of the genuine-pass cluster (5th percentile of `PASSED` scores).
+4. If the clusters **overlap** (gap ≤ 0.01), refuse to recommend a number at all — no threshold
+   choice can separate overlapping clusters, so moving it only trades false rejections for false
+   accepts. The real fix in that case is re-enrolling the people who fail most, not tuning.
+5. Otherwise recommend a value just inside the passing side of the gap, and project what the
+   reject rate would become if adopted.
+
+This is **deliberately arithmetic, not an LLM's opinion** — picking a threshold is a statistics
+problem, and a model's guess about it would be less reliable, less reproducible, and less
+auditable than the calculation. The endpoint is fully useful with AI switched off entirely. When
+`GlobalAISettings.facePolicyCopilotEnabled` **is** on, an LLM narrates the same numbers in plain
+language (`narrative` in the response) — it explains the finding, it never sets the number, and
+it's given the computed values as fixed facts it's explicitly forbidden to alter.
+
+---
+
+## Identity evidence pack
+
+The differentiating artefact this feature exists to produce: not "did a check happen" but
+**"what proved it, for this specific piece of billable work."** Attendance-only products (clock
+in/out, geofencing) can tell you someone was present; they structurally can't bind an identity
+proof to a *work item* and its *approval*, because they were never designed to track work items
+at all. Here, an identity check is already bound to the timesheet it verified — the evidence pack
+is just that binding, exported.
+
+`GET /api/face/evidence/timesheet/:id` (ADMIN/SUPER_ADMIN) bundles, as a downloadable JSON file:
+
+- the timesheet itself (project, hours, dates, status),
+- **every** identity check bound to it — the submitter's and, if approved, the approver's —
+  each with its similarity score, the threshold it was judged against (which may be stricter than
+  the workspace default for that person — see `effectiveMatchThreshold`), anti-spoof/liveness
+  scores, challenge deltas, and every provenance/injection signal recorded,
+- the consent record(s) behind those checks (exact wording agreed to, when, model version),
+- the workspace's face-verification policy **as it stood at export time** (thresholds, retention,
+  challenge on/off) — a policy that's since been retuned shouldn't silently rewrite what an old
+  export claims it was judged against.
+
+Deliberately **excludes** the biometric embeddings and server filesystem paths, the same rule
+`/face/export` follows: the evidence is the reasoning behind the decision, never the credential
+that produced it. This is what settles a client billing dispute ("prove this contractor actually
+did the work they're invoicing for") or answers a data-protection challenge — and it's only
+possible at all because identity proofs here are bound to work items, not to a clock-in moment.
 
 ---
 
@@ -425,12 +511,24 @@ Honest threat model, worth internalising before relying on it in a dispute:
 npm run verify:face -w apps/api
 
 # Full HTTP flow against a running API: gate blocks, enroll, verify, challenge–response
-# (no-challenge refusal, static-replay refusal, single-use), virtual-camera flagging,
-# verified badge, approval gate, replay rejection, wrong-face rejection, permissions,
-# stats, export, retention, deletion
+# (no-challenge refusal, static-replay refusal, single-use), capture provenance (honest vs.
+# pre-challenge timing), virtual-camera flagging, verified badge, approval gate, replay
+# rejection, wrong-face rejection, permissions, stats, policy-recommendation, auto-triage,
+# the identity evidence pack, export, retention, deletion
 npm run verify:face:e2e -w apps/api
+
+# PAD self-test: synthesises a screen-replay and a printed-photo presentation and asserts the
+# anti-spoof/liveness stack rejects them while a genuine capture still passes. NOT an ISO
+# 30107-3 conformance test — see the script's header for exactly what it can and can't claim.
+npm run verify:face:pad -w apps/api
 ```
 
 Unit tests for the enforcement logic (who's required, entitlement fail-open, single-use/expiry
-rules, challenge redemption and pose checks) live in `apps/api/tests/unit/face.service.test.ts`
+rules, challenge redemption and pose checks, capture provenance, the policy-copilot
+recommendation, and auto-triage eligibility) live in `apps/api/tests/unit/face.service.test.ts`
 and run with `npm run test -w apps/api`.
+
+`/api/face` is rate-limited to 60 requests/min per IP (see Operational notes below) — running
+`verify:face:e2e` twice back-to-back within the same minute will trip it partway through on an
+unrelated call; that's the limiter working as designed, not a test failure, and it clears within
+the minute.

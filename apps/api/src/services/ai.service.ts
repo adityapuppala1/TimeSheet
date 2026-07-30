@@ -202,7 +202,8 @@ type AIFeatureToggle =
   | "findingTriageEnabled"
   | "securityWeeklyDigestEnabled"
   | "statusReportEnabled"
-  | "faceReviewSummaryEnabled";
+  | "faceReviewSummaryEnabled"
+  | "facePolicyCopilotEnabled";
 
 /** Throws a 403 unless AI is enabled workspace-wide AND the specific feature's toggle is on. */
 export async function assertAIFeatureEnabled(feature: AIFeatureToggle): Promise<Awaited<ReturnType<typeof getGlobalAISettings>>> {
@@ -1153,6 +1154,63 @@ export async function generateStatusReport(params: {
   });
 
   return { report: result.text };
+}
+
+/* ------------------------------- Face policy copilot ------------------------------------- */
+
+/**
+ * Narrates a threshold recommendation that has ALREADY been computed arithmetically by
+ * face.service.ts#recommendMatchThreshold. The split is deliberate and load-bearing: the number
+ * comes from statistics over the org's own distribution, and the LLM only turns it into an
+ * explanation an admin can act on. Asking a model to pick the threshold would be less reliable,
+ * unreproducible, and unauditable — and this is a security control.
+ *
+ * Sees only aggregate statistics. No images, no embeddings, no individual's scores.
+ */
+export async function explainThresholdRecommendation(rec: {
+  currentThreshold: number;
+  recommendedThreshold: number | null;
+  currentRejectRatePct: number | null;
+  projectedRejectRatePct: number | null;
+  passedMedian: number | null;
+  rejectedMedian: number | null;
+  separation: number | null;
+  sampleSize: number;
+  summary: string;
+}): Promise<string | null> {
+  const { settings } = await preflight("facePolicyCopilotEnabled");
+
+  const prompt = [
+    "You are advising a workspace administrator on a face-verification match threshold.",
+    "The recommendation below was computed statistically. Do NOT change the numbers or invent new ones —",
+    "your job is to explain what they mean and what to do, in 3-5 sentences of plain prose.",
+    "",
+    "=== BEGIN COMPUTED ANALYSIS ===",
+    `Current threshold: ${rec.currentThreshold}`,
+    `Recommended threshold: ${rec.recommendedThreshold ?? "none — see finding"}`,
+    `Rejection rate now: ${rec.currentRejectRatePct ?? "n/a"}%`,
+    `Projected rejection rate if adopted: ${rec.projectedRejectRatePct ?? "n/a"}%`,
+    `Median score of genuine passes: ${rec.passedMedian ?? "n/a"}`,
+    `Median score of rejections: ${rec.rejectedMedian ?? "n/a"}`,
+    `Separation between the clusters: ${rec.separation ?? "n/a"}`,
+    `Sample size: ${rec.sampleSize} judged checks`,
+    `Computed finding: ${rec.summary}`,
+    "=== END COMPUTED ANALYSIS ===",
+    "",
+    "Explain the trade-off in terms of consequences an admin cares about: a threshold that is too low",
+    "risks accepting a lookalike, one that is too high makes honest employees retry and distrust the",
+    "feature. If the clusters overlap, say plainly that no threshold fixes it and enrollment quality is",
+    "the real lever. Respond with ONLY the prose — no headings, no bullet points, no preamble."
+  ].join("\n");
+
+  const result = await callChat(settings, { model: settings.model, maxTokens: 400, prompt });
+  await logAIUsage({
+    feature: "face_policy_copilot",
+    model: settings.model,
+    inputTokens: result.usage.inputTokens,
+    outputTokens: result.usage.outputTokens
+  });
+  return result.text?.trim() || null;
 }
 
 /* ------------------------------- Face review summary ------------------------------------- */

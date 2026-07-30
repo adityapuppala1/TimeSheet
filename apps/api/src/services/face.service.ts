@@ -643,7 +643,19 @@ export async function redeemChallenge(params: {
   challengeId: string | null | undefined;
   userId: string;
   context: FaceContext;
-}): Promise<ChallengeInstruction | null> {
+}): Promise<ChallengeInstruction | null>;
+export async function redeemChallenge(params: {
+  challengeId: string | null | undefined;
+  userId: string;
+  context: FaceContext;
+  withIssuedAt: true;
+}): Promise<{ instruction: ChallengeInstruction; issuedAt: Date } | null>;
+export async function redeemChallenge(params: {
+  challengeId: string | null | undefined;
+  userId: string;
+  context: FaceContext;
+  withIssuedAt?: boolean;
+}): Promise<ChallengeInstruction | { instruction: ChallengeInstruction; issuedAt: Date } | null> {
   if (!params.challengeId) return null;
   const claimed = await prisma.faceChallenge.updateMany({
     where: {
@@ -657,7 +669,11 @@ export async function redeemChallenge(params: {
   });
   if (claimed.count === 0) return null;
   const row = await prisma.faceChallenge.findUnique({ where: { id: params.challengeId } });
-  return (row?.instruction as ChallengeInstruction) ?? null;
+  if (!row) return null;
+  const instruction = row.instruction as ChallengeInstruction;
+  // The issuedAt overload exists for provenance: "was this frame captured before the challenge
+  // it claims to answer?" is only answerable against the challenge's own creation time.
+  return params.withIssuedAt ? { instruction, issuedAt: row.createdAt } : instruction;
 }
 
 export interface ChallengePoseResult {
@@ -676,6 +692,85 @@ export function verifyChallengePose(instruction: ChallengeInstruction, neutral: 
       ? pitchDelta >= CHALLENGE_PITCH_MIN && pitchDelta >= yawDelta
       : yawDelta >= CHALLENGE_YAW_MIN && yawDelta >= pitchDelta;
   return { ok, yawDelta, pitchDelta };
+}
+
+// ---------------------------------------------------------------------------------------------
+// Capture provenance (Phase C — injection-attack detection)
+// ---------------------------------------------------------------------------------------------
+//
+// The challenge proves a movement was performed on demand. Provenance asks a different question:
+// does the TIMING evidence agree that these frames were produced by a live camera answering THIS
+// challenge? A replayed recording is, by definition, footage that existed before the challenge
+// was issued — so a capture claiming to predate its own challenge, or frames spaced impossibly,
+// is evidence of injection in a way no single frame can be.
+//
+// Every finding here is a REVIEW SIGNAL, never a rejection. Client clocks on real machines are
+// genuinely wrong (VMs resuming from sleep, unsynced laptops, deliberately skewed dev boxes), and
+// blocking on clock skew would lock out honest users to catch an attacker who can simply set their
+// clock correctly. Recorded, surfaced, escalated — not enforced. The same posture as the
+// virtual-camera heuristic, for the same reason.
+
+export interface ProvenanceInput {
+  /** Client clock (epoch ms) when the neutral frame was captured. */
+  neutralCapturedAt?: number | null;
+  /** Client clock (epoch ms) when the gesture frame was captured, when the challenge ran. */
+  gestureCapturedAt?: number | null;
+  /** When the server issued the challenge, if one was redeemed. */
+  challengeIssuedAt?: Date | null;
+  /** Server receipt time, to bound clock skew. */
+  receivedAt: Date;
+}
+
+export interface ProvenanceVerdict {
+  captureLagMs: number | null;
+  frameIntervalMs: number | null;
+  suspect: boolean;
+  note: string | null;
+}
+
+/** Tolerance for ordinary client clock error before "captured before its challenge" is claimed. */
+const CLOCK_SKEW_TOLERANCE_MS = 120_000;
+
+export function assessProvenance(input: ProvenanceInput): ProvenanceVerdict {
+  const { neutralCapturedAt, gestureCapturedAt, challengeIssuedAt, receivedAt } = input;
+
+  const captureLagMs =
+    neutralCapturedAt != null && challengeIssuedAt
+      ? Math.round(neutralCapturedAt - challengeIssuedAt.getTime())
+      : null;
+  const frameIntervalMs =
+    neutralCapturedAt != null && gestureCapturedAt != null ? Math.round(gestureCapturedAt - neutralCapturedAt) : null;
+
+  const reasons: string[] = [];
+
+  // Frames must be ordered. Reversed frames mean the "gesture" was recorded first, which no live
+  // capture sequence can produce.
+  if (frameIntervalMs != null && frameIntervalMs < 0) reasons.push("gesture frame timestamped before the neutral frame");
+
+  // The challenge flow deliberately waits ~3s before grabbing the gesture frame, so an interval
+  // far below that didn't come from the real UI.
+  if (frameIntervalMs != null && frameIntervalMs >= 0 && frameIntervalMs < 500) {
+    reasons.push(`frames only ${frameIntervalMs}ms apart — faster than the capture flow allows`);
+  }
+
+  // The one that actually catches replay: footage captured before the challenge existed.
+  if (captureLagMs != null && captureLagMs < -CLOCK_SKEW_TOLERANCE_MS) {
+    reasons.push(`capture timestamped ${Math.round(-captureLagMs / 1000)}s BEFORE its challenge was issued`);
+  }
+
+  // Gross clock disagreement — not proof of anything, but it means every other timing signal here
+  // is untrustworthy, and saying so is more honest than silently trusting it.
+  if (neutralCapturedAt != null) {
+    const skew = Math.abs(neutralCapturedAt - receivedAt.getTime());
+    if (skew > 10 * 60 * 1000) reasons.push(`client clock is ${Math.round(skew / 60000)} minutes out of step with the server`);
+  }
+
+  return {
+    captureLagMs,
+    frameIntervalMs,
+    suspect: reasons.length > 0,
+    note: reasons.length > 0 ? reasons.join("; ").slice(0, 200) : null
+  };
 }
 
 /** Human-readable instruction text, shared by the API response so every client says exactly
@@ -785,6 +880,164 @@ export async function notifyEnrollmentRequired(
     sent++;
   }
   return sent;
+}
+
+// ---------------------------------------------------------------------------------------------
+// Policy copilot — threshold recommendation (Phase D)
+// ---------------------------------------------------------------------------------------------
+
+export interface ThresholdRecommendation {
+  currentThreshold: number;
+  recommendedThreshold: number | null;
+  /** Non-match rate at the current threshold, and what it would become if adopted. */
+  currentRejectRatePct: number | null;
+  projectedRejectRatePct: number | null;
+  /** Genuine-pass and rejected clusters, so an admin can see the separation for themselves. */
+  passedMedian: number | null;
+  rejectedMedian: number | null;
+  /** How much clear air sits between the two clusters. Small or negative = overlapping, and no
+   *  threshold choice can separate them; that's a model/enrollment problem, not a tuning one. */
+  separation: number | null;
+  sampleSize: number;
+  /** Plain-language finding — deterministic, so this is useful with AI switched off entirely. */
+  summary: string;
+}
+
+/**
+ * Recommends a match threshold from THIS workspace's own similarity distribution.
+ *
+ * Deliberately ARITHMETIC, not an LLM judgement: picking a threshold is a statistics problem, and
+ * a model's opinion about it would be less reliable, less reproducible, and less auditable than
+ * the calculation. The optional AI layer (see ai.service.ts#explainThresholdRecommendation) only
+ * narrates the number this function already computed.
+ *
+ * Method: find the widest gap between the top of the rejected cluster and the bottom of the
+ * genuine-pass cluster, and aim just inside the passing side of it. Refuses to recommend when the
+ * clusters overlap, because in that case no threshold separates them and moving the number just
+ * trades false rejections for false accepts.
+ */
+export async function recommendMatchThreshold(): Promise<ThresholdRecommendation> {
+  const settings = await getFaceSettings();
+  const attempts = await prisma.faceVerificationAttempt.findMany({
+    where: { outcome: { in: ["PASSED", "NO_MATCH"] }, similarity: { not: null } },
+    orderBy: { createdAt: "desc" },
+    take: 2000,
+    select: { outcome: true, similarity: true }
+  });
+
+  const passed = attempts.filter((a) => a.outcome === "PASSED").map((a) => a.similarity!).sort((x, y) => x - y);
+  const rejected = attempts.filter((a) => a.outcome === "NO_MATCH").map((a) => a.similarity!).sort((x, y) => x - y);
+  const median = (xs: number[]) => (xs.length === 0 ? null : xs[Math.floor(xs.length / 2)]);
+  const pct = (n: number, d: number) => (d === 0 ? null : Number(((n / d) * 100).toFixed(1)));
+
+  const base: ThresholdRecommendation = {
+    currentThreshold: settings.matchThreshold,
+    recommendedThreshold: null,
+    currentRejectRatePct: pct(rejected.length, attempts.length),
+    projectedRejectRatePct: null,
+    passedMedian: median(passed),
+    rejectedMedian: median(rejected),
+    separation: null,
+    sampleSize: attempts.length,
+    summary: ""
+  };
+
+  // 30 judged checks is the floor for saying anything; below that this is noise dressed as advice.
+  if (attempts.length < 30 || passed.length < 10) {
+    return { ...base, summary: `Only ${attempts.length} judged checks so far — not enough to recommend a change. Come back after about 30.` };
+  }
+
+  // 5th percentile of genuine passes: the weakest capture we currently accept.
+  const p5Passed = passed[Math.floor(passed.length * 0.05)];
+  // 95th percentile of rejections: the strongest near-miss we currently refuse.
+  const p95Rejected = rejected.length > 0 ? rejected[Math.floor(rejected.length * 0.95)] : 0;
+  const separation = Number((p5Passed - p95Rejected).toFixed(3));
+
+  if (separation <= 0.01) {
+    return {
+      ...base,
+      separation,
+      summary:
+        `The passing and rejected scores OVERLAP (weakest accepted ${p5Passed.toFixed(3)}, strongest rejected ` +
+        `${p95Rejected.toFixed(3)}). No threshold separates them, so moving it only trades false rejections for ` +
+        `false accepts. Look at enrollment quality instead — re-enrolling the people who fail most often is the fix.`
+    };
+  }
+
+  // Aim just inside the passing side of the gap, and never below the current setting by accident:
+  // a recommendation to LOOSEN is legitimate, but it must be stated as such, not slipped in.
+  const midpoint = Number((p95Rejected + separation * 0.5).toFixed(2));
+  const projectedRejects = passed.filter((s) => s < midpoint).length + rejected.length;
+  const direction = midpoint > settings.matchThreshold ? "tighter" : midpoint < settings.matchThreshold ? "looser" : "unchanged";
+
+  return {
+    ...base,
+    recommendedThreshold: midpoint,
+    separation,
+    projectedRejectRatePct: pct(projectedRejects, attempts.length),
+    summary:
+      direction === "unchanged"
+        ? `${settings.matchThreshold} already sits in the gap between your rejected and passing clusters (${separation.toFixed(3)} wide). No change needed.`
+        : `Your clusters are cleanly separated by ${separation.toFixed(3)}. ${midpoint} sits in the middle of that gap — ` +
+          `${direction} than the current ${settings.matchThreshold}. Based on ${attempts.length} judged checks.`
+  };
+}
+
+// ---------------------------------------------------------------------------------------------
+// Auto-triage of honest failures (Phase D)
+// ---------------------------------------------------------------------------------------------
+
+/**
+ * Clears review flags whose evidence says "honest failure" rather than "identity signal", so the
+ * queue stays small enough that a human still reads it. A flag nobody reads is not a control.
+ *
+ * The safety rules are the whole design:
+ *  - opt-in per workspace (autoTriageHonestFailures, default off);
+ *  - NEVER touches an attempt carrying an injection signal (virtual camera, bad provenance) or a
+ *    spoof suspicion — those are precisely the ones a person must see;
+ *  - only closes quality/visibility failures, never NO_MATCH, which is the genuine
+ *    "we couldn't confirm it's you" signal;
+ *  - records autoResolvedReason so the audit trail never confuses this with a human review.
+ */
+export async function autoTriageHonestFailures(): Promise<{ resolved: number }> {
+  const settings = await getFaceSettings();
+  if (!settings.autoTriageHonestFailures) return { resolved: 0 };
+
+  const candidates = await prisma.faceVerificationAttempt.findMany({
+    where: {
+      flaggedForReview: true,
+      reviewedAt: null,
+      virtualCameraSuspected: false,
+      provenanceSuspect: false,
+      // Only visibility problems. NO_MATCH and SPOOF_SUSPECTED are deliberately absent.
+      outcome: { in: ["NO_FACE", "MULTIPLE_FACES", "LOW_QUALITY", "CHALLENGE_FAILED"] },
+      createdAt: { lt: new Date(Date.now() - 60 * 60 * 1000) }
+    },
+    select: { id: true, userId: true, outcome: true, createdAt: true },
+    take: 200
+  });
+  if (candidates.length === 0) return { resolved: 0 };
+
+  let resolved = 0;
+  for (const attempt of candidates) {
+    // The deciding evidence: did this person go on to verify successfully soon afterwards? If so
+    // the failure was a bad frame, not an impostor — an impostor doesn't then pass.
+    const laterPass = await prisma.faceVerificationAttempt.findFirst({
+      where: { userId: attempt.userId, outcome: "PASSED", createdAt: { gt: attempt.createdAt, lt: new Date(attempt.createdAt.getTime() + 60 * 60 * 1000) } },
+      select: { id: true }
+    });
+    if (!laterPass) continue;
+
+    await prisma.faceVerificationAttempt.update({
+      where: { id: attempt.id },
+      data: {
+        flaggedForReview: false,
+        autoResolvedReason: `Auto-resolved: ${attempt.outcome.replaceAll("_", " ").toLowerCase()}, and the same user verified successfully within the hour — a capture problem, not an identity one.`
+      }
+    });
+    resolved++;
+  }
+  return { resolved };
 }
 
 // ---------------------------------------------------------------------------------------------

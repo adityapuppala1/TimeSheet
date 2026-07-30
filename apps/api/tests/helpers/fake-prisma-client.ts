@@ -17,12 +17,14 @@ export function createFakeTenantClient(): PrismaClient {
     faceEnrollment: { findUnique: vi.fn(), upsert: vi.fn(), deleteMany: vi.fn(), count: vi.fn(), findMany: vi.fn() },
     faceVerificationAttempt: {
       findUnique: vi.fn(),
+      findFirst: vi.fn(),
       findMany: vi.fn(),
       create: vi.fn(),
       count: vi.fn(),
       update: vi.fn(),
       updateMany: vi.fn()
     },
+    faceEnrollmentTemplate: { findMany: vi.fn(), createMany: vi.fn(), deleteMany: vi.fn() },
     faceChallenge: { create: vi.fn(), findUnique: vi.fn(), updateMany: vi.fn(), deleteMany: vi.fn() },
     notification: { create: vi.fn(), findFirst: vi.fn(), count: vi.fn() },
     user: {

@@ -230,6 +230,7 @@ const aiSettingsSchema = z.object({
       securityWeeklyDigestEnabled: z.boolean().optional(),
       statusReportEnabled: z.boolean().optional(),
       faceReviewSummaryEnabled: z.boolean().optional(),
+      facePolicyCopilotEnabled: z.boolean().optional(),
       model: z.string().min(1).max(80).optional(),
       confidenceThreshold: z.coerce.number().min(0).max(1).optional(),
       monthlyBudgetUsd: z.coerce.number().min(0).optional().nullable(),
@@ -935,6 +936,7 @@ const faceVerificationSchema = z.object({
       requireForTicket: z.boolean().optional(),
       requireForApproval: z.boolean().optional(),
       challengeEnabled: z.boolean().optional(),
+      autoTriageHonestFailures: z.boolean().optional(),
       enforcementMode: z.enum(["ALL", "SELECTED"]).optional(),
       // Bounded well away from 0/1: a threshold of 0 matches literally anyone and 1 matches
       // nobody, and both are foot-guns an admin should not be able to set by typing in a box.

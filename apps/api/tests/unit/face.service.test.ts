@@ -17,8 +17,17 @@ vi.mock("../../src/services/plan-limits.service.js", () => ({
   isFaceVerificationAllowed: mockIsAllowed
 }));
 
-const { consumeVerification, isFaceVerificationRequired, redeemChallenge, verifyChallengePose, scoreQuality, effectiveMatchThreshold } =
-  await import("../../src/services/face.service.js");
+const {
+  consumeVerification,
+  isFaceVerificationRequired,
+  redeemChallenge,
+  verifyChallengePose,
+  scoreQuality,
+  effectiveMatchThreshold,
+  assessProvenance,
+  recommendMatchThreshold,
+  autoTriageHonestFailures
+} = await import("../../src/services/face.service.js");
 
 // getFaceSettings is exported from the same module under test, so it can't be vi.mock'd out of
 // its own module — instead the fake Prisma client's upsert (which is all getFaceSettings does)
@@ -39,6 +48,7 @@ function settings(overrides: Record<string, unknown> = {}) {
     verificationTtlSeconds: 300,
     imageRetentionDays: 30,
     consentText: null,
+    autoTriageHonestFailures: false,
     entitlementLostAt: null,
     ...overrides
   };
@@ -307,6 +317,146 @@ describe("effectiveMatchThreshold", () => {
   it("is capped so it can never become unpassable", async () => {
     passesAt(Array.from({ length: 20 }, () => 1.0));
     await expect(runInTenant(client, () => effectiveMatchThreshold("u1", 0.75))).resolves.toBeLessThanOrEqual(0.95);
+  });
+});
+
+describe("assessProvenance", () => {
+  const now = new Date("2026-07-30T10:00:00Z");
+  const issued = new Date("2026-07-30T09:59:57Z"); // challenge issued 3s before capture
+
+  it("accepts a plausible live capture answering its challenge", () => {
+    const v = assessProvenance({
+      neutralCapturedAt: now.getTime(),
+      gestureCapturedAt: now.getTime() + 3100,
+      challengeIssuedAt: issued,
+      receivedAt: now
+    });
+    expect(v.suspect).toBe(false);
+    expect(v.note).toBeNull();
+    expect(v.captureLagMs).toBe(3000);
+    expect(v.frameIntervalMs).toBe(3100);
+  });
+
+  it("flags footage captured BEFORE its challenge existed — the replay signature", () => {
+    const v = assessProvenance({
+      // Captured 10 minutes before the challenge was issued: impossible for a live answer.
+      neutralCapturedAt: issued.getTime() - 10 * 60 * 1000,
+      gestureCapturedAt: issued.getTime() - 10 * 60 * 1000 + 3000,
+      challengeIssuedAt: issued,
+      receivedAt: now
+    });
+    expect(v.suspect).toBe(true);
+    expect(v.note).toMatch(/BEFORE its challenge/i);
+  });
+
+  it("tolerates ordinary clock skew rather than punishing a wrong laptop clock", () => {
+    // 60s early — inside the tolerance. Real machines are genuinely off by this much.
+    const v = assessProvenance({
+      neutralCapturedAt: issued.getTime() - 60_000,
+      gestureCapturedAt: issued.getTime() - 60_000 + 3000,
+      challengeIssuedAt: issued,
+      receivedAt: now
+    });
+    expect(v.suspect).toBe(false);
+  });
+
+  it("flags reversed frames and impossibly fast intervals", () => {
+    expect(
+      assessProvenance({ neutralCapturedAt: now.getTime(), gestureCapturedAt: now.getTime() - 500, challengeIssuedAt: issued, receivedAt: now }).note
+    ).toMatch(/before the neutral frame/i);
+    expect(
+      assessProvenance({ neutralCapturedAt: now.getTime(), gestureCapturedAt: now.getTime() + 50, challengeIssuedAt: issued, receivedAt: now }).note
+    ).toMatch(/apart/i);
+  });
+
+  it("reports nothing when there is no challenge or no timestamps to reason about", () => {
+    const v = assessProvenance({ neutralCapturedAt: null, gestureCapturedAt: null, challengeIssuedAt: null, receivedAt: now });
+    expect(v.suspect).toBe(false);
+    expect(v.captureLagMs).toBeNull();
+    expect(v.frameIntervalMs).toBeNull();
+  });
+});
+
+describe("recommendMatchThreshold", () => {
+  const withAttempts = (rows: Array<{ outcome: string; similarity: number }>) => {
+    vi.mocked(client.globalFaceVerificationSettings.upsert).mockResolvedValue(settings() as never);
+    vi.mocked(client.faceVerificationAttempt.findMany).mockResolvedValue(rows as never);
+  };
+
+  it("declines to advise on a tiny sample instead of inventing a number", async () => {
+    withAttempts(Array.from({ length: 12 }, () => ({ outcome: "PASSED", similarity: 0.9 })));
+    const r = await runInTenant(client, () => recommendMatchThreshold());
+    expect(r.recommendedThreshold).toBeNull();
+    expect(r.summary).toMatch(/not enough/i);
+  });
+
+  it("recommends a threshold inside the gap when the clusters separate cleanly", async () => {
+    withAttempts([
+      ...Array.from({ length: 40 }, () => ({ outcome: "PASSED", similarity: 0.9 })),
+      ...Array.from({ length: 10 }, () => ({ outcome: "NO_MATCH", similarity: 0.5 }))
+    ]);
+    const r = await runInTenant(client, () => recommendMatchThreshold());
+    expect(r.recommendedThreshold).not.toBeNull();
+    expect(r.recommendedThreshold!).toBeGreaterThan(0.5);
+    expect(r.recommendedThreshold!).toBeLessThan(0.9);
+    expect(r.separation!).toBeGreaterThan(0);
+  });
+
+  it("refuses to recommend when the clusters OVERLAP, and says why", async () => {
+    // Interleaved scores: no threshold separates these, so tuning only trades one error for
+    // the other. Saying that is more useful than emitting a confident number.
+    withAttempts([
+      ...Array.from({ length: 25 }, (_, i) => ({ outcome: "PASSED", similarity: 0.7 + (i % 5) * 0.01 })),
+      ...Array.from({ length: 25 }, (_, i) => ({ outcome: "NO_MATCH", similarity: 0.72 + (i % 5) * 0.01 }))
+    ]);
+    const r = await runInTenant(client, () => recommendMatchThreshold());
+    expect(r.recommendedThreshold).toBeNull();
+    expect(r.summary).toMatch(/overlap/i);
+    expect(r.summary).toMatch(/enrollment/i);
+  });
+});
+
+describe("autoTriageHonestFailures", () => {
+  it("does nothing unless the workspace opted in", async () => {
+    vi.mocked(client.globalFaceVerificationSettings.upsert).mockResolvedValue(settings({ autoTriageHonestFailures: false }) as never);
+    await expect(runInTenant(client, () => autoTriageHonestFailures())).resolves.toEqual({ resolved: 0 });
+    expect(client.faceVerificationAttempt.findMany).not.toHaveBeenCalled();
+  });
+
+  it("only ever queries visibility failures with no injection signal", async () => {
+    vi.mocked(client.globalFaceVerificationSettings.upsert).mockResolvedValue(settings({ autoTriageHonestFailures: true }) as never);
+    vi.mocked(client.faceVerificationAttempt.findMany).mockResolvedValue([] as never);
+
+    await runInTenant(client, () => autoTriageHonestFailures());
+
+    // The WHERE clause is the safety boundary: NO_MATCH and SPOOF_SUSPECTED must never be
+    // auto-closed, and anything carrying an injection signal must stay for a human.
+    const where = vi.mocked(client.faceVerificationAttempt.findMany).mock.calls[0][0]!.where as Record<string, unknown>;
+    expect(where.virtualCameraSuspected).toBe(false);
+    expect(where.provenanceSuspect).toBe(false);
+    const outcomes = (where.outcome as { in: string[] }).in;
+    expect(outcomes).not.toContain("NO_MATCH");
+    expect(outcomes).not.toContain("SPOOF_SUSPECTED");
+  });
+
+  it("clears a flag only when the same user verified successfully soon after", async () => {
+    vi.mocked(client.globalFaceVerificationSettings.upsert).mockResolvedValue(settings({ autoTriageHonestFailures: true }) as never);
+    const attempt = { id: "a1", userId: "u1", outcome: "LOW_QUALITY", createdAt: new Date("2026-07-30T09:00:00Z") };
+    vi.mocked(client.faceVerificationAttempt.findMany).mockResolvedValue([attempt] as never);
+
+    // No later pass → left alone for a human.
+    vi.mocked(client.faceVerificationAttempt.findFirst).mockResolvedValue(null as never);
+    await expect(runInTenant(client, () => autoTriageHonestFailures())).resolves.toEqual({ resolved: 0 });
+    expect(client.faceVerificationAttempt.update).not.toHaveBeenCalled();
+
+    // A later pass → the failure was a bad frame, not an impostor (an impostor doesn't then pass).
+    vi.mocked(client.faceVerificationAttempt.findFirst).mockResolvedValue({ id: "later" } as never);
+    await expect(runInTenant(client, () => autoTriageHonestFailures())).resolves.toEqual({ resolved: 1 });
+    expect(client.faceVerificationAttempt.update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({ flaggedForReview: false, autoResolvedReason: expect.stringContaining("Auto-resolved") })
+      })
+    );
   });
 });
 

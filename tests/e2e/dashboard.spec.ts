@@ -8,7 +8,11 @@
 import { test, expect } from "@playwright/test";
 import { suspendFaceGate, type FaceGateSnapshot } from "./helpers/face-gate";
 
-test.use({ storageState: "tests/e2e/.auth/employee.json" });
+// Own snapshot, not shared with timesheet.spec.ts's "employee.json" — both specs rotate their
+// session's refresh secret via POST /auth/refresh, and two specs sharing one snapshot race to
+// invalidate each other once the suite's runtime crosses the rotation-grace window. See
+// auth.setup.ts's comment on "employee-dashboard" for the failure this caused for real.
+test.use({ storageState: "tests/e2e/.auth/employee-dashboard.json" });
 
 // This spec creates a timesheet fixture through the API, which the face gate would 428 when
 // the workspace has verification enabled. See helpers/face-gate.ts.

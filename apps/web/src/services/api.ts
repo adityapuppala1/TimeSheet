@@ -1168,6 +1168,7 @@ export interface FaceVerificationSettings {
   requireForTicket: boolean;
   requireForApproval: boolean;
   challengeEnabled: boolean;
+  autoTriageHonestFailures: boolean;
   enforcementMode: "ALL" | "SELECTED";
   matchThreshold: number;
   antispoofThreshold: number;
@@ -1237,6 +1238,20 @@ export interface FaceStats {
   };
 }
 
+export interface FaceThresholdRecommendation {
+  currentThreshold: number;
+  recommendedThreshold: number | null;
+  currentRejectRatePct: number | null;
+  projectedRejectRatePct: number | null;
+  passedMedian: number | null;
+  rejectedMedian: number | null;
+  separation: number | null;
+  sampleSize: number;
+  summary: string;
+  /** AI narration of the computed numbers — never the source of the recommendation. */
+  narrative: string | null;
+}
+
 export interface FaceReviewAiSummary {
   summary: string;
   risk: "LOW" | "MEDIUM" | "HIGH";
@@ -1271,6 +1286,9 @@ export interface FaceAttemptRow {
   virtualCameraSuspected: boolean;
   unfamiliarNetwork: boolean;
   challengeInstruction: string | null;
+  provenanceSuspect?: boolean;
+  provenanceNote?: string | null;
+  autoResolvedReason?: string | null;
   user: { id: string; name: string; email: string; avatarUrl: string | null };
   reviewedBy: { id: string; name: string } | null;
 }
@@ -1314,6 +1332,10 @@ export const faceApi = {
     /** Client-perceived ms from camera-ready to submit — the only place the human's actual wait
      *  can be measured, and what /face/stats reports p50/p95 over. */
     clientDurationMs?: number;
+    /** Client clock at each frame capture — provenance evidence (Phase C). Self-reported, so the
+     *  server treats a mismatch as a review signal, never a rejection. */
+    neutralCapturedAt?: number;
+    gestureCapturedAt?: number;
   }): Promise<FaceVerifyResult> => {
     const form = new FormData();
     params.frames.forEach((frame, index) => form.append("capture", frame, `capture-${index}.jpg`));
@@ -1321,6 +1343,8 @@ export const faceApi = {
     if (params.challengeId) form.append("challengeId", params.challengeId);
     if (params.deviceLabel) form.append("deviceLabel", params.deviceLabel.slice(0, 255));
     if (params.clientDurationMs != null) form.append("clientDurationMs", String(Math.round(params.clientDurationMs)));
+    if (params.neutralCapturedAt != null) form.append("neutralCapturedAt", String(Math.round(params.neutralCapturedAt)));
+    if (params.gestureCapturedAt != null) form.append("gestureCapturedAt", String(Math.round(params.gestureCapturedAt)));
     try {
       return (await api.post<FaceVerifyResult>("/face/verify", form, { headers: { "Content-Type": "multipart/form-data" } })).data;
     } catch (error) {
@@ -1339,6 +1363,16 @@ export const faceApi = {
     (await api.patch<{ id: string; reviewedAt: string }>(`/face/attempts/${id}/review`, { note })).data,
   attemptImageUrl: (id: string) => `${api.defaults.baseURL}/face/image/attempt/${id}`,
   stats: async () => (await api.get<FaceStats>("/face/stats")).data,
+  /** Threshold recommendation computed from this workspace's own distribution; `narrative` is the
+   *  optional AI explanation of that same number (null when AI is off). */
+  policyRecommendation: async () => (await api.get<FaceThresholdRecommendation>("/face/policy-recommendation")).data,
+  autoTriage: async () => (await api.post<{ resolved: number }>("/face/auto-triage")).data,
+  /** The dispute-ready evidence pack for one timesheet — every identity check bound to it, the
+   *  consent record, and the policy in effect at export time. Blob response (like
+   *  ticketApi.securityReport.downloadPdf) rather than a bare URL: the route is authenticated,
+   *  and a plain `<a href>`/`window.open` can't attach the bearer token. */
+  downloadEvidencePack: async (timesheetId: string) =>
+    (await api.get(`/face/evidence/timesheet/${timesheetId}`, { responseType: "blob" })).data as Blob,
   aiSummary: async (attemptId: string) => (await api.post<FaceReviewAiSummary>(`/face/attempts/${attemptId}/ai-summary`)).data,
   /** Self-service data-subject export — everything held about the caller's face verification,
    *  minus the biometrics themselves. */

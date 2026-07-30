@@ -63,14 +63,25 @@ All routes require a normal authenticated session, and `/api/face/*` carries its
   logged checkbox: without it the request is rejected 422. The exact wording shown at the time
   is stored on the enrollment row, since an admin can edit the settings text later.
 - `POST /face/verify` — `capture` frame(s) + `context=TIMESHEET|TICKET|APPROVAL`, plus
-  `challengeId` (required while the challenge is on) and an optional `deviceLabel` (the
-  camera's self-reported name — recorded as a virtual-camera review signal, never trusted).
+  `challengeId` (required while the challenge is on), an optional `deviceLabel` (the
+  camera's self-reported name — recorded as a virtual-camera review signal, never trusted), and
+  optional `neutralCapturedAt`/`gestureCapturedAt` (client clock, epoch ms, at each frame capture
+  — the provenance evidence described below).
   On success returns `{ outcome: "PASSED", verificationId, expiresInSeconds }`. **The
   `verificationId` is single-use and short-lived** — pass it as `faceVerificationId` on the
   subsequent protected request. A failure returns HTTP 422 with a structured body (`outcome`,
   `message`, `attemptId`, `flagged`) rather than an opaque error, so the UI can explain *why* —
-  `NO_FACE`, `MULTIPLE_FACES`, `NO_MATCH`, `SPOOF_SUSPECTED`, `CHALLENGE_FAILED`,
-  `NOT_ENROLLED`.
+  `NO_FACE`, `MULTIPLE_FACES`, `NO_MATCH`, `SPOOF_SUSPECTED`, `CHALLENGE_FAILED`, `LOW_QUALITY`,
+  `NOT_ENROLLED`. `LOW_QUALITY` means "we couldn't see you", not "we don't believe you" — it's
+  never counted toward the failure streak that leads to a review flag.
+  - **Capture provenance (injection-attack signal).** When a challenge was redeemed, the server
+    compares `neutralCapturedAt`/`gestureCapturedAt` against when it actually issued that
+    challenge (`assessProvenance` in `face.service.ts`). A capture timestamped more than 2 minutes
+    before its own challenge existed — beyond any plausible clock skew — is the strongest replay
+    indicator available and sets `provenanceSuspect: true` on the persisted attempt, with a
+    `provenanceNote` explaining why. Like the virtual-camera signal, **this is a review signal,
+    never a block**: client clocks are self-reported and untrustworthy by design, so it can only
+    ever flag, never fail, an otherwise-passing attempt.
 - `DELETE /face/enrollment` — the caller deletes their own face data (template **and** images).
   The "withdraw consent" path biometric-privacy regimes require to be self-service. Sends the
   subject a confirmation notification (deletion evidence).
@@ -85,14 +96,36 @@ All routes require a normal authenticated session, and `/api/face/*` carries its
   the newest slice while looking like the whole log. `?take=` is still accepted as an alias for
   `pageSize` so older callers keep working.
   Rows carry the anti-injection signals (`deviceLabel`, `virtualCameraSuspected`,
-  `unfamiliarNetwork`, `challengeInstruction`) and `hasImage: boolean` — never the server
-  filesystem path.
+  `unfamiliarNetwork`, `challengeInstruction`, `provenanceSuspect`, `provenanceNote`,
+  `autoResolvedReason`) and `hasImage: boolean` — never the server filesystem path.
 - `PATCH /face/attempts/:id/review` — ADMIN/SUPER_ADMIN clears a review flag, optional `note`.
 - `POST /face/attempts/:id/ai-summary` — ADMIN/SUPER_ADMIN; AI-drafted review brief
   (`{ summary, risk, recommendation }`). Gated by `GlobalAISettings.faceReviewSummaryEnabled` +
   the AI budget; only attempt *metadata* enters the prompt.
 - `GET /face/stats` — ADMIN/SUPER_ADMIN; last-90-days outcome totals, signal counts, and the
   similarity histogram (passed vs rejected per 0.05 bucket) the threshold should be tuned from.
+- `GET /face/policy-recommendation` — ADMIN/SUPER_ADMIN; the "policy copilot". Returns
+  `{ currentThreshold, recommendedThreshold, currentRejectRatePct, projectedRejectRatePct,
+  passedMedian, rejectedMedian, separation, sampleSize, summary, narrative }`. The recommendation
+  is computed **arithmetically** from this workspace's own passed/rejected similarity
+  distribution (widest gap between the two clusters) — never by an LLM, so it's fully useful with
+  AI switched off. `narrative` is an optional LLM narration of those same numbers
+  (`GlobalAISettings.facePolicyCopilotEnabled`); it explains the number, it never sets it, and is
+  `null` when AI is off, over budget, or the response couldn't be parsed. Refuses to recommend
+  (explains why instead) below 30 judged checks or when the passed/rejected clusters overlap —
+  in the latter case no threshold separates them, and the real fix is re-enrollment, not tuning.
+- `POST /face/auto-triage` — ADMIN/SUPER_ADMIN; manually runs the same routine the daily worker
+  runs when `autoTriageHonestFailures` is on. Clears review flags only where the evidence says
+  "honest failure": a `NO_FACE`/`MULTIPLE_FACES`/`LOW_QUALITY`/`CHALLENGE_FAILED` outcome with no
+  virtual-camera or provenance suspicion, where the same user passed within the following hour.
+  Returns `{ resolved }`; a no-op (`resolved: 0`) is not an error. Never touches an attempt
+  carrying any injection signal.
+- `GET /face/evidence/timesheet/:id` — ADMIN/SUPER_ADMIN; the dispute-ready identity evidence
+  pack (see FACE_VERIFICATION.md's "Identity evidence pack" section). Bundles the timesheet, every
+  identity check bound to it (submitter's and approver's, with scores/thresholds/provenance),
+  the consent record(s) behind those checks, and the policy in effect at export time. Excludes
+  the biometric template and filesystem paths, same rule as `/face/export`. 404s for an unknown
+  or deleted timesheet.
 - `GET /face/image/attempt/:id` and `GET /face/image/enrollment/:userId` — streams stored
   imagery. Served from the API (not the public `/uploads` mount, which has no auth at all) and
   readable only by the subject or an admin; `Cache-Control: private, no-store`.
@@ -105,7 +138,9 @@ Settings live under the usual settings surface:
   entitlement (403 otherwise); every other field stays editable so an org mid-upgrade can stage
   configuration. Thresholds are bounded server-side (`matchThreshold` 0.3–0.99) — a threshold
   of 0 would match anyone and 1 would match nobody. A PATCH that activates coverage also
-  notifies covered-but-unenrolled users (deduped, 72h).
+  notifies covered-but-unenrolled users (deduped, 72h). `autoTriageHonestFailures` (default off)
+  opts into the daily worker clearing honest-failure flags automatically — see `POST
+  /face/auto-triage` above for exactly what qualifies.
 
 **Enforcement.** When the policy covers a user, the protected requests require a valid
 `faceVerificationId` and return **428 Precondition Required** without one (or with one that's

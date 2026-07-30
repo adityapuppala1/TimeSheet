@@ -60,11 +60,48 @@ async function main() {
   const employee = await login("employee@timesheet.local", "Admin@12345");
 
   // This script mutates WORKSPACE-WIDE settings, so snapshot them first and restore every
-  // field at the end. Restoring only the fields we set would leave the workspace in a state
-  // the operator never chose — and since enabling this genuinely blocks ticket/timesheet
-  // creation, a leaked "on" state breaks unrelated test suites and real users alike.
+  // field at the end — in a `finally`, not just as the last step of the happy path. A crash
+  // partway through (a thrown assertion, the API rate-limiting a burst of face requests) used
+  // to skip the restore entirely and leave `enabled: true, enforcementMode: ALL` live for real,
+  // silently breaking every OTHER suite that touches timesheets/tickets without expecting a face
+  // gate — exactly what happened to the Playwright timesheet spec after an interrupted run here.
   const original = await (await fetch(`${BASE}/api/settings/face-verification`, { headers: auth(admin) })).json();
 
+  try {
+    await runChecks(admin, employee, original);
+  } finally {
+    await restoreSettings(admin, original);
+  }
+
+  console.log(`\n${failures === 0 ? "ALL PASS" : `${failures} FAILURE(S)`}`);
+  process.exit(failures === 0 ? 0 : 1);
+}
+
+async function restoreSettings(admin: string, original: any): Promise<void> {
+  console.log("\n=== cleanup: restore the original settings exactly ===");
+  await patchSettings(admin, {
+    enabled: original.enabled,
+    requireForTimesheet: original.requireForTimesheet,
+    requireForTicket: original.requireForTicket,
+    requireForApproval: original.requireForApproval,
+    challengeEnabled: original.challengeEnabled,
+    enforcementMode: original.enforcementMode,
+    matchThreshold: original.matchThreshold,
+    antispoofThreshold: original.antispoofThreshold,
+    livenessThreshold: original.livenessThreshold,
+    maxAttempts: original.maxAttempts,
+    verificationTtlSeconds: original.verificationTtlSeconds,
+    imageRetentionDays: original.imageRetentionDays,
+    consentText: original.consentText
+  });
+  const restored = await (await fetch(`${BASE}/api/settings/face-verification`, { headers: auth(admin) })).json();
+  check(
+    "settings restored to original",
+    restored.enabled === original.enabled && restored.requireForTicket === original.requireForTicket
+  );
+}
+
+async function runChecks(admin: string, employee: string, original: any): Promise<void> {
   console.log("=== 1. feature off by default -> nothing required ===");
   await patchSettings(admin, { enabled: false });
   let status = await (await fetch(`${BASE}/api/face/status`, { headers: auth(employee) })).json();
@@ -184,6 +221,64 @@ async function main() {
   const flaggedPage = await (await fetch(`${BASE}/api/face/attempts?flaggedOnly=true&pageSize=10`, { headers: auth(admin) })).json();
   const obsRow = Array.isArray(flaggedPage?.rows) ? flaggedPage.rows.find((r: any) => r.virtualCameraSuspected) : null;
   check("…but lands in the flagged review queue with the device label", Boolean(obsRow && obsRow.deviceLabel === "OBS Virtual Camera"));
+
+  console.log("\n=== 7d. capture provenance: honest timing vs. a pre-challenge timestamp ===");
+  await patchSettings(admin, { challengeEnabled: true });
+  {
+    const honestChallenge = await (
+      await fetch(`${BASE}/api/face/challenge`, {
+        method: "POST",
+        headers: { ...auth(employee), "content-type": "application/json" },
+        body: JSON.stringify({ context: "TIMESHEET" })
+      })
+    ).json();
+    const honestNow = Date.now();
+    // Static replay ([personA, personA]) still fails the pose check — that's expected and
+    // unrelated to provenance. What this section checks is the TIMING evidence recorded
+    // alongside that outcome, not whether the pose itself passed.
+    const honest = await postCapture(employee, "/face/verify", [personA, personA], {
+      context: "TIMESHEET",
+      challengeId: honestChallenge.challengeId,
+      neutralCapturedAt: String(honestNow),
+      gestureCapturedAt: String(honestNow + 700)
+    });
+    check("honest timing still fails on pose (unrelated to provenance)", honest.body?.outcome === "CHALLENGE_FAILED");
+    const honestRow = (await (await fetch(`${BASE}/api/face/attempts?pageSize=5`, { headers: auth(admin) })).json()).rows?.find(
+      (r: any) => r.id === honest.body?.attemptId
+    );
+    check(
+      "…and is NOT flagged as a provenance signal",
+      Boolean(honestRow) && honestRow.provenanceSuspect === false,
+      JSON.stringify({ found: Boolean(honestRow), suspect: honestRow?.provenanceSuspect })
+    );
+
+    const suspectChallenge = await (
+      await fetch(`${BASE}/api/face/challenge`, {
+        method: "POST",
+        headers: { ...auth(employee), "content-type": "application/json" },
+        body: JSON.stringify({ context: "TIMESHEET" })
+      })
+    ).json();
+    // A capture claiming to predate its own challenge by 5 minutes — far past the 2-minute clock-
+    // skew tolerance — is the strongest single replay indicator this feature has.
+    const backdated = Date.now() - 5 * 60 * 1000;
+    const suspect = await postCapture(employee, "/face/verify", [personA, personA], {
+      context: "TIMESHEET",
+      challengeId: suspectChallenge.challengeId,
+      neutralCapturedAt: String(backdated),
+      gestureCapturedAt: String(backdated + 700)
+    });
+    check("backdated timing still returns a normal outcome (signal, not a block)", suspect.body?.outcome === "CHALLENGE_FAILED");
+    const flaggedForProvenance = (
+      await (await fetch(`${BASE}/api/face/attempts?flaggedOnly=true&pageSize=10`, { headers: auth(admin) })).json()
+    ).rows?.find((r: any) => r.id === suspect.body?.attemptId);
+    check(
+      "…but IS flagged with a provenance note naming the mismatch",
+      Boolean(flaggedForProvenance?.provenanceSuspect) && /before its challenge/i.test(String(flaggedForProvenance?.provenanceNote)),
+      JSON.stringify({ found: Boolean(flaggedForProvenance), suspect: flaggedForProvenance?.provenanceSuspect, note: flaggedForProvenance?.provenanceNote })
+    );
+  }
+  await patchSettings(admin, { challengeEnabled: false });
 
   console.log("\n=== 8. submit WITH the verification succeeds ===");
   // Re-runs of this script (and other suites) leave real rows on today's date, so a random
@@ -317,36 +412,51 @@ async function main() {
     !JSON.stringify(exported).includes("encryptedEmbedding") && !JSON.stringify(exported).includes("imagePath")
   );
 
+  console.log("\n=== 13c. policy copilot: deterministic threshold recommendation ===");
+  const recommendation = await (await fetch(`${BASE}/api/face/policy-recommendation`, { headers: auth(admin) })).json();
+  check("recommendation reports the current threshold", typeof recommendation.currentThreshold === "number");
+  check("recommendation carries a plain-language summary", typeof recommendation.summary === "string" && recommendation.summary.length > 0);
+  check(
+    "narrative is either a string (AI on) or explicitly null (AI off) — never missing",
+    recommendation.narrative === null || typeof recommendation.narrative === "string",
+    `narrative=${JSON.stringify(recommendation.narrative)}`
+  );
+  const recommendationForbidden = await fetch(`${BASE}/api/face/policy-recommendation`, { headers: auth(employee) });
+  check("policy recommendation is admin-only", recommendationForbidden.status === 403, `got ${recommendationForbidden.status}`);
+
+  console.log("\n=== 13d. auto-triage endpoint runs without error (opt-in, may resolve 0) ===");
+  const triage = await fetch(`${BASE}/api/face/auto-triage`, { method: "POST", headers: auth(admin) });
+  const triageBody = await triage.json();
+  check("auto-triage responds 200 with a resolved count", triage.status === 200 && typeof triageBody.resolved === "number", `status=${triage.status} body=${JSON.stringify(triageBody)}`);
+  const triageForbidden = await fetch(`${BASE}/api/face/auto-triage`, { method: "POST", headers: auth(employee) });
+  check("auto-triage is admin-only", triageForbidden.status === 403, `got ${triageForbidden.status}`);
+
+  console.log("\n=== 13e. identity evidence pack (Phase E) ===");
+  const evidenceRes = await fetch(`${BASE}/api/face/evidence/timesheet/${okBody.id}`, { headers: auth(admin) });
+  const evidence = await evidenceRes.json();
+  check("evidence pack returns 200 for the submitted+verified timesheet", evidenceRes.status === 200, `got ${evidenceRes.status}`);
+  check("evidence pack names the work item and submitter", evidence?.work?.id === okBody.id && evidence?.work?.submittedBy?.id, JSON.stringify(evidence?.work).slice(0, 200));
+  check(
+    "evidence pack lists the identity check(s) bound to this timesheet",
+    Array.isArray(evidence?.identityChecks) && evidence.identityChecks.length > 0 && evidence.identityChecks.every((c: any) => c.outcome === "PASSED"),
+    `count=${evidence?.identityChecks?.length}`
+  );
+  check("evidence pack includes the consent record", Array.isArray(evidence?.consentRecords) && evidence.consentRecords.length > 0);
+  check("evidence pack states the policy in effect at export time", typeof evidence?.policyAtExport?.matchThreshold === "number");
+  check(
+    "evidence pack never leaks the biometric template or a filesystem path",
+    !JSON.stringify(evidence).includes("encryptedEmbedding") && !JSON.stringify(evidence).includes("imagePath")
+  );
+  const evidenceForbidden = await fetch(`${BASE}/api/face/evidence/timesheet/${okBody.id}`, { headers: auth(employee) });
+  check("evidence pack is admin-only", evidenceForbidden.status === 403, `got ${evidenceForbidden.status}`);
+  const evidenceMissing = await fetch(`${BASE}/api/face/evidence/timesheet/00000000-0000-0000-0000-000000000000`, { headers: auth(admin) });
+  check("evidence pack 404s for an unknown timesheet", evidenceMissing.status === 404, `got ${evidenceMissing.status}`);
+
   console.log("\n=== 14. self-service delete removes the enrollment ===");
   const del = await fetch(`${BASE}/api/face/enrollment`, { method: "DELETE", headers: auth(employee) });
   check("deleted", del.status === 200, `status ${del.status}`);
   status = await (await fetch(`${BASE}/api/face/status`, { headers: auth(employee) })).json();
   check("no longer enrolled", status.enrolled === false);
-
-  console.log("\n=== cleanup: restore the original settings exactly ===");
-  await patchSettings(admin, {
-    enabled: original.enabled,
-    requireForTimesheet: original.requireForTimesheet,
-    requireForTicket: original.requireForTicket,
-    requireForApproval: original.requireForApproval,
-    challengeEnabled: original.challengeEnabled,
-    enforcementMode: original.enforcementMode,
-    matchThreshold: original.matchThreshold,
-    antispoofThreshold: original.antispoofThreshold,
-    livenessThreshold: original.livenessThreshold,
-    maxAttempts: original.maxAttempts,
-    verificationTtlSeconds: original.verificationTtlSeconds,
-    imageRetentionDays: original.imageRetentionDays,
-    consentText: original.consentText
-  });
-  const restored = await (await fetch(`${BASE}/api/settings/face-verification`, { headers: auth(admin) })).json();
-  check(
-    "settings restored to original",
-    restored.enabled === original.enabled && restored.requireForTicket === original.requireForTicket
-  );
-
-  console.log(`\n${failures === 0 ? "ALL PASS" : `${failures} FAILURE(S)`}`);
-  process.exit(failures === 0 ? 0 : 1);
 }
 
 main().catch((e) => {
