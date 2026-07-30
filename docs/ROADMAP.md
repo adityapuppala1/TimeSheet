@@ -583,6 +583,35 @@ visible — this file is a living reference, not a changelog.
   capability functions have no dedicated tests yet; the mocking patterns in
   `apps/api/tests/unit/*.test.ts`'s header comments generalize directly.
 
+### Responsive pass + two rate-limiter root causes (2026-07-30)
+
+- ~~Dashboard and Face-verification settings weren't small-screen friendly~~ — fixed at the
+  root rather than per page: `Card` now carries `min-w-0 max-w-full`, because a grid/flex ITEM
+  defaults to `min-width: auto`, so any card holding intrinsically-wide content (the timeline's
+  min-width scroller, the score histogram) silently stretched its ancestor grids past the phone
+  viewport instead of scrolling inside its own container. Also: two `CardHeader`s used `flex`
+  without `flex-row` (CardHeader's base is `flex-col`, so they centered instead of splitting —
+  visible in the user's own desktop screenshot), the timeline's edge hour labels now anchor
+  inward instead of hanging half outside, its date control has a stable width, and the review
+  log's mobile cards regained the virtual-camera/network signal icons the table already had.
+  Verified by screenshotting `/app` and the face settings tab at 375px and 768px before/after,
+  not by reasoning about classes.
+- ~~"Random" mid-session 429s / features appearing to break~~ — the blanket limiter was 300/min
+  **per IP**, and one office NAT is one IP while a single page load fans out ~10 React Query
+  fetches plus 30s dashboard polling. Raised to 900/min; the strict per-route limiters (auth,
+  face, webhooks) still guard the sensitive paths.
+- ~~The "hamburger drawer" Playwright flake, documented as a mystery for weeks~~ — root-caused,
+  not re-documented: `/api/auth/login`'s limiter counted **successful** logins, and
+  `responsive.spec.ts` signs in per test across five viewport projects (~75 logins), so
+  late-suite specs 429'd on login and failed as "element not visible" — which is exactly why it
+  always passed in isolation. Now `skipSuccessfulRequests: true`, so only failed attempts count
+  (the real brute-force surface, with the per-account lockout doing the precise work). Same bug
+  would have locked out the 21st colleague signing in behind a shared NAT.
+- **New `tests/e2e/helpers/face-gate.ts`** — specs that build timesheet/ticket fixtures now
+  suspend face enforcement and restore the exact prior values. Without it, enabling the app's
+  own flagship feature silently breaks the suite with 428s that surface as unrelated UI
+  failures (found the hard way).
+
 ### Dashboard follow-ups + hands-free verification (2026-07-29, same-day fixes)
 
 - ~~Day timeline rendered empty in UTC+N timezones~~ — a shipped timezone bug: "today's" key

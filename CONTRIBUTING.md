@@ -35,9 +35,17 @@ npm run test:e2e                    # Playwright (needs the dev servers, or it s
 CI runs all of these. Run at least `lint`, `build`, and the unit tier locally — they're fast, and
 they catch most of what CI would.
 
-**One known flake:** `platform-admin › hamburger drawer reaches every nav item below lg` fails
-intermittently under full-suite load but passes reliably in isolation. If that's your only
-failure, it isn't you.
+**The long-standing "hamburger drawer" flake is fixed** (2026-07-30) — it was never flaky logic.
+`/api/auth/login`'s rate limiter counted *successful* logins, and `responsive.spec.ts` signs in
+per test across five viewport projects (~75 logins), so late-suite specs 429'd on login and
+failed as "element not visible". The limiter now uses `skipSuccessfulRequests` (only failed
+attempts count — the actual brute-force surface), which also stops ~20 colleagues behind one
+office NAT from locking out the 21st.
+
+If a spec creates timesheets or tickets, wrap it with `suspendFaceGate()` from
+`tests/e2e/helpers/face-gate.ts` — with face verification enabled workspace-wide those
+creations return 428, and the failure surfaces as something unrelated (a detail sheet whose
+ticket never loads).
 
 ## How this codebase expects to be extended
 

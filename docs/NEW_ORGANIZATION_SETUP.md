@@ -206,25 +206,28 @@ database-per-tenant model, not a bug, but it needs monitoring (MySQL's
 npm run lint && npm run build && npm run test:e2e
 ```
 
-**Re-verified 2026-07-29** (after the dependency/react-router fixes above): 95 passed, 3 failed —
-all 3 failures are the same test, `platform-admin console › hamburger drawer reaches every nav
-item below lg`, across 3 of the 5 viewport projects. **Confirmed to be a pre-existing test flake,
-not an app bug**: running that test in isolation (`npx playwright test -g "hamburger drawer
-reaches every nav item below lg"`) passes cleanly across all 5 projects every time. It only fails
-as part of the full 98-test suite, most likely because its `beforeEach` does a fresh raw-HTTP
-login per test (not the shared `storageState` fixture the rest of the suite uses) and the
-`if (viewport.width >= 1024)` branch's assertion has no explicit timeout override (defaults to
-5s), which occasionally isn't enough time for the client-side silent-refresh-on-boot round trip
-under full-suite load. Not urgent to fix (it's test flakiness, not a production defect), but if
-addressed, the fix is either raising that assertion's timeout or switching the describe block to
-a shared `storageState` fixture like the rest of the suite.
+**The "hamburger drawer" flake was root-caused and fixed on 2026-07-30 — it was never flaky
+logic.** For weeks it failed only under full-suite load and always passed in isolation, and the
+standing theory (assertion timeouts) was wrong. The real cause: `/api/auth/login`'s rate limiter
+counted **successful** logins, and `responsive.spec.ts` signs in fresh per test across five
+viewport projects (~75 logins in one run). Late-suite specs got a 429 on login, ended up with no
+session, and failed as "element not visible" — while an isolated run never reached the limit.
+That also explains the sibling symptoms previously filed as separate load flakes: a `TypeError`
+where `projects[0]` was undefined (the API call had returned a 429 body), and assorted mid-run
+30s timeouts.
 
-The same full-suite-load class of flake has once (2026-07-29) hit
-`responsive › no horizontal overflow with a long ticket title open in the detail sheet` — the
-failure was a `TypeError` in the test's own raw-HTTP setup (an API call rejected under load, so
-`projects[0]` was undefined), not an actual overflow, and it passes in isolation every time. As
-mitigation, the face-status polling every app page previously did on mount was consolidated
-behind a shared 60s-stale query (`lib/use-face-status.ts`) to cut per-page request pressure.
+Both limiters were corrected: the login limiter now uses `skipSuccessfulRequests` (only failed
+attempts count, which is the actual brute-force surface — the per-account 5-failure lockout in
+`auth.service.ts` remains the precise control), and the blanket per-IP limiter went from 300 to
+900/min because a single page load fans out ~10 React Query fetches and one office NAT is one
+IP. Latest full run: **97 passed, 2 failed**, and both failures were 30s timeouts from the host
+machine sleeping mid-run (8.8h wall clock) — both pass on a live machine.
+
+One genuine test-suite gap was found alongside this: with face verification enabled
+workspace-wide, any spec that creates a timesheet or ticket gets a 428 and fails as something
+unrelated. Specs now wrap themselves in `suspendFaceGate()`
+(`tests/e2e/helpers/face-gate.ts`), which suspends enforcement and restores the exact prior
+values.
 
 The e2e suite covers 5 spec files (auth, responsive, settings, tickets, timesheet) — broad UI/flow
 coverage, but it never exercised the AI/billing/SCIM services directly.

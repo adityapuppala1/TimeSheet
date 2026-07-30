@@ -5,7 +5,13 @@ export const Card = React.forwardRef<HTMLDivElement, React.HTMLAttributes<HTMLDi
   ({ className, ...props }, ref) => (
     <div
       ref={ref}
-      className={cn("rounded-lg border border-border bg-card text-card-foreground shadow-soft", className)}
+      // min-w-0/max-w-full: grid and flex ITEMS default to `min-width: auto`, which means a
+      // card holding intrinsically-wide content (a min-width scroller, a histogram) silently
+      // stretches every ancestor grid wider than the phone viewport instead of letting its own
+      // overflow-x-auto container scroll. Cards must always be shrinkable — this is what keeps
+      // "wide content scrolls inside its own container, the page never scrolls sideways"
+      // (CONTRIBUTING.md) true by construction rather than per-page vigilance.
+      className={cn("min-w-0 max-w-full rounded-lg border border-border bg-card text-card-foreground shadow-soft", className)}
       {...props}
     />
   )

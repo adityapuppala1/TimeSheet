@@ -116,8 +116,22 @@ app.use("/api/git", gitWebhookLimiter, gitWebhookRouter);
 const billingWebhookLimiter = rateLimit({ windowMs: 60_000, limit: 60, standardHeaders: true });
 app.use("/api/billing", billingWebhookLimiter, billingWebhookRouter);
 
-// Lower-rate limiter for auth endpoints (login bruteforce defence).
-const authLimiter = rateLimit({ windowMs: 60_000, limit: 20, standardHeaders: true });
+/**
+ * Login brute-force defence. `skipSuccessfulRequests` is the load-bearing option: only FAILED
+ * attempts count toward the 20/min budget, which is precisely the brute-force surface — a
+ * password guesser only ever produces failures, so its budget is unchanged, while people who
+ * type their password correctly are never punished.
+ *
+ * WHY it matters beyond tidiness: this limiter is per IP, and an office behind one NAT is a
+ * single IP. Counting successes meant ~20 colleagues signing in at 9am could lock out the 21st
+ * — and it silently broke this app's own Playwright suite, which logs in per test across five
+ * viewport projects (~75 successful logins). Late-suite specs then 429'd on login and failed as
+ * "element not visible", which is exactly the long-standing "hamburger drawer flake" that
+ * passed in isolation and failed under full-suite load. The real anti-brute-force control is
+ * the per-ACCOUNT lockout in auth.service.ts (5 failures → 5-minute lock); this is the coarse
+ * per-IP backstop under it.
+ */
+const authLimiter = rateLimit({ windowMs: 60_000, limit: 20, standardHeaders: true, skipSuccessfulRequests: true });
 app.use("/api/auth/login", authLimiter);
 app.use("/api/auth/forgot-password", authLimiter);
 app.use("/api/auth/reset-password", authLimiter);
@@ -126,11 +140,16 @@ app.use("/api/auth/reset-password", authLimiter);
 // it's mounted after the blanket limiter below so it needs its own explicit guard here too.
 app.use("/api/platform-admin/auth/login", authLimiter);
 
-// 120/min (2 req/s) proved too tight for real usage: a single page load fans out several
-// React Query fetches (projects, tickets, labels, notifications, ...), so a normal admin
-// with a few tabs open — or this app's own Playwright suite — can trip it on legitimate
-// traffic. 300/min keeps abuse protection without false-positiving on real sessions.
-app.use(rateLimit({ windowMs: 60_000, limit: 300, standardHeaders: true }));
+// This ceiling has been raised twice on EVIDENCE, so mind the reasoning before lowering it:
+// 120/min (2 req/s) tripped on a single admin's tabs; 300/min still tripped on legitimate
+// traffic because the limit is PER IP, not per user — one office NAT is one IP, a single page
+// load fans out ~10 React Query fetches, and the dashboard re-polls summaries every 30s. The
+// observable failure mode is nasty: random requests 429 mid-session and features appear to
+// "randomly break" (this app's own full Playwright suite reproduced it — late-suite specs got
+// 429s on ticket fetches and looked like flaky UI bugs). 900/min ≈ 15 req/s per IP still
+// bounds abuse hard, while the strict limiters below (auth 20/min, face 60/min, webhooks)
+// keep guarding the actually-sensitive/expensive paths.
+app.use(rateLimit({ windowMs: 60_000, limit: 900, standardHeaders: true }));
 app.use(compression());
 app.use(cookieParser());
 app.use(express.json({ limit: "2mb" }));

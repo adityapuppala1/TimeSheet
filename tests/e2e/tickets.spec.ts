@@ -1,6 +1,18 @@
 import { test, expect } from "@playwright/test";
+import { suspendFaceGate, type FaceGateSnapshot } from "./helpers/face-gate";
 
 test.use({ storageState: "tests/e2e/.auth/manager.json" });
+
+// Creating a ticket and moving its status are both face-gated when the workspace enables
+// verification — through the UI that means a camera dialog a headless browser can't satisfy.
+// See helpers/face-gate.ts.
+let faceGate: FaceGateSnapshot;
+test.beforeAll(async () => {
+  faceGate = await suspendFaceGate();
+});
+test.afterAll(async () => {
+  await faceGate?.restore();
+});
 
 test.describe("Tickets", () => {
   test("creates a ticket, changes its status, and adds a checklist item", async ({ page }) => {

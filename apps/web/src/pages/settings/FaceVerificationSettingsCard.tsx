@@ -439,9 +439,21 @@ function FaceReviewLog({ readOnly }: { readOnly: boolean }) {
                       <p className="truncate font-medium">{a.user.name}</p>
                       <p className="truncate text-xs text-muted-foreground">{a.user.email}</p>
                     </div>
-                    <Badge className={OUTCOME_TONE[a.outcome] ?? ""} variant="secondary">
-                      {a.outcome.replaceAll("_", " ").toLowerCase()}
-                    </Badge>
+                    <div className="flex shrink-0 items-center gap-1.5">
+                      {a.virtualCameraSuspected && (
+                        <span title={`Suspected virtual camera${a.deviceLabel ? `: ${a.deviceLabel}` : ""}`}>
+                          <VideoOff className="h-3.5 w-3.5 text-destructive" />
+                        </span>
+                      )}
+                      {a.unfamiliarNetwork && (
+                        <span title="First time verifying from this network">
+                          <Wifi className="h-3.5 w-3.5 text-amber-500" />
+                        </span>
+                      )}
+                      <Badge className={OUTCOME_TONE[a.outcome] ?? ""} variant="secondary">
+                        {a.outcome.replaceAll("_", " ").toLowerCase()}
+                      </Badge>
+                    </div>
                   </div>
                   <dl className="mt-2 grid grid-cols-2 gap-x-3 gap-y-1 text-xs text-muted-foreground">
                     <div className="flex justify-between">

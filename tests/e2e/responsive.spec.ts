@@ -13,6 +13,20 @@
  * sidesteps that entirely instead of trying to widen the window to cover it.
  */
 import { test, expect } from "@playwright/test";
+import { suspendFaceGate, type FaceGateSnapshot } from "./helpers/face-gate";
+
+// Several tests below build their own ticket fixture through the API. When the workspace has
+// face verification enabled with enforcementMode ALL — a legitimate, shippable configuration —
+// those creations return 428 and the tests fail with symptoms that look nothing like the cause
+// (a detail sheet whose ticket never loads). Suspend enforcement for this file and restore the
+// exact previous values afterwards; a no-op when the feature is off. See helpers/face-gate.ts.
+let faceGate: FaceGateSnapshot;
+test.beforeAll(async () => {
+  faceGate = await suspendFaceGate();
+});
+test.afterAll(async () => {
+  await faceGate?.restore();
+});
 
 test.beforeEach(async ({ page }) => {
   await page.request.post("/api/auth/login", {

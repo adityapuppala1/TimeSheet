@@ -6,8 +6,19 @@
  * the API, then assert the dashboard actually draws it.
  */
 import { test, expect } from "@playwright/test";
+import { suspendFaceGate, type FaceGateSnapshot } from "./helpers/face-gate";
 
 test.use({ storageState: "tests/e2e/.auth/employee.json" });
+
+// This spec creates a timesheet fixture through the API, which the face gate would 428 when
+// the workspace has verification enabled. See helpers/face-gate.ts.
+let faceGate: FaceGateSnapshot;
+test.beforeAll(async () => {
+  faceGate = await suspendFaceGate();
+});
+test.afterAll(async () => {
+  await faceGate?.restore();
+});
 
 /** Local calendar date — deliberately NOT toISOString(), matching the app-side fix. */
 function localDateKey(d: Date): string {

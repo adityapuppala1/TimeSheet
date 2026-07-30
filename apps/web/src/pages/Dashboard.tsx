@@ -662,8 +662,11 @@ function DayTimeline({
 
   return (
     <Card>
-      <CardHeader className="flex flex-wrap items-center justify-between gap-2 space-y-0 pb-3">
-        <div>
+      {/* Stacks title-over-controls on phones, splits left/right from lg up. Explicit flex-row
+          on the wide branch — CardHeader's base is flex-col, and `flex` alone inherits that
+          direction, which is what previously centered the whole header. */}
+      <CardHeader className="flex flex-col gap-3 space-y-0 pb-3 lg:flex-row lg:items-center lg:justify-between">
+        <div className="min-w-0">
           <CardTitle className="flex items-center gap-2 text-base">
             <CalendarClock className="h-4 w-4 text-primary" />
             Day timeline
@@ -671,7 +674,7 @@ function DayTimeline({
           <CardDescription>Your logged entries on the clock — colors follow entry status. Covers your latest 100 entries.</CardDescription>
         </div>
         <div className="flex flex-wrap items-center gap-2">
-          <Badge variant={dayHours > 0 ? "success" : "muted"}>
+          <Badge variant={dayHours > 0 ? "success" : "muted"} className="whitespace-nowrap">
             {dayHours.toFixed(2)}h {isToday ? "today" : `on ${selectedLabel}`}
           </Badge>
           <div className="flex items-center gap-1 rounded-lg border border-border p-0.5">
@@ -686,7 +689,7 @@ function DayTimeline({
               onChange={(e) => {
                 if (e.target.value && e.target.value <= todayKey) setSelectedKey(e.target.value);
               }}
-              className="h-7 rounded-md border-0 bg-transparent px-1 text-sm tabular-nums text-foreground outline-none [color-scheme:light] dark:[color-scheme:dark]"
+              className="h-7 w-[8.5rem] rounded-md border-0 bg-transparent px-1 text-sm tabular-nums text-foreground outline-none [color-scheme:light] dark:[color-scheme:dark]"
             />
             <Button
               variant="ghost"
@@ -715,10 +718,16 @@ function DayTimeline({
         ) : (
           <div className="overflow-x-auto">
             <div className="min-w-[560px]">
-              {/* Hour axis */}
+              {/* Hour axis. Edge labels anchor inward (first left-aligned, last right-aligned)
+                  instead of centering on the tick — a centered edge label hangs half outside
+                  the container, which manifested as a phantom horizontal scrollbar. */}
               <div className="relative h-5 text-[11px] text-muted-foreground">
-                {hourTicks.map((m) => (
-                  <span key={m} className="absolute -translate-x-1/2 tabular-nums" style={{ left: `${pct(m)}%` }}>
+                {hourTicks.map((m, i) => (
+                  <span
+                    key={m}
+                    className={`absolute tabular-nums ${i === 0 ? "" : i === hourTicks.length - 1 ? "-translate-x-full" : "-translate-x-1/2"}`}
+                    style={{ left: `${pct(m)}%` }}
+                  >
                     {String(Math.floor(m / 60)).padStart(2, "0")}:00
                   </span>
                 ))}
@@ -994,7 +1003,7 @@ function WorkforceSnapshot({ data, loading }: { data?: any; loading: boolean }) 
 
   return (
     <Card>
-      <CardHeader className="flex flex-wrap items-center justify-between gap-3 space-y-0 pb-3">
+      <CardHeader className="flex flex-row flex-wrap items-center justify-between gap-3 space-y-0 pb-3">
         <div className="min-w-0">
           <CardTitle className="flex items-center gap-2 text-base">
             <Users2 className="h-4 w-4 text-primary" />
