@@ -78,7 +78,12 @@ All routes require a normal authenticated session, and `/api/face/*` carries its
 - `GET /face/export` — self-service data-subject export: enrollment metadata, the exact consent
   wording agreed to, and every attempt with scores/signals, as a JSON download. Never includes
   the embedding or filesystem paths.
-- `GET /face/attempts?userId=&outcome=&flaggedOnly=&take=` — ADMIN/SUPER_ADMIN review log.
+- `GET /face/attempts?userId=&outcome=&flaggedOnly=&page=&pageSize=` — ADMIN/SUPER_ADMIN review
+  log, **paginated server-side**: returns `{ rows, total, page, pageSize }`. Unlike the
+  DataTable-backed surfaces (which fetch an array and page in the browser) this log grows without
+  bound — one row per attempt, forever, per covered user — so client-side paging would show only
+  the newest slice while looking like the whole log. `?take=` is still accepted as an alias for
+  `pageSize` so older callers keep working.
   Rows carry the anti-injection signals (`deviceLabel`, `virtualCameraSuspected`,
   `unfamiliarNetwork`, `challengeInstruction`) and `hasImage: boolean` — never the server
   filesystem path.

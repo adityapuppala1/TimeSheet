@@ -796,6 +796,12 @@ function DayTimeline({
 
 /* ============================== Project rollup ============================== */
 
+/** Rows per page for the project rollup. Deliberately client-side (unlike the verification log):
+ *  this list is bounded by the projects one person logged against in a single month, and the data
+ *  is already in memory from the timesheet query — a server round trip per page would be slower
+ *  and buy nothing. */
+const ROLLUP_PAGE_SIZE = 10;
+
 function ProjectRollup({
   rows,
   openTicketsByProject,
@@ -805,6 +811,13 @@ function ProjectRollup({
   openTicketsByProject: Map<string, number>;
   loading: boolean;
 }) {
+  const [page, setPage] = useState(1);
+  const pageCount = Math.max(1, Math.ceil(rows.length / ROLLUP_PAGE_SIZE));
+  const safePage = Math.min(page, pageCount);
+  const pageRows = rows.slice((safePage - 1) * ROLLUP_PAGE_SIZE, safePage * ROLLUP_PAGE_SIZE);
+  const firstShown = rows.length === 0 ? 0 : (safePage - 1) * ROLLUP_PAGE_SIZE + 1;
+  const lastShown = Math.min(safePage * ROLLUP_PAGE_SIZE, rows.length);
+
   return (
     <Card>
       <CardHeader className="pb-3">
@@ -840,7 +853,7 @@ function ProjectRollup({
                   </tr>
                 </thead>
                 <tbody>
-                  {rows.map((row) => {
+                  {pageRows.map((row) => {
                     const approvedPct = row.monthHours > 0 ? Math.round((row.approvedHours / row.monthHours) * 100) : 0;
                     const open = openTicketsByProject.get(row.id) ?? 0;
                     return (
@@ -873,7 +886,7 @@ function ProjectRollup({
             </div>
 
             <div className="grid gap-2 sm:hidden">
-              {rows.map((row) => {
+              {pageRows.map((row) => {
                 const approvedPct = row.monthHours > 0 ? Math.round((row.approvedHours / row.monthHours) * 100) : 0;
                 const open = openTicketsByProject.get(row.id) ?? 0;
                 return (
@@ -894,6 +907,33 @@ function ProjectRollup({
                 );
               })}
             </div>
+
+            {/* Only surfaces once there's more than one page — a footer under three rows is
+                noise. Same visual shape as DataTable's footer for consistency. */}
+            {pageCount > 1 && (
+              <div className="mt-3 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+                <p className="text-xs text-muted-foreground">
+                  Showing {firstShown}-{lastShown} of {rows.length}
+                </p>
+                <div className="flex items-center gap-2">
+                  <Button variant="outline" size="sm" aria-label="Previous page" onClick={() => setPage((p) => Math.max(1, p - 1))} disabled={safePage <= 1}>
+                    <ChevronLeft className="h-3.5 w-3.5" />
+                  </Button>
+                  <span className="text-xs tabular-nums text-muted-foreground">
+                    Page {safePage} of {pageCount}
+                  </span>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    aria-label="Next page"
+                    onClick={() => setPage((p) => Math.min(pageCount, p + 1))}
+                    disabled={safePage >= pageCount}
+                  >
+                    <ChevronRight className="h-3.5 w-3.5" />
+                  </Button>
+                </div>
+              </div>
+            )}
           </>
         )}
       </CardContent>

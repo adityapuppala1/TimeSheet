@@ -1265,6 +1265,14 @@ export interface FaceAttemptRow {
   reviewedBy: { id: string; name: string } | null;
 }
 
+/** One page of the verification log plus the true total, so the footer can say "of N". */
+export interface FaceAttemptPage {
+  rows: FaceAttemptRow[];
+  total: number;
+  page: number;
+  pageSize: number;
+}
+
 export const faceApi = {
   status: async () => (await api.get<FaceStatus>("/face/status")).data,
   enroll: async (capture: Blob) => {
@@ -1300,8 +1308,10 @@ export const faceApi = {
   },
   deleteMyEnrollment: async () => (await api.delete<{ deleted: boolean }>("/face/enrollment")).data,
   deleteEnrollmentFor: async (userId: string) => (await api.delete<{ deleted: boolean }>(`/face/enrollment/${userId}`)).data,
-  listAttempts: async (params?: { userId?: string; outcome?: string; flaggedOnly?: boolean; take?: number }) =>
-    (await api.get<FaceAttemptRow[]>("/face/attempts", { params })).data,
+  /** Server-side paginated: the review log grows unbounded (one row per attempt, forever), so
+   *  unlike the DataTable-backed surfaces it can't fetch everything and page in the browser. */
+  listAttempts: async (params?: { userId?: string; outcome?: string; flaggedOnly?: boolean; page?: number; pageSize?: number }) =>
+    (await api.get<FaceAttemptPage>("/face/attempts", { params })).data,
   reviewAttempt: async (id: string, note?: string) =>
     (await api.patch<{ id: string; reviewedAt: string }>(`/face/attempts/${id}/review`, { note })).data,
   attemptImageUrl: (id: string) => `${api.defaults.baseURL}/face/image/attempt/${id}`,

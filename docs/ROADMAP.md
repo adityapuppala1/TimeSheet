@@ -583,6 +583,55 @@ visible — this file is a living reference, not a changelog.
   capability functions have no dedicated tests yet; the mocking patterns in
   `apps/api/tests/unit/*.test.ts`'s header comments generalize directly.
 
+### Verification-log pagination + the biometric accuracy roadmap (2026-07-30)
+
+- ~~The verification log had no pagination~~ — `GET /face/attempts` is now paginated
+  **server-side** (`?page=&pageSize=`, returning `{ rows, total, page, pageSize }`; the old
+  `?take=` is still accepted). This is the one log in the app that grows without bound — a row
+  per attempt, forever, per covered employee — so the DataTable pattern of "fetch everything and
+  page in the browser" would have quietly shown only the newest slice while claiming to be the
+  full log. The UI reuses DataTable's exact footer shape (`Showing X-Y of N`, page-size select,
+  prev/next) so it reads like every other table. The dashboard project rollup got client-side
+  pagination too (bounded data already in memory — a server round trip per page would buy
+  nothing). Verified live: `Showing 1-20 of 69` → next → `Showing 21-40 of 69`, plus e2e
+  assertions that page 2 returns a genuinely different slice and the total is stable across
+  pages (a no-op `skip` is the classic silent pagination bug).
+
+**Open — the biometric accuracy/real-time roadmap** (full research + reasoning in the plan
+artifact from this session; summary here so it isn't lost with the chat):
+
+- **Accuracy is three axes, not one** — matching (FNMR/FMR), presentation-attack detection
+  (`ISO 30107-3`, APCER/BPCER), and injection-attack detection (`CEN/TS 18099`, with
+  `ISO/IEC 25456` forthcoming). Current state is roughly untested-L1 PAD with heuristic IAD, and
+  **matching is the weakest axis** — single-template enrollment means one bad enrollment frame
+  handicaps every future check permanently.
+- **Phase A (do first): accuracy** — multi-frame enrollment (3–5 templates), capture quality gate
+  with progressive feedback *before* matching (today a blurry frame becomes `NO_MATCH`, which
+  reads to the user as an accusation), best-frame selection, per-user adaptive thresholds, and an
+  FNMR / retake-rate / time-to-verify dashboard. All derivable from rows already stored.
+- **Phase B: perception** — rolling best-frame capture, challenge overlapped with upload, explicit
+  budget of <1s p50 camera-ready → verdict.
+- **Phase C: real injection defence** — frame provenance/timing and session-integrity signals
+  instead of a device-label regex; nonce signed into the capture; WebAuthn/passkey as a *second
+  factor* on approvals (it proves device possession, never whose face — complement, not
+  substitute).
+- **Phase D: the AI layer** — explainable adjudication of flagged attempts (image-inclusive mode
+  strictly opt-in per org, since it crosses the biometrics-stay-on-our-infrastructure line),
+  behavioural anomaly narratives, agentic triage of honest failures, policy copilot grounded in
+  each org's own histogram. **An LLM must never be the matcher** — non-deterministic,
+  unauditable in a dispute, and it would mean shipping faces to a third party.
+- **Phase E: earn the claim** — run a PAD test against L1/L2-style artefact fixtures (the one
+  place competitors are genuinely ahead), ship a customer-facing identity evidence pack.
+- **Deliberately not doing:** iBeta Level 3 (an IDV-vendor problem, not an employee-verification
+  one), training our own face model (worse results, and it makes us the holder of a biometric
+  training set), and continuous/always-on monitoring (converts a proportionate check into
+  surveillance and destroys the privacy positioning).
+- **Positioning:** face recognition is table stakes — Jibble/Connecteam/Truein/Hubstaff all ship
+  it, some on free tiers. The defensible wedge is **verified work, not verified attendance**:
+  identity bound to the unit of billable work *and* to its approval, which an attendance product
+  structurally cannot do because it has no work object. Supporting claims: dispute-ready evidence
+  packs, and biometrics never reaching a third-party processor.
+
 ### Responsive pass + two rate-limiter root causes (2026-07-30)
 
 - ~~Dashboard and Face-verification settings weren't small-screen friendly~~ — fixed at the

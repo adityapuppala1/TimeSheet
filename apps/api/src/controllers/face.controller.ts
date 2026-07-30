@@ -560,21 +560,44 @@ const attemptsQuerySchema = z.object({
     userId: z.string().optional(),
     outcome: z.string().optional(),
     flaggedOnly: z.string().optional(),
-    take: z.coerce.number().int().min(1).max(200).optional()
+    /** Page size. `take` is kept as an accepted alias so any existing caller keeps working. */
+    pageSize: z.coerce.number().int().min(1).max(200).optional(),
+    take: z.coerce.number().int().min(1).max(200).optional(),
+    page: z.coerce.number().int().min(1).optional()
   })
 });
 
-/** The review log. Admin-only — it exposes when and how often individuals failed identity checks. */
+/**
+ * The review log. Admin-only — it exposes when and how often individuals failed identity checks.
+ *
+ * Paginated SERVER-side, unlike the tables that hand a whole array to `DataTable` and let it
+ * page client-side. This log is the one dataset in the app that grows without bound (a row per
+ * verification attempt, forever, times every covered employee), so "fetch everything and page in
+ * the browser" would silently show only the newest slice while claiming to be the full log, and
+ * the payload would grow forever. Response is `{ rows, total, page, pageSize }` so the UI can
+ * render a real "Showing X-Y of N" footer matching every other table.
+ */
 faceRouter.get("/attempts", requireAdmin, validate(attemptsQuerySchema), async (req, res) => {
-  const { userId, outcome, flaggedOnly, take } = req.query as Record<string, string | undefined>;
-  const attempts = await prisma.faceVerificationAttempt.findMany({
-    where: {
-      ...(userId ? { userId } : {}),
-      ...(outcome ? { outcome } : {}),
-      ...(flaggedOnly === "true" ? { flaggedForReview: true } : {})
-    },
+  const { userId, outcome, flaggedOnly } = req.query as Record<string, string | undefined>;
+  const pageSize = Number(req.query.pageSize ?? req.query.take ?? 20);
+  const page = Number(req.query.page ?? 1);
+
+  const where = {
+    ...(userId ? { userId } : {}),
+    ...(outcome ? { outcome } : {}),
+    ...(flaggedOnly === "true" ? { flaggedForReview: true } : {})
+  };
+
+  // Count and page in one round trip. The count is what makes a truthful "of N" possible —
+  // without it the UI can only say "next page maybe exists", which is how log surfaces end up
+  // quietly hiding history.
+  const [total, attempts] = await Promise.all([
+    prisma.faceVerificationAttempt.count({ where }),
+    prisma.faceVerificationAttempt.findMany({
+    where,
     orderBy: { createdAt: "desc" },
-    take: take ? Number(take) : 50,
+    skip: (page - 1) * pageSize,
+    take: pageSize,
     select: {
       id: true,
       userId: true,
@@ -597,13 +620,17 @@ faceRouter.get("/attempts", requireAdmin, validate(attemptsQuerySchema), async (
       user: { select: { id: true, name: true, email: true, avatarUrl: true } },
       reviewedBy: { select: { id: true, name: true } }
     }
-  });
+    })
+  ]);
 
   // `imagePath` is a server filesystem path — never leak it. The UI gets a boolean and fetches
   // the bytes through the authenticated route below if it wants them.
-  res.json(
-    attempts.map(({ imagePath, ...rest }) => ({ ...rest, hasImage: Boolean(imagePath) }))
-  );
+  res.json({
+    rows: attempts.map(({ imagePath, ...rest }) => ({ ...rest, hasImage: Boolean(imagePath) })),
+    total,
+    page,
+    pageSize
+  });
 });
 
 const reviewSchema = z.object({ body: z.object({ note: z.string().max(2000).optional() }) });

@@ -160,8 +160,8 @@ async function main() {
     deviceLabel: "OBS Virtual Camera"
   });
   check("suspected virtual camera still PASSES (signal, not verdict)", obsPass.body?.outcome === "PASSED", `outcome=${obsPass.body?.outcome}`);
-  const flaggedRows = await (await fetch(`${BASE}/api/face/attempts?flaggedOnly=true&take=10`, { headers: auth(admin) })).json();
-  const obsRow = Array.isArray(flaggedRows) ? flaggedRows.find((r: any) => r.virtualCameraSuspected) : null;
+  const flaggedPage = await (await fetch(`${BASE}/api/face/attempts?flaggedOnly=true&pageSize=10`, { headers: auth(admin) })).json();
+  const obsRow = Array.isArray(flaggedPage?.rows) ? flaggedPage.rows.find((r: any) => r.virtualCameraSuspected) : null;
   check("…but lands in the flagged review queue with the device label", Boolean(obsRow && obsRow.deviceLabel === "OBS Virtual Camera"));
 
   console.log("\n=== 8. submit WITH the verification succeeds ===");
@@ -252,10 +252,24 @@ async function main() {
   const noFace = await postCapture(employee, "/face/verify", blank, { context: "TIMESHEET" });
   check("no-face rejected", noFace.body?.outcome === "NO_FACE", `outcome=${noFace.body?.outcome}`);
 
-  console.log("\n=== 12. attempts are logged for admin review ===");
-  const attempts = await (await fetch(`${BASE}/api/face/attempts?take=20`, { headers: auth(admin) })).json();
-  check("attempt log populated", Array.isArray(attempts) && attempts.length > 0, `${attempts?.length} rows`);
+  console.log("\n=== 12. attempts are logged for admin review (paginated) ===");
+  const attempts = await (await fetch(`${BASE}/api/face/attempts?pageSize=20`, { headers: auth(admin) })).json();
+  check("attempt log populated", Array.isArray(attempts?.rows) && attempts.rows.length > 0, `${attempts?.rows?.length} rows`);
   check("log never leaks a filesystem path", JSON.stringify(attempts).includes("imagePath") === false);
+  check("page reports a true total", typeof attempts?.total === "number" && attempts.total >= attempts.rows.length, `total=${attempts?.total}`);
+  check("page size is honoured", attempts.rows.length <= 20, `${attempts?.rows?.length} rows`);
+
+  // Page 2 must return DIFFERENT rows than page 1 — the actual regression risk with skip/take
+  // is an offset that silently does nothing, which looks fine until someone pages.
+  const p1 = await (await fetch(`${BASE}/api/face/attempts?pageSize=2&page=1`, { headers: auth(admin) })).json();
+  const p2 = await (await fetch(`${BASE}/api/face/attempts?pageSize=2&page=2`, { headers: auth(admin) })).json();
+  const p1ids = (p1.rows ?? []).map((r: any) => r.id).join(",");
+  const p2ids = (p2.rows ?? []).map((r: any) => r.id).join(",");
+  check("page 2 returns a different slice than page 1", Boolean(p1ids) && Boolean(p2ids) && p1ids !== p2ids, `p1=[${p1ids}] p2=[${p2ids}]`);
+  check("total is stable across pages", p1.total === p2.total, `${p1.total} vs ${p2.total}`);
+  // `take` stays accepted so any older caller keeps working.
+  const legacy = await (await fetch(`${BASE}/api/face/attempts?take=3`, { headers: auth(admin) })).json();
+  check("legacy ?take= alias still works", Array.isArray(legacy?.rows) && legacy.rows.length <= 3, `${legacy?.rows?.length} rows`);
 
   console.log("\n=== 13. employee cannot read the admin review log ===");
   const forbidden = await fetch(`${BASE}/api/face/attempts`, { headers: auth(employee) });

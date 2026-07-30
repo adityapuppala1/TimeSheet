@@ -8,7 +8,7 @@
  */
 import { useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { AlertTriangle, BarChart3, Eye, Lock, Save, ScanFace, ShieldCheck, Sparkles, VideoOff, Wifi } from "lucide-react";
+import { AlertTriangle, BarChart3, ChevronLeft, ChevronRight, Eye, Lock, Save, ScanFace, ShieldCheck, Sparkles, VideoOff, Wifi } from "lucide-react";
 import { toast } from "sonner";
 import { faceApi, settingsApi, type FaceAttemptRow, type FaceReviewAiSummary } from "../../services/api";
 import { Button } from "../../components/ui/button";
@@ -16,6 +16,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../..
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "../../components/ui/dialog";
 import { Input } from "../../components/ui/input";
 import { Label } from "../../components/ui/label";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../../components/ui/select";
 import { Skeleton } from "../../components/ui/skeleton";
 import { Switch } from "../../components/ui/switch";
 import { Textarea } from "../../components/ui/textarea";
@@ -338,14 +339,42 @@ function FaceStatsCard() {
   );
 }
 
-/** The audit surface — recent attempts, flagged ones first, with the scores behind each decision. */
+const LOG_PAGE_SIZES = [10, 20, 50, 100];
+
+/** The audit surface — recent attempts, flagged ones first, with the scores behind each decision.
+ *  Paginated server-side (see the /face/attempts handler for why this one log can't page in the
+ *  browser like the DataTable surfaces do). */
 function FaceReviewLog({ readOnly }: { readOnly: boolean }) {
   const queryClient = useQueryClient();
   const [flaggedOnly, setFlaggedOnly] = useState(true);
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(20);
+
   const attempts = useQuery({
-    queryKey: ["face", "attempts", flaggedOnly],
-    queryFn: () => faceApi.listAttempts({ flaggedOnly, take: 50 })
+    queryKey: ["face", "attempts", flaggedOnly, page, pageSize],
+    queryFn: () => faceApi.listAttempts({ flaggedOnly, page, pageSize }),
+    // Keeps the previous page rendered while the next one loads, so paging doesn't flash the
+    // empty state — the same feel as the client-paged tables elsewhere.
+    placeholderData: (prev) => prev
   });
+
+  const rows = attempts.data?.rows ?? [];
+  const total = attempts.data?.total ?? 0;
+  const pageCount = Math.max(1, Math.ceil(total / pageSize));
+  const firstShown = total === 0 ? 0 : (page - 1) * pageSize + 1;
+  const lastShown = Math.min(page * pageSize, total);
+
+  // Anything that changes the size or shape of the result set resets to page 1 — landing on a
+  // page that no longer exists shows a truthful-but-useless empty table. Done in the handlers
+  // rather than as a render-time setState, which risks an update loop.
+  const changeFilter = (next: boolean) => {
+    setFlaggedOnly(next);
+    setPage(1);
+  };
+  const changePageSize = (next: number) => {
+    setPageSize(next);
+    setPage(1);
+  };
 
   const review = useMutation({
     mutationFn: (id: string) => faceApi.reviewAttempt(id),
@@ -368,12 +397,12 @@ function FaceReviewLog({ readOnly }: { readOnly: boolean }) {
       <CardContent className="space-y-3">
         <div className="flex items-center justify-between rounded-lg border border-border bg-muted/30 p-3">
           <Label htmlFor="face-flagged-only">Flagged only</Label>
-          <Switch id="face-flagged-only" checked={flaggedOnly} onCheckedChange={setFlaggedOnly} />
+          <Switch id="face-flagged-only" checked={flaggedOnly} onCheckedChange={changeFilter} />
         </div>
 
         {attempts.isLoading ? (
           <Skeleton className="h-32 w-full" />
-        ) : !attempts.data?.length ? (
+        ) : rows.length === 0 ? (
           <p className="py-6 text-center text-sm text-muted-foreground">
             {flaggedOnly ? "Nothing flagged for review." : "No verification attempts recorded yet."}
           </p>
@@ -395,7 +424,7 @@ function FaceReviewLog({ readOnly }: { readOnly: boolean }) {
                   </tr>
                 </thead>
                 <tbody>
-                  {attempts.data.map((a) => (
+                  {rows.map((a) => (
                     <tr key={a.id} className="border-t border-border">
                       <td className="p-2">
                         <div className="font-medium">{a.user.name}</div>
@@ -432,7 +461,7 @@ function FaceReviewLog({ readOnly }: { readOnly: boolean }) {
             </div>
 
             <div className="space-y-2 sm:hidden">
-              {attempts.data.map((a) => (
+              {rows.map((a) => (
                 <div key={a.id} className="rounded-lg border border-border p-3">
                   <div className="flex items-start justify-between gap-2">
                     <div className="min-w-0">
@@ -478,6 +507,42 @@ function FaceReviewLog({ readOnly }: { readOnly: boolean }) {
                   </div>
                 </div>
               ))}
+            </div>
+
+            {/* Same footer shape as DataTable's (showing X-Y of N · page-size select · prev/next)
+                so the log reads like every other table in the app, even though the paging is
+                server-side here. */}
+            <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+              <p className="text-xs text-muted-foreground">
+                Showing {firstShown}-{lastShown} of {total}
+                {attempts.isFetching && <span className="ml-2 opacity-70">updating…</span>}
+              </p>
+              <div className="flex items-center gap-2">
+                <Select value={String(pageSize)} onValueChange={(v) => changePageSize(Number(v))}>
+                  {/* Slightly wider than DataTable's 90px: "100 / page" clips at that width. */}
+                  <SelectTrigger className="h-8 w-[106px] text-xs"><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    {LOG_PAGE_SIZES.map((size) => (
+                      <SelectItem key={size} value={String(size)}>{size} / page</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+                <Button variant="outline" size="sm" aria-label="Previous page" onClick={() => setPage((p) => Math.max(1, p - 1))} disabled={page <= 1}>
+                  <ChevronLeft className="h-3.5 w-3.5" />
+                </Button>
+                <span className="text-xs tabular-nums text-muted-foreground">
+                  Page {page} of {pageCount}
+                </span>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  aria-label="Next page"
+                  onClick={() => setPage((p) => Math.min(pageCount, p + 1))}
+                  disabled={page >= pageCount}
+                >
+                  <ChevronRight className="h-3.5 w-3.5" />
+                </Button>
+              </div>
             </div>
           </>
         )}
