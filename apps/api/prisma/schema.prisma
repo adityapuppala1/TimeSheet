@@ -1408,6 +1408,35 @@ model FaceEnrollment {
   enrolledById String?
   createdAt    DateTime @default(now())
   updatedAt    DateTime @updatedAt
+
+  templates FaceEnrollmentTemplate[]
+}
+
+/// Extra reference templates captured during the SAME consented enrollment session.
+///
+/// WHY multi-template: with a single stored template, one unlucky enrollment frame (harsh side
+/// light, no glasses that day) permanently handicaps every future check for that person — and the
+/// only apparent fix is lowering the match threshold, which trades real security for a problem
+/// that isn't in the threshold. Storing several templates from a few seconds of natural variation
+/// and matching against the BEST one is the highest-value accuracy change available, and it
+/// weakens nothing: the bar each template must clear is unchanged.
+///
+/// FaceEnrollment.encryptedEmbedding stays the primary template so existing single-template
+/// enrollments keep verifying untouched; these are additive.
+model FaceEnrollmentTemplate {
+  id           String         @id @default(uuid())
+  enrollmentId String
+  enrollment   FaceEnrollment @relation(fields: [enrollmentId], references: [id], onDelete: Cascade)
+
+  /// Same AES-256-GCM treatment as the primary template — never a plaintext vector.
+  encryptedEmbedding String @db.Text
+  modelVersion       String @db.VarChar(60)
+  /// Capture quality at enrollment (see face.service.ts#scoreQuality), kept so a later pass can
+  /// prune the weakest templates instead of guessing which one is dragging matching down.
+  quality   Float?
+  createdAt DateTime @default(now())
+
+  @@index([enrollmentId])
 }
 
 /// One row per verification attempt — the audit trail, and the thing a timesheet/ticket submit
@@ -1422,7 +1451,12 @@ model FaceVerificationAttempt {
   context String @db.VarChar(20)
 
   /// PASSED | NO_FACE | MULTIPLE_FACES | NO_MATCH | SPOOF_SUSPECTED | CHALLENGE_FAILED |
-  /// NOT_ENROLLED | ERROR
+  /// LOW_QUALITY | NOT_ENROLLED | ERROR
+  ///
+  /// LOW_QUALITY is deliberately NOT a match failure: it means the frame was too dark/small/
+  /// off-centre to judge, so the user is asked to retake. Returning NO_MATCH for an unusable
+  /// frame told people the system thought they were an impostor, which is both false and the
+  /// fastest way to lose their trust in the feature.
   outcome String @db.VarChar(30)
 
   /// The raw scores behind the decision, always recorded (even on failure) so a disputed
@@ -1472,6 +1506,18 @@ model FaceVerificationAttempt {
   challengeYawDelta    Float?
   challengePitchDelta  Float?
   frameSimilarity      Float?
+
+  /// Capture quality 0..1 (face size, centring, exposure — see face.service.ts#scoreQuality) and
+  /// the effective match threshold this attempt was actually judged against. The threshold is
+  /// recorded per attempt because it is now per-USER (tightened from their own history), so
+  /// without it a stored similarity can't be interpreted after the fact.
+  qualityScore       Float?
+  effectiveThreshold Float?
+
+  /// Client-perceived round trip in ms (camera-ready → verdict), reported by the browser. The
+  /// server can time its own inference but only the client can measure what the human waited
+  /// for, and that is the number the "does this feel instant" budget is set against.
+  durationMs Int?
 
   createdAt DateTime @default(now())
 

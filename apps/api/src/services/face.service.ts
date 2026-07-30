@@ -61,6 +61,7 @@ export type FaceOutcome =
   | "NO_MATCH"
   | "SPOOF_SUSPECTED"
   | "CHALLENGE_FAILED"
+  | "LOW_QUALITY"
   | "NOT_ENROLLED"
   | "ERROR";
 
@@ -71,6 +72,13 @@ export interface FaceAnalysis {
   /** Human's liveness score — higher means "a live person was in front of the lens". */
   livenessScore: number;
   faceCount: number;
+  /** Share of the frame the face box covers, and how far its centre sits from the frame centre
+   *  (0 = dead centre, 1 = corner). Both feed scoreQuality. */
+  faceAreaShare: number;
+  centreOffset: number;
+  /** Mean luminance 0..1 of the decoded frame — catches the too-dark/blown-out captures that
+   *  otherwise surface as a bewildering NO_MATCH. */
+  brightness: number;
   /** Head rotation in radians from Human's facemesh (0 when it couldn't be computed). Used by
    *  the challenge–response check, which compares the DELTA between two frames — so the
    *  absolute sign convention doesn't need to be trusted (see verifyChallengePose). */
@@ -195,7 +203,43 @@ export async function analyzeFace(imageBuffer: Buffer): Promise<FaceAnalysis> {
     const result = await human.detect(batched);
     const faces = (result.face ?? []).filter((f: { embedding?: number[] }) => f.embedding?.length);
 
-    if (faces.length === 0) return { embedding: [], antispoofReal: 0, livenessScore: 0, faceCount: 0, yaw: 0, pitch: 0 };
+    /**
+     * Mean luminance over a rectangle of the already-decoded raw pixels (no second decode).
+     *
+     * Called with the FACE BOX, not the whole frame — measuring the frame was a real bug: a
+     * well-lit person sitting in front of a dark room (or against a dark-UI background) has a
+     * low frame mean and would be told "too dark to see you" while being perfectly visible. What
+     * matters for matching is whether the FACE is exposed, so that's what gets measured.
+     */
+    const regionBrightness = (x0: number, y0: number, w: number, h: number): number => {
+      const left = Math.max(0, Math.floor(x0));
+      const top = Math.max(0, Math.floor(y0));
+      const right = Math.min(info.width, Math.ceil(x0 + w));
+      const bottom = Math.min(info.height, Math.ceil(y0 + h));
+      if (right <= left || bottom <= top) return 0;
+
+      // Cap the sample count so a 1024px frame costs the same as a small one.
+      const step = Math.max(1, Math.floor(Math.sqrt(((right - left) * (bottom - top)) / 4096)));
+      let sum = 0;
+      let samples = 0;
+      for (let y = top; y < bottom; y += step) {
+        for (let x = left; x < right; x += step) {
+          const i = (y * info.width + x) * 3;
+          sum += 0.299 * data[i] + 0.587 * data[i + 1] + 0.114 * data[i + 2];
+          samples++;
+        }
+      }
+      return samples > 0 ? sum / samples / 255 : 0;
+    };
+
+    if (faces.length === 0) {
+      // No box to measure — whole-frame is the only available proxy, and the caller's message is
+      // "no face detected" regardless.
+      return {
+        embedding: [], antispoofReal: 0, livenessScore: 0, faceCount: 0, yaw: 0, pitch: 0,
+        faceAreaShare: 0, centreOffset: 1, brightness: regionBrightness(0, 0, info.width, info.height)
+      };
+    }
 
     // Largest face wins when several are present — the subject is the one closest to the lens.
     // `faceCount` is still reported so the caller can reject a multi-person frame outright
@@ -206,13 +250,24 @@ export async function analyzeFace(imageBuffer: Buffer): Promise<FaceAnalysis> {
     }, faces[0]);
 
     const angle = primary.rotation?.angle ?? {};
+    const box = primary.box ?? [0, 0, 0, 0];
+    const [bx, by, bw, bh] = box as number[];
+    const faceAreaShare = (bw * bh) / (info.width * info.height);
+    const cx = (bx + bw / 2) / info.width;
+    const cy = (by + bh / 2) / info.height;
+    // Normalised distance from frame centre, capped at 1.
+    const centreOffset = Math.min(1, Math.hypot(cx - 0.5, cy - 0.5) / 0.7071);
+
     return {
       embedding: Array.from(primary.embedding as number[]),
       antispoofReal: typeof primary.real === "number" ? primary.real : 0,
       livenessScore: typeof primary.live === "number" ? primary.live : 0,
       faceCount: faces.length,
       yaw: Number.isFinite(angle.yaw) ? angle.yaw : 0,
-      pitch: Number.isFinite(angle.pitch) ? angle.pitch : 0
+      pitch: Number.isFinite(angle.pitch) ? angle.pitch : 0,
+      faceAreaShare: Number.isFinite(faceAreaShare) ? faceAreaShare : 0,
+      centreOffset: Number.isFinite(centreOffset) ? centreOffset : 1,
+      brightness: regionBrightness(bx, by, bw, bh)
     };
   } finally {
     human.tf.dispose(batched);
@@ -225,6 +280,134 @@ export async function similarity(a: number[], b: number[]): Promise<number> {
   const human = await getHuman();
   const value = human.match.similarity(a, b);
   return Number.isFinite(value) ? value : 0;
+}
+
+// ---------------------------------------------------------------------------------------------
+// Capture quality
+// ---------------------------------------------------------------------------------------------
+
+/** Below this the frame is refused as unjudgeable rather than scored as a match failure. */
+export const MIN_QUALITY = 0.45;
+
+export interface QualityVerdict {
+  score: number;
+  /** Actionable, non-accusatory instruction — null when the frame is good enough. */
+  hint: string | null;
+}
+
+/**
+ * Turns the geometric/exposure facts of a capture into one 0..1 score plus the single most useful
+ * thing to tell the person.
+ *
+ * WHY this exists: an unusable frame used to fall straight through to the matcher and come back
+ * NO_MATCH — which says "we don't believe you're you" when the truth is "we couldn't see you".
+ * That one mislabel is most of why the feature felt hostile. Judging judgeability first, and
+ * naming the fix, converts a dead end into a two-second retake.
+ *
+ * The weights are deliberately blunt: face size dominates (a tiny face is the single most common
+ * cause of a weak embedding), then exposure, then centring. Tuning these is a job for real
+ * retake-rate data, which is exactly what /face/stats now reports.
+ */
+export function scoreQuality(analysis: FaceAnalysis): QualityVerdict {
+  if (analysis.faceCount === 0) return { score: 0, hint: "No face detected — make sure your face is clearly visible and well lit." };
+
+  // Face should fill a decent share of frame; ~9% is arm's length, below ~2% is unusable.
+  const sizeScore = Math.max(0, Math.min(1, (analysis.faceAreaShare - 0.015) / (0.09 - 0.015)));
+  // Comfortable exposure band; punishes both crushed shadows and blown highlights.
+  const exposureScore = Math.max(0, Math.min(1, 1 - Math.abs(analysis.brightness - 0.5) / 0.42));
+  const centreScore = Math.max(0, Math.min(1, 1 - analysis.centreOffset / 0.55));
+
+  // The score is a RANKING measure (best-frame selection, telemetry). Judgeability is decided by
+  // hard per-dimension floors below, NOT by this sum — the dimensions are AND conditions, and a
+  // weighted sum lets two good dimensions outvote a fatal one. First cut of this function did
+  // exactly that: a face filling 1.8% of the frame scored 0.51 and passed, because good exposure
+  // and centring alone cleared the bar. Unit tests caught it; the floors are the fix.
+  const score = 0.5 * sizeScore + 0.3 * exposureScore + 0.2 * centreScore;
+
+  // Only the dimensions that actually degrade the EMBEDDING are disqualifying, and each one is
+  // independently fatal (see the note above about why a weighted sum can't decide this).
+  //
+  // Face size and exposure qualify: too few pixels or crushed/blown tone genuinely produce a weak
+  // vector. Centring deliberately does NOT — the model crops to the face box, so a face sitting
+  // off to one side yields the same quality embedding as a centred one. Rejecting on position
+  // would refuse a perfectly usable capture (and did: the real test corpus tripped it). Centring
+  // stays as a gentle live nudge in the client's own hint and as a mild term in the ranking score,
+  // which is where it belongs.
+  let hint: string | null = null;
+  if (analysis.brightness < 0.12) hint = "Too dark to see you clearly — move somewhere brighter or face a light.";
+  else if (analysis.brightness > 0.93) hint = "The picture is washed out — move away from the bright light behind you.";
+  else if (analysis.faceAreaShare < 0.02) hint = "Move a little closer to the camera.";
+  else if (sizeScore < 0.12 || exposureScore < 0.2) {
+    // Cleared the absolute floors but still marginal on a dimension that matters.
+    hint = sizeScore <= exposureScore ? "Move a little closer to the camera." : "Try somewhere with more even lighting.";
+  }
+  return { score: Number(score.toFixed(3)), hint };
+}
+
+// ---------------------------------------------------------------------------------------------
+// Matching
+// ---------------------------------------------------------------------------------------------
+
+export interface MatchResult {
+  /** Best similarity across every stored template for this user. */
+  score: number;
+  /** How many templates were compared — 1 for a legacy single-template enrollment. */
+  templatesCompared: number;
+}
+
+/**
+ * Compares a capture against EVERY stored template for the enrollment and keeps the best.
+ * Multi-template matching only ever raises the score for a genuine user (more chances to look
+ * like themselves) while leaving the bar an impostor must clear untouched — see
+ * FaceEnrollmentTemplate's schema comment for why single-template enrollment was the accuracy
+ * ceiling.
+ */
+export async function matchAgainstEnrollment(
+  enrollment: { id: string; encryptedEmbedding: string },
+  candidate: number[]
+): Promise<MatchResult> {
+  const extras = await prisma.faceEnrollmentTemplate.findMany({
+    where: { enrollmentId: enrollment.id, modelVersion: FACE_MODEL_VERSION },
+    select: { encryptedEmbedding: true }
+  });
+
+  const stored = [enrollment.encryptedEmbedding, ...extras.map((t) => t.encryptedEmbedding)];
+  let best = 0;
+  for (const ciphertext of stored) {
+    const score = await similarity(decodeEmbedding(ciphertext), candidate);
+    if (score > best) best = score;
+  }
+  return { score: best, templatesCompared: stored.length };
+}
+
+/**
+ * The match threshold to judge THIS user by — never looser than the workspace setting.
+ *
+ * A single global threshold is wrong for almost everybody: people whose captures are very
+ * consistent could safely be held to a stricter bar, and holding them to the loose global one is
+ * unearned risk. So this tightens toward the low end of the user's OWN passing distribution and
+ * clamps to the global value as a floor. The direction is the whole safety argument — an adaptive
+ * threshold that could drop below the admin's setting would let a lookalike in precisely because
+ * the real user has been sloppy, which is backwards.
+ */
+export async function effectiveMatchThreshold(userId: string, globalThreshold: number): Promise<number> {
+  const recent = await prisma.faceVerificationAttempt.findMany({
+    where: { userId, outcome: "PASSED", similarity: { not: null } },
+    orderBy: { createdAt: "desc" },
+    take: 30,
+    select: { similarity: true }
+  });
+
+  const scores = recent.map((r) => r.similarity!).filter((s) => Number.isFinite(s));
+  // Fewer than 8 passes is not a distribution, it's noise — stay on the global setting.
+  if (scores.length < 8) return globalThreshold;
+
+  const mean = scores.reduce((a, b) => a + b, 0) / scores.length;
+  const sd = Math.sqrt(scores.reduce((acc, s) => acc + (s - mean) ** 2, 0) / scores.length);
+  // 3 sd below this person's own mean: tight enough to matter, loose enough not to fail them on
+  // an ordinary bad-hair day. Capped at 0.95 so it can never become unpassable.
+  const personal = Math.min(0.95, mean - 3 * sd);
+  return Math.max(globalThreshold, personal);
 }
 
 // ---------------------------------------------------------------------------------------------

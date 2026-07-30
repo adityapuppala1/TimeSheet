@@ -334,8 +334,64 @@ function FaceStatsCard() {
             </div>
           ))}
         </div>
+
+        {/* Operational accuracy — the four numbers that make "did that change help?" answerable.
+            Each carries its healthy target inline, because a bare percentage tells an admin
+            nothing about whether to act. */}
+        {data.accuracy && (
+          <div>
+            <p className="mb-2 text-sm font-medium">Accuracy &amp; speed</p>
+            <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+              <AccuracyTile
+                label="Retake rate"
+                value={data.accuracy.retakeRatePct != null ? `${data.accuracy.retakeRatePct}%` : "—"}
+                target="target < 15%"
+                bad={(data.accuracy.retakeRatePct ?? 0) > 15}
+                title="Captures refused as unjudgeable (too dark, face too small) and asked to retake. High means the capture experience needs work, not that people are failing."
+              />
+              <AccuracyTile
+                label="Non-match rate"
+                value={data.accuracy.fnmrProxyPct != null ? `${data.accuracy.fnmrProxyPct}%` : "—"}
+                target="target < 2%"
+                bad={(data.accuracy.fnmrProxyPct ?? 0) > 2}
+                title="Rejections as a share of judged checks. A proxy for false rejections — a genuine impostor rejection lands here too, so treat it as a trend line, not an absolute."
+              />
+              <AccuracyTile
+                label="Verify p50"
+                value={data.accuracy.timeToVerifyMsP50 != null ? `${(data.accuracy.timeToVerifyMsP50 / 1000).toFixed(1)}s` : "—"}
+                target="target < 1s"
+                bad={(data.accuracy.timeToVerifyMsP50 ?? 0) > 1000}
+                title="Median wait the person actually experienced, camera-ready to verdict."
+              />
+              <AccuracyTile
+                label="Verify p95"
+                value={data.accuracy.timeToVerifyMsP95 != null ? `${(data.accuracy.timeToVerifyMsP95 / 1000).toFixed(1)}s` : "—"}
+                target="target < 2s"
+                bad={(data.accuracy.timeToVerifyMsP95 ?? 0) > 2000}
+                title="The slow tail — what your least-lucky users wait."
+              />
+            </div>
+            <p className="mt-2 text-xs text-muted-foreground">
+              From {data.accuracy.samples.judged} judged checks
+              {data.accuracy.samples.timed > 0 ? `, ${data.accuracy.samples.timed} timed` : ", none timed yet"}.
+              Timings only exist for checks made since this build.
+            </p>
+          </div>
+        )}
       </CardContent>
     </Card>
+  );
+}
+
+/** One accuracy number with its target inline — a bare percentage doesn't tell an admin whether
+ *  to act, and the amber state is what makes the dashboard worth glancing at. */
+function AccuracyTile({ label, value, target, bad, title }: { label: string; value: string; target: string; bad: boolean; title: string }) {
+  return (
+    <div className={`rounded-lg border p-3 text-center ${bad ? "border-amber-500/40 bg-amber-500/10" : "border-border bg-muted/30"}`} title={title}>
+      <p className={`text-lg font-bold tabular-nums ${bad ? "text-amber-600 dark:text-amber-400" : ""}`}>{value}</p>
+      <p className="text-xs font-medium">{label}</p>
+      <p className="text-[11px] text-muted-foreground">{target}</p>
+    </div>
   );
 }
 

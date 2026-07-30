@@ -17,9 +17,8 @@ vi.mock("../../src/services/plan-limits.service.js", () => ({
   isFaceVerificationAllowed: mockIsAllowed
 }));
 
-const { consumeVerification, isFaceVerificationRequired, redeemChallenge, verifyChallengePose } = await import(
-  "../../src/services/face.service.js"
-);
+const { consumeVerification, isFaceVerificationRequired, redeemChallenge, verifyChallengePose, scoreQuality, effectiveMatchThreshold } =
+  await import("../../src/services/face.service.js");
 
 // getFaceSettings is exported from the same module under test, so it can't be vi.mock'd out of
 // its own module — instead the fake Prisma client's upsert (which is all getFaceSettings does)
@@ -234,9 +233,86 @@ describe("redeemChallenge", () => {
   });
 });
 
+describe("scoreQuality", () => {
+  const frame = (over: Partial<Parameters<typeof scoreQuality>[0]> = {}) =>
+    ({
+      embedding: [],
+      antispoofReal: 1,
+      livenessScore: 1,
+      faceCount: 1,
+      yaw: 0,
+      pitch: 0,
+      faceAreaShare: 0.09,
+      centreOffset: 0.05,
+      brightness: 0.5,
+      ...over
+    }) as Parameters<typeof scoreQuality>[0];
+
+  it("accepts a well-framed, well-lit capture with no hint", () => {
+    const v = scoreQuality(frame());
+    expect(v.hint).toBeNull();
+    expect(v.score).toBeGreaterThan(0.8);
+  });
+
+  it("asks the user to come closer when the face is tiny rather than judging identity", () => {
+    const v = scoreQuality(frame({ faceAreaShare: 0.018, centreOffset: 0.02 }));
+    expect(v.hint).toMatch(/closer/i);
+  });
+
+  it("names darkness specifically — the most common real-world cause", () => {
+    expect(scoreQuality(frame({ brightness: 0.05 })).hint).toMatch(/dark/i);
+    expect(scoreQuality(frame({ brightness: 0.98 })).hint).toMatch(/washed out|bright/i);
+  });
+
+  it("does NOT reject an off-centre face — the model crops the box, so position is not a quality problem", () => {
+    // Deliberate: rejecting on position refuses perfectly usable captures. Centring is a live
+    // nudge in the client, never a server-side verdict.
+    expect(scoreQuality(frame({ centreOffset: 0.85, faceAreaShare: 0.09, brightness: 0.5 })).hint).toBeNull();
+  });
+
+  it("rejects a marginal face size even when it clears the absolute floor", () => {
+    expect(scoreQuality(frame({ faceAreaShare: 0.022 })).hint).toMatch(/closer/i);
+  });
+
+  it("reports no face as a quality problem, never as a match failure", () => {
+    const v = scoreQuality(frame({ faceCount: 0 }));
+    expect(v.score).toBe(0);
+    expect(v.hint).toMatch(/no face/i);
+  });
+});
+
+describe("effectiveMatchThreshold", () => {
+  const passesAt = (values: number[]) =>
+    vi.mocked(client.faceVerificationAttempt.findMany).mockResolvedValue(values.map((similarity) => ({ similarity })) as never);
+
+  it("stays on the global threshold until there is a real distribution", async () => {
+    passesAt([0.9, 0.91, 0.92]); // only 3 passes
+    await expect(runInTenant(client, () => effectiveMatchThreshold("u1", 0.75))).resolves.toBe(0.75);
+  });
+
+  it("TIGHTENS for a user whose captures are consistently strong", async () => {
+    passesAt(Array.from({ length: 12 }, () => 0.93)); // sd ~0 → personal bar ≈ 0.93
+    const t = await runInTenant(client, () => effectiveMatchThreshold("u1", 0.75));
+    expect(t).toBeGreaterThan(0.75);
+    expect(t).toBeLessThanOrEqual(0.95);
+  });
+
+  it("NEVER drops below the workspace threshold, however scattered the user's history", async () => {
+    // Wide spread: mean - 3sd lands far below the global setting. Loosening here would let a
+    // lookalike in *because* the real user has been sloppy — the exact inversion to avoid.
+    passesAt([0.76, 0.99, 0.78, 0.97, 0.8, 0.95, 0.77, 0.98, 0.79, 0.96]);
+    await expect(runInTenant(client, () => effectiveMatchThreshold("u1", 0.75))).resolves.toBe(0.75);
+  });
+
+  it("is capped so it can never become unpassable", async () => {
+    passesAt(Array.from({ length: 20 }, () => 1.0));
+    await expect(runInTenant(client, () => effectiveMatchThreshold("u1", 0.75))).resolves.toBeLessThanOrEqual(0.95);
+  });
+});
+
 describe("verifyChallengePose", () => {
   const face = (yaw: number, pitch: number) =>
-    ({ embedding: [], antispoofReal: 1, livenessScore: 1, faceCount: 1, yaw, pitch }) as const;
+    ({ embedding: [], antispoofReal: 1, livenessScore: 1, faceCount: 1, yaw, pitch, faceAreaShare: 0.09, centreOffset: 0.05, brightness: 0.5 }) as const;
 
   it("passes a clear head turn for a TURN instruction (either direction — axis-based by design)", () => {
     expect(verifyChallengePose("TURN_LEFT", face(0, 0), face(0.5, 0.05)).ok).toBe(true);

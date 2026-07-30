@@ -24,8 +24,33 @@ export type FaceCaptureState = "idle" | "starting" | "ready" | "captured" | "den
  *  active camera's label (sent to the server as the virtual-camera review signal). */
 export interface FaceCaptureHandle {
   captureFrame: () => Promise<Blob | null>;
+  /** Grabs `count` frames spaced `gapMs` apart — the multi-frame enrollment burst. Natural
+   *  micro-movement between frames is the point: it's what gives the stored template set the
+   *  variation that stops one unlucky frame defining the person forever. */
+  captureBurst: (count: number, gapMs?: number) => Promise<Blob[]>;
   getDeviceLabel: () => string | null;
   isLive: () => boolean;
+}
+
+/**
+ * Client-side capture quality, used ONLY to decide when to fire and what hint to show. The
+ * server scores quality again authoritatively (face.service.ts#scoreQuality) — this is the
+ * fast local approximation that makes the camera feel cooperative instead of binary, in the
+ * same spirit as phone face-unlock telling you to move closer before it ever decides.
+ */
+function frameQuality(video: HTMLVideoElement, box: { x: number; y: number; width: number; height: number } | null) {
+  if (!box) return { score: 0, hint: "Looking for you — face the camera" };
+  const areaShare = (box.width * box.height) / (video.videoWidth * video.videoHeight);
+  const cx = (box.x + box.width / 2) / video.videoWidth;
+  const cy = (box.y + box.height / 2) / video.videoHeight;
+  const offset = Math.hypot(cx - 0.5, cy - 0.5);
+
+  if (areaShare < 0.03) return { score: 0.2, hint: "Move a little closer" };
+  if (offset > 0.22) return { score: 0.4, hint: "Centre your face in the oval" };
+  // Mirrors the server's weighting closely enough to agree on the borderline cases.
+  const sizeScore = Math.min(1, (areaShare - 0.015) / (0.09 - 0.015));
+  const centreScore = Math.max(0, 1 - offset / 0.28);
+  return { score: 0.65 * sizeScore + 0.35 * centreScore, hint: null as string | null };
 }
 
 /** Chrome's Shape Detection API — the progressive-enhancement half of hands-free capture.
@@ -84,6 +109,9 @@ export const FaceCapture = forwardRef<FaceCaptureHandle, FaceCaptureProps>(funct
   /** Hands-free scan phase: null = not scanning, "searching" = no usable face yet,
    *  "locking" = face seen, holding for stability before the shutter fires. */
   const [scanPhase, setScanPhase] = useState<"searching" | "locking" | null>(null);
+  /** Live, pre-upload coaching from the local quality score ("Move a little closer"). This is
+   *  what turns a binary pass/fail into a cooperative interaction. */
+  const [liveHint, setLiveHint] = useState<string | null>(null);
 
   const stop = useCallback(() => {
     streamRef.current?.getTracks().forEach((track) => track.stop());
@@ -174,8 +202,12 @@ export const FaceCapture = forwardRef<FaceCaptureHandle, FaceCaptureProps>(funct
     }
 
     let cancelled = false;
-    let stableTicks = 0;
+    let goodTicks = 0;
     let fired = false;
+    // Rolling best-frame: keep the highest-quality frame seen during the lock window and submit
+    // THAT, rather than whichever frame the shutter happened to land on. Same latency, better
+    // input — this is the cheap half of the accuracy work, done client-side.
+    let best: { blob: Blob; score: number } | null = null;
     const detector = new window.FaceDetector!({ fastMode: true, maxDetectedFaces: 2 });
     setScanPhase("searching");
 
@@ -186,49 +218,71 @@ export const FaceCapture = forwardRef<FaceCaptureHandle, FaceCaptureProps>(funct
         const faces = await detector.detect(video);
         if (cancelled || fired) return;
 
-        const usable =
-          faces.length === 1 &&
-          (() => {
-            const box = faces[0].boundingBox;
-            const areaShare = (box.width * box.height) / (video.videoWidth * video.videoHeight);
-            const cx = (box.x + box.width / 2) / video.videoWidth;
-            const cy = (box.y + box.height / 2) / video.videoHeight;
-            // ≥8% of the frame ≈ arm's-length selfie distance; center within the middle band.
-            return areaShare >= 0.08 && cx > 0.25 && cx < 0.75 && cy > 0.2 && cy < 0.8;
-          })();
+        // More than one face is never "usable" — the server refuses it anyway, and saying so
+        // now is faster and clearer than a round trip.
+        if (faces.length > 1) {
+          goodTicks = 0;
+          best = null;
+          setScanPhase("searching");
+          setLiveHint("Make sure you're alone in the frame");
+          return;
+        }
 
-        if (usable) {
-          stableTicks += 1;
+        const quality = frameQuality(video, faces.length === 1 ? faces[0].boundingBox : null);
+        setLiveHint(quality.hint);
+
+        if (quality.hint === null) {
+          goodTicks += 1;
           setScanPhase("locking");
-          if (stableTicks >= 3) {
+          // Score every good tick and remember the best.
+          const blob = await grabFrame();
+          if (blob && (!best || quality.score > best.score)) best = { blob, score: quality.score };
+          if (goodTicks >= 3 && best) {
             fired = true;
             setScanPhase(null);
-            capture();
+            setLiveHint(null);
+            onCapture(best.blob);
           }
         } else {
-          stableTicks = 0;
+          goodTicks = 0;
+          best = null;
           setScanPhase("searching");
         }
       } catch {
         // A detector error (unsupported source, transient) just means this tick is skipped —
         // the manual button is always there.
       }
-    }, 350);
+    }, 320);
 
     return () => {
       cancelled = true;
       clearInterval(interval);
+      setLiveHint(null);
     };
-  }, [supportsAutoCapture, state, busy, capture]);
+  }, [supportsAutoCapture, state, busy, grabFrame, onCapture]);
+
+  const captureBurst = useCallback(
+    async (count: number, gapMs = 260): Promise<Blob[]> => {
+      const out: Blob[] = [];
+      for (let i = 0; i < count; i++) {
+        const blob = await grabFrame();
+        if (blob) out.push(blob);
+        if (i < count - 1) await new Promise((r) => setTimeout(r, gapMs));
+      }
+      return out;
+    },
+    [grabFrame]
+  );
 
   useImperativeHandle(
     ref,
     () => ({
       captureFrame: grabFrame,
+      captureBurst,
       getDeviceLabel: () => streamRef.current?.getVideoTracks()[0]?.label ?? null,
       isLive: () => state === "ready"
     }),
-    [grabFrame, state]
+    [grabFrame, captureBurst, state]
   );
 
   const live = state === "ready";
@@ -266,7 +320,7 @@ export const FaceCapture = forwardRef<FaceCaptureHandle, FaceCaptureProps>(funct
           {live && !overlayText && scanPhase && (
             <div role="status" className="pointer-events-none absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/75 to-transparent px-3 pb-3 pt-8 text-center">
               <p className="text-sm font-semibold text-white drop-shadow">
-                {scanPhase === "locking" ? "Hold still…" : "Looking for you — face the camera"}
+                {liveHint ?? (scanPhase === "locking" ? "Hold still…" : "Looking for you — face the camera")}
               </p>
             </div>
           )}

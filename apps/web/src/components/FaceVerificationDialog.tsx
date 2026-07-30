@@ -44,6 +44,7 @@ const FRIENDLY: Record<FaceOutcome, string> = {
   NO_MATCH: "We couldn't confirm it's you. Try again with better lighting and your face centred.",
   SPOOF_SUSPECTED: "That didn't look like a live capture. Look directly at the camera rather than holding up a photo or screen.",
   CHALLENGE_FAILED: "We couldn't see the requested head movement — face the camera first, then make the movement clearly.",
+  LOW_QUALITY: "We couldn't see you clearly enough — adjust and try again.",
   NOT_ENROLLED: "You haven't set up face verification yet — do that in your profile first.",
   ERROR: "Something went wrong during verification. Please try again."
 };
@@ -66,6 +67,9 @@ export function FaceVerificationDialog({ open, onOpenChange, context, onVerified
   const [tone, setTone] = useState<"info" | "error" | "success">("info");
   const [flagged, setFlagged] = useState(false);
   const [overlay, setOverlay] = useState<string | null>(null);
+  /** Set when this attempt starts, so the server can be told what the human actually waited
+   *  for — the number the <1s p50 budget is tracked against. */
+  const startedAtRef = useRef<number | null>(null);
 
   const status = useFaceStatus(open);
   const challengeOn = status.data?.challengeEnabled ?? true;
@@ -95,6 +99,7 @@ export function FaceVerificationDialog({ open, onOpenChange, context, onVerified
     async (neutralFrame: Blob) => {
       setBusy(true);
       setMessage(null);
+      startedAtRef.current = Date.now();
       try {
         const frames: Blob[] = [neutralFrame];
         let challengeId: string | undefined;
@@ -126,7 +131,8 @@ export function FaceVerificationDialog({ open, onOpenChange, context, onVerified
           frames,
           context,
           challengeId,
-          deviceLabel: captureRef.current?.getDeviceLabel()
+          deviceLabel: captureRef.current?.getDeviceLabel(),
+          clientDurationMs: startedAtRef.current ? Date.now() - startedAtRef.current : undefined
         });
         if (cancelledRef.current) return;
 
@@ -135,6 +141,14 @@ export function FaceVerificationDialog({ open, onOpenChange, context, onVerified
           setMessage(FRIENDLY.PASSED);
           onVerified(result.verificationId);
           onOpenChange(false);
+          return;
+        }
+        // LOW_QUALITY means "we couldn't see you", not "we don't believe you" — so it doesn't
+        // count as a failed attempt and doesn't get the error tone. Treating an unusable frame
+        // as a failure is exactly what made this feel accusatory.
+        if (result.outcome === "LOW_QUALITY") {
+          setTone("info");
+          setMessage(result.message ?? FRIENDLY.LOW_QUALITY);
           return;
         }
         setAttempts((n) => n + 1);

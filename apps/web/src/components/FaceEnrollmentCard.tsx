@@ -11,7 +11,7 @@
  * Renders nothing at all when the workspace hasn't enabled the feature, so profiles stay clean
  * for the overwhelming majority of deployments that never turn this on.
  */
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { CheckCircle2, Download, ScanFace, ShieldAlert, Trash2 } from "lucide-react";
 import { toast } from "sonner";
@@ -22,7 +22,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "./ui/
 import { Checkbox } from "./ui/checkbox";
 import { Label } from "./ui/label";
 import { Skeleton } from "./ui/skeleton";
-import { FaceCapture } from "./FaceCapture";
+import { FaceCapture, type FaceCaptureHandle } from "./FaceCapture";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -42,10 +42,23 @@ export function FaceEnrollmentCard() {
   const [capturing, setCapturing] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  const captureRef = useRef<FaceCaptureHandle | null>(null);
+
+  /**
+   * Enrollment captures a BURST, not a single frame: the pressed frame plus a few more over the
+   * next second. Each usable one becomes a stored template, so the natural micro-variation
+   * between them (blink, tiny head shift, expression) is what stops one unlucky frame from
+   * permanently defining this person — the single biggest source of later false rejections.
+   */
   const enroll = useMutation({
-    mutationFn: (blob: Blob) => faceApi.enroll(blob),
-    onSuccess: () => {
-      toast.success("Face verification set up");
+    mutationFn: async (blob: Blob) => {
+      const extra = (await captureRef.current?.captureBurst(3, 280)) ?? [];
+      return faceApi.enroll([blob, ...extra]);
+    },
+    onSuccess: (result) => {
+      toast.success("Face verification set up", {
+        description: `${result.templatesStored} reference ${result.templatesStored === 1 ? "image" : "images"} stored — more variation means fewer failed checks later.`
+      });
       setError(null);
       setCapturing(false);
       setConsented(false);
@@ -120,6 +133,7 @@ export function FaceEnrollmentCard() {
                     this is the frame every future check compares against, and consent just
                     happened seconds ago. */}
                 <FaceCapture
+                  ref={captureRef}
                   onCapture={(blob) => enroll.mutate(blob)}
                   busy={enroll.isPending}
                   hint={error ?? undefined}
@@ -187,6 +201,7 @@ export function FaceEnrollmentCard() {
 
             {consented ? (
               <FaceCapture
+                ref={captureRef}
                 onCapture={(blob) => enroll.mutate(blob)}
                 busy={enroll.isPending}
                 hint={error ?? "Look straight at the camera in good light, with just your face in frame."}

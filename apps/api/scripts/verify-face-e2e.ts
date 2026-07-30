@@ -112,9 +112,30 @@ async function main() {
   const noConsent = await postCapture(employee, "/face/enroll", personA, { consent: "false" });
   check("enroll without consent rejected", noConsent.status === 422, `status ${noConsent.status}`);
 
-  console.log("\n=== 6. enroll with consent ===");
-  const enrolled = await postCapture(employee, "/face/enroll", personA, { consent: "true" });
+  console.log("\n=== 6. enroll with consent (multi-frame) ===");
+  // Three frames from one session — each usable one becomes a stored template, which is what
+  // stops a single unlucky enrollment frame defining the person forever.
+  const enrolled = await postCapture(employee, "/face/enroll", [personA, personA, personA], { consent: "true" });
   check("enrolled", enrolled.status === 201, `status ${enrolled.status} ${JSON.stringify(enrolled.body).slice(0, 160)}`);
+  check("stored more than one template", (enrolled.body?.templatesStored ?? 0) > 1, `templatesStored=${enrolled.body?.templatesStored}`);
+
+  console.log("\n=== 6b. an unusable frame is a RETAKE, not a match failure ===");
+  // A tiny face on a big canvas: judgeable-face floors fail, so this must come back LOW_QUALITY
+  // with an actionable hint — never NO_MATCH, which would tell an honest user we think they're
+  // an impostor.
+  const tinyFace = await sharp({ create: { width: 1600, height: 1200, channels: 3, background: { r: 128, g: 128, b: 128 } } })
+    .composite([{ input: await sharp(path.join(ASSETS, "screenshot-faceid.jpg")).resize({ width: 130 }).toBuffer(), gravity: "centre" }])
+    .jpeg()
+    .toBuffer();
+  const lowQ = await postCapture(employee, "/face/verify", tinyFace, { context: "TIMESHEET" });
+  check(
+    "tiny/unclear face returns LOW_QUALITY, not NO_MATCH",
+    lowQ.body?.outcome === "LOW_QUALITY" || lowQ.body?.outcome === "NO_FACE",
+    `outcome=${lowQ.body?.outcome} message=${String(lowQ.body?.message).slice(0, 80)}`
+  );
+  if (lowQ.body?.outcome === "LOW_QUALITY") {
+    check("…and the message says what to change", /closer|dark|centre|light/i.test(String(lowQ.body?.message)), String(lowQ.body?.message));
+  }
 
   console.log("\n=== 7. verify with the SAME face -> PASSED ===");
   const pass = await postCapture(employee, "/face/verify", personA, { context: "TIMESHEET" });
@@ -279,6 +300,12 @@ async function main() {
   const stats = await (await fetch(`${BASE}/api/face/stats`, { headers: auth(admin) })).json();
   check("stats totals populated", typeof stats.total === "number" && stats.total > 0, `total=${stats.total}`);
   check("stats histogram has buckets", Array.isArray(stats.histogram) && stats.histogram.length > 0);
+  check("accuracy metrics present", Boolean(stats.accuracy) && typeof stats.accuracy.samples?.judged === "number", JSON.stringify(stats.accuracy).slice(0, 160));
+  check(
+    "retake rate and non-match proxy are percentages or null",
+    [stats.accuracy?.retakeRatePct, stats.accuracy?.fnmrProxyPct].every((v) => v === null || (typeof v === "number" && v >= 0 && v <= 100)),
+    `retake=${stats.accuracy?.retakeRatePct} fnmr=${stats.accuracy?.fnmrProxyPct}`
+  );
   const statsForbidden = await fetch(`${BASE}/api/face/stats`, { headers: auth(employee) });
   check("stats is admin-only", statsForbidden.status === 403, `got ${statsForbidden.status}`);
 

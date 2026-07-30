@@ -94,9 +94,11 @@ const allowedCaptureMimes = new Set(["image/png", "image/jpeg", "image/jpg"]);
 
 export const faceCaptureUpload = multer({
   storage: multer.memoryStorage(),
-  // files: 2 — the challenge–response flow uploads [neutral, gesture]. Enrollment still calls
-  // .single(), whose maxCount of 1 is enforced by the route regardless of this instance cap.
-  limits: { fileSize: 4 * 1024 * 1024, files: 2 },
+  // files: 5 — multi-frame ENROLLMENT sends up to 5 frames from one consented session, and the
+  // challenge–response verify sends 2 ([neutral, gesture]). Each route caps its own maxCount, so
+  // this instance limit only needs to be >= the largest of them; lowering it silently 500s the
+  // bigger flow with LIMIT_FILE_COUNT rather than failing anything readable.
+  limits: { fileSize: 4 * 1024 * 1024, files: 5 },
   fileFilter: (_req, file, cb) => {
     const ext = path.extname(file.originalname).toLowerCase();
     // The browser's canvas.toBlob() gives us a real filename+mime; a missing extension is fine

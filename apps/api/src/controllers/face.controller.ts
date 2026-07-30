@@ -31,8 +31,8 @@ import {
   analyzeFace,
   assertFaceEntitlement,
   CHALLENGE_PROMPTS,
-  decodeEmbedding,
   DEFAULT_CONSENT_TEXT,
+  effectiveMatchThreshold,
   encodeEmbedding,
   FACE_MODEL_VERSION,
   faceStorageDir,
@@ -40,8 +40,10 @@ import {
   isFaceFeatureAllowedForOrg,
   isFaceVerificationRequired,
   issueChallenge,
+  matchAgainstEnrollment,
   redeemChallenge,
   removeUserFaceDirectories,
+  scoreQuality,
   similarity,
   storeFaceImage,
   verifyChallengePose,
@@ -142,7 +144,7 @@ const enrollSchema = z.object({ body: z.object({ consent: z.string() }) });
  * penalise. The exact wording shown at the time is copied onto the row, because an admin can
  * edit the settings text later and the record must reflect what this person actually agreed to.
  */
-faceRouter.post("/enroll", preserveTenantContext(faceCaptureUpload.single("capture")), validate(enrollSchema), async (req, res) => {
+faceRouter.post("/enroll", preserveTenantContext(faceCaptureUpload.array("capture", 5)), validate(enrollSchema), async (req, res) => {
   const settings = await getFaceSettings();
   if (!settings.enabled) throw new AppError(403, "Face verification is not enabled for this workspace.");
   // Fail CLOSED: no new biometric data may be collected without the plan entitlement.
@@ -151,49 +153,94 @@ faceRouter.post("/enroll", preserveTenantContext(faceCaptureUpload.single("captu
     throw new AppError(422, "Enrollment requires explicit consent to process your face data.");
   }
 
-  const buffer = requireCapture(req);
-  const analysis = await analyzeFace(buffer);
-  if (analysis.faceCount === 0) throw new AppError(422, "No face was detected — make sure your face is clearly visible and well lit.");
-  if (analysis.faceCount > 1) throw new AppError(422, "More than one face was detected — please make sure you're alone in the frame.");
-  if (analysis.antispoofReal < settings.antispoofThreshold || analysis.livenessScore < settings.livenessThreshold) {
-    throw new AppError(422, "That didn't look like a live capture. Please look directly at the camera rather than holding up a photo or screen.");
+  // Multi-frame enrollment: the client sends several frames from one consented session (a few
+  // seconds of natural variation). Each is validated independently and every usable one becomes a
+  // template — see FaceEnrollmentTemplate's schema comment for why one template was the accuracy
+  // ceiling. A single frame is still accepted, so nothing about the old flow breaks.
+  const frames = requireFrames(req);
+  const usable: Array<{ embedding: number[]; quality: number; buffer: Buffer }> = [];
+  let lastRejection: string | null = null;
+
+  for (const frame of frames) {
+    const analysis = await analyzeFace(frame);
+    if (analysis.faceCount === 0) {
+      lastRejection = "No face was detected — make sure your face is clearly visible and well lit.";
+      continue;
+    }
+    if (analysis.faceCount > 1) {
+      lastRejection = "More than one face was detected — please make sure you're alone in the frame.";
+      continue;
+    }
+    if (analysis.antispoofReal < settings.antispoofThreshold || analysis.livenessScore < settings.livenessThreshold) {
+      lastRejection = "That didn't look like a live capture. Please look directly at the camera rather than holding up a photo or screen.";
+      continue;
+    }
+    const quality = scoreQuality(analysis);
+    if (quality.hint) {
+      lastRejection = quality.hint;
+      continue;
+    }
+    usable.push({ embedding: analysis.embedding, quality: quality.score, buffer: frame });
   }
 
-  const consentText = settings.consentText?.trim() || DEFAULT_CONSENT_TEXT;
-  const referenceImagePath = settings.imageRetentionDays > 0 ? await storeFaceImage(req.user!.id, "reference", buffer) : null;
+  // Enrollment is the one place a weak frame must never be accepted — every future check is
+  // measured against it — so this refuses rather than storing the best of a bad set.
+  if (usable.length === 0) {
+    throw new AppError(422, lastRejection ?? "That capture couldn't be used — please try again.");
+  }
 
-  await prisma.faceEnrollment.upsert({
+  // Highest-quality frame becomes the primary template (and the reference image).
+  usable.sort((a, b) => b.quality - a.quality);
+  const [primary, ...extras] = usable;
+
+  const consentText = settings.consentText?.trim() || DEFAULT_CONSENT_TEXT;
+  const referenceImagePath = settings.imageRetentionDays > 0 ? await storeFaceImage(req.user!.id, "reference", primary.buffer) : null;
+
+  const enrollmentData = {
+    encryptedEmbedding: encodeEmbedding(primary.embedding),
+    modelVersion: FACE_MODEL_VERSION,
+    referenceImagePath,
+    consentAt: new Date(),
+    consentText,
+    consentIp: req.ip ?? null,
+    enrolledById: req.user!.id
+  };
+
+  const enrollment = await prisma.faceEnrollment.upsert({
     where: { userId: req.user!.id },
-    update: {
-      encryptedEmbedding: encodeEmbedding(analysis.embedding),
-      modelVersion: FACE_MODEL_VERSION,
-      referenceImagePath,
-      consentAt: new Date(),
-      consentText,
-      consentIp: req.ip ?? null,
-      enrolledById: req.user!.id
-    },
-    create: {
-      userId: req.user!.id,
-      encryptedEmbedding: encodeEmbedding(analysis.embedding),
-      modelVersion: FACE_MODEL_VERSION,
-      referenceImagePath,
-      consentAt: new Date(),
-      consentText,
-      consentIp: req.ip ?? null,
-      enrolledById: req.user!.id
-    }
+    update: enrollmentData,
+    create: { userId: req.user!.id, ...enrollmentData }
   });
+
+  // Re-enrolling replaces the whole template set — leaving stale templates from a previous
+  // enrollment would silently keep matching against a face the user asked to replace.
+  await prisma.faceEnrollmentTemplate.deleteMany({ where: { enrollmentId: enrollment.id } });
+  if (extras.length > 0) {
+    await prisma.faceEnrollmentTemplate.createMany({
+      data: extras.map((e) => ({
+        enrollmentId: enrollment.id,
+        encryptedEmbedding: encodeEmbedding(e.embedding),
+        modelVersion: FACE_MODEL_VERSION,
+        quality: e.quality
+      }))
+    });
+  }
 
   // Audit records the event and the scores, never the template or the image path.
   await audit(req.user!.id, "face.enrolled", "FaceEnrollment", req.user!.id, {
     modelVersion: FACE_MODEL_VERSION,
-    antispoofReal: analysis.antispoofReal,
-    livenessScore: analysis.livenessScore,
+    templatesStored: usable.length,
+    framesSubmitted: frames.length,
+    bestQuality: primary.quality,
     imageRetained: Boolean(referenceImagePath)
   });
 
-  res.status(201).json({ enrolled: true, consentAt: new Date().toISOString() });
+  res.status(201).json({
+    enrolled: true,
+    consentAt: new Date().toISOString(),
+    templatesStored: usable.length,
+    framesSubmitted: frames.length
+  });
 });
 
 const verifySchema = z.object({
@@ -203,7 +250,10 @@ const verifySchema = z.object({
     challengeId: z.string().uuid().optional().or(z.literal("")),
     /// The active camera's MediaDeviceInfo.label, self-reported by the browser. Recorded as a
     /// review signal (virtual-camera heuristic) — never trusted, never blocking.
-    deviceLabel: z.string().max(255).optional()
+    deviceLabel: z.string().max(255).optional(),
+    /// Client-perceived round trip so far (camera-ready → submit), in ms. Only the browser can
+    /// measure what the human actually waited for; bounded so a bogus value can't skew the p95.
+    clientDurationMs: z.coerce.number().int().min(0).max(600_000).optional()
   })
 });
 
@@ -230,6 +280,7 @@ faceRouter.post("/verify", preserveTenantContext(faceCaptureUpload.array("captur
   const context = req.body.context as FaceContext;
   const userId = req.user!.id;
 
+  const clientDurationMs = req.body.clientDurationMs != null ? Number(req.body.clientDurationMs) : null;
   const deviceLabel = typeof req.body.deviceLabel === "string" && req.body.deviceLabel.trim() ? req.body.deviceLabel.trim() : null;
   const virtualCameraSuspected = Boolean(deviceLabel && VIRTUAL_CAMERA_PATTERN.test(deviceLabel));
 
@@ -252,17 +303,21 @@ faceRouter.post("/verify", preserveTenantContext(faceCaptureUpload.array("captur
   const record = async (
     outcome: FaceOutcome,
     scores: { similarity?: number; antispoofReal?: number; livenessScore?: number },
-    buffer?: Buffer
+    buffer?: Buffer,
+    qualityScore?: number,
+    effectiveThreshold?: number
   ) => {
     // A recent run of failures is what earns a review flag — one bad frame (someone blinked,
-    // a cloud passed the window) is noise, not a signal worth escalating.
+    // a cloud passed the window) is noise, not a signal worth escalating. LOW_QUALITY is excluded
+    // from the streak on purpose: "we couldn't see you, please retake" is not a failed identity
+    // check, and counting it would flag honest people for standing in bad light.
     const recentFailures =
-      outcome === "PASSED"
+      outcome === "PASSED" || outcome === "LOW_QUALITY"
         ? 0
         : await prisma.faceVerificationAttempt.count({
             where: {
               userId,
-              outcome: { not: "PASSED" },
+              outcome: { notIn: ["PASSED", "LOW_QUALITY"] },
               createdAt: { gte: new Date(Date.now() - 15 * 60 * 1000) }
             }
           });
@@ -273,7 +328,7 @@ faceRouter.post("/verify", preserveTenantContext(faceCaptureUpload.array("captur
     const flaggedForReview =
       // Repeated failures escalate as before; a suspected virtual camera flags IMMEDIATELY even
       // on a pass — a pass through an injection tool is precisely the pass worth a human look.
-      (outcome !== "PASSED" && recentFailures + 1 >= settings.maxAttempts) || virtualCameraSuspected;
+      (outcome !== "PASSED" && outcome !== "LOW_QUALITY" && recentFailures + 1 >= settings.maxAttempts) || virtualCameraSuspected;
 
     const attempt = await prisma.faceVerificationAttempt.create({
       data: {
@@ -293,7 +348,10 @@ faceRouter.post("/verify", preserveTenantContext(faceCaptureUpload.array("captur
         challengeInstruction: challengeMetrics?.instruction ?? null,
         challengeYawDelta: challengeMetrics?.yawDelta ?? null,
         challengePitchDelta: challengeMetrics?.pitchDelta ?? null,
-        frameSimilarity: challengeMetrics?.frameSimilarity ?? null
+        frameSimilarity: challengeMetrics?.frameSimilarity ?? null,
+        qualityScore: qualityScore ?? null,
+        effectiveThreshold: effectiveThreshold ?? null,
+        durationMs: clientDurationMs
       }
     });
 
@@ -389,11 +447,32 @@ faceRouter.post("/verify", preserveTenantContext(faceCaptureUpload.array("captur
     });
   }
 
-  const score = await similarity(decodeEmbedding(enrollment.encryptedEmbedding), analysis.embedding);
+  // QUALITY GATE — the last check before matching, and deliberately before it. An unusable frame
+  // (too dark, face too small or off to the side) used to fall through to the matcher and come
+  // back NO_MATCH, i.e. "we don't believe you're you" when the truth was "we couldn't see you".
+  // That single mislabel is most of what made this feature feel hostile, so the frame is judged
+  // for judgeability first and the person is told the one thing to change.
+  const quality = scoreQuality(analysis);
+  if (quality.hint) {
+    const attempt = await record("LOW_QUALITY", { antispoofReal: analysis.antispoofReal, livenessScore: analysis.livenessScore }, buffer, quality.score);
+    return res.status(422).json({
+      outcome: "LOW_QUALITY",
+      attemptId: attempt.id,
+      // Retakes are not failures, so this never counts toward the flag/lockout narrative.
+      message: quality.hint
+    });
+  }
+
+  // Best-of-N across every template stored at enrollment, judged against a threshold that is
+  // never looser than the workspace setting (see effectiveMatchThreshold's header).
+  const [{ score, templatesCompared }, threshold] = await Promise.all([
+    matchAgainstEnrollment(enrollment, analysis.embedding),
+    effectiveMatchThreshold(userId, settings.matchThreshold)
+  ]);
   const scores = { similarity: score, antispoofReal: analysis.antispoofReal, livenessScore: analysis.livenessScore };
 
-  if (score < settings.matchThreshold) {
-    const attempt = await record("NO_MATCH", scores, buffer);
+  if (score < threshold) {
+    const attempt = await record("NO_MATCH", scores, buffer, quality.score, threshold);
     return res.status(422).json({
       outcome: "NO_MATCH",
       attemptId: attempt.id,
@@ -402,10 +481,11 @@ faceRouter.post("/verify", preserveTenantContext(faceCaptureUpload.array("captur
     });
   }
 
-  const attempt = await record("PASSED", scores, buffer);
+  const attempt = await record("PASSED", scores, buffer, quality.score, threshold);
   res.json({
     outcome: "PASSED",
     verificationId: attempt.id,
+    templatesCompared,
     expiresInSeconds: settings.verificationTtlSeconds
   });
 });
@@ -674,7 +754,10 @@ faceRouter.get("/stats", requireAdmin, async (_req, res) => {
   const since = new Date(Date.now() - 90 * 24 * 60 * 60 * 1000);
   const attempts = await prisma.faceVerificationAttempt.findMany({
     where: { createdAt: { gte: since } },
-    select: { outcome: true, similarity: true, virtualCameraSuspected: true, unfamiliarNetwork: true, flaggedForReview: true },
+    select: {
+      outcome: true, similarity: true, virtualCameraSuspected: true, unfamiliarNetwork: true,
+      flaggedForReview: true, durationMs: true, qualityScore: true
+    },
     orderBy: { createdAt: "desc" },
     take: 5000
   });
@@ -707,6 +790,25 @@ faceRouter.get("/stats", requireAdmin, async (_req, res) => {
     }
   }
 
+  // ---- Operational accuracy metrics ----
+  // These are the numbers that make "did that change help?" answerable. Every one is derived
+  // from rows already stored — this is a reporting job, not a data-collection job.
+  //
+  // fnmr is a PROXY, and named honestly: a true false-non-match rate needs ground truth about
+  // who was really at the camera, which no log can have. NO_MATCH / (NO_MATCH + PASSED) is the
+  // best available stand-in, and it's the right trend line even if the absolute value overstates
+  // (a genuine impostor rejection also lands in NO_MATCH).
+  const passed = outcomes.PASSED ?? 0;
+  const noMatch = outcomes.NO_MATCH ?? 0;
+  const lowQuality = outcomes.LOW_QUALITY ?? 0;
+  const judged = passed + noMatch;
+
+  const durations = attempts.map((a) => a.durationMs).filter((d): d is number => typeof d === "number" && d > 0).sort((a, b) => a - b);
+  const percentile = (p: number) => (durations.length === 0 ? null : durations[Math.min(durations.length - 1, Math.floor(durations.length * p))]);
+
+  const qualities = attempts.map((a) => a.qualityScore).filter((q): q is number => typeof q === "number");
+  const avgQuality = qualities.length > 0 ? Number((qualities.reduce((a, b) => a + b, 0) / qualities.length).toFixed(3)) : null;
+
   res.json({
     since: since.toISOString(),
     total: attempts.length,
@@ -714,7 +816,18 @@ faceRouter.get("/stats", requireAdmin, async (_req, res) => {
     flaggedPending,
     virtualCameraSuspected: virtualCamera,
     unfamiliarNetwork: unfamiliar,
-    histogram
+    histogram,
+    accuracy: {
+      /** Rejected as unjudgeable and asked to retake, over all attempts. High = capture UX problem. */
+      retakeRatePct: attempts.length > 0 ? Number(((lowQuality / attempts.length) * 100).toFixed(1)) : null,
+      /** See the note above — a proxy, not a certified FNMR. */
+      fnmrProxyPct: judged > 0 ? Number(((noMatch / judged) * 100).toFixed(1)) : null,
+      avgQuality,
+      /** Client-perceived camera-ready → verdict. The budget is <1s p50 / <2s p95. */
+      timeToVerifyMsP50: percentile(0.5),
+      timeToVerifyMsP95: percentile(0.95),
+      samples: { judged, lowQuality, timed: durations.length }
+    }
   });
 });
 

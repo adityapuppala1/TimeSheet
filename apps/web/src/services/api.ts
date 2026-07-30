@@ -1201,7 +1201,7 @@ export interface FaceStatus {
   maxAttempts: number;
 }
 
-export type FaceOutcome = "PASSED" | "NO_FACE" | "MULTIPLE_FACES" | "NO_MATCH" | "SPOOF_SUSPECTED" | "CHALLENGE_FAILED" | "NOT_ENROLLED" | "ERROR";
+export type FaceOutcome = "PASSED" | "NO_FACE" | "MULTIPLE_FACES" | "NO_MATCH" | "SPOOF_SUSPECTED" | "CHALLENGE_FAILED" | "LOW_QUALITY" | "NOT_ENROLLED" | "ERROR";
 
 export interface FaceChallenge {
   challengeId: string;
@@ -1225,6 +1225,16 @@ export interface FaceStats {
   virtualCameraSuspected: number;
   unfamiliarNetwork: number;
   histogram: FaceStatsBucket[];
+  /** Operational accuracy — the numbers that answer "did that change help?". */
+  accuracy: {
+    retakeRatePct: number | null;
+    /** A proxy, not a certified FNMR — see the server comment for why. */
+    fnmrProxyPct: number | null;
+    avgQuality: number | null;
+    timeToVerifyMsP50: number | null;
+    timeToVerifyMsP95: number | null;
+    samples: { judged: number; lowQuality: number; timed: number };
+  };
 }
 
 export interface FaceReviewAiSummary {
@@ -1275,11 +1285,20 @@ export interface FaceAttemptPage {
 
 export const faceApi = {
   status: async () => (await api.get<FaceStatus>("/face/status")).data,
-  enroll: async (capture: Blob) => {
+  /** Multi-frame enrollment: pass several frames from ONE consented session and each usable one
+   *  becomes a stored template, so a single unlucky frame can't define the person forever. A
+   *  single-frame array still works exactly as before. */
+  enroll: async (captures: Blob[]) => {
     const form = new FormData();
-    form.append("capture", capture, "capture.jpg");
+    captures.forEach((c, i) => form.append("capture", c, `capture-${i}.jpg`));
     form.append("consent", "true");
-    return (await api.post<{ enrolled: boolean; consentAt: string }>("/face/enroll", form, { headers: { "Content-Type": "multipart/form-data" } })).data;
+    return (
+      await api.post<{ enrolled: boolean; consentAt: string; templatesStored: number; framesSubmitted: number }>(
+        "/face/enroll",
+        form,
+        { headers: { "Content-Type": "multipart/form-data" } }
+      )
+    ).data;
   },
   /** Issues the liveness challenge a verification must satisfy while challenge–response is on. */
   challenge: async (context: "TIMESHEET" | "TICKET" | "APPROVAL") =>
@@ -1292,12 +1311,16 @@ export const faceApi = {
     context: "TIMESHEET" | "TICKET" | "APPROVAL";
     challengeId?: string;
     deviceLabel?: string | null;
+    /** Client-perceived ms from camera-ready to submit — the only place the human's actual wait
+     *  can be measured, and what /face/stats reports p50/p95 over. */
+    clientDurationMs?: number;
   }): Promise<FaceVerifyResult> => {
     const form = new FormData();
     params.frames.forEach((frame, index) => form.append("capture", frame, `capture-${index}.jpg`));
     form.append("context", params.context);
     if (params.challengeId) form.append("challengeId", params.challengeId);
     if (params.deviceLabel) form.append("deviceLabel", params.deviceLabel.slice(0, 255));
+    if (params.clientDurationMs != null) form.append("clientDurationMs", String(Math.round(params.clientDurationMs)));
     try {
       return (await api.post<FaceVerifyResult>("/face/verify", form, { headers: { "Content-Type": "multipart/form-data" } })).data;
     } catch (error) {

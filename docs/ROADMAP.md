@@ -597,7 +597,38 @@ visible — this file is a living reference, not a changelog.
   assertions that page 2 returns a genuinely different slice and the total is stable across
   pages (a no-op `skip` is the classic silent pagination bug).
 
-**Open — the biometric accuracy/real-time roadmap** (full research + reasoning in the plan
+### Phase A + B of the biometric roadmap — shipped (2026-07-30)
+
+- ~~Single-template enrollment was the accuracy ceiling~~ — **multi-template enrollment**: the
+  client captures a burst (pressed frame + ~3 more over a second), every usable frame becomes a
+  `FaceEnrollmentTemplate`, and verification takes the best score across all of them. Only ever
+  helps a genuine user; the impostor bar is unchanged. Verified live: 3 templates stored,
+  `templatesCompared: 3` on the next verify.
+- ~~An unusable frame was reported as `NO_MATCH`~~ — new **`LOW_QUALITY`** outcome from a quality
+  gate that runs *before* matching, returning the one thing to change. Excluded from the failure
+  streak, the review flag, and the lockout — a retake is not a failed identity check. This is the
+  fix for "the biometric is not user friendly".
+- **Per-user adaptive threshold** — after 8+ passes, judged against 3 sd below their own mean,
+  **clamped to never fall below the workspace setting** (loosening would admit a lookalike
+  *because* the real user is inconsistent) and capped at 0.95. `effectiveThreshold` is stored per
+  attempt, since a similarity can't be interpreted later without it.
+- **Rolling best-frame capture + live coaching** (Phase B) — the hands-free loop now scores each
+  frame locally, keeps the best of the lock window, and shows pre-upload hints ("Move a little
+  closer", "Make sure you're alone in the frame") instead of a binary verdict after the fact.
+- **Operational metrics** — `GET /face/stats` now returns retake rate, a non-match proxy, average
+  quality, and client-perceived time-to-verify p50/p95, surfaced as tiles with their targets
+  inline. `durationMs` is reported by the browser because only the client can measure what the
+  human actually waited for.
+
+Two bugs the tests caught in this work, both preserved as regression tests:
+- The quality gate was a **weighted sum** where the dimensions are AND conditions — good exposure
+  and framing outvoted a fatal face size (1.8% of frame scored 0.51 and passed). Now per-dimension
+  floors; the score survives only for ranking/telemetry.
+- Exposure was measured over the **whole frame**, so a well-lit person in a dark room was told
+  "too dark"; and **framing was disqualifying**, which refuses usable captures since the model
+  crops to the face box. Now: face-region exposure, and centring is a client nudge only.
+
+**Still open — Phases C, D, E** (full research + reasoning in the plan
 artifact from this session; summary here so it isn't lost with the chat):
 
 - **Accuracy is three axes, not one** — matching (FNMR/FMR), presentation-attack detection

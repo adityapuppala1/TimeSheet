@@ -316,6 +316,55 @@ A flag that nobody reads is not a control, so the review pipeline is push, not p
 - **Model upgrades force re-enrollment.** Embeddings aren't comparable across model versions, so
   `FaceEnrollment.modelVersion` is checked and the UI prompts rather than silently failing.
 
+### Accuracy: what actually determines whether checks pass
+
+Three independent things get called "accuracy", and they have different fixes (the full reasoning
+is in the Phase-A plan; this is what's implemented):
+
+| Axis | What it is | Where it lives |
+|---|---|---|
+| **Matching** | Is this the enrolled person? | Multi-template enrollment + per-user threshold, below |
+| **Presentation attack** | Real face, or a photo/screen? | Anti-spoof + liveness floors |
+| **Injection attack** | Did the frame come from a real camera? | Challenge–response + review signals |
+
+**Multi-template enrollment.** Enrollment captures a short burst (the pressed frame plus ~3 more
+over a second) and stores every usable one as a separate template; verification compares against
+all of them and keeps the best score. This is the single biggest accuracy lever, because with one
+stored template a single unlucky enrollment frame — harsh side light, no glasses that day —
+permanently handicaps every future check, and the only apparent remedy is lowering the threshold,
+which trades away real security to fix a problem that was never in the threshold. Matching against
+more templates only ever helps a genuine user; the bar an impostor must clear is unchanged.
+Re-enrolling replaces the whole set.
+
+**The capture quality gate.** Before matching, a frame is scored for *judgeability* — face size,
+exposure of the face region, framing — and an unusable one comes back `LOW_QUALITY` with the one
+thing to change ("Move a little closer", "Too dark to see you clearly") instead of being scored as
+a match failure. This matters more than it sounds: an unusable frame used to return `NO_MATCH`,
+which tells an honest person *we don't believe you're you* when the truth is *we couldn't see you*.
+`LOW_QUALITY` deliberately does **not** count toward the failure streak, the review flag, or the
+lockout narrative — a retake is not a failed identity check.
+
+Two design points found by testing, both worth preserving:
+- **The gate is per-dimension floors, not a weighted score.** The dimensions are AND conditions;
+  a weighted sum let good exposure and framing outvote a fatal one (a face filling 1.8% of the
+  frame scored 0.51 and passed). The score is still computed, but only for ranking and telemetry.
+- **Exposure is measured over the FACE BOX, not the frame,** and **framing is never
+  disqualifying.** Whole-frame brightness calls a well-lit person in a dark room "too dark"; and
+  since the model crops to the face box, an off-centre face produces an equally good embedding, so
+  rejecting on position refuses usable captures. Centring is a live client nudge only.
+
+**Per-user match threshold.** After 8+ passes, a user is judged against a threshold derived from
+their own passing distribution (3 sd below their mean), **clamped so it can never go below the
+workspace setting** and capped at 0.95. The direction is the whole safety argument: an adaptive
+threshold allowed to loosen would admit a lookalike precisely *because* the real user's captures
+have been inconsistent. Each attempt stores the `effectiveThreshold` it was judged against, since
+a stored similarity is uninterpretable afterwards without it.
+
+**Operational metrics** (Workspace Settings → Face verification, and `GET /face/stats`): retake
+rate (target <15%), non-match rate (target <2%, a *proxy* — a genuine impostor rejection lands
+there too, so read it as a trend), and client-perceived time-to-verify p50/p95 (targets <1s/<2s).
+All are derived from rows already stored.
+
 ### How close is this to Windows Hello / Face ID?
 
 The honest comparison, because it changes what you should expect from each layer:
