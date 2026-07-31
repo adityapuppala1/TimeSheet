@@ -23,6 +23,7 @@ import { AppError } from "../middleware/error.js";
 import { validate } from "../middleware/validate.js";
 import { audit } from "../services/audit.service.js";
 import { buildWorkAttestation, hashPayload, type AttestationPayload } from "../services/attestation.service.js";
+import { renderAttestationPdf } from "../services/attestation-pdf.service.js";
 import { assertTicketVisible } from "../services/ticket.service.js";
 import { getGlobalTicketSettings } from "../services/ticket.service.js";
 
@@ -152,7 +153,13 @@ attestationRouter.get("/:id.pdf", requirePermission(permissions.REPORTS_VIEW), a
 
   res.setHeader("Content-Type", "application/pdf");
   res.setHeader("Content-Disposition", `attachment; filename="attestation-${row.reference}.pdf"`);
-  renderAttestationPdf(res, row.payload as unknown as AttestationPayload, row.status, row.payloadHash);
+
+  // `bufferPages: true` is required for the per-page footer: the renderer only knows the total
+  // page count after all content is laid out, so it walks back over the buffered pages at the end.
+  const doc = new PDFDocument({ size: "A4", margin: 36, bufferPages: true });
+  doc.pipe(res);
+  renderAttestationPdf(doc, row.payload as unknown as AttestationPayload, row.status, row.payloadHash);
+  doc.end();
 });
 
 /** The frozen payload, as a download. Renders from `payload`, never a fresh rebuild — that's the
@@ -297,69 +304,4 @@ function serializeRow(row: any) {
     voidedAt: row.voidedAt,
     voidReason: row.voidReason
   };
-}
-
-/** Same pdfkit conventions as the ticket security report (A4, margin 36) so the two artifacts
- *  look like they came from the same system. */
-function renderAttestationPdf(res: NodeJS.WritableStream, payload: AttestationPayload, status: string, payloadHash: string): void {
-  const doc = new PDFDocument({ size: "A4", margin: 36 });
-  doc.pipe(res);
-
-  const a = payload.attestation;
-  doc.fontSize(18).text("Verified Work Attestation", { continued: false });
-  doc.moveDown(0.2);
-  doc.fontSize(9).fillColor("#666").text(`Reference ${a.reference}  ·  issued ${new Date(a.generatedAt).toLocaleString()}`);
-  if (status === "VOID") {
-    doc.moveDown(0.4);
-    doc.fontSize(12).fillColor("#b00020").text("VOID — this attestation has been withdrawn and must not be relied upon.");
-  }
-  doc.fillColor("#000").moveDown(0.8);
-
-  doc.fontSize(11).text(`Project: ${a.project.code} — ${a.project.name}`);
-  if (a.project.clientName) doc.text(`Client: ${a.project.clientName}`);
-  doc.text(`Period: ${a.period.start} to ${a.period.end}`);
-  if (a.generatedBy) doc.text(`Issued by: ${a.generatedBy}`);
-  doc.moveDown(0.8);
-
-  const s = payload.summary;
-  doc.fontSize(13).text("Summary");
-  doc.moveDown(0.3);
-  doc.fontSize(10);
-  doc.text(`Approved entries: ${s.entryCount}`);
-  doc.text(`Total hours: ${s.totalHours.toFixed(2)}   (billable ${s.billableHours.toFixed(2)})`);
-  doc.text(`Total amount: ${s.totalAmount.toFixed(2)} ${a.currency}`);
-  doc.text(`Contributors: ${s.contributorCount}`);
-  doc.text(`Entries with a biometric identity check: ${s.identityVerifiedEntries} of ${s.entryCount}`);
-  doc.moveDown(0.8);
-
-  doc.fontSize(13).text("Work");
-  doc.moveDown(0.3);
-  doc.fontSize(9);
-  for (const item of payload.workItems) {
-    doc.fillColor("#000").text(`${item.ticketKey ?? "—"}  ${item.ticketTitle}`);
-    doc.fillColor("#444").text(`   ${item.hours.toFixed(2)}h   ${item.amount.toFixed(2)} ${a.currency}`);
-    for (const entry of item.entries) {
-      doc.fillColor("#666").text(
-        `      ${entry.workDate}  ${entry.person}  ${entry.hours.toFixed(2)}h  ${entry.identityVerified ? "[identity verified]" : ""}`
-      );
-    }
-    doc.moveDown(0.25);
-  }
-
-  if (payload.approvals.length > 0) {
-    doc.moveDown(0.5).fillColor("#000").fontSize(13).text("Approvals");
-    doc.moveDown(0.3).fontSize(9).fillColor("#444");
-    for (const ap of payload.approvals) {
-      doc.text(`${ap.approver} — ${ap.entries} entr${ap.entries === 1 ? "y" : "ies"}${ap.identityVerified ? " (identity verified at approval)" : ""}`);
-    }
-  }
-
-  if (payload.caveats.length > 0) {
-    doc.moveDown(0.8).fillColor("#000").fontSize(13).text("Notes");
-    doc.moveDown(0.3).fontSize(8).fillColor("#666");
-    for (const caveat of payload.caveats) doc.text(`• ${caveat}`, { width: 520 });
-  }
-
-  doc.moveDown(0.8).fontSize(7).fillColor("#999").text(`Integrity hash (SHA-256): ${payloadHash}`, { width: 520 });
-  doc.end();
 }

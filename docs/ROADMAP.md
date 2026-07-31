@@ -1036,3 +1036,81 @@ surface in the application**.
 Verified by a 21-check live pass: the separate gate, super-admin-only minting, write-once token,
 unauthenticated read succeeding, SUMMARY withholding per-person detail, the uniform-404 rule
 across every failure mode, and revoke-retains-the-row.
+
+## Platform polish + the AI improvement loop (2026-07-31)
+
+### Workspace navigation, backend health, and the attestation PDF
+
+- ~~15 nav items in one flat list~~ — grouped under **Work / Team / Analytics / Administration /
+  Configuration** headings. Deliberately **static headings, not collapsible sections**: hiding admin
+  nav behind a disclosure costs a click on every visit to save vertical space the sidebar already
+  has, and `responsive.spec.ts` asserts the Workspace-settings link is visible at >=1024px with no
+  interaction. A section whose items are all filtered out by permission is omitted entirely,
+  heading included. The platform-admin console is deliberately left ungrouped — three items don't
+  need wayfinding.
+  *(Auto-slide-in on small screens and auto-close on menu click already worked; not rebuilt.)*
+- ~~A dead backend left the UI silently lying~~ — new escalating health gate: a warning strip on the
+  first failed probe, a full blocking overlay after three, auto-recovering the moment the API
+  answers again. It **overlays rather than unmounts**, so in-progress form state survives an outage.
+  Deliberately escalating rather than blocking immediately — one dropped request is usually a
+  sleeping laptop or a rolling deploy, not an outage worth destroying someone's work over.
+  - **Gotcha found:** `/health` is not under `/api`, and the Vite dev proxy only forwards `/api` —
+    a browser probe to bare `/health` would have been served by Vite and returned a **healthy 200
+    while the API was down**. Added `GET /api/health` alongside it.
+  - Also closed two adjacent gaps: axios had **no timeout** (a dead backend hung until the
+    browser's own very long default gave up) and the app had **no error boundary at all**, so any
+    render throw blanked the page with no explanation and no recovery path.
+- ~~The attestation PDF clipped~~ — it drew one continuous flow with **no page-break guards**, so
+  any attestation longer than a page silently dropped the rest of the work it was attesting to.
+  Rewritten into `attestation-pdf.service.ts` with real page breaks, repeating table headers,
+  fixed-position columns (it previously indented with literal spaces, which drifts with name
+  width), a proper VOID banner, per-page footers, and thousands-separated money. It also now calls
+  `doc.font()` — **no PDF in this repo had ever used bold**, so hierarchy came only from size and
+  colour, which prints washed out. Covered by layout tests that deliberately overflow the page,
+  since the clipping bug is invisible on happy-path sample data.
+
+### LangChain / LangGraph — evaluated, recommendation is **not yet**
+
+Researched against the actual code rather than the marketing:
+
+- All 18 AI capabilities are **single-shot** prompt->response. Not one calls `callChat` twice;
+  nothing chains one capability's output into another.
+- **Zero tool-calling** anywhere. **Zero retrieval/RAG** — the only embeddings in the system are the
+  encrypted face templates, which are deliberately not searchable.
+- The hand-rolled `callChat` already provides multi-provider BYOK, structured output on both
+  provider paths, vision, budget enforcement, per-feature toggles and usage logging in ~200
+  auditable lines.
+
+Wrapping 18 single-shot calls in LangChain would replace working, minimal, auditable code with a
+heavy dependency for no functional gain. The genuine gaps in the current layer — no retry/backoff,
+no request timeout — are tens of lines, not a framework.
+
+**The one thing that would change this verdict:** `answerWorkspaceQuestion` stuffs the 150
+most-recently-updated tickets into the prompt, truncates each description to 200 chars, and **never
+uses the question text to decide which tickets to include** — so ticket #151 is invisible and no
+prompt tuning can fix it. Making "Ask AI" correct at scale is a retrieval problem, and *that* is
+where LangGraph (retrieve -> rerank -> answer -> verify) would earn its place. Even then, a MySQL
+full-text prefilter plus reranking may be sufficient. Revisit only when that project is committed to.
+
+### The AI improvement loop — the gap this phase opens up
+
+The LangSmith "improve agents autonomously" loop (Build -> Test -> Deploy -> Monitor -> Govern) maps
+onto this product almost exactly, and **the loop is broken at precisely one joint**:
+
+| Loop corner | Status here |
+|---|---|
+| **Govern** | Already the strongest corner — BYOK multi-provider gateway with live budget ceilings |
+| **Build** | 18 capabilities, all wired and in use |
+| **Monitor** | Feedback *collected* — and discarded |
+| **Test** | Does not exist |
+| **Deploy** | Prompts hardcoded; changing one word requires a redeploy |
+
+`Ticket.aiFeedback` is written by exactly one endpoint and **read nowhere in `apps/api/src`** —
+verified by exhaustive grep. An admin clicking thumbs-down writes four bytes that nothing will ever
+look at again. `AIUsageLog` has no correctness column at all, only cost. There is no dataset,
+golden set, eval, or prompt-version concept anywhere.
+
+Being built next, phased: capture what the AI produced -> surface accuracy honestly (headline metric
+is **parse-failure rate**, which is unbiased and already happening but currently thrown away, *not*
+thumbs-up rate, which has severe selection bias) -> golden datasets from real thumbs-down cases ->
+prompt versioning without a deploy -> an eval runner.

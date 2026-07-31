@@ -7,6 +7,12 @@ import { platformAdminAuthApi } from "../services/platform-admin-api";
 import { usePlatformAdminAuthStore } from "../store/platform-admin-auth";
 import { cn } from "../lib/utils";
 
+/**
+ * Deliberately NOT grouped into sections, unlike the tenant sidebar (components/Sidebar.tsx, which
+ * groups its 15 items under Work/Team/Analytics/Administration/Configuration headings). Three
+ * items don't need wayfinding — headings here would add more chrome than they remove confusion.
+ * Revisit only if this console grows past ~7 entries.
+ */
 const NAV = [
   { to: "/platform-admin", label: "Organizations", icon: Building2, end: true },
   { to: "/platform-admin/plan-tiers", label: "Plan tiers", icon: SlidersHorizontal, end: false },

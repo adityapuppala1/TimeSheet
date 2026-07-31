@@ -23,6 +23,8 @@ import { usePlatformAdminAuthStore } from "./store/platform-admin-auth";
 import { Toaster } from "./components/ui/toaster";
 import { TooltipProvider } from "./components/ui/tooltip";
 import { Skeleton } from "./components/ui/skeleton";
+import { BackendHealthGate } from "./components/BackendHealthGate";
+import { ErrorBoundary } from "./components/ErrorBoundary";
 
 const Landing = lazy(() => import("./pages/Landing").then((m) => ({ default: m.Landing })));
 const Login = lazy(() => import("./pages/Login").then((m) => ({ default: m.Login })));
@@ -111,15 +113,23 @@ const router = createBrowserRouter([
 
 export function App() {
   return (
-    <QueryClientProvider client={queryClient}>
-      <TooltipProvider delayDuration={200}>
-        <AuthBootstrap />
-        <PlatformAdminAuthBootstrap />
-        <ThemeBootstrap />
-        <RouterProvider router={router} />
-        <Toaster />
-      </TooltipProvider>
-    </QueryClientProvider>
+    // ErrorBoundary is outermost so it catches a render throw from ANY of the providers or routes
+    // below it — inside the QueryClientProvider it would miss failures in the provider tree itself.
+    <ErrorBoundary>
+      <QueryClientProvider client={queryClient}>
+        <TooltipProvider delayDuration={200}>
+          <AuthBootstrap />
+          <PlatformAdminAuthBootstrap />
+          <ThemeBootstrap />
+          {/* Mounted at the app root, not inside AppLayout, so the outage overlay also covers
+              /login, the public landing page, and the platform-admin console — all of which are
+              equally useless with the API down. */}
+          <BackendHealthGate />
+          <RouterProvider router={router} />
+          <Toaster />
+        </TooltipProvider>
+      </QueryClientProvider>
+    </ErrorBoundary>
   );
 }
 

@@ -177,7 +177,23 @@ app.use(
 );
 app.use(morgan("tiny"));
 
-app.get("/health", (_req, res) => res.json({ ok: true }));
+/**
+ * Liveness probes. Both mounted here, BEFORE `app.use("/api", resolveTenant)` and before every
+ * authed router, so they answer with no session, no tenant subdomain and no database round-trip —
+ * a health check that needs the database can't tell you the process is up when the database is
+ * the thing that's down.
+ *
+ * WHY two paths for one handler:
+ *  - `/health` is the infra/k8s/load-balancer probe (unchanged, do not remove).
+ *  - `/api/health` is for the BROWSER (see apps/web/src/hooks/use-backend-health.ts). The web app
+ *    talks to the API on the relative `/api` prefix, and in dev the Vite proxy forwards ONLY
+ *    `/api` and `/uploads` (apps/web/vite.config.ts). A browser probe to bare `/health` would be
+ *    served by Vite itself and return 200 with the SPA's index.html — i.e. it would report
+ *    "healthy" while the API was completely down, which is worse than having no check at all.
+ */
+const healthHandler = (_req: express.Request, res: express.Response) => res.json({ ok: true });
+app.get("/health", healthHandler);
+app.get("/api/health", healthHandler);
 
 // SSO start/callback deliberately mounted BEFORE the blanket tenant-resolution middleware —
 // see controllers/sso.controller.ts's header comment for why these two routes resolve their

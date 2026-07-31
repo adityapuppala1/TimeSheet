@@ -61,11 +61,55 @@ export function apiUrl(path: string): string {
  * visible here, and it's held in memory only (see store/auth.ts) — never localStorage — to
  * shrink the window an XSS payload could steal it in.
  */
-export const api = axios.create({ baseURL: API_BASE_URL, withCredentials: true });
+/** Without this a dead backend leaves requests hanging until the browser's own (very long)
+ *  default gives up, so the UI just sits there spinning with no way to tell the user why.
+ *  Generous enough for the slowest real endpoint here (face verification runs wasm inference
+ *  server-side and PDF/report exports stream). */
+const REQUEST_TIMEOUT_MS = 30_000;
+
+export const api = axios.create({ baseURL: API_BASE_URL, withCredentials: true, timeout: REQUEST_TIMEOUT_MS });
 
 let inMemoryAccessToken: string | null = null;
 export function setAccessToken(token: string | null) {
   inMemoryAccessToken = token;
+}
+
+/**
+ * Lets the health monitor (hooks/use-backend-health.ts) learn about backend unreachability from
+ * REAL traffic, not just its own poll — so a user who clicks Save into a dead API gets the warning
+ * immediately instead of waiting up to a full poll interval.
+ *
+ * Deliberately a tiny subscriber list rather than importing a store here: this module is imported
+ * by essentially every page, and reaching into app state from the HTTP layer would create an
+ * import cycle (store -> api -> store).
+ */
+type ReachabilityListener = (reachable: boolean) => void;
+const reachabilityListeners = new Set<ReachabilityListener>();
+
+export function onBackendReachabilityChange(listener: ReachabilityListener): () => void {
+  reachabilityListeners.add(listener);
+  return () => reachabilityListeners.delete(listener);
+}
+
+function notifyReachability(reachable: boolean) {
+  for (const listener of reachabilityListeners) {
+    try {
+      listener(reachable);
+    } catch {
+      // A misbehaving listener must never break the HTTP response it's observing.
+    }
+  }
+}
+
+/** True when the failure means "couldn't reach/att the server at all" rather than "the server
+ *  answered with an error". A 500 means the backend is UP and talking — that's an application
+ *  bug for the calling code to surface, not an outage the health gate should block the whole app
+ *  for. Only a missing response (DNS/ECONNREFUSED/timeout/offline) counts. */
+export function isBackendUnreachableError(error: unknown): boolean {
+  const err = error as { response?: unknown; code?: string; message?: string } | undefined;
+  if (!err) return false;
+  if (err.response) return false;
+  return err.code === "ERR_NETWORK" || err.code === "ECONNABORTED" || err.code === "ETIMEDOUT" || err.message === "Network Error";
 }
 
 api.interceptors.request.use((config) => {
@@ -84,8 +128,15 @@ async function refreshAccessToken(): Promise<string> {
 }
 
 api.interceptors.response.use(
-  (response) => response,
+  (response) => {
+    // Any successful response proves the backend is reachable — lets the gate clear itself the
+    // instant real traffic recovers, without waiting for the next poll tick.
+    notifyReachability(true);
+    return response;
+  },
   async (error) => {
+    if (isBackendUnreachableError(error)) notifyReachability(false);
+
     const original = error.config as (AxiosRequestConfig & { _retry?: boolean }) | undefined;
     const url = original?.url ?? "";
     if (
