@@ -896,3 +896,48 @@ existing PR summary).
   persisted anywhere per-event (only the aggregate status on the webhook row), so "every webhook
   event fired about this ticket" isn't reconstructable without logging every attempt, not just
   failures; revisit if that gap turns out to matter in practice.
+
+### Phase 4: deeper AI, shipped conservatively (2026-07-31)
+
+The last phase of the smarter-SaaS plan — held back deliberately from the 2026-07-30 pass since
+it's the highest-uncertainty tier (prompt quality, cost, and — for the last item — real
+false-positive risk to developer trust). All four gated behind their own opt-in toggle, all off
+by default, same "narrate/suggest, never decide/act" discipline as every earlier AI feature here.
+
+- ~~No cross-signal "what keeps breaking" view~~ — `generateBugPatternDigest` +
+  `workers/bug-pattern-digest.worker.ts` (monthly, 1st @ 09:00): recurring CI failures by
+  provider/branch, tickets accumulating the most failed test runs, and security-finding hotspots
+  by repository, cross-referenced into one narrative. Monthly rather than weekly — a trend needs
+  a longer window than a week to mean anything. Same "given numbers only" prompt discipline as
+  every other digest.
+- ~~Assignee suggestions were unexplained numbers~~ — `explainAssigneeSuggestion` narrates
+  (never re-ranks) the existing deterministic `GET /tickets/suggest-assignee` ranking, in one
+  sentence, when a ticket title is available for context.
+- ~~Nothing nudged a stale ticket beyond the SLA breach notification~~ — a dismissible AI-suggested
+  next action, surfaced from the *existing* SLA sweep (`ticket-sla.service.ts`) as its own
+  notification (`ticket.stale_nudge`) rather than a new cron job, so an AI failure never affects
+  whether the real breach notification goes out.
+- ~~PR review was summary-only~~ — `reviewPullRequestDiff` posts actual per-line comments on a
+  PR's diff (`git-provider.service.ts#postGitHubPullRequestReview`, `event: "COMMENT"` —
+  commentary alongside a human review, never a merge-blocking verdict). Separate toggle from the
+  existing summary feature on purpose. Shipped deliberately conservative: skips diffs over 15
+  files or 150 changed lines (falls back to summary-only), caps 5 comments per PR, and — the
+  actual anti-hallucination gate — every returned `(path, line)` is validated against the PR's
+  real diff hunks before being trusted; a claimed line that was never part of the diff is
+  silently dropped rather than posted (GitHub's own API would 422 on it anyway, so this is
+  defense in depth, not the only check). Covered by unit tests specifically for this validation
+  and for the size-cap skip, since this is the one feature in the whole plan with real
+  developer-trust risk if the safety net is subtly wrong.
+- Found and fixed two adjacent gaps while wiring the toggles in: `facePolicyCopilotEnabled`
+  (from the 2026-07-30 face-verification session) and `emailSecurityWeeklyDigest` had toggles
+  that worked server-side but were never actually reachable from Workspace Settings' UI —
+  added alongside this phase's own four new toggles rather than left to rot further.
+
+Verified: 85/85 unit tests (4 new, targeting the diff-validation logic specifically), full
+Playwright suite, both workspaces lint clean. Live-verified the AI-reasoned assignee suggestion's
+graceful-degradation path end-to-end against this dev environment's actual (non-functional)
+AI credentials — confirmed it degrades to `narrative: null` without breaking the underlying
+deterministic suggestions, rather than erroring the whole request. The bug-pattern digest and
+stale-ticket nudge share the identical `preflight`/`callChat` failure path, structurally verified
+the same way (lint, unit-adjacent review) rather than independently live-triggered, since neither
+has a manual-trigger endpoint the way `/face/auto-triage` does.

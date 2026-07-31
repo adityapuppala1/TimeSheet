@@ -704,6 +704,24 @@ model GlobalAISettings {
   /// because picking a threshold is a statistics problem and a model's opinion about it would be
   /// less reliable and less auditable than arithmetic.
   facePolicyCopilotEnabled    Boolean    @default(false)
+  /// Gates ai.service.ts#generateBugPatternDigest — a monthly "what keeps breaking" narrative
+  /// over recurring TestRun failures, tickets accumulating the most failed runs, and
+  /// SecurityFinding clusters by repository. Pure aggregation of data already collected; the AI
+  /// only narrates the counts, same discipline every other digest in this app follows.
+  bugPatternDigestEnabled     Boolean    @default(false)
+  /// Gates an optional AI-explained tier on top of GET /tickets/suggest-assignee's existing
+  /// deterministic ranking (open load + prior resolved-here count) — narrates WHY the top
+  /// candidate was ranked there, it never changes the ranking itself.
+  assigneeSuggestionAiEnabled Boolean    @default(false)
+  /// Gates a dismissible AI-suggested next action on tickets the SLA sweep already flags as
+  /// stale — surfaced from the existing ticket-escalation worker's sweep, not a new cron job.
+  /// Never auto-acts, matching every other AI feature's posture in this app.
+  staleTicketNudgeEnabled     Boolean    @default(false)
+  /// Separate from aiPrReviewSummaryEnabled on purpose — deeper, per-line review comments on a
+  /// PR's actual diff carry real false-positive risk (an AI comment that's wrong or noisy erodes
+  /// developer trust fast), so this must be its own explicit opt-in, never bundled with the
+  /// lower-risk 2-3 sentence summary feature.
+  aiPrInlineReviewEnabled     Boolean    @default(false)
   model                       String     @default("claude-haiku-4-5") @db.VarChar(80)
   confidenceThreshold         Float      @default(0.6)
   monthlyBudgetUsd            Decimal?   @db.Decimal(10, 2)
@@ -795,6 +813,13 @@ model GlobalNotificationSettings {
   emailFaceDataDeleted        Boolean @default(true)
   emailFaceEntitlementLost    Boolean @default(true)
   emailIdentityWeeklyDigest   Boolean @default(false)
+
+  /// Two-layer gating, same as emailSecurityWeeklyDigest above: GlobalAISettings decides whether
+  /// the underlying worker runs at all, these decide whether email actually sends. Off by default
+  /// like every other digest — the in-app notification always fires regardless.
+  emailBugPatternDigest Boolean @default(false)
+  /// Same convention — see workers/ticket-escalation.worker.ts's stale-ticket sweep.
+  emailTicketStaleNudge Boolean @default(true)
 
   /// Hour (0–23, server local time) for the "log today's time" reminder.
   dailyReminderHour        Int     @default(16)

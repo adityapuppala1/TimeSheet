@@ -28,8 +28,8 @@ import { tenantContext } from "../config/tenant-context.js";
 import { resolveActiveOrgBySlug } from "../middleware/tenant.js";
 import { AppError } from "../middleware/error.js";
 import { decryptSecret } from "../utils/encryption.js";
-import { fetchGitHubPullRequestFiles, GIT_INTEGRATION_SYSTEM_EMAIL } from "../services/git-provider.service.js";
-import { summarizePullRequest } from "../services/ai.service.js";
+import { fetchGitHubPullRequestFiles, GIT_INTEGRATION_SYSTEM_EMAIL, postGitHubPullRequestReview } from "../services/git-provider.service.js";
+import { reviewPullRequestDiff, summarizePullRequest } from "../services/ai.service.js";
 
 export const gitWebhookRouter = Router();
 
@@ -170,6 +170,22 @@ gitWebhookRouter.post("/webhook/:orgSlug", express.raw({ type: "application/json
                 body: `<p><strong>AI PR-review summary</strong> (${riskBadge} risk):</p><p>${result.summary}</p><p><em>Review focus: ${result.reviewFocus}</em></p>`
               }
             });
+
+            // Deeper, separately-toggled inline review — its own try/catch so a failure here
+            // (disabled, budget cap, diff too large, GitHub API error) never affects whether the
+            // summary above already posted.
+            try {
+              const inlineReview = await reviewPullRequestDiff({
+                title: payload.pull_request.title,
+                filesChanged: files,
+                ticketKey
+              });
+              if (inlineReview && inlineReview.comments.length > 0) {
+                await postGitHubPullRequestReview(accessToken, payload.repository.full_name, payload.pull_request.number, inlineReview.comments);
+              }
+            } catch (error) {
+              console.warn(`[git-webhook] inline AI PR review failed for ${payload.repository.full_name}#${payload.pull_request.number}: ${(error as Error).message}`);
+            }
           } catch {
             // Same "log and move on" posture as maybePostCiFailureTriageComment's caller — a
             // disabled toggle, a budget cap, or a transient GitHub API error should never turn

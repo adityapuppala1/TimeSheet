@@ -10,6 +10,7 @@
  */
 import { prisma } from "../config/prisma.js";
 import { env } from "../config/env.js";
+import { suggestStaleTicketNextAction } from "./ai.service.js";
 import { dispatchNotification } from "./notify.service.js";
 import { templates } from "./mail-templates.js";
 import { audit } from "./audit.service.js";
@@ -51,7 +52,7 @@ export async function processTicketSlaSweep(now: Date = new Date()) {
       dueAt: { lte: now },
       deletedAt: null
     },
-    include: { assignee: true, reporter: true },
+    include: { assignee: true, reporter: true, _count: { select: { comments: true, branches: true } } },
     take: 200
   });
 
@@ -114,6 +115,41 @@ export async function processTicketSlaSweep(now: Date = new Date()) {
           }
         }
       });
+    }
+
+    // Best-effort, opt-in AI nudge — its own notification, separate from the deterministic
+    // breach notification above, so an AI failure/timeout never affects whether that one goes
+    // out. Only fires when there's actually someone to send it to.
+    if (ticket.assignee) {
+      try {
+        const suggestion = await suggestStaleTicketNextAction({
+          ticketTitle: ticket.title,
+          ticketType: ticket.type,
+          priority: ticket.priority,
+          hoursOverdue,
+          commentCount: ticket._count.comments,
+          hasLinkedBranch: ticket._count.branches > 0
+        });
+        if (suggestion) {
+          await dispatchNotification({
+            userId: ticket.assignee.id,
+            category: "ticket.stale_nudge",
+            title: `Suggested next step: ${ticket.key}`,
+            body: suggestion,
+            link: `/app/tickets?open=${ticket.id}`,
+            email: {
+              templateKey: "ticket.stale_nudge",
+              vars: { assigneeName: ticket.assignee.name, ticketKey: ticket.key, title: ticket.title, suggestion },
+              fallback: {
+                subject: `Suggested next step — ${ticket.key}`,
+                html: templates.ticketStaleNudge({ assigneeName: ticket.assignee.name, ticketKey: ticket.key, title: ticket.title, suggestion })
+              }
+            }
+          });
+        }
+      } catch (error) {
+        console.warn(`[ticket-sla] stale-ticket AI nudge failed for ticket ${ticket.id}: ${(error as Error).message}`);
+      }
     }
 
     if (willEscalate && target) {

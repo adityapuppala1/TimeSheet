@@ -1012,8 +1012,10 @@ export interface AssigneeSuggestion {
 }
 
 export const ticketApi = {
-  suggestAssignee: async (projectId: string, moduleId?: string) =>
-    (await api.get<{ suggestions: AssigneeSuggestion[] }>("/tickets/suggest-assignee", { params: { projectId, moduleId } })).data,
+  /** `title` is optional context for the AI narration only (assigneeSuggestionAiEnabled) — the
+   *  ranking itself never depends on it. */
+  suggestAssignee: async (projectId: string, moduleId?: string, title?: string) =>
+    (await api.get<{ suggestions: AssigneeSuggestion[]; narrative: string | null }>("/tickets/suggest-assignee", { params: { projectId, moduleId, title } })).data,
   list: async (params?: {
     status?: string;
     priority?: string;

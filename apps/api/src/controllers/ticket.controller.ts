@@ -34,6 +34,7 @@ import { dispatchNotification } from "../services/notify.service.js";
 import { templates } from "../services/mail-templates.js";
 import { buildTicketSecurityReport, sendTicketClosedDigest } from "../services/security-report.service.js";
 import { buildTicketLineage } from "../services/ticket-lineage.service.js";
+import { explainAssigneeSuggestion } from "../services/ai.service.js";
 import { dispatchOutboundWebhooks } from "../services/webhook-dispatch.service.js";
 import { createGitHubBranch, getGitAccessTokenOrNull, listGitHubRepos } from "../services/git-provider.service.js";
 import {
@@ -185,7 +186,21 @@ ticketRouter.get("/suggest-assignee", requirePermission(permissions.TICKETS_WRIT
     .sort((a, b) => b.score - a.score)
     .slice(0, 3);
 
-  res.json({ suggestions: ranked });
+  // Optional AI narration of the ranking above — never re-ranks, only explains. Best-effort:
+  // AI off/over budget/unparseable all fall through to `null`, same posture as the face
+  // policy-copilot's narrative (the deterministic suggestions above stand alone either way).
+  let narrative: string | null = null;
+  const title = typeof req.query.title === "string" ? req.query.title.trim() : "";
+  if (ranked.length > 0 && title) {
+    try {
+      narrative = await explainAssigneeSuggestion({ candidates: ranked, ticketTitle: title });
+    } catch (error) {
+      console.warn(`[ticket] assignee-suggestion AI narration failed: ${(error as Error).message}`);
+      narrative = null;
+    }
+  }
+
+  res.json({ suggestions: ranked, narrative });
 });
 
 ticketRouter.get("/:id", requirePermission(permissions.TICKETS_VIEW), async (req, res) => {

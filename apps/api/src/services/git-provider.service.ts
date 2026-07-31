@@ -193,6 +193,43 @@ export async function fetchGitHubPullRequestFiles(
   return files.map((f) => ({ path: f.filename, patch: f.patch }));
 }
 
+/**
+ * Posts a GitHub PR review with per-line comments — the write path
+ * ai.service.ts#reviewPullRequestDiff's inline-review feature needs. `event: "COMMENT"`
+ * deliberately, never `"REQUEST_CHANGES"` or `"APPROVE"` — an AI opinion should read as
+ * commentary sitting alongside human review, not as a merge-blocking verdict or an approval.
+ * Every `(path, line)` pair reaching this function has already been validated against the PR's
+ * actual diff hunks by the caller; GitHub's own API would 422 on an invalid one regardless, so
+ * this is defense in depth, not the only check.
+ */
+export async function postGitHubPullRequestReview(
+  accessToken: string,
+  fullName: string,
+  prNumber: number,
+  comments: Array<{ path: string; line: number; body: string }>
+): Promise<void> {
+  if (comments.length === 0) return;
+
+  const response = await fetch(`${GITHUB_API_BASE}/repos/${fullName}/pulls/${prNumber}/reviews`, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${accessToken}`,
+      Accept: "application/vnd.github+json",
+      "X-GitHub-Api-Version": "2022-11-28",
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify({
+      event: "COMMENT",
+      body: "AI-suggested review — commentary alongside your own review, not a verdict.",
+      comments: comments.map((c) => ({ path: c.path, line: c.line, body: c.body }))
+    })
+  });
+  if (!response.ok) {
+    const body = (await response.json().catch(() => ({}))) as { message?: string };
+    throw new AppError(response.status, `GitHub API error posting PR review: ${body.message ?? response.statusText}`);
+  }
+}
+
 /** Fetches a repo file's raw text content at `ref` (branch/SHA, defaults to the repo's default
  *  branch), or `null` if it doesn't exist — used for CODEOWNERS lookup below. GitHub's contents
  *  API base64-encodes file content; `githubGet` can't be reused as-is since a 404 here is an

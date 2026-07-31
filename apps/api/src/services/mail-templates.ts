@@ -262,6 +262,16 @@ export const templates = {
         paragraph(button("Review ticket", appUrl("/app/tickets"), ACCENT))
     ),
 
+  ticketStaleNudge: (params: { assigneeName: string; ticketKey: string; title: string; suggestion: string }) =>
+    shell(
+      { title: `Suggested next step — ${params.ticketKey}`, preheader: "AI-suggested next action for a stale ticket.", accentColor: ACCENT },
+      heading("A suggested next step") +
+        paragraph(`${escape(params.assigneeName.split(" ")[0])}, "<strong>${escape(params.title)}</strong>" (${escape(params.ticketKey)}) just missed its SLA — here's one concrete idea:`) +
+        infoCard([["Suggestion", escape(params.suggestion)]], ACCENT) +
+        paragraph(button("Review ticket", appUrl("/app/tickets"), ACCENT)) +
+        paragraph(`<span style="color:${MUTED};">AI-generated from the ticket's own stats (priority, comment count, whether a branch is linked) — turn it off anytime in Workspace Settings → AI.</span>`)
+    ),
+
   ticketReceivedViaEmail: (params: { senderName: string; ticketKey: string; title: string; priority: string }) =>
     shell(
       { title: `We received your report — ${params.ticketKey}`, preheader: "Our team has been notified and will follow up." },
@@ -292,6 +302,15 @@ export const templates = {
         paragraph(escape(params.summary)) +
         paragraph(button("Open Security insights", appUrl("/app/security-insights"))) +
         paragraph(`<span style="color:${MUTED};">AI-generated from this week's ingested findings — turn it off anytime in Workspace Settings → AI.</span>`)
+    ),
+
+  bugPatternDigest: (params: { periodLabel: string; summary: string }) =>
+    shell(
+      { title: `What kept breaking — ${params.periodLabel}`, preheader: "AI-authored recap of recurring CI failures and security-finding hotspots." },
+      heading(`What kept breaking — ${escape(params.periodLabel)}`) +
+        paragraph(escape(params.summary)) +
+        paragraph(button("Open Tickets", appUrl("/app/tickets"))) +
+        paragraph(`<span style="color:${MUTED};">AI-generated from this period's recurring test-run failures and security findings — turn it off anytime in Workspace Settings → AI.</span>`)
     ),
 
   ticketNeedsReview: (params: { targetName: string; ticketKey: string; title: string; senderEmail: string; confidence: number }) =>

@@ -178,6 +178,12 @@ export interface NotificationPreferences {
   emailFaceEntitlementLost: boolean;
   /** Weekly identity-assurance digest to every ADMIN/SUPER_ADMIN — deterministic stats, no AI. */
   emailIdentityWeeklyDigest: boolean;
+  /** Monthly "what kept breaking" digest — see workers/bug-pattern-digest.worker.ts. Gated
+   *  alongside GlobalAISettings.bugPatternDigestEnabled. */
+  emailBugPatternDigest: boolean;
+  /** AI-suggested next action when the SLA sweep flags a ticket as stale. Gated alongside
+   *  GlobalAISettings.staleTicketNudgeEnabled. */
+  emailTicketStaleNudge: boolean;
 }
 
 export const notificationPreferenceKeys: ReadonlyArray<keyof NotificationPreferences> = [
@@ -204,7 +210,9 @@ export const notificationPreferenceKeys: ReadonlyArray<keyof NotificationPrefere
   "emailFaceReviewOverdue",
   "emailFaceDataDeleted",
   "emailFaceEntitlementLost",
-  "emailIdentityWeeklyDigest"
+  "emailIdentityWeeklyDigest",
+  "emailBugPatternDigest",
+  "emailTicketStaleNudge"
 ];
 
 /** Workspace-wide settings: notification toggles + reminder schedule + BCC behavior. */
@@ -298,6 +306,21 @@ export interface GlobalAISettings {
   /** Gates ai.service.ts#summarizeFaceReviewAttempt — on-demand AI brief for a flagged
    *  identity-check review. Attempt metadata only; captured images/templates never leave the server. */
   faceReviewSummaryEnabled: boolean;
+  /** Gates ai.service.ts#explainThresholdRecommendation — narrates (never sets) the
+   *  deterministically-computed face-match threshold recommendation. */
+  facePolicyCopilotEnabled: boolean;
+  /** Gates ai.service.ts#generateBugPatternDigest — monthly "what keeps breaking" recap over
+   *  recurring CI failures and security-finding hotspots. See workers/bug-pattern-digest.worker.ts. */
+  bugPatternDigestEnabled: boolean;
+  /** Gates ai.service.ts#explainAssigneeSuggestion — narrates (never re-ranks) the deterministic
+   *  suggest-assignee ranking on ticket creation. */
+  assigneeSuggestionAiEnabled: boolean;
+  /** Gates a dismissible AI-suggested next action on tickets the SLA sweep already flags as
+   *  stale. Never auto-acts. */
+  staleTicketNudgeEnabled: boolean;
+  /** Gates per-line AI review comments on a PR's actual diff — deeper and riskier than
+   *  aiPrReviewSummaryEnabled's 2-3 sentence summary, so its own explicit opt-in. */
+  aiPrInlineReviewEnabled: boolean;
   model: string;
   confidenceThreshold: number;
   monthlyBudgetUsd: number | null;

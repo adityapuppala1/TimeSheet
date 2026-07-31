@@ -40,7 +40,9 @@ export type NotificationCategory =
   | "face.review_overdue"
   | "face.data_deleted"
   | "face.entitlement_lost"
-  | "digest.identity_weekly";
+  | "digest.identity_weekly"
+  | "digest.bug_pattern"
+  | "ticket.stale_nudge";
 
 interface EmailPayload {
   templateKey: string;
@@ -83,7 +85,9 @@ const SETTINGS_FIELD: Record<NotificationCategory, string> = {
   "face.review_overdue": "emailFaceReviewOverdue",
   "face.data_deleted": "emailFaceDataDeleted",
   "face.entitlement_lost": "emailFaceEntitlementLost",
-  "digest.identity_weekly": "emailIdentityWeeklyDigest"
+  "digest.identity_weekly": "emailIdentityWeeklyDigest",
+  "digest.bug_pattern": "emailBugPatternDigest",
+  "ticket.stale_nudge": "emailTicketStaleNudge"
 };
 
 const GLOBAL_ID = "global";
