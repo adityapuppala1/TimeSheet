@@ -441,7 +441,9 @@ export function Insights() {
         <Card>
           <CardHeader>
             <CardTitle className="flex items-center gap-2 text-base"><DollarSign className="h-4 w-4 text-primary" />Cost per ticket</CardTitle>
-            <CardDescription>Opt-in — computed from logged hours x each contributor's hourly rate.</CardDescription>
+            <CardDescription>
+              Opt-in — approved, billable hours only, priced at the rate frozen when each entry was approved.
+            </CardDescription>
           </CardHeader>
           <CardContent className="grid gap-4">
             {costInsights.isLoading && <Skeleton className="h-24 w-full" />}
@@ -449,7 +451,7 @@ export function Insights() {
               <>
                 <div className="grid gap-4 sm:grid-cols-2">
                   <div className="rounded-lg border border-border bg-muted/30 p-4">
-                    <p className="text-xs uppercase text-muted-foreground">Total cost (top tickets)</p>
+                    <p className="text-xs uppercase text-muted-foreground">Total cost (all tickets)</p>
                     <p className="mt-1 text-2xl font-black">${costInsights.data.totalCostUsd.toFixed(2)}</p>
                   </div>
                   <div className="rounded-lg border border-border bg-muted/30 p-4">
@@ -457,6 +459,24 @@ export function Insights() {
                     <p className="mt-1 text-2xl font-black">${costInsights.data.avgCostPerTicket.toFixed(2)}</p>
                   </div>
                 </div>
+                {/* Explains why these totals are lower than they used to be: unapproved and
+                    rejected hours are no longer counted as cost, and hours with no rate on record
+                    are reported rather than silently treated as free. */}
+                <p className="text-xs text-muted-foreground">
+                  Covers {costInsights.data.ticketCount ?? costInsights.data.rows.length} ticket(s)
+                  {(costInsights.data.excludedDraftHours ?? 0) + (costInsights.data.excludedRejectedHours ?? 0) > 0 && (
+                    <>
+                      {" "}— excludes {(costInsights.data.excludedDraftHours ?? 0).toFixed(1)}h draft and{" "}
+                      {(costInsights.data.excludedRejectedHours ?? 0).toFixed(1)}h rejected
+                    </>
+                  )}
+                  {(costInsights.data.unratedHours ?? 0) > 0 && (
+                    <>
+                      {" "}— {(costInsights.data.unratedHours ?? 0).toFixed(1)}h have no rate on record and are not priced
+                    </>
+                  )}
+                  . Table shows the top 25 by cost.
+                </p>
                 {costInsights.data.rows.length > 0 && (
                   <DataTable columns={costColumns} data={costInsights.data.rows} enableSearch={false} pageSize={10} />
                 )}

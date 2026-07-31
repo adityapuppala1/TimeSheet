@@ -941,3 +941,74 @@ deterministic suggestions, rather than erroring the whole request. The bug-patte
 stale-ticket nudge share the identical `preflight`/`callChat` failure path, structurally verified
 the same way (lint, unit-adjacent review) rather than independently live-triggered, since neither
 has a manual-trigger endpoint the way `/face/auto-triage` does.
+
+## Verified Work Attestation + billing correctness (2026-07-31)
+
+A strategy review concluded the defensible position isn't "better Jira" or "better Harvest" but
+owning the complete auditable chain: *work performed* → *time spent* → *code that resolved it* →
+*proof of who did it* → *approval*. Most of that chain already existed. This phase built the
+artifact that makes it sellable to a services business, plus the billing correctness it depends on.
+
+### Workspace Settings is now SUPER_ADMIN-only
+
+- ~~Any logged-in user could open `/app/settings`~~ — the route had **no guard at all**, and both
+  the sidebar and the command palette linked it unconditionally (non-super-admins got a read-only
+  view). Now gated three ways that must stay in sync: `RequireRole` on the route, `role:
+  "SUPER_ADMIN"` on both nav entries, and `requireSuperAdmin` on the backing GETs.
+- **The trap this had to avoid:** three ordinary pages call settings endpoints — an EMPLOYEE's
+  ticket create-dialog reads one AI flag, a MANAGER's Insights page reads two ticketing flags.
+  Locking those routes naively breaks both pages. They now read a deliberately tiny
+  `GET /settings/effective-flags` projection (three booleans, any role); `/git/*` is left at
+  `requireAuth` because the ticket Dev tab depends on it.
+- The `readOnly` prop threaded through all 14 settings cards is **kept** even though it's now
+  always `false`, so restoring a read-only tier is a one-line change rather than re-threading a
+  prop through 14 components.
+
+### Billing correctness (the foundation, fixed first)
+
+- ~~Cost was recomputed live from each user's CURRENT rate, and counted DRAFT + REJECTED
+  timesheets~~ — so a raise retroactively rewrote what past work cost, and hours nobody had
+  accepted were billed. Now: an optional **per-project rate override** (the real agency case —
+  "Client A pays more than Client B for the same person"), and a **rate snapshot frozen onto the
+  timesheet at approval time**, in the same write that sets APPROVED.
+- **Historical rows are deliberately NOT backfilled.** Inventing "the rate at the time" from
+  today's rate would make a dispute artifact assert something untrue; those hours are reported as
+  explicitly *unrated* instead. "We don't know" and "it was free" are not the same statement — the
+  old `?? 0` fallback conflated them.
+- Approval **never blocks** on missing billing config (`billedRateSource: "NONE"`), because
+  breaking the core approval workflow to serve a reporting feature is the wrong trade.
+- Also fixed while here: `totalCostUsd`/`avgCostPerTicket` were computed from the **top-25 slice**
+  rather than all tickets, so both headline numbers were wrong in any workspace with >25 costed
+  tickets. The duplicated formula in `ai.controller.ts` now shares `computeTimesheetCost`, so
+  "Ask AI" can no longer quote a different total than the Insights page.
+- ⚠️ **Cost totals drop in existing workspaces.** That's the correction, not a regression — the
+  Insights panel now carries a caption naming the excluded draft/rejected hours.
+
+### The attestation itself
+
+- `attestation.service.ts` builds a per-project × date-range artifact: approved hours grouped by
+  ticket, contributors, approvals, per-entry rate/amount, and identity-verification flags for both
+  the submitter (`context: TIMESHEET`) and the approver (`context: APPROVAL`).
+- **Persisted, not generated on demand** (`WorkAttestation`): a dispute artifact must re-render
+  identically months later even after a user is renamed or a ticket retitled. Frozen `payload`
+  plus a canonical-JSON SHA-256 `payloadHash` for tamper evidence. **Immutable** — no update path;
+  correcting one means voiding it (with a reason) and issuing a new one. Nothing is ever deleted.
+- **Strips every biometric internal**, mirroring the identity evidence pack's existing rule: no
+  embeddings, image paths, similarity scores, thresholds, or IP addresses. It carries the
+  *conclusion* of an identity check ("verified"), never the evidence behind it — and links to the
+  existing `/face/evidence/timesheet/:id` route for internal admins who need the internals. That
+  endpoint was left completely untouched.
+- Refuses to issue when a period **mixes currencies**, rather than silently summing them.
+- Access is `REPORTS_VIEW` + per-project scoping (not the coarse `requireAdmin` the face evidence
+  pack uses); voiding is stricter (`SUPER_ADMIN`), since invalidating an artifact a client may
+  already hold is a different class of action from producing one.
+
+**Verified:** 97/97 unit tests (12 new covering rate precedence, exact-decimal money math, and the
+unrated-vs-zero distinction), plus a 23-check live pass covering the off-by-default gate, preview
+not persisting, the full biometric-stripping rule, PDF rendering, project scoping, and void-not-
+delete. Both workspaces lint clean; migration is purely additive and applied to all tenants.
+
+**Deliberately not done in this pass:** the public share link (`enableAttestationSharing` and the
+`AttestationShareLink` model exist and ship **off**) — publishing to an unauthenticated URL is a
+materially different risk decision from producing an internal artifact, so it gets its own pass
+and its own review rather than riding along with this one.

@@ -243,6 +243,14 @@ export interface GlobalTicketSettings {
   /** Off by default. When true, a ticket can't move to RESOLVED while its latest ingested
    *  TestRun is FAILED — see docs/ROADMAP.md's "Auto testing on branch/PR push" theme. */
   blockResolveOnFailingTests: boolean;
+  /** ISO-4217 fallback when a project sets no billingCurrency — see
+   *  api/src/services/billing-rate.service.ts. */
+  defaultCurrency: string;
+  /** Off by default. Gates the Verified Work Attestation endpoints entirely. */
+  enableAttestations: boolean;
+  /** Off by default, and separate from enableAttestations on purpose: publishing an attestation
+   *  to a public unauthenticated URL is a different risk decision from producing one internally. */
+  enableAttestationSharing: boolean;
   updatedAt: string;
   updatedById: string | null;
 }

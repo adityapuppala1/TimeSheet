@@ -13,14 +13,17 @@ import type { ColumnDef } from "@tanstack/react-table";
 import {
   Archive,
   Check,
+  DollarSign,
   Download,
   FileSpreadsheet,
+  FileText,
   FolderTree,
   Layers,
   Mail,
   Pencil,
   Plus,
   RotateCcw,
+  Save,
   ShieldCheck,
   ShieldX,
   Sparkles,
@@ -62,6 +65,7 @@ import { Label } from "../components/ui/label";
 import { Switch } from "../components/ui/switch";
 import { ScrollArea } from "../components/ui/scroll-area";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../components/ui/select";
+import { Skeleton } from "../components/ui/skeleton";
 import { StatCard } from "../components/ui/stat-card";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "../components/ui/table";
 import { Textarea } from "../components/ui/textarea";
@@ -69,12 +73,15 @@ import { toast } from "../components/ui/toaster";
 import { Tooltip, TooltipContent, TooltipTrigger } from "../components/ui/tooltip";
 import { computeTrend } from "../lib/trend";
 import {
+  attestationApi,
   faceApi,
   fileUrl,
   projectApi,
   reportApi,
   timesheetApi,
   userApi,
+  type AttestationPayload,
+  type AttestationRow,
   type ProjectAssignmentMember,
   type UserRow
 } from "../services/api";
@@ -696,6 +703,7 @@ export function ProjectsPage() {
   const [submoduleDraft, setSubmoduleDraft] = useState({ moduleId: "", name: "" });
   const [pendingArchive, setPendingArchive] = useState<{ id: string; name: string } | null>(null);
   const [managingTeam, setManagingTeam] = useState<{ id: string; name: string } | null>(null);
+  const [billingProject, setBillingProject] = useState<any | null>(null);
   const [bulkUploadOpen, setBulkUploadOpen] = useState(false);
 
   const create = useMutation({
@@ -786,9 +794,12 @@ export function ProjectsPage() {
         header: () => <span className="block text-right">Actions</span>,
         enableSorting: false,
         cell: ({ row }) => (
-          <div className="flex justify-end gap-1">
+          <div className="flex flex-wrap justify-end gap-1">
             <Button variant="ghost" size="sm" onClick={() => setManagingTeam({ id: row.original.id, name: row.original.name })}>
               <UsersRound className="h-3.5 w-3.5" />Manage team
+            </Button>
+            <Button variant="ghost" size="sm" onClick={() => setBillingProject(row.original)}>
+              <DollarSign className="h-3.5 w-3.5" />Billing
             </Button>
             <Button
               variant="ghost"
@@ -876,6 +887,8 @@ export function ProjectsPage() {
 
       <ProjectTeamDialog project={managingTeam} onClose={() => setManagingTeam(null)} />
 
+      <ProjectBillingDialog project={billingProject} onClose={() => setBillingProject(null)} />
+
       <CsvBulkUploadDialog
         open={bulkUploadOpen}
         onOpenChange={setBulkUploadOpen}
@@ -913,6 +926,105 @@ export function ProjectsPage() {
         </AlertDialogContent>
       </AlertDialog>
     </Workspace>
+  );
+}
+
+/**
+ * Per-project client-billing settings — the rate an approved timesheet on this project snapshots
+ * (see api/src/services/billing-rate.service.ts) and the client name printed on a Verified Work
+ * Attestation. Deliberately a small dialog rather than a new page: these are three optional fields
+ * on an existing entity, not a new domain.
+ */
+function ProjectBillingDialog({ project, onClose }: { project: any | null; onClose: () => void }) {
+  const queryClient = useQueryClient();
+  const [draft, setDraft] = useState({ clientName: "", defaultHourlyRate: "", billingCurrency: "" });
+
+  // Re-seed whenever a different project is opened, so the dialog never shows stale values from
+  // the previously-opened row.
+  useEffect(() => {
+    if (!project) return;
+    setDraft({
+      clientName: project.clientName ?? "",
+      defaultHourlyRate: project.defaultHourlyRate != null ? String(project.defaultHourlyRate) : "",
+      billingCurrency: project.billingCurrency ?? ""
+    });
+  }, [project?.id]);
+
+  const save = useMutation({
+    mutationFn: () =>
+      projectApi.update(project.id, {
+        // Empty string means "clear it" — sent as null so the backend falls back to the
+        // individual's own rate / the workspace default currency rather than storing "".
+        clientName: draft.clientName.trim() || null,
+        defaultHourlyRate: draft.defaultHourlyRate.trim() === "" ? null : Number(draft.defaultHourlyRate),
+        billingCurrency: draft.billingCurrency.trim() ? draft.billingCurrency.trim().toUpperCase() : null
+      }),
+    onSuccess: () => {
+      toast.success("Billing settings saved");
+      queryClient.invalidateQueries({ queryKey: ["projects"] });
+      onClose();
+    },
+    onError: (err: any) => toast.error("Could not save", { description: serverMessage(err, "Try again.") })
+  });
+
+  const rateInvalid = draft.defaultHourlyRate.trim() !== "" && !(Number(draft.defaultHourlyRate) >= 0);
+  const currencyInvalid = draft.billingCurrency.trim() !== "" && draft.billingCurrency.trim().length !== 3;
+
+  return (
+    <Dialog open={Boolean(project)} onOpenChange={(open) => !open && onClose()}>
+      <DialogContent className="max-h-[92vh] w-[min(96vw,560px)] max-w-none overflow-y-auto">
+        {project && (
+          <>
+            <DialogHeader>
+              <DialogTitle>Client billing — {project.name}</DialogTitle>
+              <DialogDescription>
+                Used when a timesheet on this project is approved: the rate is frozen onto that entry so later pay changes never
+                rewrite what past work cost. All three are optional.
+              </DialogDescription>
+            </DialogHeader>
+            <div className="grid gap-4">
+              <FieldShell label="Client name">
+                <Input
+                  value={draft.clientName}
+                  onChange={(e) => setDraft({ ...draft, clientName: e.target.value })}
+                  placeholder="Acme Corp"
+                />
+              </FieldShell>
+              <div className="grid gap-4 sm:grid-cols-2">
+                <FieldShell label="Project hourly rate">
+                  <Input
+                    type="number"
+                    min={0}
+                    step="0.01"
+                    value={draft.defaultHourlyRate}
+                    onChange={(e) => setDraft({ ...draft, defaultHourlyRate: e.target.value })}
+                    placeholder="Falls back to each person's rate"
+                  />
+                </FieldShell>
+                <FieldShell label="Currency">
+                  <Input
+                    value={draft.billingCurrency}
+                    onChange={(e) => setDraft({ ...draft, billingCurrency: e.target.value })}
+                    placeholder="USD"
+                    maxLength={3}
+                  />
+                </FieldShell>
+              </div>
+              <p className="text-xs text-muted-foreground">
+                Leave the rate blank to bill each person at their own hourly rate. Leave currency blank to use the workspace
+                default. An attestation refuses to mix currencies in one period rather than silently summing them.
+              </p>
+            </div>
+            <DialogFooter>
+              <Button variant="ghost" onClick={onClose}>Cancel</Button>
+              <Button onClick={() => save.mutate()} disabled={save.isPending || rateInvalid || currencyInvalid}>
+                <Save className="h-4 w-4" />Save
+              </Button>
+            </DialogFooter>
+          </>
+        )}
+      </DialogContent>
+    </Dialog>
   );
 }
 
@@ -1436,7 +1548,248 @@ export function ReportsPage() {
         </CardContent>
       </Card>
       <StatusReportCard />
+      <AttestationsCard />
     </Workspace>
+  );
+}
+
+/** First day of the current month / today, as YYYY-MM-DD — the default attestation period, since
+ *  a monthly billing cycle is the common case. */
+function defaultPeriod(): { start: string; end: string } {
+  const now = new Date();
+  const first = new Date(now.getFullYear(), now.getMonth(), 1);
+  const fmt = (d: Date) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+  return { start: fmt(first), end: fmt(now) };
+}
+
+/**
+ * Verified Work Attestation — issue a client-facing artifact proving approved hours map to real
+ * tickets, done by identity-verified people, approved by a named manager, at a frozen rate.
+ * See api/src/services/attestation.service.ts.
+ *
+ * Follows StatusReportCard's convention for the disabled case: a 403 because the workspace hasn't
+ * enabled the feature is shown as a friendly inline note, not an error toast — "not turned on
+ * yet" isn't a failure.
+ */
+function AttestationsCard() {
+  const queryClient = useQueryClient();
+  const projects = useQuery({ queryKey: ["projects"], queryFn: projectApi.list });
+  const [projectId, setProjectId] = useState("");
+  const [period, setPeriod] = useState(defaultPeriod);
+  const [preview, setPreview] = useState<AttestationPayload | null>(null);
+  const [disabled, setDisabled] = useState(false);
+  const [voiding, setVoiding] = useState<AttestationRow | null>(null);
+  const [voidReason, setVoidReason] = useState("");
+  const [downloadingId, setDownloadingId] = useState<string | null>(null);
+
+  const issued = useQuery({
+    queryKey: ["attestations", projectId],
+    queryFn: () => attestationApi.list(projectId),
+    enabled: Boolean(projectId) && !disabled
+  });
+
+  function handleGateError(err: any, fallbackTitle: string) {
+    if (err?.response?.status === 403) {
+      setDisabled(true);
+      return;
+    }
+    toast.error(fallbackTitle, { description: serverMessage(err, "Try again.") });
+  }
+
+  const runPreview = useMutation({
+    mutationFn: () => attestationApi.preview({ projectId, periodStart: period.start, periodEnd: period.end }),
+    onSuccess: (data) => {
+      setPreview(data.payload);
+      setDisabled(false);
+    },
+    onError: (err: any) => handleGateError(err, "Couldn't build the preview")
+  });
+
+  const issue = useMutation({
+    mutationFn: () => attestationApi.issue({ projectId, periodStart: period.start, periodEnd: period.end }),
+    onSuccess: (row) => {
+      toast.success(`Attestation ${row.reference} issued`);
+      setPreview(null);
+      queryClient.invalidateQueries({ queryKey: ["attestations", projectId] });
+    },
+    onError: (err: any) => handleGateError(err, "Couldn't issue the attestation")
+  });
+
+  const voidMutation = useMutation({
+    mutationFn: () => attestationApi.void(voiding!.id, voidReason.trim()),
+    onSuccess: () => {
+      toast.success("Attestation voided");
+      setVoiding(null);
+      setVoidReason("");
+      queryClient.invalidateQueries({ queryKey: ["attestations", projectId] });
+    },
+    onError: (err: any) => toast.error("Couldn't void it", { description: serverMessage(err, "Try again.") })
+  });
+
+  // Authenticated blob download — the access token is in memory only, so a bare <a href> would
+  // hit the route unauthenticated. Same pattern as DownloadButton below.
+  async function download(row: AttestationRow, kind: "json" | "pdf") {
+    setDownloadingId(`${row.id}:${kind}`);
+    try {
+      const blob = kind === "pdf" ? await attestationApi.downloadPdf(row.id) : await attestationApi.downloadJson(row.id);
+      const url = URL.createObjectURL(blob as Blob);
+      const anchor = document.createElement("a");
+      anchor.href = url;
+      anchor.download = `attestation-${row.reference}.${kind}`;
+      anchor.click();
+      URL.revokeObjectURL(url);
+    } catch (err: any) {
+      toast.error("Download failed", { description: serverMessage(err, "Try again.") });
+    } finally {
+      setDownloadingId(null);
+    }
+  }
+
+  const canRun = Boolean(projectId) && Boolean(period.start) && Boolean(period.end);
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle className="flex items-center gap-2">
+          <FileText className="h-4 w-4 text-primary" />
+          Verified work attestation
+        </CardTitle>
+        <CardDescription>
+          A client-facing record that approved hours map to real tickets, done by identity-verified people and approved by a named
+          manager, priced at the rate frozen when each entry was approved.
+        </CardDescription>
+      </CardHeader>
+      <CardContent className="grid gap-4">
+        {disabled && (
+          <p className="rounded-md border border-dashed border-border bg-muted/30 p-3 text-sm text-muted-foreground">
+            Attestations are off for this workspace. A super admin can turn them on under Workspace Settings → Ticketing.
+          </p>
+        )}
+
+        <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-[2fr_1fr_1fr_auto]">
+          <div className="grid gap-1.5">
+            <Label>Project</Label>
+            <Select value={projectId} onValueChange={(v) => { setProjectId(v); setPreview(null); }}>
+              <SelectTrigger><SelectValue placeholder="Select a project" /></SelectTrigger>
+              <SelectContent>
+                {(projects.data ?? []).map((p: any) => (
+                  <SelectItem key={p.id} value={p.id}>{p.code} — {p.name}</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+          <div className="grid gap-1.5">
+            <Label>From</Label>
+            <Input type="date" value={period.start} onChange={(e) => { setPeriod({ ...period, start: e.target.value }); setPreview(null); }} />
+          </div>
+          <div className="grid gap-1.5">
+            <Label>To</Label>
+            <Input type="date" value={period.end} onChange={(e) => { setPeriod({ ...period, end: e.target.value }); setPreview(null); }} />
+          </div>
+          <div className="flex items-end">
+            <Button className="w-full" variant="outline" onClick={() => runPreview.mutate()} disabled={!canRun || runPreview.isPending}>
+              {runPreview.isPending ? "Building…" : "Preview"}
+            </Button>
+          </div>
+        </div>
+
+        {preview && (
+          <div className="grid gap-3 rounded-lg border border-primary/30 bg-primary/5 p-4">
+            <div className="grid grid-cols-2 gap-2.5 sm:gap-3 md:grid-cols-4">
+              <div>
+                <p className="text-xs uppercase text-muted-foreground">Approved entries</p>
+                <p className="text-xl font-black">{preview.summary.entryCount}</p>
+              </div>
+              <div>
+                <p className="text-xs uppercase text-muted-foreground">Total hours</p>
+                <p className="text-xl font-black">{preview.summary.totalHours.toFixed(2)}</p>
+              </div>
+              <div>
+                <p className="text-xs uppercase text-muted-foreground">Amount</p>
+                <p className="text-xl font-black">{preview.summary.totalAmount.toFixed(2)} {preview.attestation.currency}</p>
+              </div>
+              <div>
+                <p className="text-xs uppercase text-muted-foreground">Identity verified</p>
+                <p className="text-xl font-black">{preview.summary.identityVerifiedEntries}/{preview.summary.entryCount}</p>
+              </div>
+            </div>
+            {preview.caveats.length > 0 && (
+              <ul className="grid gap-1 text-xs text-muted-foreground">
+                {preview.caveats.map((c, i) => <li key={i}>• {c}</li>)}
+              </ul>
+            )}
+            <div className="flex flex-wrap gap-2">
+              <Button size="sm" onClick={() => issue.mutate()} disabled={issue.isPending || preview.summary.entryCount === 0}>
+                <Check className="h-3.5 w-3.5" />Issue attestation
+              </Button>
+              <Button size="sm" variant="ghost" onClick={() => setPreview(null)}>Discard preview</Button>
+            </div>
+            {preview.summary.entryCount === 0 && (
+              <p className="text-xs text-muted-foreground">Nothing approved in this period — there's nothing to attest to yet.</p>
+            )}
+          </div>
+        )}
+
+        {projectId && !disabled && (
+          <div className="grid gap-1.5">
+            <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Issued attestations</p>
+            {issued.isLoading && <Skeleton className="h-16 w-full" />}
+            {!issued.isLoading && (issued.data ?? []).length === 0 && (
+              <p className="py-3 text-sm text-muted-foreground">None issued for this project yet.</p>
+            )}
+            {(issued.data ?? []).map((row) => (
+              <div key={row.id} className="flex flex-wrap items-center gap-2 rounded-md border border-border px-3 py-2 text-sm">
+                <Badge variant={row.status === "VOID" ? "muted" : "success"}>{row.status}</Badge>
+                <span className="font-mono text-xs">{row.reference}</span>
+                <span className="text-muted-foreground">
+                  {row.periodStart.slice(0, 10)} → {row.periodEnd.slice(0, 10)} · {row.totalHours.toFixed(2)}h ·{" "}
+                  {row.totalAmount.toFixed(2)} {row.currency}
+                </span>
+                <div className="ml-auto flex flex-wrap gap-1">
+                  <Button size="sm" variant="ghost" disabled={downloadingId === `${row.id}:pdf`} onClick={() => download(row, "pdf")}>
+                    <Download className="h-3.5 w-3.5" />PDF
+                  </Button>
+                  <Button size="sm" variant="ghost" disabled={downloadingId === `${row.id}:json`} onClick={() => download(row, "json")}>
+                    <Download className="h-3.5 w-3.5" />JSON
+                  </Button>
+                  {row.status === "ISSUED" && (
+                    <Button size="sm" variant="ghost" className="text-destructive hover:bg-destructive/10 hover:text-destructive" onClick={() => setVoiding(row)}>
+                      Void
+                    </Button>
+                  )}
+                </div>
+                {row.voidReason && <p className="w-full text-xs text-muted-foreground">Voided: {row.voidReason}</p>}
+              </div>
+            ))}
+          </div>
+        )}
+      </CardContent>
+
+      <Dialog open={Boolean(voiding)} onOpenChange={(open) => { if (!open) { setVoiding(null); setVoidReason(""); } }}>
+        <DialogContent className="w-[min(96vw,480px)] max-w-none">
+          <DialogHeader>
+            <DialogTitle>Void {voiding?.reference}</DialogTitle>
+            <DialogDescription>
+              The record is kept, not deleted — a client may already hold a copy, so why it was withdrawn is itself part of the
+              audit trail. Issue a replacement afterwards if the work still needs attesting.
+            </DialogDescription>
+          </DialogHeader>
+          <FieldShell label="Reason">
+            <Input value={voidReason} onChange={(e) => setVoidReason(e.target.value)} placeholder="e.g. superseded by a corrected period" />
+          </FieldShell>
+          <DialogFooter>
+            <Button variant="ghost" onClick={() => { setVoiding(null); setVoidReason(""); }}>Cancel</Button>
+            <Button
+              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+              disabled={voidReason.trim().length < 3 || voidMutation.isPending}
+              onClick={() => voidMutation.mutate()}
+            >
+              Void attestation
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+    </Card>
   );
 }
 

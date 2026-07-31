@@ -141,13 +141,21 @@ const ticketingSchema = z.object({
       slaCriticalHours: z.coerce.number().int().min(1).max(2000).optional(),
       enableCostAnalytics: z.boolean().optional(),
       enableLeaderboard: z.boolean().optional(),
-      blockResolveOnFailingTests: z.boolean().optional()
+      blockResolveOnFailingTests: z.boolean().optional(),
+      // Verified Work Attestation — see services/attestation.service.ts. NOTE: this schema is
+      // `.strict()`, so a new GlobalTicketSettings field MUST be listed here or the PATCH 400s.
+      defaultCurrency: z.string().length(3).optional(),
+      enableAttestations: z.boolean().optional(),
+      enableAttestationSharing: z.boolean().optional()
     })
     .strict()
 });
 
 settingsRouter.patch("/ticketing", requireSuperAdmin, validate(ticketingSchema), async (req, res) => {
   const data: Record<string, unknown> = { ...req.body, updatedById: req.user!.id };
+  // Normalised so "usd" and "USD" can't read as two different currencies when an attestation
+  // refuses to mix them.
+  if (typeof data.defaultCurrency === "string") data.defaultCurrency = data.defaultCurrency.toUpperCase();
   const updated = await prisma.globalTicketSettings.upsert({
     where: { id: "global" },
     update: data,

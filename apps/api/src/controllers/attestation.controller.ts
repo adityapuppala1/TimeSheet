@@ -1,0 +1,281 @@
+/**
+ * Verified Work Attestation endpoints — see services/attestation.service.ts for what the artifact
+ * is and why it's the product's sharpest differentiator.
+ *
+ * ACCESS MODEL: `REPORTS_VIEW` plus per-project scoping (`assertTicketVisible`), NOT the coarse
+ * `requireAdmin` the identity evidence pack uses. An attestation is scoped to one project, so a
+ * manager who can see that project's reports should be able to issue one for it — while someone
+ * with no visibility into that project must not be able to enumerate its work by guessing ids.
+ * Voiding is deliberately stricter (SUPER_ADMIN): invalidating an artifact a client may already
+ * be holding is a different class of action from producing one.
+ *
+ * EVERY route is additionally gated on `GlobalTicketSettings.enableAttestations`, which ships off
+ * — same posture as every other capability in this app.
+ */
+import { Router } from "express";
+import PDFDocument from "pdfkit";
+import { z } from "zod";
+import { permissions } from "@timesheet/shared";
+import { prisma } from "../config/prisma.js";
+import { requireAuth, requirePermission, requireSuperAdmin } from "../middleware/auth.js";
+import { AppError } from "../middleware/error.js";
+import { validate } from "../middleware/validate.js";
+import { audit } from "../services/audit.service.js";
+import { buildWorkAttestation, hashPayload, type AttestationPayload } from "../services/attestation.service.js";
+import { assertTicketVisible } from "../services/ticket.service.js";
+import { getGlobalTicketSettings } from "../services/ticket.service.js";
+
+export const attestationRouter = Router();
+attestationRouter.use(requireAuth);
+
+async function assertAttestationsEnabled(): Promise<void> {
+  const settings = await getGlobalTicketSettings();
+  if (!settings.enableAttestations) {
+    throw new AppError(403, "Work attestations are disabled for this workspace — enable them in Workspace Settings → Ticketing.");
+  }
+}
+
+/** Dates arrive as YYYY-MM-DD and are pinned to UTC midnight so a period never shifts by a day
+ *  depending on the server's timezone (the same class of bug the dashboard timeline already had). */
+function parseUtcDate(value: string): Date {
+  const [y, m, d] = value.split("-").map(Number);
+  return new Date(Date.UTC(y, m - 1, d));
+}
+
+const periodSchema = z.object({
+  body: z.object({
+    projectId: z.string().uuid(),
+    periodStart: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "periodStart must be YYYY-MM-DD"),
+    periodEnd: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "periodEnd must be YYYY-MM-DD")
+  })
+});
+
+async function buildFromRequest(req: any) {
+  const periodStart = parseUtcDate(req.body.periodStart);
+  const periodEnd = parseUtcDate(req.body.periodEnd);
+  if (periodEnd < periodStart) throw new AppError(422, "periodEnd cannot be before periodStart.");
+
+  await assertTicketVisible(req, req.body.projectId);
+  return buildWorkAttestation({
+    projectId: req.body.projectId,
+    periodStart,
+    periodEnd,
+    generatedByName: req.user?.name ?? req.user?.email ?? null
+  });
+}
+
+/**
+ * Build and return WITHOUT persisting — so an admin can check what a period actually contains
+ * before committing an immutable, client-facing record. Without this every experiment would leave
+ * a permanent attestation row behind.
+ */
+attestationRouter.post("/preview", requirePermission(permissions.REPORTS_VIEW), validate(periodSchema), async (req, res) => {
+  await assertAttestationsEnabled();
+  const built = await buildFromRequest(req);
+  res.json({ payload: built.payload });
+});
+
+/** Issue (persist) an attestation. Immutable once written — see the model's doc comment. */
+attestationRouter.post("/", requirePermission(permissions.REPORTS_VIEW), validate(periodSchema), async (req, res) => {
+  await assertAttestationsEnabled();
+  const built = await buildFromRequest(req);
+
+  const created = await prisma.workAttestation.create({
+    data: {
+      reference: built.payload.attestation.reference,
+      projectId: req.body.projectId,
+      periodStart: parseUtcDate(req.body.periodStart),
+      periodEnd: parseUtcDate(req.body.periodEnd),
+      currency: built.totals.currency,
+      totalHours: built.totals.totalHours,
+      billableHours: built.totals.billableHours,
+      unratedHours: built.totals.unratedHours,
+      totalAmount: built.totals.totalAmount,
+      entryCount: built.totals.entryCount,
+      payload: built.payload as unknown as object,
+      payloadHash: hashPayload(built.payload),
+      generatedById: req.user!.id
+    }
+  });
+
+  await audit(req.user!.id, "attestation.issued", "WorkAttestation", created.id, {
+    reference: created.reference,
+    projectId: req.body.projectId,
+    periodStart: req.body.periodStart,
+    periodEnd: req.body.periodEnd,
+    entryCount: created.entryCount
+  });
+
+  res.status(201).json(serializeRow(created));
+});
+
+/** Project-scoped list. `projectId` is required precisely so this can't be used to enumerate
+ *  attestations across projects the caller can't see. */
+attestationRouter.get("/", requirePermission(permissions.REPORTS_VIEW), async (req, res) => {
+  await assertAttestationsEnabled();
+  const projectId = typeof req.query.projectId === "string" ? req.query.projectId : "";
+  if (!projectId) throw new AppError(422, "Query param 'projectId' is required.");
+  await assertTicketVisible(req, projectId);
+
+  const rows = await prisma.workAttestation.findMany({
+    where: { projectId },
+    orderBy: { createdAt: "desc" },
+    take: 100,
+    include: { generatedBy: { select: { id: true, name: true } } }
+  });
+  res.json(rows.map(serializeRow));
+});
+
+async function loadScoped(req: any) {
+  const row = await prisma.workAttestation.findUnique({
+    where: { id: String(req.params.id) },
+    include: { project: { select: { id: true, code: true, name: true } }, generatedBy: { select: { id: true, name: true } } }
+  });
+  if (!row) throw new AppError(404, "Attestation not found");
+  await assertTicketVisible(req, row.projectId);
+  return row;
+}
+
+/**
+ * PDF variant. Registered BEFORE the bare `/:id` route on purpose — Express matches in
+ * registration order, so with `/:id` first a request for `<uuid>.pdf` binds `id` to the literal
+ * string "<uuid>.pdf" and 404s. (The ticket security report doesn't hit this because its `.pdf`
+ * lives on its own path segment.)
+ */
+attestationRouter.get("/:id.pdf", requirePermission(permissions.REPORTS_VIEW), async (req, res) => {
+  await assertAttestationsEnabled();
+  const id = String((req.params as Record<string, string>)["id.pdf"] ?? req.params.id ?? "").replace(/\.pdf$/, "");
+  const row = await prisma.workAttestation.findUnique({ where: { id } });
+  if (!row) throw new AppError(404, "Attestation not found");
+  await assertTicketVisible(req, row.projectId);
+
+  res.setHeader("Content-Type", "application/pdf");
+  res.setHeader("Content-Disposition", `attachment; filename="attestation-${row.reference}.pdf"`);
+  renderAttestationPdf(res, row.payload as unknown as AttestationPayload, row.status, row.payloadHash);
+});
+
+/** The frozen payload, as a download. Renders from `payload`, never a fresh rebuild — that's the
+ *  whole point of persisting it. */
+attestationRouter.get("/:id", requirePermission(permissions.REPORTS_VIEW), async (req, res) => {
+  await assertAttestationsEnabled();
+  const row = await loadScoped(req);
+  res.setHeader("Content-Type", "application/json");
+  res.setHeader("Content-Disposition", `attachment; filename="attestation-${row.reference}.json"`);
+  res.json({
+    ...serializeRow(row),
+    payload: row.payload,
+    // Lets a recipient re-verify the stored payload hasn't been altered since issue.
+    payloadHash: row.payloadHash
+  });
+});
+
+const voidSchema = z.object({
+  params: z.object({ id: z.string().uuid() }),
+  body: z.object({ reason: z.string().min(3).max(500) })
+});
+
+/**
+ * Void — never delete. A client may already be holding a copy, so the record of it having existed
+ * (and why it was withdrawn) is itself part of the audit trail. Correcting an attestation means
+ * voiding this one and issuing a new one.
+ */
+attestationRouter.post("/:id/void", requireSuperAdmin, validate(voidSchema), async (req, res) => {
+  await assertAttestationsEnabled();
+  const row = await prisma.workAttestation.findUnique({ where: { id: String(req.params.id) } });
+  if (!row) throw new AppError(404, "Attestation not found");
+  if (row.status === "VOID") throw new AppError(422, "This attestation is already void.");
+
+  const updated = await prisma.workAttestation.update({
+    where: { id: row.id },
+    data: { status: "VOID", voidedAt: new Date(), voidReason: req.body.reason }
+  });
+  await audit(req.user!.id, "attestation.voided", "WorkAttestation", row.id, { reference: row.reference, reason: req.body.reason });
+  res.json(serializeRow(updated));
+});
+
+function serializeRow(row: any) {
+  return {
+    id: row.id,
+    reference: row.reference,
+    projectId: row.projectId,
+    project: row.project ?? undefined,
+    periodStart: row.periodStart,
+    periodEnd: row.periodEnd,
+    status: row.status,
+    currency: row.currency,
+    totalHours: Number(row.totalHours),
+    billableHours: Number(row.billableHours),
+    unratedHours: Number(row.unratedHours),
+    totalAmount: Number(row.totalAmount),
+    entryCount: row.entryCount,
+    generatedBy: row.generatedBy ?? null,
+    createdAt: row.createdAt,
+    voidedAt: row.voidedAt,
+    voidReason: row.voidReason
+  };
+}
+
+/** Same pdfkit conventions as the ticket security report (A4, margin 36) so the two artifacts
+ *  look like they came from the same system. */
+function renderAttestationPdf(res: NodeJS.WritableStream, payload: AttestationPayload, status: string, payloadHash: string): void {
+  const doc = new PDFDocument({ size: "A4", margin: 36 });
+  doc.pipe(res);
+
+  const a = payload.attestation;
+  doc.fontSize(18).text("Verified Work Attestation", { continued: false });
+  doc.moveDown(0.2);
+  doc.fontSize(9).fillColor("#666").text(`Reference ${a.reference}  ·  issued ${new Date(a.generatedAt).toLocaleString()}`);
+  if (status === "VOID") {
+    doc.moveDown(0.4);
+    doc.fontSize(12).fillColor("#b00020").text("VOID — this attestation has been withdrawn and must not be relied upon.");
+  }
+  doc.fillColor("#000").moveDown(0.8);
+
+  doc.fontSize(11).text(`Project: ${a.project.code} — ${a.project.name}`);
+  if (a.project.clientName) doc.text(`Client: ${a.project.clientName}`);
+  doc.text(`Period: ${a.period.start} to ${a.period.end}`);
+  if (a.generatedBy) doc.text(`Issued by: ${a.generatedBy}`);
+  doc.moveDown(0.8);
+
+  const s = payload.summary;
+  doc.fontSize(13).text("Summary");
+  doc.moveDown(0.3);
+  doc.fontSize(10);
+  doc.text(`Approved entries: ${s.entryCount}`);
+  doc.text(`Total hours: ${s.totalHours.toFixed(2)}   (billable ${s.billableHours.toFixed(2)})`);
+  doc.text(`Total amount: ${s.totalAmount.toFixed(2)} ${a.currency}`);
+  doc.text(`Contributors: ${s.contributorCount}`);
+  doc.text(`Entries with a biometric identity check: ${s.identityVerifiedEntries} of ${s.entryCount}`);
+  doc.moveDown(0.8);
+
+  doc.fontSize(13).text("Work");
+  doc.moveDown(0.3);
+  doc.fontSize(9);
+  for (const item of payload.workItems) {
+    doc.fillColor("#000").text(`${item.ticketKey ?? "—"}  ${item.ticketTitle}`);
+    doc.fillColor("#444").text(`   ${item.hours.toFixed(2)}h   ${item.amount.toFixed(2)} ${a.currency}`);
+    for (const entry of item.entries) {
+      doc.fillColor("#666").text(
+        `      ${entry.workDate}  ${entry.person}  ${entry.hours.toFixed(2)}h  ${entry.identityVerified ? "[identity verified]" : ""}`
+      );
+    }
+    doc.moveDown(0.25);
+  }
+
+  if (payload.approvals.length > 0) {
+    doc.moveDown(0.5).fillColor("#000").fontSize(13).text("Approvals");
+    doc.moveDown(0.3).fontSize(9).fillColor("#444");
+    for (const ap of payload.approvals) {
+      doc.text(`${ap.approver} — ${ap.entries} entr${ap.entries === 1 ? "y" : "ies"}${ap.identityVerified ? " (identity verified at approval)" : ""}`);
+    }
+  }
+
+  if (payload.caveats.length > 0) {
+    doc.moveDown(0.8).fillColor("#000").fontSize(13).text("Notes");
+    doc.moveDown(0.3).fontSize(8).fillColor("#666");
+    for (const caveat of payload.caveats) doc.text(`• ${caveat}`, { width: 520 });
+  }
+
+  doc.moveDown(0.8).fontSize(7).fillColor("#999").text(`Integrity hash (SHA-256): ${payloadHash}`, { width: 520 });
+  doc.end();
+}

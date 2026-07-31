@@ -282,9 +282,20 @@ export interface TicketInsights {
 }
 
 export interface CostInsights {
+  /** Across ALL costed tickets, not just the `rows` slice below. */
   totalCostUsd: number;
   avgCostPerTicket: number;
+  /** Top 25 by cost — the totals above are not derived from this slice. */
   rows: Array<{ ticketKey: string; title: string; hours: number; costUsd: number }>;
+  /** Optional: added alongside the approved-billable-only correction. Older API builds omit them,
+   *  hence optional — the UI degrades to just the totals. */
+  basis?: "APPROVED_BILLABLE";
+  ticketCount?: number;
+  /** Hours with no rate on record (pre-snapshot history, or nobody has a rate configured). Not
+   *  priced — reported separately so "unknown" is never silently rendered as "free". */
+  unratedHours?: number;
+  excludedDraftHours?: number;
+  excludedRejectedHours?: number;
 }
 
 export interface LeaderboardRow {
@@ -322,6 +333,87 @@ export interface SbomInventory {
   byEcosystem: Array<{ ecosystem: string; count: number }>;
   byRepository: Array<{ repository: string; count: number }>;
 }
+
+/** One entry inside an attestation's frozen payload. Mirrors AttestationPayload in
+ *  api/src/services/attestation.service.ts — deliberately carries the CONCLUSION of an identity
+ *  check, never the biometric internals behind it. */
+export interface AttestationPayload {
+  attestation: {
+    reference: string;
+    generatedAt: string;
+    generatedBy: string | null;
+    project: { code: string; name: string; clientName: string | null };
+    period: { start: string; end: string };
+    currency: string;
+  };
+  summary: {
+    totalHours: number;
+    billableHours: number;
+    unratedHours: number;
+    totalAmount: number;
+    entryCount: number;
+    contributorCount: number;
+    identityVerifiedEntries: number;
+    approvedEntries: number;
+  };
+  workItems: Array<{
+    ticketKey: string | null;
+    ticketTitle: string;
+    hours: number;
+    amount: number;
+    entries: Array<{
+      workDate: string;
+      hours: number;
+      activityType: string;
+      task: string;
+      person: string;
+      rate: number | null;
+      rateSource: string | null;
+      amount: number | null;
+      identityVerified: boolean;
+    }>;
+  }>;
+  contributors: Array<{ name: string; hours: number; entries: number; identityVerifiedEntries: number }>;
+  approvals: Array<{ approver: string; entries: number; identityVerified: boolean }>;
+  caveats: string[];
+}
+
+export interface AttestationRow {
+  id: string;
+  reference: string;
+  projectId: string;
+  periodStart: string;
+  periodEnd: string;
+  status: "ISSUED" | "VOID";
+  currency: string;
+  totalHours: number;
+  billableHours: number;
+  unratedHours: number;
+  totalAmount: number;
+  entryCount: number;
+  generatedBy: { id: string; name: string } | null;
+  createdAt: string;
+  voidedAt: string | null;
+  voidReason: string | null;
+}
+
+/** Verified Work Attestation — see api/src/services/attestation.service.ts. Every route 403s
+ *  until GlobalTicketSettings.enableAttestations is turned on. */
+export const attestationApi = {
+  /** Builds without persisting, so a period can be inspected before committing an immutable,
+   *  client-facing record. */
+  preview: async (payload: { projectId: string; periodStart: string; periodEnd: string }) =>
+    (await api.post<{ payload: AttestationPayload }>("/attestations/preview", payload)).data,
+  issue: async (payload: { projectId: string; periodStart: string; periodEnd: string }) =>
+    (await api.post<AttestationRow>("/attestations", payload)).data,
+  list: async (projectId: string) => (await api.get<AttestationRow[]>("/attestations", { params: { projectId } })).data,
+  /** Void, never delete — a client may already hold a copy, so withdrawal is itself a record. */
+  void: async (id: string, reason: string) => (await api.post<AttestationRow>(`/attestations/${id}/void`, { reason })).data,
+  // Authenticated blob downloads — the access token lives in memory only, so a bare <a href>
+  // would hit these routes unauthenticated. Same pattern as reportApi.download.
+  downloadJson: async (id: string) => (await api.get(`/attestations/${id}`, { responseType: "blob" })).data,
+  downloadPdf: async (id: string) => (await api.get(`/attestations/${id}.pdf`, { responseType: "blob" })).data
+};
 
 export const reportApi = {
   admin: async () => (await api.get("/reports/admin-summary")).data,

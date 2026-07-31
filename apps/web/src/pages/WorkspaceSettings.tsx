@@ -708,6 +708,57 @@ function TicketingSettingsCard({ readOnly }: { readOnly: boolean }) {
                   onCheckedChange={(v) => update.mutate({ blockResolveOnFailingTests: v })}
                 />
               </div>
+
+              <Separator />
+              <div className="grid gap-1.5">
+                <Label className="text-sm font-semibold">Verified work attestations</Label>
+                <p className="text-xs text-muted-foreground">
+                  A client-facing record that approved hours map to real tickets, done by identity-verified people and approved by a
+                  named manager — priced at the rate frozen when each entry was approved. Issued from the Reports page.
+                </p>
+              </div>
+              <div className="flex items-start gap-4 rounded-lg border border-border bg-muted/30 p-4">
+                <div className="flex-1">
+                  <Label>Enable attestations</Label>
+                  <p className="mt-0.5 text-xs text-muted-foreground">
+                    Off by default. Set a project's rate and client name under Projects → Billing so amounts appear on the artifact.
+                  </p>
+                </div>
+                <Switch
+                  checked={settings.data?.enableAttestations ?? false}
+                  disabled={readOnly}
+                  onCheckedChange={(v) => update.mutate({ enableAttestations: v })}
+                />
+              </div>
+              <div className="flex items-start gap-4 rounded-lg border border-border bg-muted/30 p-4">
+                <div className="flex-1">
+                  <Label>Allow public share links</Label>
+                  <p className="mt-0.5 text-xs text-muted-foreground">
+                    Lets a super admin mint an expiring, revocable public URL so a client can verify an attestation without an
+                    account. Deliberately separate from the toggle above — publishing to an unauthenticated URL is a different
+                    decision from producing an internal artifact. Off by default.
+                  </p>
+                </div>
+                <Switch
+                  checked={settings.data?.enableAttestationSharing ?? false}
+                  disabled={readOnly || !(settings.data?.enableAttestations ?? false)}
+                  onCheckedChange={(v) => update.mutate({ enableAttestationSharing: v })}
+                />
+              </div>
+              <div className="grid gap-1.5 sm:max-w-xs">
+                <Label htmlFor="attestation-currency">Default currency</Label>
+                <Input
+                  id="attestation-currency"
+                  value={settings.data?.defaultCurrency ?? "USD"}
+                  maxLength={3}
+                  disabled={readOnly}
+                  onChange={(e) => update.mutate({ defaultCurrency: e.target.value.toUpperCase() })}
+                />
+                <p className="text-xs text-muted-foreground">
+                  ISO-4217 code, used when a project sets no currency of its own. An attestation refuses to mix currencies in one
+                  period rather than silently summing them.
+                </p>
+              </div>
             </>
           )}
         </CardContent>
