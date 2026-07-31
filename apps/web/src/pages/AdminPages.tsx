@@ -24,6 +24,7 @@ import {
   Plus,
   RotateCcw,
   Save,
+  Share2,
   ShieldCheck,
   ShieldX,
   Sparkles,
@@ -1581,6 +1582,7 @@ function AttestationsCard() {
   const [voiding, setVoiding] = useState<AttestationRow | null>(null);
   const [voidReason, setVoidReason] = useState("");
   const [downloadingId, setDownloadingId] = useState<string | null>(null);
+  const [sharing, setSharing] = useState<AttestationRow | null>(null);
 
   const issued = useQuery({
     queryKey: ["attestations", projectId],
@@ -1753,9 +1755,14 @@ function AttestationsCard() {
                     <Download className="h-3.5 w-3.5" />JSON
                   </Button>
                   {row.status === "ISSUED" && (
-                    <Button size="sm" variant="ghost" className="text-destructive hover:bg-destructive/10 hover:text-destructive" onClick={() => setVoiding(row)}>
-                      Void
-                    </Button>
+                    <>
+                      <Button size="sm" variant="ghost" onClick={() => setSharing(row)}>
+                        <Share2 className="h-3.5 w-3.5" />Share
+                      </Button>
+                      <Button size="sm" variant="ghost" className="text-destructive hover:bg-destructive/10 hover:text-destructive" onClick={() => setVoiding(row)}>
+                        Void
+                      </Button>
+                    </>
                   )}
                 </div>
                 {row.voidReason && <p className="w-full text-xs text-muted-foreground">Voided: {row.voidReason}</p>}
@@ -1764,6 +1771,8 @@ function AttestationsCard() {
           </div>
         )}
       </CardContent>
+
+      <AttestationShareDialog attestation={sharing} onClose={() => setSharing(null)} />
 
       <Dialog open={Boolean(voiding)} onOpenChange={(open) => { if (!open) { setVoiding(null); setVoidReason(""); } }}>
         <DialogContent className="w-[min(96vw,480px)] max-w-none">
@@ -1797,6 +1806,176 @@ function AttestationsCard() {
  *  Silently omitted if the workspace hasn't turned the feature on (403 from the endpoint is
  *  shown as a friendly inline message instead of a toast, since "not enabled yet" isn't really
  *  an error). */
+/**
+ * Mint / revoke public share links for one attestation — the "client verifies it without an
+ * account" path. SUPER_ADMIN-only server-side and additionally gated on a separate workspace
+ * toggle, so a non-super-admin or a workspace with sharing off gets a friendly inline note rather
+ * than an error toast (same convention as StatusReportCard's 403 handling).
+ */
+function AttestationShareDialog({ attestation, onClose }: { attestation: AttestationRow | null; onClose: () => void }) {
+  const queryClient = useQueryClient();
+  const [scope, setScope] = useState<"SUMMARY" | "FULL">("SUMMARY");
+  const [expiresInDays, setExpiresInDays] = useState("30");
+  const [minted, setMinted] = useState<{ token: string; expiresAt: string } | null>(null);
+  const [copied, setCopied] = useState(false);
+  const [disabled, setDisabled] = useState(false);
+
+  const links = useQuery({
+    queryKey: ["attestation-shares", attestation?.id],
+    queryFn: () => attestationApi.shares.list(attestation!.id),
+    enabled: Boolean(attestation) && !disabled
+  });
+
+  const create = useMutation({
+    mutationFn: () => attestationApi.shares.create(attestation!.id, { scope, expiresInDays: Number(expiresInDays) }),
+    onSuccess: (data) => {
+      setMinted({ token: data.token, expiresAt: data.expiresAt });
+      queryClient.invalidateQueries({ queryKey: ["attestation-shares", attestation?.id] });
+    },
+    onError: (err: any) => {
+      if (err?.response?.status === 403) {
+        setDisabled(true);
+        return;
+      }
+      toast.error("Couldn't create the link", { description: serverMessage(err, "Try again.") });
+    }
+  });
+
+  const revoke = useMutation({
+    mutationFn: (linkId: string) => attestationApi.shares.revoke(attestation!.id, linkId),
+    onSuccess: () => {
+      toast.success("Link revoked");
+      queryClient.invalidateQueries({ queryKey: ["attestation-shares", attestation?.id] });
+    },
+    onError: (err: any) => toast.error("Couldn't revoke", { description: serverMessage(err, "Try again.") })
+  });
+
+  const shareUrl = minted ? `${window.location.origin}/shared/attestation/${minted.token}` : "";
+
+  function close() {
+    setMinted(null);
+    setCopied(false);
+    onClose();
+  }
+
+  return (
+    <Dialog open={Boolean(attestation)} onOpenChange={(open) => !open && close()}>
+      <DialogContent className="max-h-[92vh] w-[min(96vw,620px)] max-w-none overflow-y-auto">
+        {attestation && (
+          <>
+            <DialogHeader>
+              <DialogTitle>Share {attestation.reference}</DialogTitle>
+              <DialogDescription>
+                Creates an expiring, revocable public link so a client can verify this attestation without a TimeSphere account.
+              </DialogDescription>
+            </DialogHeader>
+
+            {disabled && (
+              <p className="rounded-md border border-dashed border-border bg-muted/30 p-3 text-sm text-muted-foreground">
+                Public share links are off for this workspace, or your role can't create them. A super admin can enable them under
+                Workspace Settings → Ticketing.
+              </p>
+            )}
+
+            {!disabled && !minted && (
+              <div className="grid gap-4">
+                <div className="grid gap-4 sm:grid-cols-2">
+                  <div className="grid gap-1.5">
+                    <Label>What the link shows</Label>
+                    <Select value={scope} onValueChange={(v) => setScope(v as "SUMMARY" | "FULL")}>
+                      <SelectTrigger><SelectValue /></SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="SUMMARY">Summary — totals and per-ticket hours</SelectItem>
+                        <SelectItem value="FULL">Full — adds per-entry detail</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  <div className="grid gap-1.5">
+                    <Label>Expires in (days)</Label>
+                    <Input type="number" min={1} max={90} value={expiresInDays} onChange={(e) => setExpiresInDays(e.target.value)} />
+                  </div>
+                </div>
+                <p className="text-xs text-muted-foreground">
+                  Summary never names an individual alongside their hours or rate. Choose Full only when the client is contractually
+                  entitled to a per-person breakdown. Maximum 90 days — a link that never expires is a permanent public exposure.
+                </p>
+                <Button
+                  className="justify-self-start"
+                  onClick={() => create.mutate()}
+                  disabled={create.isPending || !(Number(expiresInDays) >= 1 && Number(expiresInDays) <= 90)}
+                >
+                  <Share2 className="h-4 w-4" />Create link
+                </Button>
+              </div>
+            )}
+
+            {minted && (
+              <div className="grid gap-2 rounded-md border border-warning/40 bg-warning/5 p-3">
+                <p className="text-xs font-semibold text-warning">Copy this link now — it won't be shown again.</p>
+                <div className="flex min-w-0 items-center gap-2 rounded-md border border-border bg-muted/40 px-3 py-2">
+                  <code className="min-w-0 flex-1 truncate text-xs">{shareUrl}</code>
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    onClick={() => {
+                      navigator.clipboard.writeText(shareUrl).then(() => {
+                        setCopied(true);
+                        setTimeout(() => setCopied(false), 1500);
+                      });
+                    }}
+                  >
+                    {copied ? <Check className="h-3.5 w-3.5" /> : <Download className="h-3.5 w-3.5" />}
+                  </Button>
+                </div>
+                <p className="text-xs text-muted-foreground">Expires {new Date(minted.expiresAt).toLocaleDateString()}.</p>
+              </div>
+            )}
+
+            {!disabled && (
+              <div className="grid gap-1.5">
+                <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Existing links</p>
+                {links.isLoading && <Skeleton className="h-12 w-full" />}
+                {!links.isLoading && (links.data ?? []).length === 0 && (
+                  <p className="py-2 text-sm text-muted-foreground">No links created yet.</p>
+                )}
+                {(links.data ?? []).map((link) => {
+                  const expired = new Date(link.expiresAt).getTime() < Date.now();
+                  const dead = Boolean(link.revokedAt) || expired;
+                  return (
+                    <div key={link.id} className="flex flex-wrap items-center gap-2 rounded-md border border-border px-3 py-2 text-xs">
+                      <Badge variant={dead ? "muted" : "success"}>{link.revokedAt ? "REVOKED" : expired ? "EXPIRED" : "ACTIVE"}</Badge>
+                      <code className="font-mono">{link.tokenPrefix}…</code>
+                      <span className="text-muted-foreground">{link.scope}</span>
+                      <span className="text-muted-foreground">
+                        {link.viewCount} view{link.viewCount === 1 ? "" : "s"} · expires {new Date(link.expiresAt).toLocaleDateString()}
+                      </span>
+                      {!dead && (
+                        <Button
+                          size="sm"
+                          variant="ghost"
+                          className="ml-auto h-6 px-2 text-destructive hover:bg-destructive/10 hover:text-destructive"
+                          disabled={revoke.isPending}
+                          onClick={() => revoke.mutate(link.id)}
+                        >
+                          Revoke
+                        </Button>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+
+            <DialogFooter>
+              <Button variant="ghost" onClick={close}>Close</Button>
+            </DialogFooter>
+          </>
+        )}
+      </DialogContent>
+    </Dialog>
+  );
+}
+
 function StatusReportCard() {
   const projects = useQuery({ queryKey: ["projects"], queryFn: projectApi.list });
   const [projectId, setProjectId] = useState("");

@@ -28,6 +28,7 @@ const Landing = lazy(() => import("./pages/Landing").then((m) => ({ default: m.L
 const Login = lazy(() => import("./pages/Login").then((m) => ({ default: m.Login })));
 const ForgotPassword = lazy(() => import("./pages/ForgotPassword").then((m) => ({ default: m.ForgotPassword })));
 const ResetPassword = lazy(() => import("./pages/ResetPassword").then((m) => ({ default: m.ResetPassword })));
+const SharedAttestation = lazy(() => import("./pages/SharedAttestation").then((m) => ({ default: m.SharedAttestation })));
 const Dashboard = lazy(() => import("./pages/Dashboard").then((m) => ({ default: m.Dashboard })));
 const Timesheet = lazy(() => import("./pages/Timesheet").then((m) => ({ default: m.Timesheet })));
 const Tickets = lazy(() => import("./pages/Tickets").then((m) => ({ default: m.Tickets })));
@@ -70,6 +71,10 @@ const router = createBrowserRouter([
   { path: "/login", element: <PageShell><Login /></PageShell> },
   { path: "/forgot-password", element: <PageShell><ForgotPassword /></PageShell> },
   { path: "/reset-password", element: <PageShell><ResetPassword /></PageShell> },
+  // Public, no-session attestation viewer. Deliberately OUTSIDE /app: the reader is a client
+  // with no account, so it must never hit AppLayout (which assumes an authenticated user) or
+  // redirect to /login. See pages/SharedAttestation.tsx.
+  { path: "/shared/attestation/:token", element: <PageShell><SharedAttestation /></PageShell> },
   {
     path: "/app",
     element: <AppLayout />,

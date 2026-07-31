@@ -42,6 +42,7 @@ import { platformAdminRouter } from "./controllers/platform-admin.controller.js"
 import { projectRouter } from "./controllers/project.controller.js";
 import { reportRouter } from "./controllers/report.controller.js";
 import { attestationRouter } from "./controllers/attestation.controller.js";
+import { attestationPublicRouter } from "./controllers/attestation-public.controller.js";
 import { settingsRouter } from "./controllers/settings.controller.js";
 import { ssoRouter } from "./controllers/sso.controller.js";
 import { teamRouter } from "./controllers/team.controller.js";
@@ -225,6 +226,9 @@ app.use("/api/chat-integrations", chatIntegrationsRouter);
 app.use("/api/labels", labelRouter);
 app.use("/api/reports", reportRouter);
 app.use("/api/attestations", attestationRouter);
+// Unauthenticated attestation share links. Its own tighter limiter (30/min) because this is
+// the only public read surface in the app — see the controller header for the full posture.
+app.use("/api/shared/attestations", rateLimit({ windowMs: 60_000, limit: 30, standardHeaders: true }), attestationPublicRouter);
 app.use("/api/notifications", notificationRouter);
 app.use("/api/audit", auditRouter);
 app.use("/api/team", teamRouter);

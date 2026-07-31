@@ -412,8 +412,32 @@ export const attestationApi = {
   // Authenticated blob downloads — the access token lives in memory only, so a bare <a href>
   // would hit these routes unauthenticated. Same pattern as reportApi.download.
   downloadJson: async (id: string) => (await api.get(`/attestations/${id}`, { responseType: "blob" })).data,
-  downloadPdf: async (id: string) => (await api.get(`/attestations/${id}.pdf`, { responseType: "blob" })).data
+  downloadPdf: async (id: string) => (await api.get(`/attestations/${id}.pdf`, { responseType: "blob" })).data,
+  /** Public share links. SUPER_ADMIN only, and additionally gated on
+   *  GlobalTicketSettings.enableAttestationSharing which ships off. The plaintext token comes back
+   *  exactly once — same write-once convention as API keys. */
+  shares: {
+    list: async (id: string) => (await api.get<AttestationShareLinkRow[]>(`/attestations/${id}/shares`)).data,
+    create: async (id: string, payload: { scope?: "SUMMARY" | "FULL"; expiresInDays?: number }) =>
+      (await api.post<{ id: string; token: string; scope: string; expiresAt: string; tokenPrefix: string }>(
+        `/attestations/${id}/share`,
+        payload
+      )).data,
+    revoke: async (id: string, linkId: string) => api.delete(`/attestations/${id}/share/${linkId}`)
+  }
 };
+
+export interface AttestationShareLinkRow {
+  id: string;
+  /** First 12 chars only — the full token is never returned after creation. */
+  tokenPrefix: string;
+  scope: "SUMMARY" | "FULL";
+  expiresAt: string;
+  revokedAt: string | null;
+  viewCount: number;
+  lastViewedAt: string | null;
+  createdAt: string;
+}
 
 export const reportApi = {
   admin: async () => (await api.get("/reports/admin-summary")).data,

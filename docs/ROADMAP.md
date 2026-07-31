@@ -1008,7 +1008,31 @@ unrated-vs-zero distinction), plus a 23-check live pass covering the off-by-defa
 not persisting, the full biometric-stripping rule, PDF rendering, project scoping, and void-not-
 delete. Both workspaces lint clean; migration is purely additive and applied to all tenants.
 
-**Deliberately not done in this pass:** the public share link (`enableAttestationSharing` and the
-`AttestationShareLink` model exist and ship **off**) — publishing to an unauthenticated URL is a
-materially different risk decision from producing an internal artifact, so it gets its own pass
-and its own review rather than riding along with this one.
+### Public share links (shipped, off by default)
+
+The "client verifies it themselves, without an account" path — the thing that separates this from
+emailing a PDF. Built last and gated hardest, because it is the **only unauthenticated read
+surface in the application**.
+
+- Token handling copies `ApiKey` exactly: 256-bit random, **SHA-256 stored only**, plaintext shown
+  once at creation and never recoverable. A database leak yields no usable links.
+- Creation is `SUPER_ADMIN` **and** requires `enableAttestationSharing`, a toggle deliberately
+  separate from `enableAttestations` — publishing to a public URL is a different decision from
+  producing an internal artifact, and an admin should have to make it explicitly.
+- Expiry is **mandatory** (default 30d, max 90d); a link that never expires is a permanent public
+  exposure. Revoking sets `revokedAt` — the row is retained, never deleted.
+- **Expired, revoked, voided, and never-existed all return an identical generic 404**, so probing
+  can't distinguish "wrong token" from "token that was once real."
+- Attestation ids never appear in the URL, so nothing is enumerable by walking ids. Own rate
+  limiter (30/min), `noindex` + `no-store`, and every view counted and audited with a null actor.
+- `SUMMARY` scope (the default) withholds **all** per-entry rows — a client learns the work
+  happened and was verified, without receiving a per-person breakdown of the vendor's staff and
+  their rates. `FULL` is opt-in per link.
+- A voided attestation cannot be shared at all.
+- The viewer (`/shared/attestation/:token`) lives deliberately outside `/app`: the reader has no
+  session, so it must never hit the app shell or redirect to login. It uses a plain `fetch`, not
+  the authenticated axios instance.
+
+Verified by a 21-check live pass: the separate gate, super-admin-only minting, write-once token,
+unauthenticated read succeeding, SUMMARY withholding per-person detail, the uniform-404 rule
+across every failure mode, and revoke-retains-the-row.

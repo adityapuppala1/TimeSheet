@@ -12,6 +12,7 @@
  * EVERY route is additionally gated on `GlobalTicketSettings.enableAttestations`, which ships off
  * — same posture as every other capability in this app.
  */
+import crypto from "node:crypto";
 import { Router } from "express";
 import PDFDocument from "pdfkit";
 import { z } from "zod";
@@ -191,6 +192,89 @@ attestationRouter.post("/:id/void", requireSuperAdmin, validate(voidSchema), asy
   });
   await audit(req.user!.id, "attestation.voided", "WorkAttestation", row.id, { reference: row.reference, reason: req.body.reason });
   res.json(serializeRow(updated));
+});
+
+/* ---------- Public share links (off by default, super-admin only) ---------- */
+// A client verifying an attestation WITHOUT a TimeSphere account is the difference between "we
+// emailed you a PDF" and "independently verifiable" — but it means a public, unauthenticated
+// endpoint, so it sits behind its own toggle (`enableAttestationSharing`, separate from
+// `enableAttestations`) and its own stricter role gate. Token handling copies ApiKey exactly:
+// 256-bit random, sha256 stored, plaintext shown once.
+
+async function assertSharingEnabled(): Promise<void> {
+  const settings = await getGlobalTicketSettings();
+  if (!settings.enableAttestationSharing) {
+    throw new AppError(403, "Public share links are disabled for this workspace — enable them in Workspace Settings → Ticketing.");
+  }
+}
+
+const MAX_SHARE_DAYS = 90;
+const DEFAULT_SHARE_DAYS = 30;
+
+const shareSchema = z.object({
+  params: z.object({ id: z.string().uuid() }),
+  body: z.object({
+    /** SUMMARY omits per-entry rows and every per-person figure. Default, and the narrower one. */
+    scope: z.enum(["SUMMARY", "FULL"]).optional(),
+    expiresInDays: z.coerce.number().int().min(1).max(MAX_SHARE_DAYS).optional()
+  })
+});
+
+attestationRouter.post("/:id/share", requireSuperAdmin, validate(shareSchema), async (req, res) => {
+  await assertAttestationsEnabled();
+  await assertSharingEnabled();
+
+  const row = await prisma.workAttestation.findUnique({ where: { id: String(req.params.id) } });
+  if (!row) throw new AppError(404, "Attestation not found");
+  // Sharing something already withdrawn would publish a document the org has disowned.
+  if (row.status === "VOID") throw new AppError(422, "This attestation is void and cannot be shared.");
+
+  const token = crypto.randomBytes(32).toString("base64url");
+  const expiresAt = new Date(Date.now() + (req.body.expiresInDays ?? DEFAULT_SHARE_DAYS) * 24 * 60 * 60 * 1000);
+
+  const link = await prisma.attestationShareLink.create({
+    data: {
+      attestationId: row.id,
+      tokenHash: crypto.createHash("sha256").update(token).digest("hex"),
+      tokenPrefix: token.slice(0, 12),
+      scope: req.body.scope ?? "SUMMARY",
+      expiresAt,
+      createdById: req.user!.id
+    }
+  });
+  await audit(req.user!.id, "attestation.share_link_created", "AttestationShareLink", link.id, {
+    reference: row.reference,
+    scope: link.scope,
+    expiresAt
+  });
+
+  // Plaintext token returned exactly once — same write-once convention as API keys and the
+  // ingestion token. It is not recoverable afterwards; losing it means minting a new link.
+  res.status(201).json({ id: link.id, token, scope: link.scope, expiresAt: link.expiresAt, tokenPrefix: link.tokenPrefix });
+});
+
+attestationRouter.get("/:id/shares", requirePermission(permissions.REPORTS_VIEW), async (req, res) => {
+  await assertAttestationsEnabled();
+  const row = await loadScoped(req);
+  const links = await prisma.attestationShareLink.findMany({
+    where: { attestationId: row.id },
+    orderBy: { createdAt: "desc" },
+    select: { id: true, tokenPrefix: true, scope: true, expiresAt: true, revokedAt: true, viewCount: true, lastViewedAt: true, createdAt: true }
+  });
+  res.json(links);
+});
+
+attestationRouter.delete("/:id/share/:linkId", requireSuperAdmin, async (req, res) => {
+  await assertAttestationsEnabled();
+  const link = await prisma.attestationShareLink.findFirst({
+    where: { id: String(req.params.linkId), attestationId: String(req.params.id) }
+  });
+  if (!link) throw new AppError(404, "Share link not found");
+
+  // Revoke, never delete — the fact a link existed and was withdrawn is part of the audit trail.
+  await prisma.attestationShareLink.update({ where: { id: link.id }, data: { revokedAt: new Date() } });
+  await audit(req.user!.id, "attestation.share_link_revoked", "AttestationShareLink", link.id, {});
+  res.status(204).send();
 });
 
 function serializeRow(row: any) {

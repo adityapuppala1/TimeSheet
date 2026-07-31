@@ -172,6 +172,47 @@ covered-but-unverified rows distinctly from not-covered ones), and `GET /tickets
   `submittedYesterday`, `breachedYesterday`, `approvedLastWeek`, `openEscalationsYesterday`.
 - `GET /reports/export.xlsx`
 - `GET /reports/export.pdf`
+- `GET /reports/cost-insights` — opt-in (`GlobalTicketSettings.enableCostAnalytics`). Covers
+  **approved, billable** hours only, priced at the rate frozen onto each timesheet when it was
+  approved (falling back to the person's current rate only for entries approved before rate
+  snapshotting existed). Alongside `totalCostUsd`/`avgCostPerTicket`/`rows` it returns
+  `unratedHours` (hours with no rate on record — reported, never priced as zero) and
+  `excludedDraftHours`/`excludedRejectedHours`.
+
+## Verified work attestations
+
+A client-facing record that approved hours map to real tickets, done by identity-verified people,
+approved by a named manager, at a frozen rate. Scoped per project × date range. Every route 403s
+until `GlobalTicketSettings.enableAttestations` is on. Access is `reports:view` **plus**
+project-scoping; voiding is `SUPER_ADMIN`.
+
+| Route | Notes |
+|---|---|
+| `POST /attestations/preview` | Builds without persisting, so a period can be checked before committing an immutable record. |
+| `POST /attestations` | Issues (persists). Body: `{ projectId, periodStart, periodEnd }` as `YYYY-MM-DD`. Returns 422 if the period mixes currencies. |
+| `GET /attestations?projectId=…` | Project-scoped list. `projectId` is required — there is no cross-project listing. |
+| `GET /attestations/:id` | The frozen payload as a JSON download, plus `payloadHash` (SHA-256) for tamper checking. |
+| `GET /attestations/:id.pdf` | Same content as a PDF. |
+| `POST /attestations/:id/void` | `SUPER_ADMIN`. Requires a reason. **Never deletes** — a client may already hold a copy. |
+
+The payload deliberately contains **no** face embeddings, image paths, similarity scores,
+thresholds, or IP addresses — it carries the *conclusion* of an identity check, never the evidence
+behind it. Admins who need the internals use `GET /face/evidence/timesheet/:id` instead.
+
+### Public share links
+
+Requires `enableAttestationSharing` (separate from `enableAttestations`, and also off by default).
+
+| Route | Notes |
+|---|---|
+| `POST /attestations/:id/share` | `SUPER_ADMIN`. Body: `{ scope?: "SUMMARY" \| "FULL", expiresInDays?: 1–90 }`. Returns the plaintext token **exactly once**. |
+| `GET /attestations/:id/shares` | Lists links — only a 12-char prefix, never the token. |
+| `DELETE /attestations/:id/share/:linkId` | Revokes (retains the row). |
+| `GET /shared/attestations/:token` | **Unauthenticated.** 30 req/min. `noindex`/`no-store`. |
+
+Expired, revoked, voided, and unknown tokens all return an identical **404** so probing can't tell
+them apart. `SUMMARY` (the default) exposes totals and per-ticket rollups only — never per-entry
+rows, emails, user ids, or per-person rates.
 
 ## Public API
 
