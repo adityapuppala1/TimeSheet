@@ -174,6 +174,8 @@ model User {
   apiKeysCreated            ApiKey[]
   aiInteractions            AIInteraction[]           @relation("AIInteractionUser")
   aiInteractionFeedback     AIInteraction[]           @relation("AIInteractionFeedbackBy")
+  aiDatasets                AIDataset[]
+  aiDatasetItems            AIDatasetItem[]
   attestationsIssued        WorkAttestation[]
   attestationShareLinks     AttestationShareLink[]
   outboundWebhooksCreated   OutboundWebhook[]
@@ -927,6 +929,67 @@ model AIInteraction {
   @@index([createdAt])
   @@index([feedback])
   @@index([ticketId])
+}
+
+/// A golden set: real inputs paired with the answer a human says is correct.
+///
+/// WHY it exists: without ground truth, "did that prompt change help?" is unanswerable — you can
+/// only eyeball a few results and hope. A dataset turns that into a measurement.
+///
+/// WHY it's scoped to ONE feature: the capabilities take different inputs and produce different
+/// shapes, so an item is only replayable against the capability it came from. A mixed dataset
+/// would be un-runnable.
+///
+/// WHY items come from real captured interactions rather than being written by hand: invented test
+/// cases drift toward what someone imagines users do. Promoting an actual failure keeps the set
+/// anchored to what really happens — which is also why this requires content capture to be on.
+model AIDataset {
+  id          String  @id @default(uuid())
+  name        String  @db.VarChar(120)
+  description String? @db.VarChar(500)
+  /// Matches AIInteraction.feature — the capability every item replays against.
+  feature     String  @db.VarChar(60)
+
+  items AIDatasetItem[]
+
+  createdById String?
+  createdBy   User?    @relation(fields: [createdById], references: [id], onDelete: SetNull)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([feature])
+}
+
+model AIDatasetItem {
+  id        String    @id @default(uuid())
+  datasetId String
+  dataset   AIDataset @relation(fields: [datasetId], references: [id], onDelete: Cascade)
+
+  /// Where this came from. Nullable and NOT a cascade: the interaction it was promoted from will
+  /// eventually be deleted by the retention sweep, and the dataset item must outlive it — the
+  /// inputs are copied below precisely so the item stays replayable forever.
+  sourceInteractionId String? @db.VarChar(64)
+
+  /// The capability's own arguments, copied from the source interaction. This is what gets
+  /// replayed — NOT the rendered prompt, because the whole point is to run these inputs through a
+  /// DIFFERENT prompt and compare.
+  inputParamsJson Json
+  /// What the AI originally produced, kept for reference so a reviewer can see what was wrong.
+  actualOutput    String? @db.Text
+  /// What a human says the right answer is.
+  expectedOutput  String  @db.Text
+  /// How to score a replay against `expectedOutput`:
+  ///   EXACT_FIELDS — parse both as JSON and compare field by field (structured capabilities)
+  ///   CONTAINS     — the response must contain this text (cheap free-text check)
+  ///   JUDGE        — ask a model whether the response is equivalent (costs an extra call)
+  expectedKind    String  @default("EXACT_FIELDS") @db.VarChar(20)
+  notes           String? @db.VarChar(500)
+
+  createdById String?
+  createdBy   User?    @relation(fields: [createdById], references: [id], onDelete: SetNull)
+  createdAt   DateTime @default(now())
+
+  @@index([datasetId])
 }
 
 /// Singleton (id = "global") row that controls which notification categories

@@ -11,7 +11,7 @@ import rateLimit from "express-rate-limit";
 import { z } from "zod";
 import { permissions } from "@timesheet/shared";
 import { prisma } from "../config/prisma.js";
-import { requireAuth, requirePermission } from "../middleware/auth.js";
+import { requireAuth, requirePermission, requireSuperAdmin } from "../middleware/auth.js";
 import { AppError } from "../middleware/error.js";
 import { validate } from "../middleware/validate.js";
 import { audit } from "../services/audit.service.js";
@@ -22,6 +22,14 @@ import {
   improveText,
   summarizeComments
 } from "../services/ai.service.js";
+import {
+  addDatasetItemFromInteraction,
+  createDataset,
+  deleteDatasetItem,
+  getDataset,
+  listDatasets,
+  listPromotableInteractions
+} from "../services/ai-dataset.service.js";
 import { setInteractionFeedback } from "../services/ai-quality.service.js";
 import { computeTimesheetCost } from "../services/billing-rate.service.js";
 import { ticketProjectScope } from "../services/ticket.service.js";
@@ -253,3 +261,75 @@ aiRouter.patch(
     res.json({ id: existing.id, feedback: req.body.feedback });
   }
 );
+
+/* ---------- Golden datasets ---------- */
+// See services/ai-dataset.service.ts. SUPER_ADMIN-only: a golden set defines what "correct" means
+// for a workspace's AI, and eval runs are built on it — that's configuration, not day-to-day work.
+
+const createDatasetSchema = z.object({
+  body: z.object({
+    name: z.string().min(1).max(120),
+    feature: z.string().min(1).max(60),
+    description: z.string().max(500).optional()
+  })
+});
+
+aiRouter.get("/datasets", requireSuperAdmin, async (_req, res) => {
+  res.json(await listDatasets());
+});
+
+aiRouter.post("/datasets", requireSuperAdmin, validate(createDatasetSchema), async (req, res) => {
+  const created = await createDataset({
+    name: req.body.name,
+    feature: req.body.feature,
+    description: req.body.description,
+    userId: req.user!.id
+  });
+  await audit(req.user!.id, "ai.dataset_created", "AIDataset", created.id, { name: created.name, feature: created.feature });
+  res.status(201).json(created);
+});
+
+aiRouter.get("/datasets/:id", requireSuperAdmin, async (req, res) => {
+  res.json(await getDataset(String(req.params.id)));
+});
+
+/** Candidate interactions to promote. Defaults to problems only — the ones worth correcting. */
+aiRouter.get("/datasets/:id/candidates", requireSuperAdmin, async (req, res) => {
+  const dataset = await getDataset(String(req.params.id));
+  res.json(
+    await listPromotableInteractions({
+      feature: dataset.feature,
+      onlyProblems: req.query.all === "true" ? false : true,
+      limit: Number(req.query.limit) || 25
+    })
+  );
+});
+
+const addItemSchema = z.object({
+  params: z.object({ id: z.string().uuid() }),
+  body: z.object({
+    interactionId: z.string().uuid(),
+    expectedOutput: z.string().min(1).max(20000),
+    expectedKind: z.enum(["EXACT_FIELDS", "CONTAINS", "JUDGE"]).optional(),
+    notes: z.string().max(500).optional()
+  })
+});
+
+aiRouter.post("/datasets/:id/items", requireSuperAdmin, validate(addItemSchema), async (req, res) => {
+  const item = await addDatasetItemFromInteraction({
+    datasetId: String(req.params.id),
+    interactionId: req.body.interactionId,
+    expectedOutput: req.body.expectedOutput,
+    expectedKind: req.body.expectedKind,
+    notes: req.body.notes,
+    userId: req.user!.id
+  });
+  await audit(req.user!.id, "ai.dataset_item_added", "AIDatasetItem", item.id, { datasetId: item.datasetId });
+  res.status(201).json(item);
+});
+
+aiRouter.delete("/datasets/:id/items/:itemId", requireSuperAdmin, async (req, res) => {
+  await deleteDatasetItem(String(req.params.id), String(req.params.itemId));
+  await audit(req.user!.id, "ai.dataset_item_removed", "AIDatasetItem", String(req.params.itemId), {});
+  res.status(204).send();
+});

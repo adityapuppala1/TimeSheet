@@ -95,6 +95,7 @@ import { MailServerSettingsCard } from "./settings/MailServerSettingsCard";
 import { PublicApiSettingsCard } from "./settings/PublicApiSettingsCard";
 import { BillingSettingsCard } from "./settings/BillingSettingsCard";
 import { IntegrationsSettingsCard } from "./settings/IntegrationsSettingsCard";
+import { AIDatasetsCard } from "./settings/AIDatasetsCard";
 import { SecurityDevOpsSettingsCard } from "./settings/SecurityDevOpsSettingsCard";
 import { FaceVerificationSettingsCard } from "./settings/FaceVerificationSettingsCard";
 
@@ -1492,6 +1493,8 @@ function AISettingsCard({ readOnly }: { readOnly: boolean }) {
       )}
 
       <AIQualityCard enabled={Boolean(settings.data?.aiEnabled)} captureOn={Boolean(settings.data?.aiCaptureEnabled)} />
+
+      <AIDatasetsCard readOnly={readOnly} contentCaptureOn={Boolean(settings.data?.aiCaptureContentEnabled)} />
     </div>
   );
 }

@@ -645,6 +645,60 @@ export interface AIQualitySummary {
   legacyTicketFeedback: { up: number; down: number };
 }
 
+/** Golden datasets — see api/src/services/ai-dataset.service.ts. */
+export interface AIDatasetRow {
+  id: string;
+  name: string;
+  description: string | null;
+  feature: string;
+  itemCount: number;
+  createdBy: { id: string; name: string } | null;
+  createdAt: string;
+}
+export interface AIDatasetItemRow {
+  id: string;
+  sourceInteractionId: string | null;
+  inputParamsJson: unknown;
+  actualOutput: string | null;
+  expectedOutput: string;
+  expectedKind: "EXACT_FIELDS" | "CONTAINS" | "JUDGE";
+  notes: string | null;
+  createdBy: { id: string; name: string } | null;
+  createdAt: string;
+}
+export interface AIDatasetDetail extends Omit<AIDatasetRow, "itemCount"> {
+  items: AIDatasetItemRow[];
+}
+/** A captured interaction that could be promoted into a dataset. `replayable` is false when the
+ *  inputs weren't captured (content capture was off), so the UI can say so before someone types
+ *  out a corrected answer. */
+export interface AIPromotableInteraction {
+  id: string;
+  feature: string;
+  parseOk: boolean | null;
+  feedback: string | null;
+  outputText: string | null;
+  paramsJson: unknown;
+  createdAt: string;
+  replayable: boolean;
+}
+
+export const aiDatasetApi = {
+  list: async () => (await api.get<AIDatasetRow[]>("/ai/datasets")).data,
+  create: async (payload: { name: string; feature: string; description?: string }) =>
+    (await api.post<AIDatasetRow>("/ai/datasets", payload)).data,
+  get: async (id: string) => (await api.get<AIDatasetDetail>(`/ai/datasets/${id}`)).data,
+  /** Defaults to problem interactions only (unparseable or thumbs-down) — the ones worth
+   *  correcting. Pass `all` to browse everything. */
+  candidates: async (id: string, all = false) =>
+    (await api.get<AIPromotableInteraction[]>(`/ai/datasets/${id}/candidates`, { params: { all } })).data,
+  addItem: async (
+    id: string,
+    payload: { interactionId: string; expectedOutput: string; expectedKind?: "EXACT_FIELDS" | "CONTAINS" | "JUDGE"; notes?: string }
+  ) => (await api.post<AIDatasetItemRow>(`/ai/datasets/${id}/items`, payload)).data,
+  removeItem: async (id: string, itemId: string) => api.delete(`/ai/datasets/${id}/items/${itemId}`)
+};
+
 export interface AIUsageWeek {
   weekStart: string;
   costUsd: number;
