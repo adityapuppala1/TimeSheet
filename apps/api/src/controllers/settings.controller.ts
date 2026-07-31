@@ -27,7 +27,7 @@ import {
   notifyEnrollmentRequired
 } from "../services/face.service.js";
 import { getGlobalNotificationSettings } from "../services/notify.service.js";
-import { getGlobalAISettings, getMonthlyAIUsageSummary, getWeeklyAIUsageTrend } from "../services/ai.service.js";
+import { getGlobalAISettings, getMonthlyAIUsageSummary, getWeeklyAIUsageTrend, listAvailableOpenAICompatibleModels, resolveApiKey } from "../services/ai.service.js";
 import { getAllowedSsoProviders } from "../services/plan-limits.service.js";
 import { getGlobalTicketSettings } from "../services/ticket.service.js";
 import { decryptSecret, encryptSecret } from "../utils/encryption.js";
@@ -261,6 +261,42 @@ settingsRouter.patch("/ai", requireSuperAdmin, validate(aiSettingsSchema), async
   await audit(req.user!.id, "settings.ai_updated", "GlobalAISettings", "global", { ...req.body, apiKey: undefined });
   const { apiKey: _omit, ...safeUpdated } = updated;
   res.json({ ...safeUpdated, apiKeySet: Boolean(updated.apiKey) });
+});
+
+const availableModelsSchema = z.object({
+  body: z
+    .object({
+      // All optional so the settings UI can preview models against a not-yet-saved draft
+      // (provider just switched, a key just typed) — same "explicit inline value, falling back
+      // to what's already saved" convention as /mail/test-connection above. Anthropic is
+      // deliberately not handled here: its model list is small/stable and already a fixed
+      // dropdown in the UI (packages/shared's `aiModels`), not something worth a live API call.
+      baseUrl: z.string().max(300).optional(),
+      apiKey: z.string().max(2000).optional()
+    })
+    .strict()
+});
+
+/**
+ * Lists the real model ids an OpenAI-compatible endpoint serves, so the BYOK model field can be
+ * a picker instead of a free-text guess. Never throws on a remote failure — an unreachable
+ * endpoint, a bad key, or a provider that doesn't implement `/models` all just mean "nothing to
+ * show," and the UI falls back to manual entry, exactly like /mail/test-connection's `{ ok:
+ * false }` shape rather than a hard error.
+ */
+settingsRouter.post("/ai/available-models", requireSuperAdmin, validate(availableModelsSchema), async (req, res) => {
+  const saved = await getGlobalAISettings();
+  const baseUrl = req.body.baseUrl || saved.baseUrl;
+  if (!baseUrl) return res.json({ ok: false, models: [], message: "No base URL configured for this provider." });
+
+  const apiKey = typeof req.body.apiKey === "string" && req.body.apiKey.length > 0 ? req.body.apiKey : resolveApiKey(saved);
+
+  try {
+    const models = await listAvailableOpenAICompatibleModels(baseUrl, apiKey);
+    res.json({ ok: true, models });
+  } catch (error) {
+    res.json({ ok: false, models: [], message: (error as Error).message });
+  }
 });
 
 /**

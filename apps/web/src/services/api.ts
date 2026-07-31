@@ -524,6 +524,13 @@ export const settingsApi = {
     (await api.patch<GlobalAISettings>("/settings/ai", payload)).data,
   getAIUsageSummary: async () => (await api.get<AIUsageSummary>("/settings/ai/usage-summary")).data,
   getAIUsageTrend: async (weeks = 8) => (await api.get<AIUsageWeek[]>("/settings/ai/usage-trend", { params: { weeks } })).data,
+  /** Lists the real model ids an OpenAI-compatible endpoint serves, for the BYOK model picker —
+   *  `baseUrl`/`apiKey` are optional overrides so this can preview a not-yet-saved draft (a
+   *  freshly typed key, a provider just switched) instead of only ever checking what's stored.
+   *  Never rejects on a remote failure — `ok: false` with a message is the "nothing to show,
+   *  fall back to manual entry" case, same shape as testMailConnection. */
+  fetchAvailableAiModels: async (payload: { baseUrl?: string; apiKey?: string }) =>
+    (await api.post<{ ok: boolean; models: string[]; message?: string }>("/settings/ai/available-models", payload)).data,
   getSso: async () => (await api.get<SsoSettings>("/settings/sso")).data,
   /** `clientSecret`/`idpCertificate` are write-only, same masked-field convention as
    *  GlobalAISettings.apiKey — omit to leave the stored value untouched, pass "" to clear it.

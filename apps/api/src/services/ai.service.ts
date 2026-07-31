@@ -78,7 +78,7 @@ export async function getGlobalAISettings() {
 type AISettingsRow = Awaited<ReturnType<typeof getGlobalAISettings>>;
 
 /** Decrypts the row's stored key if one was set; falls back to the env var for the default Anthropic path only. */
-function resolveApiKey(settings: AISettingsRow): string {
+export function resolveApiKey(settings: AISettingsRow): string {
   if (settings.apiKey) {
     try {
       return decryptSecret(settings.apiKey);
@@ -181,6 +181,23 @@ async function callOpenAICompatible(settings: AISettingsRow, apiKey: string, par
       outputTokens: response.usage?.completion_tokens ?? 0
     }
   };
+}
+
+/**
+ * Lists the model ids an OpenAI-compatible endpoint actually serves, for the BYOK settings UI's
+ * model picker (Workspace Settings → AI) — so an admin picks a real model instead of typing one
+ * from memory and finding out it's wrong the first time a feature calls it. Anthropic isn't
+ * wired through this: its model list is small, stable, and already a fixed dropdown
+ * (`aiModels` in packages/shared) rather than something that needs a live API call. Every
+ * OpenAI-compatible provider in `aiProviderPresets` (Groq, Mistral, DeepSeek, OpenRouter, a
+ * self-hosted Ollama/LM Studio, ...) implements `GET /models` as part of aiming for SDK
+ * compatibility in the first place, so this is the one call that works across all of them
+ * without provider-specific branching.
+ */
+export async function listAvailableOpenAICompatibleModels(baseUrl: string, apiKey: string): Promise<string[]> {
+  const client = new OpenAI({ apiKey: apiKey || "not-needed", baseURL: baseUrl });
+  const response = await client.models.list();
+  return response.data.map((m) => m.id).sort();
 }
 
 async function callChat(settings: AISettingsRow, params: CallChatParams): Promise<CallChatResult> {

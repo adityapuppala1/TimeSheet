@@ -41,6 +41,7 @@ import {
   Pencil,
   PlugZap,
   Plus,
+  RefreshCw,
   Save,
   ScanFace,
   ShieldAlert,
@@ -1032,6 +1033,25 @@ function AISettingsCard({ readOnly }: { readOnly: boolean }) {
   }, [settings.data?.monthlyBudgetUsd]);
 
   const [apiKeyDraft, setApiKeyDraft] = useState("");
+  // Model picker for OPENAI_COMPATIBLE providers — see settings.controller.ts's
+  // POST /settings/ai/available-models. Manual entry is always reachable (some endpoints don't
+  // implement `/models`, or the fetch just fails), so this never blocks configuration.
+  const [manualModelEntry, setManualModelEntry] = useState(false);
+  const fetchModels = useMutation({
+    mutationFn: () => settingsApi.fetchAvailableAiModels({ baseUrl: settings.data?.baseUrl || undefined, apiKey: apiKeyDraft || undefined }),
+    onSuccess: (result) => {
+      if (!result.ok || result.models.length === 0) {
+        toast.error("Could not fetch models", { description: result.message ?? "Enter the model name manually instead." });
+        setManualModelEntry(true);
+      } else {
+        setManualModelEntry(false);
+      }
+    },
+    onError: (err: any) => {
+      toast.error("Could not fetch models", { description: err?.response?.data?.message ?? "Try again, or enter the model name manually." });
+      setManualModelEntry(true);
+    }
+  });
 
   // Which preset the current provider/baseUrl combination matches — purely a UI convenience for
   // the dropdown; only `provider` and `baseUrl` are ever actually persisted.
@@ -1199,14 +1219,59 @@ function AISettingsCard({ readOnly }: { readOnly: boolean }) {
                       />
                     </div>
                     <div className="grid gap-1.5">
-                      <Label>Model</Label>
-                      <Input
-                        value={settings.data.model}
-                        placeholder="e.g. llama3.1, mixtral-8x7b, gpt-4o-mini"
-                        disabled={readOnly}
-                        onChange={(e) => update.mutate({ model: e.target.value })}
-                      />
-                      <p className="text-xs text-muted-foreground">Exact model name as this provider expects it.</p>
+                      <div className="flex items-center justify-between gap-2">
+                        <Label>Model</Label>
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="sm"
+                          className="h-6 px-2 text-xs"
+                          disabled={readOnly || fetchModels.isPending || !(settings.data.baseUrl ?? "").trim()}
+                          onClick={() => fetchModels.mutate()}
+                        >
+                          <RefreshCw className={`mr-1 h-3 w-3 ${fetchModels.isPending ? "animate-spin" : ""}`} />
+                          {fetchModels.isPending ? "Fetching…" : "Fetch available models"}
+                        </Button>
+                      </div>
+                      {fetchModels.data?.ok && fetchModels.data.models.length > 0 && !manualModelEntry ? (
+                        <>
+                          <Select value={settings.data.model} onValueChange={(v) => update.mutate({ model: v })} disabled={readOnly}>
+                            <SelectTrigger><SelectValue /></SelectTrigger>
+                            <SelectContent>
+                              {/* Keeps the currently-set model selectable even if the live list
+                                  doesn't include it (e.g. switched providers, or the endpoint's
+                                  list changed) — never silently drops what's already configured. */}
+                              {settings.data.model && !fetchModels.data.models.includes(settings.data.model) && (
+                                <SelectItem value={settings.data.model}>{settings.data.model} (current)</SelectItem>
+                              )}
+                              {fetchModels.data.models.map((m) => (
+                                <SelectItem key={m} value={m}>{m}</SelectItem>
+                              ))}
+                            </SelectContent>
+                          </Select>
+                          <button
+                            type="button"
+                            className="justify-self-start text-xs text-muted-foreground underline-offset-2 hover:underline"
+                            onClick={() => setManualModelEntry(true)}
+                          >
+                            Enter manually instead
+                          </button>
+                        </>
+                      ) : (
+                        <>
+                          <Input
+                            value={settings.data.model}
+                            placeholder="e.g. llama3.1, mixtral-8x7b, gpt-4o-mini"
+                            disabled={readOnly}
+                            onChange={(e) => update.mutate({ model: e.target.value })}
+                          />
+                          <p className="text-xs text-muted-foreground">
+                            {fetchModels.data && !fetchModels.data.ok
+                              ? `Couldn't fetch a model list (${fetchModels.data.message ?? "unknown error"}) — enter the exact model name.`
+                              : 'Exact model name as this provider expects it, or click "Fetch available models" above to pick from a list.'}
+                          </p>
+                        </>
+                      )}
                     </div>
                   </div>
                 )}
