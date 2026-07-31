@@ -329,6 +329,13 @@ export interface GlobalAISettings {
   /** Gates per-line AI review comments on a PR's actual diff — deeper and riskier than
    *  aiPrReviewSummaryEnabled's 2-3 sentence summary, so its own explicit opt-in. */
   aiPrInlineReviewEnabled: boolean;
+  /** Records one AIInteraction row per AI call (feature, model, prompt hash, parse success,
+   *  latency) — metadata only, no user content. Makes AI quality measurable at all. */
+  aiCaptureEnabled: boolean;
+  /** Additionally stores prompt text, model output and input params. Separate toggle because it
+   *  retains real user content; required before golden datasets/evals are possible. */
+  aiCaptureContentEnabled: boolean;
+  aiCaptureRetentionDays: number;
   model: string;
   confidenceThreshold: number;
   monthlyBudgetUsd: number | null;

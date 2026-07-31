@@ -172,6 +172,8 @@ model User {
   aiUsageLogs               AIUsageLog[]
   ticketBranchesAdded       TicketBranch[]
   apiKeysCreated            ApiKey[]
+  aiInteractions            AIInteraction[]           @relation("AIInteractionUser")
+  aiInteractionFeedback     AIInteraction[]           @relation("AIInteractionFeedbackBy")
   attestationsIssued        WorkAttestation[]
   attestationShareLinks     AttestationShareLink[]
   outboundWebhooksCreated   OutboundWebhook[]
@@ -570,6 +572,7 @@ model Ticket {
   timesheets       Timesheet[]
   labels           TicketLabel[]
   aiUsageLogs      AIUsageLog[]
+  aiInteractions   AIInteraction[]
   linksFrom        TicketLink[]          @relation("TicketLinkSource")
   linksTo          TicketLink[]          @relation("TicketLinkTarget")
   checklistItems   TicketChecklistItem[]
@@ -779,6 +782,21 @@ model GlobalAISettings {
   /// developer trust fast), so this must be its own explicit opt-in, never bundled with the
   /// lower-risk 2-3 sentence summary feature.
   aiPrInlineReviewEnabled     Boolean    @default(false)
+
+  /// --- AI quality loop (see prisma AIInteraction + services/ai.service.ts) ------------------
+  /// Records one AIInteraction row per AI call: feature, model, prompt HASH, whether the response
+  /// parsed, latency. No user content. This is what makes "is our AI any good?" answerable at all —
+  /// without it the only AI signal in the system is cost.
+  aiCaptureEnabled            Boolean    @default(false)
+  /// Additionally stores the prompt text, the model's output, and the capability's input params.
+  /// SEPARATE from the toggle above because it retains real user content (ticket descriptions,
+  /// timesheet notes, PR diffs) — that is a privacy decision an admin must make deliberately.
+  /// Required before golden datasets or eval runs are possible, since both replay real inputs.
+  /// Has no effect unless aiCaptureEnabled is also on. Never applies to the face features.
+  aiCaptureContentEnabled     Boolean    @default(false)
+  /// How long captured interactions are retained before the sweep deletes them.
+  aiCaptureRetentionDays      Int        @default(30)
+
   model                       String     @default("claude-haiku-4-5") @db.VarChar(80)
   confidenceThreshold         Float      @default(0.6)
   monthlyBudgetUsd            Decimal?   @db.Decimal(10, 2)
@@ -824,6 +842,91 @@ model AIUsageLog {
   @@index([createdAt])
   @@index([model, createdAt])
   @@index([userId])
+}
+
+/// One row per AI call, recording WHAT the model was asked and what it produced — the missing
+/// half of the AI improvement loop.
+///
+/// WHY this is a separate table from AIUsageLog rather than more columns on it: AIUsageLog is
+/// SUMmed on every single AI call by the budget gate (`assertWithinBudget`) and scanned by the
+/// usage/trend reports. It is the hottest table in the AI path, and bolting `@db.Text` columns
+/// onto it would make every budget check drag prompt bodies off disk. AIUsageLog stays exactly as
+/// it is: narrow, numeric, append-only.
+///
+/// WHY it exists at all: before this, quality was invisible. `Ticket.aiFeedback` (thumbs up/down)
+/// was written by one endpoint and read literally nowhere, AIUsageLog had no correctness column of
+/// any kind, and nothing recorded what the model actually said — so there was no way to answer "is
+/// our AI any good?", let alone "did that prompt change help?". This table is what makes accuracy
+/// measurable, and it is the input a golden dataset and an eval run are built from.
+///
+/// PRIVACY: prompts contain real user content (ticket descriptions, timesheet notes, PR diffs).
+/// Storing that is a deliberate decision, not a default — hence TWO separate toggles on
+/// GlobalAISettings, both off: `aiCaptureEnabled` (metadata only, no content) and
+/// `aiCaptureContentEnabled` (adds the text fields below). The face-verification features are
+/// additionally hardcoded to never store content regardless of toggle — see ai.service.ts's
+/// CONTENT_CAPTURE_DENYLIST and the promise made in GlobalAISettings.faceReviewSummaryEnabled's
+/// own comment.
+model AIInteraction {
+  id       String @id @default(uuid())
+  feature  String @db.VarChar(60)
+  model    String @db.VarChar(80)
+  provider String @db.VarChar(30)
+
+  /// SHA-256 of the rendered prompt. Always stored, even when content capture is off — it lets you
+  /// group identical prompts and detect that a prompt changed WITHOUT retaining any user content.
+  promptHash String @db.VarChar(64)
+
+  /// Whether the response parsed against the capability's expected schema. NULL for the free-text
+  /// capabilities that have no schema to parse.
+  ///
+  /// This is the loop's single most valuable signal: it is objective, needs no human, costs
+  /// nothing, and already happens on every structured call — `parseJsonResponse` returning null
+  /// was simply thrown away before. Unlike thumbs-up rate it has no selection bias.
+  parseOk   Boolean?
+  latencyMs Int?
+
+  /// Which stored prompt version produced this (null = the hardcoded code default). Deliberately
+  /// NOT a foreign key: prompt versions may be pruned, and an interaction must keep its provenance
+  /// even then.
+  promptVersionId String? @db.VarChar(64)
+  /// Set when a stored prompt existed but could not be used (missing var, empty body, render
+  /// failure) and the code default was substituted. Makes silent fallback visible.
+  promptFallbackReason String? @db.VarChar(200)
+
+  /// Content — only written when `aiCaptureContentEnabled` is on. Truncated at write time
+  /// (see CAPTURE_TEXT_LIMIT); `ask_ai` embeds up to 150 tickets and would otherwise write ~30KB
+  /// rows on every question.
+  promptText      String?  @db.Text
+  outputText      String?  @db.Text
+  /// The capability function's own arguments, as JSON.
+  ///
+  /// Load-bearing and easy to mistake for redundant with promptText: replaying a dataset item
+  /// against a NEW prompt requires the original inputs, not the previously-rendered prompt string.
+  /// Without this, datasets and eval runs are impossible.
+  paramsJson      Json?
+  promptTruncated Boolean  @default(false)
+  outputTruncated Boolean  @default(false)
+
+  /// Feedback attached to THIS specific interaction. The pre-existing `Ticket.aiFeedback` is a
+  /// single flag per ticket even though several features may touch one ticket; this is per-call.
+  /// The old field and its endpoint are retained unchanged — see ticket.controller.ts.
+  feedback     String?   @db.VarChar(10)
+  feedbackById String?
+  feedbackBy   User?     @relation("AIInteractionFeedbackBy", fields: [feedbackById], references: [id], onDelete: SetNull)
+  feedbackAt   DateTime?
+  feedbackNote String?   @db.VarChar(500)
+
+  ticketId String?
+  ticket   Ticket? @relation(fields: [ticketId], references: [id], onDelete: SetNull)
+  userId   String?
+  user     User?   @relation("AIInteractionUser", fields: [userId], references: [id], onDelete: SetNull)
+
+  createdAt DateTime @default(now())
+
+  @@index([feature, createdAt])
+  @@index([createdAt])
+  @@index([feedback])
+  @@index([ticketId])
 }
 
 /// Singleton (id = "global") row that controls which notification categories

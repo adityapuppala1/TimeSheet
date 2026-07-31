@@ -32,6 +32,7 @@
  * locally with the same Zod schema either way (see `parseJsonResponse`) — the schema is what
  * actually guarantees a usable result, not the request shape that asked for it.
  */
+import crypto from "node:crypto";
 import Anthropic from "@anthropic-ai/sdk";
 import OpenAI from "openai";
 import { z } from "zod";
@@ -265,6 +266,27 @@ export function estimateCostUsd(model: string, inputTokens: number, outputTokens
   return (inputTokens * pricing.input + outputTokens * pricing.output) / 1_000_000;
 }
 
+/**
+ * Features whose prompts may NEVER be stored as text, regardless of `aiCaptureContentEnabled`.
+ *
+ * The face-verification capabilities are documented (in GlobalAISettings' own schema comment, and
+ * in docs/FACE_VERIFICATION.md) as sending METADATA ONLY — outcomes, scores, timestamps, device
+ * labels — and never a captured image or embedding. A new text store of those prompts would
+ * quietly retain biometric-adjacent review material outside the face-retention sweep that governs
+ * everything else in that subsystem. That is a compliance regression, so it is a hardcoded
+ * denylist rather than an admin-facing choice.
+ */
+const CONTENT_CAPTURE_DENYLIST = new Set(["face_review_summary", "face_policy_copilot"]);
+
+/** `ask_ai` embeds up to 150 tickets; without a cap a single row would be ~30KB. */
+const CAPTURE_TEXT_LIMIT = 8_000;
+
+function truncateForCapture(value: string | undefined): { text: string | undefined; truncated: boolean } {
+  if (value === undefined) return { text: undefined, truncated: false };
+  if (value.length <= CAPTURE_TEXT_LIMIT) return { text: value, truncated: false };
+  return { text: value.slice(0, CAPTURE_TEXT_LIMIT), truncated: true };
+}
+
 export async function logAIUsage(params: {
   feature: string;
   model: string;
@@ -272,6 +294,16 @@ export async function logAIUsage(params: {
   outputTokens: number;
   ticketId?: string;
   userId?: string;
+  /** Everything below is optional so all 18 existing call sites keep compiling untouched and can
+   *  adopt capture incrementally. Absent = that field simply isn't recorded. */
+  prompt?: string;
+  output?: string;
+  /** The capability's own arguments — what a dataset replays. See AIInteraction.paramsJson. */
+  params?: unknown;
+  parseOk?: boolean;
+  latencyMs?: number;
+  promptVersionId?: string;
+  promptFallbackReason?: string;
 }): Promise<void> {
   const costUsdEstimate = estimateCostUsd(params.model, params.inputTokens, params.outputTokens);
   await prisma.aIUsageLog.create({
@@ -281,6 +313,56 @@ export async function logAIUsage(params: {
       inputTokens: params.inputTokens,
       outputTokens: params.outputTokens,
       costUsdEstimate,
+      ticketId: params.ticketId,
+      userId: params.userId
+    }
+  });
+
+  // Capture is best-effort and MUST NOT fail the caller: by the time this runs the AI call has
+  // already succeeded and already cost real money, so throwing here would turn a working feature
+  // into a broken one purely for the sake of observability.
+  await captureInteraction(params).catch((error) => {
+    console.warn(`[ai] interaction capture failed for ${params.feature}: ${(error as Error).message}`);
+  });
+}
+
+async function captureInteraction(params: {
+  feature: string;
+  model: string;
+  ticketId?: string;
+  userId?: string;
+  prompt?: string;
+  output?: string;
+  params?: unknown;
+  parseOk?: boolean;
+  latencyMs?: number;
+  promptVersionId?: string;
+  promptFallbackReason?: string;
+}): Promise<void> {
+  const settings = await getGlobalAISettings();
+  if (!settings.aiCaptureEnabled) return;
+
+  const storeContent = settings.aiCaptureContentEnabled && !CONTENT_CAPTURE_DENYLIST.has(params.feature);
+  const prompt = truncateForCapture(storeContent ? params.prompt : undefined);
+  const output = truncateForCapture(storeContent ? params.output : undefined);
+
+  await prisma.aIInteraction.create({
+    data: {
+      feature: params.feature,
+      model: params.model,
+      provider: settings.provider,
+      // Hashed even when content capture is off — lets you tell that a prompt CHANGED, and group
+      // identical prompts, while retaining nothing a person wrote.
+      promptHash: crypto.createHash("sha256").update(params.prompt ?? "").digest("hex"),
+      parseOk: params.parseOk ?? null,
+      latencyMs: params.latencyMs ?? null,
+      promptVersionId: params.promptVersionId ?? null,
+      promptFallbackReason: params.promptFallbackReason ?? null,
+      promptText: prompt.text ?? null,
+      outputText: output.text ?? null,
+      paramsJson: storeContent && params.params !== undefined ? (params.params as object) : undefined,
+      promptTruncated: prompt.truncated,
+      outputTruncated: output.truncated,
       ticketId: params.ticketId,
       userId: params.userId
     }
@@ -488,6 +570,7 @@ export async function classifyTicket(params: {
     .filter(Boolean)
     .join("\n");
 
+  const startedAt = Date.now();
   const result = await callChat(settings, {
     model: settings.model,
     maxTokens: 1024,
@@ -510,15 +593,26 @@ export async function classifyTicket(params: {
     }
   });
 
+  // Parse BEFORE logging so `parseOk` can be recorded — that flag is the loop's headline quality
+  // metric (objective, free, no human needed). Usage is still logged either way: a call that
+  // returned garbage cost exactly as much as one that didn't.
+  const parsed = parseJsonResponse(result.text, TriageResultSchema);
+
   await logAIUsage({
     feature: "triage",
     model: settings.model,
     inputTokens: result.usage.inputTokens,
     outputTokens: result.usage.outputTokens,
-    userId: params.userId
+    userId: params.userId,
+    prompt,
+    output: result.text,
+    // Images are deliberately excluded from captured params — they're base64 blobs that would
+    // dwarf the row, and a dataset replaying triage cares about the text.
+    params: { title: params.title, description: params.description, typeNames: params.typeNames },
+    parseOk: Boolean(parsed),
+    latencyMs: Date.now() - startedAt
   });
 
-  const parsed = parseJsonResponse(result.text, TriageResultSchema);
   if (!parsed) throw new AppError(502, "AI classification did not return a usable result.");
 
   const moduleId = parsed.moduleName === "NONE" ? null : (params.project.modules.find((m) => m.name === parsed.moduleName)?.id ?? null);
@@ -567,6 +661,7 @@ export async function classifyCiFailure(params: {
     "than a real regression (timeouts, network blips, race conditions in the test itself)."
   ].join("\n");
 
+  const startedAt = Date.now();
   const result = await callChat(settings, {
     model: settings.model,
     maxTokens: 512,
@@ -586,15 +681,23 @@ export async function classifyCiFailure(params: {
     }
   });
 
+  // Parse before logging so `parseOk` is recorded — see classifyTicket for why that flag
+  // is the loop's headline quality metric. Usage is logged either way; a garbage response
+  // cost the same as a good one.
+  const parsed = parseJsonResponse(result.text, CiFailureResultSchema);
+
   await logAIUsage({
     feature: "ci_failure_triage",
     model: settings.model,
     inputTokens: result.usage.inputTokens,
     outputTokens: result.usage.outputTokens,
-    userId: params.userId
+    userId: params.userId,
+    prompt,
+    output: result.text,
+    parseOk: Boolean(parsed),
+    latencyMs: Date.now() - startedAt,
   });
 
-  const parsed = parseJsonResponse(result.text, CiFailureResultSchema);
   if (!parsed) throw new AppError(502, "AI classification did not return a usable result.");
   return parsed;
 }
@@ -649,6 +752,7 @@ export async function classifySecurityFinding(params: {
     .filter(Boolean)
     .join("\n");
 
+  const startedAt = Date.now();
   const result = await callChat(settings, {
     model: settings.model,
     maxTokens: 700,
@@ -668,15 +772,23 @@ export async function classifySecurityFinding(params: {
     }
   });
 
+  // Parse before logging so `parseOk` is recorded — see classifyTicket for why that flag
+  // is the loop's headline quality metric. Usage is logged either way; a garbage response
+  // cost the same as a good one.
+  const parsed = parseJsonResponse(result.text, SecurityFindingTriageResultSchema);
+
   await logAIUsage({
     feature: "security_finding_triage",
     model: settings.model,
     inputTokens: result.usage.inputTokens,
     outputTokens: result.usage.outputTokens,
-    userId: params.userId
+    userId: params.userId,
+    prompt,
+    output: result.text,
+    parseOk: Boolean(parsed),
+    latencyMs: Date.now() - startedAt,
   });
 
-  const parsed = parseJsonResponse(result.text, SecurityFindingTriageResultSchema);
   if (!parsed) throw new AppError(502, "AI classification did not return a usable result.");
   return parsed;
 }
@@ -729,6 +841,7 @@ export async function summarizePullRequest(params: {
     "on what a reviewer should focus on checking."
   ].join("\n");
 
+  const startedAt = Date.now();
   const result = await callChat(settings, {
     model: settings.model,
     maxTokens: 512,
@@ -748,14 +861,22 @@ export async function summarizePullRequest(params: {
     }
   });
 
+  // Parse before logging so `parseOk` is recorded — see classifyTicket for why that flag
+  // is the loop's headline quality metric. Usage is logged either way; a garbage response
+  // cost the same as a good one.
+  const parsed = parseJsonResponse(result.text, PrReviewSummaryResultSchema);
+
   await logAIUsage({
     feature: "pr_review_summary",
     model: settings.model,
     inputTokens: result.usage.inputTokens,
-    outputTokens: result.usage.outputTokens
+    outputTokens: result.usage.outputTokens,
+    prompt,
+    output: result.text,
+    parseOk: Boolean(parsed),
+    latencyMs: Date.now() - startedAt,
   });
 
-  const parsed = parseJsonResponse(result.text, PrReviewSummaryResultSchema);
   if (!parsed) throw new AppError(502, "AI PR-review summary did not return a usable result.");
   return parsed;
 }
@@ -840,6 +961,7 @@ export async function reviewPullRequestDiff(params: {
     "something to say."
   ].join("\n");
 
+  const startedAt = Date.now();
   const result = await callChat(settings, {
     model: settings.model,
     maxTokens: 1024,
@@ -865,14 +987,22 @@ export async function reviewPullRequestDiff(params: {
     }
   });
 
+  // Parse before logging so `parseOk` is recorded — see classifyTicket for why that flag
+  // is the loop's headline quality metric. Usage is logged either way; a garbage response
+  // cost the same as a good one.
+  const parsed = parseJsonResponse(result.text, InlineReviewResultSchema);
+
   await logAIUsage({
     feature: "pr_inline_review",
     model: settings.model,
     inputTokens: result.usage.inputTokens,
-    outputTokens: result.usage.outputTokens
+    outputTokens: result.usage.outputTokens,
+    prompt,
+    output: result.text,
+    parseOk: Boolean(parsed),
+    latencyMs: Date.now() - startedAt,
   });
 
-  const parsed = parseJsonResponse(result.text, InlineReviewResultSchema);
   if (!parsed) return null;
 
   // The actual anti-hallucination gate: drop any comment whose (path, line) doesn't correspond
@@ -927,6 +1057,7 @@ export async function classifyChatMessage(params: {
     "type, priority, and module, and give a confidence score (0-1) and a one-sentence reasoning."
   ].join("\n");
 
+  const startedAt = Date.now();
   const result = await callChat(settings, {
     model: settings.model,
     maxTokens: 1024,
@@ -949,14 +1080,22 @@ export async function classifyChatMessage(params: {
     }
   });
 
+  // Parse before logging so `parseOk` is recorded — see classifyTicket for why that flag
+  // is the loop's headline quality metric. Usage is logged either way; a garbage response
+  // cost the same as a good one.
+  const parsed = parseJsonResponse(result.text, ChatTriageResultSchema);
+
   await logAIUsage({
     feature: "chat_triage",
     model: settings.model,
     inputTokens: result.usage.inputTokens,
-    outputTokens: result.usage.outputTokens
+    outputTokens: result.usage.outputTokens,
+    prompt,
+    output: result.text,
+    parseOk: Boolean(parsed),
+    latencyMs: Date.now() - startedAt,
   });
 
-  const parsed = parseJsonResponse(result.text, ChatTriageResultSchema);
   if (!parsed) throw new AppError(502, "AI classification did not return a usable result.");
 
   const moduleId = parsed.moduleName === "NONE" ? null : (params.project.modules.find((m) => m.name === parsed.moduleName)?.id ?? null);
@@ -1003,6 +1142,7 @@ export async function findDuplicateTickets(params: {
     "Identify which (if any) existing tickets are likely duplicates of the new one. Only include genuinely similar matches — an empty list is a valid answer."
   ].join("\n");
 
+  const startedAt = Date.now();
   const result = await callChat(settings, {
     model: settings.model,
     maxTokens: 1024,
@@ -1032,15 +1172,23 @@ export async function findDuplicateTickets(params: {
     }
   });
 
+  // Parse before logging so `parseOk` is recorded — see classifyTicket for why that flag
+  // is the loop's headline quality metric. Usage is logged either way; a garbage response
+  // cost the same as a good one.
+  const parsed = parseJsonResponse(result.text, DuplicateResultSchema);
+
   await logAIUsage({
     feature: "duplicate_detection",
     model: settings.model,
     inputTokens: result.usage.inputTokens,
     outputTokens: result.usage.outputTokens,
-    userId: params.userId
+    userId: params.userId,
+    prompt,
+    output: result.text,
+    parseOk: Boolean(parsed),
+    latencyMs: Date.now() - startedAt,
   });
 
-  const parsed = parseJsonResponse(result.text, DuplicateResultSchema);
   if (!parsed) return [];
 
   return parsed.matches.map((m) => ({
@@ -1063,6 +1211,7 @@ export async function improveText(params: { text: string; context: "ticket_descr
       ? "Rewrite this bug/task description to be clear and well-structured — use a \"Steps to reproduce / Expected / Actual\" layout if it reads like a bug report. Keep it factual; don't invent details the original doesn't imply."
       : "Improve the clarity and tone of this comment while preserving its meaning and intent. Keep it concise.";
 
+  const startedAt = Date.now();
   const result = await callChat(settings, {
     model: settings.model,
     maxTokens: 1024,
@@ -1092,6 +1241,7 @@ export async function summarizeComments(params: {
     .map((c) => `${c.authorName} (${c.createdAt.toISOString().slice(0, 16).replace("T", " ")}): ${htmlToText(c.body)}`)
     .join("\n\n");
 
+  const startedAt = Date.now();
   const result = await callChat(settings, {
     model: settings.model,
     maxTokens: 512,
@@ -1138,6 +1288,7 @@ export async function answerWorkspaceQuestion(params: {
     ? `\n\nWorkspace analytics snapshot (use this for trend/aggregate questions — velocity, SLA, workload, cost):\n${params.insightsSnapshot}`
     : "";
 
+  const startedAt = Date.now();
   const result = await callChat(settings, {
     model: settings.model,
     maxTokens: 1024,
@@ -1182,6 +1333,7 @@ export async function generateWeeklyDigest(params: {
     "Keep it encouraging but factual — don't invent numbers beyond what's given. If everything is at zero, say the week was quiet rather than padding it out."
   ].join("\n");
 
+  const startedAt = Date.now();
   const result = await callChat(settings, {
     model: settings.model,
     maxTokens: 400,
@@ -1234,6 +1386,7 @@ export async function generateSecurityWeeklyDigest(params: {
     "Keep it factual and actionable — call out what changed and what needs attention first, don't invent numbers beyond what's given. If the risk score dropped and nothing is stuck, say the week looked good rather than manufacturing concern."
   ].join("\n");
 
+  const startedAt = Date.now();
   const result = await callChat(settings, {
     model: settings.model,
     maxTokens: 400,
@@ -1289,6 +1442,7 @@ export async function generateBugPatternDigest(params: {
     "Call out the clearest recurring pattern first (a specific branch, ticket, or repository that keeps coming up), and be honest if nothing stands out — don't invent a trend from thin data. Never invent numbers beyond what's given."
   ].join("\n");
 
+  const startedAt = Date.now();
   const result = await callChat(settings, {
     model: settings.model,
     maxTokens: 400,
@@ -1339,6 +1493,7 @@ export async function generateStatusReport(params: {
     "Write for a non-technical stakeholder reading this outside the team — plain language, no jargon. Be factual, don't invent numbers beyond what's given, and call out overdue items if any exist rather than glossing over them."
   ].join("\n");
 
+  const startedAt = Date.now();
   const result = await callChat(settings, {
     model: settings.model,
     maxTokens: 500,
@@ -1403,6 +1558,7 @@ export async function explainThresholdRecommendation(rec: {
     "the real lever. Respond with ONLY the prose — no headings, no bullet points, no preamble."
   ].join("\n");
 
+  const startedAt = Date.now();
   const result = await callChat(settings, { model: settings.model, maxTokens: 400, prompt });
   await logAIUsage({
     feature: "face_policy_copilot",
@@ -1441,6 +1597,7 @@ export async function explainAssigneeSuggestion(params: {
     "one sentence — no preamble, no candidate list repeated back."
   ].join("\n");
 
+  const startedAt = Date.now();
   const result = await callChat(settings, { model: settings.model, maxTokens: 150, prompt });
   await logAIUsage({
     feature: "assignee_suggestion_explanation",
@@ -1481,6 +1638,7 @@ export async function suggestStaleTicketNextAction(params: {
     "what's given. Respond with ONLY that one sentence — no preamble."
   ].join("\n");
 
+  const startedAt = Date.now();
   const result = await callChat(settings, { model: settings.model, maxTokens: 150, prompt });
   await logAIUsage({
     feature: "stale_ticket_nudge",
@@ -1586,6 +1744,7 @@ export async function summarizeFaceReviewAttempt(params: {
     'Respond with ONLY JSON: {"summary": "3-5 sentences for the reviewing admin", "risk": "LOW|MEDIUM|HIGH", "recommendation": "one concrete next step"}'
   ].join("\n");
 
+  const startedAt = Date.now();
   const result = await callChat(settings, { model: settings.model, maxTokens: 500, prompt });
 
   await logAIUsage({
