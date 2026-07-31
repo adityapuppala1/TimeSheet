@@ -22,6 +22,7 @@ import {
   improveText,
   summarizeComments
 } from "../services/ai.service.js";
+import { setInteractionFeedback } from "../services/ai-quality.service.js";
 import { computeTimesheetCost } from "../services/billing-rate.service.js";
 import { ticketProjectScope } from "../services/ticket.service.js";
 
@@ -217,3 +218,38 @@ aiRouter.post("/ask", requirePermission(permissions.TICKETS_VIEW), validate(askS
   const result = await answerWorkspaceQuestion({ question: req.body.question, tickets, insightsSnapshot, userId: req.user!.id });
   res.json(result);
 });
+
+/**
+ * Rate ONE captured AI interaction.
+ *
+ * Distinct from the pre-existing `PATCH /tickets/:id/ai-feedback`, which sets a single flag on the
+ * whole ticket. That endpoint predates interaction capture and is deliberately left working
+ * byte-for-byte — but it can't express "the triage was good, the duplicate detection was wrong"
+ * about the same ticket, and it isn't attached to anything replayable. This is.
+ */
+const interactionFeedbackSchema = z.object({
+  params: z.object({ id: z.string().uuid() }),
+  body: z.object({
+    feedback: z.enum(["up", "down"]).nullable(),
+    note: z.string().max(500).optional()
+  })
+});
+
+aiRouter.patch(
+  "/interactions/:id/feedback",
+  requirePermission(permissions.TICKETS_ASSIGN),
+  validate(interactionFeedbackSchema),
+  async (req, res) => {
+    const existing = await prisma.aIInteraction.findUnique({ where: { id: String(req.params.id) }, select: { id: true } });
+    if (!existing) throw new AppError(404, "Interaction not found");
+
+    await setInteractionFeedback({
+      interactionId: existing.id,
+      feedback: req.body.feedback,
+      userId: req.user!.id,
+      note: req.body.note
+    });
+    await audit(req.user!.id, "ai.interaction_feedback", "AIInteraction", existing.id, { feedback: req.body.feedback });
+    res.json({ id: existing.id, feedback: req.body.feedback });
+  }
+);

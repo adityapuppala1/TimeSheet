@@ -35,6 +35,7 @@ import { templates } from "../services/mail-templates.js";
 import { buildTicketSecurityReport, sendTicketClosedDigest } from "../services/security-report.service.js";
 import { buildTicketLineage } from "../services/ticket-lineage.service.js";
 import { explainAssigneeSuggestion } from "../services/ai.service.js";
+import { setInteractionFeedback } from "../services/ai-quality.service.js";
 import { dispatchOutboundWebhooks } from "../services/webhook-dispatch.service.js";
 import { createGitHubBranch, getGitAccessTokenOrNull, listGitHubRepos } from "../services/git-provider.service.js";
 import {
@@ -459,6 +460,31 @@ ticketRouter.patch("/:id/ai-feedback", requirePermission(permissions.TICKETS_ASS
 
   const updated = await prisma.ticket.update({ where: { id: existing.id }, data: { aiFeedback: req.body.feedback } });
   await audit(req.user!.id, "ticket.ai_feedback_set", "Ticket", updated.id, { feedback: req.body.feedback });
+
+  // Additionally attach the rating to the most recent triage interaction on this ticket, so the
+  // signal reaches the per-call quality metrics (services/ai-quality.service.ts) instead of dying
+  // on this one column the way it used to.
+  //
+  // Strictly additive and best-effort: the response shape, the Ticket.aiFeedback write, and the
+  // AI Activity Log UI that calls this are all unchanged. If capture is off there is simply no
+  // interaction to attach to, which is not an error.
+  try {
+    const interaction = await prisma.aIInteraction.findFirst({
+      where: { ticketId: updated.id, feature: { in: ["triage", "chat_triage"] } },
+      orderBy: { createdAt: "desc" },
+      select: { id: true }
+    });
+    if (interaction) {
+      await setInteractionFeedback({
+        interactionId: interaction.id,
+        feedback: req.body.feedback,
+        userId: req.user!.id
+      });
+    }
+  } catch (error) {
+    console.warn(`[ticket] could not mirror AI feedback onto an interaction: ${(error as Error).message}`);
+  }
+
   res.json({ id: updated.id, aiFeedback: updated.aiFeedback });
 });
 

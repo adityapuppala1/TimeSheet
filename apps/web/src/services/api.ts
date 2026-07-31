@@ -616,6 +616,35 @@ export interface AIUsageSummary {
   byModel: Array<{ model: string; costUsd: number; inputTokens: number; outputTokens: number; calls: number }>;
 }
 
+/** Mirrors api/src/services/ai-quality.service.ts. Read `coverage` before trusting
+ *  `thumbsUpRate` — feedback in this product is heavily self-selected. */
+export interface AIQualityFeature {
+  feature: string;
+  interactions: number;
+  /** Null for free-text features, which have no schema to parse against. */
+  parseFailureRate: number | null;
+  parseableInteractions: number;
+  rated: number;
+  thumbsUp: number;
+  thumbsDown: number;
+  coverage: number;
+  /** Null below 10 ratings — a percentage from 3 opinions isn't one. */
+  thumbsUpRate: number | null;
+  avgLatencyMs: number | null;
+}
+
+export interface AIQualitySummary {
+  captureEnabled: boolean;
+  contentCaptureEnabled: boolean;
+  windowDays: number;
+  totalInteractions: number;
+  overallParseFailureRate: number | null;
+  features: AIQualityFeature[];
+  /** The pre-existing per-TICKET thumbs flag, reported separately and never merged into the
+   *  per-call numbers above — different unit, would produce a meaningless total. */
+  legacyTicketFeedback: { up: number; down: number };
+}
+
 export interface AIUsageWeek {
   weekStart: string;
   costUsd: number;
@@ -702,6 +731,10 @@ export const settingsApi = {
   updateAI: async (payload: Partial<GlobalAISettings> & { apiKey?: string }) =>
     (await api.patch<GlobalAISettings>("/settings/ai", payload)).data,
   getAIUsageSummary: async () => (await api.get<AIUsageSummary>("/settings/ai/usage-summary")).data,
+  /** AI QUALITY (not cost) — see api/src/services/ai-quality.service.ts for why the headline
+   *  number is parse-failure rate rather than thumbs-up rate. */
+  getAIQualitySummary: async (windowDays = 30) =>
+    (await api.get<AIQualitySummary>("/settings/ai/quality-summary", { params: { windowDays } })).data,
   getAIUsageTrend: async (weeks = 8) => (await api.get<AIUsageWeek[]>("/settings/ai/usage-trend", { params: { weeks } })).data,
   /** Lists the real model ids an OpenAI-compatible endpoint serves, for the BYOK model picker —
    *  `baseUrl`/`apiKey` are optional overrides so this can preview a not-yet-saved draft (a

@@ -1490,7 +1490,150 @@ function AISettingsCard({ readOnly }: { readOnly: boolean }) {
           </CardContent>
         </Card>
       )}
+
+      <AIQualityCard enabled={Boolean(settings.data?.aiEnabled)} captureOn={Boolean(settings.data?.aiCaptureEnabled)} />
     </div>
+  );
+}
+
+/** Formats a 0–1 rate as a percentage, or an em dash when there's honestly nothing to report. */
+function pct(value: number | null | undefined): string {
+  return value == null ? "—" : `${Math.round(value * 100)}%`;
+}
+
+/**
+ * AI QUALITY — deliberately separate from the spend card above, because cost and correctness are
+ * different questions and this product could previously only answer the first one.
+ *
+ * The ordering here is the point: parse-failure rate leads because it's objective and covers every
+ * structured call, and every human-derived number is shown next to its coverage so nobody reads
+ * "80% positive" from eight ratings as if it meant something.
+ */
+function AIQualityCard({ enabled, captureOn }: { enabled: boolean; captureOn: boolean }) {
+  const quality = useQuery({
+    queryKey: ["settings", "ai", "quality"],
+    queryFn: () => settingsApi.getAIQualitySummary(30),
+    enabled: enabled && captureOn
+  });
+
+  if (!enabled) return null;
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle className="flex items-center gap-2 text-base">
+          <Sparkles className="h-4 w-4 text-primary" />
+          AI quality
+        </CardTitle>
+        <CardDescription>
+          How well the AI is actually performing, as opposed to what it costs. Last 30 days.
+        </CardDescription>
+      </CardHeader>
+      <CardContent className="grid gap-4">
+        {!captureOn && (
+          <p className="rounded-md border border-dashed border-border bg-muted/30 p-3 text-sm text-muted-foreground">
+            Turn on <strong>Record AI quality metrics</strong> above to start measuring this. Until then the only thing recorded
+            about your AI is what it costs.
+          </p>
+        )}
+
+        {captureOn && quality.isLoading && <Skeleton className="h-32 w-full" />}
+
+        {captureOn && quality.data && (
+          <>
+            {quality.data.totalInteractions === 0 && (
+              <p className="text-sm text-muted-foreground">No AI calls recorded yet in this window.</p>
+            )}
+
+            {quality.data.totalInteractions > 0 && (
+              <>
+                <div className="grid grid-cols-2 gap-2.5 sm:gap-3 md:grid-cols-3">
+                  <div className="rounded-lg border border-border bg-muted/30 p-4">
+                    <p className="text-xs uppercase text-muted-foreground">Unusable responses</p>
+                    <p className="mt-1 text-2xl font-black">{pct(quality.data.overallParseFailureRate)}</p>
+                    <p className="mt-0.5 text-[11px] text-muted-foreground">Failed to match the expected format</p>
+                  </div>
+                  <div className="rounded-lg border border-border bg-muted/30 p-4">
+                    <p className="text-xs uppercase text-muted-foreground">AI calls</p>
+                    <p className="mt-1 text-2xl font-black">{quality.data.totalInteractions}</p>
+                  </div>
+                  <div className="rounded-lg border border-border bg-muted/30 p-4">
+                    <p className="text-xs uppercase text-muted-foreground">Legacy ticket ratings</p>
+                    <p className="mt-1 text-2xl font-black">
+                      {quality.data.legacyTicketFeedback.up}/{quality.data.legacyTicketFeedback.up + quality.data.legacyTicketFeedback.down}
+                    </p>
+                    <p className="mt-0.5 text-[11px] text-muted-foreground">Older per-ticket thumbs, counted separately</p>
+                  </div>
+                </div>
+
+                {/* The honesty note. Without it, the thumbs column below invites exactly the wrong
+                    conclusion. */}
+                <p className="rounded-md border border-dashed border-border bg-muted/20 p-3 text-xs text-muted-foreground">
+                  <strong>Unusable-response rate is the number to trust.</strong> It's measured automatically on every structured
+                  call. Thumbs ratings only come from people who chose to leave one — check the coverage column before reading
+                  anything into them, and note that a bad result is far likelier to get rated than a good one.
+                </p>
+
+                <div className="grid gap-1.5">
+                  <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">By feature — worst first</p>
+                  {/* Stacked cards below sm, table above — the same fallback DataTable uses. */}
+                  <div className="grid gap-1.5 sm:hidden">
+                    {quality.data.features.map((f) => (
+                      <div key={f.feature} className="grid gap-1 rounded-lg border border-border bg-card p-3 text-sm shadow-sm">
+                        <span className="font-medium">{f.feature}</span>
+                        <span className="text-xs text-muted-foreground">
+                          {f.interactions} calls · unusable {pct(f.parseFailureRate)} · rated {f.rated} ({pct(f.coverage)} coverage)
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                  <div className="hidden overflow-x-auto rounded-lg border border-border sm:block">
+                    <table className="w-full text-sm">
+                      <thead>
+                        <tr className="border-b border-border text-left text-xs uppercase text-muted-foreground">
+                          <th className="p-2.5 font-semibold">Feature</th>
+                          <th className="p-2.5 font-semibold">Calls</th>
+                          <th className="p-2.5 font-semibold">Unusable</th>
+                          <th className="p-2.5 font-semibold">Rated (coverage)</th>
+                          <th className="p-2.5 font-semibold">Thumbs up</th>
+                          <th className="p-2.5 font-semibold">Avg latency</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-border">
+                        {quality.data.features.map((f) => (
+                          <tr key={f.feature}>
+                            <td className="p-2.5 font-medium">{f.feature}</td>
+                            <td className="p-2.5 text-muted-foreground">{f.interactions}</td>
+                            <td className="p-2.5">
+                              {f.parseFailureRate == null ? (
+                                <span className="text-muted-foreground">n/a</span>
+                              ) : (
+                                <span className={f.parseFailureRate > 0.05 ? "font-semibold text-destructive" : "text-success"}>
+                                  {pct(f.parseFailureRate)}
+                                </span>
+                              )}
+                            </td>
+                            <td className="p-2.5 text-muted-foreground">
+                              {f.rated} ({pct(f.coverage)})
+                            </td>
+                            <td className="p-2.5 text-muted-foreground">
+                              {/* Suppressed below 10 ratings rather than shown as a confident-looking
+                                  percentage derived from a handful of clicks. */}
+                              {f.thumbsUpRate == null ? <span title="Too few ratings to be meaningful">—</span> : pct(f.thumbsUpRate)}
+                            </td>
+                            <td className="p-2.5 text-muted-foreground">{f.avgLatencyMs != null ? `${f.avgLatencyMs}ms` : "—"}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              </>
+            )}
+          </>
+        )}
+      </CardContent>
+    </Card>
   );
 }
 

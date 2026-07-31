@@ -28,6 +28,7 @@ import {
 } from "../services/face.service.js";
 import { getGlobalNotificationSettings } from "../services/notify.service.js";
 import { getGlobalAISettings, getMonthlyAIUsageSummary, getWeeklyAIUsageTrend, listAvailableOpenAICompatibleModels, resolveApiKey } from "../services/ai.service.js";
+import { getAIQualitySummary } from "../services/ai-quality.service.js";
 import { getAllowedSsoProviders } from "../services/plan-limits.service.js";
 import { getGlobalTicketSettings } from "../services/ticket.service.js";
 import { decryptSecret, encryptSecret } from "../utils/encryption.js";
@@ -238,6 +239,13 @@ settingsRouter.get("/ai", requireSuperAdmin, async (_req, res) => {
 
 settingsRouter.get("/ai/usage-summary", requireSuperAdmin, async (_req, res) => {
   res.json(await getMonthlyAIUsageSummary());
+});
+
+/** Per-feature AI QUALITY (as opposed to cost, above) — see services/ai-quality.service.ts for
+ *  why the headline number is parse-failure rate and not thumbs-up rate. */
+settingsRouter.get("/ai/quality-summary", requireSuperAdmin, async (req, res) => {
+  const windowDays = Math.min(180, Math.max(1, Number(req.query.windowDays) || 30));
+  res.json(await getAIQualitySummary(windowDays));
 });
 
 settingsRouter.get("/ai/usage-trend", requireSuperAdmin, async (req, res) => {
