@@ -28,7 +28,11 @@ const DEMO_USERS = {
   // and rotated the shared secret out from under it. Separate logins mean separate sessions
   // (distinct `sid`), so one spec's refresh can never revoke the other's.
   employee: { email: "employee@timesheet.local", password: "Admin@12345" },
-  "employee-dashboard": { email: "employee@timesheet.local", password: "Admin@12345" }
+  "employee-dashboard": { email: "employee@timesheet.local", password: "Admin@12345" },
+  // Dedicated to backend-health.spec.ts for the same separate-session reason as above. That spec
+  // additionally spends ~30s with the API deliberately unreachable, so sharing a snapshot would
+  // park another spec's session right at the edge of the rotation-grace window.
+  "employee-health": { email: "employee@timesheet.local", password: "Admin@12345" }
 } as const;
 
 for (const [role, creds] of Object.entries(DEMO_USERS)) {
