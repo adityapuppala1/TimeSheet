@@ -21,6 +21,7 @@ import { AppError } from "../middleware/error.js";
 import { preserveTenantContext, upload } from "../middleware/upload.js";
 import { validate } from "../middleware/validate.js";
 import { audit } from "../services/audit.service.js";
+import { buildRateSnapshotPatch } from "../services/billing-rate.service.js";
 import { dispatchNotification } from "../services/notify.service.js";
 import { templates } from "../services/mail-templates.js";
 import { computeApprovalDeadline, resolveEscalationsFor } from "../services/sla.service.js";
@@ -270,9 +271,26 @@ timesheetRouter.patch("/:id/approve", requirePermission(permissions.TIMESHEETS_A
     });
   }
 
+  // Freeze the rate that applies to these hours, in the SAME write that approves them — see
+  // services/billing-rate.service.ts for why approval is the correct moment and why this can
+  // never block the approval itself. Best-effort: a billing-lookup failure must not stop a
+  // manager approving real work, so the snapshot is skipped (leaving the row "unrated", which
+  // downstream consumers already handle) rather than surfacing an error here.
+  let ratePatch = {};
+  try {
+    ratePatch = await buildRateSnapshotPatch({
+      userId: existing.userId,
+      projectId: existing.projectId,
+      totalHours: existing.totalHours,
+      billable: existing.billable
+    });
+  } catch (error) {
+    console.warn(`[timesheet] rate snapshot failed for ${existing.id}, approving unrated: ${(error as Error).message}`);
+  }
+
   const item = await prisma.timesheet.update({
     where: { id: existing.id },
-    data: { status: "APPROVED", reviewedAt: new Date(), reviewedById: req.user!.id },
+    data: { status: "APPROVED", reviewedAt: new Date(), reviewedById: req.user!.id, ...ratePatch },
     include: { project: true, user: true }
   });
   await resolveEscalationsFor(item.id);

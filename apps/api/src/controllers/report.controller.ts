@@ -19,6 +19,7 @@ import { requireAuth, requirePermission } from "../middleware/auth.js";
 import { AppError } from "../middleware/error.js";
 import { htmlToText } from "../utils/sanitize.js";
 import { generateStatusReport } from "../services/ai.service.js";
+import { computeTimesheetCost } from "../services/billing-rate.service.js";
 
 export const reportRouter = Router();
 reportRouter.use(requireAuth);
@@ -663,43 +664,100 @@ reportRouter.get("/sbom-inventory", requirePermission(permissions.REPORTS_VIEW),
   });
 });
 
-/** Opt-in cost-per-ticket analytics — gated behind GlobalTicketSettings.enableCostAnalytics (needs User.hourlyRate). */
+/**
+ * Opt-in cost-per-ticket analytics — gated behind GlobalTicketSettings.enableCostAnalytics.
+ *
+ * WHAT CHANGED (and why totals in an existing workspace will DROP after this ships — that's the
+ * correction, not a regression):
+ * 1. Only APPROVED, billable hours count. This previously summed EVERY non-deleted timesheet,
+ *    including DRAFT and REJECTED ones — i.e. it charged the business for work nobody had
+ *    accepted, and for work explicitly turned down.
+ * 2. It prefers the rate frozen at approval (`billedAmount`/`billedRate`, see
+ *    billing-rate.service.ts) and only falls back to the person's CURRENT rate for rows approved
+ *    before snapshotting existed. Previously every figure was recomputed live, so a raise
+ *    retroactively rewrote history.
+ * 3. Hours with no rate available are reported as `unratedHours` instead of silently contributing
+ *    0 — "we don't know" and "it was free" are not the same statement.
+ * 4. `totalCostUsd`/`avgCostPerTicket` are computed over ALL tickets; they were previously derived
+ *    from the top-25 slice, so both headline numbers were wrong whenever more than 25 tickets had
+ *    cost.
+ *
+ * The response is strictly additive — existing consumers (Insights.tsx) keep working unchanged.
+ */
 reportRouter.get("/cost-insights", requirePermission(permissions.REPORTS_VIEW), async (_req, res) => {
   const settings = await prisma.globalTicketSettings.findUnique({ where: { id: "global" } });
   if (!settings?.enableCostAnalytics) throw new AppError(403, "Cost analytics is disabled for this workspace.");
 
-  const timesheets = await prisma.timesheet.findMany({
-    where: { deletedAt: null, ticketId: { not: null } },
-    select: { ticketId: true, totalHours: true, user: { select: { hourlyRate: true } } }
-  });
+  const [timesheets, excluded] = await Promise.all([
+    prisma.timesheet.findMany({
+      where: { deletedAt: null, ticketId: { not: null }, status: "APPROVED", billable: true },
+      select: {
+        ticketId: true,
+        totalHours: true,
+        billable: true,
+        billedAmount: true,
+        billedRate: true,
+        user: { select: { hourlyRate: true } }
+      }
+    }),
+    // Reported so the UI can explain the drop rather than leaving it looking like data loss.
+    prisma.timesheet.groupBy({
+      by: ["status"],
+      where: { deletedAt: null, ticketId: { not: null }, status: { in: ["DRAFT", "REJECTED"] } },
+      _sum: { totalHours: true }
+    })
+  ]);
 
   const costByTicket = new Map<string, number>();
   const hoursByTicket = new Map<string, number>();
+  let unratedHours = 0;
+
   for (const row of timesheets) {
     if (!row.ticketId) continue;
-    const rate = Number(row.user.hourlyRate ?? 0);
+    const { amount, unratedHours: rowUnrated } = computeTimesheetCost([
+      {
+        totalHours: row.totalHours,
+        billable: row.billable,
+        billedAmount: row.billedAmount,
+        billedRate: row.billedRate,
+        liveFallbackRate: row.user.hourlyRate
+      }
+    ]);
     const hours = Number(row.totalHours);
-    costByTicket.set(row.ticketId, (costByTicket.get(row.ticketId) ?? 0) + rate * hours);
+    costByTicket.set(row.ticketId, (costByTicket.get(row.ticketId) ?? 0) + amount);
     hoursByTicket.set(row.ticketId, (hoursByTicket.get(row.ticketId) ?? 0) + hours);
+    unratedHours += rowUnrated;
   }
 
   const ticketIds = Array.from(costByTicket.keys());
   const tickets = await prisma.ticket.findMany({ where: { id: { in: ticketIds } }, select: { id: true, key: true, title: true } });
+  const ticketById = new Map(tickets.map((t) => [t.id, t]));
 
-  const rows = ticketIds
+  const allRows = ticketIds
     .map((id) => ({
-      ticketKey: tickets.find((t) => t.id === id)?.key ?? "?",
-      title: tickets.find((t) => t.id === id)?.title ?? "",
+      ticketKey: ticketById.get(id)?.key ?? "?",
+      title: ticketById.get(id)?.title ?? "",
       hours: Number((hoursByTicket.get(id) ?? 0).toFixed(2)),
       costUsd: Number((costByTicket.get(id) ?? 0).toFixed(2))
     }))
-    .sort((a, b) => b.costUsd - a.costUsd)
-    .slice(0, 25);
+    .sort((a, b) => b.costUsd - a.costUsd);
 
-  const totalCostUsd = rows.reduce((sum, r) => sum + r.costUsd, 0);
-  const avgCostPerTicket = rows.length > 0 ? totalCostUsd / rows.length : 0;
+  // Totals over EVERY ticket; only the returned table is capped at 25.
+  const totalCostUsd = allRows.reduce((sum, r) => sum + r.costUsd, 0);
+  const avgCostPerTicket = allRows.length > 0 ? totalCostUsd / allRows.length : 0;
+  const excludedHoursByStatus = Object.fromEntries(excluded.map((e) => [e.status, Number(e._sum.totalHours ?? 0)]));
 
-  res.json({ totalCostUsd: Number(totalCostUsd.toFixed(2)), avgCostPerTicket: Number(avgCostPerTicket.toFixed(2)), rows });
+  res.json({
+    totalCostUsd: Number(totalCostUsd.toFixed(2)),
+    avgCostPerTicket: Number(avgCostPerTicket.toFixed(2)),
+    rows: allRows.slice(0, 25),
+    // Additive fields — see the header comment.
+    basis: "APPROVED_BILLABLE" as const,
+    ticketCount: allRows.length,
+    unratedHours: Number(unratedHours.toFixed(2)),
+    excludedDraftHours: excludedHoursByStatus.DRAFT ?? 0,
+    excludedRejectedHours: excludedHoursByStatus.REJECTED ?? 0
+  });
 });
 
 /** Opt-in team leaderboard — gated behind GlobalTicketSettings.enableLeaderboard. Framed as recognition, not surveillance. */

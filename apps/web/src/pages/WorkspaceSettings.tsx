@@ -7,9 +7,18 @@
  * writes the same small set of tenant-wide singleton settings rows (`GlobalSettings`,
  * `GlobalAISettings`, `GlobalTicketSettings`, etc.) — one page keeps the "you're editing
  * workspace-wide config" framing consistent instead of scattering it across the nav.
- * WHY `readOnly` is threaded through every card instead of hiding non-admin tabs entirely: a
- * non-SUPER_ADMIN can still usefully SEE the current configuration (e.g. a manager checking
- * what SLA hours apply) — the cards render normally but every control is disabled.
+ * ACCESS: this whole page is SUPER_ADMIN-only — gated three ways that must stay in sync:
+ * `RequireRole` on the route (App.tsx), `role: "SUPER_ADMIN"` on the nav entries in both
+ * Sidebar.tsx and command-palette.tsx, and `requireSuperAdmin` on the backing routes in
+ * settings.controller.ts. It previously rendered a read-only view for other roles; that was
+ * dropped so responsibility for every workspace-wide enable/disable sits with one person.
+ * WHY `readOnly` is still threaded through every card even though it's now always `false`: the
+ * plumbing is kept deliberately, so re-introducing a read-only tier (e.g. letting ADMIN view but
+ * not change) is a one-line change here rather than re-threading a prop through 14 cards. Cards
+ * must keep honouring it.
+ * NOTE for non-super-admin pages: they must NOT call `settingsApi.getAI`/`getTicketing` (both
+ * super-admin-only now) — read `settingsApi.getEffectiveFlags` instead, a tiny auth-safe
+ * projection of the few workspace flags ordinary pages need. See Tickets.tsx / Insights.tsx.
  * WHO calls the backing APIs: `controllers/settings.controller.ts`, `email-intake.controller.ts`,
  * `chat-integrations.controller.ts` — this page is the one UI surface for all three.
  */
@@ -144,6 +153,10 @@ function formatHour(hour: number): string {
 
 export function WorkspaceSettingsPage() {
   const user = useAuthStore((s) => s.user);
+  // Always true in practice — the route is RequireRole-gated, so a non-super-admin never renders
+  // this component. Kept as belt-and-braces (and to keep the `readOnly` plumbing meaningful) so
+  // that if the route gate is ever loosened, every control stays disabled rather than silently
+  // becoming editable. See this file's header comment.
   const isSuperAdmin = user?.role === "SUPER_ADMIN";
 
   return (

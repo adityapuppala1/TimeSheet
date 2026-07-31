@@ -159,17 +159,20 @@ function heatColor(value: number, max: number): string {
 export function Insights() {
   const insights = useQuery({ queryKey: ["reports", "ticket-insights"], queryFn: reportApi.ticketInsights });
   const ticketSummary = useQuery({ queryKey: ["reports", "ticket-summary"], queryFn: reportApi.tickets });
-  const ticketSettings = useQuery({ queryKey: ["settings", "ticketing"], queryFn: settingsApi.getTicketing });
+  // Reads the auth-safe `/settings/effective-flags` projection, NOT `/settings/ticketing` —
+  // Insights is REPORTS_VIEW-gated (managers/leads reach it), and the full ticketing settings
+  // route is super-admin-only.
+  const workspaceFlags = useQuery({ queryKey: ["settings", "effective-flags"], queryFn: settingsApi.getEffectiveFlags });
 
   const costInsights = useQuery({
     queryKey: ["reports", "cost-insights"],
     queryFn: reportApi.costInsights,
-    enabled: Boolean(ticketSettings.data?.enableCostAnalytics)
+    enabled: Boolean(workspaceFlags.data?.enableCostAnalytics)
   });
   const leaderboard = useQuery({
     queryKey: ["reports", "leaderboard"],
     queryFn: reportApi.leaderboard,
-    enabled: Boolean(ticketSettings.data?.enableLeaderboard)
+    enabled: Boolean(workspaceFlags.data?.enableLeaderboard)
   });
 
   const data = insights.data;
@@ -434,7 +437,7 @@ export function Insights() {
         </>
       )}
 
-      {ticketSettings.data?.enableCostAnalytics && (
+      {workspaceFlags.data?.enableCostAnalytics && (
         <Card>
           <CardHeader>
             <CardTitle className="flex items-center gap-2 text-base"><DollarSign className="h-4 w-4 text-primary" />Cost per ticket</CardTitle>
@@ -463,7 +466,7 @@ export function Insights() {
         </Card>
       )}
 
-      {ticketSettings.data?.enableLeaderboard && (
+      {workspaceFlags.data?.enableLeaderboard && (
         <Card>
           <CardHeader>
             <CardTitle className="flex items-center gap-2 text-base"><Trophy className="h-4 w-4 text-primary" />Team leaderboard</CardTitle>

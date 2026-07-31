@@ -35,6 +35,12 @@ export function createFakeTenantClient(): PrismaClient {
       update: vi.fn(),
       count: vi.fn()
     },
-    role: { findUniqueOrThrow: vi.fn() }
+    role: { findUniqueOrThrow: vi.fn() },
+    // Billing / attestation (services/billing-rate.service.ts, attestation.service.ts)
+    project: { findUnique: vi.fn(), findFirst: vi.fn(), findMany: vi.fn() },
+    globalTicketSettings: { upsert: vi.fn(), findUnique: vi.fn() },
+    timesheet: { findMany: vi.fn(), findFirst: vi.fn(), groupBy: vi.fn(), update: vi.fn() },
+    workAttestation: { create: vi.fn(), findFirst: vi.fn(), findMany: vi.fn(), update: vi.fn(), count: vi.fn() },
+    attestationShareLink: { create: vi.fn(), findFirst: vi.fn(), findMany: vi.fn(), update: vi.fn() }
   } as unknown as PrismaClient;
 }

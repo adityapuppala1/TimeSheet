@@ -98,7 +98,12 @@ const patchProjectSchema = z.object({
       description: z.string().max(500).optional().nullable(),
       status: z.enum(["ACTIVE", "ARCHIVED"]).optional(),
       slaApprovalHours: z.coerce.number().int().min(1).max(720).optional(),
-      submissionDeadlineDayOfMonth: z.coerce.number().int().min(1).max(28).nullable().optional()
+      submissionDeadlineDayOfMonth: z.coerce.number().int().min(1).max(28).nullable().optional(),
+      // Client billing — see services/billing-rate.service.ts. NOTE: this schema is `.strict()`,
+      // so any new Project field MUST be listed here or the edit form 400s on save.
+      clientName: z.string().max(160).nullable().optional(),
+      defaultHourlyRate: z.coerce.number().min(0).max(100000).nullable().optional(),
+      billingCurrency: z.string().length(3).nullable().optional()
     })
     .strict()
 });
@@ -115,6 +120,11 @@ projectRouter.patch(
     if (typeof req.body.status === "string") data.status = req.body.status;
     if (typeof req.body.slaApprovalHours === "number") data.slaApprovalHours = req.body.slaApprovalHours;
     if ("submissionDeadlineDayOfMonth" in req.body) data.submissionDeadlineDayOfMonth = req.body.submissionDeadlineDayOfMonth;
+    if ("clientName" in req.body) data.clientName = req.body.clientName || null;
+    if ("defaultHourlyRate" in req.body) data.defaultHourlyRate = req.body.defaultHourlyRate ?? null;
+    // Normalised to uppercase so "usd" and "USD" don't read as two different currencies when the
+    // attestation refuses to mix them.
+    if ("billingCurrency" in req.body) data.billingCurrency = req.body.billingCurrency ? String(req.body.billingCurrency).toUpperCase() : null;
 
     const project = await prisma.project.update({ where: { id: String(req.params.id) }, data });
     await audit(req.user!.id, "project.updated", "Project", project.id, data);

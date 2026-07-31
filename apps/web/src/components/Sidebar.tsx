@@ -57,7 +57,10 @@ const nav: NavItem[] = [
   { to: "/app/audit", label: "Audit log", icon: ScrollText, permission: permissions.AUDIT_VIEW },
   { to: "/app/ai-activity", label: "AI activity log", icon: Sparkles, permission: permissions.TICKETS_ASSIGN },
   { to: "/app/email-templates", label: "Email templates", icon: Mail, role: "SUPER_ADMIN" },
-  { to: "/app/settings", label: "Workspace settings", icon: Settings }
+  // SUPER_ADMIN-only: every workspace-wide enable/disable (AI, biometrics, billing, SSO, DevOps
+  // ingestion) is one person's responsibility. Matches the RequireRole gate on the route itself
+  // in App.tsx and the same entry in command-palette.tsx — all three must stay in sync.
+  { to: "/app/settings", label: "Workspace settings", icon: Settings, role: "SUPER_ADMIN" }
 ];
 
 function initialsFor(name?: string) {

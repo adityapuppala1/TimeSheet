@@ -88,7 +88,7 @@ const router = createBrowserRouter([
       { path: "security-insights", element: <RequirePermission permission={permissions.REPORTS_VIEW}><PageShell><SecurityInsightsPage /></PageShell></RequirePermission> },
       { path: "audit", element: <RequirePermission permission={permissions.AUDIT_VIEW}><PageShell><AuditLog /></PageShell></RequirePermission> },
       { path: "ai-activity", element: <RequirePermission permission={permissions.TICKETS_ASSIGN}><PageShell><AIActivityLog /></PageShell></RequirePermission> },
-      { path: "settings", element: <PageShell><WorkspaceSettingsPage /></PageShell> },
+      { path: "settings", element: <RequireRole role="SUPER_ADMIN"><PageShell><WorkspaceSettingsPage /></PageShell></RequireRole> },
       { path: "email-templates", element: <RequireRole role="SUPER_ADMIN"><PageShell><EmailTemplatesPage /></PageShell></RequireRole> }
     ]
   },

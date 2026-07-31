@@ -172,6 +172,8 @@ model User {
   aiUsageLogs               AIUsageLog[]
   ticketBranchesAdded       TicketBranch[]
   apiKeysCreated            ApiKey[]
+  attestationsIssued        WorkAttestation[]
+  attestationShareLinks     AttestationShareLink[]
   outboundWebhooksCreated   OutboundWebhook[]
   gitConnectionsMade        GitConnection[]
   ticketRuleAssignments     TicketRule[]              @relation("TicketRuleAssignee")
@@ -237,6 +239,23 @@ model Project {
   /// Incremented transactionally on ticket creation to avoid collisions.
   ticketSeq Int @default(0)
 
+  /// --- Client billing (see services/billing-rate.service.ts) ------------------------------
+  /// There is deliberately no separate Client/Customer model: Project already IS the
+  /// customer-facing unit everywhere else in this app (routing rules, reports, attestations),
+  /// and inventing a CRM layer to hold one name would touch every screen for no gain. If a real
+  /// client entity is ever needed (multiple projects per client, shared billing address), this
+  /// is the field it grows out of.
+  /// Shown on a Verified Work Attestation so the artifact names who the work was for.
+  clientName        String?  @db.VarChar(160)
+  /// Optional per-project rate override. Takes precedence over User.hourlyRate when a timesheet
+  /// on this project is approved — the real agency case is "Client A pays more than Client B for
+  /// the same person." Null = fall back to the individual's own rate.
+  defaultHourlyRate Decimal? @db.Decimal(10, 2)
+  /// ISO-4217 code. Null = fall back to GlobalTicketSettings.defaultCurrency. Deliberately NOT a
+  /// per-timesheet field: an attestation refuses to mix currencies in one period rather than
+  /// silently summing them.
+  billingCurrency   String?  @db.VarChar(3)
+
   modules                   ProjectModule[]
   assignments               UserProjectAssignment[]
   timesheets                Timesheet[]
@@ -247,6 +266,7 @@ model Project {
   chatIntegrationDefaultFor ChatIntegration[]
   ingestionFallbackFor      IngestionSettings[]
   ticketRules               TicketRule[]
+  attestations              WorkAttestation[]
   createdAt                 DateTime                @default(now())
   updatedAt                 DateTime                @updatedAt
   deletedAt                 DateTime?
@@ -332,6 +352,28 @@ model Timesheet {
   /// When the approval was escalated up the hierarchy.
   escalatedAt      DateTime?
 
+  /// --- Billing (see services/billing-rate.service.ts) -------------------------------------
+  /// Whether these hours are chargeable to the client. Defaults TRUE deliberately: cost
+  /// analytics has always counted every hour, so defaulting false would silently zero every
+  /// existing workspace's numbers on migration.
+  billable         Boolean   @default(true)
+  /// Rate snapshot, captured ONCE at approval time and never recomputed. This is the whole point:
+  /// before this existed, cost was derived live from User.hourlyRate, so giving someone a raise
+  /// retroactively rewrote what past work "cost" — fine for a dashboard, disqualifying for an
+  /// artifact a client might dispute.
+  /// NULL on every row approved before this feature shipped. Those are NOT backfilled on purpose
+  /// — inventing "the rate at the time" from today's rate would make the attestation assert
+  /// something untrue. Consumers treat null as "unrated" and say so explicitly.
+  billedRate       Decimal?  @db.Decimal(10, 2)
+  /// Which source the snapshot came from: "PROJECT" (Project.defaultHourlyRate), "USER"
+  /// (User.hourlyRate), or "NONE" (no rate configured anywhere — approval still succeeds).
+  billedRateSource String?   @db.VarChar(20)
+  billedCurrency   String?   @db.VarChar(3)
+  /// billedRate × totalHours, computed in Decimal (never JS float) at approval. Zero when the
+  /// entry is non-billable; null when no rate applied.
+  billedAmount     Decimal?  @db.Decimal(12, 2)
+  rateSnapshotAt   DateTime?
+
   attachments Attachment[]
   escalations Escalation[]
 
@@ -343,6 +385,8 @@ model Timesheet {
   @@index([projectId, workDate])
   @@index([status, approvalDeadline])
   @@index([ticketId])
+  /// Drives the attestation's "approved, billable rows for this project in this date range" scan.
+  @@index([projectId, status, workDate])
 }
 
 model Attachment {
@@ -646,6 +690,19 @@ model GlobalTicketSettings {
   /// status route enforces this). Default false — orgs that don't ingest test runs yet, or
   /// that want this as a warning rather than a hard gate, are unaffected either way.
   blockResolveOnFailingTests Boolean  @default(false)
+
+  /// --- Verified Work Attestation (see services/attestation.service.ts) --------------------
+  /// ISO-4217 fallback when a project sets no billingCurrency of its own.
+  defaultCurrency            String   @default("USD") @db.VarChar(3)
+  /// Master switch for issuing attestations at all. Off by default like every other
+  /// capability in this app — the endpoints 403 until an admin opts in.
+  enableAttestations         Boolean  @default(false)
+  /// Separate, additional opt-in for generating PUBLIC share links to an attestation. Kept
+  /// distinct from enableAttestations on purpose: issuing an internal artifact and publishing
+  /// one to an unauthenticated URL are materially different risk decisions, and an admin should
+  /// have to make the second one deliberately.
+  enableAttestationSharing   Boolean  @default(false)
+
   updatedAt                  DateTime @updatedAt
   updatedById                String?
 }
@@ -1288,6 +1345,82 @@ model GitConnection {
 /// Session.refreshHash and PasswordResetToken.tokenHash. `keyPrefix` (the first 8 chars of the
 /// plaintext key) is stored in the clear purely so the UI can show "tsk_a1b2c3d4…" for the admin
 /// to recognize which key is which without ever re-displaying the full value.
+/// A Verified Work Attestation — the client-facing artifact proving "these approved hours map to
+/// these tickets, done by these (identity-verified) people, approved by this manager, at this
+/// rate." See services/attestation.service.ts.
+///
+/// WHY this is persisted rather than generated on demand: it's meant to survive a dispute. If it
+/// were rebuilt live, the same reference would render differently months later once a user is
+/// renamed, a ticket retitled, a project archived, or a timesheet soft-deleted — which is exactly
+/// the property that makes an artifact worthless as evidence. `payload` is the frozen builder
+/// output and `payloadHash` is its SHA-256, so any later tampering with the stored row is
+/// detectable.
+///
+/// IMMUTABLE: there is no update path. Correcting an attestation means voiding it (keeping the
+/// original, with a reason) and issuing a new one. Nothing is ever deleted.
+model WorkAttestation {
+  id            String   @id @default(uuid())
+  /// Human-quotable identifier printed on the artifact, e.g. "ATT-WEB-2026-07-A1B2C3".
+  reference     String   @unique @db.VarChar(40)
+  projectId     String
+  project       Project  @relation(fields: [projectId], references: [id])
+  periodStart   DateTime @db.Date
+  periodEnd     DateTime @db.Date
+  /// ISSUED | VOID. Voided rows are retained deliberately — see the immutability note above.
+  status        String   @default("ISSUED") @db.VarChar(10)
+  currency      String   @db.VarChar(3)
+  totalHours    Decimal  @db.Decimal(10, 2)
+  billableHours Decimal  @db.Decimal(10, 2)
+  /// Hours inside the period with no rate available (pre-snapshot history, or no rate anywhere).
+  /// Surfaced prominently rather than hidden, so a reader can see what the total does NOT cover.
+  unratedHours  Decimal  @db.Decimal(10, 2)
+  totalAmount   Decimal  @db.Decimal(14, 2)
+  entryCount    Int
+  /// Frozen builder output. Everything the JSON/PDF/public views render comes from here, so the
+  /// three can never disagree with each other or drift from what was issued.
+  payload       Json
+  payloadHash   String   @db.VarChar(64)
+
+  generatedById String?
+  generatedBy   User?    @relation(fields: [generatedById], references: [id], onDelete: SetNull)
+  createdAt     DateTime @default(now())
+  voidedAt      DateTime?
+  voidReason    String?  @db.VarChar(500)
+
+  shareLinks AttestationShareLink[]
+
+  @@index([projectId, periodStart, periodEnd])
+  @@index([status])
+}
+
+/// A public, unauthenticated link to one attestation — the "client can verify it themselves
+/// without an account" path. Modelled directly on ApiKey below: the plaintext token is shown
+/// exactly once at creation and only its SHA-256 is stored, so a database leak yields no usable
+/// links. Creation is SUPER_ADMIN-only AND additionally gated on
+/// GlobalTicketSettings.enableAttestationSharing, which ships off.
+model AttestationShareLink {
+  id            String          @id @default(uuid())
+  attestationId String
+  attestation   WorkAttestation @relation(fields: [attestationId], references: [id], onDelete: Cascade)
+  tokenHash     String          @unique @db.VarChar(64)
+  /// First few chars of the token, for identifying a link in the UI without storing the secret.
+  tokenPrefix   String          @db.VarChar(12)
+  /// SUMMARY (totals + per-ticket hours, no per-person detail) | FULL (adds per-entry rows).
+  /// Defaults to the narrower one on purpose.
+  scope         String          @default("SUMMARY") @db.VarChar(10)
+  /// Required — a share link that never expires is a permanent unauthenticated data exposure.
+  expiresAt     DateTime
+  revokedAt     DateTime?
+  createdById   String?
+  createdBy     User?           @relation(fields: [createdById], references: [id], onDelete: SetNull)
+  createdAt     DateTime        @default(now())
+  viewCount     Int             @default(0)
+  lastViewedAt  DateTime?
+
+  @@index([tokenHash])
+  @@index([attestationId])
+}
+
 model ApiKey {
   id          String    @id @default(uuid())
   name        String    @db.VarChar(120)

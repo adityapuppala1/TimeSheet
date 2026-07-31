@@ -502,7 +502,19 @@ export const billingApi = {
   checkoutSession: async (tier: "TEAM" | "ENTERPRISE") => (await api.post<{ url: string }>("/billing/checkout-session", { tier })).data
 };
 
+/** The three workspace flags ordinary (non-super-admin) pages are allowed to read — see
+ *  settings.controller.ts's `/effective-flags` doc comment for why this projection is deliberately
+ *  tiny. Everything else under `settingsApi` requires SUPER_ADMIN and will 403 for other roles. */
+export interface EffectiveWorkspaceFlags {
+  autoTriageAutoApply: boolean;
+  enableCostAnalytics: boolean;
+  enableLeaderboard: boolean;
+}
+
 export const settingsApi = {
+  /** Safe for any authenticated role. Use this from non-settings pages instead of `getAI`/
+   *  `getTicketing`, which are super-admin-only. */
+  getEffectiveFlags: async () => (await api.get<EffectiveWorkspaceFlags>("/settings/effective-flags")).data,
   getNotifications: async () => (await api.get<GlobalSettings>("/settings/notifications")).data,
   updateNotifications: async (payload: Partial<GlobalSettings>) =>
     (await api.patch<GlobalSettings>("/settings/notifications", payload)).data,

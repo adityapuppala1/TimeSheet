@@ -22,6 +22,7 @@ import {
   improveText,
   summarizeComments
 } from "../services/ai.service.js";
+import { computeTimesheetCost } from "../services/billing-rate.service.js";
 import { ticketProjectScope } from "../services/ticket.service.js";
 
 export const aiRouter = Router();
@@ -163,12 +164,33 @@ async function buildInsightsSnapshotText(scope: Awaited<ReturnType<typeof ticket
   ];
 
   if (costSettings?.enableCostAnalytics) {
+    // Same basis and same shared formula as GET /reports/cost-insights — approved, billable hours
+    // only, snapshot rate preferred over live. This used to be a duplicated inline reduce that
+    // counted DRAFT/REJECTED hours too, so "Ask AI" could quote a different (higher) total than
+    // the Insights page for the same workspace.
     const timesheets = await prisma.timesheet.findMany({
-      where: { deletedAt: null, ticketId: { not: null }, ...(scope.unrestricted ? {} : { ticket: { projectId: { in: scope.projectIds } } }) },
-      select: { totalHours: true, user: { select: { hourlyRate: true } } }
+      where: {
+        deletedAt: null,
+        ticketId: { not: null },
+        status: "APPROVED",
+        billable: true,
+        ...(scope.unrestricted ? {} : { ticket: { projectId: { in: scope.projectIds } } })
+      },
+      select: { totalHours: true, billable: true, billedAmount: true, billedRate: true, user: { select: { hourlyRate: true } } }
     });
-    const totalCostUsd = timesheets.reduce((sum, t) => sum + Number(t.user.hourlyRate ?? 0) * Number(t.totalHours), 0);
-    lines.push(`Total logged cost across tickets: $${totalCostUsd.toFixed(2)}`);
+    const { amount, unratedHours } = computeTimesheetCost(
+      timesheets.map((t) => ({
+        totalHours: t.totalHours,
+        billable: t.billable,
+        billedAmount: t.billedAmount,
+        billedRate: t.billedRate,
+        liveFallbackRate: t.user.hourlyRate
+      }))
+    );
+    lines.push(
+      `Total approved billable cost across tickets: $${amount.toFixed(2)}` +
+        (unratedHours > 0 ? ` (excludes ${unratedHours.toFixed(2)}h with no rate on record)` : "")
+    );
   }
 
   return lines.join("\n");

@@ -513,7 +513,13 @@ function CreateTicketDialog({
   // "Auto-apply triage suggestions" (Workspace Settings -> AI) -- when on, pre-fill the
   // suggestion directly instead of showing an accept/dismiss chip. Fields stay editable either
   // way; this only changes whether a click is required before they're filled in.
-  const aiSettings = useQuery({ queryKey: ["settings", "ai"], queryFn: settingsApi.getAI, staleTime: 60_000 });
+  // Reads the auth-safe `/settings/effective-flags` projection, NOT `/settings/ai` — this dialog
+  // is used by every role including EMPLOYEE, and the full AI settings route is super-admin-only.
+  const workspaceFlags = useQuery({
+    queryKey: ["settings", "effective-flags"],
+    queryFn: settingsApi.getEffectiveFlags,
+    staleTime: 60_000
+  });
 
   const selectedProject = projects.find((p: any) => p.id === draft.projectId);
   const members = useQuery({
@@ -589,7 +595,7 @@ function CreateTicketDialog({
     },
     onSuccess: (result) => {
       setDuplicates(result.matches);
-      if (result.triage && aiSettings.data?.autoTriageAutoApply) {
+      if (result.triage && workspaceFlags.data?.autoTriageAutoApply) {
         setDraft((d) => ({ ...d, type: result.triage!.type, priority: result.triage!.priority, moduleId: result.triage!.moduleId ?? d.moduleId }));
         setAiConfidence(result.triage.confidence);
         setSuggestion(null);

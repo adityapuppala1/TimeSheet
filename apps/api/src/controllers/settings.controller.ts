@@ -65,7 +65,32 @@ function withRuntimeMeta(settings: any) {
   };
 }
 
-settingsRouter.get("/notifications", async (_req, res) => {
+/**
+ * The ONLY settings route any authenticated role may read — a deliberately tiny projection of the
+ * handful of workspace flags that non-settings pages genuinely need to render correctly.
+ *
+ * WHY this exists: Workspace Settings is SUPER_ADMIN-only (see App.tsx's RequireRole on the
+ * `settings` route), and every other GET below is `requireSuperAdmin` to match. But two ordinary
+ * pages legitimately depend on a workspace flag: the ticket create-dialog needs
+ * `autoTriageAutoApply` to decide whether to pre-fill an AI suggestion or show an accept chip
+ * (an EMPLOYEE hits this), and Insights needs `enableCostAnalytics`/`enableLeaderboard` to know
+ * whether those panels exist at all (a MANAGER/TEAM_LEAD hits this). Handing those pages the
+ * whole `/ai` or `/ticketing` config object would leak model names, budgets, SLA policy and
+ * provider details to every employee just to answer three booleans — so they get exactly the
+ * three booleans instead.
+ *
+ * Keep this projection minimal on purpose: anything added here becomes readable by every role.
+ */
+settingsRouter.get("/effective-flags", async (_req, res) => {
+  const [ai, ticketing] = await Promise.all([getGlobalAISettings(), getGlobalTicketSettings()]);
+  res.json({
+    autoTriageAutoApply: ai.aiEnabled && ai.autoTriageEnabled && ai.autoTriageAutoApply,
+    enableCostAnalytics: ticketing.enableCostAnalytics,
+    enableLeaderboard: ticketing.enableLeaderboard
+  });
+});
+
+settingsRouter.get("/notifications", requireSuperAdmin, async (_req, res) => {
   const settings = await getGlobalNotificationSettings();
   res.json(withRuntimeMeta(settings));
 });
@@ -103,7 +128,7 @@ settingsRouter.patch("/notifications", requireSuperAdmin, validate(updateSchema)
   res.json(withRuntimeMeta(updated));
 });
 
-settingsRouter.get("/ticketing", async (_req, res) => {
+settingsRouter.get("/ticketing", requireSuperAdmin, async (_req, res) => {
   res.json(await getGlobalTicketSettings());
 });
 
@@ -137,7 +162,7 @@ settingsRouter.patch("/ticketing", requireSuperAdmin, validate(ticketingSchema),
  * ticket.service.ts#applyTicketRules for how these evaluate. `order` controls evaluation
  * sequence (first match wins); ascending on every read so the UI can render/reorder plainly.
  */
-settingsRouter.get("/ticket-rules", async (_req, res) => {
+settingsRouter.get("/ticket-rules", requireSuperAdmin, async (_req, res) => {
   const rules = await prisma.ticketRule.findMany({
     orderBy: { order: "asc" },
     include: {
@@ -196,18 +221,18 @@ settingsRouter.delete("/ticket-rules/:id", requireSuperAdmin, async (req, res) =
  * backward compatibility (true when either a stored key OR the env var fallback is usable for
  * the current provider) since the frontend's existing "is AI actually usable" check reads it.
  */
-settingsRouter.get("/ai", async (_req, res) => {
+settingsRouter.get("/ai", requireSuperAdmin, async (_req, res) => {
   const { apiKey, ...settings } = await getGlobalAISettings();
   const apiKeySet = Boolean(apiKey);
   const apiKeyConfigured = settings.provider === "ANTHROPIC" ? apiKeySet || Boolean(env.ANTHROPIC_API_KEY) : apiKeySet;
   res.json({ ...settings, apiKeySet, apiKeyConfigured });
 });
 
-settingsRouter.get("/ai/usage-summary", async (_req, res) => {
+settingsRouter.get("/ai/usage-summary", requireSuperAdmin, async (_req, res) => {
   res.json(await getMonthlyAIUsageSummary());
 });
 
-settingsRouter.get("/ai/usage-trend", async (req, res) => {
+settingsRouter.get("/ai/usage-trend", requireSuperAdmin, async (req, res) => {
   const weeks = Math.min(26, Math.max(1, Number(req.query.weeks) || 8));
   res.json(await getWeeklyAIUsageTrend(weeks));
 });
@@ -700,7 +725,7 @@ settingsRouter.get("/mail", requireSuperAdmin, async (_req, res) => {
   res.json(serializeMailSettings(settings));
 });
 
-settingsRouter.get("/mail/transport-status", async (_req, res) => {
+settingsRouter.get("/mail/transport-status", requireSuperAdmin, async (_req, res) => {
   res.json(await getTransportStatus());
 });
 
@@ -1022,10 +1047,14 @@ settingsRouter.get("/git/pulls", requireAuth, async (req, res) => {
  * Face (identity) verification — see services/face.service.ts for why the thresholds have the
  * defaults they do and why this is off by default (it collects biometric data, which is a
  * special category under GDPR Art.9 and regulated by Illinois BIPA / India's DPDP Act).
- * GET is auth-only so any user's client can read the consent text and retention window it has
- * to display; PATCH is super-admin like every other workspace-configuration section.
+ * Both GET and PATCH are super-admin, like every other workspace-configuration section. This GET
+ * was previously auth-only, on the stated rationale that "any user's client needs the consent text
+ * and retention window it has to display" — that rationale was stale: the enrollment dialog reads
+ * consent text from `GET /api/face/status` (face.controller.ts's `consentText`, which falls back
+ * to DEFAULT_CONSENT_TEXT), never from here. This route's only consumer is the settings card, so
+ * gating it leaks nothing to the enrollment flow.
  */
-settingsRouter.get("/face-verification", async (_req, res) => {
+settingsRouter.get("/face-verification", requireSuperAdmin, async (_req, res) => {
   const [settings, allowedByPlan] = await Promise.all([getFaceSettings(), isFaceFeatureAllowedForOrg()]);
   res.json({ ...settings, allowedByPlan });
 });
