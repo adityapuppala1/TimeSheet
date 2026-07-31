@@ -1114,3 +1114,44 @@ Being built next, phased: capture what the AI produced -> surface accuracy hones
 is **parse-failure rate**, which is unbiased and already happening but currently thrown away, *not*
 thumbs-up rate, which has severe selection bias) -> golden datasets from real thumbs-down cases ->
 prompt versioning without a deploy -> an eval runner.
+
+#### Shipped (2026-07-31) — all five phases
+
+| Phase | What landed | Where |
+|---|---|---|
+| P0 | `AIInteraction` capture behind two off-by-default toggles, plus `ai-retention.worker.ts` | `c885e5a` |
+| P1 | "AI quality" card, parse-failure rate first, coverage shown next to every human-derived number | `915b815` |
+| P2 | `AIDataset` / `AIDatasetItem`, promoted from real failures only | `637a848` |
+| P3 | `AIPromptTemplate` / `AIPromptVersion`, allowlisted, never-throw fallback | `de177b8` |
+| P4 | `AIEvalRun` / `AIEvalResult` + `ai-eval.worker.ts`, three budget layers | `a4165f5` |
+
+Decisions worth remembering, because each one closed off a plausible-looking alternative:
+
+- **Datasets are promoted, never authored.** An item always comes from a real captured interaction.
+  Hand-invented test cases drift toward what someone imagines users do, and a prompt tuned against
+  fiction gets worse in production while the score improves. Items copy their inputs rather than
+  joining to the interaction, because the retention sweep deletes it in ~30 days and a golden set
+  that decays is worse than none — it shrinks silently and the numbers move for invisible reasons.
+- **Prompt editing is allowlisted, and that allowlist is a security boundary.** Every `jsonSchema`
+  capability is excluded twice over: its output must parse (`classifyTicket` throws 502, and email
+  and chat intake depend on it), and its prompt carries the `<untrusted-*>` delimiter blocks that
+  defend against injected content from email, chat, CI logs and PR diffs. Auditing this was a clean
+  split — every prompt carrying an untrusted-content block is also a `jsonSchema` one, so the two
+  exclusion rules agree exactly. The face capabilities are excluded for a third reason: they sit
+  inside the biometric compliance regime.
+- **The runtime cannot be broken by a bad prompt.** `resolvePrompt` returns the built-in prompt for
+  every failure and records `promptFallbackReason` on the interaction. That guarantee is what makes
+  the feature safe to expose at all.
+- **Evals call the same capability functions production calls.** There is deliberately no "eval
+  mode" that skips `preflight`/`assertWithinBudget` — such a path would drift from the real one and
+  you'd be measuring something you don't ship. This caught a real bug during the build: the LLM
+  judge originally called `callChat` directly and could have spent outside the budget.
+- **Structured scoring is a fraction, not a boolean,** and excludes the model's self-reported
+  confidence — scoring confidence rewards being confidently wrong as much as being right.
+- **A run stopped by the budget is `PARTIAL`, not `FAILED`.** The scores it produced are real.
+
+Known limits, stated rather than papered over: `pr_inline_review` captures no params (diffs are too
+large to store), so it can't be evaluated; a dataset item whose capability signature later changes
+is recorded as *not replayed* rather than scored zero, because a zero would be a false claim about
+the model; and the enqueue-time budget refusal is covered by unit tests only, since exercising it
+live would mean writing a budget onto a real workspace's settings.
