@@ -668,7 +668,52 @@ export interface AIDatasetItemRow {
 }
 export interface AIDatasetDetail extends Omit<AIDatasetRow, "itemCount"> {
   items: AIDatasetItemRow[];
+  /** False when this capability has no replayer yet, so an eval can't be run against it. */
+  replayable: boolean;
 }
+
+export interface AIEvalRunRow {
+  id: string;
+  dataset: { id: string; name: string; feature: string };
+  promptVersionId: string | null;
+  model: string;
+  /** QUEUED | RUNNING | COMPLETED | PARTIAL | FAILED. PARTIAL means the budget stopped it early
+   *  but the scores it did produce are real. */
+  status: string;
+  itemCount: number;
+  scoredCount: number;
+  passCount: number;
+  avgScore: number | null;
+  estimatedCostUsd: number | null;
+  actualCostUsd: number | null;
+  error: string | null;
+  createdBy: { id: string; name: string } | null;
+  createdAt: string;
+  finishedAt: string | null;
+}
+export interface AIEvalResultRow {
+  id: string;
+  itemId: string;
+  output: string | null;
+  score: number;
+  passed: boolean;
+  detail: string | null;
+  error: string | null;
+  expectedOutput: string | null;
+  notes: string | null;
+}
+export interface AIEvalRunDetail extends AIEvalRunRow {
+  results: AIEvalResultRow[];
+}
+
+export const aiEvalApi = {
+  list: async (datasetId?: string) =>
+    (await api.get<AIEvalRunRow[]>("/ai/evals", { params: datasetId ? { datasetId } : {} })).data,
+  get: async (id: string) => (await api.get<AIEvalRunDetail>(`/ai/evals/${id}`)).data,
+  /** Queues a run — the worker executes it. `promptVersionId: null` measures the built-in prompt. */
+  enqueue: async (payload: { datasetId: string; promptVersionId?: string | null }) =>
+    (await api.post<AIEvalRunRow>("/ai/evals", payload)).data
+};
 /** A captured interaction that could be promoted into a dataset. `replayable` is false when the
  *  inputs weren't captured (content capture was off), so the UI can say so before someone types
  *  out a corrected answer. */

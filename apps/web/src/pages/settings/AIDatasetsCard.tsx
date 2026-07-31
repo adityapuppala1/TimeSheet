@@ -11,7 +11,7 @@
  * says that up front rather than letting someone write out a correction and then hit an error.
  */
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Check, Database, Plus, Trash2 } from "lucide-react";
+import { Check, Database, Play, Plus, Trash2 } from "lucide-react";
 import { useState } from "react";
 import { Badge } from "../../components/ui/badge";
 import { Button } from "../../components/ui/button";
@@ -23,7 +23,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from ".
 import { Skeleton } from "../../components/ui/skeleton";
 import { Textarea } from "../../components/ui/textarea";
 import { toast } from "../../components/ui/toaster";
-import { aiDatasetApi, type AIPromotableInteraction } from "../../services/api";
+import { aiDatasetApi, aiEvalApi, type AIPromotableInteraction } from "../../services/api";
 
 /** The capabilities worth building a golden set for. Structured ones first — they're scorable
  *  deterministically, so evals on them cost nothing beyond the replay itself. */
@@ -180,6 +180,21 @@ function DatasetDetailDialog({
     enabled: Boolean(datasetId) && contentCaptureOn
   });
 
+  const runEval = useMutation({
+    mutationFn: () => aiEvalApi.enqueue({ datasetId: datasetId! }),
+    onSuccess: (run) => {
+      toast.success("Evaluation queued", {
+        description: `${run.itemCount} example${run.itemCount === 1 ? "" : "s"}, estimated ${
+          run.estimatedCostUsd == null ? "cost unknown" : `$${run.estimatedCostUsd.toFixed(3)}`
+        }. Results appear in the Evaluations card.`
+      });
+      queryClient.invalidateQueries({ queryKey: ["ai", "evals"] });
+    },
+    // The refusals here are informative — budget exceeded, one already running, no examples —
+    // so the server's message is shown rather than a generic failure.
+    onError: (err: any) => toast.error("Could not start", { description: err?.response?.data?.message ?? "Try again." })
+  });
+
   const removeItem = useMutation({
     mutationFn: (itemId: string) => aiDatasetApi.removeItem(datasetId!, itemId),
     onSuccess: () => {
@@ -205,6 +220,25 @@ function DatasetDetailDialog({
 
           {dataset.data && (
             <div className="grid gap-5">
+              {!readOnly && (
+                <div className="flex flex-wrap items-center gap-2">
+                  <Button
+                    size="sm"
+                    disabled={runEval.isPending || dataset.data.items.length === 0 || !dataset.data.replayable}
+                    onClick={() => runEval.mutate()}
+                  >
+                    <Play className="h-4 w-4" />Run evaluation
+                  </Button>
+                  <span className="text-xs text-muted-foreground">
+                    {!dataset.data.replayable
+                      ? "This capability can't be replayed automatically yet."
+                      : dataset.data.items.length === 0
+                        ? "Add at least one example first."
+                        : "Replays every example and scores it. Costs real model calls."}
+                  </span>
+                </div>
+              )}
+
               <div className="grid gap-1.5">
                 <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
                   Examples ({dataset.data.items.length})

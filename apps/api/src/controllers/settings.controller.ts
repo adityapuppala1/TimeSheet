@@ -281,6 +281,7 @@ const aiSettingsSchema = z.object({
       aiCaptureEnabled: z.boolean().optional(),
       aiCaptureContentEnabled: z.boolean().optional(),
       aiCaptureRetentionDays: z.coerce.number().int().min(1).max(365).optional(),
+      aiEvalJudgeEnabled: z.boolean().optional(),
       model: z.string().min(1).max(80).optional(),
       confidenceThreshold: z.coerce.number().min(0).max(1).optional(),
       monthlyBudgetUsd: z.coerce.number().min(0).optional().nullable(),

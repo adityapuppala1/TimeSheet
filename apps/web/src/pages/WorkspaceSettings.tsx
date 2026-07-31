@@ -96,6 +96,7 @@ import { PublicApiSettingsCard } from "./settings/PublicApiSettingsCard";
 import { BillingSettingsCard } from "./settings/BillingSettingsCard";
 import { IntegrationsSettingsCard } from "./settings/IntegrationsSettingsCard";
 import { AIDatasetsCard } from "./settings/AIDatasetsCard";
+import { AIEvalsCard } from "./settings/AIEvalsCard";
 import { AIPromptsCard } from "./settings/AIPromptsCard";
 import { SecurityDevOpsSettingsCard } from "./settings/SecurityDevOpsSettingsCard";
 import { FaceVerificationSettingsCard } from "./settings/FaceVerificationSettingsCard";
@@ -1157,7 +1158,8 @@ function AISettingsCard({ readOnly }: { readOnly: boolean }) {
     { key: "staleTicketNudgeEnabled", label: "AI stale-ticket nudge", description: "A dismissible suggested next action on tickets the SLA sweep already flags as stale. Never acts on its own." },
     { key: "aiPrInlineReviewEnabled", label: "AI inline PR review comments", description: "Deeper than the PR-review summary above: per-line review comments on a PR's actual diff when it opens (Security & DevOps tab). Opt-in separately because a wrong or noisy inline comment costs developer trust fast — start with the summary alone and enable this once you trust the triage pipeline's behavior on your repos." },
     { key: "aiCaptureEnabled", label: "Record AI quality metrics", description: "Logs one row per AI call — which feature, which model, whether the response parsed, and how long it took. No prompt text, no user content, just a hash. Without this there is no way to answer \"is our AI actually any good?\" — cost is the only AI signal the system otherwise keeps." },
-    { key: "aiCaptureContentEnabled", label: "Also store prompts and responses", description: "Additionally keeps the prompt text, the model's answer, and the inputs it was given. This retains real user content (ticket descriptions, timesheet notes, PR diffs), so it's a deliberate privacy decision — but it's required before you can build a test set from real failures or compare one prompt against another. Face-verification prompts are never stored regardless of this setting." }
+    { key: "aiCaptureContentEnabled", label: "Also store prompts and responses", description: "Additionally keeps the prompt text, the model's answer, and the inputs it was given. This retains real user content (ticket descriptions, timesheet notes, PR diffs), so it's a deliberate privacy decision — but it's required before you can build a test set from real failures or compare one prompt against another. Face-verification prompts are never stored regardless of this setting." },
+    { key: "aiEvalJudgeEnabled", label: "Let evals grade free-text answers with AI", description: "When an eval scores a written answer (a digest, a summary, an explanation), ask a model whether it means the same thing as the expected one. Structured answers are always scored for free by comparing fields directly — this only affects free-text, and it's the one part of an eval that costs extra calls. Judge spend is logged separately and counts against the same monthly budget." }
   ];
 
   return (
@@ -1498,6 +1500,8 @@ function AISettingsCard({ readOnly }: { readOnly: boolean }) {
       <AIPromptsCard readOnly={readOnly} />
 
       <AIDatasetsCard readOnly={readOnly} contentCaptureOn={Boolean(settings.data?.aiCaptureContentEnabled)} />
+
+      <AIEvalsCard />
     </div>
   );
 }

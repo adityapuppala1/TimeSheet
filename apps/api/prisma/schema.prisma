@@ -177,6 +177,7 @@ model User {
   aiDatasets                AIDataset[]
   aiDatasetItems            AIDatasetItem[]
   aiPromptVersions          AIPromptVersion[]
+  aiEvalRuns                AIEvalRun[]
   attestationsIssued        WorkAttestation[]
   attestationShareLinks     AttestationShareLink[]
   outboundWebhooksCreated   OutboundWebhook[]
@@ -799,6 +800,12 @@ model GlobalAISettings {
   aiCaptureContentEnabled     Boolean    @default(false)
   /// How long captured interactions are retained before the sweep deletes them.
   aiCaptureRetentionDays      Int        @default(30)
+  /// Lets an eval scoring a FREE-TEXT answer ask a model whether it's equivalent to the expected
+  /// one. Its own toggle because it is the only part of an eval run that costs EXTRA model calls
+  /// beyond the replay itself — structured answers are scored deterministically for free. Judge
+  /// calls are logged under their own feature so that spend stays visible and budgeted like any
+  /// other. Off by default: an eval should be cheap unless you decide otherwise.
+  aiEvalJudgeEnabled          Boolean    @default(false)
 
   model                       String     @default("claude-haiku-4-5") @db.VarChar(80)
   confidenceThreshold         Float      @default(0.6)
@@ -952,6 +959,7 @@ model AIDataset {
   feature     String  @db.VarChar(60)
 
   items AIDatasetItem[]
+  runs  AIEvalRun[]
 
   createdById String?
   createdBy   User?    @relation(fields: [createdById], references: [id], onDelete: SetNull)
@@ -1048,6 +1056,82 @@ model AIPromptVersion {
 
   @@unique([templateId, version])
   @@index([templateId])
+}
+
+/// EVAL RUNS — replay a golden dataset and score the answers, so "is the new prompt better?" has
+/// a number instead of an opinion. This is the last joint of the loop: capture (AIInteraction) →
+/// ground truth (AIDataset) → change (AIPromptVersion) → measure (here).
+///
+/// WHY a queued run executed by a worker rather than a synchronous endpoint: a run is N real LLM
+/// calls. Doing that inside a request would hold a connection open for minutes and time out.
+///
+/// COST IS THE MAIN RISK, so it's bounded in three independent places:
+///   1. At enqueue — an estimate based on this feature's own recent cost per call is refused with
+///      422 if it would exceed the remaining monthly budget.
+///   2. Mid-run — the runner calls the SAME capability functions as production, so their existing
+///      preflight/assertWithinBudget applies with no bypass. A 402 marks the run PARTIAL and stops
+///      it, keeping whatever was already scored.
+///   3. Hard caps — at most 100 items per run, and one non-terminal run per workspace.
+model AIEvalRun {
+  id        String    @id @default(uuid())
+  datasetId String
+  dataset   AIDataset @relation(fields: [datasetId], references: [id], onDelete: Cascade)
+
+  /// The prompt version under test. Null means the run measured the built-in prompt — which is
+  /// what makes a before/after comparison possible.
+  promptVersionId String? @db.VarChar(64)
+  /// Copied at enqueue: the model can be changed in settings mid-run, and a score is meaningless
+  /// without knowing what produced it.
+  model           String  @db.VarChar(80)
+
+  /// QUEUED | RUNNING | COMPLETED | PARTIAL | FAILED
+  /// PARTIAL is its own state rather than FAILED: a run stopped by the budget still produced real
+  /// scores for the items it reached, and calling that a failure would throw away good data.
+  status String @default("QUEUED") @db.VarChar(20)
+
+  itemCount   Int    @default(0)
+  scoredCount Int    @default(0)
+  passCount   Int    @default(0)
+  avgScore    Float?
+
+  estimatedCostUsd Float?
+  actualCostUsd    Float?
+  error            String? @db.VarChar(500)
+
+  results AIEvalResult[]
+
+  startedAt   DateTime?
+  finishedAt  DateTime?
+  createdById String?
+  createdBy   User?     @relation(fields: [createdById], references: [id], onDelete: SetNull)
+  createdAt   DateTime  @default(now())
+
+  @@index([datasetId])
+  @@index([status])
+}
+
+model AIEvalResult {
+  id    String    @id @default(uuid())
+  runId String
+  run   AIEvalRun @relation(fields: [runId], references: [id], onDelete: Cascade)
+
+  /// The dataset item, held flat rather than as a relation: deleting an item shouldn't erase the
+  /// history of runs that already scored it.
+  itemId String @db.VarChar(64)
+
+  output String? @db.Text
+  /// 0–1. For EXACT_FIELDS this is the fraction of fields that matched, so a near-miss is
+  /// distinguishable from a completely wrong answer.
+  score  Float
+  passed Boolean
+  /// Which fields differed, or why the judge decided as it did — the part that makes a failing
+  /// score actionable instead of just discouraging.
+  detail String? @db.Text
+  error  String? @db.VarChar(300)
+
+  createdAt DateTime @default(now())
+
+  @@index([runId])
 }
 
 /// Singleton (id = "global") row that controls which notification categories

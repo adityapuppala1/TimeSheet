@@ -37,6 +37,7 @@ import {
   previewPrompt,
   savePromptVersion
 } from "../services/ai-prompt.service.js";
+import { enqueueEvalRun, getEvalRun, isReplayable, listEvalRuns } from "../services/ai-eval.service.js";
 import { setInteractionFeedback } from "../services/ai-quality.service.js";
 import { computeTimesheetCost } from "../services/billing-rate.service.js";
 import { ticketProjectScope } from "../services/ticket.service.js";
@@ -297,7 +298,10 @@ aiRouter.post("/datasets", requireSuperAdmin, validate(createDatasetSchema), asy
 });
 
 aiRouter.get("/datasets/:id", requireSuperAdmin, async (req, res) => {
-  res.json(await getDataset(String(req.params.id)));
+  const dataset = await getDataset(String(req.params.id));
+  // Told up front so the UI can explain why "Run evaluation" is unavailable, instead of offering
+  // a button that 422s. Not every captured capability has a replayer yet.
+  res.json({ ...dataset, replayable: isReplayable(dataset.feature) });
 });
 
 /** Candidate interactions to promote. Defaults to problems only — the ones worth correcting. */
@@ -339,6 +343,40 @@ aiRouter.delete("/datasets/:id/items/:itemId", requireSuperAdmin, async (req, re
   await deleteDatasetItem(String(req.params.id), String(req.params.itemId));
   await audit(req.user!.id, "ai.dataset_item_removed", "AIDatasetItem", String(req.params.itemId), {});
   res.status(204).send();
+});
+
+/* ---------- Eval runs ---------- */
+// See services/ai-eval.service.ts for the three budget layers. Enqueue only — the run itself is
+// executed by workers/ai-eval.worker.ts, because it's N real LLM calls and would time out here.
+
+aiRouter.get("/evals", requireSuperAdmin, async (req, res) => {
+  res.json(await listEvalRuns(req.query.datasetId ? String(req.query.datasetId) : undefined));
+});
+
+aiRouter.get("/evals/:id", requireSuperAdmin, async (req, res) => {
+  res.json(await getEvalRun(String(req.params.id)));
+});
+
+const enqueueEvalSchema = z.object({
+  body: z.object({
+    datasetId: z.string().uuid(),
+    /** Which prompt version to measure. Null/absent means the built-in prompt — the baseline. */
+    promptVersionId: z.string().uuid().nullish()
+  })
+});
+
+aiRouter.post("/evals", requireSuperAdmin, validate(enqueueEvalSchema), async (req, res) => {
+  const run = await enqueueEvalRun({
+    datasetId: req.body.datasetId,
+    promptVersionId: req.body.promptVersionId,
+    userId: req.user!.id
+  });
+  await audit(req.user!.id, "ai.eval_enqueued", "AIEvalRun", run.id, {
+    datasetId: run.datasetId,
+    itemCount: run.itemCount,
+    estimatedCostUsd: run.estimatedCostUsd
+  });
+  res.status(201).json(run);
 });
 
 /* ---------- Prompt versioning ---------- */

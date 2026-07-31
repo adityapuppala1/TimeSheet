@@ -31,6 +31,7 @@ import { startSecurityWeeklyDigestWorker } from "./workers/security-weekly-diges
 import { startFaceRetentionWorker } from "./workers/face-retention.worker.js";
 import { startWebhookRetryWorker } from "./workers/webhook-retry.worker.js";
 import { startBugPatternDigestWorker } from "./workers/bug-pattern-digest.worker.js";
+import { startAIEvalWorker } from "./workers/ai-eval.worker.js";
 import { startAIRetentionWorker } from "./workers/ai-retention.worker.js";
 import { runForEveryOrg } from "./workers/run-for-every-org.js";
 import { warmFaceModelsIfEnabled } from "./services/face.service.js";
@@ -170,6 +171,7 @@ const server: Server = app.listen(env.API_PORT, async () => {
   startWebhookRetryWorker();
   startBugPatternDigestWorker();
   startAIRetentionWorker();
+  startAIEvalWorker();
 
   // Detached: loads the face models at boot IF any org has the feature enabled, so the first
   // verification after a restart doesn't pay the multi-second cold model load. Deployments

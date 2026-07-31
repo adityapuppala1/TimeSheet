@@ -336,6 +336,9 @@ export interface GlobalAISettings {
    *  retains real user content; required before golden datasets/evals are possible. */
   aiCaptureContentEnabled: boolean;
   aiCaptureRetentionDays: number;
+  /** Allows an eval to spend extra model calls judging free-text answers. The only part of a run
+   *  that costs more than the replay itself, so it's opt-in and logged under its own feature. */
+  aiEvalJudgeEnabled: boolean;
   model: string;
   confidenceThreshold: number;
   monthlyBudgetUsd: number | null;
