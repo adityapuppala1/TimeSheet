@@ -30,6 +30,13 @@ import {
   listDatasets,
   listPromotableInteractions
 } from "../services/ai-dataset.service.js";
+import {
+  activatePromptVersion,
+  getPromptTemplate,
+  listPromptTemplates,
+  previewPrompt,
+  savePromptVersion
+} from "../services/ai-prompt.service.js";
 import { setInteractionFeedback } from "../services/ai-quality.service.js";
 import { computeTimesheetCost } from "../services/billing-rate.service.js";
 import { ticketProjectScope } from "../services/ticket.service.js";
@@ -331,5 +338,57 @@ aiRouter.post("/datasets/:id/items", requireSuperAdmin, validate(addItemSchema),
 aiRouter.delete("/datasets/:id/items/:itemId", requireSuperAdmin, async (req, res) => {
   await deleteDatasetItem(String(req.params.id), String(req.params.itemId));
   await audit(req.user!.id, "ai.dataset_item_removed", "AIDatasetItem", String(req.params.itemId), {});
+  res.status(204).send();
+});
+
+/* ---------- Prompt versioning ---------- */
+// See services/ai-prompt.service.ts for the allowlist and the never-throw guarantee. SUPER_ADMIN
+// only: editing a prompt changes what every user of that capability gets, workspace-wide.
+
+aiRouter.get("/prompts", requireSuperAdmin, async (_req, res) => {
+  res.json(await listPromptTemplates());
+});
+
+aiRouter.get("/prompts/:feature", requireSuperAdmin, async (req, res) => {
+  res.json(await getPromptTemplate(String(req.params.feature)));
+});
+
+const promptBodySchema = z.object({
+  params: z.object({ feature: z.string().min(1).max(60) }),
+  body: z.object({ body: z.string().max(20000), note: z.string().max(300).optional(), activate: z.boolean().optional() })
+});
+
+/** Dry run against the capability's sample values — nothing is saved, nothing is charged. */
+aiRouter.post("/prompts/:feature/preview", requireSuperAdmin, validate(promptBodySchema), async (req, res) => {
+  res.json(previewPrompt(String(req.params.feature), req.body.body));
+});
+
+aiRouter.post("/prompts/:feature/versions", requireSuperAdmin, validate(promptBodySchema), async (req, res) => {
+  const version = await savePromptVersion({
+    feature: String(req.params.feature),
+    body: req.body.body,
+    note: req.body.note,
+    activate: req.body.activate,
+    userId: req.user!.id
+  });
+  await audit(req.user!.id, "ai.prompt_version_saved", "AIPromptVersion", version.id, {
+    feature: req.params.feature,
+    version: version.version,
+    activated: req.body.activate !== false
+  });
+  res.status(201).json(version);
+});
+
+const activateSchema = z.object({
+  params: z.object({ feature: z.string().min(1).max(60) }),
+  /** null is revert-to-built-in, which is a first-class state rather than a missing value. */
+  body: z.object({ versionId: z.string().uuid().nullable() })
+});
+
+aiRouter.post("/prompts/:feature/activate", requireSuperAdmin, validate(activateSchema), async (req, res) => {
+  await activatePromptVersion(String(req.params.feature), req.body.versionId);
+  await audit(req.user!.id, "ai.prompt_version_activated", "AIPromptTemplate", String(req.params.feature), {
+    versionId: req.body.versionId
+  });
   res.status(204).send();
 });

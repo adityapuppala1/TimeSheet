@@ -42,6 +42,7 @@ import { prisma } from "../config/prisma.js";
 import { requireTenantContext } from "../config/tenant-context.js";
 import { AppError } from "../middleware/error.js";
 import { decryptSecret } from "../utils/encryption.js";
+import { resolvePrompt } from "./ai-prompt.service.js";
 import { getEffectiveAiBudgetCeiling } from "./plan-limits.service.js";
 import { htmlToText } from "../utils/sanitize.js";
 
@@ -1211,19 +1212,19 @@ export async function improveText(params: { text: string; context: "ticket_descr
       ? "Rewrite this bug/task description to be clear and well-structured — use a \"Steps to reproduce / Expected / Actual\" layout if it reads like a bug report. Keep it factual; don't invent details the original doesn't imply."
       : "Improve the clarity and tone of this comment while preserving its meaning and intent. Keep it concise.";
 
+  const p = await resolvePrompt("writing_assistant", { instruction, context: params.context, text: plain });
+
   const startedAt = Date.now();
-  const result = await callChat(settings, {
-    model: settings.model,
-    maxTokens: 1024,
-    prompt: `${instruction}\n\nOriginal text:\n${plain}\n\nRespond with ONLY the improved text — no preamble, no explanation.`
-  });
+  const result = await callChat(settings, { model: settings.model, maxTokens: 1024, prompt: p.text });
 
   await logAIUsage({
     feature: "writing_assistant",
     model: settings.model,
     inputTokens: result.usage.inputTokens,
     outputTokens: result.usage.outputTokens,
-    userId: params.userId
+    userId: params.userId,
+    promptVersionId: p.promptVersionId,
+    promptFallbackReason: p.fallbackReason
   });
 
   return { improved: result.text || plain };
@@ -1241,19 +1242,19 @@ export async function summarizeComments(params: {
     .map((c) => `${c.authorName} (${c.createdAt.toISOString().slice(0, 16).replace("T", " ")}): ${htmlToText(c.body)}`)
     .join("\n\n");
 
+  const p = await resolvePrompt("comment_summary", { ticketTitle: params.ticketTitle, thread });
+
   const startedAt = Date.now();
-  const result = await callChat(settings, {
-    model: settings.model,
-    maxTokens: 512,
-    prompt: `Summarize this comment thread on ticket "${params.ticketTitle}" in 2-4 sentences — focus on current status, decisions made, and any open questions.\n\n${thread}`
-  });
+  const result = await callChat(settings, { model: settings.model, maxTokens: 512, prompt: p.text });
 
   await logAIUsage({
     feature: "comment_summary",
     model: settings.model,
     inputTokens: result.usage.inputTokens,
     outputTokens: result.usage.outputTokens,
-    userId: params.userId
+    userId: params.userId,
+    promptVersionId: p.promptVersionId,
+    promptFallbackReason: p.fallbackReason
   });
 
   return { summary: result.text };
@@ -1288,19 +1289,19 @@ export async function answerWorkspaceQuestion(params: {
     ? `\n\nWorkspace analytics snapshot (use this for trend/aggregate questions — velocity, SLA, workload, cost):\n${params.insightsSnapshot}`
     : "";
 
+  const p = await resolvePrompt("ask_ai", { tickets: context, analyticsSnapshot: snapshotBlock, question: params.question });
+
   const startedAt = Date.now();
-  const result = await callChat(settings, {
-    model: settings.model,
-    maxTokens: 1024,
-    prompt: `You're answering a question about a team's ticket backlog and workspace analytics. Use only the tickets and analytics listed below — cite ticket keys like [WEB-12] when referencing a specific ticket, and cite numbers directly when referencing analytics. If the answer isn't in the provided data, say so plainly.\n\nTickets:\n${context}${snapshotBlock}\n\nQuestion: ${params.question}`
-  });
+  const result = await callChat(settings, { model: settings.model, maxTokens: 1024, prompt: p.text });
 
   await logAIUsage({
     feature: "ask_ai",
     model: settings.model,
     inputTokens: result.usage.inputTokens,
     outputTokens: result.usage.outputTokens,
-    userId: params.userId
+    userId: params.userId,
+    promptVersionId: p.promptVersionId,
+    promptFallbackReason: p.fallbackReason
   });
 
   return { answer: result.text || "I couldn't generate an answer from the available tickets." };
@@ -1320,32 +1321,27 @@ export async function generateWeeklyDigest(params: {
   const { settings } = await preflight("weeklyDigestEnabled");
 
   const ticketLines = params.notableTickets.map((t) => `- [${t.key}] ${t.title} (${t.status})`).join("\n") || "(none)";
-  const prompt = [
-    `Write a short, friendly Monday-morning recap (3-5 sentences, plain prose, no headings/bullets in the output) for ${params.userName} covering the week of ${params.weekLabel}.`,
-    "",
-    `Tickets created: ${params.ticketsCreated}`,
-    `Tickets resolved: ${params.ticketsResolved}`,
-    `Currently open & assigned to them: ${params.openAssigned}`,
-    `Hours logged: ${params.hoursLogged}`,
-    "Notable tickets:",
-    ticketLines,
-    "",
-    "Keep it encouraging but factual — don't invent numbers beyond what's given. If everything is at zero, say the week was quiet rather than padding it out."
-  ].join("\n");
+  const p = await resolvePrompt("weekly_digest", {
+    userName: params.userName,
+    weekLabel: params.weekLabel,
+    ticketsCreated: String(params.ticketsCreated),
+    ticketsResolved: String(params.ticketsResolved),
+    openAssigned: String(params.openAssigned),
+    hoursLogged: String(params.hoursLogged),
+    notableTickets: ticketLines
+  });
 
   const startedAt = Date.now();
-  const result = await callChat(settings, {
-    model: settings.model,
-    maxTokens: 400,
-    prompt: `${prompt}\n\nRespond with ONLY the recap paragraph — no preamble, no subject line.`
-  });
+  const result = await callChat(settings, { model: settings.model, maxTokens: 400, prompt: p.text });
 
   await logAIUsage({
     feature: "weekly_digest",
     model: settings.model,
     inputTokens: result.usage.inputTokens,
     outputTokens: result.usage.outputTokens,
-    userId: params.userId
+    userId: params.userId,
+    promptVersionId: p.promptVersionId,
+    promptFallbackReason: p.fallbackReason
   });
 
   return { summary: result.text };
@@ -1372,33 +1368,28 @@ export async function generateSecurityWeeklyDigest(params: {
   const { settings } = await preflight("securityWeeklyDigestEnabled");
 
   const repoLines = params.topRepositories.slice(0, 5).map((r) => `- ${r.repository}: ${r.count} open`).join("\n") || "(none)";
-  const prompt = [
-    `Write a short, factual security-posture recap (3-5 sentences, plain prose, no headings/bullets in the output) for the workspace admins covering the week of ${params.weekLabel}.`,
-    "",
-    `Open findings: ${params.openFindings}`,
-    `New CRITICAL/HIGH findings this week: ${params.newCriticalOrHigh}`,
-    `Findings resolved this week: ${params.resolvedThisWeek}`,
-    `Risk score: ${params.riskScore} (was ${params.riskScoreLastWeek} last week)`,
-    `Security-linked tickets past their SLA: ${params.ticketsStuckPastSla}`,
-    "Top repositories by open findings:",
-    repoLines,
-    "",
-    "Keep it factual and actionable — call out what changed and what needs attention first, don't invent numbers beyond what's given. If the risk score dropped and nothing is stuck, say the week looked good rather than manufacturing concern."
-  ].join("\n");
+  const p = await resolvePrompt("security_weekly_digest", {
+    weekLabel: params.weekLabel,
+    openFindings: String(params.openFindings),
+    newCriticalOrHigh: String(params.newCriticalOrHigh),
+    resolvedThisWeek: String(params.resolvedThisWeek),
+    riskScore: String(params.riskScore),
+    riskScoreLastWeek: String(params.riskScoreLastWeek),
+    ticketsStuckPastSla: String(params.ticketsStuckPastSla),
+    topRepositories: repoLines
+  });
 
   const startedAt = Date.now();
-  const result = await callChat(settings, {
-    model: settings.model,
-    maxTokens: 400,
-    prompt: `${prompt}\n\nRespond with ONLY the recap paragraph — no preamble, no subject line.`
-  });
+  const result = await callChat(settings, { model: settings.model, maxTokens: 400, prompt: p.text });
 
   await logAIUsage({
     feature: "security_weekly_digest",
     model: settings.model,
     inputTokens: result.usage.inputTokens,
     outputTokens: result.usage.outputTokens,
-    userId: params.userId
+    userId: params.userId,
+    promptVersionId: p.promptVersionId,
+    promptFallbackReason: p.fallbackReason
   });
 
   return { summary: result.text };
@@ -1427,34 +1418,24 @@ export async function generateBugPatternDigest(params: {
   const ticketLines = params.hotTickets.map((t) => `- [${t.key}] ${t.title}: ${t.failureCount} failed runs`).join("\n") || "(none)";
   const findingLines = params.findingHotspots.map((f) => `- ${f.repository}: ${f.count} open findings`).join("\n") || "(none)";
 
-  const prompt = [
-    `Write a short, factual "what keeps breaking" recap (3-5 sentences, plain prose, no headings/bullets in the output) for engineering leads covering ${params.periodLabel}.`,
-    "",
-    "Recurring CI failures by provider/branch:",
-    failureLines,
-    "",
-    "Tickets accumulating the most failed test runs:",
-    ticketLines,
-    "",
-    "Security-finding hotspots by repository:",
-    findingLines,
-    "",
-    "Call out the clearest recurring pattern first (a specific branch, ticket, or repository that keeps coming up), and be honest if nothing stands out — don't invent a trend from thin data. Never invent numbers beyond what's given."
-  ].join("\n");
+  const p = await resolvePrompt("bug_pattern_digest", {
+    periodLabel: params.periodLabel,
+    recurringFailures: failureLines,
+    hotTickets: ticketLines,
+    findingHotspots: findingLines
+  });
 
   const startedAt = Date.now();
-  const result = await callChat(settings, {
-    model: settings.model,
-    maxTokens: 400,
-    prompt: `${prompt}\n\nRespond with ONLY the recap paragraph — no preamble, no subject line.`
-  });
+  const result = await callChat(settings, { model: settings.model, maxTokens: 400, prompt: p.text });
 
   await logAIUsage({
     feature: "bug_pattern_digest",
     model: settings.model,
     inputTokens: result.usage.inputTokens,
     outputTokens: result.usage.outputTokens,
-    userId: params.userId
+    userId: params.userId,
+    promptVersionId: p.promptVersionId,
+    promptFallbackReason: p.fallbackReason
   });
 
   return { summary: result.text };
@@ -1479,33 +1460,28 @@ export async function generateStatusReport(params: {
   const { settings } = await preflight("statusReportEnabled");
 
   const ticketLines = params.notableTickets.map((t) => `- [${t.key}] ${t.title} (${t.status})`).join("\n") || "(none)";
-  const prompt = [
-    `Write a short stakeholder status update (4-7 sentences, plain prose, no headings/bullets in the output) for the project "${params.projectName}" covering ${params.periodLabel}.`,
-    "",
-    `Tickets created: ${params.ticketsCreated}`,
-    `Tickets resolved: ${params.ticketsResolved}`,
-    `Currently open: ${params.openCount}`,
-    `Overdue: ${params.overdueCount}`,
-    `Hours logged: ${params.hoursLogged}`,
-    "Notable tickets:",
-    ticketLines,
-    "",
-    "Write for a non-technical stakeholder reading this outside the team — plain language, no jargon. Be factual, don't invent numbers beyond what's given, and call out overdue items if any exist rather than glossing over them."
-  ].join("\n");
+  const p = await resolvePrompt("status_report", {
+    projectName: params.projectName,
+    periodLabel: params.periodLabel,
+    ticketsCreated: String(params.ticketsCreated),
+    ticketsResolved: String(params.ticketsResolved),
+    openCount: String(params.openCount),
+    overdueCount: String(params.overdueCount),
+    hoursLogged: String(params.hoursLogged),
+    notableTickets: ticketLines
+  });
 
   const startedAt = Date.now();
-  const result = await callChat(settings, {
-    model: settings.model,
-    maxTokens: 500,
-    prompt: `${prompt}\n\nRespond with ONLY the status update paragraph(s) — no preamble, no subject line.`
-  });
+  const result = await callChat(settings, { model: settings.model, maxTokens: 500, prompt: p.text });
 
   await logAIUsage({
     feature: "status_report",
     model: settings.model,
     inputTokens: result.usage.inputTokens,
     outputTokens: result.usage.outputTokens,
-    userId: params.userId
+    userId: params.userId,
+    promptVersionId: p.promptVersionId,
+    promptFallbackReason: p.fallbackReason
   });
 
   return { report: result.text };
@@ -1587,23 +1563,17 @@ export async function explainAssigneeSuggestion(params: {
     .map((c, i) => `${i + 1}. ${c.name} — ${c.openTicketCount} open now, ${c.resolvedHereCount} resolved here before`)
     .join("\n");
 
-  const prompt = [
-    `A ticket titled "${params.ticketTitle}" needs an assignee. Ranked candidates (already scored, do NOT re-rank):`,
-    lines,
-    "",
-    "In ONE sentence, explain why the top candidate is the reasonable pick, in plain language a",
-    "manager would use (e.g. \"already familiar with this area and has room on their plate\").",
-    "Never invent skills or history beyond the open/resolved counts given. Respond with ONLY that",
-    "one sentence — no preamble, no candidate list repeated back."
-  ].join("\n");
+  const p = await resolvePrompt("assignee_suggestion_explanation", { ticketTitle: params.ticketTitle, candidates: lines });
 
   const startedAt = Date.now();
-  const result = await callChat(settings, { model: settings.model, maxTokens: 150, prompt });
+  const result = await callChat(settings, { model: settings.model, maxTokens: 150, prompt: p.text });
   await logAIUsage({
     feature: "assignee_suggestion_explanation",
     model: settings.model,
     inputTokens: result.usage.inputTokens,
-    outputTokens: result.usage.outputTokens
+    outputTokens: result.usage.outputTokens,
+    promptVersionId: p.promptVersionId,
+    promptFallbackReason: p.fallbackReason
   });
   return result.text?.trim() || null;
 }
@@ -1627,25 +1597,25 @@ export async function suggestStaleTicketNextAction(params: {
 }): Promise<string | null> {
   const { settings } = await preflight("staleTicketNudgeEnabled");
 
-  const prompt = [
-    `A ${params.priority}-priority ${params.ticketType} ticket titled "${params.ticketTitle}" is ${params.hoursOverdue.toFixed(1)} hours past its resolution SLA.`,
-    `It has ${params.commentCount} comment(s) and ${params.hasLinkedBranch ? "a" : "no"} linked branch/PR.`,
-    "",
-    "In ONE short sentence, suggest the single most useful next action for whoever owns this",
-    "(e.g. \"post a status update so the reporter isn't left wondering\", \"link a branch if work has",
-    "already started\", \"flag it as blocked if it's stuck on someone else\"). Be concrete, not generic",
-    "advice like \"look into it\" or \"prioritize this\". Never invent facts about the ticket beyond",
-    "what's given. Respond with ONLY that one sentence — no preamble."
-  ].join("\n");
+  const p = await resolvePrompt("stale_ticket_nudge", {
+    priority: params.priority,
+    ticketType: params.ticketType,
+    ticketTitle: params.ticketTitle,
+    hoursOverdue: params.hoursOverdue.toFixed(1),
+    commentCount: String(params.commentCount),
+    linkedBranchPhrase: params.hasLinkedBranch ? "a" : "no"
+  });
 
   const startedAt = Date.now();
-  const result = await callChat(settings, { model: settings.model, maxTokens: 150, prompt });
+  const result = await callChat(settings, { model: settings.model, maxTokens: 150, prompt: p.text });
   await logAIUsage({
     feature: "stale_ticket_nudge",
     model: settings.model,
     inputTokens: result.usage.inputTokens,
     outputTokens: result.usage.outputTokens,
-    userId: params.userId
+    userId: params.userId,
+    promptVersionId: p.promptVersionId,
+    promptFallbackReason: p.fallbackReason
   });
   return result.text?.trim() || null;
 }

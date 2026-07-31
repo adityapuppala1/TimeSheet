@@ -24,6 +24,8 @@ export function createFakeTenantClient(): PrismaClient {
     },
     aIDataset: { findMany: vi.fn(), findUnique: vi.fn(), create: vi.fn() },
     aIDatasetItem: { create: vi.fn(), findFirst: vi.fn(), delete: vi.fn() },
+    aIPromptTemplate: { findMany: vi.fn(), findUnique: vi.fn(), upsert: vi.fn(), update: vi.fn() },
+    aIPromptVersion: { findFirst: vi.fn(), create: vi.fn() },
     scimSettings: { findUnique: vi.fn() },
     globalFaceVerificationSettings: { upsert: vi.fn(), update: vi.fn() },
     faceEnrollment: { findUnique: vi.fn(), upsert: vi.fn(), deleteMany: vi.fn(), count: vi.fn(), findMany: vi.fn() },

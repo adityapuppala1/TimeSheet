@@ -176,6 +176,7 @@ model User {
   aiInteractionFeedback     AIInteraction[]           @relation("AIInteractionFeedbackBy")
   aiDatasets                AIDataset[]
   aiDatasetItems            AIDatasetItem[]
+  aiPromptVersions          AIPromptVersion[]
   attestationsIssued        WorkAttestation[]
   attestationShareLinks     AttestationShareLink[]
   outboundWebhooksCreated   OutboundWebhook[]
@@ -990,6 +991,63 @@ model AIDatasetItem {
   createdAt   DateTime @default(now())
 
   @@index([datasetId])
+}
+
+/// PROMPT VERSIONING — change what the AI is told without shipping a release.
+///
+/// The hardcoded prompt in ai.service.ts stays exactly where it is and becomes the fallback. A row
+/// here only ever OVERRIDES it, and only for the capabilities on the allowlist in
+/// services/ai-prompt.service.ts. Nothing here can break a capability: if the active version is
+/// missing, empty, or fails to render, the runtime silently uses the code default and stamps
+/// AIInteraction.promptFallbackReason so the breakage is visible instead of silent.
+///
+/// WHY an allowlist rather than all 19 capabilities — two concrete reasons, both load-bearing:
+///   1. Every jsonSchema capability must produce parseable JSON. classifyTicket throws 502 on
+///      unparseable output and email/chat intake depend on it, so one bad edit would take down
+///      ticket creation from email.
+///   2. Those same prompts carry <untrusted-*> delimiter blocks that are a prompt-injection
+///      DEFENCE. Letting an admin delete one would silently remove a security control.
+/// The face capabilities are excluded for a third reason: they sit inside a biometric compliance
+/// regime (see GlobalFaceVerificationSettings), and their prompts are part of what that regime
+/// promises.
+model AIPromptTemplate {
+  id String @id @default(uuid())
+
+  /// The capability key — matches AIInteraction.feature and the allowlist keys.
+  feature String @unique @db.VarChar(60)
+
+  /// Which version is live. Null means "use the code default" — which is also how revert-to-stock
+  /// works, and why this is nullable rather than pointing at a seeded copy of the default.
+  activeVersionId String? @db.VarChar(64)
+
+  versions AIPromptVersion[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+/// Append-only. Versions are never edited or deleted — activating a different one is how you
+/// change what's live, and reverting is just re-activating an earlier row. That makes "what was
+/// the AI actually told when this ran?" answerable months later, which is the entire point of
+/// stamping promptVersionId onto every interaction.
+model AIPromptVersion {
+  id         String           @id @default(uuid())
+  templateId String
+  template   AIPromptTemplate @relation(fields: [templateId], references: [id], onDelete: Cascade)
+
+  /// Monotonic per template, for display ("v3") rather than for lookup.
+  version Int
+  /// The prompt body, with {{placeholder}} tokens. Validated against the capability's declared
+  /// placeholders at save time — an unknown token is rejected there rather than at runtime.
+  body    String  @db.Text
+  note    String? @db.VarChar(300)
+
+  createdById String?
+  createdBy   User?    @relation(fields: [createdById], references: [id], onDelete: SetNull)
+  createdAt   DateTime @default(now())
+
+  @@unique([templateId, version])
+  @@index([templateId])
 }
 
 /// Singleton (id = "global") row that controls which notification categories

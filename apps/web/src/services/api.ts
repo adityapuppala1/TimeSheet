@@ -699,6 +699,55 @@ export const aiDatasetApi = {
   removeItem: async (id: string, itemId: string) => api.delete(`/ai/datasets/${id}/items/${itemId}`)
 };
 
+export interface AIPromptSummary {
+  feature: string;
+  label: string;
+  description: string;
+  /** False means "running the built-in prompt" — the normal state, not a problem. */
+  customized: boolean;
+  activeVersion: number | null;
+  versionCount: number;
+}
+export interface AIPromptPlaceholder {
+  name: string;
+  description: string;
+  sample: string;
+}
+export interface AIPromptVersionRow {
+  id: string;
+  version: number;
+  body: string;
+  note: string | null;
+  createdBy: { id: string; name: string } | null;
+  createdAt: string;
+}
+export interface AIPromptDetail {
+  feature: string;
+  label: string;
+  description: string;
+  placeholders: AIPromptPlaceholder[];
+  required: string[];
+  defaultTemplate: string;
+  activeVersionId: string | null;
+  versions: AIPromptVersionRow[];
+}
+export interface AIPromptPreview {
+  problems: Array<{ kind: string; message: string }>;
+  preview: string;
+}
+
+export const aiPromptApi = {
+  list: async () => (await api.get<AIPromptSummary[]>("/ai/prompts")).data,
+  get: async (feature: string) => (await api.get<AIPromptDetail>(`/ai/prompts/${feature}`)).data,
+  /** Validates and renders against sample values. No model call, no cost. */
+  preview: async (feature: string, body: string) =>
+    (await api.post<AIPromptPreview>(`/ai/prompts/${feature}/preview`, { body })).data,
+  saveVersion: async (feature: string, payload: { body: string; note?: string; activate?: boolean }) =>
+    (await api.post<AIPromptVersionRow>(`/ai/prompts/${feature}/versions`, payload)).data,
+  /** `versionId: null` reverts to the built-in prompt. */
+  activate: async (feature: string, versionId: string | null) => api.post(`/ai/prompts/${feature}/activate`, { versionId })
+};
+
 export interface AIUsageWeek {
   weekStart: string;
   costUsd: number;
