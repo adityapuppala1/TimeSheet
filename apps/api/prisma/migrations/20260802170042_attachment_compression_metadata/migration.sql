@@ -25,7 +25,3 @@ CREATE INDEX `TicketAttachment_fileCategory_idx` ON `TicketAttachment`(`fileCate
 
 -- AddForeignKey
 ALTER TABLE `Attachment` ADD CONSTRAINT `Attachment_uploadedById_fkey` FOREIGN KEY (`uploadedById`) REFERENCES `User`(`id`) ON DELETE SET NULL ON UPDATE CASCADE;
-
--- RedefineIndex
-CREATE INDEX `Attachment_timesheetId_idx` ON `Attachment`(`timesheetId`);
-DROP INDEX `Attachment_timesheetId_fkey` ON `attachment`;

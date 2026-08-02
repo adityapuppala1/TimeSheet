@@ -182,7 +182,18 @@ export interface SsoMethods {
   providers: Array<"GOOGLE" | "MICROSOFT" | "SAML" | "LDAP">;
 }
 
+/** First-run setup state. Computed server-side — a gate the browser decides for itself is a gate
+ *  anyone can open with devtools. `blocked` is the only field the gate acts on; the rest is for
+ *  telling the person what's left. */
+export interface OnboardingStatus {
+  blocked: boolean;
+  completedAt: string | null;
+  profile: { complete: boolean; missing: string[] };
+  face: { required: boolean; enrolled: boolean };
+}
+
 export const authApi = {
+  onboardingStatus: async () => (await api.get<OnboardingStatus>("/auth/onboarding-status")).data,
   login: async (email: string, password: string, rememberMe: boolean) =>
     (await api.post<LoginResponse>("/auth/login", { email, password, rememberMe })).data,
   /** LDAP is a direct bind, not a redirect (see auth.controller.ts's "/login/ldap"), so it

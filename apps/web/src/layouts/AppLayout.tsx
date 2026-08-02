@@ -8,6 +8,7 @@
  * WHO renders this: `App.tsx`, as the element for every `/app/*` route.
  */
 import { Navigate, Outlet } from "react-router";
+import { OnboardingGate } from "../components/OnboardingGate";
 import { MobileNav, Sidebar } from "../components/Sidebar";
 import { Topbar } from "../components/Topbar";
 import { useAuthStore } from "../store/auth";
@@ -33,6 +34,10 @@ export function AppLayout() {
           <MobileNav />
         </main>
       </div>
+      {/* Overlays the shell rather than replacing it, for the same reason BackendHealthGate does:
+          unmounting the app would destroy in-progress state, and the gate lifts on its own the
+          moment the server says the requirements are met. */}
+      <OnboardingGate />
     </div>
   );
 }

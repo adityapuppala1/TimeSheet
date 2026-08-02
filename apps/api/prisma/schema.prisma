@@ -117,6 +117,15 @@ model User {
   bio                      String?    @db.Text
   phoneNumber              String?    @db.VarChar(40)
   timezone                 String?    @db.VarChar(80)
+  /// When this person finished first-run setup (profile details, plus face enrollment when the
+  /// workspace policy covers them). NULL means they have not, and the app is gated for them.
+  ///
+  /// Stored rather than derived from "is the profile filled in?" for one specific reason: deriving
+  /// it would lock out EVERY existing user the moment an admin adds a new required field, which
+  /// punishes people for a configuration change they had no part in. The migration that adds this
+  /// column backfills every existing user as already-onboarded, so the gate only ever applies to
+  /// accounts created after it shipped.
+  onboardingCompletedAt    DateTime?
   /// Free-text job title (e.g. "Senior Backend Engineer") — distinct from `role` (the RBAC
   /// role: SUPER_ADMIN/ADMIN/MANAGER/TEAM_LEAD/EMPLOYEE, which governs permissions). A person's
   /// designation has no bearing on what they can do in the app; it's display-only context shown
@@ -427,7 +436,11 @@ model Attachment {
   uploadedById      String?
   uploadedBy        User?   @relation(fields: [uploadedById], references: [id], onDelete: SetNull)
 
-  @@index([timesheetId])
+  // NO explicit @@index([timesheetId]) — MySQL already creates one to back the foreign key, and
+  // declaring it here made Prisma emit a "RedefineIndex" that DROPPED the FK-backed index. That
+  // drop succeeded on databases which already had it and failed on fresh ones with
+  // "Can't DROP INDEX Attachment_timesheetId_fkey", breaking provisioning for every new
+  // organization. Caught by replaying the full migration history into an empty database.
   @@index([fileCategory])
 }
 

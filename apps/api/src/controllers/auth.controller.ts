@@ -21,6 +21,7 @@ import { avatarUpload, preserveTenantContext } from "../middleware/upload.js";
 import { validate } from "../middleware/validate.js";
 import { audit } from "../services/audit.service.js";
 import { buildProfilePayload, changePassword, completeSsoLogin, login, refresh, requestPasswordReset, resetPassword } from "../services/auth.service.js";
+import { getOnboardingStatus } from "../services/onboarding.service.js";
 import { authenticateLdap } from "../services/sso.service.js";
 import { dispatchTransactional } from "../services/notify.service.js";
 import { templates } from "../services/mail-templates.js";
@@ -135,6 +136,17 @@ authRouter.delete("/sessions/:id", requireAuth, async (req, res) => {
 
 authRouter.get("/me", requireAuth, async (req, res) => {
   res.json(await buildProfilePayload(req.user!.id));
+});
+
+/**
+ * Whether first-run setup still blocks this person.
+ *
+ * Its own endpoint rather than a field on /me because it reads workspace face-verification policy
+ * as well as the user row, and /me is on the hot path of every page load. Computed server-side —
+ * a gate the client decides for itself is a gate anyone can open with devtools.
+ */
+authRouter.get("/onboarding-status", requireAuth, async (req, res) => {
+  res.json(await getOnboardingStatus(req.user!.id));
 });
 
 authRouter.post(
