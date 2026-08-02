@@ -31,6 +31,11 @@ user of a running installation.
   one-click refresh when the server is upgraded beneath them.
 - **Backend health gate** — a warning strip on the first dropped request, a blocking overlay on a
   real outage, automatic recovery with no reload and no lost work.
+- **Maintenance mode** — super admins schedule a window with an optional message; everyone else
+  is locked out onto a branded maintenance page with a live countdown while super admins stay
+  signed in to do the work. Includes a who's-online panel, a "wrap up" warning (in-app + email,
+  with its own notification toggle), one-click force-logout of all non-admin sessions, and an
+  advance-warning banner inside the app during the scheduled phase.
 
 ### 🐛 Fixes
 

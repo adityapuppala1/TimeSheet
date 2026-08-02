@@ -112,6 +112,15 @@ export function isBackendUnreachableError(error: unknown): boolean {
   return err.code === "ERR_NETWORK" || err.code === "ECONNABORTED" || err.code === "ETIMEDOUT" || err.message === "Network Error";
 }
 
+/** True when a failure is the server's deliberate maintenance lockout (503 + code MAINTENANCE)
+ *  rather than an outage or an auth problem. Callers use this to stay quiet — the response
+ *  interceptor below is already navigating to /maintenance, so error toasts would just flash
+ *  something misleading on the way out. */
+export function isMaintenanceLockoutError(error: unknown): boolean {
+  const err = error as { response?: { status?: number; data?: { code?: string } } } | undefined;
+  return err?.response?.status === 503 && err.response.data?.code === "MAINTENANCE";
+}
+
 api.interceptors.request.use((config) => {
   if (inMemoryAccessToken) config.headers.Authorization = `Bearer ${inMemoryAccessToken}`;
   return config;
@@ -136,6 +145,17 @@ api.interceptors.response.use(
   },
   async (error) => {
     if (isBackendUnreachableError(error)) notifyReachability(false);
+
+    // 503 + code MAINTENANCE is the server saying "the workspace is closed on purpose" — a
+    // different animal from every other 503 (which the health gate treats as an outage) and
+    // from 401 (which means "your session is bad, try refreshing it"). The right reaction is a
+    // full navigation to the maintenance page: no token refresh (it would be refused too), no
+    // retry loop. The pathname guard stops the page's own status poll from re-triggering an
+    // endless chain of redirects to itself.
+    if (isMaintenanceLockoutError(error) && window.location.pathname !== "/maintenance") {
+      window.location.assign("/maintenance");
+      throw error;
+    }
 
     const original = error.config as (AxiosRequestConfig & { _retry?: boolean }) | undefined;
     const url = original?.url ?? "";
@@ -222,6 +242,58 @@ export const systemApi = {
   version: async () => (await api.get<SystemVersion>("/system/version")).data,
   /** Cached server-side (one GitHub request an hour for the whole deployment) — poll freely. */
   updates: async () => (await api.get<UpdateStatus>("/system/updates")).data
+};
+
+/* ------------------------------ Maintenance mode ------------------------------ */
+
+/** Mirrors api/src/services/maintenance.service.ts#phaseOf. Only "active" locks anyone out;
+ *  "scheduled" is the countdown-banner state. */
+export type MaintenancePhase = "off" | "scheduled" | "active" | "ended";
+
+/** The PUBLIC status shape — window + message are null whenever the mode is disabled, so an
+ *  anonymous caller can't read a stale schedule. */
+export interface MaintenanceStatus {
+  phase: MaintenancePhase;
+  scheduledStartAt: string | null;
+  scheduledEndAt: string | null;
+  message: string | null;
+}
+
+export interface MaintenanceSettingsRow {
+  enabled: boolean;
+  scheduledStartAt: string | null;
+  scheduledEndAt: string | null;
+  message: string | null;
+  updatedAt: string;
+}
+
+export interface MaintenanceOnlineUser {
+  id: string;
+  name: string;
+  email: string;
+  role: string;
+  lastSeenAt: string | null;
+}
+
+export interface MaintenanceAdminView {
+  settings: MaintenanceSettingsRow;
+  phase: MaintenancePhase;
+  online: { count: number; users: MaintenanceOnlineUser[] };
+}
+
+export const maintenanceApi = {
+  /** Unauthenticated on purpose — the lockout page's poll must work for people whose sessions
+   *  were just revoked. Rate-limited server-side to 30/min per IP, so poll gently (≥15s). */
+  status: async () => (await api.get<MaintenanceStatus>("/maintenance/status")).data,
+  admin: async () => (await api.get<MaintenanceAdminView>("/maintenance/admin")).data,
+  updateSettings: async (payload: {
+    enabled: boolean;
+    scheduledStartAt: string | null;
+    scheduledEndAt: string | null;
+    message: string | null;
+  }) => (await api.patch<{ settings: MaintenanceSettingsRow; phase: MaintenancePhase }>("/maintenance/settings", payload)).data,
+  forceLogout: async () => (await api.post<{ revokedSessions: number }>("/maintenance/force-logout")).data,
+  notify: async () => (await api.post<{ notified: number }>("/maintenance/notify")).data
 };
 
 export const authApi = {

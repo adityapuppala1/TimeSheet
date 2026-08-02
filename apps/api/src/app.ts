@@ -48,6 +48,7 @@ import { reportRouter } from "./controllers/report.controller.js";
 import { attestationRouter } from "./controllers/attestation.controller.js";
 import { attestationPublicRouter } from "./controllers/attestation-public.controller.js";
 import { settingsRouter } from "./controllers/settings.controller.js";
+import { maintenanceRouter } from "./controllers/maintenance.controller.js";
 import { ssoRouter } from "./controllers/sso.controller.js";
 import { teamRouter } from "./controllers/team.controller.js";
 import { ticketRouter } from "./controllers/ticket.controller.js";
@@ -301,6 +302,10 @@ app.use("/api/notifications", notificationRouter);
 app.use("/api/audit", auditRouter);
 app.use("/api/team", teamRouter);
 app.use("/api/settings", settingsRouter);
+// Carries the only OTHER unauthenticated read surface (GET /status — the lockout page's poll),
+// so it gets the same tight 30/min limiter as the attestation share links. The admin routes
+// under it enforce requireAuth + requireSuperAdmin per-route.
+app.use("/api/maintenance", rateLimit({ windowMs: 60_000, limit: 30, standardHeaders: true }), maintenanceRouter);
 // Tighter than the global 300/min: every /verify costs ~150-400ms of CPU-bound wasm inference
 // PER FRAME, which makes unthrottled retries a self-inflicted DoS as much as a brute-force
 // surface. 60/min per IP comfortably covers honest use (status + challenge + two-frame verify

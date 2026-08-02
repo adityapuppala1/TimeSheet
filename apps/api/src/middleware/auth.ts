@@ -18,7 +18,14 @@ import type { NextFunction, Request, Response } from "express";
 import { prisma } from "../config/prisma.js";
 import { requireTenantContext } from "../config/tenant-context.js";
 import { verifyAccessToken } from "../utils/security.js";
+import { isMaintenanceActive } from "../services/maintenance.service.js";
 import { AppError } from "./error.js";
+
+/** Session-id -> last lastSeenAt write, for the liveness throttle below. In-memory is correct
+ *  here: losing it on restart merely causes one extra UPDATE per live session, and sharing it
+ *  across instances would defeat the point of avoiding writes. */
+const lastSeenWrites = new Map<string, number>();
+const LAST_SEEN_THROTTLE_MS = 5 * 60 * 1000;
 
 export interface RequestUser {
   id: string;
@@ -85,6 +92,33 @@ export async function requireAuth(req: Request, _res: Response, next: NextFuncti
     include: { role: { include: { permissions: { include: { permission: true } } } } }
   });
   if (!user || user.deletedAt || user.status !== "ACTIVE") throw new AppError(401, "Invalid session");
+
+  // MAINTENANCE GATE — one choke point covers every authenticated route, which is exactly why it
+  // lives here instead of as a router-level middleware someone forgets to mount on the next
+  // controller. SUPER_ADMIN passes: someone has to do the maintenance and switch it back off.
+  // 503 with a machine-readable code, not 401: the client must distinguish "your session is bad"
+  // (clear tokens, try to log in) from "the workspace is closed" (show the maintenance page) —
+  // and the check is CACHED (10s TTL in maintenance.service.ts), costing this hot path a Map
+  // lookup, not a query.
+  if (user.role.name !== "SUPER_ADMIN" && (await isMaintenanceActive())) {
+    throw new AppError(503, "This workspace is undergoing scheduled maintenance.", { code: "MAINTENANCE" });
+  }
+
+  // Throttled liveness stamp — what makes the admin's "who is online right now?" panel honest.
+  // At most one UPDATE per session per 5 minutes, tracked in-memory: unconditionally writing
+  // would add a database write to EVERY api call, and per-request precision buys nothing for a
+  // 15-minute online window. Fire-and-forget — liveness bookkeeping must never fail a request.
+  if (typeof payload.sid === "string") {
+    const sid = payload.sid;
+    const last = lastSeenWrites.get(sid) ?? 0;
+    if (Date.now() - last > LAST_SEEN_THROTTLE_MS) {
+      lastSeenWrites.set(sid, Date.now());
+      void prisma.session.update({ where: { id: sid }, data: { lastSeenAt: new Date() } }).catch(() => {
+        lastSeenWrites.delete(sid); // let the next request retry rather than sticking silent
+      });
+    }
+  }
+
   req.user = {
     id: user.id,
     name: user.name,

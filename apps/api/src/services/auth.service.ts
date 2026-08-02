@@ -16,6 +16,7 @@ import { requireTenantContext } from "../config/tenant-context.js";
 import { env } from "../config/env.js";
 import { AppError } from "../middleware/error.js";
 import { getEffectiveSeatLimit } from "./plan-limits.service.js";
+import { isMaintenanceActive } from "./maintenance.service.js";
 import {
   hashPassword,
   hashToken,
@@ -115,6 +116,22 @@ async function establishSession(
   orgId: string,
   opts: { rememberMe?: boolean; userAgent?: string; ipAddress?: string }
 ) {
+  // MAINTENANCE GATE, at the one place every login method funnels through — password, Google,
+  // Microsoft, SAML and LDAP all terminate here, so none of them can become the forgotten side
+  // door. Checked AFTER credentials verified (we need the role, and a wrong-password attempt
+  // during maintenance should still say "wrong password"). SUPER_ADMIN passes — someone has to
+  // be able to get in, do the maintenance, and switch it off. One light query per LOGIN, not
+  // per request.
+  const roleRow = await prisma.user.findUnique({
+    where: { id: user.id },
+    select: { role: { select: { name: true } } }
+  });
+  if (roleRow?.role.name !== "SUPER_ADMIN" && (await isMaintenanceActive())) {
+    throw new AppError(503, "This workspace is undergoing scheduled maintenance. Please try again after the window ends.", {
+      code: "MAINTENANCE"
+    });
+  }
+
   const days = opts.rememberMe ? 30 : env.REFRESH_TOKEN_TTL_DAYS;
   const refreshSecret = opaqueToken();
   const expiresAt = new Date(Date.now() + days * 24 * 60 * 60 * 1000);

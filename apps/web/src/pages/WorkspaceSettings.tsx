@@ -59,6 +59,7 @@ import {
   Sparkles,
   Timer,
   Trash2,
+  Wrench,
   X,
   Zap
 } from "lucide-react";
@@ -100,6 +101,7 @@ import { AIEvalsCard } from "./settings/AIEvalsCard";
 import { AIPromptsCard } from "./settings/AIPromptsCard";
 import { SecurityDevOpsSettingsCard } from "./settings/SecurityDevOpsSettingsCard";
 import { FaceVerificationSettingsCard } from "./settings/FaceVerificationSettingsCard";
+import { MaintenanceSettingsCard } from "./settings/MaintenanceSettingsCard";
 
 // Matches the exact chart styling convention used in Insights.tsx (this repo's `dataviz`
 // skill): CSS-variable colors only, fixed categorical order never re-cycled by rank.
@@ -134,6 +136,7 @@ const emailRows: ToggleRow[] = [
   { key: "emailSecurityWeeklyDigest", label: "Weekly security digest", description: "AI-authored Monday-morning (08:30) org-wide security recap for every admin — open findings, risk score, tickets past SLA. Requires the AI weekly security digest toggle in the AI tab.", icon: <ShieldAlert className="h-4 w-4 text-destructive" /> },
   { key: "emailBugPatternDigest", label: "Monthly bug-pattern digest", description: "AI-authored \"what kept breaking\" recap on the 1st of every month — recurring CI failures and security-finding hotspots. Requires the AI monthly bug-pattern digest toggle in the AI tab.", icon: <BellRing className="h-4 w-4 text-info" /> },
   { key: "emailTicketStaleNudge", label: "Stale-ticket nudge", description: "AI-suggested next action when the SLA sweep flags a ticket as stale. Requires the AI stale-ticket nudge toggle in the AI tab.", icon: <Hourglass className="h-4 w-4 text-warning" /> },
+  { key: "emailMaintenanceScheduled", label: "Maintenance warning", description: "\"Save your work\" email when a super admin sends the maintenance-window notice from the Maintenance tab. The in-app notification always fires — this only gates the email copy.", icon: <Wrench className="h-4 w-4 text-warning" /> },
   { key: "emailTicketNeedsReview", label: "Email-sourced ticket needs review", description: "Alert project admins/managers when an inbound email is classified with low confidence.", icon: <Sparkles className="h-4 w-4 text-warning" /> },
   // Face (identity) verification lifecycle — none of these ever carry a captured image or a
   // score; they link into the app, where authorization is checked.
@@ -204,6 +207,7 @@ export function WorkspaceSettingsPage() {
           <TabsTrigger value="billing">Billing</TabsTrigger>
           <TabsTrigger value="public-api">Public API</TabsTrigger>
           <TabsTrigger value="sso">Single sign-on</TabsTrigger>
+          <TabsTrigger value="maintenance">Maintenance</TabsTrigger>
           <TabsTrigger value="bcc">BCC & forms</TabsTrigger>
         </TabsList>
 
@@ -257,6 +261,10 @@ export function WorkspaceSettingsPage() {
 
         <TabsContent value="sso">
           <SsoSettingsCard readOnly={!isSuperAdmin} />
+        </TabsContent>
+
+        <TabsContent value="maintenance">
+          <MaintenanceSettingsCard readOnly={!isSuperAdmin} />
         </TabsContent>
 
         <TabsContent value="bcc">

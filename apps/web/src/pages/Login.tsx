@@ -33,7 +33,7 @@ import { Input } from "../components/ui/input";
 import { Label } from "../components/ui/label";
 import { Skeleton } from "../components/ui/skeleton";
 import { toast } from "../components/ui/toaster";
-import { apiUrl, authApi, type LoginResponse } from "../services/api";
+import { apiUrl, authApi, isMaintenanceLockoutError, type LoginResponse } from "../services/api";
 import { useAuthStore } from "../store/auth";
 import { AuthBrandPanel } from "../components/marketing/AuthBrandPanel";
 
@@ -72,6 +72,7 @@ function LdapLoginForm({ onSuccess }: { onSuccess: (data: LoginResponse) => void
     mutationFn: (values: LdapFormData) => authApi.loginLdap(values.email, values.password),
     onSuccess,
     onError: (error: any) => {
+      if (isMaintenanceLockoutError(error)) return; // the api interceptor is already navigating to /maintenance
       const message = error?.response?.data?.message ?? "Unable to sign in. Check credentials or account status.";
       toast.error("Sign-in failed", { description: message });
     }
@@ -166,6 +167,7 @@ export function Login() {
     mutationFn: (values: FormData) => authApi.login(values.email, values.password, Boolean(values.rememberMe)),
     onSuccess: handleLoginSuccess,
     onError: (error: any) => {
+      if (isMaintenanceLockoutError(error)) return; // the api interceptor is already navigating to /maintenance
       const message = error?.response?.data?.message ?? "Unable to sign in. Check credentials or account status.";
       toast.error("Sign-in failed", { description: message });
     }

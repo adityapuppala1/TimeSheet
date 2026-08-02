@@ -32,6 +32,7 @@ const Login = lazy(() => import("./pages/Login").then((m) => ({ default: m.Login
 const ForgotPassword = lazy(() => import("./pages/ForgotPassword").then((m) => ({ default: m.ForgotPassword })));
 const ResetPassword = lazy(() => import("./pages/ResetPassword").then((m) => ({ default: m.ResetPassword })));
 const SharedAttestation = lazy(() => import("./pages/SharedAttestation").then((m) => ({ default: m.SharedAttestation })));
+const MaintenancePage = lazy(() => import("./pages/Maintenance").then((m) => ({ default: m.MaintenancePage })));
 const Dashboard = lazy(() => import("./pages/Dashboard").then((m) => ({ default: m.Dashboard })));
 const Timesheet = lazy(() => import("./pages/Timesheet").then((m) => ({ default: m.Timesheet })));
 const Tickets = lazy(() => import("./pages/Tickets").then((m) => ({ default: m.Tickets })));
@@ -82,6 +83,9 @@ const router = createBrowserRouter([
   // with no account, so it must never hit AppLayout (which assumes an authenticated user) or
   // redirect to /login. See pages/SharedAttestation.tsx.
   { path: "/shared/attestation/:token", element: <PageShell><SharedAttestation /></PageShell> },
+  // Public lockout screen for maintenance mode. Same outside-/app rule as the attestation
+  // viewer: the people sent here have revoked sessions, so it must never assume auth.
+  { path: "/maintenance", element: <PageShell><MaintenancePage /></PageShell> },
   {
     path: "/app",
     element: <AppLayout />,

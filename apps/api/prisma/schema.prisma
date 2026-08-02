@@ -223,8 +223,36 @@ model Session {
   expiresAt           DateTime
   revokedAt           DateTime?
   createdAt           DateTime  @default(now())
+  /// Last authenticated request on this session, updated at most once per 5 minutes (see
+  /// middleware/auth.ts — an unthrottled write here would add one UPDATE to every API call).
+  /// This is what makes "who is online right now?" answerable: a session can legally live 30
+  /// days, so expiresAt alone says "logged in sometime this month", not "using the app now".
+  lastSeenAt          DateTime?
 
   @@index([userId, expiresAt])
+  @@index([lastSeenAt])
+}
+
+/// Workspace maintenance mode — the "everyone out while we work" switch, SUPER_ADMIN only.
+///
+/// SCHEDULED, not just toggled: `enabled` arms the window, and enforcement applies while now is
+/// inside [scheduledStartAt, scheduledEndAt]. Before the window, users see a countdown banner and
+/// keep working; inside it, every non-SUPER_ADMIN request answers 503 MAINTENANCE and logins are
+/// refused. SUPER_ADMINs are exempt throughout — someone has to be able to do the maintenance,
+/// and to turn the mode off again.
+///
+/// Singleton per tenant (same GLOBAL id pattern as every other settings table): maintenance is a
+/// per-workspace decision made by that workspace's own super admin, not a platform-wide event.
+model MaintenanceSettings {
+  id               String    @id @default("global")
+  enabled          Boolean   @default(false)
+  scheduledStartAt DateTime?
+  scheduledEndAt   DateTime?
+  /// Shown verbatim on the lockout page and in the notification — the admin's own words about
+  /// what's happening and when to come back.
+  message          String?   @db.VarChar(500)
+  updatedById      String?
+  updatedAt        DateTime  @updatedAt
 }
 
 model PasswordResetToken {
@@ -1233,6 +1261,11 @@ model GlobalNotificationSettings {
   emailBugPatternDigest Boolean @default(false)
   /// Same convention — see workers/ticket-escalation.worker.ts's stale-ticket sweep.
   emailTicketStaleNudge Boolean @default(true)
+  /// "Wrap up, maintenance is coming" warning sent explicitly by a SUPER_ADMIN from the
+  /// Maintenance settings card (services/maintenance.service.ts#notifyUsersOfMaintenance).
+  /// Default ON: the admin pressed a button that says "notify users" — suppressing the email
+  /// leg by default would make that button quietly half-work.
+  emailMaintenanceScheduled Boolean @default(true)
 
   /// Hour (0–23, server local time) for the "log today's time" reminder.
   dailyReminderHour        Int     @default(16)

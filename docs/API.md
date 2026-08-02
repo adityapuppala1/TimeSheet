@@ -12,6 +12,28 @@ Base URL: `/api`
 - `POST /auth/change-password` `{ currentPassword, nextPassword }`
 - `GET /auth/me`
 
+While a maintenance window is active (see the Maintenance mode section below), every
+authenticated route and every login method answers `503 { code: "MAINTENANCE" }` for
+non-SUPER_ADMIN users — clients must treat that code as "show the maintenance page", not as an
+outage or an auth failure.
+
+## Maintenance mode
+
+- `GET /maintenance/status` — **public** (tenant-resolved, rate-limited 30/min per IP). Returns
+  `{ phase: "off"|"scheduled"|"active"|"ended", scheduledStartAt, scheduledEndAt, message }`;
+  window and message are `null` whenever the mode is disabled. This is what the lockout page and
+  the in-app countdown banner poll.
+- `GET /maintenance/admin` — SUPER_ADMIN. Settings + phase + who's online now (unrevoked,
+  unexpired sessions active in the last 15 minutes, deduped to people).
+- `PATCH /maintenance/settings` `{ enabled, scheduledStartAt, scheduledEndAt, message }` —
+  SUPER_ADMIN. Enabling requires a coherent window (start, end, end > start, end in the future);
+  disabling never validates, so a stale schedule can always be cleared. Audited.
+- `POST /maintenance/force-logout` — SUPER_ADMIN. Revokes every non-SUPER_ADMIN session
+  server-side. Audited; returns `{ revokedSessions }`.
+- `POST /maintenance/notify` — SUPER_ADMIN. In-app + email warning to online non-admins quoting
+  the window; requires the window to be enabled and scheduled. Email leg gated by the
+  `emailMaintenanceScheduled` notification toggle. Audited; returns `{ notified }`.
+
 ## Users
 
 - `GET /users?search=&role=&status=&page=1`

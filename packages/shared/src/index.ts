@@ -184,6 +184,9 @@ export interface NotificationPreferences {
   /** AI-suggested next action when the SLA sweep flags a ticket as stale. Gated alongside
    *  GlobalAISettings.staleTicketNudgeEnabled. */
   emailTicketStaleNudge: boolean;
+  /** "Maintenance window scheduled — wrap up" warning a SUPER_ADMIN sends from the Maintenance
+   *  settings card. Gates only the EMAIL leg; the in-app notification always fires. */
+  emailMaintenanceScheduled: boolean;
 }
 
 export const notificationPreferenceKeys: ReadonlyArray<keyof NotificationPreferences> = [
@@ -212,7 +215,8 @@ export const notificationPreferenceKeys: ReadonlyArray<keyof NotificationPrefere
   "emailFaceEntitlementLost",
   "emailIdentityWeeklyDigest",
   "emailBugPatternDigest",
-  "emailTicketStaleNudge"
+  "emailTicketStaleNudge",
+  "emailMaintenanceScheduled"
 ];
 
 /** Workspace-wide settings: notification toggles + reminder schedule + BCC behavior. */

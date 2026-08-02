@@ -16,8 +16,14 @@ import type { ErrorRequestHandler } from "express";
 import { ZodError } from "zod";
 
 export class AppError extends Error {
-  constructor(public statusCode: number, message: string) {
+  /** Optional machine-readable code for clients that must BRANCH on the error kind rather than
+   *  parse prose — e.g. "MAINTENANCE", where the right reaction (show the maintenance page)
+   *  differs from every other 503 (show the outage banner). Human text stays the main channel. */
+  public code?: string;
+
+  constructor(public statusCode: number, message: string, options?: { code?: string }) {
     super(message);
+    this.code = options?.code;
   }
 }
 
@@ -31,11 +37,19 @@ export const errorHandler: ErrorRequestHandler = (error, req, res, _next) => {
   }
 
   const statusCode = error instanceof AppError ? error.statusCode : 500;
-  if (statusCode >= 500) {
+  // The maintenance lockout is a 503 by protocol but a DELIBERATE state, not a fault — during a
+  // real window every locked-out user's polling would otherwise flood the log with identical
+  // stack traces and bury any actual 500 that happens mid-maintenance (the worst possible time
+  // to lose one).
+  const deliberateLockout = error instanceof AppError && error.code === "MAINTENANCE";
+  if (statusCode >= 500 && !deliberateLockout) {
     console.error(`[error] ${req.method} ${req.originalUrl}`, error);
   }
   return res.status(statusCode).json({
-    message: error.message || "Unexpected server error"
+    message: error.message || "Unexpected server error",
+    // Only present when an AppError carries one — absent otherwise, so no client is tempted to
+    // treat "no code" as a code.
+    ...(error instanceof AppError && error.code ? { code: error.code } : {})
   });
 };
 

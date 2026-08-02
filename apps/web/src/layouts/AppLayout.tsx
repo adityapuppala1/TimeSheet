@@ -8,6 +8,7 @@
  * WHO renders this: `App.tsx`, as the element for every `/app/*` route.
  */
 import { Navigate, Outlet } from "react-router";
+import { MaintenanceBanner } from "../components/MaintenanceBanner";
 import { OnboardingGate } from "../components/OnboardingGate";
 import { MobileNav, Sidebar } from "../components/Sidebar";
 import { Topbar } from "../components/Topbar";
@@ -25,6 +26,7 @@ export function AppLayout() {
         <Sidebar />
         <main className="min-w-0 flex-1">
           <Topbar />
+          <MaintenanceBanner />
           {/* pb-20 reserves clearance for MobileNav below (fixed, ~56-60px tall, <lg only) —
               without it the last ~56px of every page's content renders underneath the fixed
               bar on phone/tablet (e.g. a page-bottom submit button becomes unreachable). */}

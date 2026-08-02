@@ -218,6 +218,37 @@ the deterministic Monday recap (no AI writes emails about named employees' ident
 See [FACE_VERIFICATION.md](FACE_VERIFICATION.md) for calibration, thresholds, the threat-model
 table, and the regulatory obligations (GDPR Art.9, Illinois BIPA, India DPDP) it carries.
 
+### 3.8 Maintenance mode — one gate, fails open, super admin exempt
+
+A SUPER_ADMIN schedules a window (start/end/message) from Workspace Settings → Maintenance;
+while the window is **active**, every non-SUPER_ADMIN is locked out. Four decisions define the
+design (`services/maintenance.service.ts`):
+
+1. **One enforcement choke point, two doors.** The active-check runs inside `requireAuth`
+   (covers every authenticated route — nothing to remember to mount) and inside
+   `establishSession` (covers every login method: password, Google, Microsoft, SAML, LDAP —
+   they all terminate there, so none can become the forgotten side door). Rejection is
+   **503 + `code: "MAINTENANCE"`**, never 401: the client must distinguish "your session is
+   bad" (refresh, re-login) from "the workspace is closed" (show `/maintenance`, stop retrying).
+2. **The check is cached (10s per tenant) and FAILS OPEN.** It sits on the hottest path in the
+   app; uncached it would add a query to every call for a value that changes a handful of times
+   a year. And a broken settings lookup must degrade to "app works normally" — never to
+   "everyone is locked out by an exception". The settings PATCH invalidates the cache so a
+   toggle is enforced immediately, not after the TTL.
+3. **"Online" means `Session.lastSeenAt` within 15 minutes** — stamped by a throttled
+   (5-min, in-memory, fire-and-forget) write in `requireAuth`, not `expiresAt`, which would
+   count everyone who logged in this month. The admin panel shows people, not sessions
+   (multi-tab dedup). Force-logout is server-side revocation of every non-SUPER_ADMIN session:
+   next request 401s → refresh fails → login is refused (maintenance) → `/maintenance` page.
+   The chain needs zero client cooperation, which is what makes it a control.
+4. **`GET /api/maintenance/status` is public** (tenant-resolved, rate-limited 30/min): the
+   people who most need it are exactly those whose tokens were just revoked. It exposes only
+   what the lockout page renders — phase, window, message — and only while the mode is enabled.
+
+The SUPER_ADMIN exemption is deliberate and minimal: someone has to do the maintenance, verify
+the result, and switch it off. The "warn users" action (in-app + email to online non-admins) is
+gated by its own notification toggle (`emailMaintenanceScheduled`) like every other category.
+
 ---
 
 ## 4. Request lifecycle (a normal, tenant-resolved API call)
@@ -294,6 +325,8 @@ service depends on `config/prisma.ts`; not repeated below unless it's the point 
 | `services/sso.service.ts` | Google/Microsoft OIDC, SAML, and LDAP — builds authorization redirects / completes the exchange / does the LDAP bind, normalizes all four into one `SsoIdentity` shape. | `openid-client`, `@node-saml/node-saml`, `ldapts`, `utils/encryption.ts` | `controllers/sso.controller.ts`, `controllers/auth.controller.ts` (LDAP only) |
 | `controllers/sso.controller.ts` | OIDC/SAML HTTP routes, mounted pre-tenant-resolution. SAML routes registered **before** the generic `/:provider/*` routes — Express matching order, see file header. | `sso.service.ts`, `auth.service.ts` | `app.ts` |
 | `controllers/auth.controller.ts` | Password login, LDAP login, session management, profile. | `auth.service.ts`, `sso.service.ts` (LDAP only) | `app.ts` |
+| `services/maintenance.service.ts` | Maintenance mode (§3.8): cached fail-open active-check, phase model, online users, force-logout, warn-users notification. | `notify.service.ts`, `middleware/error.ts` | `middleware/auth.ts`, `auth.service.ts`, `controllers/maintenance.controller.ts` |
+| `controllers/maintenance.controller.ts` | Public status probe + SUPER_ADMIN control surface (schedule PATCH, online list, force-logout, notify), all audited. | `maintenance.service.ts` | `app.ts` |
 
 ### AI & content-intake pipelines
 

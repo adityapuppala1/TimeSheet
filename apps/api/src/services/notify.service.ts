@@ -42,7 +42,8 @@ export type NotificationCategory =
   | "face.entitlement_lost"
   | "digest.identity_weekly"
   | "digest.bug_pattern"
-  | "ticket.stale_nudge";
+  | "ticket.stale_nudge"
+  | "maintenance.scheduled";
 
 interface EmailPayload {
   templateKey: string;
@@ -87,7 +88,8 @@ const SETTINGS_FIELD: Record<NotificationCategory, string> = {
   "face.entitlement_lost": "emailFaceEntitlementLost",
   "digest.identity_weekly": "emailIdentityWeeklyDigest",
   "digest.bug_pattern": "emailBugPatternDigest",
-  "ticket.stale_nudge": "emailTicketStaleNudge"
+  "ticket.stale_nudge": "emailTicketStaleNudge",
+  "maintenance.scheduled": "emailMaintenanceScheduled"
 };
 
 const GLOBAL_ID = "global";

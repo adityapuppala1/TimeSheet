@@ -1155,3 +1155,50 @@ large to store), so it can't be evaluated; a dataset item whose capability signa
 is recorded as *not replayed* rather than scored zero, because a zero would be a false claim about
 the model; and the enqueue-time budget refusal is covered by unit tests only, since exercising it
 live would mean writing a budget onto a real workspace's settings.
+
+## Deployment self-sufficiency: version identity, one-command install/update, maintenance mode (2026-08-03)
+
+The through-line of this phase: a deployment an admin can run WITHOUT the development team on
+call. Install proves itself, updates roll back by themselves, the app announces its own upgrades,
+and planned downtime is a scheduled workflow instead of a Slack apology.
+
+### Version identity + update awareness
+
+- One `VERSION` file at the repo root is the single source: the API reads it at boot (env-var
+  override for containers, walk-up fallback for dev), Vite bakes it into the bundle
+  (`__APP_VERSION__`), and Docker builds stamp GIT_SHA/BUILD_DATE. The version rides on the
+  existing `/api/health` poll, so "the server was upgraded under you — refresh" costs zero extra
+  requests, never nags dev bundles, and clears itself on rollback.
+- **What's new** page renders GitHub Release notes (markdown from a remote source → always
+  through `safeHtml`), with an admin-only update card. The update check is server-cached an hour,
+  single-flight, and can never throw — a GitHub outage degrades to "no information", not errors.
+
+### Install/update scripts that prove themselves
+
+- `install.sh` / `install.ps1` detect OS, Docker, K8s (offered, never assumed) and external
+  databases (preflighted with exact CREATE/GRANT statements printed on failure), then run a named
+  verification suite — reported version matches, admin login works, SPA serves — and exit 1
+  loudly if any check fails. CI runs the installer end-to-end (`TS_AUTO=1`) on every push.
+- `update.sh` / `update.ps1`: backup (`--all-databases` — tenant DBs provisioned after install
+  included) → checkout tag → rebuild → **verify → auto-rollback code-only on failure**. The
+  additive-migrations policy is what makes old-code-on-new-schema a safe rollback target; the
+  dump exists for disasters and is never auto-restored. `migrate:tenants` runs after health so
+  the whole tenant fleet gets the new migrations, not just the default DB.
+
+### Maintenance mode (see ARCHITECTURE.md §3.8)
+
+- Enforcement lives at exactly two choke points — `requireAuth` (every authenticated route) and
+  `establishSession` (every login method, password + all four SSO flavors) — as
+  **503 + `code: "MAINTENANCE"`**, which the client treats as "show the maintenance page", never
+  as an outage or a bad session. The check is cached 10s per tenant and **fails open**: a broken
+  settings lookup degrades to a working app, never a locked-out workforce. SUPER_ADMIN is exempt
+  — someone has to do the maintenance and turn it off.
+- "Who's online" is `Session.lastSeenAt` within 15 minutes (stamped by a throttled fire-and-forget
+  write in `requireAuth`), deduped to people — not `expiresAt`, which counts everyone who logged
+  in this month. Force-logout is server-side session revocation; the 401 → refresh-fail →
+  login-refused → `/maintenance` chain needs zero client cooperation, which is what makes it a
+  control rather than a suggestion.
+- The e2e spec deliberately never calls force-logout (it would revoke the shared auth snapshots
+  every later spec depends on — the one-owner-per-snapshot trap, at suite scale); the SUPER_ADMIN
+  exemption living in the SQL WHERE clause is pinned by a unit test instead, and the spec restores
+  the workspace in `finally` so a failed assertion can never leave the demo workspace locked.
