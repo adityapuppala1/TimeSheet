@@ -1775,8 +1775,20 @@ export const faceApi = {
   deleteEnrollmentFor: async (userId: string) => (await api.delete<{ deleted: boolean }>(`/face/enrollment/${userId}`)).data,
   /** Server-side paginated: the review log grows unbounded (one row per attempt, forever), so
    *  unlike the DataTable-backed surfaces it can't fetch everything and page in the browser. */
-  listAttempts: async (params?: { userId?: string; outcome?: string; flaggedOnly?: boolean; page?: number; pageSize?: number }) =>
-    (await api.get<FaceAttemptPage>("/face/attempts", { params })).data,
+  /** Filtering, search and sort all happen SERVER-side — this log grows without bound (a row per
+   *  check, forever, per covered employee), so the client can never hold the whole set to filter
+   *  it the way DataTable does elsewhere. `search` matches the subject's name or email. */
+  listAttempts: async (params?: {
+    userId?: string;
+    outcome?: string;
+    context?: string;
+    flaggedOnly?: boolean;
+    search?: string;
+    sortBy?: "createdAt" | "similarity" | "livenessScore" | "outcome" | "context";
+    sortDir?: "asc" | "desc";
+    page?: number;
+    pageSize?: number;
+  }) => (await api.get<FaceAttemptPage>("/face/attempts", { params })).data,
   reviewAttempt: async (id: string, note?: string) =>
     (await api.patch<{ id: string; reviewedAt: string }>(`/face/attempts/${id}/review`, { note })).data,
   attemptImageUrl: (id: string) => `${api.defaults.baseURL}/face/image/attempt/${id}`,

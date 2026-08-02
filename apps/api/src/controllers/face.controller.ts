@@ -663,11 +663,24 @@ faceRouter.get("/export", async (req, res) => {
   });
 });
 
+/** Columns the log may be sorted by. An allowlist rather than a passthrough: `orderBy` takes a
+ *  column name straight into the query, so accepting arbitrary strings would let a caller probe
+ *  the schema (and error-message its shape) one 500 at a time. */
+const ATTEMPT_SORT_FIELDS = ["createdAt", "similarity", "livenessScore", "outcome", "context"] as const;
+
 const attemptsQuerySchema = z.object({
   query: z.object({
     userId: z.string().optional(),
     outcome: z.string().optional(),
+    /** TIMESHEET | TICKET | APPROVAL | ENROLLMENT — which action prompted the check. */
+    context: z.string().optional(),
     flaggedOnly: z.string().optional(),
+    /** Free text over the subject's name and email. Matching on the RELATED user rather than on
+     *  the attempt itself, because "whose check was this?" is the only question anyone asks of
+     *  this log by text. */
+    search: z.string().max(120).optional(),
+    sortBy: z.enum(ATTEMPT_SORT_FIELDS).optional(),
+    sortDir: z.enum(["asc", "desc"]).optional(),
     /** Page size. `take` is kept as an accepted alias so any existing caller keeps working. */
     pageSize: z.coerce.number().int().min(1).max(200).optional(),
     take: z.coerce.number().int().min(1).max(200).optional(),
@@ -686,15 +699,34 @@ const attemptsQuerySchema = z.object({
  * render a real "Showing X-Y of N" footer matching every other table.
  */
 faceRouter.get("/attempts", requireAdmin, validate(attemptsQuerySchema), async (req, res) => {
-  const { userId, outcome, flaggedOnly } = req.query as Record<string, string | undefined>;
+  const { userId, outcome, context, flaggedOnly, search, sortBy, sortDir } = req.query as Record<
+    string,
+    string | undefined
+  >;
   const pageSize = Number(req.query.pageSize ?? req.query.take ?? 20);
   const page = Number(req.query.page ?? 1);
 
+  const term = search?.trim();
   const where = {
     ...(userId ? { userId } : {}),
     ...(outcome ? { outcome } : {}),
-    ...(flaggedOnly === "true" ? { flaggedForReview: true } : {})
+    ...(context ? { context } : {}),
+    ...(flaggedOnly === "true" ? { flaggedForReview: true } : {}),
+    // Searches the SUBJECT, not the attempt: every other field here is a score or an enum that
+    // the dropdowns already filter better than free text could.
+    ...(term ? { user: { OR: [{ name: { contains: term } }, { email: { contains: term } }] } } : {})
   };
+
+  // `createdAt desc` stays the default — this is a log, and "what happened most recently" is the
+  // question it exists to answer. A secondary `createdAt` key keeps paging stable when the primary
+  // sort ties (similarity and outcome tie constantly), otherwise rows shuffle between pages and
+  // the same attempt can appear twice or vanish.
+  const sortField = (sortBy ?? "createdAt") as (typeof ATTEMPT_SORT_FIELDS)[number];
+  const direction = sortDir === "asc" ? "asc" : "desc";
+  const orderBy =
+    sortField === "createdAt"
+      ? [{ createdAt: direction } as const]
+      : [{ [sortField]: direction } as Record<string, "asc" | "desc">, { createdAt: "desc" } as const];
 
   // Count and page in one round trip. The count is what makes a truthful "of N" possible —
   // without it the UI can only say "next page maybe exists", which is how log surfaces end up
@@ -703,7 +735,7 @@ faceRouter.get("/attempts", requireAdmin, validate(attemptsQuerySchema), async (
     prisma.faceVerificationAttempt.count({ where }),
     prisma.faceVerificationAttempt.findMany({
     where,
-    orderBy: { createdAt: "desc" },
+    orderBy,
     skip: (page - 1) * pageSize,
     take: pageSize,
     select: {

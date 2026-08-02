@@ -6,10 +6,13 @@
  * button), numeric/text groups keep local state behind an explicit Save, non-super-admins see
  * the card read-only rather than not at all.
  */
-import { useEffect, useState } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   AlertTriangle,
+  ArrowDown,
+  ArrowUp,
+  ArrowUpDown,
   BarChart3,
   ChevronLeft,
   ChevronRight,
@@ -18,6 +21,8 @@ import {
   Save,
   ScanFace,
   ShieldAlert,
+  RotateCcw,
+  Search,
   ShieldCheck,
   Sparkles,
   VideoOff,
@@ -36,6 +41,7 @@ import { Skeleton } from "../../components/ui/skeleton";
 import { Switch } from "../../components/ui/switch";
 import { Textarea } from "../../components/ui/textarea";
 import { Badge } from "../../components/ui/badge";
+import { useDebouncedValue } from "../../hooks/use-debounced-value";
 
 const OUTCOME_TONE: Record<string, string> = {
   PASSED: "bg-emerald-500/10 text-emerald-600 dark:text-emerald-400",
@@ -489,6 +495,51 @@ function AccuracyTile({ label, value, target, bad, title }: { label: string; val
 
 const LOG_PAGE_SIZES = [10, 20, 50, 100];
 
+/** Must stay in step with ATTEMPT_SORT_FIELDS in face.controller.ts — the server rejects anything
+ *  outside its own allowlist, so a typo here is a 422 rather than a silent unsorted result. */
+type AttemptSortField = "createdAt" | "similarity" | "livenessScore" | "outcome" | "context";
+
+/** The values `FaceVerificationAttempt.outcome` and `.context` actually take. Listed rather than
+ *  derived from the current page of rows: a filter that only offers the values already on screen
+ *  can't be used to FIND the ones that aren't. */
+// Taken from OUTCOME_TONE above, which is the existing source of truth for this enum — an earlier
+// draft of this list invented plausible-sounding values (REJECTED_NO_MATCH and friends) that the
+// column has never held, which would have produced filters that silently match nothing.
+const ATTEMPT_OUTCOMES = Object.keys(OUTCOME_TONE);
+const ATTEMPT_CONTEXTS = ["TIMESHEET", "TICKET", "APPROVAL"];
+
+/** A sortable column header. Renders a real <button> inside the <th> so it's keyboard-reachable
+ *  and announces its state, rather than a click handler on a bare cell. */
+function SortableTh({
+  field,
+  sort,
+  onSort,
+  children
+}: {
+  field: AttemptSortField;
+  sort: { by: AttemptSortField; dir: "asc" | "desc" };
+  onSort: (field: AttemptSortField) => void;
+  children: ReactNode;
+}) {
+  const active = sort.by === field;
+  return (
+    <th className="p-2 font-medium" aria-sort={active ? (sort.dir === "asc" ? "ascending" : "descending") : "none"}>
+      <button
+        type="button"
+        onClick={() => onSort(field)}
+        className="inline-flex items-center gap-1 rounded hover:text-foreground focus-ring"
+      >
+        {children}
+        {active ? (
+          sort.dir === "asc" ? <ArrowUp className="h-3 w-3" /> : <ArrowDown className="h-3 w-3" />
+        ) : (
+          <ArrowUpDown className="h-3 w-3 opacity-40" />
+        )}
+      </button>
+    </th>
+  );
+}
+
 /** The audit surface — recent attempts, flagged ones first, with the scores behind each decision.
  *  Paginated server-side (see the /face/attempts handler for why this one log can't page in the
  *  browser like the DataTable surfaces do). */
@@ -497,14 +548,49 @@ function FaceReviewLog({ readOnly }: { readOnly: boolean }) {
   const [flaggedOnly, setFlaggedOnly] = useState(true);
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(20);
+  const [searchInput, setSearchInput] = useState("");
+  const [outcome, setOutcome] = useState("all");
+  const [context, setContext] = useState("all");
+  const [sort, setSort] = useState<{ by: AttemptSortField; dir: "asc" | "desc" }>({ by: "createdAt", dir: "desc" });
+
+  // Debounced so typing a name doesn't fire a query per keystroke against a server-paged endpoint.
+  const search = useDebouncedValue(searchInput, 300);
 
   const attempts = useQuery({
-    queryKey: ["face", "attempts", flaggedOnly, page, pageSize],
-    queryFn: () => faceApi.listAttempts({ flaggedOnly, page, pageSize }),
+    queryKey: ["face", "attempts", { flaggedOnly, page, pageSize, search, outcome, context, sort }],
+    queryFn: () =>
+      faceApi.listAttempts({
+        flaggedOnly,
+        page,
+        pageSize,
+        search: search || undefined,
+        outcome: outcome === "all" ? undefined : outcome,
+        context: context === "all" ? undefined : context,
+        sortBy: sort.by,
+        sortDir: sort.dir
+      }),
     // Keeps the previous page rendered while the next one loads, so paging doesn't flash the
     // empty state — the same feel as the client-paged tables elsewhere.
     placeholderData: (prev) => prev
   });
+
+  // Any change to the SHAPE of the result set returns to page 1 — staying on page 4 of a set that
+  // now has one page shows a truthful-but-useless empty table.
+  useEffect(() => {
+    setPage(1);
+  }, [search, outcome, context, flaggedOnly, pageSize, sort]);
+
+  const toggleSort = (by: AttemptSortField) =>
+    setSort((prev) => (prev.by === by ? { by, dir: prev.dir === "asc" ? "desc" : "asc" } : { by, dir: "desc" }));
+
+  const anyFilterActive = Boolean(search) || outcome !== "all" || context !== "all" || !flaggedOnly;
+  const resetFilters = () => {
+    setSearchInput("");
+    setOutcome("all");
+    setContext("all");
+    setFlaggedOnly(true);
+    setSort({ by: "createdAt", dir: "desc" });
+  };
 
   const rows = attempts.data?.rows ?? [];
   const total = attempts.data?.total ?? 0;
@@ -568,9 +654,58 @@ function FaceReviewLog({ readOnly }: { readOnly: boolean }) {
         </div>
       </CardHeader>
       <CardContent className="space-y-3">
-        <div className="flex items-center justify-between rounded-lg border border-border bg-muted/30 p-3">
-          <Label htmlFor="face-flagged-only">Flagged only</Label>
-          <Switch id="face-flagged-only" checked={flaggedOnly} onCheckedChange={changeFilter} />
+        {/* Filter bar. Stacks on a phone and sits on one row from `sm` up — the same shape the
+            DataTable surfaces use, so this log stops being the one table without controls. */}
+        <div className="grid gap-2 rounded-lg border border-border bg-muted/30 p-3">
+          <div className="grid gap-2 sm:grid-cols-[1fr_auto_auto]">
+            <div className="relative min-w-0">
+              <Search className="pointer-events-none absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
+              <Input
+                className="h-9 pl-8"
+                placeholder="Search by name or email..."
+                aria-label="Search verification log"
+                value={searchInput}
+                onChange={(e) => setSearchInput(e.target.value)}
+              />
+            </div>
+            <Select value={outcome} onValueChange={setOutcome}>
+              <SelectTrigger className="h-9 w-full sm:w-[150px]" aria-label="Filter by outcome">
+                <SelectValue placeholder="Outcome" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">All outcomes</SelectItem>
+                {ATTEMPT_OUTCOMES.map((value) => (
+                  <SelectItem key={value} value={value}>
+                    {value.replaceAll("_", " ").toLowerCase()}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            <Select value={context} onValueChange={setContext}>
+              <SelectTrigger className="h-9 w-full sm:w-[140px]" aria-label="Filter by context">
+                <SelectValue placeholder="Context" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">All contexts</SelectItem>
+                {ATTEMPT_CONTEXTS.map((value) => (
+                  <SelectItem key={value} value={value}>
+                    {value.toLowerCase()}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <div className="flex items-center gap-2">
+              <Switch id="face-flagged-only" checked={flaggedOnly} onCheckedChange={setFlaggedOnly} />
+              <Label htmlFor="face-flagged-only" className="cursor-pointer">Flagged only</Label>
+            </div>
+            {anyFilterActive && (
+              <Button variant="ghost" size="sm" className="h-8" onClick={resetFilters}>
+                <RotateCcw className="mr-1.5 h-3.5 w-3.5" />Reset
+              </Button>
+            )}
+          </div>
         </div>
 
         {attempts.isLoading ? (
@@ -587,12 +722,15 @@ function FaceReviewLog({ readOnly }: { readOnly: boolean }) {
               <table className="w-full text-sm">
                 <thead className="text-left text-muted-foreground">
                   <tr>
+                    {/* "User" isn't sortable: the search box above already answers "whose?", and a
+                        name sort over a server-paged log invites scrolling for someone rather than
+                        searching for them. */}
                     <th className="p-2 font-medium">User</th>
-                    <th className="p-2 font-medium">When</th>
-                    <th className="p-2 font-medium">Context</th>
-                    <th className="p-2 font-medium">Outcome</th>
-                    <th className="p-2 font-medium">Match</th>
-                    <th className="p-2 font-medium">Live</th>
+                    <SortableTh field="createdAt" sort={sort} onSort={toggleSort}>When</SortableTh>
+                    <SortableTh field="context" sort={sort} onSort={toggleSort}>Context</SortableTh>
+                    <SortableTh field="outcome" sort={sort} onSort={toggleSort}>Outcome</SortableTh>
+                    <SortableTh field="similarity" sort={sort} onSort={toggleSort}>Match</SortableTh>
+                    <SortableTh field="livenessScore" sort={sort} onSort={toggleSort}>Live</SortableTh>
                     <th className="p-2" />
                   </tr>
                 </thead>
@@ -641,6 +779,31 @@ function FaceReviewLog({ readOnly }: { readOnly: boolean }) {
                   ))}
                 </tbody>
               </table>
+            </div>
+
+            {/* Sorting for the card layout. The sortable <th>s only exist in the table above, so
+                without this a phone user has filters and search but no sort at all — the gap this
+                whole change set exists to close. */}
+            <div className="flex items-center gap-2 sm:hidden">
+              <Label htmlFor="face-log-sort" className="shrink-0 text-xs text-muted-foreground">Sort by</Label>
+              <Select
+                value={`${sort.by}:${sort.dir}`}
+                onValueChange={(v) => {
+                  const [by, dir] = v.split(":") as [AttemptSortField, "asc" | "desc"];
+                  setSort({ by, dir });
+                }}
+              >
+                <SelectTrigger id="face-log-sort" className="h-9"><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="createdAt:desc">Newest first</SelectItem>
+                  <SelectItem value="createdAt:asc">Oldest first</SelectItem>
+                  <SelectItem value="similarity:asc">Match score, lowest first</SelectItem>
+                  <SelectItem value="similarity:desc">Match score, highest first</SelectItem>
+                  <SelectItem value="livenessScore:asc">Liveness, lowest first</SelectItem>
+                  <SelectItem value="outcome:asc">Outcome</SelectItem>
+                  <SelectItem value="context:asc">Context</SelectItem>
+                </SelectContent>
+              </Select>
             </div>
 
             <div className="space-y-2 sm:hidden">

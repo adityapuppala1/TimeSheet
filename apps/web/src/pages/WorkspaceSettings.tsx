@@ -163,12 +163,14 @@ export function WorkspaceSettingsPage() {
   const isSuperAdmin = user?.role === "SUPER_ADMIN";
 
   return (
-    <div className="grid gap-5">
-      <div className="flex items-center gap-3">
-        <div className="grid h-10 w-10 place-items-center rounded-lg bg-primary/10 text-primary">
+    <div className="grid min-w-0 gap-5">
+      <div className="flex min-w-0 items-center gap-3">
+        <div className="grid h-10 w-10 shrink-0 place-items-center rounded-lg bg-primary/10 text-primary">
           <ShieldCheck className="h-5 w-5" />
         </div>
-        <div>
+        {/* min-w-0 so the description wraps instead of setting a floor on the row's width; the
+            icon gets `shrink-0` so the wrap doesn't squash it into an ellipse. */}
+        <div className="min-w-0">
           <h1 className="text-2xl font-black tracking-tight">Workspace settings</h1>
           <p className="mt-1 text-sm text-muted-foreground">
             {isSuperAdmin
@@ -178,7 +180,16 @@ export function WorkspaceSettingsPage() {
         </div>
       </div>
 
-      <Tabs defaultValue="reminders" className="grid gap-4">
+      {/* `grid-cols-[minmax(0,1fr)]` is load-bearing, not tidying — and `min-w-0` alone is NOT
+          enough here, which is the subtle part. A grid ITEM defaults to `min-width: auto`, so the
+          column track sizes itself to the widest panel's min-content no matter how narrow the
+          container is allowed to get. Any one tab with a wide element therefore stretched the
+          whole page past the viewport, and `overflow-x: clip` on html/body hid the damage rather
+          than scrolling it — which is how the Face verification tab rendered 512px wide inside a
+          390px phone while the page-level overflow test stayed green. An explicit `minmax(0,1fr)`
+          track lets the column shrink below min-content, making each panel responsible for its
+          own overflow instead of exporting it to the page. */}
+      <Tabs defaultValue="reminders" className="grid min-w-0 grid-cols-[minmax(0,1fr)] gap-4">
         <TabsList className="w-full justify-start sm:w-auto">
           <TabsTrigger value="reminders">Reminders & schedule</TabsTrigger>
           <TabsTrigger value="emails">Email channels</TabsTrigger>

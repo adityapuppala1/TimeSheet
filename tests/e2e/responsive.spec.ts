@@ -134,6 +134,61 @@ test("every tab in Workspace Settings (8 tabs) is reachable", async ({ page }) =
   await assertEveryTabIsReachable(page);
 });
 
+/**
+ * Second-order version of the same trap, and the one that actually shipped a bug.
+ *
+ * `assertNoOverflow` measures the DOCUMENT, and `overflow-x: clip` on html/body means the document
+ * can never report overflow. So when the Face verification panel rendered 512px wide inside a 390px
+ * phone — dragging the page header and every sibling out with it — every existing check stayed
+ * green and the damage was simply invisible.
+ *
+ * The cause was a grid track sized to its widest panel's min-content (`min-width: auto` on grid
+ * items). Measuring `main.scrollWidth` per tab catches it: content is allowed to scroll INSIDE a
+ * panel, but a panel must never widen the page.
+ */
+test("no Workspace Settings tab widens the page beyond the viewport", async ({ page }) => {
+  // Fourteen panels, each needing a settle window before it can be measured honestly, does not fit
+  // the 30s default. Raised deliberately rather than by shortening the settle: a sample too short
+  // to see the late render is a test that passes for the wrong reason, which is exactly the failure
+  // this test exists to prevent.
+  test.setTimeout(120_000);
+
+  await page.goto("/app/settings");
+  await page.waitForLoadState("networkidle");
+
+  const tabs = page.getByRole("tab");
+  const count = await tabs.count();
+  expect(count).toBeGreaterThan(0);
+
+  for (let i = 0; i < count; i++) {
+    const tab = tabs.nth(i);
+    const label = (await tab.textContent())?.trim() ?? `tab ${i}`;
+    await tab.scrollIntoViewIfNeeded();
+    await tab.click({ timeout: 5_000 });
+    await page.waitForLoadState("networkidle");
+
+    // SAMPLED OVER TIME, not measured once — and this is the whole reason the test works.
+    // `networkidle` resolves BEFORE React Query's data lands and renders, so a single measurement
+    // right after it reads 390px and passes. The offending content (the verification log's rows)
+    // appeared ~3s later and pushed the page to 512px. Verified by reverting the fix: the
+    // measure-once version stayed green, this one fails.
+    const worst = await page.evaluate(async () => {
+      const clientWidth = document.documentElement.clientWidth;
+      let scrollWidth = 0;
+      // ~2.4s per panel: long enough to catch the verification log's rows landing at ~3s from
+      // click (network idle already absorbed the first second or so of that).
+      for (let i = 0; i < 6; i++) {
+        scrollWidth = Math.max(scrollWidth, document.querySelector("main")?.scrollWidth ?? 0);
+        await new Promise((resolve) => setTimeout(resolve, 400));
+      }
+      return { scrollWidth, clientWidth };
+    });
+    expect(worst.scrollWidth, `the "${label}" panel widened the page to ${worst.scrollWidth}px`).toBeLessThanOrEqual(
+      worst.clientWidth + 1
+    );
+  }
+});
+
 test("every tab in the ticket detail sheet (7 tabs) is reachable", async ({ page }) => {
   const { accessToken } = await (await page.request.post("/api/auth/refresh")).json();
   const headers = { Authorization: `Bearer ${accessToken}` };
