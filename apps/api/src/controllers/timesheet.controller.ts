@@ -26,6 +26,7 @@ import { dispatchNotification } from "../services/notify.service.js";
 import { templates } from "../services/mail-templates.js";
 import { computeApprovalDeadline, resolveEscalationsFor } from "../services/sla.service.js";
 import { dispatchOutboundWebhooks } from "../services/webhook-dispatch.service.js";
+import { processUpload } from "../services/attachment-storage.service.js";
 import { sanitizeRichText } from "../utils/sanitize.js";
 import { bindVerificationToRecord, consumeVerification, getTimesheetVerificationBadges, isFaceVerificationRequired } from "../services/face.service.js";
 
@@ -140,6 +141,19 @@ async function saveTimesheet(req: any, status: "DRAFT" | "SUBMITTED") {
 
   const uploadedFiles = (req.files ?? []) as Express.Multer.File[];
 
+  // Re-encoding happens OUTSIDE the transaction on purpose: WebP encoding is CPU-bound and can
+  // take a noticeable moment per image, and holding a Serializable transaction open across it
+  // would widen the window in which two concurrent submits for the same day contend.
+  //
+  // The entity id isn't known yet (the row doesn't exist), so the filename is keyed by the user
+  // and timestamp instead — the prefix exists to make a file identifiable on disk, and
+  // `<user>__timesheet-pending__<name>__<time>` does that just as well as a row id would.
+  const processedAttachments = await Promise.all(
+    uploadedFiles.map((file) =>
+      processUpload(file, { userName: req.user.name ?? req.user.email, entityType: "timesheet", entityId: "pending" })
+    )
+  );
+
   // Wrap the overlap check + create in a Serializable transaction so two
   // simultaneous submits for the same (user, day) can't both pass the check.
   // Without this, concurrent requests can each "see no overlap" and both insert.
@@ -172,11 +186,11 @@ async function saveTimesheet(req: any, status: "DRAFT" | "SUBMITTED") {
           status,
           approvalDeadline,
           attachments: {
-            create: uploadedFiles.map((file) => ({
-              fileName: file.originalname,
-              mimeType: file.mimetype || "application/octet-stream",
-              url: `/uploads/${file.filename}`,
-              sizeBytes: file.size
+            // Processed BEFORE the transaction body builds this row — images become WebP, text is
+            // gzipped, and the structured filename is minted. See attachment-storage.service.ts.
+            create: processedAttachments.map((processed) => ({
+              ...processed,
+              uploadedById: req.user.id
             }))
           }
         },

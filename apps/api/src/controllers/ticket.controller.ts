@@ -29,6 +29,7 @@ import { requireAuth, requirePermission } from "../middleware/auth.js";
 import { AppError } from "../middleware/error.js";
 import { preserveTenantContext, upload } from "../middleware/upload.js";
 import { validate } from "../middleware/validate.js";
+import { processUpload } from "../services/attachment-storage.service.js";
 import { audit } from "../services/audit.service.js";
 import { dispatchNotification } from "../services/notify.service.js";
 import { templates } from "../services/mail-templates.js";
@@ -1234,19 +1235,20 @@ ticketRouter.post(
     const files = (req.files ?? []) as Express.Multer.File[];
     if (!files.length) throw new AppError(422, "No files uploaded");
 
+    // Images become WebP, text is gzipped, and each file gets a structured, identifiable name.
+    // See services/attachment-storage.service.ts for what is compressed and what deliberately
+    // isn't (PDFs and Office files are already DEFLATE containers).
     const created = await Promise.all(
-      files.map((file) =>
-        prisma.ticketAttachment.create({
-          data: {
-            ticketId: ticket.id,
-            fileName: file.originalname,
-            mimeType: file.mimetype || "application/octet-stream",
-            url: `/uploads/${file.filename}`,
-            sizeBytes: file.size,
-            uploadedById: req.user!.id
-          }
-        })
-      )
+      files.map(async (file) => {
+        const processed = await processUpload(file, {
+          userName: req.user!.name ?? req.user!.email,
+          entityType: "ticket",
+          entityId: ticket.id
+        });
+        return prisma.ticketAttachment.create({
+          data: { ticketId: ticket.id, ...processed, uploadedById: req.user!.id }
+        });
+      })
     );
     await audit(req.user!.id, "ticket.attachment_added", "Ticket", ticket.id, { count: created.length });
     res.status(201).json(created);

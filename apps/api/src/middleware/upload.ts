@@ -27,6 +27,9 @@ import { AppError } from "./error.js";
  * `Content-Disposition: attachment` (see app.ts) as defense-in-depth on top of this allow-list.
  */
 export const allowedAttachmentExtensions = new Set([
+  // `.webp` is accepted because services/attachment-storage.service.ts converts every uploaded
+  // image to it — without this, re-uploading a file the app itself produced would be rejected.
+  ".webp",
   ".pdf", ".xls", ".xlsx", ".csv", ".jpg", ".jpeg", ".gif", ".png", ".zip", ".txt",
   ".py", ".css", ".jsx", ".ts", ".tsx", ".json", ".xml", ".yaml", ".yml",
   ".java", ".cs", ".cpp", ".c", ".h", ".php", ".rb", ".go", ".rs", ".sql", ".md", ".doc", ".docx"

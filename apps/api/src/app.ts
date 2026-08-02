@@ -14,6 +14,7 @@
  * WHO calls this: `server.ts` (`app.listen(...)`), and the Playwright suite's `webServer` config.
  */
 import path from "node:path";
+import zlib from "node:zlib";
 import compression from "compression";
 import cookieParser from "cookie-parser";
 import cors from "cors";
@@ -22,6 +23,7 @@ import rateLimit from "express-rate-limit";
 import helmet from "helmet";
 import morgan from "morgan";
 import { env } from "./config/env.js";
+import { resolveStoredFile } from "./services/attachment-storage.service.js";
 import { aiRouter } from "./controllers/ai.controller.js";
 import { auditRouter } from "./controllers/audit.controller.js";
 import { authRouter } from "./controllers/auth.controller.js";
@@ -159,6 +161,31 @@ app.use(express.json({ limit: "2mb" }));
 // real images, so they stay inline-renderable for <img> tags. Registered before the general
 // /uploads handler below so this more specific prefix wins.
 app.use("/uploads/avatars", express.static(path.join(env.UPLOAD_DIR, "avatars"), { maxAge: "1d", etag: true }));
+
+// Transparent decompression for attachments stored gzipped by
+// services/attachment-storage.service.ts. Runs BEFORE the static handler and only claims a
+// request when a `<name>.gz` twin exists, so every legacy file — everything uploaded before that
+// pipeline — falls straight through to `express.static` and behaves exactly as it always has.
+//
+// Decompressed server-side rather than served with `Content-Encoding: gzip` because the
+// `compression()` middleware above would otherwise have to be taught not to re-encode an
+// already-encoded body, and getting that subtly wrong corrupts downloads. The CPU cost is
+// negligible: only text and source files are ever gzipped.
+app.use("/uploads", async (req, res, next) => {
+  if (req.method !== "GET" && req.method !== "HEAD") return next();
+  try {
+    const resolved = await resolveStoredFile(req.path.replace(/^\//, ""));
+    if (!resolved?.gunzip || !resolved.stream) return next();
+
+    res.setHeader("Content-Disposition", "attachment");
+    res.setHeader("X-Content-Type-Options", "nosniff");
+    // No Content-Length: the decompressed size isn't known without reading the whole file, and a
+    // wrong one truncates the download.
+    resolved.stream.on("error", next).pipe(zlib.createGunzip()).on("error", next).pipe(res);
+  } catch (error) {
+    next(error);
+  }
+});
 
 // Ticket/timesheet attachments are user-uploaded and, even after the extension allow-list in
 // upload.ts, are forced to download (Content-Disposition: attachment) rather than render

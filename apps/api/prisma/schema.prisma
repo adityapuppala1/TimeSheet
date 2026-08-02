@@ -178,6 +178,7 @@ model User {
   aiDatasetItems            AIDatasetItem[]
   aiPromptVersions          AIPromptVersion[]
   aiEvalRuns                AIEvalRun[]
+  uploadedAttachments       Attachment[]
   attestationsIssued        WorkAttestation[]
   attestationShareLinks     AttestationShareLink[]
   outboundWebhooksCreated   OutboundWebhook[]
@@ -399,11 +400,35 @@ model Attachment {
   id          String    @id @default(uuid())
   timesheetId String
   timesheet   Timesheet @relation(fields: [timesheetId], references: [id], onDelete: Cascade)
+  /// The name the user recognises. Kept verbatim — the on-disk name is `storageKey`.
   fileName    String
   mimeType    String
   url         String
+  /// Bytes ON DISK after processing. `originalSizeBytes` is what was uploaded, so the saving is
+  /// `originalSizeBytes - sizeBytes`. Null `originalSizeBytes` means a row predating the pipeline.
   sizeBytes   Int
   createdAt   DateTime  @default(now())
+
+  originalSizeBytes Int?
+  /// IMAGE | DOCUMENT | SPREADSHEET | ARCHIVE | CODE | TEXT | OTHER — a coarse bucket for
+  /// analytics and, later, for deciding which files are worth extracting text from for RAG.
+  fileCategory      String? @db.VarChar(20)
+  /// NONE | WEBP | GZIP — how the bytes on disk differ from what was uploaded. The read path
+  /// needs this to know whether to gunzip; nothing else should infer it from the extension.
+  compression       String? @db.VarChar(10)
+  /// SHA-256 of the ORIGINAL upload. Deduplication and integrity, and it survives re-encoding.
+  checksumSha256    String? @db.VarChar(64)
+  /// Set for images only. Useful for rendering without probing the file, and for spotting the
+  /// "someone uploaded a 12000px screenshot" pattern in analytics.
+  width             Int?
+  height            Int?
+  /// The on-disk filename. Split from `url` so storage can move without rewriting URLs.
+  storageKey        String? @db.VarChar(255)
+  uploadedById      String?
+  uploadedBy        User?   @relation(fields: [uploadedById], references: [id], onDelete: SetNull)
+
+  @@index([timesheetId])
+  @@index([fileCategory])
 }
 
 model Notification {
@@ -615,12 +640,22 @@ model TicketAttachment {
   fileName     String
   mimeType     String
   url          String
+  /// Bytes ON DISK after processing — see Attachment.sizeBytes for the full note.
   sizeBytes    Int
   uploadedById String?
   uploadedBy   User?    @relation(fields: [uploadedById], references: [id])
   createdAt    DateTime @default(now())
 
+  originalSizeBytes Int?
+  fileCategory      String? @db.VarChar(20)
+  compression       String? @db.VarChar(10)
+  checksumSha256    String? @db.VarChar(64)
+  width             Int?
+  height            Int?
+  storageKey        String? @db.VarChar(255)
+
   @@index([ticketId])
+  @@index([fileCategory])
 }
 
 model TicketWatcher {
