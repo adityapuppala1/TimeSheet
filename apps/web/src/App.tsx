@@ -27,6 +27,7 @@ import { BackendHealthGate } from "./components/BackendHealthGate";
 import { ErrorBoundary } from "./components/ErrorBoundary";
 
 const Landing = lazy(() => import("./pages/Landing").then((m) => ({ default: m.Landing })));
+const PitchDeck = lazy(() => import("./pages/PitchDeck").then((m) => ({ default: m.PitchDeck })));
 const Login = lazy(() => import("./pages/Login").then((m) => ({ default: m.Login })));
 const ForgotPassword = lazy(() => import("./pages/ForgotPassword").then((m) => ({ default: m.ForgotPassword })));
 const ResetPassword = lazy(() => import("./pages/ResetPassword").then((m) => ({ default: m.ResetPassword })));
@@ -70,6 +71,9 @@ const queryClient = new QueryClient({
 
 const router = createBrowserRouter([
   { path: "/", element: <PageShell><Landing /></PageShell> },
+  // The pitch — a public, standalone explanation of the product for prospects and reviewers.
+  // Separate from `/` on purpose: the landing page sells the features, this one sells the thesis.
+  { path: "/pitch", element: <PageShell><PitchDeck /></PageShell> },
   { path: "/login", element: <PageShell><Login /></PageShell> },
   { path: "/forgot-password", element: <PageShell><ForgotPassword /></PageShell> },
   { path: "/reset-password", element: <PageShell><ResetPassword /></PageShell> },

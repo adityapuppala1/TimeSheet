@@ -37,6 +37,26 @@ Base URL: `/api`
 - `POST /timesheets/submit`
 - `PATCH /timesheets/:id/approve`
 - `PATCH /timesheets/:id/reject`
+- `DELETE /timesheets/:id`
+
+**`DELETE /timesheets/:id` accepts only `DRAFT` and `REJECTED`.** Anything else returns **422**,
+and the distinction is load-bearing rather than conservative:
+
+| Status | Deletable | Why |
+|---|---|---|
+| `DRAFT` | yes | Logged by mistake; nothing downstream depends on it yet. |
+| `REJECTED` | yes | Already refused; the rejection reason is preserved in the audit log. |
+| `SUBMITTED` | **no** | Someone is being asked to decide on it. Removing it mid-review erases the request. |
+| `APPROVED` | **no** | It carries a frozen rate snapshot and feeds cost reports and Verified Work Attestations. Deleting it would let history be rewritten *after* a client had been shown it. Correct approved hours with a new entry. |
+
+Authorship rules: an author may delete their own entries; `TIMESHEETS_APPROVE` (managers and up)
+may delete anyone's, so an admin can tidy up after someone who has left. It is a **soft** delete —
+the row keeps its audit trail, and because every read path (including the overlap check in
+`POST /timesheets/draft`) filters `deletedAt: null`, the freed time slot is immediately reusable.
+
+> This route did not exist until 2026-08. Its absence meant a mistaken entry could only be edited
+> into something else, and it silently broke the e2e suite's cleanup, which had been calling it and
+> treating Express's 404 as success. See `tests/e2e/helpers/admin-request.ts`.
 
 ## Face (identity) verification
 

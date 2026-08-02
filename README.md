@@ -590,6 +590,7 @@ See `.env.example` for all supported variables. Remember: the actual file the AP
 - [docs/FACE_VERIFICATION.md](docs/FACE_VERIFICATION.md) — face (identity) verification: how the server-side check works, the biometric-privacy obligations it carries, calibrating the match threshold, retention and deletion.
 - [docs/ROADMAP.md](docs/ROADMAP.md) — what differentiates this product today, next-feature themes (AI workflow automation, conversational analytics, integrations, billing), and how each maps to plan tiers.
 - [docs/SECURITY_DEVOPS_INTEGRATIONS.md](docs/SECURITY_DEVOPS_INTEGRATIONS.md) — connect GitHub Actions, GitLab CI, Jenkins, Bitbucket, or any internal git/CI system to the security-findings ingestion webhook (SAST/DAST/SSAT/SSCT), with copy-pasteable pipeline examples.
+- [docs/MARKETING_PAGES.md](docs/MARKETING_PAGES.md) — the public pages (`/`, `/pitch`, `/login`): the "every claim maps to shipped code" rule that governs them, how the product screenshots are regenerated from the running app, and the layout constraints (tab order, reduced-motion, gradient ramps) that are easy to undo by accident.
 
 ### A note on code comments in this repo
 

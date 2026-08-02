@@ -6,6 +6,13 @@
  * WHY the available methods are fetched, not hardcoded: `authApi.ssoMethods()` reflects this
  * specific org's configuration — a different org on the same deployment may show entirely
  * different buttons, or none at all if it's SSO-only.
+ *
+ * LAYOUT: a two-panel split at `lg` and up — form on the left, `AuthBrandPanel` on the right —
+ * collapsing to the form alone below that. The brand panel is deliberately LATER in the DOM and
+ * moved into place with `order`, so a keyboard or screen-reader user lands on the email field
+ * first rather than tabbing through decoration. It's also `hidden` below `lg`, so its canvas
+ * animation costs a phone nothing.
+ *
  * WHO renders this: `App.tsx`'s `/login` route.
  */
 import { zodResolver } from "@hookform/resolvers/zod";
@@ -26,6 +33,7 @@ import { Skeleton } from "../components/ui/skeleton";
 import { toast } from "../components/ui/toaster";
 import { apiUrl, authApi, type LoginResponse } from "../services/api";
 import { useAuthStore } from "../store/auth";
+import { AuthBrandPanel } from "../components/marketing/AuthBrandPanel";
 
 // LDAP has no entry here — it's a direct bind, not a redirect, so it gets its own inline form
 // (see LdapLoginForm below) instead of a "Continue with…" button.
@@ -162,28 +170,35 @@ export function Login() {
   });
 
   return (
-    <div className="relative grid min-h-screen place-items-center overflow-hidden bg-background px-4">
-      <div className="pointer-events-none absolute inset-0 -z-10">
-        <div className="absolute -left-32 -top-32 h-96 w-96 rounded-full bg-primary/20 blur-3xl" />
-        <div className="absolute -right-24 bottom-0 h-[28rem] w-[28rem] rounded-full bg-accent/25 blur-3xl" />
-      </div>
+    // Two panels at lg and up, one below it. The brand side is second in the DOM but painted first
+    // via `order` so that on a narrow screen — where it's hidden anyway — the form is what a
+    // keyboard or screen-reader user reaches first, with no skip-link needed.
+    <div className="grid min-h-screen lg:grid-cols-2">
+      <div className="relative flex items-center justify-center overflow-hidden px-4 py-10 sm:px-6 lg:order-2">
+        <div className="pointer-events-none absolute inset-0 -z-10 lg:hidden">
+          <div className="absolute -left-32 -top-32 h-96 w-96 rounded-full bg-primary/20 blur-3xl" />
+          <div className="absolute -right-24 bottom-0 h-[28rem] w-[28rem] rounded-full bg-accent/25 blur-3xl" />
+        </div>
 
-      <motion.div
-        initial={{ opacity: 0, y: 18 }}
-        animate={{ opacity: 1, y: 0 }}
-        transition={{ duration: 0.45, ease: "easeOut" }}
-        className="w-full max-w-md"
-      >
-        <Card>
-          <CardContent className="pt-6">
-            <Link to="/" className="mb-7 inline-flex items-center gap-3 font-bold">
-              <span className="grid h-9 w-9 place-items-center rounded-lg bg-primary text-primary-foreground">T</span>
-              TimeSphere
-            </Link>
-            <h1 className="text-2xl font-black tracking-tight">Welcome back</h1>
-            <p className="mt-2 text-sm text-muted-foreground">
-              Sign in to log time, approve work, and review utilization.
-            </p>
+        <motion.div
+          initial={{ opacity: 0, y: 18 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ duration: 0.45, ease: "easeOut" }}
+          className="w-full max-w-md"
+        >
+          {/* Borderless beside the brand panel — a card outline inside an already-split layout
+              reads as a box within a box. It keeps its card treatment on small screens, where it
+              IS the page. */}
+          <Card className="border-border shadow-lg lg:border-transparent lg:bg-transparent lg:shadow-none">
+            <CardContent className="pt-6 lg:px-0">
+              <Link to="/" className="mb-7 inline-flex items-center gap-3 font-bold lg:hidden">
+                <span className="grid h-9 w-9 place-items-center rounded-lg bg-primary text-primary-foreground">T</span>
+                TimeSphere
+              </Link>
+              <h1 className="text-2xl font-black tracking-tight">Welcome back</h1>
+              <p className="mt-2 text-sm text-muted-foreground">
+                Sign in to log time, approve work, and review utilization.
+              </p>
 
             {ssoMethods.isLoading && <Skeleton className="mt-7 h-10 w-full" />}
 
@@ -308,13 +323,20 @@ export function Login() {
             )}
 
             {!ssoMethods.isLoading && !passwordEnabled && ssoProviders.length === 0 && !ldapEnabled && (
-              <p className="mt-7 rounded-lg bg-muted px-3 py-3 text-sm text-muted-foreground">
-                No sign-in method is currently configured for this workspace. Contact your administrator.
+                <p className="mt-7 rounded-lg bg-muted px-3 py-3 text-sm text-muted-foreground">
+                  No sign-in method is currently configured for this workspace. Contact your administrator.
+                </p>
+              )}
+
+              <p className="mt-8 text-center text-xs text-muted-foreground">
+                New here? <Link to="/" className="font-semibold text-primary hover:underline">See what TimeSphere does</Link>
               </p>
-            )}
-          </CardContent>
-        </Card>
-      </motion.div>
+            </CardContent>
+          </Card>
+        </motion.div>
+      </div>
+
+      <AuthBrandPanel />
     </div>
   );
 }
