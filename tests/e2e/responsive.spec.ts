@@ -13,6 +13,7 @@
  * sidesteps that entirely instead of trying to widen the window to cover it.
  */
 import { test, expect } from "@playwright/test";
+import { deleteTicket } from "./helpers/admin-request";
 import { suspendFaceGate, type FaceGateSnapshot } from "./helpers/face-gate";
 
 // Several tests below build their own ticket fixture through the API. When the workspace has
@@ -85,19 +86,26 @@ test("no horizontal overflow with a long ticket title open in the detail sheet",
   const headers = { Authorization: `Bearer ${accessToken}` };
   const projects = await (await page.request.get("/api/projects", { headers })).json();
   const longTitle = "A very long ticket title that would never fit on one line on a phone screen without wrapping properly";
-  const ticket = await (
-    await page.request.post("/api/tickets", {
-      headers,
-      data: { projectId: projects[0].id, title: longTitle, type: "BUG", priority: "LOW" }
-    })
-  ).json();
+  const created = await page.request.post("/api/tickets", {
+    headers,
+    data: { projectId: projects[0].id, title: longTitle, type: "BUG", priority: "LOW" }
+  });
+  // ASSERTED, not assumed. Without this a failed create (a 428 from the face gate, a 429 from the
+  // login limiter) leaves `ticket.id` undefined, the page opens `?open=undefined`, and the failure
+  // surfaces ten seconds later as "heading not found" — pointing at the layout this test is about
+  // rather than at the fixture that never existed. Cost a real debugging cycle once.
+  expect(created.status(), `ticket fixture should be created: ${await created.text()}`).toBe(201);
+  const ticket = await created.json();
+  expect(ticket.id, "created ticket should have an id").toBeTruthy();
 
   try {
     await page.goto(`/app/tickets?open=${ticket.id}`);
     await expect(page.getByRole("heading", { name: longTitle })).toBeVisible({ timeout: 10_000 });
     await assertNoOverflow(page);
   } finally {
-    await page.request.delete(`/api/tickets/${ticket.id}`, { headers });
+    // Superadmin, because `tickets:manage` is ADMIN/SUPER_ADMIN only and this spec's session may
+    // not have it — the same silent-403 teardown that let 61 smoke tickets accumulate.
+    await deleteTicket(ticket.id);
   }
 });
 

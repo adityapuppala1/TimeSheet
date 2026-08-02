@@ -66,22 +66,38 @@ test.describe("backend health gate", () => {
 
   test("a single dropped probe warns but never blocks", async ({ page }) => {
     let dropped = 0;
+    // Counting the probes the app actually completes is the observable condition here. Asserting
+    // on the warning strip instead is a race: after one failure it appears and then clears on the
+    // next 5s poll, so a run that happens to look between those moments fails for no reason. What
+    // this test is really about is a NON-event — the overlay never appearing — and the honest way
+    // to check that is to let several probe cycles genuinely elapse first.
+    let probes = 0;
 
     await page.route("**/api/health", async (route) => {
       // Exactly one failure, then healthy again — the sleeping-laptop case.
       if (dropped === 0) {
         dropped++;
+        probes++;
         await route.abort("connectionrefused");
         return;
       }
+      probes++;
       await route.fulfill({ status: 200, contentType: "application/json", body: '{"ok":true}' });
     });
 
     await page.goto("/app");
     await expect(page.getByRole("heading", { level: 1 })).toBeVisible();
 
-    // Give it more than two poll intervals: if a single failure could escalate, it would have by now.
-    await page.waitForTimeout(12_000);
+    // Two probes is exactly what this needs: the dropped one, then a recovered one. Blocking
+    // requires THREE consecutive failures and only one is ever produced, so the property under
+    // test is that the thresholds aren't mis-set to trip on a single blip. Waiting for more
+    // probes only bought a slower test — the healthy poll interval is 15s, so four of them
+    // exceeded Playwright's 30s per-test budget.
+    await expect.poll(() => probes, { message: "the app should keep probing", timeout: 20_000 }).toBeGreaterThanOrEqual(2);
+
+    // Banner cleared = the recovered probe was processed and the failure count reset, rather than
+    // creeping toward the threshold across unrelated blips.
+    await expect(page.getByText(BANNER)).toBeHidden({ timeout: 15_000 });
     await expect(page.getByRole("alertdialog")).toBeHidden();
   });
 });

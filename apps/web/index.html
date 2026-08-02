@@ -10,6 +10,12 @@
     -->
     <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
     <meta name="theme-color" content="#0F9AA8" />
+    <!--
+      Without this, every browser requests /favicon.ico by convention and gets a 404 from Vite
+      (the SPA fallback only serves index.html for `Accept: text/html`). Declaring the icon
+      explicitly stops the stray request rather than just hiding it.
+    -->
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <meta name="description" content="TimeSphere — timesheet management, Jira-like ticketing, and AI-assisted workflows in one workspace." />
     <title>TimeSphere</title>
   </head>

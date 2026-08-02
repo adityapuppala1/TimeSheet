@@ -76,14 +76,19 @@ test.describe("Timesheet", () => {
       ).json();
       return rows.find((r) => r.taskDescription?.includes(marker));
     };
-    // Hand-rolled poll rather than expect.poll: its `message` is a static string, so the API
-    // rejection list — the one thing that explains a failure here — could never reach the report.
-    let saved = false;
-    for (let attempt = 0; attempt < 20 && !saved; attempt++) {
-      saved = Boolean(await findDraft());
-      if (!saved) await page.waitForTimeout(500);
-    }
-    expect(saved, `the draft should exist server-side after saving. API rejections: ${JSON.stringify(rejections)}`).toBe(true);
+    // Polls until something CONCLUSIVE has happened — the row exists, or the API rejected the
+    // save — then asserts which. Waiting only on the row would spend the full timeout on every
+    // failure and report "it isn't there" without saying why; a fixed sleep would be slower and
+    // still racy. The rejection assertion comes first because it's the actionable one.
+    await expect
+      .poll(async () => rejections.length > 0 || Boolean(await findDraft()), {
+        message: "the save should have either created the draft or been rejected",
+        timeout: 10_000
+      })
+      .toBe(true);
+
+    expect(rejections, "the API rejected the save").toEqual([]);
+    expect(await findDraft(), "the draft should exist server-side after saving").toBeTruthy();
 
     // Clean up so repeated runs don't accumulate drafts. An employee CAN delete their own draft,
     // so unlike tickets.spec.ts this stays on the page's own session — but the result is asserted

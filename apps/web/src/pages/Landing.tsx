@@ -327,6 +327,9 @@ export function Landing() {
             <a href="#tour" className="hidden text-sm font-semibold text-muted-foreground hover:text-foreground md:inline">Tour</a>
             <a href="#features" className="hidden text-sm font-semibold text-muted-foreground hover:text-foreground md:inline">Features</a>
             <a href="#ai" className="hidden text-sm font-semibold text-muted-foreground hover:text-foreground md:inline">AI</a>
+            {/* Restored: the rewrite kept the `#platform` section id and its scroll-mt but dropped
+                the only link pointing at it, leaving an anchor target nothing referenced. */}
+            <a href="#platform" className="hidden text-sm font-semibold text-muted-foreground hover:text-foreground lg:inline">Platform</a>
             <a href="#pricing" className="hidden text-sm font-semibold text-muted-foreground hover:text-foreground md:inline">Pricing</a>
             <Link to="/pitch" className="hidden text-sm font-semibold text-muted-foreground hover:text-foreground lg:inline">Why we built it</Link>
             <Button asChild size="sm" className="sm:h-10 sm:px-4 sm:text-sm">
@@ -476,11 +479,14 @@ export function Landing() {
 
       {/* ------------------------------------------------------------- Features */}
       <Section id="features">
+        {/* The count is derived, not written out: a hardcoded "Fifteen" silently becomes a lie the
+            first time someone adds a card — on the one page whose header says every claim must be
+            audited against the code. */}
         <SectionHeading
           center
           eyebrow="Everything included"
           title="Built for the whole loop, not one slice of it"
-          subtitle="Fifteen capabilities that ship today. Nothing here is on a roadmap."
+          subtitle={`${FEATURES.length} capabilities that ship today. Nothing here is on a roadmap.`}
         />
         <div className="mt-10 grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
           {FEATURES.map((feature) => (

@@ -11,6 +11,7 @@
  * ahead of the build. A row nobody has implemented is a support ticket at best and a refund at
  * worst, so when in doubt it doesn't go in.
  */
+import { PLAN_TIER_LIMITS, type PlanTier } from "@timesheet/shared";
 import { Check, Minus } from "lucide-react";
 import { Fragment } from "react";
 import { Badge } from "../ui/badge";
@@ -25,6 +26,28 @@ import {
 } from "../ui/dialog";
 
 type Cell = boolean | string;
+
+/* Small formatters so the rows below read as claims rather than as string plumbing. Each one
+ * reads PLAN_TIER_LIMITS, which is the same constant the control-plane seed writes into
+ * PlanTierLimit — so a table cell and the limit it describes cannot drift apart. */
+
+const TIER_LABEL: Record<string, string> = {
+  GOOGLE: "Google",
+  MICROSOFT: "Microsoft",
+  SAML: "SAML",
+  LDAP: "LDAP",
+  SLACK: "Slack",
+  MICROSOFT_TEAMS: "Teams",
+  GOOGLE_CHAT: "Google Chat",
+  TELEGRAM: "Telegram"
+};
+
+const usd = (amount: number) => (amount === 0 ? "—" : `$${amount.toLocaleString("en-US")}/mo`);
+const ssoList = (tier: PlanTier) => PLAN_TIER_LIMITS[tier].allowedSsoProviders.map((p) => TIER_LABEL[p] ?? p).join(", ");
+const chatList = (tier: PlanTier) => {
+  const platforms = PLAN_TIER_LIMITS[tier].allowedChatPlatforms;
+  return platforms.length === 0 ? false : platforms.map((p) => TIER_LABEL[p] ?? p).join(", ");
+};
 
 interface Row {
   label: string;
@@ -65,7 +88,17 @@ const GROUPS: Array<{ group: string; rows: Row[] }> = [
       },
       { label: "Auto-triage, duplicate detection, writing assistant", starter: false, team: true, enterprise: true },
       { label: "Email-to-ticket intake", starter: false, team: true, enterprise: true },
-      { label: "Monthly AI budget cap enforced per call", starter: false, team: true, enterprise: true },
+      {
+        // Was a bare true/false, which hid a 25x difference. The per-tier figure is a HARD
+        // platform ceiling clamped over whatever budget an org sets for itself, so a Team
+        // customer with heavy AI usage hits $200 regardless of what they configure. Stating it
+        // is the difference between a limit and a surprise.
+        label: "Monthly AI spend ceiling",
+        hint: "A platform cap on top of your own budget. Starter's is $0, which is why AI is unavailable there.",
+        starter: usd(PLAN_TIER_LIMITS.STARTER.aiMonthlyBudgetCeilingUsd),
+        team: usd(PLAN_TIER_LIMITS.TEAM.aiMonthlyBudgetCeilingUsd),
+        enterprise: usd(PLAN_TIER_LIMITS.ENTERPRISE.aiMonthlyBudgetCeilingUsd)
+      },
       {
         label: "Quality loop: capture, golden sets, prompt versions, evals",
         hint: "Measure whether a prompt change actually improved anything, instead of guessing.",
@@ -96,14 +129,32 @@ const GROUPS: Array<{ group: string; rows: Row[] }> = [
     rows: [
       { label: "Role-based access + tamper-evident audit log", starter: true, team: true, enterprise: true },
       { label: "Rotating httpOnly sessions + active-device list", starter: true, team: true, enterprise: true },
-      { label: "Single sign-on", starter: "Google", team: "Google + Microsoft", enterprise: "Google, Microsoft, SAML" },
+      {
+        // Derived, and now includes LDAP on Enterprise — the hand-written version omitted it,
+        // which under-sold the tier rather than over-selling it, but was still inaccurate.
+        label: "Single sign-on",
+        starter: ssoList("STARTER"),
+        team: ssoList("TEAM"),
+        enterprise: ssoList("ENTERPRISE")
+      },
+      {
+        label: "Chat integrations",
+        hint: "Open a ticket from a message in the channel where it was reported.",
+        starter: chatList("STARTER"),
+        team: chatList("TEAM"),
+        enterprise: chatList("ENTERPRISE")
+      },
       { label: "SSO-only mode (passwords disabled)", starter: false, team: false, enterprise: true },
       {
+        // CORRECTED. This row said `team: true`, and it was false: PLAN_TIER_LIMITS grants
+        // faceVerificationEnabled to ENTERPRISE only, and the feature fails CLOSED — a Team
+        // customer's admin would have been refused when they tried to switch it on. Now derived
+        // from the constant so it cannot say something the enforcement disagrees with.
         label: "Face verification at clock-in and approval",
         hint: "Optional. Encrypted templates, configurable retention, never leaves your server.",
-        starter: false,
-        team: true,
-        enterprise: true
+        starter: PLAN_TIER_LIMITS.STARTER.faceVerificationEnabled,
+        team: PLAN_TIER_LIMITS.TEAM.faceVerificationEnabled,
+        enterprise: PLAN_TIER_LIMITS.ENTERPRISE.faceVerificationEnabled
       },
       {
         label: "Security finding ingestion + VAPT uploads",
@@ -113,7 +164,18 @@ const GROUPS: Array<{ group: string; rows: Row[] }> = [
         enterprise: true
       },
       { label: "Public API keys + HMAC-signed webhooks", starter: false, team: true, enterprise: true },
-      { label: "Dedicated database, never shared with another tenant", starter: false, team: false, enterprise: true },
+      {
+        // CORRECTED. This row said Enterprise-only. It isn't: `getTenantClient` resolves a
+        // per-organization database for every tenant regardless of plan — there is no
+        // shared-schema path in this product — and the landing page says so unconditionally in
+        // two other places. Marking it Enterprise-only both contradicted the same page and sold
+        // Enterprise on something Starter already has.
+        label: "Dedicated database, never shared with another tenant",
+        hint: "Architectural, not a plan feature — no organization has ever shared a schema.",
+        starter: true,
+        team: true,
+        enterprise: true
+      },
       { label: "Platform-adjustable seat and AI-budget limits", starter: false, team: false, enterprise: true },
       { label: "Dedicated support + uptime SLA", starter: false, team: false, enterprise: true }
     ]
@@ -143,20 +205,30 @@ function CellValue({ value }: { value: Cell }) {
 export function PricingDialog({ open, onOpenChange }: { open: boolean; onOpenChange: (open: boolean) => void }) {
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-h-[92vh] w-[min(96vw,940px)] max-w-none overflow-y-auto">
+      {/* The dialog itself no longer scrolls — the table's own container does (below). Two scroll
+          containers nested inside each other is what broke the sticky header: the header's nearest
+          scrollport was the horizontal wrapper, which never scrolls vertically, so `sticky top-0`
+          did nothing while the outer dialog carried the rows past it. */}
+      <DialogContent className="flex max-h-[92vh] w-[min(96vw,940px)] max-w-none flex-col overflow-hidden">
         <DialogHeader>
           <DialogTitle>Compare plans</DialogTitle>
           <DialogDescription>
-            Every row here is something that exists in the product today. AI features need your own provider key on every
-            plan — we never resell inference.
+            Every row here is something that exists in the product today, and the tier-gated rows are generated from the
+            same limits the platform enforces. AI features need your own provider key on every plan — we never resell
+            inference.
           </DialogDescription>
         </DialogHeader>
 
-        {/* The table scrolls inside its own container rather than the page: three plan columns plus
-            a label column can't compress below ~640px without becoming unreadable. */}
-        <div className="-mx-2 overflow-x-auto px-2">
+        {/* One container, scrolling BOTH ways, so it is the sticky header's scrollport. Three plan
+            columns plus a label column can't compress below ~640px without becoming unreadable,
+            hence the horizontal scroll; `min-h-0` lets it actually shrink inside the flex column
+            instead of forcing the dialog taller than the viewport. */}
+        <div className="-mx-2 min-h-0 flex-1 overflow-auto px-2">
           <table className="w-full min-w-[620px] border-collapse text-sm">
-            <thead className="sticky top-0 z-10 bg-background">
+            {/* bg-popover, not bg-background: DialogContent is bg-popover, and the two are
+                different colours in both themes — the old value rendered as a visibly mismatched
+                band across the full width of the table. */}
+            <thead className="sticky top-0 z-10 bg-popover">
               <tr className="border-b border-border">
                 <th scope="col" className="py-3 pr-3 text-left font-semibold">
                   Feature

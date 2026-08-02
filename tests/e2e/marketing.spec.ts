@@ -28,12 +28,13 @@ test.describe("marketing pages", () => {
     const failed: string[] = [];
     page.on("response", (res) => {
       const path = new URL(res.url()).pathname;
-      // Both session probes 401 for a signed-out visitor BY DESIGN — App.tsx's two auth
-      // bootstraps ask the server whether a session exists, and "no" is the expected answer on a
-      // public page. Anything else failing is a real problem.
-      if (res.status() >= 400 && !path.includes("/auth/refresh") && !path.includes("/auth/me")) {
-        failed.push(`${res.status()} ${path}`);
-      }
+      if (res.status() < 400) return;
+      // Both session probes 401 for a signed-out visitor BY DESIGN — App.tsx's two auth bootstraps
+      // ask the server whether a session exists, and "no" is the expected answer on a public page.
+      // Nothing else is excused: /favicon.ico used to land here and fail the test for a reason
+      // unrelated to anything it checks, and the fix was to ship a favicon, not to widen this list.
+      if (path.includes("/auth/refresh") || path.includes("/auth/me")) return;
+      failed.push(`${res.status()} ${path}`);
     });
 
     await page.goto("/");
@@ -49,12 +50,21 @@ test.describe("marketing pages", () => {
     expect(failed, "no request on the landing page should fail").toEqual([]);
   });
 
-  test("every product screenshot referenced by the tour exists on disk", async ({ request }) => {
+  test("every product screenshot and its responsive variants exist on disk", async ({ request }) => {
     // Fetched directly rather than clicked through the tour: this asserts the ASSET exists,
     // independently of whether the UI happens to render it, so a rename fails loudly here.
-    for (const path of PRODUCT_IMAGES) {
-      const res = await request.get(path);
-      expect(res.status(), `${path} should be served`).toBe(200);
+    //
+    // The .webp variants are checked too. A missing one is invisible in a browser — <picture>
+    // silently falls back to the PNG — so without this the whole responsive-image path could rot
+    // while every page still looked correct and only the bytes got worse.
+    for (const png of PRODUCT_IMAGES) {
+      const res = await request.get(png);
+      expect(res.status(), `${png} should be served`).toBe(200);
+
+      for (const width of [480, 800, 1280]) {
+        const variant = png.replace(/\.png$/, `-${width}.webp`);
+        expect((await request.get(variant)).status(), `${variant} should be served`).toBe(200);
+      }
     }
   });
 
@@ -92,12 +102,13 @@ test.describe("marketing pages", () => {
     const failed: string[] = [];
     page.on("response", (res) => {
       const path = new URL(res.url()).pathname;
-      // Both session probes 401 for a signed-out visitor BY DESIGN — App.tsx's two auth
-      // bootstraps ask the server whether a session exists, and "no" is the expected answer on a
-      // public page. Anything else failing is a real problem.
-      if (res.status() >= 400 && !path.includes("/auth/refresh") && !path.includes("/auth/me")) {
-        failed.push(`${res.status()} ${path}`);
-      }
+      if (res.status() < 400) return;
+      // Both session probes 401 for a signed-out visitor BY DESIGN — App.tsx's two auth bootstraps
+      // ask the server whether a session exists, and "no" is the expected answer on a public page.
+      // Nothing else is excused: /favicon.ico used to land here and fail the test for a reason
+      // unrelated to anything it checks, and the fix was to ship a favicon, not to widen this list.
+      if (path.includes("/auth/refresh") || path.includes("/auth/me")) return;
+      failed.push(`${res.status()} ${path}`);
     });
 
     await page.goto("/pitch");
@@ -134,14 +145,55 @@ test.describe("marketing pages", () => {
     await expect(page.getByRole("heading", { name: /welcome back/i })).toBeVisible();
   });
 
-  test("no horizontal overflow on the public pages at phone width", async ({ page }) => {
+  test("no element overflows the viewport on the public pages at phone width", async ({ page }) => {
+    // MEASURED PER ELEMENT, deliberately. The obvious version of this test —
+    // `documentElement.scrollWidth - clientWidth` — CANNOT FAIL in this app: index.css sets
+    // `overflow-x: clip` on both html and body, so the document has no horizontal scroll area and
+    // the delta is always 0 no matter how far a child overflows. responsive.spec.ts documents the
+    // same trap. A section that blows past 390px would be silently clipped and unreachable while
+    // the page-level check stayed green.
     await page.setViewportSize({ width: 390, height: 844 });
+
     for (const path of ["/", "/pitch", "/login"]) {
       await page.goto(path);
-      const overflow = await page.evaluate(
-        () => document.documentElement.scrollWidth - document.documentElement.clientWidth
-      );
-      expect(overflow, `${path} should not scroll sideways`).toBeLessThanOrEqual(1);
+      // Wait for the lazy route chunk to resolve, otherwise this measures the Suspense skeleton.
+      await expect(page.getByRole("heading", { level: 1 })).toBeVisible();
+      await page.waitForLoadState("networkidle");
+
+      const offenders = await page.evaluate(() => {
+        const limit = document.documentElement.clientWidth;
+
+        /** True when some ancestor clips horizontally, so this element cannot widen the page.
+         *  Without this the hero's decorative blur orbs — deliberately positioned at -left-32
+         *  inside a `relative overflow-hidden` section — read as overflow when they're clipped
+         *  and invisible. */
+        const isClippedByAncestor = (el: HTMLElement) => {
+          for (let node = el.parentElement; node && node !== document.body; node = node.parentElement) {
+            if (getComputedStyle(node).overflowX !== "visible") return true;
+          }
+          return false;
+        };
+
+        return [...document.querySelectorAll<HTMLElement>("body *")]
+          .filter((el) => {
+            const rect = el.getBoundingClientRect();
+            if (rect.width === 0 && rect.height === 0) return false;
+            // 1px of slack absorbs sub-pixel rounding on fractional layouts.
+            return rect.right > limit + 1 || rect.left < -1;
+          })
+          .filter((el) => {
+            const style = getComputedStyle(el);
+            // `position: fixed` elements are viewport-anchored and can't scroll the document;
+            // hidden and unrendered ones (the closed mobile drawer, sr-only text) are parked
+            // off-screen on purpose.
+            if (style.position === "fixed" || style.visibility === "hidden" || el.offsetParent === null) return false;
+            return !isClippedByAncestor(el);
+          })
+          .slice(0, 5)
+          .map((el) => `${el.tagName.toLowerCase()}.${el.className?.toString().split(" ").slice(0, 3).join(".")}`);
+      });
+
+      expect(offenders, `${path} has elements wider than a 390px viewport`).toEqual([]);
     }
   });
 });

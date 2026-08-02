@@ -11,8 +11,12 @@
  *  1. `prefers-reduced-motion` is honoured — the animation never starts, and a static gradient is
  *     shown instead. Motion sickness is not a styling preference.
  *  2. The loop is torn down on unmount, so navigating to the app doesn't leave a rAF running.
- *  3. It's `aria-hidden` and the panel is hidden below `lg`, so it costs nothing on a phone and
- *     says nothing to a screen reader.
+ *  3. It genuinely does not run on a phone. This needs a matchMedia check, NOT the `hidden lg:block`
+ *     on the panel: that class is CSS, and React mounts this component regardless — so the first
+ *     version of this file ran the full loop against a 0x0 canvas on every phone, painting nothing,
+ *     while three separate comments claimed it "costs a phone nothing". Both media queries are
+ *     WATCHED rather than sampled once, because a laptop meeting an external monitor crosses the
+ *     width breakpoint without remounting.
  */
 import { useEffect, useRef } from "react";
 import { CheckCircle2, ScanFace, ShieldCheck, Sparkles } from "lucide-react";
@@ -35,36 +39,66 @@ function ConstellationCanvas() {
     const canvas = canvasRef.current;
     if (!canvas) return;
 
-    // Checked once at mount rather than watched: someone flipping this OS setting mid-login is not
-    // a case worth the listener, and re-mounting picks up the new value anyway.
-    if (window.matchMedia?.("(prefers-reduced-motion: reduce)").matches) return;
+    // Two reasons never to run, both watched rather than sampled once — a laptop plugged into an
+    // external monitor crosses the width breakpoint without remounting, and an OS accessibility
+    // setting can change under a page that's already open.
+    const reduceMotion = window.matchMedia?.("(prefers-reduced-motion: reduce)");
+    // The `hidden lg:block` on the panel is CSS ONLY: React still mounts this component on a
+    // phone, so without this query the loop would run at 60fps against a 0x0 canvas, painting
+    // nothing and burning battery. That was a real bug — the component, Login.tsx and
+    // docs/MARKETING_PAGES.md all claimed it "costs a phone nothing" while it did the opposite.
+    const isDesktop = window.matchMedia?.("(min-width: 1024px)");
 
     const ctx = canvas.getContext("2d");
     if (!ctx) return;
 
     let frame = 0;
     let nodes: Node[] = [];
-    // Cap the device pixel ratio: a 3x retina panel costs 9x the fill rate for no visible gain
-    // on a background this soft.
-    const dpr = Math.min(window.devicePixelRatio || 1, 2);
+    // Cached from `resize` rather than measured per frame: getBoundingClientRect forces a
+    // synchronous layout, and doing that 60 times a second on a page that is simultaneously
+    // running a framer-motion entrance is exactly the jank this panel shouldn't cause.
+    let width = 0;
+    let height = 0;
 
     const resize = () => {
-      const { width, height } = canvas.getBoundingClientRect();
+      const rect = canvas.getBoundingClientRect();
+      // Read the ratio here, not at mount: browser zoom and dragging a window between a HiDPI and
+      // a 1x display both change it and fire resize. Capped at 2 because a 3x backing store costs
+      // 9x the fill rate for no visible gain on a background this soft.
+      const dpr = Math.min(window.devicePixelRatio || 1, 2);
+      const previous = { width, height };
+      width = rect.width;
+      height = rect.height;
+
       canvas.width = width * dpr;
       canvas.height = height * dpr;
       ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
 
-      nodes = Array.from({ length: NODE_COUNT }, () => ({
-        x: Math.random() * width,
-        y: Math.random() * height,
-        // Slow enough to read as ambient drift rather than motion demanding attention.
-        vx: (Math.random() - 0.5) * 0.28,
-        vy: (Math.random() - 0.5) * 0.28
-      }));
+      if (nodes.length === 0) {
+        nodes = Array.from({ length: NODE_COUNT }, () => ({
+          x: Math.random() * width,
+          y: Math.random() * height,
+          // Slow enough to read as ambient drift rather than motion demanding attention.
+          vx: (Math.random() - 0.5) * 0.28,
+          vy: (Math.random() - 0.5) * 0.28
+        }));
+        return;
+      }
+
+      // Rescale instead of reseeding. `resize` fires dozens of times per second while a window
+      // edge is dragged, and regenerating the array on each one made the whole constellation
+      // teleport repeatedly — the same jarring jump the bounce logic below exists to avoid.
+      if (previous.width > 0 && previous.height > 0) {
+        const scaleX = width / previous.width;
+        const scaleY = height / previous.height;
+        for (const node of nodes) {
+          node.x *= scaleX;
+          node.y *= scaleY;
+        }
+      }
     };
 
     const draw = () => {
-      const { width, height } = canvas.getBoundingClientRect();
       ctx.clearRect(0, 0, width, height);
 
       for (const node of nodes) {
@@ -102,13 +136,36 @@ function ConstellationCanvas() {
       frame = requestAnimationFrame(draw);
     };
 
-    resize();
-    frame = requestAnimationFrame(draw);
+    /** Starts the loop only when the panel is actually visible AND motion is welcome. */
+    const start = () => {
+      if (frame !== 0) return;
+      if (reduceMotion?.matches) return;
+      if (isDesktop && !isDesktop.matches) return;
+      resize();
+      frame = requestAnimationFrame(draw);
+    };
+
+    const stop = () => {
+      if (frame === 0) return;
+      cancelAnimationFrame(frame);
+      frame = 0;
+      // Drop the nodes so the next start reseeds for the new box rather than rescaling from a
+      // stale one measured at a width the panel no longer has.
+      nodes = [];
+    };
+
+    const sync = () => (reduceMotion?.matches || (isDesktop && !isDesktop.matches) ? stop() : start());
+
+    sync();
     window.addEventListener("resize", resize);
+    reduceMotion?.addEventListener("change", sync);
+    isDesktop?.addEventListener("change", sync);
 
     return () => {
-      cancelAnimationFrame(frame);
+      stop();
       window.removeEventListener("resize", resize);
+      reduceMotion?.removeEventListener("change", sync);
+      isDesktop?.removeEventListener("change", sync);
     };
   }, []);
 

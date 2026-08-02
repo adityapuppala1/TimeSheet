@@ -7,11 +7,13 @@
  * specific org's configuration — a different org on the same deployment may show entirely
  * different buttons, or none at all if it's SSO-only.
  *
- * LAYOUT: a two-panel split at `lg` and up — form on the left, `AuthBrandPanel` on the right —
- * collapsing to the form alone below that. The brand panel is deliberately LATER in the DOM and
- * moved into place with `order`, so a keyboard or screen-reader user lands on the email field
- * first rather than tabbing through decoration. It's also `hidden` below `lg`, so its canvas
- * animation costs a phone nothing.
+ * LAYOUT: a two-panel split at `lg` and up — `AuthBrandPanel` on the LEFT, form on the right —
+ * collapsing to the form alone below that. The form is FIRST in the DOM and moved into the second
+ * column with `lg:order-2`, so a keyboard or screen-reader user lands on the email field before
+ * any decoration, with no skip-link needed. (An earlier version of this comment said the opposite;
+ * the visual order is brand-then-form, the DOM order is form-then-brand, and that inversion is the
+ * whole point.) The panel is also `hidden` below `lg`, and its canvas checks the same breakpoint in
+ * JS — CSS alone would still mount and run the animation on a phone.
  *
  * WHO renders this: `App.tsx`'s `/login` route.
  */

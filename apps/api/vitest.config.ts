@@ -7,6 +7,16 @@ export default defineConfig({
     globals: false,
     restoreMocks: true,
     testTimeout: 10_000,
+    // Off unless asked for (`--coverage`), so the normal run stays as fast as it is. `lcov` is
+    // what sonar-project.properties reads; `text` is for a human running it locally.
+    coverage: {
+      provider: "v8",
+      reporter: ["text", "lcov"],
+      reportsDirectory: "coverage",
+      // The measurement target is the code under test, not the fixtures that exercise it.
+      include: ["src/**/*.ts"],
+      exclude: ["src/generated/**", "src/**/*.d.ts"]
+    },
     env: {
       NODE_ENV: "test",
       // Deliberately unreachable — if a "unit" test forgets to mock something and code tries a

@@ -73,6 +73,16 @@ jobs:
       - name: Typecheck (api + web)
         run: npm run lint
 
+      # A GATE, unlike the `npm audit` in security-scan-dogfood below — that one runs with
+      # `|| true` and posts findings into the app, which is right for dogfooding but means nothing
+      # ever fails on a vulnerable dependency.
+      #
+      # Scoped to production dependencies (`--omit=dev`) and to `high`: dev-tooling advisories are
+      # frequent, rarely reachable from shipped code, and a gate that cries wolf is one people
+      # learn to skip. A permanently-red audit is how the next real advisory gets ignored.
+      - name: Audit production dependencies
+        run: npm audit --omit=dev --audit-level=high
+
       - name: Build (shared + api + web)
         run: npm run build
 

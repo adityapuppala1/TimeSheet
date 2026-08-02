@@ -21,32 +21,24 @@
  *     20/min, and this helper runs once per spec file PER viewport project — a fresh login each
  *     time tripped that limiter and surfaced as an unparseable "Too many requests" body.
  */
-import { request as playwrightRequest, type APIRequestContext } from "@playwright/test";
-
-const BASE_URL = process.env.E2E_BASE_URL ?? "http://localhost:5173";
-/** Access tokens last ~15m; re-login well inside that but rarely enough to stay under 20/min. */
-const TOKEN_TTL_MS = 5 * 60 * 1000;
-
-let cachedToken: { value: string; obtainedAt: number } | null = null;
+import type { APIRequestContext } from "@playwright/test";
+import { withAdminRequest } from "./admin-request";
 
 export interface FaceGateSnapshot {
   restore: () => Promise<void>;
 }
 
+/**
+ * Delegates to the ONE cached superadmin login in admin-request.ts.
+ *
+ * This file used to keep its own identical cache, and for a while both existed — which quietly
+ * doubled superadmin logins across the suite. `/api/auth/login` is rate-limited to 20/min and this
+ * suite runs every spec across five viewport projects, so the second cache pushed it close enough
+ * to the limit to matter: a 429 there surfaces as a fixture that silently fails to be created,
+ * and then as a test failure pointing at whatever the fixture was for.
+ */
 async function withContext<T>(fn: (ctx: APIRequestContext, headers: Record<string, string>) => Promise<T>): Promise<T> {
-  const ctx = await playwrightRequest.newContext({ baseURL: BASE_URL });
-  try {
-    if (!cachedToken || Date.now() - cachedToken.obtainedAt > TOKEN_TTL_MS) {
-      const res = await ctx.post("/api/auth/login", {
-        data: { email: "superadmin@timesheet.local", password: "Admin@12345" }
-      });
-      if (!res.ok()) throw new Error(`face-gate helper could not sign in as superadmin: ${res.status()}`);
-      cachedToken = { value: (await res.json()).accessToken, obtainedAt: Date.now() };
-    }
-    return await fn(ctx, { Authorization: `Bearer ${cachedToken.value}`, "Content-Type": "application/json" });
-  } finally {
-    await ctx.dispose();
-  }
+  return withAdminRequest(fn);
 }
 
 /**

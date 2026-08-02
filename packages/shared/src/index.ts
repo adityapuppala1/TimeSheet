@@ -435,3 +435,63 @@ export function calculateHours(startTime: string, endTime: string): number {
   const minutes = eh * 60 + em - (sh * 60 + sm);
   return Math.max(0, Math.round((minutes / 60) * 100) / 100);
 }
+
+/* ------------------------------------------------------------------ *
+ * PLAN TIERS — one source of truth.
+ *
+ * WHY THIS EXISTS: these numbers used to live only in the control-plane seed, and the marketing
+ * pricing table restated them from memory. It drifted, exactly as you'd expect: the comparison
+ * table advertised face verification on Team when the seed grants it to Enterprise only, and the
+ * feature FAILS CLOSED — so a Team customer who bought partly for that row would have had their
+ * admin's attempt to enable it refused. A pricing table is a set of promises; it belongs next to
+ * the values that keep them.
+ *
+ * `apps/api/prisma/control/seed.ts` writes these into PlanTierLimit, and the web pricing dialog
+ * renders from them. Change a limit here and both move together.
+ * ------------------------------------------------------------------ */
+
+export const planTiers = ["STARTER", "TEAM", "ENTERPRISE"] as const;
+export type PlanTier = (typeof planTiers)[number];
+
+/** LDAP is a direct bind rather than a redirect, but it is still an org-level sign-in method and
+ *  is gated by the same per-tier allowlist, so it belongs in this union. */
+export const ssoProviders = ["GOOGLE", "MICROSOFT", "SAML", "LDAP"] as const;
+export type SsoProvider = (typeof ssoProviders)[number];
+
+/** Effectively "no ceiling" — the schema wants a number, not null, on these two tiers. */
+export const UNLIMITED_SEATS = 1_000_000;
+
+export interface PlanTierLimits {
+  seatLimit: number;
+  /** A HARD platform ceiling, clamped over whatever budget the org sets for itself. An explicit
+   *  0 is a real cap, not "unlimited" — so Starter cannot make an AI call at all. */
+  aiMonthlyBudgetCeilingUsd: number;
+  allowedSsoProviders: SsoProvider[];
+  allowedChatPlatforms: ChatPlatform[];
+  /** Enabling, enrolling and verifying all fail CLOSED without this. */
+  faceVerificationEnabled: boolean;
+}
+
+export const PLAN_TIER_LIMITS: Record<PlanTier, PlanTierLimits> = {
+  STARTER: {
+    seatLimit: 10,
+    aiMonthlyBudgetCeilingUsd: 0,
+    allowedSsoProviders: ["GOOGLE"],
+    allowedChatPlatforms: [],
+    faceVerificationEnabled: false
+  },
+  TEAM: {
+    seatLimit: UNLIMITED_SEATS,
+    aiMonthlyBudgetCeilingUsd: 200,
+    allowedSsoProviders: ["GOOGLE", "MICROSOFT"],
+    allowedChatPlatforms: ["SLACK", "TELEGRAM"],
+    faceVerificationEnabled: false
+  },
+  ENTERPRISE: {
+    seatLimit: UNLIMITED_SEATS,
+    aiMonthlyBudgetCeilingUsd: 5000,
+    allowedSsoProviders: ["GOOGLE", "MICROSOFT", "SAML", "LDAP"],
+    allowedChatPlatforms: ["SLACK", "MICROSOFT_TEAMS", "GOOGLE_CHAT", "TELEGRAM"],
+    faceVerificationEnabled: true
+  }
+};

@@ -6,6 +6,7 @@
  * one Organization, its OrgDatabase DSN is the same database the app already talks to today,
  * so nothing behaves differently until a second, real organization is provisioned.
  */
+import { PLAN_TIER_LIMITS, planTiers } from "@timesheet/shared";
 import { PrismaClient } from "../../src/generated/control-client/index.js";
 import { encryptSecret } from "../../src/utils/encryption.js";
 import { hashPassword } from "../../src/utils/security.js";
@@ -23,43 +24,29 @@ async function main() {
   const tenantDsn = process.env.DATABASE_URL;
   if (!tenantDsn) throw new Error("DATABASE_URL must be set to seed the default organization's database connection.");
 
-  await controlPrisma.planTierLimit.upsert({
-    where: { tier: "STARTER" },
-    update: {},
-    create: {
-      tier: "STARTER",
-      seatLimit: 10,
-      aiMonthlyBudgetCeilingUsd: 0,
-      allowedSsoProviders: ["GOOGLE"],
-      allowedChatPlatforms: []
-    }
-  });
-  await controlPrisma.planTierLimit.upsert({
-    where: { tier: "TEAM" },
-    update: {},
-    create: {
-      tier: "TEAM",
-      seatLimit: 1_000_000,
-      aiMonthlyBudgetCeilingUsd: 200,
-      allowedSsoProviders: ["GOOGLE", "MICROSOFT"],
-      allowedChatPlatforms: ["SLACK", "TELEGRAM"]
-    }
-  });
-  await controlPrisma.planTierLimit.upsert({
-    where: { tier: "ENTERPRISE" },
-    // The one targeted `update`: existing deployments predate the faceVerificationEnabled
-    // column (added Enterprise-only), and without this a re-seed would leave their ENTERPRISE
-    // row on the column default (false) — silently disabling a feature that worked yesterday.
-    update: { faceVerificationEnabled: true },
-    create: {
-      tier: "ENTERPRISE",
-      seatLimit: 1_000_000,
-      aiMonthlyBudgetCeilingUsd: 5000,
-      allowedSsoProviders: ["GOOGLE", "MICROSOFT", "SAML", "LDAP"],
-      allowedChatPlatforms: ["SLACK", "MICROSOFT_TEAMS", "GOOGLE_CHAT", "TELEGRAM"],
-      faceVerificationEnabled: true
-    }
-  });
+  // Values come from @timesheet/shared's PLAN_TIER_LIMITS rather than being written out here.
+  // They used to be literals in this file, and the marketing pricing table restated them from
+  // memory — which drifted: the comparison table advertised face verification on TEAM while this
+  // seed grants it to ENTERPRISE only, and that feature fails CLOSED. Sharing the constant means
+  // the table and the enforcement can no longer disagree.
+  for (const tier of planTiers) {
+    const limits = PLAN_TIER_LIMITS[tier];
+    await controlPrisma.planTierLimit.upsert({
+      where: { tier },
+      // Only faceVerificationEnabled is force-updated on re-seed: deployments that predate that
+      // column would otherwise keep the default (false) and silently lose a feature that worked
+      // yesterday. Everything else is left alone so a platform admin's per-tier tuning survives.
+      update: { faceVerificationEnabled: limits.faceVerificationEnabled },
+      create: {
+        tier,
+        seatLimit: limits.seatLimit,
+        aiMonthlyBudgetCeilingUsd: limits.aiMonthlyBudgetCeilingUsd,
+        allowedSsoProviders: limits.allowedSsoProviders,
+        allowedChatPlatforms: limits.allowedChatPlatforms,
+        faceVerificationEnabled: limits.faceVerificationEnabled
+      }
+    });
+  }
   console.log("Seeded PlanTierLimit rows (STARTER, TEAM, ENTERPRISE).");
 
   const { host, databaseName } = parseDsn(tenantDsn);
