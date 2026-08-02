@@ -146,7 +146,13 @@ test("every tab in Workspace Settings (8 tabs) is reachable", async ({ page }) =
  * items). Measuring `main.scrollWidth` per tab catches it: content is allowed to scroll INSIDE a
  * panel, but a panel must never widen the page.
  */
-test("no Workspace Settings tab widens the page beyond the viewport", async ({ page }) => {
+test("no Workspace Settings tab widens the page beyond the viewport", async ({ page }, testInfo) => {
+  // PHONE ONLY. The bug this guards is a min-content overflow, which by definition only manifests
+  // when the viewport is narrower than the content — at 1366px and above there is simply room, so
+  // the other four projects spent two minutes each proving nothing. Running it five times also
+  // tripled the whole suite's wall-clock, which is its own kind of harm.
+  testInfo.skip(testInfo.project.name !== "responsive-phone", "the narrow viewport is the only one that can fail");
+
   // Fourteen panels, each needing a settle window before it can be measured honestly, does not fit
   // the 30s default. Raised deliberately rather than by shortening the settle: a sample too short
   // to see the late render is a test that passes for the wrong reason, which is exactly the failure

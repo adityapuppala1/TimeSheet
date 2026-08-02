@@ -6,8 +6,8 @@
  * palette open" and "which theme is active" live here instead of being duplicated per page.
  * WHO renders this: `layouts/AppLayout.tsx`.
  */
-import { useQueryClient } from "@tanstack/react-query";
-import { Command, LogOut, Menu, Moon, Search, Sun, UserRound, FileClock } from "lucide-react";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { Command, Compass, LogOut, Menu, Moon, Search, Sun, UserRound, FileClock } from "lucide-react";
 import { useEffect, useState } from "react";
 import { Link, useNavigate } from "react-router";
 import { MobileDrawerNav } from "./Sidebar";
@@ -25,6 +25,7 @@ import { Badge } from "./ui/badge";
 import { toast } from "./ui/toaster";
 import { NotificationsBell } from "./NotificationsBell";
 import { CommandPalette, useCommandPaletteHotkey } from "./command-palette";
+import { ProductTour, shouldAutoStartTour, useTourController } from "./ProductTour";
 import { authApi, fileUrl } from "../services/api";
 import { useAuthStore } from "../store/auth";
 
@@ -57,6 +58,25 @@ export function Topbar() {
   }, [dark]);
 
   useCommandPaletteHotkey(() => setPaletteOpen(true));
+
+  // The guided tour. Opens itself once, for a genuinely new account, in a browser session that
+  // hasn't seen it — and is available on demand from the profile menu below for everyone else.
+  //
+  // Shares OnboardingGate's query key, so this costs no extra request: the gate decides whether
+  // setup is still owed, and `completedAt` tells the tour whether this is someone's first day.
+  const onboarding = useQuery({
+    queryKey: ["auth", "onboarding-status"],
+    queryFn: authApi.onboardingStatus,
+    enabled: Boolean(user),
+    staleTime: 5_000
+  });
+  const { running: tourRunning, start: startTour, stop: stopTour } = useTourController();
+  useEffect(() => {
+    if (!user || !shouldAutoStartTour(onboarding.data?.completedAt)) return;
+    // Deferred so it measures a settled layout rather than a half-rendered dashboard.
+    const timer = window.setTimeout(() => startTour(), 900);
+    return () => window.clearTimeout(timer);
+  }, [user, onboarding.data?.completedAt, startTour]);
 
   const queryClient = useQueryClient();
   async function handleLogout() {
@@ -93,6 +113,7 @@ export function Topbar() {
           onClick={() => setPaletteOpen(true)}
           className="focus-ring group relative flex h-10 min-w-0 flex-1 max-w-xl items-center gap-2 rounded-md border border-input bg-background px-3 text-sm text-muted-foreground transition hover:border-primary/40 hover:text-foreground"
           aria-label="Open command palette"
+          data-tour="command-search"
         >
           <Search className="h-4 w-4 shrink-0" />
           <span className="flex-1 truncate text-left">Search users, projects, actions...</span>
@@ -102,7 +123,12 @@ export function Topbar() {
         </button>
 
         <div className="ml-auto flex items-center gap-1">
-          <NotificationsBell />
+          {/* inline-flex, NOT `contents`: an element with `display: contents` generates no box, so
+              getBoundingClientRect() returns zeros and the tour spotlight would have nothing to
+              measure. */}
+          <span data-tour="notifications" className="inline-flex">
+            <NotificationsBell />
+          </span>
 
           <Button
             variant="ghost"
@@ -116,7 +142,7 @@ export function Topbar() {
 
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
-              <Button variant="ghost" className="h-10 gap-2 rounded-full border border-border px-2 pr-3">
+              <Button data-tour="user-menu" variant="ghost" className="h-10 gap-2 rounded-full border border-border px-2 pr-3">
                 <Avatar className="h-7 w-7">
                   {avatarSrc ? <AvatarImage src={avatarSrc} alt={user?.name ?? "Profile photo"} /> : null}
                   <AvatarFallback>{initialsFor(user?.name)}</AvatarFallback>
@@ -145,6 +171,12 @@ export function Topbar() {
               <DropdownMenuItem asChild>
                 <Link to="/app/history"><FileClock /> My history</Link>
               </DropdownMenuItem>
+              {/* Sits with Profile and My history because that's where people look for "things
+                  about me and how I use this", and because the tour is the one feature someone
+                  goes hunting for AFTER dismissing it. */}
+              <DropdownMenuItem onSelect={() => startTour()}>
+                <Compass /> Take the tour
+              </DropdownMenuItem>
               <DropdownMenuSeparator />
               <DropdownMenuItem onSelect={handleLogout} className="text-destructive focus:bg-destructive/10 focus:text-destructive">
                 <LogOut /> Sign out
@@ -156,6 +188,7 @@ export function Topbar() {
 
       <CommandPalette open={paletteOpen} onOpenChange={setPaletteOpen} />
       <MobileDrawerNav open={drawerOpen} onOpenChange={setDrawerOpen} />
+      <ProductTour running={tourRunning} onClose={stopTour} />
     </>
   );
 }

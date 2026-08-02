@@ -50,7 +50,7 @@ type NavSection = "Work" | "Team" | "Analytics" | "Administration" | "Configurat
  *  heading included — an EMPLOYEE must never see an empty "Administration" label. */
 const SECTION_ORDER: NavSection[] = ["Work", "Team", "Analytics", "Administration", "Configuration"];
 
-interface NavItem {
+export interface NavItem {
   to: string;
   label: string;
   icon: any;
@@ -61,7 +61,10 @@ interface NavItem {
   section?: NavSection;
 }
 
-const nav: NavItem[] = [
+/** Exported so the product tour builds its itinerary from the SAME list and the SAME visibility
+ *  rule the sidebar renders from. Duplicating either would let the tour offer someone a page their
+ *  role can't open — the one failure a role-aware tour must not have. */
+export const nav: NavItem[] = [
   { to: "/app", label: "Dashboard", icon: LayoutDashboard, end: true },
 
   { to: "/app/timesheet", label: "Log timesheet", icon: CalendarDays, permission: permissions.TIMESHEETS_WRITE, section: "Work" },
@@ -107,7 +110,7 @@ function initialsFor(name?: string) {
     .join("");
 }
 
-function isVisible(item: NavItem, user?: { role: string; permissions: string[] }): boolean {
+export function isVisible(item: NavItem, user?: { role: string; permissions: string[] }): boolean {
   if (item.role && user?.role !== item.role) return false;
   if (item.permission && !user?.permissions.includes(item.permission)) return false;
   return true;
@@ -192,7 +195,10 @@ export function Sidebar() {
     // `sticky top-0 h-screen` keeps the sidebar pinned while the page scrolls; the nav area gets
     // its own overflow so section headings can't push the user card off-screen on a short viewport
     // (the flat list used to fit without this, the grouped one is ~140px taller).
-    <aside className="sticky top-0 hidden h-screen w-72 shrink-0 border-r border-border bg-card/60 p-4 backdrop-blur-xl lg:flex lg:flex-col">
+    <aside
+      data-tour="sidebar"
+      className="sticky top-0 hidden h-screen w-72 shrink-0 border-r border-border bg-card/60 p-4 backdrop-blur-xl lg:flex lg:flex-col"
+    >
       <BrandMark />
       <div className="-mx-1 min-h-0 flex-1 overflow-y-auto px-1">
         <NavList items={visible} />

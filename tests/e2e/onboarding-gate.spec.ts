@@ -50,11 +50,19 @@ test.describe("first-run onboarding gate", () => {
   });
 
   test("an ordinary signed-in user sees no gate overlay", async ({ page }) => {
-    await page.goto("/app");
+    // Signs in for itself rather than borrowing `.auth/employee.json`, and that is not incidental:
+    // this spec sorts BEFORE timesheet.spec, which owns that snapshot. Loading /app here rotates
+    // the snapshot's refresh secret, so timesheet.spec then presented a stale one, got its session
+    // revoked, and failed on the login page — a failure that looks nothing like its cause.
+    // Signing in is free against the limiter, which skips successful logins.
+    await page.goto("/login");
+    await page.getByLabel("Email", { exact: true }).fill("employee@timesheet.local");
+    await page.getByLabel("Password", { exact: true }).fill("Admin@12345");
+    await page.getByRole("button", { name: /sign in/i }).click();
+    await expect(page).toHaveURL(/\/app/, { timeout: 15_000 });
+
     await expect(page.getByRole("heading", { level: 1 })).toBeVisible();
     // The gate renders as an alertdialog. Its absence for a set-up user is the whole point.
     await expect(page.getByRole("alertdialog", { name: /finish setting up your account/i })).toBeHidden();
   });
 });
-
-test.use({ storageState: "tests/e2e/.auth/employee.json" });

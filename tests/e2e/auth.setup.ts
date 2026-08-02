@@ -35,6 +35,17 @@ const DEMO_USERS = {
   "employee-health": { email: "employee@timesheet.local", password: "Admin@12345" }
 } as const;
 
+/**
+ * NOTE ON THE LIMIT OF THIS PATTERN, learned building product-tour.spec.ts: a snapshot file
+ * replays ONE fixed refresh cookie, and every `/app` load rotates that session's secret. The grace
+ * window forgives only the immediately-previous secret, so a spec with MANY tests exhausts the
+ * chain — the first test leaves the snapshot two generations behind and the rest land on /login.
+ *
+ * Giving such a spec its own snapshot does NOT help; the exhaustion happens within the spec. A
+ * multi-test spec should sign in per test instead (see product-tour.spec.ts's `signIn`), which is
+ * free against the rate limiter because successful logins are skipped by it.
+ */
+
 for (const [role, creds] of Object.entries(DEMO_USERS)) {
   setup(`authenticate as ${role}`, async ({ page }) => {
     await page.goto("/login");
