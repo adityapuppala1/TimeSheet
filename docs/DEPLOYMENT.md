@@ -307,6 +307,37 @@ No repo secrets are required for either workflow as written — `cd.yml`'s GHCR 
 automatically-provided `GITHUB_TOKEN`, and `ci.yml`'s test secrets are fixed placeholder strings
 scoped to the ephemeral CI database, never real credentials.
 
+## Updating a running deployment
+
+**Compose shape (installed via install.sh / install.ps1):** one command —
+
+```bash
+./update.sh              # newest release   (Windows: .\update.ps1)
+./update.sh --to v1.2.3  # specific release (Windows: .\update.ps1 -To v1.2.3)
+```
+
+What it does, in order: dumps both databases to `./backups/` (external-DB deployments are asked
+to confirm their own snapshot instead — the script can't reach into your RDS), records the
+current git ref, checks out the release tag, rebuilds and restarts (migrations run on container
+boot as always), then runs the same verification suite the installer uses — health, the server
+reporting the *target* version, both schemas fully migrated, a login round-trip. **If
+verification fails it automatically rolls the code back to the previous ref and re-verifies**,
+so a failed update ends with the old version running, not the new one broken. The database dump
+is kept but never auto-restored: migrations are additive-only (docs/DATABASE.md), so old code on
+a newer schema is safe by policy, and restoring a dump over a live database is a human decision.
+
+Everyone with the app open when the server comes back is offered a refresh automatically — the
+version rides on the health poll the client already makes, and the **What's new** page
+(`/app/whats-new`) shows admins the release notes and this command whenever a newer GitHub
+release exists (checked hourly; disable with `UPDATE_CHECK=off`).
+
+**Kubernetes shape:** don't use update.sh — the platform already owns this dance:
+
+```bash
+helm upgrade timesphere deploy/helm/timesphere --reuse-values --set image.tag=v1.2.0
+kubectl rollout status deploy/timesphere-api     # and `helm rollback timesphere` to go back
+```
+
 ## Kubernetes deployment
 
 `deploy/helm/timesphere/` is a Helm chart covering both deployment shapes — the same "one

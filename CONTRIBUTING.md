@@ -93,6 +93,23 @@ npx prisma migrate dev --name descriptive_name --schema=prisma/schema.prisma
 One migration folder per change. In the multi-org SaaS shape, a new migration must reach every
 tenant database — `npm run migrate:tenants -w apps/api` fans it out.
 
+## Releasing a version
+
+A release is a git tag plus a GitHub Release — that pair is what the whole update system hangs
+off: CD builds `vX.Y.Z`-tagged images from the tag, running installations discover the release
+through the GitHub API (`update-check.service.ts`), the in-app **What's new** page renders the
+release body, and `update.sh` checks the tag out. Skip a step and one of those surfaces lies.
+
+1. **Bump `VERSION`** (the repo-root file — the single source; nothing reads package.json
+   versions) and add the release's section to `CHANGELOG.md`, grouped ✨ Features / 🐛 Fixes /
+   🔒 Security. Write for the people using the app, not for the diff.
+2. **Commit, then tag**: `git tag v1.2.0 && git push origin main v1.2.0`. The tag must match
+   VERSION exactly (`v` prefix on the tag only) — `update.sh` verifies the server reports the
+   tag's version after upgrading, so a mismatch fails every customer's update.
+3. **Create the GitHub Release** for the tag, pasting the CHANGELOG section as the body. This is
+   the step that makes running installations light up with "update available".
+4. CD builds and pushes the tagged images automatically — nothing to do.
+
 ## Security
 
 Don't file a public issue for a vulnerability — see [.github/SECURITY.md](.github/SECURITY.md).

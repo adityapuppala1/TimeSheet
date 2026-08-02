@@ -27,13 +27,22 @@ function Write-Step($Message) { Write-Host "==> $Message" -ForegroundColor Cyan 
 function Write-Warn($Message) { Write-Host "[warn] $Message" -ForegroundColor Yellow }
 function Write-Fail($Message) { Write-Host "[error] $Message" -ForegroundColor Red; exit 1 }
 
+# Non-interactive mode: $env:TS_AUTO = "1" answers every prompt with its default (bundled Docker
+# MySQL, localhost URLs, no SMTP). Mirrors install.sh's TS_AUTO — exists for CI and fleet scripts.
+$Auto = ($env:TS_AUTO -eq "1")
+function Ask($Prompt, $Default) {
+  if ($Auto) { return $Default }
+  $reply = Read-Host $Prompt
+  if ([string]::IsNullOrWhiteSpace($reply)) { return $Default } else { return $reply }
+}
+
 Write-Step "Checking for Docker..."
 $dockerCmd = Get-Command docker -ErrorAction SilentlyContinue
 if (-not $dockerCmd) {
   Write-Warn "Docker isn't installed. Suggested: winget install --id Docker.DockerDesktop -e"
   $wingetCmd = Get-Command winget -ErrorAction SilentlyContinue
   if ($wingetCmd) {
-    $autoInstall = Read-Host "Attempt to auto-install Docker Desktop now via winget? [y/N]"
+    $autoInstall = Ask "Attempt to auto-install Docker Desktop now via winget? [y/N]" "N"
     if ($autoInstall -match '^[Yy]$') {
       Write-Step "Running: winget install --id Docker.DockerDesktop -e"
       winget install --id Docker.DockerDesktop -e
@@ -89,16 +98,16 @@ if (Test-Path $EnvFile) {
   Write-Step "Generating .env with strong random secrets..."
 
   Write-Host "This installer targets a local/trial deployment by default."
-  $WebOriginInput = Read-Host "Public URL for the web app [http://localhost:5173]"
+  $WebOriginInput = Ask "Public URL for the web app [http://localhost:5173]" ""
   $WebOrigin = if ([string]::IsNullOrWhiteSpace($WebOriginInput)) { "http://localhost:5173" } else { $WebOriginInput }
-  $AppBaseUrlInput = Read-Host "Public URL for the API (used as the SSO callback base) [$WebOrigin]"
+  $AppBaseUrlInput = Ask "Public URL for the API (used as the SSO callback base) [$WebOrigin]" ""
   $AppBaseUrl = if ([string]::IsNullOrWhiteSpace($AppBaseUrlInput)) { $WebOrigin } else { $AppBaseUrlInput }
 
   Write-Host ""
   Write-Host "Where should the database live?"
   Write-Host "  [1] Set one up for me in Docker (default - fastest for a trial, nothing else to configure)"
   Write-Host "  [2] I already have a MySQL server I want to use (a real on-prem box, RDS, Cloud SQL, etc.)"
-  $DbChoiceInput = Read-Host "Choice [1]"
+  $DbChoiceInput = Ask "Choice [1]" "1"
   $UseExternalDb = ($DbChoiceInput.Trim() -eq "2")
 
   if ($UseExternalDb) {
@@ -128,6 +137,23 @@ if (Test-Path $EnvFile) {
     $ControlDatabaseUrl = "mysql://${ExtUserEnc}:${ExtPasswordEnc}@${ExtHost}:${ExtPort}/${ExtControlDbName}"
     $DbEnvLines = "DATABASE_URL=$DatabaseUrl`nCONTROL_DATABASE_URL=$ControlDatabaseUrl"
     $ComposeFile = "docker-compose.external-db.yml"
+
+    # PREFLIGHT - prove the credentials work and the databases can exist BEFORE any container
+    # starts. Without this, a restricted account (typical on RDS/Cloud SQL) fails minutes later
+    # as an opaque P1003 deep in 'docker compose logs api'. Runs the mysql client from the
+    # official image so the host needs no mysql client installed - Docker is already required.
+    Write-Step "Preflight: verifying MySQL connectivity and creating databases if needed..."
+    $preflightSql = "CREATE DATABASE IF NOT EXISTS ``$ExtDbName``; CREATE DATABASE IF NOT EXISTS ``$ExtControlDbName``;"
+    docker run --rm mysql:8.4 mysql -h"$ExtHost" -P"$ExtPort" -u"$ExtUser" -p"$ExtPassword" -e $preflightSql
+    if ($LASTEXITCODE -ne 0) {
+      Write-Warn "Could not connect or create the databases (see the mysql error above)."
+      Write-Warn "If the account is deliberately restricted, pre-create them and grant access:"
+      Write-Warn "  CREATE DATABASE ``$ExtDbName``; CREATE DATABASE ``$ExtControlDbName``;"
+      Write-Warn "  GRANT ALL PRIVILEGES ON ``$ExtDbName``.* TO '$ExtUser'@'%';"
+      Write-Warn "  GRANT ALL PRIVILEGES ON ``$ExtControlDbName``.* TO '$ExtUser'@'%';"
+      Write-Fail "Fix the database access above, then re-run this script. Nothing has been started."
+    }
+    Write-Host "Preflight passed: both databases exist and the account can reach them."
   } else {
     # Hex, not base64: this value gets embedded unencoded in a mysql:// DSN below, and base64's
     # alphabet includes '/' and '+' - either would corrupt the URL (a literal '/' reads as a path
@@ -149,7 +175,7 @@ if (Test-Path $EnvFile) {
   $MailFrom = "TimeSphere <no-reply@timesheet.local>"
   Write-Host ""
   Write-Host "Optional: configure outbound email now (or skip and set it later in Workspace Settings -> Mail server)."
-  $ConfigureSmtp = Read-Host "Configure SMTP now? [y/N]"
+  $ConfigureSmtp = Ask "Configure SMTP now? [y/N]" "N"
   if ($ConfigureSmtp -match '^[Yy]$') {
     $SmtpHost = Read-Host "SMTP host (e.g. smtp.gmail.com)"
     $SmtpPortInput = Read-Host "SMTP port [587]"
@@ -264,6 +290,49 @@ if ($seedOk) {
   Write-Warn "  docker compose -f $ComposeFile exec api npm run control:seed -w apps/api; docker compose -f $ComposeFile exec api npm run seed -w apps/api"
   Write-Warn "If it's an already-seeded re-run, this is expected and safe to ignore."
 }
+
+# -- VERIFICATION SUITE -----------------------------------------------------------------------
+# "Installed" below means PROVEN, not presumed - each check exercises a different layer. Mirrors
+# install.sh's suite; see that file for the reasoning per layer.
+Write-Step "Verifying the installation..."
+$verifyFailed = $false
+function Verify($Label, [scriptblock]$Check) {
+  $ok = $false
+  try { $ok = (& $Check) } catch { $ok = $false }
+  if ($ok) { Write-Host "  [pass] $Label" -ForegroundColor Green }
+  else { Write-Host "  [FAIL] $Label" -ForegroundColor Red; $script:verifyFailed = $true }
+}
+
+$expectedVersion = (Get-Content "$PSScriptRoot\VERSION" -ErrorAction SilentlyContinue | Select-Object -First 1).Trim()
+
+Verify "API health endpoint responds" {
+  (Invoke-WebRequest -Uri "http://localhost:4000/health" -UseBasicParsing -TimeoutSec 5).StatusCode -eq 200
+}
+Verify "server reports version $expectedVersion" {
+  (Invoke-WebRequest -Uri "http://localhost:4000/api/system/version" -UseBasicParsing -TimeoutSec 5).Content -match "`"version`":`"$expectedVersion`""
+}
+Verify "tenant schema at latest migration" {
+  docker compose -f $ComposeFile exec -T api npx prisma migrate status --schema=apps/api/prisma/schema.prisma | Out-Null
+  $LASTEXITCODE -eq 0
+}
+Verify "control-plane schema at latest migration" {
+  docker compose -f $ComposeFile exec -T api npx prisma migrate status --schema=apps/api/prisma/control/schema.prisma | Out-Null
+  $LASTEXITCODE -eq 0
+}
+Verify "platform-admin login returns a token" {
+  $body = '{"email":"platform-admin@timesphere.local","password":"PlatformAdmin@12345"}'
+  (Invoke-WebRequest -Uri "http://localhost:4000/api/platform-admin/auth/login" -Method Post -ContentType "application/json" -Body $body -UseBasicParsing -TimeoutSec 5).Content -match "accessToken"
+}
+Verify "web app serves the SPA" {
+  (Invoke-WebRequest -Uri "http://localhost:5173" -UseBasicParsing -TimeoutSec 5).Content -match 'id="root"'
+}
+
+if ($verifyFailed) {
+  Write-Warn "One or more verification checks FAILED - the stack is up but not proven healthy."
+  Write-Warn "Diagnose with: docker compose -f $ComposeFile logs api"
+  exit 1
+}
+Write-Step "All verification checks passed."
 
 Write-Host ""
 Write-Host "TimeSphere is up." -ForegroundColor Green

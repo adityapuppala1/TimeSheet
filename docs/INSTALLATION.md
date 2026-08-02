@@ -118,6 +118,27 @@ These are the actual failure modes you're likely to hit, in the order you'd hit 
 
 ---
 
+## What the installer detects and proves
+
+The one-click scripts are environment-aware and end with evidence, not hope:
+
+- **Kubernetes**: if `kubectl` reaches a cluster and `helm` is present, install.sh offers the
+  Helm chart path (generating a secrets file from the template) instead of a local compose stack
+  — offered, never assumed, because kubectl on a laptop often points at production.
+- **Your own MySQL**: choosing an external server triggers a **preflight** before any container
+  starts — connect, `CREATE DATABASE IF NOT EXISTS` both schemas, and on failure print the exact
+  `GRANT` statements needed. A restricted RDS account fails in seconds with instructions, not
+  minutes later as an opaque P1003 in container logs.
+- **Verification suite**: after seeding, the installer proves the deployment layer by layer —
+  API health, the server reporting exactly the checkout's `VERSION`, both schemas at the latest
+  migration, the seeded platform-admin actually able to log in, and the SPA being served. Any
+  failure prints `[FAIL]`, exits non-zero, and points at the logs. "Installed" means proven.
+- **Non-interactive mode**: `TS_AUTO=1 ./install.sh` (or `$env:TS_AUTO="1"` on Windows) accepts
+  every default — bundled Docker MySQL, localhost URLs, no SMTP. CI executes exactly this on
+  every PR, so installer rot is caught in review rather than by a customer.
+
+Updating later is one command — see docs/DEPLOYMENT.md's "Updating a running deployment".
+
 ## Manual local install (no Docker)
 
 Full walkthrough already lives in [README.md § Installation](../README.md#installation-local-no-docker)

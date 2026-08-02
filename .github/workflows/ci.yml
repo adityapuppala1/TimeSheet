@@ -288,8 +288,31 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Syntax-check install.sh (bash -n, no execution)
-        run: bash -n install.sh
+      - name: Syntax-check install.sh and update.sh (bash -n, no execution)
+        run: bash -n install.sh && bash -n update.sh
+
+  # The syntax check above catches typos; it cannot catch installer ROT — a compose key that
+  # drifted, a seed script that moved, a verification endpoint that changed shape. Only running
+  # the installer the way a customer does proves it still installs, so this executes install.sh
+  # end-to-end on the runner: real Docker build, real MySQL container, real migrations and seed,
+  # and the installer's own verification suite (health, version, migration status, seeded
+  # platform-admin login, SPA served) as the pass/fail signal. TS_AUTO=1 answers every prompt
+  # with its defaults — the same non-interactive mode fleet scripts use, so CI exercises it too.
+  install-e2e:
+    name: Execute install.sh end-to-end
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Run the installer exactly as a customer would
+        run: TS_AUTO=1 ./install.sh
+
+      - name: Show container state on failure
+        if: failure()
+        run: |
+          docker compose -f docker-compose.yml ps || true
+          docker compose -f docker-compose.yml logs --tail=200 api || true
 
   validate-installer-windows:
     name: Validate install.ps1 (PowerShell parser, no execution)
@@ -303,6 +326,7 @@ jobs:
           $tokens = $null
           $errors = $null
           [System.Management.Automation.Language.Parser]::ParseFile("install.ps1", [ref]$tokens, [ref]$errors) | Out-Null
+          [System.Management.Automation.Language.Parser]::ParseFile("update.ps1", [ref]$tokens, [ref]$errors) | Out-Null
           if ($errors.Count -gt 0) {
             $errors | ForEach-Object { Write-Error $_.Message }
             exit 1

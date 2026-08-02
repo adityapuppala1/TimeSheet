@@ -41,6 +41,17 @@ detect_os() {
 }
 OS_ID="$(detect_os)"
 
+# Non-interactive mode: TS_AUTO=1 answers every prompt with its default (bundled Docker MySQL,
+# localhost URLs, no SMTP). Exists for CI — which executes this script end-to-end on every PR so
+# installer rot is caught here rather than by a customer — and for anyone scripting a fleet.
+AUTO="${TS_AUTO:-0}"
+ask() { # ask <prompt> <default-var-name>  — honours TS_AUTO by echoing the default
+  local prompt="$1" default="$2" reply
+  if [ "$AUTO" = "1" ]; then printf '%s' "$default"; return; fi
+  read -r -p "$prompt" reply
+  printf '%s' "${reply:-$default}"
+}
+
 docker_install_hint() {
   case "$OS_ID" in
     linux-ubuntu|linux-debian) echo "curl -fsSL https://get.docker.com | sh   (then: sudo usermod -aG docker \$USER, log out/in)" ;;
@@ -52,6 +63,56 @@ docker_install_hint() {
 }
 
 log "Detected OS: $OS_ID"
+
+# ── Environment detection: Kubernetes first, then Docker ─────────────────────────────────────
+# A reachable cluster plus helm means this machine is probably an operator's workstation, and the
+# right deployment is the Helm chart, not a local compose stack. OFFERED, never assumed: kubectl
+# on a laptop often points at a production cluster, and "install.sh quietly deployed to prod"
+# is not a story anyone wants to be in. TS_AUTO always takes the compose path for the same reason.
+if [ "$AUTO" != "1" ] && command -v kubectl >/dev/null 2>&1 && command -v helm >/dev/null 2>&1; then
+  if kubectl cluster-info >/dev/null 2>&1; then
+    K8S_CTX="$(kubectl config current-context 2>/dev/null || echo unknown)"
+    printf '
+A reachable Kubernetes cluster was detected (context: %s).
+' "$K8S_CTX"
+    printf '  [1] Install locally with Docker Compose (default — best for a trial or single box)
+'
+    printf '  [2] Deploy to the Kubernetes cluster above with the bundled Helm chart
+'
+    DEPLOY_CHOICE="$(ask "Choice [1]: " "1")"
+    if [ "$DEPLOY_CHOICE" = "2" ]; then
+      log "Kubernetes path: the chart lives in deploy/helm/timesphere."
+      if [ ! -f deploy/helm/timesphere/secrets.generated.yaml ]; then
+        log "Generating deploy/helm/timesphere/secrets.generated.yaml with strong random secrets..."
+        if command -v openssl >/dev/null 2>&1; then RB() { openssl rand -base64 48 | tr -d '
+'; }; RH() { openssl rand -hex 32 | tr -d '
+'; }
+        else RB() { head -c 48 /dev/urandom | base64 | tr -d '
+'; }; RH() { head -c 32 /dev/urandom | xxd -p | tr -d '
+'; }; fi
+        sed -e "s|CHANGE_ME_ACCESS|$(RB)|" -e "s|CHANGE_ME_REFRESH|$(RB)|"             -e "s|CHANGE_ME_PLATFORM|$(RB)|" -e "s|CHANGE_ME_ENCRYPTION|$(RH)|"             deploy/helm/timesphere/secrets.example.yaml > deploy/helm/timesphere/secrets.generated.yaml
+        warn "Review deploy/helm/timesphere/secrets.generated.yaml — you must still set your database DSNs and domain in values."
+      fi
+      printf '
+Review values, then deploy with:
+'
+      printf '  helm upgrade --install timesphere deploy/helm/timesphere \
+'
+      printf '    -f deploy/helm/timesphere/values.yaml -f deploy/helm/timesphere/secrets.generated.yaml
+
+'
+      CONFIRM_HELM="$(ask "Run that helm command against context '$K8S_CTX' NOW? [y/N]: " "N")"
+      if [[ "$CONFIRM_HELM" =~ ^[Yy]$ ]]; then
+        helm upgrade --install timesphere deploy/helm/timesphere           -f deploy/helm/timesphere/values.yaml -f deploy/helm/timesphere/secrets.generated.yaml           || fail "helm upgrade failed — the output above is from helm itself."
+        log "Deployed. Watch rollout: kubectl rollout status deploy/timesphere-api"
+      else
+        log "Not deploying automatically. Run the command above when your values are ready."
+      fi
+      exit 0
+    fi
+  fi
+fi
+
 log "Checking for Docker..."
 if ! command -v docker >/dev/null 2>&1; then
   HINT="$(docker_install_hint)"
@@ -61,7 +122,7 @@ if ! command -v docker >/dev/null 2>&1; then
   # apt/dnf/brew one-liners above, which are safe to pipe straight into a shell; Windows still
   # gets a manual link since winget/choco need an elevated shell this script may not have.
   if [[ "$OS_ID" == linux-* || "$OS_ID" == "macos" ]] && [[ "$HINT" != Install\ Docker* ]]; then
-    read -r -p "Attempt to auto-install Docker now with the command above? [y/N]: " AUTO_INSTALL_DOCKER
+    AUTO_INSTALL_DOCKER="$(ask "Attempt to auto-install Docker now with the command above? [y/N]: " "N")"
     if [[ "$AUTO_INSTALL_DOCKER" =~ ^[Yy]$ ]]; then
       log "Running: $HINT"
       eval "$HINT" || fail "Auto-install failed — install Docker manually and re-run this script."
@@ -163,7 +224,7 @@ else
   printf '\nWhere should the database live?\n'
   printf '  [1] Set one up for me in Docker (default — fastest for a trial, nothing else to configure)\n'
   printf '  [2] I already have a MySQL server I want to use (a real on-prem box, RDS, Cloud SQL, etc.)\n'
-  read -r -p "Choice [1]: " DB_CHOICE
+  DB_CHOICE="$(ask "Choice [1]: " "1")"
 
   if [ "$DB_CHOICE" = "2" ]; then
     printf '\nYour MySQL server needs to already exist and be reachable from wherever this container runs.\n'
@@ -189,6 +250,28 @@ else
     DB_ENV_LINES="DATABASE_URL=${DATABASE_URL_VALUE}
 CONTROL_DATABASE_URL=${CONTROL_DATABASE_URL_VALUE}"
     COMPOSE_FILE="docker-compose.external-db.yml"
+
+    # PREFLIGHT — prove the credentials work and the databases can exist BEFORE any container
+    # starts. Without this, a restricted account (typical on RDS/Cloud SQL, where nobody hands
+    # out CREATE) fails three minutes later as an opaque P1003 deep in `docker compose logs api`.
+    # Prisma's migrate deploy does create a missing database when the account has the privilege —
+    # verified against MySQL directly — so creating them here also covers accounts that can
+    # CREATE; the failure case this exists for is the account that can't.
+    #
+    # Runs the mysql client from the official image so the HOST needs no mysql client installed —
+    # Docker is already a hard requirement by this point.
+    log "Preflight: verifying MySQL connectivity and creating databases if needed..."
+    if docker run --rm mysql:8.4 mysql         -h"$EXT_HOST" -P"$EXT_PORT" -u"$EXT_USER" -p"$EXT_PASSWORD"         -e "CREATE DATABASE IF NOT EXISTS \`$EXT_DB_NAME\`; CREATE DATABASE IF NOT EXISTS \`$EXT_CONTROL_DB_NAME\`;" 2>/tmp/ts-db-preflight.err; then
+      log "Preflight passed: both databases exist and the account can reach them."
+    else
+      warn "Could not connect or create the databases. The server said:"
+      sed 's/^/    /' /tmp/ts-db-preflight.err >&2 || true
+      warn "If the account is deliberately restricted, pre-create the databases and grant access:"
+      warn "  CREATE DATABASE \`$EXT_DB_NAME\`; CREATE DATABASE \`$EXT_CONTROL_DB_NAME\`;"
+      warn "  GRANT ALL PRIVILEGES ON \`$EXT_DB_NAME\`.* TO '$EXT_USER'@'%';"
+      warn "  GRANT ALL PRIVILEGES ON \`$EXT_CONTROL_DB_NAME\`.* TO '$EXT_USER'@'%';"
+      fail "Fix the database access above, then re-run this script. Nothing has been started."
+    fi
   else
     # Hex, not base64: this value gets embedded unencoded in a mysql:// DSN below, and base64's
     # alphabet includes '/' and '+' — either would corrupt the URL (a literal '/' reads as a path
@@ -211,7 +294,7 @@ CONTROL_DATABASE_URL=mysql://root:${MYSQL_ROOT_PASSWORD_VALUE}@mysql:3306/timesp
   SMTP_SECURE_VALUE="false"
   MAIL_FROM_VALUE="TimeSphere <no-reply@timesheet.local>"
   printf '\nOptional: configure outbound email now (or skip and set it later in Workspace Settings -> Mail server).\n'
-  read -r -p "Configure SMTP now? [y/N]: " CONFIGURE_SMTP
+  CONFIGURE_SMTP="$(ask "Configure SMTP now? [y/N]: " "N")"
   if [[ "$CONFIGURE_SMTP" =~ ^[Yy]$ ]]; then
     read -r -p "SMTP host (e.g. smtp.gmail.com): " SMTP_HOST_VALUE
     read -r -p "SMTP port [587]: " SMTP_PORT_INPUT
@@ -329,6 +412,57 @@ else
   warn "  docker compose -f $COMPOSE_FILE exec api npm run control:seed -w apps/api && docker compose -f $COMPOSE_FILE exec api npm run seed -w apps/api"
   warn "If it's an already-seeded re-run, this is expected and safe to ignore."
 fi
+
+# ── VERIFICATION SUITE ────────────────────────────────────────────────────────────────────────
+# "Installed" below means PROVEN, not presumed: each check exercises a different layer, so a pass
+# here is evidence the stack genuinely works — not just that a port answered. A failed install
+# that says so loudly is worth far more than a green banner over a broken stack.
+log "Verifying the installation..."
+VERIFY_FAILED=0
+verify() { # verify <label> <command...>
+  local label="$1"; shift
+  if "$@" >/dev/null 2>&1; then
+    printf '  [1;32m[pass][0m %s
+' "$label"
+  else
+    printf '  [1;31m[FAIL][0m %s
+' "$label"
+    VERIFY_FAILED=1
+  fi
+}
+
+# Layer 1: the process answers.
+verify "API health endpoint responds" curl -fsS http://localhost:4000/health
+
+# Layer 2: the running server identifies as the version this checkout says it should be —
+# catches "an old image from a previous attempt is still running", which health alone never can.
+EXPECTED_VERSION="$(cat "$ROOT_DIR/VERSION" 2>/dev/null | tr -d '[:space:]')"
+check_reported_version() { curl -fsS http://localhost:4000/api/system/version | grep -q "\"version\":\"$EXPECTED_VERSION\""; }
+verify "server reports version ${EXPECTED_VERSION:-unknown}" check_reported_version
+
+# Layer 3: both schemas are fully migrated — TCP health checks connectivity, not schema state,
+# and a half-migrated database is precisely the failure that surfaces days later as a 500.
+verify "tenant schema at latest migration"   docker compose -f "$COMPOSE_FILE" exec -T api npx prisma migrate status --schema=apps/api/prisma/schema.prisma
+verify "control-plane schema at latest migration"   docker compose -f "$COMPOSE_FILE" exec -T api npx prisma migrate status --schema=apps/api/prisma/control/schema.prisma
+
+# Layer 4: authentication round-trips — the seeded platform-admin can actually log in, which
+# proves seeding, password hashing, JWT signing and the DB read path in one request.
+check_admin_login() {
+  curl -fsS -X POST http://localhost:4000/api/platform-admin/auth/login     -H 'Content-Type: application/json'     --data '{"email":"platform-admin@timesphere.local","password":"PlatformAdmin@12345"}'     | grep -q accessToken
+}
+verify "platform-admin login returns a token" check_admin_login
+
+# Layer 5: the web container serves the SPA shell.
+check_spa() { curl -fsS http://localhost:5173 | grep -qi "id=.root."; }
+verify "web app serves the SPA" check_spa
+
+if [ "$VERIFY_FAILED" = "1" ]; then
+  warn "One or more verification checks FAILED — the stack is up but not proven healthy."
+  warn "Diagnose with: docker compose -f $COMPOSE_FILE logs api"
+  exit 1
+fi
+log "All verification checks passed."
+
 
 cat <<EOF
 
