@@ -30,7 +30,7 @@ import { permissions } from "@timesheet/shared";
 import { cn } from "../lib/utils";
 import { useAuthStore } from "../store/auth";
 import { Avatar, AvatarFallback, AvatarImage } from "./ui/avatar";
-import { Sheet, SheetContent, SheetTitle } from "./ui/sheet";
+import { Sheet, SheetContent, SheetDescription, SheetTitle } from "./ui/sheet";
 import { fileUrl } from "../services/api";
 
 /**
@@ -227,6 +227,10 @@ export function MobileDrawerNav({ open, onOpenChange }: { open: boolean; onOpenC
     <Sheet open={open} onOpenChange={onOpenChange}>
       <SheetContent side="left" className="flex w-72 max-w-[85vw] flex-col overflow-y-auto">
         <SheetTitle className="sr-only">Navigation menu</SheetTitle>
+        {/* Both are sr-only: sighted users read the drawer directly, but Radix wires
+            aria-describedby from this and warns (correctly) when it's absent — a screen-reader
+            user otherwise hears a title with no explanation of what the panel contains. */}
+        <SheetDescription className="sr-only">Links to every section of the app available to your role.</SheetDescription>
         <BrandMark />
         <NavList items={visible} onNavigate={() => onOpenChange(false)} />
       </SheetContent>

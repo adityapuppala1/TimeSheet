@@ -1,15 +1,28 @@
 /**
  * WHAT: read-only, filterable list of a user's past timesheet entries (date range, project,
  * status), via `timesheetApi.list`.
- * WHY read-only: editing an already-submitted/approved entry has real audit/SLA implications
- * (see `sla.service.ts`) — this page is deliberately just for reviewing history, not amending it;
- * `Timesheet.tsx` is where new entries are logged.
+ * WHY almost read-only: editing an already-submitted/approved entry has real audit/SLA
+ * implications (see `sla.service.ts`), so this page is for reviewing history, not amending it —
+ * `Timesheet.tsx` is where new entries are logged. The ONE exception is deleting a DRAFT or
+ * REJECTED entry, which had no home anywhere in the product: an entry logged by mistake could
+ * only be edited into something else or left in the list forever. Submitted and approved entries
+ * deliberately have no delete control, matching the API rule.
  * WHO calls the backing API: `controllers/timesheet.controller.ts`'s list route.
  */
-import { useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import type { ColumnDef } from "@tanstack/react-table";
-import { Clock, FileText, Filter, Layers, Paperclip, RotateCcw, ShieldCheck } from "lucide-react";
+import { Clock, FileText, Filter, Layers, Paperclip, RotateCcw, ShieldCheck, Trash2 } from "lucide-react";
 import { useMemo, useState } from "react";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle
+} from "../components/ui/alert-dialog";
 import { Badge } from "../components/ui/badge";
 import { Button } from "../components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "../components/ui/card";
@@ -21,6 +34,7 @@ import { StatCard } from "../components/ui/stat-card";
 import { computeTrend, type Trend } from "../lib/trend";
 import { projectApi, timesheetApi } from "../services/api";
 import { safeHtml } from "../lib/safe-html";
+import { toast } from "../components/ui/toaster";
 
 function startOfWeek(date: Date) {
   const d = new Date(date);
@@ -46,6 +60,24 @@ export function History() {
   const [projectId, setProjectId] = useState("all");
   const [from, setFrom] = useState("");
   const [to, setTo] = useState("");
+  /** The entry awaiting confirmation. Deleting is irreversible from the user's side, so it never
+   *  happens on a single click. */
+  const [pendingDelete, setPendingDelete] = useState<any | null>(null);
+  const queryClient = useQueryClient();
+
+  const removeEntry = useMutation({
+    mutationFn: (id: string) => timesheetApi.remove(id),
+    onSuccess: () => {
+      toast.success("Entry deleted");
+      setPendingDelete(null);
+      // Both lists move: History is this page, and the dashboard's day timeline and weekly
+      // rollups read the same rows.
+      queryClient.invalidateQueries({ queryKey: ["timesheets"] });
+      queryClient.invalidateQueries({ queryKey: ["dashboard"] });
+    },
+    onError: (err: any) =>
+      toast.error("Could not delete", { description: err?.response?.data?.message ?? "Try again." })
+  });
 
   const rows: any[] = Array.isArray(timesheets.data) ? timesheets.data : [];
 
@@ -193,9 +225,30 @@ export function History() {
             ) : null}
           </div>
         )
+      },
+      {
+        id: "actions",
+        header: "",
+        cell: ({ row }) =>
+          // Only DRAFT and REJECTED can go — the API enforces the same rule for the same reason:
+          // a SUBMITTED entry is awaiting someone's decision, and an APPROVED one underpins the
+          // billing record. Hiding the control on the others means the button never lies about
+          // what it can do.
+          row.original.status === "DRAFT" || row.original.status === "REJECTED" ? (
+            <Button
+              size="sm"
+              variant="ghost"
+              className="h-8 text-muted-foreground hover:bg-destructive/10 hover:text-destructive"
+              aria-label={`Delete entry for ${String(row.original.workDate).slice(0, 10)}`}
+              disabled={removeEntry.isPending}
+              onClick={() => setPendingDelete(row.original)}
+            >
+              <Trash2 className="h-3.5 w-3.5" />
+            </Button>
+          ) : null
       }
     ],
-    []
+    [removeEntry.isPending]
   );
 
   return (
@@ -272,6 +325,37 @@ export function History() {
           />
         </CardContent>
       </Card>
+
+      <AlertDialog open={Boolean(pendingDelete)} onOpenChange={(open) => !open && setPendingDelete(null)}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Delete this entry?</AlertDialogTitle>
+            <AlertDialogDescription>
+              {pendingDelete && (
+                <>
+                  {Number(pendingDelete.totalHours).toFixed(2)}h on {String(pendingDelete.workDate).slice(0, 10)} for{" "}
+                  {pendingDelete.project?.name}. This can't be undone, and the time slot becomes free to log again.
+                </>
+              )}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Keep it</AlertDialogCancel>
+            <AlertDialogAction
+              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+              disabled={removeEntry.isPending}
+              onClick={(e) => {
+                // Radix closes the dialog on action-click by default; deferring lets the mutation's
+                // own error path keep it open with the reason visible instead of vanishing.
+                e.preventDefault();
+                removeEntry.mutate(pendingDelete.id);
+              }}
+            >
+              Delete entry
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }

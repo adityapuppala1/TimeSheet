@@ -288,7 +288,10 @@ export const timesheetApi = {
     ).data,
   approve: async (id: string, faceVerificationId?: string) =>
     (await api.patch(`/timesheets/${id}/approve`, faceVerificationId ? { faceVerificationId } : {})).data,
-  reject: async (id: string, reason: string) => (await api.patch(`/timesheets/${id}/reject`, { reason })).data
+  reject: async (id: string, reason: string) => (await api.patch(`/timesheets/${id}/reject`, { reason })).data,
+  /** DRAFT and REJECTED entries only — the API refuses SUBMITTED (awaiting a decision) and
+   *  APPROVED (part of the billing record). Soft delete; the time slot frees up immediately. */
+  remove: async (id: string) => api.delete(`/timesheets/${id}`)
 };
 
 export interface DailyStatus {

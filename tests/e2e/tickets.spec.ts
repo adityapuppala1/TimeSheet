@@ -1,4 +1,5 @@
 import { test, expect } from "@playwright/test";
+import { deleteTicket } from "./helpers/admin-request";
 import { suspendFaceGate, type FaceGateSnapshot } from "./helpers/face-gate";
 
 test.use({ storageState: "tests/e2e/.auth/manager.json" });
@@ -46,12 +47,15 @@ test.describe("Tickets", () => {
     await page.getByRole("button", { name: /^add$/i }).click();
     await expect(page.getByText("Verify the fix")).toBeVisible();
 
-    // Clean up so the demo dataset doesn't accumulate one ticket per test run. The access
-    // token lives in page memory only (not localStorage) since the session-hardening pass,
-    // so `page.request` (which shares the browser context's httpOnly refresh cookie) mints
-    // a fresh one via /auth/refresh instead of trying to read it out of storage.
+    // Clean up so the demo dataset doesn't accumulate one ticket per run.
+    //
+    // NOT via this page's own session, which is the bug this replaced: DELETE /api/tickets/:id
+    // requires `tickets:manage`, granted only to ADMIN and SUPER_ADMIN, while this spec runs as a
+    // MANAGER on purpose. The old cleanup therefore 403'd on every single run, and since nothing
+    // asserted the response the suite stayed green while 61 smoke-test tickets accumulated in the
+    // demo workspace. See helpers/admin-request.ts.
     const ticketId = new URL(page.url()).searchParams.get("open");
-    const { accessToken } = await (await page.request.post("/api/auth/refresh")).json();
-    await page.request.delete(`/api/tickets/${ticketId}`, { headers: { Authorization: `Bearer ${accessToken}` } });
+    expect(ticketId, "the detail sheet should put the new ticket's id in the URL").toBeTruthy();
+    await deleteTicket(ticketId!);
   });
 });

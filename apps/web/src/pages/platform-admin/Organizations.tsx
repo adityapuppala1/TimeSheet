@@ -16,7 +16,7 @@ import { Badge } from "../../components/ui/badge";
 import { Button } from "../../components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../../components/ui/card";
 import { DataTable } from "../../components/ui/data-table";
-import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "../../components/ui/dialog";
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "../../components/ui/dialog";
 import { Input } from "../../components/ui/input";
 import { Label } from "../../components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../../components/ui/select";
@@ -160,6 +160,9 @@ function ProvisionOrgDialogInner({ org, onOpenChange, onProvisioned }: { org: Or
           <DialogTitle>
             Provision {org.name} <span className="font-mono text-sm font-normal text-slate-500">({org.slug})</span>
           </DialogTitle>
+          <DialogDescription className="text-slate-400">
+            Creates this organization's own database and runs every migration against it. Safe to re-run.
+          </DialogDescription>
         </DialogHeader>
         <div className="grid gap-4">
           <p className="text-xs text-slate-500">
@@ -216,6 +219,9 @@ function CreateOrgDialog({ open, onOpenChange, onCreated }: { open: boolean; onO
       <DialogContent className="border-slate-800 bg-slate-900 text-slate-100">
         <DialogHeader>
           <DialogTitle>New organization</DialogTitle>
+          <DialogDescription className="text-slate-400">
+            Registers a new tenant. It won't have a database until you provision one.
+          </DialogDescription>
         </DialogHeader>
         <div className="grid gap-4">
           <div className="grid gap-1.5">
@@ -287,6 +293,9 @@ function EditOrgDialogInner({ org, onOpenChange, onSaved }: { org: OrgListRow; o
           <DialogTitle>
             {org.name} <span className="font-mono text-sm font-normal text-slate-500">({org.slug})</span>
           </DialogTitle>
+          <DialogDescription className="text-slate-400">
+            Plan tier, status and per-organization limits for this tenant.
+          </DialogDescription>
         </DialogHeader>
         <div className="grid gap-4">
           <div className="grid gap-4 sm:grid-cols-2">

@@ -71,7 +71,7 @@ import { Label } from "../components/ui/label";
 import { RichTextEditor } from "../components/ui/rich-text-editor";
 import { ScrollArea } from "../components/ui/scroll-area";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../components/ui/select";
-import { Sheet, SheetContent, SheetHeader, SheetTitle } from "../components/ui/sheet";
+import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from "../components/ui/sheet";
 import { Skeleton } from "../components/ui/skeleton";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "../components/ui/table";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "../components/ui/tabs";
@@ -922,6 +922,12 @@ function TicketDetailSheet({
             rendered yet (this was the source of the recurring DialogTitle console warning).
             Unmounts once the real title takes over, so there's never a duplicate. */}
         {!ticket && <SheetTitle className="sr-only">{detail.isLoading ? "Loading ticket" : "Ticket details"}</SheetTitle>}
+        {/* Always mounted, unlike the title above: the visible header never carries a description,
+            so without this Radix warns on every open and a screen-reader user hears the ticket key
+            with no indication of what the panel actually offers. */}
+        <SheetDescription className="sr-only">
+          Full details for this ticket — description, comments, activity, linked work and attachments.
+        </SheetDescription>
         {detail.isLoading && (
           <div className="grid gap-3 pt-6">
             <Skeleton className="h-6 w-1/2" />

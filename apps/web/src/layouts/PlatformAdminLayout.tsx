@@ -2,7 +2,7 @@ import { LayoutDashboard, LogOut, Building2, SlidersHorizontal, ShieldCheck, Men
 import { useState } from "react";
 import { NavLink, Outlet, useNavigate } from "react-router";
 import { Button } from "../components/ui/button";
-import { Sheet, SheetContent, SheetTitle } from "../components/ui/sheet";
+import { Sheet, SheetContent, SheetDescription, SheetTitle } from "../components/ui/sheet";
 import { platformAdminAuthApi } from "../services/platform-admin-api";
 import { usePlatformAdminAuthStore } from "../store/platform-admin-auth";
 import { cn } from "../lib/utils";
@@ -120,6 +120,9 @@ export function PlatformAdminLayout() {
       <Sheet open={drawerOpen} onOpenChange={setDrawerOpen}>
         <SheetContent side="left" className="flex w-72 max-w-[85vw] flex-col border-slate-800 bg-slate-900 text-slate-100">
           <SheetTitle className="sr-only">Platform admin navigation</SheetTitle>
+          {/* sr-only for the same reason as the tenant drawer's — Radix wires aria-describedby
+              from this, and without it a screen-reader user gets a title with no context. */}
+          <SheetDescription className="sr-only">Links to the platform administration console.</SheetDescription>
           <BrandMark />
           <NavList onNavigate={() => setDrawerOpen(false)} />
           <AccountFooter email={admin?.email} onLogout={handleLogout} />

@@ -370,3 +370,45 @@ timesheetRouter.patch("/:id/reject", requirePermission(permissions.TIMESHEETS_AP
   await audit(req.user!.id, "timesheet.rejected", "Timesheet", item.id, { reason: cleanReason });
   res.json(item);
 });
+
+/**
+ * Removes an entry the author no longer wants.
+ *
+ * WHY THIS EXISTS: it didn't, and that was a real gap — there was no way, through the API or the
+ * UI, to get rid of a draft logged by mistake. A wrong entry could only be edited into something
+ * else or left sitting in the list forever. It also silently broke the e2e suite's cleanup, which
+ * had been calling a route that never existed and treating the 404 as success.
+ *
+ * ONLY DRAFT AND REJECTED, deliberately. A SUBMITTED entry is awaiting someone's decision, and an
+ * APPROVED one is the basis of billing rates, cost reports and Verified Work Attestations — those
+ * are records of something that happened, and deleting them would let history be rewritten after
+ * a client had already been shown it. Approved hours are corrected by a new entry, not by erasure.
+ *
+ * Soft delete, matching every other deletion in this schema: the row stays for audit, and every
+ * read path already filters `deletedAt: null` — including the overlap check, so the freed time
+ * slot becomes immediately reusable.
+ */
+timesheetRouter.delete("/:id", requirePermission(permissions.TIMESHEETS_WRITE), async (req, res) => {
+  const existing = await prisma.timesheet.findFirst({ where: { id: String(req.params.id), deletedAt: null } });
+  if (!existing) throw new AppError(404, "Timesheet not found");
+
+  // Authors manage their own entries; TIMESHEETS_APPROVE (managers and up) can clear anyone's, so
+  // an admin can tidy up after someone who has left.
+  const isOwner = existing.userId === req.user!.id;
+  const canManageOthers = req.user!.permissions.includes(permissions.TIMESHEETS_APPROVE);
+  if (!isOwner && !canManageOthers) throw new AppError(403, "You can only delete your own entries.");
+
+  if (existing.status !== "DRAFT" && existing.status !== "REJECTED") {
+    throw new AppError(
+      422,
+      `Cannot delete a ${existing.status} entry — submitted hours are awaiting review, and approved hours are part of the billing record. Log a correcting entry instead.`
+    );
+  }
+
+  await prisma.timesheet.update({ where: { id: existing.id }, data: { deletedAt: new Date() } });
+  await audit(req.user!.id, "timesheet.deleted", "Timesheet", existing.id, {
+    status: existing.status,
+    workDate: existing.workDate.toISOString().slice(0, 10)
+  });
+  res.status(204).send();
+});
