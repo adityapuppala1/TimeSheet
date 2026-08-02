@@ -14,12 +14,46 @@
  * the overlay disappear. No reload, and nothing the user typed is discarded, because the overlay
  * sits ON TOP of the app rather than unmounting it.
  */
-import { AlertTriangle, Loader2, RefreshCw, WifiOff } from "lucide-react";
+import { AlertTriangle, Loader2, RefreshCw, Sparkles, WifiOff, X } from "lucide-react";
+import { useState } from "react";
 import { useBackendHealth } from "../hooks/use-backend-health";
 import { Button } from "./ui/button";
 
 export function BackendHealthGate() {
-  const { level, lastOkAt, checkNow } = useBackendHealth();
+  const { level, lastOkAt, newServerVersion, checkNow } = useBackendHealth();
+  const [updateDismissed, setUpdateDismissed] = useState(false);
+
+  // The "server was upgraded underneath this tab" prompt. Non-blocking on purpose: unlike an
+  // outage, a version skew is not dangerous — the old bundle keeps working against the new API
+  // until a genuinely incompatible change ships, and interrupting someone mid-form to force a
+  // reload would LOSE work to deliver an update that could wait a minute. Dismiss lasts until the
+  // next version change (state resets on remount / new version value).
+  if (level === "healthy" && newServerVersion && !updateDismissed) {
+    return (
+      <div
+        role="status"
+        className="fixed inset-x-0 bottom-0 z-[80] flex flex-wrap items-center justify-center gap-2 border-t border-primary/40 bg-primary/10 px-4 py-2.5 text-sm backdrop-blur-sm sm:bottom-4 sm:left-1/2 sm:right-auto sm:inset-x-auto sm:-translate-x-1/2 sm:rounded-full sm:border sm:px-4 sm:shadow-lg"
+      >
+        <Sparkles className="h-4 w-4 shrink-0 text-primary" />
+        <span className="min-w-0">
+          TimeSphere was updated to <strong>v{newServerVersion}</strong>.
+        </span>
+        {/* A plain reload is a REAL hard refresh here: bundle assets are content-hashed, so the
+            re-fetched index.html references brand-new file names nothing could have cached. */}
+        <Button size="sm" className="h-7 shrink-0" onClick={() => window.location.reload()}>
+          <RefreshCw className="h-3.5 w-3.5" />Refresh
+        </Button>
+        <button
+          type="button"
+          aria-label="Dismiss update notice"
+          onClick={() => setUpdateDismissed(true)}
+          className="grid h-6 w-6 shrink-0 place-items-center rounded-full text-muted-foreground hover:bg-muted hover:text-foreground"
+        >
+          <X className="h-3.5 w-3.5" />
+        </button>
+      </div>
+    );
+  }
 
   if (level === "healthy") return null;
 

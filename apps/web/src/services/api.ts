@@ -192,6 +192,38 @@ export interface OnboardingStatus {
   face: { required: boolean; enrolled: boolean };
 }
 
+/** The running server's identity — see apps/api/src/config/version.ts. */
+export interface SystemVersion {
+  version: string;
+  gitSha: string | null;
+  builtAt: string;
+}
+
+/** One GitHub release, relayed through the server's hourly cache. `notes` is markdown and is
+ *  REMOTE content — always render it through safeHtml, never raw. */
+export interface ReleaseInfo {
+  version: string;
+  name: string;
+  notes: string;
+  publishedAt: string | null;
+  url: string;
+}
+
+export interface UpdateStatus {
+  currentVersion: string;
+  latestVersion: string | null;
+  updateAvailable: boolean;
+  checkedAt: string | null;
+  checkEnabled: boolean;
+  releases: ReleaseInfo[];
+}
+
+export const systemApi = {
+  version: async () => (await api.get<SystemVersion>("/system/version")).data,
+  /** Cached server-side (one GitHub request an hour for the whole deployment) — poll freely. */
+  updates: async () => (await api.get<UpdateStatus>("/system/updates")).data
+};
+
 export const authApi = {
   onboardingStatus: async () => (await api.get<OnboardingStatus>("/auth/onboarding-status")).data,
   login: async (email: string, password: string, rememberMe: boolean) =>

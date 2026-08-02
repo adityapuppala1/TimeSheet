@@ -18,12 +18,22 @@ RUN npx prisma generate --schema=apps/api/prisma/schema.prisma \
 FROM node:22-alpine
 WORKDIR /app
 ENV NODE_ENV=production
+# The image carries its own identity: there is no .git inside a container, so the SHA and build
+# date must be stamped in at build time (CD passes them as build-args; a local `docker build`
+# without them still gets the VERSION file's semver via the COPY below). Read by
+# src/config/version.ts, surfaced on /api/health and /api/system/version, and checked by
+# update.sh to prove an upgrade actually landed.
+ARG GIT_SHA=""
+ARG BUILD_DATE=""
+ENV GIT_SHA=$GIT_SHA
+ENV BUILD_DATE=$BUILD_DATE
 # Run as an unprivileged user rather than the container default root — defense-in-depth so a
 # compromised dependency/RCE doesn't get root inside the container. --chown on every COPY below
 # means the app user (not root) owns its own files; /app/uploads is created + chowned here too
 # so the ownership is already correct before docker-compose.yml's api-uploads volume mounts over
 # it (Docker seeds a fresh named volume from whatever's at that path in the image at mount time).
 RUN addgroup -S app && adduser -S app -G app
+COPY --chown=app:app VERSION ./
 COPY --from=build --chown=app:app /app/node_modules node_modules
 COPY --from=build --chown=app:app /app/apps/api/dist apps/api/dist
 COPY --from=build --chown=app:app /app/apps/api/prisma apps/api/prisma

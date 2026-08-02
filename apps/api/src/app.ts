@@ -23,7 +23,9 @@ import rateLimit from "express-rate-limit";
 import helmet from "helmet";
 import morgan from "morgan";
 import { env } from "./config/env.js";
+import { appVersion } from "./config/version.js";
 import { resolveStoredFile } from "./services/attachment-storage.service.js";
+import { getUpdateStatus } from "./services/update-check.service.js";
 import { aiRouter } from "./controllers/ai.controller.js";
 import { auditRouter } from "./controllers/audit.controller.js";
 import { authRouter } from "./controllers/auth.controller.js";
@@ -218,9 +220,32 @@ app.use(morgan("tiny"));
  *    served by Vite itself and return 200 with the SPA's index.html — i.e. it would report
  *    "healthy" while the API was completely down, which is worse than having no check at all.
  */
-const healthHandler = (_req: express.Request, res: express.Response) => res.json({ ok: true });
+// `version` rides on the health probe the web app ALREADY polls every 15 seconds
+// (hooks/use-backend-health.ts): when the served version stops matching the version baked into
+// the running bundle, the client knows the server was upgraded underneath it and can offer a
+// refresh. Piggybacking costs zero additional requests, which is the whole reason it lives here
+// rather than on its own polled endpoint.
+const healthHandler = (_req: express.Request, res: express.Response) =>
+  res.json({ ok: true, version: appVersion.version });
 app.get("/health", healthHandler);
 app.get("/api/health", healthHandler);
+
+/**
+ * Full identity — version, git SHA, build date. Public on purpose: it's on every /health response
+ * anyway, the /app/whats-new page reads it before login state resolves, and update.sh curls it to
+ * verify an upgrade actually landed. Nothing here is a secret; pretending otherwise would only
+ * complicate three legitimate readers.
+ */
+app.get("/api/system/version", (_req, res) => res.json(appVersion));
+
+/**
+ * Update availability + release-note history for the What's-new page. Public like /version:
+ * everything in the response is already public (this repo's GitHub releases) or already exposed
+ * (the current version, on every /health). The URL it fetches is FIXED — no parameter reaches the
+ * outbound request — and the hourly single-flight cache means hammering this endpoint cannot make
+ * the server hammer GitHub. Never errors: disabled or offline degrades to "no information".
+ */
+app.get("/api/system/updates", async (_req, res) => res.json(await getUpdateStatus()));
 
 // SSO start/callback deliberately mounted BEFORE the blanket tenant-resolution middleware —
 // see controllers/sso.controller.ts's header comment for why these two routes resolve their

@@ -56,5 +56,11 @@ jobs:
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
+          # Identity stamps — src/config/version.ts reads these inside the container, where there
+          # is no .git to derive them from. The semver itself travels as the COPY'd VERSION file,
+          # so it stays correct even for a bare local `docker build` with no args.
+          build-args: |
+            GIT_SHA=${{ github.sha }}
+            BUILD_DATE=${{ github.event.head_commit.timestamp || github.event.created_at }}
           cache-from: type=gha
           cache-to: type=gha,mode=max

@@ -35,6 +35,10 @@ export interface BackendHealth {
   level: BackendHealthLevel;
   consecutiveFailures: number;
   lastOkAt: Date | null;
+  /** The version the SERVER last reported, when it differs from the bundle this tab is running.
+   *  Non-null means the server was upgraded underneath a still-open tab, and the person should be
+   *  offered a refresh — the update they were promised exists, one reload away. */
+  newServerVersion: string | null;
   /** Lets the user force an immediate retry instead of waiting for the next tick. */
   checkNow: () => void;
 }
@@ -42,6 +46,7 @@ export interface BackendHealth {
 export function useBackendHealth(): BackendHealth {
   const [consecutiveFailures, setConsecutiveFailures] = useState(0);
   const [lastOkAt, setLastOkAt] = useState<Date | null>(null);
+  const [newServerVersion, setNewServerVersion] = useState<string | null>(null);
   // Read inside the interval callback without making it a dependency (which would tear down and
   // recreate the timer on every state change).
   const failuresRef = useRef(0);
@@ -73,8 +78,27 @@ export function useBackendHealth(): BackendHealth {
         const res = await fetch(`${SERVER_ORIGIN}/api/health`, { signal: controller.signal, cache: "no-store" });
         // A non-2xx from a reachable server still means the process is answering; treat only a
         // thrown/aborted request as unreachable.
-        if (res.ok) recordSuccess();
-        else recordFailure();
+        if (res.ok) {
+          recordSuccess();
+          // Version ride-along: the server stamps its version on this same response (app.ts's
+          // healthHandler), so noticing "the server was upgraded underneath this tab" costs zero
+          // extra requests. Guards, in order: never nag a dev bundle (its version is 0.0.0-dev
+          // while the API reports a real one — every developer would see a permanent prompt);
+          // only accept a well-formed semver so an errored/proxied body can't produce a prompt
+          // for "version undefined"; and set null on match, so a ROLLBACK clears the prompt
+          // instead of leaving a stale "new version" claim the refresh wouldn't satisfy.
+          try {
+            const body = (await res.json()) as { version?: string };
+            const serverVersion = body?.version;
+            if (__APP_VERSION__ !== "0.0.0-dev" && serverVersion && /^\d+\.\d+\.\d+/.test(serverVersion)) {
+              setNewServerVersion(serverVersion !== __APP_VERSION__ ? serverVersion : null);
+            }
+          } catch {
+            // An unparseable body on a 200 is a proxy quirk, not an outage — ignore.
+          }
+        } else {
+          recordFailure();
+        }
       } catch {
         recordFailure();
       } finally {
@@ -108,8 +132,10 @@ export function useBackendHealth(): BackendHealth {
     // the faster cadence once we're down (and back to the slow one once recovered).
   }, [probeNonce, consecutiveFailures > 0]);
 
-  const level: BackendHealthLevel =
-    consecutiveFailures >= BLOCK_AFTER_FAILURES ? "down" : consecutiveFailures >= WARN_AFTER_FAILURES ? "degraded" : "healthy";
+  // Flat, not a nested ternary — same information, readable at a glance (and S3358 agrees).
+  let level: BackendHealthLevel = "healthy";
+  if (consecutiveFailures >= BLOCK_AFTER_FAILURES) level = "down";
+  else if (consecutiveFailures >= WARN_AFTER_FAILURES) level = "degraded";
 
-  return { level, consecutiveFailures, lastOkAt, checkNow: () => setProbeNonce((n) => n + 1) };
+  return { level, consecutiveFailures, lastOkAt, newServerVersion, checkNow: () => setProbeNonce((n) => n + 1) };
 }

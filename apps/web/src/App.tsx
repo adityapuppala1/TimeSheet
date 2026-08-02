@@ -36,6 +36,7 @@ const Dashboard = lazy(() => import("./pages/Dashboard").then((m) => ({ default:
 const Timesheet = lazy(() => import("./pages/Timesheet").then((m) => ({ default: m.Timesheet })));
 const Tickets = lazy(() => import("./pages/Tickets").then((m) => ({ default: m.Tickets })));
 const Profile = lazy(() => import("./pages/Profile").then((m) => ({ default: m.Profile })));
+const WhatsNewPage = lazy(() => import("./pages/WhatsNew").then((m) => ({ default: m.WhatsNewPage })));
 const History = lazy(() => import("./pages/History").then((m) => ({ default: m.History })));
 const AuditLog = lazy(() => import("./pages/AuditLog").then((m) => ({ default: m.AuditLog })));
 const AIActivityLog = lazy(() => import("./pages/AIActivityLog").then((m) => ({ default: m.AIActivityLog })));
@@ -90,6 +91,9 @@ const router = createBrowserRouter([
       { path: "tickets", element: <RequirePermission permission={permissions.TICKETS_VIEW}><PageShell><Tickets /></PageShell></RequirePermission> },
       { path: "history", element: <PageShell><History /></PageShell> },
       { path: "profile", element: <PageShell><Profile /></PageShell> },
+      // Version details + release notes. No permission gate: notes describe features people use,
+      // and the page itself hides the admin-only update card from non-admins.
+      { path: "whats-new", element: <PageShell><WhatsNewPage /></PageShell> },
       { path: "team", element: <RequirePermission permission={permissions.TIMESHEETS_APPROVE}><PageShell><Team /></PageShell></RequirePermission> },
       { path: "approvals", element: <RequirePermission permission={permissions.TIMESHEETS_APPROVE}><PageShell><ApprovalsPage /></PageShell></RequirePermission> },
       { path: "users", element: <RequirePermission permission={permissions.USERS_MANAGE}><PageShell><UsersPage /></PageShell></RequirePermission> },
