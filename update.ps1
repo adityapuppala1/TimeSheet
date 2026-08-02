@@ -65,7 +65,7 @@ if ($ComposeFile -eq "docker-compose.yml") {
   Write-Step "Backing up both databases to $BackupFile ..."
   # Credentials come from the container's own env - never parsed out of .env, so a hand-edited
   # quoting style can't corrupt the command.
-  docker compose -f $ComposeFile exec -T mysql sh -c 'exec mysqldump -uroot -p"$MYSQL_ROOT_PASSWORD" --databases timesheet_portal timesphere_control --single-transaction --no-tablespaces' | Out-File -Encoding utf8 $BackupFile
+  docker compose -f $ComposeFile exec -T mysql sh -c 'exec mysqldump -uroot -p"$MYSQL_ROOT_PASSWORD" --all-databases --single-transaction --no-tablespaces' | Out-File -Encoding utf8 $BackupFile
   if ($LASTEXITCODE -ne 0) { Write-Fail "Backup failed - refusing to update without one. Is the mysql container running (docker compose ps)?" }
 } else {
   Write-Warn "External-database deployment: this script cannot reach into your MySQL server to back it up."
@@ -103,6 +103,18 @@ function Invoke-DeployRef([string]$Ref) {
 
 Write-Step "Deploying $To (build + migrate + restart)..."
 Invoke-DeployRef $To
+
+# Container boot migrates the default org's database. Additional organizations provisioned after
+# install each have their OWN database that boot never touches — migrate-all-tenants.ts walks the
+# control-plane registry and brings every one to the latest migration. Fast no-op when there are
+# none; skipping it would run new code against an old schema for any extra org. See update.sh.
+for ($i = 0; $i -lt 60; $i++) {
+  try { if ((Invoke-WebRequest -Uri "http://localhost:4000/health" -UseBasicParsing -TimeoutSec 3).StatusCode -eq 200) { break } } catch {}
+  Start-Sleep -Seconds 3
+}
+Write-Step "Migrating any additional tenant databases..."
+docker compose -f $ComposeFile exec -T api npm run migrate:tenants -w apps/api
+if ($LASTEXITCODE -ne 0) { Write-Warn "migrate:tenants reported a problem - check which org failed above; the default org is unaffected." }
 
 Write-Step "Verifying the new version..."
 if (Invoke-Verification $TargetVersion) {

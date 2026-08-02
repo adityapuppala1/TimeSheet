@@ -75,8 +75,11 @@ log "Backing up both databases to $BACKUP_FILE ..."
 if [ "$COMPOSE_FILE" = "docker-compose.yml" ]; then
   # Bundled MySQL: dump from inside its own container, credentials from the container's env —
   # never parsed out of .env, so a hand-edited quoting style can't corrupt the command.
+  # --all-databases rather than naming the two defaults: a platform admin can provision MORE
+  # organizations, each with its own database on this same container, and a backup that silently
+  # misses them isn't a backup — it's a surprise scheduled for restore day.
   docker compose -f "$COMPOSE_FILE" exec -T mysql sh -c \
-    'exec mysqldump -uroot -p"$MYSQL_ROOT_PASSWORD" --databases timesheet_portal timesphere_control --single-transaction --no-tablespaces' \
+    'exec mysqldump -uroot -p"$MYSQL_ROOT_PASSWORD" --all-databases --single-transaction --no-tablespaces' \
     | gzip > "$BACKUP_FILE" \
     || fail "Backup failed — refusing to update without one. Is the mysql container running (docker compose ps)?"
 else
@@ -108,8 +111,24 @@ deploy_ref() { # deploy_ref <git-ref>  — checkout + rebuild + up; migrations r
   docker compose -f "$COMPOSE_FILE" up -d --build
 }
 
+migrate_extra_tenants() {
+  # Container boot migrates DATABASE_URL — the default org. But a platform admin can PROVISION
+  # MORE organizations after install, each with its own database, and boot never touches those.
+  # migrate-all-tenants.ts walks the control-plane registry and brings every tenant database to
+  # the latest migration, with per-org failure isolation. In a plain single-org deployment it
+  # finds only the default org (already migrated) and is a fast no-op — so this is safe to run
+  # unconditionally, and skipping it would leave any extra org on the OLD schema while the NEW
+  # code runs against it: precisely the drift the additive-only policy cannot excuse.
+  log "Migrating any additional tenant databases..."
+  docker compose -f "$COMPOSE_FILE" exec -T api npm run migrate:tenants -w apps/api     || warn "migrate:tenants reported a problem — check which org failed above; the default org is unaffected."
+}
+
 log "Deploying $TARGET_TAG (build + migrate + restart)..."
 deploy_ref "$TARGET_TAG"
+
+# Wait for the API before tenant migration — the exec needs a running container.
+for _ in $(seq 1 60); do curl -fsS http://localhost:4000/health >/dev/null 2>&1 && break; sleep 3; done
+migrate_extra_tenants
 
 log "Verifying the new version..."
 if run_verification "$TARGET_VERSION"; then
