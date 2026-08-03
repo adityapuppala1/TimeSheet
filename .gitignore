@@ -27,3 +27,8 @@ tests/e2e/.auth/
 # graphify installed reproduces the whole thing with `/graphify .`. The .graphifyignore that
 # shapes WHAT gets graphed IS tracked, since that's shared configuration, not output.
 graphify-out/
+
+# Face-detection models: copied from node_modules by apps/web/scripts/copy-face-models.mjs on
+# predev/prebuild. Generated, versioned with the npm dependency, and 2.1MB of binary that would
+# otherwise land in every clone and every diff.
+apps/web/public/human-models/
