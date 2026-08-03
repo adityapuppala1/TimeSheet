@@ -390,6 +390,42 @@ export async function matchAgainstEnrollment(
  * threshold that could drop below the admin's setting would let a lookalike in precisely because
  * the real user has been sloppy, which is backwards.
  */
+/**
+ * How far above the admin's own setting this may ever tighten.
+ *
+ * WHY A RELATIVE BOUND AND NOT AN ABSOLUTE ONE (this replaced a hard 0.95 cap that locked a real
+ * user out): an absolute cap does not bound the thing that matters. Live captures of the same
+ * person typically score 0.6-0.9 depending on light, angle and glasses, so a threshold of 0.95 is
+ * unpassable in practice no matter what the admin configured — the old code's comment said the cap
+ * existed "so it can never become unpassable", and the cap was set above the range where that
+ * stops being true. Worse, the failure is a DEADLOCK: once nothing passes, no new passing samples
+ * are recorded, so the distribution that raised the bar can never age out and the person is locked
+ * out permanently.
+ *
+ * Bounding the ESCALATION instead keeps the adaptive tightening honest. An admin who chose 0.75
+ * gets at most 0.85 — a real tightening for consistent users, still inside the range a genuine
+ * capture reaches on a bad day, and never a silent substitution of a policy they did not set.
+ */
+const MAX_THRESHOLD_ESCALATION = 0.1;
+
+/**
+ * Below this standard deviation the samples are not a distribution, they are the same number
+ * repeated.
+ *
+ * Identical similarity scores do not mean a person is consistent — live captures never are. They
+ * mean the samples were not live: a verification script replaying the enrolled image, an
+ * automated test, a seeded fixture. Treating that as evidence of consistency is what drove the
+ * personal bar to the old cap.
+ *
+ * Deliberately tiny — "the same number to three decimal places", which no sequence of real
+ * captures produces. It is not trying to judge how consistent is too consistent; that job belongs
+ * to MAX_THRESHOLD_ESCALATION, which bounds the outcome no matter what the spread turns out to
+ * be. A larger epsilon here would start excluding genuinely steady users (sd around 0.008 is
+ * normal for someone who always sits in the same light), which is a different and unwanted
+ * behaviour change.
+ */
+const MIN_SAMPLE_SD = 0.001;
+
 export async function effectiveMatchThreshold(userId: string, globalThreshold: number): Promise<number> {
   const recent = await prisma.faceVerificationAttempt.findMany({
     where: { userId, outcome: "PASSED", similarity: { not: null } },
@@ -404,9 +440,15 @@ export async function effectiveMatchThreshold(userId: string, globalThreshold: n
 
   const mean = scores.reduce((a, b) => a + b, 0) / scores.length;
   const sd = Math.sqrt(scores.reduce((acc, s) => acc + (s - mean) ** 2, 0) / scores.length);
+
+  // Degenerate spread: the history is synthetic, not consistent. Don't tighten on it.
+  if (sd < MIN_SAMPLE_SD) return globalThreshold;
+
   // 3 sd below this person's own mean: tight enough to matter, loose enough not to fail them on
-  // an ordinary bad-hair day. Capped at 0.95 so it can never become unpassable.
-  const personal = Math.min(0.95, mean - 3 * sd);
+  // an ordinary bad-hair day. Bounded relative to the admin's setting so the adaptive control can
+  // tighten but never take the decision away from them — and can never reach a value a live
+  // capture cannot produce.
+  const personal = Math.min(globalThreshold + MAX_THRESHOLD_ESCALATION, mean - 3 * sd);
   return Math.max(globalThreshold, personal);
 }
 

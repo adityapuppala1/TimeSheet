@@ -301,10 +301,12 @@ describe("effectiveMatchThreshold", () => {
   });
 
   it("TIGHTENS for a user whose captures are consistently strong", async () => {
-    passesAt(Array.from({ length: 12 }, () => 0.93)); // sd ~0 → personal bar ≈ 0.93
+    // Real spread, tight but not zero: mean ≈ 0.93, sd ≈ 0.008 → personal bar lands above the
+    // global setting and below the escalation ceiling.
+    passesAt([0.92, 0.93, 0.94, 0.93, 0.92, 0.94, 0.93, 0.93, 0.94, 0.92, 0.93, 0.94]);
     const t = await runInTenant(client, () => effectiveMatchThreshold("u1", 0.75));
     expect(t).toBeGreaterThan(0.75);
-    expect(t).toBeLessThanOrEqual(0.95);
+    expect(t).toBeLessThanOrEqual(0.85);
   });
 
   it("NEVER drops below the workspace threshold, however scattered the user's history", async () => {
@@ -314,9 +316,44 @@ describe("effectiveMatchThreshold", () => {
     await expect(runInTenant(client, () => effectiveMatchThreshold("u1", 0.75))).resolves.toBe(0.75);
   });
 
-  it("is capped so it can never become unpassable", async () => {
-    passesAt(Array.from({ length: 20 }, () => 1.0));
-    await expect(runInTenant(client, () => effectiveMatchThreshold("u1", 0.75))).resolves.toBeLessThanOrEqual(0.95);
+  /**
+   * REGRESSION — this locked a real user out of the product, permanently.
+   *
+   * Their history was 30 passes at similarity exactly 1.000, all produced by the face
+   * verification scripts replaying the enrolled image. sd was 0, so `mean - 3sd` was 1.0, and the
+   * old absolute cap of 0.95 became the effective bar. Live captures of that same person scored
+   * 0.52-0.82, so nothing passed — and because only PASSED attempts feed the distribution, no new
+   * sample could ever be recorded to bring the bar back down. A closed loop with no way out from
+   * inside the product.
+   *
+   * Two things fix it and both are asserted here: identical scores are not treated as a
+   * distribution at all, and the escalation is bounded relative to what the admin actually chose.
+   */
+  it("ignores a degenerate history of identical scores instead of ratcheting to an unpassable bar", async () => {
+    passesAt(Array.from({ length: 30 }, () => 1.0));
+    // Not "≤ 0.95" — that was the assertion that let the bug through. The real property is that a
+    // synthetic history changes nothing.
+    await expect(runInTenant(client, () => effectiveMatchThreshold("u1", 0.75))).resolves.toBe(0.75);
+  });
+
+  it("never escalates more than 0.1 above the admin's setting, whatever the history says", async () => {
+    // Tight but genuine spread around a very high mean: mean - 3sd still exceeds the ceiling.
+    passesAt([0.99, 0.985, 0.99, 0.988, 0.99, 0.987, 0.99, 0.989, 0.99, 0.986]);
+    const t = await runInTenant(client, () => effectiveMatchThreshold("u1", 0.75));
+    expect(t).toBe(0.85);
+    // The bar must stay inside the range a real capture can actually reach — that is the whole
+    // point of bounding it, and 0.95 was outside it.
+    expect(t).toBeLessThan(0.9);
+  });
+
+  it("respects a stricter admin setting rather than overriding it in either direction", async () => {
+    passesAt([0.92, 0.93, 0.94, 0.93, 0.92, 0.94, 0.93, 0.93, 0.94, 0.92]);
+    // A stricter global floor wins when the personal bar is below it...
+    await expect(runInTenant(client, () => effectiveMatchThreshold("u1", 0.95))).resolves.toBe(0.95);
+    // ...and a looser one still allows tightening, bounded.
+    const loose = await runInTenant(client, () => effectiveMatchThreshold("u1", 0.6));
+    expect(loose).toBeGreaterThan(0.6);
+    expect(loose).toBeLessThanOrEqual(0.7);
   });
 });
 
