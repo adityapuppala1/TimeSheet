@@ -141,7 +141,20 @@ export function DataTable<TData>({
               >
                 {row.getVisibleCells().map((cell) => {
                   const header = cell.column.columnDef.header;
-                  const label = typeof header === "string" ? header : flexRender(header, { column: cell.column, header: cell.column, table } as any);
+                  // A column can opt out of carrying its header into the card layout.
+                  //
+                  // WHY THIS EXISTS: the card view repeats each column's header as a label beside
+                  // its value, once PER ROW. That is right for a text header and wrong for an
+                  // interactive one — a select-all checkbox in the header renders once in the
+                  // table and once per card, so a page of eight users showed nine identical
+                  // "select everyone" controls, all of which did the same thing to the same set.
+                  const meta = cell.column.columnDef.meta as { cardLabel?: boolean } | undefined;
+                  const label =
+                    meta?.cardLabel === false
+                      ? null
+                      : typeof header === "string"
+                        ? header
+                        : flexRender(header, { column: cell.column, header: cell.column, table } as any);
                   return (
                     <div key={cell.id} className="flex items-start justify-between gap-3">
                       {label ? <span className="shrink-0 text-xs font-semibold uppercase tracking-wide text-muted-foreground">{label}</span> : null}

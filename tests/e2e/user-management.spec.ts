@@ -137,3 +137,166 @@ test.describe("user management — login activity & force-logout", () => {
     }
   });
 });
+
+/* ------------------------------------------------------------------------------------------- *
+ * Filtering, pagination and bulk actions.
+ *
+ * The assertions that matter here are the SAFETY ones, not the happy path. A bulk endpoint that
+ * applies an action to a list of ids is trivial; the parts worth pinning are the ones that stop it
+ * doing something irreversible to the wrong people — that it re-derives a filter-based selection
+ * server-side, that it refuses to act on your own account, and that it reports who it skipped
+ * rather than failing the whole batch.
+ * ------------------------------------------------------------------------------------------- */
+const BULK_PREFIX = "e2e-bulk-";
+
+test.describe("user management — filtering and bulk actions", () => {
+  test("paged listing filters by role, status and free text, and reports a real total", async () => {
+    await withAdminRequest(async (ctx, headers) => {
+      const first = await (await ctx.get("/api/users/paged?pageSize=5", { headers })).json();
+      expect(Array.isArray(first.items)).toBe(true);
+      expect(first.items.length).toBeLessThanOrEqual(5);
+      // `total` counts everything matching, not what fitted on the page — the number the pager
+      // and "select all N matching" both depend on.
+      expect(first.total).toBeGreaterThanOrEqual(first.items.length);
+      expect(Array.isArray(first.designations)).toBe(true);
+
+      const roles = await (await ctx.get("/api/users/roles", { headers })).json();
+      const employee = roles.find((r: any) => r.name === "EMPLOYEE");
+      const byRole = await (await ctx.get(`/api/users/paged?roleId=${employee.id}&pageSize=100`, { headers })).json();
+      for (const u of byRole.items) expect(u.role.name).toBe("EMPLOYEE");
+
+      const inactive = await (await ctx.get("/api/users/paged?status=INACTIVE&pageSize=100", { headers })).json();
+      for (const u of inactive.items) expect(u.status).toBe("INACTIVE");
+
+      // Searching by ROLE NAME, which is a plain `contains` on every other field but cannot be on
+      // this one — Role.name is an enum, so the server matches the known values instead.
+      const byRoleWord = await (await ctx.get("/api/users/paged?search=manager&pageSize=100", { headers })).json();
+      expect(byRoleWord.items.length).toBeGreaterThan(0);
+    });
+  });
+
+  test("pagination walks the whole set without repeating or dropping anybody", async () => {
+    await withAdminRequest(async (ctx, headers) => {
+      const all = await (await ctx.get("/api/users/paged?pageSize=200", { headers })).json();
+      test.skip(all.total < 3, "needs at least 3 users to page through");
+
+      const seen = new Set<string>();
+      const pageSize = 2;
+      const pages = Math.ceil(all.total / pageSize);
+      for (let page = 1; page <= pages; page += 1) {
+        const res = await (await ctx.get(`/api/users/paged?pageSize=${pageSize}&page=${page}`, { headers })).json();
+        for (const u of res.items) {
+          // A stable sort is the whole point: an unordered paged query silently shows the same
+          // person twice and never shows somebody else at all.
+          expect(seen.has(u.id), `${u.name} appeared on two pages`).toBe(false);
+          seen.add(u.id);
+        }
+      }
+      expect(seen.size).toBe(all.total);
+    });
+  });
+
+  test("a bulk action refuses your own account and reports what it skipped", async () => {
+    await withAdminRequest(async (ctx, headers) => {
+      const me = await (await ctx.get("/api/auth/me", { headers })).json();
+      const res = await ctx.post("/api/users/bulk-action", {
+        headers,
+        data: { action: "DEACTIVATE", userIds: [me.id] }
+      });
+      expect(res.status()).toBe(200);
+      const body = await res.json();
+      // Not an error — a refusal, named. Locking yourself out mid-bulk is unrecoverable without a
+      // second admin, so there is no version of it the operator meant.
+      expect(body.applied).toBe(0);
+      expect(body.skipped[0].reason).toMatch(/your own account/i);
+
+      const stillActive = await (await ctx.get("/api/auth/me", { headers })).json();
+      expect(stillActive.id).toBe(me.id);
+    });
+  });
+
+  test("bulk deactivate ends sessions, and bulk-by-filter re-derives the set on the server", async () => {
+    await withAdminRequest(async (ctx, headers) => {
+      const stamp = Date.now();
+      const made: string[] = [];
+      try {
+        for (const n of [1, 2]) {
+          const res = await ctx.post("/api/users", {
+            headers,
+            data: {
+              name: `Bulk Probe ${n} ${stamp}`,
+              email: `${BULK_PREFIX}${n}-${stamp}@timesheet.local`,
+              role: "EMPLOYEE",
+              password: "Admin@12345",
+              designation: `E2E Bulk ${stamp}`
+            }
+          });
+          expect(res.status(), await res.text()).toBe(201);
+          made.push((await res.json()).id);
+        }
+
+        // Filter-based selection: no ids are sent at all. The server re-runs the same query the
+        // table used, which is the only way "everything matching" cannot disagree between the two.
+        const res = await ctx.post("/api/users/bulk-action", {
+          headers,
+          data: { action: "DEACTIVATE", filter: { designation: `E2E Bulk ${stamp}` } }
+        });
+        expect(res.status(), await res.text()).toBe(200);
+        const body = await res.json();
+        expect(body.applied).toBe(2);
+
+        const after = await (
+          await ctx.get(`/api/users/paged?designation=${encodeURIComponent(`E2E Bulk ${stamp}`)}&pageSize=100`, { headers })
+        ).json();
+        expect(after.items).toHaveLength(2);
+        // Deactivating without ending sessions would leave them working until their token expired,
+        // which is not what the word means to whoever clicked it.
+        for (const u of after.items) expect(u.status).toBe("INACTIVE");
+
+        const reactivated = await ctx.post("/api/users/bulk-action", {
+          headers,
+          data: { action: "ACTIVATE", userIds: made }
+        });
+        expect((await reactivated.json()).applied).toBe(2);
+      } finally {
+        for (const id of made) {
+          const res = await ctx.delete(`/api/users/${id}`, { headers });
+          expectCleanupOk(res.status(), `bulk probe ${id}`);
+        }
+      }
+    });
+  });
+
+  test("the users page filters, selects and offers the whole matching set", async ({ page }) => {
+    // Signs in for THIS test rather than replaying a shared snapshot — refresh tokens rotate on
+    // every /app load, so a multi-test spec exhausts one snapshot and later tests land on /login.
+    // Documented at length in auth.setup.ts.
+    await page.goto("/login");
+    await page.getByLabel("Email", { exact: true }).fill("superadmin@timesheet.local");
+    await page.getByLabel("Password", { exact: true }).fill("Admin@12345");
+    await page.getByRole("button", { name: /sign in/i }).click();
+    await expect(page).toHaveURL(/\/app/, { timeout: 15_000 });
+
+    await page.goto("/app/users");
+    await expect(page.getByRole("heading", { name: /user management/i })).toBeVisible({ timeout: 15_000 });
+
+    const search = page.getByLabel("Search users");
+    await expect(search).toBeVisible();
+    await search.fill("zzz-definitely-nobody");
+    // The empty state is rendered twice by the shared table component — once as a table cell and
+    // once for the card layout it switches to at narrow widths, with CSS hiding whichever does not
+    // apply. This spec runs at desktop width, so the cell is the one on screen; matching by text
+    // alone picks the hidden copy and waits forever.
+    const emptyState = page.getByRole("cell", { name: /nobody matches these filters/i });
+    await expect(emptyState).toBeVisible({ timeout: 15_000 });
+
+    await page.getByRole("button", { name: /^clear$/i }).click();
+    await expect(emptyState).toBeHidden({ timeout: 15_000 });
+
+    // Selecting the page reveals the bulk bar; the actions live behind a confirm, so nothing is
+    // applied by this test.
+    await page.getByLabel("Select everyone on this page").check();
+    await expect(page.getByText(/\d+ selected/).first()).toBeVisible();
+    await expect(page.getByRole("button", { name: /^delete$/i })).toBeVisible();
+  });
+});

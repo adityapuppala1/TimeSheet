@@ -57,6 +57,15 @@ import { CsvBulkUploadDialog } from "../components/CsvBulkUploadDialog";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../components/ui/card";
 import { DataTable } from "../components/ui/data-table";
 import {
+  EMPTY_FILTERS,
+  TablePager,
+  UserBulkBar,
+  UserFilterBar,
+  hasAnyFilter,
+  toQuery,
+  type UserFilters
+} from "../components/UserBulkToolbar";
+import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
@@ -205,7 +214,80 @@ export function UsersPage() {
   const currentUserId = useAuthStore((s) => s.user?.id);
   // 30s refetch keeps the presence dots honest — the server's picture itself moves in 5-minute
   // lastSeenAt increments, so polling faster would only pretend to more precision.
-  const users = useQuery({ queryKey: ["users"], queryFn: userApi.list, refetchInterval: 30_000 });
+  // Server-side filtering, sorting and pagination. The old call fetched the first 50 users and
+  // filtered them in the browser, which quietly meant that in an org with more than 50 people the
+  // search box could not find most of them — it was searching a page, not the company.
+  const [filters, setFilters] = useState<UserFilters>(EMPTY_FILTERS);
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(25);
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [allMatchingSelected, setAllMatchingSelected] = useState(false);
+
+  // Typing shouldn't fire a request per keystroke.
+  const [debouncedSearch, setDebouncedSearch] = useState("");
+  useEffect(() => {
+    const t = setTimeout(() => setDebouncedSearch(filters.search), 250);
+    return () => clearTimeout(t);
+  }, [filters.search]);
+
+  const query = { ...toQuery({ ...filters, search: debouncedSearch }), page, pageSize };
+  const users = useQuery({
+    queryKey: ["users", "paged", query],
+    queryFn: () => userApi.paged(query),
+    refetchInterval: 30_000,
+    placeholderData: (previous) => previous
+  });
+  const rolesQuery = useQuery({ queryKey: ["roles"], queryFn: userApi.roles });
+
+  const rows = users.data?.items ?? [];
+  const total = users.data?.total ?? 0;
+
+  // Any change to what is being looked at invalidates a selection that was made against the old
+  // view. Carrying it over is how somebody acts on rows they can no longer see.
+  useEffect(() => {
+    setSelected(new Set());
+    setAllMatchingSelected(false);
+  }, [debouncedSearch, filters.roleId, filters.designation, filters.status, filters.online, page, pageSize]);
+
+  const bulk = useMutation({
+    mutationFn: (payload: { action: any; password?: string }) =>
+      userApi.bulkAction({
+        action: payload.action,
+        password: payload.password,
+        // Filter-based when "all matching" is on, explicit ids otherwise — see UserBulkToolbar's
+        // header for why the two are kept distinct.
+        ...(allMatchingSelected
+          ? { filter: toQuery({ ...filters, search: debouncedSearch, online: "any" }) }
+          : { userIds: [...selected] })
+      }),
+    onSuccess: (result) => {
+      setSelected(new Set());
+      setAllMatchingSelected(false);
+      queryClient.invalidateQueries({ queryKey: ["users"] });
+      if (result.skipped.length === 0) {
+        toast.success(`Applied to ${result.applied} ${result.applied === 1 ? "person" : "people"}`);
+      } else {
+        // Naming the first few is the difference between "some failed" and knowing what to do.
+        toast.warning(`Applied to ${result.applied} of ${result.requested}`, {
+          description: result.skipped
+            .slice(0, 3)
+            .map((sk) => `${sk.name}: ${sk.reason}`)
+            .join(" · ") + (result.skipped.length > 3 ? ` · and ${result.skipped.length - 3} more` : "")
+        });
+      }
+    },
+    onError: (err: any) => toast.error("Bulk action failed", { description: serverMessage(err, "Try again.") })
+  });
+
+  function toggleRow(id: string) {
+    setAllMatchingSelected(false);
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }
   const [draft, setDraft] = useState({
     name: "",
     email: "",
@@ -222,9 +304,13 @@ export function UsersPage() {
   const [pendingLogout, setPendingLogout] = useState<{ id: string; name: string } | null>(null);
   const [bulkUploadOpen, setBulkUploadOpen] = useState(false);
 
+  // Deliberately NOT derived from the table's current page. "Who can I assign as a manager" is a
+  // picker question, and answering it from page 3 of a filtered table would silently omit most of
+  // the eligible people — the exact bug the separate list endpoint exists to avoid.
+  const allUsers = useQuery({ queryKey: ["users"], queryFn: userApi.list });
   const eligibleManagers = useMemo(
-    () => (users.data ?? []).filter((u: any) => ["MANAGER", "TEAM_LEAD", "ADMIN", "SUPER_ADMIN"].includes(u.role?.name)),
-    [users.data]
+    () => (allUsers.data ?? []).filter((u: any) => ["MANAGER", "TEAM_LEAD", "ADMIN", "SUPER_ADMIN"].includes(u.role?.name)),
+    [allUsers.data]
   );
 
   const create = useMutation({
@@ -310,8 +396,41 @@ export function UsersPage() {
     });
   }
 
+  const allOnPageSelected = rows.length > 0 && rows.every((r: any) => selected.has(r.id));
+
   const userColumns = useMemo<ColumnDef<any, any>[]>(
     () => [
+      {
+        id: "select",
+        enableSorting: false,
+        // The card layout repeats every header as a per-row label, which would turn one
+        // select-all control into one per card. See data-table.tsx.
+        meta: { cardLabel: false },
+        header: () => (
+          <input
+            type="checkbox"
+            aria-label="Select everyone on this page"
+            className="h-4 w-4 cursor-pointer accent-[hsl(var(--primary))]"
+            checked={allOnPageSelected}
+            onChange={() => {
+              setAllMatchingSelected(false);
+              setSelected((prev) => {
+                if (rows.every((r: any) => prev.has(r.id))) return new Set();
+                return new Set(rows.map((r: any) => r.id));
+              });
+            }}
+          />
+        ),
+        cell: ({ row }) => (
+          <input
+            type="checkbox"
+            aria-label={`Select ${row.original.name}`}
+            className="h-4 w-4 cursor-pointer accent-[hsl(var(--primary))]"
+            checked={allMatchingSelected || selected.has(row.original.id)}
+            onChange={() => toggleRow(row.original.id)}
+          />
+        )
+      },
       {
         id: "person",
         accessorFn: (row: any) => row.name,
@@ -529,15 +648,53 @@ export function UsersPage() {
       </Card>
 
       <Card>
-        <CardContent className="p-4">
+        <CardContent className="grid gap-3 p-4">
+          <UserFilterBar
+            filters={filters}
+            onChange={(next) => {
+              setFilters(next);
+              setPage(1);
+            }}
+            roles={rolesQuery.data ?? []}
+            designations={users.data?.designations ?? []}
+            total={total}
+          />
+
+          {(selected.size > 0 || allMatchingSelected) && (
+            <UserBulkBar
+              selectedCount={selected.size}
+              total={total}
+              pageCount={rows.length}
+              allMatchingSelected={allMatchingSelected}
+              onSelectAllMatching={() => setAllMatchingSelected(true)}
+              onClear={() => {
+                setSelected(new Set());
+                setAllMatchingSelected(false);
+              }}
+              onRun={(action, password) => bulk.mutate({ action, password })}
+              running={bulk.isPending}
+            />
+          )}
+
+          {users.data?.onlineFilterApplied && users.data.filteredOnPage < rows.length + 1 && (
+            <p className="text-xs text-muted-foreground">
+              Online status is checked against live sessions after the other filters, so this page can show fewer than{" "}
+              {pageSize} rows.
+            </p>
+          )}
+
+          {/* The table's own search and pagination are off: both now happen on the server, and two
+              search boxes that filter different sets is worse than one that filters the right one. */}
           <DataTable
             columns={userColumns}
-            data={users.data ?? []}
+            data={rows}
             isLoading={users.isLoading}
-            searchPlaceholder="Search users..."
-            emptyMessage="No users yet."
-            pageSize={20}
+            enableSearch={false}
+            emptyMessage={hasAnyFilter(filters) ? "Nobody matches these filters." : "No users yet."}
+            pageSize={200}
           />
+
+          <TablePager page={page} pageSize={pageSize} total={total} onPage={setPage} onPageSize={(n) => { setPageSize(n); setPage(1); }} />
         </CardContent>
       </Card>
 

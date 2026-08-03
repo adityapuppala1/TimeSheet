@@ -9,7 +9,7 @@
  */
 import { Router } from "express";
 import { z } from "zod";
-import { permissions } from "@timesheet/shared";
+import { permissions, roles } from "@timesheet/shared";
 import { env } from "../config/env.js";
 import { prisma } from "../config/prisma.js";
 import { requireTenantContext } from "../config/tenant-context.js";
@@ -60,8 +60,17 @@ userRouter.get("/", async (req, res) => {
         projectAssignments: { include: { project: true } },
         manager: { select: { id: true, name: true, email: true } }
       },
-      orderBy: { createdAt: "desc" },
-      take: 50
+      orderBy: { name: "asc" },
+      // This route feeds PICKERS — assignee, manager, approver dropdowns. It was capped at 50,
+      // which meant that in any org with more than fifty people those dropdowns silently omitted
+      // most of them, ordered by signup date, with nothing on screen to say so. A picker that
+      // cannot offer the person you need is worse than a slow one.
+      //
+      // The management table no longer uses this route at all (see GET /users/paged), so the cap
+      // only ever has to cover "everyone who could appear in a dropdown". 2000 is a real ceiling
+      // rather than an arbitrary page size; an org past it needs a searchable picker, which is a
+      // different design and not something to fake with a bigger number.
+      take: 2000
     }),
     // Live presence, same 15-min lastSeenAt definition as the Maintenance panel — one sessions
     // query for the whole page, not one per row.
@@ -74,6 +83,252 @@ userRouter.get("/", async (req, res) => {
       lastSeenAt: onlineSeen.get(user.id) ?? null
     }))
   );
+});
+
+/**
+ * GET /users/paged — the user-management table: filters, search, sort, pagination and the facet
+ * values the filter dropdowns need.
+ *
+ * WHY A SECOND ENDPOINT RATHER THAN CHANGING `GET /users`: six callers use the flat array from
+ * that route to populate assignee and manager pickers. Wrapping it in a pagination envelope would
+ * break every one of them for no benefit — a picker wants "everyone I could choose", a management
+ * table wants "page 3 of the inactive contractors". They are different questions and they now have
+ * different endpoints, rather than one endpoint with a mode flag that each caller has to
+ * understand.
+ *
+ * FILTERING BY ONLINE STATUS IS DONE IN MEMORY, deliberately. Presence lives in the Session table
+ * under a 15-minute lastSeenAt rule, not on User, so "online" cannot be a WHERE clause without a
+ * join that would make every other filter slower for the one filter that is used least. The page
+ * is capped at 200 rows, so the in-memory pass is bounded. The cost is that `total` reflects the
+ * database filters and the online filter narrows the page — which is why the response reports
+ * both numbers instead of pretending one covers everything.
+ */
+const pagedQuerySchema = z.object({
+  query: z.object({
+    search: z.string().max(120).optional(),
+    roleId: z.string().optional(),
+    designation: z.string().max(120).optional(),
+    status: z.enum(["ACTIVE", "INACTIVE", "PENDING_VERIFICATION"]).optional(),
+    online: z.enum(["online", "offline"]).optional(),
+    sort: z.enum(["name", "email", "createdAt", "lastSeenAt", "role"]).default("name"),
+    dir: z.enum(["asc", "desc"]).default("asc"),
+    page: z.coerce.number().int().min(1).default(1),
+    // The ceiling is what protects the server; a floor of 5 was arbitrary and only served to
+    // reject legitimate small pages.
+    pageSize: z.coerce.number().int().min(1).max(200).default(25)
+  })
+});
+
+/** Shared by the table and by bulk-by-filter, so "apply to everything matching" can never select
+ *  a different set from the one the operator was looking at. Duplicating this is how those two
+ *  drift apart, and the failure mode is deleting the wrong people. */
+function whereFromQuery(q: Record<string, unknown>) {
+  const search = String(q.search ?? "").trim();
+  const needle = search.toUpperCase().replace(/\s+/g, "_");
+  const matchedRoles = search ? roles.filter((r) => r.includes(needle)) : [];
+  return {
+    deletedAt: null,
+    ...(q.roleId ? { roleId: String(q.roleId) } : {}),
+    ...(q.status ? { status: q.status as "ACTIVE" | "INACTIVE" | "PENDING_VERIFICATION" } : {}),
+    ...(q.designation ? { designation: String(q.designation) } : {}),
+    ...(search
+      ? {
+          OR: [
+            { name: { contains: search } },
+            { email: { contains: search } },
+            { designation: { contains: search } },
+            // Searching by role name was asked for explicitly — people think in "find the
+            // managers", not "filter by the role dropdown". `Role.name` is an enum, so there is
+            // no `contains` to reach for: the match is done against the known values and turned
+            // into an `in`. An empty match list would select every role, so it is omitted instead.
+            ...(matchedRoles.length ? [{ role: { is: { name: { in: matchedRoles } } } }] : [])
+          ]
+        }
+      : {})
+  };
+}
+
+userRouter.get("/paged", validate(pagedQuerySchema), async (req, res) => {
+  const q = req.query as Record<string, unknown>;
+  const page = Number(q.page ?? 1);
+  const pageSize = Number(q.pageSize ?? 25);
+  const sort = String(q.sort ?? "name");
+  const dir = (String(q.dir ?? "asc") === "desc" ? "desc" : "asc") as "asc" | "desc";
+  const where = whereFromQuery(q);
+
+  const orderBy =
+    sort === "role" ? { role: { name: dir } } : sort === "lastSeenAt" ? { createdAt: dir } : { [sort]: dir };
+
+  const [total, rows, onlineSeen, designations] = await Promise.all([
+    prisma.user.count({ where }),
+    prisma.user.findMany({
+      where,
+      include: {
+        role: true,
+        manager: { select: { id: true, name: true, email: true } },
+        _count: { select: { projectAssignments: true } }
+      },
+      orderBy,
+      skip: (page - 1) * pageSize,
+      take: pageSize
+    }),
+    getOnlineSeenByUser(),
+    // Facet values for the designation dropdown. Distinct over live users only — offering a
+    // filter that matches nobody is worse than not offering it.
+    prisma.user.findMany({
+      where: { deletedAt: null, designation: { not: null } },
+      select: { designation: true },
+      distinct: ["designation"],
+      orderBy: { designation: "asc" }
+    })
+  ]);
+
+  let items = rows.map(({ passwordHash: _passwordHash, ...user }) => ({
+    ...user,
+    online: onlineSeen.has(user.id),
+    lastSeenAt: onlineSeen.get(user.id) ?? null
+  }));
+  if (q.online === "online") items = items.filter((u) => u.online);
+  if (q.online === "offline") items = items.filter((u) => !u.online);
+
+  res.json({
+    items,
+    total,
+    page,
+    pageSize,
+    /** Present so the UI can say "showing 12 of 25 on this page" when the online filter is on,
+     *  rather than silently showing fewer rows than the page size implies. */
+    filteredOnPage: items.length,
+    onlineFilterApplied: Boolean(q.online),
+    designations: designations.map((d) => d.designation).filter((d): d is string => Boolean(d))
+  });
+});
+
+/**
+ * POST /users/bulk-action — one action across many users.
+ *
+ * TWO WAYS TO CHOOSE THE TARGETS, and the second is the important one: an explicit list of ids,
+ * or the CURRENT FILTER. "Select everything matching" cannot be done by sending ten thousand ids
+ * from a browser, and re-deriving the set on the server from the same `whereFromQuery` the table
+ * used is the only way the operator's selection and the server's selection cannot disagree.
+ *
+ * REFUSALS ARE PER-USER, NOT PER-REQUEST. A bulk action that aborts on the first protected user
+ * leaves the operator with a partially-applied change and no idea which half ran. Each target is
+ * evaluated on its own and the response says exactly who was skipped and why.
+ */
+const bulkActionSchema = z.object({
+  body: z
+    .object({
+      action: z.enum(["DEACTIVATE", "ACTIVATE", "RESET_PASSWORD", "RESEND_WELCOME", "FORCE_LOGOUT", "DELETE"]),
+      userIds: z.array(z.string()).max(1000).optional(),
+      /** Mirrors the table's query. Ignored when `userIds` is given. */
+      filter: z
+        .object({
+          search: z.string().max(120).optional(),
+          roleId: z.string().optional(),
+          designation: z.string().max(120).optional(),
+          status: z.enum(["ACTIVE", "INACTIVE", "PENDING_VERIFICATION"]).optional()
+        })
+        .optional(),
+      /** Only for RESET_PASSWORD. */
+      password: z.string().min(8).max(200).optional()
+    })
+    .refine((b) => (b.userIds && b.userIds.length > 0) || b.filter, {
+      message: "Choose some users, or a filter to apply this to."
+    })
+});
+
+userRouter.post("/bulk-action", validate(bulkActionSchema), async (req, res) => {
+  const { action, userIds, filter, password } = req.body as {
+    action: "DEACTIVATE" | "ACTIVATE" | "RESET_PASSWORD" | "RESEND_WELCOME" | "FORCE_LOGOUT" | "DELETE";
+    userIds?: string[];
+    filter?: Record<string, unknown>;
+    password?: string;
+  };
+
+  const targets = await prisma.user.findMany({
+    where: userIds?.length ? { id: { in: userIds }, deletedAt: null } : whereFromQuery(filter ?? {}),
+    select: { id: true, name: true, email: true, status: true, role: { select: { name: true } } }
+  });
+
+  const actorIsSuperAdmin = req.user!.role === "SUPER_ADMIN";
+  const done: string[] = [];
+  const skipped: Array<{ id: string; name: string; reason: string }> = [];
+
+  for (const target of targets) {
+    // Two guards, both of which exist on the single-user routes and would be trivially bypassable
+    // if bulk did not repeat them. This is the whole reason bulk does not just call the database
+    // with an `in` clause.
+    if (target.role.name === "SUPER_ADMIN" && !actorIsSuperAdmin) {
+      skipped.push({ id: target.id, name: target.name, reason: "Only a super admin can act on a super admin" });
+      continue;
+    }
+    // Locking yourself out mid-bulk is unrecoverable without another admin, so it is refused
+    // rather than confirmed — there is no version of this the operator meant.
+    if (target.id === req.user!.id && action !== "RESEND_WELCOME") {
+      skipped.push({ id: target.id, name: target.name, reason: "You can't apply this to your own account" });
+      continue;
+    }
+
+    try {
+      switch (action) {
+        case "DEACTIVATE":
+        case "ACTIVATE": {
+          await prisma.user.update({
+            where: { id: target.id },
+            data: { status: action === "ACTIVATE" ? "ACTIVE" : "INACTIVE" }
+          });
+          // Deactivating without ending sessions leaves the person working until their token
+          // expires, which is not what "deactivate" means to the person who clicked it.
+          if (action === "DEACTIVATE") {
+            await prisma.session.updateMany({ where: { userId: target.id, revokedAt: null }, data: { revokedAt: new Date() } });
+          }
+          break;
+        }
+        case "RESET_PASSWORD":
+          await prisma.user.update({
+            where: { id: target.id },
+            data: { passwordHash: await hashPassword(password || "Admin@12345") }
+          });
+          break;
+        case "RESEND_WELCOME": {
+          if (target.status !== "ACTIVE") {
+            skipped.push({ id: target.id, name: target.name, reason: "Not active" });
+            continue;
+          }
+          const result = await sendWelcomeEmail(target);
+          if (!result.ok) {
+            skipped.push({ id: target.id, name: target.name, reason: result.errorMessage ?? "SMTP refused the message" });
+            continue;
+          }
+          break;
+        }
+        case "FORCE_LOGOUT":
+          await prisma.session.updateMany({ where: { userId: target.id, revokedAt: null }, data: { revokedAt: new Date() } });
+          break;
+        case "DELETE":
+          await prisma.user.update({ where: { id: target.id }, data: { deletedAt: new Date(), status: "INACTIVE" } });
+          await prisma.session.updateMany({ where: { userId: target.id, revokedAt: null }, data: { revokedAt: new Date() } });
+          break;
+      }
+      done.push(target.id);
+    } catch (err) {
+      skipped.push({ id: target.id, name: target.name, reason: (err as Error)?.message ?? "Failed" });
+    }
+  }
+
+  // One audit row for the operation plus the target list, rather than N rows: "who ran a bulk
+  // deactivate over 60 people" is the question an auditor actually asks, and it is unanswerable
+  // from sixty individual rows that look identical to sixty separate clicks.
+  await audit(req.user!.id, `user.bulk_${action.toLowerCase()}`, "User", undefined, {
+    requested: targets.length,
+    applied: done.length,
+    skipped: skipped.length,
+    selection: userIds?.length ? "explicit" : "filter",
+    userIds: done
+  });
+
+  res.json({ applied: done.length, requested: targets.length, skipped });
 });
 
 /**

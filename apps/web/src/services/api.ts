@@ -739,8 +739,54 @@ export interface CreatedUser extends UserRow {
   };
 }
 
+/** What the user-management table asks for. Every field optional — the table starts unfiltered. */
+export interface UserPageQuery {
+  search?: string;
+  roleId?: string;
+  designation?: string;
+  status?: "ACTIVE" | "INACTIVE" | "PENDING_VERIFICATION";
+  online?: "online" | "offline";
+  sort?: "name" | "email" | "createdAt" | "lastSeenAt" | "role";
+  dir?: "asc" | "desc";
+  page?: number;
+  pageSize?: number;
+}
+
+export interface UserPage {
+  items: UserRow[];
+  total: number;
+  page: number;
+  pageSize: number;
+  /** Rows left on this page after the in-memory online filter — see the endpoint's note on why
+   *  presence cannot be a WHERE clause, and why both counts are reported. */
+  filteredOnPage: number;
+  onlineFilterApplied: boolean;
+  designations: string[];
+}
+
+export type UserBulkAction = "DEACTIVATE" | "ACTIVATE" | "RESET_PASSWORD" | "RESEND_WELCOME" | "FORCE_LOGOUT" | "DELETE";
+
+export interface UserBulkResult {
+  applied: number;
+  requested: number;
+  skipped: Array<{ id: string; name: string; reason: string }>;
+}
+
 export const userApi = {
   list: async () => (await api.get<UserRow[]>("/users")).data,
+  /** The management table's list: server-side filtering, sorting and pagination. Separate from
+   *  `list` because that one feeds assignee/manager pickers, which want everybody rather than a
+   *  page — two different questions, deliberately two endpoints. */
+  paged: async (query: UserPageQuery) => (await api.get<UserPage>("/users/paged", { params: query })).data,
+  /** One action across many users. Pass `userIds` for an explicit selection, or `filter` for
+   *  "everything matching what I'm looking at" — the server re-derives that set with the same
+   *  query the table used, so the two can never select different people. */
+  bulkAction: async (payload: {
+    action: UserBulkAction;
+    userIds?: string[];
+    filter?: Omit<UserPageQuery, "page" | "pageSize" | "sort" | "dir" | "online">;
+    password?: string;
+  }) => (await api.post<UserBulkResult>("/users/bulk-action", payload)).data,
   roles: async () => (await api.get("/users/roles")).data,
   create: async (payload: unknown) => (await api.post<CreatedUser>("/users", payload)).data,
   update: async (id: string, payload: unknown) => (await api.patch(`/users/${id}`, payload)).data,
