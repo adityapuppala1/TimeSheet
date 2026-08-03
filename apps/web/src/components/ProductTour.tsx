@@ -25,6 +25,7 @@ import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react
 import { createPortal } from "react-dom";
 import { useLocation, useNavigate } from "react-router";
 import { ChevronLeft, ChevronRight, X } from "lucide-react";
+import { usePlanningFeatures } from "../lib/use-planning";
 import { buildTourSteps, type TourStep } from "../lib/tour-steps";
 import { useAuthStore } from "../store/auth";
 import { Button } from "./ui/button";
@@ -81,6 +82,7 @@ export function ProductTour({ running, onClose }: { running: boolean; onClose: (
 
   const [index, setIndex] = useState(0);
   const [rect, setRect] = useState<Rect | null>(null);
+  const { features } = usePlanningFeatures();
   const [steps, setSteps] = useState<TourStep[]>([]);
   const targetRef = useRef<HTMLElement | null>(null);
 
@@ -88,7 +90,7 @@ export function ProductTour({ running, onClose }: { running: boolean; onClose: (
   // permissions, which don't change mid-tour, and rebuilding would reset progress.
   useEffect(() => {
     if (running) {
-      setSteps(buildTourSteps(user ?? undefined));
+      setSteps(buildTourSteps(user ?? undefined, features));
       setIndex(0);
     }
   }, [running, user]);

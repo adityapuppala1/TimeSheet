@@ -37,6 +37,7 @@ import { runForEveryOrg } from "./workers/run-for-every-org.js";
 import { warmFaceModelsIfEnabled } from "./services/face.service.js";
 import { startIdentityWeeklyDigestWorker } from "./workers/identity-weekly-digest.worker.js";
 import { startProjectRiskWorker } from "./workers/project-risk.worker.js";
+import { startReportSubscriptionWorker } from "./workers/report-subscription.worker.js";
 
 /**
  * Fail-fast guards before the server accepts traffic.
@@ -164,6 +165,7 @@ const server: Server = app.listen(env.API_PORT, async () => {
   startDailyReminderWorker();
   startTicketEscalationWorker();
   startProjectRiskWorker();
+  startReportSubscriptionWorker();
   startInboundEmailWorker();
   startChatTelegramWorker();
   startWeeklyDigestWorker();

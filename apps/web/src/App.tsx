@@ -45,6 +45,7 @@ const PortfolioPage = lazy(() => import("./pages/Portfolio").then((m) => ({ defa
 const WorkloadPage = lazy(() => import("./pages/Workload").then((m) => ({ default: m.WorkloadPage })));
 const RequestsPage = lazy(() => import("./pages/Requests").then((m) => ({ default: m.RequestsPage })));
 const ProposalsPage = lazy(() => import("./pages/Proposals").then((m) => ({ default: m.ProposalsPage })));
+const DashboardsPage = lazy(() => import("./pages/Dashboards").then((m) => ({ default: m.DashboardsPage })));
 const PublicRequestFormPage = lazy(() => import("./pages/PublicRequestForm").then((m) => ({ default: m.PublicRequestFormPage })));
 const GuestApprovalPage = lazy(() => import("./pages/GuestApproval").then((m) => ({ default: m.GuestApprovalPage })));
 const AuditLog = lazy(() => import("./pages/AuditLog").then((m) => ({ default: m.AuditLog })));
@@ -121,6 +122,9 @@ const router = createBrowserRouter([
       // Readable by anyone who can see tickets; applying a suggestion needs plan:write, which
       // the page checks itself — seeing what the assistant proposed is not a privilege.
       { path: "proposals", element: <RequirePermission permission={permissions.TICKETS_VIEW}><PageShell><ProposalsPage /></PageShell></RequirePermission> },
+      // No permission gate: a dashboard shows only what its viewer can already see, so building
+      // one is not a privilege. Publishing to the workspace needs dashboards:share.
+      { path: "dashboards", element: <PageShell><DashboardsPage /></PageShell> },
       // No permission gate: this is the caller's own assigned work, and gating a personal queue
       // would leave most users with an empty nav entry.
       { path: "my-work", element: <PageShell><MyWorkPage /></PageShell> },

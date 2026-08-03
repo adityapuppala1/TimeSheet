@@ -405,6 +405,45 @@ entitlement, except the budget panel which needs only `reports:view`.
   reported with its reason rather than silently dropped. Applying twice is a **409**.
 - `POST /ai-proposals/:id/reject`.
 
+### Dashboards & scheduled reports (V6 phase 6)
+
+Needs `reports:view`; publishing a `SHARED` dashboard additionally needs `dashboards:share`.
+Dashboards themselves are **not** behind the planning toggle — several widget types read only
+tickets and hours, which every workspace already has.
+
+- `GET /dashboards/catalogue` — the widget types the server will resolve, each with its `shape`
+  (`STAT`, `SERIES`, `BREAKDOWN`, `TABLE`) and a description. The catalogue is **closed**: a
+  client cannot invent a widget by inventing a `type`, and a widget cannot carry its own query.
+  Both are on purpose. An open catalogue means "open items" gets defined once per dashboard and
+  two tiles claiming the same label quietly disagree; it also means a widget definition becomes
+  an injection surface reachable by anyone who can save a layout.
+- `GET|POST|PUT|DELETE /dashboards[/:id]` — a dashboard is a name, a scope and an array of widget
+  specs (`type`, optional title, `config`, grid position). Unknown widget types are refused
+  **422 at save time**, not skipped at render time, so a layout that saved will draw.
+- `GET /dashboards/:id/data` — layout **and** every resolved widget in one response. Eight tiles
+  fetched separately would be eight round trips on every page load, and a grid that populates
+  tile-by-tile reads as broken.
+
+  Each widget resolves against **the caller's own project scope**, never the author's. This is
+  what makes sharing safe to do casually: a shared dashboard stores a layout, so publishing one
+  can never publish a project the viewer could not already open. Two people opening the same
+  shared dashboard can legitimately see different numbers.
+
+  A widget that cannot be computed comes back with `unavailable` and **no value**. A zero would
+  be a claim — "no overdue work" and "I could not check" are opposite messages — and one bad
+  tile never takes the page down with it.
+
+- `GET|POST|DELETE /dashboards/subscriptions[/:id]` — email a dashboard on a `DAILY`, `WEEKLY` or
+  `MONTHLY` cadence to any list of addresses, including people with no account. Recipients are
+  plain strings, deliberately: the point is reaching a stakeholder who will never log in.
+
+  The worker runs hourly and resolves the widgets **as the subscription's owner**, so a report
+  can never show more than the person who set it up can see. If that person is deactivated or
+  deleted the subscription deactivates itself rather than continuing to send with stale
+  authority — the failure mode of a departed employee's report still mailing figures outward for
+  months is the one worth designing against. `lastSentAt` is the cadence guard, so a restart or a
+  double-fired cron re-sends nothing.
+
 ## Verified work attestations
 
 A client-facing record that approved hours map to real tickets, done by identity-verified people,

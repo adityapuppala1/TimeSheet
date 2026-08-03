@@ -37,6 +37,7 @@ proofRouter.get(
   requirePermission(permissions.TICKETS_VIEW),
   validate(z.object({ params: z.object({ attachmentId: z.string().uuid() }) })),
   async (req, res) => {
+    await assertProofingEnabled();
     const attachment = await prisma.ticketAttachment.findUnique({
       where: { id: String(req.params.attachmentId) },
       select: { id: true, ticket: { select: { projectId: true } } }
@@ -133,6 +134,7 @@ proofRouter.patch(
   requirePermission(permissions.TICKETS_WRITE),
   validate(z.object({ params: z.object({ id: z.string().uuid() }), body: z.object({ resolved: z.boolean() }).strict() })),
   async (req, res) => {
+    await assertProofingEnabled();
     const annotation = await prisma.proofAnnotation.findUnique({
       where: { id: String(req.params.id) },
       select: { id: true, attachment: { select: { ticket: { select: { projectId: true } } } } }
@@ -153,6 +155,7 @@ proofRouter.delete(
   requirePermission(permissions.TICKETS_WRITE),
   validate(z.object({ params: z.object({ id: z.string().uuid() }) })),
   async (req, res) => {
+    await assertProofingEnabled();
     const annotation = await prisma.proofAnnotation.findUnique({
       where: { id: String(req.params.id) },
       select: { id: true, authorId: true, attachment: { select: { ticket: { select: { projectId: true } } } } }

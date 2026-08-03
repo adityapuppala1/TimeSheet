@@ -84,6 +84,7 @@ aiProposalRouter.get(
 
 /** Latest stored snapshot per project — what the portfolio table and badges read. */
 aiProposalRouter.get("/risk", requirePermission(permissions.REPORTS_VIEW), async (req, res) => {
+  await assertPlanningEnabled();
   const scope = await ticketProjectScope(req);
   const projects = await prisma.project.findMany({
     where: { deletedAt: null, ...(scope.unrestricted ? {} : { id: { in: scope.projectIds } }) },
@@ -134,6 +135,7 @@ aiProposalRouter.post(
 /* ---------- Proposals ---------- */
 
 aiProposalRouter.get("/", requirePermission(permissions.TICKETS_VIEW), async (req, res) => {
+  await assertPlanningEnabled();
   const proposals = await prisma.aiProposal.findMany({
     where: {
       ...(req.query.status && req.query.status !== "all" ? { status: String(req.query.status) as never } : {}),
@@ -257,6 +259,7 @@ aiProposalRouter.patch(
     })
   ),
   async (req, res) => {
+    await assertPlanningEnabled();
     const entries = Object.entries(req.body.decisions as Record<string, boolean>);
     await prisma.$transaction(
       entries.map(([id, accepted]) => prisma.aiProposalChange.update({ where: { id }, data: { accepted } }))
@@ -290,6 +293,7 @@ aiProposalRouter.post(
   requirePermission(permissions.PLAN_WRITE),
   validate(z.object({ params: z.object({ id: z.string().uuid() }) })),
   async (req, res) => {
+    await assertPlanningEnabled();
     const updated = await prisma.aiProposal.update({
       where: { id: String(req.params.id) },
       data: { status: "REJECTED", reviewedById: req.user!.id, reviewedAt: new Date() }

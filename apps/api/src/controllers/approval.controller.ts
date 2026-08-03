@@ -65,6 +65,7 @@ approvalRouter.get(
   requirePermission(permissions.TICKETS_VIEW),
   validate(z.object({ params: z.object({ ticketId: z.string().uuid() }) })),
   async (req, res) => {
+    await assertApprovalsEnabled();
     const ticket = await prisma.ticket.findFirst({
       where: { id: String(req.params.ticketId), deletedAt: null },
       select: { id: true, projectId: true }
@@ -281,6 +282,7 @@ approvalRouter.delete(
   requirePermission(permissions.APPROVALS_MANAGE),
   validate(z.object({ params: z.object({ id: z.string().uuid() }) })),
   async (req, res) => {
+    await assertApprovalsEnabled();
     await prisma.approvalRequest.delete({ where: { id: String(req.params.id) } });
     await audit(req.user!.id, "approval.cancelled", "ApprovalRequest", String(req.params.id));
     res.status(204).end();
@@ -293,6 +295,7 @@ approvalRouter.post(
   requirePermission(permissions.APPROVALS_MANAGE),
   validate(z.object({ params: z.object({ stepId: z.string().uuid() }) })),
   async (req, res) => {
+    await assertApprovalsEnabled();
     const step = await prisma.approvalStep.findUnique({ where: { id: String(req.params.stepId) } });
     if (!step) throw new AppError(404, "Approval step not found");
     if (!step.guestEmail) throw new AppError(400, "That step is assigned to a colleague, not an external reviewer.");

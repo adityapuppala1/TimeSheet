@@ -342,6 +342,41 @@ what the org's plan tier allows, or a **platform-admin-only lever** (plan-tier c
 | AI PR-review summaries | — | ✓ (capped/mo, same budget-ceiling pattern) | ✓ |
 | Org-chart / reporting-line views | ✓ | ✓ | ✓ (no gating — reads data every tier already has) |
 
+**Planning layer (V6).** Every row below is enforced live by `plan-limits.service.ts` against the
+control-plane `PlanTierLimit` columns, and every one **fails closed** — the capability is refused
+unless the tier grants it. The one deliberate exception to the fail-open pattern used elsewhere:
+unlike face verification, a lapsed plan never blocks anybody from doing their job here. A
+downgraded org loses the Gantt *view*; every ticket, date, booking and budget stays in the
+database, readable and intact.
+
+| Planning feature | Starter | Team | Enterprise |
+|---|---|---|---|
+| Work-item hierarchy, dates, dependencies, Gantt | — | ✓ | ✓ |
+| Calendar, My work | ✓ (My work only) | ✓ | ✓ |
+| Portfolios | — | 1 | unlimited |
+| Saved views | — | ✓ | ✓ |
+| Resource management (capacity, bookings, workload) | — | — | ✓ |
+| Project budgets, burn, forecast, estimate accuracy | — | ✓ | ✓ |
+| Approvals on work items (incl. external reviewers) | — | ✓ | ✓ |
+| Proofing / annotation | — | ✓ | ✓ |
+| Request forms | — | 5 | unlimited |
+| Blueprints | — | 5 | unlimited |
+| Custom fields | — | 10 | unlimited |
+| Custom workflows | — | — | ✓ |
+| Custom dashboards | — | 3 each | unlimited |
+| Scheduled report delivery | — | ✓ | ✓ |
+| Project risk scoring | — | ✓ | ✓ |
+| AI planning copilot (risk narrative, plan breakdown) | — | — | ✓ |
+
+Two rows are worth explaining because they look inconsistent and are not:
+
+- **My work** is available on every tier and needs no setup. It is a personal queue over dates
+  that already exist, so gating it would leave most users with a nav entry that does nothing.
+- **Project risk scoring** is on Team even though the *AI copilot* is Enterprise. The score is
+  arithmetic — it works with AI switched off entirely. Only the plain-English narrative needs a
+  model, and that is what the Enterprise row buys.
+
+
 Every row above governs cost/usage the same way `GlobalAISettings.monthlyBudgetUsd` +
 `AIUsageLog` already do for existing AI features — no new governance model needed, just new
 things flowing through the existing meter.
@@ -1383,8 +1418,9 @@ The plan becomes visible and editable. Everything below is inert until an admin 
 - [x] **Ticket "Plan" tab** — where an item gets its FIRST dates. The timeline can only move a
   bar that already has some, and letting a hatched placeholder be dragged would mean looking at
   a plan quietly commits to one.
-- [x] Portfolios, project budget/planned window, saved views, `plan:write` separated from
-  `tickets:write` (editing a description and moving the delivery schedule are different rights).
+- [x] Portfolios, project budget/planned window, `plan:write` separated from `tickets:write`
+  (editing a description and moving the delivery schedule are different rights).
+- [~] Saved views — API and storage only; no UI shipped. Corrected in phase 6, same as proofing.
 
 **Two things the browser found that no test would have.** The timeline first opened as a wall of
 identical one-day stubs — 41 of 45 items were unscheduled, and the four bars carrying a real plan
@@ -1462,8 +1498,11 @@ Work starts arriving from outside the workspace, and leaves it for sign-off.
 - [x] **Approval chains** — sequential or parallel, internal or external. One rejection is
   terminal, one approval is only a step, and a guest reviewer gets a single-use token rather than
   a half-real `User` row that would enter every permission check forever.
-- [x] **Proofing** — pin and region comments anchored to normalised coordinates, so an annotation
-  lands on the same spot on a phone, a 4K monitor and a PDF export.
+- [~] **Proofing** — pin and region comments anchored to normalised coordinates, so an annotation
+  lands on the same spot on a phone, a 4K monitor and a PDF export. **Corrected in phase 6: the
+  schema, service and four routes shipped; the UI did not.** The workspace toggle was reachable
+  and labelled, so this read as delivered while there was no way for a user to place a pin. See
+  the phase 6 entry.
 
 **The public surface tripled, from one endpoint to four**, so the posture the attestation viewer
 established was applied deliberately to all of them: unguessable tokens, no enumerable ids, and
@@ -1512,7 +1551,76 @@ built.
 
 Verified: 329 unit tests (+19), 26 planning e2e tests (+4), full desktop and responsive suites.
 
-### Phase 6 — planned
+### Phase 6 — dashboards, delivery, and what the verification pass found (2026-08-03)
 
-6. **Hardening** — solver/expander/applier unit tests, per-phase Playwright specs at five
-   viewports, docs, tour, tier matrix, `VERSION` → 2.0.0.
+- [x] **Custom dashboards** over a **closed** widget catalogue. Closed was the whole design
+  decision, and it was made twice over. Once for meaning: if a client can define its own tile,
+  "open items" gets defined once per dashboard and two tiles wearing the same label quietly
+  disagree — and the person who notices is in a board meeting. Once for security: a user-supplied
+  widget definition is a query-injection surface reachable by anyone who can save a layout. The
+  cost is that a new metric needs a server change. That is the right trade for a number somebody
+  will make a decision on.
+- [x] **Four widget shapes, not fourteen widget components** — `STAT`, `SERIES`, `BREAKDOWN`,
+  `TABLE`. The tenth widget type needed no new UI at all.
+- [x] **Sharing publishes a layout, never data.** Every widget resolves against **the viewer's**
+  project scope, so two people opening the same shared dashboard can legitimately see different
+  numbers, and publishing one can never leak a project the viewer could not already open.
+- [x] **A widget that cannot compute says so** — `unavailable`, never a zero. "No overdue work"
+  and "I could not check" are opposite messages and look identical as `0`. Each tile resolves in
+  its own try/catch, so one bad tile cannot take the page down.
+- [x] **Scheduled delivery** — daily/weekly/monthly email to recipients with no account, because
+  the stakeholder who wants this report is exactly the person who will never log in. Resolved **as
+  the subscription's owner**, and **self-deactivating when that owner leaves**: a departed
+  employee's report still mailing figures outward for months is the failure worth designing
+  against. `lastSentAt` guards the cadence, so a restart or a double-fired cron re-sends nothing.
+- [x] **Feature-aware product tour**, docs, the full V6 tier matrix, `VERSION` → 2.0.0.
+
+**The verification pass was the most valuable part of this phase, and it did not go the way the
+plan assumed.** Three defects surfaced, all in code already recorded as shipped.
+
+- [x] **25 planning routes did not enforce the entitlement they belonged to.** The layer had
+  consistently gated CREATE and UPDATE and missed almost every read plus a scattering of writes.
+  With every planning switch off you could not create a request form but you **could delete one**,
+  resend an approval email to an external reviewer, accept a submission, delete a blueprint, or
+  record decisions on an AI proposal. The reads mattered for a second reason: `assertPlanningEnabled`
+  also checks the tier, so an ungated read is a **downgraded org still receiving the capability it
+  stopped paying for**. All 25 now fail closed with the message naming which switch is off; the
+  three deliberate exceptions (`/plan/my-work`, the dashboards router, and the token-authorised
+  public approval routes) are documented as exceptions in the code rather than left to look like
+  more of the same oversight.
+- [x] **The ticket detail sheet grew two permanent tabs.** "Plan" and "Approvals" rendered
+  unconditionally on the single most-used screen in the product. The panels themselves degrade
+  properly to a "this is off, here is the switch" explainer — which is right when planning is on
+  and a sub-feature is not, and wrong for a workspace that enabled none of it and now gets two
+  tabs advertising features it does not have, on every ticket it opens. The triggers are now gated
+  on the same flags the panels check.
+- [x] **Proofing and saved views had shipped as backend only** — schema, service and routes
+  existed and worked, with no UI for either. Proofing was the worse of the two because Workspace
+  Settings carried a labelled "Proofing & annotation" toggle, so it read as a delivered feature
+  while there was no way for a user to place a pin. Both UIs are now built: `ProofingPanel.tsx`
+  (click the image to drop a pin, one-level threads, resolve as a toggle rather than a delete) and
+  `SavedViewsBar.tsx` (named filter sets on the tickets page, personal or shared). The phase 2 and
+  phase 4 entries above are marked `[~]` to record that they were over-reported at the time.
+
+  **How this went unnoticed is the lesson worth keeping.** Every proofing route had tests through
+  the API and every one passed. Nothing asserted that a route was reachable from the product, so
+  four working endpoints with no caller looked exactly like a finished feature. The two specs
+  added here drive the UI rather than the endpoint, which is the only version of the test that
+  would have caught it.
+
+**One honest exception to "toggles off changes nothing".** The nav diff against V5 found exactly
+one new entry that appears with every switch off: **My work**. That is deliberate — a personal
+queue over ticket dates that already exist, useful on the lowest tier with no setup — but it made
+the sweeping claim in the changelog false, so the claim was narrowed to what is true rather than
+the feature quietly gated to protect the sentence.
+
+**Upgrade safety, verified rather than asserted.** The property a customer's upgrade depends on is
+invisible in development, where every database is born with the new migrations already in it. So
+it was tested directly: a database built to the last V5 migration, populated with V5-era roles,
+the exact eleven V5 permission keys and tickets across three statuses — then upgraded. The five
+new permissions landed on the **existing** roles, every V5 grant was untouched, all tickets mapped
+onto the default workflow with `status` and `legacyStatus` agreeing on every row, no existing
+column moved, and every new toggle came up off. Re-running the migration was a clean no-op, which
+is what makes an interrupted deploy recoverable.
+
+Verified: 329 unit tests; 188 passing Playwright tests (10 skipped) across all five viewport projects; a 54-migration replay into an empty database; a V5-to-V6 upgrade simulation with V5-era data; and a live toggles-off probe of every planning route.

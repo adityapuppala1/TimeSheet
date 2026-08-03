@@ -36,6 +36,7 @@ portfolioRouter.use(requireAuth);
 const OWNER_SUMMARY = { id: true, name: true, email: true, avatarUrl: true } as const;
 
 portfolioRouter.get("/", requirePermission(permissions.REPORTS_VIEW), async (_req, res) => {
+  await assertPlanningEnabled();
   const portfolios = await prisma.portfolio.findMany({
     where: { deletedAt: null },
     include: {

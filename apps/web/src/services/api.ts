@@ -2989,3 +2989,114 @@ export const copilotApi = {
     (await api.post<ApplyProposalResult>(`/ai-proposals/${id}/apply`, { decisions })).data,
   reject: async (id: string) => (await api.post(`/ai-proposals/${id}/reject`)).data
 };
+
+/* ------------------------------------------------------------------ *
+ * DASHBOARDS & SCHEDULED DELIVERY (V6 phase 6)
+ *
+ * A dashboard stores a LAYOUT, never data. Every widget resolves against the viewer's own project
+ * scope on the server, so sharing one can never share a project somebody was not already allowed
+ * to see — which is what makes sharing safe to do casually.
+ * ------------------------------------------------------------------ */
+
+export const WIDGET_TYPES = [
+  "OPEN_ITEMS",
+  "OVERDUE_ITEMS",
+  "HOURS_LOGGED",
+  "BUDGET_BURN",
+  "VELOCITY",
+  "STATUS_MIX",
+  "RISK_BANDS",
+  "WORKLOAD_SUMMARY",
+  "UPCOMING_MILESTONES",
+  "MY_QUEUE"
+] as const;
+export type WidgetTypeValue = (typeof WIDGET_TYPES)[number];
+
+/** Shape decides which component draws it, so a new STAT widget needs no new UI. */
+export type WidgetShapeValue = "STAT" | "SERIES" | "BREAKDOWN" | "TABLE";
+
+export interface WidgetDescriptorRow {
+  type: WidgetTypeValue;
+  label: string;
+  shape: WidgetShapeValue;
+  description: string;
+}
+
+export interface DashboardWidgetSpec {
+  id: string;
+  type: WidgetTypeValue;
+  title?: string;
+  config?: { projectId?: string | null; days?: number };
+  x?: number;
+  y?: number;
+  w?: number;
+  h?: number;
+}
+
+export interface DashboardRow {
+  id: string;
+  ownerId: string;
+  owner?: { id: string; name: string } | null;
+  name: string;
+  scope: "PERSONAL" | "SHARED";
+  isDefault: boolean;
+  widgets: DashboardWidgetSpec[];
+}
+
+export interface ResolvedWidget {
+  id: string;
+  title: string;
+  type: WidgetTypeValue;
+  shape: WidgetShapeValue;
+  value?: number | string | null;
+  unit?: string | null;
+  hint?: string | null;
+  points?: Array<{ label: string; value: number; secondary?: number }>;
+  rows?: Array<Record<string, string | number | null>>;
+  /** Set when the tile could not be computed. Shown instead of a zero — a zero is a claim. */
+  unavailable?: string;
+}
+
+export interface ReportSubscriptionRow {
+  id: string;
+  name: string;
+  dashboardId: string | null;
+  dashboard?: { id: string; name: string } | null;
+  cadence: "DAILY" | "WEEKLY" | "MONTHLY";
+  dayOfWeek: number | null;
+  dayOfMonth: number | null;
+  hourUtc: number;
+  recipients: string[];
+  isActive: boolean;
+  lastSentAt: string | null;
+  lastSendError: string | null;
+}
+
+export const dashboardApi = {
+  catalogue: async () => (await api.get<WidgetDescriptorRow[]>("/dashboards/catalogue")).data,
+  list: async () => (await api.get<DashboardRow[]>("/dashboards")).data,
+  /** Layout plus resolved data in one request — a grid of eight tiles fetched separately would be
+   *  eight round trips on every page load. */
+  data: async (id: string) => (await api.get<{ dashboard: DashboardRow; widgets: ResolvedWidget[] }>(`/dashboards/${id}/data`)).data,
+  create: async (payload: { name: string; scope?: string; isDefault?: boolean; widgets: DashboardWidgetSpec[] }) =>
+    (await api.post<DashboardRow>("/dashboards", payload)).data,
+  update: async (id: string, payload: { name: string; scope?: string; isDefault?: boolean; widgets: DashboardWidgetSpec[] }) =>
+    (await api.put<DashboardRow>(`/dashboards/${id}`, payload)).data,
+  remove: async (id: string) => {
+    await api.delete(`/dashboards/${id}`);
+  },
+
+  subscriptions: async () => (await api.get<ReportSubscriptionRow[]>("/dashboards/subscriptions/all")).data,
+  createSubscription: async (payload: {
+    name: string;
+    dashboardId: string;
+    cadence?: "DAILY" | "WEEKLY" | "MONTHLY";
+    dayOfWeek?: number | null;
+    dayOfMonth?: number | null;
+    hourUtc?: number;
+    recipients: string[];
+  }) => (await api.post<ReportSubscriptionRow>("/dashboards/subscriptions", payload)).data,
+  removeSubscription: async (id: string) => {
+    await api.delete(`/dashboards/subscriptions/${id}`);
+  }
+};

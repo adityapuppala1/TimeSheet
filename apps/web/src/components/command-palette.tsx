@@ -93,6 +93,7 @@ const navRoutes: NavRoute[] = [
   { label: "My team", to: "/app/team", icon: Users2, permission: permissions.TIMESHEETS_APPROVE, hint: "SLA & reports" },
   { label: "Users", to: "/app/users", icon: Users, permission: permissions.USERS_MANAGE },
   { label: "Projects", to: "/app/projects", icon: FolderKanban, permission: permissions.PROJECTS_MANAGE },
+  { label: "Dashboards", to: "/app/dashboards", icon: LayoutDashboard, feature: "planning", hint: "Build your own view" },
   { label: "Reports & Analytics", to: "/app/reports", icon: BarChart3, permission: permissions.REPORTS_VIEW },
   { label: "Insights", to: "/app/insights", icon: TrendingUp, permission: permissions.REPORTS_VIEW, hint: "Velocity, SLA, workload" },
   { label: "Security insights", to: "/app/security-insights", icon: ShieldAlert, permission: permissions.REPORTS_VIEW, hint: "Findings, risk score, MTTR" },

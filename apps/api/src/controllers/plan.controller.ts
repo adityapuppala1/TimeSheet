@@ -638,6 +638,7 @@ const savedViewSchema = z.object({
 });
 
 planRouter.get("/views", async (req, res) => {
+  await assertPlanningEnabled();
   const views = await prisma.savedView.findMany({
     // Own views plus anything published to the workspace. A SHARED view is visible to everyone
     // by design — it is a saved FILTER, not a data grant: opening one still runs every normal
@@ -650,6 +651,7 @@ planRouter.get("/views", async (req, res) => {
 });
 
 planRouter.post("/views", validate(savedViewSchema), async (req, res) => {
+  await assertPlanningEnabled();
   // Publishing to the whole workspace is the only part that needs a right beyond "logged in".
   if (req.body.scope === "SHARED" && !req.user!.permissions.includes(permissions.DASHBOARDS_SHARE)) {
     throw new AppError(403, "You can save personal views, but publishing one to the workspace needs the share permission.");
@@ -675,6 +677,7 @@ planRouter.put(
   "/views/:id",
   validate(savedViewSchema.extend({ params: z.object({ id: z.string().uuid() }) })),
   async (req, res) => {
+    await assertPlanningEnabled();
     const existing = await prisma.savedView.findUnique({ where: { id: String(req.params.id) } });
     if (!existing) throw new AppError(404, "View not found");
     // Only the owner edits a view — including a shared one. Anyone else who wants it different
@@ -702,6 +705,7 @@ planRouter.put(
 );
 
 planRouter.delete("/views/:id", validate(z.object({ params: z.object({ id: z.string().uuid() }) })), async (req, res) => {
+  await assertPlanningEnabled();
   const existing = await prisma.savedView.findUnique({ where: { id: String(req.params.id) } });
   if (!existing) throw new AppError(404, "View not found");
   if (existing.ownerId !== req.user!.id) throw new AppError(403, "Only the person who saved a view can delete it.");

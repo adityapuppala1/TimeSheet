@@ -11,6 +11,7 @@
  * gets a stop, using its nav label — a missing description is a dull step, not a broken tour.
  */
 import { nav, isVisible, type NavItem } from "../components/Sidebar";
+import type { PlanningEffective } from "../services/api";
 
 export interface TourStep {
   id: string;
@@ -71,6 +72,41 @@ const DESTINATION_COPY: Record<string, { title: string; body: string; selector?:
     title: "Your team",
     body: "Who reports to you, their logged hours, and an org chart built from the same reporting lines the approvals queue uses.",
     selector: 'main table'
+  },
+  "/app/my-work": {
+    title: "Your queue",
+    body: "Everything assigned to you across every project, sorted by when it is actually needed. Anything waiting on somebody else is listed separately, so it never sits at the top pretending you could start it.",
+    selector: "main h1"
+  },
+  "/app/timeline": {
+    title: "The timeline",
+    body: "Your plan as a Gantt chart — hierarchy, dependencies, milestones and the critical path. Drag a bar to move it. If a date contradicts a dependency it says so and leaves your date alone; nothing is ever rescheduled behind your back.",
+    selector: "main h1"
+  },
+  "/app/portfolio": {
+    title: "Portfolio",
+    body: "Delivery health across projects: schedule against the planned end date, effort-weighted progress, budget versus burn, and a risk score. Every figure is derived from the plan and the hours you already approve.",
+    selector: "main table"
+  },
+  "/app/workload": {
+    title: "Workload",
+    body: "Who is booked, how hard, week by week — against real capacity. Each cell shows the hours planned and the hours actually logged, so a forecast can be checked against what happened rather than against another forecast.",
+    selector: "main table"
+  },
+  "/app/requests": {
+    title: "Requests",
+    body: "Intake forms and what people sent through them. Publish a form to a link anyone can use without an account; every submission becomes a ticket straight away and lands here for a second look.",
+    selector: "main h1"
+  },
+  "/app/proposals": {
+    title: "AI suggestions",
+    body: "When the assistant proposes work, nothing is written. Every change lands here, you tick the ones you want and see exactly what each would alter. There is no apply-everything button, on purpose.",
+    selector: "main h1"
+  },
+  "/app/dashboards": {
+    title: "Dashboards",
+    body: "Build your own view from a fixed set of tiles, so the same tile means the same thing everywhere. Share one and each person still sees only their own projects — and email it on a schedule to people with no account.",
+    selector: "main h1"
   },
   "/app/reports": {
     title: "Reports",
@@ -169,9 +205,15 @@ const CLOSING_STEP: TourStep = {
  * Each visible destination becomes a stop that navigates there and spotlights the page's own
  * heading — so the person sees the real screen with their real data, not a description of it.
  */
-export function buildTourSteps(user?: { role: string; permissions: string[] }): TourStep[] {
+export function buildTourSteps(
+  user?: { role: string; permissions: string[] },
+  /** The server-computed `effective` planning flags. Omitting it hides every feature-gated
+   *  destination — which is correct for a workspace that has none of them on, and wrong for one
+   *  that does, so the caller passes what it already fetched for the sidebar. */
+  features?: PlanningEffective
+): TourStep[] {
   const destinations = nav
-    .filter((item: NavItem) => isVisible(item, user))
+    .filter((item: NavItem) => isVisible(item, user, features))
     .map<TourStep>((item) => {
       const copy = DESTINATION_COPY[item.to];
       return {

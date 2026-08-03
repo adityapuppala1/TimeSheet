@@ -63,6 +63,7 @@ const bodySchema = z.object({
 });
 
 blueprintRouter.get("/", requirePermission(permissions.TICKETS_VIEW), async (_req, res) => {
+  await assertPlanningEnabled();
   const blueprints = await prisma.blueprint.findMany({
     include: { createdBy: { select: { id: true, name: true } } },
     orderBy: { name: "asc" }
@@ -81,6 +82,7 @@ blueprintRouter.get(
   requirePermission(permissions.TICKETS_VIEW),
   validate(z.object({ params: z.object({ id: z.string().uuid() }) })),
   async (req, res) => {
+    await assertPlanningEnabled();
     const blueprint = await prisma.blueprint.findUnique({ where: { id: String(req.params.id) } });
     if (!blueprint) throw new AppError(404, "Blueprint not found");
     res.json(blueprint);
@@ -146,6 +148,7 @@ blueprintRouter.delete(
   requirePermission(permissions.PLAN_WRITE),
   validate(z.object({ params: z.object({ id: z.string().uuid() }) })),
   async (req, res) => {
+    await assertPlanningEnabled();
     // A blueprint attached to a live request form would silently stop working if deleted, so the
     // form is detached explicitly rather than left pointing at nothing.
     await prisma.$transaction([
@@ -163,6 +166,7 @@ blueprintRouter.post(
   requirePermission(permissions.TICKETS_VIEW),
   validate(z.object({ params: z.object({ id: z.string().uuid() }), body: z.object({ startDate: DATE }).strict() })),
   async (req, res) => {
+    await assertPlanningEnabled();
     const blueprint = await prisma.blueprint.findUnique({ where: { id: String(req.params.id) } });
     if (!blueprint) throw new AppError(404, "Blueprint not found");
     const workingDays = await readWorkingDays();

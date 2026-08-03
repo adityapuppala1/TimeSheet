@@ -100,6 +100,7 @@ export const nav: NavItem[] = [
   { to: "/app/approvals", label: "Approvals", icon: Shield, permission: permissions.TIMESHEETS_APPROVE, section: "Team" },
   { to: "/app/team", label: "My team", icon: Users2, permission: permissions.TIMESHEETS_APPROVE, section: "Team" },
 
+  { to: "/app/dashboards", label: "Dashboards", icon: LayoutDashboard, section: "Analytics", feature: "planning" },
   { to: "/app/reports", label: "Reports", icon: BarChart3, permission: permissions.REPORTS_VIEW, section: "Analytics" },
   { to: "/app/insights", label: "Insights", icon: TrendingUp, permission: permissions.REPORTS_VIEW, section: "Analytics" },
   { to: "/app/security-insights", label: "Security insights", icon: ShieldAlert, permission: permissions.REPORTS_VIEW, section: "Analytics" },

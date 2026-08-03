@@ -25,7 +25,11 @@ import { validate } from "../middleware/validate.js";
 import { audit } from "../services/audit.service.js";
 import { computeEffortVariance, computeProjectBudgets } from "../services/budget.service.js";
 import { buildPlan, dayKey, toDay } from "../services/plan-schedule.service.js";
-import { assertPlanningCapability, getPlanningSettings } from "../services/planning.service.js";
+// `assertPlanningEnabled` as well as the resource-specific gate: budgets live in this file for
+// proximity to workload, but they are a TEAM-tier capability while resource management is
+// Enterprise-only. Gating the budget panel on `assertResourcesEnabled` would quietly sell it one
+// tier higher than the pricing page says.
+import { assertPlanningCapability, assertPlanningEnabled, getPlanningSettings } from "../services/planning.service.js";
 import { ticketProjectScope } from "../services/ticket.service.js";
 import { findConflicts, loadWorkload, type BookingSpan } from "../services/workload.service.js";
 
@@ -354,6 +358,7 @@ resourceRouter.patch(
  * done on one screen and 45% on another.
  */
 resourceRouter.get("/budget/:projectId", requirePermission(permissions.REPORTS_VIEW), async (req, res) => {
+  await assertPlanningEnabled();
   const projectId = String(req.params.projectId);
   const scope = await ticketProjectScope(req);
   if (!scope.unrestricted && !scope.projectIds.includes(projectId)) throw new AppError(403, "Forbidden");

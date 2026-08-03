@@ -703,4 +703,103 @@ test.describe("planning layer", () => {
       if (p.forecastAtCompletion !== null) expect(p.forecastAtCompletion).toBeGreaterThan(0);
     }
   });
+
+  /* ---------------------------------------------------------------------- *
+   * Phase 6 follow-up: proofing and saved views.
+   *
+   * These two shipped as API-only and were caught by the phase 6 audit, not by a test — nothing
+   * asserted that a route with no caller was reachable from the product. That is exactly the gap
+   * these fill: each one drives the UI, not the endpoint.
+   * ---------------------------------------------------------------------- */
+
+  test("a saved view stores the filters, not the rows, and applying one restores them", async ({ page }) => {
+    await signIn(page);
+    const { config, token } = await planningConfig(page);
+    test.skip(!config.effective.planning, "planning is off in this workspace");
+
+    const name = `E2E view ${Date.now()}`;
+    const created = await page.request.post("/api/plan/views", {
+      headers: { Authorization: `Bearer ${token}` },
+      data: { name, viewType: "LIST", scope: "PERSONAL", filters: { projectId: "all", status: "OPEN", priority: "all", labelId: "all", onlyMine: true } }
+    });
+    expect(created.ok()).toBe(true);
+    const view = await created.json();
+    // The row carries a QUESTION. If it ever starts carrying rows, a shared view becomes a data
+    // grant and the whole sharing story stops being safe.
+    expect(view.filters).toMatchObject({ status: "OPEN", onlyMine: true });
+    expect(view).not.toHaveProperty("results");
+
+    await page.goto("/app/tickets");
+    // `exact` matters: the delete button carries the view name in its title, so a loose name
+    // match resolves to two elements and fails strict mode.
+    const chip = page.getByRole("button", { name, exact: true });
+    await expect(chip).toBeVisible({ timeout: 15_000 });
+    await chip.click();
+    // Applying it drives the page's own filter state — "Assigned to me" is the visible proof.
+    await expect(page.getByRole("button", { name: /assigned to me/i })).toBeVisible();
+
+    await page.request.delete(`/api/plan/views/${view.id}`, { headers: { Authorization: `Bearer ${token}` } });
+  });
+
+  test("a proofing pin is stored normalised, so it lands on the same spot at any size", async ({ page }) => {
+    await signIn(page);
+    const { config, token } = await planningConfig(page);
+    test.skip(!config.effective.proofing, "proofing is off in this workspace");
+    const headers = { Authorization: `Bearer ${token}` };
+
+    // Creates its own ticket AND its own image rather than hunting for one that happens to exist.
+    // A test that skips when the fixture is missing proves nothing, and this route had no caller
+    // at all until phase 6 — an absent assertion is how that went unnoticed.
+    const projects = await (await page.request.get("/api/projects", { headers })).json();
+    const ticket = await (
+      await page.request.post("/api/tickets", {
+        headers,
+        data: { projectId: projects[0].id, title: `Proofing probe ${Date.now()}`, type: "BUG", priority: "LOW" }
+      })
+    ).json();
+
+    // A 1x1 PNG is enough: the pipeline only needs a real image, and the assertion is about the
+    // coordinates, not the pixels.
+    const png = Buffer.from(
+      "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==",
+      "base64"
+    );
+    const uploadRes = await page.request.post(`/api/tickets/${ticket.id}/attachments`, {
+      headers,
+      multipart: { attachments: { name: "proof.png", mimeType: "image/png", buffer: png } }
+    });
+    expect(uploadRes.status(), await uploadRes.text()).toBe(201);
+    const image = (await uploadRes.json())[0];
+
+    const res = await page.request.post(`/api/proofs/attachment/${image.id}`, {
+      headers,
+      data: { x: 0.25, y: 0.75, body: "E2E: this padding is wrong" }
+    });
+    expect(res.status(), await res.text()).toBe(201);
+    const pin = await res.json();
+    // Normalised, never pixels. Pixels would store whichever viewport was open when somebody
+    // clicked, and every other viewer would see the pin somewhere else.
+    expect(pin.x).toBeCloseTo(0.25, 5);
+    expect(pin.y).toBeCloseTo(0.75, 5);
+
+    // A reply attaches to the root; replying to a reply is refused, because a review conversation
+    // about one spot on one image is a thread and not a tree.
+    const reply = await page.request.post(`/api/proofs/attachment/${image.id}`, {
+      headers,
+      data: { x: 0.25, y: 0.75, body: "agreed", parentId: pin.id }
+    });
+    expect(reply.status()).toBe(201);
+    const nested = await page.request.post(`/api/proofs/attachment/${image.id}`, {
+      headers,
+      data: { x: 0.25, y: 0.75, body: "no", parentId: (await reply.json()).id }
+    });
+    expect(nested.status()).toBe(400);
+
+    // The panel renders the pin over the image, numbered, on the ticket's Proofing tab.
+    await page.goto(`/app/tickets?open=${ticket.id}`);
+    await page.getByRole("tab", { name: /proofing/i }).click();
+    await expect(page.getByRole("button", { name: "1", exact: true })).toBeVisible({ timeout: 15_000 });
+
+    await page.request.delete(`/api/tickets/${ticket.id}`, { headers });
+  });
 });

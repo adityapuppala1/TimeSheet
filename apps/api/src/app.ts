@@ -48,6 +48,7 @@ import { platformAdminRouter } from "./controllers/platform-admin.controller.js"
 import { aiProposalRouter } from "./controllers/ai-proposal.controller.js";
 import { approvalPublicRouter, approvalRouter } from "./controllers/approval.controller.js";
 import { blueprintRouter } from "./controllers/blueprint.controller.js";
+import { dashboardRouter } from "./controllers/dashboard.controller.js";
 import { portfolioRouter } from "./controllers/portfolio.controller.js";
 import { proofRouter } from "./controllers/proof.controller.js";
 import { requestFormPublicRouter } from "./controllers/request-form-public.controller.js";
@@ -317,6 +318,7 @@ app.use("/api/blueprints", blueprintRouter);
 app.use("/api/approvals", approvalRouter);
 app.use("/api/proofs", proofRouter);
 app.use("/api/ai-proposals", aiProposalRouter);
+app.use("/api/dashboards", dashboardRouter);
 app.use("/api/reports", reportRouter);
 app.use("/api/attestations", attestationRouter);
 // Unauthenticated attestation share links. Its own tighter limiter (30/min) because this is

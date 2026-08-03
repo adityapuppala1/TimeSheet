@@ -44,6 +44,7 @@ import {
   Download,
   Mail,
   MessageSquare,
+  MessageSquarePlus,
   Paperclip,
   Plus,
   ScrollText,
@@ -61,6 +62,8 @@ import { useState } from "react";
 import { useSearchParams } from "react-router";
 import { PlanCalendar } from "../components/PlanCalendar";
 import { TicketApprovalsPanel } from "../components/TicketApprovalsPanel";
+import { ProofingPanel } from "../components/ProofingPanel";
+import { SavedViewsBar } from "../components/SavedViewsBar";
 import { TicketPlanningPanel } from "../components/TicketPlanningPanel";
 import { PlanTimeline, TimelineLegend, scheduledItemIds, type TimelineZoom } from "../components/PlanTimeline";
 import { TicketKanban } from "../components/TicketKanban";
@@ -433,6 +436,9 @@ export function Tickets() {
           >
             Assigned to me
           </Button>
+          {/* Sits with the filters it saves, not in the header — the thing being named is what is
+              on this row. Renders nothing at all when planning is off. */}
+          <SavedViewsBar viewMode={viewMode} filters={filters} onApply={setFilters} />
         </CardContent>
       </Card>
 
@@ -952,6 +958,9 @@ function TicketDetailSheet({
 }) {
   const user = useAuthStore((s) => s.user);
   const queryClient = useQueryClient();
+  // Cached by the shared hook, so asking again here costs nothing and keeps this sheet honest
+  // about which tabs the workspace actually has.
+  const { features: planFeatures } = usePlanningFeatures();
   const canAssign = Boolean(
     user?.permissions.includes(permissions.TICKETS_ASSIGN) || user?.permissions.includes(permissions.TICKETS_MANAGE)
   );
@@ -1182,8 +1191,20 @@ function TicketDetailSheet({
                 <TabsList>
                   <TabsTrigger value="comments"><MessageSquare className="h-3.5 w-3.5" />Comments ({ticket.comments.length})</TabsTrigger>
                   <TabsTrigger value="checklist"><CheckSquare className="h-3.5 w-3.5" />Checklist ({ticket.checklistItems.length})</TabsTrigger>
-                  <TabsTrigger value="plan"><CalendarRange className="h-3.5 w-3.5" />Plan</TabsTrigger>
-                  <TabsTrigger value="approvals"><ShieldCheck className="h-3.5 w-3.5" />Approvals</TabsTrigger>
+                  {/* Gated on the same flags the panels themselves check. The panels degrade to a
+                      "this is off" explainer, which is right when planning is ON but a sub-feature
+                      is not — it tells an admin where the switch lives. It is wrong here: a
+                      workspace that never enabled any of this would grow two tabs on the most-used
+                      screen in the product, advertising features it does not have, on every ticket. */}
+                  {planFeatures.planning && (
+                    <TabsTrigger value="plan"><CalendarRange className="h-3.5 w-3.5" />Plan</TabsTrigger>
+                  )}
+                  {planFeatures.approvals && (
+                    <TabsTrigger value="approvals"><ShieldCheck className="h-3.5 w-3.5" />Approvals</TabsTrigger>
+                  )}
+                  {planFeatures.proofing && (
+                    <TabsTrigger value="proofing"><MessageSquarePlus className="h-3.5 w-3.5" />Proofing</TabsTrigger>
+                  )}
                   <TabsTrigger value="links"><Link2 className="h-3.5 w-3.5" />Linked ({ticket.links.length})</TabsTrigger>
                   <TabsTrigger value="attachments"><Paperclip className="h-3.5 w-3.5" />Files ({ticket.attachments.length})</TabsTrigger>
                   <TabsTrigger value="time"><TimerReset className="h-3.5 w-3.5" />Time logged</TabsTrigger>
@@ -1204,6 +1225,10 @@ function TicketDetailSheet({
 
                 <TabsContent value="approvals">
                   <TicketApprovalsPanel ticketId={ticket.id} />
+                </TabsContent>
+
+                <TabsContent value="proofing">
+                  <ProofingPanel attachments={ticket.attachments} />
                 </TabsContent>
 
                 <TabsContent value="links">

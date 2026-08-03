@@ -5,11 +5,21 @@ and a GitHub Release whose body is copied from the matching section here — the
 documented in CONTRIBUTING.md, and the in-app **What's new** page renders these notes for every
 user of a running installation.
 
-## Unreleased — the planning layer (V6)
+## 2.0.0 — the planning layer
 
-Work in progress on the `V6` branch. Turns TimeSphere from an execution tracker into a
-project-management platform. **Nothing here changes how an existing workspace behaves until an
-admin turns it on** — every capability ships off by default.
+Turns TimeSphere from an execution tracker into a project-management platform: plans, schedules,
+capacity, intake, approvals and an AI copilot that never writes on its own.
+
+**Nothing here changes how an existing workspace behaves until an admin turns it on.** Every
+capability ships off by default and upgrading is a normal `./update.sh`. With every switch left
+alone, one thing is different from 1.1.0 and one thing only: a **My work** entry in the sidebar,
+a personal queue over ticket dates that already exist and needs no setup. Every other planning
+page stays hidden, and every planning endpoint refuses with a 403 that says which switch is off
+and who can turn it on — verified against a running install with every toggle cleared.
+
+Major version because the data model grew substantially and the product now competes in a
+different category, not because anything was removed. There are no breaking changes: no endpoint
+changed shape, no column was dropped, and every existing integration keeps working.
 
 ### ✨ Phase 1 — foundation
 
@@ -111,6 +121,31 @@ admin turns it on** — every capability ships off by default.
   made, that row is refused and tells you why, while the rest still apply.
 - **Nightly risk snapshots** build a history, so you can see whether last week's intervention
   actually helped rather than only how things stand today.
+
+### ✨ Phase 6 — dashboards, delivery and the finish
+
+- **Custom dashboards** — build your own view from a fixed catalogue of tiles. The catalogue is
+  closed on purpose: "open items" is one definition, so two dashboards showing it cannot
+  disagree. Share one and every viewer still sees only their own projects, so publishing a layout
+  never publishes data.
+- **Scheduled delivery** — email a dashboard daily, weekly or monthly to people who don't have an
+  account. Built with the sender's access, and it stops itself if that person leaves.
+- **The product tour** now covers the planning pages, and only the ones your workspace actually
+  has switched on.
+
+### 🛡️ Fixed during the release audit
+
+- **25 planning endpoints now enforce the entitlement they belong to.** Creating things was gated
+  and much of the rest was not, so with a feature switched off you could not create a request form
+  but you could delete one, resend an approval email to an external reviewer, or accept a
+  submission. The same gap meant a downgraded workspace kept read access to capabilities it had
+  stopped paying for. Every one now refuses with a message naming the switch that is off.
+- **The ticket detail sheet no longer shows Plan and Approvals tabs to workspaces that have those
+  features switched off.**
+- **Proofing and saved views now have a user interface.** Both had shipped as working APIs with
+  nothing calling them — proofing especially, since Workspace Settings carries a toggle for it.
+  You can now click an attached image to pin a comment to a spot on it, reply, and resolve; and
+  name a set of ticket filters to get back in one click.
 
 ### 🔧 Under the hood
 

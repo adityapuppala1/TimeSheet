@@ -78,6 +78,7 @@ const serialize = (form: any, includeToken: boolean) => ({
 });
 
 requestFormRouter.get("/", requirePermission(permissions.FORMS_CONFIGURE), async (_req, res) => {
+  await assertFormsEnabled();
   const forms = await prisma.requestForm.findMany({
     include: {
       project: { select: { id: true, code: true, name: true } },
@@ -199,6 +200,7 @@ requestFormRouter.delete(
   requirePermission(permissions.FORMS_CONFIGURE),
   validate(z.object({ params: z.object({ id: z.string().uuid() }) })),
   async (req, res) => {
+    await assertFormsEnabled();
     const id = String(req.params.id);
     const submissions = await prisma.requestFormSubmission.count({ where: { formId: id } });
     if (submissions > 0) {
@@ -217,6 +219,7 @@ requestFormRouter.delete(
 /* ---------- The inbox ---------- */
 
 requestFormRouter.get("/submissions", requirePermission(permissions.TICKETS_VIEW), async (req, res) => {
+  await assertFormsEnabled();
   const status = typeof req.query.status === "string" ? req.query.status : undefined;
   const submissions = await prisma.requestFormSubmission.findMany({
     where: {
@@ -246,6 +249,7 @@ requestFormRouter.post(
   requirePermission(permissions.TICKETS_ASSIGN),
   validate(z.object({ params: z.object({ id: z.string().uuid() }), body: z.object({ reason: z.string().max(500).optional() }).strict() })),
   async (req, res) => {
+    await assertFormsEnabled();
     const id = String(req.params.id);
     const submission = await prisma.requestFormSubmission.findUnique({ where: { id }, select: { id: true, ticketId: true } });
     if (!submission) throw new AppError(404, "Submission not found");
@@ -268,6 +272,7 @@ requestFormRouter.post(
   requirePermission(permissions.TICKETS_ASSIGN),
   validate(z.object({ params: z.object({ id: z.string().uuid() }) })),
   async (req, res) => {
+    await assertFormsEnabled();
     const id = String(req.params.id);
     const updated = await prisma.requestFormSubmission.update({
       where: { id },
