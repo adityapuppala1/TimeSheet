@@ -1702,4 +1702,15 @@ and a face check that reported "no match" when the actual failure was a head tur
 the target of. In each case the fix started by reading what the system had already recorded rather
 than by reasoning about what it should do.
 
-Verified: 331 unit tests; 221 Playwright tests across five viewports plus Firefox (Gecko) and WebKit (Safari); a 54-migration replay into an empty database; a V5-to-V6 upgrade simulation; the multi-tenant migration runner against two real tenant databases; and a live incident drill.
+Verified: 331 unit tests; **226 Playwright tests, 10 skipped, 0 failed** across seven projects —
+five viewport sizes on Chromium plus Firefox (Gecko) and WebKit (Safari/iOS); a 54-migration
+replay into an empty database; a V5-to-V6 upgrade simulation; the multi-tenant migration runner
+against two real tenant databases; and a live incident drill that opened, accumulated and closed a
+real outage record.
+
+Two earlier runs of that suite reported failures and neither was a product defect — one was a
+network interface change on the machine mid-run, the other was this session editing API source
+while the suite was running, which restarted the server under it and produced 502s. Both are
+recorded here rather than quietly dropped, because "the suite went red twice" is a fact about this
+work, and the reason it is not a fact about the product is only knowable because each one was
+re-run rather than assumed.
