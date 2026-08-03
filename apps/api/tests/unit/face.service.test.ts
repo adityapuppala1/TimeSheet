@@ -336,6 +336,33 @@ describe("effectiveMatchThreshold", () => {
     await expect(runInTenant(client, () => effectiveMatchThreshold("u1", 0.75))).resolves.toBe(0.75);
   });
 
+  /**
+   * REGRESSION, second form — the one the variance guard above does NOT catch.
+   *
+   * The all-identical history has variance exactly zero, so it is easy to spot. The realistic
+   * history is MIXED: a pile of seeded 1.000s plus the handful of genuine captures the person
+   * managed before they got locked out. That has healthy non-zero variance and a mean dragged up
+   * to ~0.98, so arithmetically it reads as "an unusually consistent user" and the personal bar
+   * climbs above anything their camera can produce. Same lockout, different arithmetic.
+   *
+   * The fix is to drop non-live scores before computing anything: a live camera never reproduces
+   * a stored still exactly, so ~1.000 is evidence of a replay, not of quality.
+   */
+  it("discards impossible-for-live scores instead of personalising on a mixed synthetic history", async () => {
+    passesAt([...Array.from({ length: 28 }, () => 1.0), 0.79, 0.81]);
+    // Only 2 live samples survive the filter — below the 8 needed for a distribution, so the
+    // workspace setting stands and the user can actually pass at 0.79.
+    await expect(runInTenant(client, () => effectiveMatchThreshold("u1", 0.75))).resolves.toBe(0.75);
+  });
+
+  it("still personalises from a genuine history that happens to contain one perfect score", async () => {
+    // A single 1.000 (a replayed test frame, say) must not throw away an otherwise real history.
+    passesAt([1.0, 0.92, 0.93, 0.94, 0.93, 0.92, 0.94, 0.93, 0.93, 0.94, 0.92, 0.93]);
+    const t = await runInTenant(client, () => effectiveMatchThreshold("u1", 0.75));
+    expect(t).toBeGreaterThan(0.75);
+    expect(t).toBeLessThanOrEqual(0.85);
+  });
+
   it("never escalates more than 0.1 above the admin's setting, whatever the history says", async () => {
     // Tight but genuine spread around a very high mean: mean - 3sd still exceeds the ceiling.
     passesAt([0.99, 0.985, 0.99, 0.988, 0.99, 0.987, 0.99, 0.989, 0.99, 0.986]);

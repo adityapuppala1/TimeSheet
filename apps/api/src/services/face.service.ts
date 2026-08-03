@@ -426,6 +426,28 @@ const MAX_THRESHOLD_ESCALATION = 0.1;
  */
 const MIN_SAMPLE_SD = 0.001;
 
+/**
+ * Scores at or above this are discarded before the distribution is computed at all.
+ *
+ * WHY, and this was found in production data rather than reasoned about: a live camera never
+ * reproduces an enrolled still exactly. Lighting moves, the sensor adds noise, the head is never
+ * in quite the same place — genuine repeat captures of the same person land around 0.83. A score
+ * of 1.000 does not mean "an excellent match", it means THE SAME IMAGE was compared with itself:
+ * a seeded fixture, an automated test, or a replay of the stored template.
+ *
+ * MIN_SAMPLE_SD already catches a history that is ENTIRELY synthetic, because its variance is
+ * exactly zero. It does not catch the far more likely mixed history — thirty seeded 1.000s and a
+ * couple of real 0.79s — where the variance is now healthily non-zero and the mean has been
+ * dragged to ~0.98. That distribution looks, arithmetically, like an extremely consistent user,
+ * and the personal bar climbs to a value no live capture of that person can ever reach. They are
+ * then locked out permanently, and the more they try the worse it gets, because only PASSED
+ * attempts feed the distribution.
+ *
+ * Filtering the samples fixes it at the source: a threshold derived from live captures should be
+ * derived from live captures only.
+ */
+const MAX_LIVE_SIMILARITY = 0.995;
+
 export async function effectiveMatchThreshold(userId: string, globalThreshold: number): Promise<number> {
   const recent = await prisma.faceVerificationAttempt.findMany({
     where: { userId, outcome: "PASSED", similarity: { not: null } },
@@ -434,8 +456,12 @@ export async function effectiveMatchThreshold(userId: string, globalThreshold: n
     select: { similarity: true }
   });
 
-  const scores = recent.map((r) => r.similarity!).filter((s) => Number.isFinite(s));
-  // Fewer than 8 passes is not a distribution, it's noise — stay on the global setting.
+  const scores = recent
+    .map((r) => r.similarity!)
+    .filter((s) => Number.isFinite(s) && s < MAX_LIVE_SIMILARITY);
+  // Fewer than 8 LIVE passes is not a distribution, it's noise — stay on the global setting. This
+  // also means a workspace whose history is entirely seeded never personalises at all, which is
+  // the correct outcome: there is no evidence about this person to personalise from.
   if (scores.length < 8) return globalThreshold;
 
   const mean = scores.reduce((a, b) => a + b, 0) / scores.length;
@@ -662,8 +688,22 @@ export const CHALLENGE_TTL_SECONDS = 90;
 /** Minimum |rotation delta| in radians between the two frames. Yaw ≈20° — an unmistakable turn
  *  that's still comfortable; pitch's bar is lower (≈13°) because necks physically pitch less
  *  than they yaw. */
-const CHALLENGE_YAW_MIN = 0.35;
-const CHALLENGE_PITCH_MIN = 0.22;
+export const CHALLENGE_YAW_MIN = 0.35;
+export const CHALLENGE_PITCH_MIN = 0.22;
+
+/**
+ * The axis each instruction is measured on. Exported with the thresholds because the browser now
+ * shows a live meter against exactly these numbers, and the one thing that must never happen is
+ * the client and the server disagreeing about where the line is — a meter that fills to "done"
+ * and is then refused is worse than no meter, because it makes the check look broken rather than
+ * strict. The client is told the requirement; the server still measures it independently from the
+ * submitted frames and still decides.
+ */
+export const CHALLENGE_AXIS: Record<ChallengeInstruction, "yaw" | "pitch"> = {
+  TURN_LEFT: "yaw",
+  TURN_RIGHT: "yaw",
+  LOOK_UP: "pitch"
+};
 
 export async function issueChallenge(userId: string, context: FaceContext): Promise<{ id: string; instruction: ChallengeInstruction; expiresInSeconds: number }> {
   // crypto.randomInt, not Math.random — this is a security nonce's unpredictability, small

@@ -11,7 +11,7 @@
  * Renders nothing at all when the workspace hasn't enabled the feature, so profiles stay clean
  * for the overwhelming majority of deployments that never turn this on.
  */
-import { useRef, useState } from "react";
+import { useState } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { CheckCircle2, Download, ScanFace, ShieldAlert, Trash2 } from "lucide-react";
 import { toast } from "sonner";
@@ -22,7 +22,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "./ui/
 import { Checkbox } from "./ui/checkbox";
 import { Label } from "./ui/label";
 import { Skeleton } from "./ui/skeleton";
-import { FaceCapture, type FaceCaptureHandle } from "./FaceCapture";
+import { GuidedFaceEnrollment } from "./GuidedFaceEnrollment";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -42,19 +42,20 @@ export function FaceEnrollmentCard() {
   const [capturing, setCapturing] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const captureRef = useRef<FaceCaptureHandle | null>(null);
 
   /**
-   * Enrollment captures a BURST, not a single frame: the pressed frame plus a few more over the
-   * next second. Each usable one becomes a stored template, so the natural micro-variation
-   * between them (blink, tiny head shift, expression) is what stops one unlucky frame from
-   * permanently defining this person — the single biggest source of later false rejections.
+   * Enrollment stores a SET of templates, one per head position, captured by the guided wizard.
+   *
+   * This used to be a burst — the pressed frame plus three more 280ms apart — on the theory that
+   * natural micro-variation between them would broaden the template set. It does not: nobody
+   * moves meaningfully in under a second, so all four frames described one angle in one light,
+   * and a later check taken at any other angle scored 0.52-0.82 against a 0.75 bar. Pose variety
+   * is the thing that actually helps, and it has to be asked for.
+   *
+   * The single-frame path below is kept for browsers with no WebGL, where the wizard cannot run.
    */
   const enroll = useMutation({
-    mutationFn: async (blob: Blob) => {
-      const extra = (await captureRef.current?.captureBurst(3, 280)) ?? [];
-      return faceApi.enroll([blob, ...extra]);
-    },
+    mutationFn: async (frames: Blob[]) => faceApi.enroll(frames),
     onSuccess: (result) => {
       toast.success("Face verification set up", {
         description: `${result.templatesStored} reference ${result.templatesStored === 1 ? "image" : "images"} stored — more variation means fewer failed checks later.`
@@ -128,18 +129,14 @@ export function FaceEnrollmentCard() {
 
             {capturing ? (
               <div className="space-y-3">
-                <p className="text-sm text-muted-foreground">Retake your reference photo — this replaces the current one.</p>
-                {/* autoStart only — enrollment stays a deliberate click, never an auto-shutter:
-                    this is the frame every future check compares against, and consent just
-                    happened seconds ago. */}
-                <FaceCapture
-                  ref={captureRef}
-                  onCapture={(blob) => enroll.mutate(blob)}
+                <p className="text-sm text-muted-foreground">
+                  Retake your reference photos — this replaces the current set.
+                </p>
+                {error && <p className="text-sm text-destructive">{error}</p>}
+                <GuidedFaceEnrollment
                   busy={enroll.isPending}
-                  hint={error ?? undefined}
-                  hintTone="error"
-                  captureLabel="Save new photo"
-                  autoStart
+                  onComplete={(frames) => enroll.mutate(frames)}
+                  onCancel={() => setCapturing(false)}
                 />
                 <div className="flex justify-center">
                   <Button variant="ghost" onClick={() => setCapturing(false)}>
@@ -200,15 +197,14 @@ export function FaceEnrollmentCard() {
             </div>
 
             {consented ? (
-              <FaceCapture
-                ref={captureRef}
-                onCapture={(blob) => enroll.mutate(blob)}
-                busy={enroll.isPending}
-                hint={error ?? "Look straight at the camera in good light, with just your face in frame."}
-                hintTone={error ? "error" : "info"}
-                captureLabel="Save my photo"
-                autoStart
-              />
+              <>
+                {error && <p className="mb-3 text-sm text-destructive">{error}</p>}
+                <GuidedFaceEnrollment
+                  busy={enroll.isPending}
+                  onComplete={(frames) => enroll.mutate(frames)}
+                  onCancel={() => setConsented(false)}
+                />
+              </>
             ) : (
               <p className="text-center text-sm text-muted-foreground">Tick the box above to turn on your camera.</p>
             )}

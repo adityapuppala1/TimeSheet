@@ -42,6 +42,9 @@ import {
   isFaceFeatureAllowedForOrg,
   isFaceVerificationRequired,
   issueChallenge,
+  CHALLENGE_AXIS,
+  CHALLENGE_YAW_MIN,
+  CHALLENGE_PITCH_MIN,
   matchAgainstEnrollment,
   recommendMatchThreshold,
   redeemChallenge,
@@ -129,11 +132,18 @@ faceRouter.post("/challenge", validate(challengeSchema), async (req, res) => {
   await assertFaceEntitlement();
 
   const challenge = await issueChallenge(req.user!.id, req.body.context as FaceContext);
+  // The axis and the minimum are sent so the browser can show a live meter against the SAME
+  // numbers this server will enforce. Publishing them concedes nothing: the requirement was
+  // already discoverable by turning your head and reading the outcome, and the server re-measures
+  // the delta from the submitted frames regardless of anything the client claims.
+  const axis = CHALLENGE_AXIS[challenge.instruction];
   res.status(201).json({
     challengeId: challenge.id,
     instruction: challenge.instruction,
     prompt: CHALLENGE_PROMPTS[challenge.instruction],
-    expiresInSeconds: challenge.expiresInSeconds
+    expiresInSeconds: challenge.expiresInSeconds,
+    axis,
+    minDelta: axis === "yaw" ? CHALLENGE_YAW_MIN : CHALLENGE_PITCH_MIN
   });
 });
 
@@ -147,7 +157,7 @@ const enrollSchema = z.object({ body: z.object({ consent: z.string() }) });
  * penalise. The exact wording shown at the time is copied onto the row, because an admin can
  * edit the settings text later and the record must reflect what this person actually agreed to.
  */
-faceRouter.post("/enroll", preserveTenantContext(faceCaptureUpload.array("capture", 5)), validate(enrollSchema), async (req, res) => {
+faceRouter.post("/enroll", preserveTenantContext(faceCaptureUpload.array("capture", 8)), validate(enrollSchema), async (req, res) => {
   const settings = await getFaceSettings();
   if (!settings.enabled) throw new AppError(403, "Face verification is not enabled for this workspace.");
   // Fail CLOSED: no new biometric data may be collected without the plan entitlement.
@@ -156,10 +166,17 @@ faceRouter.post("/enroll", preserveTenantContext(faceCaptureUpload.array("captur
     throw new AppError(422, "Enrollment requires explicit consent to process your face data.");
   }
 
-  // Multi-frame enrollment: the client sends several frames from one consented session (a few
-  // seconds of natural variation). Each is validated independently and every usable one becomes a
-  // template — see FaceEnrollmentTemplate's schema comment for why one template was the accuracy
-  // ceiling. A single frame is still accepted, so nothing about the old flow breaks.
+  // Multi-POSE enrollment: the client walks the person through four head positions and sends one
+  // frame from each. Each is validated independently and every usable one becomes a template.
+  //
+  // WHY POSE AND NOT JUST "MORE FRAMES": the previous client sent a 4-frame burst 280ms apart,
+  // which is the same pose four times — a person barely moves in under a second. The stored set
+  // therefore described one angle in one light, and a verification taken at any other angle
+  // scored 0.52-0.82 against a 0.75 bar. Recognition accuracy is known to fall roughly 10% from
+  // frontal to 60-degree yaw, so covering the range at enrollment is worth far more than adding
+  // frames within a single pose.
+  //
+  // A single frame is still accepted, so old clients and the fallback path keep working.
   const frames = requireFrames(req);
   const usable: Array<{ embedding: number[]; quality: number; buffer: Buffer }> = [];
   let lastRejection: string | null = null;

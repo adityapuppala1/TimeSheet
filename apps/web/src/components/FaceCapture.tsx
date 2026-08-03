@@ -2,10 +2,17 @@
  * WHAT: the camera surface shared by face enrollment and face verification — requests the
  * webcam, shows a live preview with an alignment guide, grabs a still, and hands the caller a
  * JPEG Blob.
- * WHY it's deliberately "dumb": no face detection or matching happens here. Every judgement is
- * made server-side (see apps/api/src/services/face.service.ts) because a client that decides
- * its own verification outcome is not a security control — anyone could send a "passed" result
- * from devtools. This component's whole job is to produce a good frame and clear feedback.
+ * WHERE THE LINE IS, and it has moved but not blurred: this component now runs live face
+ * DETECTION and head-pose tracking locally (lib/use-face-tracker.ts), because guiding somebody to
+ * produce a good frame requires knowing what the current frame looks like. It still computes no
+ * embedding and decides no outcome. Every judgement that matters — is this the right person, is
+ * this a live face, did the demanded movement actually happen — is made server-side in
+ * apps/api/src/services/face.service.ts, because a client that decides its own verification
+ * result is not a security control; anyone could send a "passed" from devtools.
+ *
+ * So: the client decides WHEN to press the shutter and what to say to the person. The server
+ * decides everything else, and re-measures from the frames rather than trusting anything sent
+ * alongside them.
  *
  * Responsive behaviour (works phone → 4K without media queries): the video sits in an
  * aspect-ratio box that fills its container up to a max width, so it scales fluidly; the
@@ -16,53 +23,37 @@ import { forwardRef, useCallback, useEffect, useImperativeHandle, useRef, useSta
 import { Camera, CameraOff, RefreshCw, ShieldCheck } from "lucide-react";
 import { Button } from "./ui/button";
 import { cn } from "../lib/utils";
+import { useFaceTracker, type FaceTrackerReading } from "../lib/use-face-tracker";
 
 export type FaceCaptureState = "idle" | "starting" | "ready" | "captured" | "denied" | "unavailable";
 
 /** Imperative surface for multi-frame flows (the challenge–response dialog): lets the parent
- *  grab an EXTRA frame from the live stream without the user pressing anything, and read the
- *  active camera's label (sent to the server as the virtual-camera review signal). */
+ *  grab an EXTRA frame from the live stream without the user pressing anything, read the current
+ *  head pose, and read the active camera's label (sent to the server as the virtual-camera review
+ *  signal). */
+/** What the head-turn challenge needs from the camera surface: which axis to watch, how far the
+ *  server will demand, and the pose the neutral frame was taken at. Given these, the preview can
+ *  show a meter that fills as the person turns and fire the shutter the instant it is satisfied —
+ *  which is the difference between "turn your head" and knowing when you have turned enough. */
+export interface PoseChallenge {
+  axis: "yaw" | "pitch";
+  /** Radians. Deliberately passed in from the caller, which reads it from the server, so the
+   *  client and the server can never disagree about where the line is. */
+  minDelta: number;
+  neutral: { yaw: number; pitch: number };
+}
+
 export interface FaceCaptureHandle {
   captureFrame: () => Promise<Blob | null>;
+  /** The newest live tracking reading, read synchronously. The challenge flow uses this to record
+   *  the neutral pose at the exact moment it grabs the neutral frame. */
+  getReading: () => FaceTrackerReading;
   /** Grabs `count` frames spaced `gapMs` apart — the multi-frame enrollment burst. Natural
    *  micro-movement between frames is the point: it's what gives the stored template set the
    *  variation that stops one unlucky frame defining the person forever. */
   captureBurst: (count: number, gapMs?: number) => Promise<Blob[]>;
   getDeviceLabel: () => string | null;
   isLive: () => boolean;
-}
-
-/**
- * Client-side capture quality, used ONLY to decide when to fire and what hint to show. The
- * server scores quality again authoritatively (face.service.ts#scoreQuality) — this is the
- * fast local approximation that makes the camera feel cooperative instead of binary, in the
- * same spirit as phone face-unlock telling you to move closer before it ever decides.
- */
-function frameQuality(video: HTMLVideoElement, box: { x: number; y: number; width: number; height: number } | null) {
-  if (!box) return { score: 0, hint: "Looking for you — face the camera" };
-  const areaShare = (box.width * box.height) / (video.videoWidth * video.videoHeight);
-  const cx = (box.x + box.width / 2) / video.videoWidth;
-  const cy = (box.y + box.height / 2) / video.videoHeight;
-  const offset = Math.hypot(cx - 0.5, cy - 0.5);
-
-  if (areaShare < 0.03) return { score: 0.2, hint: "Move a little closer" };
-  if (offset > 0.22) return { score: 0.4, hint: "Centre your face in the oval" };
-  // Mirrors the server's weighting closely enough to agree on the borderline cases.
-  const sizeScore = Math.min(1, (areaShare - 0.015) / (0.09 - 0.015));
-  const centreScore = Math.max(0, 1 - offset / 0.28);
-  return { score: 0.65 * sizeScore + 0.35 * centreScore, hint: null as string | null };
-}
-
-/** Chrome's Shape Detection API — the progressive-enhancement half of hands-free capture.
- *  Detection here is ONLY "when to press the shutter"; every security judgement stays
- *  server-side, so a platform without this simply falls back to the manual button. */
-interface BrowserFaceDetector {
-  detect: (source: HTMLVideoElement) => Promise<Array<{ boundingBox: { x: number; y: number; width: number; height: number } }>>;
-}
-declare global {
-  interface Window {
-    FaceDetector?: new (options?: { fastMode?: boolean; maxDetectedFaces?: number }) => BrowserFaceDetector;
-  }
 }
 
 interface FaceCaptureProps {
@@ -82,10 +73,15 @@ interface FaceCaptureProps {
    *  "it's already looking at you" feel. The browser's permission prompt still applies. */
   autoStart?: boolean;
   /** Hands-free shutter: scan the live stream and fire onCapture by itself once a single,
-   *  centered, large-enough face holds still for a few consecutive ticks. Only activates where
-   *  window.FaceDetector exists (Chromium's Shape Detection API); elsewhere the manual button
-   *  remains, unchanged. Re-arms automatically when `busy` drops back to false. */
+   *  centred, large-enough, sharp face holds still for a few consecutive ticks. Needs the local
+   *  tracker, which needs WebGL; where that is unavailable the manual button remains, unchanged.
+   *  Re-arms automatically when `busy` drops back to false. */
   autoCapture?: boolean;
+  /** When set, the preview shows a live "turn further" meter and fires `onCapture` by itself the
+   *  moment the demanded rotation is reached. Null disables it. */
+  poseChallenge?: PoseChallenge | null;
+  /** Fired every tick with the challenge progress 0-1, so the parent can mirror it in its own UI. */
+  onPoseProgress?: (progress: number) => void;
 }
 
 export const FaceCapture = forwardRef<FaceCaptureHandle, FaceCaptureProps>(function FaceCapture(
@@ -98,11 +94,15 @@ export const FaceCapture = forwardRef<FaceCaptureHandle, FaceCaptureProps>(funct
     className,
     overlayText = null,
     autoStart = false,
-    autoCapture = false
+    autoCapture = false,
+    poseChallenge = null,
+    onPoseProgress
   }: FaceCaptureProps,
   ref
 ) {
   const videoRef = useRef<HTMLVideoElement | null>(null);
+  // State, not a ref, so attaching the tracker re-renders once the <video> exists.
+  const [videoEl, setVideoEl] = useState<HTMLVideoElement | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
   const [state, setState] = useState<FaceCaptureState>("idle");
   const [error, setError] = useState<string | null>(null);
@@ -112,6 +112,13 @@ export const FaceCapture = forwardRef<FaceCaptureHandle, FaceCaptureProps>(funct
   /** Live, pre-upload coaching from the local quality score ("Move a little closer"). This is
    *  what turns a binary pass/fail into a cooperative interaction. */
   const [liveHint, setLiveHint] = useState<string | null>(null);
+  /** 0-1 progress toward the demanded head rotation, for the on-screen meter. */
+  const [poseProgress, setPoseProgress] = useState(0);
+
+  // The live tracker. Only runs while the camera is actually up, so nothing is loaded for a user
+  // who never opens it. `status === "unavailable"` (no WebGL, models blocked) simply means the
+  // guidance below stays quiet and the manual shutter carries the flow, exactly as before.
+  const tracker = useFaceTracker(videoEl, state === "ready");
 
   const stop = useCallback(() => {
     streamRef.current?.getTracks().forEach((track) => track.stop());
@@ -187,16 +194,22 @@ export const FaceCapture = forwardRef<FaceCaptureHandle, FaceCaptureProps>(funct
     });
   }, [grabFrame, onCapture]);
 
-  // Face-ID feel, part 2: hands-free shutter. A detection loop watches the live stream and
-  // fires ONE capture once a single face is (a) big enough to be the subject rather than a
-  // bystander, (b) roughly centered in the guide oval, and (c) stable for 3 consecutive ticks
-  // (~1s) — the same "hold still… got it" cadence phone face-unlock trains people to expect.
-  // Detection here decides only WHEN to press the shutter; whether the face is the right one
-  // is still entirely the server's call. No FaceDetector support → this effect stays inert and
-  // the manual button carries on.
-  const supportsAutoCapture = autoCapture && typeof window !== "undefined" && Boolean(window.FaceDetector);
+  // Face-ID feel, part 2: hands-free shutter, now driven by the shared tracker rather than
+  // Chromium's Shape Detection API.
+  //
+  // WHY THE SWITCH: window.FaceDetector exists only in Chromium, so on Firefox and on iOS Safari
+  // — which is most phones — hands-free capture silently never happened and every user pressed
+  // the button at a moment of their own choosing. That is precisely the flow that produced
+  // blurry, off-angle frames and unexplained rejections. The tracker works in every browser with
+  // WebGL, and it additionally measures sharpness, which the bounding box alone cannot express: a
+  // big, centred, confidently-detected face can still be motion-blurred, and blur is what turns
+  // into a low similarity score and a refusal the person cannot account for.
+  //
+  // Detection still decides only WHEN to press the shutter. Whether the face is the right one
+  // remains entirely the server's call.
+  const supportsAutoCapture = autoCapture && tracker.status === "tracking";
   useEffect(() => {
-    if (!supportsAutoCapture || state !== "ready" || busy) {
+    if (!supportsAutoCapture || state !== "ready" || busy || poseChallenge) {
       setScanPhase(null);
       return;
     }
@@ -206,51 +219,34 @@ export const FaceCapture = forwardRef<FaceCaptureHandle, FaceCaptureProps>(funct
     let fired = false;
     // Rolling best-frame: keep the highest-quality frame seen during the lock window and submit
     // THAT, rather than whichever frame the shutter happened to land on. Same latency, better
-    // input — this is the cheap half of the accuracy work, done client-side.
+    // input — the cheap half of the accuracy work, done client-side.
     let best: { blob: Blob; score: number } | null = null;
-    const detector = new window.FaceDetector!({ fastMode: true, maxDetectedFaces: 2 });
     setScanPhase("searching");
 
     const interval = setInterval(async () => {
-      const video = videoRef.current;
-      if (cancelled || fired || !video || !video.videoWidth) return;
-      try {
-        const faces = await detector.detect(video);
-        if (cancelled || fired) return;
+      if (cancelled || fired) return;
+      const reading = tracker.latest();
+      setLiveHint(reading.hint);
 
-        // More than one face is never "usable" — the server refuses it anyway, and saying so
-        // now is faster and clearer than a round trip.
-        if (faces.length > 1) {
-          goodTicks = 0;
-          best = null;
-          setScanPhase("searching");
-          setLiveHint("Make sure you're alone in the frame");
-          return;
-        }
+      if (reading.faceCount !== 1 || reading.hint !== null) {
+        goodTicks = 0;
+        best = null;
+        setScanPhase("searching");
+        return;
+      }
 
-        const quality = frameQuality(video, faces.length === 1 ? faces[0].boundingBox : null);
-        setLiveHint(quality.hint);
-
-        if (quality.hint === null) {
-          goodTicks += 1;
-          setScanPhase("locking");
-          // Score every good tick and remember the best.
-          const blob = await grabFrame();
-          if (blob && (!best || quality.score > best.score)) best = { blob, score: quality.score };
-          if (goodTicks >= 3 && best) {
-            fired = true;
-            setScanPhase(null);
-            setLiveHint(null);
-            onCapture(best.blob);
-          }
-        } else {
-          goodTicks = 0;
-          best = null;
-          setScanPhase("searching");
-        }
-      } catch {
-        // A detector error (unsupported source, transient) just means this tick is skipped —
-        // the manual button is always there.
+      goodTicks += 1;
+      setScanPhase("locking");
+      const blob = await grabFrame();
+      if (cancelled || fired) return;
+      if (blob && (!best || reading.quality > best.score)) best = { blob, score: reading.quality };
+      // 3 consecutive good ticks (~1s) — the same "hold still… got it" cadence phone face-unlock
+      // trains people to expect.
+      if (goodTicks >= 3 && best) {
+        fired = true;
+        setScanPhase(null);
+        setLiveHint(null);
+        onCapture(best.blob);
       }
     }, 320);
 
@@ -259,7 +255,80 @@ export const FaceCapture = forwardRef<FaceCaptureHandle, FaceCaptureProps>(funct
       clearInterval(interval);
       setLiveHint(null);
     };
-  }, [supportsAutoCapture, state, busy, grabFrame, onCapture]);
+  }, [supportsAutoCapture, state, busy, poseChallenge, grabFrame, onCapture, tracker]);
+
+  /**
+   * The head-turn challenge, closed-loop.
+   *
+   * THE PROBLEM THIS SOLVES, measured rather than assumed: in production the challenge failed 107
+   * times against 69 passes, and the recorded yaw deltas on those failures were 0.02-0.26 radians
+   * against a 0.35 requirement. Nobody was refusing to turn their head. The instruction was static
+   * text, the frame was grabbed at a moment the person could not anticipate, and there was no
+   * signal for "further" — so people turned a little, guessed, and were told afterwards that they
+   * had failed. The more it happened the less they trusted it.
+   *
+   * Here the same requirement becomes visible: progress fills as the head turns, and the shutter
+   * fires by itself the moment the server's own threshold is crossed, at the peak of the turn
+   * rather than wherever the person happened to stop. The security property is untouched — the
+   * server still measures the delta itself from the two frames and still decides. This only means
+   * the honest user reliably produces the movement that was asked for.
+   *
+   * A margin above the server's minimum is deliberate: the client and server measure the same
+   * pose from slightly different frames, and firing exactly at the line would land marginal
+   * captures on the wrong side of it.
+   */
+  const CHALLENGE_FIRE_MARGIN = 1.15;
+  useEffect(() => {
+    if (!poseChallenge || state !== "ready" || busy || tracker.status !== "tracking") {
+      setPoseProgress(0);
+      return;
+    }
+    let cancelled = false;
+    let fired = false;
+    let bestDelta = 0;
+    let bestBlob: Blob | null = null;
+
+    const interval = setInterval(async () => {
+      if (cancelled || fired) return;
+      const reading = tracker.latest();
+      if (reading.faceCount !== 1) {
+        setLiveHint(reading.faceCount === 0 ? "Keep your face in view" : "Make sure you're alone in the frame");
+        return;
+      }
+      setLiveHint(null);
+
+      const yawDelta = Math.abs(reading.yaw - poseChallenge.neutral.yaw);
+      const pitchDelta = Math.abs(reading.pitch - poseChallenge.neutral.pitch);
+      const onAxis = poseChallenge.axis === "yaw" ? yawDelta : pitchDelta;
+      const offAxis = poseChallenge.axis === "yaw" ? pitchDelta : yawDelta;
+
+      const progress = Math.max(0, Math.min(1, onAxis / poseChallenge.minDelta));
+      setPoseProgress(progress);
+      onPoseProgress?.(progress);
+
+      // The server also requires the demanded axis to DOMINATE, so a shrug that happens to move
+      // both is not accepted. Mirroring that here keeps the client from firing on a frame the
+      // server will then reject.
+      if (onAxis >= poseChallenge.minDelta * CHALLENGE_FIRE_MARGIN && onAxis >= offAxis) {
+        const blob = await grabFrame();
+        if (cancelled || fired) return;
+        if (blob && onAxis > bestDelta) {
+          bestDelta = onAxis;
+          bestBlob = blob;
+        }
+        if (bestBlob) {
+          fired = true;
+          setPoseProgress(1);
+          onCapture(bestBlob);
+        }
+      }
+    }, 90);
+
+    return () => {
+      cancelled = true;
+      clearInterval(interval);
+    };
+  }, [poseChallenge, state, busy, tracker, grabFrame, onCapture, onPoseProgress]);
 
   const captureBurst = useCallback(
     async (count: number, gapMs = 260): Promise<Blob[]> => {
@@ -278,11 +347,12 @@ export const FaceCapture = forwardRef<FaceCaptureHandle, FaceCaptureProps>(funct
     ref,
     () => ({
       captureFrame: grabFrame,
+      getReading: tracker.latest,
       captureBurst,
       getDeviceLabel: () => streamRef.current?.getVideoTracks()[0]?.label ?? null,
       isLive: () => state === "ready"
     }),
-    [grabFrame, captureBurst, state]
+    [grabFrame, captureBurst, state, tracker.latest]
   );
 
   const live = state === "ready";
@@ -295,7 +365,10 @@ export const FaceCapture = forwardRef<FaceCaptureHandle, FaceCaptureProps>(funct
             doesn't jump when the camera starts. */}
         <div className="relative aspect-[4/3] w-full">
           <video
-            ref={videoRef}
+            ref={(el) => {
+              videoRef.current = el;
+              setVideoEl(el);
+            }}
             playsInline
             muted
             autoPlay
@@ -329,6 +402,40 @@ export const FaceCapture = forwardRef<FaceCaptureHandle, FaceCaptureProps>(funct
             /* Challenge instruction + countdown, announced for screen readers too. */
             <div role="status" className="pointer-events-none absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/75 to-transparent px-3 pb-3 pt-8 text-center">
               <p className="text-sm font-semibold text-white drop-shadow sm:text-base">{overlayText}</p>
+              {poseChallenge && (
+                <>
+                  {/* The bar IS the fix. The requirement never changed — what changed is that it
+                      is now visible while you move, instead of being scored after you guess. */}
+                  <div className="mx-auto mt-2 h-1.5 w-40 overflow-hidden rounded-full bg-white/25 sm:w-52">
+                    <div
+                      className={cn(
+                        "h-full rounded-full transition-[width,background-color] duration-100",
+                        poseProgress >= 1 ? "bg-success" : "bg-primary"
+                      )}
+                      style={{ width: `${Math.round(poseProgress * 100)}%` }}
+                    />
+                  </div>
+                  <p className="mt-1 text-xs font-medium text-white/90 drop-shadow">
+                    {liveHint ?? (poseProgress >= 1 ? "Got it" : poseProgress > 0.55 ? "Keep going…" : "Turn a little further")}
+                  </p>
+                </>
+              )}
+            </div>
+          )}
+
+          {/* Live quality ring — the ambient "the camera can see you properly" signal. Shown only
+              while tracking and not mid-challenge, where the pose bar is the thing to watch. */}
+          {live && tracker.status === "tracking" && !poseChallenge && tracker.reading.faceCount === 1 && (
+            <div aria-hidden className="pointer-events-none absolute right-2 top-2 flex items-center gap-1.5 rounded-full bg-black/45 px-2 py-1">
+              <span
+                className={cn(
+                  "h-2 w-2 rounded-full",
+                  tracker.reading.quality > 0.7 ? "bg-success" : tracker.reading.quality > 0.4 ? "bg-warning" : "bg-destructive"
+                )}
+              />
+              <span className="text-[10px] font-semibold uppercase tracking-wide text-white/90">
+                {tracker.reading.quality > 0.7 ? "Good" : tracker.reading.quality > 0.4 ? "Fair" : "Poor"}
+              </span>
             </div>
           )}
 

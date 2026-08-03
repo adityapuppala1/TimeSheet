@@ -5,6 +5,42 @@ and a GitHub Release whose body is copied from the matching section here — the
 documented in CONTRIBUTING.md, and the in-app **What's new** page renders these notes for every
 user of a running installation.
 
+## Unreleased
+
+### 🔍 Face verification — three measured causes of it not working, fixed
+
+The feature was failing far more than it was passing. The attempt log said why, and it was not
+what anyone assumed: **the head-movement check, not the face match**, was the largest cause —
+107 failures against 69 passes, with recorded rotations of 0.02–0.26 radians against a 0.35
+requirement. People were not refusing to turn their heads. The instruction was static text, the
+frame was taken on a fixed 3-second countdown, and there was no signal for "further" — so you
+turned, guessed, and were told afterwards that you had failed.
+
+- **The head turn is now a live meter that fills as you move**, and the photo is taken by itself
+  at the peak of the turn rather than whenever a timer expired. The requirement is unchanged and
+  the server still measures it independently — you can simply see it now.
+- **Enrollment asks for four positions instead of four photos of one position.** The old "burst"
+  took four frames 280ms apart; nobody moves in under a second, so all four described the same
+  angle in the same light and a later check from any other angle scored as low as 0.52. The
+  wizard walks you through centre, both sides and a tilt, and takes one good frame at each.
+- **A per-person threshold could drift out of reach and never come back.** It is computed from
+  your own history of successful checks — but seeded and automated entries score a perfect 1.000,
+  which no live camera produces, and those dragged the bar above anything a real capture of you
+  could reach. Because only successes feed it, there was no way out from inside the product.
+  Non-live scores are now excluded from that calculation.
+- **Hands-free capture works in every browser**, not only Chromium. It previously relied on an
+  API that Firefox and iOS Safari do not have, so on most phones every photo was taken manually at
+  a moment of the user's choosing — which is exactly how blurry, off-angle frames got submitted.
+- **Live coaching while the camera is open** — "move a little closer", "hold still, the image is
+  blurry", "you're not alone in frame" — instead of finding out after the round trip. Blur is
+  measured directly, because a large, centred, confidently-detected face can still be motion
+  blurred, and that is what turns into a rejection nobody can account for.
+
+No new services and no Python: the browser now runs the same detection library the server already
+used, and it deliberately loads only detection and head-pose (2.1MB, fetched when a camera opens).
+The embedding and the match stay on the server, because a client that decides its own verification
+outcome is not a security control.
+
 ## 2.0.0 — the planning layer
 
 Turns TimeSphere from an execution tracker into a project-management platform: plans, schedules,

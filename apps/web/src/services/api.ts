@@ -1860,6 +1860,11 @@ export interface FaceChallenge {
   instruction: "TURN_LEFT" | "TURN_RIGHT" | "LOOK_UP";
   prompt: string;
   expiresInSeconds: number;
+  /** Which rotation axis the server will measure. */
+  axis: "yaw" | "pitch";
+  /** Radians of rotation the server requires. Sent so the live meter is calibrated against the
+   *  real requirement rather than a duplicated constant that could drift out of step with it. */
+  minDelta: number;
 }
 
 export interface FaceStatsBucket {
