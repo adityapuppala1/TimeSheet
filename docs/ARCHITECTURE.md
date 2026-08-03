@@ -249,6 +249,19 @@ The SUPER_ADMIN exemption is deliberate and minimal: someone has to do the maint
 the result, and switch it off. The "warn users" action (in-app + email to online non-admins) is
 gated by its own notification toggle (`emailMaintenanceScheduled`) like every other category.
 
+Two neighbors ride on the same machinery:
+
+- **Server health** (`services/system-health.service.ts`, `GET /api/maintenance/health`):
+  live CPU/memory/disk/latency + a component checklist, measured on the instance that answered
+  (the payload names host+pid rather than posing as a cluster aggregate) and guaranteed never
+  to throw — a dead dependency reports `ok: false`, because a health check that 500s when
+  things are unhealthy defeats itself.
+- **Per-user login visibility** (Users page): the same `lastSeenAt` window powers a live online
+  dot per user; `User.firstLoginAt` is stamped exactly once in `establishSession` (never
+  backfilled — null honestly means "unknown"); and `POST /users/:id/force-logout` is the
+  bulk force-logout scoped to one person, with the extra guard that only a SUPER_ADMIN may
+  sign out a SUPER_ADMIN.
+
 ---
 
 ## 4. Request lifecycle (a normal, tenant-resolved API call)

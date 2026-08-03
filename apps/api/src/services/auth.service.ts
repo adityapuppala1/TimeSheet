@@ -124,7 +124,7 @@ async function establishSession(
   // per request.
   const roleRow = await prisma.user.findUnique({
     where: { id: user.id },
-    select: { role: { select: { name: true } } }
+    select: { firstLoginAt: true, role: { select: { name: true } } }
   });
   if (roleRow?.role.name !== "SUPER_ADMIN" && (await isMaintenanceActive())) {
     throw new AppError(503, "This workspace is undergoing scheduled maintenance. Please try again after the window ends.", {
@@ -138,7 +138,12 @@ async function establishSession(
   const session = await prisma.session.create({
     data: { userId: user.id, refreshHash: await hashToken(refreshSecret), userAgent: opts.userAgent, ipAddress: opts.ipAddress, expiresAt }
   });
-  await prisma.user.update({ where: { id: user.id }, data: { lastLoginAt: new Date() } });
+  // firstLoginAt is written exactly once, then never touched again — pre-existing accounts keep
+  // null (unknown) rather than a backfilled guess. Same write as lastLoginAt, so no extra query.
+  await prisma.user.update({
+    where: { id: user.id },
+    data: { lastLoginAt: new Date(), ...(roleRow?.firstLoginAt ? {} : { firstLoginAt: new Date() }) }
+  });
 
   return {
     accessToken: signAccessToken(user.id, session.id, orgId),

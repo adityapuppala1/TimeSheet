@@ -20,6 +20,7 @@ import { audit } from "../services/audit.service.js";
 import { dispatchTransactional } from "../services/notify.service.js";
 import { templates } from "../services/mail-templates.js";
 import { findCoveredUnenrolledUserIds, notifyEnrollmentRequired } from "../services/face.service.js";
+import { getOnlineSeenByUser } from "../services/maintenance.service.js";
 import { getEffectiveSeatLimit } from "../services/plan-limits.service.js";
 import { hashPassword } from "../utils/security.js";
 
@@ -48,20 +49,54 @@ userRouter.get("/roles", async (_req, res) => {
 
 userRouter.get("/", async (req, res) => {
   const search = String(req.query.search ?? "");
-  const users = await prisma.user.findMany({
-    where: {
-      deletedAt: null,
-      OR: search ? [{ name: { contains: search } }, { email: { contains: search } }] : undefined
-    },
-    include: {
-      role: true,
-      projectAssignments: { include: { project: true } },
-      manager: { select: { id: true, name: true, email: true } }
-    },
-    orderBy: { createdAt: "desc" },
-    take: 50
+  const [users, onlineSeen] = await Promise.all([
+    prisma.user.findMany({
+      where: {
+        deletedAt: null,
+        OR: search ? [{ name: { contains: search } }, { email: { contains: search } }] : undefined
+      },
+      include: {
+        role: true,
+        projectAssignments: { include: { project: true } },
+        manager: { select: { id: true, name: true, email: true } }
+      },
+      orderBy: { createdAt: "desc" },
+      take: 50
+    }),
+    // Live presence, same 15-min lastSeenAt definition as the Maintenance panel — one sessions
+    // query for the whole page, not one per row.
+    getOnlineSeenByUser()
+  ]);
+  res.json(
+    users.map(({ passwordHash: _passwordHash, ...user }) => ({
+      ...user,
+      online: onlineSeen.has(user.id),
+      lastSeenAt: onlineSeen.get(user.id) ?? null
+    }))
+  );
+});
+
+/**
+ * Force-sign-out ONE user: revokes every unrevoked session they have, server-side. Their next
+ * request 401s, the refresh fails, and they're back at /login — the same no-client-cooperation
+ * chain as maintenance mode's bulk force-logout, scoped to one person.
+ * Guard: only a SUPER_ADMIN may sign out a SUPER_ADMIN — otherwise an ADMIN with users:manage
+ * could bounce the one role that outranks them.
+ */
+userRouter.post("/:id/force-logout", async (req, res) => {
+  const id = String(req.params.id);
+  const target = await prisma.user.findUnique({ where: { id }, select: { deletedAt: true, role: { select: { name: true } } } });
+  if (!target || target.deletedAt) throw new AppError(404, "User not found");
+  if (target.role.name === "SUPER_ADMIN" && req.user!.role !== "SUPER_ADMIN") {
+    throw new AppError(403, "Only a super admin can sign out a super admin.");
+  }
+
+  const result = await prisma.session.updateMany({
+    where: { userId: id, revokedAt: null },
+    data: { revokedAt: new Date() }
   });
-  res.json(users.map(({ passwordHash: _passwordHash, ...user }) => user));
+  await audit(req.user!.id, "user.force_logout", "User", id, { revokedSessions: result.count });
+  res.json({ revokedSessions: result.count });
 });
 
 userRouter.post(
@@ -93,6 +128,19 @@ userRouter.post(
     ]);
     if (activeSeats >= seatLimit) {
       throw new AppError(402, `Seat limit reached (${seatLimit} seats on the current plan). Contact your platform administrator to add more seats.`);
+    }
+
+    // Explicit duplicate check instead of letting the unique index throw: a P2002 here used to
+    // surface as an unhandled 500, and the soft-delete case is genuinely non-obvious to the
+    // admin — the colliding account is invisible in every list.
+    const existing = await prisma.user.findUnique({ where: { email: req.body.email }, select: { deletedAt: true } });
+    if (existing) {
+      throw new AppError(
+        409,
+        existing.deletedAt
+          ? "This email belongs to a deleted account (kept for audit history), so it can't be reused."
+          : "A user with this email already exists."
+      );
     }
 
     const role = await prisma.role.findUniqueOrThrow({ where: { name: req.body.role } });

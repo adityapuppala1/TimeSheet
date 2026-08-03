@@ -137,6 +137,25 @@ export async function updateMaintenanceSettings(params: {
 }
 
 /**
+ * userId -> most recent lastSeenAt, for everyone "online" (same definition as getOnlineUsers
+ * below). The lightweight sibling the admin Users list decorates its rows with — it needs only
+ * the id->freshness map, not names/roles it already has.
+ */
+export async function getOnlineSeenByUser(): Promise<Map<string, Date>> {
+  const since = new Date(Date.now() - ONLINE_WINDOW_MS);
+  const sessions = await prisma.session.findMany({
+    where: { revokedAt: null, expiresAt: { gt: new Date() }, lastSeenAt: { gt: since } },
+    select: { userId: true, lastSeenAt: true },
+    orderBy: { lastSeenAt: "desc" }
+  });
+  const byUser = new Map<string, Date>();
+  for (const session of sessions) {
+    if (session.lastSeenAt && !byUser.has(session.userId)) byUser.set(session.userId, session.lastSeenAt);
+  }
+  return byUser;
+}
+
+/**
  * Who is using the app right now. "Online" = an unrevoked, unexpired session whose lastSeenAt is
  * inside the window — expiresAt alone would count everyone who logged in this month.
  */

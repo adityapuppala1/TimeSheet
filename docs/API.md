@@ -33,12 +33,27 @@ outage or an auth failure.
 - `POST /maintenance/notify` — SUPER_ADMIN. In-app + email warning to online non-admins quoting
   the window; requires the window to be enabled and scheduled. Email leg gated by the
   `emailMaintenanceScheduled` notification toggle. Audited; returns `{ notified }`.
+- `GET /maintenance/health` — SUPER_ADMIN. Live vitals of the API instance answering: CPU
+  (two-sample usage %, cores, load averages where the OS provides them), memory (system +
+  process RSS), disk (`fs.statfs` on the app's volume), network/latency (tenant + control-plane
+  DB pings, event-loop lag, interface addresses), and a per-component checklist (API, both
+  databases, mail transport). Never throws — a dead dependency reports `ok: false` on its
+  component. Behind a load balancer this is one replica's view; `server.hostname`/`pid` say
+  whose.
 
 ## Users
 
-- `GET /users?search=&role=&status=&page=1`
+- `GET /users?search=&role=&status=&page=1` — each row also carries login visibility:
+  `online` (live — an unrevoked session active in the last 15 minutes), `lastSeenAt`,
+  `firstLoginAt` (stamped once on the very first login; null for accounts predating the column,
+  deliberately not backfilled) and `lastLoginAt`
+- `POST /users/:id/force-logout` — revokes every session that user has, server-side; their next
+  request 401s and the refresh fails. Only a SUPER_ADMIN may target another SUPER_ADMIN.
+  Audited; returns `{ revokedSessions }`
 - `POST /users` — accepts an optional `designation` (free-text job title, display-only — separate
-  from `role`, which governs permissions)
+  from `role`, which governs permissions). A duplicate email answers a clear `409` — including
+  when the collision is with a soft-deleted account, which is invisible in every list (this used
+  to leak an unhandled 500)
 - `POST /users/bulk` — CSV bulk-import, same optional `designation` column per row
 - `PATCH /users/:id` — `designation` updatable independently of every other field
 - `DELETE /users/:id`

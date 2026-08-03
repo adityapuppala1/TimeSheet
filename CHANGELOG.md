@@ -36,9 +36,19 @@ user of a running installation.
   signed in to do the work. Includes a who's-online panel, a "wrap up" warning (in-app + email,
   with its own notification toggle), one-click force-logout of all non-admin sessions, and an
   advance-warning banner inside the app during the scheduled phase.
+- **Server health panel** — the Maintenance tab shows live vitals of the serving instance,
+  refreshed every 10 seconds: CPU, memory, disk, database ping / event-loop latency, and a
+  component checklist (API, both databases, mail transport) that stays honest when something is
+  down instead of erroring out.
+- **Login visibility in User management** — every user row shows a live online indicator, first
+  login and latest login times, plus a confirmed *sign out everywhere* action that revokes all
+  of one person's sessions server-side.
 
 ### 🐛 Fixes
 
+- Creating a user with an email that already exists now answers a clear conflict message instead
+  of an unhandled server error — including when the collision is with a previously deleted
+  account, which is invisible in every list.
 - Workspace Settings no longer overflows on phones (a grid min-content bug affected every tab).
 - Timesheet entries can now be deleted (drafts and rejected only — approved hours are part of the
   billing record and stay immutable).

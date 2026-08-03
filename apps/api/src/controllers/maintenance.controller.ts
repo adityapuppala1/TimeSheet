@@ -25,6 +25,7 @@ import {
   phaseOf,
   updateMaintenanceSettings
 } from "../services/maintenance.service.js";
+import { getSystemHealth } from "../services/system-health.service.js";
 
 export const maintenanceRouter = Router();
 
@@ -94,4 +95,14 @@ maintenanceRouter.post("/notify", requireAuth, requireSuperAdmin, async (req, re
   const { notified } = await notifyUsersOfMaintenance();
   await audit(req.user!.id, "maintenance.users_notified", "MaintenanceSettings", "global", { notified });
   res.json({ notified });
+});
+
+/**
+ * Live server vitals for the Server health card — CPU/RAM/disk/latency/component checks, all
+ * measured on the instance answering (see system-health.service.ts's honesty rules). Not
+ * audited: it's a read-only dashboard poll, and one row every 10 seconds would drown the
+ * audit log in noise.
+ */
+maintenanceRouter.get("/health", requireAuth, requireSuperAdmin, async (_req, res) => {
+  res.json(await getSystemHealth());
 });

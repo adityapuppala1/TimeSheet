@@ -43,9 +43,10 @@ export function createFakeTenantClient(): PrismaClient {
     faceEnrollmentTemplate: { findMany: vi.fn(), createMany: vi.fn(), deleteMany: vi.fn() },
     faceChallenge: { create: vi.fn(), findUnique: vi.fn(), updateMany: vi.fn(), deleteMany: vi.fn() },
     notification: { create: vi.fn(), findFirst: vi.fn(), count: vi.fn() },
-    // Maintenance mode (services/maintenance.service.ts)
+    // Maintenance mode (services/maintenance.service.ts) + server health pings
     maintenanceSettings: { upsert: vi.fn() },
     session: { findMany: vi.fn(), findUnique: vi.fn(), update: vi.fn(), updateMany: vi.fn() },
+    $queryRaw: vi.fn(),
     user: {
       findUnique: vi.fn(),
       findFirst: vi.fn(),

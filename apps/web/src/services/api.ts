@@ -281,11 +281,40 @@ export interface MaintenanceAdminView {
   online: { count: number; users: MaintenanceOnlineUser[] };
 }
 
+/** Mirrors api/src/services/system-health.service.ts#SystemHealthSnapshot — everything measured
+ *  on the API instance that answered (one replica's view behind a load balancer, and it says so). */
+export interface SystemHealthSnapshot {
+  sampledAt: string;
+  server: {
+    hostname: string;
+    pid: number;
+    platform: string;
+    arch: string;
+    nodeVersion: string;
+    appVersion: string;
+    osUptimeSec: number;
+    processUptimeSec: number;
+  };
+  cpu: { cores: number; model: string; usagePercent: number | null; loadAvg: [number, number, number] | null };
+  memory: { totalBytes: number; freeBytes: number; usedPercent: number; processRssBytes: number };
+  disk: { path: string; totalBytes: number; freeBytes: number; usedPercent: number } | null;
+  network: {
+    interfaces: Array<{ name: string; address: string; family: string }>;
+    tenantDbPingMs: number | null;
+    controlDbPingMs: number | null;
+    eventLoopLagMeanMs: number;
+    eventLoopLagMaxMs: number;
+  };
+  components: Array<{ name: string; ok: boolean; detail: string }>;
+}
+
 export const maintenanceApi = {
   /** Unauthenticated on purpose — the lockout page's poll must work for people whose sessions
    *  were just revoked. Rate-limited server-side to 30/min per IP, so poll gently (≥15s). */
   status: async () => (await api.get<MaintenanceStatus>("/maintenance/status")).data,
   admin: async () => (await api.get<MaintenanceAdminView>("/maintenance/admin")).data,
+  /** SUPER_ADMIN. Shares the router's 30/min limiter with status/admin polls — poll ≥10s. */
+  health: async () => (await api.get<SystemHealthSnapshot>("/maintenance/health")).data,
   updateSettings: async (payload: {
     enabled: boolean;
     scheduledStartAt: string | null;
@@ -640,6 +669,13 @@ export interface UserRow {
   managerId: string | null;
   manager?: { id: string; name: string; email: string } | null;
   role: { name: string };
+  /// Live presence — same 15-minute lastSeenAt definition as the Maintenance tab's online panel.
+  online: boolean;
+  lastSeenAt: string | null;
+  /// Stamped once on the very first successful login; null for accounts predating the column
+  /// (deliberately not backfilled — see prisma schema comment).
+  firstLoginAt: string | null;
+  lastLoginAt: string | null;
 }
 
 export interface CreatedUser extends UserRow {
@@ -659,6 +695,9 @@ export const userApi = {
   remove: async (id: string) => api.delete(`/users/${id}`),
   resetPassword: async (id: string, password: string) =>
     (await api.post(`/users/${id}/reset-password`, { password })).data,
+  /** Revokes every session the user has — server-side, so it needs no cooperation from their
+   *  browser. Only a SUPER_ADMIN may target another SUPER_ADMIN. */
+  forceLogout: async (id: string) => (await api.post<{ revokedSessions: number }>(`/users/${id}/force-logout`)).data,
   resendWelcome: async (id: string) =>
     (await api.post<{ sent: boolean; to: string; emailLogId: string | null }>(`/users/${id}/resend-welcome`)).data,
   bulkCreate: async (

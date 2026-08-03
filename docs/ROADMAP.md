@@ -1202,3 +1202,18 @@ and planned downtime is a scheduled workflow instead of a Slack apology.
   every later spec depends on — the one-owner-per-snapshot trap, at suite scale); the SUPER_ADMIN
   exemption living in the SQL WHERE clause is pinned by a unit test instead, and the spec restores
   the workspace in `finally` so a failed assertion can never leave the demo workspace locked.
+
+### Follow-up (same phase): server health + per-user login visibility
+
+- `GET /api/maintenance/health` (SUPER_ADMIN) renders a live vitals card on the Maintenance tab:
+  CPU as a real two-sample delta, memory, `fs.statfs` disk, tenant/control DB pings, event-loop
+  lag, and a component checklist. Honesty rules are explicit in the service header: everything is
+  measured on the instance that answered (named by host+pid, one replica's view behind a LB),
+  Windows load averages are null rather than fake zeros, and the endpoint can never throw —
+  a health check that 500s when unhealthy defeats itself.
+- User management now shows presence (same 15-min `lastSeenAt` window, one sessions query for
+  the whole page), `firstLoginAt` (stamped exactly once in `establishSession`, deliberately not
+  backfilled — null means "unknown", not a guess) and `lastLoginAt`, plus per-user force-logout
+  (only a SUPER_ADMIN may target a SUPER_ADMIN). The e2e proves the revocation chain on a
+  throwaway drill user it creates and asserts-cleans-up itself — seeded accounts' sessions are
+  never revoked, for the same snapshot-ownership reason as above.

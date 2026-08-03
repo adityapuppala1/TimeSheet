@@ -19,6 +19,7 @@ import {
   FileText,
   FolderTree,
   Layers,
+  LogOut,
   Mail,
   Pencil,
   Plus,
@@ -166,9 +167,36 @@ function initialsFor(name?: string) {
 }
 
 /* ============================== USERS ============================== */
+/** "just now" / "4 min ago" for presence; falls back to a compact date for anything older. */
+function formatRelativeSeen(iso: string | null): string {
+  if (!iso) return "—";
+  const minutes = Math.round((Date.now() - new Date(iso).getTime()) / 60_000);
+  if (minutes <= 0) return "just now";
+  if (minutes < 60) return `${minutes} min ago`;
+  return new Date(iso).toLocaleString(undefined, { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
+}
+
+/** Compact login timestamp — "Aug 3, 02:31 AM", with the year only when it isn't this year. */
+function formatLoginTime(iso: string | null): string {
+  if (!iso) return "—";
+  const date = new Date(iso);
+  if (Number.isNaN(date.getTime())) return "—";
+  const sameYear = date.getFullYear() === new Date().getFullYear();
+  return date.toLocaleString(undefined, {
+    month: "short",
+    day: "numeric",
+    ...(sameYear ? {} : { year: "numeric" }),
+    hour: "2-digit",
+    minute: "2-digit"
+  });
+}
+
 export function UsersPage() {
   const queryClient = useQueryClient();
-  const users = useQuery({ queryKey: ["users"], queryFn: userApi.list });
+  const currentUserId = useAuthStore((s) => s.user?.id);
+  // 30s refetch keeps the presence dots honest — the server's picture itself moves in 5-minute
+  // lastSeenAt increments, so polling faster would only pretend to more precision.
+  const users = useQuery({ queryKey: ["users"], queryFn: userApi.list, refetchInterval: 30_000 });
   const [draft, setDraft] = useState({
     name: "",
     email: "",
@@ -182,6 +210,7 @@ export function UsersPage() {
   const [editing, setEditing] = useState<UserRow | null>(null);
   const [pendingDelete, setPendingDelete] = useState<{ id: string; name: string } | null>(null);
   const [pendingReset, setPendingReset] = useState<{ id: string; name: string } | null>(null);
+  const [pendingLogout, setPendingLogout] = useState<{ id: string; name: string } | null>(null);
   const [bulkUploadOpen, setBulkUploadOpen] = useState(false);
 
   const eligibleManagers = useMemo(
@@ -247,6 +276,18 @@ export function UsersPage() {
     onSettled: () => setPendingReset(null)
   });
 
+  const forceLogout = useMutation({
+    mutationFn: (id: string) => userApi.forceLogout(id),
+    onSuccess: ({ revokedSessions }) => {
+      toast.success(
+        revokedSessions === 0 ? "No active sessions — already signed out" : `Signed out ${revokedSessions} session${revokedSessions === 1 ? "" : "s"}`
+      );
+      queryClient.invalidateQueries({ queryKey: ["users"] });
+    },
+    onError: (err: any) => toast.error("Sign-out failed", { description: serverMessage(err, "Try again.") }),
+    onSettled: () => setPendingLogout(null)
+  });
+
   function handleCreate() {
     create.mutate({
       name: draft.name,
@@ -301,6 +342,44 @@ export function UsersPage() {
         cell: (info) => <Badge variant={info.getValue() === "ACTIVE" ? "success" : "warning"}>{info.getValue() as string}</Badge>
       },
       {
+        id: "presence",
+        accessorFn: (row: any) => (row.online ? 1 : 0),
+        header: "Online",
+        cell: ({ row }) => (
+          <span className="flex items-center gap-1.5 whitespace-nowrap text-xs">
+            <span
+              className={`h-2 w-2 shrink-0 rounded-full ${row.original.online ? "bg-success" : "bg-muted-foreground/30"}`}
+              aria-hidden
+            />
+            {row.original.online ? (
+              <span className="font-medium text-success">Online</span>
+            ) : (
+              <span className="text-muted-foreground">{row.original.lastSeenAt ? formatRelativeSeen(row.original.lastSeenAt) : "Offline"}</span>
+            )}
+          </span>
+        )
+      },
+      {
+        id: "firstLogin",
+        accessorFn: (row: any) => row.firstLoginAt ?? "",
+        header: "First login",
+        cell: ({ row }) => (
+          <span className="whitespace-nowrap text-xs text-muted-foreground" title={row.original.firstLoginAt ?? undefined}>
+            {formatLoginTime(row.original.firstLoginAt)}
+          </span>
+        )
+      },
+      {
+        id: "lastLogin",
+        accessorFn: (row: any) => row.lastLoginAt ?? "",
+        header: "Last login",
+        cell: ({ row }) => (
+          <span className="whitespace-nowrap text-xs text-muted-foreground" title={row.original.lastLoginAt ?? undefined}>
+            {formatLoginTime(row.original.lastLoginAt)}
+          </span>
+        )
+      },
+      {
         id: "actions",
         header: () => <span className="block text-right">Actions</span>,
         enableSorting: false,
@@ -350,6 +429,19 @@ export function UsersPage() {
                   </Button>
                 </TooltipTrigger>
                 <TooltipContent>Reset password</TooltipContent>
+              </Tooltip>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    className="h-9 w-9 text-warning hover:bg-warning/10 hover:text-warning"
+                    onClick={() => setPendingLogout({ id: user.id, name: user.name })}
+                  >
+                    <LogOut className="h-4 w-4" />
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent>Sign out all their sessions</TooltipContent>
               </Tooltip>
               <Tooltip>
                 <TooltipTrigger asChild>
@@ -511,6 +603,30 @@ export function UsersPage() {
               className="bg-destructive text-destructive-foreground hover:brightness-110"
             >
               Delete user
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      <AlertDialog open={!!pendingLogout} onOpenChange={(open) => !open && setPendingLogout(null)}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Sign out {pendingLogout?.name} everywhere?</AlertDialogTitle>
+            <AlertDialogDescription>
+              Revokes every active session they have, on every device — their next action lands on the
+              sign-in page and unsaved work is lost. They can sign back in immediately with the same
+              password.
+              {pendingLogout?.id === currentUserId &&
+                " This is YOUR account — you'll be signed out of this session too."}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={() => pendingLogout && forceLogout.mutate(pendingLogout.id)}
+              className="bg-destructive text-destructive-foreground hover:brightness-110"
+            >
+              Sign out everywhere
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>

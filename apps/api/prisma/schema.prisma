@@ -146,6 +146,11 @@ model User {
   scimExternalId           String?    @unique @db.VarChar(255)
   emailVerifiedAt          DateTime?
   lastLoginAt              DateTime?
+  /// Stamped exactly once, on the account's very first successful login (any method — password
+  /// or SSO; both terminate in establishSession). Deliberately NOT backfilled for accounts that
+  /// existed before this column: inventing a first-login date from lastLoginAt would be a lie,
+  /// so pre-existing users show "—" in the admin list until... never. Null means "unknown".
+  firstLoginAt             DateTime?
   /// Admin-only, opt-in. Only read when GlobalTicketSettings.enableCostAnalytics is on.
   hourlyRate               Decimal?   @db.Decimal(10, 2)
   /// Admin-set per-user override for face (identity) verification, in the same

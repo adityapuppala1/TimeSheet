@@ -33,6 +33,7 @@ import { Switch } from "../../components/ui/switch";
 import { Textarea } from "../../components/ui/textarea";
 import { toast } from "../../components/ui/toaster";
 import { maintenanceApi, type MaintenancePhase } from "../../services/api";
+import { ServerHealthCard } from "./ServerHealthCard";
 
 /** ISO from the API → the local "YYYY-MM-DDTHH:mm" a datetime-local input needs. Manual
  *  formatting because toISOString() would shift the wall-clock time to UTC — the admin picks
@@ -357,6 +358,9 @@ export function MaintenanceSettingsCard({ readOnly }: { readOnly: boolean }) {
           </div>
         </CardContent>
       </Card>
+
+      {/* Live vitals of the box the admin is about to take down / bring back. */}
+      <ServerHealthCard />
     </div>
   );
 }

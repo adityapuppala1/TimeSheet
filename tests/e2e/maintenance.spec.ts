@@ -64,6 +64,18 @@ test.describe("maintenance mode", () => {
       expect((await ctx.get("/api/maintenance/admin", { headers: employeeHeaders })).status()).toBe(403);
       expect((await ctx.post("/api/maintenance/force-logout", { headers: employeeHeaders })).status()).toBe(403);
       expect((await ctx.get("/api/maintenance/admin")).status()).toBe(401);
+      expect((await ctx.get("/api/maintenance/health", { headers: employeeHeaders })).status()).toBe(403);
+
+      // The server-health snapshot: super-admin only, and the shape the card renders from.
+      await withAdminRequest(async (adminCtx, headers) => {
+        const res = await adminCtx.get("/api/maintenance/health", { headers });
+        expect(res.status()).toBe(200);
+        const health = await res.json();
+        expect(health.cpu.cores).toBeGreaterThan(0);
+        expect(health.memory.usedPercent).toBeGreaterThan(0);
+        expect(health.components.map((c: { name: string }) => c.name)).toContain("Tenant database");
+        expect(health.components.find((c: { name: string; ok: boolean }) => c.name === "Tenant database")!.ok).toBe(true);
+      });
     } finally {
       await ctx.dispose();
     }
