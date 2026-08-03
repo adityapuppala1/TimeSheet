@@ -27,7 +27,7 @@ import {
   notifyEnrollmentRequired
 } from "../services/face.service.js";
 import { getGlobalNotificationSettings } from "../services/notify.service.js";
-import { getGlobalAISettings, getMonthlyAIUsageSummary, getWeeklyAIUsageTrend, listAvailableOpenAICompatibleModels, resolveApiKey } from "../services/ai.service.js";
+import { getGlobalAISettings, getMonthlyAIUsageSummary, getWeeklyAIUsageTrend, getAIFeatureUsage, listAvailableOpenAICompatibleModels, resolveApiKey } from "../services/ai.service.js";
 import { getAIQualitySummary } from "../services/ai-quality.service.js";
 import { getAllowedSsoProviders } from "../services/plan-limits.service.js";
 import { getGlobalTicketSettings } from "../services/ticket.service.js";
@@ -251,6 +251,14 @@ settingsRouter.get("/ai/quality-summary", requireSuperAdmin, async (req, res) =>
 settingsRouter.get("/ai/usage-trend", requireSuperAdmin, async (req, res) => {
   const weeks = Math.min(26, Math.max(1, Number(req.query.weeks) || 8));
   res.json(await getWeeklyAIUsageTrend(weeks));
+});
+
+/** Per-feature token consumption, cumulative and day by day — "what is spending the budget",
+ *  as opposed to usage-summary's "what did we spend". Capped at a quarter: the response carries a
+ *  row per day per feature, and a year of it would be a large payload built to be skimmed. */
+settingsRouter.get("/ai/feature-usage", requireSuperAdmin, async (req, res) => {
+  const days = Math.min(90, Math.max(1, Number(req.query.days) || 30));
+  res.json(await getAIFeatureUsage(days));
 });
 
 const aiSettingsSchema = z.object({

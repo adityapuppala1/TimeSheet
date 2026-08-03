@@ -867,8 +867,36 @@ export interface AIUsageSummary {
   totalCalls: number;
   totalInputTokens: number;
   totalOutputTokens: number;
-  byFeature: Array<{ feature: string; costUsd: number; calls: number }>;
+  byFeature: Array<{ feature: string; costUsd: number; calls: number; inputTokens: number; outputTokens: number }>;
   byModel: Array<{ model: string; costUsd: number; inputTokens: number; outputTokens: number; calls: number }>;
+}
+
+/** One feature's consumption over the window. Sorted by tokens, not cost — cost is an estimate
+ *  from a price table that moves, tokens are what was actually consumed. */
+export interface AIFeatureUsageRow {
+  feature: string;
+  calls: number;
+  inputTokens: number;
+  outputTokens: number;
+  totalTokens: number;
+  costUsd: number;
+  avgTokensPerCall: number;
+  sharePct: number;
+  models: string[];
+}
+
+export interface AIFeatureUsage {
+  from: string;
+  to: string;
+  days: number;
+  /** Feature keys present in the window, in the same order as `features` — the stacked chart uses
+   *  this to pick series and colours consistently. */
+  featureNames: string[];
+  features: AIFeatureUsageRow[];
+  /** One entry per day in the window (zero-filled), each carrying a numeric key per feature plus
+   *  `totalTokens` and `costUsd`. Pivoted server-side so the zero-filling can't be forgotten. */
+  daily: Array<Record<string, string | number>>;
+  totals: { calls: number; inputTokens: number; outputTokens: number; totalTokens: number; costUsd: number };
 }
 
 /** Mirrors api/src/services/ai-quality.service.ts. Read `coverage` before trusting
@@ -1139,6 +1167,10 @@ export const settingsApi = {
   getAIQualitySummary: async (windowDays = 30) =>
     (await api.get<AIQualitySummary>("/settings/ai/quality-summary", { params: { windowDays } })).data,
   getAIUsageTrend: async (weeks = 8) => (await api.get<AIUsageWeek[]>("/settings/ai/usage-trend", { params: { weeks } })).data,
+  /** Per-feature token consumption — "what is spending the budget", as opposed to the summary's
+   *  "what did we spend". */
+  getAIFeatureUsage: async (days = 30) =>
+    (await api.get<AIFeatureUsage>("/settings/ai/feature-usage", { params: { days } })).data,
   /** Lists the real model ids an OpenAI-compatible endpoint serves, for the BYOK model picker —
    *  `baseUrl`/`apiKey` are optional overrides so this can preview a not-yet-saved draft (a
    *  freshly typed key, a provider just switched) instead of only ever checking what's stored.

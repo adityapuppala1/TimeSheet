@@ -419,7 +419,10 @@ export async function getMonthlyAIUsageSummary() {
     prisma.aIUsageLog.groupBy({
       by: ["feature"],
       where: { createdAt: { gte: monthStart } },
-      _sum: { costUsdEstimate: true },
+      // Tokens as well as cost: cost is a derived estimate that moves when a price list changes,
+      // whereas tokens are what was actually consumed. When somebody asks "which feature is
+      // eating the budget", the answer they can act on is the token count.
+      _sum: { costUsdEstimate: true, inputTokens: true, outputTokens: true },
       _count: true
     }),
     prisma.aIUsageLog.groupBy({
@@ -435,7 +438,13 @@ export async function getMonthlyAIUsageSummary() {
     totalCalls: total._count,
     totalInputTokens: total._sum.inputTokens ?? 0,
     totalOutputTokens: total._sum.outputTokens ?? 0,
-    byFeature: byFeature.map((row) => ({ feature: row.feature, costUsd: Number(row._sum.costUsdEstimate ?? 0), calls: row._count })),
+    byFeature: byFeature.map((row) => ({
+      feature: row.feature,
+      costUsd: Number(row._sum.costUsdEstimate ?? 0),
+      inputTokens: row._sum.inputTokens ?? 0,
+      outputTokens: row._sum.outputTokens ?? 0,
+      calls: row._count
+    })),
     byModel: byModel.map((row) => ({
       model: row.model,
       costUsd: Number(row._sum.costUsdEstimate ?? 0),
@@ -443,6 +452,114 @@ export async function getMonthlyAIUsageSummary() {
       outputTokens: row._sum.outputTokens ?? 0,
       calls: row._count
     }))
+  };
+}
+
+/**
+ * Per-feature token consumption over a window, cumulative AND day by day.
+ *
+ * WHY THIS IS SEPARATE FROM THE MONTHLY SUMMARY: that panel answers "what did we spend", which is
+ * one number an admin checks against a budget. This answers "what is spending it", which is the
+ * question you ask when the first number is higher than you expected — and it needs a different
+ * shape: every feature, every day, in tokens rather than an estimated price.
+ *
+ * TOKENS ARE THE HONEST UNIT HERE. `costUsdEstimate` is exactly that, an estimate, computed from a
+ * price table at the time of the call; it moves when a provider changes prices and it is wrong for
+ * anyone on BYOK with negotiated rates. Tokens are what was actually consumed, they are comparable
+ * across months, and they are the thing a prompt change actually moves. Cost is still reported —
+ * it is what the budget cap is denominated in — but the table sorts on tokens by default.
+ *
+ * WHY THE DAILY SERIES IS PIVOTED SERVER-SIDE: the chart needs one row per day with a column per
+ * feature. Pivoting in the browser means every consumer re-implements it, and the zero-filling is
+ * the part that gets forgotten — a feature with no calls on Tuesday must appear as 0 and not as a
+ * gap, or a stacked bar silently changes what each colour means from one day to the next.
+ *
+ * Bucketed in JS rather than SQL date-trunc, matching the weekly trend directly below: AI call
+ * volume here is low, the window is bounded, and it stays portable across database engines.
+ */
+export async function getAIFeatureUsage(days: number) {
+  const to = new Date();
+  const from = new Date(to.getFullYear(), to.getMonth(), to.getDate() - (days - 1));
+
+  const rows = await prisma.aIUsageLog.findMany({
+    where: { createdAt: { gte: from } },
+    select: { feature: true, inputTokens: true, outputTokens: true, costUsdEstimate: true, createdAt: true, model: true },
+    orderBy: { createdAt: "asc" }
+  });
+
+  type Agg = { calls: number; inputTokens: number; outputTokens: number; costUsd: number; models: Set<string> };
+  const perFeature = new Map<string, Agg>();
+  const perDay = new Map<string, Map<string, number>>();
+  const perDayCost = new Map<string, number>();
+
+  for (const row of rows) {
+    const agg = perFeature.get(row.feature) ?? { calls: 0, inputTokens: 0, outputTokens: 0, costUsd: 0, models: new Set<string>() };
+    agg.calls += 1;
+    agg.inputTokens += row.inputTokens;
+    agg.outputTokens += row.outputTokens;
+    agg.costUsd += Number(row.costUsdEstimate ?? 0);
+    agg.models.add(row.model);
+    perFeature.set(row.feature, agg);
+
+    const day = localIsoDate(row.createdAt);
+    const dayMap = perDay.get(day) ?? new Map<string, number>();
+    dayMap.set(row.feature, (dayMap.get(row.feature) ?? 0) + row.inputTokens + row.outputTokens);
+    perDay.set(day, dayMap);
+    perDayCost.set(day, (perDayCost.get(day) ?? 0) + Number(row.costUsdEstimate ?? 0));
+  }
+
+  const features = [...perFeature.entries()]
+    .map(([feature, agg]) => ({
+      feature,
+      calls: agg.calls,
+      inputTokens: agg.inputTokens,
+      outputTokens: agg.outputTokens,
+      totalTokens: agg.inputTokens + agg.outputTokens,
+      costUsd: Number(agg.costUsd.toFixed(4)),
+      avgTokensPerCall: Math.round((agg.inputTokens + agg.outputTokens) / Math.max(1, agg.calls)),
+      models: [...agg.models].sort()
+    }))
+    .sort((a, b) => b.totalTokens - a.totalTokens);
+
+  const totalTokens = features.reduce((sum, f) => sum + f.totalTokens, 0);
+  const withShare = features.map((f) => ({
+    ...f,
+    // Share of the total, so "which feature is eating the budget" is answerable at a glance rather
+    // than by mentally dividing two large numbers.
+    sharePct: totalTokens === 0 ? 0 : Number(((f.totalTokens / totalTokens) * 100).toFixed(1))
+  }));
+
+  // Every day in the window, including the ones with no calls at all: a chart that omits empty
+  // days compresses the x-axis and makes a quiet week look like a busy one.
+  const daily: Array<Record<string, string | number>> = [];
+  const featureNames = withShare.map((f) => f.feature);
+  for (let i = 0; i < days; i += 1) {
+    const date = new Date(from.getFullYear(), from.getMonth(), from.getDate() + i);
+    const key = localIsoDate(date);
+    const dayMap = perDay.get(key);
+    const entry: Record<string, string | number> = { date: key, totalTokens: 0, costUsd: Number((perDayCost.get(key) ?? 0).toFixed(4)) };
+    for (const name of featureNames) {
+      const value = dayMap?.get(name) ?? 0;
+      entry[name] = value;
+      entry.totalTokens = (entry.totalTokens as number) + value;
+    }
+    daily.push(entry);
+  }
+
+  return {
+    from: localIsoDate(from),
+    to: localIsoDate(to),
+    days,
+    featureNames,
+    features: withShare,
+    daily,
+    totals: {
+      calls: rows.length,
+      inputTokens: features.reduce((s, f) => s + f.inputTokens, 0),
+      outputTokens: features.reduce((s, f) => s + f.outputTokens, 0),
+      totalTokens,
+      costUsd: Number(features.reduce((s, f) => s + f.costUsd, 0).toFixed(4))
+    }
   };
 }
 

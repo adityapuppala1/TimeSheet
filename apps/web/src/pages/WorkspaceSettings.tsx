@@ -66,6 +66,7 @@ import {
 import type { ReactNode } from "react";
 import { useEffect, useState } from "react";
 import { Bar, BarChart, CartesianGrid, Cell, Line, LineChart, ResponsiveContainer, Tooltip as RTooltip, XAxis, YAxis } from "recharts";
+import { AiFeatureUsagePanel } from "../components/AiFeatureUsagePanel";
 import { Alert, AlertDescription, AlertTitle } from "../components/ui/alert";
 import { Badge } from "../components/ui/badge";
 import { Button } from "../components/ui/button";
@@ -1508,9 +1509,11 @@ function AISettingsCard({ readOnly }: { readOnly: boolean }) {
                     <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground">By feature</p>
                     <div className="divide-y divide-border rounded-lg border border-border">
                       {usage.data.byFeature.map((f) => (
-                        <div key={f.feature} className="flex items-center justify-between p-3 text-sm">
-                          <span>{f.feature}</span>
-                          <span className="text-muted-foreground">{f.calls} calls · ${f.costUsd.toFixed(2)}</span>
+                        <div key={f.feature} className="flex items-center justify-between gap-3 p-3 text-sm">
+                          <span className="min-w-0 truncate">{f.feature}</span>
+                          <span className="shrink-0 text-muted-foreground">
+                            {f.calls} calls · {(f.inputTokens + f.outputTokens).toLocaleString()} tokens · ${f.costUsd.toFixed(2)}
+                          </span>
                         </div>
                       ))}
                     </div>
@@ -1522,6 +1525,10 @@ function AISettingsCard({ readOnly }: { readOnly: boolean }) {
           </CardContent>
         </Card>
       )}
+
+      {/* Sits directly under the monthly total it explains: that card answers "what did we spend",
+          this one answers "what is spending it". */}
+      {settings.data?.aiEnabled && <AiFeatureUsagePanel />}
 
       <AIQualityCard enabled={Boolean(settings.data?.aiEnabled)} captureOn={Boolean(settings.data?.aiCaptureEnabled)} />
 
