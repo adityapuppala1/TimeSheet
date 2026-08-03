@@ -30,11 +30,13 @@ import {
   AlertTriangle,
   ArrowUpRight,
   Bug,
+  CalendarRange,
   CheckSquare,
   ChevronDown,
   ChevronUp,
   Eye,
   EyeOff,
+  GanttChartSquare,
   GitBranch,
   LayoutGrid,
   Link2,
@@ -57,6 +59,9 @@ import {
 } from "lucide-react";
 import { useState } from "react";
 import { useSearchParams } from "react-router";
+import { PlanCalendar } from "../components/PlanCalendar";
+import { TicketPlanningPanel } from "../components/TicketPlanningPanel";
+import { PlanTimeline, TimelineLegend, scheduledItemIds, type TimelineZoom } from "../components/PlanTimeline";
 import { TicketKanban } from "../components/TicketKanban";
 import { Avatar, AvatarFallback, AvatarImage } from "../components/ui/avatar";
 import { Badge, type BadgeProps } from "../components/ui/badge";
@@ -78,9 +83,10 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "../components/ui/tabs"
 import { toast } from "../components/ui/toaster";
 import { Tooltip, TooltipContent, TooltipTrigger } from "../components/ui/tooltip";
 import { safeHtml } from "../lib/safe-html";
-import { aiApi, faceApi, fileUrl, labelApi, projectApi, settingsApi, ticketApi, ticketTypeApi, type AIDuplicateMatch, type AITriageSuggestion, type SecurityFindingRow, type TicketAttachmentRow, type TicketBranchRow, type TicketChecklistItemRow, type TicketComment, type TicketDetail, type TicketLineageEvent, type TicketLinkRow, type TicketLinkType, type TicketRow, type TicketTimesheetRow } from "../services/api";
+import { aiApi, faceApi, fileUrl, labelApi, planApi, projectApi, settingsApi, ticketApi, ticketTypeApi, type AIDuplicateMatch, type AITriageSuggestion, type SecurityFindingRow, type TicketAttachmentRow, type TicketBranchRow, type TicketChecklistItemRow, type TicketComment, type TicketDetail, type TicketLineageEvent, type TicketLinkRow, type TicketLinkType, type TicketRow, type TicketTimesheetRow } from "../services/api";
 import { FaceVerificationDialog } from "../components/FaceVerificationDialog";
 import { useFaceStatus } from "../lib/use-face-status";
+import { usePlanningFeatures } from "../lib/use-planning";
 import { useAuthStore } from "../store/auth";
 
 /** Icon for the 3 seeded defaults; any admin-added custom type falls back to a generic tag. */
@@ -264,7 +270,49 @@ export function Tickets() {
 
   const [filters, setFilters] = useState({ projectId: "all", status: "all", priority: "all", labelId: "all", onlyMine: false });
   const [createOpen, setCreateOpen] = useState(false);
-  const [viewMode, setViewMode] = useState<"list" | "board">("list");
+  // Timeline and Calendar join List and Board here rather than becoming their own pages, so the
+  // filters someone has already set carry across every way of looking at the same work. A
+  // separate "planning" page would have meant two places to filter and two mental models.
+  const [viewMode, setViewMode] = useState<"list" | "board" | "timeline" | "calendar">("list");
+  const { features: planFeatures } = usePlanningFeatures();
+  const canEditPlan = Boolean(user?.permissions.includes(permissions.PLAN_WRITE));
+  const [timelineZoom, setTimelineZoom] = useState<TimelineZoom>("week");
+  const [showBaseline, setShowBaseline] = useState(true);
+  const [criticalOnly, setCriticalOnly] = useState(false);
+  const [showUnscheduled, setShowUnscheduled] = useState(false);
+  const [calendarMonth, setCalendarMonth] = useState(() => {
+    const now = new Date();
+    return { year: now.getUTCFullYear(), month: now.getUTCMonth() };
+  });
+
+  // Both planning views respect the project filter already on this page; neither fetches until
+  // its tab is actually open, so an org that never uses them pays nothing for them being here.
+  const planProjectIds = filters.projectId !== "all" ? [filters.projectId] : undefined;
+  const timelineQuery = useQuery({
+    queryKey: ["plan", "timeline", "tickets-tab", filters.projectId],
+    queryFn: () => planApi.timeline({ projectIds: planProjectIds }),
+    enabled: viewMode === "timeline" && planFeatures.timeline
+  });
+  const timelineDeps = useQuery({
+    queryKey: ["plan", "dependencies", "tickets-tab", filters.projectId],
+    queryFn: () => planApi.dependencies(planProjectIds),
+    enabled: viewMode === "timeline" && planFeatures.timeline
+  });
+  const calendarQuery = useQuery({
+    queryKey: ["plan", "calendar", filters.projectId, calendarMonth.year, calendarMonth.month],
+    queryFn: () => {
+      // A month grid always shows six weeks, so the window has to cover the leading and trailing
+      // days from the neighbouring months or those cells render empty when they aren't.
+      const from = new Date(Date.UTC(calendarMonth.year, calendarMonth.month, 1 - 7));
+      const to = new Date(Date.UTC(calendarMonth.year, calendarMonth.month + 1, 14));
+      return planApi.calendar({
+        from: from.toISOString().slice(0, 10),
+        to: to.toISOString().slice(0, 10),
+        projectIds: planProjectIds
+      });
+    },
+    enabled: viewMode === "calendar" && planFeatures.planning
+  });
 
   const projects = useQuery({ queryKey: ["projects"], queryFn: projectApi.list });
   const labels = useQuery({ queryKey: ["labels"], queryFn: labelApi.list });
@@ -307,16 +355,34 @@ export function Tickets() {
             <p className="mt-1 text-sm text-muted-foreground">Bugs, tasks, and improvements — assign, track, and resolve.</p>
           </div>
         </div>
-        <div className="flex items-center gap-2">
-          <div className="flex items-center rounded-lg border border-border p-0.5">
-            <Button variant={viewMode === "list" ? "default" : "ghost"} size="sm" onClick={() => setViewMode("list")}>
+        {/* `min-w-0` + `flex-wrap` are load-bearing at 390px, not tidying. Going from two view
+            buttons to four pushed this row past the viewport, and because `body { overflow-x:
+            clip }` hides the damage rather than scrolling it, the symptom was the page header
+            silently dragged off-screen — the exact failure documented on the Workspace Settings
+            grid track in index.css. The switcher below owns its own overflow so it can never
+            export width to the page again. */}
+        <div className="flex min-w-0 max-w-full flex-wrap items-center gap-2">
+          <div className="flex max-w-full items-center gap-0.5 overflow-x-auto rounded-lg border border-border p-0.5">
+            <Button className="shrink-0" variant={viewMode === "list" ? "default" : "ghost"} size="sm" onClick={() => setViewMode("list")}>
               <ListChecks className="h-3.5 w-3.5" />List
             </Button>
-            <Button variant={viewMode === "board" ? "default" : "ghost"} size="sm" onClick={() => setViewMode("board")}>
+            <Button className="shrink-0" variant={viewMode === "board" ? "default" : "ghost"} size="sm" onClick={() => setViewMode("board")}>
               <LayoutGrid className="h-3.5 w-3.5" />Board
             </Button>
+            {/* Only rendered once the workspace has the capability — an org that never turns on
+                planning sees exactly the two-button toggle it always had. */}
+            {planFeatures.timeline && (
+              <Button className="shrink-0" variant={viewMode === "timeline" ? "default" : "ghost"} size="sm" onClick={() => setViewMode("timeline")}>
+                <GanttChartSquare className="h-3.5 w-3.5" />Timeline
+              </Button>
+            )}
+            {planFeatures.planning && (
+              <Button className="shrink-0" variant={viewMode === "calendar" ? "default" : "ghost"} size="sm" onClick={() => setViewMode("calendar")}>
+                <CalendarRange className="h-3.5 w-3.5" />Calendar
+              </Button>
+            )}
           </div>
-          <Button onClick={() => setCreateOpen(true)}>
+          <Button className="shrink-0" onClick={() => setCreateOpen(true)}>
             <Plus className="h-4 w-4" />New ticket
           </Button>
         </div>
@@ -376,6 +442,59 @@ export function Tickets() {
               <Skeleton className="h-64 w-full" />
             ) : (
               <TicketKanban tickets={tickets.data ?? []} onOpenTicket={openTicket} />
+            )}
+          </CardContent>
+        </Card>
+      )}
+
+      {viewMode === "timeline" && (
+        <Card>
+          <CardContent className="grid gap-3 p-3">
+            <TimelineLegend
+              zoom={timelineZoom}
+              onZoom={setTimelineZoom}
+              showBaseline={showBaseline}
+              onToggleBaseline={() => setShowBaseline((v) => !v)}
+              showCriticalOnly={criticalOnly}
+              onToggleCritical={() => setCriticalOnly((v) => !v)}
+              showUnscheduled={showUnscheduled}
+              onToggleUnscheduled={() => setShowUnscheduled((v) => !v)}
+              unscheduledCount={
+                timelineQuery.data ? timelineQuery.data.items.length - scheduledItemIds(timelineQuery.data.items).size : 0
+              }
+              violationCount={timelineQuery.data?.violations.length ?? 0}
+            />
+            {timelineQuery.isLoading ? (
+              <Skeleton className="h-64 w-full" />
+            ) : timelineQuery.data ? (
+              <PlanTimeline
+                data={timelineQuery.data}
+                dependencies={timelineDeps.data ?? []}
+                zoom={timelineZoom}
+                canEdit={canEditPlan}
+                showBaseline={showBaseline}
+                showCriticalOnly={criticalOnly}
+                showUnscheduled={showUnscheduled}
+                onOpenItem={openTicket}
+              />
+            ) : null}
+          </CardContent>
+        </Card>
+      )}
+
+      {viewMode === "calendar" && (
+        <Card>
+          <CardContent className="p-3">
+            {calendarQuery.isLoading ? (
+              <Skeleton className="h-96 w-full" />
+            ) : (
+              <PlanCalendar
+                items={calendarQuery.data ?? []}
+                year={calendarMonth.year}
+                month={calendarMonth.month}
+                onMonthChange={(year, month) => setCalendarMonth({ year, month })}
+                onOpenItem={openTicket}
+              />
             )}
           </CardContent>
         </Card>
@@ -1062,6 +1181,7 @@ function TicketDetailSheet({
                 <TabsList>
                   <TabsTrigger value="comments"><MessageSquare className="h-3.5 w-3.5" />Comments ({ticket.comments.length})</TabsTrigger>
                   <TabsTrigger value="checklist"><CheckSquare className="h-3.5 w-3.5" />Checklist ({ticket.checklistItems.length})</TabsTrigger>
+                  <TabsTrigger value="plan"><CalendarRange className="h-3.5 w-3.5" />Plan</TabsTrigger>
                   <TabsTrigger value="links"><Link2 className="h-3.5 w-3.5" />Linked ({ticket.links.length})</TabsTrigger>
                   <TabsTrigger value="attachments"><Paperclip className="h-3.5 w-3.5" />Files ({ticket.attachments.length})</TabsTrigger>
                   <TabsTrigger value="time"><TimerReset className="h-3.5 w-3.5" />Time logged</TabsTrigger>
@@ -1076,6 +1196,10 @@ function TicketDetailSheet({
                 <TabsContent value="checklist">
                   <ChecklistPanel ticketId={ticket.id} items={ticket.checklistItems} onChanged={invalidate} />
                 </TabsContent>
+                <TabsContent value="plan">
+                  <TicketPlanningPanel ticket={ticket} />
+                </TabsContent>
+
                 <TabsContent value="links">
                   <LinksPanel ticketId={ticket.id} links={ticket.links} onChanged={invalidate} onOpenTicket={onOpenTicket} />
                 </TabsContent>

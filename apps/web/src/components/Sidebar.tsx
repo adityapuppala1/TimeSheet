@@ -10,10 +10,13 @@
  */
 import {
   BarChart3,
+  Briefcase,
   CalendarDays,
   FileClock,
   FolderKanban,
+  GanttChartSquare,
   LayoutDashboard,
+  ListTodo,
   Mail,
   ScrollText,
   Settings,
@@ -28,6 +31,8 @@ import {
 import { NavLink } from "react-router";
 import { permissions } from "@timesheet/shared";
 import { cn } from "../lib/utils";
+import { usePlanningFeatures } from "../lib/use-planning";
+import type { PlanningEffective } from "../services/api";
 import { useAuthStore } from "../store/auth";
 import { Avatar, AvatarFallback, AvatarImage } from "./ui/avatar";
 import { Sheet, SheetContent, SheetDescription, SheetTitle } from "./ui/sheet";
@@ -44,11 +49,14 @@ import { fileUrl } from "../services/api";
  *
  * `null` = the ungrouped lead item(s), rendered with no heading above them.
  */
-type NavSection = "Work" | "Team" | "Analytics" | "Administration" | "Configuration";
+type NavSection = "Work" | "Plan" | "Team" | "Analytics" | "Administration" | "Configuration";
 
 /** Render order. A section with no visible items after permission filtering is omitted entirely,
- *  heading included — an EMPLOYEE must never see an empty "Administration" label. */
-const SECTION_ORDER: NavSection[] = ["Work", "Team", "Analytics", "Administration", "Configuration"];
+ *  heading included — an EMPLOYEE must never see an empty "Administration" label. The same rule
+ *  is what makes the planning layer invisible to a workspace that never enabled it: every item in
+ *  "Plan" carries a `feature`, so with planning off the section has no visible items and the
+ *  heading disappears with them. */
+const SECTION_ORDER: NavSection[] = ["Work", "Plan", "Team", "Analytics", "Administration", "Configuration"];
 
 export interface NavItem {
   to: string;
@@ -59,6 +67,10 @@ export interface NavItem {
   role?: "SUPER_ADMIN";
   /** Omit for the ungrouped lead item (Dashboard). */
   section?: NavSection;
+  /** Gate on a planning capability being both switched on AND included in the plan. The value is
+   *  a key of the server-computed `effective` object — see lib/use-planning.ts. Omit for items
+   *  that are always available. */
+  feature?: keyof PlanningEffective;
 }
 
 /** Exported so the product tour builds its itinerary from the SAME list and the SAME visibility
@@ -70,6 +82,15 @@ export const nav: NavItem[] = [
   { to: "/app/timesheet", label: "Log timesheet", icon: CalendarDays, permission: permissions.TIMESHEETS_WRITE, section: "Work" },
   { to: "/app/tickets", label: "Tickets", icon: Ticket, permission: permissions.TICKETS_VIEW, section: "Work" },
   { to: "/app/history", label: "History", icon: FileClock, section: "Work" },
+
+  // Planning layer (V6). "My work" is deliberately FIRST and deliberately ungated: it is a
+  // personal queue that reads dates every workspace already has, so it is useful before anything
+  // is switched on — and for an EMPLOYEE it is the fifth visible item, which fills the phone
+  // bottom bar with an everyday destination rather than leaving a gap. The other three carry a
+  // `feature`, so they simply do not exist until planning is on.
+  { to: "/app/my-work", label: "My work", icon: ListTodo, section: "Plan" },
+  { to: "/app/timeline", label: "Timeline", icon: GanttChartSquare, permission: permissions.TICKETS_VIEW, section: "Plan", feature: "timeline" },
+  { to: "/app/portfolio", label: "Portfolio", icon: Briefcase, permission: permissions.REPORTS_VIEW, section: "Plan", feature: "planning" },
 
   { to: "/app/approvals", label: "Approvals", icon: Shield, permission: permissions.TIMESHEETS_APPROVE, section: "Team" },
   { to: "/app/team", label: "My team", icon: Users2, permission: permissions.TIMESHEETS_APPROVE, section: "Team" },
@@ -110,9 +131,17 @@ function initialsFor(name?: string) {
     .join("");
 }
 
-export function isVisible(item: NavItem, user?: { role: string; permissions: string[] }): boolean {
+export function isVisible(
+  item: NavItem,
+  user?: { role: string; permissions: string[] },
+  features?: PlanningEffective
+): boolean {
   if (item.role && user?.role !== item.role) return false;
   if (item.permission && !user?.permissions.includes(item.permission)) return false;
+  // A feature-gated item is hidden when `features` hasn't loaded yet, not shown. Flashing a link
+  // that then vanishes is worse than a beat of absence, and it matches the layer's default: off
+  // until something says otherwise.
+  if (item.feature && !features?.[item.feature]) return false;
   return true;
 }
 
@@ -188,7 +217,8 @@ function BrandMark() {
 
 export function Sidebar() {
   const user = useAuthStore((s) => s.user);
-  const visible = nav.filter((item) => isVisible(item, user));
+  const { features } = usePlanningFeatures();
+  const visible = nav.filter((item) => isVisible(item, user, features));
   const avatarSrc = fileUrl(user?.avatarUrl);
 
   return (
@@ -227,7 +257,8 @@ export function Sidebar() {
  */
 export function MobileDrawerNav({ open, onOpenChange }: { open: boolean; onOpenChange: (open: boolean) => void }) {
   const user = useAuthStore((s) => s.user);
-  const visible = nav.filter((item) => isVisible(item, user));
+  const { features } = usePlanningFeatures();
+  const visible = nav.filter((item) => isVisible(item, user, features));
 
   return (
     <Sheet open={open} onOpenChange={onOpenChange}>
@@ -246,7 +277,8 @@ export function MobileDrawerNav({ open, onOpenChange }: { open: boolean; onOpenC
 
 export function MobileNav() {
   const user = useAuthStore((s) => s.user);
-  const visible = nav.filter((item) => isVisible(item, user)).slice(0, 5);
+  const { features } = usePlanningFeatures();
+  const visible = nav.filter((item) => isVisible(item, user, features)).slice(0, 5);
   return (
     <nav className="fixed inset-x-0 bottom-0 z-30 grid grid-cols-5 border-t border-border bg-background/95 px-1 py-1.5 shadow-soft backdrop-blur-xl lg:hidden">
       {visible.map((item) => (

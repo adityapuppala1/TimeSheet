@@ -1,0 +1,262 @@
+/**
+ * Planning layer (V6) end-to-end.
+ *
+ * WHY THESE SPECIFIC ASSERTIONS: the planning layer's whole promise is "additive — nothing you
+ * already do changes". The most valuable test here is therefore not "the Gantt renders" but
+ * "with planning OFF the app is byte-for-byte what it was", and after that, that each new surface
+ * survives real data rather than the fixture that happened to be on screen while it was built.
+ *
+ * These specs are viewport-agnostic and run in the `desktop` project. The responsive suite
+ * separately walks every route for horizontal overflow, which is where the phone/tablet
+ * behaviour of these pages is checked.
+ */
+import { expect, test, type Page } from "@playwright/test";
+
+const ADMIN = "superadmin@timesheet.local";
+
+/**
+ * Signs in for THIS test, rather than replaying a shared `storageState` snapshot.
+ *
+ * WHY, and this is documented the hard way in auth.setup.ts and product-tour.spec.ts: a snapshot
+ * file replays ONE fixed refresh cookie, and every `/app` load rotates that session's secret. The
+ * grace window forgives only the immediately-previous secret, so the first test in a multi-test
+ * spec leaves the snapshot two generations behind and every later test lands on /login. The
+ * symptom — "the page just shows the login form" — points nowhere near the cause.
+ *
+ * Free against the rate limiter: /auth/login is capped with `skipSuccessfulRequests`, so
+ * successful sign-ins never count toward the budget.
+ */
+async function signIn(page: Page) {
+  await page.goto("/login");
+  await page.getByLabel("Email", { exact: true }).fill(ADMIN);
+  await page.getByLabel("Password", { exact: true }).fill("Admin@12345");
+  await page.getByRole("button", { name: /sign in/i }).click();
+  await expect(page).toHaveURL(/\/app/, { timeout: 15_000 });
+}
+
+/**
+ * Reads the workspace planning settings through the API, using the stored session.
+ *
+ * MUST be called BEFORE any `page.goto` into the app. Refresh tokens rotate on use (see
+ * auth.service.ts), and the app's own `AuthBootstrap` calls `/auth/refresh` on first paint — so a
+ * request issued after navigation races the page for the same one-use cookie and loses with
+ * "Session expired". Every spec below therefore takes its token first and navigates second.
+ */
+async function planningConfig(page: Page) {
+  const { accessToken } = await (await page.request.post("/api/auth/refresh")).json();
+  const res = await page.request.get("/api/planning/settings", {
+    headers: { Authorization: `Bearer ${accessToken}` }
+  });
+  return { config: await res.json(), token: accessToken };
+}
+
+test.describe("planning layer", () => {
+  // No storageState: each test signs in for itself — see signIn's note above.
+  test.use({ storageState: { cookies: [], origins: [] } });
+
+  test("the settings API reports settings, entitlements and their AND", async ({ page }) => {
+    await signIn(page);
+    const { config } = await planningConfig(page);
+
+    // The three-part shape is the contract the whole client gates on: a toggle that is on but not
+    // included in the plan must never read as available.
+    expect(config).toHaveProperty("settings");
+    expect(config).toHaveProperty("entitlements");
+    expect(config).toHaveProperty("effective");
+    for (const key of ["planning", "timeline", "resourceManagement", "approvals", "proofing", "requestForms", "customWorkflows"]) {
+      expect(typeof config.effective[key], `effective.${key}`).toBe("boolean");
+    }
+    // effective is an AND, never wider than the entitlement.
+    if (!config.entitlements.ganttEnabled) expect(config.effective.timeline).toBe(false);
+    if (!config.settings.enablePlanning) expect(config.effective.timeline).toBe(false);
+  });
+
+  test("the Default workflow still mirrors the six built-in statuses", async ({ page }) => {
+    // The compatibility hinge. If this seed ever drifts from `ticketStatusTransitions`, the board
+    // starts offering moves the server rejects.
+    await signIn(page);
+    const { token } = await planningConfig(page);
+    const workflows = await (
+      await page.request.get("/api/planning/workflows", { headers: { Authorization: `Bearer ${token}` } })
+    ).json();
+
+    const system = workflows.find((w: any) => w.isSystem);
+    expect(system, "a system workflow must always exist").toBeTruthy();
+    expect(system.statuses).toHaveLength(6);
+    expect(system.transitions).toHaveLength(9);
+    expect(system.statuses.map((s: any) => s.legacyStatus).sort()).toEqual(
+      ["CLOSED", "IN_PROGRESS", "IN_REVIEW", "OPEN", "REOPENED", "RESOLVED"]
+    );
+    // Every status maps to a real built-in one — this is what keeps Ticket.status correct.
+    for (const status of system.statuses) {
+      expect(["TODO", "ACTIVE", "REVIEW", "DONE", "CANCELLED"]).toContain(status.category);
+    }
+  });
+
+  test("My work opens for anyone and buckets without blowing up on an empty queue", async ({ page }) => {
+    // Ungated on purpose — a personal queue that 403s for most of the company is worse than none.
+    await signIn(page);
+    await page.goto("/app/my-work");
+    await expect(page.getByRole("heading", { name: /my work/i })).toBeVisible();
+    // Either buckets or the empty state, never an error boundary.
+    await expect(page.getByText(/nothing assigned to you|overdue|due today|this week|later|blocked/i).first()).toBeVisible({
+      timeout: 15_000
+    });
+  });
+
+  test("the timeline renders bars, or explains why it cannot", async ({ page }) => {
+    await signIn(page);
+    await page.goto("/app/timeline");
+    await page.waitForLoadState("networkidle");
+
+    const off = page.getByText(/isn.t switched on|not included in this plan/i);
+    if (await off.count()) {
+      // The off state must say which of the two reasons applies, so the reader knows whether to
+      // change a setting or have a commercial conversation.
+      await expect(off.first()).toBeVisible();
+      return;
+    }
+
+    await expect(page.getByRole("heading", { name: /^timeline$/i })).toBeVisible();
+    // The zoom control is the load-bearing bit of the toolbar.
+    await expect(page.getByRole("button", { name: /^week$/i })).toBeVisible();
+    await page.getByRole("button", { name: /^month$/i }).click();
+    await page.getByRole("button", { name: /^day$/i }).click();
+    // Either a chart or the documented empty state — never a blank panel.
+    await expect(page.locator("svg").first().or(page.getByText(/nothing scheduled yet/i))).toBeVisible();
+  });
+
+  test("the tickets page gains Timeline and Calendar without disturbing List and Board", async ({ page }) => {
+    await signIn(page);
+    await page.goto("/app/tickets");
+    await page.waitForLoadState("networkidle");
+
+    // The two original views must still be there and still work — this is the regression that
+    // matters most, since the switcher was extended in place rather than replaced.
+    await expect(page.getByRole("button", { name: /^list$/i })).toBeVisible();
+    await expect(page.getByRole("button", { name: /^board$/i })).toBeVisible();
+    await page.getByRole("button", { name: /^board$/i }).click();
+    await expect(page.getByText(/in progress/i).first()).toBeVisible();
+    await page.getByRole("button", { name: /^list$/i }).click();
+
+    const timelineTab = page.getByRole("button", { name: /^timeline$/i });
+    if (await timelineTab.count()) {
+      await timelineTab.click();
+      await page.waitForLoadState("networkidle");
+      await expect(page.getByRole("button", { name: /critical path/i })).toBeVisible();
+    }
+
+    const calendarTab = page.getByRole("button", { name: /^calendar$/i });
+    if (await calendarTab.count()) {
+      await calendarTab.click();
+      await page.waitForLoadState("networkidle");
+      // Month grid header, and the legend that distinguishes a real schedule from an SLA date.
+      await expect(page.getByText(/sla date only/i)).toBeVisible();
+      await expect(page.getByRole("button", { name: /^today$/i })).toBeVisible();
+    }
+  });
+
+  test("a scheduling dependency that would create a loop is refused, naming the items", async ({ page }) => {
+    await signIn(page);
+    const { config, token } = await planningConfig(page);
+    test.skip(!config.effective.timeline, "planning is off in this workspace");
+
+    const headers = { Authorization: `Bearer ${token}` };
+    const projects = await (await page.request.get("/api/projects", { headers })).json();
+    const projectId = projects[0].id;
+
+    const mk = async (title: string) =>
+      (
+        await page.request.post("/api/tickets", {
+          headers,
+          data: { projectId, title, type: "BUG", priority: "LOW" }
+        })
+      ).json();
+
+    const a = await mk("Cycle probe A");
+    const b = await mk("Cycle probe B");
+
+    const first = await page.request.post("/api/plan/dependencies", {
+      headers,
+      data: { fromId: a.id, toId: b.id, type: "FINISH_TO_START" }
+    });
+    expect(first.status()).toBe(201);
+
+    // The reverse edge closes a loop and must be refused BEFORE it is written — discovering it
+    // later as a wrong-looking timeline gives nobody a way to tell which link is at fault.
+    const loop = await page.request.post("/api/plan/dependencies", {
+      headers,
+      data: { fromId: b.id, toId: a.id, type: "FINISH_TO_START" }
+    });
+    expect(loop.status()).toBe(422);
+    const body = await loop.json();
+    expect(body.message).toMatch(/loop/i);
+    expect(body.message).toContain(a.key);
+
+    await page.request.delete(`/api/tickets/${a.id}`, { headers });
+    await page.request.delete(`/api/tickets/${b.id}`, { headers });
+  });
+
+  test("scheduling an item writes real dates and the timeline reflects them", async ({ page }) => {
+    await signIn(page);
+    const { config, token } = await planningConfig(page);
+    test.skip(!config.effective.timeline, "planning is off in this workspace");
+
+    const headers = { Authorization: `Bearer ${token}` };
+    const projects = await (await page.request.get("/api/projects", { headers })).json();
+    const ticket = await (
+      await page.request.post("/api/tickets", {
+        headers,
+        data: { projectId: projects[0].id, title: "Schedule round-trip probe", type: "TASK", priority: "LOW" }
+      })
+    ).json();
+
+    const patched = await page.request.patch(`/api/plan/items/${ticket.id}`, {
+      headers,
+      data: { startDate: "2026-09-07", endDate: "2026-09-11" }
+    });
+    expect(patched.status()).toBe(200);
+
+    const timeline = await (
+      await page.request.get(`/api/plan/timeline?projectIds=${projects[0].id}`, { headers })
+    ).json();
+    const row = timeline.items.find((i: any) => i.id === ticket.id);
+    expect(row, "the scheduled item must appear on the timeline").toBeTruthy();
+    expect(row.startDate).toBe("2026-09-07");
+    expect(row.resolvedEnd).toBe("2026-09-11");
+    // Entered dates are never "inferred" — that flag is what the UI uses to hatch a guess.
+    expect(row.isInferred).toBe(false);
+    // Mon-Fri inclusive is 5 working days, not 4 and not 6. The off-by-one that makes every
+    // Gantt bar a day too long would show up right here.
+    expect(row.durationDays).toBe(5);
+
+    // An end before a start is refused rather than silently swapped.
+    const bad = await page.request.patch(`/api/plan/items/${ticket.id}`, {
+      headers,
+      data: { startDate: "2026-09-11", endDate: "2026-09-07" }
+    });
+    expect(bad.status()).toBe(422);
+
+    await page.request.delete(`/api/tickets/${ticket.id}`, { headers });
+  });
+
+  test("the portfolio roll-up returns derived numbers, and never a fake forecast", async ({ page }) => {
+    await signIn(page);
+    const { config, token } = await planningConfig(page);
+    test.skip(!config.effective.planning, "planning is off in this workspace");
+
+    const rollup = await (
+      await page.request.get("/api/portfolios/rollup", { headers: { Authorization: `Bearer ${token}` } })
+    ).json();
+    expect(Array.isArray(rollup.projects)).toBe(true);
+
+    for (const p of rollup.projects) {
+      expect(p.progressPct).toBeGreaterThanOrEqual(0);
+      expect(p.progressPct).toBeLessThanOrEqual(100);
+      // The rule that keeps an executive dashboard honest: with no spend there is no basis for a
+      // forecast, and "forecast: 0" reads as "this will cost nothing".
+      if (p.burn === 0) expect(p.forecastAtCompletion).toBeNull();
+      if (p.forecastAtCompletion !== null) expect(p.forecastAtCompletion).toBeGreaterThan(0);
+    }
+  });
+});

@@ -1577,6 +1577,33 @@ export interface TicketDetail extends TicketRow {
   /** The most recent face check spent on this ticket (creation or a status transition). */
   identityVerified: boolean;
   identityVerifiedAt: string | null;
+
+  /** Planning layer (V6). Present on the DETAIL only — the ticket list stays one query, and
+   *  hierarchy is a per-ticket question. All nullable: a workspace that never enabled planning
+   *  simply has nulls here and every existing surface behaves exactly as it did. */
+  parentId?: string | null;
+  parent?: { id: string; key: string; title: string; status: string; priority: string } | null;
+  children?: Array<{
+    id: string;
+    key: string;
+    title: string;
+    status: string;
+    priority: string;
+    startDate: string | null;
+    endDate: string | null;
+    progressPct: number | null;
+    isMilestone: boolean;
+    assignee: { id: string; name: string; avatarUrl?: string | null } | null;
+  }>;
+  startDate?: string | null;
+  endDate?: string | null;
+  isMilestone?: boolean;
+  progressPct?: number | null;
+  estimatedHours?: number | string | null;
+  baselineStartDate?: string | null;
+  baselineEndDate?: string | null;
+  baselineSetAt?: string | null;
+  workflowStatus?: { id: string; name: string; category: WorkStatusCategoryValue; color: string | null } | null;
 }
 
 export interface AssigneeSuggestion {
@@ -2162,4 +2189,277 @@ export const planningApi = {
    *  API refuses to cascade away stored values just because a definition was removed. */
   deleteCustomField: async (id: string) =>
     (await api.delete<{ deleted: boolean }>(`/planning/custom-fields/${id}`)).data
+};
+
+/* ------------------------------------------------------------------ *
+ * PLAN (V6 phase 2) — timeline, hierarchy, dependencies, baselines, my work, saved views.
+ *
+ * Dates on the wire are always `YYYY-MM-DD`, never ISO instants. A planning date is a CALENDAR
+ * DAY: "starts on the 3rd" must mean the same thing in Mumbai and Chicago, and the moment a
+ * time-of-day is involved the same stored value renders as two different days either side of a
+ * timezone boundary. The API enforces the same rule — see plan-schedule.service.ts.
+ * ------------------------------------------------------------------ */
+
+export interface PlanItemRow {
+  id: string;
+  key: string;
+  title: string;
+  parentId: string | null;
+  depth: number;
+  /** What a human entered. Null means nobody has scheduled this yet. */
+  startDate: string | null;
+  endDate: string | null;
+  /** What the solver worked out, always present. Equals the entered dates when they exist. */
+  resolvedStart: string;
+  resolvedEnd: string;
+  /** True when the dates are inferred from a dependency or a default rather than entered — the
+   *  timeline renders these differently so a guess is never mistaken for a commitment. */
+  isInferred: boolean;
+  durationDays: number;
+  isMilestone: boolean;
+  progressPct: number | null;
+  effectiveProgressPct: number;
+  totalFloatDays: number;
+  isCritical: boolean;
+  slipDays: number | null;
+  baselineStart: string | null;
+  baselineEnd: string | null;
+  violations: Array<{ dependencyId: string; message: string }>;
+  status: string;
+  statusCategory: WorkStatusCategoryValue;
+  statusLabel: string | null;
+  statusColor: string | null;
+  priority: string;
+  type: string;
+  estimatedHours: number | null;
+  assignee: { id: string; name: string; avatarUrl?: string | null } | null;
+  project: { id: string; code: string; name: string } | null;
+}
+
+export interface PlanTimeline {
+  workingDays: number[];
+  start: string | null;
+  end: string | null;
+  criticalPath: string[];
+  violations: Array<{ itemId: string; dependencyId: string; message: string }>;
+  items: PlanItemRow[];
+}
+
+export type PlanDependencyType =
+  | "BLOCKS"
+  | "FINISH_TO_START"
+  | "START_TO_START"
+  | "FINISH_TO_FINISH"
+  | "START_TO_FINISH";
+
+export interface PlanDependencyRow {
+  id: string;
+  fromId: string;
+  toId: string;
+  type: PlanDependencyType;
+  lagDays: number;
+}
+
+export interface CalendarItemRow {
+  id: string;
+  key: string;
+  title: string;
+  startDate: string | null;
+  endDate: string | null;
+  dueAt: string | null;
+  /** The day the calendar should place this on — real dates when present, else the SLA date. */
+  anchorDate: string;
+  /** False when the item only has an SLA date, so the calendar can mark it as unscheduled
+   *  rather than implying someone committed to that day. */
+  isScheduled: boolean;
+  isMilestone: boolean;
+  status: string;
+  statusCategory: WorkStatusCategoryValue;
+  statusLabel: string | null;
+  priority: string;
+  type: string;
+  assignee: { id: string; name: string; avatarUrl?: string | null } | null;
+  project: { id: string; code: string; name: string } | null;
+}
+
+export interface MyWorkItem {
+  id: string;
+  key: string;
+  title: string;
+  startDate: string | null;
+  endDate: string | null;
+  dueAt: string | null;
+  deadline: string | null;
+  priority: string;
+  status: string;
+  statusCategory: WorkStatusCategoryValue;
+  statusLabel: string | null;
+  type: string;
+  isMilestone: boolean;
+  progressPct: number | null;
+  estimatedHours: number | null;
+  project: { id: string; code: string; name: string } | null;
+  blockers: Array<{ id: string; key: string; title: string; status: string }>;
+}
+
+export interface MyWork {
+  overdue: MyWorkItem[];
+  today: MyWorkItem[];
+  thisWeek: MyWorkItem[];
+  later: MyWorkItem[];
+  blocked: MyWorkItem[];
+  counts: { total: number; blocked: number };
+}
+
+export interface SavedViewRow {
+  id: string;
+  ownerId: string;
+  owner?: { id: string; name: string };
+  name: string;
+  scope: "PERSONAL" | "SHARED";
+  viewType: "LIST" | "BOARD" | "TIMELINE" | "CALENDAR" | "WORKLOAD";
+  filters: Record<string, unknown> | null;
+  columns: string[] | null;
+  sort: Record<string, unknown> | null;
+  isDefault: boolean;
+}
+
+export const planApi = {
+  timeline: async (params?: { projectIds?: string[]; from?: string; to?: string; includeClosed?: boolean }) =>
+    (
+      await api.get<PlanTimeline>("/plan/timeline", {
+        params: {
+          projectIds: params?.projectIds?.length ? params.projectIds.join(",") : undefined,
+          from: params?.from,
+          to: params?.to,
+          includeClosed: params?.includeClosed ? "true" : undefined
+        }
+      })
+    ).data,
+  dependencies: async (projectIds?: string[]) =>
+    (
+      await api.get<PlanDependencyRow[]>("/plan/dependencies", {
+        params: { projectIds: projectIds?.length ? projectIds.join(",") : undefined }
+      })
+    ).data,
+  updateItem: async (
+    id: string,
+    patch: Partial<{
+      startDate: string | null;
+      endDate: string | null;
+      parentId: string | null;
+      isMilestone: boolean;
+      progressPct: number | null;
+      sortOrder: number;
+      estimatedHours: number | null;
+    }>
+  ) => (await api.patch(`/plan/items/${id}`, patch)).data,
+  setBaseline: async (id: string, clear = false) =>
+    (await api.post<{ baselineStart: string | null; baselineEnd: string | null }>(`/plan/items/${id}/baseline`, { clear })).data,
+  setProjectBaseline: async (projectId: string, clear = false) =>
+    (await api.post<{ count: number }>(`/plan/projects/${projectId}/baseline`, { clear })).data,
+
+  addDependency: async (payload: { fromId: string; toId: string; type: PlanDependencyType; lagDays?: number }) =>
+    (await api.post<PlanDependencyRow>("/plan/dependencies", payload)).data,
+  updateDependency: async (id: string, lagDays: number) =>
+    (await api.patch<{ id: string; lagDays: number }>(`/plan/dependencies/${id}`, { lagDays })).data,
+  removeDependency: async (id: string) => {
+    await api.delete(`/plan/dependencies/${id}`);
+  },
+
+  calendar: async (params: { from: string; to: string; projectIds?: string[] }) =>
+    (
+      await api.get<CalendarItemRow[]>("/plan/calendar", {
+        params: { ...params, projectIds: params.projectIds?.length ? params.projectIds.join(",") : undefined }
+      })
+    ).data,
+  myWork: async () => (await api.get<MyWork>("/plan/my-work")).data,
+
+  listViews: async () => (await api.get<SavedViewRow[]>("/plan/views")).data,
+  createView: async (payload: Partial<SavedViewRow> & { name: string }) =>
+    (await api.post<SavedViewRow>("/plan/views", payload)).data,
+  updateView: async (id: string, payload: Partial<SavedViewRow> & { name: string }) =>
+    (await api.put<SavedViewRow>(`/plan/views/${id}`, payload)).data,
+  deleteView: async (id: string) => {
+    await api.delete(`/plan/views/${id}`);
+  }
+};
+
+export interface PortfolioRow {
+  id: string;
+  code: string;
+  name: string;
+  description: string | null;
+  color: string | null;
+  status: string;
+  owner: { id: string; name: string; email: string; avatarUrl?: string | null } | null;
+  _count?: { projects: number };
+}
+
+export interface PortfolioProjectRollup {
+  id: string;
+  code: string;
+  name: string;
+  status: string;
+  portfolio: { id: string; code: string; name: string; color: string | null } | null;
+  plannedStart: string | null;
+  plannedEnd: string | null;
+  scheduleStart: string | null;
+  scheduleEnd: string | null;
+  overrunsPlannedEnd: boolean;
+  itemCount: number;
+  openCount: number;
+  doneCount: number;
+  progressPct: number;
+  criticalCount: number;
+  slippedCount: number;
+  worstSlipDays: number;
+  violationCount: number;
+  budget: number | null;
+  currency: string;
+  burn: number;
+  burnPct: number | null;
+  /** Null when there is not enough progress or spend for a forecast to mean anything — a blank
+   *  is honest, a confident zero is not. */
+  forecastAtCompletion: number | null;
+  overBudgetRisk: boolean;
+  budgetAlertPct: number | null;
+  loggedHours: number;
+}
+
+export interface PortfolioRollupRow {
+  id: string;
+  code: string;
+  name: string;
+  color: string | null;
+  status: string;
+  owner: { id: string; name: string } | null;
+  projectCount: number;
+  itemCount: number;
+  openCount: number;
+  progressPct: number;
+  budget: number | null;
+  burn: number;
+  slippedCount: number;
+  atRiskProjects: number;
+  scheduleEnd: string | null;
+}
+
+export const portfolioApi = {
+  list: async () => (await api.get<PortfolioRow[]>("/portfolios")).data,
+  create: async (payload: Partial<PortfolioRow> & { name: string; code: string }) =>
+    (await api.post<PortfolioRow>("/portfolios", payload)).data,
+  update: async (id: string, payload: Partial<PortfolioRow> & { name: string; code: string }) =>
+    (await api.put<PortfolioRow>(`/portfolios/${id}`, payload)).data,
+  remove: async (id: string) => {
+    await api.delete(`/portfolios/${id}`);
+  },
+  setProjects: async (id: string, projectIds: string[]) =>
+    (await api.post<{ count: number }>(`/portfolios/${id}/projects`, { projectIds })).data,
+  rollup: async (portfolioId?: string) =>
+    (
+      await api.get<{ projects: PortfolioProjectRollup[]; portfolios: PortfolioRollupRow[] }>("/portfolios/rollup", {
+        params: portfolioId ? { portfolioId } : undefined
+      })
+    ).data
 };

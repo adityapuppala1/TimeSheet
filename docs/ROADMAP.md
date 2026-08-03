@@ -1353,11 +1353,57 @@ with an upgrade message on a downgraded tier while `/tickets`, `/reports` and `/
 answering 200; 223 unit tests and all 145 Playwright tests across five viewport projects green
 with no spec edited.
 
-### Phases 2-6 — planned
+### Phase 2 — planning & views (2026-08-03)
 
-2. **Planning & views** — hierarchy UI, dependencies + lag, Gantt/timeline, calendar, view
-   switcher on the existing Tickets page (not a competing page), saved views, My Work, portfolio
-   roll-up, baselines, critical path.
+The plan becomes visible and editable. Everything below is inert until an admin turns planning on.
+
+- [x] **The schedule engine** (`services/plan-schedule.service.ts`) — working-day arithmetic,
+  four dependency types + lag, critical path with float, effort-weighted progress roll-up,
+  baseline slip, and cycle detection for both graphs (dependencies and hierarchy). A pure core
+  with a thin DB shell, because every interesting scheduler bug is arithmetic that renders
+  plausibly rather than throwing. 27 unit tests pin it, including the Mon-Fri-is-5-days
+  inclusive-span rule that is the classic "every Gantt bar is a day too long" defect.
+- [x] **It computes, it never auto-schedules.** Explicit dates always win; a contradiction is
+  reported as a `violation` and the typed date still renders. There is no undo for "the tool
+  moved forty dates overnight", and a scheduler people stop trusting is worse than none.
+- [x] **Timeline (Gantt)** — hand-built SVG, not a library. Every option ships its own design
+  system, assumes it owns the data layer, or is unmaintained; the genuinely hard parts already
+  live server-side, leaving `x = f(date)`. Tree pane, zoom (day/week/month), drag-to-move,
+  edge-drag-to-resize, dependency arrows as orthogonal elbows (bezier curves become an
+  unreadable tangle at 50 edges), baseline as an outline never a fill, hatched "not scheduled"
+  bars, today marker, critical-path emphasis. Below `lg` it becomes a list rather than a
+  shrunken chart.
+- [x] **Calendar, My work, Portfolio** — the calendar distinguishes a real schedule from an
+  SLA-only date, because on day one that is the only date most tickets have. My work buckets
+  server-side (one definition of "overdue", shared with the dashboard and the reminder emails)
+  and puts a blocked item in exactly one bucket. Portfolio derives every number — schedule from
+  the same solver, burn from the `Timesheet.billedAmount` snapshots an attestation reads.
+- [x] **View switcher on the existing Tickets page**, not a competing "planning" page: the
+  filters someone already set carry across List / Board / Timeline / Calendar.
+- [x] **Ticket "Plan" tab** — where an item gets its FIRST dates. The timeline can only move a
+  bar that already has some, and letting a hatched placeholder be dragged would mean looking at
+  a plan quietly commits to one.
+- [x] Portfolios, project budget/planned window, saved views, `plan:write` separated from
+  `tickets:write` (editing a description and moving the delivery schedule are different rights).
+
+**Two things the browser found that no test would have.** The timeline first opened as a wall of
+identical one-day stubs — 41 of 45 items were unscheduled, and the four bars carrying a real plan
+were invisible in the noise. Unscheduled work is now hidden by default behind a "Show N
+unscheduled" toggle, keeping ancestors of scheduled items so the tree stays connected. Separately,
+going from two view buttons to four pushed the Tickets header past 390px; because
+`body { overflow-x: clip }` hides that rather than scrolling it, the symptom was the page header
+silently dragged off-screen — the same failure mode already documented for the Workspace Settings
+grid track. The responsive sweep caught it, and `/app/my-work`, `/app/timeline` and
+`/app/portfolio` are now in that sweep permanently.
+
+Verified: 250 unit tests (+27), 70 desktop and 90 responsive Playwright tests across five
+viewports, plus a new `planning.spec.ts` covering the settings/entitlement AND, the Default
+workflow still matching `ticketStatusTransitions`, cycle refusal naming the offending items, the
+date round-trip including the inclusive-span rule, and the roll-up never reporting a fake
+forecast.
+
+### Phases 3-6 — planned
+
 3. **Resource & budget** — capacity, bookings, workload heatmap, over-allocation, budget vs burn
    vs forecast from the existing rate snapshots.
 4. **Intake & approvals** — request-form builder + public form route (modelled on the attestation

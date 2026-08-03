@@ -48,7 +48,13 @@ const PAGES = [
   "/app/history",
   "/app/team",
   "/app/users",
-  "/app/settings"
+  "/app/settings",
+  // Planning layer (V6). Worth sweeping specifically: the timeline is the widest thing in the
+  // app by construction (a date-scaled chart), and adding two buttons to the Tickets view
+  // switcher is exactly what pushed that page past 390px the first time.
+  "/app/my-work",
+  "/app/timeline",
+  "/app/portfolio"
 ];
 const OVERFLOW_TOLERANCE_PX = 4;
 

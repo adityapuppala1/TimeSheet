@@ -39,6 +39,9 @@ const Tickets = lazy(() => import("./pages/Tickets").then((m) => ({ default: m.T
 const Profile = lazy(() => import("./pages/Profile").then((m) => ({ default: m.Profile })));
 const WhatsNewPage = lazy(() => import("./pages/WhatsNew").then((m) => ({ default: m.WhatsNewPage })));
 const History = lazy(() => import("./pages/History").then((m) => ({ default: m.History })));
+const TimelinePage = lazy(() => import("./pages/Timeline").then((m) => ({ default: m.TimelinePage })));
+const MyWorkPage = lazy(() => import("./pages/MyWork").then((m) => ({ default: m.MyWorkPage })));
+const PortfolioPage = lazy(() => import("./pages/Portfolio").then((m) => ({ default: m.PortfolioPage })));
 const AuditLog = lazy(() => import("./pages/AuditLog").then((m) => ({ default: m.AuditLog })));
 const AIActivityLog = lazy(() => import("./pages/AIActivityLog").then((m) => ({ default: m.AIActivityLog })));
 const Insights = lazy(() => import("./pages/Insights").then((m) => ({ default: m.Insights })));
@@ -94,6 +97,15 @@ const router = createBrowserRouter([
       { path: "timesheet", element: <PageShell><Timesheet /></PageShell> },
       { path: "tickets", element: <RequirePermission permission={permissions.TICKETS_VIEW}><PageShell><Tickets /></PageShell></RequirePermission> },
       { path: "history", element: <PageShell><History /></PageShell> },
+      // Planning layer (V6). The timeline and portfolio need TICKETS_VIEW to read (editing needs
+      // plan:write, checked inside the pages) and each renders its own "planning is off" state
+      // rather than 404ing — a nav item that vanishes and a page that explains why are different
+      // experiences, and the second is the one that sells the feature.
+      { path: "timeline", element: <RequirePermission permission={permissions.TICKETS_VIEW}><PageShell><TimelinePage /></PageShell></RequirePermission> },
+      { path: "portfolio", element: <RequirePermission permission={permissions.REPORTS_VIEW}><PageShell><PortfolioPage /></PageShell></RequirePermission> },
+      // No permission gate: this is the caller's own assigned work, and gating a personal queue
+      // would leave most users with an empty nav entry.
+      { path: "my-work", element: <PageShell><MyWorkPage /></PageShell> },
       { path: "profile", element: <PageShell><Profile /></PageShell> },
       // Version details + release notes. No permission gate: notes describe features people use,
       // and the page itself hides the admin-only update card from non-admins.

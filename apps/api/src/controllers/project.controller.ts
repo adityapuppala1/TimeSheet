@@ -103,7 +103,14 @@ const patchProjectSchema = z.object({
       // so any new Project field MUST be listed here or the edit form 400s on save.
       clientName: z.string().max(160).nullable().optional(),
       defaultHourlyRate: z.coerce.number().min(0).max(100000).nullable().optional(),
-      billingCurrency: z.string().length(3).nullable().optional()
+      billingCurrency: z.string().length(3).nullable().optional(),
+      // Planning layer (V6). Same `.strict()` warning as above applies to these too.
+      portfolioId: z.string().uuid().nullable().optional(),
+      budgetAmount: z.coerce.number().min(0).max(1_000_000_000).nullable().optional(),
+      budgetCurrency: z.string().length(3).nullable().optional(),
+      budgetAlertPct: z.coerce.number().int().min(1).max(100).nullable().optional(),
+      plannedStartDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).nullable().optional(),
+      plannedEndDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).nullable().optional()
     })
     .strict()
 });
@@ -125,6 +132,23 @@ projectRouter.patch(
     // Normalised to uppercase so "usd" and "USD" don't read as two different currencies when the
     // attestation refuses to mix them.
     if ("billingCurrency" in req.body) data.billingCurrency = req.body.billingCurrency ? String(req.body.billingCurrency).toUpperCase() : null;
+
+    // Planning layer. Dates are stored as UTC-midnight calendar days for the same reason every
+    // other planning date is — a time-of-day makes the same value render as two different days
+    // either side of a timezone boundary.
+    if ("portfolioId" in req.body) data.portfolioId = req.body.portfolioId || null;
+    if ("budgetAmount" in req.body) data.budgetAmount = req.body.budgetAmount ?? null;
+    if ("budgetCurrency" in req.body) data.budgetCurrency = req.body.budgetCurrency ? String(req.body.budgetCurrency).toUpperCase() : null;
+    if ("budgetAlertPct" in req.body) data.budgetAlertPct = req.body.budgetAlertPct ?? null;
+    if ("plannedStartDate" in req.body) {
+      data.plannedStartDate = req.body.plannedStartDate ? new Date(`${req.body.plannedStartDate}T00:00:00.000Z`) : null;
+    }
+    if ("plannedEndDate" in req.body) {
+      data.plannedEndDate = req.body.plannedEndDate ? new Date(`${req.body.plannedEndDate}T00:00:00.000Z`) : null;
+    }
+    if (data.plannedStartDate && data.plannedEndDate && data.plannedEndDate < data.plannedStartDate) {
+      throw new AppError(422, "The planned end date can't be before the planned start date.");
+    }
 
     const project = await prisma.project.update({ where: { id: String(req.params.id) }, data });
     await audit(req.user!.id, "project.updated", "Project", project.id, data);

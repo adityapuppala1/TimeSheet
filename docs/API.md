@@ -240,6 +240,82 @@ covered-but-unverified rows distinctly from not-covered ones), and `GET /tickets
   `unratedHours` (hours with no rate on record — reported, never priced as zero) and
   `excludedDraftHours`/`excludedRejectedHours`.
 
+## Planning (V6)
+
+Two routers, split by audience. `/planning/*` is configuration a SUPER_ADMIN sets once;
+`/plan/*` and `/portfolios/*` are what everyone uses daily. **Every `/plan` and `/portfolios`
+route 403s unless planning is switched on for the workspace AND the org's tier includes it** —
+the two conditions produce deliberately different messages, because "turn it on in settings" and
+"upgrade your plan" need different people to do different things.
+
+Planning dates on the wire are always `YYYY-MM-DD`, never ISO instants. A planning date is a
+calendar day: "starts on the 3rd" must mean the same thing in every timezone, and a time-of-day
+makes the same stored value render as two different days across a boundary.
+
+### Configuration
+
+- `GET /planning/settings` — returns `{ settings, entitlements, effective }`. `effective` is the
+  server-computed AND of the two; **clients gate on `effective` and never recompute it**, or the
+  nav ends up offering a page the API refuses.
+- `PATCH /planning/settings` — SUPER_ADMIN. Toggles, working days (`workingDays`, 0 = Sunday,
+  at least one) and `defaultWeeklyCapacityHours`.
+- `GET /planning/workflows`, `GET /planning/workflows/meta` — the status vocabulary the editor
+  renders from, served rather than duplicated client-side.
+- `POST|PUT|DELETE /planning/workflows[/:id]` — SUPER_ADMIN, Enterprise-gated. The system
+  "Default" workflow cannot be edited or deleted; duplicate it instead. A status whose
+  `legacyStatus` changes re-aligns every ticket sitting in it, in the same transaction.
+- `GET|POST|PUT|DELETE /planning/custom-fields[/:id]` — SUPER_ADMIN to write. Deleting a field
+  that has stored values **deactivates** it instead and returns `{ deleted: false }`; a hard
+  delete would cascade the values away.
+
+### The plan
+
+- `GET /plan/timeline?projectIds=&from=&to=&includeClosed=` — the solved schedule in tree order
+  (each item immediately followed by its own subtree). Every row carries both what a human
+  entered (`startDate`/`endDate`, null when unscheduled) and what the solver resolved
+  (`resolvedStart`/`resolvedEnd`, always present) plus `isInferred`, `durationDays`,
+  `totalFloatDays`, `isCritical`, `effectiveProgressPct`, `slipDays` and any `violations`.
+  Ordering, float and criticality are computed server-side so the timeline, the portfolio
+  roll-up and later the risk score cannot disagree.
+- `GET /plan/dependencies?projectIds=` — the scheduling edges, so the chart draws arrows without
+  re-deriving them per item.
+- `PATCH /plan/items/:id` — `plan:write`. Dates, `parentId`, `isMilestone`, `progressPct`,
+  `sortOrder`, `estimatedHours`. An end before a start is **422, never silently swapped** — a
+  swap guesses which of the two the author meant. A cross-project parent is refused, as is one
+  that would make an item its own ancestor.
+- `POST /plan/items/:id/baseline` `{ clear? }` and `POST /plan/projects/:projectId/baseline` —
+  freeze or clear. Never automatic: slip is only meaningful because the baseline is frozen at a
+  moment a human called "the agreed plan".
+- `POST /plan/dependencies` `{ fromId, toId, type, lagDays? }` — `type` is one of `BLOCKS`
+  (treated as finish-to-start), `FINISH_TO_START`, `START_TO_START`, `FINISH_TO_FINISH`,
+  `START_TO_FINISH`. `lagDays` is in **working** days; negative is a lead. A cycle is refused
+  **422 before the write**, naming the ring — discovering it later as a wrong-looking timeline
+  gives nobody a way to tell which of forty links is at fault.
+- `PATCH|DELETE /plan/dependencies/:id`.
+- `GET /plan/calendar?from=&to=&projectIds=` — dated items in a window. Deliberately does **not**
+  run the solver: a calendar shows what is scheduled, and an inferred date has no business
+  appearing on a specific day as if someone committed to it. Items with only an SLA date are
+  returned with `isScheduled: false` so the UI can mark them.
+- `GET /plan/my-work` — the caller's own queue, bucketed `overdue`/`today`/`thisWeek`/`later`/
+  `blocked`. No permission gate and no planning gate. A blocked item appears in **exactly one**
+  bucket; listing it under "today" as well puts work at the top of someone's list that they
+  cannot start.
+- `GET|POST|PUT|DELETE /plan/views[/:id]` — saved filter/column/sort per view type. `SHARED`
+  needs `dashboards:share`. A shared view is a saved FILTER, not a data grant: opening one still
+  runs every normal project-scope check.
+
+### Portfolios
+
+- `GET|POST|PUT|DELETE /portfolios[/:id]` — `portfolios:manage` to write, quota-checked against
+  the tier. Deleting one **ungroups** its projects rather than taking them with it.
+- `POST /portfolios/:id/projects` `{ projectIds }` — sets membership wholesale.
+- `GET /portfolios/rollup?portfolioId=` — schedule, progress, budget burn and forecast per
+  project, plus portfolio totals. Everything is **derived**: the schedule from the same solver
+  the timeline uses, the burn summed live from the `Timesheet.billedAmount` rate snapshots that
+  a Verified Work Attestation also reads. `forecastAtCompletion` is `null` below 5% progress or
+  with zero spend — the arithmetic there produces a confident number that is noise, and
+  "forecast: 0" reads as "this will cost nothing".
+
 ## Verified work attestations
 
 A client-facing record that approved hours map to real tickets, done by identity-verified people,

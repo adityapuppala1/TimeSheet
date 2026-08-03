@@ -313,6 +313,27 @@ individual items?* Custom field **values** are rows (`CustomFieldValue`) because
 filter on them and dashboards group by them. Request-form schemas, dashboard widget layouts and
 blueprint payloads are JSON because each is authored, versioned and rendered whole.
 
+**The schedule is computed in exactly one place.** `services/plan-schedule.service.ts` is a pure
+core (working-day arithmetic, dependency resolution, critical path, effort-weighted progress
+roll-up, baseline slip) with a thin DB shell (`buildPlan`). The timeline, the portfolio roll-up
+and — from Phase 5 — the risk scorer and any scheduled PDF all call it, because three surfaces
+each deriving "when does this actually start" would disagree, and the one that disagrees is
+always the one somebody is looking at. Its purity is also why it is the most heavily unit-tested
+file in the layer: every interesting scheduler bug is arithmetic (an off-by-one on a working day
+makes every Gantt bar a day too long; a lag applied to the wrong endpoint moves the wrong task),
+and none of those throw — they render plausibly and are wrong.
+
+**It computes, it never auto-schedules.** Explicit dates always win. When a human-entered date
+contradicts a dependency, the solver reports a `violation` and still renders what was typed. A
+scheduler that silently rewrites forty dates because one predecessor moved is one people stop
+trusting the first time it is wrong, and there is no undo for it. Phase 5's AI copilots propose
+date changes the same way: as a reviewable diff, never a write.
+
+**`BLOCKS` is treated as finish-to-start.** It is the only dependency vocabulary the ticket
+detail sheet has ever offered, so V5 workspaces have real data recorded under it. The four
+`*_TO_*` types added in V6 sit alongside it rather than replacing it, and reinterpreting `BLOCKS`
+would have silently changed existing plans.
+
 ---
 
 ## 4. Request lifecycle (a normal, tenant-resolved API call)

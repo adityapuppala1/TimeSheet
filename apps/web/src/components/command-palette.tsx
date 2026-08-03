@@ -12,11 +12,14 @@ import { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router";
 import {
   BarChart3,
+  Briefcase,
   CalendarDays,
   CalendarPlus2,
   FileClock,
   FolderKanban,
+  GanttChartSquare,
   LayoutDashboard,
+  ListTodo,
   LogOut,
   Mail,
   Moon,
@@ -50,7 +53,8 @@ import { Input } from "./ui/input";
 import { ScrollArea } from "./ui/scroll-area";
 import { Skeleton } from "./ui/skeleton";
 import { useAuthStore } from "../store/auth";
-import { aiApi, authApi } from "../services/api";
+import { usePlanningFeatures } from "../lib/use-planning";
+import { aiApi, authApi, type PlanningEffective } from "../services/api";
 import { toast } from "./ui/toaster";
 
 function serverMessage(err: any, fallback: string) {
@@ -66,6 +70,10 @@ interface NavRoute {
   permission?: string;
   role?: "SUPER_ADMIN";
   hint?: string;
+  /** Planning capability this route needs, matching the sidebar's  key. Kept in sync
+   *  with Sidebar.tsx by hand — gating only the sidebar would leave the page reachable here,
+   *  which is the same bug the Workspace settings comment below warns about. */
+  feature?: keyof PlanningEffective;
 }
 
 const navRoutes: NavRoute[] = [
@@ -73,6 +81,9 @@ const navRoutes: NavRoute[] = [
   { label: "Log Timesheet", to: "/app/timesheet", icon: CalendarDays, permission: permissions.TIMESHEETS_WRITE, hint: "New entry" },
   { label: "Tickets", to: "/app/tickets", icon: Ticket, permission: permissions.TICKETS_VIEW, hint: "Bugs & tasks" },
   { label: "History", to: "/app/history", icon: FileClock },
+  { label: "My work", to: "/app/my-work", icon: ListTodo, hint: "Your queue, all projects" },
+  { label: "Timeline", to: "/app/timeline", icon: GanttChartSquare, permission: permissions.TICKETS_VIEW, feature: "timeline", hint: "Gantt & dependencies" },
+  { label: "Portfolio", to: "/app/portfolio", icon: Briefcase, permission: permissions.REPORTS_VIEW, feature: "planning", hint: "Budget, burn, health" },
   { label: "Approvals", to: "/app/approvals", icon: Shield, permission: permissions.TIMESHEETS_APPROVE },
   { label: "My team", to: "/app/team", icon: Users2, permission: permissions.TIMESHEETS_APPROVE, hint: "SLA & reports" },
   { label: "Users", to: "/app/users", icon: Users, permission: permissions.USERS_MANAGE },
@@ -100,15 +111,17 @@ export function CommandPalette({ open, onOpenChange }: Props) {
   const [, force] = useState(0);
   const [askOpen, setAskOpen] = useState(false);
   const canAskAI = Boolean(user?.permissions.includes(permissions.TICKETS_VIEW));
+  const { features } = usePlanningFeatures();
 
   const visibleRoutes = useMemo(
     () =>
       navRoutes.filter((route) => {
         if (route.role && user?.role !== route.role) return false;
         if (route.permission && !user?.permissions.includes(route.permission as any)) return false;
+        if (route.feature && !features[route.feature]) return false;
         return true;
       }),
-    [user]
+    [user, features]
   );
 
   function jump(to: string) {

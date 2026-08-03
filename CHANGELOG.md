@@ -28,6 +28,32 @@ admin turns it on** — every capability ships off by default.
   budgets, request forms, blueprints, approval chains, proofing annotations, custom dashboards,
   scheduled reports, and the human-in-the-loop AI proposal tables.
 
+### ✨ Phase 2 — planning & views
+
+- **Timeline (Gantt)** — the whole plan on one chart: hierarchy, start/end dates, dependencies
+  with lag, milestones, baselines, and the critical path. Drag a bar to move it, drag its edge to
+  change its length. Reachable from the new **Plan** nav section or as a tab on Tickets.
+- **Dependencies that mean something** — four scheduling relationships (finish-to-start and its
+  three siblings) with working-day lag. A dependency that would create a loop is refused as you
+  add it, naming the items involved, rather than quietly producing a wrong timeline.
+- **It tells you when a plan is inconsistent, it doesn't overrule you** — if a date contradicts a
+  dependency the bar stays exactly where you put it and the conflict is reported. Nothing is ever
+  rescheduled behind your back.
+- **Baselines and slip** — freeze the agreed dates, then see how far each item has moved from
+  them. Never refreshes itself, because a baseline that follows the plan makes everything look
+  permanently on time.
+- **Calendar view** — a month grid that distinguishes work you have actually scheduled from work
+  that only has an SLA date, so it is useful on day one rather than looking empty.
+- **My work** — everything assigned to you across every project, bucketed into overdue, today,
+  this week, blocked and later. Blocked items are listed separately so they never sit at the top
+  of your list pretending to be startable. Available to everyone, no setup required.
+- **Portfolio** — delivery health across projects: schedule vs planned end, effort-weighted
+  progress, budget vs burn, and a forecast at completion. Every figure is derived from the plan
+  and the approved hours you already have; the forecast stays blank until there is enough data
+  for it to mean anything.
+- **Project budgets and planned dates**, plus optional portfolio grouping.
+- **Saved views** — keep a filter/column/sort combination per view type, private or shared.
+
 ### 🔧 Under the hood
 
 - New permissions (`portfolios:manage`, `plan:write`, `resources:manage`, `approvals:manage`,
@@ -39,6 +65,11 @@ admin turns it on** — every capability ships off by default.
   status left untouched.
 - Plan tiers gain six planning capabilities and five quotas, all defaulting restrictive so a tier
   that misses initialisation under-entitles rather than over-entitles.
+- The schedule is computed in exactly one place (`plan-schedule.service.ts`) and read by the
+  timeline, the portfolio roll-up and everything that follows — three surfaces each working out
+  "when does this start" would disagree, and the one that disagrees is always the one on screen.
+- `plan:write` is a separate permission from `tickets:write`: fixing a typo in a ticket and
+  moving the delivery schedule are different acts. Managers and team leads get it by default.
 
 ## 1.1.0 — 2026-08-03
 

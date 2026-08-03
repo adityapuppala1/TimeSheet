@@ -42,8 +42,10 @@ import { faceRouter } from "./controllers/face.controller.js";
 import { emailTemplatesRouter } from "./controllers/email-templates.controller.js";
 import { labelRouter } from "./controllers/label.controller.js";
 import { notificationRouter } from "./controllers/notification.controller.js";
+import { planRouter } from "./controllers/plan.controller.js";
 import { planningRouter } from "./controllers/planning.controller.js";
 import { platformAdminRouter } from "./controllers/platform-admin.controller.js";
+import { portfolioRouter } from "./controllers/portfolio.controller.js";
 import { projectRouter } from "./controllers/project.controller.js";
 import { reportRouter } from "./controllers/report.controller.js";
 import { attestationRouter } from "./controllers/attestation.controller.js";
@@ -297,6 +299,11 @@ app.use("/api/labels", labelRouter);
 // Planning layer (V6) — workspace planning toggles, plan-tier entitlements, custom workflows and
 // custom fields. An ordinary per-tenant router: nothing here needs to precede tenant resolution.
 app.use("/api/planning", planningRouter);
+// The planning FEATURES, split from the planning CONFIGURATION above: /planning is what a
+// super admin sets once, /plan and /portfolios are what everyone uses daily. Different
+// permissions (plan:write vs SUPER_ADMIN), different read volumes, different gates.
+app.use("/api/plan", planRouter);
+app.use("/api/portfolios", portfolioRouter);
 app.use("/api/reports", reportRouter);
 app.use("/api/attestations", attestationRouter);
 // Unauthenticated attestation share links. Its own tighter limiter (30/min) because this is

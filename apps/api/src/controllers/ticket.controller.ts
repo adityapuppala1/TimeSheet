@@ -226,7 +226,19 @@ ticketRouter.get("/:id", requirePermission(permissions.TICKETS_VIEW), async (req
       checklistItems: { orderBy: { position: "asc" } },
       branches: { include: { addedBy: { select: USER_SUMMARY } }, orderBy: { createdAt: "desc" } },
       linksFrom: { include: { targetTicket: { select: TICKET_LINK_SUMMARY } } },
-      linksTo: { include: { sourceTicket: { select: TICKET_LINK_SUMMARY } } }
+      linksTo: { include: { sourceTicket: { select: TICKET_LINK_SUMMARY } } },
+      // Planning layer (V6). Included on the DETAIL only, never the list — the list is one query
+      // by design, and hierarchy is a per-ticket question. `children` is capped because an epic
+      // with hundreds of subtasks must not turn opening one ticket into a page-sized response;
+      // the timeline is where the whole tree belongs.
+      parent: { select: TICKET_LINK_SUMMARY },
+      children: {
+        where: { deletedAt: null },
+        select: { ...TICKET_LINK_SUMMARY, startDate: true, endDate: true, progressPct: true, isMilestone: true, assignee: { select: USER_SUMMARY } },
+        orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }],
+        take: 200
+      },
+      workflowStatus: { select: { id: true, name: true, category: true, color: true } }
     }
   });
   if (!ticket) throw new AppError(404, "Ticket not found");
