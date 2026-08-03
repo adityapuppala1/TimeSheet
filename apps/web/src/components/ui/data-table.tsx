@@ -90,7 +90,14 @@ export function DataTable<TData>({
   const lastRowShown = Math.min((pageIndex + 1) * currentPageSize, totalRows);
 
   return (
-    <div className={cn("grid gap-3", className)}>
+    // `grid-cols-[minmax(0,1fr)]` is load-bearing, same trap as WorkspaceSettings.tsx's tabs
+    // grid: a grid ITEM defaults to `min-width: auto`, so the desktop-table wrapper sized
+    // itself to the TABLE's min-content width and grew right past the viewport instead of
+    // letting its `overflow-auto` scroll — at tablet width every wide DataTable page was
+    // silently clipped at the right edge with no scrollbar at all. An explicit minmax(0,1fr)
+    // track lets items shrink below min-content, which is what finally lets the inner
+    // overflow container do its job.
+    <div className={cn("grid grid-cols-[minmax(0,1fr)] gap-3", className)}>
       {(enableSearch || toolbar) && (
         <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
           {enableSearch ? (

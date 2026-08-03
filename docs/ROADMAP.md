@@ -1217,3 +1217,38 @@ and planned downtime is a scheduled workflow instead of a Slack apology.
   (only a SUPER_ADMIN may target a SUPER_ADMIN). The e2e proves the revocation chain on a
   throwaway drill user it creates and asserts-cleans-up itself — seeded accounts' sessions are
   never revoked, for the same snapshot-ownership reason as above.
+
+### Follow-up (same phase): the revocation must be SEEN, and three layout truths
+
+- **A 15s `GET /auth/heartbeat`** (deliberately tiny — not `/me`, which rebuilds the whole
+  profile payload) plus a session-ended dialog: a force-logout now lands on the target's open
+  tab within seconds — modal, one exit, straight to /login. The same beat keeps idle-but-open
+  tabs honest in the online panels, and pulls locked-out users onto /maintenance within a beat
+  of the window starting. The api layer fires `onSessionEnded` exactly once per session (a
+  burst of parallel 401s must produce ONE dialog), only when a session actually existed (the
+  signed-out boot probe must stay silent).
+- **Scheduled maintenance now interrupts once**: a modal pop-up (localStorage, once per window
+  per browser — rescheduling re-warns) on top of the persistent banner. Direct product
+  feedback: nobody reads passive chrome mid-task.
+- **The layout-break bug was CSS root-cause, not Radix**: `overflow-x: clip` on `html` blocks
+  body→viewport overflow propagation, so any Radix scroll lock (`overflow: hidden` on body)
+  turned BODY into the clip box and detached every `position: sticky` element — measured as the
+  sidebar sitting at `y = -scrollY` the moment a menu opened. Clip lives on body alone now
+  (propagates to the viewport, preserving the phone hardening), `scrollbar-gutter: stable`
+  kills the scrollbar-width jump, and the topbar/table menus are `modal={false}` besides.
+- **14px root font** is the answer to "it only looks right at 80% zoom" — every Tailwind size
+  in the app is rem-based, so one declaration rescales the whole UI to 87.5%; breakpoints are
+  unaffected (media queries resolve against the browser default, not the html font size).
+- The maintenance router's limiter went 30 → 240/min per IP after the e2e caught it starving
+  the status poll: during a real window an entire office polls through ONE NAT egress IP —
+  30/min saturates at ~10 locked-out colleagues, which would have made the lockout page fail
+  exactly when it matters. Found as a test flake, fixed as a production bug.
+- **Removing the html clip UNMASKED a real tablet bug the suite had been blind to**: with
+  `overflow: clip` on the root, `documentElement.scrollWidth` reports no overflow, so the
+  "no horizontal overflow" checks were partially defeated the whole time (the same masking the
+  WorkspaceSettings grid comment describes). The honest measurement immediately failed three
+  tablet tests and led to the actual defect: DataTable's root is a grid, grid items default to
+  `min-width: auto`, so the desktop-table wrapper sized itself to the TABLE's min-content width
+  — its `overflow-auto` never engaged and wide tables were clipped edge-off-screen with no
+  scrollbar at 768px. One `grid-cols-[minmax(0,1fr)]` on DataTable's root fixed every consumer
+  at once. Lesson pinned: a passing overflow test under a root-level clip proves nothing.

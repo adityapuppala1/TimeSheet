@@ -22,17 +22,21 @@ import { withAdminRequest } from "./helpers/admin-request";
 const BASE_URL = process.env.E2E_BASE_URL ?? "http://localhost:5173";
 const MAINTENANCE_MESSAGE = "E2E maintenance drill — database upgrade in progress.";
 
-/** Enables a window spanning "now", or disables and clears. Asserted — a silently failed
- *  disable in the finally block would be indistinguishable from a working one. */
-async function setMaintenance(enabled: boolean): Promise<void> {
+/** Enables a window (spanning "now" by default, or a future one via startOffsetMs), or
+ *  disables and clears. Asserted — a silently failed disable in the finally block would be
+ *  indistinguishable from a working one. */
+async function setMaintenance(enabled: boolean, startOffsetMs = -60_000): Promise<void> {
   await withAdminRequest(async (ctx, headers) => {
     const res = await ctx.patch("/api/maintenance/settings", {
       headers,
       data: enabled
         ? {
             enabled: true,
-            scheduledStartAt: new Date(Date.now() - 60_000).toISOString(),
-            scheduledEndAt: new Date(Date.now() + 30 * 60_000).toISOString(),
+            scheduledStartAt: new Date(Date.now() + startOffsetMs).toISOString(),
+            // End is START-relative, not now-relative: with a future start, "now + 60min"
+            // equals the start to the millisecond and the API (correctly) 422s the
+            // zero-length window — a race this test lost only sometimes.
+            scheduledEndAt: new Date(Date.now() + startOffsetMs + 60 * 60_000).toISOString(),
             message: MAINTENANCE_MESSAGE
           }
         : { enabled: false, scheduledStartAt: null, scheduledEndAt: null, message: null }
@@ -139,6 +143,35 @@ test.describe("maintenance mode", () => {
       await expect(page).toHaveURL(/\/login/, { timeout: 15_000 });
     } finally {
       await ctx.dispose();
+    }
+  });
+
+  test("a FUTURE window interrupts signed-in users once with a pop-up, then keeps the banner", async ({ page }) => {
+    // Scheduled one hour out: warns, blocks nothing — employees can still sign in and work.
+    await setMaintenance(true, 60 * 60_000);
+    try {
+      await page.goto("/login");
+      await page.getByLabel("Email", { exact: true }).fill("employee@timesheet.local");
+      await page.getByLabel("Password", { exact: true }).fill("Admin@12345");
+      await page.getByRole("button", { name: /sign in/i }).click();
+      await expect(page).toHaveURL(/\/app/, { timeout: 15_000 });
+
+      // The pop-up is the loud, one-time interruption (people tune out passive chrome — the
+      // explicit feedback that motivated it); the banner is the ambient reminder that stays.
+      const popup = page.getByRole("alertdialog", { name: /scheduled maintenance ahead/i });
+      await expect(popup).toBeVisible({ timeout: 15_000 });
+      await expect(popup.getByText(MAINTENANCE_MESSAGE)).toBeVisible();
+      await popup.getByRole("button", { name: /got it/i }).click();
+      await expect(popup).toBeHidden();
+
+      await expect(page.getByRole("status").getByText(/scheduled maintenance/i)).toBeVisible();
+
+      // Acknowledged once = not interrupted again: a reload shows the banner but NO pop-up.
+      await page.reload();
+      await expect(page.getByRole("status").getByText(/scheduled maintenance/i)).toBeVisible({ timeout: 15_000 });
+      await expect(page.getByRole("alertdialog", { name: /scheduled maintenance ahead/i })).toBeHidden();
+    } finally {
+      await setMaintenance(false);
     }
   });
 });

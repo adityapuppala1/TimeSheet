@@ -95,8 +95,31 @@
    * *should* scroll horizontally (the Kanban board, a data table) manages its own
    * `overflow-x-auto` internally and is unaffected by clipping at this outer level.
    */
+  /*
+   * `overflow-x: clip` lives on BODY ONLY — deliberately NOT on html. The CSS propagation rule:
+   * body's overflow reaches the viewport only while html's overflow is `visible`. With clip on
+   * html, that propagation is blocked — so when a Radix modal (dropdown/dialog) scroll-locks by
+   * setting `overflow: hidden` on body, the BODY ELEMENT itself becomes the clip box instead of
+   * the viewport, and every `position: sticky` element (sidebar, topbar) silently detaches and
+   * appears "scrolled away" (measured: sidebar rect at y = -scrollY the moment a menu opened).
+   * With html left visible, body's clip-x still propagates to the viewport (phone overflow
+   * hardening intact) and a modal's overflow:hidden propagates too — the standard, sticky-safe
+   * scroll lock every other site gets.
+   *
+   * `scrollbar-gutter: stable` keeps the viewport width constant when that lock removes the
+   * scrollbar — without it, the whole centered layout shifted sideways on every menu open.
+   */
   html {
-    overflow-x: clip;
+    scrollbar-gutter: stable;
+    /*
+     * 14px root, not the browser's 16px — the density fix behind "the app only looks right at
+     * 80% zoom". Every Tailwind size in this app is rem-based, so this one declaration scales
+     * the entire UI (text, spacing, icons, max-widths) to 87.5%, which is what made the dense
+     * admin tables fit a laptop viewport at 100% zoom. 14px is the standard enterprise-app
+     * base (Ant Design, most admin systems). Tailwind's responsive breakpoints are UNAFFECTED
+     * on purpose — media queries resolve against the browser default, not this value.
+     */
+    font-size: 14px;
   }
 
   body {

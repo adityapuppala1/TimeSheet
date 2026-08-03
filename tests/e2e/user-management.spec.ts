@@ -78,7 +78,7 @@ test.describe("user management — login activity & force-logout", () => {
     }
   });
 
-  test("force-logout revokes every session of one user, server-side", async () => {
+  test("force-logout revokes every session of one user, and their open tab is told within a heartbeat", async ({ page }) => {
     await sweepDrillUser();
 
     const ctx = await playwrightRequest.newContext({ baseURL: BASE_URL });
@@ -95,19 +95,37 @@ test.describe("user management — login activity & force-logout", () => {
         drillUserId = (await created.json()).id;
       });
 
+      // One API session (proves raw token revocation) …
       const login = await ctx.post("/api/auth/login", { data: { email: DRILL_EMAIL, password: DRILL_PASSWORD } });
       expect(login.ok()).toBe(true);
       const drillHeaders = { Authorization: `Bearer ${(await login.json()).accessToken}` };
       expect((await ctx.get("/api/auth/me", { headers: drillHeaders })).status()).toBe(200);
 
+      // … and one real BROWSER session — proving the open tab is TOLD it was signed out, not
+      // left as a zombie UI that only admits it on the next hard refresh.
+      await page.goto("/login");
+      await page.getByLabel("Email", { exact: true }).fill(DRILL_EMAIL);
+      await page.getByLabel("Password", { exact: true }).fill(DRILL_PASSWORD);
+      await page.getByRole("button", { name: /sign in/i }).click();
+      await expect(page).toHaveURL(/\/app/, { timeout: 15_000 });
+
       await withAdminRequest(async (adminCtx, headers) => {
         const res = await adminCtx.post(`/api/users/${drillUserId}/force-logout`, { headers });
         expect(res.ok()).toBe(true);
-        expect((await res.json()).revokedSessions).toBeGreaterThanOrEqual(1);
+        // The API session + the browser session, at minimum.
+        expect((await res.json()).revokedSessions).toBeGreaterThanOrEqual(2);
       });
 
       // The revoked token dies on its next use — the whole point of server-side revocation.
       expect((await ctx.get("/api/auth/me", { headers: drillHeaders })).status()).toBe(401);
+
+      // THE HEADLINE ASSERTION: with zero interaction from the person, the 15s session
+      // heartbeat discovers the revocation and the tab shows the "signed out" dialog. 25s
+      // timeout = one heartbeat interval plus comfortable slack.
+      const dialog = page.getByRole("alertdialog", { name: /you've been signed out/i });
+      await expect(dialog).toBeVisible({ timeout: 25_000 });
+      await dialog.getByRole("button", { name: /go to sign in/i }).click();
+      await expect(page).toHaveURL(/\/login/, { timeout: 10_000 });
     } finally {
       if (drillUserId) {
         await withAdminRequest(async (adminCtx, headers) => {

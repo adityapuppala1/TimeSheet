@@ -118,6 +118,11 @@ test("no horizontal overflow with a long ticket title open in the detail sheet",
  */
 async function assertEveryTabIsReachable(page: import("@playwright/test").Page) {
   const tabs = page.getByRole("tab");
+  // Readiness first, then enumeration: `count()` samples INSTANTLY, and `networkidle` can fire
+  // during the auth-bootstrap gap (refresh POST done, settings queries not yet started) — which
+  // once produced a flaky "0 tabs" on a loaded machine. Waiting for the first tab converts the
+  // race into an explicit readiness condition.
+  await tabs.first().waitFor({ state: "visible", timeout: 15_000 });
   const count = await tabs.count();
   expect(count).toBeGreaterThan(0);
   for (let i = 0; i < count; i++) {

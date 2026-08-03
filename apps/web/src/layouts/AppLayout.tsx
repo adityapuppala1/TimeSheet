@@ -10,6 +10,7 @@
 import { Navigate, Outlet } from "react-router";
 import { MaintenanceBanner } from "../components/MaintenanceBanner";
 import { OnboardingGate } from "../components/OnboardingGate";
+import { SessionEndedDialog } from "../components/SessionEndedDialog";
 import { MobileNav, Sidebar } from "../components/Sidebar";
 import { Topbar } from "../components/Topbar";
 import { useAuthStore } from "../store/auth";
@@ -40,6 +41,9 @@ export function AppLayout() {
           unmounting the app would destroy in-progress state, and the gate lifts on its own the
           moment the server says the requirements are met. */}
       <OnboardingGate />
+      {/* Heartbeat + "you've been signed out" dialog — how an admin's force-logout reaches
+          this tab within seconds rather than on the next hard refresh. */}
+      <SessionEndedDialog />
     </div>
   );
 }

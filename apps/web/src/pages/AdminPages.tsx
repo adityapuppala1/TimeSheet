@@ -21,6 +21,7 @@ import {
   Layers,
   LogOut,
   Mail,
+  MoreHorizontal,
   Pencil,
   Plus,
   RotateCcw,
@@ -54,6 +55,13 @@ import { Button } from "../components/ui/button";
 import { CsvBulkUploadDialog } from "../components/CsvBulkUploadDialog";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../components/ui/card";
 import { DataTable } from "../components/ui/data-table";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger
+} from "../components/ui/dropdown-menu";
 import {
   Dialog,
   DialogContent,
@@ -383,79 +391,58 @@ export function UsersPage() {
         id: "actions",
         header: () => <span className="block text-right">Actions</span>,
         enableSorting: false,
+        // One labeled menu instead of six cryptic icon buttons: the icon row was the widest
+        // cell in the table (it alone forced horizontal scroll at 100% zoom) and six unlabeled
+        // glyphs made the destructive ones too easy to fat-finger. A menu is narrow, labeled,
+        // and puts Delete behind an extra deliberate step.
         cell: ({ row }) => {
           const user = row.original;
           return (
-            <div className="flex justify-end gap-1">
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <Button variant="ghost" size="icon" className="h-9 w-9" onClick={() => setEditing(user)}>
-                    <Pencil className="h-4 w-4" />
+            <div className="flex justify-end">
+              <DropdownMenu modal={false}>
+                <DropdownMenuTrigger asChild>
+                  <Button variant="ghost" size="icon" className="h-9 w-9" aria-label={`Actions for ${user.name}`}>
+                    <MoreHorizontal className="h-4 w-4" />
                   </Button>
-                </TooltipTrigger>
-                <TooltipContent>Edit details</TooltipContent>
-              </Tooltip>
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <Button
-                    variant="ghost"
-                    size="icon"
-                    className="h-9 w-9"
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="end" className="w-56">
+                  <DropdownMenuItem onClick={() => setEditing(user)}>
+                    <Pencil /> Edit details
+                  </DropdownMenuItem>
+                  <DropdownMenuItem
                     disabled={resendWelcome.isPending && resendWelcome.variables === user.id}
                     onClick={() => resendWelcome.mutate(user.id)}
                   >
-                    <Mail className="h-4 w-4" />
-                  </Button>
-                </TooltipTrigger>
-                <TooltipContent>Resend welcome email</TooltipContent>
-              </Tooltip>
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <Button
-                    variant="ghost"
-                    size="icon"
-                    className="h-9 w-9"
+                    <Mail /> Resend welcome email
+                  </DropdownMenuItem>
+                  <DropdownMenuItem
                     onClick={() => update.mutate({ id: user.id, payload: { status: user.status === "ACTIVE" ? "INACTIVE" : "ACTIVE" } })}
                   >
-                    {user.status === "ACTIVE" ? <X className="h-4 w-4" /> : <Check className="h-4 w-4" />}
-                  </Button>
-                </TooltipTrigger>
-                <TooltipContent>{user.status === "ACTIVE" ? "Deactivate" : "Activate"}</TooltipContent>
-              </Tooltip>
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <Button variant="ghost" size="icon" className="h-9 w-9" onClick={() => setPendingReset({ id: user.id, name: user.name })}>
-                    <RotateCcw className="h-4 w-4" />
-                  </Button>
-                </TooltipTrigger>
-                <TooltipContent>Reset password</TooltipContent>
-              </Tooltip>
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <Button
-                    variant="ghost"
-                    size="icon"
-                    className="h-9 w-9 text-warning hover:bg-warning/10 hover:text-warning"
-                    onClick={() => setPendingLogout({ id: user.id, name: user.name })}
-                  >
-                    <LogOut className="h-4 w-4" />
-                  </Button>
-                </TooltipTrigger>
-                <TooltipContent>Sign out all their sessions</TooltipContent>
-              </Tooltip>
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <Button
-                    variant="ghost"
-                    size="icon"
-                    className="h-9 w-9 text-destructive hover:bg-destructive/10 hover:text-destructive"
+                    {user.status === "ACTIVE" ? (
+                      <>
+                        <X /> Deactivate
+                      </>
+                    ) : (
+                      <>
+                        <Check /> Activate
+                      </>
+                    )}
+                  </DropdownMenuItem>
+                  <DropdownMenuItem onClick={() => setPendingReset({ id: user.id, name: user.name })}>
+                    <RotateCcw /> Reset password
+                  </DropdownMenuItem>
+                  <DropdownMenuItem onClick={() => setPendingLogout({ id: user.id, name: user.name })}>
+                    <LogOut /> Sign out everywhere
+                  </DropdownMenuItem>
+                  <DropdownMenuSeparator />
+                  <DropdownMenuItem
+                    className="text-destructive focus:bg-destructive/10 focus:text-destructive"
                     onClick={() => setPendingDelete({ id: user.id, name: user.name })}
                   >
-                    <Trash2 className="h-4 w-4" />
-                  </Button>
-                </TooltipTrigger>
-                <TooltipContent>Delete user</TooltipContent>
-              </Tooltip>
+                    <Trash2 /> Delete user
+                  </DropdownMenuItem>
+                </DropdownMenuContent>
+              </DropdownMenu>
             </div>
           );
         }

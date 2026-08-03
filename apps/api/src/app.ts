@@ -302,10 +302,14 @@ app.use("/api/notifications", notificationRouter);
 app.use("/api/audit", auditRouter);
 app.use("/api/team", teamRouter);
 app.use("/api/settings", settingsRouter);
-// Carries the only OTHER unauthenticated read surface (GET /status — the lockout page's poll),
-// so it gets the same tight 30/min limiter as the attestation share links. The admin routes
-// under it enforce requireAuth + requireSuperAdmin per-route.
-app.use("/api/maintenance", rateLimit({ windowMs: 60_000, limit: 30, standardHeaders: true }), maintenanceRouter);
+// Carries an unauthenticated read surface (GET /status — the lockout page's poll), but unlike
+// the attestation links its availability IS the feature: during a real window, every locked-out
+// user in an office polls it every 20s through the SAME NAT egress IP. 30/min (the first cut)
+// saturated at ~10 locked-out colleagues — and flaked the e2e suite the same way. 240/min
+// supports ~80 concurrent locked-out users per office IP (3 req/min each) plus the admin tab's
+// health (6/min) + admin-view (2/min) polls, while staying a real brake on abuse — the endpoint
+// is a 10s-cached read costing no query per hit. Admin routes under it are auth-gated anyway.
+app.use("/api/maintenance", rateLimit({ windowMs: 60_000, limit: 240, standardHeaders: true }), maintenanceRouter);
 // Tighter than the global 300/min: every /verify costs ~150-400ms of CPU-bound wasm inference
 // PER FRAME, which makes unthrottled retries a self-inflicted DoS as much as a brute-force
 // surface. 60/min per IP comfortably covers honest use (status + challenge + two-frame verify

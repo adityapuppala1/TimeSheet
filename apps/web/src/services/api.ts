@@ -72,6 +72,43 @@ export const api = axios.create({ baseURL: API_BASE_URL, withCredentials: true, 
 let inMemoryAccessToken: string | null = null;
 export function setAccessToken(token: string | null) {
   inMemoryAccessToken = token;
+  // A fresh session arms the session-ended notification again (see below) — without this, a
+  // user who was force-signed-out once and signed back in would never be told a second time.
+  if (token) sessionEndedNotified = false;
+}
+
+/* ------------------------------ Session-ended signal ------------------------------ */
+
+/** Why the person's session just died, as best the client can tell. "revoked" = the server
+ *  said the SESSION ROW was revoked (admin force-logout, or a sign-out from another device);
+ *  "expired" = the refresh simply failed (idle past the refresh window, cookie gone). */
+export type SessionEndedReason = "revoked" | "expired";
+
+type SessionEndedListener = (reason: SessionEndedReason) => void;
+const sessionEndedListeners = new Set<SessionEndedListener>();
+/** Fires at most once per established session — a burst of parallel 401s must produce ONE
+ *  dialog, not one per in-flight query. Re-armed by setAccessToken above. */
+let sessionEndedNotified = false;
+
+/**
+ * Subscribe to "this signed-in session just ended and could not be refreshed". Fired by the
+ * response interceptor below ONLY when a real session existed (never during the normal
+ * signed-out boot probe). Same tiny-subscriber pattern as onBackendReachabilityChange, for the
+ * same import-cycle reason.
+ */
+export function onSessionEnded(listener: SessionEndedListener): () => void {
+  sessionEndedListeners.add(listener);
+  return () => sessionEndedListeners.delete(listener);
+}
+
+function notifySessionEnded(reason: SessionEndedReason) {
+  for (const listener of sessionEndedListeners) {
+    try {
+      listener(reason);
+    } catch {
+      // A misbehaving listener must never break the HTTP error flow it's observing.
+    }
+  }
 }
 
 /**
@@ -177,7 +214,19 @@ api.interceptors.response.use(
       original.headers = { ...original.headers, Authorization: `Bearer ${token}` };
       return api.request(original);
     } catch (refreshError) {
+      // The refresh itself failed — the session is genuinely over. If one was actually
+      // established (token in memory — distinguishes this from the signed-out boot probe),
+      // tell the app so it can show the person a dialog instead of leaving a zombie UI that
+      // only reveals the truth on the next hard refresh. The ORIGINAL 401's message carries
+      // the why: requireAuth says "Session revoked" for a revoked session row (admin
+      // force-logout / another device's sign-out) — anything else is ordinary expiry.
+      const wasSignedIn = Boolean(inMemoryAccessToken);
       setAccessToken(null);
+      if (wasSignedIn && !sessionEndedNotified) {
+        sessionEndedNotified = true;
+        const message = String((error.response?.data as { message?: string } | undefined)?.message ?? "");
+        notifySessionEnded(message.toLowerCase().includes("revoked") ? "revoked" : "expired");
+      }
       throw refreshError;
     }
   }
@@ -326,6 +375,9 @@ export const maintenanceApi = {
 };
 
 export const authApi = {
+  /** The 15s liveness beat AppLayout polls — its 401 is how an admin's force-logout reaches
+   *  this tab within seconds (see components/SessionEndedDialog.tsx). Deliberately tiny. */
+  heartbeat: async () => (await api.get<{ ok: boolean }>("/auth/heartbeat")).data,
   onboardingStatus: async () => (await api.get<OnboardingStatus>("/auth/onboarding-status")).data,
   login: async (email: string, password: string, rememberMe: boolean) =>
     (await api.post<LoginResponse>("/auth/login", { email, password, rememberMe })).data,

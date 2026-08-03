@@ -146,7 +146,9 @@ export function Topbar() {
             {dark ? <Sun className="h-4 w-4" /> : <Moon className="h-4 w-4" />}
           </Button>
 
-          <DropdownMenu>
+          {/* modal={false}: a menu doesn't need to freeze page scroll, and the scroll lock is
+              what interacted badly with sticky positioning (see index.css's html comment). */}
+          <DropdownMenu modal={false}>
             <DropdownMenuTrigger asChild>
               <Button data-tour="user-menu" variant="ghost" className="h-10 gap-2 rounded-full border border-border px-2 pr-3">
                 <Avatar className="h-7 w-7">

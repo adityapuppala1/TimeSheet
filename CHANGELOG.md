@@ -43,9 +43,31 @@ user of a running installation.
 - **Login visibility in User management** — every user row shows a live online indicator, first
   login and latest login times, plus a confirmed *sign out everywhere* action that revokes all
   of one person's sessions server-side.
+- **Instant "you've been signed out" dialog** — a 15-second session heartbeat means an admin's
+  force-logout reaches the person's open tab within seconds: a clear dialog explains what
+  happened and takes them to the sign-in page, instead of a stale screen that only admits the
+  truth on the next refresh. Ordinary session expiry gets the same treatment with softer wording.
+- **Maintenance pop-up warning** — when a window is scheduled, signed-in users now get a one-time
+  modal interruption (people tune out passive banners) quoting the window and the admin's
+  message, acknowledged once per window per browser. The persistent amber banner stays as the
+  ambient reminder.
 
 ### 🐛 Fixes
 
+- Opening any menu or dialog after scrolling no longer breaks the page layout (sidebar/topbar
+  vanishing, content shifting sideways). Root cause: `overflow-x: clip` on the root element
+  blocked the standard scroll-lock from reaching the viewport, detaching every sticky element;
+  the scrollbar-width jump is also gone (`scrollbar-gutter: stable`).
+- Wide tables (Tickets, Users) on tablet-width screens now scroll horizontally inside their own
+  container instead of being silently clipped at the right edge with no scrollbar — a
+  pre-existing bug the old root-level clip both caused the conditions for and hid from the
+  responsive test suite.
+- The whole UI now fits comfortably at 100% browser zoom (previously only at ~80%): the root
+  font size is 14px — the standard enterprise-app base — which scales every rem-based size in
+  the app to 87.5%.
+- The User management table no longer overflows horizontally: the six per-row icon buttons are
+  consolidated into one labeled actions menu, which also puts *Delete* behind a clearer,
+  harder-to-fat-finger step.
 - Creating a user with an email that already exists now answers a clear conflict message instead
   of an unhandled server error — including when the collision is with a previously deleted
   account, which is invisible in every list.

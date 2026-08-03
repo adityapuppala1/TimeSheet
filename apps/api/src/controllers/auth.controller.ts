@@ -134,6 +134,20 @@ authRouter.delete("/sessions/:id", requireAuth, async (req, res) => {
   res.status(204).send();
 });
 
+/**
+ * The 15-second liveness beat the app shell polls. Two jobs in one cheap round-trip:
+ * 1. If this session was revoked (admin force-logout, single-device sign-out), requireAuth
+ *    answers 401 within one beat — which is what makes an admin's "sign out everywhere" land
+ *    on the target's screen in seconds instead of whenever they next click something.
+ * 2. requireAuth's throttled lastSeenAt stamp keeps an open-but-idle tab "online" in the admin
+ *    panels — the honest answer to "who will lose work if I start maintenance now?".
+ * Deliberately not /me: this runs 4×/min per signed-in user, and /me rebuilds the full profile
+ * payload every call; this does two indexed lookups.
+ */
+authRouter.get("/heartbeat", requireAuth, async (_req, res) => {
+  res.json({ ok: true });
+});
+
 authRouter.get("/me", requireAuth, async (req, res) => {
   res.json(await buildProfilePayload(req.user!.id));
 });

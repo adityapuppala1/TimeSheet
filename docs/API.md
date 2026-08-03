@@ -11,6 +11,10 @@ Base URL: `/api`
 - `POST /auth/reset-password` `{ token, password }`
 - `POST /auth/change-password` `{ currentPassword, nextPassword }`
 - `GET /auth/me`
+- `GET /auth/heartbeat` — deliberately tiny authenticated liveness beat the app shell polls
+  every 15s. Its 401 is how a server-side session revocation (admin force-logout, another
+  device's sign-out) reaches an open tab within seconds; it also keeps `Session.lastSeenAt`
+  honest for idle-but-open tabs
 
 While a maintenance window is active (see the Maintenance mode section below), every
 authenticated route and every login method answers `503 { code: "MAINTENANCE" }` for
