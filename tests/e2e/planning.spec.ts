@@ -11,6 +11,7 @@
  * behaviour of these pages is checked.
  */
 import { expect, test, type Page } from "@playwright/test";
+import { suspendFaceGate, type FaceGateSnapshot } from "./helpers/face-gate";
 
 const ADMIN = "superadmin@timesheet.local";
 
@@ -49,6 +50,20 @@ async function planningConfig(page: Page) {
   });
   return { config: await res.json(), token: accessToken };
 }
+
+// Several tests below build ticket fixtures through the API. When the workspace has face
+// verification enabled with enforcementMode ALL — a legitimate, shippable configuration — those
+// creations return 428, and because a fixture helper that does not assert its own status leaves
+// `id` undefined, the failure surfaces much later as a 422 on an unrelated route. Suspend
+// enforcement for this file and restore the exact previous values afterwards; a no-op when the
+// feature is off. Same pattern as responsive.spec.ts and tickets.spec.ts.
+let faceGate: FaceGateSnapshot;
+test.beforeAll(async () => {
+  faceGate = await suspendFaceGate();
+});
+test.afterAll(async () => {
+  await faceGate?.restore();
+});
 
 test.describe("planning layer", () => {
   // No storageState: each test signs in for itself — see signIn's note above.
@@ -165,13 +180,17 @@ test.describe("planning layer", () => {
     const projects = await (await page.request.get("/api/projects", { headers })).json();
     const projectId = projects[0].id;
 
-    const mk = async (title: string) =>
-      (
-        await page.request.post("/api/tickets", {
-          headers,
-          data: { projectId, title, type: "BUG", priority: "LOW" }
-        })
-      ).json();
+    // ASSERTED, not assumed. Without this a failed create leaves `id` undefined, the dependency
+    // POST below sends `fromId: undefined`, and the whole thing surfaces as a 422 on the cycle
+    // route — pointing at the feature under test rather than at the fixture that never existed.
+    const mk = async (title: string) => {
+      const res = await page.request.post("/api/tickets", {
+        headers,
+        data: { projectId, title, type: "BUG", priority: "LOW" }
+      });
+      expect(res.status(), `ticket fixture should be created: ${await res.text()}`).toBe(201);
+      return res.json();
+    };
 
     const a = await mk("Cycle probe A");
     const b = await mk("Cycle probe B");
@@ -204,12 +223,12 @@ test.describe("planning layer", () => {
 
     const headers = { Authorization: `Bearer ${token}` };
     const projects = await (await page.request.get("/api/projects", { headers })).json();
-    const ticket = await (
-      await page.request.post("/api/tickets", {
-        headers,
-        data: { projectId: projects[0].id, title: "Schedule round-trip probe", type: "TASK", priority: "LOW" }
-      })
-    ).json();
+    const created = await page.request.post("/api/tickets", {
+      headers,
+      data: { projectId: projects[0].id, title: "Schedule round-trip probe", type: "TASK", priority: "LOW" }
+    });
+    expect(created.status(), `ticket fixture should be created: ${await created.text()}`).toBe(201);
+    const ticket = await created.json();
 
     const patched = await page.request.patch(`/api/plan/items/${ticket.id}`, {
       headers,
@@ -238,6 +257,128 @@ test.describe("planning layer", () => {
     expect(bad.status()).toBe(422);
 
     await page.request.delete(`/api/tickets/${ticket.id}`, { headers });
+  });
+
+  test("the workload board puts planned, actual and capacity on one axis", async ({ page }) => {
+    await signIn(page);
+    const { config, token } = await planningConfig(page);
+    test.skip(!config.effective.resourceManagement, "resource management is off in this workspace");
+
+    const board = await (
+      await page.request.get("/api/resources/workload", { headers: { Authorization: `Bearer ${token}` } })
+    ).json();
+
+    expect(Array.isArray(board.rows)).toBe(true);
+    expect(board.buckets.length).toBeGreaterThan(0);
+
+    for (const row of board.rows) {
+      for (const cell of row.cells) {
+        // Capacity is what is AVAILABLE — gross capacity minus time off — so it can never be
+        // negative, and a week fully on leave must report zero rather than a negative number.
+        expect(cell.capacityHours).toBeGreaterThanOrEqual(0);
+        // The three columns that make this board worth having. A pure PM tool has only the first.
+        expect(typeof cell.bookedHours).toBe("number");
+        expect(typeof cell.loggedHours).toBe("number");
+
+        if (cell.allocationPct !== null) {
+          // 100% exactly is fully booked, which is the intended state — never flagged.
+          if (cell.allocationPct <= 100) expect(cell.isOverAllocated).toBe(false);
+        } else {
+          // No capacity to divide by: the percentage is null rather than Infinity, and the
+          // over-allocation flag has to carry the meaning instead.
+          expect(cell.capacityHours).toBe(0);
+        }
+      }
+    }
+  });
+
+  test("a booking spans working days only, and overlaps are reported not refused", async ({ page }) => {
+    await signIn(page);
+    const { config, token } = await planningConfig(page);
+    test.skip(!config.effective.resourceManagement, "resource management is off in this workspace");
+
+    const headers = { Authorization: `Bearer ${token}` };
+    const users = await (await page.request.get("/api/users", { headers })).json();
+    const userId = (Array.isArray(users) ? users : users.rows)[0].id;
+
+    // Mon 2026-09-07 to Sun 2026-09-13 at 8h/day must be 40 hours, not 56 — the calendar-vs-
+    // working-day bug that would inflate every person's load by the weekend.
+    const first = await page.request.post("/api/resources/bookings", {
+      headers,
+      data: { userId, startDate: "2026-09-07", endDate: "2026-09-13", hoursPerDay: 8, note: "e2e probe A" }
+    });
+    expect(first.status()).toBe(201);
+    const a = await first.json();
+
+    const board = await (
+      await page.request.get("/api/resources/workload?from=2026-09-07&to=2026-09-13", { headers })
+    ).json();
+    const row = board.rows.find((r: any) => r.person.id === userId);
+    expect(row.totals.bookedHours).toBe(40);
+
+    // A second overlapping booking is ACCEPTED — splitting someone across two projects is
+    // sometimes the plan, and refusing it would force planners to record something untrue.
+    const second = await page.request.post("/api/resources/bookings", {
+      headers,
+      data: { userId, startDate: "2026-09-08", endDate: "2026-09-10", hoursPerDay: 6, note: "e2e probe B" }
+    });
+    expect(second.status()).toBe(201);
+    const b = await second.json();
+
+    const conflicts = await (
+      await page.request.get("/api/resources/conflicts?from=2026-09-07&to=2026-09-13", { headers })
+    ).json();
+    expect(conflicts.some((c: any) => c.userId === userId)).toBe(true);
+
+    // An inverted range IS refused — that is a data-entry error, not a plan.
+    const bad = await page.request.post("/api/resources/bookings", {
+      headers,
+      data: { userId, startDate: "2026-09-13", endDate: "2026-09-07", hoursPerDay: 4 }
+    });
+    expect(bad.status()).toBe(422);
+
+    await page.request.delete(`/api/resources/bookings/${a.id}`, { headers });
+    await page.request.delete(`/api/resources/bookings/${b.id}`, { headers });
+  });
+
+  test("the project budget panel never reports a forecast it cannot support", async ({ page }) => {
+    await signIn(page);
+    const { token } = await planningConfig(page);
+    const headers = { Authorization: `Bearer ${token}` };
+    const projects = await (await page.request.get("/api/projects", { headers })).json();
+
+    const panel = await (await page.request.get(`/api/resources/budget/${projects[0].id}`, { headers })).json();
+    expect(panel.progressPct).toBeGreaterThanOrEqual(0);
+    expect(panel.progressPct).toBeLessThanOrEqual(100);
+
+    if (panel.budget) {
+      // Same rule as the portfolio roll-up, enforced by the one shared budget service.
+      if (panel.budget.burn === 0) expect(panel.budget.forecastAtCompletion).toBeNull();
+      // Unrated hours are counted separately, never priced as zero.
+      expect(panel.budget.unratedHours).toBeGreaterThanOrEqual(0);
+    }
+    // Variance covers finished work only, so every row must have both numbers.
+    for (const row of panel.variance.rows) {
+      expect(row.estimatedHours).toBeGreaterThan(0);
+      expect(row.actualHours).toBeGreaterThan(0);
+    }
+  });
+
+  test("the workload board opens and renders its capacity ramp", async ({ page }) => {
+    await signIn(page);
+    await page.goto("/app/workload");
+    await page.waitForLoadState("networkidle");
+
+    const off = page.getByText(/isn.t switched on|don.t have access/i);
+    if (await off.count()) {
+      await expect(off.first()).toBeVisible();
+      return;
+    }
+    await expect(page.getByRole("heading", { name: /^workload$/i })).toBeVisible();
+    // The legend is what makes the colours mean anything; its presence is the cheapest proof the
+    // ramp classes actually generated (a missing Tailwind colour renders invisible, not broken).
+    await expect(page.getByText(/over capacity/i).first()).toBeVisible();
+    await expect(page.getByRole("button", { name: /book time/i })).toBeVisible();
   });
 
   test("the portfolio roll-up returns derived numbers, and never a fake forecast", async ({ page }) => {

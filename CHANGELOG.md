@@ -54,6 +54,28 @@ admin turns it on** — every capability ships off by default.
 - **Project budgets and planned dates**, plus optional portfolio grouping.
 - **Saved views** — keep a filter/column/sort combination per view type, private or shared.
 
+### ✨ Phase 3 — resource & budget
+
+- **Workload board** — every person's capacity, week by week, coloured by how booked they are.
+  Each cell shows the hours planned *and* the hours actually logged, so a forecast can be checked
+  against what really happened rather than against another forecast.
+- **Per-person capacity** — contracted weekly hours and an expected utilisation percentage, so a
+  part-timer and a fully-loaded person are modelled properly instead of with one fudged number.
+  Anyone without their own figure follows the workspace default.
+- **Bookings** — reserve someone's time against a project or a work item, or mark it as leave.
+  Hours are per *working* day, so a five-day booking at 4h/day is 20 hours, not 28. Leave reduces
+  what's available rather than counting as load, so a week off reads as unavailable, not busy.
+- **Double-bookings are shown, not blocked** — splitting a person across two projects for a
+  fortnight is sometimes exactly the plan, and refusing it would just make people record
+  something untrue. Being booked to exactly 100% isn't flagged either; that's fully booked, which
+  is the point.
+- **Project budgets** — budget, spend, and a forecast at completion, on the project's billing
+  panel. The forecast stays blank until there's enough progress and spend for it to mean
+  anything, rather than reporting a confident zero.
+- **Estimate accuracy** — how far finished work ran over or under its estimate, reported as a
+  median so one runaway task doesn't distort the picture. Turns the hours you already collect
+  into better estimates next time.
+
 ### 🔧 Under the hood
 
 - New permissions (`portfolios:manage`, `plan:write`, `resources:manage`, `approvals:manage`,
@@ -70,6 +92,12 @@ admin turns it on** — every capability ships off by default.
   "when does this start" would disagree, and the one that disagrees is always the one on screen.
 - `plan:write` is a separate permission from `tickets:write`: fixing a typo in a ticket and
   moving the delivery schedule are different acts. Managers and team leads get it by default.
+- Burn, forecast and estimate variance are computed in one place and read by both the portfolio
+  roll-up and the project panel, so a total can never disagree with the rows under it — and the
+  figure matches a Verified Work Attestation because both read the same rate snapshots.
+- The end-to-end suite's face-verification helper now reference-counts across worker processes.
+  Two parallel workers used to suspend the gate and the first to finish restored it mid-run,
+  producing an intermittent failure that always pointed at the wrong thing.
 
 ## 1.1.0 — 2026-08-03
 

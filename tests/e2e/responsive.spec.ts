@@ -54,7 +54,8 @@ const PAGES = [
   // switcher is exactly what pushed that page past 390px the first time.
   "/app/my-work",
   "/app/timeline",
-  "/app/portfolio"
+  "/app/portfolio",
+  "/app/workload"
 ];
 const OVERFLOW_TOLERANCE_PX = 4;
 

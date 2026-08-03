@@ -49,6 +49,7 @@ import {
   AlertDialogHeader,
   AlertDialogTitle
 } from "../components/ui/alert-dialog";
+import { ProjectBudgetPanel } from "../components/ProjectBudgetPanel";
 import { Avatar, AvatarFallback, AvatarImage } from "../components/ui/avatar";
 import { Badge } from "../components/ui/badge";
 import { Button } from "../components/ui/button";
@@ -1041,7 +1042,18 @@ export function ProjectsPage() {
  */
 function ProjectBillingDialog({ project, onClose }: { project: any | null; onClose: () => void }) {
   const queryClient = useQueryClient();
-  const [draft, setDraft] = useState({ clientName: "", defaultHourlyRate: "", billingCurrency: "" });
+  const [draft, setDraft] = useState({
+    clientName: "",
+    defaultHourlyRate: "",
+    billingCurrency: "",
+    // Planning layer (V6). Budget lives here rather than in a new dialog because it is the same
+    // conversation as the rate — what this engagement costs and what it was sold for.
+    budgetAmount: "",
+    budgetCurrency: "",
+    budgetAlertPct: "",
+    plannedStartDate: "",
+    plannedEndDate: ""
+  });
 
   // Re-seed whenever a different project is opened, so the dialog never shows stale values from
   // the previously-opened row.
@@ -1050,7 +1062,12 @@ function ProjectBillingDialog({ project, onClose }: { project: any | null; onClo
     setDraft({
       clientName: project.clientName ?? "",
       defaultHourlyRate: project.defaultHourlyRate != null ? String(project.defaultHourlyRate) : "",
-      billingCurrency: project.billingCurrency ?? ""
+      billingCurrency: project.billingCurrency ?? "",
+      budgetAmount: project.budgetAmount != null ? String(project.budgetAmount) : "",
+      budgetCurrency: project.budgetCurrency ?? "",
+      budgetAlertPct: project.budgetAlertPct != null ? String(project.budgetAlertPct) : "",
+      plannedStartDate: project.plannedStartDate ? String(project.plannedStartDate).slice(0, 10) : "",
+      plannedEndDate: project.plannedEndDate ? String(project.plannedEndDate).slice(0, 10) : ""
     });
   }, [project?.id]);
 
@@ -1061,7 +1078,12 @@ function ProjectBillingDialog({ project, onClose }: { project: any | null; onClo
         // individual's own rate / the workspace default currency rather than storing "".
         clientName: draft.clientName.trim() || null,
         defaultHourlyRate: draft.defaultHourlyRate.trim() === "" ? null : Number(draft.defaultHourlyRate),
-        billingCurrency: draft.billingCurrency.trim() ? draft.billingCurrency.trim().toUpperCase() : null
+        billingCurrency: draft.billingCurrency.trim() ? draft.billingCurrency.trim().toUpperCase() : null,
+        budgetAmount: draft.budgetAmount.trim() === "" ? null : Number(draft.budgetAmount),
+        budgetCurrency: draft.budgetCurrency.trim() ? draft.budgetCurrency.trim().toUpperCase() : null,
+        budgetAlertPct: draft.budgetAlertPct.trim() === "" ? null : Number(draft.budgetAlertPct),
+        plannedStartDate: draft.plannedStartDate || null,
+        plannedEndDate: draft.plannedEndDate || null
       }),
     onSuccess: () => {
       toast.success("Billing settings saved");
@@ -1072,7 +1094,11 @@ function ProjectBillingDialog({ project, onClose }: { project: any | null; onClo
   });
 
   const rateInvalid = draft.defaultHourlyRate.trim() !== "" && !(Number(draft.defaultHourlyRate) >= 0);
-  const currencyInvalid = draft.billingCurrency.trim() !== "" && draft.billingCurrency.trim().length !== 3;
+  const currencyInvalid =
+    (draft.billingCurrency.trim() !== "" && draft.billingCurrency.trim().length !== 3) ||
+    (draft.budgetCurrency.trim() !== "" && draft.budgetCurrency.trim().length !== 3) ||
+    // Refused rather than swapped: a swap guesses which of the two the author meant.
+    (draft.plannedStartDate !== "" && draft.plannedEndDate !== "" && draft.plannedEndDate < draft.plannedStartDate);
 
   return (
     <Dialog open={Boolean(project)} onOpenChange={(open) => !open && onClose()}>
@@ -1080,7 +1106,7 @@ function ProjectBillingDialog({ project, onClose }: { project: any | null; onClo
         {project && (
           <>
             <DialogHeader>
-              <DialogTitle>Client billing — {project.name}</DialogTitle>
+              <DialogTitle>Billing &amp; budget — {project.name}</DialogTitle>
               <DialogDescription>
                 Used when a timesheet on this project is approved: the rate is frozen onto that entry so later pay changes never
                 rewrite what past work cost. All three are optional.
@@ -1118,6 +1144,57 @@ function ProjectBillingDialog({ project, onClose }: { project: any | null; onClo
                 Leave the rate blank to bill each person at their own hourly rate. Leave currency blank to use the workspace
                 default. An attestation refuses to mix currencies in one period rather than silently summing them.
               </p>
+
+              {/* Planning layer (V6). Burn against this budget is never stored — it is summed
+                  live from the rate snapshots above, so the figure here and the figure on an
+                  attestation cannot drift apart. */}
+              <div className="grid gap-4 border-t border-border pt-4">
+                <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Budget &amp; planned dates</p>
+                <div className="grid gap-4 sm:grid-cols-3">
+                  <FieldShell label="Budget">
+                    <Input
+                      type="number"
+                      min={0}
+                      step="1"
+                      value={draft.budgetAmount}
+                      onChange={(e) => setDraft({ ...draft, budgetAmount: e.target.value })}
+                      placeholder="No budget"
+                    />
+                  </FieldShell>
+                  <FieldShell label="Budget currency">
+                    <Input
+                      value={draft.budgetCurrency}
+                      onChange={(e) => setDraft({ ...draft, budgetCurrency: e.target.value })}
+                      placeholder="Falls back to billing"
+                      maxLength={3}
+                    />
+                  </FieldShell>
+                  <FieldShell label="Alert at %">
+                    <Input
+                      type="number"
+                      min={1}
+                      max={100}
+                      value={draft.budgetAlertPct}
+                      onChange={(e) => setDraft({ ...draft, budgetAlertPct: e.target.value })}
+                      placeholder="80"
+                    />
+                  </FieldShell>
+                </div>
+                <div className="grid gap-4 sm:grid-cols-2">
+                  <FieldShell label="Planned start">
+                    <Input type="date" value={draft.plannedStartDate} onChange={(e) => setDraft({ ...draft, plannedStartDate: e.target.value })} />
+                  </FieldShell>
+                  <FieldShell label="Planned end">
+                    <Input type="date" value={draft.plannedEndDate} onChange={(e) => setDraft({ ...draft, plannedEndDate: e.target.value })} />
+                  </FieldShell>
+                </div>
+                <p className="text-xs text-muted-foreground">
+                  The planned window is what the portfolio compares the real schedule against — the gap between the two is
+                  where a project goes wrong quietly.
+                </p>
+              </div>
+
+              {project.id && <ProjectBudgetPanel projectId={project.id} />}
             </div>
             <DialogFooter>
               <Button variant="ghost" onClick={onClose}>Cancel</Button>

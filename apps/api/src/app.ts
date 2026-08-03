@@ -46,6 +46,7 @@ import { planRouter } from "./controllers/plan.controller.js";
 import { planningRouter } from "./controllers/planning.controller.js";
 import { platformAdminRouter } from "./controllers/platform-admin.controller.js";
 import { portfolioRouter } from "./controllers/portfolio.controller.js";
+import { resourceRouter } from "./controllers/resource.controller.js";
 import { projectRouter } from "./controllers/project.controller.js";
 import { reportRouter } from "./controllers/report.controller.js";
 import { attestationRouter } from "./controllers/attestation.controller.js";
@@ -304,6 +305,7 @@ app.use("/api/planning", planningRouter);
 // permissions (plan:write vs SUPER_ADMIN), different read volumes, different gates.
 app.use("/api/plan", planRouter);
 app.use("/api/portfolios", portfolioRouter);
+app.use("/api/resources", resourceRouter);
 app.use("/api/reports", reportRouter);
 app.use("/api/attestations", attestationRouter);
 // Unauthenticated attestation share links. Its own tighter limiter (30/min) because this is

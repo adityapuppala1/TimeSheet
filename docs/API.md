@@ -316,6 +316,33 @@ makes the same stored value render as two different days across a boundary.
   with zero spend — the arithmetic there produces a confident number that is noise, and
   "forecast: 0" reads as "this will cost nothing".
 
+### Resources & budget
+
+Every `/resources` route needs `resources:manage` and both the workspace toggle and the tier
+entitlement, except the budget panel which needs only `reports:view`.
+
+- `GET /resources/workload?from=&to=&granularity=&projectId=` — the person × bucket grid. Each
+  cell carries `capacityHours` (gross capacity **minus** time off, i.e. what is actually
+  available), `bookedHours`, `loggedHours` and `allocationPct`. `allocationPct` is **null** when
+  there is no capacity to divide by; `isOverAllocated` carries the meaning in that case. The
+  threshold is 102%, not 100% — exactly-fully-booked is the intended state, and flagging it
+  trains people to ignore the colour.
+- `GET /resources/conflicts` — overlapping bookings whose combined daily rate exceeds the
+  person's daily capacity. Informational: bookings are never refused for overlapping, because
+  splitting someone across two projects is sometimes exactly the plan.
+- `GET|POST|PUT|DELETE /resources/bookings[/:id]` — `hoursPerDay` is per **working** day, so a
+  Mon–Sun booking at 8h/day is 40 hours, not 56. An inverted date range is a 422; an overlap is
+  not. `isTimeOff` marks leave, which reduces available capacity rather than counting as load.
+- `GET /resources/capacity`, `PATCH /resources/capacity/:userId` — `weeklyCapacityHours` and
+  `plannedUtilizationPct`. Null on either clears the override and returns the person to the
+  workspace default, which is a different fact from "their week happens to equal the default".
+- `GET /resources/budget/:projectId` — budget, burn, forecast and estimate-vs-actual variance for
+  one project. Progress comes from the same solver the timeline uses, so the percentage driving
+  the forecast is the percentage shown on the Gantt. Variance covers **finished** work only: a
+  half-done task is under its estimate by definition, and including it would make every project
+  look like it beats its estimates. The headline figure is the **median**, because one task that
+  took 12× its estimate drags a mean into uselessness.
+
 ## Verified work attestations
 
 A client-facing record that approved hours map to real tickets, done by identity-verified people,

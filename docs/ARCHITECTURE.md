@@ -334,6 +334,30 @@ detail sheet has ever offered, so V5 workspaces have real data recorded under it
 `*_TO_*` types added in V6 sit alongside it rather than replacing it, and reinterpreting `BLOCKS`
 would have silently changed existing plans.
 
+**Resourcing is where this product beats a pure PM tool, and the reason is structural.** Wrike,
+Asana and the rest hold only estimates, so they can compare a plan against another plan.
+TimeSphere already has approved timesheets with a rate snapshot, so `services/workload.service.ts`
+puts three things on one axis: PLANNED (a `ResourceBooking`), ACTUAL (approved `Timesheet` rows)
+and CAPACITY (`User.weeklyCapacityHours`). "Ana is booked at 110%" is a forecast; "Ana is booked
+at 110% and logged 46 hours" is evidence. Same pure-core/thin-shell split as the scheduler, for
+the same reason — the failure modes are silent arithmetic (spreading a booking over calendar days
+rather than working days inflates the whole company's load by 40%, and the board still looks
+plausible).
+
+**Bookings are never refused for overlapping.** Double-booking is sometimes deliberate, and a
+system that rejects the second booking forces a planner to record something untrue to get past
+it. Conflicts are surfaced, not prevented. Likewise 100% allocation is *not* flagged — a person
+booked to exactly their capacity is fully booked, which is the intended state; flagging it would
+light up the whole board on a well-planned sprint and train everyone to ignore the colour.
+
+**Money has one definition.** `services/budget.service.ts` owns burn, forecast and
+estimate-variance, and both the portfolio roll-up and the project budget panel call it. Burn is
+never stored — it is summed from the `Timesheet.billedAmount` rate snapshots that a Verified Work
+Attestation also reads, so an internal dashboard and a document a client may dispute cannot
+disagree. Forecast-at-completion returns **null** below 5% progress or with zero spend: the
+arithmetic there produces a confident "$0" that reads as "this will cost nothing", which is the
+most misleading figure it is possible to put on an executive dashboard.
+
 ---
 
 ## 4. Request lifecycle (a normal, tenant-resolved API call)

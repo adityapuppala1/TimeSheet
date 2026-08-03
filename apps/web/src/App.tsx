@@ -42,6 +42,7 @@ const History = lazy(() => import("./pages/History").then((m) => ({ default: m.H
 const TimelinePage = lazy(() => import("./pages/Timeline").then((m) => ({ default: m.TimelinePage })));
 const MyWorkPage = lazy(() => import("./pages/MyWork").then((m) => ({ default: m.MyWorkPage })));
 const PortfolioPage = lazy(() => import("./pages/Portfolio").then((m) => ({ default: m.PortfolioPage })));
+const WorkloadPage = lazy(() => import("./pages/Workload").then((m) => ({ default: m.WorkloadPage })));
 const AuditLog = lazy(() => import("./pages/AuditLog").then((m) => ({ default: m.AuditLog })));
 const AIActivityLog = lazy(() => import("./pages/AIActivityLog").then((m) => ({ default: m.AIActivityLog })));
 const Insights = lazy(() => import("./pages/Insights").then((m) => ({ default: m.Insights })));
@@ -103,6 +104,9 @@ const router = createBrowserRouter([
       // experiences, and the second is the one that sells the feature.
       { path: "timeline", element: <RequirePermission permission={permissions.TICKETS_VIEW}><PageShell><TimelinePage /></PageShell></RequirePermission> },
       { path: "portfolio", element: <RequirePermission permission={permissions.REPORTS_VIEW}><PageShell><PortfolioPage /></PageShell></RequirePermission> },
+      // Shows every person's capacity and hours, so it needs the resource right rather than a
+      // reporting one — this is people data, not project data.
+      { path: "workload", element: <RequirePermission permission={permissions.RESOURCES_MANAGE}><PageShell><WorkloadPage /></PageShell></RequirePermission> },
       // No permission gate: this is the caller's own assigned work, and gating a personal queue
       // would leave most users with an empty nav entry.
       { path: "my-work", element: <PageShell><MyWorkPage /></PageShell> },

@@ -1402,10 +1402,50 @@ workflow still matching `ticketStatusTransitions`, cycle refusal naming the offe
 date round-trip including the inclusive-span rule, and the roll-up never reporting a fake
 forecast.
 
-### Phases 3-6 — planned
+### Phase 3 — resource & budget (2026-08-03)
 
-3. **Resource & budget** — capacity, bookings, workload heatmap, over-allocation, budget vs burn
-   vs forecast from the existing rate snapshots.
+The phase that uses the asset no competitor has.
+
+- [x] **Planned, actual and capacity on one axis** (`services/workload.service.ts`). Wrike and
+  the rest hold only estimates, so they compare a plan against another plan. This app has
+  approved timesheets with a rate snapshot, so the board shows a booking, the hours actually
+  logged against it, and the person's real capacity together. "Ana is booked at 110%" is a
+  forecast; "booked at 110% and logged 46 hours" is evidence.
+- [x] **Bookings are per WORKING day**, capacity scales to the working days actually in a bucket,
+  and time off reduces what is *available* rather than counting as load — a week of leave reads
+  as "unavailable", not "fully booked", or planners fill it. 24 unit tests pin exactly these,
+  because each failure is silent: spreading a booking over calendar days inflates the whole
+  company's load by 40% and the board still looks plausible.
+- [x] **Overlaps are reported, never refused.** Double-booking is sometimes deliberate, and a
+  system that rejects the second booking forces planners to record something untrue. 100% is not
+  flagged either — fully booked is the intended state, and flagging it lights up the whole board
+  on a well-planned sprint.
+- [x] **One definition of money** (`services/budget.service.ts`), called by both the portfolio
+  roll-up and the project panel. Burn is summed from the rate snapshots a Verified Work
+  Attestation reads, so an internal dashboard and a client-facing document cannot disagree.
+  Forecast returns null below 5% progress or zero spend. Unrated hours are counted separately,
+  never priced as zero.
+- [x] **Estimate accuracy** — finished work only, reported as a median. Turns the hours this app
+  already collects into better estimates next time.
+
+**Two dev-environment lessons worth keeping.** The workload heatmap first rendered with invisible
+cells: the Vite dev server had been running since before the phase-1 `tailwind.config.ts` edit, so
+`bg-capacity-*` never existed in the dev CSS and `text-white` sat on a white card. A production
+build had them all along — Tailwind config changes need a dev-server restart, and the timeline
+looked fine throughout only because its colours are inline SVG `fill` attributes rather than
+utility classes.
+
+Separately, `test:e2e:responsive` runs four projects across two workers, which are separate OS
+processes; two of them suspended the face-verification gate and the first to finish restored it
+while the other was still creating fixtures. Intermittent, and it always pointed at whatever the
+fixture was for. `tests/e2e/helpers/face-gate.ts` now reference-counts through a lock directory so
+only the last holder restores — verified by re-running the four projects and confirming the
+settings came back exactly as they were.
+
+Verified: 274 unit tests (+24), 78 desktop and 94 responsive Playwright tests, all green.
+
+### Phases 4-6 — planned
+
 4. **Intake & approvals** — request-form builder + public form route (modelled on the attestation
    share-link pattern), blueprints with relative-date instantiation, approval chains, guest
    approvers, proofing.

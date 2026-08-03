@@ -24,6 +24,7 @@ import { requireAuth, requirePermission } from "../middleware/auth.js";
 import { AppError } from "../middleware/error.js";
 import { validate } from "../middleware/validate.js";
 import { audit } from "../services/audit.service.js";
+import { computeProjectBudgets } from "../services/budget.service.js";
 import { getPlanningQuota } from "../services/plan-limits.service.js";
 import { assertPlanningEnabled } from "../services/planning.service.js";
 import { buildPlan, dayKey, legacyCategory } from "../services/plan-schedule.service.js";
@@ -190,26 +191,17 @@ portfolioRouter.get("/rollup", requirePermission(permissions.REPORTS_VIEW), asyn
 
   const projectIds = projects.map((p) => p.id);
 
-  // Three grouped queries, never per-project loops: a portfolio page over 40 projects would
-  // otherwise fire 120 round trips and time out on exactly the workspace that most wants it.
-  const [plan, spend, counts, defaults] = await Promise.all([
+  // Grouped queries, never per-project loops: a portfolio page over 40 projects would otherwise
+  // fire 120 round trips and time out on exactly the workspace that most wants it.
+  const [plan, counts] = await Promise.all([
     buildPlan({ projectIds, includeClosed: true }),
-    prisma.timesheet.groupBy({
-      by: ["projectId"],
-      where: { projectId: { in: projectIds }, status: "APPROVED", billable: true, deletedAt: null },
-      _sum: { billedAmount: true, totalHours: true }
-    }),
     prisma.ticket.groupBy({
       by: ["projectId", "status"],
       where: { projectId: { in: projectIds }, deletedAt: null },
       _count: { _all: true }
-    }),
-    prisma.globalTicketSettings.findUnique({ where: { id: "global" } })
+    })
   ]);
 
-  const spendByProject = new Map(
-    spend.map((s) => [s.projectId, { amount: Number(s._sum.billedAmount ?? 0), hours: Number(s._sum.totalHours ?? 0) }])
-  );
   const itemsByProject = new Map<string, typeof plan.items>();
   for (const item of plan.items) {
     const raw = plan.raw.find((r: any) => r.id === item.id) as any;
@@ -226,6 +218,31 @@ portfolioRouter.get("/rollup", requirePermission(permissions.REPORTS_VIEW), asyn
     target.set(row.projectId, (target.get(row.projectId) ?? 0) + row._count._all);
   }
 
+  // Progress must be computed before the budgets, because the forecast is burn scaled by it.
+  const progressByProject = new Map<string, number>();
+  for (const p of projects) {
+    const items = itemsByProject.get(p.id) ?? [];
+    const weight = (i: (typeof items)[number]) => (i.estimatedHours && i.estimatedHours > 0 ? i.estimatedHours : 1);
+    const totalWeight = items.reduce((sum, i) => sum + weight(i), 0);
+    progressByProject.set(
+      p.id,
+      totalWeight > 0 ? Math.round(items.reduce((sum, i) => sum + i.effectiveProgressPct * weight(i), 0) / totalWeight) : 0
+    );
+  }
+
+  // Money comes from budget.service.ts rather than being summed here, so this page and the
+  // project budget panel cannot end up with two different definitions of "burn".
+  const budgets = await computeProjectBudgets(projectIds, progressByProject);
+  const loggedHoursByProject = new Map(
+    (
+      await prisma.timesheet.groupBy({
+        by: ["projectId"],
+        where: { projectId: { in: projectIds }, status: "APPROVED", deletedAt: null },
+        _sum: { totalHours: true }
+      })
+    ).map((r) => [r.projectId, Number(r._sum.totalHours ?? 0)])
+  );
+
   const projectRows = projects.map((p) => {
     const items = itemsByProject.get(p.id) ?? [];
     const start = items.reduce<Date | null>((min, i) => (!min || i.resolvedStart < min ? i.resolvedStart : min), null);
@@ -233,24 +250,8 @@ portfolioRouter.get("/rollup", requirePermission(permissions.REPORTS_VIEW), asyn
 
     // Effort-weighted, matching the roll-up inside a single project. A plain mean across items
     // would make a project with many tiny finished tasks look far healthier than it is.
-    const weight = (i: (typeof items)[number]) => (i.estimatedHours && i.estimatedHours > 0 ? i.estimatedHours : 1);
-    const totalWeight = items.reduce((sum, i) => sum + weight(i), 0);
-    const progressPct = totalWeight > 0
-      ? Math.round(items.reduce((sum, i) => sum + i.effectiveProgressPct * weight(i), 0) / totalWeight)
-      : 0;
-
-    const budget = p.budgetAmount ? Number(p.budgetAmount) : null;
-    const burn = spendByProject.get(p.id)?.amount ?? 0;
-    const burnPct = budget && budget > 0 ? Math.round((burn / budget) * 100) : null;
-
-    // Forecast-to-complete: burn scaled by how much work remains.
-    //
-    // Null unless there is BOTH real progress and real spend. Below 5% progress the denominator
-    // is near-zero and the result is noise dressed as a number; with zero burn the arithmetic
-    // yields a confident "forecast: 0", which reads as "this project will cost nothing" — the
-    // most misleading possible answer to put on an executive dashboard. A blank that says "not
-    // enough data yet" is the honest output in both cases.
-    const forecast = budget !== null && progressPct >= 5 && burn > 0 ? Math.round((burn / progressPct) * 100) : null;
+    const progressPct = progressByProject.get(p.id) ?? 0;
+    const money = budgets.get(p.id);
 
     const slipped = items.filter((i) => (i.slipDays ?? 0) > 0);
     const worstSlip = slipped.reduce((max, i) => Math.max(max, i.slipDays ?? 0), 0);
@@ -276,14 +277,14 @@ portfolioRouter.get("/rollup", requirePermission(permissions.REPORTS_VIEW), asyn
       slippedCount: slipped.length,
       worstSlipDays: worstSlip,
       violationCount: items.reduce((sum, i) => sum + i.violations.length, 0),
-      budget,
-      currency: p.budgetCurrency ?? p.billingCurrency ?? defaults?.defaultCurrency ?? "USD",
-      burn: Number(burn.toFixed(2)),
-      burnPct,
-      forecastAtCompletion: forecast,
-      overBudgetRisk: Boolean(budget && forecast && forecast > budget),
-      budgetAlertPct: p.budgetAlertPct,
-      loggedHours: Number((spendByProject.get(p.id)?.hours ?? 0).toFixed(2))
+      budget: money?.budget ?? null,
+      currency: money?.currency ?? "USD",
+      burn: money?.burn ?? 0,
+      burnPct: money?.burnPct ?? null,
+      forecastAtCompletion: money?.forecastAtCompletion ?? null,
+      overBudgetRisk: money?.overBudgetRisk ?? false,
+      budgetAlertPct: money?.budgetAlertPct ?? null,
+      loggedHours: Number((loggedHoursByProject.get(p.id) ?? 0).toFixed(2))
     };
   });
 

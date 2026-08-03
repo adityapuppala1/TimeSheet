@@ -2463,3 +2463,171 @@ export const portfolioApi = {
       })
     ).data
 };
+
+/* ------------------------------------------------------------------ *
+ * RESOURCES & BUDGET (V6 phase 3)
+ *
+ * The board puts PLANNED (a booking), ACTUAL (approved timesheets) and CAPACITY on one axis.
+ * That third and second column together are what a pure PM tool cannot show — every competitor
+ * can only compare a plan against another plan.
+ * ------------------------------------------------------------------ */
+
+export interface CapacityPersonRow {
+  id: string;
+  name: string;
+  email: string;
+  avatarUrl: string | null;
+  designation?: string | null;
+  /** Null = use the workspace default. A row-level 40 and an unanswered 40 are different facts. */
+  weeklyCapacityHours: number | null;
+  /** Share of capacity expected to be bookable project work. Null = 100. */
+  plannedUtilizationPct: number | null;
+}
+
+export interface WorkloadCellRow {
+  bucketStart: string;
+  /** Capacity MINUS time off — what is actually available to book. */
+  capacityHours: number;
+  bookedHours: number;
+  timeOffHours: number;
+  loggedHours: number;
+  /** Null when there is no capacity to divide by (someone fully on leave). */
+  allocationPct: number | null;
+  isOverAllocated: boolean;
+}
+
+export interface WorkloadRowData {
+  person: CapacityPersonRow;
+  cells: WorkloadCellRow[];
+  totals: {
+    capacityHours: number;
+    bookedHours: number;
+    loggedHours: number;
+    timeOffHours: number;
+    allocationPct: number | null;
+    overAllocatedBuckets: number;
+  };
+}
+
+export interface WorkloadBucket {
+  start: string;
+  end: string;
+  label: string;
+  workingDays: number;
+}
+
+export interface WorkloadBoard {
+  from: string;
+  to: string;
+  granularity: "day" | "week";
+  workingDays: number[];
+  buckets: WorkloadBucket[];
+  rows: WorkloadRowData[];
+  summary: {
+    people: number;
+    overAllocated: number;
+    unbooked: number;
+    totalCapacityHours: number;
+    totalBookedHours: number;
+    totalLoggedHours: number;
+  };
+}
+
+export interface ResourceBookingRow {
+  id: string;
+  userId: string;
+  user: { id: string; name: string; email: string; avatarUrl?: string | null };
+  projectId: string | null;
+  project: { id: string; code: string; name: string } | null;
+  ticketId: string | null;
+  ticket: { id: string; key: string; title: string } | null;
+  startDate: string;
+  endDate: string;
+  /** Per WORKING day, not per calendar day. */
+  hoursPerDay: number;
+  note: string | null;
+  isTimeOff: boolean;
+}
+
+export interface BookingConflict {
+  userId: string;
+  user: { id: string; name: string; avatarUrl?: string | null };
+  overlapStart: string;
+  overlapEnd: string;
+  combinedHoursPerDay: number;
+  bookings: Array<{ id: string; project: { id: string; code: string; name: string } | null; hoursPerDay: number; note: string | null }>;
+}
+
+export interface ProjectBudgetRow {
+  projectId: string;
+  budget: number | null;
+  currency: string;
+  budgetAlertPct: number | null;
+  burn: number;
+  burnPct: number | null;
+  billableHours: number;
+  nonBillableHours: number;
+  /** Approved hours with no rate on record — reported, never priced as zero. */
+  unratedHours: number;
+  forecastAtCompletion: number | null;
+  overBudgetRisk: boolean;
+  alerting: boolean;
+}
+
+export interface EffortVarianceRow {
+  ticketId: string;
+  key: string;
+  title: string;
+  estimatedHours: number;
+  actualHours: number;
+  varianceHours: number;
+  variancePct: number;
+  assignee: { id: string; name: string } | null;
+}
+
+export interface ProjectBudgetPanel {
+  project: { id: string; code: string; name: string; plannedStart: string | null; plannedEnd: string | null };
+  progressPct: number;
+  schedule: { start: string | null; end: string | null; overrunsPlannedEnd: boolean };
+  budget: ProjectBudgetRow | null;
+  variance: { rows: EffortVarianceRow[]; medianVariancePct: number | null; overrunRate: number | null };
+}
+
+/** Create and update take the same shape, so it is named once rather than inferred from the
+ *  create method — a `Parameters<typeof resourceApi.createBooking>` reference inside the object
+ *  that declares it is circular, and TypeScript widens the whole export to `any`. */
+export interface ResourceBookingInput {
+  userId: string;
+  projectId?: string | null;
+  ticketId?: string | null;
+  startDate: string;
+  endDate: string;
+  /** Per WORKING day. */
+  hoursPerDay: number;
+  note?: string | null;
+  isTimeOff?: boolean;
+}
+
+export const resourceApi = {
+  workload: async (params?: { from?: string; to?: string; granularity?: "day" | "week"; projectId?: string }) =>
+    (await api.get<WorkloadBoard>("/resources/workload", { params })).data,
+  conflicts: async (params?: { from?: string; to?: string }) =>
+    (await api.get<BookingConflict[]>("/resources/conflicts", { params })).data,
+
+  listBookings: async (params?: { from?: string; to?: string; userId?: string; projectId?: string }) =>
+    (await api.get<ResourceBookingRow[]>("/resources/bookings", { params })).data,
+  createBooking: async (payload: ResourceBookingInput) =>
+    (await api.post<ResourceBookingRow>("/resources/bookings", payload)).data,
+  updateBooking: async (id: string, payload: ResourceBookingInput) =>
+    (await api.put<ResourceBookingRow>(`/resources/bookings/${id}`, payload)).data,
+  deleteBooking: async (id: string) => {
+    await api.delete(`/resources/bookings/${id}`);
+  },
+
+  capacity: async () =>
+    (await api.get<{ defaultWeeklyCapacityHours: number; people: CapacityPersonRow[] }>("/resources/capacity")).data,
+  updateCapacity: async (userId: string, patch: { weeklyCapacityHours?: number | null; plannedUtilizationPct?: number | null }) =>
+    (await api.patch<CapacityPersonRow>(`/resources/capacity/${userId}`, patch)).data,
+
+  budget: async (projectId: string) => (await api.get<ProjectBudgetPanel>(`/resources/budget/${projectId}`)).data
+};
