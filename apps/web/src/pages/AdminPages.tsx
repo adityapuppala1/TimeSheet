@@ -453,7 +453,7 @@ export function UsersPage() {
 
   return (
     <Workspace title="User Management" subtitle="Create, edit, deactivate, reset, and map users into the manager hierarchy." icon={<Users2 className="h-5 w-5" />}>
-      <Card>
+      <Card data-tour="invite-user">
         <CardHeader className="flex-row items-start justify-between gap-3 space-y-0">
           <div className="min-w-0">
             <CardTitle>Invite a teammate</CardTitle>
@@ -1533,7 +1533,7 @@ export function ReportsPage() {
 
   return (
     <Workspace title="Reports & Exports" subtitle="Download operational reports and inspect utilization analytics." icon={<FileSpreadsheet className="h-5 w-5" />}>
-      <div className="grid grid-cols-2 gap-2.5 sm:gap-3 md:grid-cols-3 xl:grid-cols-6">
+      <div data-tour="reports-exports" className="grid grid-cols-2 gap-2.5 sm:gap-3 md:grid-cols-3 xl:grid-cols-6">
         <StatCard
           label="Users"
           value={analytics.data?.users ?? 0}

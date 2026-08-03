@@ -400,6 +400,27 @@ export const templates = {
         (params.notes ? paragraph(escape(params.notes)) : "") +
         paragraph(button("Open the review log", appUrl("/app/settings"))) +
         paragraph(`<span style="color:${MUTED};">Computed directly from this week's verification attempts — no AI involved. Turn it off in Workspace Settings → Notifications.</span>`)
+    ),
+
+  /** The "wrap up, maintenance is coming" warning a SUPER_ADMIN sends from the Maintenance tab
+   *  (services/maintenance.service.ts#notifyUsersOfMaintenance). Amber accent — a heads-up, not
+   *  an incident. `message` is the admin's UNTRUSTED free text — escaped here, like every other
+   *  human-authored value in this file. */
+  maintenanceScheduled: (params: { name: string; window: string; message: string }) =>
+    shell(
+      { title: "Scheduled maintenance — please save your work", preheader: `Maintenance window: ${params.window}.`, accentColor: ACCENT },
+      heading("Scheduled maintenance ahead") +
+        paragraph(`Hi ${escape(params.name.split(" ")[0])}, this workspace is going into <strong>scheduled maintenance</strong>. Please save your work and sign out before the window starts.`) +
+        infoCard(
+          [
+            ["Maintenance window", escape(params.window)],
+            ["What happens", "You'll be signed out automatically when it begins; signing in is paused until it ends."]
+          ],
+          ACCENT
+        ) +
+        (params.message ? paragraph(escape(params.message)) : "") +
+        paragraph(button("Open your workspace", appUrl("/app"), ACCENT)) +
+        paragraph(`<span style="color:${MUTED};">Super admins stay signed in to run the maintenance. You'll be able to sign back in the moment the window ends.</span>`)
     )
 };
 

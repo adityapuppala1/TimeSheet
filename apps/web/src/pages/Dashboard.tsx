@@ -283,7 +283,7 @@ export function Dashboard() {
       <MyTicketsBanner tickets={myTickets.data} loading={myTickets.isLoading} />
 
       {/* ---- Hero band: week at a glance / activity / progress ---- */}
-      <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
+      <div data-tour="dashboard-overview" className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
         <HeroCard delay={0}>
           <WeekAtAGlance
             loading={timesheets.isLoading}

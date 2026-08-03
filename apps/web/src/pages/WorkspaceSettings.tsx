@@ -193,7 +193,7 @@ export function WorkspaceSettingsPage() {
           track lets the column shrink below min-content, making each panel responsible for its
           own overflow instead of exporting it to the page. */}
       <Tabs defaultValue="reminders" className="grid min-w-0 grid-cols-[minmax(0,1fr)] gap-4">
-        <TabsList className="w-full justify-start sm:w-auto">
+        <TabsList data-tour="settings-tabs" className="w-full justify-start sm:w-auto">
           <TabsTrigger value="reminders">Reminders & schedule</TabsTrigger>
           <TabsTrigger value="emails">Email channels</TabsTrigger>
           <TabsTrigger value="mail-server">Mail server</TabsTrigger>

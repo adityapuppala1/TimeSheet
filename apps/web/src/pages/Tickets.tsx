@@ -322,7 +322,7 @@ export function Tickets() {
         </div>
       </div>
 
-      <Card>
+      <Card data-tour="tickets-workspace">
         <CardContent className="flex flex-wrap items-center gap-3 pt-6">
           <Select value={filters.projectId} onValueChange={(v) => setFilters((f) => ({ ...f, projectId: v }))}>
             <SelectTrigger className="w-full sm:w-[180px]"><SelectValue placeholder="All projects" /></SelectTrigger>

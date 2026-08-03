@@ -35,66 +35,87 @@ export interface TourStep {
 
 /** What each destination is FOR, in the second person. Written to be useful to someone who has
  *  never seen the app, not to restate the page title. */
-const DESTINATION_COPY: Record<string, { title: string; body: string }> = {
+/**
+ * `selector` points at THE FEATURE each page exists for — the entry form, the board, the export
+ * tiles — not the page heading. Direct product feedback drove this: spotlighting the <h1> told
+ * people where they were, never what to look at. `main h1` remains the universal fallback for
+ * viewports/roles where the feature target is hidden (e.g. desktop tables below `sm`).
+ */
+const DESTINATION_COPY: Record<string, { title: string; body: string; selector?: string }> = {
   "/app": {
     title: "Your dashboard",
-    body: "Everything waiting on you, in one place — hours still to log, approvals in your queue, and how the week is tracking. It changes shape by role, so you only ever see your own work."
+    body: "Everything waiting on you, in one place — hours still to log, approvals in your queue, and how the week is tracking. It changes shape by role, so you only ever see your own work.",
+    selector: '[data-tour="dashboard-overview"]'
   },
   "/app/timesheet": {
     title: "Log your time",
-    body: "Pick the project, module and activity, set the hours, and describe what you did. Overlaps and daily caps are checked as you type, so an entry is right before you submit it rather than after a manager sends it back."
+    body: "Pick the project, module and activity, set the hours, and describe what you did. Overlaps and daily caps are checked as you type, so an entry is right before you submit it rather than after a manager sends it back.",
+    selector: '[data-tour="timesheet-form"]'
   },
   "/app/tickets": {
     title: "Tickets",
-    body: "Bugs, tasks and improvements as a list or a Kanban board. Drag to change status, open one for its full history, and link the branch or pull request where the work actually happened."
+    body: "Bugs, tasks and improvements as a list or a Kanban board. Drag to change status, open one for its full history, and link the branch or pull request where the work actually happened.",
+    selector: '[data-tour="tickets-workspace"]'
   },
   "/app/history": {
     title: "Your history",
-    body: "Every entry you've logged, filterable by date, project and status. Drafts and rejected entries can be deleted here; approved ones can't, because they're part of the billing record."
+    body: "Every entry you've logged, filterable by date, project and status. Drafts and rejected entries can be deleted here; approved ones can't, because they're part of the billing record.",
+    selector: 'main table'
   },
   "/app/approvals": {
     title: "Approvals",
-    body: "Submissions from your reports, each with an SLA timer counting down. Approve or reject with a reason — rejections come back to the author with your note attached."
+    body: "Submissions from your reports, each with an SLA timer counting down. Approve or reject with a reason — rejections come back to the author with your note attached.",
+    selector: 'main table'
   },
   "/app/team": {
     title: "Your team",
-    body: "Who reports to you, their logged hours, and an org chart built from the same reporting lines the approvals queue uses."
+    body: "Who reports to you, their logged hours, and an org chart built from the same reporting lines the approvals queue uses.",
+    selector: 'main table'
   },
   "/app/reports": {
     title: "Reports",
-    body: "Export hours by person, project or period as CSV or PDF — the artefact you hand to finance or a client."
+    body: "Export hours by person, project or period as CSV or PDF — the artefact you hand to finance or a client.",
+    selector: '[data-tour="reports-exports"]'
   },
   "/app/insights": {
     title: "Insights",
-    body: "Velocity, cycle time, SLA compliance and workload, computed from the same rows the approvals ran against — so this and your invoice can't disagree."
+    body: "Velocity, cycle time, SLA compliance and workload, computed from the same rows the approvals ran against — so this and your invoice can't disagree.",
+    selector: 'main .recharts-wrapper'
   },
   "/app/security-insights": {
     title: "Security insights",
-    body: "Findings your CI posted in, rolled up by severity and repository. This product never runs a scanner itself; it turns what yours reports into tickets with owners."
+    body: "Findings your CI posted in, rolled up by severity and repository. This product never runs a scanner itself; it turns what yours reports into tickets with owners.",
+    selector: '[data-tour="security-overview"]'
   },
   "/app/users": {
     title: "Users",
-    body: "Add people, set roles and reporting lines, and deactivate leavers. Role decides what each person can see — including which of these very pages they get."
+    body: "Add people, set roles and reporting lines, and deactivate leavers. Role decides what each person can see — including which of these very pages they get.",
+    selector: '[data-tour="invite-user"]'
   },
   "/app/projects": {
     title: "Projects",
-    body: "Projects, their modules and submodules, plus the SLA windows and billing rates that everything downstream reads from."
+    body: "Projects, their modules and submodules, plus the SLA windows and billing rates that everything downstream reads from.",
+    selector: 'main table'
   },
   "/app/audit": {
     title: "Audit log",
-    body: "Every administrative action, who took it and when. Append-only — the record an auditor asks for."
+    body: "Every administrative action, who took it and when. Append-only — the record an auditor asks for.",
+    selector: 'main table'
   },
   "/app/ai-activity": {
     title: "AI activity log",
-    body: "Every AI-touched ticket, what the model decided, and how confident it was. Rate a decision up or down and that feedback becomes training data for the quality loop."
+    body: "Every AI-touched ticket, what the model decided, and how confident it was. Rate a decision up or down and that feedback becomes training data for the quality loop.",
+    selector: 'main table'
   },
   "/app/email-templates": {
     title: "Email templates",
-    body: "The wording of every notification the system sends, editable without a deploy."
+    body: "The wording of every notification the system sends, editable without a deploy.",
+    selector: '[data-tour="templates-list"]'
   },
   "/app/settings": {
     title: "Workspace settings",
-    body: "Every workspace-wide switch: reminders, AI and its budget, identity verification, integrations and billing. Super Admin only, so one person owns each of these decisions."
+    body: "Every workspace-wide switch: reminders, AI and its budget, identity verification, integrations and billing. Super Admin only, so one person owns each of these decisions.",
+    selector: '[data-tour="settings-tabs"]'
   }
 };
 
@@ -158,10 +179,11 @@ export function buildTourSteps(user?: { role: string; permissions: string[] }): 
         title: copy?.title ?? item.label,
         body: copy?.body ?? `The ${item.label.toLowerCase()} area.`,
         route: item.to,
-        // The page heading is the one element every page reliably has, which makes it a target
-        // that can't go stale as pages are redesigned.
-        selector: "main h1",
-        fallbackSelector: "main",
+        // The page's FEATURE when one is mapped (see DESTINATION_COPY); the heading — the one
+        // element every page reliably has — only as the fallback, because spotlighting the
+        // title told people where they were, never what to look at.
+        selector: copy?.selector ?? "main h1",
+        fallbackSelector: "main h1",
         placement: "bottom"
       };
     });

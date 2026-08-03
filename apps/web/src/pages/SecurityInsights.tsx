@@ -72,7 +72,7 @@ export function SecurityInsightsPage() {
 
       {!insights.isLoading && data && (
         <>
-          <div className="grid grid-cols-2 gap-2.5 sm:gap-3 md:grid-cols-4">
+          <div data-tour="security-overview" className="grid grid-cols-2 gap-2.5 sm:gap-3 md:grid-cols-4">
             <StatCard
               label="Open findings"
               value={data.totalOpen}

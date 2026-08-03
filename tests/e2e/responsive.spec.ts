@@ -13,7 +13,7 @@
  * sidesteps that entirely instead of trying to widen the window to cover it.
  */
 import { test, expect } from "@playwright/test";
-import { deleteTicket } from "./helpers/admin-request";
+import { deleteTicket, withAdminRequest } from "./helpers/admin-request";
 import { suspendFaceGate, type FaceGateSnapshot } from "./helpers/face-gate";
 
 // Several tests below build their own ticket fixture through the API. When the workspace has
@@ -117,7 +117,12 @@ test("no horizontal overflow with a long ticket title open in the detail sheet",
  * just clipped inside one component). Clicking every tab is the only way to actually catch this.
  */
 async function assertEveryTabIsReachable(page: import("@playwright/test").Page) {
-  const tabs = page.getByRole("tab");
+  // Scoped to the FIRST tablist, not every role=tab on the page: panels opened by earlier
+  // clicks can mount their own nested tab elements, which shifts a page-wide nth() index
+  // mid-loop — and a click resolved against a shifted index lands somewhere it was never
+  // aimed. Tab traversal must be able to VIEW every panel while being physically unable to
+  // interact with anything inside one.
+  const tabs = page.getByRole("tablist").first().getByRole("tab");
   // Readiness first, then enumeration: `count()` samples INSTANTLY, and `networkidle` can fire
   // during the auth-bootstrap gap (refresh POST done, settings queries not yet started) — which
   // once produced a flaky "0 tabs" on a loaded machine. Waiting for the first tab converts the
@@ -137,6 +142,21 @@ test("every tab in Workspace Settings (8 tabs) is reachable", async ({ page }) =
   await page.goto("/app/settings");
   await page.waitForLoadState("networkidle");
   await assertEveryTabIsReachable(page);
+
+  // INVARIANT: by the time this spec finishes, maintenance mode must be OFF — whatever armed
+  // it. A quick-suite run once had a 3-minute window enabled MID-RUN (audit forensics: a
+  // human super-admin manually testing the scheduler in their own browser against the same
+  // shared dev stack) and four downstream specs died of lockout in ways that looked nothing
+  // like their cause. This check turns any such drift — human, test, or bug — into ONE loud
+  // failure with the evidence attached, instead of four misleading ones.
+  await withAdminRequest(async (ctx, headers) => {
+    const { settings, phase } = await (await ctx.get("/api/maintenance/admin", { headers })).json();
+    expect(
+      phase,
+      `tab traversal must not activate maintenance mode (settings now: ${JSON.stringify(settings)})`
+    ).not.toBe("active");
+    expect(settings.enabled, "tab traversal must not enable the maintenance window").toBe(false);
+  });
 });
 
 /**

@@ -18,6 +18,8 @@ import { AppError } from "../middleware/error.js";
 import { env } from "../config/env.js";
 import { dispatchNotification } from "./notify.service.js";
 
+import { templates } from "./mail-templates.js";
+
 const GLOBAL_ID = "global";
 /** How stale the cached settings may be. The trade is explicit: a toggle takes effect within this
  *  many seconds, in exchange for zero per-request queries. */
@@ -28,12 +30,6 @@ const CACHE_TTL_MS = 10_000;
 const ONLINE_WINDOW_MS = 15 * 60 * 1000;
 
 const cache = new Map<string, { fetchedAt: number; settings: MaintenanceSettingsShape }>();
-
-/** The admin's free-text message ends up inside email HTML — escaped, because "maintenance note"
- *  and "HTML injection vector" should stay different things. */
-function escapeHtml(value: string): string {
-  return value.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
-}
 
 export interface MaintenanceSettingsShape {
   enabled: boolean;
@@ -245,15 +241,15 @@ export async function notifyUsersOfMaintenance(): Promise<{ notified: number }> 
         // PRE-RENDERED, not {{templated}}: renderEmailTemplate returns this fallback verbatim
         // when no DB override exists (vars are only applied to overrides), so placeholders here
         // would reach inboxes literally as "Hi {{name}}". The `vars` above still matter — they
-        // feed a template an admin later creates under this key in Email templates.
+        // feed a template an admin edits under this key in the Email templates page. The
+        // branded template escapes every value itself, the admin's free-text message included.
         fallback: {
           subject: "Scheduled maintenance — please save your work",
-          html: `<p>Hi ${escapeHtml(user.name)},</p>
-<p>This workspace is going into <strong>scheduled maintenance</strong>: <strong>${escapeHtml(windowText)}</strong>.</p>
-<p>Please save your work and sign out before the window starts — active sessions are signed out
-automatically when it begins, and signing in is disabled until it ends.</p>
-${settings.message ? `<p>${escapeHtml(settings.message)}</p>` : ""}
-<p>— TimeSphere</p>`
+          html: templates.maintenanceScheduled({
+            name: user.name,
+            window: windowText,
+            message: settings.message ?? ""
+          })
         }
       }
     });

@@ -439,15 +439,30 @@ specific message instead of you working backward from one of the errors below.
 ## Testing
 
 ```bash
-npm run test:e2e          # full Playwright suite (Chromium; desktop + phone/tablet/laptop/4K viewport projects)
-npm run test:e2e:report   # open the last run's HTML report
+npm run test:e2e             # full matrix (~13 min): every spec on desktop + phone/tablet/laptop/4K layout sweeps
+npm run test:e2e:quick       # day-to-day loop (~7 min): every FUNCTIONAL spec once, desktop only
+npm run test:e2e:responsive  # layout-only matrix (~5 min): the four viewport projects, 2 workers in parallel
+npm run test:e2e:report      # open the last run's HTML report
 ```
 
-The suite boots the API and web dev servers itself (see `playwright.config.ts`'s `webServer`
-config) if they aren't already running. A one-time `setup` project logs in as each demo role and
-saves the resulting session for the other specs to reuse — see `tests/e2e/auth.setup.ts` for why
-some specs deliberately log in fresh instead (it comes down to the refresh-token rotation
-described in Security below).
+**Which one to run:** `test:e2e:quick` while iterating (it exercises every feature spec once —
+the viewport projects only re-run `responsive.spec.ts` at other sizes); `test:e2e` before a push.
+Three things keep the clock down and are worth knowing:
+
+- **Keep `npm run dev` running between test runs.** `webServer.reuseExistingServer` is on, so a
+  live dev stack skips the ~40s server boot every invocation.
+- **The responsive matrix is parallel (2 workers) on purpose, and the functional suite is
+  serial on purpose.** `responsive.spec.ts` is read-mostly, so its four viewport projects can
+  overlap safely. The functional specs CANNOT be parallelised: they share one seeded MySQL
+  database, one login rate-limiter, and several deliberately mutate workspace-wide state
+  (maintenance mode locks the workspace; force-logout revokes sessions) — two of those running
+  at once would fail each other in ways that look nothing like their cause.
+- **Never run `quick` and `responsive` at the same time** for the same reason: the maintenance
+  spec's lockout window would 503 every page the layout sweep is measuring.
+
+A one-time `setup` project logs in as each demo role and saves the resulting session for the
+other specs to reuse — see `tests/e2e/auth.setup.ts` for why some specs deliberately log in
+fresh instead (it comes down to the refresh-token rotation described in Security below).
 
 **Unit/integration tests** (`apps/api/tests/`, Vitest) cover the three services with the least
 end-to-end UI surface to exercise them through — AI (feature-toggle/budget gating, a mocked-SDK

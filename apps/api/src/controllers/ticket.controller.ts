@@ -34,6 +34,7 @@ import { audit } from "../services/audit.service.js";
 import { dispatchNotification } from "../services/notify.service.js";
 import { templates } from "../services/mail-templates.js";
 import { buildTicketSecurityReport, sendTicketClosedDigest } from "../services/security-report.service.js";
+import { renderSecurityReportPdf } from "../services/security-report-pdf.service.js";
 import { buildTicketLineage } from "../services/ticket-lineage.service.js";
 import { explainAssigneeSuggestion } from "../services/ai.service.js";
 import { setInteractionFeedback } from "../services/ai-quality.service.js";
@@ -740,59 +741,11 @@ ticketRouter.get("/:id/security-report.pdf", requirePermission(permissions.TICKE
   res.setHeader("Content-Type", "application/pdf");
   res.setHeader("Content-Disposition", `attachment; filename="${ticket.key}-security-report.pdf"`);
 
-  const doc = new PDFDocument({ size: "A4", margin: 36 });
+  // Layout lives in security-report-pdf.service.ts (same controller-stays-a-router split as the
+  // attestation PDF). bufferPages is what makes "Page N of M" possible.
+  const doc = new PDFDocument({ size: "A4", margin: 36, bufferPages: true });
   doc.pipe(res);
-
-  doc.fontSize(20).fillColor("#0F9AA8").text("TimeSphere");
-  doc.fontSize(10).fillColor("#64748B").text(`Generated ${report.generatedAt.toLocaleString()}`);
-  doc.moveDown(0.5);
-  doc.fontSize(16).fillColor("#0F172A").text(`${report.ticket.key} — Security & Test Report`);
-  doc.fontSize(11).fillColor("#64748B").text(report.ticket.title);
-  doc.moveDown(0.5);
-
-  const verdictColor = report.riskVerdict.startsWith("Needs attention") ? "#DC2626" : "#16A34A";
-  doc.fontSize(12).fillColor(verdictColor).text(report.riskVerdict);
-  doc.fontSize(10).fillColor("#0F172A").text(`Latest test run: ${report.latestTestRun?.status ?? "none recorded"}`);
-  doc.moveDown(0.75);
-
-  const SEVERITY_COLOR: Record<string, string> = { CRITICAL: "#DC2626", HIGH: "#D97706", MEDIUM: "#0F9AA8", LOW: "#64748B" };
-  const TYPE_LABEL: Record<string, string> = {
-    SAST: "Static analysis (SAST)",
-    DAST: "Dynamic analysis (DAST)",
-    SSAT: "Secrets scanning (SSAT)",
-    SSCT: "Supply-chain testing (SSCT)",
-    VAPT: "Penetration test (VAPT)"
-  };
-
-  if (report.findings.length === 0) {
-    doc.fontSize(11).fillColor("#64748B").text("No findings have been ingested for this ticket.");
-  }
-
-  for (const type of ["SAST", "DAST", "SSAT", "SSCT", "VAPT"] as const) {
-    const items = report.findingsByType[type];
-    if (items.length === 0) continue;
-
-    if (doc.y > 720) doc.addPage();
-    doc.moveDown(0.5);
-    doc.fontSize(13).fillColor("#0F172A").text(TYPE_LABEL[type]);
-    doc.strokeColor("#E2E8F0").lineWidth(0.5).moveTo(36, doc.y).lineTo(560, doc.y).stroke();
-    doc.moveDown(0.3);
-
-    for (const finding of items) {
-      if (doc.y > 740) doc.addPage();
-      const rowY = doc.y;
-      doc.fontSize(9).fillColor(SEVERITY_COLOR[finding.severity] ?? "#0F172A").text(finding.severity, 36, rowY, { continued: true, width: 70 });
-      doc.fillColor("#0F172A").text(`  ${finding.title}`, { continued: true });
-      doc.fillColor("#64748B").text(`  (${finding.tool}${finding.status !== "OPEN" ? `, ${finding.status}` : ""})`);
-      if (finding.filePath) {
-        doc.fontSize(8).fillColor("#94A3B8").text(`${finding.filePath}${finding.lineNumber ? `:${finding.lineNumber}` : ""}`, 46);
-      }
-      doc.moveDown(0.25);
-    }
-  }
-
-  doc.moveDown(1);
-  doc.fontSize(8).fillColor("#94A3B8").text("Ingest-only report — findings reflect whatever CI/security tools this workspace has connected.", { align: "center" });
+  renderSecurityReportPdf(doc, report);
   doc.end();
 });
 

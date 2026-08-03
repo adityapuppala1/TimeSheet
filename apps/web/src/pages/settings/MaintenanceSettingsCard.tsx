@@ -244,7 +244,14 @@ export function MaintenanceSettingsCard({ readOnly }: { readOnly: boolean }) {
             <p className="flex items-center gap-1.5 text-xs text-muted-foreground">
               <CalendarClock className="h-3.5 w-3.5" /> Times are in your local timezone.
             </p>
-            <Button onClick={() => save.mutate()} disabled={readOnly || save.isPending}>
+            {/* Client-side seatbelt on top of the server's 422: enabling without a full window
+                can't even be SUBMITTED. Belt and braces after a stray automated click once
+                managed to arm a window mid-test-suite. */}
+            <Button
+              onClick={() => save.mutate()}
+              disabled={readOnly || save.isPending || (draft.enabled && (!draft.scheduledStartAt || !draft.scheduledEndAt))}
+              title={draft.enabled && (!draft.scheduledStartAt || !draft.scheduledEndAt) ? "Pick both a start and an end time first" : undefined}
+            >
               {save.isPending ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Save className="mr-2 h-4 w-4" />}
               Save maintenance settings
             </Button>

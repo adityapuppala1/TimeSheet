@@ -138,7 +138,7 @@ export function EmailTemplatesPage() {
 
       <TransportStatusBanner status={transport.data} loading={transport.isLoading} />
 
-      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
+      <div data-tour="templates-list" className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
         {templates.isLoading &&
           Array.from({ length: 6 }).map((_, i) => (
             <Card key={`s-${i}`}>

@@ -1252,3 +1252,31 @@ and planned downtime is a scheduled workflow instead of a Slack apology.
   — its `overflow-auto` never engaged and wide tables were clipped edge-off-screen with no
   scrollbar at 768px. One `grid-cols-[minmax(0,1fr)]` on DataTable's root fixed every consumer
   at once. Lesson pinned: a passing overflow test under a root-level clip proves nothing.
+
+### Follow-up (same phase): eight polish items in one pass (2026-08-03)
+
+User-reported, each fixed at the cause:
+
+- **Maintenance page** rebuilt as a living screen — counter-rotating gears, drifting orbs, a
+  blueprint grid, window-progress bar — all CSS/framer-motion, zero image assets. The
+  e2e-asserted strings were treated as a contract and kept.
+- **Timesheet ticket picker** is a cmdk combobox now; the `value` it filters on is
+  deliberately `key + title` so "OPS-381" and "lineage" both find the row.
+- **Maintenance email** moved into the branded template registry (shell/heading/infoCard) and
+  the Email templates page catalog. One escaping authority: the template escapes everything,
+  callers pass raw text — the alternative (caller pre-escapes) double-escaped on the first try.
+- **Tour targets**: DESTINATION_COPY gained an optional per-route feature `selector`
+  (data-tour anchors on seven pages; semantic `main table` where a DataTable IS the feature);
+  `main h1` demoted to fallback. Direct feedback: highlighting the title told people where
+  they were, never what to look at.
+- **Security PDF** rebuilt to the attestation house style: verdict banner whose color is the
+  answer, severity strip, CI-run line, descriptions/CWE/AI-triage (all previously dropped),
+  methodology appendix, Page N of M. Renderer extracted to its own service + 3 structural
+  tests (the 60-finding overflow case included).
+- **Server-health details** became labeled icon tiles — the one-line text footer was exactly
+  the unscannable thing the rest of the panel exists to avoid.
+- **Test workflow**: `test:e2e:quick` (desktop functional loop) + `test:e2e:responsive`
+  (4 viewport projects, 2 workers — measured 4.8 min vs ~9 serial). Parallelising the
+  FUNCTIONAL suite was explicitly rejected and the reason documented in the README: specs
+  share one DB and deliberately mutate workspace-wide state (maintenance lockout, session
+  revocation); the failure mode of overlap looks nothing like its cause.

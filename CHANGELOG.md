@@ -51,6 +51,28 @@ user of a running installation.
   modal interruption (people tune out passive banners) quoting the window and the admin's
   message, acknowledged once per window per browser. The persistent amber banner stays as the
   ambient reminder.
+- **Maintenance page redesign** — animated counter-rotating gears, drifting ambient orbs, a
+  blueprint-grid backdrop, a live progress bar showing how far through the window you are, and a
+  pulsing "live" indicator — all pure CSS/motion, no image assets, same auto-release behavior.
+- **Searchable ticket picker on the timesheet form** — type-ahead over key AND title ("OPS-381"
+  or a word from the name both work), keyboard-navigable, with an explicit "Not linked" choice.
+  A plain dropdown was fine at 10 tickets and useless at 200.
+- **Maintenance warning email joins the template system** — full branded layout (accent header,
+  window info card, action button) instead of bare paragraphs, editable like every other email
+  from the Email templates page with live variables and a sample preview.
+- **The product tour now spotlights each page's actual feature** — the entry form, the board,
+  the export tiles, the invite card — instead of the page title, which told people where they
+  were but never what to look at.
+- **Security PDF report rebuilt** — executive verdict banner (color = the answer), open-findings
+  strip by severity, latest CI run with pass/fail counts, finding descriptions + CWE + AI triage
+  (all silently dropped before), a methodology appendix explaining each assessment type for
+  readers who don't know the acronyms, page-break guards and Page N of M.
+- **Server health panel: structured details grid** — OS, architecture, Node version, app
+  version, both uptimes, sample time and pid as labeled icon tiles instead of one unscannable
+  text line.
+- **Faster test workflow** — `test:e2e:quick` (~7 min functional loop) and a parallelised
+  `test:e2e:responsive` layout matrix (~5 min, was ~9 serial), with the safety rules documented
+  in the README.
 
 ### 🐛 Fixes
 

@@ -9,7 +9,7 @@
 import { zodResolver } from "@hookform/resolvers/zod";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { activityTypes, calculateHours } from "@timesheet/shared";
-import { AlertTriangle, CalendarClock, Eraser, Save, Send, Sparkles } from "lucide-react";
+import { AlertTriangle, CalendarClock, Check, ChevronsUpDown, Eraser, Save, Send, Sparkles, Ticket } from "lucide-react";
 import { useMemo, useState } from "react";
 import { useForm, Controller } from "react-hook-form";
 import { z } from "zod";
@@ -21,6 +21,8 @@ import { Form, FormControl, FormDescription, FormField, FormItem, FormLabel, For
 import { Input } from "../components/ui/input";
 import { Progress } from "../components/ui/progress";
 import { RichTextEditor } from "../components/ui/rich-text-editor";
+import { Command, CommandEmpty, CommandGroup, CommandInput, CommandItem, CommandList } from "../components/ui/command";
+import { Popover, PopoverContent, PopoverTrigger } from "../components/ui/popover";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../components/ui/select";
 import { Separator } from "../components/ui/separator";
 import { toast } from "../components/ui/toaster";
@@ -48,6 +50,90 @@ type FormData = z.infer<typeof schema>;
 
 function stripHtml(html: string) {
   return html.replace(/<[^>]+>/g, "").trim();
+}
+
+/**
+ * Searchable ticket picker — a plain dropdown is fine at 10 tickets and useless at 200, and a
+ * busy project easily has 200. Type-ahead filters on key AND title ("OPS-381", "lineage",
+ * either works), keyboard-navigable, with an explicit "Not linked" row so clearing the link is
+ * a first-class choice rather than a hunt for an empty option.
+ */
+function TicketPicker({
+  tickets,
+  value,
+  onChange,
+  disabled,
+  placeholder
+}: {
+  tickets: Array<{ id: string; key: string; title: string }>;
+  value: string;
+  onChange: (ticketId: string) => void;
+  disabled: boolean;
+  placeholder: string;
+}) {
+  const [open, setOpen] = useState(false);
+  const selected = tickets.find((ticket) => ticket.id === value);
+
+  return (
+    <Popover open={open} onOpenChange={setOpen}>
+      <PopoverTrigger asChild>
+        <FormControl>
+          <Button
+            type="button"
+            variant="outline"
+            role="combobox"
+            aria-expanded={open}
+            disabled={disabled}
+            className="w-full justify-between font-normal"
+          >
+            <span className={`truncate ${selected ? "" : "text-muted-foreground"}`}>
+              {selected ? `${selected.key} — ${selected.title}` : placeholder}
+            </span>
+            <ChevronsUpDown className="ml-2 h-4 w-4 shrink-0 opacity-50" />
+          </Button>
+        </FormControl>
+      </PopoverTrigger>
+      <PopoverContent className="w-[var(--radix-popover-trigger-width)] p-0" align="start">
+        <Command>
+          <CommandInput placeholder="Search by key or title…" />
+          <CommandList>
+            <CommandEmpty>No open tickets match.</CommandEmpty>
+            <CommandGroup>
+              <CommandItem
+                value="__none__ not linked"
+                onSelect={() => {
+                  onChange("");
+                  setOpen(false);
+                }}
+              >
+                <Check className={`mr-2 h-4 w-4 ${value === "" ? "opacity-100" : "opacity-0"}`} />
+                <span className="text-muted-foreground">Not linked</span>
+              </CommandItem>
+              {tickets.map((ticket) => (
+                <CommandItem
+                  key={ticket.id}
+                  // cmdk filters on this string — key + title together is what makes both
+                  // "OPS-381" and a word from the title find the row.
+                  value={`${ticket.key} ${ticket.title}`}
+                  onSelect={() => {
+                    onChange(ticket.id);
+                    setOpen(false);
+                  }}
+                >
+                  <Check className={`mr-2 h-4 w-4 shrink-0 ${value === ticket.id ? "opacity-100" : "opacity-0"}`} />
+                  <Ticket className="mr-2 h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+                  <span className="truncate">
+                    <span className="font-medium">{ticket.key}</span>
+                    <span className="text-muted-foreground"> — {ticket.title}</span>
+                  </span>
+                </CommandItem>
+              ))}
+            </CommandGroup>
+          </CommandList>
+        </Command>
+      </PopoverContent>
+    </Popover>
+  );
 }
 
 export function Timesheet() {
@@ -177,7 +263,7 @@ export function Timesheet() {
         </p>
       </div>
 
-      <Card>
+      <Card data-tour="timesheet-form">
         <CardContent className="pt-6">
           <Form {...form}>
             <form
@@ -250,17 +336,14 @@ export function Timesheet() {
                   render={({ field }) => (
                     <FormItem>
                       <FormLabel>Ticket <span className="text-muted-foreground">(optional)</span></FormLabel>
-                      <Select value={field.value || ""} onValueChange={field.onChange} disabled={!selectedProject}>
-                        <FormControl>
-                          <SelectTrigger><SelectValue placeholder={selectedProject ? "Not linked" : "Pick a project first"} /></SelectTrigger>
-                        </FormControl>
-                        <SelectContent>
-                          {(openTickets.data ?? []).map((t) => (
-                            <SelectItem key={t.id} value={t.id}>{t.key} — {t.title}</SelectItem>
-                          ))}
-                        </SelectContent>
-                      </Select>
-                      <FormDescription>Attribute this entry's hours to a bug or task for effort reporting.</FormDescription>
+                      <TicketPicker
+                        tickets={openTickets.data ?? []}
+                        value={field.value || ""}
+                        onChange={field.onChange}
+                        disabled={!selectedProject}
+                        placeholder={selectedProject ? "Search or pick a ticket…" : "Pick a project first"}
+                      />
+                      <FormDescription>Attribute this entry's hours to a bug or task for effort reporting. Type to search when the list is long.</FormDescription>
                     </FormItem>
                   )}
                 />

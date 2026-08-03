@@ -37,6 +37,9 @@ export const TEMPLATE_VARIABLES: Record<string, string[]> = {
   "ticket.closed_digest": ["ticketKey", "title", "closedBy", "riskVerdict", "findingsText", "testStatus", "appUrl"],
   "digest.security_weekly": ["weekLabel", "summary", "riskScore", "appUrl"],
 
+  // Maintenance mode — the "wrap up" warning a SUPER_ADMIN sends to online users.
+  "maintenance.scheduled": ["name", "window", "message", "appUrl"],
+
   // Face (identity) verification — see docs/FACE_VERIFICATION.md. Deliberately variable-light:
   // these emails never carry scores, images, or anything biometric.
   "face.enrollment_required": ["name", "appUrl"],
@@ -70,6 +73,7 @@ export const TEMPLATE_DESCRIPTIONS: Record<string, string> = {
   "digest.weekly": "Monday-morning AI-authored recap of a person's ticket + timesheet activity for the past week.",
   "ticket.closed_digest": "Security/test-status digest sent when a ticket with ingested findings closes — to the closer + their manager, cc this workspace's admins.",
   "digest.security_weekly": "Monday-morning AI-authored org-wide security recap (open findings, risk score, tickets past SLA) sent to every ADMIN/SUPER_ADMIN.",
+  "maintenance.scheduled": "\"Save your work\" warning a super admin sends to online users before a maintenance window — quotes the window and the admin's message.",
 
   "face.enrollment_required": "Sent when the face-verification policy starts covering someone who hasn't enrolled (and as the follow-up reminder).",
   "face.verification_flagged": "Sent to the person's manager and workspace admins when repeated failed identity checks flag an attempt for review.",
@@ -192,6 +196,12 @@ export function sampleVariables(key: string): Record<string, string> {
       riskVerdict: "Needs attention — 1 open CRITICAL finding, 1 open HIGH finding, latest test run FAILED.",
       findingsText: "Static analysis (SAST):<br />  - [CRITICAL] SQL injection in login handler (semgrep)<br /><br />Secrets scanning (SSAT):<br />  - [HIGH] Hardcoded AWS key (gitleaks)",
       testStatus: "FAILED", appUrl: "https://timesphere.local"
+    },
+    "maintenance.scheduled": {
+      name: "Aanya Sharma",
+      window: "Sat, Aug 8, 10:00 PM until Sat, Aug 8, 11:30 PM",
+      message: "We're upgrading the database. Timesheets submitted before 9:45 PM are safe.",
+      appUrl: "https://timesphere.local"
     },
     "digest.security_weekly": {
       weekLabel: "Jun 29 - Jul 5",

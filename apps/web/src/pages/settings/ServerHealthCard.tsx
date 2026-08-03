@@ -10,7 +10,23 @@
  * WHO renders this: MaintenanceSettingsCard, below the schedule/online cards.
  */
 import { useQuery } from "@tanstack/react-query";
-import { Activity, Cpu, Database, HardDrive, MemoryStick, Network, RefreshCw, ServerCog } from "lucide-react";
+import {
+  Activity,
+  CircuitBoard,
+  Clock,
+  Cpu,
+  Database,
+  HardDrive,
+  Hexagon,
+  MemoryStick,
+  Monitor,
+  Network,
+  Power,
+  RefreshCw,
+  ServerCog,
+  Tag,
+  Timer
+} from "lucide-react";
 import type { ReactNode } from "react";
 import { Badge } from "../../components/ui/badge";
 import { Button } from "../../components/ui/button";
@@ -206,13 +222,41 @@ export function ServerHealthCard() {
           </ul>
         </div>
 
-        <p className="text-xs text-muted-foreground">
-          {snapshot.server.platform} · {snapshot.server.arch} · Node {snapshot.server.nodeVersion} · app v
-          {snapshot.server.appVersion} · OS up {formatUptime(snapshot.server.osUptimeSec)} · API up{" "}
-          {formatUptime(snapshot.server.processUptimeSec)} · sampled{" "}
-          {new Date(snapshot.sampledAt).toLocaleTimeString()}
-        </p>
+        {/* Same visual grammar as the vitals tiles above — the environment facts were one
+            unscannable text line before, which is exactly what a status panel must not be. */}
+        <div>
+          <p className="mb-2 text-xs font-medium uppercase tracking-wider text-muted-foreground">Server details</p>
+          <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+            <DetailTile icon={<Monitor className="h-4 w-4" />} label="Operating system" value={snapshot.server.platform} />
+            <DetailTile icon={<CircuitBoard className="h-4 w-4" />} label="Architecture" value={snapshot.server.arch} />
+            <DetailTile icon={<Hexagon className="h-4 w-4" />} label="Node.js" value={snapshot.server.nodeVersion} />
+            <DetailTile icon={<Tag className="h-4 w-4" />} label="App version" value={`v${snapshot.server.appVersion}`} />
+            <DetailTile icon={<Power className="h-4 w-4" />} label="OS uptime" value={formatUptime(snapshot.server.osUptimeSec)} />
+            <DetailTile icon={<Timer className="h-4 w-4" />} label="API uptime" value={formatUptime(snapshot.server.processUptimeSec)} />
+            <DetailTile
+              icon={<Clock className="h-4 w-4" />}
+              label="Last sampled"
+              value={new Date(snapshot.sampledAt).toLocaleTimeString()}
+            />
+            <DetailTile icon={<ServerCog className="h-4 w-4" />} label="Process" value={`pid ${snapshot.server.pid}`} />
+          </div>
+        </div>
       </CardContent>
     </Card>
+  );
+}
+
+/** Small labeled fact tile — the compact sibling of MetricTile for single-value facts. */
+function DetailTile({ icon, label, value }: { icon: ReactNode; label: string; value: string }) {
+  return (
+    <div className="flex items-center gap-3 rounded-lg border px-3 py-2.5">
+      <span className="grid h-8 w-8 shrink-0 place-items-center rounded-md bg-muted text-muted-foreground">{icon}</span>
+      <span className="min-w-0">
+        <span className="block text-[11px] font-medium uppercase tracking-wider text-muted-foreground">{label}</span>
+        <span className="block truncate text-sm font-semibold" title={value}>
+          {value}
+        </span>
+      </span>
+    </div>
   );
 }
