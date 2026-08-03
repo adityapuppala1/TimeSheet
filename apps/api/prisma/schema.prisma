@@ -986,6 +986,18 @@ model GlobalAISettings {
   /// stale — surfaced from the existing ticket-escalation worker's sweep, not a new cron job.
   /// Never auto-acts, matching every other AI feature's posture in this app.
   staleTicketNudgeEnabled     Boolean    @default(false)
+  /// --- AI PM copilot (V6 phase 5) ---------------------------------------------------------
+  /// Gates ai.service.ts#narrateProjectRisk. The risk SCORE is computed arithmetically by
+  /// project-risk.service.ts from signals this app already measures; the model only writes the
+  /// sentence that explains it. Same division of labour as facePolicyCopilotEnabled, and for the
+  /// same reason: a score a model invented is not reproducible and not defensible in the meeting
+  /// where someone asks why their project is red.
+  projectRiskAgentEnabled     Boolean    @default(false)
+  /// Gates ai.service.ts#proposePlanBreakdown — turns a goal or an epic into a PROPOSED tree of
+  /// child work items. Never writes: it emits an AiProposal whose rows a human accepts or
+  /// rejects individually. See ai-proposal.service.ts for why that envelope exists.
+  planBreakdownEnabled        Boolean    @default(false)
+
   /// Separate from aiPrReviewSummaryEnabled on purpose — deeper, per-line review comments on a
   /// PR's actual diff carry real false-positive risk (an AI comment that's wrong or noisy erodes
   /// developer trust fast), so this must be its own explicit opt-in, never bundled with the

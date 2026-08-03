@@ -96,6 +96,22 @@ admin turns it on** — every capability ships off by default.
   stay anchored at any zoom or screen size, and resolving one keeps it as a record rather than
   deleting the reason a change was made.
 
+### ✨ Phase 5 — the AI planning copilot
+
+- **Project risk scoring** — every project gets a 0–100 delivery-risk score from six measured
+  signals: schedule slip against baseline, budget forecast, blocked work, over-allocation, SLA
+  breaches and rework. The full breakdown is stored with the score, so "why is this red?" always
+  has an answer, and the same inputs always give the same number. **It works with AI switched off
+  entirely** — only the plain-English summary needs a model.
+- **AI suggestions are suggestions.** When the assistant proposes work — breaking a goal into
+  tasks, for instance — nothing is written. Every change lands on a review page where you tick the
+  ones you want, see exactly what each would change, and apply only those. There is no
+  apply-everything button, on purpose.
+- **Somebody else's edit is never quietly reverted.** If an item changed after a suggestion was
+  made, that row is refused and tells you why, while the rest still apply.
+- **Nightly risk snapshots** build a history, so you can see whether last week's intervention
+  actually helped rather than only how things stand today.
+
 ### 🔧 Under the hood
 
 - New permissions (`portfolios:manage`, `plan:write`, `resources:manage`, `approvals:manage`,
@@ -115,6 +131,9 @@ admin turns it on** — every capability ships off by default.
 - Burn, forecast and estimate variance are computed in one place and read by both the portfolio
   roll-up and the project panel, so a total can never disagree with the rows under it — and the
   figure matches a Verified Work Attestation because both read the same rate snapshots.
+- The AI copilot has exactly two model calls, both through the existing AI choke point, so budget
+  ceilings, per-feature toggles, usage logging and prompt versioning apply to them unchanged. An
+  unavailable or over-budget model never costs you a risk score.
 - Three new unauthenticated endpoints follow the posture the attestation viewer established:
   unguessable tokens, no enumerable ids, and an identical generic 404 for a bad, revoked or
   already-used link — so probing one can't confirm it was ever real.

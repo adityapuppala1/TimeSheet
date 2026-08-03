@@ -34,7 +34,7 @@ import { toast } from "../components/ui/toaster";
 import { Tooltip, TooltipContent, TooltipTrigger } from "../components/ui/tooltip";
 import { cn } from "../lib/utils";
 import { useAuthStore } from "../store/auth";
-import { planningApi, portfolioApi, projectApi, type PortfolioProjectRollup } from "../services/api";
+import { copilotApi, planningApi, portfolioApi, projectApi, type PortfolioProjectRollup } from "../services/api";
 
 const serverMessage = (err: any, fallback: string) => err?.response?.data?.message ?? fallback;
 
@@ -83,6 +83,10 @@ export function PortfolioPage() {
     enabled
   });
   const projects = useQuery({ queryKey: ["projects"], queryFn: projectApi.list, enabled });
+  // The nightly worker stores these; a project with no snapshot yet simply has no badge
+  // rather than a fabricated one.
+  const riskSnapshots = useQuery({ queryKey: ["ai-proposals", "risk"], queryFn: copilotApi.riskSnapshots, enabled });
+  const riskByProject = new Map((riskSnapshots.data ?? []).map((r) => [r.projectId, r]));
 
   const [draft, setDraft] = useState({ name: "", code: "" });
   const create = useMutation({
@@ -252,6 +256,7 @@ export function PortfolioPage() {
                     <TableHead className="text-right">Burn</TableHead>
                     <TableHead className="text-right">Forecast</TableHead>
                     <TableHead className="text-right">Slip</TableHead>
+                    <TableHead className="text-right">Risk</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
@@ -317,6 +322,29 @@ export function PortfolioPage() {
                         </TableCell>
                         <TableCell className="text-right text-xs tabular-nums">
                           {p.worstSlipDays > 0 ? <Badge variant="warning">+{p.worstSlipDays}d</Badge> : <span className="text-muted-foreground">—</span>}
+                        </TableCell>
+                        <TableCell className="text-right text-xs tabular-nums">
+                          {(() => {
+                            const risk = riskByProject.get(p.id);
+                            if (!risk) return <span className="text-muted-foreground">—</span>;
+                            return (
+                              <Tooltip>
+                                <TooltipTrigger asChild>
+                                  <Badge variant={risk.band === "RED" ? "destructive" : risk.band === "AMBER" ? "warning" : "success"}>
+                                    {risk.riskScore}
+                                  </Badge>
+                                </TooltipTrigger>
+                                <TooltipContent className="max-w-sm">
+                                  {/* The narrative is a convenience; the score and its breakdown are the
+                                      product, and they are computed arithmetically. */}
+                                  <p className="text-xs">{risk.narrative ?? `Computed risk ${risk.riskScore}/100.`}</p>
+                                  <p className="mt-1 text-[10px] text-muted-foreground">
+                                    Scored {new Date(risk.computedAt).toLocaleString()}
+                                  </p>
+                                </TooltipContent>
+                              </Tooltip>
+                            );
+                          })()}
                         </TableCell>
                       </TableRow>
                     );

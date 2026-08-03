@@ -1,0 +1,300 @@
+/**
+ * WHAT: the AI PM copilot's surface — asking for a plan breakdown, reading a project's computed
+ * risk, and reviewing/applying proposals row by row.
+ *
+ * WHY THERE IS NO "APPLY EVERYTHING" SHORTCUT: the whole point of the proposal envelope is that a
+ * person decides per row. A one-click apply-all would recreate exactly the rubber stamp the
+ * design exists to avoid, and it would be the button everyone pressed. The client sends an
+ * explicit decision map; rows it does not mention are left as they were.
+ *
+ * WHY RISK IS READABLE WITHOUT AI BEING ON AT ALL: the score is arithmetic
+ * (`project-risk.service.ts`). Only the narrative needs a model. A workspace with AI switched off
+ * still gets the number, the breakdown and the concerns — which is most of the value.
+ *
+ * WHO MOUNTS THIS: `app.ts`, after the blanket `resolveTenant`.
+ */
+import { Router } from "express";
+import { z } from "zod";
+import { permissions } from "@timesheet/shared";
+import { prisma } from "../config/prisma.js";
+import { requireAuth, requirePermission } from "../middleware/auth.js";
+import { AppError } from "../middleware/error.js";
+import { validate } from "../middleware/validate.js";
+import { applyProposal, createProposal, type DraftChange } from "../services/ai-proposal.service.js";
+import { narrateProjectRisk, proposePlanBreakdown } from "../services/ai.service.js";
+import { audit } from "../services/audit.service.js";
+import { getPlanningEntitlements } from "../services/plan-limits.service.js";
+import { assertPlanningEnabled } from "../services/planning.service.js";
+import { assessProject, latestSnapshots, saveSnapshot } from "../services/project-risk.service.js";
+import { requireTenantContext } from "../config/tenant-context.js";
+import { assertTicketVisible, ticketProjectScope } from "../services/ticket.service.js";
+
+export const aiProposalRouter = Router();
+aiProposalRouter.use(requireAuth);
+
+/** The copilot family is tier-gated as a whole; spend is still bounded by the existing monthly
+ *  AI budget, so this only decides whether the features are offered at all. */
+async function assertCopilotAllowed() {
+  const entitlements = await getPlanningEntitlements(requireTenantContext().orgId);
+  if (!entitlements.aiPmCopilotEnabled) {
+    throw new AppError(403, "The AI planning copilot is an Enterprise feature.");
+  }
+}
+
+/* ---------- Risk ---------- */
+
+/**
+ * One project's computed risk. The narrative is attempted only if the workspace has the risk
+ * agent switched on, and its failure never costs the caller the score — an AI outage must not
+ * take the number with it.
+ */
+aiProposalRouter.get(
+  "/risk/:projectId",
+  requirePermission(permissions.REPORTS_VIEW),
+  validate(z.object({ params: z.object({ projectId: z.string().uuid() }) })),
+  async (req, res) => {
+    await assertPlanningEnabled();
+    const projectId = String(req.params.projectId);
+    await assertTicketVisible(req, projectId);
+
+    const assessment = await assessProject(projectId);
+
+    let narrative: string | null = null;
+    if (req.query.narrate === "true") {
+      try {
+        await assertCopilotAllowed();
+        narrative = await narrateProjectRisk({
+          projectName: assessment.projectName,
+          riskScore: assessment.riskScore,
+          band: assessment.band,
+          topConcerns: assessment.topConcerns,
+          facts: assessment.facts,
+          userId: req.user!.id
+        });
+      } catch {
+        // Deliberately swallowed. The score is the product; the sentence is a convenience, and
+        // losing it must never cost the caller the number they came for.
+        narrative = null;
+      }
+    }
+
+    res.json({ ...assessment, narrative });
+  }
+);
+
+/** Latest stored snapshot per project — what the portfolio table and badges read. */
+aiProposalRouter.get("/risk", requirePermission(permissions.REPORTS_VIEW), async (req, res) => {
+  const scope = await ticketProjectScope(req);
+  const projects = await prisma.project.findMany({
+    where: { deletedAt: null, ...(scope.unrestricted ? {} : { id: { in: scope.projectIds } }) },
+    select: { id: true }
+  });
+  const snapshots = await latestSnapshots(projects.map((p) => p.id));
+  res.json(
+    Array.from(snapshots.entries()).map(([projectId, snapshot]) => ({
+      projectId,
+      riskScore: snapshot.riskScore,
+      band: snapshot.band,
+      computedAt: snapshot.computedAt,
+      narrative: snapshot.aiNarrative
+    }))
+  );
+});
+
+/** Recompute and store now, rather than waiting for the nightly worker. */
+aiProposalRouter.post(
+  "/risk/:projectId/refresh",
+  requirePermission(permissions.PLAN_WRITE),
+  validate(z.object({ params: z.object({ projectId: z.string().uuid() }) })),
+  async (req, res) => {
+    await assertPlanningEnabled();
+    const projectId = String(req.params.projectId);
+    await assertTicketVisible(req, projectId);
+
+    const assessment = await assessProject(projectId);
+    let narrative: string | null = null;
+    try {
+      await assertCopilotAllowed();
+      narrative = await narrateProjectRisk({
+        projectName: assessment.projectName,
+        riskScore: assessment.riskScore,
+        band: assessment.band,
+        topConcerns: assessment.topConcerns,
+        facts: assessment.facts,
+        userId: req.user!.id
+      });
+    } catch {
+      narrative = null;
+    }
+    const snapshot = await saveSnapshot(assessment, narrative);
+    res.json({ ...assessment, narrative, snapshotId: snapshot.id });
+  }
+);
+
+/* ---------- Proposals ---------- */
+
+aiProposalRouter.get("/", requirePermission(permissions.TICKETS_VIEW), async (req, res) => {
+  const proposals = await prisma.aiProposal.findMany({
+    where: {
+      ...(req.query.status && req.query.status !== "all" ? { status: String(req.query.status) as never } : {}),
+      ...(typeof req.query.projectId === "string" && req.query.projectId ? { scopeProjectId: req.query.projectId } : {})
+    },
+    include: {
+      changes: { orderBy: { order: "asc" } },
+      requestedBy: { select: { id: true, name: true } },
+      reviewedBy: { select: { id: true, name: true } },
+      scopeProject: { select: { id: true, code: true, name: true } },
+      scopeTicket: { select: { id: true, key: true, title: true } }
+    },
+    orderBy: { createdAt: "desc" },
+    take: 50
+  });
+  res.json(proposals);
+});
+
+/**
+ * Ask for a plan breakdown.
+ *
+ * The model's output becomes an `AiProposal` immediately and is never written to the plan. Note
+ * what is NOT here: an option to auto-apply. See ai-proposal.service.ts's header.
+ */
+aiProposalRouter.post(
+  "/plan-breakdown",
+  requirePermission(permissions.PLAN_WRITE),
+  validate(
+    z.object({
+      body: z
+        .object({
+          projectId: z.string().uuid(),
+          parentTicketId: z.string().uuid().nullish(),
+          goal: z.string().min(5).max(2000),
+          context: z.string().max(4000).optional()
+        })
+        .strict()
+    })
+  ),
+  async (req, res) => {
+    await assertPlanningEnabled();
+    await assertCopilotAllowed();
+    await assertTicketVisible(req, req.body.projectId);
+
+    const project = await prisma.project.findFirstOrThrow({
+      where: { id: req.body.projectId, deletedAt: null },
+      select: { id: true, name: true }
+    });
+
+    // Existing titles go in as context so the model does not propose work that already exists —
+    // a breakdown full of duplicates is worse than none, because someone has to notice.
+    const existing = await prisma.ticket.findMany({
+      where: { projectId: project.id, deletedAt: null, status: { notIn: ["CLOSED"] } },
+      select: { title: true },
+      take: 40,
+      orderBy: { createdAt: "desc" }
+    });
+
+    const breakdown = await proposePlanBreakdown({
+      goal: req.body.goal,
+      context: req.body.context,
+      projectName: project.name,
+      existingTitles: existing.map((t) => t.title),
+      userId: req.user!.id
+    });
+    if (!breakdown) throw new AppError(502, "The assistant did not return a usable breakdown. Try rephrasing the goal.");
+
+    // One CREATE row per task, then one LINK row per dependency. Both reference each other by
+    // the CREATE row's order index, because none of these rows have ids until they are applied.
+    const changes: DraftChange[] = breakdown.items.map((item, index) => ({
+      targetType: "TICKET",
+      op: "CREATE",
+      after: {
+        projectId: project.id,
+        title: item.title,
+        description: item.description || null,
+        estimatedHours: item.estimatedHours,
+        type: "TASK",
+        ...(req.body.parentTicketId ? { parentId: req.body.parentTicketId } : {})
+      },
+      summary: `Create "${item.title}" (${item.estimatedHours}h)`
+    }));
+
+    breakdown.items.forEach((item, index) => {
+      if (item.dependsOnIndex < 0) return;
+      changes.push({
+        targetType: "LINK",
+        op: "LINK",
+        after: { fromIndex: item.dependsOnIndex, toIndex: index },
+        summary: `"${breakdown.items[item.dependsOnIndex].title}" must finish before "${item.title}"`
+      });
+    });
+
+    const proposal = await createProposal({
+      kind: "PLAN_BREAKDOWN",
+      title: `Breakdown: ${req.body.goal.slice(0, 120)}`,
+      rationale: breakdown.rationale,
+      model: breakdown.model,
+      scopeProjectId: project.id,
+      scopeTicketId: req.body.parentTicketId ?? null,
+      requestedById: req.user!.id,
+      changes
+    });
+
+    await audit(req.user!.id, "ai_proposal.created", "AiProposal", proposal.id, {
+      kind: "PLAN_BREAKDOWN",
+      changes: changes.length
+    });
+    res.status(201).json(proposal);
+  }
+);
+
+/** Record per-row decisions without applying — so a long review can be done in sittings. */
+aiProposalRouter.patch(
+  "/:id/decisions",
+  requirePermission(permissions.PLAN_WRITE),
+  validate(
+    z.object({
+      params: z.object({ id: z.string().uuid() }),
+      body: z.object({ decisions: z.record(z.boolean()) }).strict()
+    })
+  ),
+  async (req, res) => {
+    const entries = Object.entries(req.body.decisions as Record<string, boolean>);
+    await prisma.$transaction(
+      entries.map(([id, accepted]) => prisma.aiProposalChange.update({ where: { id }, data: { accepted } }))
+    );
+    res.json({ updated: entries.length });
+  }
+);
+
+aiProposalRouter.post(
+  "/:id/apply",
+  requirePermission(permissions.PLAN_WRITE),
+  validate(
+    z.object({
+      params: z.object({ id: z.string().uuid() }),
+      body: z.object({ decisions: z.record(z.boolean()).optional() }).strict()
+    })
+  ),
+  async (req, res) => {
+    await assertPlanningEnabled();
+    const result = await applyProposal({
+      proposalId: String(req.params.id),
+      decisions: (req.body.decisions as Record<string, boolean>) ?? {},
+      actorId: req.user!.id
+    });
+    res.json(result);
+  }
+);
+
+aiProposalRouter.post(
+  "/:id/reject",
+  requirePermission(permissions.PLAN_WRITE),
+  validate(z.object({ params: z.object({ id: z.string().uuid() }) })),
+  async (req, res) => {
+    const updated = await prisma.aiProposal.update({
+      where: { id: String(req.params.id) },
+      data: { status: "REJECTED", reviewedById: req.user!.id, reviewedAt: new Date() }
+    });
+    await audit(req.user!.id, "ai_proposal.rejected", "AiProposal", updated.id);
+    res.json({ ok: true });
+  }
+);

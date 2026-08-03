@@ -582,6 +582,108 @@ test.describe("planning layer", () => {
     await page.request.delete(`/api/request-forms/${form.id}`, { headers });
   });
 
+  test("project risk is arithmetic — it works with AI switched off, and never invents a number", async ({ page }) => {
+    await signIn(page);
+    const { config, token } = await planningConfig(page);
+    test.skip(!config.effective.planning, "planning is off in this workspace");
+
+    const headers = { Authorization: `Bearer ${token}` };
+    const projects = await (await page.request.get("/api/projects", { headers })).json();
+    const projectId = projects[0].id;
+
+    const res = await page.request.get(`/api/ai-proposals/risk/${projectId}`, { headers });
+    expect(res.status(), "the score must not depend on an AI provider being configured").toBe(200);
+    const risk = await res.json();
+
+    expect(risk.riskScore).toBeGreaterThanOrEqual(0);
+    expect(risk.riskScore).toBeLessThanOrEqual(100);
+    // Every signal is reported, including the clean ones — "why is this green?" has to be as
+    // answerable as "why is this red?".
+    expect(risk.signals).toHaveLength(6);
+    for (const signal of risk.signals) {
+      expect(signal.points).toBeLessThanOrEqual(25); // no signal may exceed its own weight
+      expect(signal.detail).toBeTruthy();
+    }
+    // The band is a stated threshold, not a separate judgement.
+    const expectedBand = risk.riskScore >= 55 ? "RED" : risk.riskScore >= 25 ? "AMBER" : "GREEN";
+    expect(risk.band).toBe(expectedBand);
+
+    // Determinism is what makes the number defensible in a meeting.
+    const again = await (await page.request.get(`/api/ai-proposals/risk/${projectId}`, { headers })).json();
+    expect(again.riskScore).toBe(risk.riskScore);
+    expect(again.signals.map((s: any) => s.points)).toEqual(risk.signals.map((s: any) => s.points));
+
+    // Concerns are ordered worst-first, so the list reads as what to fix in order.
+    const points = risk.signals.filter((s: any) => s.note).sort((a: any, b: any) => b.points - a.points);
+    if (points.length > 1) expect(risk.topConcerns[0]).toBe(points[0].note);
+  });
+
+  test("a snapshot can be stored and read back per project", async ({ page }) => {
+    await signIn(page);
+    const { config, token } = await planningConfig(page);
+    test.skip(!config.effective.planning, "planning is off in this workspace");
+
+    const headers = { Authorization: `Bearer ${token}` };
+    const projects = await (await page.request.get("/api/projects", { headers })).json();
+    const projectId = projects[0].id;
+
+    const refreshed = await page.request.post(`/api/ai-proposals/risk/${projectId}/refresh`, { headers });
+    expect(refreshed.status()).toBe(200);
+    expect((await refreshed.json()).snapshotId).toBeTruthy();
+
+    const snapshots = await (await page.request.get("/api/ai-proposals/risk", { headers })).json();
+    const mine = snapshots.find((s: any) => s.projectId === projectId);
+    expect(mine).toBeTruthy();
+    expect(mine.band).toMatch(/GREEN|AMBER|RED/);
+  });
+
+  test("the AI copilot is gated, and an unavailable model never costs you the score", async ({ page }) => {
+    await signIn(page);
+    const { config, token } = await planningConfig(page);
+    test.skip(!config.effective.planning, "planning is off in this workspace");
+
+    const headers = { Authorization: `Bearer ${token}` };
+    const projects = await (await page.request.get("/api/projects", { headers })).json();
+
+    // Asking for a narrative must never turn a working score into an error, whatever the AI
+    // config happens to be — the score is the product, the sentence is a convenience.
+    const narrated = await page.request.get(`/api/ai-proposals/risk/${projects[0].id}?narrate=true`, { headers });
+    expect(narrated.status()).toBe(200);
+    const body = await narrated.json();
+    expect(typeof body.riskScore).toBe("number");
+
+    // Plan breakdown is tier + AI gated, and says which rather than failing opaquely.
+    const breakdown = await page.request.post("/api/ai-proposals/plan-breakdown", {
+      headers,
+      data: { projectId: projects[0].id, goal: "Add a CSV export to the reports page" }
+    });
+    expect([201, 403, 502]).toContain(breakdown.status());
+    if (breakdown.status() !== 201) {
+      expect((await breakdown.json()).message).toBeTruthy();
+    } else {
+      const proposal = await breakdown.json();
+      // The whole point of the envelope: nothing is written, and nothing is pre-accepted.
+      expect(proposal.status).toBe("PENDING_REVIEW");
+      expect(proposal.changes.every((c: any) => c.accepted === null)).toBe(true);
+      await page.request.post(`/api/ai-proposals/${proposal.id}/reject`, { headers });
+    }
+  });
+
+  test("the AI suggestions page opens and says nothing has been applied", async ({ page }) => {
+    await signIn(page);
+    await page.goto("/app/proposals");
+    await page.waitForLoadState("networkidle");
+
+    const off = page.getByText(/needs the planning layer/i);
+    if (await off.count()) {
+      await expect(off.first()).toBeVisible();
+      return;
+    }
+    await expect(page.getByRole("heading", { name: /ai suggestions/i })).toBeVisible();
+    // The promise the page has to make on sight, before anyone reads a single row.
+    await expect(page.getByText(/nothing here has been applied/i)).toBeVisible();
+  });
+
   test("the portfolio roll-up returns derived numbers, and never a fake forecast", async ({ page }) => {
     await signIn(page);
     const { config, token } = await planningConfig(page);

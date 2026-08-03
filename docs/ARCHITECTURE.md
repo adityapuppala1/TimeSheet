@@ -350,6 +350,34 @@ it. Conflicts are surfaced, not prevented. Likewise 100% allocation is *not* fla
 booked to exactly their capacity is fully booked, which is the intended state; flagging it would
 light up the whole board on a well-planned sprint and train everyone to ignore the colour.
 
+**The AI planning copilot writes through one envelope and never directly.** Every planning AI
+feature emits an `AiProposal` whose `AiProposalChange` rows a human accepts or rejects
+individually; `services/ai-proposal.service.ts` is the only thing that applies them. The reason is
+scale: these features propose MANY changes at once (break this epic into fourteen tasks, shift
+forty dates), and a yes/no dialog over a change set that size is a rubber stamp, not review —
+with no undo. Per-row decisions are also a far richer quality signal than the thumbs-up/down on
+`AIInteraction`, and they are produced as a by-product of people doing their normal work.
+
+**Stale-state detection is what makes it safe rather than merely careful.** A proposal is computed
+against the plan as it was, then sits in a queue. Every `UPDATE` row carries the before-state it
+was computed from, and application refuses any row whose current value no longer matches —
+otherwise applying would silently revert whoever moved it, and that person would never know. The
+refusal is recorded on the row, so a partially-applied proposal explains itself. Rows are applied
+independently rather than in one transaction, because they are individually reviewed decisions:
+one stale row is not a reason to discard the eleven a person explicitly approved. Writable fields
+are an **allowlist**, so a model proposing `{ reporterId: … }` or `{ status: "CLOSED" }` cannot
+have it applied whatever the prompt did.
+
+**Risk is arithmetic; the model only narrates.** `services/project-risk.service.ts` scores six
+measured signals — schedule slip against a frozen baseline, budget forecast overrun, blocked work,
+over-allocation, SLA breaches, reopen rate — with stated weights summing to 100, and stores the
+full breakdown alongside the score. A project going red is a number somebody will be asked to
+defend; "the model thinks it's risky" is not reproducible, not auditable, and cannot answer "what
+would have to change for this to go green?". The narrative is best-effort throughout: the nightly
+worker and the API both keep the score when the model is unavailable, over budget, or switched
+off, because the score is the product and the sentence is a convenience. Same division of labour
+as `face.service.ts#recommendMatchThreshold`.
+
 **Intake, approvals and proofing add THREE unauthenticated surfaces** (phase 4), doubling the
 app's public attack surface from one to four. All four follow the same posture the attestation
 viewer established: a 256-bit token in the URL, ids never enumerable, and a single generic 404

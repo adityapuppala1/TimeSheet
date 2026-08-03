@@ -384,6 +384,27 @@ entitlement, except the budget panel which needs only `reports:view`.
   ticket manager) may delete — someone removing another reviewer's objection is exactly what a
   review record must not allow.
 
+### AI planning copilot (V6 phase 5)
+
+- `GET /ai-proposals/risk/:projectId?narrate=` — the computed risk score, band, all six signals
+  with their points and detail, worst-first concerns, and the measured facts. **Works with AI
+  switched off**; `narrate=true` additionally attempts a narrative and returns `narrative: null`
+  rather than failing if the model is unavailable, over budget, or disabled.
+- `GET /ai-proposals/risk` — the latest stored snapshot per project, for badges and the portfolio
+  table. A project the nightly worker has not scored yet simply has no entry.
+- `POST /ai-proposals/risk/:projectId/refresh` — recompute and store now. `plan:write`.
+- `GET /ai-proposals?status=&projectId=` — proposals with their change rows.
+- `POST /ai-proposals/plan-breakdown` `{ projectId, parentTicketId?, goal, context? }` — Enterprise
+  + `planBreakdownEnabled`. Returns a **proposal**, never a write. Existing ticket titles are sent
+  as context so the model does not propose work that already exists.
+- `PATCH /ai-proposals/:id/decisions` `{ decisions }` — record per-row accept/reject without
+  applying, so a long review can be done in sittings.
+- `POST /ai-proposals/:id/apply` `{ decisions }` — applies only the accepted rows. There is
+  deliberately **no apply-all shortcut**: that would recreate the rubber stamp the envelope exists
+  to prevent. Returns `{ applied, skipped, failed[], status }`; a row refused for stale state is
+  reported with its reason rather than silently dropped. Applying twice is a **409**.
+- `POST /ai-proposals/:id/reject`.
+
 ## Verified work attestations
 
 A client-facing record that approved hours map to real tickets, done by identity-verified people,

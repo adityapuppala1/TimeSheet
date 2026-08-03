@@ -227,7 +227,9 @@ type AIFeatureToggle =
   | "bugPatternDigestEnabled"
   | "assigneeSuggestionAiEnabled"
   | "staleTicketNudgeEnabled"
-  | "aiPrInlineReviewEnabled";
+  | "aiPrInlineReviewEnabled"
+  | "projectRiskAgentEnabled"
+  | "planBreakdownEnabled";
 
 /** Throws a 403 unless AI is enabled workspace-wide AND the specific feature's toggle is on. */
 export async function assertAIFeatureEnabled(feature: AIFeatureToggle): Promise<Awaited<ReturnType<typeof getGlobalAISettings>>> {
@@ -1836,4 +1838,201 @@ export async function judgeAnswerEquivalence(params: {
   });
 
   return parsed;
+}
+
+/* ------------------------------- AI PM copilot (V6 phase 5) ------------------------------- */
+
+/**
+ * Narrates a delivery-risk score that has ALREADY been computed arithmetically by
+ * `project-risk.service.ts#assessRisk`.
+ *
+ * The split is deliberate and load-bearing, exactly as it is for the face policy copilot: the
+ * number comes from measured signals with stated weights, and the model only turns it into a
+ * paragraph a delivery lead can act on. Asking a model to judge whether a project is at risk
+ * would be unreproducible (run it twice, get two answers), unauditable ("the model thought so"),
+ * and indefensible in the meeting where someone asks what would have to change for it to go
+ * green. The score is the product; this is its cover letter.
+ *
+ * Sees only aggregates and the computed breakdown. No ticket bodies, no comments, no names.
+ */
+export async function narrateProjectRisk(input: {
+  projectName: string;
+  riskScore: number;
+  band: string;
+  topConcerns: string[];
+  facts: Record<string, number | string | null>;
+  userId?: string;
+}): Promise<string | null> {
+  const { settings } = await preflight("projectRiskAgentEnabled");
+
+  const factLines = Object.entries(input.facts)
+    .filter(([, v]) => v !== null && v !== undefined)
+    .map(([k, v]) => `${k}: ${v}`)
+    .join("\n");
+
+  const prompt = [
+    "You are briefing a delivery lead on one project's health.",
+    "The score and the concerns below were COMPUTED from measured data. Do not change any number,",
+    "do not invent facts, and do not add concerns that are not listed. Your job is to explain what",
+    "these numbers mean together and what to do next, in 3-5 sentences of plain prose.",
+    "If the list of concerns is empty, say plainly that nothing is flagged and keep it to one sentence.",
+    "",
+    "=== BEGIN COMPUTED ANALYSIS ===",
+    `Project: ${input.projectName}`,
+    `Risk score: ${input.riskScore}/100 (${input.band})`,
+    "",
+    "Concerns, worst first:",
+    input.topConcerns.length > 0 ? input.topConcerns.map((c) => `- ${c}`).join("\n") : "- (none)",
+    "",
+    "Measured facts:",
+    factLines,
+    "=== END COMPUTED ANALYSIS ===",
+    "",
+    "Write the briefing now. No preamble, no headings, no bullet points."
+  ].join("\n");
+
+  const result = await callChat(settings, { model: settings.model, maxTokens: 400, prompt });
+
+  await logAIUsage({
+    feature: "project_risk_narrative",
+    params: { projectName: input.projectName, riskScore: input.riskScore, band: input.band, concerns: input.topConcerns.length },
+    model: settings.model,
+    inputTokens: result.usage.inputTokens,
+    outputTokens: result.usage.outputTokens,
+    userId: input.userId
+  });
+
+  return result.text || null;
+}
+
+const PlanBreakdownSchema = z.object({
+  items: z
+    .array(
+      z.object({
+        title: z.string().min(1).max(200),
+        description: z.string().max(2000).optional(),
+        estimatedHours: z.number().min(0).max(1000),
+        /** Index of an earlier item in this same array, or -1 for none. Indexes rather than ids
+         *  because none of these exist yet. */
+        dependsOnIndex: z.number().int().min(-1).max(200)
+      })
+    )
+    .min(1)
+    .max(30),
+  rationale: z.string().max(2000)
+});
+
+export interface PlanBreakdownItem {
+  title: string;
+  description: string;
+  estimatedHours: number;
+  /** Index of an earlier item in the same list, or -1 for none. */
+  dependsOnIndex: number;
+}
+export interface PlanBreakdownResult {
+  items: PlanBreakdownItem[];
+  rationale: string;
+}
+
+/**
+ * Proposes a breakdown of a goal or epic into child work items with estimates and dependencies.
+ *
+ * Returns a PROPOSAL, never a write. The caller wraps it in an `AiProposal` whose rows a human
+ * accepts or rejects individually — see ai-proposal.service.ts for why a yes/no dialog over
+ * fourteen suggested tasks is a rubber stamp rather than review.
+ *
+ * The model is told to reference dependencies by INDEX into its own output and only ever
+ * backwards, which is the same constraint blueprints and request-form rules use: it makes cycles
+ * impossible by construction instead of something to detect afterwards.
+ */
+export async function proposePlanBreakdown(input: {
+  goal: string;
+  context?: string;
+  projectName: string;
+  existingTitles?: string[];
+  userId?: string;
+}): Promise<(PlanBreakdownResult & { model: string }) | null> {
+  const { settings } = await preflight("planBreakdownEnabled");
+
+  const prompt = [
+    "You are helping plan a piece of software delivery work.",
+    `Project: ${input.projectName}`,
+    `Goal: ${input.goal}`,
+    input.context ? `Extra context: ${input.context}` : "",
+    input.existingTitles?.length
+      ? `Work that already exists (do NOT duplicate these):\n${input.existingTitles.slice(0, 40).map((t) => `- ${t}`).join("\n")}`
+      : "",
+    "",
+    "Break the goal into 3-12 concrete tasks somebody could pick up and start.",
+    "Rules:",
+    "- Each task is a real unit of work, not a phase or a heading.",
+    "- Estimate each in hours. Be honest rather than optimistic; include review and testing time.",
+    "- `dependsOnIndex` is the index of an EARLIER task in your own list that must finish first,",
+    "  or -1 when the task can start independently. Never reference a later index.",
+    "- Do not invent requirements the goal does not imply. If the goal is vague, propose the work",
+    "  needed to clarify it rather than guessing at a solution.",
+    "",
+    "Return JSON only."
+  ]
+    .filter(Boolean)
+    .join("\n");
+
+  const result = await callChat(settings, {
+    model: settings.model,
+    maxTokens: 1500,
+    prompt,
+    jsonSchema: {
+      name: "plan_breakdown",
+      schema: {
+        type: "object",
+        properties: {
+          items: {
+            type: "array",
+            items: {
+              type: "object",
+              properties: {
+                title: { type: "string" },
+                description: { type: "string" },
+                estimatedHours: { type: "number" },
+                dependsOnIndex: { type: "integer" }
+              },
+              required: ["title", "estimatedHours", "dependsOnIndex"],
+              additionalProperties: false
+            }
+          },
+          rationale: { type: "string" }
+        },
+        required: ["items", "rationale"],
+        additionalProperties: false
+      }
+    }
+  });
+
+  await logAIUsage({
+    feature: "plan_breakdown",
+    params: { goal: input.goal, projectName: input.projectName },
+    model: settings.model,
+    inputTokens: result.usage.inputTokens,
+    outputTokens: result.usage.outputTokens,
+    userId: input.userId
+  });
+
+  const parsed = parseJsonResponse(result.text, PlanBreakdownSchema);
+  if (!parsed) return null;
+
+  // Belt and braces on the backwards-only rule. The prompt asks for it, but a model that ignores
+  // it would otherwise produce a proposal whose dependencies cannot be applied — better to drop
+  // the bad reference than to fail the whole breakdown or, worse, create a cycle.
+  // Normalised explicitly rather than via a zod `.default()`: parseJsonResponse takes a
+  // `z.ZodType<T>`, and a schema whose input and output types differ (which any default causes)
+  // makes TypeScript infer T from the INPUT side — so the parsed value would carry an optional
+  // field the return type says is required. Filling it here keeps the two identical.
+  const items = parsed.items.map((item, index) => ({
+    title: item.title,
+    description: item.description ?? "",
+    estimatedHours: item.estimatedHours,
+    dependsOnIndex: item.dependsOnIndex >= 0 && item.dependsOnIndex < index ? item.dependsOnIndex : -1
+  }));
+
+  return { ...parsed, items, model: settings.model };
 }

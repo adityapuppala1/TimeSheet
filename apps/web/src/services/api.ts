@@ -2885,3 +2885,107 @@ export const guestApprovalApi = {
   decide: async (token: string, decision: "APPROVED" | "REJECTED", comment?: string) =>
     (await publicClient.post<{ ok: boolean; decision: string }>(`/shared/approvals/${token}`, { decision, comment })).data
 };
+
+/* ------------------------------------------------------------------ *
+ * AI PM COPILOT (V6 phase 5)
+ *
+ * Two things live here and they are deliberately different in kind. Risk is ARITHMETIC — it works
+ * with AI switched off entirely, and `narrative` is simply null in that case. Proposals are the
+ * only way an AI feature reaches the plan, and they never apply themselves.
+ * ------------------------------------------------------------------ */
+
+export type RiskBandValue = "GREEN" | "AMBER" | "RED";
+
+export interface RiskSignalRow {
+  key: "scheduleSlip" | "budgetOverrun" | "blockedWork" | "overAllocation" | "slaBreaches" | "reopenRate";
+  /** 0-1. */
+  severity: number;
+  /** severity × weight — what this signal contributed to the total. */
+  points: number;
+  detail: Record<string, number | string | null>;
+  /** One actionable sentence, or "" when the signal is clean. */
+  note: string;
+}
+
+export interface ProjectRisk {
+  projectId: string;
+  projectName: string;
+  projectCode: string;
+  riskScore: number;
+  band: RiskBandValue;
+  signals: RiskSignalRow[];
+  /** Worst-first — reads as what to fix, in order. */
+  topConcerns: string[];
+  facts: Record<string, number | string | null>;
+  /** Null whenever AI is off, unavailable, or over budget. The score is never lost with it. */
+  narrative: string | null;
+  snapshotId?: string;
+}
+
+export interface RiskSnapshotRow {
+  projectId: string;
+  riskScore: number;
+  band: RiskBandValue;
+  computedAt: string;
+  narrative: string | null;
+}
+
+export interface AiProposalChangeRow {
+  id: string;
+  targetType: "TICKET" | "PROJECT" | "BOOKING" | "LINK";
+  targetId: string | null;
+  op: "CREATE" | "UPDATE" | "LINK";
+  before: Record<string, unknown> | null;
+  after: Record<string, unknown>;
+  summary: string;
+  /** Null = not yet decided. Nothing is accepted by default. */
+  accepted: boolean | null;
+  appliedAt: string | null;
+  /** Set when application was attempted and refused — usually a stale before-state. */
+  applyError: string | null;
+  order: number;
+}
+
+export interface AiProposalRow {
+  id: string;
+  kind: "PLAN_BREAKDOWN" | "SCHEDULE_ADJUSTMENT" | "ASSIGNMENT_REBALANCE" | "RISK_MITIGATION" | "BLUEPRINT_SUGGESTION";
+  title: string;
+  rationale: string | null;
+  confidence: number | null;
+  model: string | null;
+  status: "PENDING_REVIEW" | "PARTIALLY_APPLIED" | "APPLIED" | "REJECTED" | "EXPIRED";
+  createdAt: string;
+  expiresAt: string | null;
+  reviewedAt: string | null;
+  requestedBy: { id: string; name: string } | null;
+  reviewedBy: { id: string; name: string } | null;
+  scopeProject: { id: string; code: string; name: string } | null;
+  scopeTicket: { id: string; key: string; title: string } | null;
+  changes: AiProposalChangeRow[];
+}
+
+export interface ApplyProposalResult {
+  applied: number;
+  skipped: number;
+  failed: Array<{ id: string; summary: string; reason: string }>;
+  status: "APPLIED" | "PARTIALLY_APPLIED" | "REJECTED";
+}
+
+export const copilotApi = {
+  /** `narrate` costs a model call; the score does not. */
+  risk: async (projectId: string, narrate = false) =>
+    (await api.get<ProjectRisk>(`/ai-proposals/risk/${projectId}`, { params: narrate ? { narrate: "true" } : undefined })).data,
+  riskSnapshots: async () => (await api.get<RiskSnapshotRow[]>("/ai-proposals/risk")).data,
+  refreshRisk: async (projectId: string) => (await api.post<ProjectRisk>(`/ai-proposals/risk/${projectId}/refresh`)).data,
+
+  listProposals: async (params?: { status?: string; projectId?: string }) =>
+    (await api.get<AiProposalRow[]>("/ai-proposals", { params })).data,
+  planBreakdown: async (payload: { projectId: string; parentTicketId?: string | null; goal: string; context?: string }) =>
+    (await api.post<AiProposalRow>("/ai-proposals/plan-breakdown", payload)).data,
+  /** Save per-row decisions without applying, so a long review can be done in sittings. */
+  saveDecisions: async (id: string, decisions: Record<string, boolean>) =>
+    (await api.patch<{ updated: number }>(`/ai-proposals/${id}/decisions`, { decisions })).data,
+  apply: async (id: string, decisions: Record<string, boolean>) =>
+    (await api.post<ApplyProposalResult>(`/ai-proposals/${id}/apply`, { decisions })).data,
+  reject: async (id: string) => (await api.post(`/ai-proposals/${id}/reject`)).data
+};

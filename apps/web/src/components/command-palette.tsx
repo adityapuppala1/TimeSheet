@@ -88,6 +88,7 @@ const navRoutes: NavRoute[] = [
   { label: "Timeline", to: "/app/timeline", icon: GanttChartSquare, permission: permissions.TICKETS_VIEW, feature: "timeline", hint: "Gantt & dependencies" },
   { label: "Portfolio", to: "/app/portfolio", icon: Briefcase, permission: permissions.REPORTS_VIEW, feature: "planning", hint: "Budget, burn, health" },
   { label: "Workload", to: "/app/workload", icon: Gauge, permission: permissions.RESOURCES_MANAGE, feature: "resourceManagement", hint: "Capacity & bookings" },
+  { label: "AI suggestions", to: "/app/proposals", icon: Sparkles, permission: permissions.TICKETS_VIEW, feature: "planning", hint: "Review before anything applies" },
   { label: "Approvals", to: "/app/approvals", icon: Shield, permission: permissions.TIMESHEETS_APPROVE },
   { label: "My team", to: "/app/team", icon: Users2, permission: permissions.TIMESHEETS_APPROVE, hint: "SLA & reports" },
   { label: "Users", to: "/app/users", icon: Users, permission: permissions.USERS_MANAGE },

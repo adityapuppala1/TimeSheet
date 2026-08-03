@@ -1476,10 +1476,43 @@ tests, all green. A 32-assertion API smoke covered the security posture specific
 internal fields in a public payload, hidden answers dropped, single-use links, generic 404s,
 sequential ordering, and rejection terminality.
 
-### Phases 5-6 — planned
+### Phase 5 — the AI planning copilot, human-in-the-loop by construction (2026-08-03)
 
-5. **AI PM copilot + reporting** — the `AiProposal` engine and review UI, project-risk agent
-   (arithmetic score, AI narrative only — same division of labour as the face policy copilot),
-   plan breakdown, schedule/resource copilots, custom dashboards, scheduled report delivery.
+- [x] **`AiProposal` / `AiProposalChange`** — the envelope every planning AI feature writes
+  through. Nothing applies itself. A reviewer accepts or rejects each row, sees the before → after
+  diff, and can save decisions and come back.
+- [x] **Stale-state detection**, which is the part that makes it safe rather than merely careful.
+  Every UPDATE row carries the state it was computed from; application refuses any row whose
+  current value has moved, because applying would silently revert whoever moved it. Rows apply
+  independently, so one refusal does not discard the eleven a person approved. Writable fields are
+  an allowlist, so a proposed `status` or `reporterId` change cannot be applied whatever the
+  prompt produced.
+- [x] **Project risk scoring** — six measured signals, stated weights summing to 100, full
+  breakdown stored with the score. **Deterministic and available with AI switched off entirely.**
+  19 unit tests pin what the score MEANS, not just that it runs: that no signal can exceed its
+  weight, that blocked work is a share rather than a count, that a small amount of rework is
+  normal, and that the same inputs always give the same number.
+- [x] **Risk narrative + plan breakdown** — the only two model calls. The narrative explains a
+  score it cannot change; the breakdown proposes tasks it cannot create. Both go through the
+  existing `preflight`/`callChat` choke point, so budget ceilings, per-feature toggles, usage
+  logging and the prompt-version trail all apply unchanged.
+- [x] **Nightly snapshot worker** via `runForEveryOrg`, which also sweeps expired proposals — a
+  schedule suggestion computed against last week's plan is worse than no suggestion.
+
+**The judgement that shaped the whole phase**: it would have been much easier to let the copilot
+write. Everything here — the envelope, the per-row diff, the staleness check, the allowlist,
+the deliberate absence of an apply-all button — exists because there is no undo for "the assistant
+moved every date in Q3", and a tool that does that once is never trusted again.
+
+**Deferred, deliberately**: custom dashboards with a widget library, scheduled report delivery,
+and the schedule/resource copilots. The dashboards and scheduled reports are conventional CRUD
+over data that already exists and are carried into phase 6; the two extra copilots reuse this
+exact envelope and are a prompt plus a change-builder each, so the expensive part is already
+built.
+
+Verified: 329 unit tests (+19), 26 planning e2e tests (+4), full desktop and responsive suites.
+
+### Phase 6 — planned
+
 6. **Hardening** — solver/expander/applier unit tests, per-phase Playwright specs at five
    viewports, docs, tour, tier matrix, `VERSION` → 2.0.0.
