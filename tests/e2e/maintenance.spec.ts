@@ -175,3 +175,95 @@ test.describe("maintenance mode", () => {
     }
   });
 });
+
+/* ------------------------------------------------------------------------------------------- *
+ * The status page: per-feature health and recorded downtime.
+ *
+ * The assertions worth having here are about HONESTY, not about squares rendering. A status page
+ * that reports absence of data as success, or that quietly forgets an outage the moment it
+ * recovers, is worse than no status page — it will confidently deny something that happened.
+ * ------------------------------------------------------------------------------------------- */
+test.describe("service status page", () => {
+  test("probes every service and never reports 'no data' as healthy", async () => {
+    await withAdminRequest(async (ctx, headers) => {
+      const ran = await ctx.post("/api/maintenance/status-page/run", { headers });
+      expect(ran.status(), await ran.text()).toBe(200);
+      const results = (await ran.json()).results;
+      expect(results.length).toBeGreaterThanOrEqual(10);
+      for (const r of results) {
+        expect(["OPERATIONAL", "DEGRADED", "DOWN"]).toContain(r.status);
+        expect(typeof r.latencyMs).toBe("number");
+      }
+
+      const page = await (await ctx.get("/api/maintenance/status-page?days=30", { headers })).json();
+      expect(page.services.length).toBe(results.length);
+      expect(["OPERATIONAL", "DEGRADED", "DOWN"]).toContain(page.overall);
+
+      for (const service of page.services) {
+        // Exactly one square per day in the window, always — a strip that silently omits days
+        // compresses the axis and makes a quiet week look busy.
+        expect(service.days).toHaveLength(page.days);
+        // The oldest day predates any sample in a fresh workspace and MUST be null rather than
+        // green. Reporting "we had no monitoring" as "nothing was wrong" is the specific lie a
+        // status page exists not to tell.
+        for (const day of service.days) {
+          if (day.samples === 0) expect(day.status).toBeNull();
+          else expect(["OPERATIONAL", "DEGRADED", "DOWN"]).toContain(day.status);
+        }
+        // Today was just probed.
+        expect(service.days[service.days.length - 1].samples).toBeGreaterThan(0);
+      }
+    });
+  });
+
+  test("an outage opens one incident, accumulates while it lasts, and closes on recovery", async () => {
+    await withAdminRequest(async (ctx, headers) => {
+      const settings = await (await ctx.get("/api/settings/ai", { headers })).json();
+      const restore = { aiEnabled: settings.aiEnabled };
+
+      const aiOf = async () => {
+        const page = await (await ctx.get("/api/maintenance/status-page?days=2", { headers })).json();
+        return {
+          service: page.services.find((s: any) => s.key === "ai"),
+          incidents: page.incidents.filter((i: any) => i.service === "ai")
+        };
+      };
+      const probe = () => ctx.post("/api/maintenance/status-page/run", { headers });
+
+      try {
+        // A real misconfiguration rather than sabotaged infrastructure: "AI switched on with no
+        // key" is exactly the failure this probe exists to catch.
+        await ctx.patch("/api/settings/ai", { headers, data: { aiEnabled: true, apiKey: "" } });
+        await probe();
+
+        let state = await aiOf();
+        test.skip(state.service.current !== "DOWN", "this workspace has a key configured — nothing to break");
+        expect(state.incidents.filter((i: any) => !i.endedAt)).toHaveLength(1);
+        const opened = state.incidents.find((i: any) => !i.endedAt)!;
+
+        // Two more failing probes must extend the SAME incident, not create three.
+        await probe();
+        await probe();
+        state = await aiOf();
+        const still = state.incidents.filter((i: any) => !i.endedAt);
+        expect(still).toHaveLength(1);
+        expect(still[0].id).toBe(opened.id);
+        expect(still[0].sampleCount).toBeGreaterThan(opened.sampleCount);
+
+        await ctx.patch("/api/settings/ai", { headers, data: { aiEnabled: false } });
+        await probe();
+        state = await aiOf();
+        expect(state.service.current).toBe("OPERATIONAL");
+        expect(state.incidents.filter((i: any) => !i.endedAt)).toHaveLength(0);
+
+        // THE ASSERTION THAT MATTERS MOST: recovering does not repaint today green. A day is
+        // coloured by its worst check, so an outage stays visible for the day it happened —
+        // otherwise the page forgets the incident the moment it is fixed, which is precisely
+        // when somebody starts asking about it.
+        expect(state.service.days[state.service.days.length - 1].status).not.toBe("OPERATIONAL");
+      } finally {
+        await ctx.patch("/api/settings/ai", { headers, data: restore });
+      }
+    });
+  });
+});

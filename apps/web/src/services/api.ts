@@ -772,6 +772,62 @@ export interface UserBulkResult {
   skipped: Array<{ id: string; name: string; reason: string }>;
 }
 
+/* ---------- Service status page ---------- */
+
+export type ServiceStatusValue = "OPERATIONAL" | "DEGRADED" | "DOWN";
+
+export interface StatusDay {
+  date: string;
+  /** Null when nothing was sampled that day. A gap is not an outage — colouring it green would
+   *  be a claim the data does not support. */
+  status: ServiceStatusValue | null;
+  samples: number;
+  downSamples: number;
+  degradedSamples: number;
+  uptimePct: number | null;
+}
+
+export interface StatusPageService {
+  key: string;
+  label: string;
+  description: string;
+  current: ServiceStatusValue | null;
+  currentDetail: string | null;
+  lastCheckedAt: string | null;
+  avgLatencyMs: number | null;
+  uptimePct: number | null;
+  days: StatusDay[];
+}
+
+export interface StatusIncident {
+  id: string;
+  service: string;
+  serviceLabel: string;
+  status: ServiceStatusValue;
+  startedAt: string;
+  endedAt: string | null;
+  detail: string | null;
+  sampleCount: number;
+  durationMinutes: number;
+}
+
+export interface StatusPage {
+  from: string;
+  to: string;
+  days: number;
+  /** Null before the first probe has ever run — the page must not claim "all systems
+   *  operational" on the strength of no evidence. */
+  overall: ServiceStatusValue | null;
+  services: StatusPageService[];
+  incidents: StatusIncident[];
+}
+
+export const statusPageApi = {
+  get: async (days = 90) => (await api.get<StatusPage>("/maintenance/status-page", { params: { days } })).data,
+  /** Probe everything now rather than waiting for the five-minute worker. */
+  runNow: async () => (await api.post<{ ranAt: string }>("/maintenance/status-page/run")).data
+};
+
 export const userApi = {
   list: async () => (await api.get<UserRow[]>("/users")).data,
   /** The management table's list: server-side filtering, sorting and pagination. Separate from

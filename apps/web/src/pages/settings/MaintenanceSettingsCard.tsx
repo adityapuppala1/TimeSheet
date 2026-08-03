@@ -34,6 +34,7 @@ import { Textarea } from "../../components/ui/textarea";
 import { toast } from "../../components/ui/toaster";
 import { maintenanceApi, type MaintenancePhase } from "../../services/api";
 import { ServerHealthCard } from "./ServerHealthCard";
+import { ServiceStatusPage } from "../../components/ServiceStatusPage";
 
 /** ISO from the API → the local "YYYY-MM-DDTHH:mm" a datetime-local input needs. Manual
  *  formatting because toISOString() would shift the wall-clock time to UTC — the admin picks
@@ -368,6 +369,11 @@ export function MaintenanceSettingsCard({ readOnly }: { readOnly: boolean }) {
 
       {/* Live vitals of the box the admin is about to take down / bring back. */}
       <ServerHealthCard />
+
+      {/* And the other half of the question: the box can be perfectly healthy while a feature is
+          not. This one is per-feature and has a memory — "was it down on Tuesday" is the question
+          the vitals panel above structurally cannot answer. */}
+      <ServiceStatusPage />
     </div>
   );
 }

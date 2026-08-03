@@ -177,12 +177,12 @@ model User {
   /// deliberately not defaulted to 40 in the column, because a row-level 40 and an
   /// unanswered-question 40 are different facts and only the second should follow a workspace
   /// that later says its week is 37.5 hours.
-  weeklyCapacityHours      Decimal?   @db.Decimal(5, 2)
+  weeklyCapacityHours   Decimal? @db.Decimal(5, 2)
   /// What share of that capacity is expected to be bookable project work, as opposed to
   /// meetings/support/internal time. NULL = 100. Applied on top of weeklyCapacityHours so a
   /// part-time person and a fully-loaded person are modelled by different fields rather than one
   /// fudged number.
-  plannedUtilizationPct    Int?
+  plannedUtilizationPct Int?
 
   managerId String?
   manager   User?   @relation("UserManager", fields: [managerId], references: [id], onDelete: SetNull)
@@ -228,19 +228,19 @@ model User {
   faceChallenges            FaceChallenge[]
 
   /// --- Planning layer (V6) back-relations ---------------------------------------------------
-  portfoliosOwned        Portfolio[]             @relation("PortfolioOwner")
-  savedViews             SavedView[]
-  resourceBookings       ResourceBooking[]       @relation("BookingSubject")
-  resourceBookingsMade   ResourceBooking[]       @relation("BookingCreator")
-  requestFormsCreated    RequestForm[]
-  blueprintsCreated      Blueprint[]
-  approvalRequestsMade   ApprovalRequest[]       @relation("ApprovalRequester")
-  approvalSteps          ApprovalStep[]          @relation("ApprovalStepApprover")
-  proofAnnotations       ProofAnnotation[]
-  dashboards             Dashboard[]
-  reportSubscriptions    ReportSubscription[]
-  aiProposalsRequested   AiProposal[]            @relation("AiProposalRequester")
-  aiProposalsReviewed    AiProposal[]            @relation("AiProposalReviewer")
+  portfoliosOwned      Portfolio[]          @relation("PortfolioOwner")
+  savedViews           SavedView[]
+  resourceBookings     ResourceBooking[]    @relation("BookingSubject")
+  resourceBookingsMade ResourceBooking[]    @relation("BookingCreator")
+  requestFormsCreated  RequestForm[]
+  blueprintsCreated    Blueprint[]
+  approvalRequestsMade ApprovalRequest[]    @relation("ApprovalRequester")
+  approvalSteps        ApprovalStep[]       @relation("ApprovalStepApprover")
+  proofAnnotations     ProofAnnotation[]
+  dashboards           Dashboard[]
+  reportSubscriptions  ReportSubscription[]
+  aiProposalsRequested AiProposal[]         @relation("AiProposalRequester")
+  aiProposalsReviewed  AiProposal[]         @relation("AiProposalReviewer")
 
   createdAt DateTime  @default(now())
   updatedAt DateTime  @updatedAt
@@ -715,24 +715,24 @@ model Ticket {
   /// A second table would have had to duplicate all of it and force every report to UNION.
   /// NULL (the value on every pre-V6 row) means "top-level", so the existing flat list is
   /// already a valid hierarchy with no backfill.
-  parentId          String?
-  parent            Ticket?  @relation("TicketHierarchy", fields: [parentId], references: [id], onDelete: Restrict)
-  children          Ticket[] @relation("TicketHierarchy")
+  parentId String?
+  parent   Ticket?  @relation("TicketHierarchy", fields: [parentId], references: [id], onDelete: Restrict)
+  children Ticket[] @relation("TicketHierarchy")
 
   /// The PLANNED schedule. Deliberately distinct from `dueAt`, which is SLA-derived from
   /// priority and answers "when does responsiveness become a breach" — a different question from
   /// "when is this scheduled to run". Conflating them would mean re-planning a task silently
   /// moved its SLA, or an SLA policy change silently moved the project plan.
-  startDate         DateTime? @db.Date
-  endDate           DateTime? @db.Date
+  startDate   DateTime? @db.Date
+  endDate     DateTime? @db.Date
   /// Zero-duration marker on the timeline (startDate == endDate by convention). A milestone
   /// still participates in dependencies, which is the whole point of having them.
-  isMilestone       Boolean   @default(false)
+  isMilestone Boolean   @default(false)
   /// Manual completion override, 0-100. NULL = derive it (from children's rollup, or from
   /// logged-vs-estimated hours) rather than showing a number nobody entered.
-  progressPct       Int?
+  progressPct Int?
   /// Manual ordering within a parent and within a board column. Ties broken by createdAt.
-  sortOrder         Int       @default(0)
+  sortOrder   Int       @default(0)
 
   /// Baseline = the plan as it was agreed, captured explicitly by a human ("set baseline"), never
   /// automatically. Slip is `endDate - baselineEndDate`, and it is only meaningful because the
@@ -770,7 +770,7 @@ model Ticket {
   resourceBookings  ResourceBooking[]
   approvalRequests  ApprovalRequest[]
   requestSubmission RequestFormSubmission[]
-  aiProposals       AiProposal[]           @relation("AiProposalTicketScope")
+  aiProposals       AiProposal[]            @relation("AiProposalTicketScope")
 
   createdAt DateTime  @default(now())
   updatedAt DateTime  @updatedAt
@@ -890,158 +890,158 @@ model TicketLabel {
 /// TICKET_SLA_*_HOURS env vars, now editable without a server restart) plus opt-in,
 /// off-by-default analytics that touch sensitive data (hourly rates, per-person rankings).
 model GlobalTicketSettings {
-  id                         String   @id
-  slaLowHours                Int      @default(168)
-  slaMediumHours             Int      @default(72)
-  slaHighHours               Int      @default(24)
-  slaCriticalHours           Int      @default(4)
-  enableCostAnalytics        Boolean  @default(false)
-  enableLeaderboard          Boolean  @default(false)
+  id                         String  @id
+  slaLowHours                Int     @default(168)
+  slaMediumHours             Int     @default(72)
+  slaHighHours               Int     @default(24)
+  slaCriticalHours           Int     @default(4)
+  enableCostAnalytics        Boolean @default(false)
+  enableLeaderboard          Boolean @default(false)
   /// See docs/ROADMAP.md's "Auto testing on branch/PR push" theme. When true, a ticket whose
   /// latest ingested TestRun is FAILED cannot transition to RESOLVED (ticket.controller.ts's
   /// status route enforces this). Default false — orgs that don't ingest test runs yet, or
   /// that want this as a warning rather than a hard gate, are unaffected either way.
-  blockResolveOnFailingTests Boolean  @default(false)
+  blockResolveOnFailingTests Boolean @default(false)
 
   /// --- Verified Work Attestation (see services/attestation.service.ts) --------------------
   /// ISO-4217 fallback when a project sets no billingCurrency of its own.
-  defaultCurrency            String   @default("USD") @db.VarChar(3)
+  defaultCurrency          String  @default("USD") @db.VarChar(3)
   /// Master switch for issuing attestations at all. Off by default like every other
   /// capability in this app — the endpoints 403 until an admin opts in.
-  enableAttestations         Boolean  @default(false)
+  enableAttestations       Boolean @default(false)
   /// Separate, additional opt-in for generating PUBLIC share links to an attestation. Kept
   /// distinct from enableAttestations on purpose: issuing an internal artifact and publishing
   /// one to an unauthenticated URL are materially different risk decisions, and an admin should
   /// have to make the second one deliberately.
-  enableAttestationSharing   Boolean  @default(false)
+  enableAttestationSharing Boolean @default(false)
 
-  updatedAt                  DateTime @updatedAt
-  updatedById                String?
+  updatedAt   DateTime @updatedAt
+  updatedById String?
 }
 
 /// Singleton (id = "global"). Master + per-feature AI toggles. aiEnabled defaults false —
 /// every AI capability stays inert until an admin explicitly opts in (and ANTHROPIC_API_KEY
 /// is configured server-side).
 model GlobalAISettings {
-  id                          String     @id
-  aiEnabled                   Boolean    @default(false)
-  autoTriageEnabled           Boolean    @default(false)
+  id                          String  @id
+  aiEnabled                   Boolean @default(false)
+  autoTriageEnabled           Boolean @default(false)
   /// When true, AI triage suggestions are applied directly on manual ticket creation;
   /// when false, they're surfaced as a one-click "Accept?" suggestion instead.
-  autoTriageAutoApply         Boolean    @default(false)
-  duplicateDetectionEnabled   Boolean    @default(false)
-  writingAssistantEnabled     Boolean    @default(false)
-  commentSummaryEnabled       Boolean    @default(false)
-  workspaceSearchEnabled      Boolean    @default(false)
-  emailIngestionEnabled       Boolean    @default(false)
-  chatIngestionEnabled        Boolean    @default(false)
-  weeklyDigestEnabled         Boolean    @default(false)
+  autoTriageAutoApply         Boolean @default(false)
+  duplicateDetectionEnabled   Boolean @default(false)
+  writingAssistantEnabled     Boolean @default(false)
+  commentSummaryEnabled       Boolean @default(false)
+  workspaceSearchEnabled      Boolean @default(false)
+  emailIngestionEnabled       Boolean @default(false)
+  chatIngestionEnabled        Boolean @default(false)
+  weeklyDigestEnabled         Boolean @default(false)
   /// Gates ai.service.ts#classifyCiFailure — an AI-authored root-cause comment posted on a
   /// ticket when a CI test run fails with `failureText` attached (see
   /// devops-webhook.controller.ts's /test-runs route). Separate from `autoReopenEnabled`
   /// (IngestionSettings) which is deterministic and doesn't call AI at all.
-  ciFailureTriageEnabled      Boolean    @default(false)
+  ciFailureTriageEnabled      Boolean @default(false)
   /// Gates ai.service.ts#summarizePullRequest — an AI-authored summary comment posted on a
   /// ticket when a linked PR opens (controllers/git-webhook.controller.ts's "opened" handler).
   /// Needs the live GitHub connection (GitConnection) AND a repo webhook configured — see
   /// docs/ROADMAP.md's "AI PR-review summaries" item.
-  aiPrReviewSummaryEnabled    Boolean    @default(false)
+  aiPrReviewSummaryEnabled    Boolean @default(false)
   /// Gates ai.service.ts#classifySecurityFinding — sibling of ciFailureTriageEnabled, scoped to
   /// ingested SecurityFinding rows instead of CI test-run failures. Only CRITICAL/HIGH findings
   /// are triaged (same severity bar IngestionSettings.fallbackProjectId's auto-ticket-creation
   /// uses) to bound AI spend. See docs/ROADMAP.md's "Competitive parity" Phase 3.
-  findingTriageEnabled        Boolean    @default(false)
+  findingTriageEnabled        Boolean @default(false)
   /// Gates ai.service.ts#generateSecurityWeeklyDigest — an AI-authored org-wide security summary
   /// (open-findings trend, newly-critical items, tickets past SLA) emailed to every ADMIN/
   /// SUPER_ADMIN weekly, generalizing weeklyDigestEnabled's per-user pattern to an admin audience.
   /// See workers/security-weekly-digest.worker.ts.
-  securityWeeklyDigestEnabled Boolean    @default(false)
+  securityWeeklyDigestEnabled Boolean @default(false)
   /// Gates ai.service.ts#generateStatusReport — on-demand "generate a stakeholder update" for
   /// one project, triggered synchronously from the Project page rather than a cron worker.
   /// Reuses generateWeeklyDigest's prompt shape (given numbers only, no invented analysis) but
   /// is project-scoped and callable any time, not per-user and not on a schedule.
-  statusReportEnabled         Boolean    @default(false)
+  statusReportEnabled         Boolean @default(false)
   /// Gates ai.service.ts#summarizeFaceReviewAttempt — an on-demand AI draft of a flagged
   /// identity-check review: recent attempt history, device/network novelty, and timing pattern,
   /// condensed to a summary + recommendation for the reviewing admin. Only ever sees attempt
   /// METADATA (outcomes, scores, timestamps, device labels) — never a captured image or an
   /// embedding, which stay on this server unconditionally.
-  faceReviewSummaryEnabled    Boolean    @default(false)
+  faceReviewSummaryEnabled    Boolean @default(false)
   /// Gates ai.service.ts#recommendMatchThreshold — the "policy copilot". Turns "is 0.75 right for
   /// us?" into a grounded answer using THIS org's own similarity distribution. The recommended
   /// number is computed deterministically (see the service); the LLM only writes the explanation,
   /// because picking a threshold is a statistics problem and a model's opinion about it would be
   /// less reliable and less auditable than arithmetic.
-  facePolicyCopilotEnabled    Boolean    @default(false)
+  facePolicyCopilotEnabled    Boolean @default(false)
   /// Gates ai.service.ts#generateBugPatternDigest — a monthly "what keeps breaking" narrative
   /// over recurring TestRun failures, tickets accumulating the most failed runs, and
   /// SecurityFinding clusters by repository. Pure aggregation of data already collected; the AI
   /// only narrates the counts, same discipline every other digest in this app follows.
-  bugPatternDigestEnabled     Boolean    @default(false)
+  bugPatternDigestEnabled     Boolean @default(false)
   /// Gates an optional AI-explained tier on top of GET /tickets/suggest-assignee's existing
   /// deterministic ranking (open load + prior resolved-here count) — narrates WHY the top
   /// candidate was ranked there, it never changes the ranking itself.
-  assigneeSuggestionAiEnabled Boolean    @default(false)
+  assigneeSuggestionAiEnabled Boolean @default(false)
   /// Gates a dismissible AI-suggested next action on tickets the SLA sweep already flags as
   /// stale — surfaced from the existing ticket-escalation worker's sweep, not a new cron job.
   /// Never auto-acts, matching every other AI feature's posture in this app.
-  staleTicketNudgeEnabled     Boolean    @default(false)
+  staleTicketNudgeEnabled     Boolean @default(false)
   /// --- AI PM copilot (V6 phase 5) ---------------------------------------------------------
   /// Gates ai.service.ts#narrateProjectRisk. The risk SCORE is computed arithmetically by
   /// project-risk.service.ts from signals this app already measures; the model only writes the
   /// sentence that explains it. Same division of labour as facePolicyCopilotEnabled, and for the
   /// same reason: a score a model invented is not reproducible and not defensible in the meeting
   /// where someone asks why their project is red.
-  projectRiskAgentEnabled     Boolean    @default(false)
+  projectRiskAgentEnabled     Boolean @default(false)
   /// Gates ai.service.ts#proposePlanBreakdown — turns a goal or an epic into a PROPOSED tree of
   /// child work items. Never writes: it emits an AiProposal whose rows a human accepts or
   /// rejects individually. See ai-proposal.service.ts for why that envelope exists.
-  planBreakdownEnabled        Boolean    @default(false)
+  planBreakdownEnabled        Boolean @default(false)
 
   /// Separate from aiPrReviewSummaryEnabled on purpose — deeper, per-line review comments on a
   /// PR's actual diff carry real false-positive risk (an AI comment that's wrong or noisy erodes
   /// developer trust fast), so this must be its own explicit opt-in, never bundled with the
   /// lower-risk 2-3 sentence summary feature.
-  aiPrInlineReviewEnabled     Boolean    @default(false)
+  aiPrInlineReviewEnabled Boolean @default(false)
 
   /// --- AI quality loop (see prisma AIInteraction + services/ai.service.ts) ------------------
   /// Records one AIInteraction row per AI call: feature, model, prompt HASH, whether the response
   /// parsed, latency. No user content. This is what makes "is our AI any good?" answerable at all —
   /// without it the only AI signal in the system is cost.
-  aiCaptureEnabled            Boolean    @default(false)
+  aiCaptureEnabled        Boolean @default(false)
   /// Additionally stores the prompt text, the model's output, and the capability's input params.
   /// SEPARATE from the toggle above because it retains real user content (ticket descriptions,
   /// timesheet notes, PR diffs) — that is a privacy decision an admin must make deliberately.
   /// Required before golden datasets or eval runs are possible, since both replay real inputs.
   /// Has no effect unless aiCaptureEnabled is also on. Never applies to the face features.
-  aiCaptureContentEnabled     Boolean    @default(false)
+  aiCaptureContentEnabled Boolean @default(false)
   /// How long captured interactions are retained before the sweep deletes them.
-  aiCaptureRetentionDays      Int        @default(30)
+  aiCaptureRetentionDays  Int     @default(30)
   /// Lets an eval scoring a FREE-TEXT answer ask a model whether it's equivalent to the expected
   /// one. Its own toggle because it is the only part of an eval run that costs EXTRA model calls
   /// beyond the replay itself — structured answers are scored deterministically for free. Judge
   /// calls are logged under their own feature so that spend stays visible and budgeted like any
   /// other. Off by default: an eval should be cheap unless you decide otherwise.
-  aiEvalJudgeEnabled          Boolean    @default(false)
+  aiEvalJudgeEnabled      Boolean @default(false)
 
-  model                       String     @default("claude-haiku-4-5") @db.VarChar(80)
-  confidenceThreshold         Float      @default(0.6)
-  monthlyBudgetUsd            Decimal?   @db.Decimal(10, 2)
+  model               String     @default("claude-haiku-4-5") @db.VarChar(80)
+  confidenceThreshold Float      @default(0.6)
+  monthlyBudgetUsd    Decimal?   @db.Decimal(10, 2)
   /// BYOK: which model family to call. ANTHROPIC uses this row's apiKey (falling back to the
   /// server's ANTHROPIC_API_KEY env var when unset) against the native Messages API; every
   /// other supported vendor (OpenAI, Groq, Mistral, DeepSeek, OpenRouter, Gemini, Qwen, Kimi,
   /// Nvidia NIM, Ollama, LM Studio, or any other custom endpoint) goes through
   /// OPENAI_COMPATIBLE's generic adapter using this row's baseUrl.
-  provider                    AIProvider @default(ANTHROPIC)
+  provider            AIProvider @default(ANTHROPIC)
   /// Only meaningful for OPENAI_COMPATIBLE — e.g. https://api.groq.com/openai/v1 or
   /// http://localhost:11434/v1 for a local Ollama install.
-  baseUrl                     String?    @db.VarChar(300)
+  baseUrl             String?    @db.VarChar(300)
   /// AES-256-GCM ciphertext (see utils/encryption.ts) — never returned to the client; the API
   /// exposes only an `apiKeySet: boolean`, same masking convention as
   /// EmailIntakeSettings.imapPassword.
-  apiKey                      String?    @db.Text
-  updatedAt                   DateTime   @updatedAt
-  updatedById                 String?
+  apiKey              String?    @db.Text
+  updatedAt           DateTime   @updatedAt
+  updatedById         String?
 }
 
 enum AIProvider {
@@ -1115,7 +1115,7 @@ model AIInteraction {
   /// Which stored prompt version produced this (null = the hardcoded code default). Deliberately
   /// NOT a foreign key: prompt versions may be pruned, and an interaction must keep its provenance
   /// even then.
-  promptVersionId String? @db.VarChar(64)
+  promptVersionId      String? @db.VarChar(64)
   /// Set when a stored prompt existed but could not be used (missing var, empty body, render
   /// failure) and the code default was substituted. Makes silent fallback visible.
   promptFallbackReason String? @db.VarChar(200)
@@ -1123,16 +1123,16 @@ model AIInteraction {
   /// Content — only written when `aiCaptureContentEnabled` is on. Truncated at write time
   /// (see CAPTURE_TEXT_LIMIT); `ask_ai` embeds up to 150 tickets and would otherwise write ~30KB
   /// rows on every question.
-  promptText      String?  @db.Text
-  outputText      String?  @db.Text
+  promptText      String? @db.Text
+  outputText      String? @db.Text
   /// The capability function's own arguments, as JSON.
   ///
   /// Load-bearing and easy to mistake for redundant with promptText: replaying a dataset item
   /// against a NEW prompt requires the original inputs, not the previously-rendered prompt string.
   /// Without this, datasets and eval runs are impossible.
   paramsJson      Json?
-  promptTruncated Boolean  @default(false)
-  outputTruncated Boolean  @default(false)
+  promptTruncated Boolean @default(false)
+  outputTruncated Boolean @default(false)
 
   /// Feedback attached to THIS specific interaction. The pre-existing `Ticket.aiFeedback` is a
   /// single flag per ticket even though several features may touch one ticket; this is per-call.
@@ -1388,20 +1388,20 @@ model GlobalNotificationSettings {
   /// by default like the other digests. NO email in this group ever contains a captured image,
   /// a similarity score, or a template — they say THAT something needs attention and link into
   /// the app, where authorization is actually checked.
-  emailFaceEnrollmentRequired Boolean @default(true)
-  emailFaceEnrollmentReminder Boolean @default(true)
+  emailFaceEnrollmentRequired  Boolean @default(true)
+  emailFaceEnrollmentReminder  Boolean @default(true)
   emailFaceVerificationFlagged Boolean @default(true)
-  emailFaceReviewOverdue      Boolean @default(true)
-  emailFaceDataDeleted        Boolean @default(true)
-  emailFaceEntitlementLost    Boolean @default(true)
-  emailIdentityWeeklyDigest   Boolean @default(false)
+  emailFaceReviewOverdue       Boolean @default(true)
+  emailFaceDataDeleted         Boolean @default(true)
+  emailFaceEntitlementLost     Boolean @default(true)
+  emailIdentityWeeklyDigest    Boolean @default(false)
 
   /// Two-layer gating, same as emailSecurityWeeklyDigest above: GlobalAISettings decides whether
   /// the underlying worker runs at all, these decide whether email actually sends. Off by default
   /// like every other digest — the in-app notification always fires regardless.
-  emailBugPatternDigest Boolean @default(false)
+  emailBugPatternDigest     Boolean @default(false)
   /// Same convention — see workers/ticket-escalation.worker.ts's stale-ticket sweep.
-  emailTicketStaleNudge Boolean @default(true)
+  emailTicketStaleNudge     Boolean @default(true)
   /// "Wrap up, maintenance is coming" warning sent explicitly by a SUPER_ADMIN from the
   /// Maintenance settings card (services/maintenance.service.ts#notifyUsersOfMaintenance).
   /// Default ON: the admin pressed a button that says "notify users" — suppressing the email
@@ -1793,20 +1793,20 @@ model SbomComponent {
 /// utils/encryption.ts) — see that model's controller for the encrypt-on-save/mask-in-response/
 /// decrypt-on-use pattern this copies.
 model IngestionSettings {
-  id                      String   @id
-  encryptedToken          String?
+  id                                 String   @id
+  encryptedToken                     String?
   /// Where a CRITICAL/HIGH finding with no explicit ticketKey auto-creates a ticket (see
   /// devops-webhook.controller.ts). Null = auto-ticket-creation is off; the finding is still
   /// stored, just not turned into a ticket.
-  fallbackProjectId       String?
-  fallbackProject         Project? @relation(fields: [fallbackProjectId], references: [id], onDelete: SetNull)
+  fallbackProjectId                  String?
+  fallbackProject                    Project? @relation(fields: [fallbackProjectId], references: [id], onDelete: SetNull)
   /// When a FAILED TestRun references (via ticketKey) a RESOLVED/CLOSED ticket, automatically
   /// transition it back to REOPENED — see devops-webhook.controller.ts's /test-runs route.
   /// Deterministic (matches on the CI-supplied ticketKey directly), not an AI decision — unlike
   /// GlobalAISettings.ciFailureTriageEnabled, this needs no AI budget/provider configured.
   /// Off by default: silently reopening a ticket is exactly the kind of automated state change
   /// that should be an explicit admin opt-in, not a surprise.
-  autoReopenEnabled       Boolean  @default(false)
+  autoReopenEnabled                  Boolean  @default(false)
   /// Opt-in fallback assignment for an auto-created security ticket (see fallbackProjectId above)
   /// when no ModuleAssigneeRule matches: resolve an assignee via the finding's repo CODEOWNERS
   /// entry, or failing that the last GitHub committer on that file — see
@@ -1814,13 +1814,13 @@ model IngestionSettings {
   /// GitHub API call per unmatched finding (needs a connected GitConnection to do anything) and
   /// needs at least one User.githubUsername populated to ever actually resolve someone, so it's
   /// a no-op cost until an admin has both configured — not worth defaulting on.
-  codeownersAssignEnabled Boolean  @default(false)
+  codeownersAssignEnabled            Boolean  @default(false)
   /// A FAILED TestRun with NO ticket reference at all auto-creates one in fallbackProjectId — see
   /// security-report.service.ts#maybeAutoCreateTicketForCiFailure. Separate from autoReopenEnabled
   /// (that one only ever acts on an ticket that already exists) and off by default for the same
   /// reason: an automated ticket-creation is a real state change an admin should opt into, not a
   /// surprise the first time CI fails without a ticketKey attached.
-  autoCreateTicketOnCiFailureEnabled Boolean @default(false)
+  autoCreateTicketOnCiFailureEnabled Boolean  @default(false)
 
   updatedAt DateTime @updatedAt
 }
@@ -1916,10 +1916,10 @@ model WorkAttestation {
   payloadHash   String   @db.VarChar(64)
 
   generatedById String?
-  generatedBy   User?    @relation(fields: [generatedById], references: [id], onDelete: SetNull)
-  createdAt     DateTime @default(now())
+  generatedBy   User?     @relation(fields: [generatedById], references: [id], onDelete: SetNull)
+  createdAt     DateTime  @default(now())
   voidedAt      DateTime?
-  voidReason    String?  @db.VarChar(500)
+  voidReason    String?   @db.VarChar(500)
 
   shareLinks AttestationShareLink[]
 
@@ -1979,21 +1979,21 @@ model ApiKey {
 /// services/webhook-dispatch.service.ts) so a receiver can verify a payload actually came from
 /// this deployment, the same trust model GitHub/Stripe webhooks use.
 model OutboundWebhook {
-  id                 String    @id @default(uuid())
-  name               String    @db.VarChar(120)
-  url                String    @db.VarChar(500)
-  secret             String    @db.VarChar(64)
+  id                 String            @id @default(uuid())
+  name               String            @db.VarChar(120)
+  url                String            @db.VarChar(500)
+  secret             String            @db.VarChar(64)
   /// e.g. ["ticket.created","ticket.status_changed","ticket.closed","timesheet.submitted",
   /// "timesheet.approved"] — see webhook-dispatch.service.ts's WEBHOOK_EVENTS for the full list.
   /// Stored as a JSON array rather than a join table since the set is small and never queried
   /// by event across webhooks (each dispatch loop scans this org's own handful of webhooks).
   events             Json
-  isActive           Boolean   @default(true)
+  isActive           Boolean           @default(true)
   lastDeliveryAt     DateTime?
-  lastDeliveryStatus String?   @db.VarChar(20)
+  lastDeliveryStatus String?           @db.VarChar(20)
   createdById        String?
-  createdBy          User?     @relation(fields: [createdById], references: [id], onDelete: SetNull)
-  createdAt          DateTime  @default(now())
+  createdBy          User?             @relation(fields: [createdById], references: [id], onDelete: SetNull)
+  createdAt          DateTime          @default(now())
   deliveries         WebhookDelivery[]
 }
 
@@ -2006,21 +2006,21 @@ model OutboundWebhook {
 /// because a retry minutes later can't reconstruct "what the ticket looked like at dispatch
 /// time" from current state.
 model WebhookDelivery {
-  id            String    @id @default(uuid())
+  id            String          @id @default(uuid())
   webhookId     String
   webhook       OutboundWebhook @relation(fields: [webhookId], references: [id], onDelete: Cascade)
-  event         String    @db.VarChar(60)
+  event         String          @db.VarChar(60)
   payload       Json
   /// How many delivery attempts have been made so far, this one included.
-  attempt       Int       @default(1)
+  attempt       Int             @default(1)
   /// "pending" (awaiting nextAttemptAt) | "delivered" (a retry succeeded) | "exhausted" (hit the
   /// attempt cap — see workers/webhook-retry.worker.ts's MAX_ATTEMPTS).
-  status        String    @db.VarChar(20) @default("pending")
-  lastError     String?   @db.VarChar(500)
+  status        String          @default("pending") @db.VarChar(20)
+  lastError     String?         @db.VarChar(500)
   /// Null once status is no longer "pending" — nothing left to schedule.
   nextAttemptAt DateTime?
-  createdAt     DateTime  @default(now())
-  updatedAt     DateTime  @updatedAt
+  createdAt     DateTime        @default(now())
+  updatedAt     DateTime        @updatedAt
 
   @@index([webhookId])
   @@index([status, nextAttemptAt])
@@ -2171,12 +2171,12 @@ model FaceEnrollmentTemplate {
   enrollment   FaceEnrollment @relation(fields: [enrollmentId], references: [id], onDelete: Cascade)
 
   /// Same AES-256-GCM treatment as the primary template — never a plaintext vector.
-  encryptedEmbedding String @db.Text
-  modelVersion       String @db.VarChar(60)
+  encryptedEmbedding String   @db.Text
+  modelVersion       String   @db.VarChar(60)
   /// Capture quality at enrollment (see face.service.ts#scoreQuality), kept so a later pass can
   /// prune the weakest templates instead of guessing which one is dragging matching down.
-  quality   Float?
-  createdAt DateTime @default(now())
+  quality            Float?
+  createdAt          DateTime @default(now())
 
   @@index([enrollmentId])
 }
@@ -2224,8 +2224,8 @@ model FaceVerificationAttempt {
   reviewedAt       DateTime?
   reviewNote       String?   @db.Text
 
-  ipAddress String?  @db.VarChar(64)
-  userAgent String?  @db.Text
+  ipAddress String? @db.VarChar(64)
+  userAgent String? @db.Text
 
   /// Anti-injection evidence, recorded per attempt so the review log can show it and so real
   /// data accumulates before any of it becomes a hard block:
@@ -2264,21 +2264,21 @@ model FaceVerificationAttempt {
   /// ---- Capture provenance (Phase C, injection-attack detection) ----
   /// The challenge this capture claims to answer, kept as a real reference so an attempt can be
   /// traced back to the exact nonce that was issued rather than just its instruction text.
-  challengeId String? @db.VarChar(64)
+  challengeId       String? @db.VarChar(64)
   /// ms between the challenge being ISSUED and the frame being captured, from the client's own
   /// clock. A replayed recording can only ever have been captured before the challenge existed,
   /// so a negative or implausibly small value is the signal that matters here.
-  captureLagMs Int?
+  captureLagMs      Int?
   /// ms between the neutral and gesture frames, client-reported. A looped video tends to produce
   /// suspiciously uniform intervals; a human produces jitter.
-  frameIntervalMs Int?
+  frameIntervalMs   Int?
   /// Set when the timing evidence doesn't hold together (capture claimed before its challenge,
   /// impossible interval, clock far out of step with the server). Like the virtual-camera flag
   /// this is a REVIEW signal, never an automatic rejection: client clocks are genuinely wrong on
   /// real machines, and blocking on a skewed clock would lock out honest users.
   provenanceSuspect Boolean @default(false)
   /// Human-readable reason for provenanceSuspect, so the review log explains itself.
-  provenanceNote String? @db.VarChar(200)
+  provenanceNote    String? @db.VarChar(200)
 
   /// ---- Review lifecycle (Phase D) ----
   /// Set when the flag was cleared automatically as an honest failure (bad light, one blink)
@@ -2313,21 +2313,21 @@ model FaceChallenge {
   @@index([expiresAt])
 }
 
-/* ==================================================================================== *
+/**
+ * ==================================================================================== *
  * PLANNING LAYER (V6)
- *
  * WHAT: everything that turns this from an execution tracker into a project-management
  * platform — a work-item hierarchy (on Ticket, above), admin-defined workflows and fields,
  * scheduling, capacity/bookings, intake forms, blueprints, approvals, proofing, dashboards,
  * scheduled reports, and the AI proposal envelope.
- *
  * WHY IT IS SHAPED THIS WAY — the one rule that governs the whole block: an org that upgrades
  * to V6 and touches nothing must behave EXACTLY as it did on V5. So every table here is new
  * (never a rewrite of an existing one), every column added to an existing table is nullable or
  * defaulted, and every capability is inert until an admin flips a toggle on
  * GlobalPlanningSettings. The one place that rule needed real design work is custom workflows —
  * see WorkflowStatus.legacyStatus.
- * ==================================================================================== */
+ * ====================================================================================
+ */
 
 /// Canonical status vocabulary. Mirrors @timesheet/shared's `workStatusCategories`.
 enum WorkStatusCategory {
@@ -2367,21 +2367,21 @@ model Portfolio {
 /// exactly, so a workspace that never opens the workflow editor is running the same rules it
 /// always was — just expressed as rows instead of a hard-coded map.
 model Workflow {
-  id          String  @id @default(uuid())
-  name        String  @db.VarChar(120)
-  description String? @db.Text
+  id                  String  @id @default(uuid())
+  name                String  @db.VarChar(120)
+  description         String? @db.Text
   /// NULL = the workspace default, used by any ticket type with no workflow of its own.
   /// Matches `TicketType.name` (a free string validated at the API layer), the same soft-FK
   /// convention Ticket.type and Timesheet.activityType already use.
   appliesToTicketType String? @unique @db.VarChar(60)
   /// Exactly one row has this set. Enforced in workflow.service.ts, not by the schema, because
   /// MySQL has no partial unique index.
-  isDefault Boolean @default(false)
-  isActive  Boolean @default(true)
+  isDefault           Boolean @default(false)
+  isActive            Boolean @default(true)
   /// True for the row the migration seeds. Blocks deletion and blocks editing a status's
   /// legacyStatus — the safety net that guarantees there is always one workflow whose statuses
   /// map 1:1 onto the built-in enum.
-  isSystem  Boolean @default(false)
+  isSystem            Boolean @default(false)
 
   statuses    WorkflowStatus[]
   transitions WorkflowTransition[]
@@ -2435,19 +2435,19 @@ model WorkflowStatus {
 /// illegal — the same closed-world rule `ticketStatusTransitions` already enforces, so an admin
 /// cannot accidentally create a workflow that permits anything.
 model WorkflowTransition {
-  id           String         @id @default(uuid())
-  workflowId   String
-  workflow     Workflow       @relation(fields: [workflowId], references: [id], onDelete: Cascade)
-  fromStatusId String
-  fromStatus   WorkflowStatus @relation("TransitionFrom", fields: [fromStatusId], references: [id], onDelete: Cascade)
-  toStatusId   String
-  toStatus     WorkflowStatus @relation("TransitionTo", fields: [toStatusId], references: [id], onDelete: Cascade)
+  id                 String         @id @default(uuid())
+  workflowId         String
+  workflow           Workflow       @relation(fields: [workflowId], references: [id], onDelete: Cascade)
+  fromStatusId       String
+  fromStatus         WorkflowStatus @relation("TransitionFrom", fields: [fromStatusId], references: [id], onDelete: Cascade)
+  toStatusId         String
+  toStatus           WorkflowStatus @relation("TransitionTo", fields: [toStatusId], references: [id], onDelete: Cascade)
   /// When true, moving across this transition opens an ApprovalRequest and the move is held
   /// until it is approved. Only honoured while GlobalPlanningSettings.enableApprovals is on.
-  requiresApproval   Boolean @default(false)
+  requiresApproval   Boolean        @default(false)
   /// Optional extra permission key the actor must hold on top of TICKETS_WRITE, e.g. restricting
   /// "→ Released" to someone with plan:write.
-  requiredPermission String? @db.VarChar(60)
+  requiredPermission String?        @db.VarChar(60)
 
   createdAt DateTime @default(now())
 
@@ -2477,23 +2477,23 @@ enum CustomFieldTarget {
 /// view filtering on "Client = Acme" and a dashboard grouping by it both need an indexable row,
 /// which a JSON column on a table with hundreds of thousands of rows does not give on MySQL.
 model CustomField {
-  id          String            @id @default(uuid())
+  id                String            @id @default(uuid())
   /// Stable machine name used by the public API, request forms and blueprint payloads. Renaming
   /// the human `label` must never break those, which is why they are two columns.
-  key         String            @unique @db.VarChar(60)
-  label       String            @db.VarChar(120)
-  type        CustomFieldType
-  description String?           @db.VarChar(300)
+  key               String            @unique @db.VarChar(60)
+  label             String            @db.VarChar(120)
+  type              CustomFieldType
+  description       String?           @db.VarChar(300)
   /// SINGLE_SELECT / MULTI_SELECT only — a JSON array of option strings.
-  options     Json?
-  isRequired  Boolean           @default(false)
-  appliesTo   CustomFieldTarget @default(TICKET)
+  options           Json?
+  isRequired        Boolean           @default(false)
+  appliesTo         CustomFieldTarget @default(TICKET)
   /// NULL = every ticket type; otherwise the `TicketType.name` this field is scoped to.
-  ticketTypeFilter  String? @db.VarChar(60)
+  ticketTypeFilter  String?           @db.VarChar(60)
   /// Whether a request form may expose this field to an external submitter.
-  showOnRequestForm Boolean @default(false)
-  order             Int     @default(0)
-  isActive          Boolean @default(true)
+  showOnRequestForm Boolean           @default(false)
+  order             Int               @default(0)
+  isActive          Boolean           @default(true)
 
   values CustomFieldValue[]
 
@@ -2533,16 +2533,16 @@ model CustomFieldValue {
 /// private to their owner; SHARED ones are visible workspace-wide (publishing needs
 /// dashboards:share, the same right that publishes a dashboard).
 model SavedView {
-  id       String @id @default(uuid())
-  ownerId  String
-  owner    User   @relation(fields: [ownerId], references: [id], onDelete: Cascade)
-  name     String @db.VarChar(120)
-  scope    String @default("PERSONAL") @db.VarChar(20)
-  viewType String @default("LIST") @db.VarChar(20)
+  id        String  @id @default(uuid())
+  ownerId   String
+  owner     User    @relation(fields: [ownerId], references: [id], onDelete: Cascade)
+  name      String  @db.VarChar(120)
+  scope     String  @default("PERSONAL") @db.VarChar(20)
+  viewType  String  @default("LIST") @db.VarChar(20)
   /// The same filter shape the Tickets page already puts in its query string, persisted.
-  filters  Json?
-  columns  Json?
-  sort     Json?
+  filters   Json?
+  columns   Json?
+  sort      Json?
   /// Whether this is the owner's landing view for `viewType`.
   isDefault Boolean @default(false)
 
@@ -2711,9 +2711,9 @@ model ApprovalRequest {
   ticketId String
   ticket   Ticket @relation(fields: [ticketId], references: [id], onDelete: Cascade)
 
-  title       String    @db.VarChar(200)
-  description String?   @db.Text
-  dueAt       DateTime?
+  title        String           @db.VarChar(200)
+  description  String?          @db.Text
+  dueAt        DateTime?
   /// Sequential = each step unlocks the next (a chain). Parallel = everyone is asked at once and
   /// the request completes when all have decided.
   isSequential Boolean          @default(true)
@@ -2775,10 +2775,10 @@ model ProofAnnotation {
 
   /// Normalised 0-1 coordinates so an annotation stays anchored at any zoom or render size.
   /// `w`/`h` null = a point pin; set = a rectangular region.
-  x Float
-  y Float
-  w Float?
-  h Float?
+  x         Float
+  y         Float
+  w         Float?
+  h         Float?
   /// Page (PDF) or frame index — null for a single image.
   pageIndex Int?
 
@@ -2838,13 +2838,13 @@ model ReportSubscription {
   dashboardId String?
   dashboard   Dashboard? @relation(fields: [dashboardId], references: [id], onDelete: Cascade)
 
-  filters Json?
-  cadence ReportCadence @default(WEEKLY)
+  filters    Json?
+  cadence    ReportCadence @default(WEEKLY)
   /// 0 = Sunday. Only read for WEEKLY. MONTHLY uses dayOfMonth.
   dayOfWeek  Int?
   dayOfMonth Int?
   /// Hour of day in UTC — the worker ticks hourly and fires the subscriptions due this hour.
-  hourUtc    Int @default(7)
+  hourUtc    Int           @default(7)
 
   /// Explicit address list. JSON rather than a join table because a recipient here is an email
   /// string, not necessarily a User — the point is sending to stakeholders without accounts.
@@ -2911,13 +2911,13 @@ model AiProposal {
   scopeTicketId  String?
   scopeTicket    Ticket?  @relation("AiProposalTicketScope", fields: [scopeTicketId], references: [id], onDelete: Cascade)
 
-  title      String  @db.VarChar(200)
+  title           String  @db.VarChar(200)
   /// The model's stated reasoning, shown verbatim to the reviewer. Never parsed or acted on.
-  rationale  String? @db.Text
+  rationale       String? @db.Text
   /// Self-reported, displayed as context for the reviewer only. It can never gate application —
   /// a human always applies, so there is no threshold for it to cross.
-  confidence Float?
-  model      String? @db.VarChar(80)
+  confidence      Float?
+  model           String? @db.VarChar(80)
   /// Links to the prompt version that produced this, so a bad batch of proposals is traceable to
   /// a prompt change. See AIPromptVersion.
   promptVersionId String?
@@ -3008,7 +3008,7 @@ model ProjectRiskSnapshot {
   /// without recomputing it against data that has since changed.
   signals    Json
 
-  aiNarrative String? @db.Text
+  aiNarrative  String?     @db.Text
   /// A mitigation proposal generated alongside the snapshot, if the copilot is on.
   aiProposalId String?
   aiProposal   AiProposal? @relation(fields: [aiProposalId], references: [id], onDelete: SetNull)
@@ -3038,4 +3038,60 @@ model GlobalPlanningSettings {
 
   updatedAt   DateTime @updatedAt
   updatedById String?
+}
+
+/// Status of one monitored service at one moment. Three levels, not two, because "slow but
+/// answering" and "not answering" call for different reactions.
+enum ServiceStatus {
+  OPERATIONAL
+  DEGRADED
+  DOWN
+}
+
+/// One probe result for one service. This is the raw sample stream behind the status page.
+///
+/// WHY SAMPLES ARE STORED AT ALL, rather than computing status live on request: a status page's
+/// entire value is the HISTORY. "Is it up right now" is already answerable by using the product.
+/// "Was it down on Tuesday when I couldn't submit my timesheet" is not, and it is the question
+/// that gets asked — usually by somebody who has been told the problem was at their end.
+///
+/// Pruned by the health worker (see service-health.service.ts) rather than kept forever: at one
+/// sample per service per five minutes this table grows by roughly 100k rows a year per tenant,
+/// and nobody reads a raw sample older than the daily rollup that summarises it.
+model ServiceHealthSample {
+  id        String        @id @default(uuid())
+  /// Stable machine key, e.g. "tickets". Not a display name — those change.
+  service   String        @db.VarChar(60)
+  status    ServiceStatus
+  latencyMs Int?
+  /// Populated only when something is wrong; the reason, in the operator's words.
+  detail    String?       @db.VarChar(500)
+  checkedAt DateTime      @default(now())
+
+  @@index([service, checkedAt])
+  @@index([checkedAt])
+}
+
+/// A period during which a service was not fully operational.
+///
+/// WHY THIS EXISTS SEPARATELY FROM THE SAMPLES: incidents have to outlive the samples that
+/// produced them. Samples get pruned; "we were down for 40 minutes on the 3rd" must not vanish
+/// with them, because that is precisely the record somebody comes back to months later. Deriving
+/// incidents from samples on read would also mean a pruning job silently rewriting history.
+model ServiceIncident {
+  id          String        @id @default(uuid())
+  service     String        @db.VarChar(60)
+  /// The WORST status seen during the incident — a blip that degrades then recovers reads
+  /// differently from one that went fully down, and averaging them would hide that.
+  status      ServiceStatus
+  startedAt   DateTime      @default(now())
+  /// Null while ongoing. The status page shows these as active.
+  endedAt     DateTime?
+  detail      String?       @db.VarChar(500)
+  /// How many consecutive failing probes it spanned — the honest measure of confidence that it
+  /// was real rather than one unlucky sample.
+  sampleCount Int           @default(1)
+
+  @@index([service, startedAt])
+  @@index([endedAt])
 }

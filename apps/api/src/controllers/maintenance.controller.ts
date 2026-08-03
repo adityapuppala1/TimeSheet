@@ -26,6 +26,7 @@ import {
   updateMaintenanceSettings
 } from "../services/maintenance.service.js";
 import { getSystemHealth } from "../services/system-health.service.js";
+import { getStatusPage, runHealthChecks } from "../services/service-health.service.js";
 
 export const maintenanceRouter = Router();
 
@@ -105,4 +106,33 @@ maintenanceRouter.post("/notify", requireAuth, requireSuperAdmin, async (req, re
  */
 maintenanceRouter.get("/health", requireAuth, requireSuperAdmin, async (_req, res) => {
   res.json(await getSystemHealth());
+});
+
+/**
+ * GET /maintenance/status-page — per-feature status, the day-by-day history and the incident log.
+ *
+ * Distinct from /health above, which reports the BOX (CPU, memory, disk) as measured right now.
+ * This reports the FEATURES over time, which is the question somebody actually arrives with:
+ * "was it down on Tuesday when I couldn't submit". A CPU graph cannot answer that, and neither
+ * can a health check that only knows about this instant.
+ *
+ * Window capped at a year; the response carries a day per service, so a longer one would be a
+ * large payload built to be skimmed.
+ */
+maintenanceRouter.get("/status-page", requireAuth, requireSuperAdmin, async (req, res) => {
+  const days = Math.min(365, Math.max(1, Number(req.query.days) || 90));
+  res.json(await getStatusPage(days));
+});
+
+/**
+ * POST /maintenance/status-page/run — probe everything now instead of waiting for the worker.
+ *
+ * Exists because the first thing anybody does with a status page is check whether it is telling
+ * the truth, and a five-minute wait to find out is how a monitoring page loses trust on day one.
+ * It is also what makes the page usable immediately after an install rather than showing an empty
+ * strip until the first cron tick.
+ */
+maintenanceRouter.post("/status-page/run", requireAuth, requireSuperAdmin, async (_req, res) => {
+  const results = await runHealthChecks();
+  res.json({ ranAt: new Date().toISOString(), results });
 });
