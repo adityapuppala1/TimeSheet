@@ -13,7 +13,7 @@
  */
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { AlertTriangle, Check, FileText, History, RotateCcw } from "lucide-react";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Badge } from "../../components/ui/badge";
 import { Button } from "../../components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../../components/ui/card";
@@ -86,14 +86,27 @@ function PromptEditorDialog({ feature, readOnly, onClose }: { feature: string | 
   const [note, setNote] = useState("");
   const [preview, setPreview] = useState<{ problems: Array<{ message: string }>; preview: string } | null>(null);
 
-  // Seed the editor from whatever is live — the active custom version, or the built-in prompt.
+  /**
+   * Seed the editor from whatever is live — the active custom version, or the built-in prompt.
+   *
+   * Keyed on the FEATURE being edited, not on `detail.data`'s identity. Seeding on data identity
+   * meant any background refetch (React Query refetches on window focus by default) replaced the
+   * editor contents with the stored version — discarding an in-progress prompt rewrite without a
+   * word. Prompt bodies are long; that is a lot of work to lose by alt-tabbing to check a
+   * reference.
+   *
+   * Switching to a different prompt still re-seeds, which is the behaviour that was actually
+   * wanted here.
+   */
+  const seededFor = useRef<string | null>(null);
   useEffect(() => {
-    if (!detail.data) return;
-    const active = detail.data.versions.find((v) => v.id === detail.data.activeVersionId);
+    if (!detail.data || seededFor.current === feature) return;
+    seededFor.current = feature ?? null;
+    const active = detail.data.versions.find((v) => v.id === detail.data!.activeVersionId);
     setBody(active?.body ?? detail.data.defaultTemplate);
     setNote("");
     setPreview(null);
-  }, [detail.data]);
+  }, [detail.data, feature]);
 
   const invalidate = () => {
     queryClient.invalidateQueries({ queryKey: ["ai", "prompts"] });

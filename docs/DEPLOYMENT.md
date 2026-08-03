@@ -286,6 +286,136 @@ beyond what's documented elsewhere:
 
 ---
 
+## Browser and OS support
+
+**Verified by running the suite, not by inspection.** Three engines cover every browser this
+product gets asked about, because the browser is not the thing that varies — the engine is:
+
+| Engine | Browsers | How it is covered |
+|---|---|---|
+| Chromium | Chrome, Edge, Opera, Brave, Vivaldi, Arc | `desktop` + 4 responsive viewport projects |
+| Gecko | Firefox | `firefox` project |
+| WebKit | Safari on macOS **and every browser on iOS** | `webkit` project |
+
+The last row is the one people get wrong: on iOS, Chrome/Edge/Firefox are all Safari's WebKit
+wearing a different icon, because the platform requires it. Testing "Chrome on iPhone" is testing
+WebKit.
+
+```bash
+npx playwright install firefox webkit    # once
+npx playwright test --project=firefox --project=webkit
+```
+
+The cross-browser projects run a functional subset (auth, tickets, timesheets, dashboard,
+settings, user management) rather than everything. The responsive projects are a *width* question
+and pinning them to one engine is what makes a layout difference attributable to the viewport; the
+face specs need a camera and a secure context, which is a device question rather than an engine
+one.
+
+### Operating systems
+
+The server runs in Docker (Linux) regardless of the host, so **macOS, Windows and Ubuntu differ
+only in how you start it** — `install.sh` for macOS/Linux, `install.ps1` for Windows, and CI
+builds and typechecks on both Linux and Windows. There is no OS-specific application code. The
+client is a browser, so client-side support is the engine table above.
+
+Two host-level notes that have actually bitten:
+
+- **Windows + `prisma generate`** — the running API holds `query_engine-windows.dll.node` open, so
+  a regenerate fails with `EPERM`. Stop the API first. Linux and macOS do not care.
+- **Line endings** — the repo is authored with LF and git normalises on checkout. Windows editors
+  that rewrite files to CRLF produce diffs that look enormous and are not.
+
+### Known limits, stated rather than implied
+
+- **The camera needs HTTPS** on every browser and every OS. See the section below; it is not
+  something the application can work around.
+- **Hands-free face capture needs WebGL.** Where it is unavailable — locked-down enterprise
+  browsers, some VMs — the camera falls back to a manual shutter button and everything still
+  works, just with one more click.
+- **Copy buttons fall back to a legacy path** on insecure origins and older Safari, and report
+  honestly when even that fails rather than claiming success. See `lib/clipboard.ts`.
+
+## Serving over HTTPS (required for the camera, and for Copy buttons)
+
+**The symptom:** the face-verification screen says *"Your browser only allows camera access over
+HTTPS, and this page was opened on http://…"*, and Copy buttons do nothing. Almost always on a
+phone.
+
+**Why it happens, and why it is invisible in development.** Browsers only expose `getUserMedia`
+(camera), `navigator.clipboard`, and service workers in a **secure context**. `localhost` is
+exempt — so a laptop opening `http://localhost:5173` has a working camera, and the same build
+opened from a phone at `http://192.168.1.20:5173` has no camera at all. Nothing is misconfigured
+in the app; the browser is refusing, and every browser refuses. This is not something the
+application can work around, and any product that claims to has simply not been tested off
+localhost.
+
+Affected features: face enrollment and verification, every **Copy** button (share links, API
+tokens, webhook URLs). Everything else works fine over plain HTTP.
+
+### Production, with a public domain — use a reverse proxy
+
+The Compose stack does not terminate TLS itself, on purpose: certificate management belongs to
+whatever already runs in front of it. Caddy is the least work because it obtains and renews
+Let's Encrypt certificates with no extra configuration:
+
+```caddy
+# Caddyfile — put this in front of the Compose stack
+timesheet.example.com {
+    reverse_proxy localhost:5173     # the web container
+    handle_path /api/* {
+        reverse_proxy localhost:4000 # the API container
+    }
+}
+```
+
+nginx equivalent, if you already run one, terminating TLS with certbot-issued certs and proxying
+the same two upstreams. **Whichever you use, forward `X-Forwarded-Proto`** — the API reads it to
+build absolute URLs for share links and email, and without it those links come out as `http://`
+and land users right back in the insecure context.
+
+On Kubernetes there is nothing to add: set `ingress.host` and `ingress.tls` in the Helm chart and
+let cert-manager or your cloud's managed certificate handle issuance (see *Kubernetes deployment*).
+
+### On-prem with no public domain — a private CA
+
+Let's Encrypt cannot issue for `192.168.x.x` or an internal hostname, so the options are a
+self-signed certificate or an internal CA. Self-signed works, but **every phone that will use the
+camera has to trust the certificate**, or the browser blocks the page before the camera question
+even arises. `mkcert` makes this tolerable:
+
+```bash
+mkcert -install                          # creates a local CA
+mkcert timesheet.internal 192.168.1.20   # cert for the name AND the IP people actually type
+```
+
+Point the reverse proxy at the generated pair, then install the `mkcert -CAROOT` root certificate
+on each device (iOS additionally requires enabling it under *Settings → General → About →
+Certificate Trust Settings*, which is the step people miss). If that is more device management
+than you want, giving the server a real hostname and a real certificate is genuinely less work in
+the long run.
+
+### Just testing on a phone for ten minutes
+
+A tunnel gives you a trusted HTTPS URL without touching any configuration:
+
+```bash
+cloudflared tunnel --url http://localhost:5173
+# or: ngrok http 5173
+```
+
+Open the printed `https://…` address on the phone. Fine for a demo or for checking the camera
+flow; not a deployment.
+
+### What NOT to do
+
+- **Do not use Chrome's `--unsafely-treat-insecure-origin-as-secure` flag for anything real.** It
+  is per-device and per-browser, it disables a security boundary for that origin, and it silently
+  stops working after a browser update or profile reset — at which point the camera "breaks" for
+  one person with no explanation anybody can find.
+- **Do not conclude the camera is broken because it works on your laptop.** It will always work on
+  `localhost`. Test from a phone on the real address before deciding anything.
+
 ## CI/CD
 
 `.github/workflows/ci.yml` runs on every push/PR: typecheck + build both packages, then (on

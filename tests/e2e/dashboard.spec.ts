@@ -7,12 +7,18 @@
  */
 import { test, expect } from "@playwright/test";
 import { suspendFaceGate, type FaceGateSnapshot } from "./helpers/face-gate";
+import { signIn } from "./helpers/sign-in";
 
 // Own snapshot, not shared with timesheet.spec.ts's "employee.json" — both specs rotate their
 // session's refresh secret via POST /auth/refresh, and two specs sharing one snapshot race to
 // invalidate each other once the suite's runtime crosses the rotation-grace window. See
 // auth.setup.ts's comment on "employee-dashboard" for the failure this caused for real.
-test.use({ storageState: "tests/e2e/.auth/employee-dashboard.json" });
+/**
+ * Signs in per test rather than replaying a stored snapshot. A snapshot holds one rotating refresh
+ * cookie, so it survives about one session's use — which broke the moment this spec started
+ * running in three browser projects. See helpers/sign-in.ts.
+ */
+test.use({ storageState: { cookies: [], origins: [] } });
 
 // This spec creates a timesheet fixture through the API, which the face gate would 428 when
 // the workspace has verification enabled. See helpers/face-gate.ts.
@@ -31,6 +37,7 @@ function localDateKey(d: Date): string {
 
 test.describe("Dashboard day timeline", () => {
   test("shows an entry logged today, and the date picker walks to an empty day", async ({ page }) => {
+    await signIn(page, "employee");
     await page.goto("/app");
     const { accessToken } = await (await page.request.post("/api/auth/refresh")).json();
     const headers = { Authorization: `Bearer ${accessToken}` };

@@ -1624,3 +1624,82 @@ column moved, and every new toggle came up off. Re-running the migration was a c
 is what makes an interrupted deploy recoverable.
 
 Verified: 329 unit tests; 188 passing Playwright tests (10 skipped) across all five viewport projects; a 54-migration replay into an empty database; a V5-to-V6 upgrade simulation with V5-era data; and a live toggles-off probe of every planning route.
+
+## Operator surfaces + the face-verification repair (2026-08-03)
+
+Four pieces of work that share a theme: each one existed already and did not answer the question
+people were actually asking of it.
+
+### Face verification — diagnosed from the data, not from assumptions
+
+It was failing more often than it was passing, and the cause was not where anyone would have
+looked. The attempt log said so plainly once it was read:
+
+| Outcome | Count |
+|---|---|
+| **CHALLENGE_FAILED** | **107** |
+| PASSED | 69 *(every one at similarity exactly 1.000)* |
+| NOT_ENROLLED | 40 |
+| NO_FACE | 37 |
+| MULTIPLE_FACES | 21 |
+| NO_MATCH | 10 *(0.52–0.82)* |
+
+- [x] **The head-turn challenge was the largest cause, not the face match.** Recorded yaw deltas on
+  the failures were 0.02–0.26 radians against a 0.35 requirement, while the passes reached
+  0.56–0.74 — so the sensor was fine and people were genuinely under-turning. The instruction was
+  static text and the gesture frame was grabbed on a fixed 3-second countdown, which caught anyone
+  who turned early and relaxed, or who was still moving. It is now a live meter that fills as the
+  head turns, firing at the **peak** of the rotation. The requirement is unchanged and the server
+  still measures it independently; the client is simply told the threshold so the meter cannot
+  promise something the enforcement then refuses.
+- [x] **The adaptive per-user threshold could ratchet out of reach permanently.** It is computed
+  from that user's own passing history — and seeded or automated rows score exactly 1.000, which no
+  live camera produces. An earlier fix caught the entirely-synthetic case (variance exactly zero)
+  but not the realistic mixed one, where variance looks healthy and the mean has been dragged to
+  ~0.98. Because only passes feed the distribution, somebody locked out this way had **no route
+  back from inside the product**. Non-live scores are now excluded before anything is computed.
+- [x] **Enrollment stored one pose four times.** The "burst" was four frames 280ms apart; nobody
+  moves meaningfully in under a second. Replaced with a guided four-position wizard. It never says
+  "left" — Human's yaw sign is uncalibrated in this codebase, so it asks for one side and then the
+  other and enforces only that they are opposite. Naming a direction we cannot verify would mean
+  telling half the users they did it wrong when they did it right.
+- [x] **Hands-free capture worked only in Chromium.** It relied on `window.FaceDetector`, which
+  Firefox and iOS Safari do not implement — so on most phones every frame was taken manually at a
+  moment of the user's choosing, which is exactly how blurry off-angle frames reached the server.
+  Now driven by the shared tracker, which also measures blur: a large, centred, confidently-detected
+  face can still be motion-blurred, and that is what silently becomes a low similarity score.
+
+**No Python, no new service, and that was a decision rather than a default.** A separate ML service
+would mean a second runtime, a second model, and embeddings mathematically incomparable with the
+262 already stored — the `FACE_MODEL_VERSION` guard exists precisely to stop that comparison
+happening by accident, and the cost would be that everybody re-enrols for no accuracy gain. The
+browser now runs the same library the server already used, loading **only** detection and head
+pose (2.1MB, lazily, from our own origin so air-gapped installs keep working). The embedding and
+the match stay server-side, because a client that decides its own verification outcome is not a
+security control.
+
+### User management, AI usage, and a status page
+
+- [x] **User management** gained filters, real pagination and bulk actions. Two silent bugs
+  surfaced on the way in: `GET /users` was capped at 50 rows and feeds every picker in the product,
+  so orgs past fifty people had dropdowns that omitted most of them; and the shared table's card
+  layout repeats each column header per row, so a select-all checkbox rendered once per card.
+- [x] **Per-feature AI token consumption**, cumulative and daily. Reported in tokens rather than
+  dollars: the cost figure is an estimate from a price table that moves, and is simply wrong for
+  BYOK customers with negotiated rates.
+- [x] **A status page with a memory** — 13 feature-level probes every five minutes, a day-by-day
+  strip, uptime, and a recorded incident log. The existing Server health panel reports the box as
+  measured right now; this reports the features over time, which is what somebody means by "was it
+  down on Tuesday". A day is coloured by its **worst** check, because averaging is how a two-hour
+  outage becomes a 96%-green day, and a day with no samples is grey rather than green, because
+  reporting absence of monitoring as success is the one lie a status page must never tell.
+
+**The recurring lesson across all four.** Every one of these was a case of a surface that answered
+a *nearby* question convincingly enough that nobody noticed it was the wrong one — a health panel
+that reported CPU when the question was "can I submit", a usage panel that reported spend when the
+question was "spend on what", a user list that searched a page while appearing to search a company,
+and a face check that reported "no match" when the actual failure was a head turn nobody could see
+the target of. In each case the fix started by reading what the system had already recorded rather
+than by reasoning about what it should do.
+
+Verified: 331 unit tests; 221 Playwright tests across five viewports plus Firefox (Gecko) and WebKit (Safari); a 54-migration replay into an empty database; a V5-to-V6 upgrade simulation; the multi-tenant migration runner against two real tenant databases; and a live incident drill.

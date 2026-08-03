@@ -30,6 +30,7 @@ import { markReleaseSeen } from "../lib/whats-new-seen";
 import { safeHtml } from "../lib/safe-html";
 import { systemApi, type ReleaseInfo } from "../services/api";
 import { useAuthStore } from "../store/auth";
+import { copyText } from "../lib/clipboard";
 
 /** Markdown → sanitized HTML. `async: false` keeps marked synchronous (no highlighting plugins),
  *  and safeHtml strips anything DOMPurify's allowlist doesn't recognise — the load-bearing step. */
@@ -202,7 +203,7 @@ function UpdateCommand() {
         variant="outline"
         className="h-8 shrink-0"
         onClick={() => {
-          void navigator.clipboard.writeText("./update.sh");
+          void copyText("./update.sh");
           toast.success("Copied");
         }}
       >

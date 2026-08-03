@@ -57,6 +57,7 @@ import {
   type RequestFormFieldRow,
   type RequestFormRow
 } from "../services/api";
+import { copyText } from "../lib/clipboard";
 
 const serverMessage = (err: any, fallback: string) => err?.response?.data?.message ?? fallback;
 
@@ -298,8 +299,11 @@ export function RequestsPage() {
                               variant="ghost"
                               className="h-7"
                               onClick={() => {
-                                navigator.clipboard?.writeText(url);
-                                toast.success("Link copied");
+                                void copyText(url).then((ok) =>
+                                  ok
+                                    ? toast.success("Link copied")
+                                    : toast.error("Couldn't copy", { description: "Select the link and copy it manually." })
+                                );
                               }}
                             >
                               <Copy className="h-3.5 w-3.5" />

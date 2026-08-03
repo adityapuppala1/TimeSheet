@@ -22,6 +22,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from ".
 import { Skeleton } from "../../components/ui/skeleton";
 import { toast } from "../../components/ui/toaster";
 import { SERVER_ORIGIN, settingsApi, type WebhookDeliveryRow } from "../../services/api";
+import { copyText } from "../../lib/clipboard";
 
 const EVENT_LABEL: Record<OutboundWebhookEvent, string> = {
   "ticket.created": "Ticket created",
@@ -40,7 +41,7 @@ function CopyableSecret({ value }: { value: string }) {
         size="sm"
         variant="ghost"
         onClick={() => {
-          navigator.clipboard.writeText(value).then(() => {
+          copyText(value).then(() => {
             setCopied(true);
             setTimeout(() => setCopied(false), 1500);
           });

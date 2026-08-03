@@ -48,6 +48,7 @@ import { toast } from "../components/ui/toaster";
 import { emailTemplateApi, type EmailLogRow, type EmailTemplateRow } from "../services/api";
 import { safeHtml } from "../lib/safe-html";
 import { useAuthStore } from "../store/auth";
+import { copyText } from "../lib/clipboard";
 
 const FALLBACK_DEFAULT = `<h2>Title</h2>
 <p>Hi {{name}}, your action is required.</p>
@@ -467,7 +468,7 @@ function EditorDialog({ template, onClose }: { template: EmailTemplateRow | null
                         key={v}
                         type="button"
                         onClick={() => {
-                          navigator.clipboard?.writeText(`{{${v}}}`);
+                          void copyText(`{{${v}}}`);
                           toast.success("Copied", { description: `{{${v}}}` });
                         }}
                         className="inline-flex items-center gap-1 rounded-md border border-border bg-background px-2 py-0.5 font-mono text-xs hover:border-primary/40 hover:text-primary"

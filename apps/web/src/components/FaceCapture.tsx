@@ -127,11 +127,23 @@ export const FaceCapture = forwardRef<FaceCaptureHandle, FaceCaptureProps>(funct
 
   const start = useCallback(async () => {
     setError(null);
-    // getUserMedia only exists on a secure origin (https, or localhost). Saying so explicitly
-    // is far more useful than the browser's generic "undefined is not a function".
+    // getUserMedia only exists on a secure origin (https, or localhost). Saying so explicitly is
+    // far more useful than the browser's generic "undefined is not a function".
+    //
+    // WHY THE MESSAGE NAMES THE ACTUAL HOST: this is overwhelmingly a PHONE problem, and it is
+    // invisible during development. A laptop opens the app on `localhost`, which browsers exempt
+    // from the secure-context rule, so the camera works and nobody notices. The same build reached
+    // from a phone on `http://192.168.1.20:5173` has no camera at all — and the old wording ("ask
+    // your admin to enable HTTPS") gave the admin no clue that the address was the problem, or
+    // which address to fix. Showing the origin makes it self-diagnosing.
     if (!navigator.mediaDevices?.getUserMedia) {
       setState("unavailable");
-      setError("Camera access needs a secure connection (HTTPS). Ask your admin to enable HTTPS for this site.");
+      const origin = typeof window !== "undefined" ? window.location.origin : "this address";
+      setError(
+        `Your browser only allows camera access over HTTPS, and this page was opened on ${origin}. ` +
+          `Open it on https:// (or on localhost on this machine) and the camera will work. ` +
+          `Your admin can set this up — see "Serving over HTTPS" in the deployment guide.`
+      );
       return;
     }
     setState("starting");

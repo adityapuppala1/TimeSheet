@@ -2,11 +2,16 @@
  * Root-level Playwright config — this suite drives the real web app (Vite dev server)
  * against the real API (Express dev server), both started automatically via `webServer`.
  *
- * WHY Chromium-only, with custom viewport sizes instead of Playwright's built-in device
- * presets: the user explicitly asked to test "using chrome browser" across phone/tablet/
- * laptop/desktop/4K. Playwright's iPhone/iPad presets default to the WebKit engine (to
- * emulate Safari faithfully); defining our own viewport sizes on the Chromium engine keeps
- * every project on the same browser while still covering the full size range.
+ * WHY the RESPONSIVE projects are Chromium-only, with custom viewport sizes rather than
+ * Playwright's device presets: those presets default to WebKit, and pinning every size to one
+ * engine is what makes a layout difference attributable to the WIDTH rather than to the browser.
+ *
+ * WHY there are also `firefox` and `webkit` projects: shipping to "all browsers" is a claim, and
+ * it is only worth as much as the run behind it. Three engines cover every browser this product
+ * is asked about — Chrome, Edge, Opera and Brave are all Chromium; Firefox is Gecko; Safari on
+ * both macOS and iOS is WebKit. They run a `crossBrowserMatch` subset rather than everything,
+ * because the value is in checking that the app FUNCTIONS on each engine (auth, navigation,
+ * ticket flows, settings), not in re-running viewport-overflow assertions three times.
  *
  * WHY `workers: 1` / `fullyParallel: false`: specs share the same seeded MySQL database
  * (no per-test DB isolation), so running them concurrently risks one test's cleanup racing
@@ -38,6 +43,21 @@ export default defineConfig({
   },
   projects: [
     { name: "setup", testMatch: /.*\.setup\.ts/ },
+    /* Engine coverage. Deliberately a subset: face and camera specs are excluded because
+       getUserMedia needs a secure context and a real device, and the responsive suite is a
+       width question rather than an engine one. */
+    {
+      name: "firefox",
+      use: { ...devices["Desktop Firefox"], viewport: VIEWPORTS.desktop },
+      dependencies: ["setup"],
+      testMatch: /(auth|tickets|timesheet|dashboard|settings|user-management)\.spec\.ts/
+    },
+    {
+      name: "webkit",
+      use: { ...devices["Desktop Safari"], viewport: VIEWPORTS.laptop },
+      dependencies: ["setup"],
+      testMatch: /(auth|tickets|timesheet|dashboard|settings|user-management)\.spec\.ts/
+    },
     {
       name: "desktop",
       use: { ...devices["Desktop Chrome"], viewport: VIEWPORTS.desktop },

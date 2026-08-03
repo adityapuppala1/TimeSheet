@@ -25,6 +25,7 @@ import { Switch } from "../../components/ui/switch";
 import { Textarea } from "../../components/ui/textarea";
 import { toast } from "../../components/ui/toaster";
 import { projectApi, SERVER_ORIGIN, settingsApi } from "../../services/api";
+import { copyText } from "../../lib/clipboard";
 
 const VAPT_SAMPLE_JSON = `[
   {
@@ -52,7 +53,7 @@ function CopyableUrl({ label, url }: { label: string; url: string }) {
           size="sm"
           variant="ghost"
           onClick={() => {
-            navigator.clipboard.writeText(url).then(() => {
+            copyText(url).then(() => {
               setCopied(true);
               setTimeout(() => setCopied(false), 1500);
             });
@@ -283,7 +284,7 @@ export function SecurityDevOpsSettingsCard({ readOnly }: { readOnly: boolean }) 
                         size="sm"
                         variant="ghost"
                         onClick={() => {
-                          navigator.clipboard.writeText(revealedToken);
+                          void copyText(revealedToken);
                           toast.success("Copied");
                         }}
                       >

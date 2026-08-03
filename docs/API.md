@@ -444,6 +444,83 @@ tickets and hours, which every workspace already has.
   months is the one worth designing against. `lastSentAt` is the cadence guard, so a restart or a
   double-fired cron re-sends nothing.
 
+## Users — management listing and bulk actions
+
+- `GET /users` — the flat array every assignee/manager/approver **picker** reads. Ordered by name,
+  capped at 2000. It is not paginated on purpose: a picker wants everyone it could offer, and the
+  old 50-row cap meant that in any org past fifty people those dropdowns silently omitted most of
+  them.
+- `GET /users/paged?search=&roleId=&designation=&status=&online=&sort=&dir=&page=&pageSize=` — the
+  management table. `search` spans name, email, job title **and role name**; because `Role.name` is
+  an enum there is no `contains` to reach for, so the server matches the known values and turns
+  them into an `in`. Returns `{ items, total, page, pageSize, filteredOnPage, onlineFilterApplied,
+  designations }`.
+
+  `online` is applied **in memory, after the database filters**, because presence lives in
+  `Session` under a 15-minute `lastSeenAt` rule rather than on `User`. Making it a WHERE clause
+  would mean a join that slows every other filter for the one used least. `total` therefore counts
+  the database filters and `filteredOnPage` counts what survived — both are returned rather than
+  reporting one and implying it covers the other.
+
+- `POST /users/bulk-action` `{ action, userIds? | filter?, password? }` — `DEACTIVATE`, `ACTIVATE`,
+  `RESET_PASSWORD`, `RESEND_WELCOME`, `FORCE_LOGOUT`, `DELETE`.
+
+  **Two ways to choose the targets, and the second is the point.** An explicit list of ids, or the
+  current `filter` — "apply to everything matching" cannot be done by posting ten thousand ids from
+  a browser, and re-deriving the set server-side from the same query the table used is the only way
+  the operator's selection and the server's cannot disagree.
+
+  **Refusals are per user.** Acting on a `SUPER_ADMIN` without being one, or on your own account,
+  skips that row with a reason rather than aborting the batch. A bulk action that stops at the
+  first protected user leaves a half-applied change and no indication of which half ran. Returns
+  `{ applied, requested, skipped[] }`. `DEACTIVATE` and `DELETE` also revoke sessions — leaving
+  them live means the person keeps working until their token expires.
+
+## AI usage
+
+- `GET /settings/ai/usage-summary` — this month's spend, calls and tokens, by feature and by model.
+- `GET /settings/ai/usage-trend?weeks=` — weekly spend.
+- `GET /settings/ai/feature-usage?days=` *(max 90)* — per-feature consumption, cumulative **and**
+  day by day. Returns `features[]` (input/output/total tokens, calls, average per call, share,
+  models) and `daily[]`, one entry per day with a numeric key per feature.
+
+  **Tokens lead, cost follows.** `costUsdEstimate` is computed from a price table at call time: it
+  shifts when a provider changes prices and is wrong for anyone on BYOK with negotiated rates,
+  which makes it a poor basis for comparing months. Tokens are what was consumed.
+
+  The daily series is **pivoted and zero-filled server-side**. Pivoting in the browser means every
+  consumer reimplements it, and the zero-filling is what gets forgotten — a feature with no calls
+  on Tuesday must be `0` and not absent, or a stacked chart silently changes what each colour means
+  from one day to the next. Days with no activity at all are included for the same reason.
+
+## Service status page
+
+- `GET /maintenance/status-page?days=` *(SUPER_ADMIN, max 365)* — per-feature current status, a
+  day-by-day history, uptime percentages and the incident log.
+
+  Distinct from `GET /maintenance/health`, which reports the **box** (CPU, memory, disk, event-loop
+  lag) as measured right now. This reports the **features** over time, which is the question people
+  actually arrive with: a server at 12% CPU with both databases answering is perfectly healthy
+  right up until nobody can submit a timesheet.
+
+  A day carries `status` (its **worst** sample, not its average — averaging is how a two-hour
+  outage becomes a 96%-green day), `samples`, `downSamples`, `degradedSamples` and `uptimePct`. A
+  day with no samples has `status: null`; reporting absence of monitoring as success is the one
+  lie a status page must never tell, so `overall` is also null until something has been measured.
+
+- `POST /maintenance/status-page/run` *(SUPER_ADMIN)* — probe everything now instead of waiting for
+  the five-minute worker. Exists because the first thing anyone does with a status page is check
+  whether it is telling the truth, and it makes the page usable immediately after an install rather
+  than showing an empty strip until the first cron tick.
+
+  Probes exercise each feature's real dependency — a bounded query, the mail transport's own
+  verification state, the AI provider's configuration. Deliberately not HTTP self-calls (which
+  prove only that the process can reach itself, and need a credential to clear auth) and never
+  writes (a monitor that creates rows every five minutes to prove writes work has become a source
+  of the load it measures). Three states, because "slow but answering" and "not answering" need
+  different reactions, with a per-probe threshold — a ticket list must feel instant, a report is
+  allowed to take a moment.
+
 ## Verified work attestations
 
 A client-facing record that approved hours map to real tickets, done by identity-verified people,

@@ -72,6 +72,7 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger
 } from "../components/ui/dropdown-menu";
+import { copyText } from "../lib/clipboard";
 import {
   Dialog,
   DialogContent,
@@ -2255,7 +2256,7 @@ function AttestationShareDialog({ attestation, onClose }: { attestation: Attesta
                     size="sm"
                     variant="ghost"
                     onClick={() => {
-                      navigator.clipboard.writeText(shareUrl).then(() => {
+                      copyText(shareUrl).then(() => {
                         setCopied(true);
                         setTimeout(() => setCopied(false), 1500);
                       });

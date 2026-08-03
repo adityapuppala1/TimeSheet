@@ -13,15 +13,80 @@
  * Together those hid a completely inert test. The fix asserts against the API — the row either
  * exists afterwards or it doesn't — rather than against text that happens to be on screen.
  */
-import { test, expect } from "@playwright/test";
+import { test, expect, type APIRequestContext } from "@playwright/test";
 import { expectCleanupOk, expectGone, sweepLeftoverTimesheetDrafts, withAdminRequest } from "./helpers/admin-request";
 import { suspendFaceGate, type FaceGateSnapshot } from "./helpers/face-gate";
 
-/** Every run books this same slot, so a leftover from a previous run collides with it. */
 const MARKER_PREFIX = "Playwright smoke test entry";
 const ACTOR = "employee@timesheet.local";
 
-test.use({ storageState: "tests/e2e/.auth/employee.json" });
+/**
+ * Finds an hour today that this user has nothing booked in.
+ *
+ * WHY THIS IS NOT A FIXED "09:00-10:00": the API refuses any range that overlaps an existing
+ * entry for that user and day, and it counts EVERY live entry regardless of status. A hard-coded
+ * slot therefore fails the moment a real person logs real time over it — which is exactly what
+ * happened here: a genuine 09:30-11:00 submission in the development database made this test fail
+ * on one browser and not another, which reads convincingly like a browser bug and is not one.
+ *
+ * A test that only passes against a pristine database is a test that will eventually be deleted
+ * for being flaky. Asking which hours are free costs one request and makes it independent of
+ * whatever else is in there.
+ */
+async function findFreeHour(
+  request: APIRequestContext,
+  headers: Record<string, string>,
+  userId: string
+): Promise<{ start: string; end: string }> {
+  const res = await request.get(`/api/timesheets?userId=${userId}`, { headers });
+  const rows = await res.json();
+  // A non-array here means the request was refused (usually an expired token), and letting it
+  // reach `.filter` produces "rows.filter is not a function" pointing at this file rather than at
+  // the auth problem that actually happened.
+  if (!Array.isArray(rows)) {
+    throw new Error(`could not read existing entries (${res.status()}): ${JSON.stringify(rows).slice(0, 160)}`);
+  }
+
+  const today = new Date();
+  const todayKey = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, "0")}-${String(today.getDate()).padStart(2, "0")}`;
+  const minutes = (hhmm: string) => {
+    const [h, m] = hhmm.split(":").map(Number);
+    return h * 60 + m;
+  };
+  const busy = rows
+    .filter((r) => String(r.workDate).slice(0, 10) === todayKey)
+    .map((r) => [minutes(r.startTime), minutes(r.endTime)] as const);
+
+  // Walk the working day looking for a clear hour. Late hours first would be equally valid; early
+  // ones keep the fixture where a reader expects to find it.
+  for (let hour = 6; hour <= 22; hour += 1) {
+    const start = hour * 60;
+    const end = start + 60;
+    if (!busy.some(([bs, be]) => start < be && end > bs)) {
+      return { start: `${String(hour).padStart(2, "0")}:00`, end: `${String(hour + 1).padStart(2, "0")}:00` };
+    }
+  }
+  throw new Error("every hour today is already booked for this user — cannot place the fixture");
+}
+
+/**
+ * Signs in per test instead of replaying `.auth/employee.json`.
+ *
+ * The snapshot holds ONE refresh cookie, and every use rotates it. That was survivable while this
+ * spec ran in a single project; running it across chromium, firefox and webkit means three
+ * separate contexts each presenting the same already-rotated cookie, and every project after the
+ * first gets a 401 when it tries to mint a token. Signing in is free against the rate limiter —
+ * successful logins are skipped by it — and makes each project independent.
+ */
+test.use({ storageState: { cookies: [], origins: [] } });
+
+async function signInAsEmployee(page: import("@playwright/test").Page) {
+  await page.goto("/login");
+  await page.getByLabel("Email", { exact: true }).fill(ACTOR);
+  await page.getByLabel("Password", { exact: true }).fill("Admin@12345");
+  await page.getByRole("button", { name: /sign in/i }).click();
+  await expect(page).toHaveURL(/\/app/, { timeout: 15_000 });
+}
 
 let faceGate: FaceGateSnapshot;
 test.beforeAll(async () => {
@@ -49,6 +114,24 @@ test.describe("Timesheet", () => {
       }
     });
 
+    await signInAsEmployee(page);
+
+    // ONE refresh for the whole test, taken BEFORE navigating.
+    //
+    // Both halves matter. Before, because refresh tokens rotate on use and the app's own bootstrap
+    // spends one on first paint — a request issued after `goto` races the page for the same
+    // single-use cookie and loses. And once, because a second refresh later in the same test
+    // presents a cookie the first one already rotated away: it comes back 401, and the JSON body
+    // is an error object rather than the array the caller expects, which surfaces as a baffling
+    // "rows.filter is not a function" far from the actual cause.
+    const refreshed = await page.request.post("/api/auth/refresh");
+    expect(refreshed.ok(), "could not mint an access token for this test").toBe(true);
+    const { accessToken } = await refreshed.json();
+    const headers = { Authorization: `Bearer ${accessToken}` };
+
+    const me = await (await page.request.get("/api/auth/me", { headers })).json();
+    const slot = await findFreeHour(page.request, headers, me.id);
+
     await page.goto("/app/timesheet");
     await page.getByLabel("Project", { exact: true }).click();
     await page.getByRole("option").first().click();
@@ -56,16 +139,11 @@ test.describe("Timesheet", () => {
     await page.getByRole("option").first().click();
     await page.getByLabel("Activity", { exact: true }).click();
     await page.getByRole("option").first().click();
-    await page.getByLabel("Start", { exact: true }).fill("09:00");
-    await page.getByLabel("End", { exact: true }).fill("10:00");
+    await page.getByLabel("Start", { exact: true }).fill(slot.start);
+    await page.getByLabel("End", { exact: true }).fill(slot.end);
     await page.getByLabel("Task description", { exact: true }).fill(marker);
     await page.getByRole("button", { name: /save draft/i }).click();
 
-    // The token lives in page memory only (not localStorage) since the session-hardening pass, so
-    // `page.request` — which shares the browser context's httpOnly refresh cookie — mints a fresh
-    // one rather than trying to read it out of storage.
-    const { accessToken } = await (await page.request.post("/api/auth/refresh")).json();
-    const headers = { Authorization: `Bearer ${accessToken}` };
 
     // The real assertion: the row exists server-side. Polled because the save is a mutation whose
     // list invalidation lands a beat later — but polling for a row that never appears still fails,

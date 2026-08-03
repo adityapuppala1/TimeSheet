@@ -18,6 +18,7 @@ import { Skeleton } from "../../components/ui/skeleton";
 import { Switch } from "../../components/ui/switch";
 import { toast } from "../../components/ui/toaster";
 import { SERVER_ORIGIN, settingsApi } from "../../services/api";
+import { copyText } from "../../lib/clipboard";
 
 function CopyableUrl({ label, url }: { label: string; url: string }) {
   const [copied, setCopied] = useState(false);
@@ -30,7 +31,7 @@ function CopyableUrl({ label, url }: { label: string; url: string }) {
           size="sm"
           variant="ghost"
           onClick={() => {
-            navigator.clipboard.writeText(url).then(() => {
+            copyText(url).then(() => {
               setCopied(true);
               setTimeout(() => setCopied(false), 1500);
             });
@@ -124,7 +125,7 @@ export function IntegrationsSettingsCard({ readOnly }: { readOnly: boolean }) {
                         size="sm"
                         variant="ghost"
                         onClick={() => {
-                          navigator.clipboard.writeText(revealedToken);
+                          void copyText(revealedToken);
                           toast.success("Copied");
                         }}
                       >

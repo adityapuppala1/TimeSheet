@@ -32,6 +32,7 @@ import { Skeleton } from "./ui/skeleton";
 import { Switch } from "./ui/switch";
 import { Textarea } from "./ui/textarea";
 import { toast } from "./ui/toaster";
+import { copyText } from "../lib/clipboard";
 
 const serverMessage = (err: any, fallback: string) => err?.response?.data?.message ?? fallback;
 
@@ -90,7 +91,7 @@ export function TicketApprovalsPanel({ ticketId }: { ticketId: string }) {
   const reissue = useMutation({
     mutationFn: (stepId: string) => approvalApi.resendGuestLink(stepId),
     onSuccess: (result) => {
-      navigator.clipboard?.writeText(result.url);
+      void copyText(result.url);
       toast.success("New link copied", { description: "The previous link stopped working just now." });
       queryClient.invalidateQueries({ queryKey: ["approvals", ticketId] });
     },

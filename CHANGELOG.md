@@ -7,6 +7,81 @@ user of a running installation.
 
 ## Unreleased
 
+### 👥 User management — find people, and act on more than one at a time
+
+- **Filter by role, job title, status and who's online**, and search across name, email, job title
+  *and* role name — people think in "find the managers", not "set the role dropdown".
+- **Real pagination.** The list previously fetched the first 50 users and filtered them in the
+  browser, so in an org with more than fifty people the search box was searching a page rather
+  than the company, and quietly found nobody.
+- **Bulk actions** — deactivate, reactivate, reset password, resend welcome, sign out everywhere,
+  delete. Tick a page, or choose "select all N matching this filter", which are kept as separate
+  deliberate choices: blurring them is how somebody deactivates a department believing they
+  deactivated a screenful.
+- **Refusals are per person, not per batch.** Acting on a super admin without being one, or on
+  your own account, skips that row and says why instead of failing everything half-applied.
+  Deactivating also ends the person's sessions — otherwise they keep working until their token
+  expires, which is not what the word means to whoever clicked it.
+- Deleting or deactivating asks you to type the number affected. "3" and "30" look alike in a
+  toolbar and neither can be undone from that screen.
+- **Fixed:** every assignee, manager and approver dropdown in the product silently omitted most
+  people in orgs with more than fifty users.
+
+### 📊 AI settings — where the tokens actually go
+
+- A new **per-feature breakdown**: input, output and total tokens, calls, average per call, share
+  of the total, and which models each feature used — as a cumulative chart, a day-by-day stacked
+  chart, and a sortable, filterable table.
+- Reported in **tokens first, cost second**. The cost figure is an estimate from a price table; it
+  moves when a provider changes prices and it is simply wrong for anyone using their own key with
+  negotiated rates. Tokens are what was actually consumed, and what a prompt change actually moves.
+- Days with no activity are shown as zero rather than skipped, so a quiet week looks quiet instead
+  of looking like a gap in the data.
+
+### 🚦 Maintenance — a status page with a memory
+
+- **Every feature is probed every five minutes** — sign-in, timesheets, tickets, reports, files,
+  email, AI, face verification, planning, integrations, and the databases underneath them — with a
+  day-by-day history strip, uptime percentages and an incident log, in the shape of the public
+  status pages people already know how to read.
+- This answers the question the existing Server health panel structurally could not: **"was it
+  down on Tuesday, when I couldn't submit my timesheet?"** CPU and memory graphs describe this
+  instant; a server at 12% CPU is perfectly healthy right up until nobody can submit anything.
+- **A day is coloured by its worst check, not its average** — averaging is how a two-hour outage
+  becomes a 96%-green day and disappears, and finding the bad hour is the whole point.
+- **Days with no data are grey, never green.** A page that reports "we weren't monitoring" as
+  "nothing was wrong" will confidently deny an outage that happened, so "All systems operational"
+  isn't claimed until something has actually been measured.
+- Incidents are recorded rather than recomputed, so they outlive the raw samples they came from —
+  that record is exactly what somebody comes back to months later.
+
+### 🐛 Fixed — settings that appeared not to save, and Copy buttons that lied
+
+- **Settings forms no longer discard what you typed.** Three cards (face verification, mail
+  server, AI prompts) re-seeded their inputs from the server every time the underlying query
+  refetched — which happens after any save on the same card, and on window focus. So typing a new
+  match threshold and then flipping an unrelated switch silently reverted the box, and pressing
+  Save then re-saved the **old** value and reported success. The setting looked like it would not
+  persist; what actually happened is that it was never sent.
+- **Copy buttons now work over plain HTTP, and tell the truth when they cannot.**
+  `navigator.clipboard` only exists in a secure context, so on an on-prem LAN address or a phone
+  four of them threw outright and the rest silently copied nothing while showing "Copied!". There
+  is now a single helper with a legacy fallback that works on insecure origins and older Safari.
+- **The camera's HTTPS message now names the address you are on** and points at the deployment
+  guide, instead of telling an admin to "enable HTTPS" with no indication that the URL was the
+  problem.
+- **Tenant databases that had fallen behind** are migrated by `migrate:tenants`; one org in this
+  workspace was still on the last V5 migration, which made every per-org background job log an
+  error for it.
+
+### 🌐 Browser and OS support, verified
+
+Chrome, Edge, Opera, Brave (Chromium), Firefox (Gecko) and Safari (WebKit) are now covered by
+actual test runs rather than an assumption — including iOS, where every browser is WebKit whatever
+its icon says. The server runs in Docker, so macOS, Windows and Ubuntu differ only in which
+installer script starts it. See "Browser and OS support" in the deployment guide, including the
+things that genuinely need HTTPS and what degrades gracefully without it.
+
 ### 🔍 Face verification — three measured causes of it not working, fixed
 
 The feature was failing far more than it was passing. The attempt log said why, and it was not

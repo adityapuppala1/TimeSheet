@@ -6,7 +6,7 @@
  * button), numeric/text groups keep local state behind an explicit Save, non-super-admins see
  * the card read-only rather than not at all.
  */
-import { useEffect, useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   AlertTriangle,
@@ -30,7 +30,14 @@ import {
   Wifi
 } from "lucide-react";
 import { toast } from "sonner";
-import { faceApi, settingsApi, type FaceAttemptRow, type FaceReviewAiSummary, type FaceThresholdRecommendation } from "../../services/api";
+import {
+  faceApi,
+  settingsApi,
+  type FaceAttemptRow,
+  type FaceReviewAiSummary,
+  type FaceThresholdRecommendation,
+  type FaceVerificationSettings
+} from "../../services/api";
 import { Button } from "../../components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../../components/ui/card";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "../../components/ui/dialog";
@@ -54,15 +61,35 @@ const OUTCOME_TONE: Record<string, string> = {
   ERROR: "bg-muted text-muted-foreground"
 };
 
+/** The fields the calibration form owns. Used to decide whether a save should re-seed those
+ *  inputs — a toggle save must never clobber a number somebody is midway through typing. */
+const TUNING_KEYS = [
+  "matchThreshold",
+  "antispoofThreshold",
+  "livenessThreshold",
+  "maxAttempts",
+  "verificationTtlSeconds",
+  "imageRetentionDays"
+] as const;
+
 export function FaceVerificationSettingsCard({ readOnly = false }: { readOnly?: boolean }) {
   const queryClient = useQueryClient();
   const settings = useQuery({ queryKey: ["settings", "face-verification"], queryFn: settingsApi.getFaceVerification });
 
   const update = useMutation({
     mutationFn: settingsApi.updateFaceVerification,
-    onSuccess: () => {
+    onSuccess: (updated, variables) => {
       toast.success("Saved");
       queryClient.invalidateQueries({ queryKey: ["settings", "face-verification"] });
+
+      // Re-seed the text inputs from the SERVER's answer, but only for the section that was
+      // actually saved. The server clamps values (a threshold typed as 5 comes back as 0.99), so
+      // showing what it stored rather than what was typed is the honest thing — and scoping it to
+      // the saved section is what stops a toggle save from wiping a half-typed number in the box
+      // next to it.
+      const vars = (variables ?? {}) as Record<string, unknown>;
+      if (TUNING_KEYS.some((key) => key in vars)) seedTuning(updated);
+      if ("consentText" in vars) setConsentText(updated.consentText ?? "");
     },
     onError: (err: { response?: { data?: { message?: string } } }) =>
       toast.error("Could not save", { description: err?.response?.data?.message ?? "Try again." })
@@ -78,9 +105,7 @@ export function FaceVerificationSettingsCard({ readOnly = false }: { readOnly?: 
   });
   const [consentText, setConsentText] = useState("");
 
-  useEffect(() => {
-    const s = settings.data;
-    if (!s) return;
+  function seedTuning(s: FaceVerificationSettings) {
     setTuning({
       matchThreshold: String(s.matchThreshold),
       antispoofThreshold: String(s.antispoofThreshold),
@@ -89,6 +114,31 @@ export function FaceVerificationSettingsCard({ readOnly = false }: { readOnly?: 
       verificationTtlSeconds: String(s.verificationTtlSeconds),
       imageRetentionDays: String(s.imageRetentionDays)
     });
+  }
+
+  /**
+   * Seed the free-text fields from the server ONCE, on first load.
+   *
+   * THIS USED TO RUN ON EVERY CHANGE TO `settings.data`, AND IT SILENTLY DISCARDED EDITS. Any
+   * toggle on this card saves and then invalidates this query; the refetch produced a new object,
+   * the effect fired, and every number the admin had typed but not yet saved was reset to the
+   * stored value. React Query also refetches on window focus by default, so merely switching tabs
+   * and coming back wiped in-progress typing.
+   *
+   * The failure was worse than losing keystrokes. The "Save calibration" button sends whatever is
+   * in this state — so the sequence "type a new threshold, flip an unrelated switch, press Save"
+   * silently re-saved the OLD value and reported success. The setting appeared not to persist,
+   * and the thing that had actually happened was that it was never sent.
+   *
+   * Now: seeded once here, and re-seeded in the mutation's onSuccess for the specific section that
+   * was saved. A background refetch can no longer touch what somebody is typing.
+   */
+  const hydrated = useRef(false);
+  useEffect(() => {
+    const s = settings.data;
+    if (!s || hydrated.current) return;
+    hydrated.current = true;
+    seedTuning(s);
     setConsentText(s.consentText ?? "");
   }, [settings.data]);
 

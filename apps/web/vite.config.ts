@@ -35,6 +35,18 @@ export default defineConfig(({ mode }) => {
     }
   }
 
+  // Read once, outside the returned config, so a missing pair is a silent no-op rather than a
+  // crash on every request.
+  const keyPath = env.DEV_HTTPS_KEY ?? resolve(__dirname, "certs/dev-key.pem");
+  const certPath = env.DEV_HTTPS_CERT ?? resolve(__dirname, "certs/dev-cert.pem");
+  let devHttps: { key: Buffer; cert: Buffer } | undefined;
+  try {
+    devHttps = { key: readFileSync(keyPath), cert: readFileSync(certPath) };
+    console.log(`[vite] HTTPS enabled using ${certPath}`);
+  } catch {
+    /* No certs, no HTTPS — the documented default. */
+  }
+
   return {
     plugins: [react()],
     define: {
@@ -44,6 +56,23 @@ export default defineConfig(({ mode }) => {
       host: true,
       port: 5173,
       strictPort: false,
+      /**
+       * Optional HTTPS for the dev server, enabled by dropping a key/cert pair at
+       * `apps/web/certs/` (or pointing DEV_HTTPS_KEY / DEV_HTTPS_CERT elsewhere).
+       *
+       * WHY THIS IS WORTH HAVING: the camera and every Copy button need a **secure context**.
+       * Browsers exempt `localhost`, so on a laptop everything works over plain HTTP and the
+       * problem is invisible — but a phone opening `http://<lan-ip>:5173` gets no camera at all,
+       * and no amount of application code can change that. Testing the face flow on a real phone
+       * therefore requires HTTPS even in development.
+       *
+       *   mkcert -install
+       *   mkcert -key-file apps/web/certs/dev-key.pem -cert-file apps/web/certs/dev-cert.pem        *          localhost 192.168.1.20        # ...and whatever address the phone will use
+       *
+       * Absent the files this is simply undefined and the server stays on HTTP, so nobody who
+       * does not need it has to care. See docs/DEPLOYMENT.md, "Serving over HTTPS".
+       */
+      https: devHttps,
       proxy: {
         "/api": {
           target: apiTarget,

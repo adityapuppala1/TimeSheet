@@ -11,7 +11,7 @@
  */
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { AlertCircle, Loader2, Mail, PlugZap, Save, ServerCog } from "lucide-react";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Alert, AlertDescription, AlertTitle } from "../../components/ui/alert";
 import { Badge } from "../../components/ui/badge";
 import { Button } from "../../components/ui/button";
@@ -38,17 +38,33 @@ export function MailServerSettingsCard({ readOnly }: { readOnly: boolean }) {
   const status = useQuery({ queryKey: ["settings", "mail", "transport-status"], queryFn: settingsApi.getMailTransportStatus, refetchInterval: 30_000 });
 
   const [draft, setDraft] = useState<Draft | null>(null);
+
+  /**
+   * Seed the form ONCE, on first load.
+   *
+   * This previously re-seeded on every change to `settings.data`, which meant every unsaved edit
+   * was discarded by any background refetch — and React Query refetches on window focus by
+   * default. Configuring SMTP is precisely the task where that hurts: the host, port and username
+   * are being copied from the mail provider's own settings page in another window, so switching
+   * tabs to fetch the next value silently wiped the previous one.
+   *
+   * Re-seeding after a successful save is handled in the mutation, where the server's stored
+   * values are the right thing to show.
+   */
+  const hydrated = useRef(false);
   useEffect(() => {
-    if (settings.data) {
-      setDraft({
-        host: settings.data.host ?? "",
-        port: settings.data.port,
-        secure: settings.data.secure,
-        user: settings.data.user ?? "",
-        password: "",
-        fromAddress: settings.data.fromAddress ?? ""
-      });
-    }
+    if (!settings.data || hydrated.current) return;
+    hydrated.current = true;
+    setDraft({
+      host: settings.data.host ?? "",
+      port: settings.data.port,
+      secure: settings.data.secure,
+      user: settings.data.user ?? "",
+      // Never seeded from the server — the API does not return it, and pre-filling a password box
+      // with anything invites saving a placeholder over a working credential.
+      password: "",
+      fromAddress: settings.data.fromAddress ?? ""
+    });
   }, [settings.data]);
 
   const save = useMutation({

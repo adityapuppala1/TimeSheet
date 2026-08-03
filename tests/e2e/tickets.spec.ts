@@ -1,8 +1,14 @@
 import { test, expect } from "@playwright/test";
 import { deleteTicket } from "./helpers/admin-request";
 import { suspendFaceGate, type FaceGateSnapshot } from "./helpers/face-gate";
+import { signIn } from "./helpers/sign-in";
 
-test.use({ storageState: "tests/e2e/.auth/manager.json" });
+/**
+ * Signs in per test rather than replaying a stored snapshot. A snapshot holds one rotating refresh
+ * cookie, so it survives about one session's use — which broke the moment this spec started
+ * running in three browser projects. See helpers/sign-in.ts.
+ */
+test.use({ storageState: { cookies: [], origins: [] } });
 
 // Creating a ticket and moving its status are both face-gated when the workspace enables
 // verification — through the UI that means a camera dialog a headless browser can't satisfy.
@@ -17,6 +23,7 @@ test.afterAll(async () => {
 
 test.describe("Tickets", () => {
   test("creates a ticket, changes its status, and adds a checklist item", async ({ page }) => {
+    await signIn(page, "manager");
     await page.goto("/app/tickets");
     await page.getByRole("button", { name: /new ticket/i }).click();
 
