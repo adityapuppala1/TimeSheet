@@ -76,6 +76,26 @@ admin turns it on** — every capability ships off by default.
   median so one runaway task doesn't distort the picture. Turns the hours you already collect
   into better estimates next time.
 
+### ✨ Phase 4 — intake & approvals
+
+- **Request forms** — build an intake form with conditional questions ("only ask for steps to
+  reproduce if they said it's a bug"), then publish it to a link that works for anyone, with no
+  account. Every submission becomes a ticket immediately and lands in a review inbox, so nothing
+  sits in a queue waiting to be noticed.
+- **Publishing is its own decision.** Creating a form doesn't expose it; withdrawing a link kills
+  that URL permanently rather than hiding it behind a flag.
+- **Blueprints** — save a project's shape and stamp it out again against any start date. Dates
+  are stored as offsets, so a blueprint stays reusable instead of being a copy of last quarter.
+  Preview exactly what will be created before it's created, or learn a blueprint from a project
+  that already ran.
+- **Approval chains on work items** — ask colleagues, people outside the company, or both, in
+  order or all at once. External reviewers get a single-use link that needs no account and shows
+  them only what they're reviewing. One rejection settles the request and stops asking everyone
+  else; the remaining links stop working immediately.
+- **Proofing** — drop a pin on an attached image or PDF and comment on that exact spot. Comments
+  stay anchored at any zoom or screen size, and resolving one keeps it as a record rather than
+  deleting the reason a change was made.
+
 ### 🔧 Under the hood
 
 - New permissions (`portfolios:manage`, `plan:write`, `resources:manage`, `approvals:manage`,
@@ -95,6 +115,9 @@ admin turns it on** — every capability ships off by default.
 - Burn, forecast and estimate variance are computed in one place and read by both the portfolio
   roll-up and the project panel, so a total can never disagree with the rows under it — and the
   figure matches a Verified Work Attestation because both read the same rate snapshots.
+- Three new unauthenticated endpoints follow the posture the attestation viewer established:
+  unguessable tokens, no enumerable ids, and an identical generic 404 for a bad, revoked or
+  already-used link — so probing one can't confirm it was ever real.
 - The end-to-end suite's face-verification helper now reference-counts across worker processes.
   Two parallel workers used to suspend the gate and the first to finish restored it mid-run,
   producing an intermittent failure that always pointed at the wrong thing.

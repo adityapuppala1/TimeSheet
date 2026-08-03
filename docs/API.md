@@ -343,6 +343,47 @@ entitlement, except the budget panel which needs only `reports:view`.
   look like it beats its estimates. The headline figure is the **median**, because one task that
   took 12× its estimate drags a mean into uselessness.
 
+### Intake, blueprints, approvals & proofing (V6 phase 4)
+
+- `GET|POST|PUT|DELETE /request-forms[/:id]` — `forms:configure`. Deleting a form that has
+  submissions **deactivates** it instead and returns `{ deleted: false }`; cascading the
+  submissions away would destroy the record of what people asked for.
+- `POST /request-forms/:id/publish` `{ publish }` — minting the public link is a **separate,
+  deliberate step** from creating the form. Withdrawing CLEARS the token rather than setting a
+  flag, so a revoked URL can never be resurrected; re-publishing mints a new one.
+- `GET /request-forms/submissions`, `POST /request-forms/submissions/:id/accept|reject` —
+  accepting clears the review flag; rejecting soft-deletes the ticket the submission created.
+  There is no "create from submission" endpoint: a submission becomes a ticket at submit time,
+  because holding real requests in a queue nobody watches is how intake systems lose work.
+- `GET|POST /shared/request-forms/:token` — **unauthenticated**. See ARCHITECTURE §3.9 for the
+  full posture. `POST /shared/request-forms/:token/visible` evaluates the conditional rules live,
+  so a long form does not have to reimplement the rule engine to stay in step with what the
+  server will accept.
+
+- `GET|POST|PUT|DELETE /blueprints[/:id]` — `plan:write` to write.
+- `POST /blueprints/:id/preview` `{ startDate }` — what instantiating WOULD create, from the same
+  pure expander, writing nothing. Offsets are counted in **working** days.
+- `POST /blueprints/:id/instantiate` `{ projectId, startDate, titlePrefix? }` — one transaction.
+  A half-instantiated 40-item structure is worse than a clean failure, because there is no
+  obvious way to tell what is missing or to safely retry.
+- `POST /blueprints/derive` `{ projectId, name }` — learn a blueprint from a project that already
+  ran. Offsets are measured from the earliest dated item, not the planned start, so a past
+  overrun is not baked into every future instantiation.
+
+- `GET /approvals/ticket/:ticketId`, `POST /approvals`, `DELETE /approvals/:id` —
+  `approvals:manage` to create. Each step names **exactly one** approver, internal or guest,
+  never both and never neither. Guest tokens are never returned to the panel.
+- `POST /approvals/steps/:stepId/decide` — the decision belongs to the named approver and nobody
+  else, not an admin and not the requester. Out-of-turn is **409**, already-decided is **409**.
+- `POST /approvals/steps/:stepId/resend` — mints a fresh guest link and kills the previous one.
+- `GET|POST /shared/approvals/:token` — **unauthenticated**, single-use, one decision on one step.
+
+- `GET|POST /proofs/attachment/:attachmentId`, `PATCH /proofs/:id/resolve`, `DELETE /proofs/:id` —
+  coordinates are normalised 0-1 so a pin lands on the same spot at any render size. Resolving is
+  a toggle, not a delete: a resolved note is the record of a review round. Only the author (or a
+  ticket manager) may delete — someone removing another reviewer's objection is exactly what a
+  review record must not allow.
+
 ## Verified work attestations
 
 A client-facing record that approved hours map to real tickets, done by identity-verified people,

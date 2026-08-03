@@ -16,6 +16,7 @@ import {
   FolderKanban,
   GanttChartSquare,
   Gauge,
+  Inbox,
   LayoutDashboard,
   ListTodo,
   Mail,
@@ -83,6 +84,7 @@ export const nav: NavItem[] = [
   { to: "/app/timesheet", label: "Log timesheet", icon: CalendarDays, permission: permissions.TIMESHEETS_WRITE, section: "Work" },
   { to: "/app/tickets", label: "Tickets", icon: Ticket, permission: permissions.TICKETS_VIEW, section: "Work" },
   { to: "/app/history", label: "History", icon: FileClock, section: "Work" },
+  { to: "/app/requests", label: "Requests", icon: Inbox, permission: permissions.TICKETS_VIEW, section: "Work", feature: "requestForms" },
 
   // Planning layer (V6). "My work" is deliberately FIRST and deliberately ungated: it is a
   // personal queue that reads dates every workspace already has, so it is useful before anything

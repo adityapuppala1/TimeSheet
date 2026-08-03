@@ -45,7 +45,12 @@ import { notificationRouter } from "./controllers/notification.controller.js";
 import { planRouter } from "./controllers/plan.controller.js";
 import { planningRouter } from "./controllers/planning.controller.js";
 import { platformAdminRouter } from "./controllers/platform-admin.controller.js";
+import { approvalPublicRouter, approvalRouter } from "./controllers/approval.controller.js";
+import { blueprintRouter } from "./controllers/blueprint.controller.js";
 import { portfolioRouter } from "./controllers/portfolio.controller.js";
+import { proofRouter } from "./controllers/proof.controller.js";
+import { requestFormPublicRouter } from "./controllers/request-form-public.controller.js";
+import { requestFormRouter } from "./controllers/request-form.controller.js";
 import { resourceRouter } from "./controllers/resource.controller.js";
 import { projectRouter } from "./controllers/project.controller.js";
 import { reportRouter } from "./controllers/report.controller.js";
@@ -306,11 +311,23 @@ app.use("/api/planning", planningRouter);
 app.use("/api/plan", planRouter);
 app.use("/api/portfolios", portfolioRouter);
 app.use("/api/resources", resourceRouter);
+app.use("/api/request-forms", requestFormRouter);
+app.use("/api/blueprints", blueprintRouter);
+app.use("/api/approvals", approvalRouter);
+app.use("/api/proofs", proofRouter);
 app.use("/api/reports", reportRouter);
 app.use("/api/attestations", attestationRouter);
 // Unauthenticated attestation share links. Its own tighter limiter (30/min) because this is
 // the only public read surface in the app — see the controller header for the full posture.
 app.use("/api/shared/attestations", rateLimit({ windowMs: 60_000, limit: 30, standardHeaders: true }), attestationPublicRouter);
+// Unauthenticated request-form intake — the only endpoint in the app that lets a stranger WRITE.
+// 20/min per IP is the coarse backstop; the real control is the per-FORM hourly cap the form's
+// own author sets (see request-form-public.controller.ts), because per-IP alone is useless
+// against a distributed flood and punishes a genuine office behind one NAT.
+app.use("/api/shared/request-forms", rateLimit({ windowMs: 60_000, limit: 20, standardHeaders: true }), requestFormPublicRouter);
+// Unauthenticated guest approvals. Tighter still: a reviewer loads one page and clicks once, so
+// anything beyond a handful a minute from one address is not a person reviewing a deliverable.
+app.use("/api/shared/approvals", rateLimit({ windowMs: 60_000, limit: 15, standardHeaders: true }), approvalPublicRouter);
 app.use("/api/notifications", notificationRouter);
 app.use("/api/audit", auditRouter);
 app.use("/api/team", teamRouter);

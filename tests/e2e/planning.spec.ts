@@ -381,6 +381,207 @@ test.describe("planning layer", () => {
     await expect(page.getByRole("button", { name: /book time/i })).toBeVisible();
   });
 
+  test("a request form is not public until it is explicitly published", async ({ page }) => {
+    await signIn(page);
+    const { config, token } = await planningConfig(page);
+    test.skip(!config.effective.requestForms, "request forms are off in this workspace");
+
+    const headers = { Authorization: `Bearer ${token}` };
+    const projects = await (await page.request.get("/api/projects", { headers })).json();
+    const slug = `e2e-${Date.now()}`;
+
+    const created = await page.request.post("/api/request-forms", {
+      headers,
+      data: {
+        name: "E2E intake", slug, projectId: projects[0].id, ticketType: "TASK",
+        schema: { fields: [
+          { key: "summary", label: "Summary", type: "TEXT", required: true, mapsTo: "title" },
+          { key: "kind", label: "Kind", type: "SELECT", options: ["Bug", "Feature"], required: true },
+          { key: "steps", label: "Steps", type: "TEXTAREA", required: true, showWhen: [{ field: "kind", operator: "equals", value: "Bug" }] }
+        ] }
+      }
+    });
+    expect(created.status()).toBe(201);
+    const form = await created.json();
+    // Creating a form and exposing it to the open internet are different decisions.
+    expect(form.isPublic).toBe(false);
+
+    // A bogus token must be indistinguishable from an unpublished one.
+    const bogus = await page.request.get(`/api/shared/request-forms/${"a".repeat(40)}`);
+    expect(bogus.status()).toBe(404);
+
+    const published = await (await page.request.post(`/api/request-forms/${form.id}/publish`, { headers, data: { publish: true } })).json();
+    const publicToken = published.publicToken;
+    expect(publicToken?.length).toBeGreaterThan(30);
+
+    // What a stranger receives: the questions, and nothing about how the workspace is wired.
+    const view = await (await page.request.get(`/api/shared/request-forms/${publicToken}`)).json();
+    expect(view.fields).toHaveLength(3);
+    for (const leak of ["projectId", "defaultAssigneeId", "blueprintId", "moduleId"]) {
+      expect(view, `public payload must not expose ${leak}`).not.toHaveProperty(leak);
+    }
+
+    await page.request.delete(`/api/request-forms/${form.id}`, { headers });
+  });
+
+  test("a hidden conditional question is neither required nor accepted", async ({ page }) => {
+    await signIn(page);
+    const { config, token } = await planningConfig(page);
+    test.skip(!config.effective.requestForms, "request forms are off in this workspace");
+
+    const headers = { Authorization: `Bearer ${token}` };
+    const projects = await (await page.request.get("/api/projects", { headers })).json();
+    const slug = `e2e-cond-${Date.now()}`;
+    const form = await (await page.request.post("/api/request-forms", { headers, data: {
+      name: "E2E conditional", slug, projectId: projects[0].id, ticketType: "TASK",
+      schema: { fields: [
+        { key: "summary", label: "Summary", type: "TEXT", required: true, mapsTo: "title" },
+        { key: "kind", label: "Kind", type: "SELECT", options: ["Bug", "Feature"], required: true },
+        { key: "steps", label: "Steps", type: "TEXTAREA", required: true, showWhen: [{ field: "kind", operator: "equals", value: "Bug" }] }
+      ] }
+    } })).json();
+    const { publicToken } = await (await page.request.post(`/api/request-forms/${form.id}/publish`, { headers, data: { publish: true } })).json();
+
+    // Not shown, so not enforced — an honest submitter must not be blocked by a question they
+    // were routed away from and cannot see.
+    const ok = await page.request.post(`/api/shared/request-forms/${publicToken}`, {
+      data: { answers: { summary: "Dark mode please", kind: "Feature" } }
+    });
+    expect(ok.status()).toBe(201);
+
+    // Shown, so enforced.
+    const missing = await page.request.post(`/api/shared/request-forms/${publicToken}`, {
+      data: { answers: { summary: "It crashes", kind: "Bug" } }
+    });
+    expect(missing.status()).toBe(400);
+
+    // Smuggled past a branch they never triggered: dropped, not stored.
+    const smuggled = await (await page.request.post(`/api/shared/request-forms/${publicToken}`, {
+      data: { answers: { summary: "Smuggle", kind: "Feature", steps: "SHOULD_NOT_PERSIST" } }
+    })).json();
+    const inbox = await (await page.request.get("/api/request-forms/submissions", { headers })).json();
+    const row = inbox.find((s: any) => s.ticket?.key === smuggled.reference);
+    expect(row.answers).not.toHaveProperty("steps");
+    // And it never routes itself past a human.
+    expect(row.needsReview).toBe(true);
+
+    await page.request.delete(`/api/request-forms/${form.id}`, { headers });
+  });
+
+  test("an approval chain runs in order, and one rejection settles it", async ({ page }) => {
+    await signIn(page);
+    const { config, token } = await planningConfig(page);
+    test.skip(!config.effective.approvals, "approvals are off in this workspace");
+
+    const headers = { Authorization: `Bearer ${token}` };
+    const projects = await (await page.request.get("/api/projects", { headers })).json();
+    const created = await page.request.post("/api/tickets", {
+      headers, data: { projectId: projects[0].id, title: "Approval chain probe", type: "TASK", priority: "LOW" }
+    });
+    expect(created.status(), `ticket fixture should be created: ${await created.text()}`).toBe(201);
+    const ticket = await created.json();
+
+    const chain = await (await page.request.post("/api/approvals", { headers, data: {
+      ticketId: ticket.id, title: "Sign off", isSequential: true,
+      steps: [{ guestEmail: "first@example.com", order: 0 }, { guestEmail: "second@example.com", order: 1 }]
+    } })).json();
+    // The panel must never hand a manager a capability to decide as someone else.
+    expect(chain.steps.every((s: any) => !("guestToken" in s))).toBe(true);
+
+    const link1 = await (await page.request.post(`/api/approvals/steps/${chain.steps[0].id}/resend`, { headers })).json();
+    const link2 = await (await page.request.post(`/api/approvals/steps/${chain.steps[1].id}/resend`, { headers })).json();
+    const gt1 = String(link1.url).split("/").pop();
+    const gt2 = String(link2.url).split("/").pop();
+
+    // Out of turn.
+    const early = await page.request.post(`/api/shared/approvals/${gt2}`, { data: { decision: "APPROVED" } });
+    expect(early.status()).toBe(409);
+
+    // What a guest can see — the thing under review, and nothing else.
+    const guestView = await (await page.request.get(`/api/shared/approvals/${gt1}`)).json();
+    expect(guestView.item.reference).toBe(ticket.key);
+    expect(guestView).not.toHaveProperty("steps");
+    expect(guestView.item).not.toHaveProperty("assignee");
+
+    expect((await page.request.post(`/api/shared/approvals/${gt1}`, { data: { decision: "APPROVED" } })).status()).toBe(200);
+    // Single-use by construction: the spent link is now indistinguishable from a bogus one.
+    expect((await page.request.post(`/api/shared/approvals/${gt1}`, { data: { decision: "APPROVED" } })).status()).toBe(404);
+
+    expect((await page.request.post(`/api/shared/approvals/${gt2}`, { data: { decision: "REJECTED" } })).status()).toBe(200);
+    const after = await (await page.request.get(`/api/approvals/ticket/${ticket.id}`, { headers })).json();
+    expect(after[0].status).toBe("REJECTED");
+    expect(after[0].completedAt).toBeTruthy();
+
+    await page.request.delete(`/api/tickets/${ticket.id}`, { headers });
+  });
+
+  test("a blueprint expands to real dates and real dependencies", async ({ page }) => {
+    await signIn(page);
+    const { config, token } = await planningConfig(page);
+    test.skip(!config.effective.planning, "planning is off in this workspace");
+
+    const headers = { Authorization: `Bearer ${token}` };
+    const projects = await (await page.request.get("/api/projects", { headers })).json();
+    const bp = await (await page.request.post("/api/blueprints", { headers, data: {
+      name: `E2E blueprint ${Date.now()}`,
+      payload: { items: [
+        { title: "E2E Kickoff", isMilestone: true, offsetStartDays: 0 },
+        { title: "E2E Design", offsetStartDays: 0, durationDays: 5 },
+        { title: "E2E Build", offsetStartDays: 5, durationDays: 10, dependsOn: [1] }
+      ] }
+    } })).json();
+
+    // 2026-09-07 is a Monday.
+    const preview = await (await page.request.post(`/api/blueprints/${bp.id}/preview`, { headers, data: { startDate: "2026-09-07" } })).json();
+    const byTitle = new Map(preview.items.map((i: any) => [i.title, i]));
+    expect((byTitle.get("E2E Kickoff") as any).endDate).toBe("2026-09-07"); // a milestone has no span
+    expect((byTitle.get("E2E Design") as any).endDate).toBe("2026-09-11"); // Mon-Fri inclusive is 5
+    expect((byTitle.get("E2E Build") as any).startDate).toBe("2026-09-14"); // offset 5 skips the weekend
+
+    const inst = await (await page.request.post(`/api/blueprints/${bp.id}/instantiate`, {
+      headers, data: { projectId: projects[0].id, startDate: "2026-09-07" }
+    })).json();
+    expect(inst.count).toBe(3);
+
+    const timeline = await (await page.request.get(`/api/plan/timeline?projectIds=${projects[0].id}`, { headers })).json();
+    const build = timeline.items.find((i: any) => i.title === "E2E Build");
+    const design = timeline.items.find((i: any) => i.title === "E2E Design");
+    expect(build?.startDate).toBe("2026-09-14");
+    const deps = await (await page.request.get(`/api/plan/dependencies?projectIds=${projects[0].id}`, { headers })).json();
+    expect(deps.some((d: any) => d.fromId === design?.id && d.toId === build?.id)).toBe(true);
+
+    for (const item of inst.items) await page.request.delete(`/api/tickets/${item.id}`, { headers });
+    await page.request.delete(`/api/blueprints/${bp.id}`, { headers });
+  });
+
+  test("the Requests page opens and the public form renders without a session", async ({ page }) => {
+    await signIn(page);
+    const { config, token } = await planningConfig(page);
+    test.skip(!config.effective.requestForms, "request forms are off in this workspace");
+
+    await page.goto("/app/requests");
+    await page.waitForLoadState("networkidle");
+    await expect(page.getByRole("heading", { name: /^requests$/i })).toBeVisible();
+
+    const headers = { Authorization: `Bearer ${token}` };
+    const projects = await (await page.request.get("/api/projects", { headers })).json();
+    const form = await (await page.request.post("/api/request-forms", { headers, data: {
+      name: "E2E public render", slug: `e2e-render-${Date.now()}`, projectId: projects[0].id,
+      schema: { intro: "Tell us what you need.", fields: [{ key: "summary", label: "Summary", type: "TEXT", required: true, mapsTo: "title" }] }
+    } })).json();
+    const { publicToken } = await (await page.request.post(`/api/request-forms/${form.id}/publish`, { headers, data: { publish: true } })).json();
+
+    // No session at all — the page must never assume one or bounce to /login.
+    await page.context().clearCookies();
+    await page.goto(`/request/${publicToken}`);
+    await page.waitForLoadState("networkidle");
+    await expect(page).toHaveURL(new RegExp(`/request/${publicToken}`));
+    await expect(page.getByText("E2E public render")).toBeVisible();
+    await expect(page.getByRole("button", { name: /send request/i })).toBeVisible();
+
+    await page.request.delete(`/api/request-forms/${form.id}`, { headers });
+  });
+
   test("the portfolio roll-up returns derived numbers, and never a fake forecast", async ({ page }) => {
     await signIn(page);
     const { config, token } = await planningConfig(page);

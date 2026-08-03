@@ -1444,11 +1444,40 @@ settings came back exactly as they were.
 
 Verified: 274 unit tests (+24), 78 desktop and 94 responsive Playwright tests, all green.
 
-### Phases 4-6 — planned
+### Phase 4 — intake & approvals (2026-08-03)
 
-4. **Intake & approvals** — request-form builder + public form route (modelled on the attestation
-   share-link pattern), blueprints with relative-date instantiation, approval chains, guest
-   approvers, proofing.
+Work starts arriving from outside the workspace, and leaves it for sign-off.
+
+- [x] **Dynamic request forms** with conditional questions, published to a public URL that needs
+  no account. The rule engine is a pure core: a question may only be shown based on a question
+  ABOVE it, which makes circular conditions impossible by construction rather than something to
+  detect at runtime, and makes the form readable top to bottom.
+- [x] **The rule that matters most**: required is only enforced on a question that was actually
+  SHOWN, and answers to hidden questions are DROPPED. Rejecting them would fail an honest
+  submitter whose browser posted a stale answer after they changed an earlier choice; accepting
+  them would let anyone POST past a branch they were routed away from. Dropping is the only
+  option that is both forgiving to people and closed to abuse.
+- [x] **Blueprints** with relative day offsets and index-based references, previewable before
+  instantiation, and derivable from a project that already ran.
+- [x] **Approval chains** — sequential or parallel, internal or external. One rejection is
+  terminal, one approval is only a step, and a guest reviewer gets a single-use token rather than
+  a half-real `User` row that would enter every permission check forever.
+- [x] **Proofing** — pin and region comments anchored to normalised coordinates, so an annotation
+  lands on the same spot on a phone, a 4K monitor and a PDF export.
+
+**The public surface tripled, from one endpoint to four**, so the posture the attestation viewer
+established was applied deliberately to all of them: unguessable tokens, no enumerable ids, and
+one generic 404 for bad/revoked/spent alike. The request-form endpoint is the only place a
+stranger can WRITE, and carries its own per-form rate limit on top of the per-IP one — per-IP
+alone is useless against a distributed flood and punishes an office behind a single NAT.
+
+Verified: 310 unit tests (+34), 22 planning e2e tests, 84 desktop and 98 responsive Playwright
+tests, all green. A 32-assertion API smoke covered the security posture specifically — no
+internal fields in a public payload, hidden answers dropped, single-use links, generic 404s,
+sequential ordering, and rejection terminality.
+
+### Phases 5-6 — planned
+
 5. **AI PM copilot + reporting** — the `AiProposal` engine and review UI, project-risk agent
    (arithmetic score, AI narrative only — same division of labour as the face policy copilot),
    plan breakdown, schedule/resource copilots, custom dashboards, scheduled report delivery.

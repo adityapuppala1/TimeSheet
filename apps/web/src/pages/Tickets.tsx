@@ -60,6 +60,7 @@ import {
 import { useState } from "react";
 import { useSearchParams } from "react-router";
 import { PlanCalendar } from "../components/PlanCalendar";
+import { TicketApprovalsPanel } from "../components/TicketApprovalsPanel";
 import { TicketPlanningPanel } from "../components/TicketPlanningPanel";
 import { PlanTimeline, TimelineLegend, scheduledItemIds, type TimelineZoom } from "../components/PlanTimeline";
 import { TicketKanban } from "../components/TicketKanban";
@@ -1182,6 +1183,7 @@ function TicketDetailSheet({
                   <TabsTrigger value="comments"><MessageSquare className="h-3.5 w-3.5" />Comments ({ticket.comments.length})</TabsTrigger>
                   <TabsTrigger value="checklist"><CheckSquare className="h-3.5 w-3.5" />Checklist ({ticket.checklistItems.length})</TabsTrigger>
                   <TabsTrigger value="plan"><CalendarRange className="h-3.5 w-3.5" />Plan</TabsTrigger>
+                  <TabsTrigger value="approvals"><ShieldCheck className="h-3.5 w-3.5" />Approvals</TabsTrigger>
                   <TabsTrigger value="links"><Link2 className="h-3.5 w-3.5" />Linked ({ticket.links.length})</TabsTrigger>
                   <TabsTrigger value="attachments"><Paperclip className="h-3.5 w-3.5" />Files ({ticket.attachments.length})</TabsTrigger>
                   <TabsTrigger value="time"><TimerReset className="h-3.5 w-3.5" />Time logged</TabsTrigger>
@@ -1198,6 +1200,10 @@ function TicketDetailSheet({
                 </TabsContent>
                 <TabsContent value="plan">
                   <TicketPlanningPanel ticket={ticket} />
+                </TabsContent>
+
+                <TabsContent value="approvals">
+                  <TicketApprovalsPanel ticketId={ticket.id} />
                 </TabsContent>
 
                 <TabsContent value="links">

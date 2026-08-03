@@ -350,6 +350,38 @@ it. Conflicts are surfaced, not prevented. Likewise 100% allocation is *not* fla
 booked to exactly their capacity is fully booked, which is the intended state; flagging it would
 light up the whole board on a well-planned sprint and train everyone to ignore the colour.
 
+**Intake, approvals and proofing add THREE unauthenticated surfaces** (phase 4), doubling the
+app's public attack surface from one to four. All four follow the same posture the attestation
+viewer established: a 256-bit token in the URL, ids never enumerable, and a single generic 404
+for every "you may not have this" case — bad token, revoked token and spent token must be
+indistinguishable, or a probe learns that a token was once real.
+
+The request-form endpoint is the only place in the product where a **stranger can WRITE**, so it
+carries extra rules: answers are validated against the form's own schema server-side and answers
+to questions that were not visible are DROPPED (not rejected — rejecting fails an honest
+submitter whose browser posted a stale answer; accepting lets anyone POST past a branch they were
+routed away from); the created ticket body is plain text, never markup; the reporter is the
+seeded intake system user exactly as email and chat intake already do; `needsReview` starts true
+so an unauthenticated submission never routes itself past a human; and the rate limit is
+**per-form**, set by the form's own author, on top of the per-IP mount limiter — per-IP alone is
+useless against a distributed flood and punishes a genuine office behind one NAT.
+
+**A guest approver is a token, not a `User` row.** An external reviewer needs to approve exactly
+one thing, once. A half-real user who cannot log in would enter every permission check, user
+list, seat count and "who works here" report forever, for a decision that took one click. The
+token authorises one decision on one step and is spent on use. **One rejection is terminal; one
+approval is only a step** — that asymmetry is what stops a settled chain continuing to badger
+people, and the remaining links are revoked rather than marked decided, because nobody decided
+them.
+
+**Blueprint dates are relative day offsets, and references are array indexes.** Offsets are what
+separate a reusable template from a copy of last quarter's project. Indexes are the only
+reference stable across export, hand-editing as JSON and re-import, since the items have no ids
+until they are created; the expander resolves them in one pass afterwards. Both `parentIndex` and
+`dependsOn` may only point BACKWARDS, which makes cycles impossible by construction rather than
+something to detect — the same trick request-form visibility rules use, where a rule may only
+reference a question above it.
+
 **Money has one definition.** `services/budget.service.ts` owns burn, forecast and
 estimate-variance, and both the portfolio roll-up and the project budget panel call it. Burn is
 never stored — it is summed from the `Timesheet.billedAmount` rate snapshots that a Verified Work

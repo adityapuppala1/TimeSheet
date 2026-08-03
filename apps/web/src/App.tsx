@@ -43,6 +43,9 @@ const TimelinePage = lazy(() => import("./pages/Timeline").then((m) => ({ defaul
 const MyWorkPage = lazy(() => import("./pages/MyWork").then((m) => ({ default: m.MyWorkPage })));
 const PortfolioPage = lazy(() => import("./pages/Portfolio").then((m) => ({ default: m.PortfolioPage })));
 const WorkloadPage = lazy(() => import("./pages/Workload").then((m) => ({ default: m.WorkloadPage })));
+const RequestsPage = lazy(() => import("./pages/Requests").then((m) => ({ default: m.RequestsPage })));
+const PublicRequestFormPage = lazy(() => import("./pages/PublicRequestForm").then((m) => ({ default: m.PublicRequestFormPage })));
+const GuestApprovalPage = lazy(() => import("./pages/GuestApproval").then((m) => ({ default: m.GuestApprovalPage })));
 const AuditLog = lazy(() => import("./pages/AuditLog").then((m) => ({ default: m.AuditLog })));
 const AIActivityLog = lazy(() => import("./pages/AIActivityLog").then((m) => ({ default: m.AIActivityLog })));
 const Insights = lazy(() => import("./pages/Insights").then((m) => ({ default: m.Insights })));
@@ -87,6 +90,10 @@ const router = createBrowserRouter([
   // with no account, so it must never hit AppLayout (which assumes an authenticated user) or
   // redirect to /login. See pages/SharedAttestation.tsx.
   { path: "/shared/attestation/:token", element: <PageShell><SharedAttestation /></PageShell> },
+  // Two more unauthenticated surfaces, same rule as the attestation viewer above: the people who
+  // open these have no account, so they must never touch AppLayout or redirect to /login.
+  { path: "/request/:token", element: <PageShell><PublicRequestFormPage /></PageShell> },
+  { path: "/shared/approval/:token", element: <PageShell><GuestApprovalPage /></PageShell> },
   // Public lockout screen for maintenance mode. Same outside-/app rule as the attestation
   // viewer: the people sent here have revoked sessions, so it must never assume auth.
   { path: "/maintenance", element: <PageShell><MaintenancePage /></PageShell> },
@@ -107,6 +114,9 @@ const router = createBrowserRouter([
       // Shows every person's capacity and hours, so it needs the resource right rather than a
       // reporting one — this is people data, not project data.
       { path: "workload", element: <RequirePermission permission={permissions.RESOURCES_MANAGE}><PageShell><WorkloadPage /></PageShell></RequirePermission> },
+      // Readable by anyone who can see tickets — the inbox is triage, not configuration. Building
+      // and publishing forms needs forms:configure, checked inside the page.
+      { path: "requests", element: <RequirePermission permission={permissions.TICKETS_VIEW}><PageShell><RequestsPage /></PageShell></RequirePermission> },
       // No permission gate: this is the caller's own assigned work, and gating a personal queue
       // would leave most users with an empty nav entry.
       { path: "my-work", element: <PageShell><MyWorkPage /></PageShell> },

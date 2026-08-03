@@ -2631,3 +2631,257 @@ export const resourceApi = {
 
   budget: async (projectId: string) => (await api.get<ProjectBudgetPanel>(`/resources/budget/${projectId}`)).data
 };
+
+/* ------------------------------------------------------------------ *
+ * INTAKE, BLUEPRINTS, APPROVALS & PROOFING (V6 phase 4)
+ *
+ * `publicFormApi` and `guestApprovalApi` deliberately use a BARE axios instance rather than the
+ * shared `api` client: those two surfaces are opened by people with no account, and the shared
+ * client attaches credentials and runs the 401-refresh interceptor. Pointing an unauthenticated
+ * page at it would bounce a submitter to the login screen the first time anything returned 401.
+ * ------------------------------------------------------------------ */
+
+export const REQUEST_FIELD_TYPES = ["TEXT", "TEXTAREA", "NUMBER", "DATE", "SELECT", "MULTISELECT", "CHECKBOX", "EMAIL"] as const;
+export type RequestFieldType = (typeof REQUEST_FIELD_TYPES)[number];
+
+export interface RequestFormVisibilityRule {
+  field: string;
+  operator: "equals" | "notEquals" | "contains" | "isAnswered";
+  value?: string;
+}
+
+export interface RequestFormFieldRow {
+  key: string;
+  label: string;
+  type: RequestFieldType;
+  help?: string;
+  required?: boolean;
+  options?: string[];
+  showWhen?: RequestFormVisibilityRule[];
+  /** "title" | "description" | "custom:<key>" */
+  mapsTo?: string;
+}
+
+export interface RequestFormSchemaRow {
+  fields: RequestFormFieldRow[];
+  intro?: string;
+  confirmation?: string;
+}
+
+export interface RequestFormRow {
+  id: string;
+  name: string;
+  slug: string;
+  description: string | null;
+  projectId: string;
+  project?: { id: string; code: string; name: string };
+  moduleId: string | null;
+  ticketType: string;
+  defaultPriority: string;
+  defaultAssigneeId: string | null;
+  blueprintId: string | null;
+  blueprint?: { id: string; name: string } | null;
+  isActive: boolean;
+  isPublic: boolean;
+  /** Present only to someone who may configure forms — it IS the capability. */
+  publicToken?: string | null;
+  hasPublicLink: boolean;
+  maxSubmissionsPerHour: number;
+  schema: RequestFormSchemaRow;
+  _count?: { submissions: number };
+}
+
+export interface RequestSubmissionRow {
+  id: string;
+  formId: string;
+  form: { id: string; name: string; slug: string; schema: RequestFormSchemaRow };
+  ticketId: string | null;
+  ticket: { id: string; key: string; title: string; status: string } | null;
+  submitterName: string | null;
+  submitterEmail: string | null;
+  answers: Record<string, unknown>;
+  status: "PENDING" | "ACCEPTED" | "REJECTED";
+  needsReview: boolean;
+  createdAt: string;
+}
+
+export const requestFormApi = {
+  list: async () => (await api.get<RequestFormRow[]>("/request-forms")).data,
+  create: async (payload: Partial<RequestFormRow> & { name: string; slug: string; projectId: string; schema: RequestFormSchemaRow }) =>
+    (await api.post<RequestFormRow>("/request-forms", payload)).data,
+  update: async (id: string, payload: Partial<RequestFormRow> & { name: string; slug: string; projectId: string; schema: RequestFormSchemaRow }) =>
+    (await api.put<RequestFormRow>(`/request-forms/${id}`, payload)).data,
+  /** Revoking clears the token, so an old URL can never be resurrected by flipping a flag back. */
+  publish: async (id: string, publish: boolean) =>
+    (await api.post<RequestFormRow>(`/request-forms/${id}/publish`, { publish })).data,
+  remove: async (id: string) => (await api.delete<{ deleted: boolean; submissions?: number }>(`/request-forms/${id}`)).data,
+
+  submissions: async (params?: { status?: string; formId?: string }) =>
+    (await api.get<RequestSubmissionRow[]>("/request-forms/submissions", { params })).data,
+  accept: async (id: string) => (await api.post(`/request-forms/submissions/${id}/accept`)).data,
+  reject: async (id: string, reason?: string) => (await api.post(`/request-forms/submissions/${id}/reject`, { reason })).data
+};
+
+export interface BlueprintItemRow {
+  title: string;
+  type?: string;
+  description?: string;
+  priority?: string;
+  offsetStartDays?: number;
+  durationDays?: number;
+  isMilestone?: boolean;
+  estimatedHours?: number;
+  parentIndex?: number;
+  dependsOn?: number[];
+  moduleName?: string;
+}
+
+export interface BlueprintRow {
+  id: string;
+  name: string;
+  description: string | null;
+  kind: "PROJECT" | "WORK_ITEM";
+  isActive: boolean;
+  payload: { modules?: string[]; items: BlueprintItemRow[] };
+  itemCount?: number;
+  createdBy?: { id: string; name: string } | null;
+}
+
+export const blueprintApi = {
+  list: async () => (await api.get<BlueprintRow[]>("/blueprints")).data,
+  get: async (id: string) => (await api.get<BlueprintRow>(`/blueprints/${id}`)).data,
+  create: async (payload: { name: string; description?: string | null; kind?: string; payload: BlueprintRow["payload"] }) =>
+    (await api.post<BlueprintRow>("/blueprints", payload)).data,
+  update: async (id: string, payload: { name: string; description?: string | null; kind?: string; payload: BlueprintRow["payload"] }) =>
+    (await api.put<BlueprintRow>(`/blueprints/${id}`, payload)).data,
+  remove: async (id: string) => {
+    await api.delete(`/blueprints/${id}`);
+  },
+  /** Runs the same expander the real instantiation runs, and writes nothing. */
+  preview: async (id: string, startDate: string) =>
+    (
+      await api.post<{ items: Array<BlueprintItemRow & { index: number; depth: number; startDate: string | null; endDate: string | null }>; start: string | null; end: string | null }>(
+        `/blueprints/${id}/preview`,
+        { startDate }
+      )
+    ).data,
+  instantiate: async (id: string, payload: { projectId: string; startDate: string; titlePrefix?: string }) =>
+    (await api.post<{ count: number; items: Array<{ id: string; key: string; title: string }> }>(`/blueprints/${id}/instantiate`, payload)).data,
+  derive: async (projectId: string, name: string) =>
+    (await api.post<BlueprintRow>("/blueprints/derive", { projectId, name })).data
+};
+
+export interface ApprovalStepRow {
+  id: string;
+  order: number;
+  decision: "PENDING" | "APPROVED" | "REJECTED";
+  comment: string | null;
+  decidedAt: string | null;
+  approver: { id: string; name: string; email: string; avatarUrl?: string | null } | null;
+  guestEmail: string | null;
+  hasGuestLink: boolean;
+}
+
+export interface ApprovalRequestRow {
+  id: string;
+  ticketId: string;
+  title: string;
+  description: string | null;
+  dueAt: string | null;
+  isSequential: boolean;
+  status: "PENDING" | "APPROVED" | "REJECTED";
+  completedAt: string | null;
+  requestedBy: { id: string; name: string } | null;
+  steps: ApprovalStepRow[];
+}
+
+export const approvalApi = {
+  forTicket: async (ticketId: string) => (await api.get<ApprovalRequestRow[]>(`/approvals/ticket/${ticketId}`)).data,
+  create: async (payload: {
+    ticketId: string;
+    title: string;
+    description?: string | null;
+    dueAt?: string | null;
+    isSequential?: boolean;
+    steps: Array<{ approverId?: string | null; guestEmail?: string | null; order?: number }>;
+  }) => (await api.post<ApprovalRequestRow>("/approvals", payload)).data,
+  decide: async (stepId: string, decision: "APPROVED" | "REJECTED", comment?: string) =>
+    (await api.post(`/approvals/steps/${stepId}/decide`, { decision, comment })).data,
+  /** Mints a fresh link; the previous one dies immediately. */
+  resendGuestLink: async (stepId: string) => (await api.post<{ url: string }>(`/approvals/steps/${stepId}/resend`)).data,
+  cancel: async (id: string) => {
+    await api.delete(`/approvals/${id}`);
+  }
+};
+
+export interface ProofAnnotationRow {
+  id: string;
+  attachmentId: string;
+  author: { id: string; name: string; avatarUrl?: string | null } | null;
+  guestEmail: string | null;
+  /** Normalised 0-1, so a pin lands on the same spot at any render size. */
+  x: number;
+  y: number;
+  w: number | null;
+  h: number | null;
+  pageIndex: number | null;
+  body: string;
+  resolvedAt: string | null;
+  parentId: string | null;
+  createdAt: string;
+  replies?: ProofAnnotationRow[];
+}
+
+export const proofApi = {
+  list: async (attachmentId: string) => (await api.get<ProofAnnotationRow[]>(`/proofs/attachment/${attachmentId}`)).data,
+  add: async (attachmentId: string, payload: { x: number; y: number; w?: number | null; h?: number | null; pageIndex?: number | null; body: string; parentId?: string | null }) =>
+    (await api.post<ProofAnnotationRow>(`/proofs/attachment/${attachmentId}`, payload)).data,
+  resolve: async (id: string, resolved: boolean) => (await api.patch(`/proofs/${id}/resolve`, { resolved })).data,
+  remove: async (id: string) => {
+    await api.delete(`/proofs/${id}`);
+  }
+};
+
+/* ---------- Unauthenticated surfaces ---------- */
+
+/**
+ * A bare axios instance for the two pages a person with no account can open.
+ *
+ * Deliberately NOT the shared `api` client: that one sends credentials and runs a 401-refresh
+ * interceptor, which would bounce a submitter to the login screen the moment anything returned
+ * 401 — on a page where there is nothing to log in to.
+ */
+const publicClient = axios.create({ baseURL: api.defaults.baseURL, withCredentials: false });
+
+export interface PublicRequestForm {
+  name: string;
+  description: string | null;
+  intro: string | null;
+  confirmation: string | null;
+  fields: RequestFormFieldRow[];
+}
+
+export const publicFormApi = {
+  get: async (token: string) => (await publicClient.get<PublicRequestForm>(`/shared/request-forms/${token}`)).data,
+  submit: async (token: string, payload: { submitterName?: string; submitterEmail?: string; answers: Record<string, unknown> }) =>
+    (await publicClient.post<{ reference: string; confirmation: string }>(`/shared/request-forms/${token}`, payload)).data
+};
+
+export interface GuestApproval {
+  title: string;
+  description: string | null;
+  dueAt: string | null;
+  reviewerEmail: string | null;
+  item: {
+    reference: string;
+    title: string;
+    description: string | null;
+    attachments: Array<{ id: string; fileName: string; mimeType: string; url: string }>;
+  } | null;
+}
+
+export const guestApprovalApi = {
+  get: async (token: string) => (await publicClient.get<GuestApproval>(`/shared/approvals/${token}`)).data,
+  decide: async (token: string, decision: "APPROVED" | "REJECTED", comment?: string) =>
+    (await publicClient.post<{ ok: boolean; decision: string }>(`/shared/approvals/${token}`, { decision, comment })).data
+};

@@ -55,7 +55,8 @@ const PAGES = [
   "/app/my-work",
   "/app/timeline",
   "/app/portfolio",
-  "/app/workload"
+  "/app/workload",
+  "/app/requests"
 ];
 const OVERFLOW_TOLERANCE_PX = 4;
 
