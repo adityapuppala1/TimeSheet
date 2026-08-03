@@ -56,6 +56,35 @@ export default {
         card: {
           DEFAULT: "hsl(var(--card))",
           foreground: "hsl(var(--card-foreground))"
+        },
+        /* Planning layer (V6). Registered here — rather than reached for as arbitrary
+         * `bg-[hsl(var(--plan-bar))]` values at each call site — so the timeline, workload board
+         * and risk badges are styled from the same named palette as the rest of the app, and so
+         * a future theme change is one edit in index.css instead of a grep. Every value derives
+         * from the existing primary/accent/status hues; see index.css for the derivation. */
+        plan: {
+          lane: "hsl(var(--plan-lane))",
+          "lane-alt": "hsl(var(--plan-lane-alt))",
+          bar: "hsl(var(--plan-bar))",
+          "bar-fg": "hsl(var(--plan-bar-fg))",
+          "bar-parent": "hsl(var(--plan-bar-parent))",
+          baseline: "hsl(var(--plan-baseline))",
+          dependency: "hsl(var(--plan-dependency))",
+          today: "hsl(var(--plan-today))",
+          critical: "hsl(var(--plan-critical))",
+          grid: "hsl(var(--plan-grid))"
+        },
+        capacity: {
+          0: "hsl(var(--capacity-0))",
+          1: "hsl(var(--capacity-1))",
+          2: "hsl(var(--capacity-2))",
+          3: "hsl(var(--capacity-3))",
+          4: "hsl(var(--capacity-4))"
+        },
+        risk: {
+          green: "hsl(var(--risk-green))",
+          amber: "hsl(var(--risk-amber))",
+          red: "hsl(var(--risk-red))"
         }
       },
       borderRadius: {

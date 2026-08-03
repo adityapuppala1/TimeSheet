@@ -43,7 +43,23 @@ async function main() {
         aiMonthlyBudgetCeilingUsd: limits.aiMonthlyBudgetCeilingUsd,
         allowedSsoProviders: limits.allowedSsoProviders,
         allowedChatPlatforms: limits.allowedChatPlatforms,
-        faceVerificationEnabled: limits.faceVerificationEnabled
+        faceVerificationEnabled: limits.faceVerificationEnabled,
+        // Planning layer (V6). NOT added to the `update` branch above, unlike
+        // faceVerificationEnabled: a deployment that predates these columns gets them from the
+        // guarded UPDATE in *_v6_phase1_plan_entitlements/migration.sql, which runs on upgrade,
+        // whereas this seed does not. Force-updating here as well would give a platform admin's
+        // per-tier tuning a second chance to be silently reverted by a re-seed.
+        ganttEnabled: limits.ganttEnabled,
+        resourceMgmtEnabled: limits.resourceMgmtEnabled,
+        approvalsEnabled: limits.approvalsEnabled,
+        proofingEnabled: limits.proofingEnabled,
+        customWorkflowsEnabled: limits.customWorkflowsEnabled,
+        aiPmCopilotEnabled: limits.aiPmCopilotEnabled,
+        maxPortfolios: limits.maxPortfolios,
+        maxRequestForms: limits.maxRequestForms,
+        maxBlueprints: limits.maxBlueprints,
+        maxCustomFields: limits.maxCustomFields,
+        maxDashboards: limits.maxDashboards
       }
     });
   }

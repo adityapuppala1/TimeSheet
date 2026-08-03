@@ -2014,3 +2014,152 @@ export const faceApi = {
    *  minus the biometrics themselves. */
   exportMyData: async () => (await api.get<Record<string, unknown>>("/face/export")).data
 };
+
+/* ------------------------------------------------------------------ *
+ * PLANNING LAYER (V6)
+ *
+ * `settings()` is fetched on every page load by the sidebar, so it is deliberately one request
+ * returning three things: what the workspace turned on, what the plan tier allows, and the
+ * `effective` AND of the two. The client never computes that AND itself — if it did, the nav
+ * could offer a page the API then 403s, and the two would drift the first time a tier changed.
+ * ------------------------------------------------------------------ */
+
+export interface PlanningSettings {
+  enablePlanning: boolean;
+  enableResourceManagement: boolean;
+  enableApprovals: boolean;
+  enableProofing: boolean;
+  enableRequestForms: boolean;
+  enableCustomWorkflows: boolean;
+  workingDays: number[];
+  defaultWeeklyCapacityHours: number | string;
+  updatedAt: string;
+  updatedById: string | null;
+}
+
+export interface PlanningEntitlements {
+  ganttEnabled: boolean;
+  resourceMgmtEnabled: boolean;
+  approvalsEnabled: boolean;
+  proofingEnabled: boolean;
+  customWorkflowsEnabled: boolean;
+  aiPmCopilotEnabled: boolean;
+  maxPortfolios: number;
+  maxRequestForms: number;
+  maxBlueprints: number;
+  maxCustomFields: number;
+  maxDashboards: number;
+}
+
+/** Workspace toggle AND plan entitlement, computed server-side. This is what the UI gates on. */
+export interface PlanningEffective {
+  planning: boolean;
+  timeline: boolean;
+  resourceManagement: boolean;
+  approvals: boolean;
+  proofing: boolean;
+  requestForms: boolean;
+  customWorkflows: boolean;
+}
+
+export interface PlanningConfig {
+  settings: PlanningSettings;
+  entitlements: PlanningEntitlements;
+  effective: PlanningEffective;
+}
+
+export type WorkStatusCategoryValue = "TODO" | "ACTIVE" | "REVIEW" | "DONE" | "CANCELLED";
+
+export interface WorkflowStatusRow {
+  id: string;
+  workflowId: string;
+  name: string;
+  category: WorkStatusCategoryValue;
+  legacyStatus: string;
+  color: string | null;
+  order: number;
+  isInitial: boolean;
+  isFinal: boolean;
+}
+
+export interface WorkflowRow {
+  id: string;
+  name: string;
+  description: string | null;
+  appliesToTicketType: string | null;
+  isDefault: boolean;
+  isActive: boolean;
+  isSystem: boolean;
+  statuses: WorkflowStatusRow[];
+  transitions: Array<{
+    id: string;
+    workflowId: string;
+    fromStatusId: string;
+    toStatusId: string;
+    requiresApproval: boolean;
+    requiredPermission: string | null;
+  }>;
+}
+
+export interface WorkflowPayload {
+  name: string;
+  description?: string | null;
+  appliesToTicketType?: string | null;
+  isDefault?: boolean;
+  isActive?: boolean;
+  statuses: Array<{
+    name: string;
+    category: WorkStatusCategoryValue;
+    legacyStatus: string;
+    color?: string | null;
+    isInitial?: boolean;
+    isFinal?: boolean;
+  }>;
+  transitions: Array<{ from: string; to: string; requiresApproval?: boolean; requiredPermission?: string | null }>;
+}
+
+export interface CustomFieldRow {
+  id: string;
+  key: string;
+  label: string;
+  type: string;
+  description: string | null;
+  options: string[] | null;
+  isRequired: boolean;
+  appliesTo: "TICKET" | "PROJECT";
+  ticketTypeFilter: string | null;
+  showOnRequestForm: boolean;
+  order: number;
+  isActive: boolean;
+}
+
+export type CustomFieldPayload = Omit<CustomFieldRow, "id" | "options"> & { options?: string[] };
+
+export const planningApi = {
+  settings: async () => (await api.get<PlanningConfig>("/planning/settings")).data,
+  updateSettings: async (patch: Partial<Omit<PlanningSettings, "updatedAt" | "updatedById">>) =>
+    (await api.patch<PlanningSettings>("/planning/settings", patch)).data,
+
+  listWorkflows: async () => (await api.get<WorkflowRow[]>("/planning/workflows")).data,
+  /** The category/legacy-status vocabulary the editor's dropdowns render from — served rather
+   *  than hard-coded in the client so it can't drift from what the API validates. */
+  workflowMeta: async () =>
+    (await api.get<{ categories: WorkStatusCategoryValue[]; legacyStatuses: string[] }>("/planning/workflows/meta")).data,
+  createWorkflow: async (payload: WorkflowPayload) => (await api.post<WorkflowRow>("/planning/workflows", payload)).data,
+  updateWorkflow: async (id: string, payload: WorkflowPayload) =>
+    (await api.put<WorkflowRow>(`/planning/workflows/${id}`, payload)).data,
+  deleteWorkflow: async (id: string) => {
+    await api.delete(`/planning/workflows/${id}`);
+  },
+
+  listCustomFields: async (includeInactive = false) =>
+    (await api.get<CustomFieldRow[]>("/planning/custom-fields", { params: includeInactive ? { all: "true" } : undefined })).data,
+  createCustomField: async (payload: CustomFieldPayload) =>
+    (await api.post<CustomFieldRow>("/planning/custom-fields", payload)).data,
+  updateCustomField: async (id: string, payload: CustomFieldPayload) =>
+    (await api.put<CustomFieldRow>(`/planning/custom-fields/${id}`, payload)).data,
+  /** Returns `{ deleted: false }` when the field had values and was deactivated instead — the
+   *  API refuses to cascade away stored values just because a definition was removed. */
+  deleteCustomField: async (id: string) =>
+    (await api.delete<{ deleted: boolean }>(`/planning/custom-fields/${id}`)).data
+};

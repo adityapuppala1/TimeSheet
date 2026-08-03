@@ -41,7 +41,25 @@ export const permissions = {
   TICKETS_VIEW: "tickets:view",
   TICKETS_WRITE: "tickets:write",
   TICKETS_ASSIGN: "tickets:assign",
-  TICKETS_MANAGE: "tickets:manage"
+  TICKETS_MANAGE: "tickets:manage",
+
+  /// --- Planning layer (V6) ------------------------------------------------------------------
+  /// Adding a key here is NOT enough for an existing install: `prisma/seed.ts` is a one-time
+  /// bootstrap that never runs on upgrade (and would wipe custom grants if it did). Every new
+  /// key must ALSO be backfilled by idempotent SQL inside the migration that introduces it —
+  /// see prisma/migrations/*_v6_phase1_planning_foundation/migration.sql.
+  PORTFOLIOS_MANAGE: "portfolios:manage",
+  /// Edit the *plan* — dates, hierarchy, dependencies, baselines. Deliberately separate from
+  /// TICKETS_WRITE: a developer who can edit a ticket's description shouldn't necessarily be
+  /// able to move the whole delivery schedule.
+  PLAN_WRITE: "plan:write",
+  /// Capacity, bookings, and the workload board.
+  RESOURCES_MANAGE: "resources:manage",
+  /// Create/route approval chains on work items (distinct from TIMESHEETS_APPROVE, which is
+  /// the existing timesheet-only approval right).
+  APPROVALS_MANAGE: "approvals:manage",
+  /// Publish a personal dashboard to the whole workspace.
+  DASHBOARDS_SHARE: "dashboards:share"
 } as const;
 
 export type Permission = (typeof permissions)[keyof typeof permissions];
@@ -465,6 +483,11 @@ export type SsoProvider = (typeof ssoProviders)[number];
 /** Effectively "no ceiling" — the schema wants a number, not null, on these two tiers. */
 export const UNLIMITED_SEATS = 1_000_000;
 
+/** Same idea for a countable planning resource (portfolios, forms, blueprints, …). Declared
+ *  here rather than down in the planning section because `PLAN_TIER_LIMITS` below reads it at
+ *  module-init time — a `const` further down the file would be in its temporal dead zone. */
+export const UNLIMITED_PLAN_ITEMS = 1_000_000;
+
 export interface PlanTierLimits {
   seatLimit: number;
   /** A HARD platform ceiling, clamped over whatever budget the org sets for itself. An explicit
@@ -474,6 +497,31 @@ export interface PlanTierLimits {
   allowedChatPlatforms: ChatPlatform[];
   /** Enabling, enrolling and verifying all fail CLOSED without this. */
   faceVerificationEnabled: boolean;
+
+  /* --- Planning layer (V6) ---------------------------------------------------------------
+   * All of these fail CLOSED like faceVerificationEnabled: the capability is refused unless
+   * the tier grants it. The counts are ceilings on how many of a thing an org may create;
+   * 0 means "this tier cannot use the feature at all", which is why STARTER reads as all-zero
+   * rather than as a small allowance. Enforced live per request by
+   * apps/api/src/services/plan-limits.service.ts — never cached, same as every existing limit. */
+  /** Timeline/Gantt, dependencies, baselines, critical path. */
+  ganttEnabled: boolean;
+  /** Capacity, resource bookings, the workload board. */
+  resourceMgmtEnabled: boolean;
+  /** Approval chains on work items, including guest approvers. */
+  approvalsEnabled: boolean;
+  /** Pin/region annotation on attachments. */
+  proofingEnabled: boolean;
+  /** Admin-defined statuses/transitions per ticket type. */
+  customWorkflowsEnabled: boolean;
+  /** The proposal-based AI PM copilot family. Spend is still bounded by
+   *  aiMonthlyBudgetCeilingUsd — this only decides whether the features exist. */
+  aiPmCopilotEnabled: boolean;
+  maxPortfolios: number;
+  maxRequestForms: number;
+  maxBlueprints: number;
+  maxCustomFields: number;
+  maxDashboards: number;
 }
 
 export const PLAN_TIER_LIMITS: Record<PlanTier, PlanTierLimits> = {
@@ -482,20 +530,243 @@ export const PLAN_TIER_LIMITS: Record<PlanTier, PlanTierLimits> = {
     aiMonthlyBudgetCeilingUsd: 0,
     allowedSsoProviders: ["GOOGLE"],
     allowedChatPlatforms: [],
-    faceVerificationEnabled: false
+    faceVerificationEnabled: false,
+    ganttEnabled: false,
+    resourceMgmtEnabled: false,
+    approvalsEnabled: false,
+    proofingEnabled: false,
+    customWorkflowsEnabled: false,
+    aiPmCopilotEnabled: false,
+    maxPortfolios: 0,
+    maxRequestForms: 0,
+    maxBlueprints: 0,
+    maxCustomFields: 0,
+    maxDashboards: 0
   },
   TEAM: {
     seatLimit: UNLIMITED_SEATS,
     aiMonthlyBudgetCeilingUsd: 200,
     allowedSsoProviders: ["GOOGLE", "MICROSOFT"],
     allowedChatPlatforms: ["SLACK", "TELEGRAM"],
-    faceVerificationEnabled: false
+    faceVerificationEnabled: false,
+    // Team gets the everyday planning surface — a schedule, intake, approvals and a dashboard.
+    // The two capped-at-Enterprise items are the ones with real ongoing cost or blast radius:
+    // resource management reads every person's rate/capacity, and the AI copilot spends money.
+    ganttEnabled: true,
+    resourceMgmtEnabled: false,
+    approvalsEnabled: true,
+    proofingEnabled: true,
+    customWorkflowsEnabled: false,
+    aiPmCopilotEnabled: false,
+    maxPortfolios: 1,
+    maxRequestForms: 5,
+    maxBlueprints: 5,
+    maxCustomFields: 10,
+    maxDashboards: 3
   },
   ENTERPRISE: {
     seatLimit: UNLIMITED_SEATS,
     aiMonthlyBudgetCeilingUsd: 5000,
     allowedSsoProviders: ["GOOGLE", "MICROSOFT", "SAML", "LDAP"],
     allowedChatPlatforms: ["SLACK", "MICROSOFT_TEAMS", "GOOGLE_CHAT", "TELEGRAM"],
-    faceVerificationEnabled: true
+    faceVerificationEnabled: true,
+    ganttEnabled: true,
+    resourceMgmtEnabled: true,
+    approvalsEnabled: true,
+    proofingEnabled: true,
+    customWorkflowsEnabled: true,
+    aiPmCopilotEnabled: true,
+    maxPortfolios: UNLIMITED_PLAN_ITEMS,
+    maxRequestForms: UNLIMITED_PLAN_ITEMS,
+    maxBlueprints: UNLIMITED_PLAN_ITEMS,
+    maxCustomFields: UNLIMITED_PLAN_ITEMS,
+    maxDashboards: UNLIMITED_PLAN_ITEMS
   }
 };
+
+/* ------------------------------------------------------------------ *
+ * PLANNING LAYER (V6) — types both apps agree on.
+ *
+ * WHAT: the work-item hierarchy, custom workflows/fields, scheduling, resourcing, intake,
+ * approvals and the AI proposal envelope.
+ * WHY these live here and not in either app: the same drift argument the file header makes for
+ * TicketStatus applies doubly to a workflow whose statuses are ADMIN-DEFINED — the API decides
+ * whether a transition is legal and the board renders the columns, and those two must be reading
+ * the same category vocabulary or a column silently accepts a drop the server then rejects.
+ * ------------------------------------------------------------------ */
+
+/**
+ * The canonical vocabulary every custom status maps onto.
+ *
+ * THIS IS THE COMPATIBILITY HINGE OF THE WHOLE V6 PLANNING LAYER. An admin may rename "In
+ * review" to "Design QA" or add "Blocked", but every status they define must declare which of
+ * these five it behaves like. Existing code — the SLA sweep, escalation worker, every report,
+ * the Kanban's column set, `ticketStatusTransitions` — keeps reading the unchanged
+ * `Ticket.status` enum, which is derived from the status's `legacyStatus`. Nothing downstream
+ * has to learn about custom statuses to keep working correctly.
+ */
+export const workStatusCategories = ["TODO", "ACTIVE", "REVIEW", "DONE", "CANCELLED"] as const;
+export type WorkStatusCategory = (typeof workStatusCategories)[number];
+
+/** The one mapping that makes a custom workflow safe: which category each built-in status IS.
+ *  The seeded "Default" workflow is exactly this table, so a workspace that never touches
+ *  workflow settings behaves identically to V5. */
+export const DEFAULT_STATUS_CATEGORY: Record<TicketStatus, WorkStatusCategory> = {
+  OPEN: "TODO",
+  IN_PROGRESS: "ACTIVE",
+  IN_REVIEW: "REVIEW",
+  RESOLVED: "DONE",
+  CLOSED: "DONE",
+  REOPENED: "TODO"
+};
+
+export interface WorkflowStatusRow {
+  id: string;
+  name: string;
+  category: WorkStatusCategory;
+  /** Which built-in `TicketStatus` this status writes to `Ticket.status`. Every custom status
+   *  must pick one — that column stays canonical for all pre-V6 code. */
+  legacyStatus: TicketStatus;
+  color: string | null;
+  order: number;
+  isInitial: boolean;
+  isFinal: boolean;
+}
+
+export interface WorkflowRow {
+  id: string;
+  name: string;
+  description: string | null;
+  /** Null = the workspace default, used by any ticket type without its own workflow. */
+  appliesToTicketType: string | null;
+  isDefault: boolean;
+  isActive: boolean;
+  statuses: WorkflowStatusRow[];
+  transitions: Array<{ id: string; fromStatusId: string; toStatusId: string; requiresApproval: boolean }>;
+}
+
+export const customFieldTypes = [
+  "TEXT",
+  "NUMBER",
+  "DATE",
+  "SINGLE_SELECT",
+  "MULTI_SELECT",
+  "CHECKBOX",
+  "USER",
+  "CURRENCY",
+  "URL"
+] as const;
+export type CustomFieldType = (typeof customFieldTypes)[number];
+
+export const customFieldTargets = ["TICKET", "PROJECT"] as const;
+export type CustomFieldTarget = (typeof customFieldTargets)[number];
+
+export interface CustomFieldRow {
+  id: string;
+  key: string;
+  label: string;
+  type: CustomFieldType;
+  description: string | null;
+  /** Only for SINGLE_SELECT/MULTI_SELECT. */
+  options: string[];
+  isRequired: boolean;
+  appliesTo: CustomFieldTarget;
+  /** Null = every ticket type. Otherwise the `TicketType.name` this field is scoped to. */
+  ticketTypeFilter: string | null;
+  showOnRequestForm: boolean;
+  order: number;
+  isActive: boolean;
+}
+
+/** A field's stored value, normalised per type: string | number | boolean | string[] | null. */
+export type CustomFieldValue = string | number | boolean | string[] | null;
+
+export const planViewTypes = ["LIST", "BOARD", "TIMELINE", "CALENDAR", "WORKLOAD"] as const;
+export type PlanViewType = (typeof planViewTypes)[number];
+
+export const savedViewScopes = ["PERSONAL", "SHARED"] as const;
+export type SavedViewScope = (typeof savedViewScopes)[number];
+
+/** Scheduling relationship between two work items. The first three mirror the existing
+ *  TicketLinkType values and are unchanged; the four `*_TO_*` values are the standard PM
+ *  dependency kinds the timeline solver understands. BLOCKS is treated as FINISH_TO_START by
+ *  the solver so every dependency already recorded in V5 keeps meaning what it meant. */
+export const ticketLinkTypes = [
+  "BLOCKS",
+  "DUPLICATE",
+  "RELATES",
+  "FINISH_TO_START",
+  "START_TO_START",
+  "FINISH_TO_FINISH",
+  "START_TO_FINISH"
+] as const;
+export type TicketLinkType = (typeof ticketLinkTypes)[number];
+
+/** Which link types the timeline solver treats as real scheduling constraints. */
+export const SCHEDULING_LINK_TYPES: readonly TicketLinkType[] = [
+  "BLOCKS",
+  "FINISH_TO_START",
+  "START_TO_START",
+  "FINISH_TO_FINISH",
+  "START_TO_FINISH"
+];
+
+export const approvalDecisions = ["PENDING", "APPROVED", "REJECTED"] as const;
+export type ApprovalDecision = (typeof approvalDecisions)[number];
+
+export const blueprintKinds = ["PROJECT", "WORK_ITEM"] as const;
+export type BlueprintKind = (typeof blueprintKinds)[number];
+
+export const reportCadences = ["DAILY", "WEEKLY", "MONTHLY"] as const;
+export type ReportCadence = (typeof reportCadences)[number];
+
+export const riskBands = ["GREEN", "AMBER", "RED"] as const;
+export type RiskBand = (typeof riskBands)[number];
+
+/**
+ * AI PM copilot proposals — the human-in-the-loop envelope.
+ *
+ * WHY every AI planning feature returns one of these instead of writing directly: a wrong
+ * auto-applied schedule shift or reassignment is indistinguishable from a real plan change once
+ * it lands, and there is no undo for "the AI moved 40 dates". A proposal is a set of individually
+ * accept/reject-able diffs a human applies, which is the same posture the email/chat intake
+ * pipelines already take with `needsReview` — generalised to writes instead of just triage.
+ */
+export const aiProposalKinds = [
+  "PLAN_BREAKDOWN",
+  "SCHEDULE_ADJUSTMENT",
+  "ASSIGNMENT_REBALANCE",
+  "RISK_MITIGATION",
+  "BLUEPRINT_SUGGESTION"
+] as const;
+export type AiProposalKind = (typeof aiProposalKinds)[number];
+
+export const aiProposalStatuses = [
+  "PENDING_REVIEW",
+  "PARTIALLY_APPLIED",
+  "APPLIED",
+  "REJECTED",
+  "EXPIRED"
+] as const;
+export type AiProposalStatus = (typeof aiProposalStatuses)[number];
+
+export const aiProposalChangeOps = ["CREATE", "UPDATE", "LINK"] as const;
+export type AiProposalChangeOp = (typeof aiProposalChangeOps)[number];
+
+/** Workspace-wide planning toggles. Every one defaults false — same inert-until-opted-in rule
+ *  every existing capability in this app follows, so upgrading to V6 changes nothing visible
+ *  until an admin turns something on. */
+export interface GlobalPlanningSettings {
+  enablePlanning: boolean;
+  enableResourceManagement: boolean;
+  enableApprovals: boolean;
+  enableProofing: boolean;
+  enableRequestForms: boolean;
+  enableCustomWorkflows: boolean;
+  /** Default working days for the timeline solver, 0 = Sunday. */
+  workingDays: number[];
+  /** Fallback capacity when a user has no `weeklyCapacityHours` of their own. */
+  defaultWeeklyCapacityHours: number;
+  updatedAt: string;
+  updatedById: string | null;
+}

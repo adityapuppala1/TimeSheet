@@ -211,6 +211,31 @@ model PlanTierLimit {
   /// OPEN (see face.service.ts#isFaceVerificationRequired) so a downgraded/lapsed org's staff
   /// are never locked out of logging their own time by a billing change.
   faceVerificationEnabled   Boolean @default(false)
+
+  /// --- Planning layer (V6) -------------------------------------------------------------------
+  /// Every one of these defaults to the RESTRICTIVE value (false / 0). That is deliberate and is
+  /// the safe direction for a column added by migration: a tier row that exists but has not yet
+  /// been re-seeded is under-entitled rather than over-entitled, so the worst case is an admin
+  /// seeing "upgrade to use this" for a moment, not a Starter org quietly getting Enterprise
+  /// features. The migration that adds them also runs a guarded UPDATE to set the real
+  /// Team/Enterprise values from @timesheet/shared's PLAN_TIER_LIMITS.
+  ///
+  /// All of these fail CLOSED, matching faceVerificationEnabled: the capability is refused unless
+  /// the tier grants it. The counts are creation ceilings; 0 means the tier cannot use the
+  /// feature at all.
+  ganttEnabled              Boolean @default(false)
+  resourceMgmtEnabled       Boolean @default(false)
+  approvalsEnabled          Boolean @default(false)
+  proofingEnabled           Boolean @default(false)
+  customWorkflowsEnabled    Boolean @default(false)
+  /// Whether the AI PM copilot family exists for this tier. Spend is still bounded by
+  /// aiMonthlyBudgetCeilingUsd above — this only decides whether the features are offered.
+  aiPmCopilotEnabled        Boolean @default(false)
+  maxPortfolios             Int     @default(0)
+  maxRequestForms           Int     @default(0)
+  maxBlueprints             Int     @default(0)
+  maxCustomFields           Int     @default(0)
+  maxDashboards             Int     @default(0)
 }
 
 /// Platform-wide Stripe configuration (id = "global") — one Stripe account across every org on

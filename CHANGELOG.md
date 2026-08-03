@@ -5,6 +5,41 @@ and a GitHub Release whose body is copied from the matching section here — the
 documented in CONTRIBUTING.md, and the in-app **What's new** page renders these notes for every
 user of a running installation.
 
+## Unreleased — the planning layer (V6)
+
+Work in progress on the `V6` branch. Turns TimeSphere from an execution tracker into a
+project-management platform. **Nothing here changes how an existing workspace behaves until an
+admin turns it on** — every capability ships off by default.
+
+### ✨ Phase 1 — foundation
+
+- **Workspace Settings → Planning** — one new tab holding the planning master switches, the
+  working-week and default-capacity settings, custom fields, and the workflow editor. Each toggle
+  shows whether your plan actually includes the feature, so a switch can never be on while the
+  API refuses it.
+- **Custom fields** — admin-defined extra fields on tickets and projects (text, number, date,
+  select, checkbox, person, currency, link). Filterable and reportable, not free-text notes.
+- **Custom workflows** *(Enterprise)* — define your own statuses and transitions per ticket type.
+  Every custom status declares which built-in status it behaves like, so SLAs, reports, exports,
+  webhooks and the public API keep reading exactly the values they always have — renaming
+  "In review" to "Legal review" changes the board, not the data.
+- **Schema for everything that follows** — work-item hierarchy and dates on tickets, scheduling
+  dependencies with lag, portfolios, saved views, capacity and resource bookings, project
+  budgets, request forms, blueprints, approval chains, proofing annotations, custom dashboards,
+  scheduled reports, and the human-in-the-loop AI proposal tables.
+
+### 🔧 Under the hood
+
+- New permissions (`portfolios:manage`, `plan:write`, `resources:manage`, `approvals:manage`,
+  `dashboards:share`) are granted by **idempotent SQL inside the migration**, not by the seed —
+  the seed is a one-time bootstrap that never runs on upgrade, so a seed-only change would have
+  silently 403'd for every existing installation. `install`/`update` scripts needed no changes:
+  one-click install and upgrade both work as they are.
+- Every existing ticket is mapped onto the seeded Default workflow during the upgrade, with its
+  status left untouched.
+- Plan tiers gain six planning capabilities and five quotas, all defaulting restrictive so a tier
+  that misses initialisation under-entitles rather than over-entitles.
+
 ## 1.1.0 — 2026-08-03
 
 ### ✨ Features

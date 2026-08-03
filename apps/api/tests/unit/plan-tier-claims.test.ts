@@ -16,7 +16,7 @@
  * question to answer is whether the pricing page, the docs, and any signed contracts agree.
  */
 import { describe, expect, it } from "vitest";
-import { PLAN_TIER_LIMITS, planTiers, UNLIMITED_SEATS } from "@timesheet/shared";
+import { PLAN_TIER_LIMITS, planTiers, UNLIMITED_PLAN_ITEMS, UNLIMITED_SEATS } from "@timesheet/shared";
 
 describe("plan tier limits", () => {
   it("matches the tiers the pricing table sells", () => {
@@ -28,23 +28,80 @@ describe("plan tier limits", () => {
         aiMonthlyBudgetCeilingUsd: 0,
         allowedSsoProviders: ["GOOGLE"],
         allowedChatPlatforms: [],
-        faceVerificationEnabled: false
+        faceVerificationEnabled: false,
+        ganttEnabled: false,
+        resourceMgmtEnabled: false,
+        approvalsEnabled: false,
+        proofingEnabled: false,
+        customWorkflowsEnabled: false,
+        aiPmCopilotEnabled: false,
+        maxPortfolios: 0,
+        maxRequestForms: 0,
+        maxBlueprints: 0,
+        maxCustomFields: 0,
+        maxDashboards: 0
       },
       TEAM: {
         seatLimit: UNLIMITED_SEATS,
         aiMonthlyBudgetCeilingUsd: 200,
         allowedSsoProviders: ["GOOGLE", "MICROSOFT"],
         allowedChatPlatforms: ["SLACK", "TELEGRAM"],
-        faceVerificationEnabled: false
+        faceVerificationEnabled: false,
+        ganttEnabled: true,
+        resourceMgmtEnabled: false,
+        approvalsEnabled: true,
+        proofingEnabled: true,
+        customWorkflowsEnabled: false,
+        aiPmCopilotEnabled: false,
+        maxPortfolios: 1,
+        maxRequestForms: 5,
+        maxBlueprints: 5,
+        maxCustomFields: 10,
+        maxDashboards: 3
       },
       ENTERPRISE: {
         seatLimit: UNLIMITED_SEATS,
         aiMonthlyBudgetCeilingUsd: 5000,
         allowedSsoProviders: ["GOOGLE", "MICROSOFT", "SAML", "LDAP"],
         allowedChatPlatforms: ["SLACK", "MICROSOFT_TEAMS", "GOOGLE_CHAT", "TELEGRAM"],
-        faceVerificationEnabled: true
+        faceVerificationEnabled: true,
+        ganttEnabled: true,
+        resourceMgmtEnabled: true,
+        approvalsEnabled: true,
+        proofingEnabled: true,
+        customWorkflowsEnabled: true,
+        aiPmCopilotEnabled: true,
+        maxPortfolios: UNLIMITED_PLAN_ITEMS,
+        maxRequestForms: UNLIMITED_PLAN_ITEMS,
+        maxBlueprints: UNLIMITED_PLAN_ITEMS,
+        maxCustomFields: UNLIMITED_PLAN_ITEMS,
+        maxDashboards: UNLIMITED_PLAN_ITEMS
       }
     });
+  });
+
+  it("keeps every planning capability off on Starter, because they all fail closed", () => {
+    // Same argument as the face-verification row above, applied to the whole V6 planning layer:
+    // plan-limits.service.ts refuses each of these without the entitlement, so advertising one on
+    // a tier that doesn't have it is a promise the product actively declines to keep.
+    const starter = PLAN_TIER_LIMITS.STARTER;
+    expect(starter.ganttEnabled).toBe(false);
+    expect(starter.resourceMgmtEnabled).toBe(false);
+    expect(starter.approvalsEnabled).toBe(false);
+    expect(starter.proofingEnabled).toBe(false);
+    expect(starter.customWorkflowsEnabled).toBe(false);
+    expect(starter.aiPmCopilotEnabled).toBe(false);
+  });
+
+  it("gates the AI PM copilot behind a non-zero AI budget", () => {
+    // The copilot spends real money through the same meter every other AI feature uses. A tier
+    // that offered it with a zero ceiling would show the buttons and then refuse every click at
+    // preflight — worse than not offering it, because the customer has already been sold it.
+    for (const tier of planTiers) {
+      if (PLAN_TIER_LIMITS[tier].aiPmCopilotEnabled) {
+        expect(PLAN_TIER_LIMITS[tier].aiMonthlyBudgetCeilingUsd, `${tier} AI ceiling`).toBeGreaterThan(0);
+      }
+    }
   });
 
   it("keeps face verification Enterprise-only, because it fails closed", () => {
@@ -81,6 +138,29 @@ describe("plan tier limits", () => {
         expect(higher.allowedChatPlatforms, `${order[i]} chat`).toContain(platform);
       }
       if (lower.faceVerificationEnabled) expect(higher.faceVerificationEnabled).toBe(true);
+
+      // The V6 planning entitlements, checked the same way. Enumerated rather than derived from
+      // Object.keys so that adding a boolean/number to PlanTierLimits without listing it here
+      // shows up as a deliberate omission at review, not as silently-unchecked surface.
+      for (const capability of [
+        "ganttEnabled",
+        "resourceMgmtEnabled",
+        "approvalsEnabled",
+        "proofingEnabled",
+        "customWorkflowsEnabled",
+        "aiPmCopilotEnabled"
+      ] as const) {
+        if (lower[capability]) expect(higher[capability], `${order[i]} ${capability}`).toBe(true);
+      }
+      for (const quota of [
+        "maxPortfolios",
+        "maxRequestForms",
+        "maxBlueprints",
+        "maxCustomFields",
+        "maxDashboards"
+      ] as const) {
+        expect(higher[quota], `${order[i]} ${quota}`).toBeGreaterThanOrEqual(lower[quota]);
+      }
     }
   });
 });

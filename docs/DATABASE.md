@@ -42,6 +42,29 @@ locked out every existing user whose profile happened to be missing a field — 
 a configuration change they had no part in. See
 [ONBOARDING_AND_TOUR.md](ONBOARDING_AND_TOUR.md).
 
+### Backfilling a new PERMISSION is a special case (read before adding one)
+
+`prisma/seed.ts` is a **one-time bootstrap**. `docker-compose.yml` runs `prisma migrate deploy`
+on every API boot and `update.sh`/`update.ps1` then run `npm run migrate:tenants`, but **nothing
+re-runs the seed on upgrade** — and it must not, because it does
+`rolePermission.deleteMany` + `createMany` and would wipe any hand-customised grants.
+
+So a permission key added to `@timesheet/shared` reaches a *fresh* install through `seed.ts` and
+reaches an *existing* one **only** through SQL in the migration. Add both, in the same commit, or
+the feature silently 403s for every customer who upgrades. `20260803064315_v6_phase1_planning_foundation`
+is the worked example: it inserts the five planning permission keys and their role grants with
+`INSERT … SELECT … WHERE NOT EXISTS` guards, mirroring the `grants` map in `seed.ts`.
+
+The same applies to any row the application will *read and expect to exist*: the system Default
+workflow and the `GlobalPlanningSettings` singleton are both created by that migration **and** by
+`seed.ts`, using identical deterministic ids (`wf-default`, `wfs-open`, …) so the two paths
+converge on byte-identical rows. Verified by seeding a freshly-replayed database and confirming
+the grants match what the migration produces on an existing one.
+
+Every such statement must be **guarded so re-running is a no-op** — `migrate deploy` runs a
+migration once, but an interrupted deploy gets retried, and a tenant provisioned mid-upgrade
+replays the whole history.
+
 Core tables:
 
 - `users`, `roles`, `permissions`, `role_permissions`
@@ -51,6 +74,33 @@ Core tables:
 - `notifications`, `audit_logs`, `form_configurations`
 - `GlobalFaceVerificationSettings`, `FaceEnrollment`, `FaceVerificationAttempt` (optional
   face/identity verification — see below and [FACE_VERIFICATION.md](FACE_VERIFICATION.md))
+
+## Planning layer tables (V6)
+
+See [ARCHITECTURE.md §3.9](ARCHITECTURE.md#39-the-planning-layer-v6--additive-by-construction)
+for why this layer is shaped the way it is. All of it is inert until an admin turns a toggle on.
+
+| Group | Tables | Note |
+|---|---|---|
+| Hierarchy & schedule | *(columns on `Ticket`)* | `parentId`, `startDate`/`endDate`, `isMilestone`, `progressPct`, `sortOrder`, `baseline*`, `workflowStatusId` — all nullable/defaulted. `estimatedHours` already existed and **is** effort; don't add a second field. |
+| Dependencies | *(columns on `TicketLink`)* | `TicketLinkType` gains the four `*_TO_*` scheduling kinds plus `lagDays`. `BLOCKS` is treated by the solver as finish-to-start, so dependencies recorded before V6 keep meaning what they meant. |
+| Portfolio | `Portfolio` | One level above `Project` (`Project.portfolioId`). Deliberately thin — budget/risk/schedule are *derived* from its projects, never entered twice. |
+| Workflows | `Workflow`, `WorkflowStatus`, `WorkflowTransition` | `WorkflowStatus.legacyStatus` is the compatibility hinge. The system row (`wf-default`) is seeded from `ticketStatusTransitions` and is not editable. |
+| Custom fields | `CustomField`, `CustomFieldValue` | Rows, not a JSON blob on `Ticket`, because values must be filterable and reportable. Exactly one of `ticketId`/`projectId` is set — enforced in `custom-field.service.ts`, since Prisma on MySQL has no CHECK support. |
+| Views | `SavedView` | Persisted filter/column/sort per view type. |
+| Resourcing | `ResourceBooking` + `User.weeklyCapacityHours`/`plannedUtilizationPct` | Bookings are the *plan*; approved `Timesheet` rows are the *actual*. `hoursPerDay` is per **working** day, not per calendar day. |
+| Budget | *(columns on `Project`)* | `budgetAmount`/`budgetCurrency`/`budgetAlertPct`. Burn is **not stored** — it is summed live from the `Timesheet.billedAmount` rate snapshots, so the budget card and a Verified Work Attestation can never disagree. |
+| Intake | `RequestForm`, `RequestFormSubmission`, `Blueprint` | Form schemas and blueprint payloads are JSON (authored and rendered whole). Blueprint dates are **relative day offsets**, which is what makes a blueprint reusable. `publicToken` follows `AttestationShareLink.token`'s capability model. |
+| Approvals & proofing | `ApprovalRequest`, `ApprovalStep`, `ProofAnnotation` | Approves **deliverables**; the timesheet approval flow (`Timesheet.status` + `Escalation`) approves **hours** and is untouched. Guest approvers use a single-use token rather than a half-real `User` row. |
+| Dashboards & reports | `Dashboard`, `ReportSubscription` | Widgets are JSON; recipients are email strings, not necessarily `User`s. |
+| AI, human-in-the-loop | `AiProposal`, `AiProposalChange`, `ProjectRiskSnapshot` | No AI planning feature writes directly — it emits a proposal whose changes are individually accept/rejectable. `riskScore` is computed arithmetically; the LLM only writes `aiNarrative`. |
+| Settings | `GlobalPlanningSettings` | Singleton (`id = "global"`), every toggle default false. |
+
+Control plane: `PlanTierLimit` gains six boolean capabilities and five numeric quotas, all
+defaulting to the **restrictive** value so a tier row that missed initialisation
+under-entitles rather than over-entitles. The values come from `PLAN_TIER_LIMITS` in
+`@timesheet/shared` — the same constant the pricing table renders from — and are pinned by
+`apps/api/tests/unit/plan-tier-claims.test.ts`.
 
 ## Face (identity) verification tables
 

@@ -262,6 +262,57 @@ Two neighbors ride on the same machinery:
   bulk force-logout scoped to one person, with the extra guard that only a SUPER_ADMIN may
   sign out a SUPER_ADMIN.
 
+### 3.9 The planning layer (V6) — additive by construction
+
+TimeSphere tracks *the work* and *the time spent on it*, but had no way to express *the plan*:
+no hierarchy above a flat ticket, no dates other than the SLA-derived `dueAt`, no capacity, no
+intake forms, no approvals on deliverables, no fields or statuses a customer could name
+themselves. V6 adds that layer. The governing constraint is that **an org which upgrades and
+touches nothing must behave exactly as it did before** — so every table is new, every column
+added to an existing table is nullable or defaulted, and every capability is inert until an
+admin opts in on `GlobalPlanningSettings` (all six toggles default false, matching `aiEnabled`,
+`enableAttestations` and the face-verification switch).
+
+**The work item is `Ticket`, not a new table.** Hierarchy (`parentId`), schedule (`startDate`/
+`endDate`), effort (the existing `estimatedHours`), progress and baselines are columns on
+`Ticket`. Everything a planned work item needs — comments, attachments, watchers, labels, links,
+checklists, logged hours via `Timesheet.ticketId`, SLA, AI triage — already hangs off `Ticket`. A
+parallel `Task` table would have had to duplicate all of it and force every report to `UNION`,
+and would have made users decide "is this a ticket or a task?" on every capture.
+
+**`WorkflowStatus.legacyStatus` is the compatibility hinge, and it is the one piece of V6 worth
+understanding before changing anything.** Admin-defined statuses live in `Workflow` /
+`WorkflowStatus` / `WorkflowTransition`, and each status declares which built-in `TicketStatus`
+it writes to `Ticket.status`. Both columns are written in the same update by
+`services/workflow.service.ts#resolveStatusWrite`. The consequence: the ~40 existing readers of
+`Ticket.status` — the SLA sweep, the escalation worker, every report aggregate, the CSV/PDF
+exports, the public API, webhook payloads, the Kanban's columns, `ticketStatusTransitions`
+itself — keep working untouched *and keep being correct*, without any of them learning that
+custom statuses exist. Replacing the enum with a foreign key was the obvious alternative and was
+rejected: it would have meant auditing and rewriting every one of those call sites, on a live
+multi-tenant product, for no user-visible gain. `WorkStatusCategory` (TODO/ACTIVE/REVIEW/DONE/
+CANCELLED) is the richer vocabulary the *new* surfaces read, and is what makes CANCELLED
+expressible at all — the built-in enum has no such value, so a cancelled item maps to
+`legacyStatus = CLOSED` for old code while new code can still tell it from a successful close.
+
+The phase-1 migration seeds a **system "Default" workflow** whose six statuses and nine
+transitions are `ticketStatusTransitions` expressed as rows, and backfills every existing
+ticket's `workflowStatusId` from the status it is already in. A workspace that never opens the
+workflow editor is therefore running the same rules it always was.
+
+**Entitlements fail closed, with one deliberate asymmetry.** `plan-limits.service.ts` gains
+`isPlanningCapabilityAllowed` / `getPlanningEntitlements` / `getPlanningQuota`, read per request
+and never cached like every other limit. Unlike face verification there is **no fail-open
+counterpart**: a lapsed plan must not stop someone submitting a timesheet, but planning data is
+never load-bearing for day-to-day work — a downgraded org loses the Gantt *view* while every
+ticket, date and booking stays in the database, readable and intact. Losing a view is a
+recoverable annoyance; being unable to log time is not.
+
+**JSON vs rows** is decided by one test throughout this layer: *does anything query across the
+individual items?* Custom field **values** are rows (`CustomFieldValue`) because saved views
+filter on them and dashboards group by them. Request-form schemas, dashboard widget layouts and
+blueprint payloads are JSON because each is authored, versioned and rendered whole.
+
 ---
 
 ## 4. Request lifecycle (a normal, tenant-resolved API call)

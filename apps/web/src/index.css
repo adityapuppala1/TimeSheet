@@ -42,6 +42,48 @@
     --ring: 186 82% 32%;
 
     --radius: 0.625rem;
+
+    /*
+     * PLANNING SURFACES (V6) — timeline, workload heatmap, risk badges.
+     *
+     * WHY these are tokens and not values typed into the Gantt component: the timeline is the
+     * first screen in this app that is mostly COLOUR rather than mostly text, so it is the one
+     * most able to look like a different product bolted on. Every value below is derived from a
+     * hue already in this file (primary 186, accent 38, the three status hues) rather than
+     * chosen fresh, which is what keeps it reading as the same system. Built per the repo's
+     * `dataviz` skill, same as the Insights charts.
+     *
+     * The three rules the derivations follow:
+     *  1. Bars carry meaning, lanes do not. Lanes are near-background greys with a whisper of
+     *     the primary hue; bars are saturated. If a lane competed with a bar for attention the
+     *     chart would be unreadable at 200 rows.
+     *  2. Baseline is an outline, never a fill. It is a reference, not a value — filling it
+     *     would make every bar look doubled.
+     *  3. The capacity ramp is ONE hue at five lightnesses, except the top step. Ramps that
+     *     shift hue encode a second variable that does not exist. The exception is deliberate:
+     *     capacity-4 is "over capacity", a categorically different state from "busy", so it
+     *     crosses to the destructive hue — the one place a hue change carries real meaning.
+     */
+    --plan-lane: 210 30% 99%;
+    --plan-lane-alt: 214 24% 96%;
+    --plan-grid: 216 24% 90%;
+    --plan-bar: 186 82% 32%;        /* = primary */
+    --plan-bar-fg: 0 0% 100%;
+    --plan-bar-parent: 190 70% 22%; /* primary, darkened — summary rows sit visually "under" */
+    --plan-baseline: 222 14% 55%;   /* muted-foreground; used as a 1px outline only */
+    --plan-dependency: 222 14% 48%;
+    --plan-today: 38 92% 52%;       /* = accent, the only warm mark on the chart */
+    --plan-critical: 0 78% 52%;     /* = destructive */
+
+    --capacity-0: 214 24% 94%;      /* unbooked */
+    --capacity-1: 186 45% 80%;
+    --capacity-2: 186 60% 62%;
+    --capacity-3: 186 76% 42%;      /* at capacity */
+    --capacity-4: 0 78% 52%;        /* OVER capacity — hue break is the signal */
+
+    --risk-green: 152 64% 38%;      /* = success */
+    --risk-amber: 32 96% 52%;       /* = warning */
+    --risk-red: 0 78% 52%;          /* = destructive */
   }
 
   .dark {
@@ -81,6 +123,36 @@
     --border: 221 20% 24%;
     --input: 221 20% 24%;
     --ring: 184 74% 44%;
+
+    /*
+     * Dark-mode planning surfaces. NOT the light values inverted: the lane/bar contrast has to
+     * be rebuilt, because on a dark ground a saturated bar reads LOUDER than the same bar does
+     * on white. So bars lighten and desaturate slightly while lanes stay very close to the card
+     * colour — the same relationship, re-derived rather than mirrored.
+     *
+     * The capacity ramp reverses direction for the same reason: on light it runs pale -> deep,
+     * on dark it must run deep -> bright, or "more booked" would read as "fading out".
+     */
+    --plan-lane: 224 24% 13%;
+    --plan-lane-alt: 222 22% 16%;
+    --plan-grid: 221 20% 22%;
+    --plan-bar: 184 74% 44%;        /* = primary (dark) */
+    --plan-bar-fg: 220 50% 8%;
+    --plan-bar-parent: 184 60% 60%; /* lighter, not darker — depth inverts on a dark ground */
+    --plan-baseline: 214 14% 58%;
+    --plan-dependency: 214 14% 62%;
+    --plan-today: 38 92% 58%;       /* = accent (dark) */
+    --plan-critical: 0 72% 56%;     /* = destructive (dark) */
+
+    --capacity-0: 222 22% 20%;
+    --capacity-1: 186 30% 30%;
+    --capacity-2: 186 45% 40%;
+    --capacity-3: 184 74% 50%;
+    --capacity-4: 0 72% 56%;
+
+    --risk-green: 152 60% 46%;
+    --risk-amber: 32 92% 58%;
+    --risk-red: 0 72% 56%;
   }
 
   * {

@@ -1,6 +1,13 @@
 import { randomUUID } from "node:crypto";
 import { PrismaClient } from "@prisma/client";
-import { activityTypes, permissions } from "@timesheet/shared";
+import {
+  activityTypes,
+  permissions,
+  ticketStatuses,
+  ticketStatusTransitions,
+  DEFAULT_STATUS_CATEGORY,
+  type TicketStatus
+} from "@timesheet/shared";
 import { EMAIL_INTAKE_SYSTEM_EMAIL } from "../src/services/email-intake.service.js";
 import { CHAT_INTAKE_SYSTEM_EMAIL } from "../src/services/chat-intake.service.js";
 import { SECURITY_INGESTION_SYSTEM_EMAIL } from "../src/services/security-report.service.js";
@@ -61,6 +68,87 @@ export interface SeedTenantOptions {
 }
 
 /**
+ * The system "Default" workflow — V5's six statuses and `ticketStatusTransitions` expressed as
+ * rows so custom workflows can exist alongside them.
+ *
+ * WHY IT IS DERIVED FROM @timesheet/shared RATHER THAN WRITTEN OUT: `ticketStatusTransitions` is
+ * what the API validates against and what the status picker renders from. If this seed restated
+ * the graph by hand, the two could drift, and the visible symptom would be a board offering a
+ * move the server then rejects. Deriving it means the default workflow is the shared map, by
+ * construction.
+ *
+ * The ids are DETERMINISTIC (`wfs-open`, not a uuid) and match the ones the phase-1 migration
+ * inserts, so a fresh install and an upgraded install end up with byte-identical rows — which is
+ * what lets tests, fixtures and later migrations refer to them by id at all.
+ */
+const WORKFLOW_ID = "wf-default";
+const statusRowId = (s: TicketStatus) => `wfs-${s.toLowerCase().replace(/_/g, "-")}`;
+const STATUS_LABEL: Record<TicketStatus, string> = {
+  OPEN: "Open",
+  IN_PROGRESS: "In progress",
+  IN_REVIEW: "In review",
+  RESOLVED: "Resolved",
+  CLOSED: "Closed",
+  REOPENED: "Reopened"
+};
+
+export async function seedDefaultWorkflow(client: PrismaClient) {
+  await client.workflow.upsert({
+    where: { id: WORKFLOW_ID },
+    update: {},
+    create: {
+      id: WORKFLOW_ID,
+      name: "Default",
+      description:
+        "The built-in ticket workflow. Reproduces the six statuses and transitions this app has always enforced.",
+      isDefault: true,
+      isActive: true,
+      isSystem: true
+    }
+  });
+
+  for (const [index, status] of ticketStatuses.entries()) {
+    await client.workflowStatus.upsert({
+      where: { id: statusRowId(status) },
+      update: {},
+      create: {
+        id: statusRowId(status),
+        workflowId: WORKFLOW_ID,
+        name: STATUS_LABEL[status],
+        category: DEFAULT_STATUS_CATEGORY[status],
+        legacyStatus: status,
+        order: index,
+        // OPEN is where a new ticket lands (Ticket.status defaults to OPEN), and CLOSED is the
+        // only status nothing legally leaves except via REOPENED — read straight off the map
+        // rather than asserted, so a change there flows here.
+        isInitial: status === "OPEN",
+        isFinal: ticketStatusTransitions[status].length === 0
+      }
+    });
+  }
+
+  for (const [from, targets] of Object.entries(ticketStatusTransitions) as [TicketStatus, TicketStatus[]][]) {
+    for (const to of targets) {
+      await client.workflowTransition.upsert({
+        where: {
+          workflowId_fromStatusId_toStatusId: {
+            workflowId: WORKFLOW_ID,
+            fromStatusId: statusRowId(from),
+            toStatusId: statusRowId(to)
+          }
+        },
+        update: {},
+        create: {
+          workflowId: WORKFLOW_ID,
+          fromStatusId: statusRowId(from),
+          toStatusId: statusRowId(to)
+        }
+      });
+    }
+  }
+}
+
+/**
  * Seeds one tenant database's baseline data: roles/permissions, activity types, default ticket
  * types, the email-intake system account, and every "global" settings singleton at its safe
  * default — always. One admin user (real details if provided, otherwise the original demo
@@ -88,13 +176,19 @@ export async function seedTenant(client: PrismaClient, options: SeedTenantOption
   const grants: Record<string, string[]> = {
     SUPER_ADMIN: Object.values(permissions),
     ADMIN: Object.values(permissions),
+    // NOTE: this map is mirrored by idempotent SQL in
+    // prisma/migrations/*_v6_phase1_planning_foundation/migration.sql, because this seed is a
+    // ONE-TIME bootstrap that never runs on upgrade — a permission added here alone would reach
+    // fresh installs and never reach existing ones. Change both together.
     MANAGER: [
       permissions.TIMESHEETS_WRITE,
       permissions.TIMESHEETS_APPROVE,
       permissions.REPORTS_VIEW,
       permissions.TICKETS_VIEW,
       permissions.TICKETS_WRITE,
-      permissions.TICKETS_ASSIGN
+      permissions.TICKETS_ASSIGN,
+      permissions.PLAN_WRITE,
+      permissions.APPROVALS_MANAGE
     ],
     TEAM_LEAD: [
       permissions.TIMESHEETS_WRITE,
@@ -102,7 +196,9 @@ export async function seedTenant(client: PrismaClient, options: SeedTenantOption
       permissions.REPORTS_VIEW,
       permissions.TICKETS_VIEW,
       permissions.TICKETS_WRITE,
-      permissions.TICKETS_ASSIGN
+      permissions.TICKETS_ASSIGN,
+      permissions.PLAN_WRITE,
+      permissions.APPROVALS_MANAGE
     ],
     EMPLOYEE: [permissions.TIMESHEETS_WRITE, permissions.TICKETS_VIEW, permissions.TICKETS_WRITE]
   };
@@ -315,6 +411,16 @@ export async function seedTenant(client: PrismaClient, options: SeedTenantOption
     update: {},
     create: { id: "global" }
   });
+
+  // Planning-layer singleton + the system workflow (V6). Both are also created by
+  // *_v6_phase1_planning_foundation/migration.sql for databases that already existed — this
+  // block is the fresh-install half of the same fact, and the two must stay in step.
+  await client.globalPlanningSettings.upsert({
+    where: { id: "global" },
+    update: {},
+    create: { id: "global" }
+  });
+  await seedDefaultWorkflow(client);
 
   // Pre-fill every email template with a polished cross-client design. Admins
   // can later open Email Templates and tweak / send-test / revert any of them.

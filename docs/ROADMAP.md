@@ -1280,3 +1280,91 @@ User-reported, each fixed at the cause:
   FUNCTIONAL suite was explicitly rejected and the reason documented in the README: specs
   share one DB and deliberately mutate workspace-wide state (maintenance lockout, session
   revocation); the failure mode of overlap looks nothing like its cause.
+
+---
+
+## V6 — the planning layer: TimeSphere as a project-management platform
+
+**Why this theme.** Every previous phase deepened *execution* — tickets, timesheets, SLAs,
+DevOps/security ingestion, BYOK AI, multi-tenancy. Evaluated against Wrike (the closest
+feature-complete comparator), the gap is not any single missing button: it is that there is no
+way to express **the plan**. No hierarchy above a flat ticket, no dates other than the
+SLA-derived `dueAt`, no Gantt, no capacity, no intake forms, no approvals on deliverables, no
+fields or statuses a customer can name themselves, no dashboard they can build.
+
+**Why it's tractable here.** The hard half is already built, and in a way a pure PM tool cannot
+match. Wrike has to *estimate* effort; TimeSphere has real approved hours per person per project
+per day, with a rate snapshot captured at approval (`Timesheet.billedRate`, `billedAmount`). That
+makes workload heatmaps, budget burn, forecast-to-complete and estimate-variance **measured
+rather than entered** — the same "tickets and timesheets are one system" advantage this document
+already claims, cashed in.
+
+**The constraint on the whole programme:** an org that upgrades and touches nothing must behave
+exactly as it did on V5. Every table new, every added column nullable or defaulted, every
+capability inert until an admin opts in, the full Playwright suite passing unedited at each phase
+boundary.
+
+### Phase 1 — foundation (2026-08-03)
+
+Schema, entitlements and the admin surface. No user-visible feature beyond one settings tab —
+deliberately, so the riskiest part (a schema touching `Ticket`, `Project`, `User` and
+`TicketLink` on live multi-tenant data) lands and is verified on its own.
+
+- [x] **Work item = `Ticket`, not a new table.** `parentId` (self-relation), `startDate`/
+  `endDate`, `isMilestone`, `progressPct`, `sortOrder`, `baseline*`, `workflowStatusId`. The
+  existing `estimatedHours` **is** effort — no second field. A parallel `Task` table would have
+  duplicated comments/attachments/watchers/links/checklists/timesheet-linkage and forced every
+  report to `UNION`.
+- [x] **Custom workflows via `WorkflowStatus.legacyStatus`** — the compatibility hinge. Admin
+  statuses each declare which built-in `TicketStatus` they write, so the ~40 existing readers of
+  `Ticket.status` keep working *and keep being correct* without knowing custom statuses exist.
+  Replacing the enum with an FK was rejected: rewriting every one of those call sites on a live
+  product buys nothing a user can see. `WorkStatusCategory` adds CANCELLED, which the built-in
+  enum cannot express.
+- [x] **Custom fields as rows, not JSON on `Ticket`** — saved views filter on them and dashboards
+  group by them, which a JSON column on a large MySQL table cannot serve. One validation choke
+  point (`custom-field.service.ts#normaliseValue`) because four write paths will depend on it.
+- [x] Portfolio, saved views, resource bookings + capacity, project budget, request forms,
+  blueprints, approvals, proofing, dashboards, report subscriptions, and the `AiProposal` /
+  `AiProposalChange` / `ProjectRiskSnapshot` trio — schema only this phase.
+- [x] **Entitlements fail closed, with no fail-open counterpart** (unlike face verification).
+  Six capabilities + five quotas on `PlanTierLimit`, defaulting restrictive, read per request.
+  A downgraded org loses the *view*; every ticket, date and booking stays readable.
+- [x] Planning design tokens (light + dark) in `index.css` + a named `plan`/`capacity`/`risk`
+  palette in `tailwind.config.ts`, all derived from existing hues so the timeline reads as the
+  same product. The capacity ramp is one hue at five lightnesses **except** the top step, which
+  crosses to destructive — "over capacity" is a categorically different state from "busy", and
+  that is the one place a hue change carries meaning.
+
+**The upgrade-safety finding that shaped the migration.** `prisma/seed.ts` is a one-time
+bootstrap: `migrate deploy` runs on every boot and `migrate:tenants` walks every tenant DB, but
+**nothing re-runs the seed** — and it must not, since it does `rolePermission.deleteMany` +
+`createMany`. So a new permission key added to `@timesheet/shared` would have reached fresh
+installs and silently 403'd for every existing customer. Every permission, the system Default
+workflow, and the settings singleton are therefore backfilled by guarded SQL **inside** the
+migration, mirroring `seed.ts`. Consequence: `install.sh`/`install.ps1`/`update.sh`/`update.ps1`
+needed **zero changes** — one-click install and one-click upgrade both work as they are.
+
+Verified: 54-migration replay into a genuinely empty database (the check DATABASE.md mandates,
+because dev-DB success is a weaker claim); backfill run twice to prove idempotence; fresh-install
+seed producing byte-identical grants to the upgrade path; 762 existing tickets backfilled with
+`status` and `workflowStatus.legacyStatus` agreeing on every row; entitlement gate returning 403
+with an upgrade message on a downgraded tier while `/tickets`, `/reports` and `/timesheets` kept
+answering 200; 223 unit tests and all 145 Playwright tests across five viewport projects green
+with no spec edited.
+
+### Phases 2-6 — planned
+
+2. **Planning & views** — hierarchy UI, dependencies + lag, Gantt/timeline, calendar, view
+   switcher on the existing Tickets page (not a competing page), saved views, My Work, portfolio
+   roll-up, baselines, critical path.
+3. **Resource & budget** — capacity, bookings, workload heatmap, over-allocation, budget vs burn
+   vs forecast from the existing rate snapshots.
+4. **Intake & approvals** — request-form builder + public form route (modelled on the attestation
+   share-link pattern), blueprints with relative-date instantiation, approval chains, guest
+   approvers, proofing.
+5. **AI PM copilot + reporting** — the `AiProposal` engine and review UI, project-risk agent
+   (arithmetic score, AI narrative only — same division of labour as the face policy copilot),
+   plan breakdown, schedule/resource copilots, custom dashboards, scheduled report delivery.
+6. **Hardening** — solver/expander/applier unit tests, per-phase Playwright specs at five
+   viewports, docs, tour, tier matrix, `VERSION` → 2.0.0.

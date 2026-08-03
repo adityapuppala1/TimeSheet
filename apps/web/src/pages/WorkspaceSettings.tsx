@@ -102,6 +102,7 @@ import { AIPromptsCard } from "./settings/AIPromptsCard";
 import { SecurityDevOpsSettingsCard } from "./settings/SecurityDevOpsSettingsCard";
 import { FaceVerificationSettingsCard } from "./settings/FaceVerificationSettingsCard";
 import { MaintenanceSettingsCard } from "./settings/MaintenanceSettingsCard";
+import { PlanningSettingsCard } from "./settings/PlanningSettingsCard";
 
 // Matches the exact chart styling convention used in Insights.tsx (this repo's `dataviz`
 // skill): CSS-variable colors only, fixed categorical order never re-cycled by rank.
@@ -198,6 +199,10 @@ export function WorkspaceSettingsPage() {
           <TabsTrigger value="emails">Email channels</TabsTrigger>
           <TabsTrigger value="mail-server">Mail server</TabsTrigger>
           <TabsTrigger value="ticketing">Ticketing</TabsTrigger>
+          {/* Sits next to Ticketing on purpose: planning extends the ticket, it isn't a separate
+              product, and an admin looking for "where do I turn on the Gantt" looks near the
+              thing it plans. */}
+          <TabsTrigger value="planning">Planning</TabsTrigger>
           <TabsTrigger value="ai">AI</TabsTrigger>
           <TabsTrigger value="email-intake">Email intake</TabsTrigger>
           <TabsTrigger value="chat-integrations">Chat integrations</TabsTrigger>
@@ -225,6 +230,10 @@ export function WorkspaceSettingsPage() {
 
         <TabsContent value="ticketing">
           <TicketingSettingsCard readOnly={!isSuperAdmin} />
+        </TabsContent>
+
+        <TabsContent value="planning">
+          <PlanningSettingsCard readOnly={!isSuperAdmin} />
         </TabsContent>
 
         <TabsContent value="ai">

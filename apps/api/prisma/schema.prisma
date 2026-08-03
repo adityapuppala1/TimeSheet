@@ -59,10 +59,20 @@ enum EmailMatchType {
   SUBJECT_PREFIX
 }
 
+/// The first three are V5's original values and keep their exact meaning. The four `*_TO_*`
+/// values added in V6 are the standard project-scheduling dependency kinds the timeline solver
+/// understands. BLOCKS is treated by the solver AS finish-to-start, so every dependency an org
+/// already recorded before V6 participates in the schedule correctly without being migrated to a
+/// new type — which matters because "blocks" is the only dependency vocabulary the ticket detail
+/// sheet has ever offered, and orgs have real data in it.
 enum TicketLinkType {
   BLOCKS
   DUPLICATE
   RELATES
+  FINISH_TO_START
+  START_TO_START
+  FINISH_TO_FINISH
+  START_TO_FINISH
 }
 
 enum TicketPriority {
@@ -161,6 +171,19 @@ model User {
   /// from an entire company at once.
   faceVerificationRequired Boolean    @default(false)
 
+  /// --- Planning layer (V6) -----------------------------------------------------------------
+  /// Contracted hours per week, the denominator of every utilisation/over-allocation number on
+  /// the workload board. NULL means "use GlobalPlanningSettings.defaultWeeklyCapacityHours" —
+  /// deliberately not defaulted to 40 in the column, because a row-level 40 and an
+  /// unanswered-question 40 are different facts and only the second should follow a workspace
+  /// that later says its week is 37.5 hours.
+  weeklyCapacityHours      Decimal?   @db.Decimal(5, 2)
+  /// What share of that capacity is expected to be bookable project work, as opposed to
+  /// meetings/support/internal time. NULL = 100. Applied on top of weeklyCapacityHours so a
+  /// part-time person and a fully-loaded person are modelled by different fields rather than one
+  /// fudged number.
+  plannedUtilizationPct    Int?
+
   managerId String?
   manager   User?   @relation("UserManager", fields: [managerId], references: [id], onDelete: SetNull)
   reports   User[]  @relation("UserManager")
@@ -203,6 +226,21 @@ model User {
   faceVerifications         FaceVerificationAttempt[] @relation("FaceVerificationSubject")
   faceVerificationsReviewed FaceVerificationAttempt[] @relation("FaceVerificationReviewer")
   faceChallenges            FaceChallenge[]
+
+  /// --- Planning layer (V6) back-relations ---------------------------------------------------
+  portfoliosOwned        Portfolio[]             @relation("PortfolioOwner")
+  savedViews             SavedView[]
+  resourceBookings       ResourceBooking[]       @relation("BookingSubject")
+  resourceBookingsMade   ResourceBooking[]       @relation("BookingCreator")
+  requestFormsCreated    RequestForm[]
+  blueprintsCreated      Blueprint[]
+  approvalRequestsMade   ApprovalRequest[]       @relation("ApprovalRequester")
+  approvalSteps          ApprovalStep[]          @relation("ApprovalStepApprover")
+  proofAnnotations       ProofAnnotation[]
+  dashboards             Dashboard[]
+  reportSubscriptions    ReportSubscription[]
+  aiProposalsRequested   AiProposal[]            @relation("AiProposalRequester")
+  aiProposalsReviewed    AiProposal[]            @relation("AiProposalReviewer")
 
   createdAt DateTime  @default(now())
   updatedAt DateTime  @updatedAt
@@ -305,6 +343,28 @@ model Project {
   /// silently summing them.
   billingCurrency   String?  @db.VarChar(3)
 
+  /// --- Planning layer (V6) -----------------------------------------------------------------
+  /// Optional grouping one level above Project. NULL = ungrouped, which is every pre-V6 project,
+  /// so portfolios are purely additive: an org that ignores them sees no change anywhere.
+  portfolioId String?
+  portfolio   Portfolio? @relation(fields: [portfolioId], references: [id], onDelete: SetNull)
+
+  /// Approved budget for the engagement. Burn is NOT stored — it's summed live from the
+  /// `Timesheet.billedAmount` rate snapshots that already exist, so the number on the budget card
+  /// and the number on a Verified Work Attestation can never disagree.
+  budgetAmount   Decimal? @db.Decimal(14, 2)
+  /// NULL = fall back to billingCurrency, then GlobalTicketSettings.defaultCurrency — the same
+  /// chain billing-rate.service.ts already walks.
+  budgetCurrency String?  @db.VarChar(3)
+  /// Percent of budget at which the project starts warning (e.g. 80). NULL = no alerting.
+  budgetAlertPct Int?
+
+  /// Planned delivery window for the project as a whole. Independent of its work items' dates:
+  /// the gap between this and the rolled-up item dates is exactly the signal the risk scorer
+  /// reads as schedule pressure.
+  plannedStartDate DateTime? @db.Date
+  plannedEndDate   DateTime? @db.Date
+
   modules                   ProjectModule[]
   assignments               UserProjectAssignment[]
   timesheets                Timesheet[]
@@ -316,9 +376,16 @@ model Project {
   ingestionFallbackFor      IngestionSettings[]
   ticketRules               TicketRule[]
   attestations              WorkAttestation[]
+  customFieldValues         CustomFieldValue[]
+  resourceBookings          ResourceBooking[]
+  requestForms              RequestForm[]
+  riskSnapshots             ProjectRiskSnapshot[]
+  aiProposals               AiProposal[]            @relation("AiProposalProjectScope")
   createdAt                 DateTime                @default(now())
   updatedAt                 DateTime                @updatedAt
   deletedAt                 DateTime?
+
+  @@index([portfolioId])
 }
 
 model ProjectModule {
@@ -640,6 +707,50 @@ model Ticket {
   /// event — "the same crash came back" is detectable without a human re-linking it by hand.
   errorFingerprint String?  @db.VarChar(128)
 
+  /// --- Planning layer (V6) -----------------------------------------------------------------
+  /// Self-relation giving the flat V5 ticket list a hierarchy: an EPIC ticket with STORY
+  /// children with TASK children. Modelled on Ticket rather than a parallel "Task" table because
+  /// everything a planned work item needs — comments, attachments, watchers, labels, links,
+  /// checklists, logged hours via Timesheet.ticketId, SLA, AI triage — already hangs off Ticket.
+  /// A second table would have had to duplicate all of it and force every report to UNION.
+  /// NULL (the value on every pre-V6 row) means "top-level", so the existing flat list is
+  /// already a valid hierarchy with no backfill.
+  parentId          String?
+  parent            Ticket?  @relation("TicketHierarchy", fields: [parentId], references: [id], onDelete: Restrict)
+  children          Ticket[] @relation("TicketHierarchy")
+
+  /// The PLANNED schedule. Deliberately distinct from `dueAt`, which is SLA-derived from
+  /// priority and answers "when does responsiveness become a breach" — a different question from
+  /// "when is this scheduled to run". Conflating them would mean re-planning a task silently
+  /// moved its SLA, or an SLA policy change silently moved the project plan.
+  startDate         DateTime? @db.Date
+  endDate           DateTime? @db.Date
+  /// Zero-duration marker on the timeline (startDate == endDate by convention). A milestone
+  /// still participates in dependencies, which is the whole point of having them.
+  isMilestone       Boolean   @default(false)
+  /// Manual completion override, 0-100. NULL = derive it (from children's rollup, or from
+  /// logged-vs-estimated hours) rather than showing a number nobody entered.
+  progressPct       Int?
+  /// Manual ordering within a parent and within a board column. Ties broken by createdAt.
+  sortOrder         Int       @default(0)
+
+  /// Baseline = the plan as it was agreed, captured explicitly by a human ("set baseline"), never
+  /// automatically. Slip is `endDate - baselineEndDate`, and it is only meaningful because the
+  /// baseline is frozen — auto-refreshing it would make every plan look permanently on time,
+  /// which is exactly the failure mode baselines exist to prevent.
+  baselineStartDate   DateTime? @db.Date
+  baselineEndDate     DateTime? @db.Date
+  baselineEffortHours Decimal?  @db.Decimal(7, 2)
+  baselineSetAt       DateTime?
+
+  /// The admin-defined status this ticket is actually in. NULL = this workspace never enabled
+  /// custom workflows, so `status` (the enum) is the whole truth — the V5 behaviour, unchanged.
+  /// When set, `status` is still written in the same update from the row's `legacyStatus`, so
+  /// every pre-V6 query/worker/report keeps reading a correct value without knowing this column
+  /// exists. See WorkflowStatus's own comment.
+  workflowStatusId String?
+  workflowStatus   WorkflowStatus? @relation(fields: [workflowStatusId], references: [id], onDelete: SetNull)
+
   comments         TicketComment[]
   attachments      TicketAttachment[]
   watchers         TicketWatcher[]
@@ -655,6 +766,12 @@ model Ticket {
   testRuns         TestRun[]
   branches         TicketBranch[]
 
+  customFieldValues CustomFieldValue[]
+  resourceBookings  ResourceBooking[]
+  approvalRequests  ApprovalRequest[]
+  requestSubmission RequestFormSubmission[]
+  aiProposals       AiProposal[]           @relation("AiProposalTicketScope")
+
   createdAt DateTime  @default(now())
   updatedAt DateTime  @updatedAt
   deletedAt DateTime?
@@ -664,6 +781,10 @@ model Ticket {
   @@index([status, dueAt])
   @@index([reporterId])
   @@index([errorFingerprint])
+  /// Drives the hierarchy tree fetch (children of one parent, in display order).
+  @@index([parentId, sortOrder])
+  /// Drives the timeline window query ("everything in this project overlapping these dates").
+  @@index([projectId, startDate, endDate])
 }
 
 model TicketComment {
@@ -699,6 +820,9 @@ model TicketAttachment {
   width             Int?
   height            Int?
   storageKey        String? @db.VarChar(255)
+
+  /// Proofing (V6) — pin/region comments anchored to this file.
+  annotations ProofAnnotation[]
 
   @@index([ticketId])
   @@index([fileCategory])
@@ -1458,6 +1582,10 @@ model TicketLink {
   targetTicketId String
   targetTicket   Ticket         @relation("TicketLinkTarget", fields: [targetTicketId], references: [id], onDelete: Cascade)
   type           TicketLinkType
+  /// Scheduling lag in days between the two endpoints, e.g. FINISH_TO_START with lagDays = 2
+  /// means "start two days after the predecessor finishes". Negative = lead (overlap). NULL is
+  /// read as 0, which is what every pre-V6 row means.
+  lagDays        Int?
   createdAt      DateTime       @default(now())
 
   @@unique([sourceTicketId, targetTicketId, type])
@@ -2171,4 +2299,731 @@ model FaceChallenge {
 
   @@index([userId, createdAt])
   @@index([expiresAt])
+}
+
+/* ==================================================================================== *
+ * PLANNING LAYER (V6)
+ *
+ * WHAT: everything that turns this from an execution tracker into a project-management
+ * platform — a work-item hierarchy (on Ticket, above), admin-defined workflows and fields,
+ * scheduling, capacity/bookings, intake forms, blueprints, approvals, proofing, dashboards,
+ * scheduled reports, and the AI proposal envelope.
+ *
+ * WHY IT IS SHAPED THIS WAY — the one rule that governs the whole block: an org that upgrades
+ * to V6 and touches nothing must behave EXACTLY as it did on V5. So every table here is new
+ * (never a rewrite of an existing one), every column added to an existing table is nullable or
+ * defaulted, and every capability is inert until an admin flips a toggle on
+ * GlobalPlanningSettings. The one place that rule needed real design work is custom workflows —
+ * see WorkflowStatus.legacyStatus.
+ * ==================================================================================== */
+
+/// Canonical status vocabulary. Mirrors @timesheet/shared's `workStatusCategories`.
+enum WorkStatusCategory {
+  TODO
+  ACTIVE
+  REVIEW
+  DONE
+  CANCELLED
+}
+
+/// One level above Project. Deliberately thin: it groups projects and rolls their numbers up,
+/// and that is all. Everything a portfolio "has" (budget, risk, schedule) is derived from its
+/// projects rather than entered twice, because two independently-editable copies of a budget is
+/// how portfolio tools end up disagreeing with themselves.
+model Portfolio {
+  id          String  @id @default(uuid())
+  code        String  @unique @db.VarChar(20)
+  name        String  @db.VarChar(160)
+  description String? @db.Text
+  status      String  @default("ACTIVE") @db.VarChar(20)
+  color       String? @db.VarChar(20)
+
+  ownerId String?
+  owner   User?   @relation("PortfolioOwner", fields: [ownerId], references: [id], onDelete: SetNull)
+
+  projects Project[]
+
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  deletedAt DateTime?
+
+  @@index([status])
+}
+
+/// A named set of statuses and legal transitions, optionally scoped to one ticket type.
+/// The seeded "Default" workflow reproduces V5's six statuses and `ticketStatusTransitions`
+/// exactly, so a workspace that never opens the workflow editor is running the same rules it
+/// always was — just expressed as rows instead of a hard-coded map.
+model Workflow {
+  id          String  @id @default(uuid())
+  name        String  @db.VarChar(120)
+  description String? @db.Text
+  /// NULL = the workspace default, used by any ticket type with no workflow of its own.
+  /// Matches `TicketType.name` (a free string validated at the API layer), the same soft-FK
+  /// convention Ticket.type and Timesheet.activityType already use.
+  appliesToTicketType String? @unique @db.VarChar(60)
+  /// Exactly one row has this set. Enforced in workflow.service.ts, not by the schema, because
+  /// MySQL has no partial unique index.
+  isDefault Boolean @default(false)
+  isActive  Boolean @default(true)
+  /// True for the row the migration seeds. Blocks deletion and blocks editing a status's
+  /// legacyStatus — the safety net that guarantees there is always one workflow whose statuses
+  /// map 1:1 onto the built-in enum.
+  isSystem  Boolean @default(false)
+
+  statuses    WorkflowStatus[]
+  transitions WorkflowTransition[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+/// One admin-defined status.
+///
+/// `legacyStatus` IS THE COMPATIBILITY HINGE OF V6. Every status — including one an admin
+/// invents, like "Design QA" — must declare which built-in `TicketStatus` it writes to
+/// `Ticket.status`. Both columns are written in the same update. The consequence is that the
+/// ~40 places already reading `Ticket.status` (the SLA sweep, the escalation worker, every
+/// report aggregate, the CSV/PDF exports, the public API, the webhook payloads, the Kanban's
+/// column set) keep working untouched and keep being CORRECT, without any of them learning that
+/// custom statuses exist. The alternative — replacing the enum with a foreign key — would have
+/// meant auditing and rewriting every one of those call sites, on a live multi-tenant product,
+/// for no user-visible gain.
+///
+/// `category` is the richer vocabulary the NEW planning surfaces read (a timeline bar is "done"
+/// if its category is DONE), and it is what makes CANCELLED expressible at all — the built-in
+/// enum has no such value, so a cancelled item maps to legacyStatus CLOSED for old code while
+/// the new code can still tell "cancelled" from "closed successfully".
+model WorkflowStatus {
+  id           String             @id @default(uuid())
+  workflowId   String
+  workflow     Workflow           @relation(fields: [workflowId], references: [id], onDelete: Cascade)
+  name         String             @db.VarChar(60)
+  category     WorkStatusCategory
+  legacyStatus TicketStatus
+  color        String?            @db.VarChar(20)
+  order        Int                @default(0)
+  /// Where a newly-created ticket on this workflow lands.
+  isInitial    Boolean            @default(false)
+  /// Terminal — nothing transitions out of it.
+  isFinal      Boolean            @default(false)
+
+  tickets         Ticket[]
+  transitionsFrom WorkflowTransition[] @relation("TransitionFrom")
+  transitionsTo   WorkflowTransition[] @relation("TransitionTo")
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([workflowId, name])
+  @@index([workflowId, order])
+}
+
+/// A legal move between two statuses of the same workflow. Absence of a row means the move is
+/// illegal — the same closed-world rule `ticketStatusTransitions` already enforces, so an admin
+/// cannot accidentally create a workflow that permits anything.
+model WorkflowTransition {
+  id           String         @id @default(uuid())
+  workflowId   String
+  workflow     Workflow       @relation(fields: [workflowId], references: [id], onDelete: Cascade)
+  fromStatusId String
+  fromStatus   WorkflowStatus @relation("TransitionFrom", fields: [fromStatusId], references: [id], onDelete: Cascade)
+  toStatusId   String
+  toStatus     WorkflowStatus @relation("TransitionTo", fields: [toStatusId], references: [id], onDelete: Cascade)
+  /// When true, moving across this transition opens an ApprovalRequest and the move is held
+  /// until it is approved. Only honoured while GlobalPlanningSettings.enableApprovals is on.
+  requiresApproval   Boolean @default(false)
+  /// Optional extra permission key the actor must hold on top of TICKETS_WRITE, e.g. restricting
+  /// "→ Released" to someone with plan:write.
+  requiredPermission String? @db.VarChar(60)
+
+  createdAt DateTime @default(now())
+
+  @@unique([workflowId, fromStatusId, toStatusId])
+  @@index([fromStatusId])
+}
+
+enum CustomFieldType {
+  TEXT
+  NUMBER
+  DATE
+  SINGLE_SELECT
+  MULTI_SELECT
+  CHECKBOX
+  USER
+  CURRENCY
+  URL
+}
+
+enum CustomFieldTarget {
+  TICKET
+  PROJECT
+}
+
+/// Admin-defined extra fields on a ticket or project. Modelled as definition + value rows rather
+/// than a JSON blob on Ticket because the values have to be FILTERABLE and REPORTABLE — a saved
+/// view filtering on "Client = Acme" and a dashboard grouping by it both need an indexable row,
+/// which a JSON column on a table with hundreds of thousands of rows does not give on MySQL.
+model CustomField {
+  id          String            @id @default(uuid())
+  /// Stable machine name used by the public API, request forms and blueprint payloads. Renaming
+  /// the human `label` must never break those, which is why they are two columns.
+  key         String            @unique @db.VarChar(60)
+  label       String            @db.VarChar(120)
+  type        CustomFieldType
+  description String?           @db.VarChar(300)
+  /// SINGLE_SELECT / MULTI_SELECT only — a JSON array of option strings.
+  options     Json?
+  isRequired  Boolean           @default(false)
+  appliesTo   CustomFieldTarget @default(TICKET)
+  /// NULL = every ticket type; otherwise the `TicketType.name` this field is scoped to.
+  ticketTypeFilter  String? @db.VarChar(60)
+  /// Whether a request form may expose this field to an external submitter.
+  showOnRequestForm Boolean @default(false)
+  order             Int     @default(0)
+  isActive          Boolean @default(true)
+
+  values CustomFieldValue[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([appliesTo, isActive, order])
+}
+
+/// One field's value on one ticket or project. Exactly one of ticketId/projectId is set —
+/// enforced in custom-field.service.ts, since Prisma on MySQL has no CHECK-constraint support.
+/// `value` is JSON so one table serves all nine types without nine nullable typed columns; the
+/// service normalises and validates against the field's declared type on every write, so a
+/// NUMBER field can never come back as a string.
+model CustomFieldValue {
+  id      String      @id @default(uuid())
+  fieldId String
+  field   CustomField @relation(fields: [fieldId], references: [id], onDelete: Cascade)
+
+  ticketId  String?
+  ticket    Ticket?  @relation(fields: [ticketId], references: [id], onDelete: Cascade)
+  projectId String?
+  project   Project? @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  value Json?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([fieldId, ticketId])
+  @@unique([fieldId, projectId])
+  @@index([ticketId])
+  @@index([projectId])
+}
+
+/// A saved filter/column/sort configuration for one of the work views. PERSONAL views are
+/// private to their owner; SHARED ones are visible workspace-wide (publishing needs
+/// dashboards:share, the same right that publishes a dashboard).
+model SavedView {
+  id       String @id @default(uuid())
+  ownerId  String
+  owner    User   @relation(fields: [ownerId], references: [id], onDelete: Cascade)
+  name     String @db.VarChar(120)
+  scope    String @default("PERSONAL") @db.VarChar(20)
+  viewType String @default("LIST") @db.VarChar(20)
+  /// The same filter shape the Tickets page already puts in its query string, persisted.
+  filters  Json?
+  columns  Json?
+  sort     Json?
+  /// Whether this is the owner's landing view for `viewType`.
+  isDefault Boolean @default(false)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([ownerId, viewType])
+  @@index([scope])
+}
+
+/// A reservation of someone's time. This is the PLAN ("Ana is on Acme 4h/day next sprint");
+/// approved Timesheet rows are the ACTUAL. The workload board shows both against
+/// User.weeklyCapacityHours, and the gap between planned and actual is the number that makes
+/// this app's resource management more trustworthy than a tool that only ever has estimates.
+model ResourceBooking {
+  id     String @id @default(uuid())
+  userId String
+  user   User   @relation("BookingSubject", fields: [userId], references: [id], onDelete: Cascade)
+
+  /// A booking is against a project, a specific work item, or neither (leave/overhead). At most
+  /// one of these is set.
+  projectId String?
+  project   Project? @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  ticketId  String?
+  ticket    Ticket?  @relation(fields: [ticketId], references: [id], onDelete: Cascade)
+
+  startDate   DateTime @db.Date
+  endDate     DateTime @db.Date
+  /// Hours per WORKING day (GlobalPlanningSettings.workingDays), not per calendar day — booking
+  /// someone 8h/day across a week must not silently claim 56 hours.
+  hoursPerDay Decimal  @db.Decimal(4, 2)
+  note        String?  @db.VarChar(300)
+  /// Marks non-project time (leave, holiday, training) so it reduces available capacity without
+  /// being counted as project delivery in utilisation.
+  isTimeOff   Boolean  @default(false)
+
+  createdById String?
+  createdBy   User?   @relation("BookingCreator", fields: [createdById], references: [id], onDelete: SetNull)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([userId, startDate, endDate])
+  @@index([projectId])
+  @@index([ticketId])
+}
+
+/// An intake form that turns a request into a ticket. Two audiences from one model: internal
+/// (session required) and public (`isPublic` + an unguessable `publicToken` in the URL) — the
+/// same two-step opt-in shape attestations use, where issuing the artifact and publishing it to
+/// an unauthenticated URL are separate, deliberate decisions.
+model RequestForm {
+  id          String  @id @default(uuid())
+  slug        String  @unique @db.VarChar(80)
+  name        String  @db.VarChar(160)
+  description String? @db.Text
+  isActive    Boolean @default(true)
+
+  /// Where submissions land.
+  projectId         String
+  project           Project        @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  moduleId          String?
+  ticketType        String         @default("BUG") @db.VarChar(60)
+  defaultPriority   TicketPriority @default(MEDIUM)
+  defaultAssigneeId String?
+  /// Optionally instantiate a whole blueprint instead of a single ticket.
+  blueprintId       String?
+  blueprint         Blueprint?     @relation(fields: [blueprintId], references: [id], onDelete: SetNull)
+
+  /// Public submission. `publicToken` is the capability — treated exactly like
+  /// AttestationShareLink.token: unguessable, revocable by clearing it, and never derived from
+  /// the form id.
+  isPublic              Boolean @default(false)
+  publicToken           String? @unique @db.VarChar(64)
+  /// Bounds abuse of an unauthenticated endpoint independently of the global limiter.
+  maxSubmissionsPerHour Int     @default(20)
+
+  /// The questions and their conditional-show rules. JSON because a form's shape is authored,
+  /// versioned and rendered as a whole — there is no query that needs to filter across
+  /// individual questions, which is the test that decides JSON vs rows in this schema.
+  schema Json
+
+  createdById String?
+  createdBy   User?   @relation(fields: [createdById], references: [id], onDelete: SetNull)
+
+  submissions RequestFormSubmission[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([isActive])
+}
+
+model RequestFormSubmission {
+  id     String      @id @default(uuid())
+  formId String
+  form   RequestForm @relation(fields: [formId], references: [id], onDelete: Cascade)
+
+  /// NULL until the submission is accepted — a rejected/spam submission never creates a ticket.
+  ticketId String?
+  ticket   Ticket? @relation(fields: [ticketId], references: [id], onDelete: SetNull)
+
+  submitterName  String? @db.VarChar(160)
+  submitterEmail String? @db.VarChar(255)
+  answers        Json
+
+  /// PENDING | ACCEPTED | REJECTED
+  status       String  @default("PENDING") @db.VarChar(20)
+  /// AI triage confidence, capped at the same EXTERNAL_INTAKE_CONFIDENCE_CEILING the email/chat
+  /// pipelines use — an unauthenticated submitter's content must never be able to talk its way
+  /// past human review.
+  aiConfidence Float?
+  needsReview  Boolean @default(true)
+
+  /// Salted hash, never a raw IP: enough to rate-limit and spot a flood, not a stored identifier
+  /// for someone who only ever filled in a form.
+  ipHash String? @db.VarChar(64)
+
+  createdAt DateTime @default(now())
+
+  @@index([formId, createdAt])
+  @@index([status, createdAt])
+}
+
+enum BlueprintKind {
+  PROJECT
+  WORK_ITEM
+}
+
+/// A reusable project/work-item structure. Dates in `payload` are stored as RELATIVE day
+/// offsets, never absolute — that is what makes a blueprint reusable at all, and it means
+/// instantiating one is "pick a start date" rather than "fix up 30 dates afterwards".
+model Blueprint {
+  id          String        @id @default(uuid())
+  name        String        @db.VarChar(160)
+  description String?       @db.Text
+  kind        BlueprintKind @default(PROJECT)
+  isActive    Boolean       @default(true)
+
+  /// { modules: [...], items: [{ title, type, offsetStartDays, durationDays, dependsOn,
+  ///   customFields, ... }], approvalChain: [...] } — expanded by blueprint.service.ts.
+  payload Json
+
+  createdById String?
+  createdBy   User?   @relation(fields: [createdById], references: [id], onDelete: SetNull)
+
+  requestForms RequestForm[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([kind, isActive])
+}
+
+enum ApprovalDecision {
+  PENDING
+  APPROVED
+  REJECTED
+}
+
+/// An approval gate on a work item. Distinct from the timesheet approval flow (Timesheet.status
+/// + Escalation), which stays exactly as it is — that one approves HOURS, this one approves
+/// DELIVERABLES, and merging them would have meant one of the two changing meaning.
+model ApprovalRequest {
+  id       String @id @default(uuid())
+  ticketId String
+  ticket   Ticket @relation(fields: [ticketId], references: [id], onDelete: Cascade)
+
+  title       String    @db.VarChar(200)
+  description String?   @db.Text
+  dueAt       DateTime?
+  /// Sequential = each step unlocks the next (a chain). Parallel = everyone is asked at once and
+  /// the request completes when all have decided.
+  isSequential Boolean          @default(true)
+  status       ApprovalDecision @default(PENDING)
+
+  requestedById String
+  requestedBy   User   @relation("ApprovalRequester", fields: [requestedById], references: [id])
+
+  /// Set when this request is gating a workflow transition, so approving it can complete the
+  /// move the requester originally attempted.
+  pendingTransitionStatusId String? @db.VarChar(36)
+
+  steps ApprovalStep[]
+
+  createdAt   DateTime  @default(now())
+  completedAt DateTime?
+
+  @@index([ticketId, status])
+  @@index([status, dueAt])
+}
+
+/// One approver's slot. Either an internal `approverId` OR an external `guestEmail` + single-use
+/// `guestToken` — the guest path reuses the public-share-link pattern (unguessable token, no
+/// account, scoped to exactly one decision) rather than inventing a guest user record, because a
+/// half-real User row that cannot log in is a permission bug waiting to happen.
+model ApprovalStep {
+  id        String          @id @default(uuid())
+  requestId String
+  request   ApprovalRequest @relation(fields: [requestId], references: [id], onDelete: Cascade)
+  order     Int             @default(0)
+
+  approverId String?
+  approver   User?   @relation("ApprovalStepApprover", fields: [approverId], references: [id], onDelete: SetNull)
+  guestEmail String? @db.VarChar(255)
+  guestToken String? @unique @db.VarChar(64)
+
+  decision   ApprovalDecision @default(PENDING)
+  comment    String?          @db.Text
+  decidedAt  DateTime?
+  remindedAt DateTime?
+
+  createdAt DateTime @default(now())
+
+  @@index([requestId, order])
+  @@index([approverId, decision])
+}
+
+/// A pin or region comment anchored to a point on an attachment — the proofing surface. Threaded
+/// via `parentId` so a reviewer's note and the reply to it stay together.
+model ProofAnnotation {
+  id           String           @id @default(uuid())
+  attachmentId String
+  attachment   TicketAttachment @relation(fields: [attachmentId], references: [id], onDelete: Cascade)
+
+  authorId   String?
+  author     User?   @relation(fields: [authorId], references: [id], onDelete: SetNull)
+  /// Set instead of authorId when a guest reviewer (an ApprovalStep guest) left the note.
+  guestEmail String? @db.VarChar(255)
+
+  /// Normalised 0-1 coordinates so an annotation stays anchored at any zoom or render size.
+  /// `w`/`h` null = a point pin; set = a rectangular region.
+  x Float
+  y Float
+  w Float?
+  h Float?
+  /// Page (PDF) or frame index — null for a single image.
+  pageIndex Int?
+
+  body       String    @db.Text
+  resolvedAt DateTime?
+
+  parentId String?
+  parent   ProofAnnotation?  @relation("ProofThread", fields: [parentId], references: [id], onDelete: Cascade)
+  replies  ProofAnnotation[] @relation("ProofThread")
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([attachmentId, createdAt])
+  @@index([parentId])
+}
+
+/// A user-composed dashboard. Widgets live in one JSON column rather than their own table for
+/// the same reason RequestForm.schema does: a dashboard is authored and rendered whole, and
+/// nothing ever queries across individual widgets.
+model Dashboard {
+  id      String @id @default(uuid())
+  ownerId String
+  owner   User   @relation(fields: [ownerId], references: [id], onDelete: Cascade)
+  name    String @db.VarChar(160)
+  /// PERSONAL | SHARED
+  scope   String @default("PERSONAL") @db.VarChar(20)
+  /// [{ id, type, title, config, x, y, w, h }] — the grid layout and each widget's config.
+  widgets Json
+
+  isDefault Boolean @default(false)
+
+  subscriptions ReportSubscription[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([ownerId])
+  @@index([scope])
+}
+
+enum ReportCadence {
+  DAILY
+  WEEKLY
+  MONTHLY
+}
+
+/// "Email me this report every Monday." Delivered by workers/report-subscription.worker.ts
+/// through run-for-every-org, reusing the existing mail pipeline and template store rather than
+/// adding a second way to send email.
+model ReportSubscription {
+  id   String @id @default(uuid())
+  name String @db.VarChar(160)
+
+  /// Which report to render: a `reportKey` naming an existing /reports endpoint, or a dashboard.
+  reportKey   String?    @db.VarChar(60)
+  dashboardId String?
+  dashboard   Dashboard? @relation(fields: [dashboardId], references: [id], onDelete: Cascade)
+
+  filters Json?
+  cadence ReportCadence @default(WEEKLY)
+  /// 0 = Sunday. Only read for WEEKLY. MONTHLY uses dayOfMonth.
+  dayOfWeek  Int?
+  dayOfMonth Int?
+  /// Hour of day in UTC — the worker ticks hourly and fires the subscriptions due this hour.
+  hourUtc    Int @default(7)
+
+  /// Explicit address list. JSON rather than a join table because a recipient here is an email
+  /// string, not necessarily a User — the point is sending to stakeholders without accounts.
+  recipients Json
+  /// HTML | CSV | PDF
+  format     String  @default("HTML") @db.VarChar(10)
+  isActive   Boolean @default(true)
+
+  lastSentAt    DateTime?
+  lastSendError String?   @db.VarChar(500)
+
+  createdById String?
+  createdBy   User?   @relation(fields: [createdById], references: [id], onDelete: SetNull)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([isActive, cadence, hourUtc])
+}
+
+enum AiProposalKind {
+  PLAN_BREAKDOWN
+  SCHEDULE_ADJUSTMENT
+  ASSIGNMENT_REBALANCE
+  RISK_MITIGATION
+  BLUEPRINT_SUGGESTION
+}
+
+enum AiProposalStatus {
+  PENDING_REVIEW
+  PARTIALLY_APPLIED
+  APPLIED
+  REJECTED
+  EXPIRED
+}
+
+enum AiProposalChangeOp {
+  CREATE
+  UPDATE
+  LINK
+}
+
+/// THE HUMAN-IN-THE-LOOP ENVELOPE. No AI planning feature in this app writes to a ticket,
+/// schedule or booking directly — it emits one of these, and a human applies it.
+///
+/// WHY this exists as a first-class table rather than each feature just prompting for
+/// confirmation: the AI planning features propose MANY changes at once (break this epic into 14
+/// tasks; shift 40 dates; move 6 tickets between people). A yes/no dialog over a change set that
+/// size is not review, it is a rubber stamp — and there is no undo for "the AI moved every date
+/// in Q3". Storing the diff row-by-row means a reviewer accepts the 11 rows that are right and
+/// rejects the 3 that are not, the before-state is recorded for audit, and a proposal nobody
+/// reviews simply expires having changed nothing.
+///
+/// It also gives the existing AI quality loop something to learn from: accept/reject per row is a
+/// far richer signal than the thumbs-up/down on AIInteraction, and it is generated as a
+/// by-product of people doing their normal work.
+model AiProposal {
+  id   String         @id @default(uuid())
+  kind AiProposalKind
+
+  /// Scope — at most one is set, depending on kind.
+  scopeProjectId String?
+  scopeProject   Project? @relation("AiProposalProjectScope", fields: [scopeProjectId], references: [id], onDelete: Cascade)
+  scopeTicketId  String?
+  scopeTicket    Ticket?  @relation("AiProposalTicketScope", fields: [scopeTicketId], references: [id], onDelete: Cascade)
+
+  title      String  @db.VarChar(200)
+  /// The model's stated reasoning, shown verbatim to the reviewer. Never parsed or acted on.
+  rationale  String? @db.Text
+  /// Self-reported, displayed as context for the reviewer only. It can never gate application —
+  /// a human always applies, so there is no threshold for it to cross.
+  confidence Float?
+  model      String? @db.VarChar(80)
+  /// Links to the prompt version that produced this, so a bad batch of proposals is traceable to
+  /// a prompt change. See AIPromptVersion.
+  promptVersionId String?
+
+  status AiProposalStatus @default(PENDING_REVIEW)
+
+  requestedById String?
+  requestedBy   User?     @relation("AiProposalRequester", fields: [requestedById], references: [id], onDelete: SetNull)
+  reviewedById  String?
+  reviewedBy    User?     @relation("AiProposalReviewer", fields: [reviewedById], references: [id], onDelete: SetNull)
+  reviewedAt    DateTime?
+  appliedAt     DateTime?
+  /// Unreviewed proposals go stale — a schedule proposal computed against last week's plan is
+  /// worse than no proposal. The sweep marks these EXPIRED rather than letting someone apply one.
+  expiresAt     DateTime?
+
+  changes       AiProposalChange[]
+  riskSnapshots ProjectRiskSnapshot[]
+
+  createdAt DateTime @default(now())
+
+  @@index([status, createdAt])
+  @@index([scopeProjectId, status])
+  @@index([expiresAt])
+}
+
+/// One individually accept/rejectable change within a proposal. `before` is re-checked at APPLY
+/// time as well as captured at propose time — if the underlying row moved while the proposal sat
+/// unreviewed, applying it would otherwise silently clobber someone else's edit.
+model AiProposalChange {
+  id         String     @id @default(uuid())
+  proposalId String
+  proposal   AiProposal @relation(fields: [proposalId], references: [id], onDelete: Cascade)
+
+  /// TICKET | PROJECT | BOOKING | LINK
+  targetType String             @db.VarChar(20)
+  /// NULL for op = CREATE — the row does not exist yet. Filled in once applied.
+  targetId   String?
+  op         AiProposalChangeOp
+
+  /// Field-level diff. `before` is null for CREATE.
+  before Json?
+  after  Json
+
+  /// Human-readable one-liner ("Move TCK-14 from Ana to Ben"), so the reviewer reads intent
+  /// rather than raw JSON.
+  summary String @db.VarChar(300)
+
+  /// NULL = not yet decided. The reviewer sets each row.
+  accepted   Boolean?
+  appliedAt  DateTime?
+  /// Set when application was attempted and refused (stale before-state, permission, validation),
+  /// so a partially-applied proposal explains itself.
+  applyError String?   @db.VarChar(500)
+
+  order Int @default(0)
+
+  createdAt DateTime @default(now())
+
+  @@index([proposalId, order])
+}
+
+enum RiskBand {
+  GREEN
+  AMBER
+  RED
+}
+
+/// A point-in-time project health reading, written nightly by workers/project-risk.worker.ts.
+///
+/// `riskScore` is computed ARITHMETICALLY from signals this app already measures (schedule slip
+/// vs baseline, blocked dependencies, SLA breaches, over-allocation, budget burn vs progress,
+/// reopen rate). The LLM's only job is `aiNarrative` — writing the sentence that explains the
+/// number. This is the same division of labour the face policy copilot uses, and it exists for
+/// the same reason: a score a model invented is not auditable, not reproducible, and not
+/// defensible in the meeting where someone asks why their project is red.
+model ProjectRiskSnapshot {
+  id        String  @id @default(uuid())
+  projectId String
+  project   Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  computedAt DateTime @default(now())
+  /// 0-100, higher = worse.
+  riskScore  Int
+  band       RiskBand
+  /// Per-signal breakdown: { scheduleSlipDays, blockedCount, slaBreaches, overAllocatedPeople,
+  /// budgetBurnPct, progressPct, reopenRate, ... } — kept so the score is always explainable
+  /// without recomputing it against data that has since changed.
+  signals    Json
+
+  aiNarrative String? @db.Text
+  /// A mitigation proposal generated alongside the snapshot, if the copilot is on.
+  aiProposalId String?
+  aiProposal   AiProposal? @relation(fields: [aiProposalId], references: [id], onDelete: SetNull)
+
+  @@index([projectId, computedAt])
+  @@index([band, computedAt])
+}
+
+/// Singleton (id = "global"), mirroring GlobalTicketSettings/GlobalAISettings. Every toggle
+/// defaults false: upgrading to V6 must change nothing a user can see until an admin opts in.
+model GlobalPlanningSettings {
+  id String @id
+
+  enablePlanning           Boolean @default(false)
+  enableResourceManagement Boolean @default(false)
+  enableApprovals          Boolean @default(false)
+  enableProofing           Boolean @default(false)
+  enableRequestForms       Boolean @default(false)
+  enableCustomWorkflows    Boolean @default(false)
+
+  /// JSON array of weekday numbers, 0 = Sunday. The timeline solver and the workload denominator
+  /// both read this — a 5-day week and a 6-day week produce genuinely different schedules, and
+  /// hard-coding Mon-Fri would be wrong for a large share of this product's likely market.
+  workingDays                Json    @default("[1,2,3,4,5]")
+  /// Fallback for users with no weeklyCapacityHours of their own.
+  defaultWeeklyCapacityHours Decimal @default(40) @db.Decimal(5, 2)
+
+  updatedAt   DateTime @updatedAt
+  updatedById String?
 }
