@@ -51,3 +51,44 @@ export async function accessToken(page: Page): Promise<Record<string, string>> {
   const { accessToken: token } = await res.json();
   return { Authorization: `Bearer ${token}` };
 }
+
+/**
+ * Picks a date through the calendar popover.
+ *
+ * The date fields are calendars now, not `<input type="date">`, so there is nothing to `fill`. This
+ * drives the control the way a person does — open it, step the month header to the target, click
+ * the day — which is also the only way to catch the popover failing to open at all.
+ */
+export async function pickDate(page: Page, triggerId: string, target: Date) {
+  await page.locator(`#${triggerId}`).click();
+  const dialog = page.getByRole("dialog");
+  await expect(dialog).toBeVisible({ timeout: 10_000 });
+
+  const wanted = target.toLocaleDateString("en-US", { month: "long", year: "numeric" });
+  // Step backwards or forwards until the heading matches. Bounded so a broken stepper fails fast
+  // rather than spinning for the whole timeout.
+  for (let i = 0; i < 60; i += 1) {
+    const heading = (await dialog.getByRole("heading").first().textContent())?.trim() ?? "";
+    if (heading === wanted) break;
+    const back = new Date(`${heading} 1`) > target;
+    // `.first()` because React Aria renders a second, visually-hidden stepper for screen readers;
+    // both carry the same accessible name and a bare match is a strict-mode violation.
+    await dialog.getByRole("button", { name: back ? "Previous" : "Next" }).first().click();
+  }
+
+  // Cells are buttons whose accessible name is the FULL date — "Wednesday, August 5, 2026" — not
+  // the bare day number. Matching on the number alone finds nothing, and matching loosely would
+  // hit "5" inside "15" and "25". Verified against the rendered DOM.
+  const label = target.toLocaleDateString("en-US", {
+    weekday: "long",
+    year: "numeric",
+    month: "long",
+    day: "numeric"
+  });
+  await dialog.getByRole("button", { name: label, exact: true }).click();
+
+  // A single-date picker commits on click and closes. Waiting for that is not politeness: the
+  // popover carries its own "Today" button, so while it is open every page-level lookup for one is
+  // ambiguous — and a picker that silently stays open would be a real bug worth failing on.
+  await expect(dialog).toBeHidden({ timeout: 10_000 });
+}

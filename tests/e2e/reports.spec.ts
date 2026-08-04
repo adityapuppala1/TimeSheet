@@ -115,7 +115,14 @@ test.describe("timesheet reporting", () => {
     await expect(hoursTile).toBeVisible({ timeout: 15_000 });
 
     // A date range nothing can match must empty the table rather than silently showing everything.
-    await page.locator("#report-from").fill("2099-01-01");
+    // "Last year" rather than "Today": this workspace has entries logged today, so that preset
+    // would prove nothing. The seeded data is all in the current year, so the previous one is
+    // genuinely empty — which is the state under test.
+    await page.locator("#report-range").click();
+    const rangeDialog = page.getByRole("dialog");
+    await expect(rangeDialog).toBeVisible({ timeout: 10_000 });
+    await rangeDialog.getByRole("button", { name: "Last year", exact: true }).click();
+    await rangeDialog.getByRole("button", { name: "Apply" }).click();
     await expect(page.getByText(/no entries match these filters/i)).toBeVisible({ timeout: 15_000 });
     await expect(hoursTile).toHaveText(/^0\.00h$/);
 
@@ -249,7 +256,7 @@ test.describe("timesheet analytics", () => {
     await page.goto("/app/reports");
 
     await expect(page.getByRole("heading", { name: /^analytics$/i })).toBeVisible({ timeout: 15_000 });
-    await expect(page.locator("#analytics-from")).toBeVisible();
+    await expect(page.locator("#analytics-range")).toBeVisible();
 
     // The utilisation table is the headline; it must render even when nobody has capacity set.
     // `exact` matters: the card's own description also mentions where the hours went, so a loose

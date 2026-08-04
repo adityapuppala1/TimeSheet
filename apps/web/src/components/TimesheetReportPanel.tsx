@@ -19,6 +19,7 @@ import { Download, FileSpreadsheet, Loader2 } from "lucide-react";
 import { Button } from "./ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "./ui/card";
 import { Input } from "./ui/input";
+import { DateRangePicker } from "./ui/date-range-picker";
 import { Label } from "./ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "./ui/select";
 import { Skeleton } from "./ui/skeleton";
@@ -139,13 +140,17 @@ export function TimesheetReportPanel() {
 
       <CardContent className="grid gap-4">
         <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-          <div className="grid gap-1.5">
-            <Label htmlFor="report-from">From</Label>
-            <Input id="report-from" type="date" value={form.from} onChange={(e) => set("from", e.target.value)} />
-          </div>
-          <div className="grid gap-1.5">
-            <Label htmlFor="report-to">To</Label>
-            <Input id="report-to" type="date" value={form.to} onChange={(e) => set("to", e.target.value)} />
+          {/* One range instead of two unrelated date inputs. Nothing previously stopped `to` being
+              before `from`, and "last month" took two taps and a mental calendar. */}
+          <div className="grid gap-1.5 sm:col-span-2">
+            <Label htmlFor="report-range">Date range</Label>
+            <DateRangePicker
+              id="report-range"
+              className="w-full"
+              value={{ from: form.from, to: form.to }}
+              onChange={(range) => setForm((f) => ({ ...f, from: range.from, to: range.to }))}
+              placeholder="All time"
+            />
           </div>
           <div className="grid gap-1.5">
             <Label htmlFor="report-project">Project</Label>

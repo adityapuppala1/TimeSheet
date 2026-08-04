@@ -7,7 +7,7 @@
  */
 import { test, expect } from "@playwright/test";
 import { suspendFaceGate, type FaceGateSnapshot } from "./helpers/face-gate";
-import { signIn } from "./helpers/sign-in";
+import { pickDate, signIn } from "./helpers/sign-in";
 
 // Own snapshot, not shared with timesheet.spec.ts's "employee.json" — both specs rotate their
 // session's refresh secret via POST /auth/refresh, and two specs sharing one snapshot race to
@@ -79,7 +79,7 @@ test.describe("Dashboard day timeline", () => {
       // Date picker: walk far into the past (before any seeded data) and expect the empty state.
       const past = new Date();
       past.setFullYear(past.getFullYear() - 2);
-      await page.getByLabel("Timeline date").fill(localDateKey(past));
+      await pickDate(page, "dashboard-date", past);
       await expect(page.getByTestId("timeline-entry")).toHaveCount(0);
       await expect(track).toContainText(/Nothing logged on/);
 

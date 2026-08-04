@@ -13,7 +13,7 @@
  * Together those hid a completely inert test. The fix asserts against the API — the row either
  * exists afterwards or it doesn't — rather than against text that happens to be on screen.
  */
-import { test, expect, type APIRequestContext } from "@playwright/test";
+import { test, expect, type APIRequestContext, type Page } from "@playwright/test";
 import { expectCleanupOk, expectGone, sweepLeftoverTimesheetDrafts, withAdminRequest } from "./helpers/admin-request";
 import { suspendFaceGate, type FaceGateSnapshot } from "./helpers/face-gate";
 
@@ -100,6 +100,37 @@ test.afterAll(async () => {
   await faceGate?.restore();
 });
 
+
+/**
+ * Sets a 24-hour HH:mm on a React Aria segmented time field.
+ *
+ * The field is a group of `spinbutton` segments — hour, minute and AM/PM — each separately
+ * labelled and focusable. There is no single input to `fill`, so each segment is targeted by its
+ * own accessible name and typed into. That is also what a keyboard user does, so the test
+ * exercises the control rather than reaching around it.
+ *
+ * Verified against the rendered DOM rather than assumed: the segment names are
+ * "hour, Start time" / "minute, Start time" / "AM/PM, Start time".
+ */
+async function fillTime(page: Page, label: string, value: string) {
+  const [h, m] = value.split(":").map(Number);
+  const hour12 = h % 12 === 0 ? 12 : h % 12;
+
+  await page.getByRole("spinbutton", { name: `hour, ${label}` }).click();
+  await page.keyboard.type(String(hour12).padStart(2, "0"));
+  await page.getByRole("spinbutton", { name: `minute, ${label}` }).click();
+  await page.keyboard.type(String(m).padStart(2, "0"));
+  // A single character — "a" or "p". "AM" would send "A" then "M", and the second one is not a
+  // day-period key.
+  await page.getByRole("spinbutton", { name: `AM/PM, ${label}` }).click();
+  await page.keyboard.type(h < 12 ? "a" : "p");
+
+  // Assert the control actually holds what was asked for. Without this a mistyped segment shows up
+  // much later as an unrelated 422 about end times, which points nowhere near the cause.
+  await expect(page.getByRole("spinbutton", { name: `hour, ${label}` })).toHaveText(String(hour12));
+  await expect(page.getByRole("spinbutton", { name: `AM/PM, ${label}` })).toHaveText(h < 12 ? "AM" : "PM");
+}
+
 test.describe("Timesheet", () => {
   test("logs a draft entry", async ({ page }) => {
     const marker = `${MARKER_PREFIX} ${Date.now()}`;
@@ -139,8 +170,12 @@ test.describe("Timesheet", () => {
     await page.getByRole("option").first().click();
     await page.getByLabel("Activity", { exact: true }).click();
     await page.getByRole("option").first().click();
-    await page.getByLabel("Start", { exact: true }).fill(slot.start);
-    await page.getByLabel("End", { exact: true }).fill(slot.end);
+    // The time fields are React Aria segmented inputs now, not `<input type="time">`. A segmented
+    // field has no single value to `fill` — it has an hour, a minute and (in 12-hour locales) a
+    // day-period segment, each focusable. Typing the digits is what a person does, and it is what
+    // exercises the control rather than bypassing it.
+    await fillTime(page, "Start time", slot.start);
+    await fillTime(page, "End time", slot.end);
     await page.getByLabel("Task description", { exact: true }).fill(marker);
     await page.getByRole("button", { name: /save draft/i }).click();
 

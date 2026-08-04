@@ -35,6 +35,7 @@ import { computeTrend, type Trend } from "../lib/trend";
 import { projectApi, timesheetApi } from "../services/api";
 import { safeHtml } from "../lib/safe-html";
 import { toast } from "../components/ui/toaster";
+import { DateRangePicker } from "../components/ui/date-range-picker";
 
 function startOfWeek(date: Date) {
   const d = new Date(date);
@@ -302,12 +303,25 @@ export function History() {
               </Select>
             </div>
             <div className="grid gap-1.5">
-              <Label>From</Label>
-              <Input type="date" value={from} onChange={(event) => setFrom(event.target.value)} />
-            </div>
-            <div className="grid gap-1.5">
-              <Label>To</Label>
-              <Input type="date" value={to} onChange={(event) => setTo(event.target.value)} />
+
+              {/* One range instead of two unrelated inputs — nothing previously stopped `to` preceding
+
+                  `from`, and "last month" needed two taps and a mental calendar. */}
+
+              <Label htmlFor="history-range">Date range</Label>
+
+              <DateRangePicker
+
+                id="history-range"
+
+                value={{ from, to }}
+
+                onChange={(range) => { setFrom(range.from); setTo(range.to); }}
+
+                placeholder="All time"
+
+              />
+
             </div>
           </div>
         </CardContent>

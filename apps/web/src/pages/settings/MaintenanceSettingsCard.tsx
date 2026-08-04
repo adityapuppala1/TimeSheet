@@ -33,12 +33,14 @@ import { Switch } from "../../components/ui/switch";
 import { Textarea } from "../../components/ui/textarea";
 import { toast } from "../../components/ui/toaster";
 import { maintenanceApi, type MaintenancePhase } from "../../services/api";
+import { DateTimePicker, buildTimeSlots } from "../../components/ui/date-picker";
 import { ServerHealthCard } from "./ServerHealthCard";
 import { ServiceStatusPage } from "../../components/ServiceStatusPage";
 
-/** ISO from the API → the local "YYYY-MM-DDTHH:mm" a datetime-local input needs. Manual
- *  formatting because toISOString() would shift the wall-clock time to UTC — the admin picks
- *  times in THEIR clock. */
+/** ISO from the API → the local "YYYY-MM-DDTHH:mm" the draft holds. Manual formatting because
+ *  toISOString() would shift the wall-clock time to UTC — the admin picks times in THEIR clock.
+ *  (The field is a DateTimePicker now; the draft keeps this shape because it splits cleanly on
+ *  "T" into the picker's date and time halves.) */
 function toLocalInputValue(iso: string | null): string {
   if (!iso) return "";
   const date = new Date(iso);
@@ -47,8 +49,8 @@ function toLocalInputValue(iso: string | null): string {
   return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T${pad(date.getHours())}:${pad(date.getMinutes())}`;
 }
 
-/** datetime-local value → ISO for the API. new Date() parses the value as local time, so the
- *  instant is preserved exactly. */
+/** The draft's local "YYYY-MM-DDTHH:mm" → ISO for the API. new Date() parses it as local time, so
+ *  the instant is preserved exactly. */
 function fromLocalInputValue(value: string): string | null {
   if (!value) return null;
   const date = new Date(value);
@@ -70,9 +72,13 @@ const PHASE_BADGE: Record<MaintenancePhase, { label: string; variant: "muted" | 
   ended: { label: "Window ended", variant: "warning" }
 };
 
+/** Every half hour of the full day. Maintenance windows land at night as often as during it, so a
+ *  9-to-6 slot list — the default — would make the most common window unselectable. */
+const MAINTENANCE_SLOTS = buildTimeSlots("00:00", "23:30", 30);
+
 interface Draft {
   enabled: boolean;
-  scheduledStartAt: string; // datetime-local format, "" = unset
+  scheduledStartAt: string; // local "YYYY-MM-DDTHH:mm", "" = unset
   scheduledEndAt: string;
   message: string;
 }
@@ -204,21 +210,25 @@ export function MaintenanceSettingsCard({ readOnly }: { readOnly: boolean }) {
           <div className="grid gap-4 sm:grid-cols-2">
             <div className="grid gap-1.5">
               <Label htmlFor="maintenance-start">Window starts</Label>
-              <Input
+              <DateTimePicker
                 id="maintenance-start"
-                type="datetime-local"
-                value={draft.scheduledStartAt}
-                onChange={(event) => setDraft({ ...draft, scheduledStartAt: event.target.value })}
+                date={draft.scheduledStartAt.split("T")[0] ?? ""}
+                time={draft.scheduledStartAt.split("T")[1] ?? ""}
+                onChange={({ date, time }) => setDraft({ ...draft, scheduledStartAt: date && time ? `${date}T${time}` : "" })}
+                slots={MAINTENANCE_SLOTS}
+                placeholder="Not scheduled"
                 disabled={readOnly}
               />
             </div>
             <div className="grid gap-1.5">
               <Label htmlFor="maintenance-end">Window ends</Label>
-              <Input
+              <DateTimePicker
                 id="maintenance-end"
-                type="datetime-local"
-                value={draft.scheduledEndAt}
-                onChange={(event) => setDraft({ ...draft, scheduledEndAt: event.target.value })}
+                date={draft.scheduledEndAt.split("T")[0] ?? ""}
+                time={draft.scheduledEndAt.split("T")[1] ?? ""}
+                onChange={({ date, time }) => setDraft({ ...draft, scheduledEndAt: date && time ? `${date}T${time}` : "" })}
+                slots={MAINTENANCE_SLOTS}
+                placeholder="Not scheduled"
                 disabled={readOnly}
               />
             </div>

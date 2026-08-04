@@ -48,6 +48,7 @@ import {
   type ResourceBookingRow,
   type WorkloadCellRow
 } from "../services/api";
+import { DateRangePicker } from "../components/ui/date-range-picker";
 
 const serverMessage = (err: any, fallback: string) => err?.response?.data?.message ?? fallback;
 
@@ -592,12 +593,21 @@ function BookingDialog({
 
           <div className="grid gap-3 sm:grid-cols-3">
             <div className="grid gap-1.5">
-              <Label>From</Label>
-              <Input type="date" value={form.startDate} onChange={(e) => setForm({ ...form, startDate: e.target.value })} />
-            </div>
-            <div className="grid gap-1.5">
-              <Label>To</Label>
-              <Input type="date" value={form.endDate} onChange={(e) => setForm({ ...form, endDate: e.target.value })} />
+
+              <Label htmlFor="workload-range">Date range</Label>
+
+              <DateRangePicker
+
+                id="workload-range"
+
+                value={{ from: form.startDate, to: form.endDate }}
+
+                onChange={(range) => setForm({ ...form, startDate: range.from, endDate: range.to })}
+
+                allowAllTime={false}
+
+              />
+
             </div>
             <div className="grid gap-1.5">
               <Label>Hours / working day</Label>

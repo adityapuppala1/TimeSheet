@@ -57,6 +57,7 @@ import { CsvBulkUploadDialog } from "../components/CsvBulkUploadDialog";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../components/ui/card";
 import { DataTable } from "../components/ui/data-table";
 import { TimesheetReportPanel } from "../components/TimesheetReportPanel";
+import { DateRangePicker } from "../components/ui/date-range-picker";
 import { TimesheetAnalyticsPanel } from "../components/TimesheetAnalyticsPanel";
 import {
   EMPTY_FILTERS,
@@ -1340,14 +1341,14 @@ function ProjectBillingDialog({ project, onClose }: { project: any | null; onClo
                     />
                   </FieldShell>
                 </div>
-                <div className="grid gap-4 sm:grid-cols-2">
-                  <FieldShell label="Planned start">
-                    <Input type="date" value={draft.plannedStartDate} onChange={(e) => setDraft({ ...draft, plannedStartDate: e.target.value })} />
-                  </FieldShell>
-                  <FieldShell label="Planned end">
-                    <Input type="date" value={draft.plannedEndDate} onChange={(e) => setDraft({ ...draft, plannedEndDate: e.target.value })} />
-                  </FieldShell>
-                </div>
+                <FieldShell label="Planned window">
+                  <DateRangePicker
+                    className="w-full"
+                    value={{ from: draft.plannedStartDate, to: draft.plannedEndDate }}
+                    onChange={(range) => setDraft({ ...draft, plannedStartDate: range.from, plannedEndDate: range.to })}
+                    placeholder="No planned window"
+                  />
+                </FieldShell>
                 <p className="text-xs text-muted-foreground">
                   The planned window is what the portfolio compares the real schedule against — the gap between the two is
                   where a project goes wrong quietly.
@@ -2024,13 +2025,17 @@ function AttestationsCard() {
               </SelectContent>
             </Select>
           </div>
-          <div className="grid gap-1.5">
-            <Label>From</Label>
-            <Input type="date" value={period.start} onChange={(e) => { setPeriod({ ...period, start: e.target.value }); setPreview(null); }} />
-          </div>
-          <div className="grid gap-1.5">
-            <Label>To</Label>
-            <Input type="date" value={period.end} onChange={(e) => { setPeriod({ ...period, end: e.target.value }); setPreview(null); }} />
+          <div className="grid gap-1.5 sm:col-span-2">
+            <Label htmlFor="attestation-period">Period</Label>
+            {/* An attestation is a client-facing document about a specific period, so an unbounded
+                range is not a meaningful choice here. */}
+            <DateRangePicker
+              id="attestation-period"
+              className="w-full"
+              value={{ from: period.start, to: period.end }}
+              onChange={(range) => { setPeriod({ start: range.from, end: range.to }); setPreview(null); }}
+              allowAllTime={false}
+            />
           </div>
           <div className="flex items-end">
             <Button className="w-full" variant="outline" onClick={() => runPreview.mutate()} disabled={!canRun || runPreview.isPending}>

@@ -49,6 +49,7 @@ import { StatCard, TrendBadge } from "../components/ui/stat-card";
 import { computeTrend, type Trend } from "../lib/trend";
 import { reportApi, ticketApi, timesheetApi, type TicketRow } from "../services/api";
 import { useAuthStore } from "../store/auth";
+import { DatePicker } from "../components/ui/date-picker";
 
 function startOfWeek(date: Date) {
   const d = new Date(date);
@@ -681,15 +682,17 @@ function DayTimeline({
             <Button variant="ghost" size="icon" className="h-7 w-7" aria-label="Previous day" onClick={() => shiftDay(-1)}>
               <ChevronLeft className="h-4 w-4" />
             </Button>
-            <input
-              type="date"
-              aria-label="Timeline date"
+            {/* Sits between the prev/next chevrons, so it stays borderless and compact — the
+                stepper is the primary control and the calendar is the jump-to. */}
+            <DatePicker
+              id="dashboard-date"
               value={selectedKey}
-              max={todayKey}
-              onChange={(e) => {
-                if (e.target.value && e.target.value <= todayKey) setSelectedKey(e.target.value);
+              maxValue={todayKey}
+              onChange={(iso) => {
+                if (iso && iso <= todayKey) setSelectedKey(iso);
               }}
-              className="h-7 w-[8.5rem] rounded-md border-0 bg-transparent px-1 text-sm tabular-nums text-foreground outline-none [color-scheme:light] dark:[color-scheme:dark]"
+              placeholder="Pick a day"
+              className="h-7 w-[9.5rem] border-0 bg-transparent px-1 text-sm tabular-nums hover:bg-muted"
             />
             <Button
               variant="ghost"

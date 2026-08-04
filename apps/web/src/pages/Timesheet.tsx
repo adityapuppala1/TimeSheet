@@ -26,6 +26,7 @@ import { Popover, PopoverContent, PopoverTrigger } from "../components/ui/popove
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../components/ui/select";
 import { Separator } from "../components/ui/separator";
 import { toast } from "../components/ui/toaster";
+import { DatePicker, TimeField } from "../components/ui/date-picker";
 import { faceApi, projectApi, ticketApi, timesheetApi } from "../services/api";
 import { FaceVerificationDialog } from "../components/FaceVerificationDialog";
 import { useFaceStatus } from "../lib/use-face-status";
@@ -376,7 +377,15 @@ export function Timesheet() {
                     <FormItem>
                       <FormLabel>Date</FormLabel>
                       <FormControl>
-                        <Input type="date" max={new Date().toISOString().slice(0, 10)} {...field} />
+                        {/* Calendar instead of a native date input: identical in every browser,
+                            and future dates are simply not selectable rather than rejected after
+                            the fact. */}
+                        <DatePicker
+                          value={field.value ?? ""}
+                          onChange={field.onChange}
+                          maxValue={new Date().toISOString().slice(0, 10)}
+                          placeholder="Pick the work date"
+                        />
                       </FormControl>
                       <FormMessage />
                     </FormItem>
@@ -388,7 +397,9 @@ export function Timesheet() {
                   render={({ field }) => (
                     <FormItem>
                       <FormLabel>Start</FormLabel>
-                      <FormControl><Input type="time" {...field} /></FormControl>
+                      <FormControl>
+                        <TimeField value={field.value ?? ""} onChange={field.onChange} aria-label="Start time" />
+                      </FormControl>
                       <FormMessage />
                     </FormItem>
                   )}
@@ -399,7 +410,9 @@ export function Timesheet() {
                   render={({ field }) => (
                     <FormItem>
                       <FormLabel>End</FormLabel>
-                      <FormControl><Input type="time" {...field} /></FormControl>
+                      <FormControl>
+                        <TimeField value={field.value ?? ""} onChange={field.onChange} aria-label="End time" />
+                      </FormControl>
                       <FormMessage />
                     </FormItem>
                   )}

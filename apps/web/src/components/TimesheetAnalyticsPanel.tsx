@@ -20,8 +20,7 @@ import { Cell, Legend, Pie, PieChart, ResponsiveContainer, Tooltip as RTooltip }
 import { Activity, Clock, Gauge, HelpCircle } from "lucide-react";
 
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "./ui/card";
-import { Input } from "./ui/input";
-import { Label } from "./ui/label";
+import { DateRangePicker } from "./ui/date-range-picker";
 import { Skeleton } from "./ui/skeleton";
 import { reportApi } from "../services/api";
 import { cn } from "../lib/utils";
@@ -99,28 +98,16 @@ export function TimesheetAnalyticsPanel() {
             Utilisation against contracted capacity, how long approvals take, and where the hours went.
           </CardDescription>
         </div>
-        <div className="flex shrink-0 flex-wrap gap-2">
-          <div className="grid gap-1">
-            <Label htmlFor="analytics-from" className="text-xs">From</Label>
-            <Input
-              id="analytics-from"
-              type="date"
-              className="h-9 w-[9.5rem]"
-              value={range.from}
-              onChange={(e) => setRange((r) => ({ ...r, from: e.target.value }))}
-            />
-          </div>
-          <div className="grid gap-1">
-            <Label htmlFor="analytics-to" className="text-xs">To</Label>
-            <Input
-              id="analytics-to"
-              type="date"
-              className="h-9 w-[9.5rem]"
-              value={range.to}
-              onChange={(e) => setRange((r) => ({ ...r, to: e.target.value }))}
-            />
-          </div>
-        </div>
+        {/* `allowAllTime` is off here on purpose: utilisation is hours over capacity, and capacity
+            only exists relative to a period. Offering "All time" would offer a question the server
+            correctly refuses to answer. */}
+        <DateRangePicker
+          id="analytics-range"
+          className="shrink-0"
+          value={range}
+          onChange={setRange}
+          allowAllTime={false}
+        />
       </CardHeader>
 
       <CardContent className="grid gap-6">

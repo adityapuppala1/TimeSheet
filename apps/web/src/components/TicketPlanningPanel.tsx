@@ -26,6 +26,7 @@ import { useAuthStore } from "../store/auth";
 import { Badge } from "./ui/badge";
 import { Button } from "./ui/button";
 import { Input } from "./ui/input";
+import { DatePicker } from "./ui/date-picker";
 import { Label } from "./ui/label";
 import { Progress } from "./ui/progress";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "./ui/select";
@@ -177,15 +178,23 @@ export function TicketPlanningPanel({ ticket }: { ticket: TicketDetail }) {
         <div className="grid gap-3 sm:grid-cols-2">
           <div className="grid gap-1.5">
             <Label className="text-xs">Start</Label>
-            <Input type="date" value={start} disabled={!canEdit} onChange={(e) => setStart(e.target.value)} />
+            <DatePicker
+              value={start}
+              disabled={!canEdit}
+              onChange={setStart}
+              placeholder="Not scheduled"
+            />
           </div>
           <div className="grid gap-1.5">
             <Label className="text-xs">{ticket.isMilestone ? "Date" : "End"}</Label>
-            <Input
-              type="date"
+            <DatePicker
               value={ticket.isMilestone ? start : end}
               disabled={!canEdit || ticket.isMilestone}
-              onChange={(e) => setEnd(e.target.value)}
+              onChange={setEnd}
+              placeholder="Not scheduled"
+              // An end before the start is not a plan, so the calendar simply cannot offer one.
+              // Refusing it here beats accepting it and reporting a conflict afterwards.
+              minValue={start || undefined}
             />
           </div>
         </div>
