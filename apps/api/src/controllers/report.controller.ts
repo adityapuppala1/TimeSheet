@@ -20,6 +20,16 @@ import { AppError } from "../middleware/error.js";
 import { htmlToText } from "../utils/sanitize.js";
 import { generateStatusReport } from "../services/ai.service.js";
 import { computeTimesheetCost } from "../services/billing-rate.service.js";
+import {
+  GROUP_BY_KEYS,
+  REPORT_INCLUDE,
+  REPORT_ROW_LIMIT,
+  buildTimesheetReport,
+  buildTimesheetWhere,
+  resolveReviewerNames,
+  type GroupByKey,
+  type TimesheetReportFilters
+} from "../services/timesheet-report.service.js";
 
 export const reportRouter = Router();
 reportRouter.use(requireAuth);
@@ -852,48 +862,185 @@ reportRouter.post("/status-report", requirePermission(permissions.REPORTS_VIEW),
   res.json({ report, projectName: project.name, periodLabel });
 });
 
-reportRouter.get("/export.csv", requirePermission(permissions.REPORTS_VIEW), async (_req, res) => {
+
+/**
+ * Parses the filter query string shared by both exports and the grouped report.
+ *
+ * Unknown values are DROPPED rather than rejected. A report URL is something people bookmark,
+ * hand-edit and paste to each other; refusing the whole request over one stale `status=CLOSED`
+ * from an older build would be worse than quietly reporting on everything else. The response
+ * echoes back the filters it actually applied, so nothing is guessed at silently.
+ */
+/** Rows a single PDF will render. Generous — and when it is exceeded the document SAYS so rather
+ *  than quietly reporting a total that covers only part of what matched. A PDF is a paginated
+ *  document somebody prints; an unbounded one is a denial-of-service on the person who opens it. */
+const PDF_ROW_LIMIT = 2_000;
+
+const TIMESHEET_STATUSES = ["DRAFT", "SUBMITTED", "APPROVED", "REJECTED"] as const;
+
+function parseReportFilters(query: Record<string, unknown>): TimesheetReportFilters {
+  const str = (key: string): string | undefined => {
+    const raw = query[key];
+    return typeof raw === "string" && raw.trim() ? raw.trim() : undefined;
+  };
+  const isoDate = (key: string): string | undefined => {
+    const raw = str(key);
+    return raw && /^\d{4}-\d{2}-\d{2}$/.test(raw) ? raw : undefined;
+  };
+  const status = str("status");
+  const billable = str("billable");
+
+  return {
+    from: isoDate("from"),
+    to: isoDate("to"),
+    projectId: str("projectId"),
+    moduleId: str("moduleId"),
+    userId: str("userId"),
+    ticketId: str("ticketId"),
+    status: (TIMESHEET_STATUSES as readonly string[]).includes(status ?? "")
+      ? (status as TimesheetReportFilters["status"])
+      : undefined,
+    activityType: str("activityType"),
+    billable: billable === "true" ? true : billable === "false" ? false : undefined
+  };
+}
+
+/** A human-readable one-liner describing what was filtered, printed onto the PDF so the document
+ *  states its own scope. A report that does not say what it covers invites being read as covering
+ *  everything. */
+function describeFilters(filters: TimesheetReportFilters): string {
+  const parts: string[] = [];
+  if (filters.from || filters.to) parts.push(`${filters.from ?? "start"} to ${filters.to ?? "today"}`);
+  if (filters.status) parts.push(`status ${filters.status}`);
+  if (filters.activityType) parts.push(`activity ${filters.activityType}`);
+  if (typeof filters.billable === "boolean") parts.push(filters.billable ? "billable only" : "non-billable only");
+  return parts.length ? parts.join(" · ") : "all entries, all time";
+}
+
+/**
+ * GET /reports/timesheets — the grouped report.
+ *
+ * One endpoint, nine groupings. This is the thing that turns rows into an answer: "hours per
+ * person per month", "which activity ate Project Apollo", "what does each ticket actually cost".
+ * Before it, the only way to ask any of those was to export every row in the workspace and pivot
+ * it in Excel.
+ */
+reportRouter.get("/timesheets", requirePermission(permissions.REPORTS_VIEW), async (req, res) => {
+  const filters = parseReportFilters(req.query as Record<string, unknown>);
+  const requested = String((req.query as Record<string, unknown>).groupBy ?? "user");
+  const groupBy = (GROUP_BY_KEYS as string[]).includes(requested) ? (requested as GroupByKey) : "user";
+  res.json({ ...(await buildTimesheetReport(filters, groupBy)), groupByOptions: GROUP_BY_KEYS });
+});
+
+/**
+ * GET /reports/export.csv — every matching row, with the columns a report is actually asked for.
+ *
+ * WHAT CHANGED AND WHY IT MATTERED: this handler used to be `async (_req, res)` — the underscore
+ * was honest, the request was ignored — with `where: { deletedAt: null }` and nothing else. Every
+ * timesheet in the workspace, for all time, for everybody, on one button. It also omitted every
+ * field that makes an export worth having: no billing, no SLA, no ticket, no reviewer. So it could
+ * not answer "what did this cost", "who approved it", or "was it late", which is most of what
+ * somebody exports a timesheet report to find out.
+ */
+reportRouter.get("/export.csv", requirePermission(permissions.REPORTS_VIEW), async (req, res) => {
+  const filters = parseReportFilters(req.query as Record<string, unknown>);
   const rows = await prisma.timesheet.findMany({
-    where: { deletedAt: null },
-    include: { user: true, project: true, module: true, submodule: true },
-    orderBy: [{ workDate: "desc" }, { startTime: "asc" }]
+    where: buildTimesheetWhere(filters),
+    include: REPORT_INCLUDE,
+    orderBy: [{ workDate: "desc" }, { startTime: "asc" }],
+    take: REPORT_ROW_LIMIT
   });
-  const header = ["User", "Email", "Date", "Project", "Module", "Submodule", "Activity", "Start", "End", "Hours", "Status", "Task", "Notes"];
+  const reviewers = await resolveReviewerNames(rows);
+
+  const header = [
+    "User", "Email", "Date", "Project", "Project code", "Module", "Submodule", "Ticket",
+    "Activity", "Start", "End", "Hours", "Billable", "Rate", "Amount", "Status",
+    "Reviewed by", "Reviewed at", "Approval deadline", "SLA breached at", "Task", "Notes"
+  ];
   const escape = (value: unknown) => `"${String(value ?? "").replace(/"/g, '""')}"`;
+  const iso = (value: Date | null | undefined) => (value ? value.toISOString() : "");
+
   const lines = [
     header.join(","),
     ...rows.map((row) =>
       [
         row.user.name, row.user.email, row.workDate.toISOString().slice(0, 10),
-        row.project.name, row.module.name, row.submodule?.name,
+        row.project.name, row.project.code, row.module.name, row.submodule?.name,
+        row.ticket?.key,
         row.activityType, row.startTime, row.endTime,
-        Number(row.totalHours).toFixed(2), row.status,
+        Number(row.totalHours).toFixed(2),
+        row.billable ? "Yes" : "No",
+        // Blank rather than 0 when unrated: a rate of zero is a claim that the work was free,
+        // and these rows are deliberately never backfilled (see the schema comment on billedRate).
+        row.billedRate == null ? "" : Number(row.billedRate).toFixed(2),
+        row.billedAmount == null ? "" : Number(row.billedAmount).toFixed(2),
+        row.status,
+        row.reviewedById ? (reviewers.get(row.reviewedById) ?? "") : "",
+        iso(row.reviewedAt), iso(row.approvalDeadline), iso(row.slaBreachAt),
         htmlToText(row.taskDescription), htmlToText(row.notes ?? "")
       ]
         .map(escape)
         .join(",")
     )
   ];
+
+  const stamp = new Date().toISOString().slice(0, 10);
   res.setHeader("Content-Type", "text/csv; charset=utf-8");
-  res.setHeader("Content-Disposition", "attachment; filename=timesheet-report.csv");
-  res.send(lines.join("\n"));
+  res.setHeader("Content-Disposition", `attachment; filename=timesheet-report-${stamp}.csv`);
+  res.setHeader("X-Report-Rows-Included", String(rows.length));
+  // A CSV cannot carry a caveat in its body without corrupting the data, so the header is the
+  // only honest channel. Hitting this at all means the filter was too broad to be a report.
+  if (rows.length === REPORT_ROW_LIMIT) res.setHeader("X-Report-Truncated", "true");
+  // A BOM, so Excel opens UTF-8 correctly instead of mangling every accented name. Costs three
+  // bytes and removes the single most common "your export is broken" report.
+  res.send("\uFEFF" + lines.join("\n"));
 });
 
-reportRouter.get("/export.pdf", requirePermission(permissions.REPORTS_VIEW), async (_req, res) => {
+/**
+ * GET /reports/export.pdf — the same filtered set, as a document.
+ *
+ * TWO THINGS THIS USED TO GET WRONG, and the second was the dangerous one.
+ *
+ * It took no filters (`async (_req, res)`), so it was always the whole workspace.
+ *
+ * And it capped at `take: 500` and then printed `Entries: N  Total hours: X` computed from those
+ * 500 — with nothing anywhere on the page saying it had been cut. Past 500 live entries the
+ * document stated a total that was simply wrong, in a file somebody might hand to a client or an
+ * auditor. A silent truncation on a report is the same class of failure as colouring an unmonitored
+ * day green: it is not missing information, it is confidently asserted wrong information.
+ *
+ * Now the cap is high, and when it is hit the document says so in the header, in red, before any
+ * numbers are read.
+ */
+reportRouter.get("/export.pdf", requirePermission(permissions.REPORTS_VIEW), async (req, res) => {
+  const filters = parseReportFilters(req.query as Record<string, unknown>);
+  const where = buildTimesheetWhere(filters);
+
+  // Counted separately so the document can compare what it is showing against what matched, and
+  // say plainly when those differ.
+  const matched = await prisma.timesheet.count({ where });
   const rows = await prisma.timesheet.findMany({
-    where: { deletedAt: null },
-    include: { user: { select: { name: true, email: true } }, project: { select: { name: true } } },
+    where,
+    include: REPORT_INCLUDE,
     orderBy: [{ workDate: "desc" }, { startTime: "asc" }],
-    take: 500
+    take: PDF_ROW_LIMIT
   });
+  const truncated = matched > rows.length;
 
   const totalHours = rows.reduce((sum, row) => sum + Number(row.totalHours ?? 0), 0);
   const approvedHours = rows
     .filter((row) => row.status === "APPROVED")
     .reduce((sum, row) => sum + Number(row.totalHours ?? 0), 0);
 
+  const stamp = new Date().toISOString().slice(0, 10);
   res.setHeader("Content-Type", "application/pdf");
-  res.setHeader("Content-Disposition", 'attachment; filename="timesheet-report.pdf"');
+  res.setHeader("Content-Disposition", `attachment; filename="timesheet-report-${stamp}.pdf"`);
+  // Machine-readable truncation, alongside the human-readable warning printed on the page. A
+  // caller scripting this export cannot reasonably parse the PDF to discover the document is
+  // partial, and "partial" is exactly the thing it must not miss.
+  res.setHeader("X-Report-Total-Matching", String(matched));
+  res.setHeader("X-Report-Rows-Included", String(rows.length));
+  if (truncated) res.setHeader("X-Report-Truncated", "true");
 
   const doc = new PDFDocument({ size: "A4", margin: 36 });
   doc.pipe(res);
@@ -902,9 +1049,26 @@ reportRouter.get("/export.pdf", requirePermission(permissions.REPORTS_VIEW), asy
   doc.fontSize(10).fillColor("#64748B").text(`Generated ${new Date().toLocaleString()}`);
   doc.moveDown(0.5);
   doc.fontSize(16).fillColor("#0F172A").text("Timesheet Report");
-  doc.moveDown(0.5);
+  doc.moveDown(0.3);
+  // The document states its own scope. Without this a filtered report is indistinguishable from
+  // an unfiltered one once it has been printed or emailed on.
+  doc.fontSize(9).fillColor("#64748B").text(`Scope: ${describeFilters(filters)}`);
+  doc.moveDown(0.4);
   doc.fontSize(10).fillColor("#0F172A");
   doc.text(`Entries: ${rows.length}    Total hours: ${totalHours.toFixed(2)}    Approved hours: ${approvedHours.toFixed(2)}`);
+
+  if (truncated) {
+    doc.moveDown(0.4);
+    doc
+      .fontSize(9)
+      .fillColor("#DC2626")
+      .text(
+        `Showing the ${rows.length} most recent of ${matched} matching entries. The totals above cover ` +
+          `only what is shown. Narrow the date range, or use the CSV export, for the complete set.`,
+        { width: 524 }
+      );
+    doc.fillColor("#0F172A").fontSize(10);
+  }
   doc.moveDown(0.75);
 
   const colX = { date: 36, user: 100, project: 215, activity: 320, hours: 410, status: 460 };
@@ -952,6 +1116,15 @@ reportRouter.get("/export.pdf", requirePermission(permissions.REPORTS_VIEW), asy
     doc.fontSize(11).fillColor("#64748B").text("No timesheet entries to export.", { align: "center" });
   }
   doc.moveDown(2);
+  if (truncated) {
+    // Repeated at the end because a long report is often read from the last page backwards, and
+    // the caveat has to be wherever the reader is.
+    doc
+      .fontSize(8)
+      .fillColor("#DC2626")
+      .text(`Truncated: ${rows.length} of ${matched} matching entries shown.`, { align: "center" });
+    doc.moveDown(0.3);
+  }
   doc.fontSize(8).fillColor("#94A3B8").text("Confidential — for internal operational review.", { align: "center" });
   doc.end();
 });

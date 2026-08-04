@@ -56,6 +56,7 @@ import { Button } from "../components/ui/button";
 import { CsvBulkUploadDialog } from "../components/CsvBulkUploadDialog";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../components/ui/card";
 import { DataTable } from "../components/ui/data-table";
+import { TimesheetReportPanel } from "../components/TimesheetReportPanel";
 import {
   EMPTY_FILTERS,
   TablePager,
@@ -1810,15 +1811,15 @@ export function ReportsPage() {
           trendLabel="vs yesterday"
         />
       </div>
+      {/* The report leads: the point is usually a question ("where did Apollo's hours go?"), and
+          answering it on screen means most people never need the download at all. */}
+      <TimesheetReportPanel />
+
       <Card>
         <CardHeader className="flex-col items-start justify-between gap-3 space-y-0 sm:flex-row sm:items-center">
           <div>
             <CardTitle>Project hours</CardTitle>
             <CardDescription>Aggregate across the workspace — drill into a project from the table view.</CardDescription>
-          </div>
-          <div className="flex flex-wrap gap-2">
-            <DownloadButton type="csv" label="CSV" />
-            <DownloadButton type="pdf" label="PDF" />
           </div>
         </CardHeader>
         <CardContent>
@@ -2398,27 +2399,6 @@ function StatusReportCard() {
 }
 
 /* ============================== HELPERS ============================== */
-function DownloadButton({ type, label }: { type: "csv" | "pdf"; label: string }) {
-  async function download() {
-    try {
-      const blob = await reportApi.download(type);
-      const url = URL.createObjectURL(blob);
-      const anchor = document.createElement("a");
-      anchor.href = url;
-      anchor.download = `timesheet-report.${type}`;
-      anchor.click();
-      URL.revokeObjectURL(url);
-      toast.success(`Downloaded ${label}`);
-    } catch (err: any) {
-      toast.error("Download failed", { description: serverMessage(err, "Try again.") });
-    }
-  }
-  return (
-    <Button variant="outline" onClick={download}>
-      <Download />{label}
-    </Button>
-  );
-}
 
 function Workspace({ title, subtitle, icon, children }: { title: string; subtitle: string; icon?: ReactNode; children: ReactNode }) {
   return (

@@ -235,6 +235,28 @@ its icon says. The server runs in Docker, so macOS, Windows and Ubuntu differ on
 installer script starts it. See "Browser and OS support" in the deployment guide, including the
 things that genuinely need HTTPS and what degrades gracefully without it.
 
+#### 📄 Reports you can actually filter — and a PDF that no longer lies
+
+- **Both exports now take filters** — date range, project, person, status, activity, billable.
+  They previously took none at all: one button meant *every timesheet in the workspace, for all
+  time, for everybody*, and there was no way to ask for one project or one month.
+- **A grouped report** with nine groupings — by person, project, module, activity, status, ticket,
+  day, week or month — so "where did Apollo's hours go?" is answerable on screen instead of by
+  exporting everything and pivoting it in Excel. Every grouping of the same rows totals to the same
+  number, which is asserted rather than assumed.
+- **The CSV gained the columns that make an export worth having** — billable flag, frozen rate and
+  amount, ticket key, who reviewed it and when, approval deadline and SLA breach time. It went from
+  13 columns to 22, and now opens in Excel without mangling accented names.
+- **Fixed: the PDF silently truncated at 500 rows** while printing a total computed from only those
+  500. Past 500 entries it stated a number that was simply wrong, with nothing on the page saying
+  so — in a file somebody might hand to a client. It now carries far more, prints its own scope,
+  and says plainly in the header and the footer when it is showing a subset. Both exports also
+  return that as a response header, since a caller scripting an export cannot parse a PDF to
+  discover the document is partial.
+- **Cost reads "—" rather than "0.00" when no rate was ever captured.** Zero claims the work was
+  free; a dash says we do not know, which is the truth for entries approved before rate snapshots
+  existed.
+
 #### 🛡️ Fixed in the status page, found by its own test
 
 - **One outage could be recorded as two incidents.** Opening an incident read the open ones and

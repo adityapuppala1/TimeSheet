@@ -701,8 +701,76 @@ export const reportApi = {
   leaderboard: async () => (await api.get<{ rows: LeaderboardRow[] }>("/reports/leaderboard")).data,
   statusReport: async (projectId: string, periodDays = 7) =>
     (await api.post<{ report: string; projectName: string; periodLabel: string }>("/reports/status-report", { projectId, periodDays })).data,
-  download: async (type: "csv" | "pdf") => (await api.get(`/reports/export.${type}`, { responseType: "blob" })).data
+  /** Filters shared by both exports and the grouped report — one shape, so a CSV and a PDF asked
+   *  for the same thing can never disagree about what "the same thing" means. */
+  download: async (type: "csv" | "pdf", filters: TimesheetReportFilters = {}) => {
+    const res = await api.get(`/reports/export.${type}`, { params: cleanFilters(filters), responseType: "blob" });
+    return {
+      blob: res.data as Blob,
+      // Surfaced so the UI can warn. A caller scripting a PDF export cannot reasonably parse the
+      // document to discover it is partial, and "partial" is the thing it must not miss.
+      truncated: res.headers["x-report-truncated"] === "true",
+      rowsIncluded: Number(res.headers["x-report-rows-included"] ?? 0),
+      totalMatching: Number(res.headers["x-report-total-matching"] ?? 0)
+    };
+  },
+  timesheetReport: async (filters: TimesheetReportFilters = {}, groupBy: GroupByKey = "user") =>
+    (await api.get<TimesheetReport>("/reports/timesheets", { params: { ...cleanFilters(filters), groupBy } })).data
 };
+
+/** Drops empty values so the query string carries only real constraints — and so a bookmarked
+ *  report URL stays readable. */
+function cleanFilters(filters: TimesheetReportFilters): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const [key, value] of Object.entries(filters)) {
+    if (value === undefined || value === null || value === "") continue;
+    out[key] = String(value);
+  }
+  return out;
+}
+
+export type GroupByKey = "user" | "project" | "module" | "activity" | "status" | "ticket" | "day" | "week" | "month";
+
+export interface TimesheetReportFilters {
+  from?: string;
+  to?: string;
+  projectId?: string;
+  userId?: string;
+  status?: "DRAFT" | "SUBMITTED" | "APPROVED" | "REJECTED";
+  activityType?: string;
+  billable?: boolean;
+}
+
+export interface TimesheetReportGroup {
+  key: string;
+  label: string;
+  entries: number;
+  hours: number;
+  billableHours: number;
+  /** Null when NO row in the group carries a rate snapshot. Not zero — zero would claim the work
+   *  was free, when the truth is that the rate was never captured. */
+  cost: number | null;
+  unratedEntries: number;
+  people: number;
+  firstDate: string | null;
+  lastDate: string | null;
+}
+
+export interface TimesheetReport {
+  groupBy: GroupByKey;
+  groupByOptions: GroupByKey[];
+  truncated: boolean;
+  rowsScanned: number;
+  totals: {
+    entries: number;
+    hours: number;
+    billableHours: number;
+    cost: number | null;
+    unratedEntries: number;
+    people: number;
+  };
+  groups: TimesheetReportGroup[];
+}
 
 export interface UserRow {
   id: string;

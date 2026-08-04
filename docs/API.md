@@ -444,6 +444,55 @@ tickets and hours, which every workspace already has.
   months is the one worth designing against. `lastSentAt` is the cadence guard, so a restart or a
   double-fired cron re-sends nothing.
 
+## Timesheet reporting and exports
+
+All three share one filter set — `from`, `to`, `projectId`, `moduleId`, `userId`, `ticketId`,
+`status`, `activityType`, `billable` — parsed and applied in one place
+(`services/timesheet-report.service.ts`). That sharing is the point: a CSV and a PDF asked for the
+same thing must not be able to disagree about what "the same thing" means, and the way that
+failure presents is somebody exporting both for "March, Apollo", getting different totals, and
+having no way to tell which is lying.
+
+Unknown filter values are **dropped, not rejected**. A report URL gets bookmarked, hand-edited and
+pasted around; refusing the whole request over one stale `status=CLOSED` from an older build is
+worse than reporting on everything else. The grouped response echoes the filters it actually
+applied.
+
+- `GET /reports/timesheets?groupBy=` *(`reports:view`)* — the grouped report. Nine groupings:
+  `user`, `project`, `module`, `activity`, `status`, `ticket`, `day`, `week`, `month`. Each group
+  carries hours, billable hours, entries, distinct people, cost, and its real first/last date.
+
+  **Every grouping of the same rows totals identically** — asserted in both the unit and e2e
+  suites, because a report where "by user" and "by project" disagree is worse than no report:
+  somebody acts on whichever they opened, with nothing on screen to say the other exists. Related:
+  un-ticketed work is its own bucket rather than dropped. For most workspaces it is the majority of
+  hours, and excluding it would make every total understate reality while looking complete.
+
+  **`cost` is `null`, never `0`, when no row in the group carries a rate.** `billedAmount` is a
+  snapshot frozen at approval, and rows approved before that existed have none — deliberately not
+  backfilled, since inventing "the rate at the time" from today's rate would assert something
+  untrue. Zero would read as "this work was free"; null reads as "we do not know". Where a group is
+  partly rated, `cost` is the part we know and `unratedEntries` says how much we do not.
+
+- `GET /reports/export.csv` *(`reports:view`)* — 22 columns including billing (`Billable`, `Rate`,
+  `Amount`), review (`Reviewed by`, `Reviewed at`), SLA (`Approval deadline`, `SLA breached at`)
+  and the ticket key. Emitted with a UTF-8 BOM so Excel does not mangle accented names.
+
+- `GET /reports/export.pdf` *(`reports:view`)* — the same set as a document, printing its own
+  scope ("Scope: 2026-03-01 to 2026-03-31 · status APPROVED") so a filtered report cannot be
+  mistaken for a complete one once printed or forwarded.
+
+**Truncation is always stated, never silent.** Both exports return `X-Report-Rows-Included` and
+`X-Report-Total-Matching`, plus `X-Report-Truncated: true` when they differ; the PDF additionally
+prints the caveat in red in the header and repeats it in the footer, because a long report is often
+read from the last page backwards.
+
+This matters because of what it replaced. The PDF capped at 500 rows and then printed
+`Entries: 500  Total hours: X` computed from those 500, with nothing anywhere saying it had been
+cut — a document stating a confidently wrong number, in a file somebody might hand to a client or
+an auditor. Same class of failure as colouring an unmonitored day green on a status page: not
+missing information, but asserted-wrong information.
+
 ## Users — management listing and bulk actions
 
 - `GET /users` — the flat array every assignee/manager/approver **picker** reads. Ordered by name,
