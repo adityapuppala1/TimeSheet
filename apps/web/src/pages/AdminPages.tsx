@@ -57,6 +57,7 @@ import { CsvBulkUploadDialog } from "../components/CsvBulkUploadDialog";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../components/ui/card";
 import { DataTable } from "../components/ui/data-table";
 import { TimesheetReportPanel } from "../components/TimesheetReportPanel";
+import { TimesheetAnalyticsPanel } from "../components/TimesheetAnalyticsPanel";
 import {
   EMPTY_FILTERS,
   TablePager,
@@ -1814,6 +1815,10 @@ export function ReportsPage() {
       {/* The report leads: the point is usually a question ("where did Apollo's hours go?"), and
           answering it on screen means most people never need the download at all. */}
       <TimesheetReportPanel />
+
+      {/* Sits under the report because it answers the follow-up question. The report says where
+          the hours went; this says whether that was a reasonable amount of them. */}
+      <TimesheetAnalyticsPanel />
 
       <Card>
         <CardHeader className="flex-col items-start justify-between gap-3 space-y-0 sm:flex-row sm:items-center">

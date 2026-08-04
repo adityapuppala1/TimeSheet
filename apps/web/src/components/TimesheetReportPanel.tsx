@@ -76,7 +76,7 @@ export function TimesheetReportPanel() {
     billable: ANY
   });
   const [groupBy, setGroupBy] = useState<GroupByKey>("user");
-  const [downloading, setDownloading] = useState<"csv" | "pdf" | null>(null);
+  const [downloading, setDownloading] = useState<"csv" | "pdf" | "xlsx" | null>(null);
 
   const filters = toFilters(form);
   const projects = useQuery({ queryKey: ["projects"], queryFn: projectApi.list });
@@ -89,10 +89,16 @@ export function TimesheetReportPanel() {
 
   const set = <K extends keyof typeof form>(key: K, value: (typeof form)[K]) => setForm((f) => ({ ...f, [key]: value }));
 
-  async function download(type: "csv" | "pdf") {
+  async function download(type: "csv" | "pdf" | "xlsx") {
     setDownloading(type);
     try {
-      const { blob, truncated, rowsIncluded, totalMatching } = await reportApi.download(type, filters);
+      // The grouping goes along for xlsx so its Summary sheet matches what is on screen — a
+      // workbook whose summary groups differently from the page that produced it is a support
+      // ticket waiting to happen.
+      const { blob, truncated, rowsIncluded, totalMatching } = await reportApi.download(
+        type,
+        type === "xlsx" ? { ...filters, groupBy } : filters
+      );
       const url = URL.createObjectURL(blob);
       const anchor = document.createElement("a");
       anchor.href = url;
@@ -217,6 +223,10 @@ export function TimesheetReportPanel() {
           <Button variant="outline" size="sm" disabled={downloading !== null} onClick={() => void download("csv")}>
             {downloading === "csv" ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Download className="h-3.5 w-3.5" />}
             CSV
+          </Button>
+          <Button variant="outline" size="sm" disabled={downloading !== null} onClick={() => void download("xlsx")}>
+            {downloading === "xlsx" ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Download className="h-3.5 w-3.5" />}
+            Excel
           </Button>
           <Button variant="outline" size="sm" disabled={downloading !== null} onClick={() => void download("pdf")}>
             {downloading === "pdf" ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Download className="h-3.5 w-3.5" />}

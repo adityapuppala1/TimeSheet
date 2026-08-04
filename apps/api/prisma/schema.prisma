@@ -461,6 +461,20 @@ model Timesheet {
   reviewedAt      DateTime?
   rejectionReason String?
 
+  /// When this entry was submitted for approval.
+  ///
+  /// WHY IT IS STORED RATHER THAN DERIVED: the submit path already computed this — as a local
+  /// variable, used to derive `approvalDeadline`, then discarded. Approval latency (submit to
+  /// decision) was therefore unmeasurable, and the only way to reconstruct it was
+  /// `approvalDeadline - project.slaApprovalHours`, which is correct only while that project's SLA
+  /// setting has never changed and silently wrong the moment it has.
+  ///
+  /// NULL on every row submitted before this column existed, and deliberately NOT backfilled —
+  /// same rule as `billedRate` below. Inventing a submit time from today's SLA setting would make
+  /// the latency figures assert something untrue. Consumers report those rows as `unmeasurable`
+  /// rather than dropping them, so a median over a handful is never mistaken for one over
+  /// everything.
+  submittedAt      DateTime?
   /// When approval is due. Computed from project.slaApprovalHours at submit time.
   approvalDeadline DateTime?
   /// First time we detected the approval SLA was missed.
@@ -500,6 +514,7 @@ model Timesheet {
   @@index([userId, workDate, status])
   @@index([projectId, workDate])
   @@index([status, approvalDeadline])
+  @@index([submittedAt, reviewedAt])
   @@index([ticketId])
   /// Drives the attestation's "approved, billable rows for this project in this date range" scan.
   @@index([projectId, status, workDate])

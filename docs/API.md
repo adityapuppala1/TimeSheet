@@ -474,6 +474,33 @@ applied.
   untrue. Zero would read as "this work was free"; null reads as "we do not know". Where a group is
   partly rated, `cost` is the part we know and `unratedEntries` says how much we do not.
 
+- `GET /reports/analytics?from=&to=&…` *(`reports:view`)* — utilisation, approval latency and
+  activity mix. **The date range is required and the endpoint 422s without it**: utilisation is
+  hours divided by capacity, and capacity only exists relative to a period. "Utilisation, all time"
+  is not a question with an answer, and silently choosing a window would produce a confident
+  percentage nobody asked for.
+
+  - **Utilisation** reuses `capacityForBucket` from the workload service rather than
+    reimplementing it, so a person cannot read as 80% booked on the workload board and 120%
+    utilised on the report for the same fortnight. `capacityHours` and `utilisationPct` are
+    **null** for anyone with no contracted hours on file and no workspace default — 0% would read
+    as "this person did nothing" when the truth is "nobody told us their hours".
+  - **Approval latency** needs `Timesheet.submittedAt`, which is NULL on every row submitted
+    before that column existed and deliberately not backfilled. Those are counted as
+    `unmeasurable` alongside `measured`, so a median over three of two hundred entries is never
+    read as covering all two hundred. `breachRatePct` is unaffected and works from day one — it
+    reads `approvalDeadline`/`slaBreachAt`, which have always been stored.
+  - **Activity mix** shares are rounded by largest remainder so they sum to exactly 100. Rounding
+    each independently yields sets totalling 100.1%, which on a labelled pie reads as an
+    arithmetic error — and a report caught being wrong about something trivial is not trusted
+    about anything else.
+
+- `GET /reports/export.xlsx?groupBy=` *(`reports:view`)* — a real workbook: a **Summary** sheet
+  carrying the grouped breakdown and an **Entries** sheet with every row, typed. CSV has no types,
+  so every date and number arrives as text and gets re-typed by hand before anyone can pivot — or
+  does not, and sorts `10.5` before `9.0`. Dates, hours, rates and amounts are real cells with
+  number formats, the header row is frozen, and an autofilter is applied.
+
 - `GET /reports/export.csv` *(`reports:view`)* — 22 columns including billing (`Billable`, `Rate`,
   `Amount`), review (`Reviewed by`, `Reviewed at`), SLA (`Approval deadline`, `SLA breached at`)
   and the ticket key. Emitted with a UTF-8 BOM so Excel does not mangle accented names.

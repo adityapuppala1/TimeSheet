@@ -235,6 +235,25 @@ its icon says. The server runs in Docker, so macOS, Windows and Ubuntu differ on
 installer script starts it. See "Browser and OS support" in the deployment guide, including the
 things that genuinely need HTTPS and what degrades gracefully without it.
 
+#### 📈 Analytics, and Excel
+
+- **Utilisation** — logged hours against each person's real contracted capacity, over any range.
+  It reuses the workload board's own capacity calculation, so the two can never disagree about the
+  same fortnight. Anyone with no contracted hours on file shows "—" rather than 0%: a zero would
+  read as "this person did nothing" when the truth is that nobody recorded their hours.
+- **Approval latency** — median, 90th percentile, slowest, and a per-approver breakdown, plus the
+  SLA breach rate. This needed a new `submittedAt` timestamp: the submit path computed one, used
+  it to derive the approval deadline, and threw it away. It is now stored, so **latency starts
+  filling in from today** and historical entries are reported as "can't be timed" rather than
+  guessed at. The breach rate works immediately — it reads the approval deadline, which was
+  always stored.
+- **Where the hours went** — activity mix per range with shares and cost, as a chart and a table.
+  Useful for the question a status meeting actually asks: how much of this project went to bug
+  fixing rather than building.
+- **Excel export** — a real workbook with a Summary sheet (your current grouping) and an Entries
+  sheet with every row properly typed, frozen headers and an autofilter. CSV has no types, so
+  dates and numbers arrive as text and have to be re-typed before anyone can pivot.
+
 #### 📄 Reports you can actually filter — and a PDF that no longer lies
 
 - **Both exports now take filters** — date range, project, person, status, activity, billable.

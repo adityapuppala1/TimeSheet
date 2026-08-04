@@ -20,6 +20,8 @@ import { AppError } from "../middleware/error.js";
 import { htmlToText } from "../utils/sanitize.js";
 import { generateStatusReport } from "../services/ai.service.js";
 import { computeTimesheetCost } from "../services/billing-rate.service.js";
+import ExcelJS from "exceljs";
+import { buildTimesheetAnalytics } from "../services/timesheet-analytics.service.js";
 import {
   GROUP_BY_KEYS,
   REPORT_INCLUDE,
@@ -942,6 +944,152 @@ reportRouter.get("/timesheets", requirePermission(permissions.REPORTS_VIEW), asy
  * not answer "what did this cost", "who approved it", or "was it late", which is most of what
  * somebody exports a timesheet report to find out.
  */
+/**
+ * GET /reports/analytics — utilisation, approval latency and activity mix.
+ *
+ * A DATE RANGE IS REQUIRED here, unlike the grouped report, and that is not laziness. Utilisation
+ * is hours divided by capacity, and capacity only exists relative to a period — "utilisation, all
+ * time" is not a question with an answer. Defaulting silently to some window would produce a
+ * confident percentage nobody asked for.
+ */
+reportRouter.get("/analytics", requirePermission(permissions.REPORTS_VIEW), async (req, res) => {
+  const filters = parseReportFilters(req.query as Record<string, unknown>);
+  if (!filters.from || !filters.to) {
+    throw new AppError(
+      422,
+      "Analytics needs a date range: utilisation is hours against capacity, and capacity only means something over a period."
+    );
+  }
+  res.json(await buildTimesheetAnalytics({ ...filters, from: filters.from, to: filters.to }));
+});
+
+/**
+ * GET /reports/export.xlsx — the same filtered set as a real spreadsheet.
+ *
+ * WHY THIS EXISTS ALONGSIDE CSV: CSV has no types. Every date arrives as text, every number as
+ * text, and the first thing anyone does is re-type the columns by hand before they can pivot —
+ * or worse, does not, and sorts "10.5" before "9.0" because it sorted alphabetically. A workbook
+ * carries real number and date cells, and can hold the grouped summary on a second sheet next to
+ * the raw rows, which is exactly the shape people were building by hand from the CSV.
+ */
+reportRouter.get("/export.xlsx", requirePermission(permissions.REPORTS_VIEW), async (req, res) => {
+  const filters = parseReportFilters(req.query as Record<string, unknown>);
+  const requested = String((req.query as Record<string, unknown>).groupBy ?? "user");
+  const groupBy = (GROUP_BY_KEYS as string[]).includes(requested) ? (requested as GroupByKey) : "user";
+
+  const where = buildTimesheetWhere(filters);
+  const matched = await prisma.timesheet.count({ where });
+  const rows = await prisma.timesheet.findMany({
+    where,
+    include: REPORT_INCLUDE,
+    orderBy: [{ workDate: "desc" }, { startTime: "asc" }],
+    take: REPORT_ROW_LIMIT
+  });
+  const reviewers = await resolveReviewerNames(rows);
+  const report = await buildTimesheetReport(filters, groupBy);
+
+  const wb = new ExcelJS.Workbook();
+  wb.creator = "TimeSphere";
+  wb.created = new Date();
+
+  // ---- sheet 1: the summary, because that is what most people actually wanted -----------------
+  const summary = wb.addWorksheet("Summary");
+  summary.addRow(["TimeSphere — timesheet report"]).font = { bold: true, size: 14 };
+  summary.addRow([`Scope: ${describeFilters(filters)}`]);
+  summary.addRow([`Generated: ${new Date().toISOString()}`]);
+  if (rows.length < matched) {
+    // Stated on the sheet, not only in a header — a workbook gets forwarded without its HTTP
+    // response.
+    const warn = summary.addRow([`TRUNCATED: showing ${rows.length} of ${matched} matching entries.`]);
+    warn.font = { bold: true, color: { argb: "FFDC2626" } };
+  }
+  summary.addRow([]);
+  summary.addRow([`Grouped by ${groupBy}`]).font = { bold: true };
+  summary.addRow(["Group", "Hours", "Billable hours", "Entries", "People", "Cost"]).font = { bold: true };
+  for (const g of report.groups) {
+    summary.addRow([g.label, g.hours, g.billableHours, g.entries, g.people, g.cost]);
+  }
+  summary.addRow([]);
+  summary.addRow(["TOTAL", report.totals.hours, report.totals.billableHours, report.totals.entries, report.totals.people, report.totals.cost]).font = {
+    bold: true
+  };
+  summary.getColumn(1).width = 42;
+  for (let c = 2; c <= 6; c += 1) summary.getColumn(c).width = 16;
+
+  // ---- sheet 2: every row, properly typed ------------------------------------------------------
+  const detail = wb.addWorksheet("Entries");
+  detail.columns = [
+    { header: "User", key: "user", width: 22 },
+    { header: "Email", key: "email", width: 28 },
+    { header: "Date", key: "date", width: 12 },
+    { header: "Project", key: "project", width: 24 },
+    { header: "Module", key: "module", width: 20 },
+    { header: "Submodule", key: "submodule", width: 20 },
+    { header: "Ticket", key: "ticket", width: 14 },
+    { header: "Activity", key: "activity", width: 16 },
+    { header: "Start", key: "start", width: 8 },
+    { header: "End", key: "end", width: 8 },
+    { header: "Hours", key: "hours", width: 9 },
+    { header: "Billable", key: "billable", width: 10 },
+    { header: "Rate", key: "rate", width: 10 },
+    { header: "Amount", key: "amount", width: 12 },
+    { header: "Status", key: "status", width: 12 },
+    { header: "Submitted at", key: "submittedAt", width: 20 },
+    { header: "Reviewed by", key: "reviewedBy", width: 20 },
+    { header: "Reviewed at", key: "reviewedAt", width: 20 },
+    { header: "Approval deadline", key: "deadline", width: 20 },
+    { header: "SLA breached at", key: "breach", width: 20 },
+    { header: "Task", key: "task", width: 50 }
+  ];
+  detail.getRow(1).font = { bold: true };
+  detail.views = [{ state: "frozen", ySplit: 1 }];
+
+  for (const row of rows) {
+    detail.addRow({
+      user: row.user.name,
+      email: row.user.email,
+      date: row.workDate,
+      project: row.project.name,
+      module: row.module.name,
+      submodule: row.submodule?.name ?? "",
+      ticket: row.ticket?.key ?? "",
+      activity: row.activityType,
+      start: row.startTime,
+      end: row.endTime,
+      hours: Number(row.totalHours),
+      billable: row.billable ? "Yes" : "No",
+      // null, not 0 — a rate of zero claims the work was free, and these rows are deliberately
+      // never backfilled.
+      rate: row.billedRate == null ? null : Number(row.billedRate),
+      amount: row.billedAmount == null ? null : Number(row.billedAmount),
+      status: row.status,
+      submittedAt: row.submittedAt,
+      reviewedBy: row.reviewedById ? (reviewers.get(row.reviewedById) ?? "") : "",
+      reviewedAt: row.reviewedAt,
+      deadline: row.approvalDeadline,
+      breach: row.slaBreachAt,
+      task: htmlToText(row.taskDescription)
+    });
+  }
+  detail.getColumn("date").numFmt = "yyyy-mm-dd";
+  for (const key of ["submittedAt", "reviewedAt", "deadline", "breach"]) {
+    detail.getColumn(key).numFmt = "yyyy-mm-dd hh:mm";
+  }
+  detail.getColumn("hours").numFmt = "0.00";
+  detail.getColumn("rate").numFmt = "0.00";
+  detail.getColumn("amount").numFmt = "0.00";
+  detail.autoFilter = { from: "A1", to: { row: 1, column: detail.columns.length } };
+
+  const stamp = new Date().toISOString().slice(0, 10);
+  res.setHeader("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
+  res.setHeader("Content-Disposition", `attachment; filename="timesheet-report-${stamp}.xlsx"`);
+  res.setHeader("X-Report-Rows-Included", String(rows.length));
+  res.setHeader("X-Report-Total-Matching", String(matched));
+  if (rows.length < matched) res.setHeader("X-Report-Truncated", "true");
+  await wb.xlsx.write(res);
+  res.end();
+});
+
 reportRouter.get("/export.csv", requirePermission(permissions.REPORTS_VIEW), async (req, res) => {
   const filters = parseReportFilters(req.query as Record<string, unknown>);
   const rows = await prisma.timesheet.findMany({

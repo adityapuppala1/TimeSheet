@@ -703,7 +703,7 @@ export const reportApi = {
     (await api.post<{ report: string; projectName: string; periodLabel: string }>("/reports/status-report", { projectId, periodDays })).data,
   /** Filters shared by both exports and the grouped report — one shape, so a CSV and a PDF asked
    *  for the same thing can never disagree about what "the same thing" means. */
-  download: async (type: "csv" | "pdf", filters: TimesheetReportFilters = {}) => {
+  download: async (type: "csv" | "pdf" | "xlsx", filters: TimesheetReportFilters & { groupBy?: GroupByKey } = {}) => {
     const res = await api.get(`/reports/export.${type}`, { params: cleanFilters(filters), responseType: "blob" });
     return {
       blob: res.data as Blob,
@@ -715,8 +715,44 @@ export const reportApi = {
     };
   },
   timesheetReport: async (filters: TimesheetReportFilters = {}, groupBy: GroupByKey = "user") =>
-    (await api.get<TimesheetReport>("/reports/timesheets", { params: { ...cleanFilters(filters), groupBy } })).data
+    (await api.get<TimesheetReport>("/reports/timesheets", { params: { ...cleanFilters(filters), groupBy } })).data,
+  /** Requires a date range — utilisation is hours against capacity, and capacity only means
+   *  something over a period. The server refuses without one rather than picking a window. */
+  analytics: async (filters: TimesheetReportFilters & { from: string; to: string }) =>
+    (await api.get<TimesheetAnalytics>("/reports/analytics", { params: cleanFilters(filters) })).data
 };
+
+export interface UtilisationRow {
+  userId: string;
+  name: string;
+  loggedHours: number;
+  billableHours: number;
+  /** Null when the person has no capacity on file and the workspace has no default. Dividing by an
+   *  unknown is how a utilisation chart shows 0% for a contractor nobody configured. */
+  capacityHours: number | null;
+  utilisationPct: number | null;
+  billableUtilisationPct: number | null;
+}
+
+export interface TimesheetAnalytics {
+  range: { from: string; to: string; workingDays: number };
+  utilisation: UtilisationRow[];
+  approvalLatency: {
+    measured: number;
+    /** Reviewed entries submitted before the submit timestamp existed. Reported so a median over a
+     *  handful is never read as covering everything. */
+    unmeasurable: number;
+    medianHours: number | null;
+    p90Hours: number | null;
+    slowestHours: number | null;
+    breached: number;
+    breachRatePct: number | null;
+    byApprover: Array<{ approverId: string; name: string; reviewed: number; medianHours: number | null }>;
+  };
+  activityMix: Array<{ activity: string; hours: number; sharePct: number; cost: number | null; unratedEntries: number }>;
+  totals: { hours: number; billableHours: number; entries: number; people: number };
+  truncated: boolean;
+}
 
 /** Drops empty values so the query string carries only real constraints — and so a bookmarked
  *  report URL stays readable. */

@@ -134,6 +134,11 @@ async function saveTimesheet(req: any, status: "DRAFT" | "SUBMITTED") {
   const project = await prisma.project.findUniqueOrThrow({ where: { id: req.body.projectId } });
   const submittedAt = new Date();
   const approvalDeadline = status === "SUBMITTED" ? computeApprovalDeadline(submittedAt, project.slaApprovalHours) : null;
+  // Persisted, not just used to derive the deadline. Every SUBMITTED write goes through this
+  // function, so this is the only place it has to happen — but it does have to happen here, since
+  // reconstructing it later from `approvalDeadline - project.slaApprovalHours` is only correct
+  // while that project's SLA setting has never changed.
+  const submittedAtValue = status === "SUBMITTED" ? submittedAt : null;
 
   // SECURITY: rich-text content arrives as HTML — sanitize before persisting.
   const cleanTaskDescription = sanitizeRichText(req.body.taskDescription);
@@ -184,6 +189,7 @@ async function saveTimesheet(req: any, status: "DRAFT" | "SUBMITTED") {
           userId: req.user.id,
           totalHours: hours,
           status,
+          submittedAt: submittedAtValue,
           approvalDeadline,
           attachments: {
             // Processed BEFORE the transaction body builds this row — images become WebP, text is
