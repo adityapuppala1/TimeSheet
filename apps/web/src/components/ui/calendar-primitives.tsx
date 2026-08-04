@@ -113,10 +113,24 @@ const cellClass = ({
 
 const gridHeaderClass = "pb-1 text-xs font-medium text-muted-foreground";
 
+/**
+ * A fixed height for the day grid, sized to the tallest month.
+ *
+ * Months span five or six week-rows depending on where the 1st falls, so without this the grid
+ * changes height as you page through — and because the calendar lives in a popover that anchors to
+ * a trigger, the whole panel jumps up and down under the cursor. Stepping from March to April then
+ * becomes a game of chasing the chevron.
+ *
+ * WebKit made it worse than cosmetic: the popover re-positions on every resize, so it was never
+ * "stable" and clicks queued behind an animation that restarted each time. Six rows of h-9 cells
+ * plus the weekday header row.
+ */
+const GRID_MIN_HEIGHT = "min-h-[13.5rem]";
+
 /** One month of a single-date calendar. */
 export function CalendarMonthGrid() {
   return (
-    <AriaCalendarGrid weekdayStyle="short" className="w-full border-collapse">
+    <AriaCalendarGrid weekdayStyle="short" className={cn("w-full border-collapse", GRID_MIN_HEIGHT)}>
       <CalendarGridHeader>
         {(day) => <CalendarHeaderCell className={gridHeaderClass}>{day}</CalendarHeaderCell>}
       </CalendarGridHeader>
@@ -136,7 +150,7 @@ export function CalendarMonthGrid() {
 /** One month of a range calendar — same cells, plus the in-range bar. */
 export function RangeCalendarMonthGrid({ offset }: { offset?: { months: number } }) {
   return (
-    <AriaCalendarGrid weekdayStyle="short" offset={offset} className="w-full border-collapse">
+    <AriaCalendarGrid weekdayStyle="short" offset={offset} className={cn("w-full border-collapse", GRID_MIN_HEIGHT)}>
       <CalendarGridHeader>
         {(day) => <CalendarHeaderCell className={gridHeaderClass}>{day}</CalendarHeaderCell>}
       </CalendarGridHeader>

@@ -64,16 +64,39 @@ export async function pickDate(page: Page, triggerId: string, target: Date) {
   const dialog = page.getByRole("dialog");
   await expect(dialog).toBeVisible({ timeout: 10_000 });
 
-  const wanted = target.toLocaleDateString("en-US", { month: "long", year: "numeric" });
-  // Step backwards or forwards until the heading matches. Bounded so a broken stepper fails fast
-  // rather than spinning for the whole timeout.
+  const MONTHS = [
+    "January", "February", "March", "April", "May", "June",
+    "July", "August", "September", "October", "November", "December"
+  ];
+  /**
+   * Turns "August 2026" into a comparable number.
+   *
+   * NOT `new Date(heading)`. "August 2026" is not a format the spec requires engines to parse:
+   * Chromium accepts it, WebKit returns Invalid Date. Every comparison against an invalid date is
+   * false, so the direction logic always chose "Next", walked forward to the picker's maxValue,
+   * and then waited forever on a stepper that had correctly become disabled — a 30-second timeout
+   * pointing at the button rather than at the parsing.
+   */
+  const monthIndex = (heading: string): number => {
+    // The heading is NOT bare "August 2026" — React Aria prefixes it with the calendar's own
+    // accessible name, giving "Pick a day, August 2026". Splitting on whitespace therefore read
+    // "Pick" as the month, produced NaN, and every comparison against NaN is false: the loop
+    // always stepped forward, hit the picker's maxValue, and waited out the timeout on a stepper
+    // that had correctly disabled itself. Anchor to the END of the string instead.
+    const match = heading.match(/([A-Za-z]+)\s+(\d{4})\s*$/);
+    if (!match) throw new Error(`could not read a month from the calendar heading: "${heading}"`);
+    return Number(match[2]) * 12 + MONTHS.indexOf(match[1]);
+  };
+  const wantedIndex = target.getFullYear() * 12 + target.getMonth();
+
+  // Bounded so a broken stepper fails fast rather than spinning for the whole timeout.
   for (let i = 0; i < 60; i += 1) {
     const heading = (await dialog.getByRole("heading").first().textContent())?.trim() ?? "";
-    if (heading === wanted) break;
-    const back = new Date(`${heading} 1`) > target;
+    const current = monthIndex(heading);
+    if (current === wantedIndex) break;
     // `.first()` because React Aria renders a second, visually-hidden stepper for screen readers;
     // both carry the same accessible name and a bare match is a strict-mode violation.
-    await dialog.getByRole("button", { name: back ? "Previous" : "Next" }).first().click();
+    await dialog.getByRole("button", { name: current > wantedIndex ? "Previous" : "Next" }).first().click();
   }
 
   // Cells are buttons whose accessible name is the FULL date — "Wednesday, August 5, 2026" — not
