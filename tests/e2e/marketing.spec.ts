@@ -38,7 +38,7 @@ test.describe("marketing pages", () => {
     });
 
     await page.goto("/");
-    await expect(page.getByRole("heading", { level: 1 })).toContainText(/AI that earns your trust/i);
+    await expect(page.getByRole("heading", { level: 1 })).toContainText(/what actually happened/i);
 
     // The hero shot is above the fold and eager-loaded, so it must be decoded by now. Checking
     // naturalWidth rather than visibility catches the case that matters: the <img> is present and

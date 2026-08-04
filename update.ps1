@@ -92,6 +92,13 @@ function Invoke-Verification([string]$Expected) {
   if ($LASTEXITCODE -ne 0) { return $false }
   docker compose -f $ComposeFile exec -T api npx prisma migrate status --schema=apps/api/prisma/control/schema.prisma | Out-Null
   if ($LASTEXITCODE -ne 0) { return $false }
+  # Advisory, matching install.ps1: missing face-detection models mean no camera guidance, but
+  # they must never roll back an otherwise good update.
+  try {
+    Invoke-WebRequest -Uri "http://localhost:5173/human-models/blazeface.json" -UseBasicParsing -TimeoutSec 5 | Out-Null
+  } catch {
+    Write-Warn "Face-detection models are missing from the web image - camera guidance will be unavailable until it is rebuilt."
+  }
   return $true
 }
 

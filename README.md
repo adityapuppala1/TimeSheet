@@ -1,12 +1,22 @@
 # TimeSphere — Timesheet + AI-Powered Ticketing Portal
 
 A full-stack workspace platform that combines **timesheet management** (daily work logging,
-approvals, SLA-driven escalation, reporting) with a **Jira-like ticketing system**, a
+approvals, SLA-driven escalation, reporting) with a **Jira-like ticketing system**, a full
+**project-planning layer** (Gantt timelines, dependencies, portfolios, capacity and budgets), a
 **bring-your-own-key AI layer** (Anthropic or any OpenAI-compatible provider), and an
 **analytics/insights dashboard** — all under one roof, one login, and one admin-configurable
-settings surface. The unifying idea: this app already owns both *the work* (tickets) and *the
-time spent on it* (timesheets), so features that fuse the two (workload heatmaps, AI weekly
-digests) are only possible because they live in the same system.
+settings surface.
+
+The unifying idea, and the thing that is genuinely hard to copy: this app already owns both *the
+work* (tickets) and *the time actually spent on it* (approved, rate-snapshotted timesheets). A
+dedicated project tool has to **estimate** effort, because estimates are all it holds; here the
+workload board can put planned hours, real logged hours and contracted capacity on the same axis,
+and a budget forecast is priced from the same approved rates a client-facing attestation reads. A
+timesheet tool cannot plan and a planning tool cannot measure — the whole product is the argument
+that those should not be two systems.
+
+> **v2.0.0 — the planning layer.** Everything in it ships **off by default**: upgrading changes
+> nothing a user can see until an admin turns it on. See [CHANGELOG.md](CHANGELOG.md).
 
 ## Feature areas
 
@@ -444,11 +454,17 @@ specific message instead of you working backward from one of the errors below.
 ## Testing
 
 ```bash
-npm run test:e2e             # full matrix (~13 min): every spec on desktop + phone/tablet/laptop/4K layout sweeps
+npm run test:e2e             # everything (~22 min): 7 projects — 5 viewports + Firefox + WebKit
 npm run test:e2e:quick       # day-to-day loop (~7 min): every FUNCTIONAL spec once, desktop only
 npm run test:e2e:responsive  # layout-only matrix (~5 min): the four viewport projects, 2 workers in parallel
+npm run test:e2e:browsers    # engine coverage (~5 min): Firefox (Gecko) + WebKit (Safari/iOS)
 npm run test:e2e:report      # open the last run's HTML report
 ```
+
+**Cross-browser needs a one-time download:** `npx playwright install firefox webkit`. Three engines
+cover every browser this product gets asked about — Chrome, Edge, Opera, Brave and Arc are all
+Chromium; Firefox is Gecko; Safari is WebKit, **as is every browser on iOS**, whatever its icon
+says. Testing "Chrome on iPhone" is testing WebKit.
 
 **Which one to run:** `test:e2e:quick` while iterating (it exercises every feature spec once —
 the viewport projects only re-run `responsive.spec.ts` at other sizes); `test:e2e` before a push.

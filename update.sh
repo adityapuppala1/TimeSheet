@@ -103,6 +103,10 @@ run_verification() { # run_verification <expected-version>  — mirrors install.
     -H 'Content-Type: application/json' \
     --data '{"email":"platform-admin@timesphere.local","password":"PlatformAdmin@12345"}' \
     | grep -q accessToken || warn "Login check inconclusive (the seeded platform-admin password may have been changed — that's fine)."
+  # Advisory, matching install.sh's layer 6: the face-detection models are produced by the web
+  # build, so an image built without that step is healthy in every other respect and silently has
+  # no camera guidance. Warn rather than fail — this must never roll back an otherwise good update.
+  curl -fsS -o /dev/null http://localhost:5173/human-models/blazeface.json 2>/dev/null     || warn "Face-detection models are missing from the web image — camera guidance will be unavailable until it is rebuilt."
   return 0
 }
 

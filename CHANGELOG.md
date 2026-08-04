@@ -5,9 +5,162 @@ and a GitHub Release whose body is copied from the matching section here — the
 documented in CONTRIBUTING.md, and the in-app **What's new** page renders these notes for every
 user of a running installation.
 
-## Unreleased
+## 2.0.0 — the planning layer
 
-### 👥 User management — find people, and act on more than one at a time
+Turns TimeSphere from an execution tracker into a project-management platform: plans, schedules,
+capacity, intake, approvals and an AI copilot that never writes on its own — plus a rebuilt face
+check, real user management, per-feature AI cost visibility and a status page with a memory.
+
+**Nothing here changes how an existing workspace behaves until an admin turns it on.** Every
+planning capability ships off by default and upgrading is a normal `./update.sh`. With every
+switch left alone, one thing is different from 1.1.0 and one thing only: a **My work** entry in
+the sidebar, a personal queue over ticket dates that already exist and needs no setup. Every other
+planning page stays hidden, and every planning endpoint refuses with a 403 that says which switch
+is off and who can turn it on — verified against a running install with every toggle cleared.
+
+Major version because the data model grew substantially and the product now competes in a
+different category, not because anything was removed. There are no breaking changes: no endpoint
+changed shape, no column was dropped, and every existing integration keeps working.
+
+**If you read one section, make it the fixes.** Three of them were features that had been recorded
+as delivered and were not, and the way each was found — reading what the system had already
+recorded, rather than reasoning about what it should do — is the most useful thing in this release.
+
+---
+
+### The planning layer
+
+#### ✨ Phase 1 — foundation
+
+- **Workspace Settings → Planning** — one new tab holding the planning master switches, the
+  working-week and default-capacity settings, custom fields, and the workflow editor. Each toggle
+  shows whether your plan actually includes the feature, so a switch can never be on while the
+  API refuses it.
+- **Custom fields** — admin-defined extra fields on tickets and projects (text, number, date,
+  select, checkbox, person, currency, link). Filterable and reportable, not free-text notes.
+- **Custom workflows** *(Enterprise)* — define your own statuses and transitions per ticket type.
+  Every custom status declares which built-in status it behaves like, so SLAs, reports, exports,
+  webhooks and the public API keep reading exactly the values they always have — renaming
+  "In review" to "Legal review" changes the board, not the data.
+- **Schema for everything that follows** — work-item hierarchy and dates on tickets, scheduling
+  dependencies with lag, portfolios, saved views, capacity and resource bookings, project
+  budgets, request forms, blueprints, approval chains, proofing annotations, custom dashboards,
+  scheduled reports, and the human-in-the-loop AI proposal tables.
+
+#### ✨ Phase 2 — planning & views
+
+- **Timeline (Gantt)** — the whole plan on one chart: hierarchy, start/end dates, dependencies
+  with lag, milestones, baselines, and the critical path. Drag a bar to move it, drag its edge to
+  change its length. Reachable from the new **Plan** nav section or as a tab on Tickets.
+- **Dependencies that mean something** — four scheduling relationships (finish-to-start and its
+  three siblings) with working-day lag. A dependency that would create a loop is refused as you
+  add it, naming the items involved, rather than quietly producing a wrong timeline.
+- **It tells you when a plan is inconsistent, it doesn't overrule you** — if a date contradicts a
+  dependency the bar stays exactly where you put it and the conflict is reported. Nothing is ever
+  rescheduled behind your back.
+- **Baselines and slip** — freeze the agreed dates, then see how far each item has moved from
+  them. Never refreshes itself, because a baseline that follows the plan makes everything look
+  permanently on time.
+- **Calendar view** — a month grid that distinguishes work you have actually scheduled from work
+  that only has an SLA date, so it is useful on day one rather than looking empty.
+- **My work** — everything assigned to you across every project, bucketed into overdue, today,
+  this week, blocked and later. Blocked items are listed separately so they never sit at the top
+  of your list pretending to be startable. Available to everyone, no setup required.
+- **Portfolio** — delivery health across projects: schedule vs planned end, effort-weighted
+  progress, budget vs burn, and a forecast at completion. Every figure is derived from the plan
+  and the approved hours you already have; the forecast stays blank until there is enough data
+  for it to mean anything.
+- **Project budgets and planned dates**, plus optional portfolio grouping.
+- **Saved views** — keep a filter/column/sort combination per view type, private or shared.
+
+#### ✨ Phase 3 — resource & budget
+
+- **Workload board** — every person's capacity, week by week, coloured by how booked they are.
+  Each cell shows the hours planned *and* the hours actually logged, so a forecast can be checked
+  against what really happened rather than against another forecast.
+- **Per-person capacity** — contracted weekly hours and an expected utilisation percentage, so a
+  part-timer and a fully-loaded person are modelled properly instead of with one fudged number.
+  Anyone without their own figure follows the workspace default.
+- **Bookings** — reserve someone's time against a project or a work item, or mark it as leave.
+  Hours are per *working* day, so a five-day booking at 4h/day is 20 hours, not 28. Leave reduces
+  what's available rather than counting as load, so a week off reads as unavailable, not busy.
+- **Double-bookings are shown, not blocked** — splitting a person across two projects for a
+  fortnight is sometimes exactly the plan, and refusing it would just make people record
+  something untrue. Being booked to exactly 100% isn't flagged either; that's fully booked, which
+  is the point.
+- **Project budgets** — budget, spend, and a forecast at completion, on the project's billing
+  panel. The forecast stays blank until there's enough progress and spend for it to mean
+  anything, rather than reporting a confident zero.
+- **Estimate accuracy** — how far finished work ran over or under its estimate, reported as a
+  median so one runaway task doesn't distort the picture. Turns the hours you already collect
+  into better estimates next time.
+
+#### ✨ Phase 4 — intake & approvals
+
+- **Request forms** — build an intake form with conditional questions ("only ask for steps to
+  reproduce if they said it's a bug"), then publish it to a link that works for anyone, with no
+  account. Every submission becomes a ticket immediately and lands in a review inbox, so nothing
+  sits in a queue waiting to be noticed.
+- **Publishing is its own decision.** Creating a form doesn't expose it; withdrawing a link kills
+  that URL permanently rather than hiding it behind a flag.
+- **Blueprints** — save a project's shape and stamp it out again against any start date. Dates
+  are stored as offsets, so a blueprint stays reusable instead of being a copy of last quarter.
+  Preview exactly what will be created before it's created, or learn a blueprint from a project
+  that already ran.
+- **Approval chains on work items** — ask colleagues, people outside the company, or both, in
+  order or all at once. External reviewers get a single-use link that needs no account and shows
+  them only what they're reviewing. One rejection settles the request and stops asking everyone
+  else; the remaining links stop working immediately.
+- **Proofing** — drop a pin on an attached image or PDF and comment on that exact spot. Comments
+  stay anchored at any zoom or screen size, and resolving one keeps it as a record rather than
+  deleting the reason a change was made.
+
+#### ✨ Phase 5 — the AI planning copilot
+
+- **Project risk scoring** — every project gets a 0–100 delivery-risk score from six measured
+  signals: schedule slip against baseline, budget forecast, blocked work, over-allocation, SLA
+  breaches and rework. The full breakdown is stored with the score, so "why is this red?" always
+  has an answer, and the same inputs always give the same number. **It works with AI switched off
+  entirely** — only the plain-English summary needs a model.
+- **AI suggestions are suggestions.** When the assistant proposes work — breaking a goal into
+  tasks, for instance — nothing is written. Every change lands on a review page where you tick the
+  ones you want, see exactly what each would change, and apply only those. There is no
+  apply-everything button, on purpose.
+- **Somebody else's edit is never quietly reverted.** If an item changed after a suggestion was
+  made, that row is refused and tells you why, while the rest still apply.
+- **Nightly risk snapshots** build a history, so you can see whether last week's intervention
+  actually helped rather than only how things stand today.
+
+#### ✨ Phase 6 — dashboards, delivery and the finish
+
+- **Custom dashboards** — build your own view from a fixed catalogue of tiles. The catalogue is
+  closed on purpose: "open items" is one definition, so two dashboards showing it cannot
+  disagree. Share one and every viewer still sees only their own projects, so publishing a layout
+  never publishes data.
+- **Scheduled delivery** — email a dashboard daily, weekly or monthly to people who don't have an
+  account. Built with the sender's access, and it stops itself if that person leaves.
+- **The product tour** now covers the planning pages, and only the ones your workspace actually
+  has switched on.
+
+#### 🛡️ Fixed during the release audit
+
+- **25 planning endpoints now enforce the entitlement they belong to.** Creating things was gated
+  and much of the rest was not, so with a feature switched off you could not create a request form
+  but you could delete one, resend an approval email to an external reviewer, or accept a
+  submission. The same gap meant a downgraded workspace kept read access to capabilities it had
+  stopped paying for. Every one now refuses with a message naming the switch that is off.
+- **The ticket detail sheet no longer shows Plan and Approvals tabs to workspaces that have those
+  features switched off.**
+- **Proofing and saved views now have a user interface.** Both had shipped as working APIs with
+  nothing calling them — proofing especially, since Workspace Settings carries a toggle for it.
+  You can now click an attached image to pin a comment to a spot on it, reply, and resolve; and
+  name a set of ticket filters to get back in one click.
+
+---
+
+### Everything else in this release
+
+#### 👥 User management — find people, and act on more than one at a time
 
 - **Filter by role, job title, status and who's online**, and search across name, email, job title
   *and* role name — people think in "find the managers", not "set the role dropdown".
@@ -27,7 +180,7 @@ user of a running installation.
 - **Fixed:** every assignee, manager and approver dropdown in the product silently omitted most
   people in orgs with more than fifty users.
 
-### 📊 AI settings — where the tokens actually go
+#### 📊 AI settings — where the tokens actually go
 
 - A new **per-feature breakdown**: input, output and total tokens, calls, average per call, share
   of the total, and which models each feature used — as a cumulative chart, a day-by-day stacked
@@ -38,7 +191,7 @@ user of a running installation.
 - Days with no activity are shown as zero rather than skipped, so a quiet week looks quiet instead
   of looking like a gap in the data.
 
-### 🚦 Maintenance — a status page with a memory
+#### 🚦 Maintenance — a status page with a memory
 
 - **Every feature is probed every five minutes** — sign-in, timesheets, tickets, reports, files,
   email, AI, face verification, planning, integrations, and the databases underneath them — with a
@@ -55,7 +208,7 @@ user of a running installation.
 - Incidents are recorded rather than recomputed, so they outlive the raw samples they came from —
   that record is exactly what somebody comes back to months later.
 
-### 🐛 Fixed — settings that appeared not to save, and Copy buttons that lied
+#### 🐛 Fixed — settings that appeared not to save, and Copy buttons that lied
 
 - **Settings forms no longer discard what you typed.** Three cards (face verification, mail
   server, AI prompts) re-seeded their inputs from the server every time the underlying query
@@ -74,7 +227,7 @@ user of a running installation.
   workspace was still on the last V5 migration, which made every per-org background job log an
   error for it.
 
-### 🌐 Browser and OS support, verified
+#### 🌐 Browser and OS support, verified
 
 Chrome, Edge, Opera, Brave (Chromium), Firefox (Gecko) and Safari (WebKit) are now covered by
 actual test runs rather than an assumption — including iOS, where every browser is WebKit whatever
@@ -82,7 +235,21 @@ its icon says. The server runs in Docker, so macOS, Windows and Ubuntu differ on
 installer script starts it. See "Browser and OS support" in the deployment guide, including the
 things that genuinely need HTTPS and what degrades gracefully without it.
 
-### 🔍 Face verification — three measured causes of it not working, fixed
+#### 🛡️ Fixed in the status page, found by its own test
+
+- **One outage could be recorded as two incidents.** Opening an incident read the open ones and
+  created one if the service had none — with nothing enforcing uniqueness in between. The
+  five-minute worker overlapping a manual "check now" was enough to race it, and the page then
+  showed the same failure twice. The database now permits at most one open incident per service,
+  and a run that loses the race joins the incident the winner opened instead of failing. The
+  migration merges any duplicates an affected install already has, folding their sample counts
+  into the earliest one rather than discarding them.
+- **The AI probe could report a false outage.** It checked the stored API-key column directly
+  instead of asking the resolver the AI calls actually use — so a workspace on the Anthropic
+  provider running from an environment variable, which is a perfectly healthy setup, was reported
+  as down. A monitor that invents failures is worse than no monitor.
+
+#### 🔍 Face verification — three measured causes of it not working, fixed
 
 The feature was failing far more than it was passing. The attempt log said why, and it was not
 what anyone assumed: **the head-movement check, not the face match**, was the largest cause —
@@ -115,148 +282,6 @@ No new services and no Python: the browser now runs the same detection library t
 used, and it deliberately loads only detection and head-pose (2.1MB, fetched when a camera opens).
 The embedding and the match stay on the server, because a client that decides its own verification
 outcome is not a security control.
-
-## 2.0.0 — the planning layer
-
-Turns TimeSphere from an execution tracker into a project-management platform: plans, schedules,
-capacity, intake, approvals and an AI copilot that never writes on its own.
-
-**Nothing here changes how an existing workspace behaves until an admin turns it on.** Every
-capability ships off by default and upgrading is a normal `./update.sh`. With every switch left
-alone, one thing is different from 1.1.0 and one thing only: a **My work** entry in the sidebar,
-a personal queue over ticket dates that already exist and needs no setup. Every other planning
-page stays hidden, and every planning endpoint refuses with a 403 that says which switch is off
-and who can turn it on — verified against a running install with every toggle cleared.
-
-Major version because the data model grew substantially and the product now competes in a
-different category, not because anything was removed. There are no breaking changes: no endpoint
-changed shape, no column was dropped, and every existing integration keeps working.
-
-### ✨ Phase 1 — foundation
-
-- **Workspace Settings → Planning** — one new tab holding the planning master switches, the
-  working-week and default-capacity settings, custom fields, and the workflow editor. Each toggle
-  shows whether your plan actually includes the feature, so a switch can never be on while the
-  API refuses it.
-- **Custom fields** — admin-defined extra fields on tickets and projects (text, number, date,
-  select, checkbox, person, currency, link). Filterable and reportable, not free-text notes.
-- **Custom workflows** *(Enterprise)* — define your own statuses and transitions per ticket type.
-  Every custom status declares which built-in status it behaves like, so SLAs, reports, exports,
-  webhooks and the public API keep reading exactly the values they always have — renaming
-  "In review" to "Legal review" changes the board, not the data.
-- **Schema for everything that follows** — work-item hierarchy and dates on tickets, scheduling
-  dependencies with lag, portfolios, saved views, capacity and resource bookings, project
-  budgets, request forms, blueprints, approval chains, proofing annotations, custom dashboards,
-  scheduled reports, and the human-in-the-loop AI proposal tables.
-
-### ✨ Phase 2 — planning & views
-
-- **Timeline (Gantt)** — the whole plan on one chart: hierarchy, start/end dates, dependencies
-  with lag, milestones, baselines, and the critical path. Drag a bar to move it, drag its edge to
-  change its length. Reachable from the new **Plan** nav section or as a tab on Tickets.
-- **Dependencies that mean something** — four scheduling relationships (finish-to-start and its
-  three siblings) with working-day lag. A dependency that would create a loop is refused as you
-  add it, naming the items involved, rather than quietly producing a wrong timeline.
-- **It tells you when a plan is inconsistent, it doesn't overrule you** — if a date contradicts a
-  dependency the bar stays exactly where you put it and the conflict is reported. Nothing is ever
-  rescheduled behind your back.
-- **Baselines and slip** — freeze the agreed dates, then see how far each item has moved from
-  them. Never refreshes itself, because a baseline that follows the plan makes everything look
-  permanently on time.
-- **Calendar view** — a month grid that distinguishes work you have actually scheduled from work
-  that only has an SLA date, so it is useful on day one rather than looking empty.
-- **My work** — everything assigned to you across every project, bucketed into overdue, today,
-  this week, blocked and later. Blocked items are listed separately so they never sit at the top
-  of your list pretending to be startable. Available to everyone, no setup required.
-- **Portfolio** — delivery health across projects: schedule vs planned end, effort-weighted
-  progress, budget vs burn, and a forecast at completion. Every figure is derived from the plan
-  and the approved hours you already have; the forecast stays blank until there is enough data
-  for it to mean anything.
-- **Project budgets and planned dates**, plus optional portfolio grouping.
-- **Saved views** — keep a filter/column/sort combination per view type, private or shared.
-
-### ✨ Phase 3 — resource & budget
-
-- **Workload board** — every person's capacity, week by week, coloured by how booked they are.
-  Each cell shows the hours planned *and* the hours actually logged, so a forecast can be checked
-  against what really happened rather than against another forecast.
-- **Per-person capacity** — contracted weekly hours and an expected utilisation percentage, so a
-  part-timer and a fully-loaded person are modelled properly instead of with one fudged number.
-  Anyone without their own figure follows the workspace default.
-- **Bookings** — reserve someone's time against a project or a work item, or mark it as leave.
-  Hours are per *working* day, so a five-day booking at 4h/day is 20 hours, not 28. Leave reduces
-  what's available rather than counting as load, so a week off reads as unavailable, not busy.
-- **Double-bookings are shown, not blocked** — splitting a person across two projects for a
-  fortnight is sometimes exactly the plan, and refusing it would just make people record
-  something untrue. Being booked to exactly 100% isn't flagged either; that's fully booked, which
-  is the point.
-- **Project budgets** — budget, spend, and a forecast at completion, on the project's billing
-  panel. The forecast stays blank until there's enough progress and spend for it to mean
-  anything, rather than reporting a confident zero.
-- **Estimate accuracy** — how far finished work ran over or under its estimate, reported as a
-  median so one runaway task doesn't distort the picture. Turns the hours you already collect
-  into better estimates next time.
-
-### ✨ Phase 4 — intake & approvals
-
-- **Request forms** — build an intake form with conditional questions ("only ask for steps to
-  reproduce if they said it's a bug"), then publish it to a link that works for anyone, with no
-  account. Every submission becomes a ticket immediately and lands in a review inbox, so nothing
-  sits in a queue waiting to be noticed.
-- **Publishing is its own decision.** Creating a form doesn't expose it; withdrawing a link kills
-  that URL permanently rather than hiding it behind a flag.
-- **Blueprints** — save a project's shape and stamp it out again against any start date. Dates
-  are stored as offsets, so a blueprint stays reusable instead of being a copy of last quarter.
-  Preview exactly what will be created before it's created, or learn a blueprint from a project
-  that already ran.
-- **Approval chains on work items** — ask colleagues, people outside the company, or both, in
-  order or all at once. External reviewers get a single-use link that needs no account and shows
-  them only what they're reviewing. One rejection settles the request and stops asking everyone
-  else; the remaining links stop working immediately.
-- **Proofing** — drop a pin on an attached image or PDF and comment on that exact spot. Comments
-  stay anchored at any zoom or screen size, and resolving one keeps it as a record rather than
-  deleting the reason a change was made.
-
-### ✨ Phase 5 — the AI planning copilot
-
-- **Project risk scoring** — every project gets a 0–100 delivery-risk score from six measured
-  signals: schedule slip against baseline, budget forecast, blocked work, over-allocation, SLA
-  breaches and rework. The full breakdown is stored with the score, so "why is this red?" always
-  has an answer, and the same inputs always give the same number. **It works with AI switched off
-  entirely** — only the plain-English summary needs a model.
-- **AI suggestions are suggestions.** When the assistant proposes work — breaking a goal into
-  tasks, for instance — nothing is written. Every change lands on a review page where you tick the
-  ones you want, see exactly what each would change, and apply only those. There is no
-  apply-everything button, on purpose.
-- **Somebody else's edit is never quietly reverted.** If an item changed after a suggestion was
-  made, that row is refused and tells you why, while the rest still apply.
-- **Nightly risk snapshots** build a history, so you can see whether last week's intervention
-  actually helped rather than only how things stand today.
-
-### ✨ Phase 6 — dashboards, delivery and the finish
-
-- **Custom dashboards** — build your own view from a fixed catalogue of tiles. The catalogue is
-  closed on purpose: "open items" is one definition, so two dashboards showing it cannot
-  disagree. Share one and every viewer still sees only their own projects, so publishing a layout
-  never publishes data.
-- **Scheduled delivery** — email a dashboard daily, weekly or monthly to people who don't have an
-  account. Built with the sender's access, and it stops itself if that person leaves.
-- **The product tour** now covers the planning pages, and only the ones your workspace actually
-  has switched on.
-
-### 🛡️ Fixed during the release audit
-
-- **25 planning endpoints now enforce the entitlement they belong to.** Creating things was gated
-  and much of the rest was not, so with a feature switched off you could not create a request form
-  but you could delete one, resend an approval email to an external reviewer, or accept a
-  submission. The same gap meant a downgraded workspace kept read access to capabilities it had
-  stopped paying for. Every one now refuses with a message naming the switch that is off.
-- **The ticket detail sheet no longer shows Plan and Approvals tabs to workspaces that have those
-  features switched off.**
-- **Proofing and saved views now have a user interface.** Both had shipped as working APIs with
-  nothing calling them — proofing especially, since Workspace Settings carries a toggle for it.
-  You can now click an attached image to pin a comment to a spot on it, reply, and resolve; and
-  name a set of ticket filters to get back in one click.
 
 ### 🔧 Under the hood
 

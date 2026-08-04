@@ -456,6 +456,23 @@ verify "platform-admin login returns a token" check_admin_login
 check_spa() { curl -fsS http://localhost:5173 | grep -qi "id=.root."; }
 verify "web app serves the SPA" check_spa
 
+# Layer 6: the face-detection models are actually in the image.
+#
+# These are copied out of node_modules by apps/web/scripts/copy-face-models.mjs during the web
+# build, so a build that skipped that step produces an image that looks perfectly healthy and has
+# no camera guidance in it. The failure is silent and it surfaces days later as "the face check
+# doesn't help me aim any more", which is a miserable thing to diagnose from a bug report. One
+# curl proves the asset shipped. Not fatal on its own — face verification is optional and the
+# camera still works with a manual shutter — so this warns rather than failing the install.
+check_face_models() { curl -fsS -o /dev/null http://localhost:5173/human-models/blazeface.json; }
+if check_face_models; then
+  printf '  [1;32m✓[0m %s
+' "face-detection models are served"
+else
+  warn "Face-detection models are missing from the web image — the camera will still work, but without live guidance."
+  warn "Rebuild with: docker compose -f $COMPOSE_FILE build --no-cache web"
+fi
+
 if [ "$VERIFY_FAILED" = "1" ]; then
   warn "One or more verification checks FAILED — the stack is up but not proven healthy."
   warn "Diagnose with: docker compose -f $COMPOSE_FILE logs api"

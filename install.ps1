@@ -327,6 +327,18 @@ Verify "web app serves the SPA" {
   (Invoke-WebRequest -Uri "http://localhost:5173" -UseBasicParsing -TimeoutSec 5).Content -match 'id="root"'
 }
 
+# The face-detection models are copied out of node_modules during the web build, so an image built
+# without that step is healthy in every other respect and silently has no camera guidance in it.
+# Advisory rather than fatal: face verification is optional and the camera still works with a
+# manual shutter, so this must not fail an otherwise good install.
+try {
+  Invoke-WebRequest -Uri "http://localhost:5173/human-models/blazeface.json" -UseBasicParsing -TimeoutSec 5 | Out-Null
+  Write-Host "  [ok] face-detection models are served" -ForegroundColor Green
+} catch {
+  Write-Warn "Face-detection models are missing from the web image - the camera will still work, but without live guidance."
+  Write-Warn "Rebuild with: docker compose -f $ComposeFile build --no-cache web"
+}
+
 if ($verifyFailed) {
   Write-Warn "One or more verification checks FAILED - the stack is up but not proven healthy."
   Write-Warn "Diagnose with: docker compose -f $ComposeFile logs api"

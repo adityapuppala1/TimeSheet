@@ -10,7 +10,7 @@ import type { PrismaClient } from "@prisma/client";
  */
 export function createFakeTenantClient(): PrismaClient {
   return {
-    globalAISettings: { upsert: vi.fn() },
+    globalAISettings: { upsert: vi.fn(), findUnique: vi.fn() },
     aIUsageLog: { create: vi.fn(), aggregate: vi.fn() },
     aIInteraction: {
       create: vi.fn(),
@@ -29,7 +29,7 @@ export function createFakeTenantClient(): PrismaClient {
     aIEvalRun: { findFirst: vi.fn(), findMany: vi.fn(), findUnique: vi.fn(), create: vi.fn(), update: vi.fn() },
     aIEvalResult: { create: vi.fn(), findMany: vi.fn() },
     scimSettings: { findUnique: vi.fn() },
-    globalFaceVerificationSettings: { upsert: vi.fn(), update: vi.fn() },
+    globalFaceVerificationSettings: { upsert: vi.fn(), update: vi.fn(), findUnique: vi.fn() },
     faceEnrollment: { findUnique: vi.fn(), upsert: vi.fn(), deleteMany: vi.fn(), count: vi.fn(), findMany: vi.fn() },
     faceVerificationAttempt: {
       findUnique: vi.fn(),
@@ -45,7 +45,7 @@ export function createFakeTenantClient(): PrismaClient {
     notification: { create: vi.fn(), findFirst: vi.fn(), count: vi.fn() },
     // Maintenance mode (services/maintenance.service.ts) + server health pings
     maintenanceSettings: { upsert: vi.fn() },
-    session: { findMany: vi.fn(), findUnique: vi.fn(), update: vi.fn(), updateMany: vi.fn() },
+    session: { findMany: vi.fn(), findUnique: vi.fn(), update: vi.fn(), updateMany: vi.fn(), count: vi.fn() },
     $queryRaw: vi.fn(),
     user: {
       findUnique: vi.fn(),
@@ -60,8 +60,16 @@ export function createFakeTenantClient(): PrismaClient {
     project: { findUnique: vi.fn(), findFirst: vi.fn(), findMany: vi.fn() },
     ticket: { findUnique: vi.fn(), findFirst: vi.fn(), findMany: vi.fn(), count: vi.fn(), update: vi.fn(), groupBy: vi.fn() },
     globalTicketSettings: { upsert: vi.fn(), findUnique: vi.fn() },
-    timesheet: { findMany: vi.fn(), findFirst: vi.fn(), groupBy: vi.fn(), update: vi.fn() },
+    timesheet: { findMany: vi.fn(), findFirst: vi.fn(), groupBy: vi.fn(), update: vi.fn(), count: vi.fn(), aggregate: vi.fn() },
     workAttestation: { create: vi.fn(), findFirst: vi.fn(), findMany: vi.fn(), update: vi.fn(), count: vi.fn() },
-    attestationShareLink: { create: vi.fn(), findFirst: vi.fn(), findMany: vi.fn(), update: vi.fn() }
+    attestationShareLink: { create: vi.fn(), findFirst: vi.fn(), findMany: vi.fn(), update: vi.fn() },
+    // Feature-level health monitoring (services/service-health.service.ts). Every probe reads one
+    // of these, so a missing entry surfaces as "cannot read properties of undefined" from inside
+    // a probe rather than as a useful failure.
+    ticketAttachment: { count: vi.fn() },
+    outboundWebhook: { count: vi.fn() },
+    globalPlanningSettings: { findUnique: vi.fn() },
+    serviceHealthSample: { createMany: vi.fn(), deleteMany: vi.fn(), findMany: vi.fn() },
+    serviceIncident: { findMany: vi.fn(), findUnique: vi.fn(), create: vi.fn(), update: vi.fn() }
   } as unknown as PrismaClient;
 }

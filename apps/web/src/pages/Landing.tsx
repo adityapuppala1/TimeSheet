@@ -31,7 +31,11 @@ import {
   FileText,
   FlaskConical,
   GitBranch,
+  Activity,
+  GanttChartSquare,
+  Gauge,
   Inbox,
+  Wallet,
   KeyRound,
   LayoutGrid,
   Lock,
@@ -106,6 +110,26 @@ const TOUR = [
 
 const FEATURES: Array<{ icon: typeof Clock; title: string; body: string }> = [
   {
+    icon: GanttChartSquare,
+    title: "Plans, timelines and dependencies",
+    body: "A real Gantt: hierarchy, four kinds of scheduling dependency with working-day lag, milestones, baselines and the critical path. Drag a bar to move it. If a date contradicts a dependency it says so and leaves your date alone — nothing is ever rescheduled behind your back, because there is no undo for a plan."
+  },
+  {
+    icon: Gauge,
+    title: "Capacity you can check, not guess",
+    body: "The workload board puts planned hours, actually-logged hours and contracted capacity on one axis. That middle column is what a pure planning tool cannot show you: everything else in this category compares a plan against another plan, because estimates are all it holds."
+  },
+  {
+    icon: Wallet,
+    title: "Budgets priced from real rates",
+    body: "Burn and forecast-at-completion computed from the same approved rate snapshots a client-facing Verified Work Attestation reads, so an internal dashboard and a document a client might dispute can never disagree. The forecast stays blank until there is enough data to mean anything."
+  },
+  {
+    icon: Inbox,
+    title: "Intake, blueprints and approvals",
+    body: "Publish a request form to a link that needs no account; every submission becomes a ticket immediately. Save a project's shape as a blueprint and stamp it out against any start date. Route work items through sequential or parallel approvals, including external reviewers who get a single-use link rather than a half-real account."
+  },
+  {
     icon: CalendarCheck,
     title: "Smart timesheets",
     body: "Hierarchical project / module / submodule picker, overlap detection, daily cap warnings, and a rich task editor with attachments. Mistaken drafts can be deleted; approved hours can't, because they're part of the billing record."
@@ -169,6 +193,11 @@ const FEATURES: Array<{ icon: typeof Clock; title: string; body: string }> = [
     icon: WifiOff,
     title: "It tells you when it's down",
     body: "The app polls its own backend. One dropped request shows a quiet warning; a real outage pauses the interface rather than letting you type into a void. It resumes on its own, keeping what you had entered."
+  },
+  {
+    icon: Activity,
+    title: "A status page with a memory",
+    body: "Every feature is probed every five minutes — sign-in, timesheets, tickets, reports, email, AI, planning — with a day-by-day history and a recorded incident log. It answers the question a CPU graph structurally cannot: was it down on Tuesday, when I could not submit? A day is coloured by its worst check, because averaging is how a two-hour outage becomes a 96%-green day."
   },
   {
     icon: Bell,
@@ -349,19 +378,19 @@ export function Landing() {
           <motion.div initial={{ opacity: 0, y: 14 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.5 }}>
             <Badge variant="info" className="mx-auto w-fit gap-1 px-3 py-1 text-xs">
               <Sparkles className="h-3 w-3 shrink-0" />
-              <span>Timesheets, ticketing and BYOK AI in one workspace</span>
+              <span>Plan the work, track the tickets, measure the hours — one workspace</span>
             </Badge>
             <h1 className="mx-auto mt-5 max-w-4xl text-3xl font-black leading-tight tracking-tight sm:text-5xl lg:text-6xl">
-              Work your team logs.{" "}
+              The plan, and{" "}
               {/* Teal→blue only. Running the gradient through `accent` (amber) meant that when the
                   phrase wrapped, the second line ended gold — which reads as a warning state, not
                   emphasis. A two-stop ramp survives wrapping at any width. */}
-              <span className="bg-gradient-to-r from-primary to-info bg-clip-text text-transparent">AI that earns your trust</span>.
+              <span className="bg-gradient-to-r from-primary to-info bg-clip-text text-transparent">what actually happened</span>.
             </h1>
             <p className="mx-auto mt-5 max-w-2xl text-base leading-7 text-muted-foreground sm:text-lg sm:leading-8">
-              One portal for daily time logs, Jira-style tickets, SLA-driven escalations, and an AI layer that triages,
-              summarizes and answers questions — behind toggles, budget caps and a human-review gate your security team
-              will actually sign off on.
+              Gantt timelines, portfolios, capacity and budgets — sitting on top of the tickets your team works and the
+              hours they actually log. A project tool has to estimate effort. This one measures it, because the plan and
+              the timesheet are the same system.
             </p>
             <div className="mt-8 flex flex-col items-center justify-center gap-3 sm:flex-row">
               <Button asChild size="lg" className="w-full sm:w-auto">

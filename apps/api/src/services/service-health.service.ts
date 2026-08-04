@@ -32,6 +32,7 @@
 import { prisma } from "../config/prisma.js";
 import { controlPrisma } from "../config/control-prisma.js";
 import { getTransportStatus } from "./mail.service.js";
+import { resolveApiKey } from "./ai.service.js";
 
 export type ServiceStatusValue = "OPERATIONAL" | "DEGRADED" | "DOWN";
 
@@ -172,7 +173,12 @@ export const SERVICES: ServiceDefinition[] = [
     probe: async () => {
       const settings = await withTimeout(prisma.globalAISettings.findUnique({ where: { id: "global" } }));
       if (!settings?.aiEnabled) return { ok: true, detail: "switched off" };
-      const hasKey = Boolean(settings.apiKey);
+      // Ask the SAME resolver the AI calls use, rather than checking the column directly. A
+      // workspace on the ANTHROPIC provider legitimately runs with no stored key and falls back to
+      // ANTHROPIC_API_KEY from the environment — reading `settings.apiKey` alone reports that
+      // perfectly healthy setup as an outage. A monitor that invents failures is worse than no
+      // monitor, because the first thing it teaches people is to ignore it.
+      const hasKey = Boolean(resolveApiKey(settings));
       return hasKey ? { ok: true } : { ok: false, detail: "enabled but no API key is configured" };
     }
   },
@@ -258,6 +264,21 @@ export const SAMPLE_RETENTION_DAYS = 45;
  * seeing. `sampleCount` records how many consecutive failing probes an incident spanned, so a
  * one-sample blip is distinguishable from a sustained outage on read.
  */
+/** Extends an open incident with one more failing sample. Shared by the normal path and the
+ *  lost-the-race path so the two can never disagree about what "extend" means. */
+async function bumpIncident(id: string, currentStatus: ServiceStatusValue, result: ProbeResult): Promise<void> {
+  await prisma.serviceIncident.update({
+    where: { id },
+    data: {
+      // DOWN outranks DEGRADED: an incident that dipped fully down should not read as a slowdown
+      // once it recovers to merely slow.
+      status: currentStatus === "DOWN" ? "DOWN" : result.status,
+      sampleCount: { increment: 1 },
+      detail: result.detail ?? undefined
+    }
+  });
+}
+
 export async function runHealthChecks(): Promise<ProbeResult[]> {
   const results = await Promise.all(SERVICES.map(probeService));
 
@@ -277,25 +298,36 @@ export async function runHealthChecks(): Promise<ProbeResult[]> {
     const existing = openByService.get(result.service);
     if (result.status === "OPERATIONAL") {
       if (existing) {
-        await prisma.serviceIncident.update({ where: { id: existing.id }, data: { endedAt: new Date() } });
+        // Clearing `openKey` is what releases the unique slot for the next incident.
+        await prisma.serviceIncident.update({
+          where: { id: existing.id },
+          data: { endedAt: new Date(), openKey: null }
+        });
       }
       continue;
     }
     if (existing) {
-      await prisma.serviceIncident.update({
-        where: { id: existing.id },
+      await bumpIncident(existing.id, existing.status, result);
+      continue;
+    }
+    try {
+      await prisma.serviceIncident.create({
         data: {
-          // DOWN outranks DEGRADED: an incident that dipped fully down should not read as a
-          // slowdown once it recovers to merely slow.
-          status: existing.status === "DOWN" ? "DOWN" : result.status,
-          sampleCount: { increment: 1 },
-          detail: result.detail ?? existing.detail
+          service: result.service,
+          status: result.status,
+          detail: result.detail,
+          openKey: result.service
         }
       });
-    } else {
-      await prisma.serviceIncident.create({
-        data: { service: result.service, status: result.status, detail: result.detail }
-      });
+    } catch (err) {
+      // P2002 = another run opened this incident between our read and our write. That is not an
+      // error condition, it is the constraint doing its job: the read above and this create are
+      // not atomic, and the five-minute worker overlapping a manual "check now" is enough to race
+      // them. Before the constraint existed both inserts succeeded and one outage was reported
+      // twice. Now the loser simply joins the incident the winner opened.
+      if ((err as { code?: string })?.code !== "P2002") throw err;
+      const winner = await prisma.serviceIncident.findUnique({ where: { openKey: result.service } });
+      if (winner) await bumpIncident(winner.id, winner.status, result);
     }
   }
 

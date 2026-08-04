@@ -63,6 +63,14 @@ Adding a nav item therefore adds a tour stop automatically, correctly gated, wit
 to remember. Per-destination copy lives in `DESTINATION_COPY`; a destination with no entry still
 gets a stop using its nav label, because a dull step beats a broken tour.
 
+**Role is not the only gate any more.** Since the planning layer, `isVisible` also takes the
+workspace's *effective* feature flags — the AND of "an admin switched it on" and "the plan
+includes it" — and `buildTourSteps` is passed the same set the sidebar already fetched. Without
+that argument every feature-gated destination is treated as hidden, which is right for a workspace
+that has none of them on and wrong for one that does. The failure it prevents is specific: a tour
+that confidently walks somebody to a Gantt chart their workspace has never enabled, then strands
+them on a page telling them the feature is off.
+
 ### Why it's hand-built rather than driver.js/shepherd/joyride
 
 The tooltip is the easy part. Every step has to drive the router, wait for a page that fetches

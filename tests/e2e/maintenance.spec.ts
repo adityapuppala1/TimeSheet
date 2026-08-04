@@ -216,54 +216,40 @@ test.describe("service status page", () => {
     });
   });
 
-  test("an outage opens one incident, accumulates while it lasts, and closes on recovery", async () => {
+  /**
+   * The incident LIFECYCLE is covered by tests/unit/service-health.service.test.ts, not here, and
+   * that placement was learned the hard way.
+   *
+   * This spec used to force a real outage by setting the workspace's AI settings to "enabled, no
+   * API key". It restored `aiEnabled` afterwards and could not restore the key — the API masks it
+   * on read, so the test had no way to put back what it had cleared. Every run therefore destroyed
+   * a real credential and left that workspace's AI permanently down. A test that mutates
+   * configuration it cannot restore is not a test, it is an outage on a timer.
+   *
+   * What is left here is what only an end-to-end test can answer: the route exists, is
+   * SUPER_ADMIN-gated, and returns the shape the page renders. Everything about how an incident
+   * opens, accumulates and closes is logic, and logic is tested where nothing real can be harmed.
+   */
+  test("the incident log is exposed in the shape the status page renders", async () => {
     await withAdminRequest(async (ctx, headers) => {
-      const settings = await (await ctx.get("/api/settings/ai", { headers })).json();
-      const restore = { aiEnabled: settings.aiEnabled };
+      const page = await (await ctx.get("/api/maintenance/status-page?days=7", { headers })).json();
+      expect(Array.isArray(page.incidents)).toBe(true);
 
-      const aiOf = async () => {
-        const page = await (await ctx.get("/api/maintenance/status-page?days=2", { headers })).json();
-        return {
-          service: page.services.find((s: any) => s.key === "ai"),
-          incidents: page.incidents.filter((i: any) => i.service === "ai")
-        };
-      };
-      const probe = () => ctx.post("/api/maintenance/status-page/run", { headers });
-
-      try {
-        // A real misconfiguration rather than sabotaged infrastructure: "AI switched on with no
-        // key" is exactly the failure this probe exists to catch.
-        await ctx.patch("/api/settings/ai", { headers, data: { aiEnabled: true, apiKey: "" } });
-        await probe();
-
-        let state = await aiOf();
-        test.skip(state.service.current !== "DOWN", "this workspace has a key configured — nothing to break");
-        expect(state.incidents.filter((i: any) => !i.endedAt)).toHaveLength(1);
-        const opened = state.incidents.find((i: any) => !i.endedAt)!;
-
-        // Two more failing probes must extend the SAME incident, not create three.
-        await probe();
-        await probe();
-        state = await aiOf();
-        const still = state.incidents.filter((i: any) => !i.endedAt);
-        expect(still).toHaveLength(1);
-        expect(still[0].id).toBe(opened.id);
-        expect(still[0].sampleCount).toBeGreaterThan(opened.sampleCount);
-
-        await ctx.patch("/api/settings/ai", { headers, data: { aiEnabled: false } });
-        await probe();
-        state = await aiOf();
-        expect(state.service.current).toBe("OPERATIONAL");
-        expect(state.incidents.filter((i: any) => !i.endedAt)).toHaveLength(0);
-
-        // THE ASSERTION THAT MATTERS MOST: recovering does not repaint today green. A day is
-        // coloured by its worst check, so an outage stays visible for the day it happened —
-        // otherwise the page forgets the incident the moment it is fixed, which is precisely
-        // when somebody starts asking about it.
-        expect(state.service.days[state.service.days.length - 1].status).not.toBe("OPERATIONAL");
-      } finally {
-        await ctx.patch("/api/settings/ai", { headers, data: restore });
+      for (const incident of page.incidents) {
+        expect(["OPERATIONAL", "DEGRADED", "DOWN"]).toContain(incident.status);
+        expect(typeof incident.serviceLabel).toBe("string");
+        // A duration is always computable — an ongoing incident measures to now rather than
+        // reporting null, because "how long has this been broken" is the question being asked.
+        expect(incident.durationMinutes).toBeGreaterThanOrEqual(1);
+        expect(incident.sampleCount).toBeGreaterThanOrEqual(1);
       }
+
+      // At most one OPEN incident per service, which the database now enforces with a unique
+      // index. Before that constraint a single outage could be recorded twice by two overlapping
+      // health runs, and the page showed the same failure as two separate rows.
+      const openByService = page.incidents.filter((i: any) => !i.endedAt).map((i: any) => i.service);
+      expect(new Set(openByService).size).toBe(openByService.length);
     });
   });
+
 });

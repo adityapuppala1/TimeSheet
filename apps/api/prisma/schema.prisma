@@ -3092,6 +3092,18 @@ model ServiceIncident {
   /// was real rather than one unlucky sample.
   sampleCount Int           @default(1)
 
+  /// Set to `service` while the incident is OPEN, and NULL once it closes.
+  ///
+  /// WHY A SEPARATE COLUMN RATHER THAN A CONSTRAINT ON `endedAt`: opening an incident was a
+  /// check-then-act — read the open incidents, create one if this service has none. Two health
+  /// runs overlapping (the five-minute worker and a manual "check now" are enough) both read
+  /// "none open" and both created one, so a single outage produced two incidents a millisecond
+  /// apart and the status page reported the same failure twice. MySQL has no partial unique
+  /// index, so open-ness has to live in a column the constraint can see. NULLs do not collide in
+  /// a MySQL unique index, which is exactly the property needed: any number of CLOSED incidents
+  /// per service, never two open ones.
+  openKey     String?       @unique @db.VarChar(60)
+
   @@index([service, startedAt])
   @@index([endedAt])
 }

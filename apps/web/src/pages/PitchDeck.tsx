@@ -21,6 +21,7 @@ import {
   Building2,
   CircleDollarSign,
   FileCheck2,
+  GanttChartSquare,
   FlaskConical,
   Layers,
   Lock,
@@ -60,6 +61,12 @@ const AUDIENCES = [
 
 /** What makes this hard to copy. Each entry is a property of the build, not a marketing angle. */
 const MOATS = [
+  {
+    icon: GanttChartSquare,
+    title: "The only planner that can measure itself",
+    body: "Every project tool in this category compares a plan against another plan, because estimates are the only thing it holds. This one owns the approved, rate-snapshotted timesheet too — so the workload board puts planned hours, actually-logged hours and contracted capacity on one axis, and a budget forecast is priced from the same rates a client-facing attestation reads.",
+    why: "A planning vendor cannot bolt this on: they would need timesheet capture, an approval chain and rate history in production first. A timesheet vendor has the data and no plan to compare it against. The fusion is the product, and it is only available to whoever owns both halves."
+  },
   {
     icon: FileCheck2,
     title: "Proof as a first-class output",
@@ -107,6 +114,11 @@ const REVENUE = [
 
 /** Where the product goes next. Labelled as intent, never as shipped. */
 const NEXT = [
+  {
+    title: "Ambient identity verification",
+    body: "Face checks are hands-free inside the dialog today — the camera starts itself, captures at the best frame, and the liveness challenge fires on the movement. Continuous background scanning is the obvious next step and is deliberately not built: a camera running unprompted during ordinary work is a different consent posture, and that is a customer's decision to opt into rather than ours to assume.",
+    status: "Deliberately gated on consent design"
+  },
   {
     title: "Retrieval for Ask AI",
     body: "Today Ask AI stuffs the 150 most recently updated tickets into the prompt and never uses the question to choose which ones. Ticket 151 is invisible, and no amount of prompt tuning fixes that — it needs real retrieval.",

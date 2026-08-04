@@ -197,7 +197,10 @@ seems broken. It checks, in order, and stops at the first failure with a specifi
    otherwise — the number-one "camera never appears" cause on LAN deployments), the face image
    directory is writable, and enough memory is free for the ~500MB the models hold per process.
    Add `--face` (`npm run doctor -w apps/api -- --face`) to also load the real ML models and
-   time an inference on this hardware.
+   time an inference on this hardware. If it warns about the secure context, the fix is a
+   certificate rather than a setting in this product — see **Serving over HTTPS** in
+   [DEPLOYMENT.md](DEPLOYMENT.md), which covers a public domain, a LAN with no domain, and quick
+   phone testing.
 
 Because step 4 runs *before* the pass/fail decision, a failure can tell you the answer instead of
 just the symptom. Configured for 3307 but MySQL is really on 3306? You get:

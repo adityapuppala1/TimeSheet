@@ -47,11 +47,11 @@ Browser                          Server
                  ──POST /api/face/challenge─►  pick a RANDOM head movement
                  ◄── challengeId+instruction   (single-use, 90s)
 capture neutral frame,
-show instruction, countdown,
-capture gesture frame
+show instruction + live meter,
+capture at the PEAK of the turn
                  ──POST /api/face/verify────►  redeem the challenge
-(2 frames + challengeId;                       measure the head-pose delta
- no ML in the browser)                         detect face, anti-spoof + liveness (both frames)
+(2 frames + challengeId;                       measure the head-pose delta ITSELF
+ browser tracks pose only)                     detect face, anti-spoof + liveness (both frames)
                                                compare to enrolled template
                                                record the attempt (pass or fail)
                  ◄── verificationId ─────────  (single-use, expires in ~5 min)
@@ -86,7 +86,21 @@ existed. With `challengeEnabled` (default on):
 1. `POST /api/face/challenge` issues a random instruction — turn your head / tilt up — with a
    90-second, single-use lifetime.
 2. The dialog captures a neutral frame first, *then* fetches the instruction (so it can't be
-   anticipated), shows it with a short countdown, and auto-captures the gesture frame.
+   anticipated), and shows it with a **live meter that fills as you turn**. The gesture frame is
+   taken automatically at the *peak* of the rotation.
+
+   This replaced a fixed 3-second countdown, and the reason is worth recording because it was the
+   single largest source of failed checks in the product. In production the challenge failed 107
+   times against 69 passes, and the recorded yaw deltas on those failures were 0.02–0.26 radians
+   against a 0.35 requirement. Nobody was refusing to turn their head. The instruction was static
+   text, the frame was grabbed at a moment the person could not anticipate, and there was no
+   signal for "further" — so people turned a little, guessed, and were told afterwards that they
+   had failed. The requirement never changed; it is now visible while you move.
+
+   The browser is told the threshold so the meter cannot promise something the server then
+   refuses. That concedes nothing: the requirement was already discoverable by turning your head
+   and reading the outcome, and the server re-measures the delta from the submitted frames
+   regardless of anything the client claims.
 3. The server measures the actual rotation delta between the two frames and requires the
    demanded axis to both clear a floor (~20° yaw / ~13° pitch) and dominate the other axis — a
    nod can't satisfy a turn. Both frames must also each contain exactly one live face.
@@ -149,6 +163,22 @@ colleague passes trivially, which defeats the entire point. Both floors must be 
 the similarity comparison even runs.
 
 ---
+
+## Prerequisite: the page must be served over HTTPS
+
+**Browsers only expose the camera in a secure context.** `localhost` is exempt, which is why this
+works on a laptop during setup and then does not work for a single member of staff on a phone
+pointed at `http://192.168.1.20`. Nothing is misconfigured when that happens and no application
+code can work around it — every browser refuses.
+
+The symptom is explicit: *"Your browser only allows camera access over HTTPS, and this page was
+opened on http://…"*. The fix is a certificate, not a setting in this product. See **Serving over
+HTTPS** in [DEPLOYMENT.md](DEPLOYMENT.md) for a reverse proxy with automatic certificates, the
+`mkcert` route for a LAN with no public domain (including the iOS trust step people miss), and why
+the Chrome insecure-origin flag is a trap rather than a workaround.
+
+**Test from a phone on the real address before rolling this out to staff.** It will always work on
+your own machine, and that proves nothing about theirs.
 
 ## Setup
 
@@ -413,9 +443,22 @@ is in the Phase-A plan; this is what's implemented):
 | **Presentation attack** | Real face, or a photo/screen? | Anti-spoof + liveness floors |
 | **Injection attack** | Did the frame come from a real camera? | Challenge–response + review signals |
 
-**Multi-template enrollment.** Enrollment captures a short burst (the pressed frame plus ~3 more
-over a second) and stores every usable one as a separate template; verification compares against
-all of them and keeps the best score. This is the single biggest accuracy lever, because with one
+**Multi-POSE enrollment.** A guided wizard walks the person through four head positions — centre,
+each side, and a tilt — and stores one good frame from each as a separate template; verification
+compares against all of them and keeps the best score.
+
+It used to capture a "burst": the pressed frame plus three more 280ms apart. That is the same pose
+four times, because nobody moves meaningfully in under a second, so the stored set described one
+angle in one light and a later check from any other angle scored as low as 0.52 against a 0.75
+bar. More frames of one pose is not more information. Recognition accuracy is known to fall
+roughly 10% from frontal to 60° yaw, so covering the range a person actually sits in front of a
+webcam is worth far more than adding frames within a single pose.
+
+The wizard never asks for "left". This model's yaw *sign* convention is not calibrated in this
+codebase (see the challenge notes above), so it asks for one side and then the other and enforces
+only that the two are opposite. Naming a direction we cannot verify would mean telling half the
+users they did it wrong when they did it right. A missed pose is not fatal — three good templates
+beat refusing to enrol somebody whose neck does not turn that far. This is the single biggest accuracy lever, because with one
 stored template a single unlucky enrollment frame — harsh side light, no glasses that day —
 permanently handicaps every future check, and the only apparent remedy is lowering the threshold,
 which trades away real security to fix a problem that was never in the threshold. Matching against
@@ -439,12 +482,32 @@ Two design points found by testing, both worth preserving:
   since the model crops to the face box, an off-centre face produces an equally good embedding, so
   rejecting on position refuses usable captures. Centring is a live client nudge only.
 
-**Per-user match threshold.** After 8+ passes, a user is judged against a threshold derived from
-their own passing distribution (3 sd below their mean), **clamped so it can never go below the
-workspace setting** and capped at 0.95. The direction is the whole safety argument: an adaptive
-threshold allowed to loosen would admit a lookalike precisely *because* the real user's captures
-have been inconsistent. Each attempt stores the `effectiveThreshold` it was judged against, since
-a stored similarity is uninterpretable afterwards without it.
+**Per-user match threshold.** After 8+ *live* passes, a user is judged against a threshold derived
+from their own passing distribution (3 sd below their mean), **clamped so it can never go below the
+workspace setting**, and bounded to at most **0.1 above** whatever the admin chose. The direction
+is the whole safety argument: an adaptive threshold allowed to loosen would admit a lookalike
+precisely *because* the real user's captures have been inconsistent. Each attempt stores the
+`effectiveThreshold` it was judged against, since a stored similarity is uninterpretable
+afterwards without it.
+
+> **This mechanism locked a real user out of the product, permanently, and the fix is worth
+> understanding before you tune anything.** The bound used to be an absolute cap of 0.95. Their
+> history was 30 passes at similarity exactly 1.000 — produced by seeded fixtures and automated
+> scripts replaying the enrolled image, not by a camera. A live capture *never* reproduces a
+> stored still exactly; genuine repeat captures of the same person land around 0.83. With zero
+> variance, `mean − 3sd` was 1.0, so the cap became the effective bar, and real captures scoring
+> 0.52–0.82 could not clear it. Because **only passing attempts feed the distribution**, no new
+> sample could ever be recorded to bring it back down: a closed loop with no way out from inside
+> the product.
+>
+> Two changes fix it, and both matter. The escalation is now bounded *relative* to the admin's
+> setting, so the adaptive control can tighten but never substitute a policy nobody chose. And
+> scores at or above 0.995 are discarded before the distribution is computed at all — a threshold
+> derived from live captures should be derived from live captures only. The first change alone was
+> not enough: it caught a history that was *entirely* synthetic (variance exactly zero) but not the
+> realistic mixed one, where a pile of seeded 1.000s plus a couple of genuine 0.79s has healthy
+> variance and a mean dragged to ~0.98 — which reads, arithmetically, as an unusually consistent
+> user.
 
 **Operational metrics** (Workspace Settings → Face verification, and `GET /face/stats`): retake
 rate (target <15%), non-match rate (target <2%, a *proxy* — a genuine impostor rejection lands
@@ -472,12 +535,27 @@ What IS reachable is the *experience*, and the app now ships it:
 
 - **The camera comes to you** — the verification dialog requests the webcam the moment it
   opens (the browser's permission prompt still applies, once).
-- **Hands-free shutter** — on Chromium browsers with the Shape Detection API
-  (`window.FaceDetector`), the dialog scans the live preview and fires by itself once a
-  single, centered, close-enough face holds still for ~1 second — the guide oval locks solid
-  and pulses, exactly the phone-unlock cadence. Client detection only decides *when to press
-  the shutter*; every security judgement stays server-side. No API support → the manual
-  button, unchanged.
+- **Hands-free shutter, in every browser** — the dialog scans the live preview and fires by
+  itself once a single, centred, close-enough, *sharp* face holds still for ~1 second: the guide
+  oval locks solid and pulses, exactly the phone-unlock cadence.
+
+  This used to rely on `window.FaceDetector`, which only Chromium implements — so on Firefox and
+  on **iOS Safari, meaning most phones**, hands-free capture silently never happened and every
+  frame was taken manually at a moment of the user's choosing. That is precisely how blurry,
+  off-angle frames reached the server and became unexplained rejections. It now runs the same
+  detection library the server uses, in the browser, wherever WebGL is available.
+
+  It also measures **blur**, which a bounding box cannot express: a large, centred,
+  confidently-detected face can still be motion-blurred, and blur is what turns into a low
+  similarity score and a refusal nobody can account for.
+
+  Client detection still only decides *when to press the shutter* and what to say to the person.
+  It computes no embedding and decides no outcome — every judgement that matters stays
+  server-side, because a client that decides its own verification result is not a security
+  control. No WebGL → the manual button, unchanged.
+
+- **Live coaching while the camera is open** — "move a little closer", "hold still, the image is
+  blurry", "make sure you're alone in frame" — instead of finding out after a round trip.
 - **Auto-retry with a ceiling** — two hands-free attempts, then it falls back to the manual
   button, so a scanner pointed at the wrong face can't hammer the rate limit or flood the
   review log on its own.

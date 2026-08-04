@@ -19,6 +19,7 @@
     "test:e2e": "playwright test",
     "test:e2e:quick": "playwright test --project=desktop",
     "test:e2e:responsive": "playwright test --project=responsive-phone --project=responsive-tablet --project=responsive-laptop --project=responsive-4k --workers=2",
+    "test:e2e:browsers": "playwright test --project=firefox --project=webkit",
     "test:e2e:report": "playwright show-report"
   },
   "devDependencies": {
