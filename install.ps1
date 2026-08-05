@@ -12,9 +12,9 @@
   overwrite an existing .env -re-running this script against an already-configured deployment
   just brings the stack up again.
 
-  No new required .env keys have been added by recent feature work (Kanban swimlanes, org-chart,
-  manual ticket-to-branch/PR linking, VAPT report upload, mobile card-view fallbacks) - every one
-  of those reads from the same DATABASE_URL this script already provisions, via the migrations
+  Feature work (the V6 planning layer, face verification, reports, multi-provider git webhooks,
+  HTTPS tooling) has added NO new required .env keys - everything reads from the same
+  DATABASE_URL this script already provisions, via the migrations
   that run automatically on container boot. Nothing in this script needs to change to pick them
   up.
 #>
