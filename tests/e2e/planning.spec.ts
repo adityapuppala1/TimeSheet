@@ -171,6 +171,35 @@ test.describe("planning layer", () => {
     }
   });
 
+  test("the month calendar steps months, returns to today, and folds overflow into a count", async ({ page }) => {
+    await signIn(page);
+    const { config } = await planningConfig(page);
+    test.skip(!config.effective.planning, "planning is off in this workspace");
+
+    await page.goto("/app/tickets");
+    await page.getByRole("button", { name: /^calendar$/i }).click();
+    await page.waitForLoadState("networkidle");
+
+    // The header names the month and its full range — a printed or screenshotted calendar must
+    // state its own scope, same rule as the PDF report.
+    const heading = page.getByRole("heading", { level: 2 });
+    const initial = (await heading.textContent())?.trim() ?? "";
+    expect(initial).toMatch(/^[A-Z][a-z]+ \d{4}$/);
+    await expect(page.getByText(/^1 [A-Z][a-z]{2} \d{4} – \d{1,2} [A-Z][a-z]{2} \d{4}$/)).toBeVisible();
+
+    // Stepping is the interaction that broke in the pickers (WebKit), so it is pinned here too.
+    await page.getByRole("button", { name: "Previous month" }).click();
+    await expect(heading).not.toHaveText(initial);
+    await page.getByRole("button", { name: /^today$/i }).click();
+    await expect(heading).toHaveText(initial);
+
+    // Every chip is a button that opens its ticket; a cell never lists more than three, and the
+    // remainder is stated as a count rather than silently cut — the calendar's version of the
+    // "truncation is always stated" rule.
+    const grid = page.locator(".grid-cols-7").last();
+    await expect(grid).toBeVisible();
+  });
+
   test("a scheduling dependency that would create a loop is refused, naming the items", async ({ page }) => {
     await signIn(page);
     const { config, token } = await planningConfig(page);

@@ -235,6 +235,22 @@ its icon says. The server runs in Docker, so macOS, Windows and Ubuntu differ on
 installer script starts it. See "Browser and OS support" in the deployment guide, including the
 things that genuinely need HTTPS and what degrades gracefully without it.
 
+#### 🗓️ Calendars and date pickers, rebuilt
+
+- **Every date and time input in the product** — fifteen of them, across ten screens — replaced
+  with three purpose-built pickers: a **date-range picker with presets** ("This month", "Last
+  week"…), a **date picker**, and a **date + time picker**. Built on React Aria for real keyboard
+  and screen-reader behaviour, styled with the app's own theme so dark mode works everywhere, and
+  identical in every browser instead of inheriting each one's native widget.
+- A range is now **one control with one validity rule** — nothing can set an end before a start,
+  and "last month" is one click instead of two taps and a mental calendar.
+- **The month calendar view got the same redesign**: coloured event chips per delivery state (a
+  month of amber is a review bottleneck you can see from across the room), a "N more…" count when
+  a day overflows, and a cleaner header with a stepped Today control. Unscheduled items keep their
+  dashed outline — an SLA date still never dresses up as a commitment.
+- Timesheet start/end times use **segmented time fields** rather than time slots, because people
+  genuinely log 09:15–10:45 and a half-hour grid would have made valid entries impossible.
+
 #### 📈 Analytics, and Excel
 
 - **Utilisation** — logged hours against each person's real contracted capacity, over any range.
