@@ -708,15 +708,16 @@ export function UsersPage() {
             </p>
           )}
 
-          {/* The table's own search and pagination are off: both now happen on the server, and two
-              search boxes that filter different sets is worse than one that filters the right one. */}
+          {/* The table's own search and pagination are off: both now happen on the server, and
+              two search boxes (or two pagers) describing different sets is worse than one
+              describing the right one. TablePager below is the real, server-total pager. */}
           <DataTable
             columns={userColumns}
             data={rows}
             isLoading={users.isLoading}
             enableSearch={false}
+            enablePagination={false}
             emptyMessage={hasAnyFilter(filters) ? "Nobody matches these filters." : "No users yet."}
-            pageSize={200}
           />
 
           <TablePager page={page} pageSize={pageSize} total={total} onPage={setPage} onPageSize={(n) => { setPageSize(n); setPage(1); }} />

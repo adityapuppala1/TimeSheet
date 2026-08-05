@@ -45,6 +45,11 @@ interface DataTableProps<TData> {
   /** Extra filter controls (Selects, toggle buttons) to render next to the search box — for
    *  pages that want everything in one toolbar row instead of a separate Card above the table. */
   toolbar?: ReactNode;
+  /** Turn OFF the built-in client-side pagination (footer included) for tables whose paging
+   *  happens on the SERVER — those render their own pager over the real total. Leaving this on
+   *  produced two stacked pagers on the Users page: this one truthfully paging the 25 rows it
+   *  could see, above the server's pager for the whole set. Two bars, one of them misleading. */
+  enablePagination?: boolean;
   pageSize?: number;
   isLoading?: boolean;
   emptyMessage?: string;
@@ -60,6 +65,7 @@ export function DataTable<TData>({
   enableSearch = true,
   searchPlaceholder = "Search...",
   toolbar,
+  enablePagination = true,
   pageSize = 10,
   isLoading = false,
   emptyMessage = "No results.",
@@ -68,7 +74,9 @@ export function DataTable<TData>({
 }: DataTableProps<TData>) {
   const [sorting, setSorting] = useState<SortingState>([]);
   const [globalFilter, setGlobalFilter] = useState("");
-  const [pagination, setPagination] = useState({ pageIndex: 0, pageSize });
+  // With pagination off, every row the parent hands over renders — the parent's server-side
+  // pager owns the real page boundaries.
+  const [pagination, setPagination] = useState({ pageIndex: 0, pageSize: enablePagination ? pageSize : Number.MAX_SAFE_INTEGER });
 
   const table = useReactTable({
     data,
@@ -233,7 +241,7 @@ export function DataTable<TData>({
         </Table>
       </div>
 
-      {totalRows > 0 && (
+      {enablePagination && totalRows > 0 && (
         <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
           <p className="text-xs text-muted-foreground">
             Showing {firstRowShown}-{lastRowShown} of {totalRows}

@@ -280,6 +280,12 @@ test.describe("user management — filtering and bulk actions", () => {
     await page.goto("/app/users");
     await expect(page.getByRole("heading", { name: /user management/i })).toBeVisible({ timeout: 15_000 });
 
+    // Exactly ONE pager — the server-side TablePager ("1–25 of N", en dash). The shared table's
+    // own client-side footer ("Showing 1-25 of 25") used to render above it, truthfully paging
+    // only the rows it could see: two stacked pagers, one of them misleading about the total.
+    await expect(page.getByText(/\d+–\d+ of \d+/)).toHaveCount(1);
+    await expect(page.getByText(/^Showing \d+-\d+ of \d+$/)).toHaveCount(0);
+
     const search = page.getByLabel("Search users");
     await expect(search).toBeVisible();
     await search.fill("zzz-definitely-nobody");

@@ -369,6 +369,14 @@ outcome is not a security control.
   Two parallel workers used to suspend the gate and the first to finish restored it mid-run,
   producing an intermittent failure that always pointed at the wrong thing.
 
+### 🐛 Fixes (post-release polish)
+
+- **The Users page showed two stacked pagers.** The shared table's built-in client-side footer
+  (truthfully paging only the 25 rows it could see, with an empty page-size box) rendered above
+  the real server-side pager for the whole set. The shared table now takes
+  `enablePagination={false}` for server-paged consumers, and the e2e suite asserts the Users
+  page has exactly one pager.
+
 ### 🔀 Git integrations beyond GitHub
 
 - **Branch/PR auto-sync from six providers.** The webhook receiver now speaks GitLab, Bitbucket
