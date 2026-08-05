@@ -6,7 +6,7 @@
     "packages/*"
   ],
   "scripts": {
-    "postinstall": "npm run build -w packages/shared",
+    "postinstall": "node -e \"const{existsSync}=require('fs');if(existsSync('packages/shared/tsconfig.json')){require('child_process').execSync('npm run build -w packages/shared',{stdio:'inherit'})}else{console.log('postinstall: packages/shared sources absent (manifest-only install layer) - skipping build')}\"",
     "dev": "concurrently \"npm run dev -w apps/api\" \"npm run dev -w apps/web\"",
     "build": "npm run build -w packages/shared && npm run build -w apps/api && npm run build -w apps/web",
     "lint": "npm run lint -w apps/api && npm run lint -w apps/web",

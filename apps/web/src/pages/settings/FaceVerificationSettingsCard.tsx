@@ -955,6 +955,39 @@ function FaceReviewLog({ readOnly }: { readOnly: boolean }) {
 function AttemptActions({ attempt, readOnly, onReview }: { attempt: FaceAttemptRow; readOnly: boolean; onReview: () => void }) {
   const [aiOpen, setAiOpen] = useState(false);
   const [aiResult, setAiResult] = useState<FaceReviewAiSummary | null>(null);
+  const [captureOpen, setCaptureOpen] = useState(false);
+  const [captureUrl, setCaptureUrl] = useState<string | null>(null);
+
+  // The image route is authenticated, so the capture is fetched as a blob through the api client
+  // (which carries the bearer token) and shown in-app. The old window.open() navigated with no
+  // Authorization header and served every admin a JSON 401 instead of the image.
+  const viewCapture = useMutation({
+    mutationFn: () => faceApi.attemptImage(attempt.id),
+    onSuccess: (blob) => {
+      setCaptureUrl((prev) => {
+        if (prev) URL.revokeObjectURL(prev);
+        return URL.createObjectURL(blob);
+      });
+      setCaptureOpen(true);
+    },
+    onError: (err: { response?: { status?: number } }) =>
+      toast.error("Could not load the capture", {
+        description:
+          err?.response?.status === 404
+            ? "This image has been purged by the retention policy."
+            : "The image could not be fetched — try refreshing the page."
+      })
+  });
+
+  const closeCapture = (open: boolean) => {
+    setCaptureOpen(open);
+    if (!open) {
+      setCaptureUrl((prev) => {
+        if (prev) URL.revokeObjectURL(prev);
+        return null;
+      });
+    }
+  };
 
   const aiSummary = useMutation({
     mutationFn: () => faceApi.aiSummary(attempt.id),
@@ -982,9 +1015,10 @@ function AttemptActions({ attempt, readOnly, onReview }: { attempt: FaceAttemptR
           size="icon"
           className="h-9 w-9"
           title="View capture"
-          onClick={() => window.open(faceApi.attemptImageUrl(attempt.id), "_blank", "noopener")}
+          disabled={viewCapture.isPending}
+          onClick={() => viewCapture.mutate()}
         >
-          <Eye className="h-4 w-4" />
+          <Eye className={`h-4 w-4 ${viewCapture.isPending ? "animate-pulse" : ""}`} />
         </Button>
       )}
       {!readOnly && (
@@ -1027,6 +1061,29 @@ function AttemptActions({ attempt, readOnly, onReview }: { attempt: FaceAttemptR
                 <p className="mt-1">{aiResult.recommendation}</p>
               </div>
             </div>
+          )}
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={captureOpen} onOpenChange={closeCapture}>
+        <DialogContent className="w-[calc(100vw-2rem)] max-w-lg">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <Eye className="h-4 w-4 text-primary" />
+              Verification capture
+            </DialogTitle>
+            <DialogDescription>
+              The frame stored for this check — {new Date(attempt.createdAt).toLocaleString()}, outcome{" "}
+              {attempt.outcome.toLowerCase().replace(/_/g, " ")}. Served through the authenticated
+              image route; it is never publicly addressable.
+            </DialogDescription>
+          </DialogHeader>
+          {captureUrl && (
+            <img
+              src={captureUrl}
+              alt="Stored verification capture"
+              className="max-h-[60vh] w-full rounded-lg border border-border object-contain"
+            />
           )}
         </DialogContent>
       </Dialog>

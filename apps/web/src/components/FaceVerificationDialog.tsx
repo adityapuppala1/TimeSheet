@@ -47,7 +47,8 @@ const FRIENDLY: Record<FaceOutcome, string> = {
   PASSED: "Identity confirmed.",
   NO_FACE: "No face detected — make sure your face is clearly visible and well lit.",
   MULTIPLE_FACES: "More than one face is in frame — please make sure you're alone.",
-  NO_MATCH: "We couldn't confirm it's you. Try again with better lighting and your face centred.",
+  NO_MATCH:
+    "We couldn't confirm it's you. Better lighting and a centred face help — and if this keeps happening, retrain your face model from Profile → Face verification to cover more angles.",
   SPOOF_SUSPECTED: "That didn't look like a live capture. Look directly at the camera rather than holding up a photo or screen.",
   CHALLENGE_FAILED: "We couldn't see the requested head movement — face the camera first, then make the movement clearly.",
   LOW_QUALITY: "We couldn't see you clearly enough — adjust and try again.",

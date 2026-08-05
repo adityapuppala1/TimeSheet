@@ -226,6 +226,19 @@ export function GuidedFaceEnrollment({
         </div>
       )}
 
+      {/* The captures are done and the server is now validating each shot and building the
+          template set — without this line that stretch reads as a hang, and people re-click. */}
+      {busy && !running && (
+        <div className="grid gap-1.5" role="status" aria-live="polite">
+          <div className="h-2 w-full overflow-hidden rounded-full bg-muted">
+            <div className="h-full w-1/2 animate-pulse rounded-full bg-primary" />
+          </div>
+          <p className="text-center text-xs text-muted-foreground">
+            Training your face model — validating and storing each shot…
+          </p>
+        </div>
+      )}
+
       {note && <p className="text-sm text-destructive">{note}</p>}
 
       <div className="flex flex-wrap gap-2">

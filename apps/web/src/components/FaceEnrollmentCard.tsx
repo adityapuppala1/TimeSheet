@@ -35,12 +35,21 @@ import {
   AlertDialogTrigger
 } from "./ui/alert-dialog";
 
+type TrainingReport = {
+  templatesStored: number;
+  framesSubmitted: number;
+  frameResults: Array<{ index: number; accepted: boolean; quality: number | null; reason: string | null }>;
+};
+
 export function FaceEnrollmentCard() {
   const queryClient = useQueryClient();
   const status = useFaceStatus();
   const [consented, setConsented] = useState(false);
   const [capturing, setCapturing] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  /** The last enrollment's per-shot verdicts — shown until dismissed, so "did the training
+   *  actually take?" has a visible answer rather than a toast that vanished. */
+  const [report, setReport] = useState<TrainingReport | null>(null);
 
 
   /**
@@ -57,8 +66,13 @@ export function FaceEnrollmentCard() {
   const enroll = useMutation({
     mutationFn: async (frames: Blob[]) => faceApi.enroll(frames),
     onSuccess: (result) => {
-      toast.success("Face verification set up", {
-        description: `${result.templatesStored} reference ${result.templatesStored === 1 ? "image" : "images"} stored — more variation means fewer failed checks later.`
+      toast.success("Face model trained", {
+        description: `${result.templatesStored} of ${result.framesSubmitted} ${result.framesSubmitted === 1 ? "shot" : "shots"} stored — more angles mean fewer failed checks later.`
+      });
+      setReport({
+        templatesStored: result.templatesStored,
+        framesSubmitted: result.framesSubmitted,
+        frameResults: result.frameResults ?? []
       });
       setError(null);
       setCapturing(false);
@@ -118,7 +132,10 @@ export function FaceEnrollmentCard() {
             <div className="flex items-start gap-2 rounded-lg border border-emerald-500/40 bg-emerald-500/10 p-3 text-sm text-emerald-700 dark:text-emerald-400">
               <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0" />
               <div>
-                <p className="font-medium">You're set up.</p>
+                <p className="font-medium">
+                  You're set up — your face model holds {s.templateCount} reference{" "}
+                  {s.templateCount === 1 ? "angle" : "angles"}.
+                </p>
                 <p>
                   Enrolled {s.enrolledAt ? new Date(s.enrolledAt).toLocaleDateString() : "recently"}. Captures are kept for{" "}
                   {s.imageRetentionDays === 0 ? "no time at all (images are never stored)" : `${s.imageRetentionDays} days`}, then
@@ -127,10 +144,26 @@ export function FaceEnrollmentCard() {
               </div>
             </div>
 
+            {/* An enrollment from before the guided wizard holds one angle in one light — the
+                measured cause of the marginal 0.80-0.84 scores in the review log. Offered, never
+                forced: a thin model is degraded accuracy, not a lockout. */}
+            {s.needsBetterEnrollment && !capturing && (
+              <div className="flex items-start gap-2 rounded-lg border border-amber-500/40 bg-amber-500/10 p-3 text-sm text-amber-700 dark:text-amber-400">
+                <ShieldAlert className="mt-0.5 h-4 w-4 shrink-0" />
+                <p>
+                  Your face model was captured before guided training existed, so it covers only{" "}
+                  {s.templateCount === 1 ? "a single angle" : "two angles"}. Retraining takes about fifteen
+                  seconds and makes checks far more reliable.
+                </p>
+              </div>
+            )}
+
+            {report && <TrainingReportPanel report={report} onDismiss={() => setReport(null)} />}
+
             {capturing ? (
               <div className="space-y-3">
                 <p className="text-sm text-muted-foreground">
-                  Retake your reference photos — this replaces the current set.
+                  Retrain your face model — this replaces the current reference set.
                 </p>
                 {error && <p className="text-sm text-destructive">{error}</p>}
                 <GuidedFaceEnrollment
@@ -146,9 +179,13 @@ export function FaceEnrollmentCard() {
               </div>
             ) : (
               <div className="flex flex-col gap-2 sm:flex-row">
-                <Button variant="outline" onClick={() => setCapturing(true)} className="w-full sm:w-auto">
+                <Button
+                  variant={s.needsBetterEnrollment ? "default" : "outline"}
+                  onClick={() => setCapturing(true)}
+                  className="w-full sm:w-auto"
+                >
                   <ScanFace className="mr-2 h-4 w-4" />
-                  Retake photo
+                  Retrain face model
                 </Button>
                 <Button
                   variant="outline"
@@ -212,6 +249,61 @@ export function FaceEnrollmentCard() {
         )}
       </CardContent>
     </Card>
+  );
+}
+
+/**
+ * The per-shot outcome of the last training run. A toast can say "3 images stored"; only a
+ * persistent report can say WHICH shot failed and why, which is what makes a retake targeted
+ * rather than a shrug-and-redo-everything.
+ */
+function TrainingReportPanel({ report, onDismiss }: { report: TrainingReport; onDismiss: () => void }) {
+  const allGood = report.templatesStored === report.framesSubmitted;
+  return (
+    <div className="rounded-lg border border-border bg-muted/30 p-3" role="status">
+      <div className="mb-2 flex items-center justify-between gap-2">
+        <p className="text-sm font-medium">
+          Training {allGood ? "complete" : "finished"} — {report.templatesStored} of {report.framesSubmitted}{" "}
+          {report.framesSubmitted === 1 ? "shot" : "shots"} stored
+        </p>
+        <Button variant="ghost" size="sm" onClick={onDismiss}>
+          Dismiss
+        </Button>
+      </div>
+      <ul className="grid gap-1.5">
+        {report.frameResults.map((f) => (
+          <li key={f.index} className="flex items-center gap-2 text-xs">
+            {f.accepted ? (
+              <CheckCircle2 className="h-3.5 w-3.5 shrink-0 text-emerald-600 dark:text-emerald-400" />
+            ) : (
+              <ShieldAlert className="h-3.5 w-3.5 shrink-0 text-amber-600 dark:text-amber-400" />
+            )}
+            <span className="font-medium">Shot {f.index + 1}</span>
+            {f.accepted ? (
+              <span className="flex min-w-0 flex-1 items-center gap-2 text-muted-foreground">
+                <span className="h-1.5 max-w-24 flex-1 overflow-hidden rounded-full bg-muted">
+                  <span
+                    className="block h-full rounded-full bg-emerald-500/70"
+                    style={{ width: `${Math.round((f.quality ?? 0) * 100)}%` }}
+                  />
+                </span>
+                quality {(f.quality ?? 0).toFixed(2)}
+              </span>
+            ) : (
+              <span className="min-w-0 flex-1 truncate text-muted-foreground" title={f.reason ?? undefined}>
+                {f.reason}
+              </span>
+            )}
+          </li>
+        ))}
+      </ul>
+      {!allGood && (
+        <p className="mt-2 text-xs text-muted-foreground">
+          The stored shots are enough to verify with. Retrain whenever you like to replace the set with a
+          fuller one.
+        </p>
+      )}
+    </div>
   );
 }
 

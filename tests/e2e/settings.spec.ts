@@ -112,3 +112,51 @@ test.describe("settings forms keep what you typed", () => {
     expect((await restored).ok(), "the restore save was rejected").toBe(true);
   });
 });
+
+test.describe("face verification review log", () => {
+  test.use({ storageState: { cookies: [], origins: [] } });
+
+  /**
+   * The regression: "View capture" used window.open() on the authenticated image route, which
+   * navigates with no Authorization header — every admin got {"message":"Authentication
+   * required"} instead of the capture. The fix fetches the blob through the api client and shows
+   * it in-app, so this test asserts the image ACTUALLY LOADS, not merely that a dialog opened.
+   */
+  test("an admin can view a stored capture from the log", async ({ page }) => {
+    await page.goto("/login");
+    await page.getByLabel("Email", { exact: true }).fill("superadmin@timesheet.local");
+    await page.getByLabel("Password", { exact: true }).fill("Admin@12345");
+    await page.getByRole("button", { name: /sign in/i }).click();
+    await expect(page).toHaveURL(/\/app/, { timeout: 15_000 });
+
+    await page.goto("/app/settings");
+    await page.getByRole("tab", { name: /face verification/i }).click();
+    await expect(page.getByText("Verification log")).toBeVisible({ timeout: 15_000 });
+
+    // Only attempts that stored an image carry the eye button, and a fresh CI database has no
+    // attempts at all — absence is a data condition here, not a failure.
+    const eye = page.getByRole("button", { name: "View capture" }).first();
+    let hasCapture = true;
+    try {
+      await eye.waitFor({ state: "visible", timeout: 10_000 });
+    } catch {
+      hasCapture = false;
+    }
+    test.skip(!hasCapture, "no stored captures in this workspace to view");
+
+    await eye.click();
+    const dialog = page.getByRole("dialog", { name: /verification capture/i });
+    await expect(dialog).toBeVisible({ timeout: 15_000 });
+
+    const img = dialog.getByRole("img", { name: "Stored verification capture" });
+    await expect(img).toBeVisible();
+    // blob: proves it came through the authenticated fetch, not a bare URL navigation.
+    expect(await img.getAttribute("src")).toMatch(/^blob:/);
+    await expect
+      .poll(
+        () => img.evaluate((el) => (el as HTMLImageElement).complete && (el as HTMLImageElement).naturalWidth > 0),
+        { message: "the capture image must decode — a 401 JSON body would leave naturalWidth at 0", timeout: 10_000 }
+      )
+      .toBe(true);
+  });
+});

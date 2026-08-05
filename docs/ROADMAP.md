@@ -1791,3 +1791,23 @@ accounts that predate the migration's own timestamp, which keeps it true forever
 catching the only failure it exists to catch: a pre-gate account the backfill missed. Re-run
 green. The three new accounts will meet the onboarding flow at first sign-in, which is what it is
 for.
+
+### Post-merge fixes: the first CD run, and face training that reports itself (2026-08-05)
+
+Merging to `main` triggered the image-publish workflow for the first time ever — it fires only on
+`main`, and `main` had never been pushed to — and its first run failed in `npm install` inside
+both Dockerfiles. The root `postinstall` builds `packages/shared`, and the dependency layer holds
+only manifests: no sources, no `tsconfig.base.json`. Reproduced locally in a scratch directory
+holding exactly the five files that layer copies; the postinstall now skips itself, stating why,
+when the shared sources are absent. The lesson worth keeping: a workflow that has never fired is
+untested code, whatever CI says about the rest.
+
+Two face fixes in the same pass: "View capture" opened the authenticated image route in a new tab
+— no bearer token travels on a navigation, so every admin got a JSON 401 (the code's own comment
+on `downloadEvidencePack` already stated the rule; the button predates it) — it now fetches the
+blob with credentials and renders in-app, with an e2e that asserts the image actually decodes.
+And enrollment became visible training: per-shot verdicts returned by the server, a persistent
+training report, the face-model size on the card, and a retrain nudge for pre-wizard single-angle
+enrollments — the measured cause of the 0.80–0.84 marginal scores. The verification-log failures
+the user reported all predate the 2026-08-03 hardening (zero attempts since), so the fix for them
+is retraining on the fixed pipeline, not another threshold change.

@@ -369,6 +369,27 @@ outcome is not a security control.
   Two parallel workers used to suspend the gate and the first to finish restored it mid-run,
   producing an intermittent failure that always pointed at the wrong thing.
 
+### 🐛 Fixes
+
+- **"View capture" in the verification log showed admins `{"message":"Authentication required"}`**
+  instead of the image. The button opened the authenticated image route in a new tab, and a plain
+  navigation carries no bearer token — the image is now fetched with credentials and shown in an
+  in-app dialog. The route itself was always correct; captures were never publicly reachable.
+- **Docker image builds failed at `npm install`** (one-click install, and the CI publish job's
+  first-ever run on `main`). The root `postinstall` builds `packages/shared`, but the Dockerfiles'
+  dependency layer holds only manifests — no sources, no `tsconfig.base.json` — so the build died
+  with exit 1 before anything was installed. The postinstall now skips itself, with a printed
+  reason, when the shared sources aren't present.
+- **Face training now reports itself.** Enrollment returns a per-shot verdict (stored + quality,
+  or the specific rejection), and the profile card shows a persistent training report — which shot
+  failed and why — instead of a toast that vanished. The card also shows the size of your face
+  model ("4 reference angles"), a live "training your face model" progress state while the server
+  validates the shots, and a **retrain nudge** for enrollments made before guided multi-angle
+  training existed: those hold one angle in one light, which is the measured cause of the marginal
+  0.80–0.84 match scores in the review log. Retraining is offered, never forced — a thin model is
+  degraded accuracy, not a lockout. A failed match now says the useful thing too: retrain from
+  Profile → Face verification.
+
 ## 1.1.0 — 2026-08-03
 
 ### ✨ Features

@@ -2084,6 +2084,11 @@ export interface FaceStatus {
   /** Enrollment exists but was made with an older model — embeddings aren't comparable across
    *  model versions, so the user must re-enroll or every check would fail. */
   needsReEnrollment: boolean;
+  /** How many stored templates verification compares against — the size of this face model. */
+  templateCount: number;
+  /** Enrollment predates the guided multi-angle wizard (fewer than 3 templates). Verification
+   *  still works, but marginal scores are likelier — offer retraining, never force it. */
+  needsBetterEnrollment: boolean;
   enrolledAt: string | null;
   consentAt: string | null;
   consentText: string;
@@ -2205,11 +2210,15 @@ export const faceApi = {
     captures.forEach((c, i) => form.append("capture", c, `capture-${i}.jpg`));
     form.append("consent", "true");
     return (
-      await api.post<{ enrolled: boolean; consentAt: string; templatesStored: number; framesSubmitted: number }>(
-        "/face/enroll",
-        form,
-        { headers: { "Content-Type": "multipart/form-data" } }
-      )
+      await api.post<{
+        enrolled: boolean;
+        consentAt: string;
+        templatesStored: number;
+        framesSubmitted: number;
+        /** Per-shot verdicts in submission order, so the wizard can report which head position
+         *  failed and why instead of a single anonymous rejection string. */
+        frameResults: Array<{ index: number; accepted: boolean; quality: number | null; reason: string | null }>;
+      }>("/face/enroll", form, { headers: { "Content-Type": "multipart/form-data" } })
     ).data;
   },
   /** Issues the liveness challenge a verification must satisfy while challenge–response is on. */
@@ -2267,7 +2276,11 @@ export const faceApi = {
   }) => (await api.get<FaceAttemptPage>("/face/attempts", { params })).data,
   reviewAttempt: async (id: string, note?: string) =>
     (await api.patch<{ id: string; reviewedAt: string }>(`/face/attempts/${id}/review`, { note })).data,
-  attemptImageUrl: (id: string) => `${api.defaults.baseURL}/face/image/attempt/${id}`,
+  /** Blob, not a bare URL, for the same reason as downloadEvidencePack below: the route is
+   *  authenticated, and a `window.open`/`<img src>` navigation carries no bearer token — it
+   *  greeted admins with {"message":"Authentication required"} instead of the capture. */
+  attemptImage: async (id: string) =>
+    (await api.get(`/face/image/attempt/${id}`, { responseType: "blob" })).data as Blob,
   stats: async () => (await api.get<FaceStats>("/face/stats")).data,
   /** Threshold recommendation computed from this workspace's own distribution; `narrative` is the
    *  optional AI explanation of that same number (null when AI is off). */

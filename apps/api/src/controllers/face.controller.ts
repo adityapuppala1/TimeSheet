@@ -93,12 +93,18 @@ faceRouter.get("/status", async (req, res) => {
     select: { id: true, createdAt: true, consentAt: true, modelVersion: true }
   });
 
-  const [timesheetRequired, ticketRequired, approvalRequired, allowedByPlan] = await Promise.all([
+  const [timesheetRequired, ticketRequired, approvalRequired, allowedByPlan, extraTemplates] = await Promise.all([
     isFaceVerificationRequired(req.user!.id, "TIMESHEET"),
     isFaceVerificationRequired(req.user!.id, "TICKET"),
     isFaceVerificationRequired(req.user!.id, "APPROVAL"),
-    isFaceFeatureAllowedForOrg()
+    isFaceFeatureAllowedForOrg(),
+    enrollment
+      ? prisma.faceEnrollmentTemplate.count({ where: { enrollmentId: enrollment.id, modelVersion: FACE_MODEL_VERSION } })
+      : Promise.resolve(0)
   ]);
+
+  // Primary embedding + extra templates = the whole face model this user is matched against.
+  const templateCount = enrollment ? extraTemplates + 1 : 0;
 
   res.json({
     enabled: settings.enabled,
@@ -111,6 +117,15 @@ faceRouter.get("/status", async (req, res) => {
     // An embedding from an older model can't be compared against a new one, so the UI must
     // prompt for re-enrollment rather than letting every check mysteriously fail.
     needsReEnrollment: Boolean(enrollment && enrollment.modelVersion !== FACE_MODEL_VERSION),
+    /** How many templates verification compares against — the size of this person's face model. */
+    templateCount,
+    /**
+     * True for enrollments from before the guided multi-pose wizard (one or two templates).
+     * Matching still works, but a single-angle model is exactly why marginal 0.80-0.84 scores
+     * happen — the UI should offer retraining, not force it: fewer templates is degraded
+     * accuracy, never a lockout.
+     */
+    needsBetterEnrollment: Boolean(enrollment && enrollment.modelVersion === FACE_MODEL_VERSION && templateCount < 3),
     enrolledAt: enrollment?.createdAt ?? null,
     consentAt: enrollment?.consentAt ?? null,
     consentText: settings.consentText?.trim() || DEFAULT_CONSENT_TEXT,
@@ -179,28 +194,37 @@ faceRouter.post("/enroll", preserveTenantContext(faceCaptureUpload.array("captur
   // A single frame is still accepted, so old clients and the fallback path keep working.
   const frames = requireFrames(req);
   const usable: Array<{ embedding: number[]; quality: number; buffer: Buffer }> = [];
+  // Per-frame verdicts, in submission order, returned to the client. The wizard captures one
+  // frame per head position, so "shot 3 was rejected: too dark" is actionable in a way the old
+  // single lastRejection string ("some frame, somewhere, failed") never was.
+  const frameResults: Array<{ index: number; accepted: boolean; quality: number | null; reason: string | null }> = [];
   let lastRejection: string | null = null;
 
-  for (const frame of frames) {
+  for (const [index, frame] of frames.entries()) {
+    const reject = (reason: string) => {
+      lastRejection = reason;
+      frameResults.push({ index, accepted: false, quality: null, reason });
+    };
     const analysis = await analyzeFace(frame);
     if (analysis.faceCount === 0) {
-      lastRejection = "No face was detected — make sure your face is clearly visible and well lit.";
+      reject("No face was detected — make sure your face is clearly visible and well lit.");
       continue;
     }
     if (analysis.faceCount > 1) {
-      lastRejection = "More than one face was detected — please make sure you're alone in the frame.";
+      reject("More than one face was detected — please make sure you're alone in the frame.");
       continue;
     }
     if (analysis.antispoofReal < settings.antispoofThreshold || analysis.livenessScore < settings.livenessThreshold) {
-      lastRejection = "That didn't look like a live capture. Please look directly at the camera rather than holding up a photo or screen.";
+      reject("That didn't look like a live capture. Please look directly at the camera rather than holding up a photo or screen.");
       continue;
     }
     const quality = scoreQuality(analysis);
     if (quality.hint) {
-      lastRejection = quality.hint;
+      reject(quality.hint);
       continue;
     }
     usable.push({ embedding: analysis.embedding, quality: quality.score, buffer: frame });
+    frameResults.push({ index, accepted: true, quality: quality.score, reason: null });
   }
 
   // Enrollment is the one place a weak frame must never be accepted — every future check is
@@ -259,7 +283,8 @@ faceRouter.post("/enroll", preserveTenantContext(faceCaptureUpload.array("captur
     enrolled: true,
     consentAt: new Date().toISOString(),
     templatesStored: usable.length,
-    framesSubmitted: frames.length
+    framesSubmitted: frames.length,
+    frameResults
   });
 });
 

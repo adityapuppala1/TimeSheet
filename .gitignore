@@ -32,3 +32,7 @@ graphify-out/
 # predev/prebuild. Generated, versioned with the npm dependency, and 2.1MB of binary that would
 # otherwise land in every clone and every diff.
 apps/web/public/human-models/
+
+# Local agent tooling artifacts (vendored skill docs), not part of the product
+.agents/
+skills-lock.json
