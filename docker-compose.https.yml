@@ -1,0 +1,44 @@
+# HTTPS overlay for the standard stack — run BOTH files together:
+#
+#   docker compose -f docker-compose.yml -f docker-compose.https.yml up -d
+#
+# Two modes, chosen by env vars (put them in the same .env docker compose already reads):
+#
+#   1. Public domain (automatic Let's Encrypt certificates):
+#        HTTPS_DOMAIN=timesphere.yourcompany.com
+#        CADDYFILE=Caddyfile.domain
+#
+#   2. LAN / no domain (bring your own certs, e.g. mkcert):
+#        (leave both unset — Caddyfile.local is the default)
+#        Put the pair at deploy/caddy/certs/cert.pem + key.pem first;
+#        scripts/make-lan-certs.{sh,ps1} generates them.
+#
+# Either way the app is then reached at https://<domain-or-ip> (port 443). The base
+# compose file still publishes web on 5173 and the api on 4000 over plain http — fine on
+# a trusted network, but on an exposed host restrict those to localhost in an override
+# (e.g. "127.0.0.1:5173:80") so the only way in is through TLS.
+#
+# WHY the camera needs this at all: browsers expose getUserMedia only on secure origins —
+# an application setting cannot lift that. See docs/DEPLOYMENT.md § Serving over HTTPS.
+services:
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      HTTPS_DOMAIN: ${HTTPS_DOMAIN:-}
+    volumes:
+      - ./deploy/caddy/${CADDYFILE:-Caddyfile.local}:/etc/caddy/Caddyfile:ro
+      - ./deploy/caddy/certs:/certs:ro
+      # Caddy's cert store + config survive restarts — losing /data means re-issuing
+      # Let's Encrypt certificates and burning rate limit on every deploy.
+      - caddy-data:/data
+      - caddy-config:/config
+    depends_on:
+      - web
+
+volumes:
+  caddy-data:
+  caddy-config:

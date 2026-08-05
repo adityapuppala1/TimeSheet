@@ -11,7 +11,7 @@
 import { test, expect, request as playwrightRequest } from "@playwright/test";
 import { expectCleanupOk, withAdminRequest } from "./helpers/admin-request";
 
-const BASE_URL = process.env.E2E_BASE_URL ?? "http://localhost:5173";
+import { E2E_BASE_URL as BASE_URL } from "./helpers/base-url";
 /** Per-run unique: cleanup soft-deletes (the app has no hard delete, on purpose), and a
  *  soft-deleted row KEEPS its unique email while being invisible to every list — so a fixed
  *  address collides with its own ghost on the second run. Learned the hard way: this spec
@@ -35,7 +35,7 @@ async function sweepDrillUser(): Promise<void> {
 
 test.describe("user management — login activity & force-logout", () => {
   test("the users list reports live presence and first/last login times", async () => {
-    const ctx = await playwrightRequest.newContext({ baseURL: BASE_URL });
+    const ctx = await playwrightRequest.newContext({ baseURL: BASE_URL, ignoreHTTPSErrors: true });
     try {
       // A fresh employee login + one authenticated call makes them ONLINE by the 15-min
       // lastSeenAt definition, and (since the column shipped) stamps firstLoginAt.
@@ -81,7 +81,7 @@ test.describe("user management — login activity & force-logout", () => {
   test("force-logout revokes every session of one user, and their open tab is told within a heartbeat", async ({ page }) => {
     await sweepDrillUser();
 
-    const ctx = await playwrightRequest.newContext({ baseURL: BASE_URL });
+    const ctx = await playwrightRequest.newContext({ baseURL: BASE_URL, ignoreHTTPSErrors: true });
     let drillUserId: string | null = null;
     try {
       // Create the throwaway account (welcome-email delivery failing is fine — SMTP isn't

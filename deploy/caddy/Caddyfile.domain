@@ -1,0 +1,13 @@
+# HTTPS front for the Docker Compose stack — PUBLIC DOMAIN mode.
+#
+# Caddy obtains and renews a real certificate from Let's Encrypt automatically; the only
+# requirements are that HTTPS_DOMAIN resolves to this machine and ports 80/443 reach it.
+# The web container's own nginx already proxies /api and /uploads to the api container,
+# so everything routes through one upstream and no path rules are needed here.
+#
+# Used by docker-compose.https.yml when you set CADDYFILE=Caddyfile.domain — see
+# docs/DEPLOYMENT.md § Serving over HTTPS for the full runbook.
+{$HTTPS_DOMAIN} {
+	encode gzip
+	reverse_proxy web:80
+}

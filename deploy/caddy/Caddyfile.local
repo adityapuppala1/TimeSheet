@@ -1,0 +1,18 @@
+# HTTPS front for the Docker Compose stack — LAN / NO PUBLIC DOMAIN mode.
+#
+# Serves the certificate pair you place in deploy/caddy/certs/ (generate it with mkcert —
+# see docs/DEPLOYMENT.md § Serving over HTTPS, or run scripts/make-lan-certs.{sh,ps1}).
+# Every device that will use the app must trust the mkcert root CA once; after that the
+# camera, Copy buttons, and everything else requiring a secure context work on the LAN.
+#
+# This is the docker-compose.https.yml default (CADDYFILE unset).
+https://:443 {
+	tls /certs/cert.pem /certs/key.pem
+	encode gzip
+	reverse_proxy web:80
+}
+
+# Convenience: plain-http visitors get sent to the https address they should be using.
+http://:80 {
+	redir https://{host}{uri} permanent
+}

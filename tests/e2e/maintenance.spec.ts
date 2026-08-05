@@ -19,7 +19,7 @@
 import { test, expect, request as playwrightRequest, type APIRequestContext } from "@playwright/test";
 import { withAdminRequest } from "./helpers/admin-request";
 
-const BASE_URL = process.env.E2E_BASE_URL ?? "http://localhost:5173";
+import { E2E_BASE_URL as BASE_URL } from "./helpers/base-url";
 const MAINTENANCE_MESSAGE = "E2E maintenance drill — database upgrade in progress.";
 
 /** Enables a window (spanning "now" by default, or a future one via startOffsetMs), or
@@ -51,7 +51,7 @@ test.describe("maintenance mode", () => {
   test.use({ storageState: { cookies: [], origins: [] } });
 
   test("public status endpoint answers unauthenticated, admin surface requires SUPER_ADMIN", async () => {
-    const ctx = await playwrightRequest.newContext({ baseURL: BASE_URL });
+    const ctx = await playwrightRequest.newContext({ baseURL: BASE_URL, ignoreHTTPSErrors: true });
     try {
       // Anonymous status probe — the lockout page's lifeline — must work with zero auth.
       const status = await ctx.get("/api/maintenance/status");
@@ -86,7 +86,7 @@ test.describe("maintenance mode", () => {
   });
 
   test("active window locks out non-admins (API + login), spares the super admin, and disable restores", async ({ page }) => {
-    const ctx: APIRequestContext = await playwrightRequest.newContext({ baseURL: BASE_URL });
+    const ctx: APIRequestContext = await playwrightRequest.newContext({ baseURL: BASE_URL, ignoreHTTPSErrors: true });
     try {
       // An employee session minted BEFORE the window — proves enabling blocks existing tokens,
       // not merely new logins.

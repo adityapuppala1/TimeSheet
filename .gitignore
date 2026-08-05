@@ -36,3 +36,8 @@ apps/web/public/human-models/
 # Local agent tooling artifacts (vendored skill docs), not part of the product
 .agents/
 skills-lock.json
+
+# TLS material — private keys must never be committed
+apps/web/certs/
+deploy/caddy/certs/*
+!deploy/caddy/certs/.gitkeep

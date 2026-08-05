@@ -122,10 +122,15 @@ const gridHeaderClass = "pb-1 text-xs font-medium text-muted-foreground";
  * becomes a game of chasing the chevron.
  *
  * WebKit made it worse than cosmetic: the popover re-positions on every resize, so it was never
- * "stable" and clicks queued behind an animation that restarted each time. Six rows of h-9 cells
- * plus the weekday header row.
+ * "stable" and clicks queued behind an animation that restarted each time.
+ *
+ * SIZED TO INCLUDE THE WEEKDAY HEADER, learned the hard way: the first value here was 13.5rem —
+ * exactly six h-9 rows and nothing else — so a six-row month still overflowed it by the header's
+ * height and the popover kept jumping ~28px on 5-to-6-row transitions. Chromium clicked through
+ * the wobble; WebKit's stability check timed out on it, but only under load, which made it read
+ * as flake instead of geometry. 15rem = 6 x 2.25rem rows + the header row, with a little slack.
  */
-const GRID_MIN_HEIGHT = "min-h-[13.5rem]";
+const GRID_MIN_HEIGHT = "min-h-[15rem]";
 
 /** One month of a single-date calendar. */
 export function CalendarMonthGrid() {

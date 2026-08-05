@@ -1830,3 +1830,27 @@ is retraining on the fixed pipeline, not another threshold change.
 - [x] Smaller: emailed links documented against `APP_BASE_URL` (a reset link built on localhost
   only opens on the server itself); a worked Microsoft 365 SMTP example in `.env.example`; the
   `npm run dev` startup proxy-error flood collapsed to one throttled line.
+
+### HTTPS as a runbook, and a full-gate verification under it (2026-08-05)
+
+The camera's secure-context requirement stopped being a documentation problem and became shipped
+machinery: `scripts/make-lan-certs.{ps1,sh}` (mkcert CA + a certificate for every address the
+machine answers on, dropped where both `npm run dev` and the new Caddy overlay already look) and
+`docker-compose.https.yml` (LAN mode serving the mkcert pair; domain mode with automatic Let's
+Encrypt). Replicating on a new machine is three commands, documented in DEPLOYMENT.md § "The
+shipped runbook". The dev machine now serves https on localhost and its LAN address; the e2e
+suite derives its base URL from the same signal vite uses (the cert files' existence), because a
+suite pinned to http:// dies the moment the certs land — which is exactly how that lesson was
+learned: the first post-cert gate was run while the flip was happening mid-run, and its "48 did
+not run" was the suite talking TLS to a server still speaking http. An invalid run, discarded and
+re-run rather than explained away.
+
+The re-run under https: **251 passed, 11 skipped, 1 failed** — and the failure was real geometry,
+not flake. The calendar grid's minimum height was sized to exactly six day-rows and no header, so
+6-row months still overflowed it and the popover jumped ~28px on certain month transitions.
+Chromium clicks through the wobble; WebKit's stability checker times out on it, but only under
+load, which had made it read as flake twice before anyone measured it. Sized correctly (rows plus
+header), the test passes 3/3 repeats on WebKit and all 13 picker tests stay green. Also this
+pass: the acme tenant database was missing the morning's migration (`prisma migrate dev` only
+touches the default DB — `migrate:tenants` is the step that walks every tenant, and the one-click
+updater already runs it), and `fresh-checkout-org` was archived, silencing the per-worker skip.

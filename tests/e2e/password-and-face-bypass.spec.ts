@@ -13,7 +13,7 @@
 import { expect, request as playwrightRequest, test } from "@playwright/test";
 import { withAdminRequest } from "./helpers/admin-request";
 
-const BASE_URL = process.env.E2E_BASE_URL ?? "http://localhost:5173";
+import { E2E_BASE_URL as BASE_URL } from "./helpers/base-url";
 
 test.describe("admin password resets", () => {
   test("a reset with no password generates a one-time password and prompts a change", async () => {
@@ -34,7 +34,7 @@ test.describe("admin password resets", () => {
         expect(generatedPassword).toMatch(/^[a-zA-Z0-9]{12}!7a$/);
 
         // The generated password actually signs in, and the profile carries the prompt flag.
-        const userCtx = await playwrightRequest.newContext({ baseURL: BASE_URL });
+        const userCtx = await playwrightRequest.newContext({ baseURL: BASE_URL, ignoreHTTPSErrors: true });
         try {
           const login = await userCtx.post("/api/auth/login", { data: { email, password: generatedPassword } });
           expect(login.ok(), `generated password was refused at login (${login.status()})`).toBe(true);

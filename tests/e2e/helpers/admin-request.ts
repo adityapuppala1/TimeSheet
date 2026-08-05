@@ -19,7 +19,7 @@
  */
 import { expect, request as playwrightRequest, type APIRequestContext } from "@playwright/test";
 
-const BASE_URL = process.env.E2E_BASE_URL ?? "http://localhost:5173";
+import { E2E_BASE_URL as BASE_URL } from "./base-url";
 /** Access tokens last ~15m; refresh well inside that but rarely enough to stay under the limiter. */
 const TOKEN_TTL_MS = 5 * 60 * 1000;
 
@@ -29,7 +29,7 @@ let cachedToken: { value: string; obtainedAt: number } | null = null;
 export async function withAdminRequest<T>(
   fn: (ctx: APIRequestContext, headers: Record<string, string>) => Promise<T>
 ): Promise<T> {
-  const ctx = await playwrightRequest.newContext({ baseURL: BASE_URL });
+  const ctx = await playwrightRequest.newContext({ baseURL: BASE_URL, ignoreHTTPSErrors: true });
   try {
     if (!cachedToken || Date.now() - cachedToken.obtainedAt > TOKEN_TTL_MS) {
       const res = await ctx.post("/api/auth/login", {

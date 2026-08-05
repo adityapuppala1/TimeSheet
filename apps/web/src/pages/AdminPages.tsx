@@ -656,7 +656,7 @@ export function UsersPage() {
                   onCheckedChange={(v) => setDraft({ ...draft, faceVerificationRequired: v })}
                 />
                 <span className="text-xs text-muted-foreground">
-                  Camera identity check on submit (only while enabled workspace-wide)
+                  Only while enabled workspace-wide
                 </span>
               </div>
             </FieldShell>

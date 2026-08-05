@@ -369,6 +369,19 @@ outcome is not a security control.
   Two parallel workers used to suspend the gate and the first to finish restored it mid-run,
   producing an intermittent failure that always pointed at the wrong thing.
 
+### 🔒 HTTPS, shipped as a runbook
+
+- **One-command LAN certificates**: `scripts/make-lan-certs.{ps1,sh}` installs a local CA
+  (mkcert), issues a certificate for every address the machine answers on, and drops the pair
+  where both entry points already look — `npm run dev` then serves `https://<lan-ip>:5173`
+  automatically, and the new **`docker-compose.https.yml` overlay** (Caddy) serves
+  `https://<lan-ip>` in front of the whole stack. Phones trust the printed `rootCA.pem` once and
+  the camera works everywhere on the LAN.
+- **Public-domain mode** in the same overlay: set `HTTPS_DOMAIN` and `CADDYFILE=Caddyfile.domain`
+  and Caddy obtains and renews real Let's Encrypt certificates on its own.
+- The full replicate-on-any-machine sequence is documented in DEPLOYMENT.md § *Serving over
+  HTTPS* → "The shipped runbook". Private keys are git-ignored by construction.
+
 ### 🔐 Password and camera-policy hardening
 
 - **Admin password resets no longer default to `Admin@12345`.** That default is documented in

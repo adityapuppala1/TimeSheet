@@ -18,6 +18,7 @@
  * another test's setup. Simpler and more reliable to run serially for now.
  */
 import { defineConfig, devices } from "@playwright/test";
+import { E2E_BASE_URL } from "./tests/e2e/helpers/base-url";
 
 const VIEWPORTS = {
   phone: { width: 390, height: 844 }, // iPhone 14-ish
@@ -36,7 +37,13 @@ export default defineConfig({
   reporter: [["list"], ["html", { open: "never", outputFolder: "playwright-report" }]],
   timeout: 30_000,
   use: {
-    baseURL: "http://localhost:5173",
+    // Derived, not hardcoded: certificates at apps/web/certs/ flip the dev server to HTTPS-only
+    // (see helpers/base-url.ts), and a suite pinned to http:// would fail with connection errors
+    // that look nothing like their cause.
+    baseURL: E2E_BASE_URL,
+    // The dev certificate is mkcert-issued; Chromium trusts the OS store but Playwright's
+    // bundled Firefox/WebKit carry their own — without this they'd refuse the local CA.
+    ignoreHTTPSErrors: true,
     trace: "on-first-retry",
     screenshot: "only-on-failure",
     video: "retain-on-failure"
@@ -97,7 +104,8 @@ export default defineConfig({
     },
     {
       command: "npm run dev -w apps/web",
-      url: "http://localhost:5173",
+      url: E2E_BASE_URL,
+      ignoreHTTPSErrors: true,
       reuseExistingServer: true,
       timeout: 60_000
     }

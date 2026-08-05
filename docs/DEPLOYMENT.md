@@ -353,6 +353,53 @@ localhost.
 Affected features: face enrollment and verification, every **Copy** button (share links, API
 tokens, webhook URLs). Everything else works fine over plain HTTP.
 
+### The shipped runbook (do this; the sections after it are the reasoning)
+
+The repo carries everything pre-wired, so standing HTTPS up — on this machine or any future one —
+is the same short sequence every time.
+
+**A. LAN / no public domain (dev machine or an on-prem box):**
+
+```bash
+# 1. Install mkcert, once per machine:
+winget install FiloSottile.mkcert        # Windows (then reopen the terminal)
+sudo apt install mkcert libnss3-tools    # Debian/Ubuntu
+brew install mkcert nss                  # macOS
+
+# 2. Generate + install the certificate for every address this machine answers on:
+powershell -ExecutionPolicy Bypass -File scripts\make-lan-certs.ps1   # Windows
+bash scripts/make-lan-certs.sh                                        # Linux/macOS
+```
+
+The script drops the pair where **both** entry points already look — `apps/web/certs/` (picked up
+automatically by `npm run dev`, which then serves `https://<lan-ip>:5173`) and
+`deploy/caddy/certs/` (used by the Docker overlay below). It prints the exact per-device trust
+steps for the `rootCA.pem`, and reminds you to point `APP_BASE_URL` at the `https://` address so
+emailed links match. Windows note: the first `mkcert -install` pops a security-warning dialog that
+needs a human click. Re-run the script whenever the machine's IP changes — the certificate names
+addresses, not the machine.
+
+**B. Docker, LAN mode** (after step A on the host):
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.https.yml up -d
+# → https://<lan-ip>   (Caddy serves the mkcert pair; plain http redirects to https)
+```
+
+**C. Docker, public domain** (no mkcert, no device trust — real certificates, automatic renewal):
+
+```bash
+# In the .env next to docker-compose.yml:
+#   HTTPS_DOMAIN=timesphere.yourcompany.com
+#   CADDYFILE=Caddyfile.domain
+docker compose -f docker-compose.yml -f docker-compose.https.yml up -d
+# → https://timesphere.yourcompany.com  (Let's Encrypt; needs DNS → this box and ports 80/443 open)
+```
+
+In every mode, set `APP_BASE_URL` (and add the https origin to `WEB_ORIGIN` for production) to the
+address people actually open. On an internet-exposed host, also restrict the base compose file's
+plain-http ports (`5173`, `4000`) to localhost in an override so TLS is the only way in.
+
 ### Production, with a public domain — use a reverse proxy
 
 The Compose stack does not terminate TLS itself, on purpose: certificate management belongs to
