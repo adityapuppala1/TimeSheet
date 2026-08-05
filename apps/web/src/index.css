@@ -1,0 +1,280 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    --background: 210 30% 98%;
+    --foreground: 224 38% 12%;
+
+    --card: 0 0% 100%;
+    --card-foreground: 224 38% 12%;
+
+    --popover: 0 0% 100%;
+    --popover-foreground: 224 38% 12%;
+
+    --primary: 186 82% 32%;
+    --primary-foreground: 0 0% 100%;
+
+    --secondary: 214 32% 93%;
+    --secondary-foreground: 224 38% 18%;
+
+    --muted: 214 24% 92%;
+    --muted-foreground: 222 14% 42%;
+
+    --accent: 38 92% 52%;
+    --accent-foreground: 30 60% 14%;
+
+    --destructive: 0 78% 52%;
+    --destructive-foreground: 0 0% 100%;
+
+    --success: 152 64% 38%;
+    --success-foreground: 0 0% 100%;
+
+    --warning: 32 96% 52%;
+    --warning-foreground: 32 90% 14%;
+
+    --info: 215 88% 52%;
+    --info-foreground: 0 0% 100%;
+
+    --border: 216 24% 86%;
+    --input: 216 24% 86%;
+    --ring: 186 82% 32%;
+
+    --radius: 0.625rem;
+
+    /*
+     * PLANNING SURFACES (V6) — timeline, workload heatmap, risk badges.
+     *
+     * WHY these are tokens and not values typed into the Gantt component: the timeline is the
+     * first screen in this app that is mostly COLOUR rather than mostly text, so it is the one
+     * most able to look like a different product bolted on. Every value below is derived from a
+     * hue already in this file (primary 186, accent 38, the three status hues) rather than
+     * chosen fresh, which is what keeps it reading as the same system. Built per the repo's
+     * `dataviz` skill, same as the Insights charts.
+     *
+     * The three rules the derivations follow:
+     *  1. Bars carry meaning, lanes do not. Lanes are near-background greys with a whisper of
+     *     the primary hue; bars are saturated. If a lane competed with a bar for attention the
+     *     chart would be unreadable at 200 rows.
+     *  2. Baseline is an outline, never a fill. It is a reference, not a value — filling it
+     *     would make every bar look doubled.
+     *  3. The capacity ramp is ONE hue at five lightnesses, except the top step. Ramps that
+     *     shift hue encode a second variable that does not exist. The exception is deliberate:
+     *     capacity-4 is "over capacity", a categorically different state from "busy", so it
+     *     crosses to the destructive hue — the one place a hue change carries real meaning.
+     */
+    --plan-lane: 210 30% 99%;
+    --plan-lane-alt: 214 24% 96%;
+    --plan-grid: 216 24% 90%;
+    --plan-bar: 186 82% 32%;        /* = primary */
+    --plan-bar-fg: 0 0% 100%;
+    --plan-bar-parent: 190 70% 22%; /* primary, darkened — summary rows sit visually "under" */
+    --plan-baseline: 222 14% 55%;   /* muted-foreground; used as a 1px outline only */
+    --plan-dependency: 222 14% 48%;
+    --plan-today: 38 92% 52%;       /* = accent, the only warm mark on the chart */
+    --plan-critical: 0 78% 52%;     /* = destructive */
+
+    --capacity-0: 214 24% 94%;      /* unbooked */
+    --capacity-1: 186 45% 80%;
+    --capacity-2: 186 60% 62%;
+    --capacity-3: 186 76% 42%;      /* at capacity */
+    --capacity-4: 0 78% 52%;        /* OVER capacity — hue break is the signal */
+
+    --risk-green: 152 64% 38%;      /* = success */
+    --risk-amber: 32 96% 52%;       /* = warning */
+    --risk-red: 0 78% 52%;          /* = destructive */
+  }
+
+  .dark {
+    --background: 225 28% 9%;
+    --foreground: 210 30% 96%;
+
+    --card: 224 24% 12%;
+    --card-foreground: 210 30% 96%;
+
+    --popover: 224 24% 12%;
+    --popover-foreground: 210 30% 96%;
+
+    --primary: 184 74% 44%;
+    --primary-foreground: 220 50% 8%;
+
+    --secondary: 222 22% 18%;
+    --secondary-foreground: 210 30% 96%;
+
+    --muted: 222 22% 18%;
+    --muted-foreground: 214 14% 65%;
+
+    --accent: 38 92% 58%;
+    --accent-foreground: 30 60% 12%;
+
+    --destructive: 0 72% 56%;
+    --destructive-foreground: 0 0% 100%;
+
+    --success: 152 60% 46%;
+    --success-foreground: 0 0% 100%;
+
+    --warning: 32 92% 58%;
+    --warning-foreground: 32 90% 10%;
+
+    --info: 215 90% 60%;
+    --info-foreground: 0 0% 100%;
+
+    --border: 221 20% 24%;
+    --input: 221 20% 24%;
+    --ring: 184 74% 44%;
+
+    /*
+     * Dark-mode planning surfaces. NOT the light values inverted: the lane/bar contrast has to
+     * be rebuilt, because on a dark ground a saturated bar reads LOUDER than the same bar does
+     * on white. So bars lighten and desaturate slightly while lanes stay very close to the card
+     * colour — the same relationship, re-derived rather than mirrored.
+     *
+     * The capacity ramp reverses direction for the same reason: on light it runs pale -> deep,
+     * on dark it must run deep -> bright, or "more booked" would read as "fading out".
+     */
+    --plan-lane: 224 24% 13%;
+    --plan-lane-alt: 222 22% 16%;
+    --plan-grid: 221 20% 22%;
+    --plan-bar: 184 74% 44%;        /* = primary (dark) */
+    --plan-bar-fg: 220 50% 8%;
+    --plan-bar-parent: 184 60% 60%; /* lighter, not darker — depth inverts on a dark ground */
+    --plan-baseline: 214 14% 58%;
+    --plan-dependency: 214 14% 62%;
+    --plan-today: 38 92% 58%;       /* = accent (dark) */
+    --plan-critical: 0 72% 56%;     /* = destructive (dark) */
+
+    --capacity-0: 222 22% 20%;
+    --capacity-1: 186 30% 30%;
+    --capacity-2: 186 45% 40%;
+    --capacity-3: 184 74% 50%;
+    --capacity-4: 0 72% 56%;
+
+    --risk-green: 152 60% 46%;
+    --risk-amber: 32 92% 58%;
+    --risk-red: 0 72% 56%;
+  }
+
+  * {
+    @apply border-border;
+    box-sizing: border-box;
+  }
+
+  /*
+   * Belt-and-suspenders against horizontal scroll on narrow screens: a single
+   * unconstrained descendant (a wide table row, a non-wrapping flex toolbar) can
+   * otherwise push the whole document wider than the viewport. Any element that
+   * *should* scroll horizontally (the Kanban board, a data table) manages its own
+   * `overflow-x-auto` internally and is unaffected by clipping at this outer level.
+   */
+  /*
+   * `overflow-x: clip` lives on BODY ONLY — deliberately NOT on html. The CSS propagation rule:
+   * body's overflow reaches the viewport only while html's overflow is `visible`. With clip on
+   * html, that propagation is blocked — so when a Radix modal (dropdown/dialog) scroll-locks by
+   * setting `overflow: hidden` on body, the BODY ELEMENT itself becomes the clip box instead of
+   * the viewport, and every `position: sticky` element (sidebar, topbar) silently detaches and
+   * appears "scrolled away" (measured: sidebar rect at y = -scrollY the moment a menu opened).
+   * With html left visible, body's clip-x still propagates to the viewport (phone overflow
+   * hardening intact) and a modal's overflow:hidden propagates too — the standard, sticky-safe
+   * scroll lock every other site gets.
+   *
+   * `scrollbar-gutter: stable` keeps the viewport width constant when that lock removes the
+   * scrollbar — without it, the whole centered layout shifted sideways on every menu open.
+   */
+  html {
+    scrollbar-gutter: stable;
+    /*
+     * 14px root, not the browser's 16px — the density fix behind "the app only looks right at
+     * 80% zoom". Every Tailwind size in this app is rem-based, so this one declaration scales
+     * the entire UI (text, spacing, icons, max-widths) to 87.5%, which is what made the dense
+     * admin tables fit a laptop viewport at 100% zoom. 14px is the standard enterprise-app
+     * base (Ant Design, most admin systems). Tailwind's responsive breakpoints are UNAFFECTED
+     * on purpose — media queries resolve against the browser default, not this value.
+     */
+    font-size: 14px;
+  }
+
+  body {
+    @apply bg-background text-foreground;
+    margin: 0;
+    min-width: 320px;
+    overflow-x: clip;
+    font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    font-feature-settings: "rlig" 1, "calt" 1;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  body::before {
+    content: "";
+    position: fixed;
+    inset: 0;
+    z-index: -1;
+    background:
+      radial-gradient(circle at 12% -10%, hsl(var(--primary) / 0.10), transparent 38%),
+      radial-gradient(circle at 92% 10%, hsl(var(--accent) / 0.12), transparent 36%);
+  }
+
+  button,
+  input,
+  select,
+  textarea {
+    font: inherit;
+  }
+}
+
+@layer components {
+  .focus-ring {
+    @apply focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background;
+  }
+
+  .scrollbar-thin::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+  }
+  .scrollbar-thin::-webkit-scrollbar-thumb {
+    @apply rounded-full bg-border;
+  }
+
+  /* Tiptap content baseline */
+  .tiptap {
+    @apply min-h-32 w-full rounded-md px-3 py-2 text-sm leading-relaxed outline-none;
+  }
+  .tiptap p {
+    @apply my-1;
+  }
+  .tiptap p.is-editor-empty:first-child::before {
+    content: attr(data-placeholder);
+    @apply pointer-events-none float-left h-0 text-muted-foreground;
+  }
+  .tiptap ul {
+    @apply ml-5 list-disc;
+  }
+  .tiptap ol {
+    @apply ml-5 list-decimal;
+  }
+  .tiptap a {
+    @apply text-primary underline underline-offset-4;
+  }
+  .tiptap code {
+    @apply rounded bg-muted px-1.5 py-0.5 text-xs;
+  }
+  .tiptap blockquote {
+    @apply my-2 border-l-4 border-border pl-3 italic text-muted-foreground;
+  }
+  .tiptap h1 { @apply mb-1 mt-3 text-xl font-bold; }
+  .tiptap h2 { @apply mb-1 mt-3 text-lg font-bold; }
+  .tiptap h3 { @apply mb-1 mt-2 text-base font-bold; }
+
+  /* React DayPicker shadcn-style overrides */
+  .rdp-root { --rdp-cell-size: 36px; --rdp-accent-color: hsl(var(--primary)); }
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  a,
+  button,
+  input,
+  select,
+  textarea {
+    transition: background-color 160ms ease, border-color 160ms ease, color 160ms ease, transform 160ms ease, box-shadow 160ms ease;
+  }
+}

@@ -1,0 +1,34 @@
+node_modules/
+dist/
+.env
+.env.local
+*.log
+*.tsbuildinfo
+coverage/
+uploads/
+apps/api/uploads/
+.DS_Store
+apps/*/dist/
+packages/*/dist/
+
+# Generated Prisma client for the control-plane schema (apps/api/prisma/control/schema.prisma)
+# — regenerate with `npm run control:generate -w apps/api`, never hand-edited.
+apps/api/src/generated/
+
+# Playwright — generated test artifacts and per-role session snapshots (live cookies/tokens,
+# regenerated on every test run — never something to commit).
+playwright-report/
+test-results/
+tests/e2e/.auth/
+
+# graphify knowledge graph — derived artifacts, rebuilt from source by the post-commit hook.
+# Deliberately NOT tracked: graph.json (3MB) + graph.html (2.5MB) are regenerated on every
+# commit, so tracking them would add ~5MB of churn per commit to the repo history. Anyone with
+# graphify installed reproduces the whole thing with `/graphify .`. The .graphifyignore that
+# shapes WHAT gets graphed IS tracked, since that's shared configuration, not output.
+graphify-out/
+
+# Face-detection models: copied from node_modules by apps/web/scripts/copy-face-models.mjs on
+# predev/prebuild. Generated, versioned with the npm dependency, and 2.1MB of binary that would
+# otherwise land in every clone and every diff.
+apps/web/public/human-models/

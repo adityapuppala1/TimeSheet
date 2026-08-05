@@ -1,0 +1,26 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <!--
+      This viewport tag is the single most load-bearing line in this file: without it,
+      mobile browsers render the page at a ~980px desktop-width virtual viewport and let
+      the user pinch-zoom, which is exactly the "always shows web view" symptom on phones.
+      `width=device-width` ties the viewport to the device's real CSS pixel width instead.
+    -->
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <meta name="theme-color" content="#0F9AA8" />
+    <!--
+      Without this, every browser requests /favicon.ico by convention and gets a 404 from Vite
+      (the SPA fallback only serves index.html for `Accept: text/html`). Declaring the icon
+      explicitly stops the stray request rather than just hiding it.
+    -->
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <meta name="description" content="TimeSphere — timesheet management, Jira-like ticketing, and AI-assisted workflows in one workspace." />
+    <title>TimeSphere</title>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>

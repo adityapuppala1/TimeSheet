@@ -1,0 +1,703 @@
+# TimeSphere — Architecture Reference
+
+> **What this file is.** A structured, continuously-maintained map of the codebase: what each
+> module is for, why it exists, what it depends on, and how data flows through the system. It is
+> written for two audiences at once — a human engineer onboarding onto the project, and an AI
+> coding assistant (Claude Code, Cursor, Copilot, etc.) that needs to understand the system
+> before changing it. Prefer this document over re-deriving architecture from scratch by reading
+> every file.
+>
+> **How to keep this current (read this before you skip it).** Whenever you add a new
+> service/controller/worker, change what a module depends on, or add a new data flow, update the
+> relevant section below in the same change. Treat an out-of-date `ARCHITECTURE.md` as a bug.
+> Each module entry is deliberately terse (purpose, depends-on, depended-on-by, one "why") —
+> that's the format to match when adding a new one, not prose paragraphs.
+
+---
+
+## 1. What this system is
+
+TimeSphere is a **multi-tenant SaaS platform** combining timesheet management, a Jira-like
+ticketing system, a bring-your-own-key AI layer, and multi-channel ticket intake (email + four
+chat platforms), deployable either as a single-company on-prem install or as a true multi-org
+SaaS product on the same codebase.
+
+```mermaid
+flowchart TB
+    subgraph Client["Browser"]
+        Web["apps/web (React SPA)"]
+    end
+
+    subgraph API["apps/api (Express)"]
+        MW["Tenant resolution + auth middleware"]
+        Ctrl["Controllers"]
+        Svc["Services"]
+        AI["ai.service.ts\n(single AI choke point)"]
+    end
+
+    subgraph Data["Data plane"]
+        Control[("Control-plane DB\norgs, SSO/chat config,\nplan tiers, platform admins")]
+        T1[("Tenant DB — Org A")]
+        T2[("Tenant DB — Org B")]
+        T3[("Tenant DB — Org N")]
+    end
+
+    subgraph External["External systems"]
+        LLM["Anthropic / OpenAI-compatible LLM"]
+        Mail["SMTP + IMAP"]
+        Chat["Slack / Teams / Google Chat / Telegram"]
+        IdP["Google / Microsoft / SAML IdP / LDAP"]
+    end
+
+    Web -->|HTTPS, Host header carries org subdomain| MW
+    MW -->|resolves org, decrypts DSN,\nattaches tenant Prisma client| Ctrl
+    MW -->|reads org → DSN mapping| Control
+    Ctrl --> Svc
+    Svc --> AI
+    AI --> LLM
+    Svc -->|prisma proxy, AsyncLocalStorage-bound| T1
+    Svc --> T2
+    Svc --> T3
+    Svc <--> Mail
+    Svc <--> Chat
+    MW <--> IdP
+```
+
+**The one idea everything else follows from**: every tenant (`Organization`) gets its own
+**physically separate MySQL database** — never a shared table filtered by a `tenantId` column.
+A small **control-plane database** (`apps/api/prisma/control/schema.prisma`) is the only place
+that knows every org exists and where its database lives; it never holds ticket/timesheet
+content. This is why the same 30+ controllers/services that were written assuming "the whole
+database is my company" needed almost no changes to become multi-tenant — see §3.
+
+---
+
+## 2. Monorepo layout
+
+| Path | Purpose |
+|---|---|
+| `apps/api` | Express + TypeScript API. Two Prisma schemas: `prisma/schema.prisma` (tenant data) and `prisma/control/schema.prisma` (control plane). |
+| `apps/web` | React + TypeScript SPA (Vite). Talks to `apps/api` over `/api/*`. |
+| `packages/shared` | Types and constants imported by both `apps/api` and `apps/web` (e.g. `GlobalAISettings`, `ChatPlatform`, permission keys) — the one place a cross-cutting type is defined once instead of drifting between frontend/backend copies. |
+| `deploy/helm/timesphere` | Kubernetes Helm chart (see §8). |
+| `.github/workflows` | CI (`ci.yml`) and CD (`cd.yml`) — see §8. |
+| `docs/` | This file, `DEPLOYMENT.md` (operational how-to), and diagrams. |
+| `install.sh` / `install.ps1` | One-click Docker Compose installers (Shape 1 — see §8). |
+| `tests/e2e` | Playwright end-to-end suite (repo root — exercises both `apps/api` and `apps/web` together). |
+| `apps/api/tests` | Vitest unit (`tests/unit`, mocked, no real DB) + integration (`tests/integration`, real throwaway MySQL) tests, scoped to `apps/api` alone — AI service, Stripe billing, SCIM, face verification. |
+
+---
+
+## 3. Core architectural concepts
+
+### 3.1 Database-per-tenant multi-tenancy
+
+- **Control plane** (`apps/api/prisma/control/schema.prisma`): `Organization`, `OrgDatabase`
+  (encrypted DSN), `OrgSsoConfig`, `OrgAuthMethod`, `PlatformAdminUser`/`PlatformAdminSession`,
+  `PlanTierLimit`. Nothing here is tenant *content* — only metadata about tenants.
+- **Tenant resolution** (`apps/api/src/middleware/tenant.ts`): resolves which org a request
+  belongs to from the `Host` header's subdomain (falls back to `DEFAULT_ORG_SLUG` when there's no
+  real subdomain — the on-prem shape), decrypts that org's DSN, and wraps the rest of the request
+  in an `AsyncLocalStorage` context (`apps/api/src/config/tenant-context.ts`) carrying the active
+  tenant's Prisma client.
+- **The `prisma` Proxy** (`apps/api/src/config/prisma.ts`): every one of the ~30 existing
+  `import { prisma } from "../config/prisma.js"` call sites across controllers/services/workers
+  is untouched — `prisma` is a `Proxy` that forwards every property access to whichever tenant
+  client is active in the current async context. This is *why* the multi-tenancy conversion
+  didn't require touching every file that already used `prisma`.
+- **Cron workers have no request to hang tenant resolution off of**, so
+  `apps/api/src/workers/run-for-every-org.ts` loops over every `ACTIVE` org from the control
+  plane and re-runs the worker's existing body once per org, each inside that org's own tenant
+  context — one org's failure is caught and logged, never blocking the rest.
+
+### 3.2 Authentication — 4 SSO methods + password
+
+| Provider | Mechanism | Key file |
+|---|---|---|
+| Password | bcrypt hash + JWT access/refresh, httpOnly cookie rotation | `services/auth.service.ts` |
+| Google / Microsoft | OIDC redirect, PKCE, org identity travels in a signed `state` JWT (not the callback URL, which is one fixed URL shared by every org) | `services/sso.service.ts` |
+| SAML | IdP-initiated POST binding to a per-app-fixed ACS URL, org identity in `RelayState` | `services/sso.service.ts` |
+| LDAP / Active Directory | Direct bind (no redirect) — service-account bind + search, then rebind as the found DN to verify the password | `services/sso.service.ts` (LDAP section) |
+
+All four converge on the same tail: `completeSsoLogin`/`login` → `establishSession` (session row +
+JWT mint) in `services/auth.service.ts`. Every access/refresh token carries an `org` claim
+cross-checked against the tenant the request resolved to — defense-in-depth, not the primary
+isolation boundary (the separate physical databases are).
+
+### 3.3 The AI layer — one choke point
+
+`apps/api/src/services/ai.service.ts` is the **only** place that knows how to call an LLM.
+Every capability (`classifyTicket`, `classifyChatMessage`, `findDuplicateTickets`, writing
+assistant, comment summary, workspace search, weekly digest) goes through `preflight(feature)` →
+`callChat(settings, params)`. `preflight` enforces: the workspace-wide `aiEnabled` switch, the
+specific feature's own toggle, and the **effective AI budget** (`min(org's own budget, plan-tier
+ceiling)`, re-read on every call so a platform admin lowering a tier's ceiling takes effect
+immediately, not after some reconciliation job). `callChat` branches on `GlobalAISettings.provider`
+(`ANTHROPIC` native API, or `OPENAI_COMPATIBLE` via the `openai` SDK for every other vendor) —
+no capability function knows or cares which is active.
+
+### 3.4 External-content intake pipelines (email + chat)
+
+Both `services/email-intake.service.ts` and `services/chat-intake.service.ts` follow the same
+shape: **route → classify → create → confidence-gate → reply/confirm → audit**. A routing rule
+(`EmailRoutingRule` / `ChatRoutingRule`) decides which project a message belongs to; the AI
+classifier's confidence is capped at `EXTERNAL_INTAKE_CONFIDENCE_CEILING` (0.85, in
+`ai.service.ts`) before it's allowed to suppress human review — a single self-reported number
+from unauthenticated external content should never be able to fully bypass review, even before
+considering prompt injection. Both pipelines create the ticket under a dedicated system "reporter"
+user (`EMAIL_INTAKE_SYSTEM_EMAIL` / `CHAT_INTAKE_SYSTEM_EMAIL`) since `Ticket.reporterId` needs a
+real `User` row, while the real sender lives in separate free-text fields
+(`externalReporterEmail`/`externalChatUserId` etc.).
+
+### 3.5 Plan-tier enforcement
+
+`services/plan-limits.service.ts` re-reads (never caches) an org's effective seat limit, AI
+budget ceiling, allowed SSO providers, and allowed chat platforms on every relevant check —
+seat creation, AI calls, and the "enable this provider/platform" toggle in Workspace Settings.
+Enforced live, not just validated once at signup, so a platform admin's change takes effect on
+the very next request.
+
+### 3.6 Platform-admin console
+
+A structurally separate admin surface (`/platform-admin`, own JWT secret
+`PLATFORM_ADMIN_JWT_SECRET`, own `PlatformAdminUser` table that doesn't exist in any tenant
+database — a compromised tenant DB can never yield platform credentials). Manages org lifecycle,
+plan-tier limits, and cross-org analytics. `services/platform-admin-analytics.service.ts` is the
+**sole file in the codebase allowed to loop over every tenant database**, and is restricted by
+convention to aggregate/count queries — never row-level ticket/comment content. That convention
+is the concrete, auditable point where the "no cross-tenant data leakage" guarantee either holds
+or doesn't.
+
+### 3.7 Face (identity) verification — server-authoritative by construction
+
+Optional, off by default, Enterprise-tier gated. Confirms the person submitting a
+timesheet/ticket — or moving a ticket through its workflow, or **approving** a timesheet — is
+the account holder. Four design constraints drive the whole shape of it:
+
+1. **Every decision is made server-side.** The browser only uploads JPEGs — there is no
+   face-matching code in the web bundle at all. This is not a performance choice: a client that
+   decides its own verification outcome is not a security control, because any employee could
+   POST a "passed" result from devtools. `services/face.service.ts` owns detection, anti-spoof,
+   liveness, pose measurement, and comparison.
+2. **Anti-spoof is checked BEFORE the match.** Otherwise holding a printed photo of the right
+   colleague up to the webcam passes on similarity alone — the exact attack the feature exists
+   to stop.
+3. **A passed check is a single-use, short-lived token.** `POST /api/face/verify` returns a
+   `verificationId` that `consumeVerification()` redeems at submit time — same user, same
+   context, not already spent, not expired. A conditional `updateMany` arbitrates concurrent
+   double-submits, so exactly one wins. Gates on CREATE routes consume *before* the row exists
+   and bind the attempt to it afterwards (`bindVerificationToRecord`) — that binding is what
+   the "Identity verified" badges join on.
+4. **Anti-injection is challenge–response, not frame forensics.** A virtual camera replaying a
+   recorded video defeats per-frame anti-spoof honestly (each frame IS a live-looking face). So
+   the server issues a random head-movement instruction (single-use, 90s) and measures the
+   actual pose delta between a neutral and a gesture frame — a movement chosen *after* the
+   recording existed is the one thing a replay cannot perform. Device-label and
+   network-novelty heuristics are recorded as review *signals*, never verdicts (both are
+   client-influenced and spoofable; a suspected virtual camera flags the attempt for human
+   review even when it passes).
+
+**The plan entitlement splits its failure directions deliberately**
+(`plan-limits.service.ts#isFaceVerificationAllowed`): configuration/enrollment/verification
+fail **closed** (403 — no new biometric collection without the entitlement), while enforcement
+on submissions fails **open** (`isFaceVerificationRequired` returns false) — a lapsed payment
+must stop *demanding* checks, not lock a workforce out of logging time. Downgrade data handling
+(30-day grace, then purge) lives in the retention worker.
+
+Biometric data is treated as its own category throughout: templates are AES-256-GCM encrypted
+(same helper as API keys), and captured images live **outside** the public `/uploads` static
+mount — that mount has no authentication at all, so anything under it is world-readable to
+anyone who guesses a filename. Face imagery is served only by `GET /api/face/image/...`, which
+checks session, tenant, and subject-or-admin, and is stored org-scoped
+(`face/<orgId>/<userId>/`) so an org's imagery can be purged as a directory.
+`workers/face-retention.worker.ts` runs the whole daily lifecycle — image retention, downgrade
+grace/purge, enrollment reminders, overdue-review nudges, challenge cleanup — because a policy
+nothing enforces is just a document; `workers/identity-weekly-digest.worker.ts` sends admins
+the deterministic Monday recap (no AI writes emails about named employees' identity checks).
+
+See [FACE_VERIFICATION.md](FACE_VERIFICATION.md) for calibration, thresholds, the threat-model
+table, and the regulatory obligations (GDPR Art.9, Illinois BIPA, India DPDP) it carries.
+
+### 3.8 Maintenance mode — one gate, fails open, super admin exempt
+
+A SUPER_ADMIN schedules a window (start/end/message) from Workspace Settings → Maintenance;
+while the window is **active**, every non-SUPER_ADMIN is locked out. Four decisions define the
+design (`services/maintenance.service.ts`):
+
+1. **One enforcement choke point, two doors.** The active-check runs inside `requireAuth`
+   (covers every authenticated route — nothing to remember to mount) and inside
+   `establishSession` (covers every login method: password, Google, Microsoft, SAML, LDAP —
+   they all terminate there, so none can become the forgotten side door). Rejection is
+   **503 + `code: "MAINTENANCE"`**, never 401: the client must distinguish "your session is
+   bad" (refresh, re-login) from "the workspace is closed" (show `/maintenance`, stop retrying).
+2. **The check is cached (10s per tenant) and FAILS OPEN.** It sits on the hottest path in the
+   app; uncached it would add a query to every call for a value that changes a handful of times
+   a year. And a broken settings lookup must degrade to "app works normally" — never to
+   "everyone is locked out by an exception". The settings PATCH invalidates the cache so a
+   toggle is enforced immediately, not after the TTL.
+3. **"Online" means `Session.lastSeenAt` within 15 minutes** — stamped by a throttled
+   (5-min, in-memory, fire-and-forget) write in `requireAuth`, not `expiresAt`, which would
+   count everyone who logged in this month. The admin panel shows people, not sessions
+   (multi-tab dedup). Force-logout is server-side revocation of every non-SUPER_ADMIN session:
+   next request 401s → refresh fails → login is refused (maintenance) → `/maintenance` page.
+   The chain needs zero client cooperation, which is what makes it a control.
+4. **`GET /api/maintenance/status` is public** (tenant-resolved, rate-limited 30/min): the
+   people who most need it are exactly those whose tokens were just revoked. It exposes only
+   what the lockout page renders — phase, window, message — and only while the mode is enabled.
+
+The SUPER_ADMIN exemption is deliberate and minimal: someone has to do the maintenance, verify
+the result, and switch it off. The "warn users" action (in-app + email to online non-admins) is
+gated by its own notification toggle (`emailMaintenanceScheduled`) like every other category.
+
+Two neighbors ride on the same machinery:
+
+- **Server health** (`services/system-health.service.ts`, `GET /api/maintenance/health`):
+  live CPU/memory/disk/latency + a component checklist, measured on the instance that answered
+  (the payload names host+pid rather than posing as a cluster aggregate) and guaranteed never
+  to throw — a dead dependency reports `ok: false`, because a health check that 500s when
+  things are unhealthy defeats itself.
+- **Per-user login visibility** (Users page): the same `lastSeenAt` window powers a live online
+  dot per user; `User.firstLoginAt` is stamped exactly once in `establishSession` (never
+  backfilled — null honestly means "unknown"); and `POST /users/:id/force-logout` is the
+  bulk force-logout scoped to one person, with the extra guard that only a SUPER_ADMIN may
+  sign out a SUPER_ADMIN.
+
+### 3.9 The planning layer (V6) — additive by construction
+
+TimeSphere tracks *the work* and *the time spent on it*, but had no way to express *the plan*:
+no hierarchy above a flat ticket, no dates other than the SLA-derived `dueAt`, no capacity, no
+intake forms, no approvals on deliverables, no fields or statuses a customer could name
+themselves. V6 adds that layer. The governing constraint is that **an org which upgrades and
+touches nothing must behave exactly as it did before** — so every table is new, every column
+added to an existing table is nullable or defaulted, and every capability is inert until an
+admin opts in on `GlobalPlanningSettings` (all six toggles default false, matching `aiEnabled`,
+`enableAttestations` and the face-verification switch).
+
+**The work item is `Ticket`, not a new table.** Hierarchy (`parentId`), schedule (`startDate`/
+`endDate`), effort (the existing `estimatedHours`), progress and baselines are columns on
+`Ticket`. Everything a planned work item needs — comments, attachments, watchers, labels, links,
+checklists, logged hours via `Timesheet.ticketId`, SLA, AI triage — already hangs off `Ticket`. A
+parallel `Task` table would have had to duplicate all of it and force every report to `UNION`,
+and would have made users decide "is this a ticket or a task?" on every capture.
+
+**`WorkflowStatus.legacyStatus` is the compatibility hinge, and it is the one piece of V6 worth
+understanding before changing anything.** Admin-defined statuses live in `Workflow` /
+`WorkflowStatus` / `WorkflowTransition`, and each status declares which built-in `TicketStatus`
+it writes to `Ticket.status`. Both columns are written in the same update by
+`services/workflow.service.ts#resolveStatusWrite`. The consequence: the ~40 existing readers of
+`Ticket.status` — the SLA sweep, the escalation worker, every report aggregate, the CSV/PDF
+exports, the public API, webhook payloads, the Kanban's columns, `ticketStatusTransitions`
+itself — keep working untouched *and keep being correct*, without any of them learning that
+custom statuses exist. Replacing the enum with a foreign key was the obvious alternative and was
+rejected: it would have meant auditing and rewriting every one of those call sites, on a live
+multi-tenant product, for no user-visible gain. `WorkStatusCategory` (TODO/ACTIVE/REVIEW/DONE/
+CANCELLED) is the richer vocabulary the *new* surfaces read, and is what makes CANCELLED
+expressible at all — the built-in enum has no such value, so a cancelled item maps to
+`legacyStatus = CLOSED` for old code while new code can still tell it from a successful close.
+
+The phase-1 migration seeds a **system "Default" workflow** whose six statuses and nine
+transitions are `ticketStatusTransitions` expressed as rows, and backfills every existing
+ticket's `workflowStatusId` from the status it is already in. A workspace that never opens the
+workflow editor is therefore running the same rules it always was.
+
+**Entitlements fail closed, with one deliberate asymmetry.** `plan-limits.service.ts` gains
+`isPlanningCapabilityAllowed` / `getPlanningEntitlements` / `getPlanningQuota`, read per request
+and never cached like every other limit. Unlike face verification there is **no fail-open
+counterpart**: a lapsed plan must not stop someone submitting a timesheet, but planning data is
+never load-bearing for day-to-day work — a downgraded org loses the Gantt *view* while every
+ticket, date and booking stays in the database, readable and intact. Losing a view is a
+recoverable annoyance; being unable to log time is not.
+
+**JSON vs rows** is decided by one test throughout this layer: *does anything query across the
+individual items?* Custom field **values** are rows (`CustomFieldValue`) because saved views
+filter on them and dashboards group by them. Request-form schemas, dashboard widget layouts and
+blueprint payloads are JSON because each is authored, versioned and rendered whole.
+
+**The schedule is computed in exactly one place.** `services/plan-schedule.service.ts` is a pure
+core (working-day arithmetic, dependency resolution, critical path, effort-weighted progress
+roll-up, baseline slip) with a thin DB shell (`buildPlan`). The timeline, the portfolio roll-up
+and — from Phase 5 — the risk scorer and any scheduled PDF all call it, because three surfaces
+each deriving "when does this actually start" would disagree, and the one that disagrees is
+always the one somebody is looking at. Its purity is also why it is the most heavily unit-tested
+file in the layer: every interesting scheduler bug is arithmetic (an off-by-one on a working day
+makes every Gantt bar a day too long; a lag applied to the wrong endpoint moves the wrong task),
+and none of those throw — they render plausibly and are wrong.
+
+**It computes, it never auto-schedules.** Explicit dates always win. When a human-entered date
+contradicts a dependency, the solver reports a `violation` and still renders what was typed. A
+scheduler that silently rewrites forty dates because one predecessor moved is one people stop
+trusting the first time it is wrong, and there is no undo for it. Phase 5's AI copilots propose
+date changes the same way: as a reviewable diff, never a write.
+
+**`BLOCKS` is treated as finish-to-start.** It is the only dependency vocabulary the ticket
+detail sheet has ever offered, so V5 workspaces have real data recorded under it. The four
+`*_TO_*` types added in V6 sit alongside it rather than replacing it, and reinterpreting `BLOCKS`
+would have silently changed existing plans.
+
+**Resourcing is where this product beats a pure PM tool, and the reason is structural.** Wrike,
+Asana and the rest hold only estimates, so they can compare a plan against another plan.
+TimeSphere already has approved timesheets with a rate snapshot, so `services/workload.service.ts`
+puts three things on one axis: PLANNED (a `ResourceBooking`), ACTUAL (approved `Timesheet` rows)
+and CAPACITY (`User.weeklyCapacityHours`). "Ana is booked at 110%" is a forecast; "Ana is booked
+at 110% and logged 46 hours" is evidence. Same pure-core/thin-shell split as the scheduler, for
+the same reason — the failure modes are silent arithmetic (spreading a booking over calendar days
+rather than working days inflates the whole company's load by 40%, and the board still looks
+plausible).
+
+**Bookings are never refused for overlapping.** Double-booking is sometimes deliberate, and a
+system that rejects the second booking forces a planner to record something untrue to get past
+it. Conflicts are surfaced, not prevented. Likewise 100% allocation is *not* flagged — a person
+booked to exactly their capacity is fully booked, which is the intended state; flagging it would
+light up the whole board on a well-planned sprint and train everyone to ignore the colour.
+
+**The AI planning copilot writes through one envelope and never directly.** Every planning AI
+feature emits an `AiProposal` whose `AiProposalChange` rows a human accepts or rejects
+individually; `services/ai-proposal.service.ts` is the only thing that applies them. The reason is
+scale: these features propose MANY changes at once (break this epic into fourteen tasks, shift
+forty dates), and a yes/no dialog over a change set that size is a rubber stamp, not review —
+with no undo. Per-row decisions are also a far richer quality signal than the thumbs-up/down on
+`AIInteraction`, and they are produced as a by-product of people doing their normal work.
+
+**Stale-state detection is what makes it safe rather than merely careful.** A proposal is computed
+against the plan as it was, then sits in a queue. Every `UPDATE` row carries the before-state it
+was computed from, and application refuses any row whose current value no longer matches —
+otherwise applying would silently revert whoever moved it, and that person would never know. The
+refusal is recorded on the row, so a partially-applied proposal explains itself. Rows are applied
+independently rather than in one transaction, because they are individually reviewed decisions:
+one stale row is not a reason to discard the eleven a person explicitly approved. Writable fields
+are an **allowlist**, so a model proposing `{ reporterId: … }` or `{ status: "CLOSED" }` cannot
+have it applied whatever the prompt did.
+
+**Risk is arithmetic; the model only narrates.** `services/project-risk.service.ts` scores six
+measured signals — schedule slip against a frozen baseline, budget forecast overrun, blocked work,
+over-allocation, SLA breaches, reopen rate — with stated weights summing to 100, and stores the
+full breakdown alongside the score. A project going red is a number somebody will be asked to
+defend; "the model thinks it's risky" is not reproducible, not auditable, and cannot answer "what
+would have to change for this to go green?". The narrative is best-effort throughout: the nightly
+worker and the API both keep the score when the model is unavailable, over budget, or switched
+off, because the score is the product and the sentence is a convenience. Same division of labour
+as `face.service.ts#recommendMatchThreshold`.
+
+**Intake, approvals and proofing add THREE unauthenticated surfaces** (phase 4), doubling the
+app's public attack surface from one to four. All four follow the same posture the attestation
+viewer established: a 256-bit token in the URL, ids never enumerable, and a single generic 404
+for every "you may not have this" case — bad token, revoked token and spent token must be
+indistinguishable, or a probe learns that a token was once real.
+
+The request-form endpoint is the only place in the product where a **stranger can WRITE**, so it
+carries extra rules: answers are validated against the form's own schema server-side and answers
+to questions that were not visible are DROPPED (not rejected — rejecting fails an honest
+submitter whose browser posted a stale answer; accepting lets anyone POST past a branch they were
+routed away from); the created ticket body is plain text, never markup; the reporter is the
+seeded intake system user exactly as email and chat intake already do; `needsReview` starts true
+so an unauthenticated submission never routes itself past a human; and the rate limit is
+**per-form**, set by the form's own author, on top of the per-IP mount limiter — per-IP alone is
+useless against a distributed flood and punishes a genuine office behind one NAT.
+
+**A guest approver is a token, not a `User` row.** An external reviewer needs to approve exactly
+one thing, once. A half-real user who cannot log in would enter every permission check, user
+list, seat count and "who works here" report forever, for a decision that took one click. The
+token authorises one decision on one step and is spent on use. **One rejection is terminal; one
+approval is only a step** — that asymmetry is what stops a settled chain continuing to badger
+people, and the remaining links are revoked rather than marked decided, because nobody decided
+them.
+
+**Blueprint dates are relative day offsets, and references are array indexes.** Offsets are what
+separate a reusable template from a copy of last quarter's project. Indexes are the only
+reference stable across export, hand-editing as JSON and re-import, since the items have no ids
+until they are created; the expander resolves them in one pass afterwards. Both `parentIndex` and
+`dependsOn` may only point BACKWARDS, which makes cycles impossible by construction rather than
+something to detect — the same trick request-form visibility rules use, where a rule may only
+reference a question above it.
+
+**Money has one definition.** `services/budget.service.ts` owns burn, forecast and
+estimate-variance, and both the portfolio roll-up and the project budget panel call it. Burn is
+never stored — it is summed from the `Timesheet.billedAmount` rate snapshots that a Verified Work
+Attestation also reads, so an internal dashboard and a document a client may dispute cannot
+disagree. Forecast-at-completion returns **null** below 5% progress or with zero spend: the
+arithmetic there produces a confident "$0" that reads as "this will cost nothing", which is the
+most misleading figure it is possible to put on an executive dashboard.
+
+---
+
+## 4. Request lifecycle (a normal, tenant-resolved API call)
+
+```mermaid
+sequenceDiagram
+    participant B as Browser
+    participant MW as resolveTenant (middleware/tenant.ts)
+    participant Auth as requireAuth (middleware/auth.ts)
+    participant C as Controller
+    participant S as Service
+    participant P as prisma Proxy (config/prisma.ts)
+    participant DB as Tenant DB
+
+    B->>MW: GET /api/tickets (Host: acme.timesphere.app)
+    MW->>MW: resolveOrgSlug(req) → "acme"
+    MW->>MW: controlPrisma.organization.findUnique({slug:"acme"})
+    MW->>MW: decryptSecret(org.database.encryptedDsn)
+    MW->>MW: getTenantClient(org.id, dsn) — cached, LRU-evicted
+    MW->>Auth: tenantContext.run({orgId, client}, next)
+    Auth->>Auth: verify access JWT, check org claim matches
+    Auth->>C: req.user attached
+    C->>S: ticketService.list(...)
+    S->>P: prisma.ticket.findMany(...)
+    P->>P: resolve active tenant client from AsyncLocalStorage
+    P->>DB: actual SQL query, Org Acme's own database only
+    DB-->>B: response
+```
+
+## 5. SSO / webhook routes that bypass normal tenant resolution
+
+A handful of routes are mounted **before** `app.use("/api", resolveTenant)` in `apps/api/src/app.ts`
+because they can't rely on subdomain resolution:
+
+| Route prefix | Why it's special | Handled in |
+|---|---|---|
+| `/api/auth/sso/*` (OIDC start/callback, SAML ACS) | The provider redirects to one fixed callback URL — never that org's own subdomain. Org identity travels in a signed `state`/`RelayState` JWT instead. | `controllers/sso.controller.ts` |
+| `/api/platform-admin/*` | Cross-tenant by nature (org CRUD, analytics) — has its own auth entirely. | `controllers/platform-admin.controller.ts` |
+| `/api/chat/*/events/:orgSlug`, `/api/chat/teams/messages/:orgSlug` | An external chat platform calling a fixed webhook URL has no Host-header subdomain to resolve from — org is identified directly from the URL path instead, with authenticity proven per-platform (Slack HMAC signature / Teams Bot Framework JWT / Google Chat shared token), not by the URL's secrecy. **Must be mounted before the global `express.json()` body parser** — Slack's signature check needs the exact raw request bytes, and body parsers only read the request stream once. | `controllers/chat-webhook.controller.ts` |
+| `/api/devops/:orgSlug/findings`, `/api/devops/:orgSlug/test-runs` | Same "external caller, no subdomain" reasoning as the chat webhooks — a CI job POSTing security-scan findings or test results. Authenticity is a single shared bearer token per org (`IngestionSettings.encryptedToken`, `crypto.timingSafeEqual`), not a per-vendor signature scheme, since arbitrary SAST/DAST tools don't share one. Rate-limited (120/min) since it's a public POST endpoint doing DB writes. | `controllers/devops-webhook.controller.ts` |
+
+`/api/auth/login/ldap` is the one exception that does **not** need special mounting — LDAP is a
+direct POST with a body, resolved via the normal Host-header tenant middleware exactly like
+password login (`controllers/auth.controller.ts`).
+
+---
+
+## 6. Module reference (the "graph")
+
+Format per entry: **purpose** — one line. **Depends on** — what it calls/imports that matters
+architecturally. **Depended on by** — who calls it. Skip trivial/obvious dependencies (e.g. every
+service depends on `config/prisma.ts`; not repeated below unless it's the point of the entry).
+
+### Control plane & multi-tenancy
+
+| File | Purpose | Depends on | Depended on by |
+|---|---|---|---|
+| `config/control-prisma.ts` | The control-plane's own `PrismaClient` singleton — deliberately separate from the tenant `prisma` proxy. | — | Everything that touches org/SSO/plan-tier metadata |
+| `config/tenant-context.ts` | `AsyncLocalStorage` holding `{orgId, orgSlug, client}` for the current request/worker tick. | — | `config/prisma.ts`, `middleware/tenant.ts`, `workers/run-for-every-org.ts` |
+| `config/prisma.ts` | The `prisma` Proxy + `getTenantClient(orgId, dsn)` factory (LRU-capped, per-tenant connection-limited). | `tenant-context.ts` | Every controller/service (unchanged import) |
+| `middleware/tenant.ts` | Resolves org from Host header, attaches tenant context. Exports `resolveOrgSlug`/`resolveActiveOrgBySlug` reused by SSO/chat-webhook routes that can't use the middleware directly. | `control-prisma.ts`, `config/prisma.ts`, `utils/encryption.ts` | `app.ts` (global), `sso.controller.ts`, `chat-webhook.controller.ts` |
+| `workers/run-for-every-org.ts` | Cron-worker equivalent of tenant resolution — loops every `ACTIVE` org, runs a callback per-org inside its tenant context. | `control-prisma.ts`, `config/prisma.ts` | Every `workers/*.ts` cron file |
+| `services/provisioning.service.ts` | Full org provisioning flow: create physical DB → migrate → seed → register `OrgDatabase`. Every step idempotent/retry-safe. | `prisma/seed.ts#seedTenant`, `scripts` (invokes Prisma CLI directly via `node`, not `npx.cmd`, to avoid a Windows spawn restriction — see its own comment) | `controllers/platform-admin.controller.ts`, `scripts/migrate-all-tenants.ts` |
+| `scripts/migrate-all-tenants.ts` | Fans a new migration out across every tenant DB, skipping already-current ones, isolating one org's failure from the rest. | `provisioning.service.ts` | Run manually after merging a migration (`npm run migrate:tenants`) |
+| `services/plan-limits.service.ts` | Effective (org-override-or-tier-default) seat limit / AI budget / allowed SSO providers / allowed chat platforms — always re-read, never cached. | `control-prisma.ts` | `ai.service.ts`, `user.controller.ts`, `auth.service.ts`, `settings.controller.ts`, `chat-integrations.controller.ts` |
+| `services/platform-admin-analytics.service.ts` | **The sole cross-tenant-loop file** — aggregate-only reporting for `/platform-admin`. | `run-for-every-org.ts`-style loop | `controllers/platform-admin.controller.ts` |
+| `services/platform-admin-auth.service.ts` + `utils/platform-admin-security.ts` + `middleware/platform-admin-auth.ts` | Entirely separate auth stack from tenant auth — own JWT secret, own session table, own cookie path. | `control-prisma.ts` | `controllers/platform-admin.controller.ts` |
+
+### Auth & SSO
+
+| File | Purpose | Depends on | Depended on by |
+|---|---|---|---|
+| `services/auth.service.ts` | Password login, `completeSsoLogin` (shared find-or-create tail for every SSO provider), `establishSession`, refresh-token rotation with reuse detection. | `utils/security.ts`, `plan-limits.service.ts` | `controllers/auth.controller.ts`, `controllers/sso.controller.ts` |
+| `services/sso.service.ts` | Google/Microsoft OIDC, SAML, and LDAP — builds authorization redirects / completes the exchange / does the LDAP bind, normalizes all four into one `SsoIdentity` shape. | `openid-client`, `@node-saml/node-saml`, `ldapts`, `utils/encryption.ts` | `controllers/sso.controller.ts`, `controllers/auth.controller.ts` (LDAP only) |
+| `controllers/sso.controller.ts` | OIDC/SAML HTTP routes, mounted pre-tenant-resolution. SAML routes registered **before** the generic `/:provider/*` routes — Express matching order, see file header. | `sso.service.ts`, `auth.service.ts` | `app.ts` |
+| `controllers/auth.controller.ts` | Password login, LDAP login, session management, profile. | `auth.service.ts`, `sso.service.ts` (LDAP only) | `app.ts` |
+| `services/maintenance.service.ts` | Maintenance mode (§3.8): cached fail-open active-check, phase model, online users, force-logout, warn-users notification. | `notify.service.ts`, `middleware/error.ts` | `middleware/auth.ts`, `auth.service.ts`, `controllers/maintenance.controller.ts` |
+| `controllers/maintenance.controller.ts` | Public status probe + SUPER_ADMIN control surface (schedule PATCH, online list, force-logout, notify), all audited. | `maintenance.service.ts` | `app.ts` |
+
+### AI & content-intake pipelines
+
+| File | Purpose | Depends on | Depended on by |
+|---|---|---|---|
+| `services/ai.service.ts` | The one AI choke point — see §3.3. | `@anthropic-ai/sdk`, `openai`, `plan-limits.service.ts` | `email-intake.service.ts`, `chat-intake.service.ts`, `ticket.controller.ts`, `ai.controller.ts` |
+| `services/email-intake.service.ts` | Email → ticket pipeline (see §3.4). | `ai.service.ts`, `ticket.service.ts`, `notify.service.ts` | `workers/inbound-email.worker.ts`, `controllers/email-intake.controller.ts` |
+| `services/chat-intake.service.ts` | Chat → ticket pipeline, same shape as email intake (see §3.4). | `ai.service.ts`, `chat-outbound.service.ts`, `ticket.service.ts`, `notify.service.ts` | `controllers/chat-webhook.controller.ts`, `workers/chat-telegram.worker.ts` |
+| `services/chat-outbound.service.ts` | Sends the "ticket created" reply back into Slack/Teams/Google Chat/Telegram — one function per platform, same "single entry point, branch per provider" shape as `ai.service.ts#callChat`. | `utils/encryption.ts` | `chat-intake.service.ts` |
+| `controllers/chat-webhook.controller.ts` | Inbound webhook receivers for Slack/Teams/Google Chat (push-only APIs) — see §5 for why this is mounted specially. | `middleware/tenant.ts` helpers, `chat-intake.service.ts` | `app.ts` |
+| `workers/chat-telegram.worker.ts` | Telegram long-polling (the one chat platform that supports polling, avoiding a public endpoint requirement). | `run-for-every-org.ts`, `chat-intake.service.ts` | `server.ts` |
+| `controllers/chat-integrations.controller.ts` | Org-admin settings CRUD for chat platform credentials + routing rules, plan-tier gated. | `plan-limits.service.ts` | `app.ts` |
+| `workers/inbound-email.worker.ts` | IMAP polling (chosen over a webhook so this app needs no public domain by default). | `run-for-every-org.ts`, `email-intake.service.ts` | `server.ts` |
+
+### Face (identity) verification
+
+| File | Purpose | Depends on | Depended on by |
+|---|---|---|---|
+| `services/face.service.ts` | The one face choke point — lazy model loading, embedding extraction, anti-spoof/liveness scoring, pose measurement, match comparison, the enforcement helpers (`isFaceVerificationRequired`, `consumeVerification`, `bindVerificationToRecord`), the challenge–response primitives (`issueChallenge`/`redeemChallenge`/`verifyChallengePose`), the plan-entitlement asserts, the badge decorator, and the enrollment-notification helper. Its header documents three non-obvious loading workarounds that must not be "simplified" away. | `@vladmandic/human` (node-wasm build), `@tensorflow/tfjs-*`, `sharp`, `utils/encryption.ts`, `plan-limits.service.ts`, `notify.service.ts` | `controllers/face.controller.ts`, `timesheet.controller.ts`, `ticket.controller.ts`, `settings.controller.ts`, `user.controller.ts`, both face workers |
+| `controllers/face.controller.ts` | HTTP surface: consent-gated enrollment, challenge issuance, multi-frame verification with review signals, self-service + admin deletion, data-subject export, the admin review log + AI summary + stats histogram, and authenticated image streaming. | `face.service.ts`, `ai.service.ts`, `middleware/upload.ts` | `app.ts` (behind its own 60/min rate limit) |
+| `workers/face-retention.worker.ts` | The daily 03:15 face lifecycle: image retention purge, downgrade grace/purge (`entitlementLostAt` → 30 days → purge + disable), enrollment reminders, overdue-review nudges, expired-challenge cleanup. | `run-for-every-org.ts`, `face.service.ts`, `notify.service.ts` | `server.ts` |
+| `workers/identity-weekly-digest.worker.ts` | Monday 08:45 deterministic identity-assurance recap to every ADMIN/SUPER_ADMIN — deliberately not AI-generated. | `run-for-every-org.ts`, `face.service.ts`, `notify.service.ts` | `server.ts` |
+| `middleware/upload.ts#preserveTenantContext` | Re-enters the tenant `AsyncLocalStorage` store after multer. **Load-bearing for every upload route, not just face** — see its header for the size-dependent bug it fixes. | `config/tenant-context.ts` | `auth`, `ticket`, `timesheet`, `face` controllers |
+
+### Security assessment ingestion & outbound mail
+
+| File | Purpose | Depends on | Depended on by |
+|---|---|---|---|
+| `controllers/devops-webhook.controller.ts` | Ingest-only, tool-agnostic receiver for `SecurityFinding`/`TestRun` rows — see §5. Never runs a scanner itself. | `middleware/tenant.ts` helpers, `utils/encryption.ts` | `app.ts` |
+| `services/security-report.service.ts` | `buildTicketSecurityReport()` (findings grouped by type/severity + latest test run + a one-line risk verdict) — the single source both the PDF export and the ticket-closed digest email read from, so they can never disagree. `sendTicketClosedDigest()` fires from `ticket.controller.ts`'s status route when a ticket with findings closes. | `notify.service.ts`, `config/tenant-context.ts` | `ticket.controller.ts` |
+| `services/mail.service.ts` | Outbound SMTP transport — resolves config from `GlobalMailSettings` (DB, admin-editable) with `.env`'s `SMTP_*` as fallback, same "DB row overrides env var" relationship `GlobalAISettings.apiKey`/`ANTHROPIC_API_KEY` has. Transport is cached and rebuilt only when the resolved config actually changes (`invalidateMailTransportCache()`, called after a settings save). | `utils/encryption.ts` | `notify.service.ts`, `controllers/email-templates.controller.ts` |
+| `services/template-store.service.ts` | Registry pairing every email template key with its `{{variable}}` names/description/sample data — **not** auto-derived from `mail-templates.ts`; adding a template requires an entry here too (see that file's header comment). | `mail-templates.ts` | `controllers/email-templates.controller.ts` |
+| `controllers/settings.controller.ts#POST /security-ingestion/vapt-report` | Structured JSON upload path for VAPT (periodic human-led pentest) findings — deliberately **not** PDF parsing (report layouts vary too much to parse reliably); the assessor pastes/uploads a small JSON shape from Workspace Settings → Security & DevOps, optionally attached to a ticket by key. Creates `SecurityFinding` rows with `type: "VAPT"`, same table the CI webhook above writes to, so `security-report.service.ts` never has to distinguish the two on read. | `security-report.service.ts` | `pages/settings/SecurityDevOpsSettingsCard.tsx` |
+
+### Ticketing extras (manual git linking, reporting-line views)
+
+| File | Purpose | Depends on | Depended on by |
+|---|---|---|---|
+| `prisma/schema.prisma#TicketBranch` | Repo/branch/PR reference on a ticket (repository, branch, `prUrl`, `prStatus`) — free-text fields, written three ways: manually (the Dev tab's form), picked from a live GitHub lookup (the Dev tab's "Pick from GitHub" section), or auto-synced by `git-webhook.controller.ts` below. | — | `controllers/ticket.controller.ts#/:id/branches`, `controllers/git-webhook.controller.ts` |
+| `controllers/ticket.controller.ts#/:id/branches` | CRUD for `TicketBranch` (add/update-status/remove), same `assertTicketVisible` access guard as every other ticket sub-resource route. | `middleware` ticket-visibility guard | `pages/Tickets.tsx` (the ticket detail sheet's **Dev** tab, `BranchesPanel`) |
+| `pages/components/TicketKanban.tsx` (web) | Kanban board with an optional "Group by manager" swimlane view — `buildSwimlanes()` groups cards by `assignee.manager`, with an "Unassigned / no manager" fallback lane; drag-and-drop droppable IDs are prefixed `${laneKey}::${status}` so the same `TicketStatus` repeated per-lane doesn't collide. | `dnd-kit` | `pages/Tickets.tsx` |
+| `controllers/team.controller.ts#GET /org-chart` | Reads the existing `User.managerId` self-relation into a tree — no new schema beyond `User.designation` (a free-text, display-only job title, unrelated to the `role` RBAC field). Privileged roles see the whole company; everyone else sees their own subtree. Powers the Team page's `OrgChartTree` component (`components/OrgChartTree.tsx`) — a D3-hierarchy/D3-zoom pan-and-zoom SVG tree, centered on the tree's horizontal midpoint, color/icon-coded per role, showing each person's designation — and is the data/read-side half of the Kanban-swimlane feature above (same manager relation, two different UI surfaces). | `User.managerId` self-relation, `User.designation` | `pages/Team.tsx`, `components/OrgChartTree.tsx` |
+
+### Public API, outbound webhooks, and live git integration
+
+| File | Purpose | Depends on | Depended on by |
+|---|---|---|---|
+| `middleware/public-api-auth.ts` | Bearer-API-key auth for the public API — separate from the JWT session middleware every other tenant route uses. Mounted after `resolveTenant` (unlike the SSO/devops/git webhook receivers), since a caller already knows their org's URL. | `ApiKey` (hash lookup, `sha256`) | `controllers/public-api.controller.ts` |
+| `controllers/public-api.controller.ts` | `GET/POST/PATCH /api/public/v1/*` — list/get/create tickets, change ticket status, add a ticket comment, list timesheets. Status-change re-enforces `ticketStatusTransitions` and the CI gate by duplicating (not importing) `ticket.controller.ts`'s logic — same "independent integration surface" reasoning `devops-webhook.controller.ts`'s own `withOrgTenant` copy uses. See docs/API.md's "Public API" section for the full contract. | `public-api-auth.ts`, `ticket.service.ts` | `app.ts` |
+| `services/webhook-dispatch.service.ts` | `dispatchOutboundWebhooks(event, payload)` — HMAC-SHA256-signs and POSTs to every active `OutboundWebhook` subscribed to an event, best-effort (5s timeout, no retry queue this phase), records `lastDeliveryStatus` on the row. | — | `ticket.controller.ts` (create/status-change routes), `timesheet.controller.ts` (submit/approve routes), `public-api.controller.ts` (ticket creation) |
+| `services/git-provider.service.ts` | GitHub OAuth (state signing/verification mirroring `sso.service.ts#signSsoState` exactly, authorize-URL building, code exchange) + read-only REST calls (list repos/branches/PRs) once connected. | `jsonwebtoken` | `controllers/git-connection.controller.ts`, `controllers/settings.controller.ts`'s `/git/*` routes |
+| `controllers/git-connection.controller.ts` | The GitHub OAuth **callback** only — mounted pre-tenant-resolution (same reason as `sso.controller.ts`: one fixed callback URL shared across every org, so org identity has to travel in the signed `state` param instead of the Host header). Every other `/git/*` action (connect-URL generation, app-credential save, live repo/branch/PR lookups) is a normal authenticated route in `settings.controller.ts`, since those are admin actions taken from an already-tenant-resolved session. | `git-provider.service.ts`, `config/prisma.ts#getTenantClient` | `app.ts` |
+| `controllers/git-webhook.controller.ts` | `POST /api/git/webhook/:orgSlug` — receives GitHub's `push`/`pull_request` repo webhooks (a **per-repo** webhook the admin adds manually on GitHub, since an OAuth App has no org-wide webhook the way a GitHub App does), `X-Hub-Signature-256`-verified against `GitConnection.encryptedWebhookSecret`. Matches a ticket-key-shaped token in the branch name to auto-create/update `TicketBranch`, and on a PR's `opened` action, optionally calls `ai.service.ts#summarizePullRequest` (`aiPrReviewSummaryEnabled`) to post an AI review-summary comment — failures there are caught and logged, never fail the webhook delivery. Mounted before `express.json()` (own `express.raw()`, same reason `chat-webhook.controller.ts`'s Slack route needs it: the signature is computed over the exact raw bytes). | `git-provider.service.ts`, `ai.service.ts#summarizePullRequest` | `app.ts` |
+
+### Planning layer (V6)
+
+Every service below is split the same way, and the split is the point: an exported **pure**
+function that takes plain data and returns plain data, wrapped by a thin shell that does the
+Prisma reads. The arithmetic is where the bugs that matter live — a scheduler that walks a cycle
+forever, a capacity figure that counts weekends, a risk score that moves when nothing changed —
+and none of it needs a database to test. That is why the unit suite covers this layer densely
+while the DB shells are covered by Playwright.
+
+| File | Purpose | Depends on | Depended on by |
+|---|---|---|---|
+| `services/planning.service.ts` | The gate for the whole layer: reads the `GlobalPlanningSettings` singleton, combines each toggle with the tier entitlement, and exposes `assertPlanningEnabled()` / `assertPlanningCapability()`. Its two refusal messages differ on purpose — "turn it on in settings" and "upgrade your plan" need different people to act. Also computes the `effective` flag set the web app reads once and feeds to the sidebar, the command palette and the product tour. | `plan-limits.service.ts` | Every planning controller, `use-planning.ts` (web), both planning workers |
+| `services/plan-schedule.service.ts` | The scheduler, and **the only place a schedule is computed**. Pure core: `addWorkingDays`/`workingDaysBetween` (inclusive spans — Mon–Fri is 5 days, not 4), `findCycle` (iterative DFS, so a deep tree cannot blow the stack), `solveSchedule`, effort-weighted `rollUpProgress`. A date that contradicts a dependency is **reported, never corrected** — silently moving somebody's dates is unrecoverable, because there is no undo for a plan. | — (pure) + a thin Prisma shell | `plan.controller.ts`, `portfolio.controller.ts`, `project-risk.service.ts`, `dashboard.service.ts` |
+| `services/workload.service.ts` | Capacity vs bookings vs **actually logged** hours per person per bucket. Bookings accrue on working days only, so five days at 4h/day is 20 hours and not 28 — the calendar-day version of this is the single most common way a capacity figure ends up wrong. Over-allocation trips at 102%, not 100%: flagging the exactly-fully-booked state trains people to ignore the colour. | `plan-schedule.service.ts` (working-day arithmetic) | `resource.controller.ts`, `project-risk.service.ts` |
+| `services/budget.service.ts` | Project budget, burn and forecast-at-completion, priced from the same `Timesheet.billedAmount` rate snapshots a Verified Work Attestation reads — so an internal dashboard and a document a client may dispute cannot disagree. Returns `null` for the forecast below 5% progress or with zero spend, rather than a confidently-wrong number. | — (pure) + shell | `portfolio.controller.ts`, `project-risk.service.ts`, `dashboard.service.ts` |
+| `services/project-risk.service.ts` | The 0–100 delivery-risk score from six measured signals with published weights (`RISK_WEIGHTS`), banded GREEN/AMBER/RED. **Arithmetic — it works with AI switched off entirely.** The model only writes the prose summary, the same "arithmetic decides, model explains" discipline as `face.service.ts#recommendMatchThreshold`. The full breakdown is stored beside the score, so a number nobody can interrogate is never shown. | `plan-schedule`, `workload`, `budget` services, `ai.service.ts` (narrative only) | `portfolio.controller.ts`, `dashboard.service.ts`, `workers/project-risk.worker.ts` |
+| `services/ai-proposal.service.ts` | The human-in-the-loop envelope every AI planning feature writes through — **no PM AI feature ever writes to a ticket directly**. A proposal is a set of individually accept/rejectable rows carrying `before`/`after`. Two hard guards: a writable-field allowlist (so a model cannot reach `status`, an FK or a price), and a staleness check that refuses a row whose underlying value changed since it was suggested rather than quietly reverting a colleague's edit. There is deliberately no apply-all. | `ai.service.ts` | `ai-proposal.controller.ts`, every AI planning capability |
+| `services/blueprint.service.ts`, `approval.service.ts`, `custom-field.service.ts`, `workflow.service.ts` | Intake and configuration: relative-offset blueprint expansion (previewable before anything is created), sequential/parallel approval ordering where one rejection settles the request, conditional-field validation where a hidden question is neither required nor accepted, and custom workflows whose statuses each declare a `legacyStatus`. | — (pure cores) + shells | `blueprint`/`approval`/`custom-field`/`workflow` controllers |
+| `services/dashboard.service.ts` | A **closed** catalogue of widget types over four shapes (`STAT`/`SERIES`/`BREAKDOWN`/`TABLE`), so a new tile usually needs no new UI. Closed on purpose twice over: it keeps "open items" to one definition, and it stops a saved layout from becoming a query-injection surface. `resolveDashboard` wraps each widget in its own try/catch — one tile that cannot compute reports `unavailable` instead of a zero, and never takes the page down. Every widget resolves against **the viewer's** project scope, which is what makes sharing a layout safe. | `plan-schedule`, `budget`, `project-risk` services | `dashboard.controller.ts`, `workers/report-subscription.worker.ts` |
+| `workers/project-risk.worker.ts` | Nightly `ProjectRiskSnapshot` per project, so risk has a trend and not just a current value. | `run-for-every-org.ts`, `project-risk.service.ts` | `server.ts` |
+| `workers/report-subscription.worker.ts` | Hourly at `:05`; `isDue`/`alreadySent` guard the cadence off `lastSentAt`, so a restart or a double-fired cron re-sends nothing. Resolves widgets **as the subscription's owner** and deactivates the subscription if that person leaves — a departed employee's report quietly mailing figures outward for months is the failure worth designing against. | `run-for-every-org.ts`, `dashboard.service.ts`, `notify.service.ts` | `server.ts` |
+| `components/PlanTimeline.tsx` (web) | The Gantt, hand-built as SVG over the existing d3 dependency rather than a chart library — dependency arrows, baseline ghosts, critical-path emphasis and drag-to-reschedule are not what an off-the-shelf chart does, and the theme tokens keep it looking like the rest of the product. Horizontal scroll is contained inside the pane, per the `body { overflow-x: clip }` rule documented in `index.css`. | `d3-scale`, `d3-zoom`, plan CSS tokens | `pages/Timeline.tsx` |
+| `components/PlanCalendar.tsx` (web) | The month event-calendar (Untitled UI's month-view design, drawn with this app's tokens). Chips are coloured by delivery-state category — the product's meaningful categorical axis — while an item with only an SLA date keeps a dashed outline instead of a coloured chip, because plotting a deadline as though somebody scheduled it would be lying. Weeks start Monday to agree with every weekly figure in the app. A multi-day item occupies every day it spans (bounded at 400), and the grid is always 6 rows so paging months never reflows the page. | plan CSS tokens, status-category tokens | `pages/Tickets.tsx` (Calendar tab) |
+
+### Shared date & calendar UI (web)
+
+Every date input in the product goes through these three files — there is deliberately no second
+calendar implementation to drift from the first. Built on `react-aria-components` (the same
+primitive Untitled UI itself wraps) because a calendar grid is one of the few widgets where
+hand-rolled accessibility is reliably wrong: roving tabindex over a 2-D grid, arrow keys across
+month boundaries, `role="grid"` semantics and month-change announcements all come tested against
+real screen readers. Styled entirely with the app's own HSL tokens — which is what makes dark mode
+work unmodified and avoided the Tailwind v4 migration adopting Untitled UI's package would have
+forced. All values are `CalendarDate`/ISO strings (no time, no zone), the same day-shift-bug
+avoidance `localIsoDate()` documents.
+
+| File | Purpose | Depends on | Depended on by |
+|---|---|---|---|
+| `components/ui/calendar-primitives.tsx` | The one month-grid every picker renders: nav buttons, heading, day-cell styling with a deliberate state priority (selection beats today beats hover), and a fixed minimum grid height — months span 5 or 6 week-rows, and a popover that resizes while paging jumps under the cursor (and made WebKit's click-stability check time out). | `react-aria-components`, `@internationalized/date` | `date-picker.tsx`, `date-range-picker.tsx` |
+| `components/ui/date-picker.tsx` | `DatePicker` (single date, commits on click, Today/Clear), `DateTimePicker` (calendar + a time-slot column that always includes the value it was handed — a picker that cannot express its own current value is broken by construction), and `TimeField` (segmented hh:mm AM/PM entry emitting 24-h `HH:mm`, for surfaces like the timesheet where any minute is legal and a slot grid would round 09:15 away). | `calendar-primitives.tsx` | Timesheet entry, Dashboard timeline date, ticket planning panel, maintenance window scheduling |
+| `components/ui/date-range-picker.tsx` | `DateRangePicker` with nine presets (computed **at open time** — at module load, "today" freezes overnight), a two-month grid that collapses to one below `md`, and explicit Apply/Cancel. The trigger label derives only from the **committed** value, never the draft — deriving it from the draft is how Cancel leaves the trigger describing a range that was never applied (a bug this component's own spec caught on first run). `""` means unbounded, for "All time" on surfaces that allow it. | `calendar-primitives.tsx` | Reports, analytics, History, Workload, project planned-window + attestation period (admin) |
+| `tests/e2e/helpers/sign-in.ts#pickDate` | Drives the popover the way a person does (open, step months, click the full-date-named cell) — with integer month arithmetic, because `new Date("August 2026")` is Invalid Date on WebKit and every comparison against it is false. | — | date-picker/timesheet/dashboard/planning specs |
+
+### Monitoring & operator surfaces
+
+| File | Purpose | Depends on | Depended on by |
+|---|---|---|---|
+| `services/system-health.service.ts` | The **box**: CPU (a real two-sample delta), memory, disk, event-loop lag, DB pings. Everything is measured on the instance that answered, and the payload says so rather than pretending to be a cluster aggregate. | `os`, `fs.statfs`, both Prisma clients | `controllers/maintenance.controller.ts` |
+| `services/service-health.service.ts` | The **features**: 13 probes (sign-in, timesheets, tickets, reports, files, email, AI, face, planning, integrations, plus the two databases), the incident lifecycle, and the status-page rollup. Answers "was it down on Tuesday", which the box-level panel structurally cannot. Three states because "slow" and "gone" need different reactions; a day is coloured by its **worst** sample because averaging hides the outage; a day with no samples is `null` and never green. Probes are bounded reads, never HTTP self-calls and never writes. | `config/prisma.ts`, `control-prisma.ts`, `mail.service.ts` | `maintenance.controller.ts`, `workers/service-health.worker.ts` |
+| `workers/service-health.worker.ts` | Every 5 minutes, per org, offset off the top of the minute so it does not contend with the other cron jobs. Per-org because every probe below the control-plane check queries a **tenant** database — "are tickets working" has a different answer per tenant. | `run-for-every-org.ts`, `service-health.service.ts` | `server.ts` |
+| `components/ServiceStatusPage.tsx` (web) | The status page. Colour is never the only channel — every square carries a title and the summary states status in words, because a red/green strip is exactly the pattern that fails colour-vision deficiency. | `statusPageApi` | `pages/settings/MaintenanceSettingsCard.tsx` |
+| `lib/use-face-tracker.ts` (web) | In-browser face detection and head pose at ~15fps, for guidance only — no embedding, no match, no security judgement. Loads blazeface + facemesh (2.1MB) lazily from our own origin, so on-prem installs with no outbound internet keep working. `status: "unavailable"` (no WebGL) degrades to the manual shutter. | `@vladmandic/human` | `components/FaceCapture.tsx` |
+| `lib/face-pose.ts` (web) | Waits for the head to actually reach a demanded position and returns the frame at the **peak** of the movement, rather than whichever frame a timer landed on. Never asks for "left": Human's yaw sign is uncalibrated here, so callers ask for "away from neutral" and, where two poses are needed, "the other way". | `use-face-tracker.ts` | `FaceVerificationDialog.tsx`, `GuidedFaceEnrollment.tsx` |
+
+### DevOps / deployment
+
+| File | Purpose |
+|---|---|
+| `.github/workflows/ci.yml` | Typecheck/build/full-e2e on Linux (real MySQL service container); typecheck/build-only cross-platform job on Windows; installer-script syntax checks. |
+| `.github/workflows/cd.yml` | Builds + pushes `apps/api`/`apps/web` images to GHCR on push to `main`/version tags. |
+| `install.sh` / `install.ps1` | One-click Docker Compose bring-up for Shape 1 (on-prem/single-org) — generate `.env` with strong secrets, `docker compose up -d --build`, wait for health, run the one-time seed. |
+| `deploy/helm/timesphere/` | Kubernetes chart for both shapes — `mysql.enabled` toggles self-hosted vs. external managed DB, `ingress.wildcardHost` enables SaaS subdomain routing, `api.autoscaling`/`web.autoscaling` drive real `HorizontalPodAutoscaler`s (the one place genuine autoscaling exists in this project — Compose has no orchestrator to react to load with). |
+
+---
+
+## 7. Key data-flow diagrams
+
+### 7.1 SSO login (all four providers converge on one session tail)
+
+```mermaid
+flowchart LR
+    subgraph Redirect-based
+        G[Google OIDC] --> ID[SsoIdentity]
+        M[Microsoft OIDC] --> ID
+        S[SAML] --> ID
+    end
+    L[LDAP bind+search] --> ID
+    ID --> CSL["completeSsoLogin()\n(auth.service.ts)"]
+    CSL --> ES["establishSession()\nSession row + JWT mint"]
+    ES --> Cookie["httpOnly refresh cookie\n+ access token in response body"]
+```
+
+### 7.2 Chat/email intake → ticket
+
+```mermaid
+flowchart TB
+    In["Inbound message\n(email or chat)"] --> Route["Route via *RoutingRule\n(first active match wins)\nor fall back to default project"]
+    Route --> Classify["ai.service.ts classifier\n(untrusted-content framing,\nconfidence score)"]
+    Classify --> Cap["Cap confidence at 0.85\nbefore gating needsReview"]
+    Cap --> Create["Create Ticket\n(system reporter user,\nreal sender in free-text fields)"]
+    Create --> Gate{needsReview?}
+    Gate -->|No + module resolved| Assign["Auto-assign via\nModuleAssigneeRule"]
+    Gate -->|Yes| Notify["Notify SUPER_ADMIN/ADMIN\n+ project MANAGER/TEAM_LEAD"]
+    Assign --> Reply["Reply/confirm to sender\n(email) or chat (Slack/Teams/\nGoogle Chat/Telegram)"]
+    Notify --> Reply
+    Reply --> Audit["audit() — surfaces in the\nticket's own Activity tab"]
+```
+
+### 7.3 Plan-tier enforcement (live, not cached)
+
+```mermaid
+flowchart LR
+    Req["Any gated action\n(create user / AI call / enable SSO+chat provider)"] --> EffFn["plan-limits.service.ts\ngetEffective*()"]
+    EffFn --> Org["Organization.seatLimitOverride /\naiMonthlyBudgetCeilingOverride\n(org-specific, platform-admin set)"]
+    EffFn --> Tier["PlanTierLimit\n(tier default, platform-admin edited)"]
+    Org -.->|org override wins if set| Result["Effective limit"]
+    Tier -.->|else tier default| Result
+    Result --> Check{Within limit?}
+    Check -->|No| Reject["402/403 — action rejected"]
+    Check -->|Yes| Allow["Action proceeds"]
+```
+
+### 7.4 Deployment shapes
+
+```mermaid
+flowchart TB
+    subgraph Shape1["Shape 1 — On-prem / single-org"]
+        C1["docker-compose.yml\nor install.sh/install.ps1"] --> API1["api container"]
+        API1 --> MySQL1[("mysql container\n(tenant + control DBs)")]
+        API1 --> Web1["web (nginx) container"]
+    end
+    subgraph Shape2["Shape 2 — SaaS multi-org"]
+        Helm["Helm chart\n(deploy/helm/timesphere)"] --> API2["api Deployment\n(HPA-scaled)"]
+        Helm --> Web2["web Deployment\n(HPA-scaled)"]
+        API2 --> ControlDB[("Control-plane DB")]
+        API2 --> TDB1[("Tenant DB — Org A")]
+        API2 --> TDB2[("Tenant DB — Org N")]
+        Ingress["Ingress\n(wildcard subdomain)"] --> API2
+        Ingress --> Web2
+    end
+    CD[".github/workflows/cd.yml"] -->|publishes images| C1
+    CD -->|publishes images| Helm
+```
+
+---
+
+## 8. Glossary
+
+| Term | Meaning |
+|---|---|
+| **Org / Organization** | One customer/company. Row in the control-plane `Organization` table. |
+| **Tenant** | The physical database + all content belonging to one Org. |
+| **DEFAULT_ORG_SLUG** | The org a request with no real subdomain resolves to — what makes on-prem a special case of the SaaS shape, not a separate code path. |
+| **Plan tier** | `STARTER` / `TEAM` / `ENTERPRISE` — default seat/AI-budget/SSO/chat-platform limits, overridable per org. |
+| **System reporter user** | `email-intake@system.local` / `chat-intake@system.local` — seeded accounts satisfying `Ticket.reporterId`'s FK for externally-sourced tickets; nobody logs in as them. |
+| **`needsReview`** | Set when a ticket's (capped) AI confidence falls below the org's configured threshold — surfaces to reviewers instead of silent auto-assignment. |
+| **`EXTERNAL_INTAKE_CONFIDENCE_CEILING`** | 0.85 — the cap on how much a single self-reported AI confidence value (from untrusted external content) can suppress `needsReview`, defined once in `ai.service.ts` and shared by both intake pipelines. |
+
+---
+
+*Last updated during: Track D (LDAP SSO), Track E (Slack/Teams/Google Chat/Telegram connectors), Track F (CI/CD, one-click installers, Kubernetes Helm chart with autoscaling).*

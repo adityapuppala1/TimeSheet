@@ -1,0 +1,128 @@
+import type { Config } from "tailwindcss";
+import animate from "tailwindcss-animate";
+
+export default {
+  content: ["./index.html", "./src/**/*.{ts,tsx}"],
+  darkMode: "class",
+  theme: {
+    container: {
+      center: true,
+      padding: "1rem",
+      screens: { "2xl": "1400px" }
+    },
+    extend: {
+      colors: {
+        border: "hsl(var(--border))",
+        input: "hsl(var(--input))",
+        ring: "hsl(var(--ring))",
+        background: "hsl(var(--background))",
+        foreground: "hsl(var(--foreground))",
+        primary: {
+          DEFAULT: "hsl(var(--primary))",
+          foreground: "hsl(var(--primary-foreground))"
+        },
+        secondary: {
+          DEFAULT: "hsl(var(--secondary))",
+          foreground: "hsl(var(--secondary-foreground))"
+        },
+        muted: {
+          DEFAULT: "hsl(var(--muted))",
+          foreground: "hsl(var(--muted-foreground))"
+        },
+        accent: {
+          DEFAULT: "hsl(var(--accent))",
+          foreground: "hsl(var(--accent-foreground))"
+        },
+        destructive: {
+          DEFAULT: "hsl(var(--destructive))",
+          foreground: "hsl(var(--destructive-foreground))"
+        },
+        success: {
+          DEFAULT: "hsl(var(--success))",
+          foreground: "hsl(var(--success-foreground))"
+        },
+        warning: {
+          DEFAULT: "hsl(var(--warning))",
+          foreground: "hsl(var(--warning-foreground))"
+        },
+        info: {
+          DEFAULT: "hsl(var(--info))",
+          foreground: "hsl(var(--info-foreground))"
+        },
+        popover: {
+          DEFAULT: "hsl(var(--popover))",
+          foreground: "hsl(var(--popover-foreground))"
+        },
+        card: {
+          DEFAULT: "hsl(var(--card))",
+          foreground: "hsl(var(--card-foreground))"
+        },
+        /* Planning layer (V6). Registered here — rather than reached for as arbitrary
+         * `bg-[hsl(var(--plan-bar))]` values at each call site — so the timeline, workload board
+         * and risk badges are styled from the same named palette as the rest of the app, and so
+         * a future theme change is one edit in index.css instead of a grep. Every value derives
+         * from the existing primary/accent/status hues; see index.css for the derivation. */
+        plan: {
+          lane: "hsl(var(--plan-lane))",
+          "lane-alt": "hsl(var(--plan-lane-alt))",
+          bar: "hsl(var(--plan-bar))",
+          "bar-fg": "hsl(var(--plan-bar-fg))",
+          "bar-parent": "hsl(var(--plan-bar-parent))",
+          baseline: "hsl(var(--plan-baseline))",
+          dependency: "hsl(var(--plan-dependency))",
+          today: "hsl(var(--plan-today))",
+          critical: "hsl(var(--plan-critical))",
+          grid: "hsl(var(--plan-grid))"
+        },
+        capacity: {
+          0: "hsl(var(--capacity-0))",
+          1: "hsl(var(--capacity-1))",
+          2: "hsl(var(--capacity-2))",
+          3: "hsl(var(--capacity-3))",
+          4: "hsl(var(--capacity-4))"
+        },
+        risk: {
+          green: "hsl(var(--risk-green))",
+          amber: "hsl(var(--risk-amber))",
+          red: "hsl(var(--risk-red))"
+        }
+      },
+      borderRadius: {
+        lg: "var(--radius)",
+        md: "calc(var(--radius) - 2px)",
+        sm: "calc(var(--radius) - 4px)"
+      },
+      fontFamily: {
+        sans: ["Inter", "ui-sans-serif", "system-ui", "-apple-system", "BlinkMacSystemFont", "Segoe UI", "sans-serif"]
+      },
+      boxShadow: {
+        soft: "0 18px 70px rgba(15, 23, 42, 0.10)",
+        glow: "0 0 0 1px hsl(var(--primary) / 0.18), 0 18px 60px -20px hsl(var(--primary) / 0.45)"
+      },
+      keyframes: {
+        "accordion-down": {
+          from: { height: "0" },
+          to: { height: "var(--radix-accordion-content-height)" }
+        },
+        "accordion-up": {
+          from: { height: "var(--radix-accordion-content-height)" },
+          to: { height: "0" }
+        },
+        "fade-in": {
+          from: { opacity: "0", transform: "translateY(6px)" },
+          to: { opacity: "1", transform: "translateY(0)" }
+        },
+        shimmer: {
+          "100%": { transform: "translateX(100%)" }
+        }
+      },
+      animation: {
+        "accordion-down": "accordion-down 0.2s ease-out",
+        "accordion-up": "accordion-up 0.2s ease-out",
+        "fade-in": "fade-in 0.25s ease-out both",
+        shimmer: "shimmer 1.8s linear infinite"
+      }
+    }
+  },
+  plugins: [animate]
+} satisfies Config;

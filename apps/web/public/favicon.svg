@@ -1,0 +1,22 @@
+<!--
+  The brand mark used across the app (a rounded teal tile with a "T"), as the tab icon.
+
+  WHY IT EXISTS: index.html declared no icon and public/ held only screenshots, so every browser
+  requested /favicon.ico and got a 404. Harmless to a user, but it meant any test that asserts
+  "no failed requests" would trip on an unrelated 404 whose presence depends on the headless mode.
+
+  SVG rather than .ico: one file, sharp at any size, and the colour matches the `--primary` token
+  and the theme-color meta tag (#0F9AA8).
+-->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="TimeSphere">
+  <rect width="64" height="64" rx="14" fill="#0F9AA8" />
+  <text
+    x="32"
+    y="44"
+    text-anchor="middle"
+    font-family="system-ui, -apple-system, Segoe UI, Roboto, sans-serif"
+    font-size="36"
+    font-weight="700"
+    fill="#FFFFFF"
+  >T</text>
+</svg>

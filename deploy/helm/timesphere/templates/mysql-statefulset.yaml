@@ -1,0 +1,57 @@
+{{- if .Values.mysql.enabled }}
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{ include "timesphere.fullname" . }}-mysql
+  labels:
+    {{- include "timesphere.labels" . | nindent 4 }}
+    app.kubernetes.io/component: mysql
+spec:
+  serviceName: {{ include "timesphere.fullname" . }}-mysql
+  replicas: 1
+  selector:
+    matchLabels:
+      {{- include "timesphere.selectorLabels" (dict "Release" .Release "Chart" .Chart "component" "mysql") | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "timesphere.labels" . | nindent 8 }}
+        app.kubernetes.io/component: mysql
+    spec:
+      containers:
+        - name: mysql
+          image: {{ .Values.mysql.image }}
+          args: ["--default-time-zone={{ .Values.env.tz }}"]
+          ports:
+            - name: mysql
+              containerPort: 3306
+          env:
+            - name: MYSQL_ROOT_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.existingSecretName }}
+                  key: MYSQL_ROOT_PASSWORD
+            - name: TZ
+              value: {{ .Values.env.tz | quote }}
+          resources:
+            {{- toYaml .Values.mysql.resources | nindent 12 }}
+          livenessProbe:
+            exec:
+              command: ["mysqladmin", "ping", "-h", "localhost"]
+            initialDelaySeconds: 30
+            periodSeconds: 10
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/mysql
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        {{- if .Values.mysql.storageClassName }}
+        storageClassName: {{ .Values.mysql.storageClassName }}
+        {{- end }}
+        resources:
+          requests:
+            storage: {{ .Values.mysql.storageSize }}
+{{- end }}

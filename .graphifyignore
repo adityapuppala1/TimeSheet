@@ -1,0 +1,24 @@
+# What the knowledge graph should NOT ingest (gitignore syntax; can only exclude, never re-include).
+#
+# WHY this file exists: the graph is only useful if it's about THIS product. Vendored
+# third-party skill/rule documentation is ~70% of the repo's markdown by file count, and
+# graphing it buries TimeSphere's actual architecture under generic advice — every community
+# would be someone else's React rulebook rather than our tenancy/face/AI subsystems.
+.agents/
+
+# Build output and generated clients: derived artifacts, not source of truth. The Prisma
+# generated clients in particular are tens of thousands of machine-written lines that would
+# dominate the AST node count while teaching a reader nothing.
+dist/
+build/
+apps/api/src/generated/
+graphify-out/
+
+# Test result artifacts and coverage reports — ephemeral, regenerated per run.
+test-results/
+playwright-report/
+coverage/
+
+# Lockfiles: enormous, no conceptual structure to extract.
+package-lock.json
+skills-lock.json

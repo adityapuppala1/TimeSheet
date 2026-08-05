@@ -1,0 +1,356 @@
+name: CI
+
+# Runs on every push and PR. Four jobs, deliberately scoped to what each platform can actually
+# verify: GitHub Actions' `services:` containers (needed for a real MySQL instance) only run on
+# Linux runners, so the full build+migrate+seed+Playwright pipeline runs on ubuntu-latest only.
+# windows-latest still earns its place in this workflow — it's the platform install.sh/install.ps1
+# and this whole codebase actually get developed on day-to-day (see docs/DEPLOYMENT.md), so a
+# separate cross-platform job proves the app itself typechecks/builds cleanly there too, and a
+# syntax-only pass over both installer scripts runs on the OS each one is native to.
+# Test tiers run in cost order inside the ubuntu job: mocked unit tests (no DB) first for the
+# fastest failure signal, then integration tests against a real MySQL, then Playwright.
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+    branches: ["**"]
+
+env:
+  NODE_VERSION: "22"
+
+jobs:
+  build-test-ubuntu:
+    name: Build, typecheck, and e2e (ubuntu)
+    runs-on: ubuntu-latest
+    services:
+      mysql:
+        image: mysql:8.4
+        env:
+          MYSQL_ROOT_PASSWORD: root_ci_password
+          MYSQL_DATABASE: ci_placeholder
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd="mysqladmin ping -h localhost -proot_ci_password"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=10
+    env:
+      NODE_ENV: test
+      DATABASE_URL: "mysql://root:root_ci_password@127.0.0.1:3306/ci_tenant"
+      CONTROL_DATABASE_URL: "mysql://root:root_ci_password@127.0.0.1:3306/ci_control"
+      JWT_ACCESS_SECRET: "ci-only-access-secret-not-for-real-use-0123456789"
+      JWT_REFRESH_SECRET: "ci-only-refresh-secret-not-for-real-use-0123456789"
+      PLATFORM_ADMIN_JWT_SECRET: "ci-only-platform-admin-secret-not-for-real-use-0123456789"
+      ENCRYPTION_KEY: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcd"
+      WEB_ORIGIN: "http://localhost:5173"
+      APP_BASE_URL: "http://localhost:5173"
+      DEFAULT_ORG_SLUG: "default"
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      # Prisma client code (both schemas) is generated, never checked in — `npm ci` alone
+      # doesn't produce it, and `apps/api`'s own build/typecheck imports it directly
+      # (`@prisma/client`, plus the control-plane client's generated path). This needs no
+      # database connection, only the schema files, so it runs before Typecheck/Build below
+      # rather than after — generating it any later means tsc fails on a fresh checkout with
+      # "cannot find module" errors that never show up on a dev machine that already has both
+      # clients generated from prior local work.
+      - name: Generate Prisma clients (both schemas)
+        working-directory: apps/api
+        run: |
+          npx prisma generate --schema=prisma/schema.prisma
+          npx prisma generate --schema=prisma/control/schema.prisma
+
+      - name: Typecheck (api + web)
+        run: npm run lint
+
+      # A GATE, unlike the `npm audit` in security-scan-dogfood below — that one runs with
+      # `|| true` and posts findings into the app, which is right for dogfooding but means nothing
+      # ever fails on a vulnerable dependency.
+      #
+      # Scoped to production dependencies (`--omit=dev`) and to `high`: dev-tooling advisories are
+      # frequent, rarely reachable from shipped code, and a gate that cries wolf is one people
+      # learn to skip. A permanently-red audit is how the next real advisory gets ignored.
+      - name: Audit production dependencies
+        run: npm audit --omit=dev --audit-level=high
+
+      - name: Build (shared + api + web)
+        run: npm run build
+
+      # Runs before any database setup on purpose: the unit tier is fully mocked (no DB, no
+      # network, no LLM/Stripe calls), so it's the fastest signal in the pipeline and shouldn't
+      # wait behind migrate/seed to tell you something's broken.
+      - name: Unit tests (vitest)
+        run: npm run test -w apps/api
+
+      - name: Create CI databases
+        run: |
+          mysql -h127.0.0.1 -uroot -proot_ci_password -e "CREATE DATABASE IF NOT EXISTS ci_tenant; CREATE DATABASE IF NOT EXISTS ci_control;"
+
+      - name: Migrate both schemas
+        working-directory: apps/api
+        run: |
+          npx prisma migrate deploy --schema=prisma/schema.prisma
+          npx prisma migrate deploy --schema=prisma/control/schema.prisma
+
+      - name: Seed tenant + control-plane data
+        working-directory: apps/api
+        run: |
+          npx tsx prisma/seed.ts
+          npx tsx prisma/control/seed.ts
+
+      # The integration tier derives its own throwaway `<db>_test` databases from
+      # DATABASE_URL/CONTROL_DATABASE_URL and creates/migrates/seeds/drops them itself, so it
+      # needs the MySQL service above but deliberately never touches the ci_tenant/ci_control
+      # databases the Playwright suite runs against.
+      - name: Integration tests (vitest, real MySQL)
+        run: npm run test:integration -w apps/api
+
+      - name: Install Playwright browsers
+        run: npx playwright install --with-deps chromium
+
+      - name: Run e2e suite
+        run: npm run test:e2e
+        env:
+          CI: "true"
+
+      - name: Upload Playwright report
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report
+          path: playwright-report/
+          retention-days: 14
+
+      # Reports this job's own outcome as a TestRun through the app's own ingestion webhook
+      # (devops-webhook.controller.ts — the same endpoint docs/SECURITY_DEVOPS_INTEGRATIONS.md
+      # tells CUSTOMERS to POST to). `job.status` reflects this job's status up to this point
+      # even inside an `always()` step, same pattern as a Slack-on-failure notification step.
+      # Skipped entirely until TIMESPHERE_INGEST_TOKEN is configured (see security-scan-dogfood
+      # job below for the one-time setup), so this is a no-op on forks/until an admin opts in.
+      - name: Report test-run status to TimeSphere
+        if: always() && secrets.TIMESPHERE_INGEST_TOKEN != ''
+        run: |
+          STATUS="PASSED"
+          if [ "${{ job.status }}" != "success" ]; then STATUS="FAILED"; fi
+          curl -sf -X POST "$TIMESPHERE_INGEST_URL/api/devops/$TIMESPHERE_ORG_SLUG/test-runs" \
+            -H "Authorization: Bearer $TIMESPHERE_INGEST_TOKEN" -H "Content-Type: application/json" \
+            --data "{\"provider\":\"github-actions\",\"branch\":\"${{ github.ref_name }}\",\"status\":\"$STATUS\"}" \
+            || echo "::warning::Failed to report test-run status to TimeSphere (non-fatal)"
+        env:
+          TIMESPHERE_INGEST_TOKEN: ${{ secrets.TIMESPHERE_INGEST_TOKEN }}
+          TIMESPHERE_INGEST_URL: ${{ secrets.TIMESPHERE_INGEST_URL }}
+          TIMESPHERE_ORG_SLUG: ${{ secrets.TIMESPHERE_ORG_SLUG }}
+
+  # Dogfoods TimeSphere's own ingest-only security pipeline against its own source — the exact
+  # endpoints docs/SECURITY_DEVOPS_INTEGRATIONS.md documents for customers, exercised for real
+  # here for the first time. Entirely opt-in: skipped whole-job until an admin generates an
+  # ingestion token (Workspace Settings -> Security -> CI/CD ingestion -> rotate token) and adds
+  # it plus the target host/org as repo secrets (TIMESPHERE_INGEST_TOKEN/_URL/_ORG_SLUG) — so
+  # this is a safe no-op on every fork and on this repo until someone deliberately turns it on.
+  # `continue-on-error: true` because this job's whole point is informational dogfooding, not a
+  # merge gate — a scanner hiccup or a real finding must never block a PR.
+  security-scan-dogfood:
+    name: Dogfood security scanning (SAST + SCA + SBOM)
+    runs-on: ubuntu-latest
+    if: ${{ secrets.TIMESPHERE_INGEST_TOKEN != '' }}
+    continue-on-error: true
+    env:
+      TIMESPHERE_INGEST_TOKEN: ${{ secrets.TIMESPHERE_INGEST_TOKEN }}
+      TIMESPHERE_INGEST_URL: ${{ secrets.TIMESPHERE_INGEST_URL }}
+      TIMESPHERE_ORG_SLUG: ${{ secrets.TIMESPHERE_ORG_SLUG }}
+      REPO: ${{ github.repository }}
+      BRANCH: ${{ github.ref_name }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      # --- SAST: CodeQL, output kept local (upload: false) since results go to TimeSphere, not
+      #     GitHub's own code-scanning tab — this repo may not have GitHub Advanced Security.
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@v3
+        with:
+          languages: javascript-typescript
+
+      - name: Run CodeQL analysis
+        uses: github/codeql-action/analyze@v3
+        with:
+          output: codeql-results
+          upload: false
+
+      - name: Post CodeQL findings to TimeSphere
+        run: |
+          shopt -s nullglob
+          for f in codeql-results/*.sarif; do
+            curl -sf -X POST "$TIMESPHERE_INGEST_URL/api/devops/$TIMESPHERE_ORG_SLUG/findings/sarif?type=SAST&repository=$REPO&branch=$BRANCH" \
+              -H "Authorization: Bearer $TIMESPHERE_INGEST_TOKEN" -H "Content-Type: application/json" \
+              --data @"$f" || echo "::warning::Failed to post CodeQL SARIF ($f) to TimeSphere (non-fatal)"
+          done
+
+      # --- SAST: Semgrep's free ruleset, the exact tool docs/SECURITY_DEVOPS_INTEGRATIONS.md
+      #     already documents as the canonical example — this makes that example a proven one.
+      - name: Run Semgrep
+        run: |
+          docker run --rm -v "$PWD:/src" semgrep/semgrep semgrep --config auto --sarif --output /src/semgrep.sarif /src || true
+
+      - name: Post Semgrep findings to TimeSphere
+        run: |
+          if [ -f semgrep.sarif ]; then
+            curl -sf -X POST "$TIMESPHERE_INGEST_URL/api/devops/$TIMESPHERE_ORG_SLUG/findings/sarif?type=SAST&repository=$REPO&branch=$BRANCH" \
+              -H "Authorization: Bearer $TIMESPHERE_INGEST_TOKEN" -H "Content-Type: application/json" \
+              --data @semgrep.sarif || echo "::warning::Failed to post Semgrep SARIF to TimeSphere (non-fatal)"
+          fi
+
+      # --- SSCT: npm audit has no SARIF output, so a small mapper translates it to the native
+      #     findings-batch shape (scripts/ci/npm-audit-to-findings.mjs).
+      - name: Run npm audit
+        run: npm audit --json > npm-audit.json || true
+
+      - name: Map and post npm audit findings to TimeSphere
+        run: |
+          node scripts/ci/npm-audit-to-findings.mjs npm-audit.json "$REPO" "$BRANCH" > npm-audit-findings.json
+          if [ -s npm-audit-findings.json ] && [ "$(node -e "console.log(JSON.parse(require('fs').readFileSync('npm-audit-findings.json','utf8')).findings.length)")" != "0" ]; then
+            curl -sf -X POST "$TIMESPHERE_INGEST_URL/api/devops/$TIMESPHERE_ORG_SLUG/findings" \
+              -H "Authorization: Bearer $TIMESPHERE_INGEST_TOKEN" -H "Content-Type: application/json" \
+              --data @npm-audit-findings.json || echo "::warning::Failed to post npm audit findings to TimeSphere (non-fatal)"
+          fi
+
+      # --- SBOM: a real dependency inventory, not a stub — feeds the app's own SBOM inventory
+      #     report the moment it's ingested.
+      - name: Generate SBOM (CycloneDX)
+        run: npx --yes @cyclonedx/cyclonedx-npm --output-file sbom.json || true
+
+      - name: Post SBOM to TimeSphere
+        run: |
+          if [ -f sbom.json ]; then
+            curl -sf -X POST "$TIMESPHERE_INGEST_URL/api/devops/$TIMESPHERE_ORG_SLUG/sbom?repository=$REPO" \
+              -H "Authorization: Bearer $TIMESPHERE_INGEST_TOKEN" -H "Content-Type: application/json" \
+              --data @sbom.json || echo "::warning::Failed to post SBOM to TimeSphere (non-fatal)"
+          fi
+
+  build-cross-platform:
+    name: Typecheck + build (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    # `prisma generate` (below) doesn't connect to a database, but it does validate that the
+    # schema's referenced env vars are at least defined — this job never touches a real MySQL
+    # instance, so these are unused placeholder values, just enough to satisfy that check.
+    env:
+      DATABASE_URL: "mysql://unused:unused@localhost:3306/unused"
+      CONTROL_DATABASE_URL: "mysql://unused:unused@localhost:3306/unused"
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      # Same reason as the ubuntu job above — tsc needs the generated Prisma clients to
+      # resolve `@prisma/client`'s types before it can typecheck/build apps/api at all.
+      - name: Generate Prisma clients (both schemas)
+        working-directory: apps/api
+        run: |
+          npx prisma generate --schema=prisma/schema.prisma
+          npx prisma generate --schema=prisma/control/schema.prisma
+
+      - name: Typecheck (api + web)
+        run: npm run lint
+
+      - name: Build (shared + api + web)
+        run: npm run build
+
+  validate-installers:
+    name: Validate installer scripts
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Syntax-check install.sh and update.sh (bash -n, no execution)
+        run: bash -n install.sh && bash -n update.sh
+
+  # The syntax check above catches typos; it cannot catch installer ROT — a compose key that
+  # drifted, a seed script that moved, a verification endpoint that changed shape. Only running
+  # the installer the way a customer does proves it still installs, so this executes install.sh
+  # end-to-end on the runner: real Docker build, real MySQL container, real migrations and seed,
+  # and the installer's own verification suite (health, version, migration status, seeded
+  # platform-admin login, SPA served) as the pass/fail signal. TS_AUTO=1 answers every prompt
+  # with its defaults — the same non-interactive mode fleet scripts use, so CI exercises it too.
+  install-e2e:
+    name: Execute install.sh end-to-end
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Run the installer exactly as a customer would
+        run: TS_AUTO=1 ./install.sh
+
+      - name: Show container state on failure
+        if: failure()
+        run: |
+          docker compose -f docker-compose.yml ps || true
+          docker compose -f docker-compose.yml logs --tail=200 api || true
+
+  validate-installer-windows:
+    name: Validate install.ps1 (PowerShell parser, no execution)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Parse install.ps1 without running it (PowerShell 7 / pwsh)
+        shell: pwsh
+        run: |
+          $tokens = $null
+          $errors = $null
+          [System.Management.Automation.Language.Parser]::ParseFile("install.ps1", [ref]$tokens, [ref]$errors) | Out-Null
+          [System.Management.Automation.Language.Parser]::ParseFile("update.ps1", [ref]$tokens, [ref]$errors) | Out-Null
+          if ($errors.Count -gt 0) {
+            $errors | ForEach-Object { Write-Error $_.Message }
+            exit 1
+          }
+          Write-Host "install.ps1 parses cleanly under pwsh."
+
+      # Deliberately a SEPARATE step from the pwsh one above, using `shell: powershell`
+      # (Windows PowerShell 5.1, the OS-bundled default every real end-user actually runs this
+      # script with — see docs/INSTALLATION.md's own "PowerShell 5.1+ (built in)" prerequisite)
+      # rather than pwsh (PowerShell 7/Core). The two engines default to different text
+      # encodings for a BOM-less script file — pwsh assumes UTF-8, Windows PowerShell 5.1
+      # assumes the system codepage — so a non-ASCII character (an em-dash, a smart quote) in a
+      # BOM-less .ps1 file can parse perfectly under pwsh while genuinely failing to parse under
+      # powershell.exe. That exact gap let install.ps1 ship with a real parse error invisible to
+      # this job until someone actually ran it with plain `powershell.exe` — see install.ps1's
+      # own file-encoding fix (UTF-8 BOM) for the concrete case this step now guards against.
+      - name: Parse install.ps1 without running it (Windows PowerShell 5.1)
+        shell: powershell
+        run: |
+          $tokens = $null
+          $errors = $null
+          [System.Management.Automation.Language.Parser]::ParseFile("install.ps1", [ref]$tokens, [ref]$errors) | Out-Null
+          if ($errors.Count -gt 0) {
+            $errors | ForEach-Object { Write-Error $_.Message }
+            exit 1
+          }
+          Write-Host "install.ps1 parses cleanly under Windows PowerShell 5.1."

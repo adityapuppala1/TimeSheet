@@ -1,0 +1,772 @@
+/**
+ * WHAT: the single `@timesheet/shared` package — every type/constant that both `apps/api` and
+ * `apps/web` need to agree on: roles/permission keys, activity types, ticket status/priority
+ * enums + legal status transitions, plan-tier/chat-platform/email-match-type unions, and the
+ * shape of settings objects like `GlobalAISettings`/`EmailIntakeSettings`/`ChatIntegrationRow`.
+ * WHY this package exists at all: without it, the frontend and backend would each define their
+ * own copy of e.g. `TicketStatus`, and the two copies would silently drift apart the first time
+ * one side added a value the other didn't know about — importing from one shared source makes
+ * that class of bug a compile error instead of a runtime surprise.
+ * WHO imports this: nearly every file in both `apps/api/src` and `apps/web/src` that touches a
+ * role, permission, ticket, or settings type.
+ */
+export const roles = ["SUPER_ADMIN", "ADMIN", "MANAGER", "TEAM_LEAD", "EMPLOYEE"] as const;
+export type RoleName = (typeof roles)[number];
+
+export const activityTypes = [
+  "Learning",
+  "Code Study",
+  "POC",
+  "Documentation",
+  "Development",
+  "Demo",
+  "Testing",
+  "Meeting",
+  "Bug Fixing",
+  "Research",
+  "Deployment",
+  "Support"
+] as const;
+
+export type ActivityType = (typeof activityTypes)[number];
+
+export const permissions = {
+  USERS_MANAGE: "users:manage",
+  PROJECTS_MANAGE: "projects:manage",
+  TIMESHEETS_WRITE: "timesheets:write",
+  TIMESHEETS_APPROVE: "timesheets:approve",
+  REPORTS_VIEW: "reports:view",
+  FORMS_CONFIGURE: "forms:configure",
+  AUDIT_VIEW: "audit:view",
+  TICKETS_VIEW: "tickets:view",
+  TICKETS_WRITE: "tickets:write",
+  TICKETS_ASSIGN: "tickets:assign",
+  TICKETS_MANAGE: "tickets:manage",
+
+  /// --- Planning layer (V6) ------------------------------------------------------------------
+  /// Adding a key here is NOT enough for an existing install: `prisma/seed.ts` is a one-time
+  /// bootstrap that never runs on upgrade (and would wipe custom grants if it did). Every new
+  /// key must ALSO be backfilled by idempotent SQL inside the migration that introduces it —
+  /// see prisma/migrations/*_v6_phase1_planning_foundation/migration.sql.
+  PORTFOLIOS_MANAGE: "portfolios:manage",
+  /// Edit the *plan* — dates, hierarchy, dependencies, baselines. Deliberately separate from
+  /// TICKETS_WRITE: a developer who can edit a ticket's description shouldn't necessarily be
+  /// able to move the whole delivery schedule.
+  PLAN_WRITE: "plan:write",
+  /// Capacity, bookings, and the workload board.
+  RESOURCES_MANAGE: "resources:manage",
+  /// Create/route approval chains on work items (distinct from TIMESHEETS_APPROVE, which is
+  /// the existing timesheet-only approval right).
+  APPROVALS_MANAGE: "approvals:manage",
+  /// Publish a personal dashboard to the whole workspace.
+  DASHBOARDS_SHARE: "dashboards:share"
+} as const;
+
+export type Permission = (typeof permissions)[keyof typeof permissions];
+
+export interface AuthUser {
+  id: string;
+  name: string;
+  email: string;
+  role: RoleName;
+  permissions: Permission[];
+  avatarUrl?: string | null;
+  bio?: string | null;
+  phoneNumber?: string | null;
+  timezone?: string | null;
+  managerId?: string | null;
+  manager?: { id: string; name: string; email: string } | null;
+}
+
+export interface TimesheetInput {
+  projectId: string;
+  moduleId: string;
+  submoduleId?: string;
+  activityType: ActivityType;
+  taskDescription: string;
+  workDate: string;
+  startTime: string;
+  endTime: string;
+  notes?: string;
+  ticketId?: string;
+}
+
+/** Admin-editable — the actual list of active types lives in the TicketType table (`ticketTypeApi.list()`). */
+export type TicketType = string;
+
+export const ticketPriorities = ["LOW", "MEDIUM", "HIGH", "CRITICAL"] as const;
+export type TicketPriority = (typeof ticketPriorities)[number];
+
+export const ticketStatuses = ["OPEN", "IN_PROGRESS", "IN_REVIEW", "RESOLVED", "CLOSED", "REOPENED"] as const;
+export type TicketStatus = (typeof ticketStatuses)[number];
+
+/** Valid forward/backward moves for the ticket workflow. Shared so the API can enforce it and the UI can restrict the status picker to the same set. */
+export const ticketStatusTransitions: Record<TicketStatus, TicketStatus[]> = {
+  OPEN: ["IN_PROGRESS"],
+  IN_PROGRESS: ["IN_REVIEW", "OPEN"],
+  IN_REVIEW: ["RESOLVED", "IN_PROGRESS"],
+  RESOLVED: ["CLOSED", "REOPENED"],
+  CLOSED: ["REOPENED"],
+  REOPENED: ["IN_PROGRESS"]
+};
+
+/** Ingest-only security-assessment types — see docs/ROADMAP.md's "Security assessment suite"
+ *  section. SSAT = secrets scanning, SSCT = software supply-chain testing (SBOM/provenance),
+ *  distinct from a plain CVE-only dependency check. VAPT is deliberately absent here — it's a
+ *  periodic human-led assessment, not a per-finding type an automated webhook posts. */
+/** Includes VAPT even though the CI ingestion webhook never accepts it as input (see
+ *  devops-webhook.controller.ts's own hardcoded, VAPT-excluding type list) — this constant is
+ *  the *display*-side source of truth (report rendering, the ticket Security tab), where a VAPT
+ *  finding (uploaded via Workspace Settings, not the webhook) needs to render identically to
+ *  the other 4 types. */
+export const securityFindingTypes = ["SAST", "DAST", "SSAT", "SSCT", "VAPT"] as const;
+export type SecurityFindingType = (typeof securityFindingTypes)[number];
+
+export const securityFindingSeverities = ["LOW", "MEDIUM", "HIGH", "CRITICAL"] as const;
+export type SecurityFindingSeverity = (typeof securityFindingSeverities)[number];
+
+export const securityFindingStatuses = ["OPEN", "ACKNOWLEDGED", "FIXED", "ACCEPTED_RISK"] as const;
+export type SecurityFindingStatus = (typeof securityFindingStatuses)[number];
+
+export const securityFindingAiVerdicts = ["TRUE_POSITIVE", "FALSE_POSITIVE", "NEEDS_REVIEW"] as const;
+export type SecurityFindingAiVerdict = (typeof securityFindingAiVerdicts)[number];
+
+export const testRunStatuses = ["PASSED", "FAILED", "RUNNING"] as const;
+export type TestRunStatus = (typeof testRunStatuses)[number];
+
+/** Manual repo/branch/PR linking on a ticket — see prisma/schema.prisma's TicketBranch model
+ *  comment for why this is manual, not synced live from a git provider. */
+export const ticketBranchPrStatuses = ["NONE", "OPEN", "MERGED", "CLOSED"] as const;
+export type TicketBranchPrStatus = (typeof ticketBranchPrStatuses)[number];
+
+/** Public REST API + outbound webhooks — see docs/ROADMAP.md's theme of the same name and
+ *  docs/API.md's "Public API" section. Kept in sync manually with
+ *  apps/api/src/services/webhook-dispatch.service.ts#WEBHOOK_EVENTS (that file is the source of
+ *  truth server-side; this copy is what the settings UI's event checkboxes render from). */
+export const outboundWebhookEvents = [
+  "ticket.created",
+  "ticket.status_changed",
+  "ticket.closed",
+  "timesheet.submitted",
+  "timesheet.approved"
+] as const;
+export type OutboundWebhookEvent = (typeof outboundWebhookEvents)[number];
+export const apiKeyScopes = ["READ", "WRITE"] as const;
+export type ApiKeyScope = (typeof apiKeyScopes)[number];
+
+export interface TicketInput {
+  projectId: string;
+  moduleId?: string;
+  type: TicketType;
+  title: string;
+  description?: string;
+  priority: TicketPriority;
+  assigneeId?: string;
+}
+
+/** Per-category email opt-ins, persisted on the workspace settings singleton. */
+export interface NotificationPreferences {
+  emailTimesheetSubmitted: boolean;
+  emailTimesheetApproved: boolean;
+  emailTimesheetRejected: boolean;
+  emailSlaBreach: boolean;
+  emailDeadlineReminder: boolean;
+  emailEscalation: boolean;
+  emailWeeklyDigest: boolean;
+  emailDailyReminder: boolean;
+  emailDailyEscalation: boolean;
+  emailTicketAssigned: boolean;
+  emailTicketStatusChanged: boolean;
+  emailTicketCommented: boolean;
+  emailTicketSlaBreach: boolean;
+  emailTicketEscalation: boolean;
+  emailTicketNeedsReview: boolean;
+  /** Ticket-close security/test-status digest — see docs/ROADMAP.md's security assessment suite. */
+  emailTicketClosedDigest: boolean;
+  /** AI weekly org-wide security digest to every ADMIN/SUPER_ADMIN — see
+   *  workers/security-weekly-digest.worker.ts. Gated alongside GlobalAISettings.securityWeeklyDigestEnabled. */
+  emailSecurityWeeklyDigest: boolean;
+  /** Face (identity) verification lifecycle — see docs/FACE_VERIFICATION.md. None of these ever
+   *  carry a captured image or a score; they link into the app where authorization is checked. */
+  emailFaceEnrollmentRequired: boolean;
+  emailFaceEnrollmentReminder: boolean;
+  emailFaceVerificationFlagged: boolean;
+  emailFaceReviewOverdue: boolean;
+  emailFaceDataDeleted: boolean;
+  emailFaceEntitlementLost: boolean;
+  /** Weekly identity-assurance digest to every ADMIN/SUPER_ADMIN — deterministic stats, no AI. */
+  emailIdentityWeeklyDigest: boolean;
+  /** Monthly "what kept breaking" digest — see workers/bug-pattern-digest.worker.ts. Gated
+   *  alongside GlobalAISettings.bugPatternDigestEnabled. */
+  emailBugPatternDigest: boolean;
+  /** AI-suggested next action when the SLA sweep flags a ticket as stale. Gated alongside
+   *  GlobalAISettings.staleTicketNudgeEnabled. */
+  emailTicketStaleNudge: boolean;
+  /** "Maintenance window scheduled — wrap up" warning a SUPER_ADMIN sends from the Maintenance
+   *  settings card. Gates only the EMAIL leg; the in-app notification always fires. */
+  emailMaintenanceScheduled: boolean;
+}
+
+export const notificationPreferenceKeys: ReadonlyArray<keyof NotificationPreferences> = [
+  "emailTimesheetSubmitted",
+  "emailTimesheetApproved",
+  "emailTimesheetRejected",
+  "emailSlaBreach",
+  "emailDeadlineReminder",
+  "emailEscalation",
+  "emailWeeklyDigest",
+  "emailDailyReminder",
+  "emailDailyEscalation",
+  "emailTicketAssigned",
+  "emailTicketStatusChanged",
+  "emailTicketCommented",
+  "emailTicketSlaBreach",
+  "emailTicketEscalation",
+  "emailTicketNeedsReview",
+  "emailTicketClosedDigest",
+  "emailSecurityWeeklyDigest",
+  "emailFaceEnrollmentRequired",
+  "emailFaceEnrollmentReminder",
+  "emailFaceVerificationFlagged",
+  "emailFaceReviewOverdue",
+  "emailFaceDataDeleted",
+  "emailFaceEntitlementLost",
+  "emailIdentityWeeklyDigest",
+  "emailBugPatternDigest",
+  "emailTicketStaleNudge",
+  "emailMaintenanceScheduled"
+];
+
+/** Workspace-wide settings: notification toggles + reminder schedule + BCC behavior. */
+export interface GlobalSettings extends NotificationPreferences {
+  dailyReminderHour: number;
+  escalationReminderHour: number;
+  remindOnWeekdaysOnly: boolean;
+  bccSuperAdminOnAllEmails: boolean;
+  updatedAt: string;
+  /** Effective IANA timezone the API server is running in. Read-only. */
+  serverTimezone: string;
+  /** "UTC+05:30" formatted offset matching `serverTimezone` at the moment of the response. */
+  serverUtcOffset: string;
+  /** ISO timestamp of the server's current time — useful for client/server clock sanity checks. */
+  serverNow: string;
+}
+
+/** Workspace-wide ticket SLA hours + opt-in analytics toggles. */
+export interface GlobalTicketSettings {
+  slaLowHours: number;
+  slaMediumHours: number;
+  slaHighHours: number;
+  slaCriticalHours: number;
+  /** Off by default — needs User.hourlyRate populated to be meaningful. */
+  enableCostAnalytics: boolean;
+  /** Off by default — per-person resolution/velocity rankings. */
+  enableLeaderboard: boolean;
+  /** Off by default. When true, a ticket can't move to RESOLVED while its latest ingested
+   *  TestRun is FAILED — see docs/ROADMAP.md's "Auto testing on branch/PR push" theme. */
+  blockResolveOnFailingTests: boolean;
+  /** ISO-4217 fallback when a project sets no billingCurrency — see
+   *  api/src/services/billing-rate.service.ts. */
+  defaultCurrency: string;
+  /** Off by default. Gates the Verified Work Attestation endpoints entirely. */
+  enableAttestations: boolean;
+  /** Off by default, and separate from enableAttestations on purpose: publishing an attestation
+   *  to a public unauthenticated URL is a different risk decision from producing one internally. */
+  enableAttestationSharing: boolean;
+  updatedAt: string;
+  updatedById: string | null;
+}
+
+/** Selectable models for AI features, cheapest/fastest first. */
+export const aiModels = [
+  { id: "claude-haiku-4-5", label: "Claude Haiku 4.5 — fastest & cheapest" },
+  { id: "claude-sonnet-5", label: "Claude Sonnet 5 — balanced" },
+  { id: "claude-opus-4-8", label: "Claude Opus 4.8 — most capable" }
+] as const;
+
+export const aiProviders = ["ANTHROPIC", "OPENAI_COMPATIBLE"] as const;
+export type AIProvider = (typeof aiProviders)[number];
+
+/** A curated dropdown of well-known OpenAI-compatible endpoints — the admin can still type a
+ *  custom baseUrl for anything not listed (see WorkspaceSettings' AI tab). Zen, OpenCode, and
+ *  OpenGateway are deliberately not presets here: none are a standard hosted-LLM API with a
+ *  stable OpenAI-compatible base URL, so "Custom endpoint" is the honest way to reach them. */
+export const aiProviderPresets: Array<{ key: string; label: string; baseUrl: string; needsKey: boolean }> = [
+  { key: "openai", label: "OpenAI", baseUrl: "https://api.openai.com/v1", needsKey: true },
+  { key: "groq", label: "Groq", baseUrl: "https://api.groq.com/openai/v1", needsKey: true },
+  { key: "mistral", label: "Mistral", baseUrl: "https://api.mistral.ai/v1", needsKey: true },
+  { key: "deepseek", label: "DeepSeek", baseUrl: "https://api.deepseek.com/v1", needsKey: true },
+  { key: "openrouter", label: "OpenRouter", baseUrl: "https://openrouter.ai/api/v1", needsKey: true },
+  { key: "gemini", label: "Gemini", baseUrl: "https://generativelanguage.googleapis.com/v1beta/openai", needsKey: true },
+  { key: "qwen", label: "Qwen (DashScope)", baseUrl: "https://dashscope.aliyuncs.com/compatible-mode/v1", needsKey: true },
+  { key: "kimi", label: "Kimi (Moonshot)", baseUrl: "https://api.moonshot.ai/v1", needsKey: true },
+  { key: "nvidia", label: "Nvidia NIM", baseUrl: "https://integrate.api.nvidia.com/v1", needsKey: true },
+  { key: "ollama", label: "Ollama (local)", baseUrl: "http://localhost:11434/v1", needsKey: false },
+  { key: "lmstudio", label: "LM Studio (local)", baseUrl: "http://localhost:1234/v1", needsKey: false },
+  { key: "custom", label: "Custom endpoint", baseUrl: "", needsKey: true }
+];
+
+/** Master + per-feature AI toggles. `aiEnabled` is the workspace-wide kill switch. */
+export interface GlobalAISettings {
+  aiEnabled: boolean;
+  autoTriageEnabled: boolean;
+  autoTriageAutoApply: boolean;
+  duplicateDetectionEnabled: boolean;
+  writingAssistantEnabled: boolean;
+  commentSummaryEnabled: boolean;
+  workspaceSearchEnabled: boolean;
+  emailIngestionEnabled: boolean;
+  chatIngestionEnabled: boolean;
+  weeklyDigestEnabled: boolean;
+  /** Gates ai.service.ts#classifyCiFailure — an AI-authored root-cause comment posted when a
+   *  CI test run fails with a failure-log excerpt attached. See docs/ROADMAP.md. */
+  ciFailureTriageEnabled: boolean;
+  /** Gates ai.service.ts#summarizePullRequest — an AI-authored review-summary comment posted
+   *  when a linked PR opens (git-webhook.controller.ts). Needs a live GitHub connection. */
+  aiPrReviewSummaryEnabled: boolean;
+  /** Gates ai.service.ts#classifySecurityFinding — sibling of ciFailureTriageEnabled, scoped to
+   *  ingested SecurityFinding rows (CRITICAL/HIGH only) instead of CI test-run failures. */
+  findingTriageEnabled: boolean;
+  /** Gates ai.service.ts#generateSecurityWeeklyDigest — an org-wide security summary emailed to
+   *  every ADMIN/SUPER_ADMIN weekly. See workers/security-weekly-digest.worker.ts. */
+  securityWeeklyDigestEnabled: boolean;
+  /** Gates ai.service.ts#generateStatusReport — on-demand project stakeholder update, triggered
+   *  synchronously from the Project page rather than a cron worker. */
+  statusReportEnabled: boolean;
+  /** Gates ai.service.ts#summarizeFaceReviewAttempt — on-demand AI brief for a flagged
+   *  identity-check review. Attempt metadata only; captured images/templates never leave the server. */
+  faceReviewSummaryEnabled: boolean;
+  /** Gates ai.service.ts#explainThresholdRecommendation — narrates (never sets) the
+   *  deterministically-computed face-match threshold recommendation. */
+  facePolicyCopilotEnabled: boolean;
+  /** Gates ai.service.ts#generateBugPatternDigest — monthly "what keeps breaking" recap over
+   *  recurring CI failures and security-finding hotspots. See workers/bug-pattern-digest.worker.ts. */
+  bugPatternDigestEnabled: boolean;
+  /** Gates ai.service.ts#explainAssigneeSuggestion — narrates (never re-ranks) the deterministic
+   *  suggest-assignee ranking on ticket creation. */
+  assigneeSuggestionAiEnabled: boolean;
+  /** Gates a dismissible AI-suggested next action on tickets the SLA sweep already flags as
+   *  stale. Never auto-acts. */
+  staleTicketNudgeEnabled: boolean;
+  /** Gates per-line AI review comments on a PR's actual diff — deeper and riskier than
+   *  aiPrReviewSummaryEnabled's 2-3 sentence summary, so its own explicit opt-in. */
+  aiPrInlineReviewEnabled: boolean;
+  /** Records one AIInteraction row per AI call (feature, model, prompt hash, parse success,
+   *  latency) — metadata only, no user content. Makes AI quality measurable at all. */
+  aiCaptureEnabled: boolean;
+  /** Additionally stores prompt text, model output and input params. Separate toggle because it
+   *  retains real user content; required before golden datasets/evals are possible. */
+  aiCaptureContentEnabled: boolean;
+  aiCaptureRetentionDays: number;
+  /** Allows an eval to spend extra model calls judging free-text answers. The only part of a run
+   *  that costs more than the replay itself, so it's opt-in and logged under its own feature. */
+  aiEvalJudgeEnabled: boolean;
+  model: string;
+  confidenceThreshold: number;
+  monthlyBudgetUsd: number | null;
+  updatedAt: string;
+  updatedById: string | null;
+  /** BYOK — which model family requests go through. See apps/api/src/services/ai.service.ts#callChat. */
+  provider: AIProvider;
+  /** Only meaningful when provider is OPENAI_COMPATIBLE. */
+  baseUrl: string | null;
+  /** Read-only. Whether a usable key exists — either a saved BYOK key (`apiKeySet`) or, for the
+   *  ANTHROPIC provider only, the server's ANTHROPIC_API_KEY env var. Toggles do nothing until this is true. */
+  apiKeyConfigured: boolean;
+  /** Read-only. Whether a BYOK key is saved on this row — the key itself is never returned. */
+  apiKeySet: boolean;
+}
+
+export const emailMatchTypes = ["TO_ADDRESS", "TO_PLUS_TAG", "SUBJECT_PREFIX"] as const;
+export type EmailMatchType = (typeof emailMatchTypes)[number];
+
+export const chatPlatforms = ["SLACK", "MICROSOFT_TEAMS", "GOOGLE_CHAT", "TELEGRAM"] as const;
+export type ChatPlatform = (typeof chatPlatforms)[number];
+
+export const chatMatchTypes = ["CHANNEL_ID", "COMMAND_PREFIX"] as const;
+export type ChatMatchType = (typeof chatMatchTypes)[number];
+
+/** Workspace-wide IMAP mailbox connection + polling cadence for email-to-ticket ingestion. */
+export interface EmailIntakeSettings {
+  imapHost: string | null;
+  imapPort: number;
+  imapSecure: boolean;
+  imapUser: string | null;
+  /** Read-only. Whether an IMAP password is currently saved — the actual value is never returned. */
+  imapPasswordSet: boolean;
+  pollIntervalMinutes: number;
+  fallbackProjectId: string | null;
+  lastPolledAt: string | null;
+  lastPollError: string | null;
+  updatedAt: string;
+  updatedById: string | null;
+}
+
+export interface EmailRoutingRuleRow {
+  id: string;
+  matchType: EmailMatchType;
+  matchValue: string;
+  projectId: string;
+  project: { id: string; name: string; code: string };
+  defaultModuleId: string | null;
+  defaultModule: { id: string; name: string } | null;
+  isActive: boolean;
+  createdAt: string;
+}
+
+export interface ModuleAssigneeRuleRow {
+  id: string;
+  moduleId: string;
+  module: { id: string; name: string; projectId: string };
+  defaultAssigneeId: string;
+  defaultAssignee: { id: string; name: string; email: string };
+  createdAt: string;
+}
+
+/** Per-platform chat-connector connection settings (Slack/Teams/Google Chat/Telegram) — same
+ *  write-only-secret masking convention as EmailIntakeSettings above. */
+export interface ChatIntegrationRow {
+  platform: ChatPlatform;
+  isEnabled: boolean;
+  botTokenSet: boolean;
+  signingSecretSet: boolean;
+  teamsAppId: string | null;
+  teamsAppPasswordSet: boolean;
+  googleChatWebhookUrl: string | null;
+  defaultProjectId: string | null;
+  lastEventAt: string | null;
+  lastError: string | null;
+}
+
+export interface ChatRoutingRuleRow {
+  id: string;
+  platform: ChatPlatform;
+  matchType: ChatMatchType;
+  matchValue: string;
+  projectId: string;
+  project: { id: string; name: string; code: string };
+  defaultModuleId: string | null;
+  defaultModule: { id: string; name: string } | null;
+  isActive: boolean;
+  createdAt: string;
+}
+
+export function calculateHours(startTime: string, endTime: string): number {
+  const [sh, sm] = startTime.split(":").map(Number);
+  const [eh, em] = endTime.split(":").map(Number);
+  const minutes = eh * 60 + em - (sh * 60 + sm);
+  return Math.max(0, Math.round((minutes / 60) * 100) / 100);
+}
+
+/* ------------------------------------------------------------------ *
+ * PLAN TIERS — one source of truth.
+ *
+ * WHY THIS EXISTS: these numbers used to live only in the control-plane seed, and the marketing
+ * pricing table restated them from memory. It drifted, exactly as you'd expect: the comparison
+ * table advertised face verification on Team when the seed grants it to Enterprise only, and the
+ * feature FAILS CLOSED — so a Team customer who bought partly for that row would have had their
+ * admin's attempt to enable it refused. A pricing table is a set of promises; it belongs next to
+ * the values that keep them.
+ *
+ * `apps/api/prisma/control/seed.ts` writes these into PlanTierLimit, and the web pricing dialog
+ * renders from them. Change a limit here and both move together.
+ * ------------------------------------------------------------------ */
+
+export const planTiers = ["STARTER", "TEAM", "ENTERPRISE"] as const;
+export type PlanTier = (typeof planTiers)[number];
+
+/** LDAP is a direct bind rather than a redirect, but it is still an org-level sign-in method and
+ *  is gated by the same per-tier allowlist, so it belongs in this union. */
+export const ssoProviders = ["GOOGLE", "MICROSOFT", "SAML", "LDAP"] as const;
+export type SsoProvider = (typeof ssoProviders)[number];
+
+/** Effectively "no ceiling" — the schema wants a number, not null, on these two tiers. */
+export const UNLIMITED_SEATS = 1_000_000;
+
+/** Same idea for a countable planning resource (portfolios, forms, blueprints, …). Declared
+ *  here rather than down in the planning section because `PLAN_TIER_LIMITS` below reads it at
+ *  module-init time — a `const` further down the file would be in its temporal dead zone. */
+export const UNLIMITED_PLAN_ITEMS = 1_000_000;
+
+export interface PlanTierLimits {
+  seatLimit: number;
+  /** A HARD platform ceiling, clamped over whatever budget the org sets for itself. An explicit
+   *  0 is a real cap, not "unlimited" — so Starter cannot make an AI call at all. */
+  aiMonthlyBudgetCeilingUsd: number;
+  allowedSsoProviders: SsoProvider[];
+  allowedChatPlatforms: ChatPlatform[];
+  /** Enabling, enrolling and verifying all fail CLOSED without this. */
+  faceVerificationEnabled: boolean;
+
+  /* --- Planning layer (V6) ---------------------------------------------------------------
+   * All of these fail CLOSED like faceVerificationEnabled: the capability is refused unless
+   * the tier grants it. The counts are ceilings on how many of a thing an org may create;
+   * 0 means "this tier cannot use the feature at all", which is why STARTER reads as all-zero
+   * rather than as a small allowance. Enforced live per request by
+   * apps/api/src/services/plan-limits.service.ts — never cached, same as every existing limit. */
+  /** Timeline/Gantt, dependencies, baselines, critical path. */
+  ganttEnabled: boolean;
+  /** Capacity, resource bookings, the workload board. */
+  resourceMgmtEnabled: boolean;
+  /** Approval chains on work items, including guest approvers. */
+  approvalsEnabled: boolean;
+  /** Pin/region annotation on attachments. */
+  proofingEnabled: boolean;
+  /** Admin-defined statuses/transitions per ticket type. */
+  customWorkflowsEnabled: boolean;
+  /** The proposal-based AI PM copilot family. Spend is still bounded by
+   *  aiMonthlyBudgetCeilingUsd — this only decides whether the features exist. */
+  aiPmCopilotEnabled: boolean;
+  maxPortfolios: number;
+  maxRequestForms: number;
+  maxBlueprints: number;
+  maxCustomFields: number;
+  maxDashboards: number;
+}
+
+export const PLAN_TIER_LIMITS: Record<PlanTier, PlanTierLimits> = {
+  STARTER: {
+    seatLimit: 10,
+    aiMonthlyBudgetCeilingUsd: 0,
+    allowedSsoProviders: ["GOOGLE"],
+    allowedChatPlatforms: [],
+    faceVerificationEnabled: false,
+    ganttEnabled: false,
+    resourceMgmtEnabled: false,
+    approvalsEnabled: false,
+    proofingEnabled: false,
+    customWorkflowsEnabled: false,
+    aiPmCopilotEnabled: false,
+    maxPortfolios: 0,
+    maxRequestForms: 0,
+    maxBlueprints: 0,
+    maxCustomFields: 0,
+    maxDashboards: 0
+  },
+  TEAM: {
+    seatLimit: UNLIMITED_SEATS,
+    aiMonthlyBudgetCeilingUsd: 200,
+    allowedSsoProviders: ["GOOGLE", "MICROSOFT"],
+    allowedChatPlatforms: ["SLACK", "TELEGRAM"],
+    faceVerificationEnabled: false,
+    // Team gets the everyday planning surface — a schedule, intake, approvals and a dashboard.
+    // The two capped-at-Enterprise items are the ones with real ongoing cost or blast radius:
+    // resource management reads every person's rate/capacity, and the AI copilot spends money.
+    ganttEnabled: true,
+    resourceMgmtEnabled: false,
+    approvalsEnabled: true,
+    proofingEnabled: true,
+    customWorkflowsEnabled: false,
+    aiPmCopilotEnabled: false,
+    maxPortfolios: 1,
+    maxRequestForms: 5,
+    maxBlueprints: 5,
+    maxCustomFields: 10,
+    maxDashboards: 3
+  },
+  ENTERPRISE: {
+    seatLimit: UNLIMITED_SEATS,
+    aiMonthlyBudgetCeilingUsd: 5000,
+    allowedSsoProviders: ["GOOGLE", "MICROSOFT", "SAML", "LDAP"],
+    allowedChatPlatforms: ["SLACK", "MICROSOFT_TEAMS", "GOOGLE_CHAT", "TELEGRAM"],
+    faceVerificationEnabled: true,
+    ganttEnabled: true,
+    resourceMgmtEnabled: true,
+    approvalsEnabled: true,
+    proofingEnabled: true,
+    customWorkflowsEnabled: true,
+    aiPmCopilotEnabled: true,
+    maxPortfolios: UNLIMITED_PLAN_ITEMS,
+    maxRequestForms: UNLIMITED_PLAN_ITEMS,
+    maxBlueprints: UNLIMITED_PLAN_ITEMS,
+    maxCustomFields: UNLIMITED_PLAN_ITEMS,
+    maxDashboards: UNLIMITED_PLAN_ITEMS
+  }
+};
+
+/* ------------------------------------------------------------------ *
+ * PLANNING LAYER (V6) — types both apps agree on.
+ *
+ * WHAT: the work-item hierarchy, custom workflows/fields, scheduling, resourcing, intake,
+ * approvals and the AI proposal envelope.
+ * WHY these live here and not in either app: the same drift argument the file header makes for
+ * TicketStatus applies doubly to a workflow whose statuses are ADMIN-DEFINED — the API decides
+ * whether a transition is legal and the board renders the columns, and those two must be reading
+ * the same category vocabulary or a column silently accepts a drop the server then rejects.
+ * ------------------------------------------------------------------ */
+
+/**
+ * The canonical vocabulary every custom status maps onto.
+ *
+ * THIS IS THE COMPATIBILITY HINGE OF THE WHOLE V6 PLANNING LAYER. An admin may rename "In
+ * review" to "Design QA" or add "Blocked", but every status they define must declare which of
+ * these five it behaves like. Existing code — the SLA sweep, escalation worker, every report,
+ * the Kanban's column set, `ticketStatusTransitions` — keeps reading the unchanged
+ * `Ticket.status` enum, which is derived from the status's `legacyStatus`. Nothing downstream
+ * has to learn about custom statuses to keep working correctly.
+ */
+export const workStatusCategories = ["TODO", "ACTIVE", "REVIEW", "DONE", "CANCELLED"] as const;
+export type WorkStatusCategory = (typeof workStatusCategories)[number];
+
+/** The one mapping that makes a custom workflow safe: which category each built-in status IS.
+ *  The seeded "Default" workflow is exactly this table, so a workspace that never touches
+ *  workflow settings behaves identically to V5. */
+export const DEFAULT_STATUS_CATEGORY: Record<TicketStatus, WorkStatusCategory> = {
+  OPEN: "TODO",
+  IN_PROGRESS: "ACTIVE",
+  IN_REVIEW: "REVIEW",
+  RESOLVED: "DONE",
+  CLOSED: "DONE",
+  REOPENED: "TODO"
+};
+
+export interface WorkflowStatusRow {
+  id: string;
+  name: string;
+  category: WorkStatusCategory;
+  /** Which built-in `TicketStatus` this status writes to `Ticket.status`. Every custom status
+   *  must pick one — that column stays canonical for all pre-V6 code. */
+  legacyStatus: TicketStatus;
+  color: string | null;
+  order: number;
+  isInitial: boolean;
+  isFinal: boolean;
+}
+
+export interface WorkflowRow {
+  id: string;
+  name: string;
+  description: string | null;
+  /** Null = the workspace default, used by any ticket type without its own workflow. */
+  appliesToTicketType: string | null;
+  isDefault: boolean;
+  isActive: boolean;
+  statuses: WorkflowStatusRow[];
+  transitions: Array<{ id: string; fromStatusId: string; toStatusId: string; requiresApproval: boolean }>;
+}
+
+export const customFieldTypes = [
+  "TEXT",
+  "NUMBER",
+  "DATE",
+  "SINGLE_SELECT",
+  "MULTI_SELECT",
+  "CHECKBOX",
+  "USER",
+  "CURRENCY",
+  "URL"
+] as const;
+export type CustomFieldType = (typeof customFieldTypes)[number];
+
+export const customFieldTargets = ["TICKET", "PROJECT"] as const;
+export type CustomFieldTarget = (typeof customFieldTargets)[number];
+
+export interface CustomFieldRow {
+  id: string;
+  key: string;
+  label: string;
+  type: CustomFieldType;
+  description: string | null;
+  /** Only for SINGLE_SELECT/MULTI_SELECT. */
+  options: string[];
+  isRequired: boolean;
+  appliesTo: CustomFieldTarget;
+  /** Null = every ticket type. Otherwise the `TicketType.name` this field is scoped to. */
+  ticketTypeFilter: string | null;
+  showOnRequestForm: boolean;
+  order: number;
+  isActive: boolean;
+}
+
+/** A field's stored value, normalised per type: string | number | boolean | string[] | null. */
+export type CustomFieldValue = string | number | boolean | string[] | null;
+
+export const planViewTypes = ["LIST", "BOARD", "TIMELINE", "CALENDAR", "WORKLOAD"] as const;
+export type PlanViewType = (typeof planViewTypes)[number];
+
+export const savedViewScopes = ["PERSONAL", "SHARED"] as const;
+export type SavedViewScope = (typeof savedViewScopes)[number];
+
+/** Scheduling relationship between two work items. The first three mirror the existing
+ *  TicketLinkType values and are unchanged; the four `*_TO_*` values are the standard PM
+ *  dependency kinds the timeline solver understands. BLOCKS is treated as FINISH_TO_START by
+ *  the solver so every dependency already recorded in V5 keeps meaning what it meant. */
+export const ticketLinkTypes = [
+  "BLOCKS",
+  "DUPLICATE",
+  "RELATES",
+  "FINISH_TO_START",
+  "START_TO_START",
+  "FINISH_TO_FINISH",
+  "START_TO_FINISH"
+] as const;
+export type TicketLinkType = (typeof ticketLinkTypes)[number];
+
+/** Which link types the timeline solver treats as real scheduling constraints. */
+export const SCHEDULING_LINK_TYPES: readonly TicketLinkType[] = [
+  "BLOCKS",
+  "FINISH_TO_START",
+  "START_TO_START",
+  "FINISH_TO_FINISH",
+  "START_TO_FINISH"
+];
+
+export const approvalDecisions = ["PENDING", "APPROVED", "REJECTED"] as const;
+export type ApprovalDecision = (typeof approvalDecisions)[number];
+
+export const blueprintKinds = ["PROJECT", "WORK_ITEM"] as const;
+export type BlueprintKind = (typeof blueprintKinds)[number];
+
+export const reportCadences = ["DAILY", "WEEKLY", "MONTHLY"] as const;
+export type ReportCadence = (typeof reportCadences)[number];
+
+export const riskBands = ["GREEN", "AMBER", "RED"] as const;
+export type RiskBand = (typeof riskBands)[number];
+
+/**
+ * AI PM copilot proposals — the human-in-the-loop envelope.
+ *
+ * WHY every AI planning feature returns one of these instead of writing directly: a wrong
+ * auto-applied schedule shift or reassignment is indistinguishable from a real plan change once
+ * it lands, and there is no undo for "the AI moved 40 dates". A proposal is a set of individually
+ * accept/reject-able diffs a human applies, which is the same posture the email/chat intake
+ * pipelines already take with `needsReview` — generalised to writes instead of just triage.
+ */
+export const aiProposalKinds = [
+  "PLAN_BREAKDOWN",
+  "SCHEDULE_ADJUSTMENT",
+  "ASSIGNMENT_REBALANCE",
+  "RISK_MITIGATION",
+  "BLUEPRINT_SUGGESTION"
+] as const;
+export type AiProposalKind = (typeof aiProposalKinds)[number];
+
+export const aiProposalStatuses = [
+  "PENDING_REVIEW",
+  "PARTIALLY_APPLIED",
+  "APPLIED",
+  "REJECTED",
+  "EXPIRED"
+] as const;
+export type AiProposalStatus = (typeof aiProposalStatuses)[number];
+
+export const aiProposalChangeOps = ["CREATE", "UPDATE", "LINK"] as const;
+export type AiProposalChangeOp = (typeof aiProposalChangeOps)[number];
+
+/** Workspace-wide planning toggles. Every one defaults false — same inert-until-opted-in rule
+ *  every existing capability in this app follows, so upgrading to V6 changes nothing visible
+ *  until an admin turns something on. */
+export interface GlobalPlanningSettings {
+  enablePlanning: boolean;
+  enableResourceManagement: boolean;
+  enableApprovals: boolean;
+  enableProofing: boolean;
+  enableRequestForms: boolean;
+  enableCustomWorkflows: boolean;
+  /** Default working days for the timeline solver, 0 = Sunday. */
+  workingDays: number[];
+  /** Fallback capacity when a user has no `weeklyCapacityHours` of their own. */
+  defaultWeeklyCapacityHours: number;
+  updatedAt: string;
+  updatedById: string | null;
+}

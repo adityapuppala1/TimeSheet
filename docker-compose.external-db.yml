@@ -1,0 +1,77 @@
+# Same "on-prem / single-org" shape as docker-compose.yml, for a deployment pointing at a real
+# MySQL server the operator already runs (a dedicated on-prem box, a managed service like RDS/
+# Cloud SQL, etc.) instead of the bundled `mysql` container that file provisions. A standalone
+# file rather than a docker-compose.yml override, deliberately: Compose's override-merge
+# semantics for removing a service/dependency entirely (rather than just adding/changing keys)
+# need a fairly recent Compose version (`!reset`), and a plain second file with no merge tricks
+# needed is simpler to reason about and works on any Compose version.
+#
+# Used automatically by install.sh/install.ps1 when you choose "connect to your own existing
+# MySQL server" during setup — see docs/DEPLOYMENT.md's "Bringing your own MySQL server" section
+# for what changes vs. docker-compose.yml (in short: no `mysql` service, no `depends_on` on it,
+# no `mysql-data` volume — everything else, including the migration-then-start command and every
+# env var, is identical).
+services:
+  api:
+    build:
+      context: .
+      dockerfile: apps/api/Dockerfile
+    environment:
+      NODE_ENV: production
+      TZ: ${TZ:-Asia/Kolkata}
+      DATABASE_URL: ${DATABASE_URL:?DATABASE_URL must be set}
+      CONTROL_DATABASE_URL: ${CONTROL_DATABASE_URL:?CONTROL_DATABASE_URL must be set}
+      DEFAULT_ORG_SLUG: ${DEFAULT_ORG_SLUG:-default}
+      JWT_ACCESS_SECRET: ${JWT_ACCESS_SECRET:?JWT_ACCESS_SECRET must be set}
+      JWT_REFRESH_SECRET: ${JWT_REFRESH_SECRET:?JWT_REFRESH_SECRET must be set}
+      PLATFORM_ADMIN_JWT_SECRET: ${PLATFORM_ADMIN_JWT_SECRET:?PLATFORM_ADMIN_JWT_SECRET must be set}
+      ENCRYPTION_KEY: ${ENCRYPTION_KEY:?ENCRYPTION_KEY must be set}
+      ACCESS_TOKEN_TTL: ${ACCESS_TOKEN_TTL:-15m}
+      REFRESH_TOKEN_TTL_DAYS: ${REFRESH_TOKEN_TTL_DAYS:-14}
+      API_PORT: 4000
+      WEB_ORIGIN: ${WEB_ORIGIN:?WEB_ORIGIN must be set (your production domain)}
+      APP_BASE_URL: ${APP_BASE_URL:?APP_BASE_URL must be set (your production domain)}
+      MAIL_FROM: ${MAIL_FROM:-Timesheet Portal <no-reply@timesheet.local>}
+      SMTP_HOST: ${SMTP_HOST:-}
+      SMTP_PORT: ${SMTP_PORT:-587}
+      SMTP_USER: ${SMTP_USER:-}
+      SMTP_PASS: ${SMTP_PASS:-}
+      SMTP_SECURE: ${SMTP_SECURE:-false}
+      UPLOAD_DIR: /app/uploads
+      SLA_ENABLED: ${SLA_ENABLED:-true}
+      TICKET_SLA_ENABLED: ${TICKET_SLA_ENABLED:-true}
+      TICKET_SLA_CRON_SCHEDULE: ${TICKET_SLA_CRON_SCHEDULE:-*/15 * * * *}
+      TICKET_SLA_LOW_HOURS: ${TICKET_SLA_LOW_HOURS:-168}
+      TICKET_SLA_MEDIUM_HOURS: ${TICKET_SLA_MEDIUM_HOURS:-72}
+      TICKET_SLA_HIGH_HOURS: ${TICKET_SLA_HIGH_HOURS:-24}
+      TICKET_SLA_CRITICAL_HOURS: ${TICKET_SLA_CRITICAL_HOURS:-4}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+    ports:
+      - "4000:4000"
+    volumes:
+      - api-uploads:/app/uploads
+    # No `depends_on` on a bundled mysql service — there isn't one in this file. Your own MySQL
+    # server is assumed already up and reachable; the migration step below fails fast (crashing
+    # the container, which `restart: unless-stopped` + the installer's health-check auto-heal
+    # already handle the same way they handle any other first-boot flake) if it isn't.
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://localhost:4000/health').then(r=>r.ok?process.exit(0):process.exit(1)).catch(()=>process.exit(1))"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+    command: sh -c "npx prisma migrate deploy --schema=apps/api/prisma/schema.prisma && npx prisma migrate deploy --schema=apps/api/prisma/control/schema.prisma && node apps/api/dist/src/server.js"
+
+  web:
+    build:
+      context: .
+      dockerfile: apps/web/Dockerfile
+    ports:
+      - "5173:80"
+    depends_on:
+      - api
+    restart: unless-stopped
+
+volumes:
+  api-uploads:
