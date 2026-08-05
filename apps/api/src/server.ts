@@ -115,6 +115,29 @@ function assertProductionSafety() {
 assertProductionSafety();
 
 const server: Server = app.listen(env.API_PORT, async () => {
+  /* startup banner below */
+});
+
+/**
+ * Single-instance guard. Without it, a second `npm run dev` used to LOOK like it worked: this
+ * process crashed with a raw EADDRINUSE stack, but Vite (which picks the next free port when
+ * unguarded) came up anyway and proxied to the FIRST instance — a half-dead stack quietly
+ * burning CPU and RAM per extra invocation, with nothing on screen saying so. Now the duplicate
+ * names the situation and exits 0: not an error, just "already running, use the existing one".
+ */
+server.on("error", (err: NodeJS.ErrnoException) => {
+  if (err.code === "EADDRINUSE") {
+    console.log(
+      `\n[api] Port ${env.API_PORT} is already in use — another API instance is running.\n` +
+        `[api] One backend is all the app needs; this duplicate will exit. Use the existing one,\n` +
+        `[api] or stop it first if you meant to restart (the process listening on :${env.API_PORT}).`
+    );
+    process.exit(0);
+  }
+  throw err;
+});
+
+server.on("listening", async () => {
   const now = new Date();
   const offsetMinutes = -now.getTimezoneOffset();
   const offsetSign = offsetMinutes >= 0 ? "+" : "-";

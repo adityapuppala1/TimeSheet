@@ -173,7 +173,9 @@ export function GuidedFaceEnrollment({
 
   return (
     <div className="grid gap-4">
-      <div className="flex items-center justify-between gap-3">
+      {/* flex-wrap: on narrow phones the four step chips drop below the title instead of
+          squeezing it into a one-word-per-line column. */}
+      <div className="flex flex-wrap items-center justify-between gap-3">
         <div className="min-w-0">
           <p className="text-sm font-semibold">{running ? step.title : "Four quick positions"}</p>
           <p className="text-xs text-muted-foreground">
@@ -204,12 +206,14 @@ export function GuidedFaceEnrollment({
       <FaceCapture
         ref={captureRef}
         onCapture={() => {
-          /* The wizard drives capture itself; the shutter button is hidden while it runs. */
+          /* The wizard drives capture imperatively; controls="none" removes the component's own
+             shutter — which used to render as a second, DEAD "Start" beside the wizard's real
+             one. Camera-enable/retry stays with FaceCapture in every mode. */
         }}
         busy={busy || running}
         autoStart
         overlayText={running ? step.title : null}
-        captureLabel="Start"
+        controls="none"
       />
 
       {running && step.target && (

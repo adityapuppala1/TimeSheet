@@ -30,6 +30,12 @@ import { AppError } from "../middleware/error.js";
 import { decryptSecret } from "../utils/encryption.js";
 import { fetchGitHubPullRequestFiles, GIT_INTEGRATION_SYSTEM_EMAIL, postGitHubPullRequestReview } from "../services/git-provider.service.js";
 import { reviewPullRequestDiff, summarizePullRequest } from "../services/ai.service.js";
+import {
+  GIT_WEBHOOK_PROVIDERS,
+  normalizeGitWebhook,
+  verifyGitWebhook,
+  type GitWebhookProvider
+} from "../services/git-webhook-providers.js";
 
 export const gitWebhookRouter = Router();
 
@@ -197,6 +203,92 @@ gitWebhookRouter.post("/webhook/:orgSlug", express.raw({ type: "application/json
       }
 
       res.status(200).json({ ok: true, ignored: true });
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
+/**
+ * Multi-provider receiver — GitLab, Bitbucket Cloud, Gitea, Forgejo, Azure DevOps.
+ *
+ * Same job as the GitHub route above (branch/PR → TicketBranch, matched by ticket-key-shaped
+ * token in the branch name), same shared webhook secret, but each provider's own auth scheme
+ * and payload dialect — both translated by services/git-webhook-providers.ts so this handler
+ * stays provider-blind. The AI PR-review summary stays GitHub-only: it needs the provider's
+ * API to fetch the diff, and only the GitHub OAuth connection holds a token for that.
+ *
+ * Express routing note: `/webhook/:orgSlug` above matches exactly one path segment, so this
+ * two-segment route never shadows or races it.
+ */
+gitWebhookRouter.post("/webhook/:orgSlug/:provider", express.raw({ type: "application/json" }), async (req, res, next) => {
+  try {
+    const provider = String(req.params.provider) as GitWebhookProvider;
+    if (!GIT_WEBHOOK_PROVIDERS.includes(provider)) {
+      throw new AppError(404, `Unknown git provider "${provider}". Supported: ${GIT_WEBHOOK_PROVIDERS.join(", ")}.`);
+    }
+    const rawBody = (req.body ?? Buffer.alloc(0)) as Buffer;
+    const parsedBody = JSON.parse(rawBody.toString("utf8") || "{}") as Record<string, unknown>;
+
+    await withOrgTenant(String(req.params.orgSlug), async () => {
+      const connection = await prisma.gitConnection.findUnique({ where: { id: "global" } });
+      if (!connection?.encryptedWebhookSecret) {
+        throw new AppError(404, "The git webhook secret isn't configured for this workspace — generate it in Workspace Settings → Security & DevOps.");
+      }
+      const secret = decryptSecret(connection.encryptedWebhookSecret);
+      if (
+        !verifyGitWebhook({
+          provider,
+          secret,
+          rawBody,
+          headers: req.headers as Record<string, unknown>,
+          query: req.query as Record<string, unknown>
+        })
+      ) {
+        throw new AppError(401, "Invalid webhook credentials.");
+      }
+
+      const event = normalizeGitWebhook({ provider, headers: req.headers as Record<string, unknown>, body: parsedBody });
+      if (event.kind === "ignored") {
+        return res.status(200).json({ ok: true, ignored: true, reason: event.reason });
+      }
+
+      const ticketKey = extractTicketKey(event.branch);
+      if (!ticketKey) return res.status(200).json({ ok: true, matched: false });
+      const ticket = await prisma.ticket.findFirst({ where: { key: ticketKey, deletedAt: null } });
+      if (!ticket) return res.status(200).json({ ok: true, matched: false });
+
+      const systemUser = await prisma.user.findUnique({ where: { email: GIT_INTEGRATION_SYSTEM_EMAIL } });
+      if (!systemUser) throw new AppError(500, "Git integration system account is missing — run the seed script.");
+
+      const existing = await prisma.ticketBranch.findFirst({
+        where: { ticketId: ticket.id, repository: event.repository, branch: event.branch }
+      });
+      if (event.kind === "push") {
+        if (!existing) {
+          await prisma.ticketBranch.create({
+            data: { ticketId: ticket.id, repository: event.repository, branch: event.branch, addedById: systemUser.id }
+          });
+        }
+      } else if (existing) {
+        await prisma.ticketBranch.update({
+          where: { id: existing.id },
+          data: { prUrl: event.prUrl ?? existing.prUrl, prStatus: event.prStatus }
+        });
+      } else {
+        await prisma.ticketBranch.create({
+          data: {
+            ticketId: ticket.id,
+            repository: event.repository,
+            branch: event.branch,
+            prUrl: event.prUrl,
+            prStatus: event.prStatus,
+            addedById: systemUser.id
+          }
+        });
+      }
+
+      return res.status(200).json({ ok: true, matched: true, provider });
     });
   } catch (error) {
     next(error);

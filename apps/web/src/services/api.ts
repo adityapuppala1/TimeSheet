@@ -1475,6 +1475,9 @@ export interface GitConnectionStatus {
   connectedAt: string | null;
   webhookSecretSet: boolean;
   webhookUrl: string;
+  /** Per-provider receiver URLs (gitlab, bitbucket, gitea, forgejo, azure-devops) — all
+   *  verified against the same webhook secret as the GitHub URL above. */
+  providerWebhookUrls: Record<string, string>;
 }
 export interface GitHubRepoSummary {
   fullName: string;

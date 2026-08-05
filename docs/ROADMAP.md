@@ -1854,3 +1854,20 @@ header), the test passes 3/3 repeats on WebKit and all 13 picker tests stay gree
 pass: the acme tenant database was missing the morning's migration (`prisma migrate dev` only
 touches the default DB — `migrate:tenants` is the step that walks every tenant, and the one-click
 updater already runs it), and `fresh-checkout-org` was archived, silencing the per-worker skip.
+
+### Follow-up: six git providers, one honest receiver — and three small truths (2026-08-05)
+
+- [x] **Branch/PR auto-sync beyond GitHub**: GitLab, Bitbucket Cloud, Gitea, Forgejo and Azure
+  DevOps now feed the same receiver — one shared webhook secret, each provider verified in its
+  own dialect by a pure translation module (`git-webhook-providers.ts`, 9 unit tests) and synced
+  by one provider-blind handler. Driven end-to-end in e2e: a GitLab push creates the Dev-tab row,
+  a Gitea merged-PR upgrades the same row (never a second one), wrong credentials 401, unknown
+  providers 404. Deliberately excluded, with reasons in the docs: AWS CodeCommit (AWS closed it
+  to new customers July 2024) and SourceForge (no usable webhook API). Azure DevOps signs
+  nothing, so its verification is stated as the weaker secret-in-transit scheme it is.
+- [x] **A duplicate `npm run dev` now explains itself and exits** instead of leaving a half-dead
+  stack per invocation (crashed API + a Vite on the next port proxying to the survivor).
+- [x] **The face wizard's five buttons became the right two** — the capture surface was rendering
+  a dead "Start" beside the wizard's real one, and two Cancels — and the training report now
+  fits a 360px phone (rejection reasons wrap on their own line). Both verified by a new
+  phone-width spec that opens the wizard and counts the buttons.

@@ -294,3 +294,31 @@ translate into the payload shape above works. Common choices per category:
 - **429 Too Many Requests** — the ingestion endpoint is rate-limited (120 req/min per IP,
   shared across all your CI runners hitting from the same egress IP) — batch findings into
   fewer, larger requests rather than one request per finding.
+
+## 8. Git webhooks — branch/PR auto-sync from any of six providers
+
+Separate from findings ingestion above: pushing a branch named with a ticket key (e.g.
+`WEB-123-fix-login`) or opening/merging a PR on it auto-syncs the ticket's **Dev tab**. GitHub
+was first; the same receiver now speaks five more dialects, all verified against the **one**
+workspace webhook secret (Workspace Settings → Security & DevOps → generate/rotate):
+
+| Provider | Webhook URL (shown in Workspace Settings) | Where the secret goes |
+|---|---|---|
+| GitHub | `/api/git/webhook/<org>` | Webhook "Secret" (HMAC `X-Hub-Signature-256`) |
+| GitLab | `/api/git/webhook/<org>/gitlab` | "Secret token" (sent as `X-Gitlab-Token`) |
+| Bitbucket Cloud | `/api/git/webhook/<org>/bitbucket` | Webhook "Secret" (HMAC `X-Hub-Signature`) |
+| Gitea | `/api/git/webhook/<org>/gitea` | Webhook "Secret" (HMAC) |
+| Forgejo | `/api/git/webhook/<org>/forgejo` | Webhook "Secret" (HMAC) |
+| Azure DevOps | `/api/git/webhook/<org>/azure-devops` | Service-hook **basic-auth password**, or append `?token=<secret>` |
+
+Subscribe each repo to **push** and **pull/merge request** events, content type JSON. A branch
+with no ticket-key-shaped token is acknowledged and ignored (200) — providers disable webhooks
+that keep erroring, so "not ours" is never an error.
+
+Honesty notes: Azure DevOps service hooks sign nothing, so its verification is
+secret-in-transit rather than proof-of-possession — serve the app over https and treat the
+secret as rotatable. The AI PR-review summary remains GitHub-only (it needs the provider's API
+to read the diff; only the GitHub OAuth connection holds a token). **AWS CodeCommit** is not
+supported: AWS closed it to new customers in July 2024 and is steering existing ones off it.
+**SourceForge** exposes no usable webhook for this purpose. For both, the Dev tab's manual
+branch/PR links work exactly as before — as they do for any provider you simply don't wire up.

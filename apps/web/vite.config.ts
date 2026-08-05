@@ -78,7 +78,11 @@ export default defineConfig(({ mode }) => {
     server: {
       host: true,
       port: 5173,
-      strictPort: false,
+      // Strict on purpose: with this false, a second `npm run dev` silently came up on 5174 —
+      // proxying to whichever API instance survived — and the machine accumulated half-dead
+      // stacks that all LOOKED like the app. Failing loudly ("port in use") pairs with the API's
+      // own EADDRINUSE guard: one running stack, or a clear message.
+      strictPort: true,
       /**
        * Optional HTTPS for the dev server, enabled by dropping a key/cert pair at
        * `apps/web/certs/` (or pointing DEV_HTTPS_KEY / DEV_HTTPS_CERT elsewhere).

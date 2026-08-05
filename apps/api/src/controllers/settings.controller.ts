@@ -997,7 +997,17 @@ settingsRouter.get("/git", requireSuperAdmin, async (req, res) => {
     // the admin can copy-paste it into each repo's GitHub webhook config without guessing the
     // URL shape (see controllers/git-webhook.controller.ts's own comment on why this is a
     // per-repo webhook, not one org-wide URL GitHub calls automatically).
-    webhookUrl: `${req.protocol}://${req.get("host")}/api/git/webhook/${orgSlug}`
+    webhookUrl: `${req.protocol}://${req.get("host")}/api/git/webhook/${orgSlug}`,
+    /** One URL per non-GitHub provider, all verified against the SAME webhook secret. Paste the
+     *  matching one into the provider's webhook config: GitLab (Secret token), Bitbucket
+     *  (Secret), Gitea/Forgejo (Secret, HMAC), Azure DevOps (basic-auth password or ?token=).
+     *  See docs/SECURITY_DEVOPS_INTEGRATIONS.md § Git webhooks. */
+    providerWebhookUrls: Object.fromEntries(
+      ["gitlab", "bitbucket", "gitea", "forgejo", "azure-devops"].map((p) => [
+        p,
+        `${req.protocol}://${req.get("host")}/api/git/webhook/${orgSlug}/${p}`
+      ])
+    )
   });
 });
 

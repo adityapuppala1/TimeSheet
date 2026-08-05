@@ -369,6 +369,31 @@ outcome is not a security control.
   Two parallel workers used to suspend the gate and the first to finish restored it mid-run,
   producing an intermittent failure that always pointed at the wrong thing.
 
+### 🔀 Git integrations beyond GitHub
+
+- **Branch/PR auto-sync from six providers.** The webhook receiver now speaks GitLab, Bitbucket
+  Cloud, Gitea, Forgejo and Azure DevOps alongside GitHub — same ticket-key-in-branch-name
+  matching, same Dev-tab rows, one shared webhook secret, each provider verified in its own
+  dialect (HMAC where the provider signs; Azure DevOps via basic-auth/`?token=`, stated plainly
+  as the weaker scheme it is). Per-provider URLs are shown in Workspace Settings → Security &
+  DevOps, which no longer requires a GitHub connection to generate the secret. Deliberately not
+  included: AWS CodeCommit (closed to new customers by AWS, July 2024) and SourceForge (no
+  usable webhook API) — manual Dev-tab links cover both, as they always did.
+
+### 🧰 Dev-machine and face-flow polish
+
+- **A second `npm run dev` now says so and stops.** Previously the duplicate API crashed with a
+  raw stack while a duplicate Vite silently took the next port and proxied to the survivor — a
+  half-dead stack per invocation, each burning RAM and CPU while looking like the app. The API
+  now exits cleanly naming the running instance, and Vite fails loudly instead of port-hopping.
+- **The face wizard had five buttons; now it has the right ones.** The capture surface rendered
+  its own shutter even when a wizard drove it — a dead "Start" beside the real one — plus a
+  "Turn off" that read as a second cancel, plus a literal second Cancel below the wizard. Each
+  parent now states which controls it owns; one Start, one Cancel, everywhere.
+- **The training report fits a phone.** Rejection reasons drop to their own indented line on
+  narrow screens instead of pushing the card past the viewport edge; wizard step chips wrap
+  below the title. Verified by a new 360px-wide spec with the wizard open.
+
 ### 🔒 HTTPS, shipped as a runbook
 
 - **One-command LAN certificates**: `scripts/make-lan-certs.{ps1,sh}` installs a local CA

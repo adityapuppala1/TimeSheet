@@ -303,6 +303,9 @@ export function FaceVerificationDialog({ open, onOpenChange, context, onVerified
           overlayText={overlay}
           autoStart
           autoCapture={autoScanActive}
+          // The dialog's own Cancel closes and unmounting stops the camera — FaceCapture's
+          // "Turn off" here was a duplicate that read like a second cancel.
+          controls="capture-only"
         />
 
         {/* The movement meter, repeated below the preview. The overlay version sits on a dark

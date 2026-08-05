@@ -672,6 +672,68 @@ export function SecurityDevOpsSettingsCard({ readOnly }: { readOnly: boolean }) 
           )}
         </CardContent>
       </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2 text-base">
+            <GitBranch className="h-4 w-4 text-primary" />
+            Other git providers — branch/PR auto-sync
+          </CardTitle>
+          <CardDescription>
+            GitLab, Bitbucket Cloud, Gitea, Forgejo and Azure DevOps can push branch and pull-request
+            events straight into ticket Dev tabs — no OAuth needed. Add a webhook in the repo (pushes +
+            pull/merge requests, JSON) using the URL for your provider and the <strong>same webhook
+            secret</strong> as GitHub above: GitLab takes it as the "Secret token", Gitea/Forgejo as the
+            HMAC secret, Bitbucket as the webhook "Secret", Azure DevOps as the basic-auth password (or
+            append <code className="rounded bg-muted px-1 py-0.5 text-xs">?token=…</code>). Branches are
+            matched to tickets by a ticket key in the branch name, e.g.{" "}
+            <code className="rounded bg-muted px-1 py-0.5 text-xs">WEB-123-fix-login</code>.
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="grid gap-3">
+          {git.data?.providerWebhookUrls ? (
+            <>
+              {Object.entries(git.data.providerWebhookUrls).map(([provider, url]) => (
+                <CopyableUrl
+                  key={provider}
+                  label={provider === "azure-devops" ? "Azure DevOps" : provider.charAt(0).toUpperCase() + provider.slice(1)}
+                  url={url}
+                />
+              ))}
+              {/* An org can use these providers WITHOUT ever connecting GitHub, so the secret has
+                  to be generatable here too — it's the same secret, shown once, either place. */}
+              {!git.data.webhookSecretSet && !readOnly && (
+                <Button
+                  size="sm"
+                  variant="outline"
+                  className="justify-self-start"
+                  onClick={() => rotateWebhookSecret.mutate()}
+                  disabled={rotateWebhookSecret.isPending}
+                >
+                  <KeyRound className="h-3.5 w-3.5" />
+                  Generate webhook secret
+                </Button>
+              )}
+              {revealedWebhookSecret && !git.data.connected && (
+                <div className="grid gap-1">
+                  <span className="text-xs font-semibold text-warning">Copy this secret now — it won't be shown again.</span>
+                  <div className="flex min-w-0 items-center gap-2 rounded-md border border-warning/40 bg-warning/5 px-3 py-2">
+                    <code className="min-w-0 flex-1 truncate text-xs">{revealedWebhookSecret}</code>
+                  </div>
+                </div>
+              )}
+              <p className="text-xs text-muted-foreground">
+                The AI PR-review summary stays GitHub-only for now (it needs the provider's API to read
+                the diff). AWS CodeCommit isn't supported — AWS closed it to new customers in July 2024 —
+                and SourceForge has no usable webhook API; for both, the Dev tab's manual branch/PR links
+                work as always.
+              </p>
+            </>
+          ) : (
+            <Skeleton className="h-16 w-full" />
+          )}
+        </CardContent>
+      </Card>
     </div>
   );
 }

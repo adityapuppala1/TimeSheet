@@ -166,16 +166,12 @@ export function FaceEnrollmentCard() {
                   Retrain your face model — this replaces the current reference set.
                 </p>
                 {error && <p className="text-sm text-destructive">{error}</p>}
+                {/* The wizard carries its own Cancel — a second one below it was a duplicate. */}
                 <GuidedFaceEnrollment
                   busy={enroll.isPending}
                   onComplete={(frames) => enroll.mutate(frames)}
                   onCancel={() => setCapturing(false)}
                 />
-                <div className="flex justify-center">
-                  <Button variant="ghost" onClick={() => setCapturing(false)}>
-                    Cancel
-                  </Button>
-                </div>
               </div>
             ) : (
               <div className="flex flex-col gap-2 sm:flex-row">
@@ -260,9 +256,12 @@ export function FaceEnrollmentCard() {
 function TrainingReportPanel({ report, onDismiss }: { report: TrainingReport; onDismiss: () => void }) {
   const allGood = report.templatesStored === report.framesSubmitted;
   return (
-    <div className="rounded-lg border border-border bg-muted/30 p-3" role="status">
-      <div className="mb-2 flex items-center justify-between gap-2">
-        <p className="text-sm font-medium">
+    // min-w-0 + wrapping headers: this panel lives inside a CSS-grid page column, whose children
+    // default to min-width:auto — the exact mechanism by which a long rejection reason was
+    // pushing the whole card wider than a phone screen.
+    <div className="min-w-0 rounded-lg border border-border bg-muted/30 p-3" role="status">
+      <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+        <p className="min-w-0 text-sm font-medium">
           Training {allGood ? "complete" : "finished"} — {report.templatesStored} of {report.framesSubmitted}{" "}
           {report.framesSubmitted === 1 ? "shot" : "shots"} stored
         </p>
@@ -272,25 +271,30 @@ function TrainingReportPanel({ report, onDismiss }: { report: TrainingReport; on
       </div>
       <ul className="grid gap-1.5">
         {report.frameResults.map((f) => (
-          <li key={f.index} className="flex items-center gap-2 text-xs">
+          <li key={f.index} className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 text-xs">
             {f.accepted ? (
               <CheckCircle2 className="h-3.5 w-3.5 shrink-0 text-emerald-600 dark:text-emerald-400" />
             ) : (
               <ShieldAlert className="h-3.5 w-3.5 shrink-0 text-amber-600 dark:text-amber-400" />
             )}
-            <span className="font-medium">Shot {f.index + 1}</span>
+            <span className="shrink-0 font-medium">Shot {f.index + 1}</span>
             {f.accepted ? (
-              <span className="flex min-w-0 flex-1 items-center gap-2 text-muted-foreground">
-                <span className="h-1.5 max-w-24 flex-1 overflow-hidden rounded-full bg-muted">
+              <span className="flex min-w-24 flex-1 items-center gap-2 text-muted-foreground">
+                <span className="h-1.5 w-full max-w-24 overflow-hidden rounded-full bg-muted">
                   <span
                     className="block h-full rounded-full bg-emerald-500/70"
                     style={{ width: `${Math.round((f.quality ?? 0) * 100)}%` }}
                   />
                 </span>
-                quality {(f.quality ?? 0).toFixed(2)}
+                <span className="whitespace-nowrap">quality {(f.quality ?? 0).toFixed(2)}</span>
               </span>
             ) : (
-              <span className="min-w-0 flex-1 truncate text-muted-foreground" title={f.reason ?? undefined}>
+              // Full width on phones — an indented, wrapping line people can actually read —
+              // and inline-truncated (title carries the full text) where the row has room.
+              <span
+                className="basis-full pl-5 text-muted-foreground sm:basis-auto sm:min-w-0 sm:flex-1 sm:truncate sm:pl-0"
+                title={f.reason ?? undefined}
+              >
                 {f.reason}
               </span>
             )}

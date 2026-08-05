@@ -82,6 +82,18 @@ interface FaceCaptureProps {
   poseChallenge?: PoseChallenge | null;
   /** Fired every tick with the challenge progress 0-1, so the parent can mirror it in its own UI. */
   onPoseProgress?: (progress: number) => void;
+  /**
+   * Which of this component's own buttons to render.
+   * - "full": shutter + "Turn off" (standalone usage).
+   * - "capture-only": just the shutter — for dialogs whose own Cancel already closes and stops
+   *   the camera; a second "Turn off" there was one of the duplicate buttons users tripped on.
+   * - "none": no controls at all — for wizard parents that drive capture imperatively; the old
+   *   behavior rendered a shutter wired to a no-op, which is worse than a duplicate: a dead
+   *   "Start" right beside the real one.
+   * The "Turn on camera / Try again" button is exempt: enabling the camera (and recovering from
+   * a denied permission) is this component's own job in every mode.
+   */
+  controls?: "full" | "capture-only" | "none";
 }
 
 export const FaceCapture = forwardRef<FaceCaptureHandle, FaceCaptureProps>(function FaceCapture(
@@ -96,7 +108,8 @@ export const FaceCapture = forwardRef<FaceCaptureHandle, FaceCaptureProps>(funct
     autoStart = false,
     autoCapture = false,
     poseChallenge = null,
-    onPoseProgress
+    onPoseProgress,
+    controls = "full"
   }: FaceCaptureProps,
   ref
 ) {
@@ -487,35 +500,42 @@ export const FaceCapture = forwardRef<FaceCaptureHandle, FaceCaptureProps>(funct
         </p>
       )}
 
-      {/* Stacks on phones, inline from sm up. */}
-      <div className="flex w-full max-w-sm flex-col gap-2 sm:flex-row sm:justify-center">
-        {showStart ? (
-          <Button type="button" onClick={start} className="w-full sm:w-auto">
-            <Camera className="mr-2 h-4 w-4" />
-            {state === "idle" ? "Turn on camera" : "Try again"}
-          </Button>
-        ) : (
-          <>
-            <Button type="button" onClick={capture} disabled={!live || busy} className="w-full sm:w-auto">
-              {busy ? <RefreshCw className="mr-2 h-4 w-4 animate-spin" /> : <ShieldCheck className="mr-2 h-4 w-4" />}
-              {busy ? "Checking…" : captureLabel}
+      {/* Stacks on phones, inline from sm up. One row, whose contents depend on `controls` —
+          see the prop's comment for why wizard/dialog parents suppress pieces of it. */}
+      {(showStart || controls !== "none") && (
+        <div className="flex w-full max-w-sm flex-col gap-2 sm:flex-row sm:justify-center">
+          {showStart ? (
+            <Button type="button" onClick={start} className="w-full sm:w-auto">
+              <Camera className="mr-2 h-4 w-4" />
+              {state === "idle" ? "Turn on camera" : "Try again"}
             </Button>
-            <Button
-              type="button"
-              variant="outline"
-              onClick={() => {
-                stop();
-                setState("idle");
-              }}
-              disabled={busy}
-              className="w-full sm:w-auto"
-            >
-              <CameraOff className="mr-2 h-4 w-4" />
-              Turn off
-            </Button>
-          </>
-        )}
-      </div>
+          ) : (
+            controls !== "none" && (
+              <>
+                <Button type="button" onClick={capture} disabled={!live || busy} className="w-full sm:w-auto">
+                  {busy ? <RefreshCw className="mr-2 h-4 w-4 animate-spin" /> : <ShieldCheck className="mr-2 h-4 w-4" />}
+                  {busy ? "Checking…" : captureLabel}
+                </Button>
+                {controls === "full" && (
+                  <Button
+                    type="button"
+                    variant="outline"
+                    onClick={() => {
+                      stop();
+                      setState("idle");
+                    }}
+                    disabled={busy}
+                    className="w-full sm:w-auto"
+                  >
+                    <CameraOff className="mr-2 h-4 w-4" />
+                    Turn off
+                  </Button>
+                )}
+              </>
+            )
+          )}
+        </div>
+      )}
     </div>
   );
 });
