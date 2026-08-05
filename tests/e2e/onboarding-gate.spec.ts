@@ -17,9 +17,12 @@ import { withAdminRequest } from "./helpers/admin-request";
 test.describe("first-run onboarding gate", () => {
   test("no existing user is blocked — the backfill did its job", async () => {
     await withAdminRequest(async (ctx, headers) => {
-      const users: Array<{ id: string; email: string; onboardingCompletedAt: string | null }> = await (
-        await ctx.get("/api/users", { headers })
-      ).json();
+      const users: Array<{
+        id: string;
+        email: string;
+        createdAt: string;
+        onboardingCompletedAt: string | null;
+      }> = await (await ctx.get("/api/users", { headers })).json();
       expect(users.length).toBeGreaterThan(0);
 
       // ASSERTED BEFORE USE. An earlier version of this test fetched `/api/users/:id` — a route
@@ -30,11 +33,24 @@ test.describe("first-run onboarding gate", () => {
         users[0],
         "the users list must expose onboardingCompletedAt for this test to mean anything"
       ).toHaveProperty("onboardingCompletedAt");
+      expect(
+        users[0],
+        "the users list must expose createdAt for the pre-gate scoping below to mean anything"
+      ).toHaveProperty("createdAt");
 
-      // Every existing account must report onboarded. A null here means the migration's backfill
-      // missed someone, and that someone cannot use the app at all.
-      const gated = users.filter((user) => user.onboardingCompletedAt === null).map((user) => user.email);
-      expect(gated, "these existing users would be locked out by the gate").toEqual([]);
+      // The backfill's promise covers accounts that EXISTED when the gate shipped — the migration
+      // stamped every one of them, and a null on any of those means somebody who could use the
+      // app yesterday cannot today. An account created AFTER the gate shipped is legitimately
+      // un-onboarded until its owner first signs in; that is the gate doing its job, not a
+      // lockout. The first version of this test asserted null-free across ALL accounts, which was
+      // true on migration day and then failed the first time an admin added three real people —
+      // so the assertion is scoped by the migration's own timestamp, which keeps it true forever
+      // while still catching the only failure it exists to catch.
+      const GATE_SHIPPED_AT = new Date("2026-08-02T17:19:43Z"); // 20260802171943_user_onboarding_completed_at
+      const gated = users
+        .filter((user) => new Date(user.createdAt) < GATE_SHIPPED_AT && user.onboardingCompletedAt === null)
+        .map((user) => user.email);
+      expect(gated, "these pre-gate users would be locked out — the backfill missed them").toEqual([]);
     });
   });
 

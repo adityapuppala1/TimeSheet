@@ -572,6 +572,26 @@ while the DB shells are covered by Playwright.
 | `workers/project-risk.worker.ts` | Nightly `ProjectRiskSnapshot` per project, so risk has a trend and not just a current value. | `run-for-every-org.ts`, `project-risk.service.ts` | `server.ts` |
 | `workers/report-subscription.worker.ts` | Hourly at `:05`; `isDue`/`alreadySent` guard the cadence off `lastSentAt`, so a restart or a double-fired cron re-sends nothing. Resolves widgets **as the subscription's owner** and deactivates the subscription if that person leaves — a departed employee's report quietly mailing figures outward for months is the failure worth designing against. | `run-for-every-org.ts`, `dashboard.service.ts`, `notify.service.ts` | `server.ts` |
 | `components/PlanTimeline.tsx` (web) | The Gantt, hand-built as SVG over the existing d3 dependency rather than a chart library — dependency arrows, baseline ghosts, critical-path emphasis and drag-to-reschedule are not what an off-the-shelf chart does, and the theme tokens keep it looking like the rest of the product. Horizontal scroll is contained inside the pane, per the `body { overflow-x: clip }` rule documented in `index.css`. | `d3-scale`, `d3-zoom`, plan CSS tokens | `pages/Timeline.tsx` |
+| `components/PlanCalendar.tsx` (web) | The month event-calendar (Untitled UI's month-view design, drawn with this app's tokens). Chips are coloured by delivery-state category — the product's meaningful categorical axis — while an item with only an SLA date keeps a dashed outline instead of a coloured chip, because plotting a deadline as though somebody scheduled it would be lying. Weeks start Monday to agree with every weekly figure in the app. A multi-day item occupies every day it spans (bounded at 400), and the grid is always 6 rows so paging months never reflows the page. | plan CSS tokens, status-category tokens | `pages/Tickets.tsx` (Calendar tab) |
+
+### Shared date & calendar UI (web)
+
+Every date input in the product goes through these three files — there is deliberately no second
+calendar implementation to drift from the first. Built on `react-aria-components` (the same
+primitive Untitled UI itself wraps) because a calendar grid is one of the few widgets where
+hand-rolled accessibility is reliably wrong: roving tabindex over a 2-D grid, arrow keys across
+month boundaries, `role="grid"` semantics and month-change announcements all come tested against
+real screen readers. Styled entirely with the app's own HSL tokens — which is what makes dark mode
+work unmodified and avoided the Tailwind v4 migration adopting Untitled UI's package would have
+forced. All values are `CalendarDate`/ISO strings (no time, no zone), the same day-shift-bug
+avoidance `localIsoDate()` documents.
+
+| File | Purpose | Depends on | Depended on by |
+|---|---|---|---|
+| `components/ui/calendar-primitives.tsx` | The one month-grid every picker renders: nav buttons, heading, day-cell styling with a deliberate state priority (selection beats today beats hover), and a fixed minimum grid height — months span 5 or 6 week-rows, and a popover that resizes while paging jumps under the cursor (and made WebKit's click-stability check time out). | `react-aria-components`, `@internationalized/date` | `date-picker.tsx`, `date-range-picker.tsx` |
+| `components/ui/date-picker.tsx` | `DatePicker` (single date, commits on click, Today/Clear), `DateTimePicker` (calendar + a time-slot column that always includes the value it was handed — a picker that cannot express its own current value is broken by construction), and `TimeField` (segmented hh:mm AM/PM entry emitting 24-h `HH:mm`, for surfaces like the timesheet where any minute is legal and a slot grid would round 09:15 away). | `calendar-primitives.tsx` | Timesheet entry, Dashboard timeline date, ticket planning panel, maintenance window scheduling |
+| `components/ui/date-range-picker.tsx` | `DateRangePicker` with nine presets (computed **at open time** — at module load, "today" freezes overnight), a two-month grid that collapses to one below `md`, and explicit Apply/Cancel. The trigger label derives only from the **committed** value, never the draft — deriving it from the draft is how Cancel leaves the trigger describing a range that was never applied (a bug this component's own spec caught on first run). `""` means unbounded, for "All time" on surfaces that allow it. | `calendar-primitives.tsx` | Reports, analytics, History, Workload, project planned-window + attestation period (admin) |
+| `tests/e2e/helpers/sign-in.ts#pickDate` | Drives the popover the way a person does (open, step months, click the full-date-named cell) — with integer month arithmetic, because `new Date("August 2026")` is Invalid Date on WebKit and every comparison against it is false. | — | date-picker/timesheet/dashboard/planning specs |
 
 ### Monitoring & operator surfaces
 

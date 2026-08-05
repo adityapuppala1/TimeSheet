@@ -1714,3 +1714,80 @@ while the suite was running, which restarted the server under it and produced 50
 recorded here rather than quietly dropped, because "the suite went red twice" is a fact about this
 work, and the reason it is not a fact about the product is only knowable because each one was
 re-run rather than assumed.
+
+## Reports people can take away, and every date control rebuilt (2026-08-05)
+
+Two programs in one pass: the reporting layer grew from "a CSV of whatever fits" into filterable,
+grouped, multi-format exports with an analytics panel derived from the same query; and every date
+input in the product — pickers, ranges, and the month calendar — was rebuilt on one accessible
+foundation styled after Untitled UI's date components.
+
+### Reports: three formats, one query, and numbers that refuse to guess
+
+- [x] **Filterable exports in CSV, PDF and Excel.** All three formats — and the on-screen grouped
+  report — are fed by one shared `buildTimesheetWhere` + include set, so the four surfaces cannot
+  disagree about which rows a filter matches. CSV carries 22 columns (identity, hierarchy, hours,
+  status, rate-snapshot billing, approval trail); Excel is a real workbook with a summary sheet,
+  not a renamed CSV.
+- [x] **The PDF stopped lying.** It renders a bounded number of rows for size, and previously did
+  so silently — a truncated export that looks complete is worse than no export. Now the header and
+  footer both state the cut, and every export route returns `X-Report-Truncated` /
+  `X-Report-Rows-Included` / `X-Report-Total-Matching` headers so a machine consumer can tell too.
+- [x] **A grouped report** (by person, project, activity, or day) with share-of-total columns,
+  using largest-remainder rounding so the shares sum to exactly 100 rather than 99.9 or 100.1.
+- [x] **Analytics against the entries: utilisation, approval latency, activity mix.** Utilisation
+  compares logged hours to each person's *contracted* capacity; approval latency measures
+  submitted→decided (which needed a `submittedAt` column backfilled by migration, because
+  `updatedAt` moves for reasons that are not submission); activity mix shows where the hours went.
+  The rule throughout is **null, never zero**: a person with no capacity on file has no
+  utilisation figure rather than an alarming 0%, an entry that predates `submittedAt` has no
+  latency rather than a fictional instant approval, and a cost without a rate snapshot is absent
+  rather than free. Zero is a measurement; null is an admission — conflating them is how
+  dashboards go quietly wrong.
+
+### Every date control, rebuilt once, on React Aria
+
+The ask was Untitled UI's calendar, range-picker and date-time components. Their package needs
+Tailwind v4.3 and this app is on 3.4 — adopting it verbatim meant a framework migration across
+every screen. The decision (taken with the user): build on the same primitive Untitled UI itself
+uses — React Aria — and style it with this app's own HSL tokens. Same keyboard model, same
+screen-reader semantics, dark mode for free, no migration.
+
+- [x] **Three shared components** (`ui/calendar-primitives.tsx`, `ui/date-picker.tsx`,
+  `ui/date-range-picker.tsx`): a single-date picker, a date-time picker whose slot column always
+  includes the value it was handed (a picker that cannot express its own value is broken by
+  construction), a segmented time field for free-form HH:mm entry, and a range picker with nine
+  presets computed at open time — computing them at module load would freeze "today" overnight.
+  All dates are `CalendarDate` (no time, no zone), the same class of fix as `localIsoDate()`.
+- [x] **Fifteen inputs across ten files** replaced native date/time inputs: reports, analytics,
+  history, workload, admin windows, attestation periods, the timesheet entry form, maintenance
+  scheduling, ticket planning, and the dashboard timeline date.
+- [x] **The month calendar restyled** to the reference's visual language with two deliberate,
+  documented divergences: chips are coloured by delivery state (the product's meaningful axis, so
+  a wall of amber reads as a review bottleneck from across the room), and the week starts Monday
+  because every weekly figure in the app keys weeks to Monday — a calendar that disagrees with
+  the reports about which week a Friday belongs to would be the worse infidelity. Scheduled work
+  keeps its coloured chip; an SLA-only date keeps its dashed outline, because dressing a deadline
+  as a plan is the exact lie this calendar exists to avoid.
+
+**What the new tests caught before anyone else did.** The range picker's trigger label was derived
+from the draft state, so choosing a range and pressing Cancel left the trigger describing a range
+that had never been applied — my own new spec caught it on first run. WebKit found two more: month
+headings were parsed with `new Date("August 2026")`, which Safari's engine correctly refuses
+(every comparison against an invalid date is false, so the stepper always walked forward until it
+disabled itself), and the popover re-anchored on every 5-vs-6-week-row height change, so clicks
+queued forever behind a repositioning animation. The grid now has a fixed minimum height and the
+test helper does integer month arithmetic. All three are the same lesson this file keeps
+recording: dump the real DOM and read the real error before writing the fix.
+
+**Verified:** the full seven-project gate — 258 tests, Chromium at five viewport sizes plus
+Firefox and WebKit — ran 18.5 minutes: 246 passed, 11 deliberately skipped, one failed. The
+failure was the suite auditing itself, and it is the best bug in this section: the onboarding-gate
+spec asserted that **no** account has a null `onboardingCompletedAt`, which was true on the day of
+the backfill migration and became false the day three real colleagues were added to the workspace.
+An account created *after* the gate shipped is legitimately un-onboarded until its owner first
+signs in — that is the gate doing its job, not a lockout — so the assertion now scopes itself to
+accounts that predate the migration's own timestamp, which keeps it true forever while still
+catching the only failure it exists to catch: a pre-gate account the backfill missed. Re-run
+green. The three new accounts will meet the onboarding flow at first sign-in, which is what it is
+for.

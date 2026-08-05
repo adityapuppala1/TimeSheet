@@ -294,7 +294,7 @@ const PRICING = [
       "AI features, bring your own key",
       "AI quality loop: golden sets, prompt versions, evals",
       "Email-to-ticket intake + Kanban board",
-      "Insights, attestations, PDF/CSV exports",
+      "Insights, attestations, PDF/CSV/Excel exports + report analytics",
       "Audit log + role-based access"
     ]
   },
