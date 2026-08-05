@@ -69,6 +69,9 @@ export interface AuthUser {
   name: string;
   email: string;
   role: RoleName;
+  /** True while this person is using a password an admin set — drives a "choose your own
+   *  password" prompt in the web app; cleared when they change it. */
+  mustChangePassword?: boolean;
   permissions: Permission[];
   avatarUrl?: string | null;
   bio?: string | null;

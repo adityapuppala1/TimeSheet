@@ -268,6 +268,11 @@ export function UsersPage() {
       setSelected(new Set());
       setAllMatchingSelected(false);
       queryClient.invalidateQueries({ queryKey: ["users"] });
+      // Bulk reset without an explicit password: each person got their OWN random one-time
+      // password, and this response is the only place it will ever exist in plaintext.
+      if (result.generatedPasswords?.length) {
+        setBulkGenerated(result.generatedPasswords);
+      }
       if (result.skipped.length === 0) {
         toast.success(`Applied to ${result.applied} ${result.applied === 1 ? "person" : "people"}`);
       } else {
@@ -305,6 +310,11 @@ export function UsersPage() {
   const [editing, setEditing] = useState<UserRow | null>(null);
   const [pendingDelete, setPendingDelete] = useState<{ id: string; name: string } | null>(null);
   const [pendingReset, setPendingReset] = useState<{ id: string; name: string } | null>(null);
+  /** The one-time password the server just generated — shown until dismissed, because it is
+   *  never retrievable again (only its hash is stored). */
+  const [generatedReset, setGeneratedReset] = useState<{ name: string; email: string; password: string } | null>(null);
+  /** Same, for a bulk reset: one random password per person, shown once. */
+  const [bulkGenerated, setBulkGenerated] = useState<Array<{ id: string; name: string; email: string; password: string }> | null>(null);
   const [pendingLogout, setPendingLogout] = useState<{ id: string; name: string } | null>(null);
   const [bulkUploadOpen, setBulkUploadOpen] = useState(false);
 
@@ -368,9 +378,20 @@ export function UsersPage() {
     onSettled: () => setPendingDelete(null)
   });
 
+  // No password passed: the server generates a random one-time password per person and returns
+  // it exactly once (only the hash is stored). The old client sent the fixed "Admin@12345" —
+  // documented in this repo's README, so effectively public.
   const resetPwd = useMutation({
-    mutationFn: (id: string) => userApi.resetPassword(id, "Admin@12345"),
-    onSuccess: () => toast.success("Password reset", { description: "Share the default credentials securely." }),
+    mutationFn: (id: string) => userApi.resetPassword(id),
+    onSuccess: (result, id) => {
+      const who = users.data?.items?.find((u: { id: string }) => u.id === id) as { name?: string; email?: string } | undefined;
+      setGeneratedReset({
+        name: who?.name ?? pendingReset?.name ?? "the user",
+        email: who?.email ?? "",
+        password: result.generatedPassword ?? ""
+      });
+      toast.success("Password reset", { description: "A one-time password was generated — copy it now, it is shown only once." });
+    },
     onError: (err: any) => toast.error("Reset failed", { description: serverMessage(err, "Try again.") }),
     onSettled: () => setPendingReset(null)
   });
@@ -786,7 +807,8 @@ export function UsersPage() {
           <AlertDialogHeader>
             <AlertDialogTitle>Reset password for {pendingReset?.name}?</AlertDialogTitle>
             <AlertDialogDescription>
-              The user's password is reset to the workspace default. Share securely and prompt them to change it.
+              A random one-time password is generated and shown to you exactly once — share it securely.
+              They'll be prompted to choose their own at next sign-in.
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
@@ -795,6 +817,68 @@ export function UsersPage() {
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
+
+      <Dialog open={!!generatedReset} onOpenChange={(open) => !open && setGeneratedReset(null)}>
+        <DialogContent className="w-[calc(100vw-2rem)] max-w-md">
+          <DialogHeader>
+            <DialogTitle>One-time password for {generatedReset?.name}</DialogTitle>
+            <DialogDescription>
+              Shown only once — the server keeps just a hash. Copy it now and share it securely
+              {generatedReset?.email ? ` with ${generatedReset.email}` : ""}. They'll be prompted to
+              choose their own password at next sign-in.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="flex items-center gap-2">
+            <code className="flex-1 select-all rounded-md border border-border bg-muted/40 px-3 py-2 font-mono text-sm">
+              {generatedReset?.password}
+            </code>
+            <Button
+              variant="outline"
+              onClick={async () => {
+                const ok = generatedReset ? await copyText(generatedReset.password) : false;
+                if (ok) toast.success("Copied");
+                else toast.error("Copy failed — select the text and copy manually");
+              }}
+            >
+              Copy
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={!!bulkGenerated} onOpenChange={(open) => !open && setBulkGenerated(null)}>
+        <DialogContent className="max-h-[85vh] w-[calc(100vw-2rem)] max-w-lg overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle>One-time passwords ({bulkGenerated?.length})</DialogTitle>
+            <DialogDescription>
+              Each person got their own random password. This list is shown exactly once — the server keeps
+              only hashes. Everyone will be prompted to choose their own password at next sign-in.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="grid gap-2">
+            {bulkGenerated?.map((row) => (
+              <div key={row.id} className="flex items-center justify-between gap-3 rounded-md border border-border bg-muted/30 px-3 py-2 text-sm">
+                <div className="min-w-0">
+                  <p className="truncate font-medium">{row.name}</p>
+                  <p className="truncate text-xs text-muted-foreground">{row.email}</p>
+                </div>
+                <code className="select-all font-mono text-sm">{row.password}</code>
+              </div>
+            ))}
+          </div>
+          <Button
+            variant="outline"
+            onClick={async () => {
+              const text = (bulkGenerated ?? []).map((r) => `${r.name} <${r.email}>: ${r.password}`).join("\n");
+              const ok = await copyText(text);
+              if (ok) toast.success("All copied — paste somewhere safe, then delete after sharing");
+              else toast.error("Copy failed — select the rows and copy manually");
+            }}
+          >
+            Copy all
+          </Button>
+        </DialogContent>
+      </Dialog>
     </Workspace>
   );
 }

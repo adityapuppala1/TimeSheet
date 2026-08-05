@@ -48,6 +48,7 @@ import {
   matchAgainstEnrollment,
   recommendMatchThreshold,
   redeemChallenge,
+  recordInsecureSkip,
   removeUserFaceDirectories,
   scoreQuality,
   similarity,
@@ -113,6 +114,9 @@ faceRouter.get("/status", async (req, res) => {
     requiredForTicket: ticketRequired,
     requiredForApproval: approvalRequired,
     challengeEnabled: settings.challengeEnabled,
+    /** When true, a browser that cannot open the camera (plain-http origin) may proceed via
+     *  POST /face/skip — recorded, never silent. See the settings schema for the trade-off. */
+    insecureContextBypass: settings.insecureContextBypass,
     enrolled: Boolean(enrollment),
     // An embedding from an older model can't be compared against a new one, so the UI must
     // prompt for re-enrollment rather than letting every check mysteriously fail.
@@ -135,6 +139,21 @@ faceRouter.get("/status", async (req, res) => {
 });
 
 const challengeSchema = z.object({ body: z.object({ context: z.enum(["TIMESHEET", "TICKET", "APPROVAL"]) }) });
+
+/**
+ * POST /face/skip — the insecure-context pass-through. Mints a SKIPPED_INSECURE attempt the
+ * submit flow can spend exactly like a PASSED one, but only while the super-admin bypass toggle
+ * is on (checked again at spend time). The row makes the skip visible in the review log — the
+ * whole design is "bypass with a paper trail", because the client's "I can't open the camera"
+ * claim is unprovable server-side.
+ */
+faceRouter.post("/skip", validate(challengeSchema), async (req, res) => {
+  const attempt = await recordInsecureSkip(req.user!.id, req.body.context);
+  await audit(req.user!.id, "face.verification_skipped_insecure", "FaceVerificationAttempt", attempt.id, {
+    context: req.body.context
+  });
+  res.status(201).json({ verificationId: attempt.id });
+});
 
 /**
  * POST /face/challenge — issues the liveness challenge a verification must satisfy while

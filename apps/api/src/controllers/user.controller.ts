@@ -22,7 +22,7 @@ import { templates } from "../services/mail-templates.js";
 import { findCoveredUnenrolledUserIds, notifyEnrollmentRequired } from "../services/face.service.js";
 import { getOnlineSeenByUser } from "../services/maintenance.service.js";
 import { getEffectiveSeatLimit } from "../services/plan-limits.service.js";
-import { hashPassword } from "../utils/security.js";
+import { generateTempPassword, hashPassword } from "../utils/security.js";
 
 export const userRouter = Router();
 userRouter.use(requireAuth, requirePermission(permissions.USERS_MANAGE));
@@ -254,6 +254,10 @@ userRouter.post("/bulk-action", validate(bulkActionSchema), async (req, res) => 
   const actorIsSuperAdmin = req.user!.role === "SUPER_ADMIN";
   const done: string[] = [];
   const skipped: Array<{ id: string; name: string; reason: string }> = [];
+  /** Filled only by RESET_PASSWORD with no explicit password: each person gets their OWN random
+   *  one-time password, returned once in this response and stored nowhere in plaintext — the
+   *  operator copies them out now or resets again. Never written to the audit log. */
+  const generatedPasswords: Array<{ id: string; name: string; email: string; password: string }> = [];
 
   for (const target of targets) {
     // Two guards, both of which exist on the single-user routes and would be trivially bypassable
@@ -285,12 +289,21 @@ userRouter.post("/bulk-action", validate(bulkActionSchema), async (req, res) => 
           }
           break;
         }
-        case "RESET_PASSWORD":
+        case "RESET_PASSWORD": {
+          // No explicit password → a per-person random one (never a fixed default: the old
+          // "Admin@12345" fallback is documented in this repo's README, and a default anyone
+          // can read is not a password). Either way the person is prompted to choose their own
+          // at next sign-in via mustChangePassword.
+          const nextPassword = password || generateTempPassword();
           await prisma.user.update({
             where: { id: target.id },
-            data: { passwordHash: await hashPassword(password || "Admin@12345") }
+            data: { passwordHash: await hashPassword(nextPassword), mustChangePassword: true }
           });
+          if (!password) {
+            generatedPasswords.push({ id: target.id, name: target.name, email: target.email, password: nextPassword });
+          }
           break;
+        }
         case "RESEND_WELCOME": {
           if (target.status !== "ACTIVE") {
             skipped.push({ id: target.id, name: target.name, reason: "Not active" });
@@ -328,7 +341,7 @@ userRouter.post("/bulk-action", validate(bulkActionSchema), async (req, res) => 
     userIds: done
   });
 
-  res.json({ applied: done.length, requested: targets.length, skipped });
+  res.json({ applied: done.length, requested: targets.length, skipped, generatedPasswords });
 });
 
 /**
@@ -410,6 +423,9 @@ userRouter.post(
         roleId: role.id,
         status: "ACTIVE",
         passwordHash: await hashPassword(req.body.password),
+        // The admin knows this password; the person it belongs to should not keep it. Prompts
+        // (never forces) a change at first sign-in.
+        mustChangePassword: true,
         managerId: req.body.managerId ?? undefined,
         designation: req.body.designation ?? undefined,
         faceVerificationRequired: req.body.faceVerificationRequired ?? undefined,
@@ -508,7 +524,11 @@ userRouter.post("/bulk", validate(bulkUsersSchema), async (req, res) => {
           email: row.email,
           roleId: role.id,
           status: "ACTIVE",
-          passwordHash: await hashPassword(row.password && row.password.length >= 8 ? row.password : `Bulk-${Math.random().toString(36).slice(2)}!A1`),
+          passwordHash: await hashPassword(row.password && row.password.length >= 8 ? row.password : generateTempPassword()),
+          // Whether the CSV carried a password (the uploader knows it) or one was generated
+          // (nobody knows it — an admin reset hands it over later), the person should choose
+          // their own at first sign-in.
+          mustChangePassword: true,
           designation: row.designation || undefined,
           githubUsername: row.githubUsername || undefined,
           notificationPreference: { create: {} }
@@ -621,10 +641,18 @@ userRouter.delete("/:id", async (req, res) => {
 });
 
 userRouter.post("/:id/reset-password", async (req, res) => {
-  const password = req.body.password || "Admin@12345";
-  await prisma.user.update({ where: { id: String(req.params.id) }, data: { passwordHash: await hashPassword(password) } });
+  // No password supplied → generate a random one-time password and return it ONCE in this
+  // response (it is stored only as a hash). The old behavior defaulted to "Admin@12345", which
+  // this repo's own README documents — a default the whole internet can read is not a password.
+  const provided = typeof req.body.password === "string" && req.body.password.length >= 8 ? req.body.password : null;
+  const password = provided ?? generateTempPassword();
+  await prisma.user.update({
+    where: { id: String(req.params.id) },
+    // Admin-known passwords are temporary by definition — prompt the person to pick their own.
+    data: { passwordHash: await hashPassword(password), mustChangePassword: true }
+  });
   await audit(req.user!.id, "user.password_reset", "User", String(req.params.id));
-  res.json({ message: "Password reset successfully" });
+  res.json({ message: "Password reset successfully", generatedPassword: provided ? null : password });
 });
 
 /**

@@ -1811,3 +1811,22 @@ training report, the face-model size on the card, and a retrain nudge for pre-wi
 enrollments — the measured cause of the 0.80–0.84 marginal scores. The verification-log failures
 the user reported all predate the 2026-08-03 hardening (zero attempts since), so the fix for them
 is retraining on the fixed pipeline, not another threshold change.
+
+### Follow-up (same day): passwords nobody else knows, and an honest camera escape hatch
+
+- [x] **Admin resets stopped defaulting to `Admin@12345`** — a default documented in this repo's
+  own README is not a password. Resets now generate a random one-time password per person (shown
+  to the admin exactly once, stored only as a hash; bulk resets return one per person with a
+  copy-all dialog), and every admin-set password — creation, reset, CSV import — flags the account
+  with a "choose your own password" banner until the person changes it. A banner and not a modal,
+  because forced modals produce old-password-plus-a-"1", not better passwords. Verified end to end
+  by API-level e2e: generated password signs in → flag is true → change-password → flag clears.
+- [x] **Insecure-context face bypass** (super-admin toggle, default off): browsers refuse the
+  camera on plain http and no server setting can lift that, so a LAN pilot could never complete a
+  check. The bypass records every pass-through as a `SKIPPED_INSECURE` attempt (amber in the
+  review log, own filter, audit entry) and is re-checked when the skip is spent, so switching it
+  off closes the hole immediately. The client's "I can't open the camera" claim is unprovable
+  server-side — the toggle trades enforcement for visibility, explicitly, and the doc says so.
+- [x] Smaller: emailed links documented against `APP_BASE_URL` (a reset link built on localhost
+  only opens on the server itself); a worked Microsoft 365 SMTP example in `.env.example`; the
+  `npm run dev` startup proxy-error flood collapsed to one throttled line.

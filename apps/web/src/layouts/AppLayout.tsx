@@ -9,6 +9,7 @@
  */
 import { Navigate, Outlet } from "react-router";
 import { MaintenanceBanner } from "../components/MaintenanceBanner";
+import { PasswordChangeBanner } from "../components/PasswordChangeBanner";
 import { OnboardingGate } from "../components/OnboardingGate";
 import { SessionEndedDialog } from "../components/SessionEndedDialog";
 import { MobileNav, Sidebar } from "../components/Sidebar";
@@ -28,6 +29,7 @@ export function AppLayout() {
         <main className="min-w-0 flex-1">
           <Topbar />
           <MaintenanceBanner />
+          <PasswordChangeBanner />
           {/* pb-20 reserves clearance for MobileNav below (fixed, ~56-60px tall, <lg only) —
               without it the last ~56px of every page's content renders underneath the fixed
               bar on phone/tablet (e.g. a page-bottom submit button becomes unreachable). */}

@@ -164,7 +164,10 @@ export function UserBulkBar({
 }) {
   const [confirming, setConfirming] = useState<UserBulkAction | null>(null);
   const [typed, setTyped] = useState("");
-  const [password, setPassword] = useState("Admin@12345");
+  // Empty by default: the server then generates a random one-time password PER PERSON and
+  // returns the list once. The old default here was the fixed "Admin@12345" — documented in
+  // this repo's README, so effectively public.
+  const [password, setPassword] = useState("");
 
   const effectiveCount = allMatchingSelected ? total : selectedCount;
   const needsTyping = confirming ? DESTRUCTIVE.includes(confirming) : false;
@@ -228,8 +231,18 @@ export function UserBulkBar({
 
           {confirming === "RESET_PASSWORD" && (
             <div className="grid gap-1.5">
-              <Label htmlFor="bulk-password">New password</Label>
-              <Input id="bulk-password" value={password} onChange={(e) => setPassword(e.target.value)} />
+              <Label htmlFor="bulk-password">New password (optional)</Label>
+              <Input
+                id="bulk-password"
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                placeholder="Leave empty — each person gets their own random one-time password"
+              />
+              <p className="text-xs text-muted-foreground">
+                Empty: a random password per person, shown to you once after the reset. Typed: the same
+                password for everyone (min 8 characters). Either way they're prompted to change it at next
+                sign-in.
+              </p>
             </div>
           )}
 
@@ -258,7 +271,9 @@ export function UserBulkBar({
               disabled={!confirmOk || running}
               onClick={() => {
                 if (!confirming) return;
-                onRun(confirming, confirming === "RESET_PASSWORD" ? password : undefined);
+                // Empty or too-short → omit, and the server generates per-person passwords
+                // (its schema refuses anything 1-7 chars, so never send those).
+                onRun(confirming, confirming === "RESET_PASSWORD" && password.length >= 8 ? password : undefined);
                 setConfirming(null);
               }}
             >

@@ -31,6 +31,7 @@ import { Button } from "./ui/button";
 import { FaceCapture, type FaceCaptureHandle } from "./FaceCapture";
 import { faceApi, type FaceChallenge, type FaceOutcome } from "../services/api";
 import { cn } from "../lib/utils";
+import { isSecureContext } from "../lib/clipboard";
 import { useFaceStatus } from "../lib/use-face-status";
 
 interface FaceVerificationDialogProps {
@@ -95,6 +96,29 @@ export function FaceVerificationDialog({ open, onOpenChange, context, onVerified
 
   const status = useFaceStatus(open);
   const challengeOn = status.data?.challengeEnabled ?? true;
+
+  /** getUserMedia only exists on secure origins (https, or localhost) — a browser rule no
+   *  setting can lift. When the admin has enabled the audited bypass, offer to proceed without
+   *  the check rather than presenting a camera that can never start. */
+  const [skipping, setSkipping] = useState(false);
+  const insecureSkipAvailable = !isSecureContext() && (status.data?.insecureContextBypass ?? false);
+
+  const handleSkip = useCallback(async () => {
+    setSkipping(true);
+    try {
+      const { verificationId } = await faceApi.skipVerification(context);
+      onVerified(verificationId);
+      onOpenChange(false);
+    } catch (err) {
+      setTone("error");
+      setMessage(
+        (err as { response?: { data?: { message?: string } } })?.response?.data?.message ??
+          "Could not record the skip — try again, or contact your admin."
+      );
+    } finally {
+      setSkipping(false);
+    }
+  }, [context, onVerified, onOpenChange]);
 
   // Reset on each open — a stale "couldn't confirm it's you" from last time would be alarming.
   useEffect(() => {
@@ -316,6 +340,19 @@ export function FaceVerificationDialog({ open, onOpenChange, context, onVerified
           <p className="text-center text-xs text-muted-foreground">
             {attempts} failed {attempts === 1 ? "attempt" : "attempts"} in this session
           </p>
+        )}
+
+        {insecureSkipAvailable && (
+          <div className="rounded-lg border border-warning/40 bg-warning/5 p-3 text-sm">
+            <p className="text-muted-foreground">
+              The camera can't open here because this connection is plain <strong>http</strong> — that's the
+              browser's rule, not this app's. Your admin has allowed proceeding without the check on such
+              connections. <strong>The skip is recorded</strong> in the verification log.
+            </p>
+            <Button variant="outline" className="mt-2 w-full" onClick={() => void handleSkip()} disabled={skipping || busy}>
+              {skipping ? "Recording skip…" : "Continue without camera check"}
+            </Button>
+          </div>
         )}
 
         <div className="flex justify-end">

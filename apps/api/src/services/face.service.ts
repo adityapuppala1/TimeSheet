@@ -491,6 +491,28 @@ export async function getFaceSettings() {
   });
 }
 
+/**
+ * Records a pass-through for a browser that cannot open the camera because the app is served
+ * over plain http (getUserMedia exists only on secure origins — a browser rule no server
+ * setting can lift). Only callable while the super-admin bypass toggle is on. The row exists so
+ * the review log tells the truth: "this submission was not identity-checked, here is when and
+ * for whom" — a silent skip would make the verified badge a lie by omission. The claim "my
+ * context is insecure" is the client's and cannot be proven here; that is exactly why the
+ * toggle defaults off and the row is queryable.
+ */
+export async function recordInsecureSkip(userId: string, context: FaceContext): Promise<{ id: string }> {
+  const settings = await getFaceSettings();
+  if (!settings.enabled) throw new AppError(403, "Face verification is not enabled for this workspace.");
+  if (!settings.insecureContextBypass) {
+    throw new AppError(403, "Proceeding without a camera check is not enabled for this workspace — ask a super admin, or open the app over https.");
+  }
+  const attempt = await prisma.faceVerificationAttempt.create({
+    data: { userId, context, outcome: "SKIPPED_INSECURE" },
+    select: { id: true }
+  });
+  return attempt;
+}
+
 export const DEFAULT_CONSENT_TEXT =
   "I consent to my employer capturing and processing an image of my face to verify my identity " +
   "when I perform protected actions in this workspace, such as submitting timesheets, creating " +
@@ -625,7 +647,12 @@ export async function consumeVerification(params: {
   if (!attempt || attempt.userId !== params.userId || attempt.context !== params.context) {
     throw new AppError(428, "Identity verification is required before this can be submitted.");
   }
-  if (attempt.outcome !== "PASSED") {
+  // SKIPPED_INSECURE is spendable ONLY while the admin bypass is on — re-checked here, at spend
+  // time, so switching the toggle off closes the hole immediately even for a skip minted a
+  // moment earlier. Everything else about consumption (single-use, TTL, binding) is identical,
+  // which is the point: one enforcement path, whatever the attempt's story.
+  const acceptable = attempt.outcome === "PASSED" || (attempt.outcome === "SKIPPED_INSECURE" && settings.insecureContextBypass);
+  if (!acceptable) {
     throw new AppError(428, "That identity check did not pass — please verify again.");
   }
   if (attempt.consumedAt) {

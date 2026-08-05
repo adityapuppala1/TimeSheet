@@ -369,6 +369,31 @@ outcome is not a security control.
   Two parallel workers used to suspend the gate and the first to finish restored it mid-run,
   producing an intermittent failure that always pointed at the wrong thing.
 
+### 🔐 Password and camera-policy hardening
+
+- **Admin password resets no longer default to `Admin@12345`.** That default is documented in
+  this repo's README — a password the whole internet can read is not a password. A reset with no
+  explicit password now generates a **random one-time password per person** (shown to the admin
+  exactly once; the server keeps only a hash), and bulk resets return one per selected person
+  with a copy-all dialog. Every admin-set password — creation, reset, CSV import — now flags the
+  account, and the person sees a **"choose your own password" banner** until they change it
+  (Profile, or the emailed reset link). A banner, deliberately not a blocking modal: forced
+  modals train people to append a "1" to the old password just to get to work.
+- **Insecure-context face bypass (super-admin toggle, off by default).** Browsers only open the
+  camera on https or localhost — no server setting can lift that rule, so on a plain-http LAN
+  address the face check could never complete. With the new toggle on, such a person may proceed
+  **without** the check, and every pass-through is recorded as a `SKIPPED_INSECURE` attempt in
+  the verification log (amber, filterable) plus an audit entry — a bypass with a paper trail,
+  never a silent hole. Meant for LAN pilots; the real fix stays serving the app over https, and
+  the toggle re-checks at spend time so switching it off closes the hole immediately.
+- **Emailed links honour your LAN.** `.env.example` now documents pointing `APP_BASE_URL` at the
+  machine's network address (a reset link built on `localhost` only ever opens on the server
+  itself), plus a worked Microsoft 365 SMTP example — including why sending "from" your corporate
+  domain through a personal Gmail is precisely what recipient spam filters flag.
+- **`npm run dev` no longer prints an error-stack flood while the API boots.** Vite is up in ~1s,
+  the API takes several; the proxy errors from an already-open tab now collapse into one
+  throttled, self-explaining line instead of per-request `AggregateError` stacks.
+
 ### 🐛 Fixes
 
 - **"View capture" in the verification log showed admins `{"message":"Authentication required"}`**

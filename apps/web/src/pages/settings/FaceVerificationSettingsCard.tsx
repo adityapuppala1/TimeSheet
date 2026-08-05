@@ -58,6 +58,9 @@ const OUTCOME_TONE: Record<string, string> = {
   MULTIPLE_FACES: "bg-amber-500/10 text-amber-600 dark:text-amber-400",
   NO_FACE: "bg-amber-500/10 text-amber-600 dark:text-amber-400",
   NOT_ENROLLED: "bg-muted text-muted-foreground",
+  /** The audited insecure-context pass-through — amber, not muted: every one of these is a
+   *  submission that went UNCHECKED, which is exactly what this log exists to make visible. */
+  SKIPPED_INSECURE: "bg-amber-500/10 text-amber-600 dark:text-amber-400",
   ERROR: "bg-muted text-muted-foreground"
 };
 
@@ -259,6 +262,23 @@ export function FaceVerificationSettingsCard({ readOnly = false }: { readOnly?: 
                 checked={s?.autoTriageHonestFailures ?? false}
                 disabled={readOnly || !enabled}
                 onCheckedChange={(v) => update.mutate({ autoTriageHonestFailures: v })}
+              />
+            </div>
+            <div className="flex items-center justify-between rounded-lg border border-warning/40 bg-warning/5 p-4">
+              <div className="space-y-0.5 pr-4">
+                <Label>Allow skipping on plain-http connections</Label>
+                <p className="text-sm text-muted-foreground">
+                  Browsers only open the camera on <strong>https</strong> (or localhost) — that rule can't be
+                  lifted by any setting here. With this on, someone whose connection is plain http may proceed{" "}
+                  <strong>without</strong> the face check; every skip is recorded in the verification log below
+                  as <em>skipped insecure</em>. This weakens the control — meant for LAN pilots until you serve
+                  the app over https, then switch it back off.
+                </p>
+              </div>
+              <Switch
+                checked={s?.insecureContextBypass ?? false}
+                disabled={readOnly || !enabled}
+                onCheckedChange={(v) => update.mutate({ insecureContextBypass: v })}
               />
             </div>
           </div>

@@ -1097,6 +1097,9 @@ const faceVerificationSchema = z.object({
       requireForTicket: z.boolean().optional(),
       requireForApproval: z.boolean().optional(),
       challengeEnabled: z.boolean().optional(),
+      // The insecure-context pass-through (see the schema comment): audited, off by default,
+      // and deliberately super-admin-only like everything else on this route.
+      insecureContextBypass: z.boolean().optional(),
       autoTriageHonestFailures: z.boolean().optional(),
       enforcementMode: z.enum(["ALL", "SELECTED"]).optional(),
       // Bounded well away from 0/1: a threshold of 0 matches literally anyone and 1 matches

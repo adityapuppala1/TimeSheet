@@ -109,12 +109,19 @@ export function Profile() {
 
   const passwordMutation = useMutation({
     mutationFn: () => authApi.changePassword(currentPassword, nextPassword),
-    onSuccess: () => {
+    onSuccess: async () => {
       setCurrentPassword("");
       setNextPassword("");
       setConfirmPassword("");
       toast.success("Password updated", { description: "Every other device was signed out for safety." });
       queryClient.invalidateQueries({ queryKey: ["auth", "sessions"] });
+      // The server just cleared mustChangePassword — refresh the stored profile so the
+      // "choose your own password" banner disappears without a reload.
+      try {
+        setUser(await authApi.me());
+      } catch {
+        /* banner clears on next refresh instead */
+      }
     },
     onError: (err: any) =>
       toast.error("Could not update password", {

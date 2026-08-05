@@ -1,7 +1,29 @@
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import react from "@vitejs/plugin-react";
-import { defineConfig, loadEnv } from "vite";
+import { createLogger, defineConfig, loadEnv } from "vite";
+
+/**
+ * `npm run dev` starts Vite (~1s) well before the API finishes booting (Prisma clients + face
+ * model warm-up take several seconds), so any already-open tab's first heartbeats hit the proxy
+ * with nothing listening and Vite prints a full AggregateError stack per request — which reads
+ * exactly like an outage and is nothing of the sort. Collapse those into one throttled line.
+ * A genuinely dead API still surfaces: the line repeats every 5s for as long as it stays true.
+ */
+const quietProxyLogger = createLogger();
+const originalError = quietProxyLogger.error.bind(quietProxyLogger);
+let lastProxyNoteAt = 0;
+quietProxyLogger.error = (msg, options) => {
+  if (typeof msg === "string" && msg.includes("http proxy error")) {
+    const now = Date.now();
+    if (now - lastProxyNoteAt > 5_000) {
+      lastProxyNoteAt = now;
+      quietProxyLogger.info("[dev] API not reachable yet — the proxy retries as requests arrive (normal during the first seconds of `npm run dev`; a message repeating past that means the API is actually down).");
+    }
+    return;
+  }
+  originalError(msg, options);
+};
 
 /**
  * Same-origin dev story:
@@ -49,6 +71,7 @@ export default defineConfig(({ mode }) => {
 
   return {
     plugins: [react()],
+    customLogger: quietProxyLogger,
     define: {
       __APP_VERSION__: JSON.stringify(bundleVersion)
     },

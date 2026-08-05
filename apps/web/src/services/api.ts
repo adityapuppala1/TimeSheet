@@ -874,6 +874,9 @@ export interface UserBulkResult {
   applied: number;
   requested: number;
   skipped: Array<{ id: string; name: string; reason: string }>;
+  /** RESET_PASSWORD with no explicit password: each person's freshly generated one-time
+   *  password, returned exactly once — the server keeps only the hash. */
+  generatedPasswords: Array<{ id: string; name: string; email: string; password: string }>;
 }
 
 /* ---------- Service status page ---------- */
@@ -951,8 +954,16 @@ export const userApi = {
   create: async (payload: unknown) => (await api.post<CreatedUser>("/users", payload)).data,
   update: async (id: string, payload: unknown) => (await api.patch(`/users/${id}`, payload)).data,
   remove: async (id: string) => api.delete(`/users/${id}`),
-  resetPassword: async (id: string, password: string) =>
-    (await api.post(`/users/${id}/reset-password`, { password })).data,
+  /** Omit `password` and the server generates a random one-time password, returned ONCE as
+   *  `generatedPassword` (stored only as a hash). Passing a password uses it verbatim. Either
+   *  way the person is prompted to choose their own at next sign-in. */
+  resetPassword: async (id: string, password?: string) =>
+    (
+      await api.post<{ message: string; generatedPassword: string | null }>(
+        `/users/${id}/reset-password`,
+        password ? { password } : {}
+      )
+    ).data,
   /** Revokes every session the user has — server-side, so it needs no cooperation from their
    *  browser. Only a SUPER_ADMIN may target another SUPER_ADMIN. */
   forceLogout: async (id: string) => (await api.post<{ revokedSessions: number }>(`/users/${id}/force-logout`)).data,
@@ -2057,6 +2068,10 @@ export interface FaceVerificationSettings {
   requireForTicket: boolean;
   requireForApproval: boolean;
   challengeEnabled: boolean;
+  /** Lets a plain-http browser (camera unavailable — a browser rule) proceed without the face
+   *  check, recorded as a skipped-insecure attempt. A deliberate, audited weakening for LAN
+   *  pilots; off by default. */
+  insecureContextBypass: boolean;
   autoTriageHonestFailures: boolean;
   enforcementMode: "ALL" | "SELECTED";
   matchThreshold: number;
@@ -2080,6 +2095,9 @@ export interface FaceStatus {
   /** Challenge–response liveness on: verification captures TWO frames (neutral + a server-chosen
    *  head movement) — the dialog orchestrates that automatically. */
   challengeEnabled: boolean;
+  /** When true, a browser that cannot open the camera (plain-http origin) may proceed via
+   *  faceApi.skipVerification — recorded in the review log, never silent. */
+  insecureContextBypass: boolean;
   enrolled: boolean;
   /** Enrollment exists but was made with an older model — embeddings aren't comparable across
    *  model versions, so the user must re-enroll or every check would fail. */
@@ -2256,6 +2274,10 @@ export const faceApi = {
       throw error;
     }
   },
+  /** The insecure-context pass-through: mints a consumable "skipped" verification, only while
+   *  the super-admin bypass toggle is on. Recorded in the review log — never silent. */
+  skipVerification: async (context: "TIMESHEET" | "TICKET" | "APPROVAL") =>
+    (await api.post<{ verificationId: string }>("/face/skip", { context })).data,
   deleteMyEnrollment: async () => (await api.delete<{ deleted: boolean }>("/face/enrollment")).data,
   deleteEnrollmentFor: async (userId: string) => (await api.delete<{ deleted: boolean }>(`/face/enrollment/${userId}`)).data,
   /** Server-side paginated: the review log grows unbounded (one row per attempt, forever), so

@@ -180,6 +180,25 @@ the Chrome insecure-origin flag is a trap rather than a workaround.
 **Test from a phone on the real address before rolling this out to staff.** It will always work on
 your own machine, and that proves nothing about theirs.
 
+### The escape hatch: "Allow skipping on plain-http connections" (off by default)
+
+For a LAN pilot that cannot get certificates yet, Workspace Settings → Face verification carries a
+super-admin toggle that lets a person whose browser cannot open the camera proceed **without** the
+check. Understand exactly what it trades away before switching it on:
+
+- The claim "my connection is insecure" comes from the client and **cannot be proven server-side**
+  — anyone who can script a request can claim it. While the toggle is on, the face gate is
+  effectively optional for anyone willing to lie. That is why it defaults off.
+- The trade is made **visible, never silent**: every pass-through is stored as a
+  `SKIPPED_INSECURE` row in the verification log (amber badge, its own filter) and an audit
+  entry, so "which submissions went unchecked, whose, and when" stays answerable. A verified
+  badge is never shown for a skipped check.
+- The toggle is re-checked when the skip is **spent**, not just when it is minted — switching it
+  off closes the hole immediately.
+
+Use it to keep a pilot moving; treat every amber row as a reminder to finish the HTTPS setup, then
+switch it off.
+
 ## Setup
 
 ### 1. Enable it — Workspace Settings → Face verification (SUPER_ADMIN)

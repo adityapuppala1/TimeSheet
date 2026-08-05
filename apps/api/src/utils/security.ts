@@ -13,6 +13,8 @@
  * "alg: none" JWT vulnerability class).
  * WHO calls this: `services/auth.service.ts` (mint), `middleware/auth.ts` (verify).
  */
+import { randomInt } from "node:crypto";
+
 import bcrypt from "bcryptjs";
 import jwt from "jsonwebtoken";
 import { nanoid } from "nanoid";
@@ -21,6 +23,17 @@ import { env } from "../config/env.js";
 export const hashPassword = (password: string) => bcrypt.hash(password, 12);
 export const verifyPassword = (password: string, hash: string) => bcrypt.compare(password, hash);
 export const opaqueToken = () => nanoid(48);
+
+/**
+ * A one-time password for admin resets: 12 chars from an unambiguous alphabet (no 0/O/1/l/I)
+ * plus a fixed "!7a" tail so it clears any complexity rule without the generator needing to
+ * know one. Replaces the old fixed "Admin@12345" default, which is publicly documented in this
+ * repo — a default anyone who has read the README can type is not a password. `randomInt` is
+ * the CSPRNG (and rejection-samples, so the alphabet is drawn uniformly).
+ */
+const TEMP_PASSWORD_ALPHABET = "abcdefghjkmnpqrstuvwxyzABCDEFGHJKMNPQRSTUVWXYZ23456789";
+export const generateTempPassword = () =>
+  `${Array.from({ length: 12 }, () => TEMP_PASSWORD_ALPHABET[randomInt(TEMP_PASSWORD_ALPHABET.length)]).join("")}!7a`;
 export const hashToken = (token: string) => bcrypt.hash(token, 10);
 export const verifyTokenHash = (token: string, hash: string) => bcrypt.compare(token, hash);
 

@@ -38,6 +38,7 @@ export type ProfilePayload = {
   name: string;
   email: string;
   role: string;
+  mustChangePassword: boolean;
   permissions: string[];
   avatarUrl: string | null;
   bio: string | null;
@@ -57,6 +58,9 @@ export async function buildProfilePayload(userId: string): Promise<ProfilePayloa
     name: user.name,
     email: user.email,
     role: user.role.name,
+    // Drives the web's "choose your own password" prompt after an admin created or reset the
+    // account. A prompt, never a gate — see the schema comment on User.mustChangePassword.
+    mustChangePassword: user.mustChangePassword,
     permissions: user.role.permissions.map((p) => p.permission.key),
     avatarUrl: user.avatarUrl,
     bio: user.bio,
@@ -178,6 +182,7 @@ export async function login(email: string, password: string, rememberMe = false,
       name: user.name,
       email: user.email,
       role: user.role.name,
+      mustChangePassword: user.mustChangePassword,
       permissions: user.role.permissions.map((p) => p.permission.key),
       avatarUrl: user.avatarUrl,
       bio: user.bio,
@@ -248,6 +253,7 @@ export async function completeSsoLogin(
       name: user.name,
       email: user.email,
       role: user.role.name,
+      mustChangePassword: user.mustChangePassword,
       permissions: user.role.permissions.map((p) => p.permission.key),
       avatarUrl: user.avatarUrl,
       bio: user.bio,
@@ -365,7 +371,11 @@ export async function refresh(refreshToken: unknown) {
 export async function changePassword(userId: string, currentPassword: string, nextPassword: string, currentSessionId?: string) {
   const user = await prisma.user.findUniqueOrThrow({ where: { id: userId } });
   if (!(await verifyPassword(currentPassword, user.passwordHash))) throw new AppError(422, "Current password is incorrect");
-  await prisma.user.update({ where: { id: userId }, data: { passwordHash: await hashPassword(nextPassword) } });
+  // Choosing their own password clears the "admin knows this password" prompt flag.
+  await prisma.user.update({
+    where: { id: userId },
+    data: { passwordHash: await hashPassword(nextPassword), mustChangePassword: false }
+  });
   // Revoke every other session — a password change is exactly the moment to assume any
   // other active session might belong to someone who shouldn't have access anymore.
   await prisma.session.updateMany({
@@ -414,7 +424,12 @@ export async function resetPassword(rawToken: string, nextPassword: string): Pro
 
   await prisma.$transaction([
     prisma.passwordResetToken.update({ where: { id: match.id }, data: { usedAt: new Date() } }),
-    prisma.user.update({ where: { id: match.userId }, data: { passwordHash: await hashPassword(nextPassword) } }),
+    // A password chosen through the emailed link is the person's own — the change-prompt flag
+    // (set by admin creation/reset) has served its purpose.
+    prisma.user.update({
+      where: { id: match.userId },
+      data: { passwordHash: await hashPassword(nextPassword), mustChangePassword: false }
+    }),
     prisma.session.updateMany({ where: { userId: match.userId, revokedAt: null }, data: { revokedAt: new Date() } })
   ]);
 }

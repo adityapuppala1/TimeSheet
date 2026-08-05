@@ -120,6 +120,11 @@ model User {
   name                     String
   email                    String     @unique
   passwordHash             String
+  /// True while this person is using a password somebody else knows — set by admin creation and
+  /// every admin reset, cleared the moment they choose their own (change-password or the emailed
+  /// reset flow). Drives a prompt, never a lockout: forcing a change at a modal is how people end
+  /// up typing their old password with a "1" appended.
+  mustChangePassword       Boolean    @default(false)
   status                   UserStatus @default(PENDING_VERIFICATION)
   roleId                   String
   role                     Role       @relation(fields: [roleId], references: [id])
@@ -2072,6 +2077,15 @@ model GlobalFaceVerificationSettings {
   /// virtual camera: the attacker can't know which movement will be demanded. When off,
   /// verification is the original single-frame check.
   challengeEnabled Boolean @default(true)
+
+  /// Allows a person whose browser CANNOT open the camera because the app is served over plain
+  /// http (getUserMedia exists only on secure origins — that is the browser's rule, no server
+  /// setting can lift it) to proceed WITHOUT the face check. Every such pass-through is recorded
+  /// as a SKIPPED_INSECURE attempt row, so the review log shows exactly who skipped and when.
+  /// Off by default because it is an honest hole in the control: the "my context is insecure"
+  /// claim comes from the client and cannot be proven server-side. For pilots and LAN demos —
+  /// the real fix is serving the app over https.
+  insecureContextBypass Boolean @default(false)
 
   /// Set by the retention worker when it first observes that this org's plan tier no longer
   /// allows face verification (downgrade). Enforcement stops immediately (fail-open in
