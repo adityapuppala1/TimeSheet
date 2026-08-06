@@ -46,7 +46,7 @@ chmod +x install.sh   # only needed once, if the file isn't already executable
 
 ```powershell
 # Windows — from an ordinary PowerShell prompt (Start menu → "Windows PowerShell"), in the repo root
-.\install.ps1
+.\install.cmd
 ```
 
 Either script is interactive (it'll prompt you for a couple of values — see step 3 below) and
@@ -59,7 +59,7 @@ These are the actual failure modes you're likely to hit, in the order you'd hit 
 
 | Error | Cause | Fix |
 |---|---|---|
-| PowerShell: `install.ps1 cannot be loaded because running scripts is disabled on this system` | Windows' default script execution policy (`Restricted`) blocks any local `.ps1` file, signed or not — this is a Windows default, not something specific to this repo. | Either run `powershell -ExecutionPolicy Bypass -File .\install.ps1` once, or (if you'll run PowerShell scripts regularly) `Set-ExecutionPolicy -Scope CurrentUser RemoteSigned` in an admin PowerShell, then re-run normally. |
+| PowerShell: `install.ps1 cannot be loaded because running scripts is disabled on this system` | Windows' default script execution policy (`Restricted`) blocks any local `.ps1` file, signed or not — this is a Windows default, not something specific to this repo. | Run the shipped launcher instead: `.\install.cmd` / `.\update.cmd` — a batch file isn't subject to the policy and starts the script with a process-scoped bypass (nothing machine-wide changes). Alternatives: `powershell -ExecutionPolicy Bypass -File .\install.ps1` once, or `Set-ExecutionPolicy -Scope CurrentUser RemoteSigned` in an admin PowerShell. |
 | PowerShell: `install.ps1 is not digitally signed` / a red "cannot be loaded" wall of text mentioning a security warning | Same execution-policy family of error as above, sometimes phrased differently depending on Windows version/policy. | Same fix as above. |
 | PowerShell: `Missing closing '}' in statement block or type definition` / `The string is missing the terminator: "` when you've done nothing but run `.\install.ps1` | A real bug, fixed 2026-07-29: `install.ps1` contains non-ASCII characters (em-dashes) and previously had no UTF-8 byte-order mark. Windows PowerShell 5.1 — the OS-bundled `powershell.exe`, not PowerShell 7's `pwsh` — defaults to the system codepage instead of UTF-8 for a BOM-less script file, which corrupted string parsing. This is fixed at the file level (a UTF-8 BOM was added) and CI now validates `install.ps1` under both `pwsh` and Windows PowerShell 5.1 so this class of bug can't silently return. | `git pull` to get the fixed file. If you're still hitting this on a version after 2026-07-29, please report it — it means the fix regressed. |
 | bash: `install.sh: line 2: $'\r': command not found`, or `bad interpreter: /bin/bash^M` | The file has Windows-style CRLF line endings instead of Unix LF — happens if you cloned with `git config core.autocrlf true` (Git for Windows' own suggested default) before this repo's `.gitattributes` (which forces `install.sh` to always check out as LF) existed in your local copy. | `git pull` to get the current `.gitattributes`, then re-checkout the file: `git rm --cached install.sh && git checkout install.sh`. Or, one-off: `sed -i 's/\r$//' install.sh` (Git Bash/WSL) before running it. |

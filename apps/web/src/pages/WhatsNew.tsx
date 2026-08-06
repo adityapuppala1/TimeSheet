@@ -203,7 +203,9 @@ export function WhatsNewPage() {
 /** The upgrade one-liner with a copy button — the admin's actual next step, so it earns the
  *  biggest visual weight on the page. */
 function UpdateCommand() {
-  const command = "./update.sh          # or  .\\update.ps1  on Windows";
+  // .cmd on Windows, not .ps1: the launcher sidesteps PowerShell's default Restricted
+  // execution policy, which blocks .ps1 files outright on stock Windows.
+  const command = "./update.sh          # or  .\\update.cmd  on Windows";
   return (
     <div className="flex items-center gap-2 rounded-lg border border-border bg-background p-2 pl-3">
       <code className="min-w-0 flex-1 truncate font-mono text-sm">{command}</code>

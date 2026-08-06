@@ -39,7 +39,8 @@ health check, then run the one-time seed.
 ```
 
 ```powershell
-.\install.ps1          # Windows — run from an ordinary PowerShell prompt
+.\install.cmd          # Windows — the .cmd launcher runs install.ps1 with a process-scoped
+                       # execution-policy bypass, so the default Restricted policy can't block it
 ```
 
 Both scripts are read-only about anything outside this repo — they never install Docker itself,
@@ -489,8 +490,8 @@ scoped to the ephemeral CI database, never real credentials.
 **Compose shape (installed via install.sh / install.ps1):** one command —
 
 ```bash
-./update.sh              # newest release   (Windows: .\update.ps1)
-./update.sh --to v1.2.3  # specific release (Windows: .\update.ps1 -To v1.2.3)
+./update.sh              # newest release   (Windows: .\update.cmd)
+./update.sh --to v1.2.3  # specific release (Windows: .\update.cmd -To v1.2.3)
 ```
 
 What it does, in order: dumps both databases to `./backups/` (external-DB deployments are asked

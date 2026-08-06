@@ -288,7 +288,7 @@ Three ways to run this in a container/orchestrator, from fastest to most product
 
 ```bash
 ./install.sh        # Linux/macOS
-.\install.ps1        # Windows PowerShell
+.\install.cmd        # Windows (launcher that sidesteps PowerShell's script-execution policy)
 ```
 
 Checks for Docker + Compose, generates a root `.env` with strong random secrets (never touching
