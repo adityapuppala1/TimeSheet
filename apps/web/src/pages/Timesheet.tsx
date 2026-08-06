@@ -140,7 +140,7 @@ function TicketPicker({
 export function Timesheet() {
   const queryClient = useQueryClient();
   const [files, setFiles] = useState<File[]>([]);
-  const projects = useQuery({ queryKey: ["projects"], queryFn: projectApi.list });
+  const projects = useQuery({ queryKey: ["projects"], queryFn: () => projectApi.list() });
   const timesheets = useQuery({ queryKey: ["timesheets"], queryFn: timesheetApi.list });
 
   const form = useForm<FormData>({

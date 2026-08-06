@@ -12,6 +12,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import type { ColumnDef } from "@tanstack/react-table";
 import {
   Archive,
+  ArchiveRestore,
   Check,
   DollarSign,
   Download,
@@ -1048,7 +1049,10 @@ function UserEditDialog({
 /* ============================== PROJECTS ============================== */
 export function ProjectsPage() {
   const queryClient = useQueryClient();
-  const projects = useQuery({ queryKey: ["projects"], queryFn: projectApi.list });
+  // Its own cache key: this page sees archived projects too, and sharing ["projects"] with the
+  // active-only pickers would let one response masquerade as the other. Invalidations use the
+  // ["projects"] prefix, which matches both.
+  const projects = useQuery({ queryKey: ["projects", "admin"], queryFn: () => projectApi.list({ includeArchived: true }) });
   const [draft, setDraft] = useState({ code: "", name: "", description: "" });
   const [moduleDraft, setModuleDraft] = useState({ projectId: "", name: "" });
   const [submoduleDraft, setSubmoduleDraft] = useState({ moduleId: "", name: "" });
@@ -1113,13 +1117,17 @@ export function ProjectsPage() {
     },
     onError: (err: any) => toast.error("Create failed", { description: serverMessage(err, "Try again.") })
   });
-  const archive = useMutation({
-    mutationFn: projectApi.remove,
-    onSuccess: () => {
-      toast.success("Project archived");
+  // Archive/reactivate are the SAME operation with a status flipped — a project switch, not a
+  // deletion. The old mutation called DELETE, which soft-deletes: the project vanished from
+  // this list with no way back, while the duplicate-code error advised "reactivate it instead".
+  const setProjectStatus = useMutation({
+    mutationFn: (payload: { id: string; status: "ACTIVE" | "ARCHIVED" }) =>
+      projectApi.update(payload.id, { status: payload.status }),
+    onSuccess: (_data, payload) => {
+      toast.success(payload.status === "ARCHIVED" ? "Project archived — reactivate it here anytime" : "Project reactivated");
       queryClient.invalidateQueries({ queryKey: ["projects"] });
     },
-    onError: (err: any) => toast.error("Archive failed", { description: serverMessage(err, "Try again.") }),
+    onError: (err: any) => toast.error("Could not change project status", { description: serverMessage(err, "Try again.") }),
     onSettled: () => setPendingArchive(null)
   });
   const addModule = useMutation({
@@ -1217,14 +1225,26 @@ export function ProjectsPage() {
             <Button variant="ghost" size="sm" onClick={() => setBillingProject(row.original)}>
               <DollarSign className="h-3.5 w-3.5" />Billing
             </Button>
-            <Button
-              variant="ghost"
-              size="sm"
-              className="text-destructive hover:bg-destructive/10 hover:text-destructive"
-              onClick={() => setPendingArchive({ id: row.original.id, name: row.original.name })}
-            >
-              <Archive className="h-3.5 w-3.5" />Archive
-            </Button>
+            {row.original.status === "ACTIVE" ? (
+              <Button
+                variant="ghost"
+                size="sm"
+                className="text-destructive hover:bg-destructive/10 hover:text-destructive"
+                onClick={() => setPendingArchive({ id: row.original.id, name: row.original.name })}
+              >
+                <Archive className="h-3.5 w-3.5" />Archive
+              </Button>
+            ) : (
+              // The other half of the switch — archiving used to be a one-way door (a soft
+              // delete that removed the row from this very list).
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={() => setProjectStatus.mutate({ id: row.original.id, status: "ACTIVE" })}
+              >
+                <ArchiveRestore className="h-3.5 w-3.5" />Reactivate
+              </Button>
+            )}
           </div>
         )
       }
@@ -1443,12 +1463,16 @@ export function ProjectsPage() {
           <AlertDialogHeader>
             <AlertDialogTitle>Archive {pendingArchive?.name}?</AlertDialogTitle>
             <AlertDialogDescription>
-              Archived projects disappear from new timesheet entries, but stay visible on history and reports.
+              Archiving disables the project: it disappears from timesheet entry, ticket creation and every
+              picker, while existing entries and history stay untouched. It remains on this page with an
+              ARCHIVED badge — reactivate it here whenever you like.
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
             <AlertDialogCancel>Cancel</AlertDialogCancel>
-            <AlertDialogAction onClick={() => pendingArchive && archive.mutate(pendingArchive.id)}>Archive project</AlertDialogAction>
+            <AlertDialogAction onClick={() => pendingArchive && setProjectStatus.mutate({ id: pendingArchive.id, status: "ARCHIVED" })}>
+              Archive project
+            </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
@@ -2180,7 +2204,7 @@ function defaultPeriod(): { start: string; end: string } {
  */
 function AttestationsCard() {
   const queryClient = useQueryClient();
-  const projects = useQuery({ queryKey: ["projects"], queryFn: projectApi.list });
+  const projects = useQuery({ queryKey: ["projects"], queryFn: () => projectApi.list() });
   const [projectId, setProjectId] = useState("");
   const [period, setPeriod] = useState(defaultPeriod);
   const [preview, setPreview] = useState<AttestationPayload | null>(null);
@@ -2587,7 +2611,7 @@ function AttestationShareDialog({ attestation, onClose }: { attestation: Attesta
 }
 
 function StatusReportCard() {
-  const projects = useQuery({ queryKey: ["projects"], queryFn: projectApi.list });
+  const projects = useQuery({ queryKey: ["projects"], queryFn: () => projectApi.list() });
   const [projectId, setProjectId] = useState("");
   const [periodDays, setPeriodDays] = useState("7");
   const [result, setResult] = useState<{ report: string; projectName: string; periodLabel: string } | null>(null);

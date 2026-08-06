@@ -83,3 +83,36 @@ test.describe("maintenance window sanity", () => {
     });
   });
 });
+
+test.describe("project enable/disable", () => {
+  test("archive removes a project from pickers, keeps it manageable, and reactivate restores it", async () => {
+    await withAdminRequest(async (ctx, headers) => {
+      const code = `E2EARCH${Date.now() % 100000}`;
+      const created = await (await ctx.post("/api/projects", { headers, data: { code, name: "Archive Drill" } })).json();
+
+      try {
+        // Disable = PATCH status, never a delete.
+        const archived = await ctx.patch(`/api/projects/${created.id}`, { headers, data: { status: "ARCHIVED" } });
+        expect(archived.status(), await archived.text()).toBe(200);
+
+        // Gone from the default (picker) list — nobody logs time against a disabled project…
+        const pickers = await (await ctx.get("/api/projects", { headers })).json();
+        expect(pickers.some((p: any) => p.id === created.id)).toBe(false);
+
+        // …but present and labelled where managing it is the point.
+        const admin = await (await ctx.get("/api/projects?includeArchived=1", { headers })).json();
+        const row = admin.find((p: any) => p.id === created.id);
+        expect(row?.status).toBe("ARCHIVED");
+
+        // Enable = the same switch, flipped back.
+        const revived = await ctx.patch(`/api/projects/${created.id}`, { headers, data: { status: "ACTIVE" } });
+        expect(revived.status()).toBe(200);
+        const pickersAfter = await (await ctx.get("/api/projects", { headers })).json();
+        expect(pickersAfter.some((p: any) => p.id === created.id)).toBe(true);
+      } finally {
+        const del = await ctx.delete(`/api/projects/${created.id}`, { headers });
+        expect(del.status(), "drill-project cleanup failed").toBeLessThan(300);
+      }
+    });
+  });
+});

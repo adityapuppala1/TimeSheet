@@ -38,7 +38,7 @@ export function TimelinePage() {
   const [showUnscheduled, setShowUnscheduled] = useState(false);
 
   const config = useQuery({ queryKey: ["planning", "settings"], queryFn: planningApi.settings });
-  const projects = useQuery({ queryKey: ["projects"], queryFn: projectApi.list });
+  const projects = useQuery({ queryKey: ["projects"], queryFn: () => projectApi.list() });
 
   const projectIds = projectId === "__all__" ? undefined : [projectId];
   const enabled = Boolean(config.data?.effective.timeline);

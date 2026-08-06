@@ -56,7 +56,7 @@ const statusVariant: Record<string, "success" | "warning" | "destructive" | "mut
 
 export function History() {
   const timesheets = useQuery({ queryKey: ["timesheets"], queryFn: timesheetApi.list, refetchInterval: 30_000 });
-  const projects = useQuery({ queryKey: ["projects"], queryFn: projectApi.list });
+  const projects = useQuery({ queryKey: ["projects"], queryFn: () => projectApi.list() });
   const [status, setStatus] = useState<StatusFilter>("ALL");
   const [projectId, setProjectId] = useState("all");
   const [from, setFrom] = useState("");

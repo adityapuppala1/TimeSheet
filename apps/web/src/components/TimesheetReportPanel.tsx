@@ -80,7 +80,7 @@ export function TimesheetReportPanel() {
   const [downloading, setDownloading] = useState<"csv" | "pdf" | "xlsx" | null>(null);
 
   const filters = toFilters(form);
-  const projects = useQuery({ queryKey: ["projects"], queryFn: projectApi.list });
+  const projects = useQuery({ queryKey: ["projects"], queryFn: () => projectApi.list() });
   const users = useQuery({ queryKey: ["users"], queryFn: userApi.list });
   const report = useQuery({
     queryKey: ["reports", "timesheets", filters, groupBy],

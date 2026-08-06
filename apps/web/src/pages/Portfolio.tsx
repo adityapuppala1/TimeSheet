@@ -82,7 +82,7 @@ export function PortfolioPage() {
     queryFn: () => portfolioApi.rollup(selected === "__all__" ? undefined : selected),
     enabled
   });
-  const projects = useQuery({ queryKey: ["projects"], queryFn: projectApi.list, enabled });
+  const projects = useQuery({ queryKey: ["projects"], queryFn: () => projectApi.list(), enabled });
   // The nightly worker stores these; a project with no snapshot yet simply has no badge
   // rather than a fabricated one.
   const riskSnapshots = useQuery({ queryKey: ["ai-proposals", "risk"], queryFn: copilotApi.riskSnapshots, enabled });

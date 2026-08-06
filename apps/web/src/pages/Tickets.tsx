@@ -318,7 +318,7 @@ export function Tickets() {
     enabled: viewMode === "calendar" && planFeatures.planning
   });
 
-  const projects = useQuery({ queryKey: ["projects"], queryFn: projectApi.list });
+  const projects = useQuery({ queryKey: ["projects"], queryFn: () => projectApi.list() });
   const labels = useQuery({ queryKey: ["labels"], queryFn: labelApi.list });
   const tickets = useQuery({
     queryKey: ["tickets", filters],

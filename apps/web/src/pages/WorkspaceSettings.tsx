@@ -877,7 +877,7 @@ function TicketingSettingsCard({ readOnly }: { readOnly: boolean }) {
 function TicketRulesCard({ readOnly }: { readOnly: boolean }) {
   const queryClient = useQueryClient();
   const rules = useQuery({ queryKey: ["settings", "ticket-rules"], queryFn: settingsApi.listTicketRules });
-  const projects = useQuery({ queryKey: ["projects"], queryFn: projectApi.list });
+  const projects = useQuery({ queryKey: ["projects"], queryFn: () => projectApi.list() });
   const users = useQuery({ queryKey: ["users"], queryFn: userApi.list });
   const labels = useQuery({ queryKey: ["labels"], queryFn: labelApi.list });
 
@@ -1695,7 +1695,7 @@ interface ConnectionDraft {
 function EmailIntakeSettingsCard({ readOnly }: { readOnly: boolean }) {
   const queryClient = useQueryClient();
   const settings = useQuery({ queryKey: ["settings", "email-intake"], queryFn: emailIntakeApi.getSettings });
-  const projects = useQuery({ queryKey: ["projects"], queryFn: projectApi.list });
+  const projects = useQuery({ queryKey: ["projects"], queryFn: () => projectApi.list() });
   const users = useQuery({ queryKey: ["users"], queryFn: userApi.list });
   const routingRules = useQuery({ queryKey: ["email-intake", "routing-rules"], queryFn: emailIntakeApi.routingRules.list });
   const assigneeRules = useQuery({ queryKey: ["email-intake", "assignee-rules"], queryFn: emailIntakeApi.assigneeRules.list });

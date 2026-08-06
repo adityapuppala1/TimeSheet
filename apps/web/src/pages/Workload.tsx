@@ -114,7 +114,7 @@ export function WorkloadPage() {
     queryFn: () => resourceApi.listBookings({ from, to, projectId: projectId === "__all__" ? undefined : projectId }),
     enabled
   });
-  const projects = useQuery({ queryKey: ["projects"], queryFn: projectApi.list, enabled });
+  const projects = useQuery({ queryKey: ["projects"], queryFn: () => projectApi.list(), enabled });
   const users = useQuery({ queryKey: ["users"], queryFn: () => userApi.list(), enabled });
 
   const removeBooking = useMutation({

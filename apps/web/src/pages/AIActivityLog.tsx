@@ -39,7 +39,7 @@ export function AIActivityLog() {
   const [source, setSource] = useState("all");
   const [reviewOnly, setReviewOnly] = useState(false);
 
-  const projects = useQuery({ queryKey: ["projects"], queryFn: projectApi.list });
+  const projects = useQuery({ queryKey: ["projects"], queryFn: () => projectApi.list() });
   const tickets = useQuery({
     queryKey: ["tickets", "ai-activity", projectId, source],
     queryFn: () =>

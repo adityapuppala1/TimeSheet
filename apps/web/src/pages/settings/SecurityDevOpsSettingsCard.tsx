@@ -108,7 +108,7 @@ export function SecurityDevOpsSettingsCard({ readOnly }: { readOnly: boolean }) 
 
   const ingestion = useQuery({ queryKey: ["settings", "security-ingestion"], queryFn: settingsApi.getSecurityIngestion });
   const notifications = useQuery({ queryKey: ["settings", "notifications"], queryFn: settingsApi.getNotifications });
-  const projects = useQuery({ queryKey: ["projects"], queryFn: projectApi.list });
+  const projects = useQuery({ queryKey: ["projects"], queryFn: () => projectApi.list() });
   const [revealedToken, setRevealedToken] = useState<string | null>(null);
 
   const updateFallbackProject = useMutation({

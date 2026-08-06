@@ -366,7 +366,7 @@ function FormBuilderDialog({
   editing: RequestFormRow | null;
 }) {
   const queryClient = useQueryClient();
-  const projects = useQuery({ queryKey: ["projects"], queryFn: projectApi.list, enabled: open });
+  const projects = useQuery({ queryKey: ["projects"], queryFn: () => projectApi.list(), enabled: open });
 
   const [meta, setMeta] = useState({ name: "", slug: "", projectId: "", ticketType: "BUG", intro: "", confirmation: "" });
   const [fields, setFields] = useState<RequestFormFieldRow[]>([]);

@@ -34,7 +34,7 @@ const CHAT_MATCH_TYPES: ChatMatchType[] = ["CHANNEL_ID", "COMMAND_PREFIX"];
 
 export function ChatIntegrationsSettingsCard({ readOnly }: { readOnly: boolean }) {
   const settings = useQuery({ queryKey: ["settings", "chat-integrations"], queryFn: chatIntegrationsApi.getSettings });
-  const projects = useQuery({ queryKey: ["projects"], queryFn: projectApi.list });
+  const projects = useQuery({ queryKey: ["projects"], queryFn: () => projectApi.list() });
   const routingRules = useQuery({ queryKey: ["chat-integrations", "routing-rules"], queryFn: chatIntegrationsApi.routingRules.list });
 
   return (

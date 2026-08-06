@@ -46,9 +46,14 @@ async function visibilityScope(req: any): Promise<{ unrestricted: boolean; userI
 
 projectRouter.get("/", async (req, res) => {
   const scope = await visibilityScope(req);
+  // Archived projects are DISABLED, not gone: excluded from every picker and filter by
+  // default (nobody logs time against a switched-off project), included only where managing
+  // them is the point — the admin page asks with ?includeArchived=1 and shows the badge.
+  const includeArchived = req.query.includeArchived === "1" || req.query.includeArchived === "true";
   const projects = await prisma.project.findMany({
     where: {
       deletedAt: null,
+      ...(includeArchived ? {} : { status: "ACTIVE" }),
       ...(scope.unrestricted ? {} : { assignments: { some: { userId: { in: scope.userIds } } } })
     },
     include: {

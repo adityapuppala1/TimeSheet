@@ -459,7 +459,10 @@ export interface ProjectAssignment {
 }
 
 export const projectApi = {
-  list: async () => (await api.get("/projects")).data,
+  /** Active projects only by default — pickers and filters must not offer disabled projects.
+   *  The admin management page passes includeArchived to see (and reactivate) everything. */
+  list: async (opts?: { includeArchived?: boolean }) =>
+    (await api.get("/projects", { params: opts?.includeArchived ? { includeArchived: 1 } : {} })).data,
   create: async (payload: unknown) => (await api.post("/projects", payload)).data,
   update: async (id: string, payload: unknown) => (await api.patch(`/projects/${id}`, payload)).data,
   remove: async (id: string) => api.delete(`/projects/${id}`),

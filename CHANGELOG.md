@@ -382,6 +382,15 @@ outcome is not a security control.
   stopped uploading dead weight — and stopped including the **dev TLS private keys**, which
   `COPY apps/web` had been silently baking into the web image since the LAN-HTTPS work.
 
+### 🔛 Projects can be disabled and re-enabled
+
+- **Archive was a one-way door**: it soft-deleted the project, which removed it from the very
+  list an admin would look in to bring it back — while the duplicate-code error helpfully
+  advised "reactivate it instead". Archive is now a true disable: the project vanishes from
+  timesheet entry, ticket creation and every picker (the default project list serves only
+  ACTIVE), but stays on the Project Management page with its ARCHIVED badge and a
+  **Reactivate** action. History and existing entries are untouched in both directions.
+
 ### 🪟 The module editor dialog, made legible
 
 - The first cut of the hierarchy dialog broke on real data: one long submodule name forced the
