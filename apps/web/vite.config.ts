@@ -66,7 +66,13 @@ export default defineConfig(({ mode }) => {
     devHttps = { key: readFileSync(keyPath), cert: readFileSync(certPath) };
     console.log(`[vite] HTTPS enabled using ${certPath}`);
   } catch {
-    /* No certs, no HTTPS — the documented default. */
+    // No certs → http, and SAY WHY: certificates are per-machine private keys (git-ignored),
+    // so every fresh clone lands here — which reads as "https is missing" unless the terminal
+    // explains itself. The camera on other devices needs https; localhost is exempt.
+    console.log(
+      "[vite] Serving over http — no certificate at apps/web/certs/ (per-machine, git-ignored)." +
+        " For https + LAN camera access run `npm run certs`, then restart. Docs: DEPLOYMENT.md § Serving over HTTPS."
+    );
   }
 
   return {

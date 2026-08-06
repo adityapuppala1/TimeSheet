@@ -192,6 +192,26 @@ docs/
 
    The web dev server proxies `/api` and `/uploads` to the API, so there's no separate URL/CORS config to manage in dev.
 
+8. **(Optional) HTTPS on the LAN — required for the camera from other devices.** A fresh clone
+   always serves **http**: the TLS certificates are per-machine private keys, deliberately
+   git-ignored, so no `npm run setup` on a new machine can bring them along. Generate this
+   machine's own pair (needs [mkcert](https://github.com/FiloSottile/mkcert), e.g.
+   `winget install FiloSottile.mkcert`):
+
+   ```bash
+   npm run certs        # dispatches to scripts/make-lan-certs.{ps1,sh} for your OS
+   ```
+
+   Restart `npm run dev` and it serves `https://localhost:5173` + `https://<lan-ip>:5173`
+   automatically — the presence of `apps/web/certs/` is the switch. The script prints the
+   one-time root-CA trust step for phones. Details: DEPLOYMENT.md § *Serving over HTTPS*.
+
+9. **(Optional) Point this checkout at UAT or production config** instead of local:
+   `APP_ENV=uat npm run dev -w apps/api` (PowerShell: `$env:APP_ENV = "uat"`), after copying
+   `apps/api/.env.uat.example` → `.env.uat`. Profiles layer over `.env`, real ones are
+   git-ignored, and a missing profile refuses to boot rather than silently running local
+   config. Full runbook: DEPLOYMENT.md § *Environment profiles*.
+
 ### Demo credentials (after seeding)
 
 - Super Admin: `superadmin@timesheet.local` / `Admin@12345`
