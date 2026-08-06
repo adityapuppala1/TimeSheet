@@ -382,6 +382,15 @@ outcome is not a security control.
   stopped uploading dead weight — and stopped including the **dev TLS private keys**, which
   `COPY apps/web` had been silently baking into the web image since the LAN-HTTPS work.
 
+### 🗞️ Release history, typeset like it matters
+
+- Release cards now parse their own notes into the industry-standard taxonomy — **Features,
+  Fixes, Security, Infrastructure, Dependencies, Internal** — each section tagged with a colored
+  chip and the release header carrying per-category counts, so the shape of a release is visible
+  before anything is expanded. The release's NAME finally shows ("v2.0.0 — the planning layer"),
+  dates right-align, section bodies sit behind a left rule, and every fragment renders through
+  the same sanitizer path as before.
+
 ### 📞 Profile fields that mean something
 
 - **Phone numbers are validated per country, both ends.** The profile's free-text phone box (it

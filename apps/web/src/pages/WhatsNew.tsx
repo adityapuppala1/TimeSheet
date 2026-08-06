@@ -19,8 +19,22 @@
  */
 import { useQuery } from "@tanstack/react-query";
 import { marked } from "marked";
-import { ArrowUpCircle, CheckCircle2, Copy, ExternalLink, GitCommitHorizontal, History, Package, Sparkles } from "lucide-react";
-import { useEffect, useState } from "react";
+import {
+  ArrowUpCircle,
+  Bug,
+  CheckCircle2,
+  Copy,
+  ExternalLink,
+  GitCommitHorizontal,
+  History,
+  Package,
+  ShieldCheck,
+  Sparkles,
+  Wrench,
+  Zap,
+  type LucideIcon
+} from "lucide-react";
+import { useEffect, useMemo, useState } from "react";
 import { Badge } from "../components/ui/badge";
 import { Button } from "../components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../components/ui/card";
@@ -41,6 +55,83 @@ function renderNotes(markdown: string): { __html: string } {
 function formatDate(iso: string | null): string {
   if (!iso) return "—";
   return new Date(iso).toLocaleDateString(undefined, { year: "numeric", month: "long", day: "numeric" });
+}
+
+/* ------------------------------------------------------------------ release-note structure */
+
+/**
+ * The industry-standard changelog taxonomy (Keep-a-Changelog / GitHub releases), matched by
+ * keyword so it works whether a section was written "### ✨ Features", "### Fixes" or
+ * "### 🔐 Password and camera-policy hardening". Order in this list is match priority —
+ * "security hardening" must land on security before "hardening" could mean anything else.
+ */
+const NOTE_CATEGORIES: Array<{ match: RegExp; label: string; tone: string; icon: LucideIcon }> = [
+  { match: /security|hardening|password|privacy/i, label: "Security", tone: "bg-destructive/10 text-destructive", icon: ShieldCheck },
+  { match: /fix|bug/i, label: "Fixes", tone: "bg-warning/10 text-warning", icon: Bug },
+  {
+    match: /feature|new|planning layer|release history|calendar|report|profile|user management|status page|everything else/i,
+    label: "Features",
+    tone: "bg-success/10 text-success",
+    icon: Sparkles
+  },
+  { match: /performance|install|infra|https|deploy|docker/i, label: "Infrastructure", tone: "bg-info/10 text-info", icon: Zap },
+  { match: /dependenc|packages|upgrade/i, label: "Dependencies", tone: "bg-muted text-muted-foreground", icon: Package },
+  { match: /under the hood|internal|polish|dev/i, label: "Internal", tone: "bg-muted text-muted-foreground", icon: Wrench }
+];
+const FALLBACK_CATEGORY = { label: "Changes", tone: "bg-muted text-muted-foreground", icon: History };
+
+interface NoteSection {
+  /** The heading as written, minus its emoji — the author's words stay the headline. */
+  title: string;
+  category: (typeof NOTE_CATEGORIES)[number] | typeof FALLBACK_CATEGORY;
+  markdown: string;
+  /** Top-level bullets — the number shown on the collapsed chip. */
+  items: number;
+}
+
+/**
+ * Splits a release body on its `###` section headings. `##`+`####` stay inside content (the
+ * planning-layer section uses #### for phases). Anything before the first heading is the intro.
+ */
+function parseReleaseSections(notes: string): { intro: string; sections: NoteSection[] } {
+  const lines = notes.split(/\r?\n/);
+  const sections: NoteSection[] = [];
+  let intro: string[] = [];
+  let current: { title: string; body: string[] } | null = null;
+
+  const push = () => {
+    if (!current) return;
+    const cleanTitle = current.title.replace(/[\p{Extended_Pictographic}️]/gu, "").trim();
+    const category = NOTE_CATEGORIES.find((c) => c.match.test(cleanTitle)) ?? FALLBACK_CATEGORY;
+    const markdown = current.body.join("\n").trim();
+    sections.push({ title: cleanTitle, category, markdown, items: current.body.filter((l) => /^- /.test(l)).length });
+  };
+
+  for (const line of lines) {
+    const heading = line.match(/^###\s+(.*)$/);
+    if (heading) {
+      push();
+      current = { title: heading[1], body: [] };
+    } else if (current) {
+      current.body.push(line);
+    } else {
+      intro.push(line);
+    }
+  }
+  push();
+  return { intro: intro.join("\n").trim(), sections };
+}
+
+/** Collapsed-state summary: one chip per distinct category with its bullet count — the shape of
+ *  a release at a glance, before anyone expands anything. */
+function categoryChips(sections: NoteSection[]) {
+  const byLabel = new Map<string, { tone: string; icon: LucideIcon; items: number }>();
+  for (const s of sections) {
+    const existing = byLabel.get(s.category.label);
+    if (existing) existing.items += s.items;
+    else byLabel.set(s.category.label, { tone: s.category.tone, icon: s.category.icon, items: s.items });
+  }
+  return [...byLabel.entries()].map(([label, v]) => ({ label, ...v }));
 }
 
 export function WhatsNewPage() {
@@ -236,31 +327,72 @@ function ReleaseCard({
   open: boolean;
   onToggle: () => void;
 }) {
+  const parsed = useMemo(() => parseReleaseSections(release.notes), [release.notes]);
+  const chips = useMemo(() => categoryChips(parsed.sections), [parsed.sections]);
+  /** The release NAME, when it has one beyond "vX.Y.Z" — "the planning layer" is information. */
+  const displayName = release.name && release.name !== `v${release.version}` ? release.name : null;
+
   return (
-    <div className={`rounded-lg border p-3 ${isCurrent ? "border-primary/40 bg-primary/5" : "border-border"}`}>
-      <button type="button" onClick={onToggle} className="flex w-full flex-wrap items-center gap-2 text-left" aria-expanded={open}>
-        <span className="font-mono text-sm font-bold">v{release.version}</span>
-        {isCurrent && <Badge variant="success">running</Badge>}
-        <span className="text-xs text-muted-foreground">{formatDate(release.publishedAt)}</span>
-        <span className="ml-auto text-xs font-semibold text-primary">{open ? "Hide" : "Details"}</span>
+    <div className={`rounded-lg border ${isCurrent ? "border-primary/40 bg-primary/5" : "border-border"}`}>
+      <button type="button" onClick={onToggle} className="grid w-full gap-1.5 p-3 text-left" aria-expanded={open}>
+        <span className="flex flex-wrap items-center gap-2">
+          <span className="font-mono text-sm font-bold">v{release.version}</span>
+          {displayName && <span className="text-sm font-semibold">— {displayName}</span>}
+          {isCurrent && <Badge variant="success">running</Badge>}
+          <span className="ml-auto flex shrink-0 items-center gap-3">
+            <span className="text-xs tabular-nums text-muted-foreground">{formatDate(release.publishedAt)}</span>
+            <span className="text-xs font-semibold text-primary">{open ? "Hide" : "Details"}</span>
+          </span>
+        </span>
+        {/* The shape of the release at a glance — category chips with bullet counts, visible
+            without expanding anything. */}
+        {chips.length > 0 && (
+          <span className="flex flex-wrap items-center gap-1.5">
+            {chips.map((chip) => (
+              <span key={chip.label} className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[11px] font-medium ${chip.tone}`}>
+                <chip.icon className="h-3 w-3" />
+                {chip.label}
+                {chip.items > 0 && <span className="tabular-nums opacity-70">{chip.items}</span>}
+              </span>
+            ))}
+          </span>
+        )}
       </button>
 
       {open && (
-        <div className="mt-3 border-t border-border pt-3">
-          {release.notes.trim() ? (
+        <div className="border-t border-border p-3 pt-3">
+          {parsed.intro && (
             // REMOTE markdown — sanitized in renderNotes, never rendered raw. See the file header.
-            <div
-              className="prose-sm max-w-none text-sm leading-6 [&_a]:text-primary [&_a]:underline [&_code]:rounded [&_code]:bg-muted [&_code]:px-1 [&_h1]:text-base [&_h1]:font-bold [&_h2]:text-sm [&_h2]:font-bold [&_h3]:text-sm [&_h3]:font-semibold [&_li]:ml-4 [&_ul]:list-disc [&_ol]:list-decimal"
-              dangerouslySetInnerHTML={renderNotes(release.notes)}
-            />
-          ) : (
-            <p className="text-sm text-muted-foreground">No notes were written for this release.</p>
+            <div className={`${NOTES_PROSE} mb-4`} dangerouslySetInnerHTML={renderNotes(parsed.intro)} />
           )}
+
+          {parsed.sections.length > 0 ? (
+            <div className="grid gap-4">
+              {parsed.sections.map((section) => (
+                <section key={section.title} className="grid gap-2">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <span className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[11px] font-semibold ${section.category.tone}`}>
+                      <section.category.icon className="h-3 w-3" />
+                      {section.category.label}
+                    </span>
+                    <h3 className="text-sm font-semibold">{section.title}</h3>
+                  </div>
+                  <div
+                    className={`${NOTES_PROSE} border-l-2 border-border pl-3`}
+                    dangerouslySetInnerHTML={renderNotes(section.markdown)}
+                  />
+                </section>
+              ))}
+            </div>
+          ) : (
+            !parsed.intro && <p className="text-sm text-muted-foreground">No notes were written for this release.</p>
+          )}
+
           <a
             href={release.url}
             target="_blank"
             rel="noreferrer noopener"
-            className="mt-2 inline-flex items-center gap-1 text-xs font-semibold text-primary hover:underline"
+            className="mt-3 inline-flex items-center gap-1 text-xs font-semibold text-primary hover:underline"
           >
             View on GitHub <ExternalLink className="h-3 w-3" />
           </a>
@@ -269,3 +401,7 @@ function ReleaseCard({
     </div>
   );
 }
+
+/** One prose style for every rendered note fragment, so intro and sections cannot drift apart. */
+const NOTES_PROSE =
+  "prose-sm max-w-none text-sm leading-6 [&_a]:text-primary [&_a]:underline [&_code]:rounded [&_code]:bg-muted [&_code]:px-1 [&_h1]:text-base [&_h1]:font-bold [&_h2]:text-sm [&_h2]:font-bold [&_h4]:mt-2 [&_h4]:text-sm [&_h4]:font-semibold [&_li]:ml-4 [&_li]:mt-1 [&_ul]:list-disc [&_ol]:list-decimal [&_p]:mt-2 [&_p:first-child]:mt-0 [&_strong]:font-semibold";
