@@ -382,6 +382,15 @@ outcome is not a security control.
   stopped uploading dead weight — and stopped including the **dev TLS private keys**, which
   `COPY apps/web` had been silently baking into the web image since the LAN-HTTPS work.
 
+### 🏷️ Validation errors name the field
+
+- Every Zod rejection app-wide used to reach the user as a bare **"Validation failed"** — a
+  501-character project description produced an error that never said "description" anywhere a
+  person would look. The error middleware now writes the first problems into the message itself
+  ("Validation failed — description: String must contain at most 500 character(s)"), and the
+  project form's inputs carry the API's own limits (64/160/500) so the boundary is felt while
+  typing instead of discovered after clicking Create.
+
 ### 🚪 The first-run popup now leaves when you're done
 
 - **Completing onboarding used to leave the "finish setting up your account" popup on screen**

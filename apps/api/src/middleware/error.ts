@@ -34,7 +34,24 @@ export const notFound = () => {
 
 export const errorHandler: ErrorRequestHandler = (error, req, res, _next) => {
   if (error instanceof ZodError) {
-    return res.status(422).json({ message: "Validation failed", issues: error.flatten() });
+    // The message NAMES the fields. The bare "Validation failed" this used to send made every
+    // form's error toast useless — a 501-character project description produced a rejection
+    // that never mentioned "description" anywhere a person would look (flatten() even collapses
+    // the path to "body"). Machines still get the full issue list; humans get the first three
+    // problems in words.
+    const detail = error.issues
+      .slice(0, 3)
+      .map((issue) => {
+        // Drop the validate-middleware wrapper segment (body/query/params) — nobody typed into
+        // a field called "body".
+        const path = issue.path.filter((p) => !["body", "query", "params"].includes(String(p))).join(".");
+        return path ? `${path}: ${issue.message}` : issue.message;
+      })
+      .join("; ");
+    return res.status(422).json({
+      message: detail ? `Validation failed — ${detail}` : "Validation failed",
+      issues: error.flatten()
+    });
   }
 
   // Prisma's known errors are CLIENT mistakes wearing a stack trace. Without this translation,

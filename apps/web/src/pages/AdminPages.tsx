@@ -1183,9 +1183,11 @@ export function ProjectsPage() {
         </CardHeader>
         <CardContent className="grid gap-4">
           <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-[1fr_1.4fr_2fr_auto]">
-            <FieldShell label="Code"><Input value={draft.code} onChange={(e) => setDraft({ ...draft, code: e.target.value })} placeholder="HICS-OPS" /></FieldShell>
-            <FieldShell label="Project name"><Input value={draft.name} onChange={(e) => setDraft({ ...draft, name: e.target.value })} placeholder="HICS Operations Platform" /></FieldShell>
-            <FieldShell label="Description"><Input value={draft.description} onChange={(e) => setDraft({ ...draft, description: e.target.value })} placeholder="What's this initiative for?" /></FieldShell>
+            {/* maxLengths mirror the API schema (64/160/500) so the limit is felt while typing,
+                not discovered as a rejection after clicking Create. */}
+            <FieldShell label="Code"><Input value={draft.code} onChange={(e) => setDraft({ ...draft, code: e.target.value })} maxLength={64} placeholder="HICS-OPS" /></FieldShell>
+            <FieldShell label="Project name"><Input value={draft.name} onChange={(e) => setDraft({ ...draft, name: e.target.value })} maxLength={160} placeholder="HICS Operations Platform" /></FieldShell>
+            <FieldShell label="Description"><Input value={draft.description} onChange={(e) => setDraft({ ...draft, description: e.target.value })} maxLength={500} placeholder="What's this initiative for?" /></FieldShell>
             <div className="flex items-end">
               <Button className="w-full" onClick={() => create.mutate(draft)} disabled={!draft.code || !draft.name || create.isPending}>
                 <Plus />Create
