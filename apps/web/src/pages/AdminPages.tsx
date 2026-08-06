@@ -1059,8 +1059,28 @@ export function ProjectsPage() {
   /** The project whose module/submodule tree is open for renaming. Kept as an id-lookup into
    *  the live query data, so renames show in the dialog without re-opening it. */
   const [hierarchyProjectId, setHierarchyProjectId] = useState<string | null>(null);
-  const setHierarchyProject = (p: any) => setHierarchyProjectId(p.id);
+  const [hierarchyFilter, setHierarchyFilter] = useState("");
+  const setHierarchyProject = (p: any) => {
+    setHierarchyFilter("");
+    setHierarchyProjectId(p.id);
+  };
   const hierarchyProject = (projects.data ?? []).find((p: any) => p.id === hierarchyProjectId) ?? null;
+  /** Filter matches a module by its own name OR any submodule's; a matching module keeps only
+   *  its matching submodules unless the module itself matched (then all stay — context intact). */
+  const filteredHierarchy = useMemo(() => {
+    const all = hierarchyProject?.modules ?? [];
+    const term = hierarchyFilter.trim().toLowerCase();
+    if (!term) return all;
+    return all
+      .map((m: any) => {
+        const moduleHit = m.name.toLowerCase().includes(term);
+        const subs = (m.submodules ?? []).filter((s: any) => s.name.toLowerCase().includes(term));
+        if (moduleHit) return m;
+        if (subs.length > 0) return { ...m, submodules: subs };
+        return null;
+      })
+      .filter(Boolean);
+  }, [hierarchyProject, hierarchyFilter]);
 
   const editProject = useMutation({
     mutationFn: (payload: { id: string; name: string; description: string }) =>
@@ -1332,40 +1352,66 @@ export function ProjectsPage() {
       </Dialog>
 
       <Dialog open={!!hierarchyProject} onOpenChange={(open) => !open && setHierarchyProjectId(null)}>
-        <DialogContent className="max-h-[85vh] w-[calc(100vw-2rem)] max-w-lg overflow-y-auto">
+        {/* overflow-hidden on the PANEL + a dedicated scroll area for the LIST: the first
+            version put overflow-y on the whole panel and let CSS-grid children keep their
+            min-width:auto — one long submodule name then forced the pane wider than the dialog,
+            clipping the left edge behind a horizontal scrollbar. Header and filter stay fixed;
+            only the tree scrolls; every level carries min-w-0 so names truncate instead of
+            widening anything. */}
+        <DialogContent className="flex max-h-[85vh] w-[calc(100vw-2rem)] max-w-lg flex-col overflow-hidden">
           <DialogHeader>
-            <DialogTitle>Modules in {hierarchyProject?.name}</DialogTitle>
+            <DialogTitle className="truncate">Modules in {hierarchyProject?.name}</DialogTitle>
             <DialogDescription>
-              Rename modules and submodules here — timesheets reference them by id, so existing entries follow
-              the new name automatically. Add new ones from the panels on the page behind.
+              {(hierarchyProject?.modules ?? []).length} modules ·{" "}
+              {(hierarchyProject?.modules ?? []).reduce((n: number, m: any) => n + (m.submodules?.length ?? 0), 0)} submodules.
+              Click a name's pencil to rename — timesheets reference these by id, so existing entries follow the
+              new name automatically.
             </DialogDescription>
           </DialogHeader>
+
           {hierarchyProject && (
-            <div className="grid gap-2">
-              {(hierarchyProject.modules ?? []).length === 0 && (
-                <p className="text-sm text-muted-foreground">No modules yet — add one from the "Add module" panel.</p>
+            <>
+              {(hierarchyProject.modules ?? []).length > 6 && (
+                <Input
+                  value={hierarchyFilter}
+                  onChange={(e) => setHierarchyFilter(e.target.value)}
+                  placeholder="Filter modules and submodules…"
+                  className="shrink-0"
+                />
               )}
-              {(hierarchyProject.modules ?? []).map((m: any) => (
-                <div key={m.id} className="rounded-lg border border-border p-2">
-                  <RenameRow
-                    label="Module"
-                    name={m.name}
-                    pending={renameNode.isPending}
-                    onRename={(name) => renameNode.mutate({ kind: "module", id: m.id, name })}
-                  />
-                  {(m.submodules ?? []).map((s: any) => (
-                    <div key={s.id} className="ml-5 mt-1 border-l border-border pl-3">
+
+              <div className="-mr-2 min-h-0 flex-1 overflow-y-auto pr-2">
+                {filteredHierarchy.length === 0 && (
+                  <p className="py-4 text-sm text-muted-foreground">
+                    {hierarchyFilter ? "Nothing matches that filter." : 'No modules yet — add one from the "Add module" panel.'}
+                  </p>
+                )}
+                <div className="grid gap-2">
+                  {filteredHierarchy.map((m: any) => (
+                    <div key={m.id} className="min-w-0 rounded-lg border border-border p-2">
                       <RenameRow
-                        label="Submodule"
-                        name={s.name}
+                        name={m.name}
+                        emphasis
                         pending={renameNode.isPending}
-                        onRename={(name) => renameNode.mutate({ kind: "submodule", id: s.id, name })}
+                        onRename={(name) => renameNode.mutate({ kind: "module", id: m.id, name })}
                       />
+                      {(m.submodules ?? []).length > 0 && (
+                        <div className="ml-2.5 mt-1 grid gap-0.5 border-l border-border pl-3">
+                          {(m.submodules ?? []).map((s: any) => (
+                            <RenameRow
+                              key={s.id}
+                              name={s.name}
+                              pending={renameNode.isPending}
+                              onRename={(name) => renameNode.mutate({ kind: "submodule", id: s.id, name })}
+                            />
+                          ))}
+                        </div>
+                      )}
                     </div>
                   ))}
                 </div>
-              ))}
-            </div>
+              </div>
+            </>
           )}
         </DialogContent>
       </Dialog>
@@ -2645,13 +2691,15 @@ function Workspace({ title, subtitle, icon, children }: { title: string; subtitl
  * blur-cancel goes back. Local draft state so a slow rename never eats keystrokes.
  */
 function RenameRow({
-  label,
   name,
+  emphasis = false,
   pending,
   onRename
 }: {
-  label: string;
   name: string;
+  /** Module rows read as headers; submodules as their children — hierarchy carried by type
+   *  and indentation instead of a per-row "MODULE"/"SUBMODULE" chip repeated down the list. */
+  emphasis?: boolean;
   pending: boolean;
   onRename: (name: string) => void;
 }) {
@@ -2663,8 +2711,7 @@ function RenameRow({
     setDraft(null);
   };
   return (
-    <div className="flex min-w-0 items-center gap-2">
-      <span className="shrink-0 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">{label}</span>
+    <div className="group flex min-w-0 items-center gap-2">
       {editing ? (
         <>
           <Input
@@ -2687,8 +2734,16 @@ function RenameRow({
         </>
       ) : (
         <>
-          <span className="min-w-0 flex-1 truncate text-sm">{name}</span>
-          <Button size="sm" variant="ghost" className="h-8 w-8 p-0" aria-label={`Rename ${label.toLowerCase()} ${name}`} onClick={() => setDraft(name)}>
+          <span className={`min-w-0 flex-1 truncate ${emphasis ? "text-sm font-semibold" : "text-sm text-muted-foreground"}`} title={name}>
+            {name}
+          </span>
+          <Button
+            size="sm"
+            variant="ghost"
+            className="h-7 w-7 shrink-0 p-0 opacity-50 group-hover:opacity-100 focus-visible:opacity-100"
+            aria-label={`Rename ${name}`}
+            onClick={() => setDraft(name)}
+          >
             <Pencil className="h-3.5 w-3.5" />
           </Button>
         </>

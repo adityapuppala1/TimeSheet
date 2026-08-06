@@ -382,6 +382,17 @@ outcome is not a security control.
   stopped uploading dead weight — and stopped including the **dev TLS private keys**, which
   `COPY apps/web` had been silently baking into the web image since the LAN-HTTPS work.
 
+### 🪟 The module editor dialog, made legible
+
+- The first cut of the hierarchy dialog broke on real data: one long submodule name forced the
+  whole pane wider than the dialog (CSS-grid children keep min-width:auto), clipping the title
+  and every row's left edge behind a horizontal scrollbar, and a "MODULE/SUBMODULE" chip
+  repeated down 70+ rows was noise. Rebuilt: fixed header with live counts, a filter box for
+  big trees (matching a submodule keeps its parent for context), modules as bold headers with
+  indented children, names that truncate instead of widening anything, and only the tree
+  scrolls. Verified against the 76-submodule tree with a measured zero pixels of horizontal
+  overflow.
+
 ### ✏️ Projects you can correct, and windows that can't start yesterday
 
 - **Projects, modules and submodules are finally editable after creation.** The projects table
