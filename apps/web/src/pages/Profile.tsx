@@ -9,6 +9,7 @@
  */
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import type { ColumnDef } from "@tanstack/react-table";
+import { getCountries, getCountryCallingCode, parsePhoneNumberFromString, type CountryCode } from "libphonenumber-js/min";
 import { Camera, ImageOff, KeyRound, Laptop, Loader2, LogOut, Save, Shield, ShieldCheck, Smartphone, Tablet, Trash2, UserRound } from "lucide-react";
 import { useMemo, useRef, useState } from "react";
 import { Alert, AlertDescription, AlertTitle } from "../components/ui/alert";
@@ -28,6 +29,7 @@ import { Badge } from "../components/ui/badge";
 import { Button } from "../components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../components/ui/card";
 import { DataTable } from "../components/ui/data-table";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../components/ui/select";
 import { Input } from "../components/ui/input";
 import { Label } from "../components/ui/label";
 import { Separator } from "../components/ui/separator";
@@ -41,6 +43,26 @@ const DEVICE_ICON = { desktop: Laptop, mobile: Smartphone, tablet: Tablet } as c
 
 const ALLOWED_TYPES = ["image/png", "image/jpeg", "image/jpg", "image/gif"];
 const MAX_AVATAR_MB = 5;
+
+/** Every country libphonenumber knows, named in English and sorted for the picker — built once
+ *  at module load, not per render. */
+const REGION_NAMES = new Intl.DisplayNames(["en"], { type: "region" });
+const COUNTRY_OPTIONS = getCountries()
+  .map((code) => ({ code, name: REGION_NAMES.of(code) ?? code, dial: `+${getCountryCallingCode(code)}` }))
+  .sort((a, b) => a.name.localeCompare(b.name));
+
+/** The browser's own region (from its locale), falling back to India — the deployment default
+ *  timezone's country — when the locale carries no region. A default, never a restriction. */
+function detectDeviceCountry(): CountryCode {
+  const region = new Intl.Locale(navigator.language).region;
+  const known = getCountries();
+  return region && (known as string[]).includes(region) ? (region as CountryCode) : "IN";
+}
+
+/** The device's own IANA timezone — what "auto-detect" means, and the value backfilled for
+ *  users who never chose one. */
+const DEVICE_TIMEZONE = Intl.DateTimeFormat().resolvedOptions().timeZone;
+const TIMEZONE_OPTIONS = Intl.supportedValuesOf("timeZone");
 
 function initialsFor(name?: string) {
   if (!name) return "?";
@@ -59,8 +81,17 @@ export function Profile() {
 
   const [name, setName] = useState(user?.name ?? "");
   const [bio, setBio] = useState(user?.bio ?? "");
-  const [phoneNumber, setPhoneNumber] = useState(user?.phoneNumber ?? "");
+  // Phone lives as country + national number in the UI, and only ever leaves as validated
+  // E.164 — the stored value parses back into both fields, so round-trips are lossless.
+  const stored = user?.phoneNumber ? parsePhoneNumberFromString(user.phoneNumber) : undefined;
+  const [phoneCountry, setPhoneCountry] = useState<CountryCode>(stored?.country ?? detectDeviceCountry());
+  const [phoneNational, setPhoneNational] = useState(stored?.nationalNumber ?? "");
   const [timezone, setTimezone] = useState(user?.timezone ?? "");
+
+  /** Empty is fine (the field is optional); anything typed must validate for its country. */
+  const phoneParsed = phoneNational.trim() ? parsePhoneNumberFromString(phoneNational, phoneCountry) : undefined;
+  const phoneValid = !phoneNational.trim() || (phoneParsed?.isValid() ?? false);
+  const phoneE164 = phoneNational.trim() && phoneParsed?.isValid() ? phoneParsed.number : null;
   const [currentPassword, setCurrentPassword] = useState("");
   const [nextPassword, setNextPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
@@ -72,7 +103,7 @@ export function Profile() {
       authApi.updateProfile({
         name: name.trim(),
         bio: bio.trim() ? bio.trim() : null,
-        phoneNumber: phoneNumber.trim() ? phoneNumber.trim() : null,
+        phoneNumber: phoneE164,
         timezone: timezone.trim() ? timezone.trim() : null
       }),
     onSuccess: (updated) => {
@@ -221,10 +252,10 @@ export function Profile() {
     return (
       (name.trim() !== (user?.name ?? "")) ||
       ((bio.trim() || null) !== (user?.bio ?? null)) ||
-      ((phoneNumber.trim() || null) !== (user?.phoneNumber ?? null)) ||
+      (phoneE164 !== (user?.phoneNumber ?? null)) ||
       ((timezone.trim() || null) !== (user?.timezone ?? null))
     );
-  }, [name, bio, phoneNumber, timezone, user]);
+  }, [name, bio, phoneE164, timezone, user]);
 
   function pickAvatar() {
     fileInputRef.current?.click();
@@ -329,7 +360,7 @@ export function Profile() {
               className="grid gap-4"
               onSubmit={(event) => {
                 event.preventDefault();
-                if (name.trim().length >= 2 && profileDirty) profileMutation.mutate();
+                if (name.trim().length >= 2 && profileDirty && phoneValid) profileMutation.mutate();
               }}
             >
               <div className="grid gap-1.5">
@@ -359,23 +390,64 @@ export function Profile() {
               <div className="grid gap-4 sm:grid-cols-2">
                 <div className="grid gap-1.5">
                   <Label htmlFor="profile-phone">Phone</Label>
-                  <Input
-                    id="profile-phone"
-                    value={phoneNumber}
-                    onChange={(event) => setPhoneNumber(event.target.value)}
-                    maxLength={40}
-                    placeholder="+1 555 0123"
-                  />
+                  <div className="flex gap-2">
+                    {/* Country first, number second — the country picks the validation rules,
+                        so "is this number valid" always has a defined answer. */}
+                    <Select value={phoneCountry} onValueChange={(v) => setPhoneCountry(v as CountryCode)}>
+                      <SelectTrigger className="w-[8.5rem] shrink-0" aria-label="Country code">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent className="max-h-72">
+                        {COUNTRY_OPTIONS.map((c) => (
+                          <SelectItem key={c.code} value={c.code}>
+                            {c.code} {c.dial}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                    <Input
+                      id="profile-phone"
+                      className="min-w-0 flex-1"
+                      value={phoneNational}
+                      onChange={(event) => setPhoneNational(event.target.value.replace(/[^\d\s().-]/g, ""))}
+                      maxLength={20}
+                      inputMode="tel"
+                      placeholder={phoneCountry === "IN" ? "98765 43210" : "phone number"}
+                      aria-invalid={!phoneValid}
+                    />
+                  </div>
+                  {!phoneValid && (
+                    <p className="text-xs text-destructive">
+                      Not a valid {REGION_NAMES.of(phoneCountry)} number — check the digits (saved as{" "}
+                      {COUNTRY_OPTIONS.find((c) => c.code === phoneCountry)?.dial}…).
+                    </p>
+                  )}
                 </div>
                 <div className="grid gap-1.5">
                   <Label htmlFor="profile-tz">Timezone</Label>
-                  <Input
-                    id="profile-tz"
-                    value={timezone}
-                    onChange={(event) => setTimezone(event.target.value)}
-                    maxLength={80}
-                    placeholder="America/New_York"
-                  />
+                  <div className="flex gap-2">
+                    <Select value={timezone || DEVICE_TIMEZONE} onValueChange={setTimezone}>
+                      <SelectTrigger id="profile-tz" className="min-w-0 flex-1">
+                        <SelectValue placeholder="Pick a timezone" />
+                      </SelectTrigger>
+                      <SelectContent className="max-h-72">
+                        {TIMEZONE_OPTIONS.map((tz) => (
+                          <SelectItem key={tz} value={tz}>
+                            {tz}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                    {timezone !== DEVICE_TIMEZONE && (
+                      <Button type="button" variant="outline" className="shrink-0" onClick={() => setTimezone(DEVICE_TIMEZONE)}>
+                        Use device
+                      </Button>
+                    )}
+                  </div>
+                  <p className="text-xs text-muted-foreground">
+                    Your device reports <span className="font-medium">{DEVICE_TIMEZONE}</span> — detected from the
+                    browser, not from where the server runs.
+                  </p>
                 </div>
               </div>
               <Separator />

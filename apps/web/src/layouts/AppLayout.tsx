@@ -7,8 +7,10 @@
  * an already-logged-in user on every page refresh.
  * WHO renders this: `App.tsx`, as the element for every `/app/*` route.
  */
+import { useEffect } from "react";
 import { Navigate, Outlet } from "react-router";
 import { MaintenanceBanner } from "../components/MaintenanceBanner";
+import { authApi } from "../services/api";
 import { PasswordChangeBanner } from "../components/PasswordChangeBanner";
 import { OnboardingGate } from "../components/OnboardingGate";
 import { SessionEndedDialog } from "../components/SessionEndedDialog";
@@ -19,6 +21,24 @@ import { useAuthStore } from "../store/auth";
 export function AppLayout() {
   const user = useAuthStore((s) => s.user);
   const hydrated = useAuthStore((s) => s.hydrated);
+  const setUser = useAuthStore((s) => s.setUser);
+
+  // Timezone backfill: someone who never chose a timezone gets their DEVICE's zone recorded
+  // once — detected in the browser, which is the only party that actually knows where the
+  // person is. The server's own TZ says where the code runs, not where anyone lives, and using
+  // it as a default mislabels every remote user. Silent and once; Profile lets them change it.
+  useEffect(() => {
+    if (!user || user.timezone) return;
+    const deviceTz = Intl.DateTimeFormat().resolvedOptions().timeZone;
+    if (!deviceTz) return;
+    authApi
+      .updateProfile({ timezone: deviceTz })
+      .then(setUser)
+      .catch(() => {
+        /* next load retries; a missing timezone is not worth an error in anyone's way */
+      });
+    // eslint-disable-next-line react-hooks/exhaustive-deps — run once per signed-in user
+  }, [user?.id]);
   if (!hydrated) return <div className="grid min-h-screen place-items-center bg-background text-sm text-foreground/60">Loading secure workspace...</div>;
   if (!user) return <Navigate to="/login" replace />;
 

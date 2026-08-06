@@ -382,6 +382,21 @@ outcome is not a security control.
   stopped uploading dead weight — and stopped including the **dev TLS private keys**, which
   `COPY apps/web` had been silently baking into the web image since the LAN-HTTPS work.
 
+### 📞 Profile fields that mean something
+
+- **Phone numbers are validated per country, both ends.** The profile's free-text phone box (it
+  accepted "hello") became a country picker + number field validated by libphonenumber — an
+  Indian mobile must have its 10 digits, a Singapore number its 8 — with the server enforcing
+  the same rules on PATCH (the client check is convenience, never the boundary) and storing
+  canonical E.164 (`+919876543210`), whatever spacing was typed.
+- **Timezone comes from the person's device, not the server's.** The browser is the only party
+  that knows where someone actually is; the server's TZ only says where the code runs. Users
+  with no timezone get their device's zone recorded automatically at next sign-in; the profile
+  gained a real zone picker with a "use device" shortcut. Server-side validation asks the
+  runtime itself ("can you format dates in this zone?") rather than checking membership in the
+  canonical-names list — which would have rejected `Asia/Kolkata` on ICU builds that
+  canonicalize to `Asia/Calcutta`, the exact zone this product defaults to.
+
 ### 📦 Dependency refresh, with its skips stated
 
 - Every in-range update applied across all workspaces (Playwright 1.62 + fresh browser builds,

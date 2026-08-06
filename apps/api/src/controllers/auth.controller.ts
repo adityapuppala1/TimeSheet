@@ -26,6 +26,7 @@ import { authenticateLdap } from "../services/sso.service.js";
 import { dispatchTransactional } from "../services/notify.service.js";
 import { templates } from "../services/mail-templates.js";
 import { processAvatar } from "../utils/image.js";
+import { isValidTimezone, normalizePhoneNumber } from "../utils/phone.js";
 import { sanitizeRichText } from "../utils/sanitize.js";
 
 export const authRouter = Router();
@@ -223,8 +224,27 @@ authRouter.patch("/profile", requireAuth, validate(profilePatchSchema), async (r
   if ("bio" in req.body) {
     data.bio = req.body.bio === null ? null : sanitizeRichText(req.body.bio ?? "").slice(0, 600) || null;
   }
-  if ("phoneNumber" in req.body) data.phoneNumber = req.body.phoneNumber === null ? null : (req.body.phoneNumber ?? "").trim() || null;
-  if ("timezone" in req.body) data.timezone = req.body.timezone === null ? null : (req.body.timezone ?? "").trim() || null;
+  if ("phoneNumber" in req.body) {
+    const raw = req.body.phoneNumber === null ? "" : (req.body.phoneNumber ?? "").trim();
+    if (!raw) {
+      data.phoneNumber = null;
+    } else {
+      // Validated and normalized SERVER-side — the client's own check is convenience, not a
+      // boundary. Stored as E.164 so every consumer starts from one canonical format.
+      const check = normalizePhoneNumber(raw);
+      if (!check.ok) throw new AppError(422, check.message);
+      data.phoneNumber = check.e164;
+    }
+  }
+  if ("timezone" in req.body) {
+    const tz = req.body.timezone === null ? "" : (req.body.timezone ?? "").trim();
+    if (!tz) {
+      data.timezone = null;
+    } else {
+      if (!isValidTimezone(tz)) throw new AppError(422, `"${tz}" is not a valid IANA timezone (e.g. Asia/Kolkata, America/New_York).`);
+      data.timezone = tz;
+    }
+  }
 
   if (Object.keys(data).length === 0) throw new AppError(422, "No profile fields provided");
 
