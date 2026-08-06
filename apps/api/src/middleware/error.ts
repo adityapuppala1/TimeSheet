@@ -12,6 +12,7 @@
  * WHO calls this: registered once in app.ts as the last middleware in the chain — every
  * controller/service in the app relies on it implicitly by throwing `AppError` freely.
  */
+import { Prisma } from "@prisma/client";
 import type { ErrorRequestHandler } from "express";
 import { ZodError } from "zod";
 
@@ -34,6 +35,26 @@ export const notFound = () => {
 export const errorHandler: ErrorRequestHandler = (error, req, res, _next) => {
   if (error instanceof ZodError) {
     return res.status(422).json({ message: "Validation failed", issues: error.flatten() });
+  }
+
+  // Prisma's known errors are CLIENT mistakes wearing a stack trace. Without this translation,
+  // any unique-constraint hit anywhere in the app leaked the raw `Invalid prisma.x.create()
+  // invocation …` dump to the browser as a 500 — which is how "that project code is taken"
+  // reached a user as a wall of ORM internals. Routes with context still pre-check and throw
+  // their own precise AppError; this is the floor, not the ceiling.
+  if (error instanceof Prisma.PrismaClientKnownRequestError) {
+    if (error.code === "P2002") {
+      const target = error.meta?.target;
+      const fields = Array.isArray(target) ? target.join(", ") : typeof target === "string" ? target : null;
+      return res.status(409).json({
+        message: fields
+          ? `That value is already in use — ${fields} must be unique. Pick a different value.`
+          : "That value is already in use — it must be unique. Pick a different value."
+      });
+    }
+    if (error.code === "P2025") {
+      return res.status(404).json({ message: "The record this action targets no longer exists — it may have just been deleted." });
+    }
   }
 
   const statusCode = error instanceof AppError ? error.statusCode : 500;

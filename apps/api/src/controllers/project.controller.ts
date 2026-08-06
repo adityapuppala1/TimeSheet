@@ -75,6 +75,22 @@ projectRouter.post(
     })
   ),
   async (req, res) => {
+    // Explicit duplicate check instead of letting the unique index throw — same reasoning as
+    // user creation's: the constraint error can't say WHICH project holds the code or that an
+    // archived one (invisible in most pickers) is the collision. This message can.
+    const existing = await prisma.project.findUnique({
+      where: { code: req.body.code },
+      select: { name: true, status: true }
+    });
+    if (existing) {
+      throw new AppError(
+        409,
+        `Project code "${req.body.code}" is already used by "${existing.name}"${
+          existing.status === "ARCHIVED" ? " (archived — reactivate it instead, or pick a new code)" : ""
+        }. Codes must be unique.`
+      );
+    }
+
     const project = await prisma.project.create({
       data: {
         code: req.body.code,

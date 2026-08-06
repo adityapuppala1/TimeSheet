@@ -382,6 +382,16 @@ outcome is not a security control.
   stopped uploading dead weight — and stopped including the **dev TLS private keys**, which
   `COPY apps/web` had been silently baking into the web image since the LAN-HTTPS work.
 
+### 🧯 Duplicate keys answer like a product, not an ORM
+
+- **Creating a project with an existing code showed a raw Prisma stack** (`Unique constraint
+  failed on Project_code_key`) as a 500. Two fixes, two layers: the create route now pre-checks
+  and answers 409 naming the colliding project — including when it's archived and therefore
+  invisible in pickers — and the error middleware gained a Prisma-translation floor, so ANY
+  unique-constraint hit anywhere in the app (module names, custom fields, future routes) returns
+  a human 409 instead of leaking ORM internals. Proven both ways by e2e: the named message on
+  the pre-checked route, the translated one on a route with no pre-check.
+
 ### 🗞️ Release history, typeset like it matters
 
 - Release cards now parse their own notes into the industry-standard taxonomy — **Features,
