@@ -147,6 +147,59 @@ customers.
 
 ---
 
+## Environment profiles — local / UAT / production
+
+One checkout can be pointed at different environments without ever editing `.env` back and
+forth. `APP_ENV` selects which profile file configures the API:
+
+| Profile | Command sets | File loaded | Falls back to |
+|---|---|---|---|
+| local (default) | *(nothing)* | `apps/api/.env` | — |
+| UAT | `APP_ENV=uat` | `apps/api/.env.uat` | `.env` for unset keys |
+| production | `APP_ENV=production` | `apps/api/.env.production` | `.env` for unset keys |
+
+**Setup, once per profile:** copy the committed template and fill it in — the templates carry
+per-environment guidance (why UAT gets its own databases and secrets, why production never uses
+`APP_BASE_URL="auto"`):
+
+```bash
+cp apps/api/.env.uat.example        apps/api/.env.uat
+cp apps/api/.env.production.example apps/api/.env.production
+```
+
+Real profile files are git-ignored by pattern (`.env.*` except `*.example`) — credentials can't
+land in a commit. Only keys that DIFFER need to be in a profile; everything else falls back to
+`.env`, and real shell environment variables still beat both.
+
+**Running each profile:**
+
+```bash
+# Linux/macOS (dev server or built app)
+npm run dev -w apps/api                      # local
+APP_ENV=uat        npm run dev -w apps/api   # UAT
+APP_ENV=production npm run dev -w apps/api   # production config, e.g. a config rehearsal
+```
+
+```powershell
+# Windows PowerShell
+npm run dev -w apps/api                                  # local
+$env:APP_ENV = "uat";        npm run dev -w apps/api     # UAT
+$env:APP_ENV = "production"; npm run dev -w apps/api     # production config
+# ($env:APP_ENV lasts for the terminal session — Remove-Item Env:APP_ENV to go back to local)
+```
+
+A named profile whose file is missing is a **hard boot failure** naming the fix — an operator
+who asked for UAT and silently got local database credentials would be debugging the wrong
+universe. The boot log always states which profile loaded.
+
+**Docker deployments are different on purpose:** a Compose stack installed via
+`install.sh`/`install.cmd` reads the ROOT `.env` the installer generated on that machine —
+each environment is its own machine (or its own checkout) with its own root `.env`, which is
+already a complete environment profile. `APP_ENV` matters when running the API process directly
+(manual/bare-metal deploys, or pointing a workstation at UAT to reproduce a bug). The web dev
+server has its own equivalent if you ever need it: Vite's native modes (`vite --mode uat` loads
+`apps/web/.env.uat`).
+
 ## Shape 2 — SaaS multi-org
 
 One platform, many organizations, each with a fully separate physical database. New in this

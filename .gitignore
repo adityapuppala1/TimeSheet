@@ -41,3 +41,8 @@ skills-lock.json
 apps/web/certs/
 deploy/caddy/certs/*
 !deploy/caddy/certs/.gitkeep
+
+# Environment profiles hold real credentials; only their .example templates are committed
+.env.*
+!.env.example
+!.env.*.example

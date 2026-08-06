@@ -19,6 +19,34 @@ import { resolve } from "node:path";
 import dotenv from "dotenv";
 import { z } from "zod";
 
+/**
+ * Environment profiles. `APP_ENV` picks WHICH .env file configures this process:
+ *
+ *   (unset)              → .env                (local development — unchanged default)
+ *   APP_ENV=uat          → .env.uat, then .env (uat wins on conflicts, .env fills gaps)
+ *   APP_ENV=production   → .env.production, then .env
+ *
+ * Layering works because dotenv never overwrites a variable that's already set — the profile
+ * file loads FIRST, so its values win; the base .env only fills whatever the profile left out.
+ * Real shell environment variables beat both, unchanged.
+ *
+ * A NAMED profile whose file is missing is a hard, loud failure — an operator who asked for
+ * "uat" and silently got local database credentials would be debugging the wrong universe.
+ * Copy apps/api/.env.uat.example → .env.uat (same for production) and fill it in.
+ */
+const APP_ENV = process.env.APP_ENV?.trim();
+if (APP_ENV) {
+  const profilePath = `.env.${APP_ENV}`;
+  const result = dotenv.config({ path: profilePath });
+  if (result.error) {
+    console.error(
+      `[env] APP_ENV=${APP_ENV} but ${profilePath} could not be read (${(result.error as Error).message}).\n` +
+        `[env] Copy .env.${APP_ENV}.example to ${profilePath} in apps/api/ and fill it in — refusing to boot with the wrong environment's config.`
+    );
+    process.exit(1);
+  }
+  console.log(`[env] profile: ${APP_ENV} (${profilePath}, with .env as fallback for unset keys)`);
+}
 dotenv.config();
 
 /**
