@@ -1,8 +1,8 @@
-<#
+﻿<#
 One-command updater for a TimeSphere installed by install.ps1 (the Docker Compose shape).
 
-  .\update.ps1                 # update to the newest released tag (vX.Y.Z)
-  .\update.ps1 -To v1.2.3      # update to a specific release
+  .\update.cmd                 # update to the newest released tag (vX.Y.Z)
+  .\update.cmd -To v1.2.3      # update to a specific release  (the .cmd launcher runs this file with a process-scoped execution-policy bypass)
 
 Faithful port of update.sh — see that file for the full reasoning. The short version of the
 guarantees, in order:
@@ -27,7 +27,7 @@ function Write-Warn($Message) { Write-Host "[warn] $Message" -ForegroundColor Ye
 function Write-Fail($Message) { Write-Host "[error] $Message" -ForegroundColor Red; exit 1 }
 
 # -- Preconditions -----------------------------------------------------------------------------
-if (-not (Test-Path ".env")) { Write-Fail "No .env here - this doesn't look like an installed deployment. Run .\install.ps1 first." }
+if (-not (Test-Path ".env")) { Write-Fail "No .env here - this doesn't look like an installed deployment. Run .\install.cmd first." }
 try { git rev-parse --git-dir | Out-Null } catch { Write-Fail "This directory isn't a git clone. Updates need one: git clone the repo, copy your .env in, run .\install.ps1 once - after that .\update.ps1 works." }
 try { docker compose version | Out-Null } catch { Write-Fail "Docker Compose isn't available - is Docker Desktop running?" }
 
