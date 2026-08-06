@@ -108,6 +108,9 @@ export function Profile() {
       }),
     onSuccess: (updated) => {
       setUser(updated);
+      // A gated new joiner may have just satisfied the profile step — tell the gate NOW rather
+      // than letting it poll its way there.
+      queryClient.invalidateQueries({ queryKey: ["auth", "onboarding-status"] });
       toast.success("Profile updated", { description: "Visible across audit logs, approvals, and your team page." });
     },
     onError: (err: any) =>

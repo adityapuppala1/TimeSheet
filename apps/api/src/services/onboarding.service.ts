@@ -14,7 +14,7 @@
  * objection answered: the gate only ever applies to accounts created after it shipped.
  */
 import { prisma } from "../config/prisma.js";
-import { getFaceSettings } from "./face.service.js";
+import { isFaceVerificationRequired } from "./face.service.js";
 
 export interface OnboardingStatus {
   /** True when the app should be blocked for this user right now. */
@@ -44,12 +44,17 @@ export async function getOnboardingStatus(userId: string): Promise<OnboardingSta
   const missing = missingProfileFields(user);
   const profileComplete = missing.length === 0;
 
-  // Face enrollment is only ever part of this when the workspace has the feature on AND the policy
-  // actually covers this person. An org with face verification off must never see this gate
-  // mention it, let alone be held by it.
-  const settings = await getFaceSettings();
-  const faceRequired =
-    settings.enabled && (settings.requireForTimesheet || settings.requireForTicket || settings.requireForApproval);
+  // Face enrollment is only ever part of this when the policy actually covers THIS PERSON —
+  // per-user, through the same check every submission gate uses. The first version asked only
+  // workspace-level questions (enabled + any context on), which over-blocked in SELECTED
+  // enforcement mode: a new joiner the policy deliberately didn't cover was still held at the
+  // gate for an enrollment nothing would ever ask them to use.
+  const [timesheetReq, ticketReq, approvalReq] = await Promise.all([
+    isFaceVerificationRequired(userId, "TIMESHEET"),
+    isFaceVerificationRequired(userId, "TICKET"),
+    isFaceVerificationRequired(userId, "APPROVAL")
+  ]);
+  const faceRequired = timesheetReq || ticketReq || approvalReq;
 
   const enrollment = faceRequired
     ? await prisma.faceEnrollment.findUnique({ where: { userId }, select: { id: true } })

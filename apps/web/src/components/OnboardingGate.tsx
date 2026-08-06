@@ -34,10 +34,18 @@ export function OnboardingGate() {
     queryKey: ["auth", "onboarding-status"],
     queryFn: authApi.onboardingStatus,
     enabled: Boolean(user),
-    // Refetched on focus and on navigation so finishing enrollment in the profile page lifts the
-    // gate without a reload. The server self-closes the gate the moment requirements are met.
     refetchOnWindowFocus: true,
-    staleTime: 5_000
+    /**
+     * POLLS WHILE BLOCKED, stops the moment it isn't. The first version claimed (in a comment)
+     * to refetch "on navigation", but nothing implemented that: this component stays mounted
+     * across route changes, so walking back from the profile after finishing every step just
+     * re-rendered the CACHED blocked:true — the gate sat there until a hard refresh, which is
+     * exactly the wall a brand-new user must never hit in their first five minutes. The two
+     * completing mutations (profile save, face enrollment) also invalidate this query for an
+     * instant lift; the poll is the backstop that makes a wedged gate impossible.
+     */
+    refetchInterval: (query) => (query.state.data?.blocked ? 4_000 : false),
+    staleTime: 3_000
   });
 
   if (!user || !status.data?.blocked) return null;

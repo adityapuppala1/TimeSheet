@@ -82,3 +82,65 @@ test.describe("first-run onboarding gate", () => {
     await expect(page.getByRole("alertdialog", { name: /finish setting up your account/i })).toBeHidden();
   });
 });
+
+test.describe("the gate lifts by itself", () => {
+  test.use({ storageState: { cookies: [], origins: [] } });
+
+  /**
+   * The regression: completing the last requirement used to leave the popup on screen until a
+   * hard refresh — the gate stayed mounted across navigation and kept rendering its CACHED
+   * blocked:true. Now the completing mutations invalidate the status query and the gate polls
+   * while blocked, so this asserts the dialog disappears with NO navigation and NO reload.
+   *
+   * Runs in SELECTED enforcement mode (restored afterwards) so the new drill user isn't held on
+   * face enrollment a headless browser can't perform — which also exercises the second bug fixed
+   * here: the gate demanding enrollment from people the SELECTED policy deliberately excludes.
+   */
+  test("completing the profile dismisses the popup without a reload", async ({ page }) => {
+    const email = `e2e-gate-lift-${Date.now()}@timesheet.local`;
+    const password = "GateLift@1234";
+
+    await withAdminRequest(async (ctx, headers) => {
+      const settings = await (await ctx.get("/api/settings/face-verification", { headers })).json();
+      const originalMode = settings.enforcementMode;
+      await ctx.patch("/api/settings/face-verification", { headers, data: { enforcementMode: "SELECTED" } });
+
+      const created = await ctx.post("/api/users", {
+        headers,
+        data: { name: "Gate Lift Drill", email, role: "EMPLOYEE", password }
+      });
+      expect(created.ok(), `could not create drill user (${created.status()})`).toBe(true);
+      const userId = (await created.json()).id as string;
+
+      try {
+        await page.goto("/login");
+        await page.getByLabel("Email", { exact: true }).fill(email);
+        await page.getByLabel("Password", { exact: true }).fill(password);
+        await page.getByRole("button", { name: /sign in/i }).click();
+        await expect(page).toHaveURL(/\/app/, { timeout: 15_000 });
+
+        const gate = page.getByRole("alertdialog", { name: /finish setting up your account/i });
+        await expect(gate).toBeVisible({ timeout: 15_000 });
+
+        // Complete the profile OUT OF BAND (as the user, via API) — the popup must notice by
+        // itself. The device-timezone backfill may have already supplied the timezone; sending
+        // both makes the test independent of that race.
+        const login = await ctx.post("/api/auth/login", { data: { email, password } });
+        const { accessToken } = await login.json();
+        const patched = await ctx.patch("/api/auth/profile", {
+          headers: { Authorization: `Bearer ${accessToken}`, "Content-Type": "application/json" },
+          data: { phoneNumber: "+91 98765 43210", timezone: "Asia/Kolkata" }
+        });
+        expect(patched.ok(), await patched.text()).toBe(true);
+
+        // No navigation, no reload — the poll (4s) plus a margin is the contract.
+        await expect(gate).toBeHidden({ timeout: 15_000 });
+      } finally {
+        const restore = await ctx.patch("/api/settings/face-verification", { headers, data: { enforcementMode: originalMode } });
+        expect(restore.ok(), "failed to restore face enforcement mode").toBe(true);
+        const del = await ctx.delete(`/api/users/${userId}`, { headers });
+        expect(del.status(), "drill-user cleanup failed").toBeLessThan(300);
+      }
+    });
+  });
+});

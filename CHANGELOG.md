@@ -382,6 +382,20 @@ outcome is not a security control.
   stopped uploading dead weight — and stopped including the **dev TLS private keys**, which
   `COPY apps/web` had been silently baking into the web image since the LAN-HTTPS work.
 
+### 🚪 The first-run popup now leaves when you're done
+
+- **Completing onboarding used to leave the "finish setting up your account" popup on screen**
+  until a hard refresh: the gate stayed mounted across navigation, so returning from the profile
+  just re-rendered its cached "blocked" answer (a comment claimed it refetched on navigation;
+  nothing did). Now the two completing actions — saving the profile, enrolling a face — tell the
+  gate immediately, and the gate polls every few seconds while blocked as a backstop, so a
+  wedged popup is impossible by construction. Verified by an e2e that creates a fresh user,
+  meets the gate, completes the profile out-of-band, and watches the popup leave with no
+  navigation and no reload.
+- **Second bug found on the way**: the gate demanded face enrollment from people the SELECTED
+  enforcement mode deliberately doesn't cover — it asked workspace-level questions about a
+  per-person policy. It now uses the same per-user check every submission gate uses.
+
 ### 🧯 Duplicate keys answer like a product, not an ORM
 
 - **Creating a project with an existing code showed a raw Prisma stack** (`Unique constraint
