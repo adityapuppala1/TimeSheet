@@ -21,3 +21,18 @@ docs
 # ...except the changelog: the api image serves it as the offline release history
 # (changelog-releases.service.ts), and COPYing an ignored file fails the build.
 !CHANGELOG.md
+
+# TLS private keys must never enter an image or its build context — `COPY apps/web` would
+# otherwise bake the dev certificate pair into the distributable web image.
+apps/web/certs
+deploy/caddy/certs
+# Build-context weight only — nothing below is COPYed, but every byte here is uploaded to the
+# builder on each build (graphify-out alone is several MB of knowledge-graph output).
+graphify-out
+tests
+test-results
+playwright-report
+.agents
+.claude
+.github
+skills-lock.json

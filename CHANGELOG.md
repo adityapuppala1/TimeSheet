@@ -369,6 +369,19 @@ outcome is not a security control.
   Two parallel workers used to suspend the gate and the first to finish restored it mid-run,
   producing an intermittent failure that always pointed at the wrong thing.
 
+### 🚢 Install & links that survive the real world
+
+- **`APP_BASE_URL="auto"`** — emailed links (password resets, welcome, digests) now build on the
+  machine's own LAN address detected at boot, instead of an IP frozen into `.env` that goes
+  stale the moment DHCP hands out a new one (it already had, when this shipped). Scheme follows
+  the dev-certificate signal, `{lan-ip}` templating covers custom ports, and production still
+  pins a real domain — with a loud warning if it doesn't.
+- **Docker builds got faster and stricter**: `npm ci` (exact lockfile replay — an image can no
+  longer quietly resolve different versions than the repo tested) with a BuildKit cache mount
+  that persists the npm cache between builds without entering the image. The build context also
+  stopped uploading dead weight — and stopped including the **dev TLS private keys**, which
+  `COPY apps/web` had been silently baking into the web image since the LAN-HTTPS work.
+
 ### 📜 Release history that works everywhere
 
 - **The What's-new page now always has a release history.** GitHub Releases remain the live

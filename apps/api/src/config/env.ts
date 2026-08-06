@@ -12,6 +12,10 @@
  * WHO calls this: every file in the API imports `{ env }` from here — it's the one place
  * `process.env` is read directly.
  */
+import { existsSync } from "node:fs";
+import os from "node:os";
+import { resolve } from "node:path";
+
 import dotenv from "dotenv";
 import { z } from "zod";
 
@@ -94,7 +98,57 @@ const schema = z.object({
   ANTHROPIC_API_KEY: z.string().default("")
 });
 
-export const env = schema.parse(process.env);
+const parsed = schema.parse(process.env);
+
+/**
+ * APP_BASE_URL="auto" (or any URL containing the "{lan-ip}" token) resolves to the machine's
+ * OWN address at boot instead of an IP frozen into .env — a laptop that hops networks gets a
+ * new DHCP address, and every emailed link built on the old one dies quietly.
+ *
+ * Resolution rules, stated because each is a choice:
+ *  - Primary non-internal IPv4, preferring private ranges (192.168./10.) over anything exotic —
+ *    the audience for "auto" is a LAN deployment, and the LAN address is the one colleagues
+ *    can actually open.
+ *  - "auto" assumes the dev web port (5173) and picks https exactly when the dev certificate
+ *    pair exists (the same signal vite.config.ts switches on) — the two ends of the link derive
+ *    the scheme from one artefact and cannot disagree. Other ports/schemes: use "{lan-ip}"
+ *    inside a full URL, e.g. "https://{lan-ip}:8443".
+ *  - Detected once at BOOT. An IP change needs an API restart — a link's base flipping between
+ *    two addresses mid-session would be far harder to debug than a stale one.
+ *  - Production should pin a real domain; "auto" there gets a loud warning, not a refusal —
+ *    an on-prem LAN pilot IS production to the people using it.
+ */
+function resolveAppBaseUrl(configured: string): string {
+  const wantsAuto = configured === "auto";
+  const wantsToken = configured.includes("{lan-ip}");
+  if (!wantsAuto && !wantsToken) return configured;
+
+  const candidates: string[] = [];
+  for (const list of Object.values(os.networkInterfaces())) {
+    for (const iface of list ?? []) {
+      if (iface.family === "IPv4" && !iface.internal && !iface.address.startsWith("169.254.")) {
+        candidates.push(iface.address);
+      }
+    }
+  }
+  const ip = candidates.find((a) => a.startsWith("192.168.") || a.startsWith("10.")) ?? candidates[0] ?? "localhost";
+
+  let resolved: string;
+  if (wantsToken) {
+    resolved = configured.replaceAll("{lan-ip}", ip);
+  } else {
+    const certsExist = [resolve(process.cwd(), "../web/certs/dev-cert.pem"), resolve(process.cwd(), "apps/web/certs/dev-cert.pem")]
+      .some((p) => existsSync(p));
+    resolved = `${certsExist ? "https" : "http"}://${ip}:5173`;
+  }
+  console.log(`[env] APP_BASE_URL ${configured} → ${resolved} (emailed links use this base; restart after an IP change)`);
+  if (process.env.NODE_ENV === "production") {
+    console.warn("[env] APP_BASE_URL is auto-detected in production — pin a real domain so emailed links survive address changes.");
+  }
+  return resolved;
+}
+
+export const env = { ...parsed, APP_BASE_URL: resolveAppBaseUrl(parsed.APP_BASE_URL) };
 
 /** Effective IANA timezone the Node process is honouring. */
 export const serverTimezone =

@@ -1,10 +1,14 @@
+# syntax=docker/dockerfile:1
 FROM node:22-alpine AS deps
 WORKDIR /app
 COPY package.json package-lock.json* ./
 COPY apps/api/package.json apps/api/package.json
 COPY apps/web/package.json apps/web/package.json
 COPY packages/shared/package.json packages/shared/package.json
-RUN npm install --include=dev --no-audit --no-fund
+# `npm ci` (not install): strict lockfile replay — faster, and the image can never quietly
+# resolve different versions than the repo tested. The BuildKit cache mount persists the npm
+# cache BETWEEN builds without ever entering the image, cutting rebuild times dramatically.
+RUN --mount=type=cache,target=/root/.npm npm ci --include=dev --no-audit --no-fund
 
 FROM deps AS build
 COPY tsconfig.base.json ./
