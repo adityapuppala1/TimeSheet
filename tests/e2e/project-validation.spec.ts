@@ -39,11 +39,47 @@ test.describe("duplicate keys answer like a product, not an ORM", () => {
         const moduleBody = await second.json();
         expect(moduleBody.message).toMatch(/already in use|unique/i);
         expect(moduleBody.message).not.toContain("prisma");
+        // Renames: modules and submodules were create-only, so a typo at creation was
+        // permanent. PATCH must rename and return the new name.
+        const renamed = await ctx.patch(`/api/projects/modules/${createdModule.id}`, {
+          headers,
+          data: { name: `${moduleName} (renamed)` }
+        });
+        expect(renamed.status(), await renamed.text()).toBe(200);
+        expect((await renamed.json()).name).toBe(`${moduleName} (renamed)`);
+
+        // Project rename round-trips too, and is restored to leave the workspace as found.
+        const renamedProject = await ctx.patch(`/api/projects/${existing.id}`, {
+          headers,
+          data: { name: `${existing.name} *` }
+        });
+        expect(renamedProject.status(), await renamedProject.text()).toBe(200);
+        const restoreName = await ctx.patch(`/api/projects/${existing.id}`, { headers, data: { name: existing.name } });
+        expect(restoreName.ok(), "failed to restore the project name").toBe(true);
       } finally {
         // Modules may not expose a delete route — cleanup is best-effort, and one extra module
         // named "E2E Dup Module <ts>" in a demo workspace is visible, not corrupting.
         await ctx.delete(`/api/projects/modules/${createdModule.id}`, { headers }).catch(() => {});
       }
+    });
+  });
+});
+
+test.describe("maintenance window sanity", () => {
+  test("a NEW start in the past is refused; nothing gets armed by the refusal", async () => {
+    await withAdminRequest(async (ctx, headers) => {
+      const yesterday = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
+      const tomorrow = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString();
+      const res = await ctx.patch("/api/maintenance/settings", {
+        headers,
+        data: { enabled: true, scheduledStartAt: yesterday, scheduledEndAt: tomorrow, message: null }
+      });
+      expect(res.status(), await res.text()).toBe(422);
+      expect((await res.json()).message).toContain("past");
+
+      // The refusal must not have armed anything.
+      const view = await (await ctx.get("/api/maintenance/admin", { headers })).json();
+      expect(view.settings.enabled, "a 422 must leave maintenance mode untouched").toBe(false);
     });
   });
 });

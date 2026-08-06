@@ -108,6 +108,15 @@ export async function updateMaintenanceSettings(params: {
     if (params.scheduledEndAt <= new Date()) {
       throw new AppError(422, "That window is entirely in the past — pick an end time that hasn't happened yet.");
     }
+    // A NEW start time must be now or later — scheduling a window to have already begun is
+    // either a typo or a stale form. The one legitimate past-start is an UNCHANGED one: an
+    // admin extending or re-wording a window that is already running must not be told their
+    // own active window is invalid. Five minutes of grace absorbs form-filling time.
+    const stored = await getMaintenanceSettings();
+    const startChanged = stored.scheduledStartAt?.getTime() !== params.scheduledStartAt.getTime();
+    if (startChanged && params.scheduledStartAt.getTime() < Date.now() - 5 * 60 * 1000) {
+      throw new AppError(422, "The window can't start in the past — pick the current time or later.");
+    }
   }
 
   const row = await prisma.maintenanceSettings.upsert({

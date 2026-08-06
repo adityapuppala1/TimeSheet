@@ -466,6 +466,9 @@ export const projectApi = {
   createModule: async (projectId: string, name: string) => (await api.post(`/projects/${projectId}/modules`, { name })).data,
   createSubmodule: async (moduleId: string, name: string) =>
     (await api.post(`/projects/modules/${moduleId}/submodules`, { name })).data,
+  renameModule: async (moduleId: string, name: string) => (await api.patch(`/projects/modules/${moduleId}`, { name })).data,
+  renameSubmodule: async (submoduleId: string, name: string) =>
+    (await api.patch(`/projects/submodules/${submoduleId}`, { name })).data,
   assignments: async (projectId: string) =>
     (await api.get<ProjectAssignment[]>(`/projects/${projectId}/assignments`)).data,
   assign: async (projectId: string, userId: string) =>

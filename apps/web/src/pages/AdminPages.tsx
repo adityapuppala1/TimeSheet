@@ -1055,6 +1055,33 @@ export function ProjectsPage() {
   const [pendingArchive, setPendingArchive] = useState<{ id: string; name: string } | null>(null);
   const [managingTeam, setManagingTeam] = useState<{ id: string; name: string } | null>(null);
   const [billingProject, setBillingProject] = useState<any | null>(null);
+  const [editingProject, setEditingProject] = useState<{ id: string; name: string; description: string } | null>(null);
+  /** The project whose module/submodule tree is open for renaming. Kept as an id-lookup into
+   *  the live query data, so renames show in the dialog without re-opening it. */
+  const [hierarchyProjectId, setHierarchyProjectId] = useState<string | null>(null);
+  const setHierarchyProject = (p: any) => setHierarchyProjectId(p.id);
+  const hierarchyProject = (projects.data ?? []).find((p: any) => p.id === hierarchyProjectId) ?? null;
+
+  const editProject = useMutation({
+    mutationFn: (payload: { id: string; name: string; description: string }) =>
+      projectApi.update(payload.id, { name: payload.name.trim(), description: payload.description.trim() || null }),
+    onSuccess: () => {
+      toast.success("Project updated");
+      queryClient.invalidateQueries({ queryKey: ["projects"] });
+      setEditingProject(null);
+    },
+    onError: (err: any) => toast.error("Could not update project", { description: serverMessage(err, "Try again.") })
+  });
+
+  const renameNode = useMutation({
+    mutationFn: (payload: { kind: "module" | "submodule"; id: string; name: string }) =>
+      payload.kind === "module" ? projectApi.renameModule(payload.id, payload.name) : projectApi.renameSubmodule(payload.id, payload.name),
+    onSuccess: () => {
+      toast.success("Renamed");
+      queryClient.invalidateQueries({ queryKey: ["projects"] });
+    },
+    onError: (err: any) => toast.error("Could not rename", { description: serverMessage(err, "Try again.") })
+  });
   const [bulkUploadOpen, setBulkUploadOpen] = useState(false);
 
   const create = useMutation({
@@ -1112,7 +1139,16 @@ export function ProjectsPage() {
         accessorFn: (row: any) => row.modules?.length ?? 0,
         header: "Hierarchy",
         cell: ({ row }) => (
-          <span className="text-muted-foreground"><Layers className="mr-1 inline h-3 w-3" />{row.original.modules?.length ?? 0} modules</span>
+          // A button, not a label: the count is the door to the module/submodule editor —
+          // before this, hierarchy names were create-only and a typo lived forever.
+          <button
+            type="button"
+            className="text-muted-foreground underline-offset-2 hover:text-foreground hover:underline"
+            onClick={() => setHierarchyProject(row.original)}
+          >
+            <Layers className="mr-1 inline h-3 w-3" />
+            {row.original.modules?.length ?? 0} modules
+          </button>
         )
       },
       {
@@ -1146,6 +1182,15 @@ export function ProjectsPage() {
         enableSorting: false,
         cell: ({ row }) => (
           <div className="flex flex-wrap justify-end gap-1">
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() =>
+                setEditingProject({ id: row.original.id, name: row.original.name, description: row.original.description ?? "" })
+              }
+            >
+              <Pencil className="h-3.5 w-3.5" />Edit
+            </Button>
             <Button variant="ghost" size="sm" onClick={() => setManagingTeam({ id: row.original.id, name: row.original.name })}>
               <UsersRound className="h-3.5 w-3.5" />Manage team
             </Button>
@@ -1241,6 +1286,89 @@ export function ProjectsPage() {
       <ProjectTeamDialog project={managingTeam} onClose={() => setManagingTeam(null)} />
 
       <ProjectBillingDialog project={billingProject} onClose={() => setBillingProject(null)} />
+
+      <Dialog open={!!editingProject} onOpenChange={(open) => !open && setEditingProject(null)}>
+        <DialogContent className="w-[calc(100vw-2rem)] max-w-md">
+          <DialogHeader>
+            <DialogTitle>Edit project</DialogTitle>
+            <DialogDescription>
+              Renaming is safe: tickets keep their existing keys and timesheets reference the project by id, so
+              history follows the new name. The code stays fixed — it prefixes every ticket key ever issued.
+            </DialogDescription>
+          </DialogHeader>
+          {editingProject && (
+            <div className="grid gap-3">
+              <div className="grid gap-1.5">
+                <Label htmlFor="edit-project-name">Project name</Label>
+                <Input
+                  id="edit-project-name"
+                  value={editingProject.name}
+                  maxLength={160}
+                  onChange={(e) => setEditingProject({ ...editingProject, name: e.target.value })}
+                />
+              </div>
+              <div className="grid gap-1.5">
+                <Label htmlFor="edit-project-desc">Description</Label>
+                <Input
+                  id="edit-project-desc"
+                  value={editingProject.description}
+                  maxLength={500}
+                  onChange={(e) => setEditingProject({ ...editingProject, description: e.target.value })}
+                  placeholder="What's this initiative for?"
+                />
+              </div>
+              <DialogFooter>
+                <Button variant="ghost" onClick={() => setEditingProject(null)}>Cancel</Button>
+                <Button
+                  disabled={editingProject.name.trim().length < 2 || editProject.isPending}
+                  onClick={() => editProject.mutate(editingProject)}
+                >
+                  Save changes
+                </Button>
+              </DialogFooter>
+            </div>
+          )}
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={!!hierarchyProject} onOpenChange={(open) => !open && setHierarchyProjectId(null)}>
+        <DialogContent className="max-h-[85vh] w-[calc(100vw-2rem)] max-w-lg overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle>Modules in {hierarchyProject?.name}</DialogTitle>
+            <DialogDescription>
+              Rename modules and submodules here — timesheets reference them by id, so existing entries follow
+              the new name automatically. Add new ones from the panels on the page behind.
+            </DialogDescription>
+          </DialogHeader>
+          {hierarchyProject && (
+            <div className="grid gap-2">
+              {(hierarchyProject.modules ?? []).length === 0 && (
+                <p className="text-sm text-muted-foreground">No modules yet — add one from the "Add module" panel.</p>
+              )}
+              {(hierarchyProject.modules ?? []).map((m: any) => (
+                <div key={m.id} className="rounded-lg border border-border p-2">
+                  <RenameRow
+                    label="Module"
+                    name={m.name}
+                    pending={renameNode.isPending}
+                    onRename={(name) => renameNode.mutate({ kind: "module", id: m.id, name })}
+                  />
+                  {(m.submodules ?? []).map((s: any) => (
+                    <div key={s.id} className="ml-5 mt-1 border-l border-border pl-3">
+                      <RenameRow
+                        label="Submodule"
+                        name={s.name}
+                        pending={renameNode.isPending}
+                        onRename={(name) => renameNode.mutate({ kind: "submodule", id: s.id, name })}
+                      />
+                    </div>
+                  ))}
+                </div>
+              ))}
+            </div>
+          )}
+        </DialogContent>
+      </Dialog>
 
       <CsvBulkUploadDialog
         open={bulkUploadOpen}
@@ -2508,6 +2636,63 @@ function Workspace({ title, subtitle, icon, children }: { title: string; subtitl
         </div>
       </div>
       {children}
+    </div>
+  );
+}
+
+/**
+ * One name with a pencil: click to swap the text for an input, save on check/Enter, escape or
+ * blur-cancel goes back. Local draft state so a slow rename never eats keystrokes.
+ */
+function RenameRow({
+  label,
+  name,
+  pending,
+  onRename
+}: {
+  label: string;
+  name: string;
+  pending: boolean;
+  onRename: (name: string) => void;
+}) {
+  const [draft, setDraft] = useState<string | null>(null);
+  const editing = draft !== null;
+  const save = () => {
+    const next = (draft ?? "").trim();
+    if (next && next !== name) onRename(next);
+    setDraft(null);
+  };
+  return (
+    <div className="flex min-w-0 items-center gap-2">
+      <span className="shrink-0 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">{label}</span>
+      {editing ? (
+        <>
+          <Input
+            autoFocus
+            className="h-8 min-w-0 flex-1"
+            value={draft}
+            maxLength={160}
+            onChange={(e) => setDraft(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") save();
+              if (e.key === "Escape") setDraft(null);
+            }}
+          />
+          <Button size="sm" className="h-8" disabled={pending || !(draft ?? "").trim()} onClick={save}>
+            Save
+          </Button>
+          <Button size="sm" variant="ghost" className="h-8" onClick={() => setDraft(null)}>
+            Cancel
+          </Button>
+        </>
+      ) : (
+        <>
+          <span className="min-w-0 flex-1 truncate text-sm">{name}</span>
+          <Button size="sm" variant="ghost" className="h-8 w-8 p-0" aria-label={`Rename ${label.toLowerCase()} ${name}`} onClick={() => setDraft(name)}>
+            <Pencil className="h-3.5 w-3.5" />
+          </Button>
+        </>
+      )}
     </div>
   );
 }

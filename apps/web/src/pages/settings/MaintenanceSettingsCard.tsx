@@ -106,6 +106,20 @@ export function MaintenanceSettingsCard({ readOnly }: { readOnly: boolean }) {
 
   const invalidate = () => queryClient.invalidateQueries({ queryKey: ["maintenance", "admin"] });
 
+  /** Local today (YYYY-MM-DD) — the earliest date either picker may offer. */
+  const todayLocal = toLocalInputValue(new Date().toISOString()).split("T")[0];
+  /**
+   * A start in the past is refused for NEW/CHANGED starts only — an admin editing the end or
+   * message of a window that is ALREADY RUNNING has a legitimately-past start, and telling
+   * them their own active window is invalid would be absurd. Mirrors the server's rule.
+   */
+  const savedStart = toLocalInputValue(adminView.data?.settings.scheduledStartAt ?? null);
+  const startInPast = Boolean(
+    draft?.scheduledStartAt &&
+      draft.scheduledStartAt !== savedStart &&
+      new Date(draft.scheduledStartAt).getTime() < Date.now() - 60_000
+  );
+
   const save = useMutation({
     mutationFn: () =>
       maintenanceApi.updateSettings({
@@ -218,12 +232,19 @@ export function MaintenanceSettingsCard({ readOnly }: { readOnly: boolean }) {
                 slots={MAINTENANCE_SLOTS}
                 placeholder="Not scheduled"
                 disabled={readOnly}
+                minValue={todayLocal}
               />
+              {startInPast && (
+                <p className="text-xs text-destructive">
+                  The window can't start in the past — pick the current time or later.
+                </p>
+              )}
             </div>
             <div className="grid gap-1.5">
               <Label htmlFor="maintenance-end">Window ends</Label>
               <DateTimePicker
                 id="maintenance-end"
+                minValue={draft.scheduledStartAt.split("T")[0] || todayLocal}
                 date={draft.scheduledEndAt.split("T")[0] ?? ""}
                 time={draft.scheduledEndAt.split("T")[1] ?? ""}
                 onChange={({ date, time }) => setDraft({ ...draft, scheduledEndAt: date && time ? `${date}T${time}` : "" })}
@@ -260,8 +281,14 @@ export function MaintenanceSettingsCard({ readOnly }: { readOnly: boolean }) {
                 managed to arm a window mid-test-suite. */}
             <Button
               onClick={() => save.mutate()}
-              disabled={readOnly || save.isPending || (draft.enabled && (!draft.scheduledStartAt || !draft.scheduledEndAt))}
-              title={draft.enabled && (!draft.scheduledStartAt || !draft.scheduledEndAt) ? "Pick both a start and an end time first" : undefined}
+              disabled={readOnly || save.isPending || startInPast || (draft.enabled && (!draft.scheduledStartAt || !draft.scheduledEndAt))}
+              title={
+                startInPast
+                  ? "The window can't start in the past"
+                  : draft.enabled && (!draft.scheduledStartAt || !draft.scheduledEndAt)
+                    ? "Pick both a start and an end time first"
+                    : undefined
+              }
             >
               {save.isPending ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Save className="mr-2 h-4 w-4" />}
               Save maintenance settings

@@ -190,6 +190,36 @@ projectRouter.post("/modules/:id/submodules", requirePermission(permissions.PROJ
   res.status(201).json(created);
 });
 
+/**
+ * Renames. Modules and submodules had create-only routes, so a typo made at creation was
+ * permanent in every timesheet picker until someone edited the database by hand. Renaming is
+ * safe by construction: timesheets reference modules by id, so history follows the new name
+ * automatically instead of orphaning. Duplicate names within the same parent hit the unique
+ * index and come back as the middleware's 409, already human.
+ */
+const renameSchema = z.object({
+  params: z.object({ id: z.string().uuid() }),
+  body: z.object({ name: z.string().min(1).max(160) }).strict()
+});
+
+projectRouter.patch("/modules/:id", requirePermission(permissions.PROJECTS_MANAGE), validate(renameSchema), async (req, res) => {
+  const updated = await prisma.projectModule.update({
+    where: { id: String(req.params.id) },
+    data: { name: req.body.name.trim() }
+  });
+  await audit(req.user!.id, "project_module.renamed", "ProjectModule", updated.id, { name: updated.name });
+  res.json(updated);
+});
+
+projectRouter.patch("/submodules/:id", requirePermission(permissions.PROJECTS_MANAGE), validate(renameSchema), async (req, res) => {
+  const updated = await prisma.projectSubmodule.update({
+    where: { id: String(req.params.id) },
+    data: { name: req.body.name.trim() }
+  });
+  await audit(req.user!.id, "project_submodule.renamed", "ProjectSubmodule", updated.id, { name: updated.name });
+  res.json(updated);
+});
+
 const bulkProjectRowSchema = z.object({
   projectCode: z.string().min(1).max(64),
   projectName: z.string().min(1).max(160),

@@ -382,6 +382,20 @@ outcome is not a security control.
   stopped uploading dead weight — and stopped including the **dev TLS private keys**, which
   `COPY apps/web` had been silently baking into the web image since the LAN-HTTPS work.
 
+### ✏️ Projects you can correct, and windows that can't start yesterday
+
+- **Projects, modules and submodules are finally editable after creation.** The projects table
+  gained an **Edit** action (name + description — the code stays fixed, since it prefixes every
+  ticket key ever issued), and the "N modules" count is now the door to a hierarchy dialog with
+  inline rename for every module and submodule. Renaming is safe by construction: timesheets and
+  tickets reference these by id, so history follows the new name instead of orphaning. Duplicate
+  names within the same parent come back as a clear 409.
+- **The maintenance window can no longer be scheduled to start in the past.** The start picker
+  offers today onward, the end picker can't precede the start, a changed past start blocks the
+  save with an inline message, and the server enforces the same rule — while still allowing
+  edits to a window that is ALREADY running (its start is legitimately in the past; telling an
+  admin their active window is invalid would be absurd). A refused save arms nothing.
+
 ### 🏷️ Validation errors name the field
 
 - Every Zod rejection app-wide used to reach the user as a bare **"Validation failed"** — a
