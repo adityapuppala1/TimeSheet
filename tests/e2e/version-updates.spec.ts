@@ -58,7 +58,11 @@ test.describe("what's-new page", () => {
     await page.goto("/app/whats-new");
     await expect(page.getByRole("heading", { name: /what's new/i })).toBeVisible({ timeout: 15_000 });
     await expect(page.getByText(`v${EXPECTED_VERSION}`).first()).toBeVisible();
-    // The update command is an action only admins can take; an employee must never see it.
-    await expect(page.getByText(/update\.sh/)).toBeHidden();
+    // The update-command CARD is an action surface only admins get; an employee must never see
+    // it. Matched by the card's own description — NOT by /update\.sh/ anywhere on the page,
+    // because release NOTES legitimately mention the command in prose (the bundled changelog
+    // does), and reading about an update is not the same as being offered one.
+    await expect(page.getByText(/update from the server that runs this workspace/)).toBeHidden();
+    await expect(page.getByRole("heading", { name: /is available/i })).toBeHidden();
   });
 });

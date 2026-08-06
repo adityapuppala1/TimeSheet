@@ -27,7 +27,7 @@
     "verify:face:pad": "tsx scripts/verify-face-pad.ts"
   },
   "dependencies": {
-    "@anthropic-ai/sdk": "^0.110.0",
+    "@anthropic-ai/sdk": "^0.115.0",
     "@node-saml/node-saml": "^5.1.0",
     "@prisma/client": "^6.7.0",
     "@tensorflow/tfjs-backend-wasm": "^4.22.0",
@@ -56,7 +56,7 @@
     "nodemailer": "^9.0.3",
     "openai": "^6.45.0",
     "openid-client": "^6.8.4",
-    "pdfkit": "^0.15.2",
+    "pdfkit": "^0.19.1",
     "sanitize-html": "^2.13.1",
     "sharp": "^0.35.3",
     "stripe": "^22.3.2",
@@ -74,7 +74,7 @@
     "@types/node": "^22.15.3",
     "@types/node-cron": "^3.0.11",
     "@types/nodemailer": "^8.0.1",
-    "@types/pdfkit": "^0.13.5",
+    "@types/pdfkit": "^0.17.6",
     "@types/sanitize-html": "^2.13.0",
     "@types/supertest": "^7.2.1",
     "@vitest/coverage-v8": "^4.1.10",

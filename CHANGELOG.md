@@ -382,6 +382,23 @@ outcome is not a security control.
   stopped uploading dead weight — and stopped including the **dev TLS private keys**, which
   `COPY apps/web` had been silently baking into the web image since the LAN-HTTPS work.
 
+### 📦 Dependency refresh, with its skips stated
+
+- Every in-range update applied across all workspaces (Playwright 1.62 + fresh browser builds,
+  Radix suite, TanStack Query, react-hook-form, helmet, imapflow, node-cron, stripe, axios and
+  ~25 more), plus deliberate bumps: `@anthropic-ai/sdk` 0.115, `pdfkit` 0.19 (which alone
+  retired two deprecated transitive packages), `concurrently` 10. **`react-day-picker` removed
+  entirely** — dead code since the React Aria date-picker migration.
+- Deliberately NOT taken, each being its own migration project rather than a cleanup: Prisma 7,
+  TypeScript 7, Tiptap 3, Recharts 3 (the one remaining *direct* deprecation warning),
+  TanStack Table 9, ldapts 9 (auth library majors don't get bumped without an LDAP server to
+  test against). Remaining install warnings all come from `exceljs`'s dependency chain — it is
+  already at its latest release, so those are upstream's to fix, not ours to chase.
+- Verified: typechecks, 367 unit tests, production build, and the full desktop e2e project —
+  whose one failure was an over-broad assertion, not a regression: the bundled release notes
+  legitimately *mention* `./update.sh` in prose, and the spec now distinguishes reading about
+  an update from being offered one.
+
 ### 📜 Release history that works everywhere
 
 - **The What's-new page now always has a release history.** GitHub Releases remain the live
