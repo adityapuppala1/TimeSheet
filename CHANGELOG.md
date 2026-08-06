@@ -5,7 +5,7 @@ and a GitHub Release whose body is copied from the matching section here — the
 documented in CONTRIBUTING.md, and the in-app **What's new** page renders these notes for every
 user of a running installation.
 
-## 2.0.0 — the planning layer
+## 2.0.0 — the planning layer — 2026-08-06
 
 Turns TimeSphere from an execution tracker into a project-management platform: plans, schedules,
 capacity, intake, approvals and an AI copilot that never writes on its own — plus a rebuilt face
@@ -368,6 +368,18 @@ outcome is not a security control.
 - The end-to-end suite's face-verification helper now reference-counts across worker processes.
   Two parallel workers used to suspend the gate and the first to finish restored it mid-run,
   producing an intermittent failure that always pointed at the wrong thing.
+
+### 📜 Release history that works everywhere
+
+- **The What's-new page now always has a release history.** GitHub Releases remain the live
+  source (and the only source of "an update is available"), but when GitHub yields nothing — a
+  private repo asked anonymously, an air-gapped install, or simply no releases published yet —
+  the page falls back to **this build's own bundled `CHANGELOG.md`**, parsed into the same
+  structured cards, with an explicit caption saying so and that versions newer than the
+  installation can't appear there. A build's own changelog can't know the future, and the UI
+  says that instead of pretending.
+- **Private repos get a live feed too**: set `UPDATE_CHECK_TOKEN` (a fine-grained PAT with
+  read-only Contents) and the hourly release check authenticates instead of asking anonymously.
 
 ### 🐛 Fixes (post-release polish)
 

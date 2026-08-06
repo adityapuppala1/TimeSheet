@@ -17,11 +17,15 @@
  * changelog to forget.
  */
 import { appVersion } from "../config/version.js";
+import { getBundledReleases } from "./changelog-releases.service.js";
 
 /** Owner/repo, overridable for forks. Kept as a plain env read rather than joining env.ts's
  *  validated schema: a bad value here should degrade to "no update info", never block boot. */
 const REPO = process.env.UPDATE_CHECK_REPO?.trim() || "adityapuppala1/TimeSheet";
 const DISABLED = (process.env.UPDATE_CHECK ?? "on").toLowerCase() === "off";
+/** Optional fine-grained PAT (read-only Contents is enough) so a PRIVATE repo's releases are
+ *  visible — anonymous calls to a private repo 404. Absent = anonymous, exactly as before. */
+const TOKEN = process.env.UPDATE_CHECK_TOKEN?.trim() || null;
 
 /** An hour. Releases happen weekly at most; checking faster only spends rate limit. */
 const CHECK_INTERVAL_MS = 60 * 60 * 1000;
@@ -47,6 +51,11 @@ export interface UpdateStatus {
   checkedAt: string | null;
   checkEnabled: boolean;
   releases: ReleaseInfo[];
+  /** Where `releases` came from: live GitHub data (has real URLs/dates), this build's own
+   *  bundled CHANGELOG.md (complete history up to the running version, no knowledge of newer
+   *  ones), or null when even the changelog was missing. The UI states the source rather than
+   *  letting bundled history masquerade as a live feed. */
+  releasesSource: "github" | "changelog" | null;
 }
 
 let cache: { fetchedAt: number; releases: ReleaseInfo[] } | null = null;
@@ -64,7 +73,11 @@ export function compareSemver(a: string, b: string): number {
 
 async function fetchReleases(): Promise<ReleaseInfo[]> {
   const response = await fetch(`https://api.github.com/repos/${REPO}/releases?per_page=${RELEASE_HISTORY_LIMIT}`, {
-    headers: { Accept: "application/vnd.github+json", "User-Agent": "timesphere-update-check" },
+    headers: {
+      Accept: "application/vnd.github+json",
+      "User-Agent": "timesphere-update-check",
+      ...(TOKEN ? { Authorization: `Bearer ${TOKEN}` } : {})
+    },
     signal: AbortSignal.timeout(10_000)
   });
   if (!response.ok) throw new Error(`GitHub answered ${response.status}`);
@@ -103,9 +116,10 @@ export async function getUpdateStatus(): Promise<UpdateStatus> {
     updateAvailable: false,
     checkedAt: cache ? new Date(cache.fetchedAt).toISOString() : null,
     checkEnabled: !DISABLED,
-    releases: cache?.releases ?? []
+    releases: cache?.releases ?? [],
+    releasesSource: cache?.releases.length ? "github" : null
   };
-  if (DISABLED) return base;
+  if (DISABLED) return withBundledFallback(base);
 
   if (!cache || Date.now() - cache.fetchedAt > CHECK_INTERVAL_MS) {
     // Single-flight so a burst of settings-page loads right after cache expiry produces one
@@ -128,11 +142,26 @@ export async function getUpdateStatus(): Promise<UpdateStatus> {
 
   const releases = cache?.releases ?? [];
   const latest = releases[0]?.version ?? null;
-  return {
+  return withBundledFallback({
     ...base,
     latestVersion: latest,
     updateAvailable: latest != null && compareSemver(latest, appVersion.version) > 0,
     checkedAt: cache ? new Date(cache.fetchedAt).toISOString() : null,
-    releases
-  };
+    releases,
+    releasesSource: releases.length ? "github" : null
+  });
+}
+
+/**
+ * When GitHub yielded nothing — private repo without a token, air-gapped install, no releases
+ * published yet, check disabled — the HISTORY comes from this build's own CHANGELOG.md instead
+ * of an empty panel. `updateAvailable`/`latestVersion` are left alone: a build's own changelog
+ * cannot know about anything newer than itself, and inventing "you're up to date" from it would
+ * be a lie with a straight face.
+ */
+function withBundledFallback(status: UpdateStatus): UpdateStatus {
+  if (status.releases.length > 0) return status;
+  const bundled = getBundledReleases(REPO);
+  if (bundled.length === 0) return status;
+  return { ...status, releases: bundled, releasesSource: "changelog" };
 }

@@ -167,6 +167,15 @@ export function WhatsNewPage() {
         <CardContent className="grid gap-2">
           {updates.isLoading && <Skeleton className="h-24 w-full" />}
 
+          {/* Bundled history is complete UP TO this build but can't know about anything newer —
+              said out loud, so it never masquerades as a live feed. */}
+          {!updates.isLoading && updates.data?.releasesSource === "changelog" && (
+            <p className="text-xs text-muted-foreground">
+              Shown from this build's own changelog{updates.data?.checkEnabled ? " — GitHub release data isn't reachable from this server" : ""}.
+              Versions newer than this installation won't appear here.
+            </p>
+          )}
+
           {!updates.isLoading && releases.length === 0 && (
             <p className="py-4 text-sm text-muted-foreground">
               {updates.data?.checkEnabled

@@ -285,6 +285,9 @@ export interface UpdateStatus {
   checkedAt: string | null;
   checkEnabled: boolean;
   releases: ReleaseInfo[];
+  /** "github" = live release feed; "changelog" = this build's own bundled history (complete up
+   *  to the running version, blind to anything newer); null = nothing available at all. */
+  releasesSource: "github" | "changelog" | null;
 }
 
 export const systemApi = {

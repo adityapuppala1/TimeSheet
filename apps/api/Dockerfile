@@ -34,6 +34,9 @@ ENV BUILD_DATE=$BUILD_DATE
 # it (Docker seeds a fresh named volume from whatever's at that path in the image at mount time).
 RUN addgroup -S app && adduser -S app -G app
 COPY --chown=app:app VERSION ./
+# The What's-new page's offline release history — parsed by changelog-releases.service.ts when
+# GitHub has nothing to offer (private repo, air-gapped install, no releases published).
+COPY --chown=app:app CHANGELOG.md ./
 COPY --from=build --chown=app:app /app/node_modules node_modules
 COPY --from=build --chown=app:app /app/apps/api/dist apps/api/dist
 COPY --from=build --chown=app:app /app/apps/api/prisma apps/api/prisma
