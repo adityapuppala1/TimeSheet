@@ -90,12 +90,30 @@ existed. With `challengeEnabled` (default on):
    taken automatically at the *peak* of the rotation.
 
    This replaced a fixed 3-second countdown, and the reason is worth recording because it was the
-   single largest source of failed checks in the product. In production the challenge failed 107
-   times against 69 passes, and the recorded yaw deltas on those failures were 0.02–0.26 radians
-   against a 0.35 requirement. Nobody was refusing to turn their head. The instruction was static
-   text, the frame was grabbed at a moment the person could not anticipate, and there was no
-   signal for "further" — so people turned a little, guessed, and were told afterwards that they
-   had failed. The requirement never changed; it is now visible while you move.
+   single largest source of failed checks in the product.
+
+   **Read the 107 CHALLENGE_FAILED rows carefully before drawing conclusions from them** — an
+   earlier revision of this page quoted the raw total, and most of it is not user behaviour.
+   Splitting by `userAgent`:
+
+   | Class | Rows | What it actually is |
+   | --- | ---: | --- |
+   | `userAgent = node`, `frameSimilarity = 1.000`, both deltas `0.000` | 49 | A scripted load posting one image as both frames. Identical embeddings, so zero delta by construction. |
+   | `userAgent = node`, `challengeInstruction = NULL` | 39 | The challenge id never redeemed — expired, reused or absent. The pose was never measured. |
+   | Real browser | **19** | Actual people. |
+
+   Among those 19, **every single one fell short on the demanded axis** — mean 0.09 rad against
+   the 0.35 yaw floor, 0.12 against the 0.22 pitch floor, roughly a quarter of the way — and 8 of
+   them additionally lost axis dominance (a tilt where a turn was asked for, or the reverse). Not
+   one failed for moving far enough in an unacceptable way. Meanwhile attempts that *did* clear
+   the gate recorded 0.37–0.74 rad of yaw and 0.21–0.40 of pitch, so **both thresholds are
+   comfortably reachable and neither should be lowered.**
+
+   Nobody was refusing to turn their head. The instruction was static text, the frame was grabbed
+   at a moment the person could not anticipate, and there was no signal for "further" — so people
+   turned a little, guessed, and were told afterwards that they had failed. The requirement never
+   changed; it is now visible while you move, and the prompt now names the axis constraint
+   ("keep it level") that the dominance rule enforces.
 
    The browser is told the threshold so the meter cannot promise something the server then
    refuses. That concedes nothing: the requirement was already discoverable by turning your head

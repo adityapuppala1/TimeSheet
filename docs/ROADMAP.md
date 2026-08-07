@@ -1926,3 +1926,115 @@ Both duplicates detected the collision themselves and stood down rather than shi
 implementations — one had already written a second `CREATE TABLE` migration that would have been
 unapplyable. Nothing was lost, but the failure was silent at the dispatch site, which is the part
 worth remembering.
+
+### Security audit: authentication, authorization and tenant isolation (2026-08-07)
+
+A full pass over auth, authorization and multi-tenant isolation, prompted by one question — "if two
+organizations disagree about this value, can both be right at once?" — which turned out to have the
+wrong answer in several places. Every fix below has a test that fails against the pre-fix code and
+passes after; the negative results are recorded too, because "we looked and it was fine" is worth as
+much here as a finding.
+
+#### Fixed
+
+- [x] **`/uploads` served every tenant's attachments unauthenticated.** `express.static` over the
+  storage root, filenames of the form `${Date.now()}-${originalName}` (guessable, not a capability),
+  and no organization segment at all — one flat directory for the whole platform. Confirmed by
+  experiment, not by reading. Now HMAC-signed, expiring, org-bound URLs minted at the API boundary
+  by wrapping `res.json`, so no controller can forget to sign one. Guest reviewers
+  (`approval.controller.ts`) still work with no special case: their authorization is checked when
+  the payload is built, and the signature carries that decision to a static request that has no
+  session. Existing files were NOT moved; legacy flat paths still resolve.
+- [x] **Biometric captures were readable at `/uploads/face/<orgId>/<userId>/<file>`**, in direct
+  contradiction of `face.service.ts`'s own documented contract, bypassing the authorization on
+  `GET /face/image/attempt/:id`. Guarded by path containment against the resolved face directory —
+  not a `/face` string match, so it survives `STORAGE_FACE_DIR` relocation.
+- [x] **Half-written uploads were publicly readable** — multer's temp destination was inside the
+  served tree. Now a staging directory inside the non-public subtree.
+- [x] **Login lockout was cross-tenant.** `failedLogins` keyed on email alone, and recorded a
+  failure even for users that do not exist in the org — so five attempts against any org's login
+  endpoint locked that address out of every org, unauthenticated and repeatable. Now keyed on
+  `(orgId, email)` from the resolved tenant context, never from the request body.
+- [x] **SMTP config leaked across tenants.** Five single-slot module variables held per-tenant mail
+  config; org A's mail could go out carrying org B's From address, and the Mail-server banner showed
+  another tenant's host, port, username and raw SMTP error with no race required. Now a per-org map
+  with pool close-on-evict, and `invalidateMailTransportCache` scoped to its caller.
+- [x] **Six ticket routes bypassed project scope.** `canModifyTicket` returns true for any
+  `TICKETS_ASSIGN`/`TICKETS_MANAGE` holder, so a TEAM_LEAD on project A could retitle, transition,
+  reassign, unassign or soft-delete any ticket in the workspace, and `GET /suggest-assignee`
+  returned any project's member roster to a plain EMPLOYEE. All six now call `assertTicketVisible`,
+  which the other 22 sub-resource routes already did.
+- [x] **Project roster disclosure** — `GET /projects/:id/assignments` had `requireAuth` only while
+  `visibilityScope()` sat unused in the same file. Any authenticated user could read name, email,
+  status and role for any project. Predicate moved into the WHERE clause; 404 rather than 403, so
+  whether a project exists is not itself disclosed.
+- [x] **Sessions outlived their accounts.** `refresh()` never re-checked the user, and neither SCIM
+  deprovision nor single-user delete revoked — so a removed account kept minting token pairs for the
+  session's full life. Refresh now revokes on a deleted/inactive account rather than merely refusing.
+- [x] **Admin password reset did not evict the attacker** it was being used against. Both admin paths
+  now revoke every session, matching what the self-service and emailed-reset paths already did.
+- [x] **Per-IP rate limiting was one shared bucket behind a proxy.** `trust proxy` was never set, so
+  `req.ip` was the proxy's address for every caller and the 20/min login limiter throttled the
+  planet as a unit. Now `TRUST_PROXY_HOPS`, a hop COUNT rather than a boolean — `trust proxy: true`
+  believes the client-supplied left-most `X-Forwarded-For` entry and hands `req.ip` forgery to
+  anyone who asks. Defaults to 0; **every proxied deployment must set it.**
+- [x] **GitHub proxy routes were `requireAuth` only** and decrypt the org's OAuth token — any session
+  could enumerate private repo names, branches and PR titles. Gated on `TICKETS_WRITE` rather than
+  super-admin, because the ticket branch picker is the real consumer. Noted honestly in the code:
+  all five seeded roles hold that permission, so this only bites tenants who have narrowed a role.
+- [x] **Webhook replay**, where it is a real hole rather than theatre: GitHub and the five other git
+  dialects (delivery-id required, deduped after HMAC verification so an unsigned caller cannot evict
+  genuine ids) and Slack. Deliberately NOT added for SCIM, devops, Teams, Google Chat, GitLab or
+  Azure DevOps — in each the credential travels with the request, so whoever captured a delivery can
+  mint fresh ones and a nonce store proves nothing. Rotation is the control there.
+- [x] **Guest and public tokens were stored in plaintext** — a database read disclosed live
+  capabilities. Now SHA-256 digests, following `attestation-public.controller.ts`, with a 30-day
+  expiry on guest approval links. Phase 1 of two deliberately: the plaintext columns and a fallback
+  lookup are retained so a code rollback cannot strand every outstanding approval link.
+- [x] **`POST /approvals/steps/:stepId/resend` minted a working guest link for any step id** with no
+  scope check, contradicting its own file header. Now scoped, with an identical 404 for "no such
+  step" and "not your project".
+- [x] **`Math.random()` generated face image filenames** — not a cryptographic source, and those
+  names were the only thing between an unauthenticated request and a biometric image.
+
+#### Open — reported, not fixed
+
+- [ ] **Phase 2 of token hashing**: drop `ApprovalStep.guestToken` / `RequestForm.publicToken` and
+  the plaintext fallback, once the hashed columns have been live long enough that a rollback is no
+  longer plausible.
+- [ ] **SSO/OAuth hardening**: `sso.service.ts` and `git-provider.service.ts` call `jwt.verify`
+  without pinning `algorithms`, the one place the codebase's own rule (`utils/security.ts`) is not
+  followed. SAML runs with node-saml defaults, so `validateInResponseTo` is `never` and a captured
+  `SAMLResponse` is replayable for its whole `NotOnOrAfter` window. `git-connection.controller.ts`
+  takes `orgId` and `userId` from a signed-but-not-single-use `state`, so a leaked state is
+  replayable within 10 minutes to bind an attacker's GitHub token into the victim org.
+- [ ] **Unauthenticated org-slug enumeration**: every `withOrgTenant` resolves the org BEFORE
+  authenticating, and `middleware/tenant.ts` returns three distinguishable statuses (404 unknown /
+  403 suspended / 503 not ready), so an anonymous caller can enumerate which orgs exist and their
+  lifecycle state, forcing a DSN decrypt per guess at 120/min/IP.
+- [ ] **The wider fetch-then-don't-check set** — same shape as the six ticket routes, but each needs
+  a product decision on the intended boundary: `approval.controller.ts` `DELETE /:id` (hard delete
+  straight from `req.params`, while both siblings scope correctly), `ai-proposal.controller.ts`
+  (unscoped list; updates rows by body-supplied ids never checked against the parent),
+  `request-form.controller.ts` (unscoped submission inbox under a permission EMPLOYEE holds),
+  `timesheet.controller.ts` approve/reject (no `managerId` predicate — and its own `DELETE` sibling
+  does check, so the file is inconsistent with itself), plus the `resource`, `blueprint`, `ai` and
+  `report` controllers.
+- [ ] **Unbounded module maps**: `failedLogins` and `middleware/auth.ts`'s `lastSeenWrites` are never
+  swept and grow for the process lifetime; the former on unauthenticated input. Neither is a tenant
+  leak, both want a TTL sweep.
+- [ ] **Minor**: `chat-webhook.controller.ts` echoes an attacker-supplied `challenge` before any
+  signature check; two `(req.body as Buffer).toString()` calls are unguarded and 500 on a
+  `text/plain` request; three comparisons pre-check byte length before `timingSafeEqual`, leaking
+  token length, while the correct hash-then-compare helper already exists in
+  `git-webhook-providers.ts`. `docs/ARCHITECTURE.md` section 5's "bypasses tenant resolution" table
+  is stale — it omits `/api/git/webhook/*`, `/api/billing/webhook`, `/api/scim/*` and
+  `/api/git/callback`.
+- [ ] **Tenant connection ceiling**: `config/prisma.ts` permits 50 cached clients x 5 connections =
+  250, against a MySQL `max_connections` of 151 (measured on the dev host). Roughly 30
+  concurrently-active organizations exhausts it, and it will present as random query failures rather
+  than as anything connection-shaped.
+- [ ] **Adaptive match threshold rejects genuine users.** Measured: 3 of 10 real-browser `NO_MATCH`
+  results scored at or above the configured 0.75 and were rejected by `effectiveMatchThreshold`'s
+  per-user tightening, which can only ever tighten. With genuine live scores averaging 0.709, a user
+  who has drifted upward can effectively never pass again. Re-check with `npm run eval:face`.

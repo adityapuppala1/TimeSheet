@@ -61,7 +61,9 @@ outage or an auth failure.
 - `POST /users/bulk` — CSV bulk-import, same optional `designation` column per row
 - `PATCH /users/:id` — `designation` updatable independently of every other field
 - `DELETE /users/:id`
-- `POST /users/:id/reset-password`
+- `POST /users/:id/reset-password` — also revokes every session the target has, the same as the
+  emailed reset does; an admin reset is usually a response to a compromise, and a new hash alone
+  evicts nobody
 
 ## Projects
 

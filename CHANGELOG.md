@@ -5,6 +5,139 @@ and a GitHub Release whose body is copied from the matching section here — the
 documented in CONTRIBUTING.md, and the in-app **What's new** page renders these notes for every
 user of a running installation.
 
+## 2.2.0 — what the code assumed, and what it actually did — 2026-08-07
+
+A security release. The theme is a single question asked of every shared value in the system — *if
+two organizations disagree about this, can both be right at once?* — and the number of places where
+the code had quietly answered "yes" to something that could only be "no".
+
+**Upgrading is a normal `./update.sh`.** One migration, additive, and deliberately reversible: the
+plaintext token columns it replaces are kept alongside the new hashed ones so a rollback cannot
+strand every outstanding approval link.
+
+**One thing you must set.** `TRUST_PROXY_HOPS` defaults to `0`, which preserves today's behaviour.
+If anything sits in front of this API — nginx, a load balancer, Cloudflare — set it to the real
+number of hops or your per-IP rate limits stay one shared global bucket. See below.
+
+---
+
+### 🔒 Security
+
+- **`/uploads` served every tenant's attachments to anyone who asked.** A static mount over the
+  storage root, filenames of the form `<timestamp>-<original name>` — guessable, not a capability —
+  and no organization segment at all, so one flat directory held the whole platform's files and any
+  hostname reached any of them. Reads now require an HMAC-signed, expiring, org-bound grant. The
+  signature is minted at the API boundary rather than per-route, because a scheme that depends on a
+  dozen controllers each remembering to sign is one forgotten route from reopening the hole.
+- **Biometric captures were reachable the same way**, contradicting the app's own documented
+  contract and bypassing the authorization on the endpoint that exists specifically to protect
+  them. Also: a half-written upload was publicly readable *while it was being written*, because
+  the temporary destination sat inside the served tree.
+- **Guest approval links keep working**, with no special case. A reviewer's authorization is checked
+  when their page is built, and the signature carries that decision to a file request that has no
+  session — which is precisely what a signed URL is for.
+- **The login lockout was cross-tenant.** It keyed on the email address alone and counted failures
+  for people who don't exist in that organization, so five failed attempts against *any*
+  organization's login page locked that address out of *every* organization. Unauthenticated,
+  repeatable, and invisible.
+- **Outgoing mail could carry another organization's identity.** Per-tenant SMTP settings were held
+  in single shared variables, so one workspace could send over its own server with a different
+  workspace's From address — and the Mail server panel could display another tenant's host,
+  username and error text with no race required at all.
+- **Six ticket routes had no project boundary.** The check they relied on grants access to anyone
+  holding a workspace-wide ticket permission, which ordinary roles do. A team leader on one project
+  could rename, transition, reassign, unassign or delete any ticket in the workspace, and the
+  assignee suggester handed any project's member list to any employee.
+- **Project rosters were readable by any signed-in user** — names, email addresses, roles — while
+  the scoping helper that should have prevented it sat unused in the same file.
+- **Sessions outlived their accounts.** Refreshing a token never re-checked whether the account
+  still existed, and neither SCIM deprovisioning nor deleting a single user ended their sessions —
+  so a removed person kept renewing access for weeks. Admin password reset had the same gap, which
+  meant it could not evict the attacker it was being used against. Both now sign the account out
+  everywhere.
+- **Per-IP rate limiting did not work behind a proxy.** Without `trust proxy` set, every request
+  appears to come from the proxy, so the 20/min login limiter and every other per-IP limit throttled
+  the entire internet as a single bucket. The new `TRUST_PROXY_HOPS` is a **hop count, not a
+  toggle** — trusting forwarded headers wholesale simply hands IP forgery to anyone who asks, which
+  is not an improvement.
+- **Private repository names, branches and pull request titles** were readable by any signed-in
+  session from the GitHub proxy routes, which decrypt the workspace's stored token.
+- **Guest and public tokens are now stored hashed**, so a database read no longer discloses live
+  capabilities, and guest approval links expire after 30 days. Published intake form URLs
+  deliberately do not expire — a form address printed on a support page that silently stops working
+  looks like the product losing tickets. Unpublishing is how you revoke one. The form URL is now
+  shown once, when you publish it.
+- **Resending a guest approval link** minted a working link for any step id with no ownership check,
+  contradicting that file's own header comment.
+- **Replay protection** was added for webhooks where the signing secret never leaves our server, and
+  deliberately *not* where the credential travels with the request — there, anyone who captured a
+  delivery captured the credential and can mint fresh ones, so a replay store proves nothing and
+  rotation is the real control.
+
+### 🗄️ Storage you can put somewhere else
+
+- **`STORAGE_ROOT`**, plus per-subtree overrides, moves uploads off the application directory —
+  where a relative default meant user files lived one `git checkout` from deletion. Documents,
+  profile images and biometric data are separated so they can be backed up, or deliberately not
+  backed up, on different policies.
+- **Nothing moves and nothing is deleted.** Set none of it and paths resolve exactly as before.
+  Relocation is non-destructive in both directions: files written before a move keep being read
+  from where they are.
+- Paths are **environment-only, not editable in the UI**, and that is deliberate. They are
+  process-wide while a super admin is per-organization, so one workspace's admin saving a new root
+  would silently redirect another workspace's uploads. That is the wrong scope for a setting, not a
+  permission problem that validation could rescue. The new **Storage & logs** tab shows the resolved
+  paths, whether they are genuinely writable, and validates a candidate directory for you.
+
+### 📜 Logs that survive the night
+
+- Log files where previously everything went to the console and vanished. Four-hour files inside
+  per-date folders, the previous day compressed at rollover, and old days pruned on a retention
+  window — with a catch-up pass at boot, so a server restarted every morning still honours
+  retention despite never being awake for a rollover.
+- Console output is untouched, and a log directory that cannot be written degrades to console-only
+  with a warning rather than taking the server down.
+
+### 🪪 Face verification — measured, not guessed
+
+- **The numbers were being flattered by the test suite.** 66 of 80 scored checks came from an
+  end-to-end script that enrols and verifies with the same image file and scores a perfect match
+  every time. Averaged in, the workspace looked flawless.
+- **Among real people, the head-turn step failed 47.5% of the time** — and the cause was that the
+  progress meter had been written but never connected. The dialog ran its own duplicate loop that
+  fired at exactly the required angle with no margin, ignored whether you had turned the right way,
+  and abandoned the best reading on the first flicker. People were being asked to hit an invisible
+  target. There is now one measurement feeding the meter, the shutter and the wording, so a full bar
+  and a captured frame are the same event — and the refusal tells you *"about a quarter of the way"*
+  rather than just "failed". **No threshold was loosened**; the ones who succeeded cleared the bar
+  comfortably.
+- **A warning before the shutter** when a second face appears, rather than a rejection afterwards.
+  It warns rather than blocks, because the in-browser detector is guidance and letting it veto would
+  strand anyone it misreads.
+- **Thin enrollments now get chased.** Anyone enrolled from a single pose is offered the four-pose
+  wizard inline, and admins get a list of who still needs it with a reminder action.
+- **`npm run eval:face`** answers "would a better recognition model help?" with genuine-versus-
+  impostor score distributions from your own data instead of an opinion — and on a small workspace
+  it will tell you plainly that the sample is too small to conclude, rather than dressing up a weak
+  result. It also surfaced that some genuine rejections were caused by the per-person adaptive
+  threshold, which only ever tightens, rather than by the setting you can see.
+
+### 🧹 Also
+
+- **Who's online** now shows each person's device, browser, IP address and when their session
+  started — from data the session record already held. Multiple devices for one person are grouped
+  rather than double-counted, so the "N online" figure still means people.
+- **Email channels** groups collapse, with a count of muted rows on each closed section so a
+  collapsed group cannot quietly hide muted mail.
+- **`npm run setup` now sets things up**: it creates your `.env`, mints development certificates if
+  the machine has none, and — the part that matters on an upgrade — tells you which variables have
+  been added to `.env.example` since your `.env` was written. A new feature flag that your config
+  has never heard of looks like a broken feature, not an unconfigured one.
+- Request telemetry is **on by default in development** and off in production. A panel that reports
+  "recording is switched off" to the person who just built it is a bad first impression.
+
+---
+
 ## 2.1.0 — who gets the email, and why it was slow — 2026-08-07
 
 Two questions this product could not previously answer about itself: **which people receive which
