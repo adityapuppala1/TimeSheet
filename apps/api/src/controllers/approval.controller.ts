@@ -26,7 +26,14 @@ import { prisma } from "../config/prisma.js";
 import { requireAuth, requirePermission } from "../middleware/auth.js";
 import { AppError } from "../middleware/error.js";
 import { validate } from "../middleware/validate.js";
-import { applyDecision, issueGuestToken, validateChain, type ApprovalStepState } from "../services/approval.service.js";
+import {
+  applyDecision,
+  GUEST_TOKEN_TTL_MS,
+  hashGuestToken,
+  issueGuestToken,
+  validateChain,
+  type ApprovalStepState
+} from "../services/approval.service.js";
 import { audit } from "../services/audit.service.js";
 import { dispatchNotification } from "../services/notify.service.js";
 import { assertPlanningCapability } from "../services/planning.service.js";
@@ -55,7 +62,7 @@ const serializeStep = (s: any) => ({
   decidedAt: s.decidedAt,
   approver: s.approver ?? null,
   guestEmail: s.guestEmail,
-  hasGuestLink: Boolean(s.guestToken)
+  hasGuestLink: Boolean(s.guestTokenHash ?? s.guestToken)
 });
 
 /* ---------- Reading ---------- */
@@ -130,14 +137,19 @@ approvalRouter.post("/", requirePermission(permissions.APPROVALS_MANAGE), valida
       isSequential: req.body.isSequential ?? true,
       requestedById: req.user!.id,
       steps: {
-        create: req.body.steps.map((step: any, index: number) => ({
-          order: step.order ?? index,
-          approverId: step.approverId ?? null,
-          guestEmail: step.guestEmail?.trim() ?? null,
+        create: req.body.steps.map((step: any, index: number) => {
           // A guest token is minted up front so the link can be sent immediately. It is single-
-          // purpose and dies with the step's decision.
-          guestToken: step.guestEmail ? issueGuestToken() : null
-        }))
+          // purpose and dies with the step's decision. Only its digest is persisted — the raw
+          // value reaches the reviewer through POST /steps/:stepId/resend and nowhere else.
+          const token = step.guestEmail ? issueGuestToken() : null;
+          return {
+            order: step.order ?? index,
+            approverId: step.approverId ?? null,
+            guestEmail: step.guestEmail?.trim() ?? null,
+            guestTokenHash: token ? hashGuestToken(token) : null,
+            guestTokenExpiresAt: token ? new Date(Date.now() + GUEST_TOKEN_TTL_MS) : null
+          };
+        })
       }
     },
     include: { steps: { include: { approver: { select: USER_SUMMARY } }, orderBy: { order: "asc" } } }
@@ -231,8 +243,11 @@ async function persistDecision(params: {
         decision,
         comment,
         decidedAt: new Date(),
-        // Spent. A guest link is single-use by construction, not by convention.
-        guestToken: null
+        // Spent. A guest link is single-use by construction, not by convention. Both columns:
+        // a legacy row still carries the plaintext, and leaving it would keep the link alive.
+        guestToken: null,
+        guestTokenHash: null,
+        guestTokenExpiresAt: null
       }
     });
     await tx.approvalRequest.update({
@@ -247,7 +262,7 @@ async function persistDecision(params: {
     if (outcome.supersededSteps.length > 0) {
       await tx.approvalStep.updateMany({
         where: { id: { in: outcome.supersededSteps.map((s) => s.id) } },
-        data: { guestToken: null }
+        data: { guestToken: null, guestTokenHash: null, guestTokenExpiresAt: null }
       });
     }
   });
@@ -289,20 +304,46 @@ approvalRouter.delete(
   }
 );
 
-/** Regenerates a guest link — the previous one dies immediately. */
+/**
+ * Regenerates a guest link — the previous one dies immediately.
+ *
+ * This route MINTS a capability and hands it straight back, so it needs the same project-scoping
+ * every other route in this file applies, not just the APPROVALS_MANAGE permission: that
+ * permission is held by MANAGER and TEAM_LEAD, and without the visibility check any of them could
+ * post a bare step id and receive a working link into a ticket on a project they are not on. The
+ * step id is a uuid, but this file's own header promises the token authorises "one decision on
+ * one step" — an endpoint that issues one for any step in the tenant contradicted that.
+ */
 approvalRouter.post(
   "/steps/:stepId/resend",
   requirePermission(permissions.APPROVALS_MANAGE),
   validate(z.object({ params: z.object({ stepId: z.string().uuid() }) })),
   async (req, res) => {
     await assertApprovalsEnabled();
-    const step = await prisma.approvalStep.findUnique({ where: { id: String(req.params.stepId) } });
+    const step = await prisma.approvalStep.findUnique({
+      where: { id: String(req.params.stepId) },
+      include: { request: { select: { ticket: { select: { projectId: true } } } } }
+    });
     if (!step) throw new AppError(404, "Approval step not found");
+    // 404, not 403 — the same generic answer for "no such step" and "not your project", so this
+    // cannot be used to probe which step ids exist.
+    if (!step.request.ticket) throw new AppError(404, "Approval step not found");
+    await assertTicketVisible(req, step.request.ticket.projectId);
     if (!step.guestEmail) throw new AppError(400, "That step is assigned to a colleague, not an external reviewer.");
     if (step.decision !== "PENDING") throw new AppError(409, "That step has already been decided.");
 
     const token = issueGuestToken();
-    await prisma.approvalStep.update({ where: { id: step.id }, data: { guestToken: token } });
+    await prisma.approvalStep.update({
+      where: { id: step.id },
+      // Storing only the digest is what makes this response the sole copy of the token; the
+      // previous link dies because its digest is overwritten (and the legacy plaintext, if this
+      // row still has one, is cleared alongside it).
+      data: {
+        guestToken: null,
+        guestTokenHash: hashGuestToken(token),
+        guestTokenExpiresAt: new Date(Date.now() + GUEST_TOKEN_TTL_MS)
+      }
+    });
     await audit(req.user!.id, "approval.guest_link_reissued", "ApprovalStep", step.id);
     res.json({ url: `${env.APP_BASE_URL}/shared/approval/${token}` });
   }
@@ -313,9 +354,15 @@ approvalRouter.post(
  * ================================================================== */
 
 async function loadByToken(token: string) {
-  if (!token || token.length < 20) throw new AppError(404, "This approval link isn't available.");
+  if (!token || token.length < 20 || token.length > 200) throw new AppError(404, "This approval link isn't available.");
   const step = await prisma.approvalStep.findFirst({
-    where: { guestToken: token, decision: "PENDING" },
+    // Digest first; `guestToken` is the transitional fallback for links minted before hashing
+    // and is dropped with that column (see prisma/schema.prisma). Both arms return the SAME 404
+    // as an expired or spent link, so a probe learns nothing from which one missed.
+    where: {
+      OR: [{ guestTokenHash: hashGuestToken(token) }, { guestToken: token }],
+      decision: "PENDING"
+    },
     include: {
       request: {
         include: {
@@ -334,6 +381,11 @@ async function loadByToken(token: string) {
     }
   });
   if (!step) throw new AppError(404, "This approval link isn't available.");
+  // NULL = minted before `guestTokenExpiresAt` existed, and those stay open-ended: retro-dating
+  // links already sitting in reviewers' inboxes would have killed every outstanding approval.
+  if (step.guestTokenExpiresAt && step.guestTokenExpiresAt.getTime() < Date.now()) {
+    throw new AppError(404, "This approval link isn't available.");
+  }
   return step;
 }
 

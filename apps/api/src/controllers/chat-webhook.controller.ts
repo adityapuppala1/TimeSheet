@@ -20,6 +20,7 @@ import { resolveActiveOrgBySlug } from "../middleware/tenant.js";
 import { AppError } from "../middleware/error.js";
 import { decryptSecret } from "../utils/encryption.js";
 import { processInboundChatMessage, type ParsedInboundChatMessage } from "../services/chat-intake.service.js";
+import { isReplayedDelivery } from "../services/webhook-replay.js";
 
 export const chatWebhookRouter = Router();
 
@@ -73,6 +74,18 @@ chatWebhookRouter.post("/slack/events/:orgSlug", express.raw({ type: "applicatio
       if (!verifySlackSignature(signingSecret, timestamp, rawBody, signature)) {
         throw new AppError(401, "Invalid Slack request signature.");
       }
+
+      // The ±5 minute timestamp window above narrows replay to that window; it does not close
+      // it, and inside it a captured event can be resent to create the same ticket repeatedly.
+      // Slack's `event_id` is unique per event and covered by the signature, so it cannot be
+      // varied without the signing secret. This also collapses Slack's own delivery retries
+      // (which reuse `event_id`) into one intake, which is the behaviour we want anyway: the
+      // retry arrives because Slack missed our 200, not because the message happened twice.
+      // After the signature check, so an unauthenticated caller cannot pollute the store.
+      // Returning (rather than throwing) leaves the caller's plain 200 in place: Slack disables
+      // endpoints that keep failing, and "already handled" is a success from its point of view.
+      const eventId = typeof payload.event_id === "string" ? payload.event_id : null;
+      if (eventId && isReplayedDelivery(`slack:${req.params.orgSlug}`, eventId)) return;
 
       const event = payload.event as Record<string, unknown> | undefined;
       const userId = typeof event?.user === "string" ? event.user : null;

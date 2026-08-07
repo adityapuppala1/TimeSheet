@@ -18,7 +18,19 @@ import sharp from "sharp";
 const tempDir = await fsp.mkdtemp(path.join(os.tmpdir(), "ts-uploads-"));
 process.env.UPLOAD_DIR = tempDir;
 
-const { categorize, processUpload, resolveStoredFile } = await import("../../src/services/attachment-storage.service.js");
+const {
+  categorize,
+  processUpload: processUploadRaw,
+  resolveStoredFile
+} = await import("../../src/services/attachment-storage.service.js");
+const { tenantContext } = await import("../../src/config/tenant-context.js");
+
+/** Documents are written under the uploader's org, so the pipeline requires a tenant context and
+ *  throws without one (deliberately — see processUpload). Only `orgId` is read; `prisma` is never
+ *  touched here, which is why a null client is honest rather than a shortcut. */
+const ORG_ID = "0d1b7e3a-1111-4111-8111-0d1b7e3a1111";
+const processUpload: typeof processUploadRaw = (file, owner) =>
+  tenantContext.run({ orgId: ORG_ID, orgSlug: "test-org", client: null as never }, () => processUploadRaw(file, owner));
 
 /** Multer gives us either a buffer (memory storage) or a path (disk storage); the pipeline
  *  accepts both, so tests construct the buffer shape. */
@@ -141,8 +153,10 @@ describe("processUpload — naming", () => {
   it("builds an identifiable, unique storage key", async () => {
     const result = await processUpload(fileOf("Q3 Report (final).csv", Buffer.from("a,b\n".repeat(500))), owner);
 
-    // person __ entity-shortid __ original name __ timestamp __ random
-    expect(result.storageKey).toMatch(/^priya-raman__ticket-abcdef12__q3-report-final__\d{8}-\d{6}__[0-9a-f]{6}\.csv\.gz$/);
+    // orgId / person __ entity-shortid __ original name __ timestamp __ 128 bits of randomness
+    expect(result.storageKey).toMatch(
+      new RegExp(`^${ORG_ID}/priya-raman__ticket-abcdef12__q3-report-final__\\d{8}-\\d{6}__[0-9a-f]{32}\\.csv\\.gz$`)
+    );
     // The URL keeps the real extension so the download is named correctly; `.gz` is an on-disk
     // detail the browser never sees.
     expect(result.url).not.toContain(".gz");
@@ -179,9 +193,13 @@ describe("resolveStoredFile", () => {
 
   it("returns null for a name that doesn't exist, and can't escape the upload directory", async () => {
     expect(await resolveStoredFile("nope-does-not-exist.txt")).toBeNull();
-    // Path traversal: basename() strips the climb, so this looks for "passwd" inside UPLOAD_DIR
-    // rather than reading /etc/passwd.
+    // Path traversal: a key is at most `<orgId>/<name>` and its last segment is basename()'d, so
+    // this never becomes a read of /etc/passwd.
     expect(await resolveStoredFile("../../../../etc/passwd")).toBeNull();
+    // A two-segment key whose first segment is not an org UUID is refused outright — that is what
+    // stops the documents reader from being a route into `avatars/`, `face/` or `incoming/`.
+    expect(await resolveStoredFile("face/org-1/reference.jpg")).toBeNull();
+    expect(await resolveStoredFile("incoming/anything.pdf")).toBeNull();
   });
 });
 

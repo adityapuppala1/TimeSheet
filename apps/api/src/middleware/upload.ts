@@ -12,12 +12,12 @@
  * WHO calls this: any controller route accepting a file (ticket/timesheet attachments,
  * `auth.controller.ts`'s avatar upload), plus the email/chat intake pipelines for attachments.
  */
-import fs from "node:fs";
+import crypto from "node:crypto";
 import path from "node:path";
 import multer from "multer";
 import type { RequestHandler } from "express";
 import { tenantContext } from "../config/tenant-context.js";
-import { env } from "../config/env.js";
+import { ensureStorageDirectories, stagingDir } from "../config/storage-paths.js";
 import { AppError } from "./error.js";
 
 /**
@@ -38,16 +38,32 @@ export const allowedAttachmentExtensions = new Set([
 const allowedImageExtensions = new Set([".png", ".jpg", ".jpeg", ".gif"]);
 const allowedImageMimes = new Set(["image/png", "image/jpeg", "image/jpg", "image/gif"]);
 
-fs.mkdirSync(env.UPLOAD_DIR, { recursive: true });
-fs.mkdirSync(path.join(env.UPLOAD_DIR, "avatars"), { recursive: true });
+// Root + documents + avatars, wherever config/storage-paths.ts resolved them to. Non-throwing:
+// a NAS mount that isn't up yet must not stop the API from booting — the write itself still
+// fails loudly, and Workspace Settings → Storage & logs shows the directory in red.
+for (const failure of ensureStorageDirectories()) {
+  console.warn(`[storage] could not create ${failure} — uploads to it will fail until this is fixed.`);
+}
 
+/**
+ * The raw bytes land in the STAGING tree, not the documents tree.
+ *
+ * Two reasons, and the first is a security fix: `/uploads` used to serve the documents directory
+ * with no authentication, so a temp file written here was publicly readable for as long as it
+ * existed. Staging is on the non-public list (config/storage-paths.ts#isInsideNonPublicSubtree),
+ * so it can never be named through `/uploads` at all. The second is that the final location
+ * depends on the uploader's org, and multer's `destination` callback runs on a stream event where
+ * the tenant AsyncLocalStorage store is not reliably present (see `preserveTenantContext` below
+ * for the same hazard in its worse form) — so the org-scoped write is
+ * attachment-storage.service.ts's job, which always runs back inside the request's context.
+ *
+ * The name is a random UUID and NOT derived from the user's filename or the clock.
+ * `${Date.now()}-${originalName}` was a guess away from readable: anyone who knew what someone
+ * had attached could enumerate a second's worth of millisecond values and find it.
+ */
 const attachmentStorage = multer.diskStorage({
-  destination: (_req, _file, cb) => cb(null, env.UPLOAD_DIR),
-  filename: (_req, file, cb) => {
-    const ext = path.extname(file.originalname).toLowerCase();
-    const safeBase = path.basename(file.originalname, ext).replace(/[^a-zA-Z0-9_-]/g, "-").slice(0, 80);
-    cb(null, `${Date.now()}-${safeBase}${ext}`);
-  }
+  destination: (_req, _file, cb) => cb(null, stagingDir()),
+  filename: (_req, file, cb) => cb(null, `${crypto.randomUUID()}${path.extname(file.originalname).toLowerCase()}`)
 });
 
 export const upload = multer({

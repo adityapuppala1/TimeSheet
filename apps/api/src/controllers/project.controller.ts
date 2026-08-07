@@ -324,6 +324,21 @@ async function canModifyAssignment(req: any, projectId: string, targetUserId: st
 
 projectRouter.get("/:id/assignments", async (req, res) => {
   const projectId = String(req.params.id);
+  // The roster carries email addresses and roles, and this router only requires a session — so
+  // the visibility predicate has to be here, in the same WHERE `GET /` uses. Reading the roster
+  // of a project you aren't on is a 404, not a 403: whether that project id exists is itself
+  // something you can't see.
+  const scope = await visibilityScope(req);
+  const visible = await prisma.project.findFirst({
+    where: {
+      id: projectId,
+      deletedAt: null,
+      ...(scope.unrestricted ? {} : { assignments: { some: { userId: { in: scope.userIds } } } })
+    },
+    select: { id: true }
+  });
+  if (!visible) throw new AppError(404, "Project not found");
+
   const assignments = await prisma.userProjectAssignment.findMany({
     where: { projectId },
     include: {

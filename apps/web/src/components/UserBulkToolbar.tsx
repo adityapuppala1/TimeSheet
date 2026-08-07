@@ -223,7 +223,8 @@ export function UserBulkBar({
                 "They stop being able to sign in and disappear from pickers. Their timesheets, tickets and history are kept — deleting those would break the records that reference them."}
               {confirming === "DEACTIVATE" && "They're signed out everywhere immediately and can't sign back in."}
               {confirming === "ACTIVATE" && "They'll be able to sign in again. Existing sessions stay signed out."}
-              {confirming === "RESET_PASSWORD" && "Their current password stops working immediately. Tell them the new one yourself — this doesn't email it."}
+              {confirming === "RESET_PASSWORD" &&
+                "Their current password stops working immediately and they're signed out on every device. Tell them the new one yourself — this doesn't email it."}
               {confirming === "RESEND_WELCOME" && "Sends the welcome email again. Anyone who isn't active is skipped."}
               {confirming === "FORCE_LOGOUT" && "Ends every session they have. They can sign straight back in."}
             </DialogDescription>

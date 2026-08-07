@@ -29,12 +29,20 @@
  * Every branch records what it did in `compression`, so the read path never has to guess and the
  * numbers in analytics are honest about which files were actually reduced.
  *
- * ── NAMING ──────────────────────────────────────────────────────────────────────────────────
+ * ── NAMING AND LOCATION ─────────────────────────────────────────────────────────────────────
  *
- *   <person>__<entity>-<shortId>__<original-name>__<timestamp>__<rand>.<ext>
+ *   <documents>/<orgId>/<person>__<entity>-<shortId>__<original-name>__<timestamp>__<rand>.<ext>
  *
  * Readable enough to identify a stray file on disk without a database lookup, and unique enough
  * that two people uploading `screenshot.png` in the same second cannot collide.
+ *
+ * The `<rand>` component is 128 bits of `crypto.randomBytes`, not the 24 bits it started as. Every
+ * other part of that name is derivable by someone who knows what a colleague attached — their
+ * name, the ticket, the original filename, roughly when — so the random tail is the only part
+ * carrying any secrecy, and `/uploads` links are handed to unauthenticated guest reviewers.
+ *
+ * The `<orgId>` directory is new; files written before it stay flat in `<documents>` and are read
+ * from there forever (see `resolveStoredFile`). NOTHING is moved.
  */
 import crypto from "node:crypto";
 import fs from "node:fs";
@@ -43,7 +51,8 @@ import path from "node:path";
 import zlib from "node:zlib";
 import { promisify } from "node:util";
 import sharp from "sharp";
-import { env } from "../config/env.js";
+import { documentReadDirs, documentsDirForOrg, isOrgSegment, resolveWithin } from "../config/storage-paths.js";
+import { requireTenantContext } from "../config/tenant-context.js";
 
 const gzip = promisify(zlib.gzip);
 
@@ -134,6 +143,10 @@ export interface UploadOwner {
  * leaving both would double the storage this whole service exists to reduce.
  */
 export async function processUpload(file: Express.Multer.File, owner: UploadOwner): Promise<ProcessedUpload> {
+  // Throws rather than falling back to a flat write. "No tenant context" here would mean a file
+  // landing in the shared directory with no owning org — the exact condition this change exists to
+  // remove — so it must fail loudly at the one call site that got it wrong, not silently degrade.
+  const { orgId } = requireTenantContext();
   const originalExt = path.extname(file.originalname).toLowerCase();
   const originalBase = path.basename(file.originalname, originalExt);
   const input = file.buffer ?? (await fsp.readFile(file.path));
@@ -147,7 +160,9 @@ export async function processUpload(file: Express.Multer.File, owner: UploadOwne
     `${owner.entityType}-${owner.entityId.slice(0, 8)}`,
     slug(originalBase, 40),
     stamp(new Date()),
-    crypto.randomBytes(3).toString("hex")
+    // 128 bits. See the header: every other segment of this name is guessable by someone who knows
+    // what was attached, so this is the part that has to be a secret rather than a serial number.
+    crypto.randomBytes(16).toString("hex")
   ].join("__");
 
   let outputBuffer = input;
@@ -195,8 +210,15 @@ export async function processUpload(file: Express.Multer.File, owner: UploadOwne
 
   // `.gz` is appended to the ON-DISK name only. The URL keeps the real extension so the download
   // is named correctly, and the read path uses `compression` to know it must decompress.
-  const storageKey = `${namePrefix}${extension}${compression === "GZIP" ? ".gz" : ""}`;
-  const targetPath = path.join(env.UPLOAD_DIR, storageKey);
+  //
+  // `storageKey` carries the org segment because it is what a delete path joins onto the documents
+  // directory; a key that resolved to a different place than the URL did would leave orphans.
+  const diskName = `${namePrefix}${extension}${compression === "GZIP" ? ".gz" : ""}`;
+  const publicName = `${namePrefix}${extension}`;
+  const storageKey = `${orgId}/${diskName}`;
+  const orgDir = documentsDirForOrg(orgId);
+  await fsp.mkdir(orgDir, { recursive: true });
+  const targetPath = path.join(orgDir, diskName);
   await fsp.writeFile(targetPath, outputBuffer);
 
   // Disk-storage uploads leave the raw multer file behind; removing it is what makes the saving
@@ -208,7 +230,9 @@ export async function processUpload(file: Express.Multer.File, owner: UploadOwne
   return {
     fileName: `${originalBase}${extension}`,
     mimeType,
-    url: `/uploads/${encodeURIComponent(`${namePrefix}${extension}`)}`,
+    // The org segment is a real path segment, so it is NOT run through encodeURIComponent — that
+    // would turn the separator into %2F, which serve-static refuses outright.
+    url: `/uploads/${orgId}/${encodeURIComponent(publicName)}`,
     storageKey,
     sizeBytes: outputBuffer.length,
     originalSizeBytes,
@@ -221,27 +245,75 @@ export async function processUpload(file: Express.Multer.File, owner: UploadOwne
 }
 
 /**
+ * Reduces a requested `/uploads/...` path to the only two shapes a document can legitimately
+ * have, or `null`.
+ *
+ *   "<name>"           legacy — everything written before documents were org-segmented
+ *   "<orgId>/<name>"   current
+ *
+ * `path.basename` on the final segment is the containment control and must stay: it collapses
+ * every traversal attempt ("../../../etc/passwd", an absolute path, a Windows drive letter) to a
+ * lookup for a file that does not exist. The org segment is admitted only when it matches the
+ * control-plane UUID shape exactly, which is what stops "any two-segment path" from being a way
+ * to reach `avatars/`, `face/` or `incoming/` through the documents reader — and, because the
+ * value is echoed back to the caller, lets app.ts check it against the org the request's signed
+ * grant was minted for.
+ */
+export function normalizeDocumentKey(requested: string): { relative: string; orgId: string | null } | null {
+  let decoded: string;
+  try {
+    decoded = decodeURIComponent(requested);
+  } catch {
+    return null;
+  }
+  if (!decoded || decoded.includes("\0")) return null;
+
+  const segments = decoded.split(/[\\/]+/).filter(Boolean);
+  if (segments.length === 0 || segments.length > 2) return null;
+
+  const safeName = path.basename(segments[segments.length - 1]);
+  if (!safeName || safeName === "." || safeName === "..") return null;
+
+  if (segments.length === 1) return { relative: safeName, orgId: null };
+  const orgId = segments[0];
+  if (!isOrgSegment(orgId)) return null;
+  return { relative: `${orgId}/${safeName}`, orgId };
+}
+
+/**
  * Resolves a public `/uploads/<name>` request to the bytes to send.
  *
  * Three cases, and legacy is the one that matters most: files uploaded before this pipeline sit on
  * disk under their original name with no database `compression` value, and must keep working
  * untouched — this is not a migration, and rewriting existing files would risk data for a storage
- * saving nobody asked for.
+ * saving nobody asked for. Org-segmented and flat names are both accepted for exactly that
+ * reason: the two layouts coexist on disk permanently.
+ *
+ * The directory LIST (rather than a single directory) is what makes STORAGE_DOCUMENTS_DIR safe to
+ * change: after a relocation, reads still fall back to the pre-move root, so historical
+ * attachments keep resolving instead of turning into 404s the moment the variable is set.
  */
 export async function resolveStoredFile(
   requestedName: string
 ): Promise<{ stream: fs.ReadStream | null; gunzip: boolean; absolutePath: string } | null> {
-  const safeName = path.basename(decodeURIComponent(requestedName));
-  const direct = path.join(env.UPLOAD_DIR, safeName);
-  const gzipped = `${direct}.gz`;
+  const key = normalizeDocumentKey(requestedName);
+  if (!key) return null;
 
-  // `.gz` is checked FIRST: a gzipped upload has no plain twin, and checking the other order would
-  // mean a stat call that always misses.
-  if (fs.existsSync(gzipped)) {
-    return { stream: fs.createReadStream(gzipped), gunzip: true, absolutePath: gzipped };
-  }
-  if (fs.existsSync(direct)) {
-    return { stream: fs.createReadStream(direct), gunzip: false, absolutePath: direct };
+  for (const dir of documentReadDirs()) {
+    // Belt and braces over normalizeDocumentKey: the join is only used if it provably stays inside
+    // the directory it was joined onto.
+    const direct = resolveWithin(dir, key.relative);
+    if (!direct) continue;
+    const gzipped = `${direct}.gz`;
+
+    // `.gz` is checked FIRST: a gzipped upload has no plain twin, and checking the other order
+    // would mean a stat call that always misses.
+    if (fs.existsSync(gzipped)) {
+      return { stream: fs.createReadStream(gzipped), gunzip: true, absolutePath: gzipped };
+    }
+    if (fs.existsSync(direct)) {
+      return { stream: fs.createReadStream(direct), gunzip: false, absolutePath: direct };
+    }
   }
   return null;
 }

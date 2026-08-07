@@ -13,7 +13,6 @@
  * one is special.
  * WHO calls this: `server.ts` (`app.listen(...)`), and the Playwright suite's `webServer` config.
  */
-import path from "node:path";
 import zlib from "node:zlib";
 import compression from "compression";
 import cookieParser from "cookie-parser";
@@ -23,7 +22,10 @@ import rateLimit from "express-rate-limit";
 import helmet from "helmet";
 import morgan from "morgan";
 import { env } from "./config/env.js";
+import { avatarsDir, documentReadDirs, isInsideNonPublicSubtree, isOrgSegment, resolveWithin, storageRoot } from "./config/storage-paths.js";
+import { tenantContext } from "./config/tenant-context.js";
 import { appVersion } from "./config/version.js";
+import { decodeFileKey, signFileUrlsDeep, verifyFileGrant } from "./utils/file-url.js";
 import { resolveStoredFile } from "./services/attachment-storage.service.js";
 import { getUpdateStatus } from "./services/update-check.service.js";
 import { aiRouter } from "./controllers/ai.controller.js";
@@ -71,6 +73,24 @@ import { recordApiRequest } from "./middleware/request-telemetry.js";
 import { resolveTenant } from "./middleware/tenant.js";
 
 export const app = express();
+
+/**
+ * How many reverse proxies sit in front of this process. Everything that limits "per IP" — the
+ * 20/min login limiter most importantly, plus the webhook and public-form limiters — reads
+ * `req.ip`, and Express only derives that from `X-Forwarded-For` when this is set. Behind a proxy
+ * with it left at 0, `req.ip` is the PROXY's address for every caller on earth, so each of those
+ * limiters silently degrades into one shared global bucket: a single attacker exhausts the login
+ * limit for every user, and one noisy tenant throttles everyone.
+ *
+ * WHY A HOP COUNT AND NOT `true`: `trust proxy: true` tells Express to believe the left-most
+ * X-Forwarded-For entry, which is client-supplied — anyone can then forge `req.ip` and bypass
+ * every per-IP limit, and poison the IP hash the public request form stores. A number means
+ * "trust exactly the last N entries", which is only correct if it matches the real topology.
+ * Hence the default of 0 (direct exposure, `req.ip` is the socket address, always truthful) and
+ * an explicit opt-in per deployment: one proxy = 1, Cloudflare in front of nginx = 2.
+ * See docs/DEPLOYMENT.md.
+ */
+app.set("trust proxy", env.TRUST_PROXY_HOPS);
 
 app.use(helmet({ crossOriginResourcePolicy: { policy: "cross-origin" } }));
 
@@ -172,10 +192,76 @@ app.use(rateLimit({ windowMs: 60_000, limit: 900, standardHeaders: true }));
 app.use(compression());
 app.use(cookieParser());
 app.use(express.json({ limit: "2mb" }));
+/**
+ * Nothing under `/uploads` may address a private subtree.
+ *
+ * Biometric imagery defaults to `<storage root>/face`, and the documents static mount below is
+ * rooted at the storage root — so before this guard existed, `/uploads/face/<orgId>/<userId>/<file>`
+ * was served by an UNAUTHENTICATED handler to anyone who could guess a filename, in direct
+ * contradiction of face.service.ts's own documented contract. Mounted ahead of every /uploads
+ * handler so it applies to the avatar mount, the gzip handler and the documents mount alike, and
+ * expressed as containment against the RESOLVED directory rather than a "/face" string match, so
+ * it keeps holding when an operator relocates the tree with STORAGE_FACE_DIR.
+ */
+app.use("/uploads", (req, _res, next) => {
+  let decoded: string;
+  try {
+    decoded = decodeURIComponent(req.path);
+  } catch {
+    // Malformed percent-encoding ("%ZZ"). Nothing legitimate produces it, and letting the
+    // URIError propagate would turn a bad URL into a 500 in the error log.
+    return next(new AppError(404, "Not found"));
+  }
+  const target = resolveWithin(storageRoot(), decoded.replace(/^\/+/, ""));
+  if (target && isInsideNonPublicSubtree(target)) return next(new AppError(404, "Not found"));
+  next();
+});
+
+/**
+ * `/uploads` IS NO LONGER PUBLIC. Every request needs a signed, expiring, org-bound grant.
+ *
+ * The finding this closes: the static mounts below serve the storage root to anyone, and until
+ * this pass filenames were `<millisecond timestamp>-<the uploader's own filename>` in a single
+ * flat directory shared by every tenant. That is a guess, not a capability — an unauthenticated
+ * stranger who knew roughly when a colleague attached `invoice.pdf` could find it, from any
+ * workspace's hostname.
+ *
+ * WHY A SIGNATURE AND NOT `requireAuth`: these URLs are consumed by `<a href>`, `<img src>` and
+ * an unauthenticated guest reviewer (see utils/file-url.ts for the full argument). None of those
+ * requests can carry a Bearer token, and the guest genuinely has no session to check. So the
+ * capability rides in the URL and the API mints it only into responses it has already authorised
+ * — the `/api` signer below.
+ *
+ * Ordered AFTER the private-subtree guard on purpose: biometric imagery must 404 as "there is
+ * nothing here", not 403 as "you need a better link", even for a caller holding a valid grant.
+ *
+ * No filesystem access happens here, so a missing file and an unsigned request are refused
+ * identically — this gate cannot be used to probe what exists.
+ */
+app.use("/uploads", (req, _res, next) => {
+  const key = decodeFileKey(req.path.replace(/^\/+/, ""));
+  if (!key) return next(new AppError(404, "Not found"));
+
+  const grant = verifyFileGrant(key, req.query);
+  if (!grant) {
+    return next(new AppError(403, "This file link has expired or isn't valid. Reopen the item to get a fresh one."));
+  }
+
+  // Defence in depth against a future caller signing a path it shouldn't: for the org-segmented
+  // layout the tenancy is visible IN the path, so it has to agree with the grant. Legacy flat
+  // names (and `avatars/<userId>/…`) have no org segment to check — for those the grant itself is
+  // the whole control, which is why the segmentation exists going forward.
+  const [firstSegment, ...rest] = key.split("/");
+  if (rest.length > 0 && isOrgSegment(firstSegment) && firstSegment !== grant.orgId) {
+    return next(new AppError(403, "This file belongs to a different workspace."));
+  }
+  next();
+});
+
 // Avatars are re-encoded through sharp on upload (see middleware/upload.ts) and are always
 // real images, so they stay inline-renderable for <img> tags. Registered before the general
 // /uploads handler below so this more specific prefix wins.
-app.use("/uploads/avatars", express.static(path.join(env.UPLOAD_DIR, "avatars"), { maxAge: "1d", etag: true }));
+app.use("/uploads/avatars", express.static(avatarsDir(), { maxAge: "1d", etag: true }));
 
 // Transparent decompression for attachments stored gzipped by
 // services/attachment-storage.service.ts. Runs BEFORE the static handler and only claims a
@@ -206,18 +292,28 @@ app.use("/uploads", async (req, res, next) => {
 // upload.ts, are forced to download (Content-Disposition: attachment) rather than render
 // inline — defense-in-depth so an allowed-but-unexpected file type can never execute as a
 // script in the API's origin just by someone opening its /uploads URL directly in a browser.
-app.use(
-  "/uploads",
-  express.static(env.UPLOAD_DIR, {
-    maxAge: "1d",
-    etag: true,
-    setHeaders: (res) => {
-      res.setHeader("Content-Disposition", "attachment");
-      res.setHeader("X-Content-Type-Options", "nosniff");
-    }
-  })
-);
-app.use(morgan("tiny"));
+// One mount per directory in documentReadDirs(): the configured documents directory, plus the
+// pre-move root when STORAGE_DOCUMENTS_DIR relocated it. The second mount is what stops a
+// relocation from 404-ing every attachment uploaded before it — the same reasoning as
+// resolveStoredFile's fallback list, applied to the non-gzipped path.
+for (const dir of documentReadDirs()) {
+  app.use(
+    "/uploads",
+    express.static(dir, {
+      maxAge: "1d",
+      etag: true,
+      setHeaders: (res) => {
+        res.setHeader("Content-Disposition", "attachment");
+        res.setHeader("X-Content-Type-Options", "nosniff");
+      }
+    })
+  );
+}
+// Routed through console.info rather than morgan's default process.stdout so config/logger.ts's
+// console capture mirrors HTTP access lines into the rotating files too — access logs are the
+// first thing anyone asks for when diagnosing a production incident. stdout is unchanged: the
+// patched console still calls the original first.
+app.use(morgan("tiny", { stream: { write: (message) => console.info(message.trimEnd()) } }));
 
 /**
  * Liveness probes. Both mounted here, BEFORE `app.use("/api", resolveTenant)` and before every
@@ -293,6 +389,35 @@ app.use("/api/git", gitConnectionRouter);
 // `prisma` — mounted after /health, /uploads, and the SSO routes (none of which need the
 // normal resolved-tenant path) and before every controller router below (all of which do).
 app.use("/api", resolveTenant);
+
+/**
+ * The other half of the `/uploads` lockdown: every `/uploads/...` path leaving this API in a JSON
+ * body is rewritten into a signed, expiring, org-bound URL.
+ *
+ * WHY HERE AND NOT IN EACH CONTROLLER: file references leave through a dozen routes — ticket and
+ * timesheet attachments, the proofing panel, every avatar on every user summary, email-intake
+ * attachments, the guest approval payload — and a scheme that depends on each of them remembering
+ * to sign is a scheme that will be one forgotten route away from the hole it just closed. Signing
+ * at the boundary makes it structural: a route cannot emit an unsigned link, including routes
+ * written after this comment.
+ *
+ * Mounted immediately after `resolveTenant` so the org is known, and BEFORE every router so it
+ * wraps all of them. It is deliberately inside the tenant-scoped prefix: the cross-tenant surfaces
+ * mounted above (platform admin, SCIM, the webhook receivers) have no single org to bind a grant
+ * to, and none of them return file URLs.
+ *
+ * The UNAUTHENTICATED public routers — guest approvals, shared attestations — sit under `/api` too
+ * and are signed by the same pass. That is what keeps `approval.controller.ts`'s guest-reviewer
+ * flow working: the reviewer's link is authorised by their guest token when the payload is built,
+ * and the signature carries that authorisation to a static file request that has no session.
+ */
+app.use("/api", (_req, res, next) => {
+  const ctx = tenantContext.getStore();
+  if (!ctx) return next();
+  const sendJson = res.json.bind(res);
+  res.json = ((body?: unknown) => sendJson(signFileUrlsDeep(body, ctx.orgId))) as typeof res.json;
+  next();
+});
 
 // Request telemetry, mounted here for two reasons that both point at this exact line: the row it
 // writes goes to the TENANT's database (so it must be after resolveTenant), and it has to wrap the

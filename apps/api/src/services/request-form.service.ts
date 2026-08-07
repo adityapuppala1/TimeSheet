@@ -16,7 +16,27 @@
  * WHO CALLS THIS: `controllers/request-form.controller.ts` (authoring) and
  * `controllers/request-form-public.controller.ts` (unauthenticated submission).
  */
+import { createHash, randomBytes } from "node:crypto";
 import { AppError } from "../middleware/error.js";
+
+/* ================================================================== *
+ * The public link
+ * ================================================================== */
+
+/** 256 bits, base64url. Unguessable and never derived from the form id, which is not secret. */
+export function issuePublicFormToken(): string {
+  return randomBytes(32).toString("base64url");
+}
+
+/**
+ * Only this goes in the database — same reasoning as approval.service.ts#hashGuestToken and
+ * AttestationShareLink.tokenHash. The consequence, and it is a real one: the full URL exists
+ * exactly once, in the response to `POST /request-forms/:id/publish`. It cannot be re-derived
+ * later, so the authoring UI has to keep it rather than re-fetch it.
+ */
+export function hashPublicFormToken(token: string): string {
+  return createHash("sha256").update(token).digest("hex");
+}
 
 /* ================================================================== *
  * The authored schema

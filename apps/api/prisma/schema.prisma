@@ -2654,11 +2654,19 @@ model RequestForm {
   blueprintId       String?
   blueprint         Blueprint?     @relation(fields: [blueprintId], references: [id], onDelete: SetNull)
 
-  /// Public submission. `publicToken` is the capability — treated exactly like
-  /// AttestationShareLink.token: unguessable, revocable by clearing it, and never derived from
-  /// the form id.
+  /// Public submission. The token is the capability — unguessable, revocable by clearing it, and
+  /// never derived from the form id. Only its SHA-256 is stored (see ApprovalStep.guestTokenHash
+  /// for why an unsalted digest is the right primitive for a 256-bit random secret), which is why
+  /// the full URL is shown once, at publish, and never re-derivable afterwards.
+  ///
+  /// Deliberately NOT given an expiry the way guest approval links are: a published intake form
+  /// is a standing address a company prints on a support page, and silently retiring it would
+  /// look like the product losing tickets. Unpublishing is the revocation.
   isPublic              Boolean @default(false)
+  /// LEGACY plaintext token — no longer written, read only as a fallback. See
+  /// ApprovalStep.guestToken.
   publicToken           String? @unique @db.VarChar(64)
+  publicTokenHash       String? @unique @db.VarChar(64)
   /// Bounds abuse of an unauthenticated endpoint independently of the global limiter.
   maxSubmissionsPerHour Int     @default(20)
 
@@ -2790,7 +2798,18 @@ model ApprovalStep {
   approverId String?
   approver   User?   @relation("ApprovalStepApprover", fields: [approverId], references: [id], onDelete: SetNull)
   guestEmail String? @db.VarChar(255)
+  /// LEGACY plaintext token. No longer written; read only as a fallback so links minted before
+  /// the hashing change keep working. Dropped by the follow-up migration once no row has one.
   guestToken String? @unique @db.VarChar(64)
+  /// SHA-256 of the token, exactly as AttestationShareLink.tokenHash does it — a database read
+  /// (a backup, a dump, an injected SELECT) then discloses no live capability. Unsalted SHA-256
+  /// is correct here and would be wrong for a password: the input is 256 random bits, so there is
+  /// no dictionary to stretch against, and the lookup has to be an equality query on an index.
+  guestTokenHash String? @unique @db.VarChar(64)
+  /// A guest link that never expires is a permanent unauthenticated capability, so new ones get
+  /// one. NULL means "minted before this column existed" and keeps its old open-ended behaviour —
+  /// backfilling an expiry onto live links would have killed every outstanding approval.
+  guestTokenExpiresAt DateTime?
 
   decision   ApprovalDecision @default(PENDING)
   comment    String?          @db.Text

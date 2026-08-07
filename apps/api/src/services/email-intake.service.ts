@@ -20,11 +20,13 @@
  * instead of silently auto-assigned, 5) email the sender back, 6) audit the whole decision so
  * it shows up in that ticket's own Activity tab automatically (entity="Ticket").
  */
+import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { ImapFlow } from "imapflow";
-import { env } from "../config/env.js";
+import { documentsDirForOrg } from "../config/storage-paths.js";
 import { prisma } from "../config/prisma.js";
+import { requireTenantContext } from "../config/tenant-context.js";
 import { allowedAttachmentExtensions } from "../middleware/upload.js";
 import { audit } from "./audit.service.js";
 import { classifyTicket, getGlobalAISettings, EXTERNAL_INTAKE_CONFIDENCE_CEILING } from "./ai.service.js";
@@ -113,15 +115,21 @@ async function saveAttachment(ticketId: string, att: ParsedInboundEmail["attachm
     return;
   }
   const safeBase = path.basename(att.filename || "attachment", ext).replace(/[^a-zA-Z0-9_-]/g, "-").slice(0, 80);
-  const diskName = `${Date.now()}-${Math.round(Math.random() * 1e6)}-${safeBase}${ext}`;
-  fs.mkdirSync(env.UPLOAD_DIR, { recursive: true });
-  fs.writeFileSync(path.join(env.UPLOAD_DIR, diskName), att.content);
+  // Same two rules as the interactive upload path (services/attachment-storage.service.ts): the
+  // file lands under the receiving org, and the unique part of its name is `crypto.randomBytes`
+  // rather than a clock and `Math.random()` — an inbound email's arrival time and its attachment's
+  // filename are both things the SENDER already knows.
+  const { orgId } = requireTenantContext();
+  const diskName = `${crypto.randomBytes(16).toString("hex")}-${safeBase}${ext}`;
+  const orgDir = documentsDirForOrg(orgId);
+  fs.mkdirSync(orgDir, { recursive: true });
+  fs.writeFileSync(path.join(orgDir, diskName), att.content);
   await prisma.ticketAttachment.create({
     data: {
       ticketId,
       fileName: att.filename || diskName,
       mimeType: att.contentType || "application/octet-stream",
-      url: `/uploads/${diskName}`,
+      url: `/uploads/${orgId}/${diskName}`,
       sizeBytes: att.content.length
     }
   });

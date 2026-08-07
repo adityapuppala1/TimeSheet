@@ -9,12 +9,14 @@
  */
 import { Router } from "express";
 import { z } from "zod";
-import { notificationPreferenceKeys, roles } from "@timesheet/shared";
+import { notificationPreferenceKeys, permissions, roles } from "@timesheet/shared";
 import { prisma } from "../config/prisma.js";
 import { controlPrisma } from "../config/control-prisma.js";
 import { requireTenantContext } from "../config/tenant-context.js";
 import { serverTimezone } from "../config/env.js";
-import { requireAuth, requireSuperAdmin } from "../middleware/auth.js";
+import { getLoggingStatus } from "../config/logger.js";
+import { describeStorageLayout, validateDirectory } from "../config/storage-paths.js";
+import { requireAuth, requirePermission, requireSuperAdmin } from "../middleware/auth.js";
 import { env } from "../config/env.js";
 import { AppError } from "../middleware/error.js";
 import { validate } from "../middleware/validate.js";
@@ -89,6 +91,53 @@ settingsRouter.get("/effective-flags", async (_req, res) => {
     enableCostAnalytics: ticketing.enableCostAnalytics,
     enableLeaderboard: ticketing.enableLeaderboard
   });
+});
+
+/**
+ * ── STORAGE & LOG PATHS ARE ENV-ONLY, AND THAT IS A DELIBERATE SECURITY DECISION ────────────
+ *
+ * These two routes READ the effective filesystem layout and VALIDATE a candidate directory.
+ * Neither writes a path anywhere. There is no PATCH, on purpose:
+ *
+ *  1. The paths are PROCESS-WIDE; SUPER_ADMIN is PER-TENANT. This deployment runs a database per
+ *     organization behind one Node process, so a super admin of org A persisting a storage root
+ *     would silently redirect org B's uploads — a tenant-scoped role reconfiguring a
+ *     platform-scoped resource is a tenant-isolation break however carefully the path is
+ *     validated.
+ *  2. An arbitrary absolute path that the app then WRITES to is close to arbitrary file write
+ *     scoped to whatever the service account can reach, and the static mounts turn parts of it
+ *     into arbitrary file READ. Validation (absolute, no "..", exists, writable) stops mistakes;
+ *     it does not stop someone who has the field and means it — `C:\inetpub\wwwroot` and
+ *     `/etc/cron.d` are absolute, existing and writable.
+ *  3. Compromising one super-admin account currently yields settings changes. It must not also
+ *     yield a foothold on the filesystem.
+ *
+ * What the admin actually needs — "where are my files going right now, and is that directory
+ * healthy?" — is answered in full by GET, and "will this new path work before I commit to it?"
+ * by the validator, which returns the same verdict the app will reach at 3am. Applying it is one
+ * .env line and a restart, which is also the only change that leaves an audit trail outside the
+ * application's own database.
+ */
+settingsRouter.get("/storage", requireSuperAdmin, async (_req, res) => {
+  res.json({ storage: describeStorageLayout(), logging: getLoggingStatus() });
+});
+
+const directoryProbeSchema = z.object({ body: z.object({ path: z.string().max(4096) }).strict() });
+
+/**
+ * Dry-run a directory the operator is considering. Audited because it is a filesystem probe
+ * driven by user input: it stats a caller-supplied path and, if that succeeds, creates and
+ * immediately deletes a uniquely-named probe file to establish real writability (see
+ * storage-paths.ts on why fs.access is not good enough on either Windows or a read-only mount).
+ * SUPER_ADMIN only, and it never reads, lists or returns directory CONTENT.
+ */
+settingsRouter.post("/storage/validate-directory", requireSuperAdmin, validate(directoryProbeSchema), async (req, res) => {
+  const result = validateDirectory(req.body.path);
+  await audit(req.user!.id, "settings.storage_path_validated", "StorageConfig", "global", {
+    candidate: req.body.path,
+    ok: result.ok
+  });
+  res.json(result.ok ? { ok: true, path: result.path } : { ok: false, message: result.message });
 });
 
 settingsRouter.get("/notifications", requireSuperAdmin, async (_req, res) => {
@@ -1081,19 +1130,33 @@ async function requireGitAccessToken(): Promise<string> {
   return decryptSecret(connection.encryptedAccessToken);
 }
 
-settingsRouter.get("/git/repos", requireAuth, async (_req, res) => {
+/**
+ * These three proxy GitHub's API with the ORG'S decrypted OAuth token, so their response is the
+ * private repo/branch/PR inventory of whatever account the admin connected — not workspace
+ * configuration. They were `requireAuth` only, which made that inventory readable by every
+ * authenticated account in the tenant.
+ *
+ * NOT `requireSuperAdmin` like the rest of `/git/*`: their real consumer is the ticket Dev tab's
+ * "Pick from GitHub" picker (web/src/pages/Tickets.tsx#BranchesPanel), which a normal engineer
+ * uses to link a branch/PR to their ticket. TICKETS_WRITE is the permission that consumer already
+ * requires to write the resulting `TicketBranch`, so gating on it keeps the feature working for
+ * exactly the people who can act on the result. Every seeded role holds TICKETS_WRITE; the gate
+ * bites for roles an admin has narrowed (RolePermission rows are per-tenant data, not the enum)
+ * and for anything holding a token without that grant.
+ */
+settingsRouter.get("/git/repos", requireAuth, requirePermission(permissions.TICKETS_WRITE), async (_req, res) => {
   const token = await requireGitAccessToken();
   res.json(await listGitHubRepos(token));
 });
 
-settingsRouter.get("/git/branches", requireAuth, async (req, res) => {
+settingsRouter.get("/git/branches", requireAuth, requirePermission(permissions.TICKETS_WRITE), async (req, res) => {
   const repo = typeof req.query.repo === "string" ? req.query.repo : "";
   if (!repo) throw new AppError(422, "Query param 'repo' (owner/name) is required.");
   const token = await requireGitAccessToken();
   res.json(await listGitHubBranches(token, repo));
 });
 
-settingsRouter.get("/git/pulls", requireAuth, async (req, res) => {
+settingsRouter.get("/git/pulls", requireAuth, requirePermission(permissions.TICKETS_WRITE), async (req, res) => {
   const repo = typeof req.query.repo === "string" ? req.query.repo : "";
   if (!repo) throw new AppError(422, "Query param 'repo' (owner/name) is required.");
   const token = await requireGitAccessToken();

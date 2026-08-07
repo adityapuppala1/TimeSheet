@@ -22,7 +22,7 @@
  *
  * WHO CALLS THIS: `controllers/approval.controller.ts` (internal) and its public guest route.
  */
-import { randomBytes } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 import { AppError } from "../middleware/error.js";
 
 export type Decision = "PENDING" | "APPROVED" | "REJECTED";
@@ -39,6 +39,24 @@ export interface ApprovalStepState {
 export function issueGuestToken(): string {
   return randomBytes(32).toString("base64url");
 }
+
+/**
+ * What goes in the database. The raw token exists only in the URL that was emailed, so reading
+ * `ApprovalStep` no longer tells you how to approve anything.
+ *
+ * Plain SHA-256, not bcrypt/argon2, for the same reason AttestationShareLink.tokenHash uses it:
+ * the input is 256 bits of `randomBytes`, so there is no dictionary for a slow KDF to defend
+ * against, and the lookup has to be an equality query on a unique index rather than the
+ * fetch-500-candidates-and-compare loop that a per-row salt forces (see auth.service.ts#
+ * resetPassword, where the input IS user-chosen and bcrypt is therefore right).
+ */
+export function hashGuestToken(token: string): string {
+  return createHash("sha256").update(token).digest("hex");
+}
+
+/** A guest link is a standing unauthenticated capability; 30 days is the same horizon a session
+ *  gets, and long enough that a reviewer who is on leave still finds a working link. */
+export const GUEST_TOKEN_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 
 /**
  * Which steps are being asked for a decision right now.

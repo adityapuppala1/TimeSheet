@@ -299,6 +299,12 @@ userRouter.post("/bulk-action", validate(bulkActionSchema), async (req, res) => 
             where: { id: target.id },
             data: { passwordHash: await hashPassword(nextPassword), mustChangePassword: true }
           });
+          // Same reasoning as the emailed-reset path (auth.service.ts#resetPassword): the reason
+          // an admin resets somebody's password is usually that the account is compromised, and
+          // a new hash alone evicts nobody — an attacker's refresh token keeps rotating for the
+          // rest of the session's 30 days. ALL sessions, not "all but the current": the actor
+          // here is the admin, never the target.
+          await prisma.session.updateMany({ where: { userId: target.id, revokedAt: null }, data: { revokedAt: new Date() } });
           if (!password) {
             generatedPasswords.push({ id: target.id, name: target.name, email: target.email, password: nextPassword });
           }
@@ -635,8 +641,12 @@ userRouter.patch("/:id", validate(patchSchema), async (req, res) => {
 });
 
 userRouter.delete("/:id", async (req, res) => {
-  await prisma.user.update({ where: { id: String(req.params.id) }, data: { deletedAt: new Date(), status: "INACTIVE" } });
-  await audit(req.user!.id, "user.deleted", "User", String(req.params.id));
+  const id = String(req.params.id);
+  await prisma.user.update({ where: { id }, data: { deletedAt: new Date(), status: "INACTIVE" } });
+  // The bulk DELETE path (POST /bulk) already does this; the single-user route didn't, which
+  // left the deleted person's Session rows alive and refreshable.
+  await prisma.session.updateMany({ where: { userId: id, revokedAt: null }, data: { revokedAt: new Date() } });
+  await audit(req.user!.id, "user.deleted", "User", id);
   res.status(204).send();
 });
 
@@ -651,8 +661,17 @@ userRouter.post("/:id/reset-password", async (req, res) => {
     // Admin-known passwords are temporary by definition — prompt the person to pick their own.
     data: { passwordHash: await hashPassword(password), mustChangePassword: true }
   });
+  // See the bulk RESET_PASSWORD case: a new hash on its own does not evict whoever prompted the
+  // reset, so every session of the target ends here — including the one on their own phone.
+  await prisma.session.updateMany({
+    where: { userId: String(req.params.id), revokedAt: null },
+    data: { revokedAt: new Date() }
+  });
   await audit(req.user!.id, "user.password_reset", "User", String(req.params.id));
-  res.json({ message: "Password reset successfully", generatedPassword: provided ? null : password });
+  res.json({
+    message: "Password reset. They've been signed out everywhere.",
+    generatedPassword: provided ? null : password
+  });
 });
 
 /**

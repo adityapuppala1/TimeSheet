@@ -109,6 +109,48 @@ export function verifyGitWebhook(params: {
   }
 }
 
+/**
+ * The per-delivery unique id each provider stamps on a request, for services/webhook-replay.ts.
+ * Kept here with the rest of the per-provider dialect knowledge so the receiver stays
+ * provider-blind.
+ *
+ * Azure DevOps has no delivery header — its service hooks put a notification GUID in the body
+ * instead, and even that is not documented as guaranteed.
+ */
+export function gitWebhookDeliveryId(params: {
+  provider: GitWebhookProvider;
+  headers: Record<string, unknown>;
+  body: Record<string, any>;
+}): string | null {
+  const { provider, headers, body } = params;
+  switch (provider) {
+    case "gitlab":
+      return header(headers, "x-gitlab-event-uuid");
+    case "gitea":
+    case "forgejo":
+      return header(headers, `x-${provider}-delivery`) ?? header(headers, "x-gitea-delivery");
+    case "bitbucket":
+      return header(headers, "x-request-uuid");
+    case "azure-devops":
+      return typeof body.id === "string" && body.id ? body.id : null;
+  }
+}
+
+/**
+ * Providers that ALWAYS send a delivery id, so a delivery arriving without one is a stripped
+ * header rather than an old server — treat it as unauthenticated instead of as "cannot dedupe",
+ * otherwise the replay check is defeated by deleting one header.
+ *
+ * GitLab is deliberately absent: `X-Gitlab-Event-UUID` is comparatively recent, and GitLab's
+ * scheme puts the shared secret in the request anyway, so a replay guard there is not the
+ * control doing the work (see services/webhook-replay.ts).
+ */
+export const GIT_PROVIDERS_WITH_GUARANTEED_DELIVERY_ID: ReadonlySet<GitWebhookProvider> = new Set([
+  "gitea",
+  "forgejo",
+  "bitbucket"
+]);
+
 const stripRef = (ref: string | undefined | null): string | null =>
   ref ? ref.replace(/^refs\/heads\//, "") : null;
 

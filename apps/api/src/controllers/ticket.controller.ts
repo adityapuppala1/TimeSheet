@@ -146,6 +146,9 @@ ticketRouter.get("/suggest-assignee", requirePermission(permissions.TICKETS_WRIT
   const projectId = String(req.query.projectId ?? "");
   const moduleId = req.query.moduleId ? String(req.query.moduleId) : undefined;
   if (!projectId) throw new AppError(422, "projectId is required");
+  // projectId is a raw query param — without this, TICKETS_WRITE (which EMPLOYEE holds) would
+  // read out the full member roster and per-person workload of any project in the workspace.
+  await assertTicketVisible(req, projectId);
 
   const members = await prisma.userProjectAssignment.findMany({
     where: { projectId },
@@ -433,6 +436,10 @@ const patchSchema = z.object({
 ticketRouter.patch("/:id", requirePermission(permissions.TICKETS_WRITE), validate(patchSchema), async (req, res) => {
   const existing = await prisma.ticket.findFirst({ where: { id: String(req.params.id), deletedAt: null } });
   if (!existing) throw new AppError(404, "Ticket not found");
+  // Two different questions, both required: assertTicketVisible answers "is this ticket in a
+  // project you can see at all" (canModifyTicket can't — it returns true for any TICKETS_ASSIGN
+  // holder, tenant-wide), canModifyTicket answers "may you edit it".
+  await assertTicketVisible(req, existing.projectId);
   if (!canModifyTicket(req, existing)) throw new AppError(403, "Forbidden");
   if (typeof req.body.type === "string") await assertValidTicketType(req.body.type);
 
@@ -471,6 +478,7 @@ const aiFeedbackSchema = z.object({
 ticketRouter.patch("/:id/ai-feedback", requirePermission(permissions.TICKETS_ASSIGN), validate(aiFeedbackSchema), async (req, res) => {
   const existing = await prisma.ticket.findFirst({ where: { id: String(req.params.id), deletedAt: null } });
   if (!existing) throw new AppError(404, "Ticket not found");
+  await assertTicketVisible(req, existing.projectId);
 
   const updated = await prisma.ticket.update({ where: { id: existing.id }, data: { aiFeedback: req.body.feedback } });
   await audit(req.user!.id, "ticket.ai_feedback_set", "Ticket", updated.id, { feedback: req.body.feedback });
@@ -518,6 +526,7 @@ ticketRouter.patch("/:id/status", requirePermission(permissions.TICKETS_WRITE), 
     include: { watchers: true }
   });
   if (!existing) throw new AppError(404, "Ticket not found");
+  await assertTicketVisible(req, existing.projectId);
   if (!canModifyTicket(req, existing)) throw new AppError(403, "Forbidden");
 
   const nextStatus = req.body.status as TicketStatus;
@@ -638,6 +647,10 @@ const assignSchema = z.object({
 ticketRouter.patch("/:id/assign", requirePermission(permissions.TICKETS_ASSIGN), validate(assignSchema), async (req, res) => {
   const existing = await prisma.ticket.findFirst({ where: { id: String(req.params.id), deletedAt: null } });
   if (!existing) throw new AppError(404, "Ticket not found");
+  // The membership check below vets the ASSIGNEE, never the caller — and it's skipped entirely
+  // when unassigning. Without this line a TEAM_LEAD scoped to one project could reassign, or
+  // silently unassign, any ticket in the workspace.
+  await assertTicketVisible(req, existing.projectId);
 
   const isPrivileged = ["SUPER_ADMIN", "ADMIN"].includes(req.user!.role);
   if (req.body.assigneeId && !isPrivileged && !(await isProjectMember(req.body.assigneeId, existing.projectId))) {
@@ -692,6 +705,7 @@ ticketRouter.patch("/:id/assign", requirePermission(permissions.TICKETS_ASSIGN),
 ticketRouter.delete("/:id", requirePermission(permissions.TICKETS_MANAGE), async (req, res) => {
   const existing = await prisma.ticket.findFirst({ where: { id: String(req.params.id), deletedAt: null } });
   if (!existing) throw new AppError(404, "Ticket not found");
+  await assertTicketVisible(req, existing.projectId);
   await prisma.ticket.update({ where: { id: existing.id }, data: { deletedAt: new Date() } });
   await audit(req.user!.id, "ticket.deleted", "Ticket", existing.id);
   res.status(204).send();

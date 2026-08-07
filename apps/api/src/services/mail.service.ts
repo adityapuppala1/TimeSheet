@@ -24,6 +24,7 @@ import nodemailer, { type Transporter } from "nodemailer";
 import { isEmailRoleMuted, type EmailRoleMutes, type NotificationPreferences } from "@timesheet/shared";
 import { env } from "../config/env.js";
 import { prisma } from "../config/prisma.js";
+import { requireTenantContext } from "../config/tenant-context.js";
 import { decryptSecret } from "../utils/encryption.js";
 
 export { templates } from "./mail-templates.js";
@@ -75,11 +76,33 @@ async function resolveMailConfig(): Promise<ResolvedMailConfig> {
   };
 }
 
-let transporter: Transporter | null = null;
-let cachedConfigKey: string | null = null;
-let transportVerified: boolean | null = null;
-let transportVerifyError: string | null = null;
-let lastResolvedConfig: ResolvedMailConfig | null = null;
+/**
+ * SMTP config is a TENANT setting (`GlobalMailSettings` lives in each org's own database), but
+ * one Node process serves every org — so the transport cache has to be keyed by orgId. It used
+ * to be five single-slot module variables, which leaked across tenants two ways:
+ *   - `lastResolvedConfig` was written inside `getTransport()` and read back by callers AFTER
+ *     awaiting it. `resolveMailConfig()` is a database round-trip, so another org's request
+ *     routinely resolved in that window and overwrote the slot — org A's mail went out stamped
+ *     with org B's From address, and A's admin "Mail server" banner rendered B's host/port/user.
+ *   - `transportVerified`/`transportVerifyError` were only ever written by the most recent
+ *     transport build anywhere in the process, so A's banner showed B's SMTP error string
+ *     (which names B's host, and often B's SMTP username) with no race required at all.
+ * Nothing is read from module scope after an await anymore: `getTransport()` hands the caller
+ * the whole entry, and the async `verify()` mutates that same org's entry rather than a global.
+ */
+interface MailTransportEntry {
+  configKey: string;
+  transporter: Transporter | null;
+  config: ResolvedMailConfig;
+  /** null until the async verify() settles. Mutated in place by the .then/.catch below. */
+  verified: boolean | null;
+  verifyError: string | null;
+}
+
+const transportsByOrg = new Map<string, MailTransportEntry>();
+/** Each entry can hold a live nodemailer connection pool, so the cache is bounded the same way
+ *  config/prisma.ts bounds its tenant client cache — evict the oldest rather than grow forever. */
+const MAX_CACHED_TRANSPORTS = 50;
 
 function configKey(config: ResolvedMailConfig): string {
   return JSON.stringify({ host: config.host, port: config.port, secure: config.secure, user: config.user, pass: config.pass, from: config.from });
@@ -87,49 +110,60 @@ function configKey(config: ResolvedMailConfig): string {
 
 /** Call after saving GlobalMailSettings so the next send picks up the new config immediately —
  *  without this, the cached transporter (built from the old config) would keep being reused
- *  until the API process restarts. */
+ *  until the API process restarts. Scoped to the calling tenant: one org saving its mail
+ *  settings must not tear down every other org's connection pool. */
 export function invalidateMailTransportCache(): void {
-  cachedConfigKey = null;
+  const { orgId } = requireTenantContext();
+  transportsByOrg.get(orgId)?.transporter?.close?.();
+  transportsByOrg.delete(orgId);
 }
 
-async function getTransport(): Promise<Transporter | null> {
+async function getTransport(): Promise<MailTransportEntry> {
+  const { orgId } = requireTenantContext();
   const config = await resolveMailConfig();
-  lastResolvedConfig = config;
   const key = configKey(config);
 
-  if (key === cachedConfigKey) return transporter;
-  cachedConfigKey = key;
+  const cached = transportsByOrg.get(orgId);
+  if (cached && cached.configKey === key) return cached;
+  cached?.transporter?.close?.();
+
+  const entry: MailTransportEntry = { configKey: key, transporter: null, config, verified: null, verifyError: null };
+  transportsByOrg.set(orgId, entry);
+  if (transportsByOrg.size > MAX_CACHED_TRANSPORTS) {
+    const oldest = transportsByOrg.keys().next().value as string | undefined;
+    if (oldest && oldest !== orgId) {
+      transportsByOrg.get(oldest)?.transporter?.close?.();
+      transportsByOrg.delete(oldest);
+    }
+  }
 
   if (!config.host) {
-    transporter = null;
     console.warn(
       "[mail] No SMTP host configured — emails will NOT be delivered. Set it from Workspace Settings → Mail server, or SMTP_HOST/PORT/USER/PASS in apps/api/.env."
     );
-    return null;
+    return entry;
   }
 
-  transporter = nodemailer.createTransport({
+  entry.transporter = nodemailer.createTransport({
     host: config.host,
     port: config.port,
     secure: config.secure,
     auth: config.user ? { user: config.user, pass: config.pass } : undefined
   });
 
-  transportVerified = null;
-  transportVerifyError = null;
-  transporter
+  entry.transporter
     .verify()
     .then(() => {
-      transportVerified = true;
+      entry.verified = true;
       console.info(`[mail] SMTP transport ready (${config.host}:${config.port}, secure=${config.secure}, source=${config.source}).`);
     })
     .catch((error) => {
-      transportVerified = false;
-      transportVerifyError = (error as Error).message;
-      console.warn(`[mail] SMTP verification failed (${config.host}:${config.port}): ${transportVerifyError}`);
+      entry.verified = false;
+      entry.verifyError = (error as Error).message;
+      console.warn(`[mail] SMTP verification failed (${config.host}:${config.port}): ${entry.verifyError}`);
     });
 
-  return transporter;
+  return entry;
 }
 
 /* ============================== From-address health ============================== */
@@ -188,8 +222,10 @@ function classifyFromAddress(from: string, smtpUser: string): {
 /** Public-facing snapshot of mail-transport state. Used by the admin UI banner. Triggers
  *  transport (re)build/verification as a side effect, same as sendMail would. */
 export async function getTransportStatus() {
-  await getTransport(); // resolves config as a side effect (no-op rebuild if unchanged) and ensures verify has been attempted at least once
-  const config = lastResolvedConfig!;
+  // Everything below reads THIS org's entry, handed back by getTransport — never a module-level
+  // slot, which another tenant's concurrent resolve would have overwritten by now.
+  const entry = await getTransport();
+  const config = entry.config;
   const fromCheck = classifyFromAddress(config.from, config.user);
   return {
     configured: Boolean(config.host),
@@ -203,8 +239,8 @@ export async function getTransportStatus() {
     fromDomain: fromCheck.fromDomain,
     userDomain: fromCheck.userDomain,
     fromIssues: fromCheck.issues,
-    verified: transportVerified,
-    verifyError: transportVerifyError
+    verified: entry.verified,
+    verifyError: entry.verifyError
   };
 }
 
@@ -312,8 +348,8 @@ export async function sendMail(
     }
   });
 
-  const transport = await getTransport();
-  const from = lastResolvedConfig?.from ?? env.MAIL_FROM;
+  const { transporter: transport, config } = await getTransport();
+  const from = config.from || env.MAIL_FROM;
 
   if (!transport) {
     const errorMessage =

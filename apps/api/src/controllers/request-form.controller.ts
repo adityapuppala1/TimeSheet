@@ -8,7 +8,6 @@
  *
  * WHO MOUNTS THIS: `app.ts`, after the blanket `resolveTenant`.
  */
-import { randomBytes } from "node:crypto";
 import { Router } from "express";
 import { z } from "zod";
 import { permissions } from "@timesheet/shared";
@@ -20,7 +19,13 @@ import { validate } from "../middleware/validate.js";
 import { audit } from "../services/audit.service.js";
 import { getPlanningQuota } from "../services/plan-limits.service.js";
 import { assertPlanningCapability } from "../services/planning.service.js";
-import { REQUEST_FIELD_TYPES, validateFormSchema, type RequestFormSchema } from "../services/request-form.service.js";
+import {
+  hashPublicFormToken,
+  issuePublicFormToken,
+  REQUEST_FIELD_TYPES,
+  validateFormSchema,
+  type RequestFormSchema
+} from "../services/request-form.service.js";
 
 export const requestFormRouter = Router();
 requestFormRouter.use(requireAuth);
@@ -70,11 +75,20 @@ const bodySchema = z.object({
   })
 });
 
-/** Never returned to a client that shouldn't have it — the token IS the capability. */
-const serialize = (form: any, includeToken: boolean) => ({
+/**
+ * The token IS the capability, and only its digest is stored — so for anything published since
+ * that change there is nothing to return here, no matter who is asking. `publicToken` survives
+ * only for forms published before it (the transitional column), which is why this still carries
+ * a value at all; `hasPublicLink` is the flag the UI can rely on either way.
+ *
+ * `freshToken` is the one and only channel for a new link: the publish route passes it through
+ * once and it is never recoverable afterwards.
+ */
+const serialize = (form: any, freshToken?: string) => ({
   ...form,
-  publicToken: includeToken ? form.publicToken : undefined,
-  hasPublicLink: Boolean(form.publicToken)
+  publicToken: freshToken ?? form.publicToken ?? null,
+  publicTokenHash: undefined,
+  hasPublicLink: Boolean(form.publicTokenHash ?? form.publicToken)
 });
 
 requestFormRouter.get("/", requirePermission(permissions.FORMS_CONFIGURE), async (_req, res) => {
@@ -87,7 +101,7 @@ requestFormRouter.get("/", requirePermission(permissions.FORMS_CONFIGURE), async
     },
     orderBy: { name: "asc" }
   });
-  res.json(forms.map((f) => serialize(f, true)));
+  res.json(forms.map((f) => serialize(f)));
 });
 
 requestFormRouter.post(
@@ -131,7 +145,7 @@ requestFormRouter.post(
       }
     });
     await audit(req.user!.id, "request_form.created", "RequestForm", created.id, { slug: created.slug });
-    res.status(201).json(serialize(created, true));
+    res.status(201).json(serialize(created));
   }
 );
 
@@ -161,7 +175,7 @@ requestFormRouter.put(
       }
     });
     await audit(req.user!.id, "request_form.updated", "RequestForm", updated.id);
-    res.json(serialize(updated, true));
+    res.json(serialize(updated));
   }
 );
 
@@ -170,6 +184,10 @@ requestFormRouter.put(
  *
  * Revoking CLEARS the token rather than setting a flag, so a revoked URL cannot be resurrected by
  * flipping a boolean back — re-publishing mints a new one and the old link stays dead forever.
+ *
+ * Publishing is now the ONLY moment the full URL exists: the database holds a SHA-256 digest, so
+ * nothing can hand the link back afterwards. The authoring UI has to hold onto this response, and
+ * an admin who loses it re-publishes (which is already how revocation works).
  */
 requestFormRouter.post(
   "/:id/publish",
@@ -180,18 +198,23 @@ requestFormRouter.post(
     const id = String(req.params.id);
 
     if (!req.body.publish) {
-      const revoked = await prisma.requestForm.update({ where: { id }, data: { isPublic: false, publicToken: null } });
+      const revoked = await prisma.requestForm.update({
+        where: { id },
+        data: { isPublic: false, publicToken: null, publicTokenHash: null }
+      });
       await audit(req.user!.id, "request_form.unpublished", "RequestForm", id);
-      return res.json(serialize(revoked, true));
+      return res.json(serialize(revoked));
     }
 
+    const token = issuePublicFormToken();
     const published = await prisma.requestForm.update({
       where: { id },
-      // 256 bits, base64url. Unguessable and never derived from the form id, which is not secret.
-      data: { isPublic: true, publicToken: randomBytes(32).toString("base64url") }
+      // `publicToken: null` also retires the plaintext on a form that was published before
+      // hashing — re-publishing is how a legacy row stops being one.
+      data: { isPublic: true, publicToken: null, publicTokenHash: hashPublicFormToken(token) }
     });
     await audit(req.user!.id, "request_form.published", "RequestForm", id);
-    res.json(serialize(published, true));
+    res.json(serialize(published, token));
   }
 );
 
@@ -206,7 +229,10 @@ requestFormRouter.delete(
     if (submissions > 0) {
       // Deactivate rather than delete: the submissions are a record of what people asked for, and
       // cascading them away because a form was retired destroys history nobody meant to lose.
-      await prisma.requestForm.update({ where: { id }, data: { isActive: false, isPublic: false, publicToken: null } });
+      await prisma.requestForm.update({
+        where: { id },
+        data: { isActive: false, isPublic: false, publicToken: null, publicTokenHash: null }
+      });
       await audit(req.user!.id, "request_form.deactivated", "RequestForm", id, { submissions });
       return res.json({ deleted: false, submissions });
     }

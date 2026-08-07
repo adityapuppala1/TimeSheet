@@ -38,7 +38,13 @@ import { AppError } from "../middleware/error.js";
 import { validate } from "../middleware/validate.js";
 import { audit } from "../services/audit.service.js";
 import { setCustomFieldValues } from "../services/custom-field.service.js";
-import { normaliseSubmission, renderAnswers, visibleFields, type RequestFormSchema } from "../services/request-form.service.js";
+import {
+  hashPublicFormToken,
+  normaliseSubmission,
+  renderAnswers,
+  visibleFields,
+  type RequestFormSchema
+} from "../services/request-form.service.js";
 import { EMAIL_INTAKE_SYSTEM_EMAIL } from "../services/email-intake.service.js";
 import { computeTicketDueDate, getGlobalTicketSettings, issueTicketKey } from "../services/ticket.service.js";
 import { dispatchNotification } from "../services/notify.service.js";
@@ -53,9 +59,16 @@ const hashIp = (ip: string) => crypto.createHmac("sha256", env.JWT_ACCESS_SECRET
 const notFound = () => new AppError(404, "This form isn't available.");
 
 async function loadPublishedForm(token: string) {
-  if (!token || token.length < 20) throw notFound();
+  if (!token || token.length < 20 || token.length > 200) throw notFound();
   const form = await prisma.requestForm.findFirst({
-    where: { publicToken: token, isPublic: true, isActive: true },
+    // Looked up by digest, so the stored row is not itself a working link — a database read
+    // (backup, dump, injected SELECT) no longer hands over the capability. `publicToken` is the
+    // transitional fallback for forms published before hashing and goes away with that column.
+    where: {
+      OR: [{ publicTokenHash: hashPublicFormToken(token) }, { publicToken: token }],
+      isPublic: true,
+      isActive: true
+    },
     include: { project: { select: { id: true, name: true } } }
   });
   if (!form) throw notFound();

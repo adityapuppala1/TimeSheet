@@ -79,21 +79,31 @@ export async function buildProfilePayload(userId: string): Promise<ProfilePayloa
  * specific known account from a botnet of different IPs; this does. In-memory by design —
  * same tradeoff as express-rate-limit's default store, acceptable at this app's scale (a
  * restart clears lockouts, which just means "worst case, an attacker gets a few more tries").
+ *
+ * The key is (orgId, email), NOT email alone. One Node process serves every tenant database, so
+ * an email-only key makes this map a cross-tenant weapon: `recordFailedLogin` fires even when no
+ * such user exists in the org being hit, so five unauthenticated POSTs at ANY org's login route
+ * would lock that address out of EVERY org. orgId comes from the resolved tenant context, never
+ * from the request body — the caller can pick which tenant it talks to via the host/slug the
+ * tenant middleware already validated, but it can't forge a key for a tenant it isn't addressing.
  */
 const FAILED_LOGIN_LIMIT = 5;
 const LOCKOUT_MS = 5 * 60 * 1000;
 const failedLogins = new Map<string, { count: number; lockedUntil: number | null }>();
 
-function checkAccountLockout(email: string) {
-  const entry = failedLogins.get(email.toLowerCase());
+/** A NUL separator can't occur in an orgId or an email, so no (org, email) pair can collide. */
+const lockoutKey = (orgId: string, email: string) => `${orgId}\u0000${email.toLowerCase()}`;
+
+function checkAccountLockout(orgId: string, email: string) {
+  const entry = failedLogins.get(lockoutKey(orgId, email));
   if (entry?.lockedUntil && entry.lockedUntil > Date.now()) {
     const minutesLeft = Math.ceil((entry.lockedUntil - Date.now()) / 60_000);
     throw new AppError(429, `Too many failed attempts. Try again in ${minutesLeft} minute${minutesLeft === 1 ? "" : "s"}.`);
   }
 }
 
-function recordFailedLogin(email: string) {
-  const key = email.toLowerCase();
+function recordFailedLogin(orgId: string, email: string) {
+  const key = lockoutKey(orgId, email);
   const entry = failedLogins.get(key) ?? { count: 0, lockedUntil: null };
   entry.count += 1;
   if (entry.count >= FAILED_LOGIN_LIMIT) {
@@ -103,8 +113,13 @@ function recordFailedLogin(email: string) {
   failedLogins.set(key, entry);
 }
 
-function clearFailedLogins(email: string) {
-  failedLogins.delete(email.toLowerCase());
+function clearFailedLogins(orgId: string, email: string) {
+  failedLogins.delete(lockoutKey(orgId, email));
+}
+
+/** Test-only: the map is module state that survives across tests in one Vitest file. */
+export function __resetLoginLockoutsForTests() {
+  failedLogins.clear();
 }
 
 /* ================================== Login =================================== */
@@ -157,9 +172,9 @@ async function establishSession(
 }
 
 export async function login(email: string, password: string, rememberMe = false, userAgent?: string, ipAddress?: string) {
-  checkAccountLockout(email);
-
   const { orgId } = requireTenantContext();
+  checkAccountLockout(orgId, email);
+
   const authMethod = await controlPrisma.orgAuthMethod.findUnique({ where: { organizationId: orgId } });
   if (authMethod && (authMethod.requireSsoOnly || !authMethod.passwordLoginEnabled)) {
     throw new AppError(403, "Password sign-in is disabled for this workspace — use your organization's SSO login instead.");
@@ -167,11 +182,11 @@ export async function login(email: string, password: string, rememberMe = false,
 
   const user = await prisma.user.findUnique({ where: { email }, include: PROFILE_INCLUDE });
   if (!user || user.deletedAt || !(await verifyPassword(password, user.passwordHash))) {
-    recordFailedLogin(email);
+    recordFailedLogin(orgId, email);
     throw new AppError(401, "Invalid email or password");
   }
   if (user.status !== "ACTIVE") throw new AppError(403, "Account is not active");
-  clearFailedLogins(email);
+  clearFailedLogins(orgId, email);
 
   const session = await establishSession(user, orgId, { rememberMe, userAgent, ipAddress });
 
@@ -323,6 +338,18 @@ export async function refresh(refreshToken: unknown) {
   const session = await prisma.session.findUnique({ where: { id: payload.sid } });
   if (!session || session.revokedAt || session.expiresAt < new Date()) {
     throw new AppError(401, "Refresh token expired");
+  }
+
+  // The session row alone isn't enough: deactivating or soft-deleting an account doesn't
+  // necessarily revoke its sessions (SCIM's DELETE /Users/:id only flips status), so without
+  // this a disabled account would keep rotating itself a fresh token pair indefinitely.
+  // requireAuth already refuses the resulting access token, but a session that outlives the
+  // account it belongs to shouldn't stay alive at all — revoke it here rather than just
+  // rejecting this one request.
+  const owner = await prisma.user.findUnique({ where: { id: payload.sub }, select: { status: true, deletedAt: true } });
+  if (!owner || owner.deletedAt || owner.status !== "ACTIVE") {
+    await prisma.session.update({ where: { id: session.id }, data: { revokedAt: new Date() } });
+    throw new AppError(401, "Invalid refresh token");
   }
 
   const matchesCurrent = await verifyTokenHash(secret, session.refreshHash);

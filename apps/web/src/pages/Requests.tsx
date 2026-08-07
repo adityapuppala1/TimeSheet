@@ -79,6 +79,10 @@ export function RequestsPage() {
   const [statusFilter, setStatusFilter] = useState("PENDING");
   const [editing, setEditing] = useState<RequestFormRow | null>(null);
   const [builderOpen, setBuilderOpen] = useState(false);
+  /** The server stores only a hash of the public token, so the publish response is the one and
+   *  only time the URL exists. Held here for the rest of the visit; after that, re-publishing is
+   *  the way to get a link back — which is also how revoking one already works. */
+  const [justPublished, setJustPublished] = useState<Record<string, string>>({});
 
   const config = useQuery({ queryKey: ["planning", "settings"], queryFn: planningApi.settings });
   const forms = useQuery({ queryKey: ["request-forms"], queryFn: requestFormApi.list, enabled: canConfigure });
@@ -105,9 +109,17 @@ export function RequestsPage() {
   });
   const publish = useMutation({
     mutationFn: ({ id, next }: { id: string; next: boolean }) => requestFormApi.publish(id, next),
-    onSuccess: (_r, vars) => {
+    onSuccess: (result, vars) => {
+      setJustPublished((prev) => {
+        const next = { ...prev };
+        if (vars.next && result.publicToken) next[vars.id] = result.publicToken;
+        else delete next[vars.id];
+        return next;
+      });
       toast.success(vars.next ? "Published" : "Link withdrawn", {
-        description: vars.next ? undefined : "The old URL is dead — republishing mints a new one."
+        description: vars.next
+          ? "Copy the URL now — it is shown once and can't be recovered later."
+          : "The old URL is dead — republishing mints a new one."
       });
       queryClient.invalidateQueries({ queryKey: ["request-forms"] });
     },
@@ -279,7 +291,11 @@ export function RequestsPage() {
                   <p className="py-6 text-center text-sm text-muted-foreground">No forms yet.</p>
                 ) : (
                   forms.data!.map((form) => {
-                    const url = form.publicToken ? `${window.location.origin}/request/${form.publicToken}` : null;
+                    // `form.publicToken` is only ever set for forms published before the server
+                    // started storing a hash; for everything else the token exists solely in
+                    // `justPublished`, from this visit's publish response.
+                    const token = justPublished[form.id] ?? form.publicToken;
+                    const url = token ? `${window.location.origin}/request/${token}` : null;
                     return (
                       <div key={form.id} className="grid gap-2 rounded-lg border border-border p-3">
                         <div className="flex flex-wrap items-center gap-2">
@@ -309,6 +325,13 @@ export function RequestsPage() {
                               <Copy className="h-3.5 w-3.5" />
                             </Button>
                           </div>
+                        )}
+
+                        {!url && form.hasPublicLink && (
+                          <p className="text-xs text-muted-foreground">
+                            This form is live, but the URL is shown only once, when it is published. Re-publish to get a
+                            new one — the current link stops working.
+                          </p>
                         )}
 
                         <div className="flex flex-wrap gap-2">

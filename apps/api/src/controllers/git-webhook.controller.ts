@@ -31,11 +31,14 @@ import { decryptSecret } from "../utils/encryption.js";
 import { fetchGitHubPullRequestFiles, GIT_INTEGRATION_SYSTEM_EMAIL, postGitHubPullRequestReview } from "../services/git-provider.service.js";
 import { reviewPullRequestDiff, summarizePullRequest } from "../services/ai.service.js";
 import {
+  GIT_PROVIDERS_WITH_GUARANTEED_DELIVERY_ID,
   GIT_WEBHOOK_PROVIDERS,
+  gitWebhookDeliveryId,
   normalizeGitWebhook,
   verifyGitWebhook,
   type GitWebhookProvider
 } from "../services/git-webhook-providers.js";
+import { isReplayedDelivery } from "../services/webhook-replay.js";
 
 export const gitWebhookRouter = Router();
 
@@ -74,6 +77,8 @@ gitWebhookRouter.post("/webhook/:orgSlug", express.raw({ type: "application/json
     const signature = Array.isArray(signatureHeader) ? signatureHeader[0] : signatureHeader;
     const githubEvent = req.headers["x-github-event"];
     const event = Array.isArray(githubEvent) ? githubEvent[0] : githubEvent;
+    const deliveryHeader = req.headers["x-github-delivery"];
+    const deliveryId = Array.isArray(deliveryHeader) ? deliveryHeader[0] : deliveryHeader;
 
     await withOrgTenant(String(req.params.orgSlug), async () => {
       const connection = await prisma.gitConnection.findUnique({ where: { id: "global" } });
@@ -88,6 +93,19 @@ gitWebhookRouter.post("/webhook/:orgSlug", express.raw({ type: "application/json
       const expectedBuf = Buffer.from(expected);
       if (sigBuf.length !== expectedBuf.length || !crypto.timingSafeEqual(sigBuf, expectedBuf)) {
         throw new AppError(401, "Invalid webhook signature.");
+      }
+
+      // The signature says the body came from the configured repo; it does not say WHEN, and
+      // there is no timestamp in GitHub's scheme to bound it. Without this, one captured
+      // `pull_request:opened` delivery re-runs the AI summary and posts another GitHub review
+      // every time it is resent, indefinitely. `X-GitHub-Delivery` is always present on a real
+      // delivery, so a MISSING one is a stripped header, not an old sender — rejecting it is
+      // what stops the check being bypassed by deleting a header. Deliberately AFTER the
+      // signature check: an unauthenticated caller must not be able to write into the store and
+      // evict genuine ids. See services/webhook-replay.ts for the per-process caveat.
+      if (!deliveryId) throw new AppError(401, "Missing webhook delivery id.");
+      if (isReplayedDelivery(`github:${req.params.orgSlug}`, deliveryId)) {
+        throw new AppError(409, "This webhook delivery has already been processed.");
       }
 
       const systemUser = await prisma.user.findUnique({ where: { email: GIT_INTEGRATION_SYSTEM_EMAIL } });
@@ -246,6 +264,19 @@ gitWebhookRouter.post("/webhook/:orgSlug/:provider", express.raw({ type: "applic
         })
       ) {
         throw new AppError(401, "Invalid webhook credentials.");
+      }
+
+      // Same replay guard as the GitHub route above, keyed per tenant AND per provider because
+      // one process serves every org and nothing makes two providers' delivery ids disjoint.
+      // Only the HMAC providers (gitea/forgejo/bitbucket) are required to carry one — for the
+      // rest the shared secret travels with the request, so an id is a nice-to-have rather than
+      // the control doing the work. See services/webhook-replay.ts.
+      const deliveryId = gitWebhookDeliveryId({ provider, headers: req.headers as Record<string, unknown>, body: parsedBody });
+      if (!deliveryId && GIT_PROVIDERS_WITH_GUARANTEED_DELIVERY_ID.has(provider)) {
+        throw new AppError(401, "Missing webhook delivery id.");
+      }
+      if (deliveryId && isReplayedDelivery(`${provider}:${req.params.orgSlug}`, deliveryId)) {
+        throw new AppError(409, "This webhook delivery has already been processed.");
       }
 
       const event = normalizeGitWebhook({ provider, headers: req.headers as Record<string, unknown>, body: parsedBody });

@@ -14,7 +14,7 @@
  */
 import { existsSync } from "node:fs";
 import os from "node:os";
-import { resolve } from "node:path";
+import { isAbsolute, resolve } from "node:path";
 
 import dotenv from "dotenv";
 import { z } from "zod";
@@ -59,6 +59,23 @@ dotenv.config();
  * Override via `TZ=Europe/London` (or any IANA zone) in apps/api/.env.
  */
 process.env.TZ = process.env.TZ || "Asia/Kolkata";
+
+/**
+ * An OPTIONAL directory variable that, when set at all, must be an absolute path with no `..`
+ * segment. Empty string is the "not configured, use the built-in default" signal — see the
+ * STORAGE_* block below for why absolute-only is the rule for these specifically, when
+ * `UPLOAD_DIR` above is deliberately allowed to stay relative for backward compatibility.
+ */
+function absoluteDirectory(name: string) {
+  return z
+    .string()
+    .default("")
+    .transform((value) => value.trim())
+    .refine(
+      (value) => value === "" || (isAbsolute(value) && !value.split(/[\\/]+/).includes("..") && !value.includes("\0")),
+      `${name} must be an ABSOLUTE filesystem path with no ".." segments (e.g. C:\\TimeSphere_Uploads or /srv/timesphere/uploads). Leave it unset to keep the current default.`
+    );
+}
 
 const schema = z.object({
   NODE_ENV: z.string().default("development"),
@@ -105,6 +122,54 @@ const schema = z.object({
     .transform((value) => value === "true" || value === "1"),
   UPLOAD_DIR: z.string().default("uploads"),
 
+  /**
+   * Number of reverse proxies in front of this process — see app.ts's `trust proxy` block for why
+   * this is a hop COUNT rather than a boolean. 0 (the default) means "nothing in front of me",
+   * which is both the safe default and the correct one for `npm run dev` and a directly-exposed
+   * container. Set it to the real number of hops in any deployment that terminates TLS elsewhere,
+   * or every per-IP rate limit in the app collapses into a single shared bucket.
+   */
+  TRUST_PROXY_HOPS: z.coerce.number().int().min(0).max(10).default(0),
+
+  /**
+   * Relocatable, segregated file storage. See config/storage-paths.ts for how these four resolve
+   * into the effective layout — this is only the validation.
+   *
+   * ALL FOUR DEFAULT TO EMPTY, and empty means "exactly what this deployment does today":
+   * `UPLOAD_DIR` (default "uploads", relative to the API's cwd) stays the root, documents stay
+   * flat in it, avatars in `avatars/`, face imagery in `face/`. Nothing on disk moves and no
+   * stored URL changes unless an operator sets one of these on purpose.
+   *
+   * WHY ABSOLUTE-ONLY: a relative path is resolved against `process.cwd()`, which differs
+   * between `npm run dev` (apps/api), `node dist/src/server.js`, a systemd unit, and a Docker
+   * image — the whole point of moving storage off the repo working tree is that a
+   * `git checkout` or redeploy can't touch it, and a relative path cannot promise that.
+   * `..` is rejected outright rather than normalised: the only reason to write one here is to
+   * climb out of somewhere, and a path that has to climb is a path that was written wrong.
+   */
+  STORAGE_ROOT: absoluteDirectory("STORAGE_ROOT"),
+  STORAGE_DOCUMENTS_DIR: absoluteDirectory("STORAGE_DOCUMENTS_DIR"),
+  STORAGE_AVATARS_DIR: absoluteDirectory("STORAGE_AVATARS_DIR"),
+  STORAGE_FACE_DIR: absoluteDirectory("STORAGE_FACE_DIR"),
+
+  /**
+   * Rotating file logs (config/logger.ts). Empty LOG_DIR = OFF, which is today's behaviour
+   * exactly: console only, no files written anywhere near the working tree. Set it to a real
+   * absolute directory (e.g. C:\TimeSphere_Logs, /var/log/timesphere) to turn file logging on.
+   * Console output is NEVER taken away — Docker, `npm run dev` and systemd journals all read it.
+   */
+  LOG_DIR: absoluteDirectory("LOG_DIR"),
+  /** Hours per log file within a day. 4 → six files a day (00-04 … 20-24). 24 → one file a day. */
+  LOG_ROTATE_HOURS: z.coerce.number().int().min(1).max(24).default(4),
+  /** Whole day-directories older than this are deleted. Counted in days, not files, because the
+   *  unit an operator reasons about ("keep a month") is days. */
+  LOG_RETENTION_DAYS: z.coerce.number().int().min(1).max(3650).default(30),
+  /** Gzip a day's files once the date rolls over. Off only if something else already ships them. */
+  LOG_COMPRESS_ON_ROLLOVER: z
+    .union([z.literal("true"), z.literal("false"), z.literal("1"), z.literal("0")])
+    .default("true")
+    .transform((value) => value === "true" || value === "1"),
+
   SLA_DEFAULT_APPROVAL_HOURS: z.coerce.number().default(48),
   SLA_CRON_SCHEDULE: z.string().default("*/15 * * * *"),
   SLA_ENABLED: z
@@ -128,15 +193,25 @@ const schema = z.object({
   /**
    * Per-request API telemetry (middleware/request-telemetry.ts → ApiRequestSample).
    *
-   * OFF BY DEFAULT, and that is the important part: this middleware sits in the hot path of every
-   * single request and writes a row per sampled one. An operator has to ASK for that cost; a
-   * deployment that never touches these variables pays one boolean check per request and nothing
-   * else. On a busy instance turn the rate down rather than the feature off — percentiles from a
-   * 10% sample are still percentiles, whereas no data answers nothing.
+   * OFF BY DEFAULT **IN PRODUCTION**, and that is the important part: this middleware sits in the
+   * hot path of every single request and writes a row per sampled one. An operator has to ASK for
+   * that cost; a production deployment that never touches these variables pays one boolean check
+   * per request and nothing else. On a busy instance turn the rate down rather than the feature
+   * off — percentiles from a 10% sample are still percentiles, whereas no data answers nothing.
+   *
+   * ON BY DEFAULT IN DEVELOPMENT, because the opposite default made the feature look broken: a
+   * developer runs `npm run dev`, opens Maintenance → API performance, and finds an empty panel
+   * explaining that recording is off — for a panel they have just built or just upgraded into.
+   * The cost that justifies the production default (a row per request, forever, per tenant) is
+   * not a cost a dev database is under any pressure from, and a local server that records nothing
+   * cannot be used to answer "is this endpoint slow?" while you are the one making it slow.
+   *
+   * Explicitly setting the variable always wins, in either direction — this only changes what
+   * happens when nobody has said anything.
    */
   API_TELEMETRY_ENABLED: z
     .union([z.literal("true"), z.literal("false"), z.literal("1"), z.literal("0")])
-    .default("false")
+    .default(process.env.NODE_ENV === "production" ? "false" : "true")
     .transform((value) => value === "true" || value === "1"),
   /** Fraction of requests recorded, 0..1. 1 = every request. */
   API_TELEMETRY_SAMPLE_RATE: z.coerce.number().min(0).max(1).default(1),
