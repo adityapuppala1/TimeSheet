@@ -136,8 +136,21 @@ aiProposalRouter.post(
 
 aiProposalRouter.get("/", requirePermission(permissions.TICKETS_VIEW), async (req, res) => {
   await assertPlanningEnabled();
+  // `tickets:view` is held tenant-wide by every non-viewer role, so it is a permission and not a
+  // boundary — exactly the gap `assertTicketVisible` exists to close on the ticket sub-resources.
+  // Without the scope below, any employee listing proposals saw every project's plan changes,
+  // including the AI's reasoning text, for projects they cannot open at all. `GET /risk` in this
+  // same file already scopes this way; this route simply never did.
+  //
+  // A proposal with no `scopeProjectId` is workspace-wide rather than unowned, so it is matched on
+  // authorship instead: you keep seeing what you asked for, and stop seeing what you didn't.
+  const scope = await ticketProjectScope(req);
+  const visibility = scope.unrestricted
+    ? {}
+    : { OR: [{ scopeProjectId: { in: scope.projectIds } }, { requestedById: req.user!.id }] };
   const proposals = await prisma.aiProposal.findMany({
     where: {
+      ...visibility,
       ...(req.query.status && req.query.status !== "all" ? { status: String(req.query.status) as never } : {}),
       ...(typeof req.query.projectId === "string" && req.query.projectId ? { scopeProjectId: req.query.projectId } : {})
     },

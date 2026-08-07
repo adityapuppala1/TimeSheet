@@ -210,13 +210,20 @@ so each phase ships, tests green, and is usable standalone before the next start
 depends on a later one being done to be valuable on its own.
 
 *Phase 1 — fast wins, reuse existing patterns (ingestion + assignment):*
-- [ ] **SARIF ingestion adapter** — `POST /api/devops/:orgSlug/findings/sarif` (or content-type
+- [x] **SARIF ingestion adapter** — shipped: `POST /api/devops/:orgSlug/findings/sarif`
+  (`devops-webhook.controller.ts:271`), sharing its finding handler with the native-JSON
+  `/findings` route (`:102`, `:154`) so the two cannot drift. Ticked 2026-08-08 after an audit
+  found the item open against code that already existed.
+  *As originally scoped:* — `POST /api/devops/:orgSlug/findings/sarif` (or content-type
   sniffing on the existing `/findings` route) accepts a raw SARIF 2.1.0 document and maps its
   `runs[].results[]` into the existing `SecurityFinding` shape — GitHub Code Scanning,
   `codeql-action`, `semgrep --sarif`, and Azure DevOps' native scan output all land with zero
   hand-written `jq` translation, closing the single biggest onboarding-friction gap vs.
   GitHub/Azure's built-in code scanning.
-- [ ] **Finding-level auto-reopen** — extend `autoReopenEnabled`'s trigger beyond failing
+- [x] **Finding-level auto-reopen** — shipped: `maybeReopenTicketOnRegression` is now called on
+  a new finding (`devops-webhook.controller.ts:138`) as well as on a failed test run (`:349`),
+  which is exactly the "beyond failing TestRuns" this asked for. Ticked 2026-08-08.
+  *As originally scoped:* — extend `autoReopenEnabled`'s trigger beyond failing
   `TestRun`s to "a new/reintroduced finding lands against a RESOLVED/CLOSED ticket's linked
   repo+branch," mirroring Black Duck's Jira-plugin `BOM_EDIT`-triggered reopen. Same
   `security-report.service.ts` function (`maybeAutoReopen` or equivalent), one more call site.
@@ -225,7 +232,11 @@ depends on a later one being done to be valuable on its own.
   in `security-report.service.ts`), assignee resolved through the existing `ModuleAssigneeRule`
   chain, same `dispatchTransactional` notify path already wired. Verified during this phase's
   research pass — no new code needed here.
-- [ ] **CODEOWNERS/last-committer assignment fallback** — when no `ModuleAssigneeRule` matches a
+- [x] **CODEOWNERS/last-committer assignment fallback** — shipped:
+  `maybeAssignFindingViaCodeowners` (`security-report.service.ts:390`), called from the assignment
+  chain at `:333`, with a `codeownersAssignEnabled` switch (`settings.controller.ts:575`).
+  Ticked 2026-08-08.
+  *As originally scoped:* — when no `ModuleAssigneeRule` matches a
   finding's `filePath`, resolve an assignee via the repo's `CODEOWNERS` file or the last
   committer on that file (both fetched through the existing `GitConnection` OAuth token, cached
   per repo) before falling back to unassigned. This is the concrete "assign to the relevant
@@ -2012,24 +2023,39 @@ much here as a finding.
   authenticating, and `middleware/tenant.ts` returns three distinguishable statuses (404 unknown /
   403 suspended / 503 not ready), so an anonymous caller can enumerate which orgs exist and their
   lifecycle state, forcing a DSN decrypt per guess at 120/min/IP.
+- [x] **`GET /ai-proposals` was unscoped** (2026-08-08). `tickets:view` is held tenant-wide by every
+  non-viewer role, so it gated nothing: any employee listing proposals saw every project's pending
+  plan changes and the model's reasoning for projects they cannot open. Now filtered through
+  `ticketProjectScope`, the same helper `GET /risk` in that file already used, with workspace-wide
+  proposals (null `scopeProjectId`) matched on authorship so you still find what you requested.
+  `tests/unit/ai-proposal-scope.test.ts` drives the real router and asserts the `where` reaching
+  Prisma — 3 of its 5 cases fail against the pre-fix route.
 - [ ] **The wider fetch-then-don't-check set** — same shape as the six ticket routes, but each needs
   a product decision on the intended boundary: `approval.controller.ts` `DELETE /:id` (hard delete
   straight from `req.params`, while both siblings scope correctly), `ai-proposal.controller.ts`
-  (unscoped list; updates rows by body-supplied ids never checked against the parent),
-  `request-form.controller.ts` (unscoped submission inbox under a permission EMPLOYEE holds),
-  `timesheet.controller.ts` approve/reject (no `managerId` predicate — and its own `DELETE` sibling
-  does check, so the file is inconsistent with itself), plus the `resource`, `blueprint`, `ai` and
-  `report` controllers.
+  (still updates change rows by body-supplied ids never checked against the parent — the LIST is
+  fixed above, this is not), `request-form.controller.ts` (unscoped submission inbox under a
+  permission EMPLOYEE holds), `timesheet.controller.ts` approve/reject (no `managerId` predicate —
+  and its own `DELETE` sibling does check, so the file is inconsistent with itself), plus the
+  `resource`, `ai` and `report` controllers.
+- [ ] **`GET /blueprints` is workspace-wide, and that may be intended** — listed here originally as
+  part of the set above, but re-checking the model shows `Blueprint` has NO project relation at all
+  (`schema.prisma:2728`): name, kind, payload, createdBy. There is nothing to scope it *by*, so it
+  is not the same class of bug as the ticket routes. The real question is whether a template
+  library should be visible to every role that holds `tickets:view`, which is a product decision,
+  not a missing predicate. Recorded separately so it stops being counted as a scoping leak.
 - [ ] **Unbounded module maps**: `failedLogins` and `middleware/auth.ts`'s `lastSeenWrites` are never
   swept and grow for the process lifetime; the former on unauthenticated input. Neither is a tenant
   leak, both want a TTL sweep.
-- [ ] **Minor**: `chat-webhook.controller.ts` echoes an attacker-supplied `challenge` before any
+- [ ] **Minor (code)**: `chat-webhook.controller.ts` echoes an attacker-supplied `challenge` before any
   signature check; two `(req.body as Buffer).toString()` calls are unguarded and 500 on a
   `text/plain` request; three comparisons pre-check byte length before `timingSafeEqual`, leaking
   token length, while the correct hash-then-compare helper already exists in
-  `git-webhook-providers.ts`. `docs/ARCHITECTURE.md` section 5's "bypasses tenant resolution" table
-  is stale — it omits `/api/git/webhook/*`, `/api/billing/webhook`, `/api/scim/*` and
-  `/api/git/callback`.
+  `git-webhook-providers.ts`.
+- [x] **`docs/ARCHITECTURE.md` section 5's "bypasses tenant resolution" table was stale** — split
+  out of "Minor" and fixed 2026-08-07: the four missing routes (`/api/git/webhook/:orgSlug`,
+  `/api/git/callback`, `/api/billing/webhook`, `/api/scim/:orgSlug/v2/Users*`) are listed, with a
+  note on what is deliberately NOT bypassed.
 - [ ] **Tenant connection ceiling**: `config/prisma.ts` permits 50 cached clients x 5 connections =
   250, against a MySQL `max_connections` of 151 (measured on the dev host). Roughly 30
   concurrently-active organizations exhausts it, and it will present as random query failures rather
