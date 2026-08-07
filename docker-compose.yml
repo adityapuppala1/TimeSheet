@@ -56,6 +56,20 @@ services:
       TICKET_SLA_MEDIUM_HOURS: ${TICKET_SLA_MEDIUM_HOURS:-72}
       TICKET_SLA_HIGH_HOURS: ${TICKET_SLA_HIGH_HOURS:-24}
       TICKET_SLA_CRITICAL_HOURS: ${TICKET_SLA_CRITICAL_HOURS:-4}
+      # API request telemetry (docs/DEPLOYMENT.md → "Operating API request telemetry"). Forwarded
+      # explicitly like every other var here: Compose does NOT pass the host .env through to the
+      # container, so a variable that is not listed simply does not exist inside it. Recording is
+      # off unless API_TELEMETRY_ENABLED is set, so the defaults below are inert.
+      API_TELEMETRY_ENABLED: ${API_TELEMETRY_ENABLED:-false}
+      API_TELEMETRY_SAMPLE_RATE: ${API_TELEMETRY_SAMPLE_RATE:-1}
+      API_TELEMETRY_FLUSH_MS: ${API_TELEMETRY_FLUSH_MS:-5000}
+      API_TELEMETRY_MAX_BUFFER: ${API_TELEMETRY_MAX_BUFFER:-5000}
+      API_TELEMETRY_RETENTION_DAYS: ${API_TELEMETRY_RETENTION_DAYS:-14}
+      # Host identity stamped on each sample. Named for the Kubernetes downward API; left empty
+      # off-cluster, where the columns are written NULL rather than guessed at.
+      POD_NAME: ${POD_NAME:-}
+      POD_NAMESPACE: ${POD_NAMESPACE:-}
+      CLUSTER_NAME: ${CLUSTER_NAME:-}
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
     ports:
       - "4000:4000"

@@ -1,0 +1,31 @@
+-- CreateTable
+CREATE TABLE `ApiRequestSample` (
+    `id` VARCHAR(191) NOT NULL,
+    `apiName` VARCHAR(220) NOT NULL,
+    `method` VARCHAR(10) NOT NULL,
+    `apiPath` VARCHAR(200) NOT NULL,
+    `statusCode` INTEGER NOT NULL,
+    `userId` VARCHAR(191) NULL,
+    `apiRequestAt` DATETIME(3) NOT NULL,
+    `apiResponseAt` DATETIME(3) NOT NULL,
+    `apiResponseTime` INTEGER NOT NULL,
+    `dbResponseTime` INTEGER NULL,
+    `dbQueryCount` INTEGER NULL,
+    `hostname` VARCHAR(120) NOT NULL,
+    `podName` VARCHAR(120) NULL,
+    `podNamespace` VARCHAR(120) NULL,
+    `cluster` VARCHAR(120) NULL,
+    `osType` VARCHAR(80) NOT NULL,
+    `cpuPercent` DOUBLE NULL,
+    `memUsedPercent` DOUBLE NULL,
+    `diskUsedPercent` DOUBLE NULL,
+    `eventLoopLagMs` DOUBLE NULL,
+    `createdAt` DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+
+    INDEX `ApiRequestSample_createdAt_idx`(`createdAt`),
+    INDEX `ApiRequestSample_apiPath_createdAt_idx`(`apiPath`, `createdAt`),
+    INDEX `ApiRequestSample_statusCode_createdAt_idx`(`statusCode`, `createdAt`),
+    INDEX `ApiRequestSample_hostname_createdAt_idx`(`hostname`, `createdAt`),
+    INDEX `ApiRequestSample_apiResponseTime_createdAt_idx`(`apiResponseTime`, `createdAt`),
+    PRIMARY KEY (`id`)
+) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;

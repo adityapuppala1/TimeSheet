@@ -9,7 +9,7 @@
  */
 import { Router } from "express";
 import { z } from "zod";
-import { notificationPreferenceKeys } from "@timesheet/shared";
+import { notificationPreferenceKeys, roles } from "@timesheet/shared";
 import { prisma } from "../config/prisma.js";
 import { controlPrisma } from "../config/control-prisma.js";
 import { requireTenantContext } from "../config/tenant-context.js";
@@ -105,13 +105,22 @@ const updateSchema = z.object({
       dailyReminderHour: z.coerce.number().int().min(0).max(23).optional(),
       escalationReminderHour: z.coerce.number().int().min(0).max(23).optional(),
       remindOnWeekdaysOnly: z.boolean().optional(),
-      bccSuperAdminOnAllEmails: z.boolean().optional()
+      bccSuperAdminOnAllEmails: z.boolean().optional(),
+      // Per-role mute matrix. Keys are constrained to the known preference keys and values to the
+      // known roles so a typo can't silently persist a mute that no UI can ever clear again —
+      // this column is free-form JSON at the DB level, so this schema IS its only integrity check.
+      emailRoleMutes: z
+        .record(
+          z.enum(notificationPreferenceKeys as unknown as [string, ...string[]]),
+          z.array(z.enum(roles as unknown as [string, ...string[]]))
+        )
+        .optional()
     })
     .strict()
 });
 
 settingsRouter.patch("/notifications", requireSuperAdmin, validate(updateSchema), async (req, res) => {
-  const data: Record<string, boolean | number> = {};
+  const data: Record<string, boolean | number | Record<string, string[]>> = {};
   for (const key of notificationPreferenceKeys) {
     if (typeof req.body[key] === "boolean") data[key] = req.body[key];
   }
@@ -119,6 +128,14 @@ settingsRouter.patch("/notifications", requireSuperAdmin, validate(updateSchema)
   if (typeof req.body.escalationReminderHour === "number") data.escalationReminderHour = req.body.escalationReminderHour;
   if (typeof req.body.remindOnWeekdaysOnly === "boolean") data.remindOnWeekdaysOnly = req.body.remindOnWeekdaysOnly;
   if (typeof req.body.bccSuperAdminOnAllEmails === "boolean") data.bccSuperAdminOnAllEmails = req.body.bccSuperAdminOnAllEmails;
+  // Sent whole-object, not merged per key: the matrix UI always PATCHes the complete map, and a
+  // merge would make un-ticking the last muted role for a category impossible to express.
+  // Categories with an empty list are dropped so the stored JSON stays the mutes, not the grid.
+  if (req.body.emailRoleMutes && typeof req.body.emailRoleMutes === "object") {
+    data.emailRoleMutes = Object.fromEntries(
+      Object.entries(req.body.emailRoleMutes as Record<string, string[]>).filter(([, list]) => list.length > 0)
+    );
+  }
 
   const updated = await prisma.globalNotificationSettings.upsert({
     where: { id: "global" },

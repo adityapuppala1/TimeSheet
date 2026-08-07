@@ -8,8 +8,12 @@
  */
 import { describe, expect, it } from "vitest";
 import {
+  buildTimesheetSections,
   buildTimesheetWhere,
+  describeReportPeriod,
+  entryHours,
   groupTimesheetRows,
+  summariseTimesheetRows,
   GROUP_BY_KEYS,
   type GroupByKey
 } from "../../src/services/timesheet-report.service.js";
@@ -26,6 +30,8 @@ function row(over: Partial<Record<string, unknown>> = {}): Row {
     ticketId: null,
     activityType: "Development",
     workDate: new Date("2026-03-04T00:00:00.000Z"),
+    startTime: "09:00",
+    endTime: "11:00",
     totalHours: 2,
     billable: true,
     billedAmount: null,
@@ -164,5 +170,56 @@ describe("groupTimesheetRows", () => {
 
   it("returns nothing for no rows rather than a zero-filled shell", () => {
     expect(groupTimesheetRows([], "user")).toEqual([]);
+  });
+});
+
+describe("entryHours", () => {
+  it("trusts the stored total, which is what the entry screen showed", () => {
+    // Re-deriving here would let an export disagree with the row the person actually logged.
+    expect(entryHours(row({ totalHours: 2.5, startTime: "09:00", endTime: "17:00" }))).toBe(2.5);
+  });
+
+  it("falls back to the SAME helper the write path uses when no total was stored", () => {
+    expect(entryHours(row({ totalHours: null, startTime: "09:15", endTime: "11:45" }))).toBe(2.5);
+  });
+
+  it("is zero, not NaN, when there is nothing to go on", () => {
+    expect(entryHours(row({ totalHours: null, startTime: null, endTime: null }))).toBe(0);
+  });
+});
+
+describe("the export document's structure", () => {
+  const rows = [
+    row({ id: "a", userId: "u1", totalHours: 3, workDate: new Date("2026-03-10T00:00:00.000Z") }),
+    row({ id: "b", userId: "u2", totalHours: 2, user: { id: "u2", name: "Mira", email: "m@x.com" } }),
+    row({ id: "c", userId: "u1", totalHours: 1.5, workDate: new Date("2026-03-02T00:00:00.000Z") })
+  ];
+
+  it("gives every section the same totals as the summary it is printed under", () => {
+    // A section heading that disagrees with the table above it is the exact drift this whole file
+    // exists to prevent — so both come from one object, and this pins that.
+    const sections = buildTimesheetSections(rows, "user");
+    expect(sections.map((s) => s.summary.hours)).toEqual([4.5, 2]);
+    for (const section of sections) {
+      expect(section.rows.reduce((sum, r) => sum + entryHours(r), 0)).toBeCloseTo(section.summary.hours, 5);
+    }
+    expect(sections.reduce((sum, s) => sum + s.summary.hours, 0)).toBe(summariseTimesheetRows(rows).hours);
+  });
+
+  it("reads each section forwards even though the query returns newest-first", () => {
+    const [dev] = buildTimesheetSections(rows, "user");
+    expect(dev.rows.map((r) => r.id)).toEqual(["c", "a"]);
+  });
+
+  it("states the dates it actually covers rather than claiming all time", () => {
+    // "All time" over a set that stops in March reads as "nothing was logged afterwards".
+    expect(describeReportPeriod({ from: "2026-03-01", to: "2026-03-31" }, rows)).toBe("2026-03-01 to 2026-03-31");
+    expect(describeReportPeriod({}, rows)).toBe("All dates (2026-03-02 to 2026-03-10)");
+    expect(describeReportPeriod({}, [])).toBe("All dates");
+  });
+
+  it("produces an empty document, not a crash, for no rows", () => {
+    expect(buildTimesheetSections([], "user")).toEqual([]);
+    expect(summariseTimesheetRows([])).toMatchObject({ entries: 0, hours: 0, cost: null, people: 0 });
   });
 });

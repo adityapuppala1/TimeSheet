@@ -373,6 +373,33 @@ A flag that nobody reads is not a control, so the review pipeline is push, not p
   daily `face-retention` worker (03:15), or on demand via the *Auto-triage now* button
   (`POST /api/face/auto-triage`) for an admin who doesn't want to wait.
 
+#### What "Mark reviewed" does — and what it does not
+
+It clears `flaggedForReview`, records `reviewedById` / `reviewedAt`, and stores the optional note.
+That is the whole of it.
+
+It does **not** accept that face, add the capture as a new reference, re-enroll the person, or move
+any threshold. **There is no adaptive re-enrollment anywhere in this product.** The only way a
+person's stored reference changes is completing the guided enrollment again — which *replaces*
+their templates rather than adding to them.
+
+This is worth stating outright because the opposite is a reasonable thing to assume, and assuming
+it leads somewhere expensive: reviewing the same person's failures week after week expecting
+recognition to improve, when nothing in the review path can move it. If somebody fails repeatedly,
+the levers are re-enrollment (ideally multi-pose), the workspace match threshold, and the capture
+conditions — not the review queue.
+
+The one thing that *is* adaptive is the per-person match threshold, and it can only ever tighten,
+never loosen (see [Calibrating the match threshold](#calibrating-the-match-threshold)). So a person
+who has been scraping past the bar can drift toward a stricter one over time — which is a sensible
+place to look first when someone who used to pass starts failing.
+
+**Reading the numbers:** the analytics on this settings card keep *pending*, *human-reviewed* and
+*auto-triaged* as three separate states and never total them into one "handled" figure. Auto-triage
+sets `autoResolvedReason` and deliberately leaves `reviewedAt` null, so the two can never be
+confused — a queue drained by auto-triage and a queue drained by people mean very different things
+about whether the policy is working.
+
 ---
 
 ## Policy copilot: a grounded threshold recommendation

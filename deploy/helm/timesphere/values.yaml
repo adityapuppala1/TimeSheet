@@ -91,6 +91,22 @@ env:
   appBaseUrl: https://timesphere.example.com
   tz: Asia/Kolkata
 
+# API request telemetry — per-request latency/DB-time samples behind Workspace Settings →
+# Maintenance → "API performance". See docs/DEPLOYMENT.md → "Operating API request telemetry".
+#
+# OFF by default: this middleware runs in the hot path of every request and writes a row per
+# sampled one, into EVERY tenant database. Enabling it also turns on the downward-API pod
+# identity on the api Deployment, so switching it on triggers a pod restart.
+# On a busy cluster turn sampleRate DOWN rather than the feature off — percentiles from a 10%
+# sample are still percentiles.
+telemetry:
+  enabled: false
+  sampleRate: 1 # 0..1 — fraction of requests recorded
+  flushMs: 5000 # how often the in-memory buffer drains to the database
+  maxBuffer: 5000 # past this, samples are dropped (and counted), never queued unbounded
+  retentionDays: 14 # pruned nightly at 04:10; rows accumulate with traffic
+  clusterName: "" # free text; Kubernetes cannot report its own cluster name
+
 # Runs `prisma migrate deploy` against BOTH schemas as a Helm hook Job before the api
 # Deployment rolls out new pods - the Kubernetes equivalent of docker-compose.yml's inline
 # migrate-then-start command, but as its own short-lived Job rather than baked into every

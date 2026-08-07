@@ -34,6 +34,19 @@ spec:
                 name: {{ include "timesphere.fullname" . }}-config
             - secretRef:
                 name: {{ .Values.existingSecretName }}
+          {{- if .Values.telemetry.enabled }}
+          # Downward API rather than the ConfigMap: these differ per POD, and a ConfigMap is one
+          # object shared by every replica. Without them the telemetry rows still record the
+          # hostname (which is the pod name on Kubernetes), but the per-pod breakdown cannot
+          # distinguish a namespace or survive a hostname convention change.
+          env:
+            - name: POD_NAME
+              valueFrom:
+                fieldRef: { fieldPath: metadata.name }
+            - name: POD_NAMESPACE
+              valueFrom:
+                fieldRef: { fieldPath: metadata.namespace }
+          {{- end }}
           resources:
             {{- toYaml .Values.api.resources | nindent 12 }}
           livenessProbe:

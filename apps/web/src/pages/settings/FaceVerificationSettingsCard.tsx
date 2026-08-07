@@ -17,7 +17,9 @@ import {
   ChevronLeft,
   ChevronRight,
   Eye,
+  Loader2,
   Lock,
+  RefreshCw,
   Save,
   ScanFace,
   ShieldAlert,
@@ -29,11 +31,25 @@ import {
   Wand2,
   Wifi
 } from "lucide-react";
+import {
+  Bar,
+  BarChart,
+  CartesianGrid,
+  Cell,
+  Legend,
+  ResponsiveContainer,
+  Tooltip as RTooltip,
+  XAxis,
+  YAxis
+} from "recharts";
 import { toast } from "sonner";
 import {
+  FACE_OUTCOMES,
   faceApi,
   settingsApi,
+  type FaceAnalyticsWindow,
   type FaceAttemptRow,
+  type FaceOutcome,
   type FaceReviewAiSummary,
   type FaceThresholdRecommendation,
   type FaceVerificationSettings
@@ -50,11 +66,18 @@ import { Textarea } from "../../components/ui/textarea";
 import { Badge } from "../../components/ui/badge";
 import { useDebouncedValue } from "../../hooks/use-debounced-value";
 
-const OUTCOME_TONE: Record<string, string> = {
+/** Typed against FaceOutcome (not `string`) so a value added to the union fails the build here
+ *  instead of silently rendering an untinted badge — LOW_QUALITY was missing for exactly that
+ *  reason, and since ATTEMPT_OUTCOMES is derived from this map its absence also hid the app's
+ *  largest failure bucket from the log's outcome filter. */
+const OUTCOME_TONE: Record<FaceOutcome, string> = {
   PASSED: "bg-emerald-500/10 text-emerald-600 dark:text-emerald-400",
   NO_MATCH: "bg-destructive/10 text-destructive",
   SPOOF_SUSPECTED: "bg-destructive/10 text-destructive",
   CHALLENGE_FAILED: "bg-destructive/10 text-destructive",
+  /** Amber, not red: the frame was unjudgeable and the person was asked to retake — telling them
+   *  it looked like a match failure would be false. */
+  LOW_QUALITY: "bg-amber-500/10 text-amber-600 dark:text-amber-400",
   MULTIPLE_FACES: "bg-amber-500/10 text-amber-600 dark:text-amber-400",
   NO_FACE: "bg-amber-500/10 text-amber-600 dark:text-amber-400",
   NOT_ENROLLED: "bg-muted text-muted-foreground",
@@ -376,6 +399,7 @@ export function FaceVerificationSettingsCard({ readOnly = false }: { readOnly?: 
       </Card>
 
       {enabled && <FaceStatsCard />}
+      {enabled && <FaceOutcomeAnalyticsCard />}
       <FaceReviewLog readOnly={readOnly} />
     </div>
   );
@@ -563,6 +587,332 @@ function AccuracyTile({ label, value, target, bad, title }: { label: string; val
   );
 }
 
+/* ------------------------------------------------------------------ *
+ * Outcome analytics
+ *
+ * Same charting conventions as pages/Insights.tsx: CSS-variable colours only (so both themes and
+ * any future re-brand come along for free), the shared axis/tooltip/grid objects below, and a
+ * FIXED categorical order — colour is bound to the outcome, never to its rank, so an outcome
+ * doesn't change colour between charts or when a bad week reshuffles the ranking.
+ * ------------------------------------------------------------------ */
+
+const AXIS_STYLE = { stroke: "hsl(var(--muted-foreground))", fontSize: 12 };
+const TOOLTIP_STYLE = {
+  contentStyle: { background: "hsl(var(--popover))", border: "1px solid hsl(var(--border))", borderRadius: 8, color: "hsl(var(--popover-foreground))" }
+};
+const GRID_STYLE = { strokeDasharray: "3 3", stroke: "hsl(var(--border))" };
+
+/**
+ * Outcome → colour, by FAMILY rather than by ten unrelated hues: green passed, red for the three
+ * rejections, amber for the three "we couldn't judge that frame" cases, blue for the two policy
+ * gaps, grey for a system fault. Alpha separates members within a family (the same single-hue
+ * technique Insights' workload heatmap uses) — that keeps ten series readable without inventing
+ * colours outside the design tokens, and it means a glance at the trend chart reads as
+ * "increasingly red" or "increasingly amber", which is the actual question being asked.
+ */
+const OUTCOME_COLOR: Record<FaceOutcome, string> = {
+  PASSED: "hsl(var(--success))",
+  NO_MATCH: "hsl(var(--destructive))",
+  SPOOF_SUSPECTED: "hsl(var(--destructive) / 0.7)",
+  CHALLENGE_FAILED: "hsl(var(--destructive) / 0.45)",
+  LOW_QUALITY: "hsl(var(--warning))",
+  NO_FACE: "hsl(var(--warning) / 0.7)",
+  MULTIPLE_FACES: "hsl(var(--warning) / 0.45)",
+  NOT_ENROLLED: "hsl(var(--info))",
+  SKIPPED_INSECURE: "hsl(var(--info) / 0.55)",
+  ERROR: "hsl(var(--muted-foreground))"
+};
+
+const OUTCOME_LABEL: Record<FaceOutcome, string> = {
+  PASSED: "Passed",
+  NO_MATCH: "No match",
+  SPOOF_SUSPECTED: "Spoof suspected",
+  CHALLENGE_FAILED: "Challenge failed",
+  LOW_QUALITY: "Low quality",
+  NO_FACE: "No face",
+  MULTIPLE_FACES: "Multiple faces",
+  NOT_ENROLLED: "Not enrolled",
+  SKIPPED_INSECURE: "Skipped (insecure)",
+  ERROR: "Error"
+};
+
+const ANALYTICS_WINDOWS: Array<{ value: FaceAnalyticsWindow; label: string }> = [
+  { value: 7, label: "Last 7 days" },
+  { value: 30, label: "Last 30 days" },
+  { value: 90, label: "Last 90 days" }
+];
+
+/** Bucket starts arrive as `YYYY-MM-DD`. Parsed with an explicit local midnight because
+ *  `new Date("2026-08-07")` is UTC midnight, which renders as the PREVIOUS day west of Greenwich
+ *  — an off-by-one that would silently misalign every bar with the log below it. */
+function formatBucket(iso: string) {
+  return new Date(`${iso}T00:00:00`).toLocaleDateString(undefined, { month: "short", day: "numeric" });
+}
+
+/** One horizontal stacked bar summarising a small set of mutually-exclusive states, plus a legend
+ *  carrying the raw counts — the shape Insights uses for its status mix. Segments with a zero
+ *  value keep their legend entry (absence is information) but contribute no bar. */
+function StackedShareBar({ segments, empty }: { segments: Array<{ key: string; label: string; value: number; color: string; hint?: string }>; empty: string }) {
+  const total = segments.reduce((sum, s) => sum + s.value, 0);
+  if (total === 0) return <p className="py-4 text-center text-sm text-muted-foreground">{empty}</p>;
+
+  const row = segments.reduce<Record<string, number | string>>((acc, s) => ({ ...acc, [s.key]: s.value }), { name: "total" });
+  const drawn = segments.filter((s) => s.value > 0);
+
+  return (
+    <>
+      <div className="h-12">
+        <ResponsiveContainer width="100%" height="100%">
+          <BarChart layout="vertical" data={[row]} margin={{ left: 0, right: 0, top: 0, bottom: 0 }}>
+            <XAxis type="number" hide />
+            <YAxis type="category" dataKey="name" hide />
+            <RTooltip
+              {...TOOLTIP_STYLE}
+              formatter={(value: number, name) => [value, segments.find((s) => s.key === name)?.label ?? String(name)]}
+            />
+            {drawn.map((segment, index) => (
+              <Bar
+                key={segment.key}
+                dataKey={segment.key}
+                name={segment.key}
+                stackId="share"
+                fill={segment.color}
+                radius={index === 0 ? [4, 0, 0, 4] : index === drawn.length - 1 ? [0, 4, 4, 0] : [0, 0, 0, 0]}
+              />
+            ))}
+          </BarChart>
+        </ResponsiveContainer>
+      </div>
+      <div className="mt-3 flex flex-wrap gap-x-4 gap-y-1.5 text-xs text-muted-foreground">
+        {segments.map((segment) => (
+          <span key={segment.key} className="inline-flex items-center gap-1.5" title={segment.hint}>
+            <span className="h-2 w-2 shrink-0 rounded-full" style={{ background: segment.color }} />
+            {segment.label} <span className="font-semibold tabular-nums text-foreground">{segment.value}</span>
+            {total > 0 && <span className="tabular-nums">({Math.round((segment.value / total) * 100)}%)</span>}
+          </span>
+        ))}
+      </div>
+    </>
+  );
+}
+
+/**
+ * What verification actually DECIDED, over a window the admin picks — the counterpart to the
+ * match-score distribution above, which answers where the threshold should sit rather than what
+ * it produced. Four questions, in the order an admin asks them: what happened, is it getting
+ * worse, what happened to the attempts we reported, and how much of the workforce is enrolled.
+ *
+ * Every number here is a COUNT aggregated in the database (GET /face/analytics); no attempt rows
+ * reach the browser, so this stays the same weight for a workspace with a million checks.
+ */
+function FaceOutcomeAnalyticsCard() {
+  const [days, setDays] = useState<FaceAnalyticsWindow>(30);
+  const analytics = useQuery({ queryKey: ["face", "analytics", days], queryFn: () => faceApi.analytics(days) });
+  const data = analytics.data;
+
+  if (analytics.isLoading) return <Skeleton className="h-64 w-full" />;
+  if (!data) return null;
+
+  const known = new Set<string>(FACE_OUTCOMES);
+  // Fixed order first, then anything the server knows about that this build doesn't — a new
+  // outcome should show up as an unlabelled grey bar, never vanish from the totals.
+  const breakdown = [
+    ...FACE_OUTCOMES.map((outcome) => ({
+      outcome: outcome as string,
+      label: OUTCOME_LABEL[outcome],
+      color: OUTCOME_COLOR[outcome],
+      count: data.outcomes.find((o) => o.outcome === outcome)?.count ?? 0
+    })),
+    ...data.outcomes
+      .filter((o) => !known.has(o.outcome))
+      .map((o) => ({ outcome: o.outcome, label: o.outcome.replaceAll("_", " ").toLowerCase(), color: "hsl(var(--muted-foreground))", count: o.count }))
+  ].filter((row) => row.count > 0);
+
+  const trendSeries = breakdown.filter((row) => data.trend.some((bucket) => (bucket.counts[row.outcome] ?? 0) > 0));
+  const trendRows = data.trend.map((bucket) => ({ label: formatBucket(bucket.bucketStart), ...bucket.counts }));
+
+  const { review, enrollment } = data;
+  const windowLabel = ANALYTICS_WINDOWS.find((w) => w.value === days)?.label.toLowerCase() ?? `last ${days} days`;
+
+  return (
+    <Card>
+      <CardHeader>
+        <div className="flex flex-wrap items-start justify-between gap-2">
+          <div>
+            <CardTitle className="flex items-center gap-2">
+              <BarChart3 className="h-5 w-5" />
+              Outcome analytics
+            </CardTitle>
+            <CardDescription>
+              What identity checks decided, how that is trending, what happened to the ones flagged for review, and how much of the
+              covered workforce has enrolled.
+            </CardDescription>
+          </div>
+          <Select value={String(days)} onValueChange={(v) => setDays(Number(v) as FaceAnalyticsWindow)}>
+            <SelectTrigger className="h-9 w-full sm:w-[150px]" aria-label="Analytics time window">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              {ANALYTICS_WINDOWS.map((w) => (
+                <SelectItem key={w.value} value={String(w.value)}>
+                  {w.label}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </div>
+      </CardHeader>
+      <CardContent className="space-y-6">
+        <div>
+          <p className="text-sm font-medium">Outcome breakdown</p>
+          <p className="mb-2 text-sm text-muted-foreground">
+            {data.total} check{data.total === 1 ? "" : "s"} in the {windowLabel}. Red is a rejection, amber a frame that couldn't be
+            judged (the person was asked to retake), blue a policy gap rather than a failure.
+          </p>
+          {breakdown.length === 0 ? (
+            <p className="py-6 text-center text-sm text-muted-foreground">No verification attempts in this window.</p>
+          ) : (
+            /* Its own scroll container so a long outcome label can never make the settings page
+               scroll sideways. */
+            <div className="overflow-x-auto">
+              <div className="min-w-[320px]" style={{ height: Math.max(140, breakdown.length * 34) }}>
+                <ResponsiveContainer width="100%" height="100%">
+                  <BarChart layout="vertical" data={breakdown} margin={{ left: 0, right: 12, top: 4, bottom: 4 }}>
+                    <CartesianGrid {...GRID_STYLE} horizontal={false} />
+                    <XAxis type="number" {...AXIS_STYLE} allowDecimals={false} />
+                    <YAxis type="category" dataKey="label" width={116} {...AXIS_STYLE} />
+                    <RTooltip {...TOOLTIP_STYLE} cursor={{ fill: "hsl(var(--muted) / 0.4)" }} formatter={(value: number) => [value, "Attempts"]} />
+                    <Bar dataKey="count" name="Attempts" radius={[0, 4, 4, 0]}>
+                      {breakdown.map((row) => (
+                        <Cell key={row.outcome} fill={row.color} />
+                      ))}
+                    </Bar>
+                  </BarChart>
+                </ResponsiveContainer>
+              </div>
+            </div>
+          )}
+        </div>
+
+        <div>
+          <p className="text-sm font-medium">Trend</p>
+          <p className="mb-2 text-sm text-muted-foreground">
+            Outcomes per {data.bucket}. A growing red band means rejections are rising; a growing amber one means the capture
+            experience is degrading, which is a very different problem with a very different fix.
+          </p>
+          {trendSeries.length === 0 ? (
+            <p className="py-6 text-center text-sm text-muted-foreground">Nothing to trend yet.</p>
+          ) : (
+            <div className="overflow-x-auto">
+              <div className="h-72 min-w-[520px]">
+                <ResponsiveContainer width="100%" height="100%">
+                  <BarChart data={trendRows} margin={{ left: 0, right: 8, top: 4, bottom: 4 }}>
+                    <CartesianGrid {...GRID_STYLE} />
+                    <XAxis dataKey="label" {...AXIS_STYLE} interval="preserveStartEnd" minTickGap={16} />
+                    <YAxis {...AXIS_STYLE} allowDecimals={false} />
+                    <RTooltip
+                      {...TOOLTIP_STYLE}
+                      cursor={{ fill: "hsl(var(--muted) / 0.4)" }}
+                      formatter={(value: number, name) => [value, trendSeries.find((s) => s.outcome === name)?.label ?? String(name)]}
+                    />
+                    <Legend
+                      wrapperStyle={{ fontSize: 12, color: "hsl(var(--muted-foreground))" }}
+                      formatter={(name) => trendSeries.find((s) => s.outcome === name)?.label ?? String(name)}
+                    />
+                    {trendSeries.map((series) => (
+                      <Bar key={series.outcome} dataKey={series.outcome} name={series.outcome} stackId="outcomes" fill={series.color} />
+                    ))}
+                  </BarChart>
+                </ResponsiveContainer>
+              </div>
+            </div>
+          )}
+        </div>
+
+        <div className="grid gap-6 lg:grid-cols-2">
+          <div className="rounded-lg border border-border bg-muted/30 p-4">
+            <p className="text-sm font-medium">Review funnel</p>
+            <p className="mb-3 text-sm text-muted-foreground">
+              What became of the {review.flaggedTotal} attempt{review.flaggedTotal === 1 ? "" : "s"} flagged in this window.
+              Auto-triaged means the flag was cleared by the rule, <strong>not</strong> that anyone looked — it is counted apart
+              from human review for exactly that reason.
+            </p>
+            <StackedShareBar
+              empty="Nothing has been flagged in this window."
+              segments={[
+                {
+                  key: "pendingReview",
+                  label: "Awaiting review",
+                  value: review.pendingReview,
+                  color: "hsl(var(--warning))",
+                  hint: "Still flagged — nobody has cleared these yet."
+                },
+                {
+                  key: "humanReviewed",
+                  label: "Human reviewed",
+                  value: review.humanReviewed,
+                  color: "hsl(var(--success))",
+                  hint: "An admin marked these reviewed; the note they left is stored with the attempt."
+                },
+                {
+                  key: "autoTriaged",
+                  label: "Auto-triaged",
+                  value: review.autoTriaged,
+                  color: "hsl(var(--info))",
+                  hint: "Cleared automatically as an honest failure. No human has seen these."
+                }
+              ]}
+            />
+          </div>
+
+          <div className="rounded-lg border border-border bg-muted/30 p-4">
+            <p className="text-sm font-medium">Enrollment coverage</p>
+            <p className="mb-3 text-sm text-muted-foreground">
+              {enrollment.covered} user{enrollment.covered === 1 ? "" : "s"} are covered by the current policy (
+              {enrollment.enforcementMode === "ALL" ? "everyone" : "individually selected"}). There is no background retraining in
+              this product — a face model exists only because the person completed the guided multi-pose enrollment, which
+              replaces whatever they had before. So this is what "trained" means here.
+            </p>
+            <StackedShareBar
+              empty="Nobody is covered by the policy yet."
+              segments={[
+                {
+                  key: "multiPose",
+                  label: "Multi-pose",
+                  value: enrollment.multiPose,
+                  color: "hsl(var(--success))",
+                  hint: "Three or more templates from the guided wizard — the accuracy this feature was calibrated for."
+                },
+                {
+                  key: "singlePose",
+                  label: "Single-pose",
+                  value: enrollment.singlePose,
+                  color: "hsl(var(--warning))",
+                  hint: "Enrolled before the guided wizard. Verification works, but marginal scores are likelier — ask them to re-enroll."
+                },
+                {
+                  key: "staleModel",
+                  label: "Needs re-enrollment",
+                  value: enrollment.staleModel,
+                  color: "hsl(var(--destructive))",
+                  hint: "Enrolled against a superseded model. Embeddings aren't comparable across versions, so these people cannot verify at all."
+                },
+                {
+                  key: "notEnrolled",
+                  label: "Not enrolled",
+                  value: enrollment.notEnrolled,
+                  color: "hsl(var(--muted-foreground))",
+                  hint: "Covered by the policy with no face model — every protected action is blocked for them."
+                }
+              ]}
+            />
+          </div>
+        </div>
+      </CardContent>
+    </Card>
+  );
+}
+
 const LOG_PAGE_SIZES = [10, 20, 50, 100];
 
 /** Must stay in step with ATTEMPT_SORT_FIELDS in face.controller.ts — the server rejects anything
@@ -572,10 +922,11 @@ type AttemptSortField = "createdAt" | "similarity" | "livenessScore" | "outcome"
 /** The values `FaceVerificationAttempt.outcome` and `.context` actually take. Listed rather than
  *  derived from the current page of rows: a filter that only offers the values already on screen
  *  can't be used to FIND the ones that aren't. */
-// Taken from OUTCOME_TONE above, which is the existing source of truth for this enum — an earlier
-// draft of this list invented plausible-sounding values (REJECTED_NO_MATCH and friends) that the
-// column has never held, which would have produced filters that silently match nothing.
-const ATTEMPT_OUTCOMES = Object.keys(OUTCOME_TONE);
+// FACE_OUTCOMES is the shared list mirroring the server's own — an earlier draft of this list
+// invented plausible-sounding values (REJECTED_NO_MATCH and friends) that the column has never
+// held, which produced filters that silently matched nothing, and the draft after it derived the
+// list from OUTCOME_TONE, so LOW_QUALITY being absent there dropped it from the filter too.
+const ATTEMPT_OUTCOMES = FACE_OUTCOMES;
 const ATTEMPT_CONTEXTS = ["TIMESHEET", "TICKET", "APPROVAL"];
 
 /** A sortable column header. Renders a real <button> inside the <th> so it's keyboard-reachable
@@ -680,20 +1031,37 @@ function FaceReviewLog({ readOnly }: { readOnly: boolean }) {
     setPage(1);
   };
 
+  // The note is optional but persisted and audited (see PATCH /face/attempts/:id/review), and it
+  // is the only place the REASON a flag was cleared survives — "was this looked at?" is answered
+  // by reviewedAt, "why was it fine?" only by this.
   const review = useMutation({
-    mutationFn: (id: string) => faceApi.reviewAttempt(id),
+    mutationFn: ({ id, note }: { id: string; note?: string }) => faceApi.reviewAttempt(id, note),
     onSuccess: () => {
       toast.success("Marked reviewed");
       queryClient.invalidateQueries({ queryKey: ["face", "attempts"] });
+      // The funnel counts move the moment a flag is cleared, so the charts must not keep showing
+      // the pre-review split.
+      queryClient.invalidateQueries({ queryKey: ["face", "analytics"] });
     },
     onError: () => toast.error("Could not update")
   });
+
+  // Invalidated by prefix rather than refetching this one query: every filter/page combination is
+  // its own cache entry, so a plain refetch would leave the entries behind the current view stale.
+  const [refreshing, setRefreshing] = useState(false);
+  const refreshLog = () => {
+    setRefreshing(true);
+    queryClient.invalidateQueries({ queryKey: ["face", "attempts"] }).finally(() => setRefreshing(false));
+  };
 
   const autoTriage = useMutation({
     mutationFn: faceApi.autoTriage,
     onSuccess: ({ resolved }) => {
       toast.success(resolved > 0 ? `Cleared ${resolved} honest failure${resolved === 1 ? "" : "s"}` : "Nothing to clear right now");
       queryClient.invalidateQueries({ queryKey: ["face", "attempts"] });
+      // Moves rows out of "awaiting review" and into "auto-triaged" — the funnel would otherwise
+      // keep showing a backlog that no longer exists.
+      queryClient.invalidateQueries({ queryKey: ["face", "analytics"] });
     },
     onError: () => toast.error("Could not run auto-triage")
   });
@@ -709,18 +1077,37 @@ function FaceReviewLog({ readOnly }: { readOnly: boolean }) {
             </CardTitle>
             <CardDescription>Recent identity checks and their scores. Use this to calibrate the match threshold.</CardDescription>
           </div>
-          {!readOnly && (
+          <div className="flex flex-wrap items-center gap-2">
+            {/* Not behind `readOnly` — that gate exists for actions that WRITE, and a read-only
+                viewer still needs the log to be current without reloading the page. */}
             <Button
               variant="outline"
               size="sm"
-              disabled={autoTriage.isPending}
-              onClick={() => autoTriage.mutate()}
-              title="Clears flags on failures where the same person clearly passed within the hour and nothing looked like an injection attempt"
+              aria-label="Refresh verification log"
+              disabled={refreshing}
+              onClick={refreshLog}
+              title="Re-fetch the log without reloading the page"
             >
-              <Wand2 className={`mr-2 h-3.5 w-3.5 ${autoTriage.isPending ? "animate-pulse" : ""}`} />
-              Auto-triage now
+              {refreshing ? (
+                <Loader2 className="mr-2 h-3.5 w-3.5 animate-spin" />
+              ) : (
+                <RefreshCw className="mr-2 h-3.5 w-3.5" />
+              )}
+              Refresh
             </Button>
-          )}
+            {!readOnly && (
+              <Button
+                variant="outline"
+                size="sm"
+                disabled={autoTriage.isPending}
+                onClick={() => autoTriage.mutate()}
+                title="Clears flags on failures where the same person clearly passed within the hour and nothing looked like an injection attempt"
+              >
+                <Wand2 className={`mr-2 h-3.5 w-3.5 ${autoTriage.isPending ? "animate-pulse" : ""}`} />
+                Auto-triage now
+              </Button>
+            )}
+          </div>
         </div>
       </CardHeader>
       <CardContent className="space-y-3">
@@ -843,7 +1230,7 @@ function FaceReviewLog({ readOnly }: { readOnly: boolean }) {
                       <td className="p-2 tabular-nums">{a.similarity != null ? a.similarity.toFixed(3) : "—"}</td>
                       <td className="p-2 tabular-nums">{a.livenessScore != null ? a.livenessScore.toFixed(2) : "—"}</td>
                       <td className="p-2 text-right">
-                        <AttemptActions attempt={a} readOnly={readOnly} onReview={() => review.mutate(a.id)} />
+                        <AttemptActions attempt={a} readOnly={readOnly} onReview={(note) => review.mutate({ id: a.id, note })} />
                       </td>
                     </tr>
                   ))}
@@ -924,7 +1311,7 @@ function FaceReviewLog({ readOnly }: { readOnly: boolean }) {
                     </div>
                   </dl>
                   <div className="mt-2 flex justify-end">
-                    <AttemptActions attempt={a} readOnly={readOnly} onReview={() => review.mutate(a.id)} />
+                    <AttemptActions attempt={a} readOnly={readOnly} onReview={(note) => review.mutate({ id: a.id, note })} />
                   </div>
                 </div>
               ))}
@@ -972,11 +1359,22 @@ function FaceReviewLog({ readOnly }: { readOnly: boolean }) {
   );
 }
 
-function AttemptActions({ attempt, readOnly, onReview }: { attempt: FaceAttemptRow; readOnly: boolean; onReview: () => void }) {
+function AttemptActions({
+  attempt,
+  readOnly,
+  onReview
+}: {
+  attempt: FaceAttemptRow;
+  readOnly: boolean;
+  /** `note` is optional on purpose — clearing an obvious flag shouldn't demand prose. */
+  onReview: (note?: string) => void;
+}) {
   const [aiOpen, setAiOpen] = useState(false);
   const [aiResult, setAiResult] = useState<FaceReviewAiSummary | null>(null);
   const [captureOpen, setCaptureOpen] = useState(false);
   const [captureUrl, setCaptureUrl] = useState<string | null>(null);
+  const [reviewOpen, setReviewOpen] = useState(false);
+  const [reviewNote, setReviewNote] = useState("");
 
   // The image route is authenticated, so the capture is fetched as a blob through the api client
   // (which carries the bearer token) and shown in-app. The old window.open() navigated with no
@@ -1054,10 +1452,54 @@ function AttemptActions({ attempt, readOnly, onReview }: { attempt: FaceAttemptR
         </Button>
       )}
       {attempt.flaggedForReview && !readOnly && (
-        <Button variant="outline" size="sm" onClick={onReview}>
+        <Button variant="outline" size="sm" onClick={() => setReviewOpen(true)}>
           Mark reviewed
         </Button>
       )}
+
+      {/* The note the API has always accepted and read back, which nothing ever sent. Clearing a
+          flag without one leaves an audit trail that records WHO cleared it and WHEN but never
+          WHY — the single question anyone re-opening a disputed submission actually has. */}
+      <Dialog open={reviewOpen} onOpenChange={setReviewOpen}>
+        <DialogContent className="w-[calc(100vw-2rem)] max-w-md">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <ShieldCheck className="h-4 w-4 text-primary" />
+              Mark reviewed
+            </DialogTitle>
+            <DialogDescription>
+              Clears the review flag on {attempt.user.name}'s {attempt.outcome.replaceAll("_", " ").toLowerCase()} check from{" "}
+              {new Date(attempt.createdAt).toLocaleString()}. The note is optional, stored with the attempt, and written to the
+              audit log.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="grid gap-1.5">
+            <Label htmlFor={`review-note-${attempt.id}`}>Note (optional)</Label>
+            <Textarea
+              id={`review-note-${attempt.id}`}
+              rows={3}
+              maxLength={2000}
+              value={reviewNote}
+              placeholder="e.g. Confirmed with the employee — bad light in the warehouse, re-verified in person."
+              onChange={(e) => setReviewNote(e.target.value)}
+            />
+          </div>
+          <div className="flex justify-end gap-2">
+            <Button variant="ghost" onClick={() => setReviewOpen(false)}>
+              Cancel
+            </Button>
+            <Button
+              onClick={() => {
+                onReview(reviewNote.trim() || undefined);
+                setReviewOpen(false);
+                setReviewNote("");
+              }}
+            >
+              Mark reviewed
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
 
       <Dialog open={aiOpen} onOpenChange={setAiOpen}>
         <DialogContent className="w-[calc(100vw-2rem)] max-w-lg">

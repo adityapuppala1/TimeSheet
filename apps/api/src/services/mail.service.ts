@@ -21,6 +21,7 @@
  * `dispatchTransactional` — nothing else calls `sendMail` directly.
  */
 import nodemailer, { type Transporter } from "nodemailer";
+import { isEmailRoleMuted, type EmailRoleMutes, type NotificationPreferences } from "@timesheet/shared";
 import { env } from "../config/env.js";
 import { prisma } from "../config/prisma.js";
 import { decryptSecret } from "../utils/encryption.js";
@@ -228,6 +229,18 @@ interface SendArgs {
    * caller; this function does not re-check tenant scope, it only forwards the list.
    */
   cc?: string[];
+  /**
+   * The `GlobalNotificationSettings` boolean column this send belongs to (e.g.
+   * `"emailDailyReminder"`), supplied by `notify.service.ts#dispatchNotification`. Used for one
+   * thing: honouring the SUPER_ADMIN row of the per-role mute matrix on the *audit BCC*, so
+   * that muting a category for super admins actually empties their inbox instead of leaving the
+   * hidden copy arriving anyway.
+   *
+   * Passed in rather than looked up here because the category -> column map lives in
+   * notify.service.ts, which already imports this module; importing it back would be a cycle.
+   * Absent for `dispatchTransactional()` sends, which have no category and so BCC as before.
+   */
+  preferenceKey?: string;
 }
 
 export interface SendResult {
@@ -238,10 +251,24 @@ export interface SendResult {
   messageId?: string;
 }
 
-async function getBccList(to: string): Promise<string[]> {
+async function getBccList(to: string, preferenceKey?: string): Promise<string[]> {
   try {
     const settings = await prisma.globalNotificationSettings.findUnique({ where: { id: "global" } });
     if (!settings?.bccSuperAdminOnAllEmails) return [];
+    // A super admin who muted this category in the Email channels matrix has said "not in my
+    // inbox". The blanket audit BCC would otherwise re-deliver exactly what they just muted,
+    // which is the single loudest source of super-admin inbox noise (every reminder for every
+    // employee, every day).
+    if (
+      preferenceKey &&
+      isEmailRoleMuted(
+        settings.emailRoleMutes as EmailRoleMutes | null,
+        preferenceKey as keyof NotificationPreferences,
+        "SUPER_ADMIN"
+      )
+    ) {
+      return [];
+    }
     const admins = await prisma.user.findMany({
       where: { status: "ACTIVE", deletedAt: null, role: { name: "SUPER_ADMIN" } },
       select: { email: true }
@@ -265,7 +292,7 @@ export async function sendMail(
 
   if (!args.to) return { ok: false, status: "SKIPPED", errorMessage: "Recipient is empty" };
 
-  const bcc = args.skipBcc ? [] : await getBccList(args.to);
+  const bcc = args.skipBcc ? [] : await getBccList(args.to, args.preferenceKey);
 
   // `to` may itself be a comma-separated list of multiple primary recipients (the ticket-closed
   // digest puts both the closer and their manager there) — split it so cc-dedup checks every

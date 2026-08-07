@@ -123,7 +123,42 @@ const schema = z.object({
   TICKET_SLA_CRITICAL_HOURS: z.coerce.number().default(4),
 
   // Optional — AI features stay disabled (GlobalAISettings.aiEnabled defaults false) until this is set.
-  ANTHROPIC_API_KEY: z.string().default("")
+  ANTHROPIC_API_KEY: z.string().default(""),
+
+  /**
+   * Per-request API telemetry (middleware/request-telemetry.ts → ApiRequestSample).
+   *
+   * OFF BY DEFAULT, and that is the important part: this middleware sits in the hot path of every
+   * single request and writes a row per sampled one. An operator has to ASK for that cost; a
+   * deployment that never touches these variables pays one boolean check per request and nothing
+   * else. On a busy instance turn the rate down rather than the feature off — percentiles from a
+   * 10% sample are still percentiles, whereas no data answers nothing.
+   */
+  API_TELEMETRY_ENABLED: z
+    .union([z.literal("true"), z.literal("false"), z.literal("1"), z.literal("0")])
+    .default("false")
+    .transform((value) => value === "true" || value === "1"),
+  /** Fraction of requests recorded, 0..1. 1 = every request. */
+  API_TELEMETRY_SAMPLE_RATE: z.coerce.number().min(0).max(1).default(1),
+  /** How often the in-memory buffer is drained to the database. */
+  API_TELEMETRY_FLUSH_MS: z.coerce.number().min(250).default(5_000),
+  /** Hard ceiling on buffered rows. Past it, new samples are DROPPED (and counted) rather than
+   *  allowed to grow into a memory leak — losing telemetry beats losing the process. */
+  API_TELEMETRY_MAX_BUFFER: z.coerce.number().min(100).default(5_000),
+  /** Rows older than this are pruned nightly. These accumulate per request, not per hour. */
+  API_TELEMETRY_RETENTION_DAYS: z.coerce.number().min(1).default(14),
+
+  /**
+   * Host identity for the telemetry rows. Named for the Kubernetes downward API so a Deployment
+   * can map them straight through (`fieldRef: metadata.name` / `metadata.namespace`); off-cluster
+   * they stay empty and the columns are written NULL rather than filled with a guess.
+   */
+  POD_NAME: z.string().default(""),
+  POD_NAMESPACE: z.string().default(""),
+  CLUSTER_NAME: z.string().default(""),
+  /** Container runtimes set this to the pod/container name. Only consulted if os.hostname()
+   *  somehow yields nothing — os.hostname() already returns the pod name inside a pod. */
+  HOSTNAME: z.string().default("")
 });
 
 const parsed = schema.parse(process.env);

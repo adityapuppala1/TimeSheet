@@ -54,6 +54,10 @@ const FRIENDLY: Record<FaceOutcome, string> = {
   CHALLENGE_FAILED: "We couldn't see the requested head movement — face the camera first, then make the movement clearly.",
   LOW_QUALITY: "We couldn't see you clearly enough — adjust and try again.",
   NOT_ENROLLED: "You haven't set up face verification yet — do that in your profile first.",
+  /** Never returned by /face/verify — POST /face/skip mints it directly (see the insecure-context
+   *  bypass). Present so this map stays exhaustive over FaceOutcome, and worded honestly in case
+   *  it ever does reach the fallback below: the submission went through UNCHECKED. */
+  SKIPPED_INSECURE: "The camera check was skipped because this connection isn't secure — your submission was recorded as unverified.",
   ERROR: "Something went wrong during verification. Please try again."
 };
 

@@ -9,6 +9,7 @@
 import { Router } from "express";
 import { prisma } from "../config/prisma.js";
 import { requireAuth } from "../middleware/auth.js";
+import { AppError } from "../middleware/error.js";
 import { CHAT_INTAKE_SYSTEM_EMAIL } from "../services/chat-intake.service.js";
 import { EMAIL_INTAKE_SYSTEM_EMAIL } from "../services/email-intake.service.js";
 import { SECURITY_INGESTION_SYSTEM_EMAIL } from "../services/security-report.service.js";
@@ -61,6 +62,112 @@ teamRouter.get("/reports", async (req, res) => {
   });
 
   res.json(enriched);
+});
+
+/**
+ * GET /api/team/reports/:userId/hours-trend
+ * Logged-hours trend for ONE direct report: week-by-week inside the current month, plus the
+ * trailing 12 calendar months. Backs the per-person dialog on `apps/web/src/pages/Team.tsx`.
+ *
+ * WHY ALL LOGGED HOURS, not just approved: this answers "how much is this person working", and
+ * an entry that is still sitting in DRAFT/SUBMITTED is work that was done. The approved-only
+ * total already exists next to it in `/reports`'s `stats.approvedHours`.
+ *
+ * WHY EVERY DATE CALCULATION USES THE UTC GETTERS: `Timesheet.workDate` is written as a UTC
+ * midnight (see timesheet.controller.ts), so reading it with local getters would push a day's
+ * hours into the previous bucket for any server west of UTC.
+ */
+const TREND_MONTHS = 12;
+const DAY_MS = 24 * 60 * 60 * 1000;
+
+function utcDayOf(date: Date): Date {
+  return new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate()));
+}
+
+function utcIsoWeekStart(date: Date): Date {
+  const d = utcDayOf(date);
+  d.setUTCDate(d.getUTCDate() - ((d.getUTCDay() + 6) % 7)); // Mon=0..Sun=6
+  return d;
+}
+
+function isoDate(date: Date): string {
+  return date.toISOString().slice(0, 10);
+}
+
+teamRouter.get("/reports/:userId/hours-trend", async (req, res) => {
+  // The scope check IS the lookup: `managerId: req.user!.id, deletedAt: null` is the same
+  // predicate `/reports` filters the roster by, so a userId belonging to somebody else's team
+  // simply doesn't match and there is no window in which their rows could be aggregated. 404
+  // rather than 403 so this can't be used to probe which user ids exist outside my own team.
+  const report = await prisma.user.findFirst({
+    where: { id: String(req.params.userId), managerId: req.user!.id, deletedAt: null },
+    select: { id: true, name: true }
+  });
+  if (!report) throw new AppError(404, "No such direct report.");
+
+  const now = new Date();
+  const monthStart = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1));
+  const monthEnd = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() + 1, 0));
+  const windowStart = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() - (TREND_MONTHS - 1), 1));
+
+  // Summed in the database — at most one row per calendar day comes back, and only the ~17
+  // finished buckets reach the client. Raw timesheet rows never leave the server.
+  const daily = await prisma.timesheet.groupBy({
+    by: ["workDate"],
+    where: { userId: report.id, deletedAt: null, workDate: { gte: windowStart, lte: monthEnd } },
+    _sum: { totalHours: true },
+    _count: true
+  });
+
+  const months = Array.from({ length: TREND_MONTHS }, (_, i) => ({
+    monthStart: isoDate(new Date(Date.UTC(windowStart.getUTCFullYear(), windowStart.getUTCMonth() + i, 1))),
+    hours: 0,
+    entries: 0
+  }));
+  const monthIndex = new Map(months.map((m, i) => [m.monthStart, i]));
+
+  // ISO weeks CLIPPED to the month, so the first and last bucket may be short. A bucket that
+  // ran into a neighbouring month would attribute hours the monthly chart beside it counts
+  // elsewhere, which is exactly the comparison this dialog exists to support.
+  const firstWeekStart = utcIsoWeekStart(monthStart);
+  const weeks: Array<{ weekStart: string; weekEnd: string; hours: number; entries: number }> = [];
+  for (const cursor = new Date(firstWeekStart); cursor <= monthEnd; cursor.setUTCDate(cursor.getUTCDate() + 7)) {
+    const weekEnd = new Date(cursor);
+    weekEnd.setUTCDate(weekEnd.getUTCDate() + 6);
+    weeks.push({
+      weekStart: isoDate(cursor < monthStart ? monthStart : cursor),
+      weekEnd: isoDate(weekEnd > monthEnd ? monthEnd : weekEnd),
+      hours: 0,
+      entries: 0
+    });
+  }
+
+  for (const row of daily) {
+    const day = utcDayOf(row.workDate);
+    const hours = Number(row._sum.totalHours ?? 0);
+
+    const mi = monthIndex.get(isoDate(new Date(Date.UTC(day.getUTCFullYear(), day.getUTCMonth(), 1))));
+    if (mi !== undefined) {
+      months[mi].hours += hours;
+      months[mi].entries += row._count;
+    }
+
+    if (day >= monthStart && day <= monthEnd) {
+      const wi = Math.floor((day.getTime() - firstWeekStart.getTime()) / (7 * DAY_MS));
+      if (weeks[wi]) {
+        weeks[wi].hours += hours;
+        weeks[wi].entries += row._count;
+      }
+    }
+  }
+
+  const round = <T extends { hours: number }>(bucket: T): T => ({ ...bucket, hours: Number(bucket.hours.toFixed(2)) });
+
+  res.json({
+    user: { id: report.id, name: report.name },
+    currentMonth: { monthStart: isoDate(monthStart), weeks: weeks.map(round) },
+    monthly: months.map(round)
+  });
 });
 
 /**

@@ -10,7 +10,7 @@ import { zodResolver } from "@hookform/resolvers/zod";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { activityTypes, calculateHours } from "@timesheet/shared";
 import { AlertTriangle, CalendarClock, Check, ChevronsUpDown, Eraser, Save, Send, Sparkles, Ticket } from "lucide-react";
-import { useMemo, useState } from "react";
+import { useCallback, useMemo, useRef, useState } from "react";
 import { useForm, Controller } from "react-hook-form";
 import { z } from "zod";
 import { Alert, AlertDescription, AlertTitle } from "../components/ui/alert";
@@ -159,6 +159,39 @@ export function Timesheet() {
     }
   });
 
+  const formRef = useRef<HTMLFormElement>(null);
+
+  /**
+   * Take the user to the first field that failed validation.
+   *
+   * react-hook-form's built-in `shouldFocusError` only fires for fields it holds a DOM ref for.
+   * Every select on this form is a Radix trigger rendered through `<Controller>`, so RHF has no
+   * ref for them and a failed submit did nothing the user could see — the offending field is
+   * usually scrolled off-screen, so the form just appeared not to respond to the button.
+   *
+   * Keying off `aria-invalid` (stamped by shadcn's `FormControl` on whichever element is in
+   * error) rather than a field-name lookup means this keeps working as fields are added, moved
+   * or reordered: the first match in document order IS the first error on screen, with no
+   * name -> element map to keep in sync.
+   */
+  const focusFirstInvalid = useCallback(() => {
+    // Next frame: `FormMessage` has to render before we scroll, or we centre the field on its
+    // pre-error position and it shifts out from under the user as the message expands.
+    requestAnimationFrame(() => {
+      const target = formRef.current?.querySelector<HTMLElement>('[aria-invalid="true"]');
+      if (!target) return;
+      const reduceMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+      target.scrollIntoView({ behavior: reduceMotion ? "auto" : "smooth", block: "center" });
+      // preventScroll so focus() doesn't fight the smooth scroll above with a second jump.
+      target.focus({ preventScroll: true });
+
+      const label = target.id ? formRef.current?.querySelector(`label[for="${CSS.escape(target.id)}"]`) : null;
+      toast.error("Check the highlighted field", {
+        description: label?.textContent ? `"${label.textContent.trim()}" needs attention before this can be saved.` : undefined
+      });
+    });
+  }, []);
+
   const projectId = form.watch("projectId");
   const moduleId = form.watch("moduleId");
   const start = form.watch("startTime");
@@ -268,8 +301,9 @@ export function Timesheet() {
         <CardContent className="pt-6">
           <Form {...form}>
             <form
+              ref={formRef}
               className="grid gap-6"
-              onSubmit={form.handleSubmit((values) => requestSubmit(values))}
+              onSubmit={form.handleSubmit((values) => requestSubmit(values), focusFirstInvalid)}
             >
               <section className="grid gap-4 sm:grid-cols-2 md:grid-cols-4">
                 <FormField
@@ -500,7 +534,7 @@ export function Timesheet() {
                     type="button"
                     variant="outline"
                     disabled={mutation.isPending}
-                    onClick={form.handleSubmit((values) => mutation.mutate({ values, draft: true }))}
+                    onClick={form.handleSubmit((values) => mutation.mutate({ values, draft: true }), focusFirstInvalid)}
                   >
                     <Save className="h-4 w-4" />Save draft
                   </Button>

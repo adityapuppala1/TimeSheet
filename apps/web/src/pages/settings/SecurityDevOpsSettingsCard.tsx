@@ -193,18 +193,12 @@ export function SecurityDevOpsSettingsCard({ readOnly }: { readOnly: boolean }) 
     onError: () => toast.error("Could not disable ingestion", { description: "Try again." })
   });
 
-  const toggleDigest = useMutation({
-    mutationFn: (value: boolean) => settingsApi.updateNotifications({ emailTicketClosedDigest: value } as Partial<NotificationPreferences>),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["settings", "notifications"] }),
-    onError: () => toast.error("Could not update the digest setting", { description: "Try again." })
-  });
-
-  const toggleSecurityWeeklyDigest = useMutation({
-    mutationFn: (value: boolean) => settingsApi.updateNotifications({ emailSecurityWeeklyDigest: value } as Partial<NotificationPreferences>),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["settings", "notifications"] }),
-    onError: () => toast.error("Could not update the digest setting", { description: "Try again." })
-  });
-
+  // These two categories are READ-ONLY here on purpose. Both are ordinary rows in Workspace
+  // settings → Email channels, which is now the single place every email is switched on and
+  // given an audience; a second switch for the same column meant two screens that could each
+  // look authoritative while disagreeing. The status badge stays so this card still tells you
+  // whether the scan-source work above will actually reach anyone.
+  //
   // Defensive — matches this app's existing convention of the shared package being the single
   // source of truth for which toggle keys exist (see WorkspaceSettings.tsx's emailRows list).
   const digestKeySupported = notificationPreferenceKeys.includes("emailTicketClosedDigest");
@@ -529,14 +523,14 @@ export function SecurityDevOpsSettingsCard({ readOnly }: { readOnly: boolean }) 
                 <Sparkles className="h-4 w-4 shrink-0 text-info" />
                 <div className="min-w-0">
                   <p className="text-sm font-medium">Email a digest when a ticket closes</p>
-                  <p className="text-xs text-muted-foreground">Off by default — turn on once you've connected a scan source above.</p>
+                  <p className="text-xs text-muted-foreground">
+                    Turn on once you've connected a scan source above. Delivery and audience are set in Email channels.
+                  </p>
                 </div>
               </div>
-              <Switch
-                checked={Boolean(notifications.data?.emailTicketClosedDigest)}
-                onCheckedChange={(value) => toggleDigest.mutate(value)}
-                disabled={readOnly || toggleDigest.isPending}
-              />
+              <Badge variant={notifications.data?.emailTicketClosedDigest ? "success" : "muted"}>
+                {notifications.data?.emailTicketClosedDigest ? "On" : "Off"}
+              </Badge>
             </div>
           )}
         </CardContent>
@@ -559,14 +553,14 @@ export function SecurityDevOpsSettingsCard({ readOnly }: { readOnly: boolean }) 
                 <Sparkles className="h-4 w-4 shrink-0 text-info" />
                 <div className="min-w-0">
                   <p className="text-sm font-medium">Email the weekly security digest to admins</p>
-                  <p className="text-xs text-muted-foreground">Off by default — skips weeks with nothing to report.</p>
+                  <p className="text-xs text-muted-foreground">
+                    Skips weeks with nothing to report. Delivery and audience are set in Email channels.
+                  </p>
                 </div>
               </div>
-              <Switch
-                checked={Boolean(notifications.data?.emailSecurityWeeklyDigest)}
-                onCheckedChange={(value) => toggleSecurityWeeklyDigest.mutate(value)}
-                disabled={readOnly || toggleSecurityWeeklyDigest.isPending}
-              />
+              <Badge variant={notifications.data?.emailSecurityWeeklyDigest ? "success" : "muted"}>
+                {notifications.data?.emailSecurityWeeklyDigest ? "On" : "Off"}
+              </Badge>
             </div>
           )}
         </CardContent>

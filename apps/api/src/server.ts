@@ -39,6 +39,8 @@ import { startIdentityWeeklyDigestWorker } from "./workers/identity-weekly-diges
 import { startProjectRiskWorker } from "./workers/project-risk.worker.js";
 import { startReportSubscriptionWorker } from "./workers/report-subscription.worker.js";
 import { startServiceHealthWorker } from "./workers/service-health.worker.js";
+import { startApiTelemetryRetentionWorker } from "./workers/api-telemetry-retention.worker.js";
+import { flushApiTelemetry, startApiTelemetry } from "./services/api-telemetry.service.js";
 
 /**
  * Fail-fast guards before the server accepts traffic.
@@ -201,6 +203,10 @@ server.on("listening", async () => {
   startBugPatternDigestWorker();
   startAIRetentionWorker();
   startAIEvalWorker();
+  startApiTelemetryRetentionWorker();
+  // Starts the machine-snapshot refresh and the buffer's flush timer. A no-op unless
+  // API_TELEMETRY_ENABLED is set, so an untouched deployment starts no extra timers.
+  startApiTelemetry();
 
   // Detached: loads the face models at boot IF any org has the feature enabled, so the first
   // verification after a restart doesn't pay the multi-second cold model load. Deployments
@@ -235,6 +241,10 @@ function shutdown(signal: NodeJS.Signals) {
   server.close(async (err) => {
     if (err) console.error("[shutdown] server.close error:", err.message);
     try {
+      // Before the pools close, not after: buffered telemetry is written through the tenant clients
+      // `disconnectAllTenantClients` is about to tear down. A rolling deploy replaces this process
+      // every release, so without this every replacement silently loses its last flush interval.
+      await flushApiTelemetry();
       await disconnectAllTenantClients();
       await controlPrisma.$disconnect();
       console.log("[shutdown] prisma disconnected");

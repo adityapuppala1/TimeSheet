@@ -2,7 +2,7 @@
 
 How to connect GitHub, GitLab, Jenkins, Bitbucket, or any internal/self-hosted git+CI setup to
 TimeSphere's security-assessment ingestion pipeline — see
-[docs/ROADMAP.md § Security assessment suite](ROADMAP.md#3-security-assessment-suite--vapt--dast--sast--ssat--ssct)
+[docs/ROADMAP.md § Security assessment suite](ROADMAP.md)
 for the product rationale (ingest-only, tool-agnostic, why VAPT is handled differently).
 
 ## How it works, in one sentence

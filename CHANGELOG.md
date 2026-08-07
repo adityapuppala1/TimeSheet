@@ -5,6 +5,149 @@ and a GitHub Release whose body is copied from the matching section here — the
 documented in CONTRIBUTING.md, and the in-app **What's new** page renders these notes for every
 user of a running installation.
 
+## 2.1.0 — who gets the email, and why it was slow — 2026-08-07
+
+Two questions this product could not previously answer about itself: **which people receive which
+emails**, and **why a request was slow**. Both now have a screen. Alongside them, the approvals
+queue finally shows an approver enough to approve on, and the identity log gained the analytics
+that make its numbers mean something.
+
+**Upgrading is a normal `./update.sh`.** Two migrations ship, both additive — one nullable column
+and one new table — so the additive-only rollback policy in docs/DATABASE.md still holds and old
+code runs correctly against the new schema. Nothing changes behaviour until an admin changes a
+setting: the email matrix starts with every role ticked, and request telemetry ships switched off.
+
+---
+
+### 📬 Email: one screen that answers "who gets this?"
+
+- **Email channels is now a category × role matrix.** Every notification category is a row, every
+  role a column, and a tick means that role receives that email. The row's switch is still the
+  master; the ticks choose the audience within it. Click a role name to mute or unmute its whole
+  column.
+- **Muting mutes the inbox, never the app.** The in-app bell notification is written before the
+  mute is even consulted, so a muted manager still sees every escalation — they just stop getting
+  a copy per report per day. This is what makes it safe to mute the roles that approve time rather
+  than log it.
+- **Fixed: six ticket categories had no user interface at all.** `emailTicketAssigned`,
+  `emailTicketStatusChanged`, `emailTicketCommented`, `emailTicketSlaBreach`,
+  `emailTicketEscalation` and `emailTicketClosedDigest` were enforced by the server from the day
+  they shipped, but appeared on no screen — the only way to change one was a direct database
+  write. They are rows like everything else now, and a compile-time check fails the build if a
+  future category is ever added without one.
+- **Fixed: the super-admin audit BCC ignored every setting.** With `bccSuperAdminOnAllEmails` on,
+  every active super admin was silently copied on *every outbound email in the application* —
+  including each employee's daily reminder, every day. That, not the category toggles, is usually
+  why a super admin's inbox is unmanageable. The BCC now honours the SUPER_ADMIN row of the
+  matrix, so muting a category genuinely empties the inbox instead of leaving the hidden copy
+  arriving anyway.
+- **Fixed: two settings had two switches.** The ticket-closed and weekly-security digests were
+  toggleable from both Email channels and the Security/DevOps card, so two screens could each look
+  authoritative while disagreeing. Security/DevOps now shows their state and points at the one
+  place that sets it.
+- **`welcome`, `reset` and email-intake replies are listed but not gateable**, under "Always
+  sent". They go to one specific person as the direct result of an action, have no recipient
+  account to read a role from, and a role filter over a password reset is an account lockout
+  waiting to happen. They are shown so that "what does this app send?" has one complete answer.
+
+### 📈 Email templates — volume, trends and why a send failed
+
+- **Every template card carries a send count** and a today-vs-yesterday delta. Absolute, not a
+  percentage: yesterday is zero for most templates and "+∞%" helps nobody.
+- **A new Analytics tab** — per-template counts, volume by month/week/day, and delivered vs failed.
+- **Failures are grouped by reason, with the recipients attached**, so a bounce is debuggable
+  instead of being a number. Noisy SMTP strings are normalised for grouping and the verbatim
+  message stays one click away.
+- Two honest details in that data. `reminder.escalation` mails the employee *and* their manager
+  under a single log category, so those two rows are marked **shared** and must not be summed;
+  and anything that cannot be mapped to a template lands in an explicit **Other / unmapped**
+  bucket rather than being dropped, because a silently discarded bucket makes every total a lie.
+
+### 🚦 Maintenance — why it was slow, when, and on which server
+
+- **API performance**, a new opt-in panel: latency percentiles (p50/p95/p99), slowest endpoints,
+  error rate, a latency time-series, a per-host/pod breakdown, and a filterable request log with
+  the slowest individual requests.
+- **Database time is measured, not estimated.** Each request accumulates the real duration of its
+  own Prisma operations — raw queries included — so "this endpoint is slow" separates into time in
+  the database and time in the handler.
+- **Off by default, and cheap when on.** The middleware sits in the hot path of every request, so
+  the disabled path is a single boolean test; nothing is awaited in the request lifecycle; rows
+  buffer in memory and flush in batches; the buffer drops and *counts* past its ceiling rather
+  than growing; and requests are sampled at a configurable rate. On a busy deployment turn the
+  rate down rather than the feature off — percentiles from a 10% sample are still percentiles.
+- Routes are recorded as **patterns** (`/api/projects/:id`), never raw URLs with ids in them,
+  which is the difference between a slowest-endpoints table and thousands of single-request rows.
+- Nothing sensitive is stored: no bodies, query strings, headers, cookies, IPs or user agents. The
+  user id is the whole of the identity recorded, and names are joined at read time — so the table
+  never holds a person's details and a deleted user simply disappears from the view.
+- **A caveat worth knowing before you read the numbers:** CPU, memory and disk come from a
+  snapshot refreshed every ~15 seconds, not measured per request. Measuring CPU properly means
+  sleeping between two kernel readings, which is fine for a health card and catastrophic in a
+  request path. Those columns describe the machine *around* a request, not during it.
+- Rows accumulate with traffic and are pruned nightly at 04:10, keeping 14 days by default.
+
+### ✅ Approvals — enough context to actually approve
+
+- The queue gained **search** (across name, email, task and notes), **project/status/activity
+  filters**, a **date range**, row numbers, the **module and submodule** under the project, the
+  **time frame with hours**, when the entry was **last updated**, and **notes** where present.
+- **Tapping a name opens the full detail** — on desktop as well as mobile — with Approve, Reject
+  and a **download of that one entry**.
+- None of this needed a schema change: the endpoint had been returning module, submodule, notes
+  and task description all along, and the screen simply never showed them.
+- The list is capped at 100 rows and does not paginate. Rather than quietly change that, the table
+  now says when the cap is reached instead of implying there is nothing older.
+
+### 📄 Timesheet exports, rebuilt
+
+- **Excel** — a Summary sheet, a frozen and autofiltered header, real date/time and numeric cell
+  types instead of strings, per-group subtotals and a grand total.
+- **PDF** — a proper header block, a table header that repeats on every page, task descriptions
+  that wrap rather than clip, status in the app's own colours, and `Page X of Y`.
+- An empty result now produces a valid one-page document saying so, rather than an empty file.
+
+### 🪪 Identity checks — analytics, and a clarification that matters
+
+- **New charts**: outcome breakdown, outcomes over time, a review funnel, and enrollment coverage.
+- The funnel keeps **pending, human-reviewed and auto-triaged as three distinct states** and never
+  sums them into one "handled" number — they mean very different things when you are deciding
+  whether a policy is working.
+- **"Mark reviewed" does not retrain anything, and never did.** It clears the flag and records who
+  looked, and that is all: it does not accept that face, add the capture as a reference, or change
+  any threshold. There is no adaptive re-enrollment in this product — the only way a person's
+  reference changes is completing the guided enrollment again, which *replaces* their templates.
+  Said plainly here because expecting otherwise leads to reviewing failures that were never going
+  to improve on their own.
+- What *is* adaptive is the per-person match threshold, and it only ever tightens — worth knowing
+  if specific people keep failing.
+- **Fixed:** `LOW_QUALITY` was missing from the outcome filter despite being one of the largest
+  failure buckets; `SKIPPED_INSECURE` was written to the database but absent from the type that
+  was supposed to enumerate every outcome; and "Mark reviewed" now lets you leave the note the API
+  had always been able to store.
+
+### 🧹 Smaller things
+
+- **My Team** — clicking a direct report shows their hours week-by-week for the current month and
+  month-by-month for the trailing year. Scoped so a manager only ever sees their own reports.
+- **Timesheet form** — a failed submit now scrolls to and focuses the first invalid field and
+  names it. Every select on that form is a custom control, so the form library held no reference
+  to focus and a rejected submit had simply looked like a dead button.
+- **Projects** — a row number and the project's creation date, sortable.
+- **Verification log** — a refresh button, so checking for new attempts no longer means reloading
+  the whole page.
+
+### Upgrading
+
+- `./update.sh` handles everything, including fanning the two migrations out to **every tenant
+  database** — this product runs a database per organization, and a migration that only reaches
+  `DATABASE_URL` leaves every other org on the old schema. A manual or non-Docker deployment must
+  run `npm run migrate:tenants -w apps/api` itself. See docs/DEPLOYMENT.md.
+- Request telemetry stays off until you set `API_TELEMETRY_ENABLED=true`. See `.env.example` for
+  the sampling, flush, buffer and retention knobs, and the Kubernetes pod/cluster identity vars.
+
+---
+
 ## 2.0.0 — the planning layer — 2026-08-06
 
 Turns TimeSphere from an execution tracker into a project-management platform: plans, schedules,

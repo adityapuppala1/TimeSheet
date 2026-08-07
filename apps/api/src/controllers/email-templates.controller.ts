@@ -18,6 +18,7 @@ import { requireAuth, requireSuperAdmin } from "../middleware/auth.js";
 import { AppError } from "../middleware/error.js";
 import { validate } from "../middleware/validate.js";
 import { audit } from "../services/audit.service.js";
+import { getEmailAnalytics, getEmailFailureBreakdown } from "../services/email-analytics.service.js";
 import { getTransportStatus, sendMail } from "../services/mail.service.js";
 import { sanitizeEmailHtml } from "../utils/sanitize.js";
 import {
@@ -32,6 +33,20 @@ emailTemplatesRouter.use(requireAuth, requireSuperAdmin);
 
 emailTemplatesRouter.get("/transport-status", async (_req, res) => {
   res.json(await getTransportStatus());
+});
+
+/* Registered ahead of the `/:key` routes below purely for readability — "analytics" is not a
+   template key, so `/:key/log` (two segments, second one literally "log") could never shadow it. */
+emailTemplatesRouter.get("/analytics", async (_req, res) => {
+  res.json(await getEmailAnalytics());
+});
+
+const failuresSchema = z.object({
+  query: z.object({ days: z.coerce.number().int().min(1).max(365).optional() })
+});
+
+emailTemplatesRouter.get("/analytics/failures", validate(failuresSchema), async (req, res) => {
+  res.json(await getEmailFailureBreakdown(Number(req.query.days ?? 30)));
 });
 
 emailTemplatesRouter.get("/", async (_req, res) => {

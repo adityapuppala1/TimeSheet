@@ -14,23 +14,28 @@ import {
   Archive,
   ArchiveRestore,
   Check,
+  Clock,
   DollarSign,
   Download,
   FileSpreadsheet,
   FileText,
+  Filter,
   FolderTree,
   Layers,
   LogOut,
   Mail,
   MoreHorizontal,
+  Paperclip,
   Pencil,
   Plus,
   RotateCcw,
   Save,
+  Search,
   Share2,
   ShieldCheck,
   ShieldX,
   Sparkles,
+  StickyNote,
   Trash2,
   UploadCloud,
   Users2,
@@ -58,7 +63,7 @@ import { CsvBulkUploadDialog } from "../components/CsvBulkUploadDialog";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../components/ui/card";
 import { DataTable } from "../components/ui/data-table";
 import { TimesheetReportPanel } from "../components/TimesheetReportPanel";
-import { DateRangePicker } from "../components/ui/date-range-picker";
+import { DateRangePicker, type DateRangeValue } from "../components/ui/date-range-picker";
 import { TimesheetAnalyticsPanel } from "../components/TimesheetAnalyticsPanel";
 import {
   EMPTY_FILTERS,
@@ -96,6 +101,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from ".
 import { Textarea } from "../components/ui/textarea";
 import { toast } from "../components/ui/toaster";
 import { Tooltip, TooltipContent, TooltipTrigger } from "../components/ui/tooltip";
+import { safeHtml } from "../lib/safe-html";
 import { computeTrend } from "../lib/trend";
 import {
   attestationApi,
@@ -1047,6 +1053,14 @@ function UserEditDialog({
 }
 
 /* ============================== PROJECTS ============================== */
+/** Same shape Tickets.tsx uses for table dates — day-level precision, no time of day. */
+function formatCreatedDate(value?: string | null): string {
+  if (!value) return "—";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "—";
+  return date.toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" });
+}
+
 export function ProjectsPage() {
   const queryClient = useQueryClient();
   // Its own cache key: this page sees archived projects too, and sharing ["projects"] with the
@@ -1155,6 +1169,20 @@ export function ProjectsPage() {
 
   const projectColumns = useMemo<ColumnDef<any, any>[]>(
     () => [
+      {
+        id: "sno",
+        header: "S.No",
+        enableSorting: false,
+        // A position, not data: it has to count from the page offset (row 1 of page 2 at 20/page
+        // is 21), so it's derived from where the row sits in the CURRENT page plus that offset.
+        // `row.index` can't do this — TanStack pins it to the original data array, so it ignores
+        // sorting, the search filter, and paging alike.
+        cell: ({ row, table }) => {
+          const { pageIndex, pageSize } = table.getState().pagination;
+          const positionOnPage = table.getRowModel().rows.findIndex((r) => r.id === row.id);
+          return <span className="text-xs tabular-nums text-muted-foreground">{pageIndex * pageSize + positionOnPage + 1}</span>;
+        }
+      },
       { accessorKey: "code", header: "Code", cell: (info) => <span className="font-mono text-xs">{info.getValue()}</span> },
       { accessorKey: "name", header: "Name", cell: (info) => <span className="font-medium">{info.getValue()}</span> },
       {
@@ -1178,6 +1206,13 @@ export function ProjectsPage() {
             {row.original.modules?.length ?? 0} modules
           </button>
         )
+      },
+      {
+        accessorKey: "createdAt",
+        header: "Created",
+        // Sorts on the raw ISO string the API returns, which orders identically to the instant —
+        // the formatting only happens in the cell, so the display shape can change freely.
+        cell: (info) => <span className="text-xs tabular-nums text-muted-foreground">{formatCreatedDate(info.getValue())}</span>
       },
       {
         id: "team",
@@ -1852,11 +1887,68 @@ function UserChip({
 }
 
 /* ============================== APPROVALS ============================== */
+
+/** Date AND time. "Has this been touched since I last looked at it" is the question `updatedAt`
+ *  answers, and a bare date cannot answer it for an entry edited the same day it was logged. */
+function formatTimestamp(value?: string | null): string {
+  if (!value) return "—";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "—";
+  return date.toLocaleString(undefined, { month: "short", day: "numeric", year: "numeric", hour: "2-digit", minute: "2-digit" });
+}
+
+/**
+ * Tiptap HTML in, one line of plain text out — for SEARCHING only, never for rendering (the
+ * dialog and the table cell both go through `safeHtml`).
+ *
+ * Matching the raw string would make every entry a hit for "p", "span" or "href", which is the
+ * kind of search box that teaches people not to use the search box.
+ */
+const htmlStripper = typeof DOMParser === "undefined" ? null : new DOMParser();
+/** Memoised because TanStack re-runs an accessor on every sort, filter and render pass, and this
+ *  one parses a document. Keyed on the HTML itself, which is immutable for a fetched row. */
+const plainTextCache = new Map<string, string>();
+function plainText(html: string | null | undefined): string {
+  if (!html) return "";
+  const cached = plainTextCache.get(html);
+  if (cached !== undefined) return cached;
+  const parsed = htmlStripper?.parseFromString(html, "text/html").body.textContent ?? html.replace(/<[^>]*>/g, " ");
+  const text = parsed.replace(/\s+/g, " ").trim();
+  plainTextCache.set(html, text);
+  return text;
+}
+
+const APPROVAL_STATUS_VARIANT: Record<string, "success" | "warning" | "destructive" | "muted"> = {
+  APPROVED: "success",
+  SUBMITTED: "warning",
+  DRAFT: "muted",
+  REJECTED: "destructive"
+};
+
+/** One labelled fact in the mobile detail dialog. Label above value on a phone, beside it once
+ *  there is room — a fixed two-column grid at 360px leaves the value about ten characters wide. */
+function ApprovalDetailRow({ label, children }: { label: string; children: ReactNode }) {
+  return (
+    <div className="grid gap-0.5 border-b border-border/60 pb-2 last:border-b-0 sm:grid-cols-[9rem_minmax(0,1fr)] sm:gap-3">
+      <span className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">{label}</span>
+      <div className="min-w-0 break-words [overflow-wrap:anywhere]">{children}</div>
+    </div>
+  );
+}
+
 export function ApprovalsPage() {
   const queryClient = useQueryClient();
   const timesheets = useQuery({ queryKey: ["timesheets"], queryFn: timesheetApi.list });
   const [rejectTarget, setRejectTarget] = useState<{ id: string; user: string } | null>(null);
   const [rejectReason, setRejectReason] = useState("");
+  /** The entry whose full detail is open. On a phone the table collapses to cards and the
+   *  approver taps a name to get here; on desktop it is the same door, one click on the name. */
+  const [detail, setDetail] = useState<any | null>(null);
+  const [search, setSearch] = useState("");
+  const [statusFilter, setStatusFilter] = useState<string>("SUBMITTED");
+  const [projectFilter, setProjectFilter] = useState("all");
+  const [activityFilter, setActivityFilter] = useState("all");
+  const [range, setRange] = useState<DateRangeValue>({ from: "", to: "" });
 
   const approve = useMutation({
     mutationFn: ({ id, faceVerificationId }: { id: string; faceVerificationId?: string }) =>
@@ -1864,6 +1956,9 @@ export function ApprovalsPage() {
     onSuccess: () => {
       toast.success("Approved", { description: "Employee will receive an in-app + email confirmation." });
       queryClient.invalidateQueries({ queryKey: ["timesheets"] });
+      // The open detail dialog holds a snapshot taken before the decision. Leaving it up would
+      // show a decided entry still offering Approve and Reject.
+      setDetail(null);
     },
     onError: (err: any) => toast.error("Approval failed", { description: serverMessage(err, "Try again.") })
   });
@@ -1874,6 +1969,9 @@ export function ApprovalsPage() {
   const faceStatus = useFaceStatus();
   const [pendingApproveId, setPendingApproveId] = useState<string | null>(null);
   const requestApprove = (id: string) => {
+    // Detail closes first either way: the face dialog must not open behind it, and the row's
+    // snapshot is about to be stale regardless of which path the decision takes.
+    setDetail(null);
     if (faceStatus.data?.requiredForApproval) {
       setPendingApproveId(id);
       return;
@@ -1887,6 +1985,7 @@ export function ApprovalsPage() {
       queryClient.invalidateQueries({ queryKey: ["timesheets"] });
       setRejectTarget(null);
       setRejectReason("");
+      setDetail(null);
     },
     onError: (err: any) => toast.error("Rejection failed", { description: serverMessage(err, "Try again.") })
   });
@@ -1908,26 +2007,183 @@ export function ApprovalsPage() {
     }
   };
 
-  const pending = (timesheets.data ?? []).filter((row: any) => row.status === "SUBMITTED");
+  /** One entry's full detail as a file, so the reason for a decision can be filed alongside it.
+   *  Same authenticated-blob route as the evidence pack, and the same columns the workspace-wide
+   *  CSV uses — see reports/timesheets/:id/export.csv on why that sharing is deliberate. */
+  const downloadEntry = async (row: any) => {
+    try {
+      const blob = await reportApi.downloadEntry(row.id);
+      const url = URL.createObjectURL(blob);
+      const anchor = document.createElement("a");
+      anchor.href = url;
+      anchor.download = `timesheet-${String(row.workDate).slice(0, 10)}-${row.id.slice(0, 8)}.csv`;
+      anchor.click();
+      URL.revokeObjectURL(url);
+      toast.success("Entry exported");
+    } catch (err: any) {
+      toast.error("Could not export this entry", { description: serverMessage(err, "Try again.") });
+    }
+  };
+
+  const rows: any[] = Array.isArray(timesheets.data) ? timesheets.data : [];
+
+  // Options come from the rows in hand rather than a second /projects query: the queue can only
+  // ever contain projects that already appear here, and an option that matches nothing is a
+  // filter that looks broken when you pick it.
+  const projectOptions = useMemo(() => {
+    const byId = new Map<string, string>();
+    for (const row of rows) if (row.projectId) byId.set(row.projectId, row.project?.name ?? row.projectId);
+    return [...byId].map(([id, name]) => ({ id, name })).sort((a, b) => a.name.localeCompare(b.name));
+  }, [rows]);
+
+  const activityOptions = useMemo(
+    () => [...new Set(rows.map((row) => row.activityType).filter(Boolean))].sort((a, b) => String(a).localeCompare(String(b))),
+    [rows]
+  );
+
+  // Client-side, because the list route does not paginate — it returns one capped page (100 rows,
+  // newest work first) and always has. Filtering on the server here would mean either inventing
+  // pagination semantics this page's callers do not share, or a second cache key competing with
+  // History's for the same ["timesheets"] data.
+  const filtered = useMemo(() => {
+    const needle = search.trim().toLowerCase();
+    return rows.filter((row) => {
+      if (statusFilter !== "ALL" && row.status !== statusFilter) return false;
+      if (projectFilter !== "all" && row.projectId !== projectFilter) return false;
+      if (activityFilter !== "all" && row.activityType !== activityFilter) return false;
+      const day = String(row.workDate).slice(0, 10);
+      if (range.from && day < range.from) return false;
+      if (range.to && day > range.to) return false;
+      if (!needle) return true;
+      return (
+        String(row.user?.name ?? "").toLowerCase().includes(needle) ||
+        String(row.user?.email ?? "").toLowerCase().includes(needle) ||
+        plainText(row.taskDescription).toLowerCase().includes(needle) ||
+        plainText(row.notes).toLowerCase().includes(needle)
+      );
+    });
+  }, [rows, search, statusFilter, projectFilter, activityFilter, range.from, range.to]);
+
+  const filtersActive =
+    search.trim() !== "" || statusFilter !== "SUBMITTED" || projectFilter !== "all" || activityFilter !== "all" || Boolean(range.from || range.to);
+
+  function resetFilters() {
+    setSearch("");
+    setStatusFilter("SUBMITTED");
+    setProjectFilter("all");
+    setActivityFilter("all");
+    setRange({ from: "", to: "" });
+  }
 
   const approvalColumns = useMemo<ColumnDef<any, any>[]>(
     () => [
-      { id: "employee", accessorFn: (row: any) => row.user?.name, header: "Employee", cell: ({ row }) => <span className="font-medium">{row.original.user?.name}</span> },
+      {
+        id: "sno",
+        header: "S.No",
+        enableSorting: false,
+        // Counts from the page offset, so row 1 of page 2 at 20/page reads 21. `row.index` is
+        // pinned to the original array and ignores sorting, filtering and paging alike.
+        cell: ({ row, table }) => {
+          const { pageIndex, pageSize } = table.getState().pagination;
+          const positionOnPage = table.getRowModel().rows.findIndex((r) => r.id === row.id);
+          return <span className="text-xs tabular-nums text-muted-foreground">{pageIndex * pageSize + positionOnPage + 1}</span>;
+        }
+      },
+      {
+        id: "employee",
+        accessorFn: (row: any) => row.user?.name,
+        header: "Employee",
+        // The name is the door into the full entry. It is the only control that fits a phone
+        // card, and on desktop it saves the approver reconstructing the context from six columns.
+        cell: ({ row }) => (
+          <button
+            type="button"
+            className="focus-ring max-w-[12rem] rounded text-left"
+            onClick={() => setDetail(row.original)}
+            title="Open the full entry"
+          >
+            <span className="block truncate font-medium underline-offset-2 hover:underline">{row.original.user?.name}</span>
+            <span className="block truncate text-xs text-muted-foreground">{row.original.user?.email}</span>
+          </button>
+        )
+      },
       {
         id: "date",
         accessorFn: (row: any) => row.workDate,
         header: "Date",
-        cell: ({ row }) => <span className="text-muted-foreground">{String(row.original.workDate).slice(0, 10)}</span>
+        cell: ({ row }) => <span className="whitespace-nowrap text-muted-foreground">{String(row.original.workDate).slice(0, 10)}</span>
       },
-      { id: "project", accessorFn: (row: any) => row.project?.name, header: "Project" },
+      {
+        id: "project",
+        accessorFn: (row: any) => row.project?.name,
+        header: "Project / Module",
+        // The module and submodule are the difference between "four hours on Apollo" and "four
+        // hours on Apollo's payments importer" — the latter is a thing an approver can judge.
+        cell: ({ row }) => (
+          <div className="min-w-0">
+            <p className="truncate font-medium">{row.original.project?.name}</p>
+            <p className="flex items-center gap-1 truncate text-xs text-muted-foreground">
+              <Layers className="h-3 w-3 shrink-0" />
+              {row.original.module?.name}
+              {row.original.submodule ? ` / ${row.original.submodule.name}` : ""}
+            </p>
+            {row.original.ticket && <Badge variant="outline" className="mt-1 font-mono text-[10px]">{row.original.ticket.key}</Badge>}
+          </div>
+        )
+      },
       { accessorKey: "activityType", header: "Activity" },
       {
-        id: "hours",
-        accessorFn: (row: any) => Number(row.totalHours),
-        header: "Hours",
-        cell: ({ row }) => <span className="font-semibold">{Number(row.original.totalHours).toFixed(2)}</span>
+        id: "time",
+        accessorFn: (row: any) => row.startTime,
+        header: "Time frame",
+        cell: ({ row }) => (
+          <div className="whitespace-nowrap">
+            <span className="inline-flex items-center gap-1 text-muted-foreground">
+              <Clock className="h-3 w-3" />
+              {row.original.startTime} → {row.original.endTime}
+            </span>
+            <p className="font-semibold tabular-nums">{Number(row.original.totalHours).toFixed(2)}h</p>
+          </div>
+        )
       },
-      { accessorKey: "status", header: "Status", cell: (info) => <Badge variant="warning">{info.getValue() as string}</Badge> },
+      {
+        id: "task",
+        accessorFn: (row: any) => plainText(row.taskDescription),
+        header: "Task",
+        enableSorting: false,
+        cell: ({ row }) => (
+          <div className="max-w-xs">
+            <div className="flex items-start gap-1 text-foreground/80">
+              <FileText className="mt-0.5 h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+              <div className="prose-sm line-clamp-2" dangerouslySetInnerHTML={safeHtml(row.original.taskDescription)} />
+            </div>
+            {/* Notes only when there are notes — an always-present "Notes: —" trains the eye to
+                skip the row, which is the opposite of what a note is for. */}
+            {plainText(row.original.notes) ? (
+              <p className="mt-1 line-clamp-1 text-xs text-muted-foreground">
+                <StickyNote className="mr-1 inline h-3 w-3" />
+                {plainText(row.original.notes)}
+              </p>
+            ) : null}
+            {row.original.attachments?.length ? (
+              <p className="mt-1 inline-flex items-center gap-1 text-xs text-muted-foreground">
+                <Paperclip className="h-3 w-3" />
+                {row.original.attachments.length} attachment(s)
+              </p>
+            ) : null}
+          </div>
+        )
+      },
+      {
+        accessorKey: "updatedAt",
+        header: "Last updated",
+        cell: (info) => <span className="whitespace-nowrap text-xs tabular-nums text-muted-foreground">{formatTimestamp(info.getValue())}</span>
+      },
+      {
+        accessorKey: "status",
+        header: "Status",
+        cell: (info) => <Badge variant={APPROVAL_STATUS_VARIANT[info.getValue() as string] ?? "muted"}>{info.getValue() as string}</Badge>
+      },
       {
         id: "identity",
         header: "Identity",
@@ -1968,34 +2224,228 @@ export function ApprovalsPage() {
         enableSorting: false,
         cell: ({ row }) => (
           <div className="flex justify-end gap-2">
-            <Button variant="success" size="sm" onClick={() => requestApprove(row.original.id)}>
-              <Check className="h-4 w-4" />Approve
+            <Button
+              variant="ghost"
+              size="icon"
+              className="h-8 w-8"
+              title="Download this entry's full detail"
+              aria-label="Download this entry's full detail"
+              onClick={() => downloadEntry(row.original)}
+            >
+              <Download className="h-4 w-4" />
             </Button>
-            <Button variant="outline" size="sm" onClick={() => setRejectTarget({ id: row.original.id, user: row.original.user?.name })}>
-              <ShieldX className="h-4 w-4" />Reject
-            </Button>
+            {/* Only a SUBMITTED entry is awaiting a decision. With the status filter widened past
+                the queue, offering Approve on an already-approved row would be a button that can
+                only fail — the API refuses anything but SUBMITTED for the same reason. */}
+            {row.original.status === "SUBMITTED" ? (
+              <>
+                <Button variant="success" size="sm" onClick={() => requestApprove(row.original.id)}>
+                  <Check className="h-4 w-4" />Approve
+                </Button>
+                <Button variant="outline" size="sm" onClick={() => setRejectTarget({ id: row.original.id, user: row.original.user?.name })}>
+                  <ShieldX className="h-4 w-4" />Reject
+                </Button>
+              </>
+            ) : null}
           </div>
         )
       }
     ],
     // eslint-disable-next-line react-hooks/exhaustive-deps -- requestApprove closes over stable refs
-    [approve, faceStatus.data?.requiredForApproval, downloadEvidencePack]
+    [approve, faceStatus.data?.requiredForApproval, downloadEvidencePack, downloadEntry]
   );
 
   return (
     <Workspace title="Timesheet Approvals" subtitle="Review submitted work logs with attachments and audit-friendly actions." icon={<Check className="h-5 w-5" />}>
       <Card>
+        <CardHeader className="flex-row items-center justify-between space-y-0 pb-3">
+          <CardTitle className="flex items-center gap-2 text-base">
+            <Filter className="h-4 w-4" /> Filters
+          </CardTitle>
+          <Button variant="ghost" size="sm" disabled={!filtersActive} onClick={resetFilters}>
+            <RotateCcw className="h-3.5 w-3.5" />Reset
+          </Button>
+        </CardHeader>
+        <CardContent>
+          <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-5">
+            <div className="grid gap-1.5 sm:col-span-2 xl:col-span-1">
+              <Label htmlFor="approval-search">Search</Label>
+              <div className="relative">
+                <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+                <Input
+                  id="approval-search"
+                  value={search}
+                  onChange={(event) => setSearch(event.target.value)}
+                  placeholder="Name, email or task…"
+                  className="pl-9"
+                />
+              </div>
+            </div>
+            <div className="grid gap-1.5">
+              <Label htmlFor="approval-status">Status</Label>
+              {/* Defaults to SUBMITTED so the page opens on the queue it has always shown.
+                  Widening it is how an approver checks what they decided last week. */}
+              <Select value={statusFilter} onValueChange={setStatusFilter}>
+                <SelectTrigger id="approval-status"><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="SUBMITTED">Awaiting decision</SelectItem>
+                  <SelectItem value="APPROVED">Approved</SelectItem>
+                  <SelectItem value="REJECTED">Rejected</SelectItem>
+                  <SelectItem value="DRAFT">Draft</SelectItem>
+                  <SelectItem value="ALL">All statuses</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="grid gap-1.5">
+              <Label htmlFor="approval-project">Project</Label>
+              <Select value={projectFilter} onValueChange={setProjectFilter}>
+                <SelectTrigger id="approval-project"><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">All projects</SelectItem>
+                  {projectOptions.map((project) => (
+                    <SelectItem key={project.id} value={project.id}>{project.name}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="grid gap-1.5">
+              <Label htmlFor="approval-activity">Activity</Label>
+              <Select value={activityFilter} onValueChange={setActivityFilter}>
+                <SelectTrigger id="approval-activity"><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">All activities</SelectItem>
+                  {activityOptions.map((activity) => (
+                    <SelectItem key={activity} value={activity}>{activity}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="grid gap-1.5">
+              <Label htmlFor="approval-range">Work date</Label>
+              <DateRangePicker
+                id="approval-range"
+                value={range}
+                onChange={setRange}
+                placeholder="All time"
+                className="w-full"
+              />
+            </div>
+          </div>
+        </CardContent>
+      </Card>
+
+      <Card>
         <CardContent className="p-4">
           <DataTable
             columns={approvalColumns}
-            data={pending}
+            data={filtered}
             isLoading={timesheets.isLoading}
             enableSearch={false}
-            emptyMessage="Nothing pending — you're all caught up."
+            emptyMessage={filtersActive ? "No entries match the current filters." : "Nothing pending — you're all caught up."}
             pageSize={20}
           />
+          {/* The list route returns one capped page of the most recent work and always has. Saying
+              so is the difference between "there is nothing older" and "we did not look." */}
+          {rows.length >= 100 && (
+            <p className="mt-3 text-xs text-muted-foreground">
+              Showing the 100 most recent entries. Older work is on the Reports screen, which queries the full set.
+            </p>
+          )}
         </CardContent>
       </Card>
+
+      {/* Everything the table shows across eleven columns, in one readable column — the phone's
+          only view of the entry, and on desktop the one place the full task text is not clamped. */}
+      <Dialog open={!!detail} onOpenChange={(open) => !open && setDetail(null)}>
+        <DialogContent className="w-[min(95vw,640px)] max-w-none">
+          <DialogHeader>
+            <DialogTitle className="break-words">{detail?.user?.name}</DialogTitle>
+            <DialogDescription className="break-words">
+              {detail?.user?.email} · {String(detail?.workDate ?? "").slice(0, 10)}
+            </DialogDescription>
+          </DialogHeader>
+          {detail && (
+            <ScrollArea className="max-h-[55vh] pr-3">
+              <div className="grid gap-2 text-sm">
+                <ApprovalDetailRow label="Status">
+                  <Badge variant={APPROVAL_STATUS_VARIANT[detail.status] ?? "muted"}>{detail.status}</Badge>
+                </ApprovalDetailRow>
+                <ApprovalDetailRow label="Project">
+                  <p className="font-medium">{detail.project?.name}</p>
+                  <p className="text-xs text-muted-foreground">
+                    {detail.module?.name}
+                    {detail.submodule ? ` / ${detail.submodule.name}` : ""}
+                  </p>
+                  {detail.ticket && <Badge variant="outline" className="mt-1 font-mono text-[10px]">{detail.ticket.key}</Badge>}
+                </ApprovalDetailRow>
+                <ApprovalDetailRow label="Activity">{detail.activityType}</ApprovalDetailRow>
+                <ApprovalDetailRow label="Time frame">
+                  {detail.startTime} → {detail.endTime}
+                </ApprovalDetailRow>
+                <ApprovalDetailRow label="Hours spent">
+                  <span className="font-semibold tabular-nums">{Number(detail.totalHours).toFixed(2)}h</span>
+                </ApprovalDetailRow>
+                <ApprovalDetailRow label="Last updated">{formatTimestamp(detail.updatedAt)}</ApprovalDetailRow>
+                <ApprovalDetailRow label="Task">
+                  <div className="prose-sm" dangerouslySetInnerHTML={safeHtml(detail.taskDescription)} />
+                </ApprovalDetailRow>
+                {plainText(detail.notes) ? (
+                  <ApprovalDetailRow label="Notes">
+                    <div className="prose-sm" dangerouslySetInnerHTML={safeHtml(detail.notes)} />
+                  </ApprovalDetailRow>
+                ) : null}
+                {detail.attachments?.length ? (
+                  <ApprovalDetailRow label="Attachments">
+                    <span className="inline-flex items-center gap-1 text-muted-foreground">
+                      <Paperclip className="h-3 w-3" />
+                      {detail.attachments.length} file(s)
+                    </span>
+                  </ApprovalDetailRow>
+                ) : null}
+                <ApprovalDetailRow label="Identity">
+                  {detail.identityVerified ? (
+                    <Badge variant="success">
+                      <ShieldCheck className="mr-1 h-3 w-3" />Verified
+                    </Badge>
+                  ) : detail.identityVerificationApplies ? (
+                    <Badge variant="outline">Unverified</Badge>
+                  ) : (
+                    <span className="text-muted-foreground">Not covered by the face policy</span>
+                  )}
+                </ApprovalDetailRow>
+                {detail.status === "REJECTED" && detail.rejectionReason ? (
+                  <ApprovalDetailRow label="Rejection reason">
+                    <span className="text-destructive">{detail.rejectionReason}</span>
+                  </ApprovalDetailRow>
+                ) : null}
+              </div>
+            </ScrollArea>
+          )}
+          <DialogFooter>
+            <Button variant="outline" onClick={() => detail && downloadEntry(detail)}>
+              <Download className="h-4 w-4" />Download
+            </Button>
+            {detail?.status === "SUBMITTED" ? (
+              <>
+                <Button
+                  variant="outline"
+                  onClick={() => {
+                    // Closed first: the reject dialog owns the screen from here, and two stacked
+                    // dialogs leave no obvious way back on a phone.
+                    setRejectTarget({ id: detail.id, user: detail.user?.name });
+                    setDetail(null);
+                  }}
+                >
+                  <ShieldX className="h-4 w-4" />Reject
+                </Button>
+                <Button variant="success" onClick={() => requestApprove(detail.id)}>
+                  <Check className="h-4 w-4" />Approve
+                </Button>
+              </>
+            ) : null}
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       <Dialog open={!!rejectTarget} onOpenChange={(open) => { if (!open) { setRejectTarget(null); setRejectReason(""); } }}>
         <DialogContent className="w-[min(95vw,520px)] max-w-none">

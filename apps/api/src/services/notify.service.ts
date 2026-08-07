@@ -10,6 +10,12 @@
  * `dispatchTransactional()` is the sibling for mail that isn't tied to a registered User at all
  * (e.g. the email-intake confirmation reply to an external sender's address).
  */
+import {
+  isEmailRoleMuted,
+  type EmailRoleMutes,
+  type NotificationPreferences,
+  type RoleName
+} from "@timesheet/shared";
 import { env } from "../config/env.js";
 import { prisma } from "../config/prisma.js";
 import { sendMail } from "./mail.service.js";
@@ -105,7 +111,7 @@ export async function getGlobalNotificationSettings() {
 export async function dispatchNotification(args: DispatchArgs) {
   const recipient = await prisma.user.findUnique({
     where: { id: args.userId },
-    select: { id: true, email: true, status: true, deletedAt: true }
+    select: { id: true, email: true, status: true, deletedAt: true, role: { select: { name: true } } }
   });
   if (!recipient || recipient.deletedAt || recipient.status !== "ACTIVE") return;
 
@@ -125,6 +131,14 @@ export async function dispatchNotification(args: DispatchArgs) {
   const field = SETTINGS_FIELD[args.category];
   if (field && !(settings as any)[field]) return;
 
+  // Per-role suppression, layered under the category toggle above. Note the ordering: the
+  // in-app Notification row is already written, so a muted role still sees the alert in the
+  // bell menu — we are only declining to also put it in their inbox. Managers/super admins
+  // who don't log time but do approve it are the motivating case.
+  if (field && isEmailRoleMuted(settings.emailRoleMutes as EmailRoleMutes | null, field as keyof NotificationPreferences, recipient.role?.name as RoleName | undefined)) {
+    return;
+  }
+
   // The EMAIL leg is deliberately fire-and-forget. This function runs inside user request
   // paths (submit, approve, status change, face verify), and a real SMTP round-trip costs
   // 1–3 seconds PER RECIPIENT — measured: a face verify that notified four reviewers took
@@ -143,6 +157,7 @@ export async function dispatchNotification(args: DispatchArgs) {
       subject: rendered.subject,
       html: rendered.html,
       template: args.category,
+      preferenceKey: field,
       metadata: args.metadata
     });
   })().catch((error) => {

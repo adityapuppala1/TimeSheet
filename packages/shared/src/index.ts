@@ -240,12 +240,41 @@ export const notificationPreferenceKeys: ReadonlyArray<keyof NotificationPrefere
   "emailMaintenanceScheduled"
 ];
 
+/**
+ * Per-role email suppression, layered UNDER the `NotificationPreferences` booleans: a category
+ * must be ON *and* the recipient's role must not be listed here for the email to go out.
+ *
+ * A missing key means "no role is muted for this category", so `{}` / `undefined` reproduces the
+ * pre-matrix behaviour exactly. Only the EMAIL leg is affected — the in-app bell notification
+ * always fires, so muting MANAGER on an escalation stops the inbox copy without hiding the
+ * escalation itself.
+ */
+export type EmailRoleMutes = Partial<Record<keyof NotificationPreferences, RoleName[]>>;
+
+/**
+ * Single source of truth for "should this recipient get the email", shared by the API's dispatch
+ * path and the settings UI's checkbox state so the ticked box and the delivered mail can never
+ * disagree. Unknown keys/roles read as "not muted" — an older client PATCHing a payload that
+ * predates a new category must never accidentally suppress mail.
+ */
+export function isEmailRoleMuted(
+  mutes: EmailRoleMutes | null | undefined,
+  key: keyof NotificationPreferences,
+  role: RoleName | null | undefined
+): boolean {
+  if (!mutes || !role) return false;
+  const muted = mutes[key];
+  return Array.isArray(muted) && muted.includes(role);
+}
+
 /** Workspace-wide settings: notification toggles + reminder schedule + BCC behavior. */
 export interface GlobalSettings extends NotificationPreferences {
   dailyReminderHour: number;
   escalationReminderHour: number;
   remindOnWeekdaysOnly: boolean;
   bccSuperAdminOnAllEmails: boolean;
+  /** See {@link EmailRoleMutes}. Null on rows written before the matrix shipped. */
+  emailRoleMutes: EmailRoleMutes | null;
   updatedAt: string;
   /** Effective IANA timezone the API server is running in. Read-only. */
   serverTimezone: string;

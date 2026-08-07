@@ -723,6 +723,11 @@ export const reportApi = {
       totalMatching: Number(res.headers["x-report-total-matching"] ?? 0)
     };
   },
+  /** One entry, full detail, same columns as the bulk CSV — what an approver attaches to the
+   *  record of why they approved it. Blob rather than a link for the same reason as `download`:
+   *  the route needs the bearer token an <a href> cannot carry. */
+  downloadEntry: async (timesheetId: string) =>
+    (await api.get(`/reports/timesheets/${timesheetId}/export.csv`, { responseType: "blob" })).data as Blob,
   timesheetReport: async (filters: TimesheetReportFilters = {}, groupBy: GroupByKey = "user") =>
     (await api.get<TimesheetReport>("/reports/timesheets", { params: { ...cleanFilters(filters), groupBy } })).data,
   /** Requires a date range — utilisation is hours against capacity, and capacity only means
@@ -938,6 +943,131 @@ export interface StatusPage {
   incidents: StatusIncident[];
 }
 
+/* ------------------------------- API performance ------------------------------- */
+
+export interface ApiLatencyPoint {
+  bucketStart: string;
+  total: number;
+  clientErrors: number;
+  serverErrors: number;
+  avgMs: number;
+  p50Ms: number;
+  p95Ms: number;
+  p99Ms: number;
+  avgDbMs: number | null;
+}
+
+export interface ApiEndpointRow {
+  apiName: string;
+  method: string;
+  apiPath: string;
+  total: number;
+  clientErrors: number;
+  serverErrors: number;
+  errorRate: number;
+  avgMs: number;
+  p50Ms: number;
+  p95Ms: number;
+  p99Ms: number;
+  maxMs: number;
+  avgDbMs: number | null;
+  totalMs: number;
+}
+
+export interface ApiHostRow {
+  hostname: string;
+  podName: string | null;
+  cluster: string | null;
+  osType: string;
+  total: number;
+  serverErrors: number;
+  avgMs: number;
+  p95Ms: number;
+  avgCpuPercent: number | null;
+  avgMemPercent: number | null;
+  avgDiskPercent: number | null;
+  lastSeenAt: string;
+}
+
+export interface ApiPerformanceOverview {
+  window: { hours: number; since: string; bucketSeconds: number };
+  /** Collection state, so an empty chart can say "recording is off" instead of "no traffic". */
+  collection: {
+    enabled: boolean;
+    sampleRate: number;
+    flushMs: number;
+    retentionDays: number;
+    maxBuffer: number;
+    bufferedNow: number;
+    droppedSinceBoot: number;
+    failedSinceBoot: number;
+    writtenSinceBoot: number;
+    host: { hostname: string; podName: string | null; podNamespace: string | null; cluster: string | null; osType: string };
+  };
+  totals: {
+    total: number;
+    clientErrors: number;
+    serverErrors: number;
+    errorRate: number;
+    avgMs: number;
+    p50Ms: number;
+    p95Ms: number;
+    p99Ms: number;
+    maxMs: number;
+    avgDbMs: number | null;
+    distinctUsers: number;
+    distinctHosts: number;
+  };
+  series: ApiLatencyPoint[];
+  endpoints: ApiEndpointRow[];
+  hosts: ApiHostRow[];
+  statusMix: Array<{ statusClass: string; total: number }>;
+}
+
+export interface ApiRequestRow {
+  id: string;
+  apiName: string;
+  method: string;
+  apiPath: string;
+  statusCode: number;
+  userId: string | null;
+  user: { id: string; name: string; email: string } | null;
+  apiRequestAt: string;
+  apiResponseAt: string;
+  apiResponseTime: number;
+  dbResponseTime: number | null;
+  dbQueryCount: number | null;
+  hostname: string;
+  podName: string | null;
+  cluster: string | null;
+  osType: string;
+  cpuPercent: number | null;
+  memUsedPercent: number | null;
+  diskUsedPercent: number | null;
+  eventLoopLagMs: number | null;
+}
+
+export interface ApiRequestQuery {
+  hours?: number;
+  path?: string;
+  method?: string;
+  hostname?: string;
+  minMs?: number;
+  statusClass?: number;
+  sort?: "slowest" | "recent";
+  limit?: number;
+}
+
+export const apiPerformanceApi = {
+  /** SUPER_ADMIN. Aggregated server-side — the response carries percentiles and buckets, never
+   *  raw samples, however wide the window. */
+  overview: async (hours = 24) =>
+    (await api.get<ApiPerformanceOverview>("/maintenance/api-performance", { params: { hours } })).data,
+  /** The drill-down after the aggregates point somewhere. Server-capped at 200 rows. */
+  requests: async (query: ApiRequestQuery) =>
+    (await api.get<{ since: string; rows: ApiRequestRow[] }>("/maintenance/api-performance/requests", { params: query })).data
+};
+
 export const statusPageApi = {
   get: async (days = 90) => (await api.get<StatusPage>("/maintenance/status-page", { params: { days } })).data,
   /** Probe everything now rather than waiting for the five-minute worker. */
@@ -1038,8 +1168,24 @@ export const teamApi = {
         burnout: Array<{ userId: string; name: string; weekStart: string; hours: number }>;
         implausible: Array<{ userId: string; name: string; date: string; hours: number }>;
       }>("/team/timesheet-anomalies")
-    ).data
+    ).data,
+  /** Per-report logged-hours trend. 404s unless `userId` is one of the caller's own direct
+   *  reports — the backend re-derives that from `User.managerId`, never from this argument. */
+  hoursTrend: async (userId: string) =>
+    (await api.get<TeamHoursTrend>(`/team/reports/${userId}/hours-trend`)).data
 };
+
+/** Buckets are pre-aggregated server-side and always present, including empty ones, so a chart
+ *  over them keeps a continuous axis for a report who logged nothing. */
+export interface TeamHoursTrend {
+  user: { id: string; name: string };
+  currentMonth: {
+    monthStart: string;
+    /** ISO weeks clipped to the month — the first and last bucket can be shorter than 7 days. */
+    weeks: Array<{ weekStart: string; weekEnd: string; hours: number; entries: number }>;
+  };
+  monthly: Array<{ monthStart: string; hours: number; entries: number }>;
+}
 
 export interface AIUsageSummary {
   monthStart: string;
@@ -1632,8 +1778,95 @@ export interface BulkTestResult {
   results: Array<{ key: string; ok: boolean; status: string; errorMessage?: string; emailLogId?: string }>;
 }
 
+/** One point of a volume series. `bucket` is the ISO date of the bucket start (day / Monday /
+ *  1st of month) — formatting is the client's job, the API never sends a display string. */
+export interface EmailVolumeBucket {
+  bucket: string;
+  sent: number;
+  failed: number;
+  queued: number;
+  total: number;
+}
+
+export interface EmailTemplateVolumeRow {
+  key: string;
+  /** The raw `EmailLog.template` values reconciled into this card — a notification CATEGORY for
+   *  worker-driven sends, a templateKey for transactional ones. See email-analytics.service.ts. */
+  sources: string[];
+  /** True when a source category also feeds another card (`reminder.escalation` covers both the
+   *  employee and manager templates), so this number is a shared total and must NOT be summed
+   *  with the sibling row's. */
+  shared: boolean;
+  sharedWith: string[];
+  total: number;
+  sent: number;
+  failed: number;
+  queued: number;
+  /** Subset of `total` produced by the editor's test / bulk-test sends. */
+  test: number;
+  today: number;
+  yesterday: number;
+}
+
+/** A log row whose `template` matches no template card at all (a category with no editable
+ *  template, or a legacy value). Surfaced rather than dropped so the per-template numbers and
+ *  the workspace total reconcile. */
+export interface EmailUnmappedVolumeRow {
+  template: string;
+  total: number;
+  sent: number;
+  failed: number;
+  queued: number;
+  today: number;
+  yesterday: number;
+}
+
+export interface EmailAnalytics {
+  generatedAt: string;
+  totals: { total: number; sent: number; failed: number; queued: number; test: number; unmapped: number };
+  today: Omit<EmailVolumeBucket, "bucket">;
+  yesterday: Omit<EmailVolumeBucket, "bucket">;
+  perTemplate: EmailTemplateVolumeRow[];
+  unmapped: EmailUnmappedVolumeRow[];
+  daily: EmailVolumeBucket[];
+  weekly: EmailVolumeBucket[];
+  monthly: EmailVolumeBucket[];
+}
+
+export interface EmailFailureRecipient {
+  to: string;
+  count: number;
+  lastAt: string;
+  lastMessage: string;
+}
+
+export interface EmailFailureReason {
+  id: string;
+  /** Normalised form — volatile queue ids / addresses / timestamps replaced with `<markers>` so
+   *  identical failures group. `sample` keeps one verbatim SMTP message. */
+  reason: string;
+  sample: string;
+  count: number;
+  firstSeen: string;
+  lastSeen: string;
+  templates: Array<{ template: string; count: number }>;
+  recipients: EmailFailureRecipient[];
+  recipientsTruncated: boolean;
+}
+
+export interface EmailFailureBreakdown {
+  windowDays: number;
+  since: string;
+  totalFailures: number;
+  sampledFailures: number;
+  reasons: EmailFailureReason[];
+}
+
 export const emailTemplateApi = {
   list: async () => (await api.get<EmailTemplateRow[]>("/email-templates")).data,
+  analytics: async () => (await api.get<EmailAnalytics>("/email-templates/analytics")).data,
+  failures: async (days: number) =>
+    (await api.get<EmailFailureBreakdown>("/email-templates/analytics/failures", { params: { days } })).data,
   transportStatus: async () => (await api.get<MailTransportStatus>("/email-templates/transport-status")).data,
   log: async (key: string) => (await api.get<EmailLogRow[]>(`/email-templates/${encodeURIComponent(key)}/log`)).data,
   save: async (key: string, payload: { subject: string; bodyHtml: string; enabled?: boolean }) =>
@@ -2126,7 +2359,30 @@ export interface FaceStatus {
   maxAttempts: number;
 }
 
-export type FaceOutcome = "PASSED" | "NO_FACE" | "MULTIPLE_FACES" | "NO_MATCH" | "SPOOF_SUSPECTED" | "CHALLENGE_FAILED" | "LOW_QUALITY" | "NOT_ENROLLED" | "ERROR";
+/**
+ * Every value `FaceVerificationAttempt.outcome` can hold, in the same severity order as
+ * FACE_OUTCOMES in apps/api/src/services/face.service.ts. An ordered array rather than a bare
+ * union because the analytics charts assign colour BY POSITION — a palette keyed off rank would
+ * give one outcome a different colour in each chart.
+ *
+ * SKIPPED_INSECURE was missing from the old hand-kept union even though the column has stored it
+ * since the insecure-context bypass shipped, which made every "exhaustive" Record over
+ * FaceOutcome quietly incomplete.
+ */
+export const FACE_OUTCOMES = [
+  "PASSED",
+  "NO_MATCH",
+  "SPOOF_SUSPECTED",
+  "CHALLENGE_FAILED",
+  "LOW_QUALITY",
+  "NO_FACE",
+  "MULTIPLE_FACES",
+  "NOT_ENROLLED",
+  "SKIPPED_INSECURE",
+  "ERROR"
+] as const;
+
+export type FaceOutcome = (typeof FACE_OUTCOMES)[number];
 
 export interface FaceChallenge {
   challengeId: string;
@@ -2164,6 +2420,41 @@ export interface FaceStats {
     timeToVerifyMsP50: number | null;
     timeToVerifyMsP95: number | null;
     samples: { judged: number; lowQuality: number; timed: number };
+  };
+}
+
+/** Selectable analytics windows. 90 days is bucketed by week server-side — 90 daily bars are
+ *  unreadable at any width this card gets. */
+export type FaceAnalyticsWindow = 7 | 30 | 90;
+
+/**
+ * Outcome analytics for the face review screen. Every field is a COUNT computed in the database:
+ * this endpoint deliberately never returns attempt rows, so the payload is the same size for a
+ * workspace with a thousand checks and one with a million.
+ */
+export interface FaceAnalytics {
+  since: string;
+  days: number;
+  bucket: "day" | "week";
+  total: number;
+  /** Descending by count. Charts re-order to FACE_OUTCOMES so colours stay put. */
+  outcomes: Array<{ outcome: string; count: number }>;
+  /** Zero-filled across every bucket and every outcome seen in the window. */
+  trend: Array<{ bucketStart: string; total: number; counts: Record<string, number> }>;
+  /** The three review states are mutually exclusive and must never be summed into one "handled"
+   *  number: an auto-triaged attempt is one NOBODY looked at. */
+  review: { flaggedTotal: number; pendingReview: number; humanReviewed: number; autoTriaged: number };
+  /** Enrollment coverage — the true meaning of "trained" here: there is no adaptive retraining,
+   *  only a user completing the guided multi-pose enrollment, which replaces their templates. */
+  enrollment: {
+    enforcementMode: string;
+    covered: number;
+    enrolled: number;
+    notEnrolled: number;
+    /** Enrolled against a superseded model — still unable to verify until they re-enroll. */
+    staleModel: number;
+    multiPose: number;
+    singlePose: number;
   };
 }
 
@@ -2316,6 +2607,10 @@ export const faceApi = {
   attemptImage: async (id: string) =>
     (await api.get(`/face/image/attempt/${id}`, { responseType: "blob" })).data as Blob,
   stats: async () => (await api.get<FaceStats>("/face/stats")).data,
+  /** Outcome analytics over a selectable window — counts only, aggregated in the database.
+   *  Separate from `stats`, which answers the fixed-window CALIBRATION question. */
+  analytics: async (days: FaceAnalyticsWindow = 30) =>
+    (await api.get<FaceAnalytics>("/face/analytics", { params: { days } })).data,
   /** Threshold recommendation computed from this workspace's own distribution; `narrative` is the
    *  optional AI explanation of that same number (null when AI is off). */
   policyRecommendation: async () => (await api.get<FaceThresholdRecommendation>("/face/policy-recommendation")).data,

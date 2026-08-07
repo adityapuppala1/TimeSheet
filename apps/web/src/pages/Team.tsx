@@ -21,18 +21,28 @@ import {
   Users2
 } from "lucide-react";
 import { useMemo, useState } from "react";
+import {
+  Bar,
+  BarChart,
+  CartesianGrid,
+  ResponsiveContainer,
+  Tooltip as RTooltip,
+  XAxis,
+  YAxis
+} from "recharts";
 import { OrgChartTree } from "../components/OrgChartTree";
 import { Avatar, AvatarFallback, AvatarImage } from "../components/ui/avatar";
 import { Badge } from "../components/ui/badge";
 import { Button } from "../components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../components/ui/card";
 import { DataTable } from "../components/ui/data-table";
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "../components/ui/dialog";
 import { Skeleton } from "../components/ui/skeleton";
 import { StatCard } from "../components/ui/stat-card";
 import { Tooltip, TooltipContent, TooltipTrigger } from "../components/ui/tooltip";
 import { toast } from "../components/ui/toaster";
 import { computeTrend } from "../lib/trend";
-import { fileUrl, teamApi, timesheetApi, type OrgChartNode } from "../services/api";
+import { fileUrl, teamApi, timesheetApi, type OrgChartNode, type TeamReport } from "../services/api";
 
 function initialsFor(name?: string) {
   if (!name) return "?";
@@ -57,6 +67,7 @@ function relativeTime(value: string) {
 
 export function Team() {
   const queryClient = useQueryClient();
+  const [trendFor, setTrendFor] = useState<TeamReport | null>(null);
   const reports = useQuery({ queryKey: ["team", "reports"], queryFn: teamApi.reports });
   const summary = useQuery({ queryKey: ["team", "sla-summary"], queryFn: teamApi.slaSummary, refetchInterval: 30_000 });
   const escalations = useQuery({ queryKey: ["team", "escalations"], queryFn: teamApi.escalations });
@@ -145,10 +156,15 @@ export function Team() {
                 {avatarSrc ? <AvatarImage src={avatarSrc} alt={row.original.name} /> : null}
                 <AvatarFallback>{initialsFor(row.original.name)}</AvatarFallback>
               </Avatar>
-              <div className="min-w-0">
-                <p className="truncate font-medium">{row.original.name}</p>
-                {row.original.bio && <p className="line-clamp-1 text-xs text-muted-foreground">{row.original.bio}</p>}
-              </div>
+              <button
+                type="button"
+                className="focus-ring min-w-0 rounded text-left"
+                onClick={() => setTrendFor(row.original)}
+              >
+                {/* spans, not <p> — a button may only contain phrasing content. */}
+                <span className="block truncate font-medium hover:underline">{row.original.name}</span>
+                {row.original.bio && <span className="line-clamp-1 block text-xs text-muted-foreground">{row.original.bio}</span>}
+              </button>
             </div>
           );
         }
@@ -342,10 +358,10 @@ export function Team() {
                         {avatarSrc ? <AvatarImage src={avatarSrc} alt={person.name} /> : null}
                         <AvatarFallback>{initialsFor(person.name)}</AvatarFallback>
                       </Avatar>
-                      <div className="min-w-0 flex-1">
-                        <p className="truncate font-medium">{person.name}</p>
+                      <button type="button" className="focus-ring min-w-0 flex-1 rounded text-left" onClick={() => setTrendFor(person)}>
+                        <span className="block truncate font-medium hover:underline">{person.name}</span>
                         <Badge variant="info" className="mt-0.5">{person.role.replace("_", " ")}</Badge>
-                      </div>
+                      </button>
                       <Tooltip>
                         <TooltipTrigger asChild>
                           <a href={`mailto:${person.email}`} className="shrink-0 text-primary"><Mail className="h-4 w-4" /></a>
@@ -380,7 +396,136 @@ export function Team() {
 
       <AnomaliesCard />
       <OrgChartCard />
+
+      <HoursTrendDialog person={trendFor} onClose={() => setTrendFor(null)} />
     </div>
+  );
+}
+
+const AXIS_STYLE = { stroke: "hsl(var(--muted-foreground))", fontSize: 12 };
+const TOOLTIP_STYLE = {
+  contentStyle: { background: "hsl(var(--popover))", border: "1px solid hsl(var(--border))", borderRadius: 8, color: "hsl(var(--popover-foreground))" }
+};
+const GRID_STYLE = { strokeDasharray: "3 3", stroke: "hsl(var(--border))" };
+// Fixed categorical order — a color names which window it belongs to, never a rank.
+const SERIES_COLOR = { thisMonth: "hsl(var(--primary))", trailingYear: "hsl(var(--info))" };
+
+/** `timeZone: "UTC"` on every bucket label: the API's dates are UTC-midnight day keys, so
+ *  rendering them in the viewer's local zone would print the day before for anyone west of UTC. */
+function formatWeekRange(start: string, end: string) {
+  const from = new Date(start);
+  const to = new Date(end);
+  const label = from.toLocaleDateString(undefined, { month: "short", day: "numeric", timeZone: "UTC" });
+  if (start === end) return label;
+  return `${label}–${to.toLocaleDateString(undefined, { day: "numeric", timeZone: "UTC" })}`;
+}
+
+function formatMonth(monthStart: string) {
+  return new Date(monthStart).toLocaleDateString(undefined, { month: "short", year: "2-digit", timeZone: "UTC" });
+}
+
+/** Per-report logged-hours trends. The report's id is only ever a hint to the server — it
+ *  re-checks the reporting line before returning anything, so this dialog cannot be pointed at
+ *  somebody else's team by editing the id. */
+function HoursTrendDialog({ person, onClose }: { person: TeamReport | null; onClose: () => void }) {
+  const trend = useQuery({
+    queryKey: ["team", "hours-trend", person?.id],
+    queryFn: () => teamApi.hoursTrend(person!.id),
+    enabled: Boolean(person)
+  });
+
+  const weeks = trend.data?.currentMonth.weeks ?? [];
+  const months = trend.data?.monthly ?? [];
+  const monthTotal = weeks.reduce((sum, w) => sum + w.hours, 0);
+  const yearTotal = months.reduce((sum, m) => sum + m.hours, 0);
+  const avatarSrc = fileUrl(person?.avatarUrl);
+
+  return (
+    <Dialog open={Boolean(person)} onOpenChange={(open) => !open && onClose()}>
+      <DialogContent className="max-h-[92vh] w-[min(96vw,860px)] max-w-none overflow-y-auto">
+        <DialogHeader>
+          <DialogTitle className="flex items-center gap-2 pr-6">
+            <Avatar className="h-7 w-7">
+              {avatarSrc ? <AvatarImage src={avatarSrc} alt={person?.name ?? ""} /> : null}
+              <AvatarFallback>{initialsFor(person?.name)}</AvatarFallback>
+            </Avatar>
+            <span className="truncate">{person?.name}</span>
+          </DialogTitle>
+          <DialogDescription>
+            Hours logged — every entry, whatever its approval state. Approved-only totals are in the table behind this dialog.
+          </DialogDescription>
+        </DialogHeader>
+
+        {trend.isLoading && (
+          <div className="grid gap-4">
+            <Skeleton className="h-14 w-full" />
+            <Skeleton className="h-56 w-full" />
+            <Skeleton className="h-56 w-full" />
+          </div>
+        )}
+
+        {trend.isError && <p className="py-6 text-center text-sm text-muted-foreground">Couldn't load this person's hours.</p>}
+
+        {trend.data && (
+          <div className="grid gap-4">
+            <div className="grid grid-cols-2 gap-2.5">
+              <div className="rounded-lg border border-border bg-muted/30 p-3">
+                <p className="text-xs uppercase text-muted-foreground">This month</p>
+                <p className="mt-1 text-xl font-black tracking-tight">{monthTotal.toFixed(1)}h</p>
+              </div>
+              <div className="rounded-lg border border-border bg-muted/30 p-3">
+                <p className="text-xs uppercase text-muted-foreground">Last 12 months</p>
+                <p className="mt-1 text-xl font-black tracking-tight">{yearTotal.toFixed(1)}h</p>
+              </div>
+            </div>
+
+            <div className="grid gap-1.5">
+              <p className="text-sm font-semibold">
+                {new Date(trend.data.currentMonth.monthStart).toLocaleDateString(undefined, { month: "long", year: "numeric", timeZone: "UTC" })}, week by week
+              </p>
+              {monthTotal === 0 ? (
+                <p className="py-6 text-center text-sm text-muted-foreground">No hours logged this month yet.</p>
+              ) : (
+                <div className="h-56">
+                  <ResponsiveContainer width="100%" height="100%">
+                    <BarChart data={weeks.map((w) => ({ ...w, label: formatWeekRange(w.weekStart, w.weekEnd) }))}>
+                      <CartesianGrid {...GRID_STYLE} />
+                      <XAxis dataKey="label" {...AXIS_STYLE} />
+                      <YAxis {...AXIS_STYLE} />
+                      <RTooltip {...TOOLTIP_STYLE} formatter={(value: number) => [`${value}h`, "Hours"]} />
+                      <Bar dataKey="hours" name="Hours" fill={SERIES_COLOR.thisMonth} radius={[4, 4, 0, 0]} />
+                    </BarChart>
+                  </ResponsiveContainer>
+                </div>
+              )}
+            </div>
+
+            <div className="grid gap-1.5">
+              <p className="text-sm font-semibold">Month by month, last 12 months</p>
+              {yearTotal === 0 ? (
+                <p className="py-6 text-center text-sm text-muted-foreground">Nothing logged in the last 12 months.</p>
+              ) : (
+                // Twelve labelled buckets need room a phone doesn't have — scroll this chart
+                // inside its own box rather than letting the dialog scroll sideways.
+                <div className="overflow-x-auto">
+                  <div className="h-56 min-w-[520px]">
+                    <ResponsiveContainer width="100%" height="100%">
+                      <BarChart data={months.map((m) => ({ ...m, label: formatMonth(m.monthStart) }))}>
+                        <CartesianGrid {...GRID_STYLE} />
+                        <XAxis dataKey="label" {...AXIS_STYLE} />
+                        <YAxis {...AXIS_STYLE} />
+                        <RTooltip {...TOOLTIP_STYLE} formatter={(value: number) => [`${value}h`, "Hours"]} />
+                        <Bar dataKey="hours" name="Hours" fill={SERIES_COLOR.trailingYear} radius={[4, 4, 0, 0]} />
+                      </BarChart>
+                    </ResponsiveContainer>
+                  </div>
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+      </DialogContent>
+    </Dialog>
   );
 }
 

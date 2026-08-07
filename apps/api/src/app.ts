@@ -67,6 +67,7 @@ import { ticketTypeRouter } from "./controllers/ticket-type.controller.js";
 import { timesheetRouter } from "./controllers/timesheet.controller.js";
 import { userRouter } from "./controllers/user.controller.js";
 import { AppError, errorHandler, notFound } from "./middleware/error.js";
+import { recordApiRequest } from "./middleware/request-telemetry.js";
 import { resolveTenant } from "./middleware/tenant.js";
 
 export const app = express();
@@ -292,6 +293,12 @@ app.use("/api/git", gitConnectionRouter);
 // `prisma` — mounted after /health, /uploads, and the SSO routes (none of which need the
 // normal resolved-tenant path) and before every controller router below (all of which do).
 app.use("/api", resolveTenant);
+
+// Request telemetry, mounted here for two reasons that both point at this exact line: the row it
+// writes goes to the TENANT's database (so it must be after resolveTenant), and it has to wrap the
+// whole of every handler below to time it (so it must be before all of them). Off by default and a
+// single boolean check when off — see middleware/request-telemetry.ts's hot-path contract.
+app.use("/api", recordApiRequest);
 
 app.use("/api/auth", authRouter);
 app.use("/api/billing", billingRouter);

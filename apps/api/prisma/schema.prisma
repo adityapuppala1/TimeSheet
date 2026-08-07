@@ -1437,6 +1437,19 @@ model GlobalNotificationSettings {
   /// BCC every active SUPER_ADMIN on every outbound email.
   bccSuperAdminOnAllEmails Boolean @default(false)
 
+  /// Per-role email suppression, layered UNDER the per-category booleans above. Shape:
+  /// `{ "emailDailyReminder": ["MANAGER", "SUPER_ADMIN"], ... }` — a category key mapped to the
+  /// list of roles that must NOT receive that email. A missing key means "everybody gets it",
+  /// so an empty/null column reproduces today's behaviour exactly (see the migration's
+  /// default). Deliberately one JSON column rather than category×role boolean columns: the
+  /// matrix is 27 categories × 5 roles = 135 cells, and a new notification category should
+  /// keep costing one enum member + one boolean column (see notify.service.ts's header), not
+  /// five more.
+  ///
+  /// This gates the EMAIL leg only. In-app bell notifications always fire — muting a role here
+  /// must never make a manager lose sight of an escalation, only stop it hitting their inbox.
+  emailRoleMutes Json?
+
   updatedAt   DateTime @updatedAt
   updatedById String?
 }
@@ -3135,4 +3148,67 @@ model ServiceIncident {
 
   @@index([service, startedAt])
   @@index([endedAt])
+}
+
+/// One completed HTTP request, as measured by the instance that served it.
+///
+/// WHY A SAMPLE TABLE AND NOT A LOG: the question this answers is "why was it slow, when, and on
+/// which server". That is an aggregate question — p95 by endpoint, latency over time, one pod
+/// dragging the fleet — and aggregates need rows a GROUP BY can reach, not a text log somebody
+/// greps. It deliberately does NOT replace morgan's access log; it carries no bodies, no query
+/// strings, no headers, no IPs, and no user identity beyond `userId`.
+///
+/// WHY `apiPath` IS A ROUTE PATTERN, NEVER THE RAW URL: `/api/tickets/:id` is one row's worth of
+/// cardinality; `/api/tickets/<uuid>` is one row per ticket ever viewed, which makes every GROUP BY
+/// in api-performance.service.ts return thousands of one-hit groups and the table's indexes
+/// useless. See middleware/request-telemetry.ts#routePattern for how the pattern is recovered.
+///
+/// THE HOST COLUMNS ARE DENORMALISED ON PURPOSE. They repeat on every row rather than pointing at
+/// a host table because the whole point is comparing hosts WITHIN a time window ("pod-7 is the
+/// slow one"), and a join per aggregate to save a few bytes per row on a table that is pruned
+/// every fortnight is the wrong trade. The values come from one cached snapshot refreshed on an
+/// interval, NOT measured per request — see services/api-telemetry.service.ts.
+///
+/// Written by middleware/request-telemetry.ts (buffered, batched — never inline in the request),
+/// read by services/api-performance.service.ts, pruned by workers/api-telemetry-retention.worker.ts.
+model ApiRequestSample {
+  id              String   @id @default(uuid())
+  /// Human-readable identity of the endpoint, e.g. "GET /api/tickets/:id". Method + pattern, so a
+  /// GET and a DELETE on the same path never average together.
+  apiName         String   @db.VarChar(220)
+  method          String   @db.VarChar(10)
+  /// The route pattern alone, e.g. "/api/tickets/:id".
+  apiPath         String   @db.VarChar(200)
+  statusCode      Int
+  /// Who made the request, when it was authenticated. No name, no email, no IP — the drill-down
+  /// resolves the name through User at read time, so revoking a user erases them from this view too.
+  userId          String?  @db.VarChar(191)
+  apiRequestAt    DateTime
+  apiResponseAt   DateTime
+  apiResponseTime Int
+  /// Real Prisma time inside this request, accumulated by the client extension in
+  /// config/prisma.ts. Null when telemetry was enabled mid-request or the request touched no
+  /// database at all — null means "not measured", never "zero".
+  dbResponseTime  Int?
+  dbQueryCount    Int?
+  hostname        String   @db.VarChar(120)
+  /// Kubernetes identity, from the downward API. Null off-cluster rather than faked.
+  podName         String?  @db.VarChar(120)
+  podNamespace    String?  @db.VarChar(120)
+  cluster         String?  @db.VarChar(120)
+  osType          String   @db.VarChar(80)
+  cpuPercent      Float?
+  memUsedPercent  Float?
+  diskUsedPercent Float?
+  /// "Network" as this app can honestly measure it: event-loop lag, the latency that actually
+  /// degrades responses. NIC byte counters are not portably readable from Node — see
+  /// services/system-health.service.ts's same reasoning.
+  eventLoopLagMs  Float?
+  createdAt       DateTime @default(now())
+
+  @@index([createdAt])
+  @@index([apiPath, createdAt])
+  @@index([statusCode, createdAt])
+  @@index([hostname, createdAt])
+  @@index([apiResponseTime, createdAt])
 }

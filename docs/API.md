@@ -165,6 +165,25 @@ All routes require a normal authenticated session, and `/api/face/*` carries its
   the AI budget; only attempt *metadata* enters the prompt.
 - `GET /face/stats` — ADMIN/SUPER_ADMIN; last-90-days outcome totals, signal counts, and the
   similarity histogram (passed vs rejected per 0.05 bucket) the threshold should be tuned from.
+- `GET /face/analytics?days=7|30|90` — ADMIN/SUPER_ADMIN; the operations counterpart to
+  `/face/stats`. `days` is an **enum, not a range** (anything else is 422) and defaults to 30;
+  above 30 the series buckets by week (`bucket: "day" | "week"`), because ninety daily bars are
+  unreadable. Returns `since`, `days`, `bucket`, `total`, `outcomes[]` (`{ outcome, count }`,
+  commonest first), `trend[]` (`bucketStart`, `total`, and `counts` per outcome — zero-filled
+  across every bucket **and** every outcome seen in the window, since a hole in a stacked series
+  reads as "no data" rather than "none of that outcome"), `review` (`flaggedTotal`,
+  `pendingReview`, `humanReviewed`, `autoTriaged` — three mutually exclusive states, so "a human
+  signed this off" stays countable apart from "the worker cleared it and nobody looked") and
+  `enrollment` (`enforcementMode`, `covered`, `enrolled`, `notEnrolled`, `staleModel`,
+  `multiPose`, `singlePose`). `covered` follows the enforcement mode — in `SELECTED` only
+  individually-flagged users count, or the panel reports a coverage gap that does not exist.
+  Every figure is a COUNT aggregated in the database; no per-attempt row is returned.
+
+  Kept as a sibling of `/face/stats` rather than more fields on it: that endpoint answers a
+  **calibration** question (where this workforce's similarity distribution sits relative to the
+  threshold) over a fixed 90 days and pulls rows to compute percentiles. This one answers an
+  **operations** question over a window the admin picks. Folding them together would make the
+  calibration card pay for a window it never uses.
 - `GET /face/policy-recommendation` — ADMIN/SUPER_ADMIN; the "policy copilot". Returns
   `{ currentThreshold, recommendedThreshold, currentRejectRatePct, projectedRejectRatePct,
   passedMedian, rejectedMedian, separation, sampleSize, summary, narrative }`. The recommendation
@@ -231,6 +250,24 @@ covered-but-unverified rows distinctly from not-covered ones), and `GET /tickets
   `avgResolutionHoursLastWeek` alongside the current-period fields.
 - `GET /team/sla-summary` — same pattern, scoped to the calling manager's direct reports:
   `submittedYesterday`, `breachedYesterday`, `approvedLastWeek`, `openEscalationsYesterday`.
+- `GET /team/reports/:userId/hours-trend` — authenticated, with **no separate role check because
+  the lookup *is* the scope check**: the user is fetched with `managerId = <the caller>`, the same
+  predicate `GET /team/reports` filters the roster by, so a `userId` on somebody else's team
+  simply does not match and there is no window in which their rows could be aggregated. That miss
+  answers **404, not 403**, so the route cannot be used to probe which user ids exist outside the
+  caller's own team.
+
+  Returns `{ user: { id, name }, currentMonth: { monthStart, weeks[] }, monthly[] }`. `weeks[]`
+  carries `weekStart`/`weekEnd`/`hours`/`entries` for the ISO (Monday-start) weeks of the current
+  month, **clipped to the month** — a bucket running into a neighbouring month would attribute
+  hours that `monthly[]` counts elsewhere, which is exactly the comparison the dialog exists to
+  support, so the first and last bucket may be short. `monthly[]` is `monthStart`/`hours`/
+  `entries` for the trailing 12 calendar months, zero-filled. All dates are `YYYY-MM-DD`.
+
+  Counts **all logged hours, not just approved ones**: the question is how much this person is
+  working, and an entry still sitting in `DRAFT`/`SUBMITTED` is work that was done. The
+  approved-only total already sits beside it in `GET /team/reports`'s `stats.approvedHours`.
+  Summed in the database — raw timesheet rows never leave the server.
 - `GET /reports/export.xlsx`
 - `GET /reports/export.pdf`
 - `GET /reports/cost-insights` — opt-in (`GlobalTicketSettings.enableCostAnalytics`). Covers
@@ -505,6 +542,20 @@ applied.
   `Amount`), review (`Reviewed by`, `Reviewed at`), SLA (`Approval deadline`, `SLA breached at`)
   and the ticket key. Emitted with a UTF-8 BOM so Excel does not mangle accented names.
 
+- `GET /reports/timesheets/:id/export.csv` *(`reports:view`)* — **one entry**, with the same 22
+  columns and the same UTF-8 BOM as the bulk export above, filenamed
+  `timesheet-entry-<YYYY-MM-DD>-<id-prefix>.csv`. Sets `X-Report-Rows-Included: 1`; there is
+  nothing here to truncate.
+
+  A route rather than an `id=` filter on the shared filter set, because every filter that set
+  accepts describes a **set** ("this project, this month") and a single-row escape hatch would
+  blur what an export's scope line means. This is a different question — "give me the record
+  behind this decision" — asked from the approvals queue, where an approver wants the row they are
+  about to sign off on as a file they can attach to *why* they signed it. Gated on `reports:view`
+  like the rest of the export family rather than `timesheets:approve`, since it returns somebody
+  else's hours, rate and cost. Soft-deleted entries stay unreachable (**404**) for the same reason
+  every other export excludes them: somebody retracted that work.
+
 - `GET /reports/export.pdf` *(`reports:view`)* — the same set as a document, printing its own
   scope ("Scope: 2026-03-01 to 2026-03-31 · status APPROVED") so a filtered report cannot be
   mistaken for a complete one once printed or forwarded.
@@ -552,6 +603,83 @@ missing information, but asserted-wrong information.
   `{ applied, requested, skipped[] }`. `DEACTIVATE` and `DELETE` also revoke sessions — leaving
   them live means the person keeps working until their token expires.
 
+## Notification settings
+
+- `GET /settings/notifications` *(SUPER_ADMIN)* — the workspace notification singleton: all 27
+  `email*` category booleans, the reminder schedule (`dailyReminderHour`,
+  `escalationReminderHour`, `remindOnWeekdaysOnly`), `bccSuperAdminOnAllEmails`, `emailRoleMutes`,
+  and read-only runtime meta (`serverTimezone`, `serverUtcOffset`, `serverNow`) so an hour picker
+  can say which clock it is actually setting.
+- `PATCH /settings/notifications` *(SUPER_ADMIN)* — every field optional; the body is strict, so an
+  unknown key is **422** rather than a silently ignored setting.
+
+### The `emailRoleMutes` map
+
+A map of notification category → the roles that must **not** receive that category's email:
+
+```json
+{ "emailRoleMutes": { "emailDailyReminder": ["MANAGER", "SUPER_ADMIN"], "emailEscalation": ["EMPLOYEE"] } }
+```
+
+Keys are constrained to `notificationPreferenceKeys` and values to `roles` (`SUPER_ADMIN`,
+`ADMIN`, `MANAGER`, `TEAM_LEAD`, `EMPLOYEE`), both from `@timesheet/shared`; an unrecognised key
+or role is **422**. The underlying column is free-form JSON, so this schema is its **only**
+integrity check — a typo would otherwise persist a mute that no UI could ever find and clear
+again.
+
+- **It stores the mutes, not the ticks.** A category whose list arrives empty is dropped
+  server-side, so "absent" means "everyone receives" and the stored JSON stays proportional to
+  what was actually suppressed rather than to the whole grid the UI draws.
+- **The PATCH replaces the whole map; it does not merge per key.** The matrix UI always sends the
+  complete map, and under a merge, un-ticking the last muted role for a category would be
+  impossible to express.
+- **It gates the EMAIL leg only.** The in-app bell notification is written first and always fires,
+  so muting `MANAGER` on an escalation stops the inbox copy without hiding the escalation itself.
+- It also applies to `bccSuperAdminOnAllEmails`: a SUPER_ADMIN who muted a category does not get
+  the blanket audit BCC of it either, or the hidden copy would re-deliver exactly what they just
+  muted.
+
+Omitting `emailRoleMutes` from a PATCH leaves the stored map untouched. See
+[DATABASE.md](DATABASE.md#per-role-email-mutes-globalnotificationsettingsemailrolemutes) for the
+column and why NULL is the correct default forever.
+
+## Email delivery analytics
+
+The whole `/email-templates` router is `requireAuth` + `requireSuperAdmin`, these two included.
+
+- `GET /email-templates/analytics` — aggregate read models over `EmailLog` for the Email templates
+  screen. No parameters; the windows are fixed. Returns `generatedAt`, workspace `totals`
+  (`total`, `sent`, `failed`, `queued`, `test`, `unmapped`), `today` and `yesterday`
+  (`sent`/`failed`/`queued`/`total`), `perTemplate[]`, `unmapped[]`, and zero-filled `daily` (30
+  days), `weekly` (12 Monday-start weeks) and `monthly` (12 months) series of
+  `{ bucket, sent, failed, queued, total }`.
+
+  **`EmailLog.template` is not a template key**, which is why the per-template rows are a
+  reconciliation rather than a join: `dispatchNotification` writes the notification *category*
+  into that column while `dispatchTransactional` writes the template key. Each `perTemplate` row
+  therefore carries `sources[]` (the log values feeding it) plus `shared`/`sharedWith` — one
+  category can feed two cards (`reminder.escalation` renders both the employee and the manager
+  template), and a shared total must not be summed across rows. Anything reconciling to no card at
+  all is reported in `unmapped[]` rather than dropped, so the per-template numbers can never
+  quietly add up to less than the workspace total with nothing on screen saying where the rest
+  went; `totals` is computed independently of the reconciliation for the same reason. Editor test
+  sends (`<key>.test`) are counted into `test` so they can be told apart from real traffic.
+
+- `GET /email-templates/analytics/failures?days=` *(1–365, default 30)* — `FAILED` rows grouped by
+  **reason**. Returns `windowDays`, `since`, `totalFailures`, `sampledFailures` and `reasons[]`:
+  `id`, the normalised `reason`, one verbatim `sample`, `count`, `firstSeen`/`lastSeen`,
+  `templates[]` (`{ template, count }`) and up to 50 `recipients[]` (`to`, `count`, `lastAt`,
+  `lastMessage`) with `recipientsTruncated` when that cap bit.
+
+  The grouping is the feature. Queue ids, message ids, IPs, UUIDs, timestamps and the rejected
+  address all change on every attempt, so without normalising them away "550 mailbox unavailable"
+  for 400 recipients reads as 400 distinct one-off failures and the actual pattern is invisible.
+  Numeric SMTP codes (`550`, `5.7.1`) are left intact — those are the signal, not the noise.
+  Normalisation happens in JS (SQL cannot strip a volatile id out of an SMTP string), so at most
+  5,000 rows are inspected per request; `totalFailures` is counted separately from
+  `sampledFailures` precisely so the UI can say when it is looking at a sample rather than at
+  everything.
+
 ## AI usage
 
 - `GET /settings/ai/usage-summary` — this month's spend, calls and tokens, by feature and by model.
@@ -596,6 +724,64 @@ missing information, but asserted-wrong information.
   of the load it measures). Three states, because "slow but answering" and "not answering" need
   different reactions, with a per-probe threshold — a ticket list must feel instant, a report is
   allowed to take a moment.
+
+## API performance telemetry
+
+The third question this router answers, after "is the box healthy" (`GET /maintenance/health`) and
+"do the features work" (`GET /maintenance/status-page`): **why was it slow, when, and on which
+server**. Both routes are SUPER_ADMIN. Neither is audited, same reasoning as `/health` — a polled
+read-only dashboard would drown the audit log.
+
+- `GET /maintenance/api-performance?hours=` *(default 24, clamped to 1–8760)* — returns `window`
+  (`hours`, `since`, `bucketSeconds`), `collection`, `totals`, `series[]`, `endpoints[]`,
+  `hosts[]` and `statusMix[]`.
+
+  - `totals` — `total`, `clientErrors`, `serverErrors`, `errorRate`, `avgMs`, `p50Ms`, `p95Ms`,
+    `p99Ms`, `maxMs`, `avgDbMs`, `distinctUsers`, `distinctHosts`.
+  - `series[]` — per bucket: `bucketStart`, `total`, `clientErrors`, `serverErrors`, `avgMs`,
+    `p50Ms`, `p95Ms`, `p99Ms`, `avgDbMs`. Bucket width is derived from the window (60s up to 6h)
+    so the chart always carries roughly 50–150 points; a fixed width gives either a 10,000-point
+    line for a 90-day window or six points for an hour.
+  - `endpoints[]` — top 25 by p95: `apiName` (`GET /api/tickets/:id`), `method`, `apiPath`,
+    `total`, `clientErrors`, `serverErrors`, `errorRate`, `avgMs`, `p50Ms`/`p95Ms`/`p99Ms`,
+    `maxMs`, `avgDbMs` and `totalMs`. `totalMs` is the honest ranking of *work*: a 40ms endpoint
+    called 100,000 times costs the server more than a four-second one called twice, and a table
+    sorted by p95 alone would never show it.
+  - `hosts[]` — up to 50 `hostname`/`podName`/`cluster` groups with `osType`, `total`,
+    `serverErrors`, `avgMs`, `p95Ms`, `avgCpuPercent`/`avgMemPercent`/`avgDiskPercent` and
+    `lastSeenAt`, so "one pod is the slow one" stays visible instead of averaging into the fleet.
+  - `statusMix[]` — `{ statusClass: "2xx", total }`. Grouped into classes rather than exact codes
+    because the decision an admin makes is the same for a 401 and a 403 ("clients are being
+    refused") and different for a 502.
+  - `collection` — `enabled`, `sampleRate`, `flushMs`, `retentionDays`, `maxBuffer`,
+    `bufferedNow`, `droppedSinceBoot`, `failedSinceBoot`, `writtenSinceBoot`, `host`. Present so
+    the panel can *explain* an empty chart ("recording is off") rather than leave an admin
+    guessing: collection is **off by default** (`API_TELEMETRY_ENABLED`), because the middleware
+    that feeds it sits in the hot path of every request. On a busy deployment turn the sample rate
+    down rather than the feature off — percentiles from a 10% sample are still percentiles.
+
+  **Percentiles, not averages.** An average latency is the one number that reliably hides the
+  problem: a handful of eight-second responses vanish into a 120ms mean, and those responses are
+  the entire reason somebody opened the page. p50 says what the typical user feels, p95/p99 say
+  what the unlucky ones do, and the gap between them is the finding. Everything above is
+  aggregated in SQL — nothing raw is shipped for charting.
+
+- `GET /maintenance/api-performance/requests` — the drill-down, once the aggregates have pointed
+  somewhere. Filters: `hours` (default 24, same clamp), `path` (substring match, truncated to 200
+  chars), `method` (exact), `hostname` (exact), `minMs`, `statusClass` (1–5, so `4` means 4xx),
+  `sort=slowest|recent` (default `slowest`) and `limit` (clamped 10–200, default 50). Unparseable
+  values are dropped rather than rejected. Returns `{ since, rows[] }`, each row carrying the
+  sample's own columns (`apiName`, `method`, `apiPath`, `statusCode`, `apiRequestAt`,
+  `apiResponseAt`, `apiResponseTime`, `dbResponseTime`, `dbQueryCount`, host and machine fields)
+  plus a resolved `user` — `null` for an unauthenticated request (a login, a public status poll),
+  which is a real and meaningful answer rather than a lookup that failed, and a `"Deleted user"`
+  placeholder where the id no longer resolves.
+
+  Hard-capped on purpose: this is the "show me the actual slow calls" step, not a log export, and
+  an uncapped version would be exactly the raw dump the aggregate endpoint exists to avoid. Names
+  are joined in at read time rather than stored on the sample — see
+  [DATABASE.md](DATABASE.md#api-request-telemetry-apirequestsample) for why the table itself holds
+  no identity beyond a `userId`.
 
 ## Verified work attestations
 

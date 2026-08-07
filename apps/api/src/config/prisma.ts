@@ -1,4 +1,5 @@
 import { PrismaClient } from "@prisma/client";
+import { dbTimingStore } from "./db-timing.js";
 import { requireTenantContext } from "./tenant-context.js";
 
 /**
@@ -21,6 +22,43 @@ export const prisma: PrismaClient = new Proxy({} as PrismaClient, {
     return typeof value === "function" ? value.bind(client) : value;
   }
 });
+
+/**
+ * Wraps a freshly-constructed client so every operation adds its own duration to the current
+ * request's timing bucket (see config/db-timing.ts). This is the ONLY honest way to report
+ * `ApiRequestSample.dbResponseTime` — Prisma's `query` log event knows the duration but not which
+ * request caused it.
+ *
+ * WHY IT IS APPLIED UNCONDITIONALLY rather than only when telemetry is enabled: two differently-
+ * shaped clients depending on configuration is exactly the kind of divergence that produces a bug
+ * reproducible only in production. With no active bucket — every cron tick, every boot query, and
+ * every request while telemetry is off — the wrapper is one `getStore()` returning undefined.
+ *
+ * `$allOperations` (not `$allModels`) so raw queries are counted too; a report endpoint that spends
+ * its time in `$queryRaw` would otherwise report zero database time, which is worse than reporting
+ * none. The cast is required because `$extends` returns a structurally different (wider) type that
+ * TypeScript will not accept as `PrismaClient`; the runtime object is a superset, and confining the
+ * cast to this one function keeps the other ~30 importers of `prisma` completely unaffected.
+ */
+function withDbTiming(client: PrismaClient): PrismaClient {
+  return client.$extends({
+    query: {
+      async $allOperations({ args, query }) {
+        const bucket = dbTimingStore.getStore();
+        if (!bucket) return query(args);
+        const startedAt = performance.now();
+        try {
+          return await query(args);
+        } finally {
+          // In `finally` on purpose: a query that THREW still consumed database time, and a slow
+          // failing query is precisely what somebody debugging "why was it slow" is hunting.
+          bucket.ms += performance.now() - startedAt;
+          bucket.queries += 1;
+        }
+      }
+    }
+  }) as unknown as PrismaClient;
+}
 
 interface CachedClient {
   client: PrismaClient;
@@ -74,10 +112,12 @@ export async function getTenantClient(orgId: string, dsn: string): Promise<Prism
 
   if (clientCache.size >= MAX_CACHED_CLIENTS) await evictLeastRecentlyUsed();
 
-  const client = new PrismaClient({
-    datasources: { db: { url: withConnectionLimit(dsn) } },
-    log: process.env.NODE_ENV === "development" ? ["error", "warn"] : ["error"]
-  });
+  const client = withDbTiming(
+    new PrismaClient({
+      datasources: { db: { url: withConnectionLimit(dsn) } },
+      log: process.env.NODE_ENV === "development" ? ["error", "warn"] : ["error"]
+    })
+  );
   clientCache.set(orgId, { client, lastUsedAt: Date.now() });
   await applyDatabaseTimezone(client).catch((error) => {
     console.warn(`[tenant:${orgId}] timezone alignment failed:`, (error as Error).message);

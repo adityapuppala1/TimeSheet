@@ -54,16 +54,30 @@ export const FACE_MODEL_VERSION = "human-3-faceres-1024";
 
 export const FACE_GLOBAL_ID = "global";
 
-export type FaceOutcome =
-  | "PASSED"
-  | "NO_FACE"
-  | "MULTIPLE_FACES"
-  | "NO_MATCH"
-  | "SPOOF_SUSPECTED"
-  | "CHALLENGE_FAILED"
-  | "LOW_QUALITY"
-  | "NOT_ENROLLED"
-  | "ERROR";
+/**
+ * Every value `FaceVerificationAttempt.outcome` can hold, in severity order (pass → rejection →
+ * capture problem → policy gap → system fault). A const array rather than a bare union so the
+ * values can be ITERATED — the analytics charts and the review log's outcome filter both need
+ * the list, not just the type.
+ *
+ * SKIPPED_INSECURE was missing from the previous hand-kept union even though recordInsecureSkip
+ * below writes it, which quietly made every "exhaustive" Record over this type incomplete. The
+ * web client mirrors this list (services/api.ts#FACE_OUTCOMES); the two must stay in step.
+ */
+export const FACE_OUTCOMES = [
+  "PASSED",
+  "NO_MATCH",
+  "SPOOF_SUSPECTED",
+  "CHALLENGE_FAILED",
+  "LOW_QUALITY",
+  "NO_FACE",
+  "MULTIPLE_FACES",
+  "NOT_ENROLLED",
+  "SKIPPED_INSECURE",
+  "ERROR"
+] as const;
+
+export type FaceOutcome = (typeof FACE_OUTCOMES)[number];
 
 export interface FaceAnalysis {
   embedding: number[];

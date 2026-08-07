@@ -244,7 +244,8 @@ the admin-configurable settings surfaces this app has:
 | What | Where | Notes |
 |---|---|---|
 | Outbound email (SMTP) | Workspace Settings → **Mail server** | Overrides `.env`'s `SMTP_*` vars; leave blank to keep using `.env`. Live "Test connection" button. |
-| Email templates (subject/body per event) | **Email templates** page (sidebar) | Edit any of the 20 built-in templates, preview with sample data, send a single test, or "Send all templates as test" to smoke-test every one at once. |
+| Email templates (subject/body per event) | **Email templates** page (sidebar) | Edit any of the 20 built-in templates, preview with sample data, send a single test, or "Send all templates as test" to smoke-test every one at once. Also shows per-template send volume, the success/failure split, and a grouped failure breakdown read from `EmailLog`. |
+| Which roles get which emails | Workspace Settings → **Email channels** | A category × role grid: every gateable email category is a row, grouped into Timesheets / Tickets / Digests / Identity / Workspace. Unticking a cell suppresses only the **email** leg for that role — the in-app bell notification always fires, so muting Manager on an escalation removes the inbox copy without hiding the escalation. `welcome`, `reset`, and the email-intake auto-reply are listed as **Always sent** and deliberately have no row: they go to one person as a direct result of an action, and a role filter over a password reset is an account lockout waiting to happen. |
 | AI provider/model/budget | Workspace Settings → **AI** | BYOK — Anthropic or any OpenAI-compatible endpoint. |
 | Email-to-ticket intake | Workspace Settings → **Email intake** | IMAP mailbox + routing rules. |
 | Chat-to-ticket (Slack/Teams/Google Chat/Telegram) | Workspace Settings → **Chat integrations** | Per-platform bot tokens + routing rules. |
@@ -260,9 +261,34 @@ the admin-configurable settings surfaces this app has:
 | Ticket types, labels, SLA hours | Workspace Settings → **Ticketing** | |
 | Plan tiers, seat limits, AI budget ceilings | `/platform-admin` console | Cross-org, platform-admin-only. |
 | User designation (job title) | Users page → create/edit form, or bulk-upload CSV's `designation` column | Free text, display-only — shown on the Users table and org chart. Has no effect on RBAC (that's the separate `role` field). |
+| API request telemetry (latency percentiles, slowest endpoints, per-host/pod split) | Workspace Settings → **Maintenance → API performance** | **The one row here that is not a UI toggle** — the panel reads and reports, but collection is switched on in the environment. Off by default. |
 
-None of these require a server restart — every one reads live from the database on the next
-request.
+Every row above except the last reads live from the database on the next request — no server
+restart. API telemetry is the exception: it sits in the hot path of every request, so an operator
+has to ask for that cost in the environment rather than an admin flipping it from a settings page.
+
+### Environment variables for API telemetry
+
+Add these to `apps/api/.env` (manual install) and restart the API. Docker Compose and the Helm
+chart forward an explicit list of variables rather than the whole file, so those shapes also need
+the variable added to `docker-compose.yml`'s `api.environment` block or the chart's ConfigMap —
+see [docs/DEPLOYMENT.md § Operating API request telemetry](DEPLOYMENT.md#operating-api-request-telemetry)
+for the full operational picture (row volume, retention, sampling, and what the CPU/RAM columns
+can and cannot tell you).
+
+- `API_TELEMETRY_ENABLED` — master switch, default `false`. Read at boot, so a change needs a restart.
+- `API_TELEMETRY_SAMPLE_RATE` — fraction of requests recorded, `0`–`1` (default `1`). On a busy
+  deployment turn this down (e.g. `0.1`) rather than turning the feature off — percentiles from a
+  sample are still percentiles.
+- `API_TELEMETRY_FLUSH_MS` — how often the in-memory buffer drains to the database (default `5000`).
+- `API_TELEMETRY_MAX_BUFFER` — buffered rows past which new samples are dropped and counted rather
+  than queued (default `5000`).
+- `API_TELEMETRY_RETENTION_DAYS` — rows older than this are pruned nightly at 04:10 (default `14`).
+- `POD_NAME` / `POD_NAMESPACE` / `CLUSTER_NAME` — host identity stamped on each row, named for the
+  Kubernetes downward API. Leave unset off-cluster; those columns are written `NULL` rather than
+  guessed, and the hostname still comes from `os.hostname()`.
+
+The root `.env.example` carries the same list with the reasoning inline.
 
 ---
 
@@ -341,7 +367,7 @@ already planned — check there before filing something that's already tracked.
 For symptom-specific fixes not covered above, see:
 - [README.md § Troubleshooting](../README.md#troubleshooting) — build/env/port/login issues.
 - [docs/DEPLOYMENT.md](DEPLOYMENT.md) — Docker Compose / Kubernetes-specific issues.
-- [docs/SECURITY_DEVOPS_INTEGRATIONS.md § 6](SECURITY_DEVOPS_INTEGRATIONS.md#6-troubleshooting) — ingestion webhook 401/404/429s.
+- [docs/SECURITY_DEVOPS_INTEGRATIONS.md § 7](SECURITY_DEVOPS_INTEGRATIONS.md#7-troubleshooting) — ingestion webhook 401/404/429s.
 
 If none of those cover it, the fastest next step is almost always `npm run doctor -w apps/api`
 (manual install) or checking `docker compose logs api` (Docker install) — both surface the

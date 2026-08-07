@@ -27,6 +27,7 @@ import {
 } from "../services/maintenance.service.js";
 import { getSystemHealth } from "../services/system-health.service.js";
 import { getStatusPage, runHealthChecks } from "../services/service-health.service.js";
+import { getApiPerformanceOverview, listApiRequests } from "../services/api-performance.service.js";
 
 export const maintenanceRouter = Router();
 
@@ -135,4 +136,40 @@ maintenanceRouter.get("/status-page", requireAuth, requireSuperAdmin, async (req
 maintenanceRouter.post("/status-page/run", requireAuth, requireSuperAdmin, async (_req, res) => {
   const results = await runHealthChecks();
   res.json({ ranAt: new Date().toISOString(), results });
+});
+
+/**
+ * GET /maintenance/api-performance — the third question this router answers, after "is the box
+ * healthy" (/health) and "do the features work" (/status-page): "why was it SLOW, when, and on
+ * which server". Latency percentiles, per-endpoint breakdown, error rate and a per-host/pod split,
+ * all aggregated in SQL (see api-performance.service.ts — nothing raw is shipped for charting).
+ *
+ * Not audited, same reasoning as /health: a polled read-only dashboard would drown the audit log.
+ */
+maintenanceRouter.get("/api-performance", requireAuth, requireSuperAdmin, async (req, res) => {
+  res.json(await getApiPerformanceOverview(Number(req.query.hours) || 24));
+});
+
+/**
+ * GET /maintenance/api-performance/requests — the drill-down, once the aggregates above have
+ * pointed somewhere. Returns individual requests, hard-capped at 200: this is the "show me the
+ * actual slow calls" step, not a log export, and an uncapped version would be exactly the raw dump
+ * the aggregate endpoints exist to avoid.
+ */
+maintenanceRouter.get("/api-performance/requests", requireAuth, requireSuperAdmin, async (req, res) => {
+  const statusClass = Number(req.query.statusClass);
+  const minMs = Number(req.query.minMs);
+  res.json(
+    await listApiRequests({
+      hours: Number(req.query.hours) || 24,
+      path: typeof req.query.path === "string" && req.query.path.trim() ? req.query.path.trim().slice(0, 200) : undefined,
+      method: typeof req.query.method === "string" && req.query.method.trim() ? req.query.method.trim().slice(0, 10) : undefined,
+      hostname:
+        typeof req.query.hostname === "string" && req.query.hostname.trim() ? req.query.hostname.trim().slice(0, 120) : undefined,
+      minMs: Number.isFinite(minMs) && minMs > 0 ? Math.round(minMs) : undefined,
+      statusClass: Number.isInteger(statusClass) && statusClass >= 1 && statusClass <= 5 ? statusClass : undefined,
+      sort: req.query.sort === "recent" ? "recent" : "slowest",
+      limit: Math.min(200, Math.max(10, Number(req.query.limit) || 50))
+    })
+  );
 });

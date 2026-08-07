@@ -958,6 +958,158 @@ faceRouter.get("/stats", requireAdmin, async (_req, res) => {
   });
 });
 
+/** Windows the analytics endpoint will aggregate over. Bounded rather than free-form: the trend
+ *  query scans an index range, and an admin typing days=100000 would turn a chart into a table
+ *  scan. Anything longer than a month is bucketed by week — 90 daily bars are unreadable. */
+const ANALYTICS_WINDOWS = [7, 30, 90] as const;
+const analyticsQuerySchema = z.object({
+  query: z.object({ days: z.coerce.number().int().refine((d) => (ANALYTICS_WINDOWS as readonly number[]).includes(d)).optional() })
+});
+
+const DAY_MS = 24 * 60 * 60 * 1000;
+
+/**
+ * GET /face/analytics?days=30 — the outcome analytics behind the review log: what verification
+ * decided, whether it is trending worse, what happened to the attempts it reported, and how much
+ * of the covered workforce has actually enrolled.
+ *
+ * WHY a sibling of /face/stats rather than more fields on it: /face/stats answers a CALIBRATION
+ * question (where does this workforce's similarity distribution sit relative to the threshold)
+ * over a fixed 90-day window, and it deliberately pulls rows to compute percentiles. This one
+ * answers an OPERATIONS question over a window the admin picks, and every number here is a
+ * COUNT — so it aggregates in the database and returns nothing per-attempt. Folding the two
+ * together would make the calibration card pay for a window it doesn't use.
+ */
+faceRouter.get("/analytics", requireAdmin, validate(analyticsQuerySchema), async (req, res) => {
+  const days = Number(req.query.days ?? 30);
+  const bucket: "day" | "week" = days > 30 ? "week" : "day";
+  // Aligned to a day boundary so the first bucket is a whole day rather than a partial one that
+  // makes the earliest bar look like a collapse in volume.
+  const since = new Date(new Date().setHours(0, 0, 0, 0) - (days - 1) * DAY_MS);
+  const window = { createdAt: { gte: since } };
+
+  const settings = await getFaceSettings();
+  const coveredWhere = {
+    status: "ACTIVE" as const,
+    deletedAt: null,
+    // Mirrors findCoveredUnenrolledUserIds: in SELECTED mode only individually-flagged users are
+    // covered, so counting every active user would report a coverage gap that doesn't exist.
+    ...(settings.enforcementMode === "ALL" ? {} : { faceVerificationRequired: true })
+  };
+
+  const [outcomeGroups, pendingReview, humanReviewed, autoTriaged, covered, enrolledUsers] = await Promise.all([
+    prisma.faceVerificationAttempt.groupBy({ by: ["outcome"], where: window, _count: { _all: true } }),
+    // The three review states are mutually exclusive by construction and must stay that way:
+    // marking reviewed clears flaggedForReview and stamps reviewedAt; auto-triage clears the flag
+    // and writes autoResolvedReason WITHOUT a reviewedAt, which is the whole point of that column
+    // (see the schema note) — "nobody actually looked at this" has to stay countable separately
+    // from "a human signed it off".
+    prisma.faceVerificationAttempt.count({ where: { ...window, flaggedForReview: true } }),
+    prisma.faceVerificationAttempt.count({ where: { ...window, reviewedAt: { not: null } } }),
+    prisma.faceVerificationAttempt.count({ where: { ...window, reviewedAt: null, autoResolvedReason: { not: null } } }),
+    prisma.user.count({ where: coveredWhere }),
+    prisma.user.findMany({
+      where: { ...coveredWhere, faceEnrollment: { isNot: null } },
+      select: { faceEnrollment: { select: { id: true, modelVersion: true } } }
+    })
+  ]);
+
+  /**
+   * Per-day, per-outcome counts in ONE aggregate query. Prisma's groupBy cannot bucket a
+   * DateTime, and the alternatives are both worse: a query per bucket (up to 90 round trips) or
+   * pulling every attempt row back to bucket in JS — which is the thing this endpoint exists to
+   * avoid. DATE() resolves in the session time zone, which config/prisma.ts pins to the
+   * configured offset, so a "day" here is the same day the rest of the app reports.
+   */
+  const daily = await prisma.$queryRaw<Array<{ day: string; outcome: string; n: bigint | number }>>`
+    SELECT DATE_FORMAT(createdAt, '%Y-%m-%d') AS day, outcome, COUNT(*) AS n
+    FROM FaceVerificationAttempt
+    WHERE createdAt >= ${since}
+    GROUP BY day, outcome
+  `;
+
+  const outcomes = outcomeGroups
+    .map((g) => ({ outcome: g.outcome, count: g._count._all }))
+    .sort((a, b) => b.count - a.count);
+  const total = outcomes.reduce((sum, o) => sum + o.count, 0);
+
+  // Zero-filled across every bucket AND every outcome seen in the window: a stacked series with
+  // holes in it renders as a gap the eye reads as "no data", not "none of that outcome".
+  const seenOutcomes = outcomes.map((o) => o.outcome);
+  const bucketMs = bucket === "week" ? 7 * DAY_MS : DAY_MS;
+  const bucketCount = Math.ceil((Date.now() - since.getTime()) / bucketMs);
+  const trend = Array.from({ length: bucketCount }, (_, i) => ({
+    bucketStart: new Date(since.getTime() + i * bucketMs).toISOString().slice(0, 10),
+    total: 0,
+    counts: Object.fromEntries(seenOutcomes.map((o) => [o, 0])) as Record<string, number>
+  }));
+
+  for (const row of daily) {
+    // DATE_FORMAT rather than DATE() so the driver hands back a plain string: a DATE column
+    // arrives as a Date pinned to UTC midnight, which is a different instant from the local
+    // midnight `since` is aligned to — every bucket would land one off east of Greenwich.
+    const dayStart = new Date(`${String(row.day)}T00:00:00`);
+    const index = Math.floor((dayStart.getTime() - since.getTime()) / bucketMs);
+    if (index < 0 || index >= trend.length) continue;
+    const n = Number(row.n);
+    trend[index].counts[row.outcome] = (trend[index].counts[row.outcome] ?? 0) + n;
+    trend[index].total += n;
+  }
+
+  /**
+   * Enrollment coverage — the honest answer to "how many are trained". This app has NO adaptive
+   * retraining: the only training that exists is a user completing the guided multi-pose
+   * enrollment, which REPLACES their templates. So the meaningful split is how much of the
+   * covered population has a usable face model, and how many of those models are the weak
+   * single-angle kind that predates the wizard (the same test /face/status#needsBetterEnrollment
+   * uses: fewer than 3 templates including the primary embedding).
+   */
+  const enrollmentIds = enrolledUsers.map((u) => u.faceEnrollment!.id);
+  const currentModelIds = new Set(
+    enrolledUsers.filter((u) => u.faceEnrollment!.modelVersion === FACE_MODEL_VERSION).map((u) => u.faceEnrollment!.id)
+  );
+  const templateGroups = enrollmentIds.length
+    ? await prisma.faceEnrollmentTemplate.groupBy({
+        by: ["enrollmentId"],
+        where: { enrollmentId: { in: enrollmentIds }, modelVersion: FACE_MODEL_VERSION },
+        _count: { _all: true }
+      })
+    : [];
+  const extraTemplates = new Map(templateGroups.map((g) => [g.enrollmentId, g._count._all]));
+
+  let multiPose = 0;
+  for (const id of currentModelIds) {
+    if ((extraTemplates.get(id) ?? 0) + 1 >= 3) multiPose++;
+  }
+
+  res.json({
+    since: since.toISOString(),
+    days,
+    bucket,
+    total,
+    outcomes,
+    trend,
+    review: {
+      /** Every attempt this window reported, in whatever state it now sits. */
+      flaggedTotal: pendingReview + humanReviewed + autoTriaged,
+      pendingReview,
+      humanReviewed,
+      autoTriaged
+    },
+    enrollment: {
+      enforcementMode: settings.enforcementMode,
+      covered,
+      enrolled: enrollmentIds.length,
+      notEnrolled: Math.max(0, covered - enrollmentIds.length),
+      /** Enrolled against a superseded model — matching can't compare across versions, so these
+       *  people are enrolled and still unable to verify until they re-enroll. */
+      staleModel: enrollmentIds.length - currentModelIds.size,
+      multiPose,
+      singlePose: currentModelIds.size - multiPose
+    }
+  });
+});
+
 /**
  * GET /face/policy-recommendation — the "policy copilot". The recommended threshold is computed
  * arithmetically from this workspace's own distribution (see recommendMatchThreshold), so this

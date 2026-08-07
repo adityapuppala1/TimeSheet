@@ -51,7 +51,7 @@ export default defineConfig(({ mode }) => {
   let bundleVersion = process.env.APP_VERSION ?? env.APP_VERSION ?? "0.0.0-dev";
   if (!process.env.APP_VERSION && !env.APP_VERSION) {
     try {
-      bundleVersion = readFileSync(resolve(__dirname, "../../VERSION"), "utf8").trim();
+      bundleVersion = readFileSync(resolve(import.meta.dirname, "../../VERSION"), "utf8").trim();
     } catch {
       /* dev fallback stands */
     }
@@ -59,8 +59,8 @@ export default defineConfig(({ mode }) => {
 
   // Read once, outside the returned config, so a missing pair is a silent no-op rather than a
   // crash on every request.
-  const keyPath = env.DEV_HTTPS_KEY ?? resolve(__dirname, "certs/dev-key.pem");
-  const certPath = env.DEV_HTTPS_CERT ?? resolve(__dirname, "certs/dev-cert.pem");
+  const keyPath = env.DEV_HTTPS_KEY ?? resolve(import.meta.dirname, "certs/dev-key.pem");
+  const certPath = env.DEV_HTTPS_CERT ?? resolve(import.meta.dirname, "certs/dev-cert.pem");
   let devHttps: { key: Buffer; cert: Buffer } | undefined;
   try {
     devHttps = { key: readFileSync(keyPath), cert: readFileSync(certPath) };

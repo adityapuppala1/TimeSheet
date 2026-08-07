@@ -27,12 +27,15 @@ import {
   aiModels,
   aiProviderPresets,
   emailMatchTypes,
+  isEmailRoleMuted,
   notificationPreferenceKeys,
   type EmailMatchType,
+  type EmailRoleMutes,
   type GlobalAISettings,
   type GlobalSettings,
   type GlobalTicketSettings,
-  type NotificationPreferences
+  type NotificationPreferences,
+  type RoleName
 } from "@timesheet/shared";
 import {
   AlarmClock,
@@ -71,6 +74,7 @@ import { Alert, AlertDescription, AlertTitle } from "../components/ui/alert";
 import { Badge } from "../components/ui/badge";
 import { Button } from "../components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../components/ui/card";
+import { Checkbox } from "../components/ui/checkbox";
 import { Input } from "../components/ui/input";
 import { Label } from "../components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../components/ui/select";
@@ -123,32 +127,89 @@ interface ToggleRow {
   label: string;
   description: string;
   icon: ReactNode;
+  /** Section heading this row sits under in the matrix. */
+  group: "Timesheets" | "Tickets" | "Digests" | "Identity" | "Workspace";
 }
 
+/**
+ * EVERY gateable email in the app, in one table. `notificationPreferenceKeys` is the contract:
+ * a key that exists there but has no row here is a category the backend silently enforces and
+ * no admin can find — which is exactly what had happened to the six `emailTicket*` rows below.
+ * The `emailChannelCoverage` assertion under this list keeps that from recurring.
+ */
 const emailRows: ToggleRow[] = [
-  { key: "emailTimesheetSubmitted", label: "Submission confirmation", description: "Email the submitter when a timesheet enters the approval queue.", icon: <Check className="h-4 w-4 text-info" /> },
-  { key: "emailTimesheetApproved", label: "Timesheet approved", description: "Email the employee when their entry is approved.", icon: <Check className="h-4 w-4 text-success" /> },
-  { key: "emailTimesheetRejected", label: "Timesheet rejected", description: "Email the employee with the reviewer's reason and a fix link.", icon: <X className="h-4 w-4 text-destructive" /> },
-  { key: "emailSlaBreach", label: "Approval SLA breached", description: "Email the manager who missed the window before we escalate.", icon: <Hourglass className="h-4 w-4 text-warning" /> },
-  { key: "emailEscalation", label: "Approval escalations", description: "Email the manager-of-manager (or admin) when an SLA is missed.", icon: <ShieldX className="h-4 w-4 text-destructive" /> },
-  { key: "emailDailyReminder", label: "Daily reminder (4 PM)", description: "Nudge employees who haven't logged today's time.", icon: <Clock className="h-4 w-4 text-primary" /> },
-  { key: "emailDailyEscalation", label: "Next-morning escalation (9 AM)", description: "Email both the employee and their manager when yesterday's log was missed.", icon: <Timer className="h-4 w-4 text-destructive" /> },
-  { key: "emailDeadlineReminder", label: "Monthly deadline reminder", description: "Email employees a few days before the monthly cutoff.", icon: <CalendarClock className="h-4 w-4 text-warning" /> },
-  { key: "emailWeeklyDigest", label: "Weekly digest", description: "AI-authored Monday-morning recap of your ticket and timesheet activity. Requires the AI weekly digest toggle in the AI tab.", icon: <BellRing className="h-4 w-4 text-info" /> },
-  { key: "emailSecurityWeeklyDigest", label: "Weekly security digest", description: "AI-authored Monday-morning (08:30) org-wide security recap for every admin — open findings, risk score, tickets past SLA. Requires the AI weekly security digest toggle in the AI tab.", icon: <ShieldAlert className="h-4 w-4 text-destructive" /> },
-  { key: "emailBugPatternDigest", label: "Monthly bug-pattern digest", description: "AI-authored \"what kept breaking\" recap on the 1st of every month — recurring CI failures and security-finding hotspots. Requires the AI monthly bug-pattern digest toggle in the AI tab.", icon: <BellRing className="h-4 w-4 text-info" /> },
-  { key: "emailTicketStaleNudge", label: "Stale-ticket nudge", description: "AI-suggested next action when the SLA sweep flags a ticket as stale. Requires the AI stale-ticket nudge toggle in the AI tab.", icon: <Hourglass className="h-4 w-4 text-warning" /> },
-  { key: "emailMaintenanceScheduled", label: "Maintenance warning", description: "\"Save your work\" email when a super admin sends the maintenance-window notice from the Maintenance tab. The in-app notification always fires — this only gates the email copy.", icon: <Wrench className="h-4 w-4 text-warning" /> },
-  { key: "emailTicketNeedsReview", label: "Email-sourced ticket needs review", description: "Alert project admins/managers when an inbound email is classified with low confidence.", icon: <Sparkles className="h-4 w-4 text-warning" /> },
+  { group: "Timesheets", key: "emailTimesheetSubmitted", label: "Submission confirmation", description: "Email the submitter when a timesheet enters the approval queue.", icon: <Check className="h-4 w-4 text-info" /> },
+  { group: "Timesheets", key: "emailTimesheetApproved", label: "Timesheet approved", description: "Email the employee when their entry is approved.", icon: <Check className="h-4 w-4 text-success" /> },
+  { group: "Timesheets", key: "emailTimesheetRejected", label: "Timesheet rejected", description: "Email the employee with the reviewer's reason and a fix link.", icon: <X className="h-4 w-4 text-destructive" /> },
+  { group: "Timesheets", key: "emailSlaBreach", label: "Approval SLA breached", description: "Email the manager who missed the window before we escalate.", icon: <Hourglass className="h-4 w-4 text-warning" /> },
+  { group: "Timesheets", key: "emailEscalation", label: "Approval escalations", description: "Email the manager-of-manager (or admin) when an SLA is missed.", icon: <ShieldX className="h-4 w-4 text-destructive" /> },
+  { group: "Timesheets", key: "emailDailyReminder", label: "Daily reminder (4 PM)", description: "Nudge employees who haven't logged today's time.", icon: <Clock className="h-4 w-4 text-primary" /> },
+  { group: "Timesheets", key: "emailDailyEscalation", label: "Next-morning escalation (9 AM)", description: "Email both the employee and their manager when yesterday's log was missed.", icon: <Timer className="h-4 w-4 text-destructive" /> },
+  { group: "Timesheets", key: "emailDeadlineReminder", label: "Monthly deadline reminder", description: "Email employees a few days before the monthly cutoff.", icon: <CalendarClock className="h-4 w-4 text-warning" /> },
+  { group: "Digests", key: "emailWeeklyDigest", label: "Weekly digest", description: "AI-authored Monday-morning recap of your ticket and timesheet activity. Requires the AI weekly digest toggle in the AI tab.", icon: <BellRing className="h-4 w-4 text-info" /> },
+  { group: "Digests", key: "emailSecurityWeeklyDigest", label: "Weekly security digest", description: "AI-authored Monday-morning (08:30) org-wide security recap for every admin — open findings, risk score, tickets past SLA. Requires the AI weekly security digest toggle in the AI tab.", icon: <ShieldAlert className="h-4 w-4 text-destructive" /> },
+  { group: "Digests", key: "emailBugPatternDigest", label: "Monthly bug-pattern digest", description: "AI-authored \"what kept breaking\" recap on the 1st of every month — recurring CI failures and security-finding hotspots. Requires the AI monthly bug-pattern digest toggle in the AI tab.", icon: <BellRing className="h-4 w-4 text-info" /> },
+  { group: "Tickets", key: "emailTicketStaleNudge", label: "Stale-ticket nudge", description: "AI-suggested next action when the SLA sweep flags a ticket as stale. Requires the AI stale-ticket nudge toggle in the AI tab.", icon: <Hourglass className="h-4 w-4 text-warning" /> },
+  { group: "Workspace", key: "emailMaintenanceScheduled", label: "Maintenance warning", description: "\"Save your work\" email when a super admin sends the maintenance-window notice from the Maintenance tab. The in-app notification always fires — this only gates the email copy.", icon: <Wrench className="h-4 w-4 text-warning" /> },
+  { group: "Tickets", key: "emailTicketNeedsReview", label: "Email-sourced ticket needs review", description: "Alert project admins/managers when an inbound email is classified with low confidence.", icon: <Sparkles className="h-4 w-4 text-warning" /> },
   // Face (identity) verification lifecycle — none of these ever carry a captured image or a
   // score; they link into the app, where authorization is checked.
-  { key: "emailFaceEnrollmentRequired", label: "Face enrollment required", description: "Tell someone the identity policy now covers them — before a blocked submission does.", icon: <ScanFace className="h-4 w-4 text-primary" /> },
-  { key: "emailFaceEnrollmentReminder", label: "Face enrollment reminder", description: "Daily follow-up (at most one per 3 days) while a covered person hasn't enrolled.", icon: <ScanFace className="h-4 w-4 text-warning" /> },
-  { key: "emailFaceVerificationFlagged", label: "Identity check flagged", description: "Alert the person's manager and admins when repeated failed checks flag an attempt for review.", icon: <ShieldAlert className="h-4 w-4 text-destructive" /> },
-  { key: "emailFaceReviewOverdue", label: "Identity review overdue", description: "Nudge admins when flagged attempts sit unreviewed for 48+ hours.", icon: <Hourglass className="h-4 w-4 text-warning" /> },
-  { key: "emailFaceDataDeleted", label: "Face data deleted", description: "Confirm to the person when their biometric data is deleted (self-service or by an admin).", icon: <ShieldCheck className="h-4 w-4 text-success" /> },
-  { key: "emailFaceEntitlementLost", label: "Face verification plan change", description: "Tell admins when the plan stops including face verification and the purge grace window starts.", icon: <ShieldX className="h-4 w-4 text-destructive" /> },
-  { key: "emailIdentityWeeklyDigest", label: "Weekly identity digest", description: "Monday-morning recap of identity checks, failures, and pending reviews for every admin. Stats only — no AI.", icon: <BellRing className="h-4 w-4 text-info" /> }
+  { group: "Identity", key: "emailFaceEnrollmentRequired", label: "Face enrollment required", description: "Tell someone the identity policy now covers them — before a blocked submission does.", icon: <ScanFace className="h-4 w-4 text-primary" /> },
+  { group: "Identity", key: "emailFaceEnrollmentReminder", label: "Face enrollment reminder", description: "Daily follow-up (at most one per 3 days) while a covered person hasn't enrolled.", icon: <ScanFace className="h-4 w-4 text-warning" /> },
+  { group: "Identity", key: "emailFaceVerificationFlagged", label: "Identity check flagged", description: "Alert the person's manager and admins when repeated failed checks flag an attempt for review.", icon: <ShieldAlert className="h-4 w-4 text-destructive" /> },
+  { group: "Identity", key: "emailFaceReviewOverdue", label: "Identity review overdue", description: "Nudge admins when flagged attempts sit unreviewed for 48+ hours.", icon: <Hourglass className="h-4 w-4 text-warning" /> },
+  { group: "Identity", key: "emailFaceDataDeleted", label: "Face data deleted", description: "Confirm to the person when their biometric data is deleted (self-service or by an admin).", icon: <ShieldCheck className="h-4 w-4 text-success" /> },
+  { group: "Identity", key: "emailFaceEntitlementLost", label: "Face verification plan change", description: "Tell admins when the plan stops including face verification and the purge grace window starts.", icon: <ShieldX className="h-4 w-4 text-destructive" /> },
+  { group: "Digests", key: "emailIdentityWeeklyDigest", label: "Weekly identity digest", description: "Monday-morning recap of identity checks, failures, and pending reviews for every admin. Stats only — no AI.", icon: <BellRing className="h-4 w-4 text-info" /> },
+  // Ticket lifecycle. These six were enforced by dispatchNotification from the day they shipped
+  // but had no row here, so the only way to change them was a direct DB write.
+  { group: "Tickets", key: "emailTicketAssigned", label: "Ticket assigned", description: "Email the assignee when a ticket is assigned to them.", icon: <Inbox className="h-4 w-4 text-primary" /> },
+  { group: "Tickets", key: "emailTicketStatusChanged", label: "Ticket status changed", description: "Email the reporter and assignee when a ticket moves between statuses.", icon: <RefreshCw className="h-4 w-4 text-info" /> },
+  { group: "Tickets", key: "emailTicketCommented", label: "Ticket commented", description: "Email the ticket's participants when someone adds a comment.", icon: <Pencil className="h-4 w-4 text-info" /> },
+  { group: "Tickets", key: "emailTicketSlaBreach", label: "Ticket SLA breached", description: "Email the assignee when a ticket passes its priority's SLA window.", icon: <Hourglass className="h-4 w-4 text-warning" /> },
+  { group: "Tickets", key: "emailTicketEscalation", label: "Ticket escalation", description: "Email the assignee's manager when a breached ticket escalates.", icon: <ShieldX className="h-4 w-4 text-destructive" /> },
+  { group: "Tickets", key: "emailTicketClosedDigest", label: "Ticket-closed security digest", description: "Security/test-status recap to whoever closed a ticket, their manager, and this org's admins. Needs a connected scan source to be meaningful.", icon: <ShieldCheck className="h-4 w-4 text-success" /> }
+];
+
+/**
+ * Compile-time proof that every gateable email category has a row above. If a new key is added
+ * to `notificationPreferenceKeys` without a matching `emailRows` entry, this errors — the whole
+ * point being that the backend already enforces such a key, so a missing row is an invisible
+ * setting rather than a cosmetic gap. Deliberately a type-level check, not a runtime one: the
+ * failure has to surface in CI, not in a super admin's browser.
+ */
+type UncoveredEmailKey = Exclude<keyof NotificationPreferences, (typeof emailRows)[number]["key"]>;
+const _emailChannelCoverage: UncoveredEmailKey extends never ? true : never = true;
+void _emailChannelCoverage;
+
+const EMAIL_GROUP_ORDER: ReadonlyArray<ToggleRow["group"]> = ["Timesheets", "Tickets", "Digests", "Identity", "Workspace"];
+
+/**
+ * Transactional mail that deliberately has NO toggle and no role column. These go to one specific
+ * person as the direct result of an action they or an admin just took, and are listed purely so
+ * "which emails does this app send?" has a single complete answer on this screen.
+ *
+ * Not gateable on purpose: a role filter over a password reset is an account-lockout waiting to
+ * happen, and `dispatchTransactional()` has no recipient User row to read a role from anyway.
+ */
+const ALWAYS_SENT_ROWS: ReadonlyArray<{ label: string; description: string }> = [
+  { label: "welcome", description: "Sent once, the first time an account is created." },
+  { label: "reset", description: "Password-reset link with a 30-minute TTL." },
+  { label: "Email-intake confirmation", description: "Auto-reply to an external sender whose email created a ticket." }
+];
+
+/**
+ * Column order for the Email channels matrix: least-privileged first, so the two columns an
+ * admin most often wants to clear (Manager, Super Admin — the roles that approve time rather
+ * than log it) sit next to each other on the right. Deliberately NOT `roles` from @timesheet/
+ * shared, which is ordered by descending privilege for permission checks.
+ */
+const MATRIX_ROLES: ReadonlyArray<{ role: RoleName; label: string; short: string }> = [
+  { role: "EMPLOYEE", label: "Employee", short: "Emp" },
+  { role: "TEAM_LEAD", label: "Team Leader", short: "TL" },
+  { role: "MANAGER", label: "Manager", short: "Mgr" },
+  { role: "ADMIN", label: "Admin", short: "Adm" },
+  { role: "SUPER_ADMIN", label: "Super Admin", short: "SA" }
 ];
 
 const HOURS_24 = Array.from({ length: 24 }, (_, i) => i);
@@ -461,11 +522,49 @@ function ReminderScheduleCard({ readOnly }: { readOnly: boolean }) {
   );
 }
 
+/**
+ * Email channels — a category × role matrix.
+ *
+ * Two independent gates per cell, and the distinction matters when reading this:
+ *  - the row's `Switch` is the category master (`GlobalNotificationSettings.emailDailyReminder`
+ *    and friends). Off = nobody gets that email, whatever the ticks say.
+ *  - each role `Checkbox` is the per-role audience (`emailRoleMutes`). Unticked = that role is
+ *    muted for that category. Stored inverted (we persist the MUTES, not the ticks) so that a
+ *    workspace which never opens this screen — and every category added after it shipped — keeps
+ *    defaulting to "everyone", with no backfill.
+ *
+ * Both gate the EMAIL leg only; the in-app bell notification always fires. That's the property
+ * that makes muting MANAGER/SUPER_ADMIN safe: an approver still SEES an escalation in the app,
+ * they just stop getting a copy per employee per day in their inbox.
+ */
 function EmailChannelsCard({ readOnly }: { readOnly: boolean }) {
   const settings = useSettings();
   const update = useUpdate();
 
   const allOff = settings.data ? notificationPreferenceKeys.every((key) => !settings.data?.[key]) : false;
+  const mutes: EmailRoleMutes = (settings.data?.emailRoleMutes as EmailRoleMutes | null) ?? {};
+
+  /** Persist the whole map — see settings.controller.ts, which replaces rather than merges. */
+  const saveMutes = (next: EmailRoleMutes) =>
+    update.mutate({ emailRoleMutes: next } as Partial<GlobalSettings>);
+
+  const toggleCell = (key: keyof NotificationPreferences, role: RoleName, receives: boolean) => {
+    const current = mutes[key] ?? [];
+    const next = receives ? current.filter((r) => r !== role) : Array.from(new Set([...current, role]));
+    saveMutes({ ...mutes, [key]: next });
+  };
+
+  /** Column header acts as select-all/none for that role across every category. */
+  const toggleColumn = (role: RoleName, receivesAll: boolean) => {
+    const next: EmailRoleMutes = { ...mutes };
+    for (const row of emailRows) {
+      const current = next[row.key] ?? [];
+      next[row.key] = receivesAll ? current.filter((r) => r !== role) : Array.from(new Set([...current, role]));
+    }
+    saveMutes(next);
+  };
+
+  const columnFullyOn = (role: RoleName) => emailRows.every((row) => !isEmailRoleMuted(mutes, row.key, role));
 
   return (
     <Card>
@@ -475,7 +574,8 @@ function EmailChannelsCard({ readOnly }: { readOnly: boolean }) {
           Email channels
         </CardTitle>
         <CardDescription>
-          Workspace-wide on/off for every notification category. In-app alerts always fire — turning these off only mutes outbound email.
+          Which roles receive which emails. The switch turns a category off for everyone; the ticks choose the audience
+          within it. In-app alerts always fire — this screen only mutes outbound email.
         </CardDescription>
       </CardHeader>
       <CardContent className="grid gap-3">
@@ -486,45 +586,177 @@ function EmailChannelsCard({ readOnly }: { readOnly: boolean }) {
             <AlertDescription>No outbound email will be sent. Users will still see in-app alerts in the bell menu.</AlertDescription>
           </Alert>
         )}
-        <div className="divide-y divide-border rounded-lg border border-border">
-          {settings.isLoading &&
-            Array.from({ length: 8 }).map((_, i) => (
-              <div key={`s-${i}`} className="flex items-center gap-4 p-4">
+
+        {settings.isLoading && (
+          <div className="grid gap-3 rounded-lg border border-border p-4">
+            {Array.from({ length: 8 }).map((_, i) => (
+              <div key={`s-${i}`} className="flex items-center gap-4">
                 <Skeleton className="h-8 w-8 rounded-md" />
-                <div className="flex-1 space-y-2">
-                  <Skeleton className="h-4 w-1/3" />
-                  <Skeleton className="h-3 w-2/3" />
-                </div>
-                <Skeleton className="h-6 w-11 rounded-full" />
+                <Skeleton className="h-4 flex-1" />
+                <Skeleton className="h-4 w-40" />
               </div>
             ))}
-          {!settings.isLoading &&
-            emailRows.map((row) => {
-              const checked = Boolean(settings.data?.[row.key]);
-              const inputId = `gns-${row.key}`;
-              const isUpdatingThis =
-                update.isPending && update.variables && Object.prototype.hasOwnProperty.call(update.variables, row.key);
-              return (
-                <div key={row.key} className="flex items-start gap-4 p-4">
-                  <div className="mt-1 grid h-8 w-8 place-items-center rounded-md bg-muted">{row.icon}</div>
-                  <div className="flex-1 min-w-0">
-                    <Label htmlFor={inputId} className={readOnly ? "" : "cursor-pointer"}>{row.label}</Label>
-                    <p className="mt-0.5 text-xs text-muted-foreground">{row.description}</p>
+          </div>
+        )}
+
+        {!settings.isLoading && (
+          // Horizontal scroll is contained HERE rather than on the page: seven columns cannot fit
+          // a phone, and letting the page scroll sideways breaks every other card on the tab.
+          <div className="overflow-x-auto rounded-lg border border-border">
+            <table className="w-full min-w-[46rem] border-collapse text-sm">
+              <thead>
+                <tr className="border-b border-border bg-muted/40">
+                  <th
+                    scope="col"
+                    className="sticky left-0 z-10 bg-muted/40 px-4 py-2 text-left align-bottom font-semibold backdrop-blur"
+                  >
+                    Email template
+                  </th>
+                  <th scope="col" className="w-16 px-2 py-2 text-center align-bottom text-xs font-semibold">
+                    On
+                  </th>
+                  <th
+                    scope="colgroup"
+                    colSpan={MATRIX_ROLES.length}
+                    className="border-l border-border px-2 pt-2 text-center text-xs font-semibold uppercase tracking-wide text-muted-foreground"
+                  >
+                    Roles that receive it
+                  </th>
+                </tr>
+                <tr className="border-b border-border bg-muted/20">
+                  <th scope="col" className="sticky left-0 z-10 bg-muted/20 px-4 py-2" />
+                  <th scope="col" className="px-2 py-2" />
+                  {MATRIX_ROLES.map((column, index) => {
+                    const fullyOn = columnFullyOn(column.role);
+                    return (
+                      <th
+                        key={column.role}
+                        scope="col"
+                        className={`w-24 px-2 py-2 text-center text-xs font-semibold ${index === 0 ? "border-l border-border" : ""}`}
+                      >
+                        <button
+                          type="button"
+                          disabled={readOnly}
+                          onClick={() => toggleColumn(column.role, !fullyOn)}
+                          title={`${fullyOn ? "Mute" : "Unmute"} every category for ${column.label}`}
+                          className="focus-ring rounded px-1 py-0.5 leading-tight transition hover:text-primary disabled:cursor-not-allowed disabled:hover:text-inherit"
+                        >
+                          <span className="hidden sm:inline">{column.label}</span>
+                          <span className="sm:hidden">{column.short}</span>
+                        </button>
+                      </th>
+                    );
+                  })}
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-border">
+                {EMAIL_GROUP_ORDER.flatMap((group) => {
+                  const rowsInGroup = emailRows.filter((row) => row.group === group);
+                  if (rowsInGroup.length === 0) return [];
+                  return [
+                    <tr key={`group-${group}`} className="bg-muted/40">
+                      {/* Not sticky, unlike the data rows' first cell: this cell already spans the
+                          full table width, so pinning it left would only risk it ghosting over the
+                          columns scrolling beneath a translucent background. */}
+                      <th
+                        scope="colgroup"
+                        colSpan={2 + MATRIX_ROLES.length}
+                        className="px-4 py-2 text-left text-xs font-semibold uppercase tracking-wide text-muted-foreground"
+                      >
+                        {group}
+                      </th>
+                    </tr>,
+                    ...rowsInGroup.map((row) => {
+                  const enabled = Boolean(settings.data?.[row.key]);
+                  const inputId = `gns-${row.key}`;
+                  const isUpdatingThis =
+                    update.isPending && update.variables && Object.prototype.hasOwnProperty.call(update.variables, row.key);
+                  // No zebra striping: the frozen first column has to be OPAQUE to occlude the
+                  // cells sliding under it, which rules out the usual translucent `bg-muted/10`
+                  // stripe — an opaque stripe that matched would have to be repeated here by
+                  // index anyway, since a `even:` variant on the cell keys off its position among
+                  // siblings (always 1st), not the row's. `divide-y` carries row separation.
+                  return (
+                    <tr key={row.key} className="align-top">
+                      <th scope="row" className="sticky left-0 z-10 max-w-sm bg-background px-4 py-3 text-left font-normal">
+                        <div className="flex items-start gap-3">
+                          <div className="mt-0.5 grid h-8 w-8 shrink-0 place-items-center rounded-md bg-muted">{row.icon}</div>
+                          <div className="min-w-0">
+                            <Label htmlFor={inputId} className={readOnly ? "" : "cursor-pointer"}>
+                              {row.label}
+                            </Label>
+                            <p className="mt-0.5 text-xs font-normal text-muted-foreground">{row.description}</p>
+                          </div>
+                        </div>
+                      </th>
+                      <td className="px-2 py-3 text-center">
+                        <div className="flex items-center justify-center gap-1">
+                          {isUpdatingThis && <Loader2 className="h-3 w-3 animate-spin text-muted-foreground" />}
+                          <Switch
+                            id={inputId}
+                            checked={enabled}
+                            disabled={readOnly}
+                            onCheckedChange={(value) => update.mutate({ [row.key]: value } as Partial<GlobalSettings>)}
+                            aria-label={`${row.label} — email on or off for everyone`}
+                          />
+                        </div>
+                      </td>
+                      {MATRIX_ROLES.map((column, index) => {
+                        const receives = !isEmailRoleMuted(mutes, row.key, column.role);
+                        return (
+                          <td
+                            key={column.role}
+                            className={`px-2 py-3 text-center ${index === 0 ? "border-l border-border" : ""}`}
+                          >
+                            <Checkbox
+                              className="mx-auto"
+                              // Greyed, not hidden, when the master switch is off: the audience is
+                              // still meaningful config, it just isn't reachable until the category
+                              // is on — and hiding it would read as "this row has no roles".
+                              disabled={readOnly || !enabled}
+                              checked={receives}
+                              onCheckedChange={(value) => toggleCell(row.key, column.role, value === true)}
+                              aria-label={`${column.label} receives ${row.label}`}
+                            />
+                          </td>
+                        );
+                      })}
+                    </tr>
+                  );
+                    })
+                  ];
+                })}
+              </tbody>
+            </table>
+          </div>
+        )}
+
+        {!settings.isLoading && (
+          <div className="rounded-lg border border-dashed border-border p-4">
+            <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Always sent</p>
+            <p className="mt-1 text-xs text-muted-foreground">
+              Direct replies to an action someone just took. These have no toggle and no audience — they go to one
+              specific person, and a role filter over a password reset would lock people out of the app.
+            </p>
+            <ul className="mt-3 grid gap-2 sm:grid-cols-3">
+              {ALWAYS_SENT_ROWS.map((row) => (
+                <li key={row.label} className="flex items-start gap-2">
+                  <MailCheck className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground" />
+                  <div className="min-w-0">
+                    <p className="text-sm font-medium">{row.label}</p>
+                    <p className="text-xs text-muted-foreground">{row.description}</p>
                   </div>
-                  <div className="flex items-center gap-2 pt-0.5">
-                    {isUpdatingThis && <Loader2 className="h-3.5 w-3.5 animate-spin text-muted-foreground" />}
-                    <Switch
-                      id={inputId}
-                      checked={checked}
-                      disabled={readOnly}
-                      onCheckedChange={(value) => update.mutate({ [row.key]: value } as Partial<GlobalSettings>)}
-                      aria-label={row.label}
-                    />
-                  </div>
-                </div>
-              );
-            })}
-        </div>
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
+
+        <p className="text-xs text-muted-foreground">
+          Tip: click a role name to mute or unmute that whole column. Managers and super admins normally approve time
+          rather than log it, so muting them on the two reminder rows removes the bulk of their inbox traffic without
+          touching escalations they still need.
+        </p>
       </CardContent>
     </Card>
   );

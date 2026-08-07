@@ -33,6 +33,25 @@ Rules that follow from it:
   update the recorded `checksum` in `_prisma_migrations`. Verify constraint counts and row counts
   before and after.
 
+## After merging a migration: fan it out to every tenant
+
+Reaching `DATABASE_URL` is not the same as reaching the workspace — every organization has its own
+database. After merging a migration:
+
+```bash
+npm run migrate:tenants -w apps/api
+```
+
+Fans it out across every `ACTIVE`/`SUSPENDED` org's own database, skipping any already on the
+latest version and isolating one org's failure from the rest — see
+[DEPLOYMENT.md](DEPLOYMENT.md#keeping-every-tenants-schema-current) and
+`scripts/migrate-all-tenants.ts`. `docker-compose.yml`'s `prisma migrate deploy` only ever migrates
+one database.
+
+Both migrations in the 2026-08-07 batch need this step: `20260807090000_email_role_mutes` adds a
+column read on every outbound-email path, and `20260807140000_api_request_telemetry` creates the
+table the request-telemetry middleware writes into. A tenant left behind has neither.
+
 ## Backfills
 
 A migration that adds a column the application will *gate* on must backfill existing rows in the
@@ -74,6 +93,7 @@ Core tables:
 - `notifications`, `audit_logs`, `form_configurations`
 - `GlobalFaceVerificationSettings`, `FaceEnrollment`, `FaceVerificationAttempt` (optional
   face/identity verification — see below and [FACE_VERIFICATION.md](FACE_VERIFICATION.md))
+- `ApiRequestSample` (optional per-request telemetry, off by default — see below)
 
 ## Planning layer tables (V6)
 
@@ -128,6 +148,112 @@ Two deliberate choices worth knowing before changing anything here:
 - **Image *paths* are stored, but the files live outside the public `/uploads` mount.** That
   mount is served with no authentication at all, so anything under it is readable by anyone who
   guesses a filename. Face imagery is served only via an authenticated API route.
+
+## Per-role email mutes (`GlobalNotificationSettings.emailRoleMutes`)
+
+Added by `20260807090000_email_role_mutes` as one nullable `JSON` column, no default and **no
+backfill** — which is the design, not an omission:
+
+```sql
+ALTER TABLE `GlobalNotificationSettings` ADD COLUMN `emailRoleMutes` JSON NULL;
+```
+
+- **NULL / absent means "no role is muted anywhere — everyone receives."** An existing row reads
+  back NULL and delivery is byte-for-byte what it was before the migration, so rolling this out
+  changes nothing until a super admin actually unticks a cell. This is the case the
+  [Backfills](#backfills) rule explicitly does *not* cover: nothing gates on the column, so there
+  is no existing row that a missing value would lock out.
+- **It stores the MUTES, not the ticks.** The shape is category → the roles that must *not* get
+  that email (`{"emailDailyReminder":["MANAGER","SUPER_ADMIN"]}`), and the API drops any category
+  whose list is empty. Storing the ticked cells instead would make the default state 135 explicit
+  `true`s that have to exist before anything works, and every new notification category would then
+  need a migration to add its cells to every workspace's grid. Storing the exceptions is what
+  keeps "nothing recorded" the correct default forever.
+- **One JSON column rather than category × role boolean columns.** The matrix is 27 categories × 5
+  roles = 135 cells. A new notification category should keep costing one enum member and one
+  boolean column (see `notify.service.ts`'s header), not five more.
+- **It gates the EMAIL leg only.** The in-app `Notification` row is written regardless, so muting a
+  role never hides an escalation — it only keeps it out of an inbox. Enforced in
+  `notify.service.ts`, and in `mail.service.ts` for the super-admin audit BCC, through the single
+  `isEmailRoleMuted` predicate in `@timesheet/shared` that the settings UI also reads, so the
+  ticked box and the delivered mail cannot disagree.
+
+MySQL JSON is free-form, so the Zod schema on `PATCH /api/settings/notifications` is this column's
+**only** integrity check — unknown keys and roles are rejected there. See
+[API.md](API.md#the-emailrolemutes-map).
+
+## API request telemetry (`ApiRequestSample`)
+
+One row per completed HTTP request, as measured by the instance that served it. Created by
+`20260807140000_api_request_telemetry`; written by `middleware/request-telemetry.ts` (buffered and
+batched, never inline in the request), read by `services/api-performance.service.ts`, pruned by
+`workers/api-telemetry-retention.worker.ts`. Collection is **off by default**
+(`API_TELEMETRY_ENABLED`), so on an untouched deployment the table stays empty. Endpoints:
+[API.md](API.md#api-performance-telemetry).
+
+It deliberately does not replace the access log: no bodies, no query strings, no headers, no IPs.
+
+| Column | Type | Notes |
+|---|---|---|
+| `id` | `VARCHAR(191)` PK | UUID, like every other table here. |
+| `apiName` | `VARCHAR(220)` | Human-readable endpoint identity, e.g. `GET /api/tickets/:id`. Method and pattern together, so a GET and a DELETE on one path never average into each other. |
+| `method` | `VARCHAR(10)` | |
+| `apiPath` | `VARCHAR(200)` | The **route pattern**, never the raw URL — see below. |
+| `statusCode` | `INT` | |
+| `userId` | `VARCHAR(191)` NULL | Id only, and **no foreign key** — see below. NULL for an unauthenticated request, which is a real answer rather than missing data. |
+| `apiRequestAt`, `apiResponseAt` | `DATETIME(3)` | |
+| `apiResponseTime` | `INT` | Milliseconds, wall clock. |
+| `dbResponseTime` | `INT` NULL | Real Prisma time inside the request, accumulated by the client extension in `config/prisma.ts`. NULL means **not measured** (telemetry enabled mid-request, or the request touched no database) — never zero. |
+| `dbQueryCount` | `INT` NULL | Same null semantics. |
+| `hostname` | `VARCHAR(120)` | From `os.hostname()`. |
+| `podName`, `podNamespace`, `cluster` | `VARCHAR(120)` NULL | Kubernetes downward-API identity (`POD_NAME`/`POD_NAMESPACE`/`CLUSTER_NAME`). NULL off-cluster rather than faked. |
+| `osType` | `VARCHAR(80)` | |
+| `cpuPercent`, `memUsedPercent`, `diskUsedPercent` | `DOUBLE` NULL | From one cached host snapshot refreshed on an interval, **not** measured per request. |
+| `eventLoopLagMs` | `DOUBLE` NULL | "Network" as this app can honestly measure it — the latency that actually degrades responses. NIC byte counters are not portably readable from Node; same reasoning as `system-health.service.ts`. |
+| `createdAt` | `DATETIME(3)` default now | What every index and the prune are anchored on. |
+
+Five indexes. Every query this table serves is "some slice of the last N hours", so four of them
+are `(<filter>, createdAt)` composites:
+
+| Index | Serves |
+|---|---|
+| `(createdAt)` | The window itself — the totals, the time series, and the retention sweep. |
+| `(apiPath, createdAt)` | The per-endpoint breakdown and the drill-down's `path` filter. |
+| `(statusCode, createdAt)` | The status-class mix and the `statusClass` filter. |
+| `(hostname, createdAt)` | The per-host/pod split. |
+| `(apiResponseTime, createdAt)` | The `minMs` filter and the slowest-first drill-down. |
+
+**No foreign key to `User`, on purpose.** `userId` is a bare column; names and emails are joined in
+at read time by the drill-down only. Two things follow, and both are the reason:
+
+- **No PII lives in the table.** The only identity it carries is an opaque id, so a fortnight of
+  telemetry is not a fortnight of who-did-what, and a user erased from `User` disappears from this
+  view instead of living on in it.
+- **A deleted user cannot cascade.** With a foreign key, removing one person would either take
+  their samples with them — silently rewriting the latency history of every endpoint they touched
+  — or block the delete outright. Neither is acceptable for a table whose only job is to describe
+  the past accurately.
+
+**`apiPath` is a route pattern, never the raw URL.** `/api/tickets/:id` is one row's worth of
+cardinality; `/api/tickets/<uuid>` is one group per ticket ever viewed, which makes every `GROUP
+BY` return thousands of one-hit groups and the indexes above useless.
+
+**The host columns are denormalised deliberately.** They repeat on every row rather than pointing
+at a host table because the whole point is comparing hosts *within* a time window ("pod-7 is the
+slow one"), and a join per aggregate to save a few bytes per row on a table pruned every fortnight
+is the wrong trade.
+
+**Retention: 14 days by default** (`API_TELEMETRY_RETENTION_DAYS`), pruned nightly at **04:10**
+across every tenant by `workers/api-telemetry-retention.worker.ts`. It gets its own worker rather
+than a sweep inside the writer because this table grows with **traffic** — a moderately busy
+workspace produces more rows in an hour than the `ServiceHealthSample` probe stream does in a year
+— and a delete on that scale must never run on the path that is also trying to flush new telemetry.
+It deletes in bounded batches (ids selected first, 10,000 per statement, at most 20 rounds per
+tenant per tick) so no single statement locks and replicates a fortnight of rows, and so one
+tenant's backlog cannot hold the org loop open and starve the tenants after it; the next night's
+tick continues where it stopped. 04:10 sits after the AI sweep at 03:40 so the two never contend
+for the same tenant connections, and the schedule runs even when collection is switched off —
+turning recording off must not strand the rows it already wrote.
 
 Design notes:
 

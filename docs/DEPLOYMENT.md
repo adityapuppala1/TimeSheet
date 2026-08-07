@@ -569,6 +569,144 @@ helm upgrade timesphere deploy/helm/timesphere --reuse-values --set image.tag=v1
 kubectl rollout status deploy/timesphere-api     # and `helm rollback timesphere` to go back
 ```
 
+### What this release adds to that dance (email channel matrix + API telemetry)
+
+Two migrations ship with this release, and **both are additive**, which is the whole reason the
+existing rollback policy above still holds:
+
+| Migration | What it does | Shape |
+|---|---|---|
+| `20260807090000_email_role_mutes` | `ALTER TABLE GlobalNotificationSettings ADD COLUMN emailRoleMutes JSON NULL` | one nullable column |
+| `20260807140000_api_request_telemetry` | `CREATE TABLE ApiRequestSample` (+ five indexes) | one brand-new table |
+
+Nothing is dropped, renamed, narrowed, or backfilled. Old code running against the new schema
+ignores a column and a table it has never heard of, so the auto-rollback path in `update.sh` —
+which restores the previous *code* and deliberately never restores the database dump — behaves
+exactly as documented above. See [docs/DATABASE.md](DATABASE.md) for the policy itself.
+
+**Neither migration changes observable behaviour on its own.** `emailRoleMutes` reads back `NULL`
+on every existing row, which the application treats as "no role is muted anywhere" — byte-for-byte
+today's email delivery — until a super admin actually unticks a cell in Workspace settings → Email
+channels. `ApiRequestSample` stays empty until an operator opts into telemetry (next section). An
+upgrade that changes nothing until somebody asks it to is the point, not an oversight.
+
+**Compose deployments: this is an ordinary `./update.sh`.** There is no manual step, no
+pre-migration, and nothing to run by hand.
+
+```bash
+./update.sh              # Windows: .\update.cmd
+```
+
+**But remember this project is multi-tenant — a database per organization.** Container boot runs
+`prisma migrate deploy` against `DATABASE_URL` only, which is the *default* org. Every additional
+organization a platform admin provisioned after install has its own physical database that boot
+never touches, and leaving one of those on the old schema while the new code runs against it is
+precisely the drift the additive-only policy cannot excuse (the new code will `SELECT
+emailRoleMutes` from a table that hasn't got it). The fan-out command is the one already
+documented under [Keeping every tenant's schema current](#keeping-every-tenants-schema-current):
+
+```bash
+npm run migrate:tenants -w apps/api
+```
+
+Who runs it for you, and who doesn't:
+
+- **`update.sh` / `update.cmd` — already automatic.** Its `migrate_extra_tenants` function waits
+  for `/health` to answer, then runs `docker compose exec -T api npm run migrate:tenants -w apps/api`
+  unconditionally, before the verification suite. In a plain single-org deployment that walk finds
+  only the default org, sees it already migrated, and is a fast no-op — which is exactly why it is
+  safe to run every time rather than gated behind "are you multi-org?". A failure there is a
+  `warn`, not a `fail`: one tenant with a bad connection or hand-edited schema drift must not roll
+  back an update that succeeded for everybody else, so read the warning and fix that org
+  individually.
+- **Manual / non-Docker deployments — you must run it yourself**, as its own deploy step after
+  `prisma migrate deploy`. Nothing else will.
+- **Kubernetes — you must run it yourself too.** The chart's `pre-install,pre-upgrade` hook Job
+  runs `prisma migrate deploy` against the tenant and control-plane *schemas* (i.e. `DATABASE_URL`
+  and `CONTROL_DATABASE_URL`), which is not the same thing as every tenant database. After the
+  rollout completes:
+  ```bash
+  kubectl exec deploy/my-release-timesphere-api -- npm run migrate:tenants -w apps/api
+  ```
+
+Post-deploy, the two things worth actually looking at: Workspace settings → Email channels should
+render the full category × role grid (every gateable category now has a row, including the six
+`emailTicket*` ones that previously had no UI at all), and Workspace settings → Maintenance should
+show an **API performance** panel stating that recording is switched off.
+
+## Operating API request telemetry
+
+New in this release: per-request timings (latency percentiles, slowest endpoints, per-host/pod
+split, and a capped drill-down of individual requests) behind Workspace Settings → Maintenance →
+**API performance**. It is worth understanding what it costs before turning it on, because unlike
+almost everything else in that tab it is *not* an admin toggle.
+
+**It is off by default, and enabling it is an environment change plus a restart** — not a UI
+switch. `API_TELEMETRY_ENABLED` is read at boot (`config/env.ts`), so the panel can tell you it is
+off but cannot turn it on. The full variable list, with the wording those defaults were chosen
+under, is in the root `.env.example`; the short version:
+
+| Variable | Default | What it controls |
+|---|---|---|
+| `API_TELEMETRY_ENABLED` | `false` | Master switch. The disabled path is one boolean test and `next()`. |
+| `API_TELEMETRY_SAMPLE_RATE` | `1` | Fraction of requests recorded, `0`–`1`. |
+| `API_TELEMETRY_FLUSH_MS` | `5000` | How often the in-memory buffer drains to the database. |
+| `API_TELEMETRY_MAX_BUFFER` | `5000` | Ceiling on buffered rows before new samples are dropped. |
+| `API_TELEMETRY_RETENTION_DAYS` | `14` | Age past which rows are pruned nightly. |
+| `POD_NAME` / `POD_NAMESPACE` / `CLUSTER_NAME` | unset | Host identity stamped on each row. |
+
+**Compose and Helm do not forward these yet.** `docker-compose.yml` passes an explicit list of
+variables to the `api` service rather than the whole `.env`, and the chart's ConfigMap does the
+same — so putting `API_TELEMETRY_ENABLED=true` in the root `.env` alone has no effect. Add it to
+`docker-compose.yml`'s `api.environment` block (`API_TELEMETRY_ENABLED: ${API_TELEMETRY_ENABLED:-false}`,
+matching the pattern every other optional variable there already uses) or to the chart's
+`templates/configmap.yaml`, then restart. On Kubernetes this is also where `POD_NAME`/
+`POD_NAMESPACE` earn their names — they are deliberately spelled for the downward API, so a
+Deployment can map them straight through with `fieldRef: metadata.name` / `metadata.namespace`
+instead of inventing an identity. Off-cluster, leave them unset: those columns are written `NULL`
+rather than filled with a guess, and the hostname still comes from `os.hostname()`.
+
+**On a busy deployment, turn the rate down rather than the feature off.** Percentiles computed
+from a 10% sample are still percentiles; no data answers nothing. `API_TELEMETRY_SAMPLE_RATE=0.1`
+is the lever that trades resolution for cost, and it is almost always the right one — the reason
+you opened the panel was a p99, and a p99 survives sampling.
+
+**Plan for row volume, because it grows with traffic, not with time.** This is the difference
+between this table and every other bookkeeping table in the app: the service-health sampler writes
+a fixed handful of rows per five minutes forever, whereas `ApiRequestSample` writes one row per
+*sampled request*, so a moderately busy workspace produces more rows in an hour than the health
+sampler does in a year — and it does that in **every tenant's** database independently. Retention
+defaults to 14 days, pruned by a nightly worker at **04:10** (deliberately after the AI retention
+sweep at 03:40, so the two never contend for the same tenant connections), deleting in bounded
+batches so a fortnight's backlog never becomes one enormous locking transaction. The prune is
+scheduled **even when collection is switched off**, so turning recording off never strands the
+rows it already wrote.
+
+**The buffer drops rather than grows.** Nothing in the request lifecycle waits on telemetry:
+samples are pushed onto an in-memory array and flushed on a timer. If the database is slow or down
+and the buffer reaches `API_TELEMETRY_MAX_BUFFER`, new samples are **discarded and counted** — the
+count is reported back through the panel's status — rather than queued into a memory leak. Losing
+telemetry beats losing the process, and the same reasoning applies to the middleware itself: a bug
+in telemetry must be able to lose telemetry and must not be able to fail a user's request.
+
+**The honest caveat about the CPU / memory / disk / event-loop columns.** They come from a host
+snapshot refreshed on a ~15-second timer, not from a measurement taken during the request. The
+server-health card can afford to sleep 250ms between two readings of the kernel's counters because
+one human is waiting for one card; doing that on every request would be catastrophic, so the CPU
+delta is taken between refreshes with no sleep at all and `eventLoopLagMs` is the mean loop delay
+over the interval. Read those four columns as *"what the machine looked like **around** this
+request, to within ~15 seconds"* — good enough to correlate a latency spike with a saturated box,
+not evidence about what any individual request consumed. The per-request columns
+(`apiResponseTime`, `dbResponseTime`, `dbQueryCount`) are measured on that request and carry no
+such caveat.
+
+Two smaller things worth knowing: `/api/health` and the panel's own endpoints are excluded from
+collection (liveness probes and a self-polling observer would otherwise be the highest-volume
+"endpoints" in the workspace), and paths are recorded as route patterns (`/api/tickets/:id`), with
+id-shaped segments redacted if Express cannot supply one — never the raw URL. Request bodies,
+query strings, headers, cookies, IPs and user-agents are not collected at all; `userId` is the
+whole of the recorded identity and is resolved to a name only at read time.
+
 ## Kubernetes deployment
 
 `deploy/helm/timesphere/` is a Helm chart covering both deployment shapes — the same "one

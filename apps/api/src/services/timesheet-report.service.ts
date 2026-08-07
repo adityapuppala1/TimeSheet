@@ -15,7 +15,9 @@
  * You could not export one project, one month, or one person.
  */
 import { Prisma } from "@prisma/client";
+import { calculateHours } from "@timesheet/shared";
 import { prisma } from "../config/prisma.js";
+import { htmlToText } from "../utils/sanitize.js";
 
 export type TimesheetStatusValue = "DRAFT" | "SUBMITTED" | "APPROVED" | "REJECTED";
 
@@ -130,7 +132,69 @@ function isoWeek(date: Date): string {
   return isoDay(d);
 }
 
-type ReportRow = Prisma.TimesheetGetPayload<{ include: typeof REPORT_INCLUDE }>;
+export type ReportRow = Prisma.TimesheetGetPayload<{ include: typeof REPORT_INCLUDE }>;
+
+/**
+ * The hours of ONE entry, and the only place any report is allowed to ask.
+ *
+ * `totalHours` is authoritative: it is what `calculateHours` produced when the entry was written
+ * (timesheet.controller.ts), and re-deriving it here would let an export disagree with the screen
+ * the entry was logged on. The fallback exists only for a row that carries no stored total, and it
+ * calls THE SAME helper rather than an inline `end - start` — an export that rounds or wraps
+ * midnight differently from the write path is the failure this function prevents.
+ */
+export function entryHours(row: {
+  totalHours?: Prisma.Decimal | number | null;
+  startTime?: string | null;
+  endTime?: string | null;
+}): number {
+  if (row.totalHours != null) return Number(row.totalHours);
+  if (row.startTime && row.endTime) return calculateHours(row.startTime, row.endTime);
+  return 0;
+}
+
+/**
+ * The export's columns, and the one function that fills them.
+ *
+ * WHY HERE RATHER THAN INLINE IN THE CSV HANDLER: the approvals queue exports ONE entry, the
+ * report screen exports many, and both are the same document at different cardinalities. Two
+ * builders drift — and the way that drift presents is an approver exporting a row to attach to a
+ * decision, then finding it has different columns (or a different idea of what an unrated row
+ * costs) from the workspace export the same row appears in.
+ */
+export const TIMESHEET_CSV_HEADER = [
+  "User", "Email", "Date", "Project", "Project code", "Module", "Submodule", "Ticket",
+  "Activity", "Start", "End", "Hours", "Billable", "Rate", "Amount", "Status",
+  "Reviewed by", "Reviewed at", "Approval deadline", "SLA breached at", "Task", "Notes",
+  "Submitted at", "Last updated"
+] as const;
+
+export function timesheetCsvValues(row: ReportRow, reviewerName: string): Array<string | null | undefined> {
+  const iso = (value: Date | null | undefined) => (value ? value.toISOString() : "");
+  return [
+    row.user.name, row.user.email, row.workDate.toISOString().slice(0, 10),
+    row.project.name, row.project.code, row.module.name, row.submodule?.name,
+    row.ticket?.key,
+    row.activityType, row.startTime, row.endTime,
+    entryHours(row).toFixed(2),
+    row.billable ? "Yes" : "No",
+    // Blank rather than 0 when unrated: a rate of zero is a claim that the work was free, and
+    // these rows are deliberately never backfilled (see the schema comment on billedRate).
+    row.billedRate == null ? "" : Number(row.billedRate).toFixed(2),
+    row.billedAmount == null ? "" : Number(row.billedAmount).toFixed(2),
+    row.status,
+    reviewerName,
+    iso(row.reviewedAt), iso(row.approvalDeadline), iso(row.slaBreachAt),
+    htmlToText(row.taskDescription), htmlToText(row.notes ?? ""),
+    iso(row.submittedAt), iso(row.updatedAt)
+  ];
+}
+
+/** Every field is quoted unconditionally — a task description containing a comma, a newline or a
+ *  quote is the normal case here, not the edge case. */
+export function toCsvLine(values: ReadonlyArray<string | null | undefined>): string {
+  return values.map((value) => `"${String(value ?? "").replace(/"/g, '""')}"`).join(",");
+}
 
 function bucketOf(row: ReportRow, groupBy: GroupByKey): { key: string; label: string } {
   switch (groupBy) {
@@ -179,7 +243,7 @@ export function groupTimesheetRows(rows: ReportRow[], groupBy: GroupByKey): Grou
 
   for (const row of rows) {
     const { key, label } = bucketOf(row, groupBy);
-    const hours = Number(row.totalHours ?? 0);
+    const hours = entryHours(row);
     const day = isoDay(row.workDate);
     const bucket = buckets.get(key) ?? {
       label,
@@ -236,14 +300,7 @@ export function groupTimesheetRows(rows: ReportRow[], groupBy: GroupByKey): Grou
 export interface TimesheetReport {
   filters: TimesheetReportFilters;
   groupBy: GroupByKey;
-  totals: {
-    entries: number;
-    hours: number;
-    billableHours: number;
-    cost: number | null;
-    unratedEntries: number;
-    people: number;
-  };
+  totals: TimesheetTotals;
   groups: GroupedRow[];
 }
 
@@ -265,22 +322,166 @@ export async function buildTimesheetReport(
 
   const truncated = rows.length > REPORT_ROW_LIMIT;
   const used = truncated ? rows.slice(0, REPORT_ROW_LIMIT) : rows;
-  const groups = groupTimesheetRows(used, groupBy);
 
-  const ratedTotal = used.filter((r) => r.billedAmount != null);
   return {
     filters,
     groupBy,
     truncated,
     rowsScanned: used.length,
-    totals: {
-      entries: used.length,
-      hours: Number(used.reduce((s, r) => s + Number(r.totalHours ?? 0), 0).toFixed(2)),
-      billableHours: Number(used.filter((r) => r.billable).reduce((s, r) => s + Number(r.totalHours ?? 0), 0).toFixed(2)),
-      cost: ratedTotal.length === 0 ? null : Number(ratedTotal.reduce((s, r) => s + Number(r.billedAmount ?? 0), 0).toFixed(2)),
-      unratedEntries: used.length - ratedTotal.length,
-      people: new Set(used.map((r) => r.userId)).size
-    },
-    groups
+    totals: summariseTimesheetRows(used),
+    groups: groupTimesheetRows(used, groupBy)
   };
+}
+
+/* ------------------------------------------------------------------------------------------ *
+ * EXPORT DOCUMENT — the shape both the workbook and the PDF are rendered from.
+ *
+ * WHY IT IS ASSEMBLED HERE rather than in each renderer: the XLSX and the PDF are the same
+ * document in two formats, and the moment each one groups and totals its own rows they drift.
+ * The way that drift presents is somebody comparing the spreadsheet a colleague sent with the PDF
+ * they printed, finding different subtotals, and having no way to tell which is lying — the same
+ * failure the top of this file exists to prevent for filters.
+ * ------------------------------------------------------------------------------------------ */
+
+export interface TimesheetTotals {
+  entries: number;
+  hours: number;
+  billableHours: number;
+  cost: number | null;
+  unratedEntries: number;
+  people: number;
+}
+
+/** Grand totals over exactly the rows a document PRINTS — never over a wider query. A total that
+ *  covers rows the reader cannot see is the truncation bug this report already had once. */
+export function summariseTimesheetRows(rows: ReportRow[]): TimesheetTotals {
+  const rated = rows.filter((r) => r.billedAmount != null);
+  const round = (n: number) => Number(n.toFixed(2));
+  return {
+    entries: rows.length,
+    hours: round(rows.reduce((s, r) => s + entryHours(r), 0)),
+    billableHours: round(rows.filter((r) => r.billable).reduce((s, r) => s + entryHours(r), 0)),
+    cost: rated.length === 0 ? null : round(rated.reduce((s, r) => s + Number(r.billedAmount ?? 0), 0)),
+    unratedEntries: rows.length - rated.length,
+    people: new Set(rows.map((r) => r.userId)).size
+  };
+}
+
+/** One printed section: the group's own subtotal line plus the entries behind it. */
+export interface TimesheetExportSection {
+  summary: GroupedRow;
+  rows: ReportRow[];
+}
+
+/**
+ * Splits rows into printable sections, ordered and totalled by `groupTimesheetRows`.
+ *
+ * Deliberately delegating the ordering and the arithmetic means a section heading can never
+ * disagree with the summary table above it — they are literally the same object.
+ */
+export function buildTimesheetSections(rows: ReportRow[], groupBy: GroupByKey): TimesheetExportSection[] {
+  const byKey = new Map<string, ReportRow[]>();
+  for (const row of rows) {
+    const { key } = bucketOf(row, groupBy);
+    const list = byKey.get(key);
+    if (list) list.push(row);
+    else byKey.set(key, [row]);
+  }
+  for (const list of byKey.values()) {
+    // Within a person (or a project) a timesheet reads forwards, whatever order the query
+    // returned — the query sorts newest-first so that a TRUNCATED export keeps the most recent
+    // work, which is a different question from how a section should read.
+    list.sort((a, b) => a.workDate.getTime() - b.workDate.getTime() || a.startTime.localeCompare(b.startTime));
+  }
+  return groupTimesheetRows(rows, groupBy).map((summary) => ({ summary, rows: byKey.get(summary.key) ?? [] }));
+}
+
+/** A human-readable one-liner describing what was filtered, printed onto every export so the
+ *  document states its own scope. A report that does not say what it covers invites being read as
+ *  covering everything. */
+export function describeReportFilters(filters: TimesheetReportFilters): string {
+  const parts: string[] = [];
+  if (filters.from || filters.to) parts.push(`${filters.from ?? "start"} to ${filters.to ?? "today"}`);
+  if (filters.status) parts.push(`status ${filters.status}`);
+  if (filters.activityType) parts.push(`activity ${filters.activityType}`);
+  if (typeof filters.billable === "boolean") parts.push(filters.billable ? "billable only" : "non-billable only");
+  return parts.length ? parts.join(" · ") : "all entries, all time";
+}
+
+/**
+ * The date range the document actually covers.
+ *
+ * When no bounds were asked for, the answer is the range of the rows themselves rather than the
+ * words "all time": a header that says "all time" over a set that happens to stop in March reads
+ * as a claim that nothing was logged afterwards.
+ */
+export function describeReportPeriod(filters: TimesheetReportFilters, rows: ReportRow[]): string {
+  if (filters.from && filters.to) return `${filters.from} to ${filters.to}`;
+  const days = rows.map((r) => isoDay(r.workDate)).sort();
+  const covered = days.length > 0 ? `${days[0]} to ${days[days.length - 1]}` : null;
+  if (filters.from) return `${filters.from} onwards${covered ? ` (covering ${covered})` : ""}`;
+  if (filters.to) return `up to ${filters.to}${covered ? ` (covering ${covered})` : ""}`;
+  return covered ? `All dates (${covered})` : "All dates";
+}
+
+export interface TimesheetExportDocument {
+  workspace: string;
+  title: string;
+  periodLabel: string;
+  scopeLabel: string;
+  generatedBy: string;
+  generatedAt: Date;
+  groupBy: GroupByKey;
+  /** What the document prints vs what the filter matched — never equal silently. */
+  rowsIncluded: number;
+  totalMatching: number;
+  truncated: boolean;
+  sections: TimesheetExportSection[];
+  totals: TimesheetTotals;
+  approvedHours: number;
+  /** `Timesheet.reviewedById` has no relation behind it — see `resolveReviewerNames`. */
+  reviewers: Map<string, string>;
+}
+
+export function buildTimesheetExportDocument(input: {
+  rows: ReportRow[];
+  totalMatching: number;
+  filters: TimesheetReportFilters;
+  groupBy: GroupByKey;
+  workspace: string;
+  generatedBy: string;
+  reviewers: Map<string, string>;
+  generatedAt?: Date;
+}): TimesheetExportDocument {
+  const { rows, filters, groupBy } = input;
+  return {
+    workspace: input.workspace,
+    title: "Timesheet Report",
+    periodLabel: describeReportPeriod(filters, rows),
+    scopeLabel: describeReportFilters(filters),
+    generatedBy: input.generatedBy,
+    generatedAt: input.generatedAt ?? new Date(),
+    groupBy,
+    rowsIncluded: rows.length,
+    totalMatching: input.totalMatching,
+    truncated: input.totalMatching > rows.length,
+    sections: buildTimesheetSections(rows, groupBy),
+    totals: summariseTimesheetRows(rows),
+    approvedHours: Number(
+      rows
+        .filter((r) => r.status === "APPROVED")
+        .reduce((s, r) => s + entryHours(r), 0)
+        .toFixed(2)
+    ),
+    reviewers: input.reviewers
+  };
+}
+
+/** Display helpers shared by both renderers, so "—" means the same thing in each. */
+export function reviewerNameFor(doc: TimesheetExportDocument, row: ReportRow): string {
+  return row.reviewedById ? (doc.reviewers.get(row.reviewedById) ?? "") : "";
+}
+
+export function entryPlaceLabel(row: ReportRow): string {
+  return row.submodule?.name ? `${row.module.name} › ${row.submodule.name}` : row.module.name;
 }

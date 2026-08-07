@@ -36,6 +36,7 @@ import { maintenanceApi, type MaintenancePhase } from "../../services/api";
 import { DateTimePicker, buildTimeSlots } from "../../components/ui/date-picker";
 import { ServerHealthCard } from "./ServerHealthCard";
 import { ServiceStatusPage } from "../../components/ServiceStatusPage";
+import { ApiPerformancePanel } from "../../components/ApiPerformancePanel";
 
 /** ISO from the API → the local "YYYY-MM-DDTHH:mm" the draft holds. Manual formatting because
  *  toISOString() would shift the wall-clock time to UTC — the admin picks times in THEIR clock.
@@ -411,6 +412,11 @@ export function MaintenanceSettingsCard({ readOnly }: { readOnly: boolean }) {
           not. This one is per-feature and has a memory — "was it down on Tuesday" is the question
           the vitals panel above structurally cannot answer. */}
       <ServiceStatusPage />
+
+      {/* The third question, which neither of the two above can reach: not "is it up" but "why was
+          it SLOW, when, and on which server". That needs per-request measurement rather than a
+          five-minute probe. */}
+      <ApiPerformancePanel />
     </div>
   );
 }

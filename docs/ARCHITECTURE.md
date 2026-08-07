@@ -420,12 +420,52 @@ most misleading figure it is possible to put on an executive dashboard.
 
 ---
 
+### 3.10 API request telemetry — opt-in, and cheap when it isn't
+
+The only subsystem in this codebase that runs inside **every** request, so its design is dominated
+by what it must not cost rather than by what it can measure.
+
+**Off by default** (`API_TELEMETRY_ENABLED`, default `false`). When off, the middleware is one
+boolean test and `next()` — no allocation, no context, no store.
+
+**Nothing in the request lifecycle waits on it.** `enqueue` is synchronous, does no I/O and cannot
+reject; rows accumulate in memory and leave in tenant-grouped batches on a timer, flushed again on
+shutdown before the Prisma pools close. An awaited `INSERT` per request would add a round-trip to
+every response and make the observability tool the top entry in its own slowest-endpoints table.
+Past `API_TELEMETRY_MAX_BUFFER` samples are **dropped and counted** — losing telemetry beats losing
+the process, and the count is surfaced so a deployment that has outgrown its flush interval says so
+instead of quietly under-reporting.
+
+**`dbResponseTime` is real.** Prisma's `query` log event carries a duration but arrives detached
+from whichever request caused it, so it cannot answer "this request spent 340ms in the database".
+Instead `config/prisma.ts` wraps each tenant client in a `$extends` `query.$allOperations` hook
+that adds its own duration to an `AsyncLocalStorage` bucket scoped by the middleware —
+`$allOperations` rather than `$allModels` so `$queryRaw` counts too. The wrapper is applied
+**unconditionally**, because two differently-shaped clients depending on configuration is the kind
+of divergence that only reproduces in production; with no active bucket it is a single
+`getStore()`.
+
+**Two limits, stated rather than papered over.** Host CPU/memory/disk come from a snapshot
+refreshed every ~15s, not measured per request — a correct CPU reading needs a sleep between two
+kernel samples, which `system-health.service.ts` can afford for one health card and this cannot.
+Those columns therefore describe the machine *around* a request, not during it. And sampling below
+1.0 means percentiles are estimates from a sample; on a busy deployment that is the knob to turn,
+because percentiles from a 10% sample are still percentiles whereas no data answers nothing.
+
+**Privacy is structural.** No bodies, query strings, headers, cookies, IPs or user agents are
+recorded; `userId` is the whole of the identity, there is deliberately **no foreign key** to
+`User`, and names are resolved at read time — so the table never holds a person's details and a
+deleted user disappears from the view rather than cascading.
+
+---
+
 ## 4. Request lifecycle (a normal, tenant-resolved API call)
 
 ```mermaid
 sequenceDiagram
     participant B as Browser
     participant MW as resolveTenant (middleware/tenant.ts)
+    participant T as recordApiRequest (middleware/request-telemetry.ts)
     participant Auth as requireAuth (middleware/auth.ts)
     participant C as Controller
     participant S as Service
@@ -437,14 +477,18 @@ sequenceDiagram
     MW->>MW: controlPrisma.organization.findUnique({slug:"acme"})
     MW->>MW: decryptSecret(org.database.encryptedDsn)
     MW->>MW: getTenantClient(org.id, dsn) — cached, LRU-evicted
-    MW->>Auth: tenantContext.run({orgId, client}, next)
+    MW->>T: tenantContext.run({orgId, client}, next)
+    Note over T: disabled (default) → one boolean, next()
+    T->>Auth: dbTimingStore.run(bucket, next) — §3.10
     Auth->>Auth: verify access JWT, check org claim matches
     Auth->>C: req.user attached
     C->>S: ticketService.list(...)
     S->>P: prisma.ticket.findMany(...)
     P->>P: resolve active tenant client from AsyncLocalStorage
+    P->>P: $allOperations adds its duration to the request's bucket
     P->>DB: actual SQL query, Org Acme's own database only
     DB-->>B: response
+    Note over T: res "finish" → enqueue sample (sync, no I/O)
 ```
 
 ## 5. SSO / webhook routes that bypass normal tenant resolution
@@ -603,6 +647,23 @@ avoidance `localIsoDate()` documents.
 | `components/ServiceStatusPage.tsx` (web) | The status page. Colour is never the only channel — every square carries a title and the summary states status in words, because a red/green strip is exactly the pattern that fails colour-vision deficiency. | `statusPageApi` | `pages/settings/MaintenanceSettingsCard.tsx` |
 | `lib/use-face-tracker.ts` (web) | In-browser face detection and head pose at ~15fps, for guidance only — no embedding, no match, no security judgement. Loads blazeface + facemesh (2.1MB) lazily from our own origin, so on-prem installs with no outbound internet keep working. `status: "unavailable"` (no WebGL) degrades to the manual shutter. | `@vladmandic/human` | `components/FaceCapture.tsx` |
 | `lib/face-pose.ts` (web) | Waits for the head to actually reach a demanded position and returns the frame at the **peak** of the movement, rather than whichever frame a timer landed on. Never asks for "left": Human's yaw sign is uncalibrated here, so callers ask for "away from neutral" and, where two poses are needed, "the other way". | `use-face-tracker.ts` | `FaceVerificationDialog.tsx`, `GuidedFaceEnrollment.tsx` |
+
+### API request telemetry (§3.10)
+
+| File | Purpose | Depends on | Depended on by |
+|---|---|---|---|
+| `config/db-timing.ts` | One `AsyncLocalStorage<DbTimingBucket>` and nothing else. Deliberately its own module with no imports: `config/prisma.ts` imports it, so anything it imported that led back there would be a cycle. | `node:async_hooks` | `config/prisma.ts`, `middleware/request-telemetry.ts` |
+| `middleware/request-telemetry.ts` | Measures one request and hands it to the buffer. Mounted after `resolveTenant` (the row belongs to a tenant database). Disabled path is one boolean and `next()`; nothing is awaited; the `res.on("finish")` handler swallows its own errors totally, because it runs after the response is sent and a throw there would surface as an `uncaughtException`. Records the **route pattern**, never the raw URL — the difference between a slowest-endpoints table and one row per entity ever touched. | `db-timing.ts`, `tenant-context.ts`, `api-telemetry.service.ts` | `app.ts` |
+| `services/api-telemetry.service.ts` | Host identity, a machine snapshot refreshed on a ~15s timer (never per request — a real CPU delta needs a sleep between two readings), and the in-memory buffer that batches rows out with `createMany`. Drops-and-counts past its ceiling rather than growing; the flush groups by tenant so one org's failure cannot stop another's, and never throws into the timer. | `node:os`, `node:fs/promises`, `config/env.ts` | `middleware/request-telemetry.ts`, `server.ts` (shutdown flush), `workers/api-telemetry-retention.worker.ts` |
+| `services/api-performance.service.ts` | The read half: percentiles (MySQL 8 window functions — there is no `PERCENTILE_CONT` and Prisma `groupBy` has no percentile aggregate), slowest endpoints, error rate, latency series, per-host/pod split, and the slow-request drill-down. User names are joined at **read** time, so no PII is ever stored in the telemetry table. | `config/prisma.ts` | `controllers/maintenance.controller.ts` |
+| `workers/api-telemetry-retention.worker.ts` | Daily 04:10 prune, select-ids-then-delete in batches. Scheduled even when collection is off, so switching recording off never strands the rows already written. | `run-for-every-org.ts` | `server.ts` |
+| `components/ApiPerformancePanel.tsx` (web) | The operator surface: latency & errors, endpoints, hosts & pods, request log. Distinguishes "recording is off" from "no traffic", and surfaces dropped/failed sample counts rather than silently under-reporting. | `maintenanceApi` | `pages/settings/MaintenanceSettingsCard.tsx` |
+
+### Email delivery analytics
+
+| File | Purpose | Depends on | Depended on by |
+|---|---|---|---|
+| `services/email-analytics.service.ts` | Send volume and failure breakdown over `EmailLog`. Reconciles the two things that column holds — `dispatchNotification` writes a notification **category**, `dispatchTransactional` writes a **templateKey** — onto the template cards, surfacing anything unresolvable in an explicit *Other / unmapped* bucket instead of dropping it. Normalises noisy SMTP strings for grouping while keeping the verbatim message. | `config/prisma.ts` | `controllers/email-templates.controller.ts` |
 
 ### DevOps / deployment
 

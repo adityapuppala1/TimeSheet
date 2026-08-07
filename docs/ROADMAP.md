@@ -18,7 +18,7 @@ easy to retrofit into a competitor later:
   tools) uses row-level multi-tenancy. The practical consequence: an org's AI provider key,
   AI spend, SSO config, and every row of ticket/timesheet data live in a database connection
   no other tenant's request ever opens — see [README § AI, and every other per-org setting,
-  cannot leak across tenants](../README.md#ai-and-every-other-per-org-setting-cannot-leak-across-tenants-by-construction-not-by-filter).
+  cannot leak across tenants](../README.md#ai-and-every-other-per-org-setting-cannot-leak-across-tenants--by-construction-not-by-filter).
 - **BYOK across 10+ LLM vendors** (Anthropic native, plus any OpenAI-compatible endpoint —
   OpenAI, Groq, Mistral, DeepSeek, OpenRouter, Gemini, Qwen, Kimi, Nvidia NIM, local
   Ollama/LM Studio) with per-call cost estimation, an `AIUsageLog` audit trail, and a
@@ -1871,3 +1871,58 @@ updater already runs it), and `fresh-checkout-org` was archived, silencing the p
   a dead "Start" beside the wizard's real one, and two Cancels — and the training report now
   fits a 360px phone (rejection reasons wrap on their own line). Both verified by a new
   phone-width spec that opens the wizard and counts the buttons.
+
+### Follow-up: two questions the product couldn't answer about itself (2026-08-07)
+
+Shipped as 2.1.0. Both themes started as a user question that the code could not answer, and in
+both cases the investigation found the real cause was somewhere other than where it was reported.
+
+- [x] **"Stop emailing managers and super admins the daily reminder"** — the reminder worker had
+  *always* targeted only `EMPLOYEE`/`TEAM_LEAD` (`getTargetUsers()`), so the reported symptom could
+  not have come from where it appeared to. It came from `bccSuperAdminOnAllEmails`, which copies
+  every super admin on **every outbound email in the app** — every employee's reminder, every day —
+  below any per-category gate. Fixed by giving delivery a third layer, a per-role mute matrix
+  (`GlobalNotificationSettings.emailRoleMutes`, stored as the mutes rather than the ticks so a null
+  column reproduces today's behaviour with no backfill), and by teaching the audit BCC to honour
+  the SUPER_ADMIN row of it. Verified against a running install: a muted manager received the
+  in-app notification and **no** `EmailLog` row, an unmuted employee received both, and a second
+  org with no mutes was unaffected.
+- [x] **Six notification categories had no user interface.** `emailTicketAssigned`,
+  `StatusChanged`, `Commented`, `SlaBreach`, `Escalation` and `ClosedDigest` were in
+  `notificationPreferenceKeys` and enforced by `dispatchNotification`, but no screen rendered them
+  — a direct DB write was the only way to change one. Found by diffing the shared key list against
+  the UI's row list rather than by reading either. A type-level assertion in `WorkspaceSettings.tsx`
+  now fails the build if a key ever lacks a row again, because the same class of gap is invisible
+  by construction.
+- [x] **Two screens could each look authoritative about the same switch** — the ticket-closed and
+  weekly-security digests were toggleable from both Email channels and the Security/DevOps card.
+  The second is now a status badge pointing at the first.
+- [x] **"Why was it slow, and on which server?"** — new `ApiRequestSample` telemetry: opt-in,
+  sampled, buffered, flushed in batches, route-pattern keyed, pruned nightly. `dbResponseTime` is
+  real (an AsyncLocalStorage bucket filled by a Prisma `$allOperations` extension), not estimated.
+  Two deliberate limits are documented rather than papered over: host CPU/RAM/disk come from a
+  ~15s snapshot and so describe the machine *around* a request rather than during it, and the
+  buffer drops-and-counts past its ceiling rather than growing. Verified on a running install —
+  22 samples, 0 dropped, 0 failed, real percentiles and a real average DB time.
+- [x] **The approvals queue showed less than it already had.** Module, submodule, notes and task
+  description were on the wire the whole time and simply weren't rendered; the fix needed no schema
+  change. Search, filters, date range, per-entry export and a mobile detail dialog were added
+  around them. The 100-row cap was left alone but is now *stated* in the UI instead of silently
+  implying there is nothing older.
+- [x] **"Does 'Mark reviewed' retrain the face model?"** — no, and it never did: it clears the flag
+  and records who looked. There is no adaptive re-enrollment anywhere in the product. Documented in
+  CHANGELOG and docs/FACE_VERIFICATION.md because the expectation is reasonable and acting on it
+  wastes real review time. Three genuine defects surfaced while confirming it: `LOW_QUALITY` was
+  missing from the outcome filter, `SKIPPED_INSECURE` was persisted but absent from the outcome
+  union, and `reviewNote` was storable by the API but unreachable from the UI.
+- [x] **Smaller truths**: the timesheet form's failed submit looked like a dead button because
+  every select is a custom control the form library holds no ref for, so its built-in error focus
+  silently did nothing — now driven off `aria-invalid` instead, which survives fields being
+  reordered.
+
+**Process note, recorded because it cost real tokens:** two parallel agent dispatches were
+malformed and silently launched duplicates of an already-running task instead of the intended one.
+Both duplicates detected the collision themselves and stood down rather than shipping competing
+implementations — one had already written a second `CREATE TABLE` migration that would have been
+unapplyable. Nothing was lost, but the failure was silent at the dispatch site, which is the part
+worth remembering.

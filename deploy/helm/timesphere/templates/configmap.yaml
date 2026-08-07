@@ -12,3 +12,16 @@ data:
   APP_BASE_URL: {{ .Values.env.appBaseUrl | quote }}
   API_PORT: "4000"
   UPLOAD_DIR: "/app/uploads"
+  {{- with .Values.telemetry }}
+  # API request telemetry — see docs/DEPLOYMENT.md → "Operating API request telemetry".
+  # Recording is off unless `telemetry.enabled` is set, so these are inert by default. Pod and
+  # cluster identity are NOT here: POD_NAME/POD_NAMESPACE come from the downward API on the
+  # Deployment itself (a ConfigMap cannot know which pod reads it), and CLUSTER_NAME is the one
+  # value Kubernetes cannot tell us about itself.
+  API_TELEMETRY_ENABLED: {{ .enabled | quote }}
+  API_TELEMETRY_SAMPLE_RATE: {{ .sampleRate | quote }}
+  API_TELEMETRY_FLUSH_MS: {{ .flushMs | quote }}
+  API_TELEMETRY_MAX_BUFFER: {{ .maxBuffer | quote }}
+  API_TELEMETRY_RETENTION_DAYS: {{ .retentionDays | quote }}
+  CLUSTER_NAME: {{ .clusterName | quote }}
+  {{- end }}
