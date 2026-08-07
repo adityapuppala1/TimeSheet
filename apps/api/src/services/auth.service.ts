@@ -18,6 +18,7 @@ import { AppError } from "../middleware/error.js";
 import { getEffectiveSeatLimit } from "./plan-limits.service.js";
 import { isMaintenanceActive } from "./maintenance.service.js";
 import {
+  DUMMY_PASSWORD_HASH,
   hashPassword,
   hashToken,
   opaqueToken,
@@ -181,7 +182,13 @@ export async function login(email: string, password: string, rememberMe = false,
   }
 
   const user = await prisma.user.findUnique({ where: { email }, include: PROFILE_INCLUDE });
-  if (!user || user.deletedAt || !(await verifyPassword(password, user.passwordHash))) {
+  // Always run one bcrypt round, even when the account doesn't exist. Comparing the supplied
+  // password against a constant sentinel hash equalizes the response time with the wrong-password
+  // path, so the "Invalid email or password" reply — already identical in body and status — is
+  // also identical in timing. Skipping the compare for a missing user (the `||` short-circuit
+  // this replaces) turned that reply into a timing oracle: ~6ms unknown vs ~200ms real account.
+  const passwordOk = await verifyPassword(password, user?.passwordHash ?? DUMMY_PASSWORD_HASH);
+  if (!user || user.deletedAt || !passwordOk) {
     recordFailedLogin(orgId, email);
     throw new AppError(401, "Invalid email or password");
   }

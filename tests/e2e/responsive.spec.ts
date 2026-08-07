@@ -15,6 +15,7 @@
 import { test, expect } from "@playwright/test";
 import { deleteTicket, withAdminRequest } from "./helpers/admin-request";
 import { suspendFaceGate, type FaceGateSnapshot } from "./helpers/face-gate";
+import { accessToken } from "./helpers/sign-in";
 
 // Several tests below build their own ticket fixture through the API. When the workspace has
 // face verification enabled with enforcementMode ALL — a legitimate, shippable configuration —
@@ -91,8 +92,7 @@ test("no horizontal overflow on the public landing page", async ({ page }) => {
  * test specifically does, with a title long enough to have triggered it.
  */
 test("no horizontal overflow with a long ticket title open in the detail sheet", async ({ page }) => {
-  const { accessToken } = await (await page.request.post("/api/auth/refresh")).json();
-  const headers = { Authorization: `Bearer ${accessToken}` };
+  const headers = await accessToken(page);
   const projects = await (await page.request.get("/api/projects", { headers })).json();
   const longTitle = "A very long ticket title that would never fit on one line on a phone screen without wrapping properly";
   const created = await page.request.post("/api/tickets", {
@@ -230,8 +230,7 @@ test("no Workspace Settings tab widens the page beyond the viewport", async ({ p
 });
 
 test("every tab in the ticket detail sheet (7 tabs) is reachable", async ({ page }) => {
-  const { accessToken } = await (await page.request.post("/api/auth/refresh")).json();
-  const headers = { Authorization: `Bearer ${accessToken}` };
+  const headers = await accessToken(page);
   const projects = await (await page.request.get("/api/projects", { headers })).json();
   const ticket = await (
     await page.request.post("/api/tickets", {

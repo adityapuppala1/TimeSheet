@@ -38,6 +38,22 @@ services:
       SMTP_PASS: ${SMTP_PASS:-}
       SMTP_SECURE: ${SMTP_SECURE:-false}
       UPLOAD_DIR: /app/uploads
+      # Reverse-proxy hop count — see docker-compose.yml's block of the same name for the full
+      # reasoning. Short version: the `web` container's nginx already proxies /api here, so a
+      # deployment left at 0 attributes every browser request to nginx's address and turns every
+      # per-IP rate limit into one shared bucket. 1 as shipped, 2 behind docker-compose.https.yml.
+      TRUST_PROXY_HOPS: ${TRUST_PROXY_HOPS:-0}
+      # Relocatable file storage / rotating file logs. Empty = unchanged behaviour. A path set
+      # here must live inside a mounted volume, or it is written into the container's ephemeral
+      # layer and lost on the next rebuild.
+      STORAGE_ROOT: ${STORAGE_ROOT:-}
+      STORAGE_DOCUMENTS_DIR: ${STORAGE_DOCUMENTS_DIR:-}
+      STORAGE_AVATARS_DIR: ${STORAGE_AVATARS_DIR:-}
+      STORAGE_FACE_DIR: ${STORAGE_FACE_DIR:-}
+      LOG_DIR: ${LOG_DIR:-}
+      LOG_ROTATE_HOURS: ${LOG_ROTATE_HOURS:-4}
+      LOG_RETENTION_DAYS: ${LOG_RETENTION_DAYS:-30}
+      LOG_COMPRESS_ON_ROLLOVER: ${LOG_COMPRESS_ON_ROLLOVER:-true}
       SLA_ENABLED: ${SLA_ENABLED:-true}
       TICKET_SLA_ENABLED: ${TICKET_SLA_ENABLED:-true}
       TICKET_SLA_CRON_SCHEDULE: ${TICKET_SLA_CRON_SCHEDULE:-*/15 * * * *}

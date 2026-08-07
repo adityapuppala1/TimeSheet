@@ -12,8 +12,7 @@
  */
 import { expect, test, type Page } from "@playwright/test";
 import { suspendFaceGate, type FaceGateSnapshot } from "./helpers/face-gate";
-
-const ADMIN = "superadmin@timesheet.local";
+import { accessToken, signIn as sharedSignIn } from "./helpers/sign-in";
 
 /**
  * Signs in for THIS test, rather than replaying a shared `storageState` snapshot.
@@ -27,13 +26,8 @@ const ADMIN = "superadmin@timesheet.local";
  * Free against the rate limiter: /auth/login is capped with `skipSuccessfulRequests`, so
  * successful sign-ins never count toward the budget.
  */
-async function signIn(page: Page) {
-  await page.goto("/login");
-  await page.getByLabel("Email", { exact: true }).fill(ADMIN);
-  await page.getByLabel("Password", { exact: true }).fill("Admin@12345");
-  await page.getByRole("button", { name: /sign in/i }).click();
-  await expect(page).toHaveURL(/\/app/, { timeout: 15_000 });
-}
+const signIn = (page: Page) => sharedSignIn(page, "superadmin");
+
 
 /**
  * Reads the workspace planning settings through the API, using the stored session.
@@ -44,11 +38,9 @@ async function signIn(page: Page) {
  * "Session expired". Every spec below therefore takes its token first and navigates second.
  */
 async function planningConfig(page: Page) {
-  const { accessToken } = await (await page.request.post("/api/auth/refresh")).json();
-  const res = await page.request.get("/api/planning/settings", {
-    headers: { Authorization: `Bearer ${accessToken}` }
-  });
-  return { config: await res.json(), token: accessToken };
+  const headers = await accessToken(page);
+  const res = await page.request.get("/api/planning/settings", { headers });
+  return { config: await res.json(), token: headers.Authorization.replace("Bearer ", "") };
 }
 
 // Several tests below build ticket fixtures through the API. When the workspace has face

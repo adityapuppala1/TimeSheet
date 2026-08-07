@@ -81,16 +81,27 @@ These are the actual failure modes you're likely to hit, in the order you'd hit 
    something else on this machine, before Compose gets a chance to bind-fail on them deep in its
    own logs. 3307, not MySQL's usual 3306 — see the port-conflict row in the table above for why.
 3. **`.env` handling** (human-in-the-loop, security-relevant): 
-   - If `.env` doesn't exist yet, you're prompted for exactly two values (web URL, API URL —
-     both default to `localhost` for a trial run) and then, **optionally**, your outbound SMTP
+   - If `.env` doesn't exist yet, you're prompted for three values (web URL, API URL — both
+     default to `localhost` for a trial run — and the **reverse-proxy hop count**, see below)
+     and then, **optionally**, your outbound SMTP
      details (host/port/user/password/TLS) — type `N` to skip and configure email later from
      the UI. The password prompt hides your input as you type. Every other secret (DB
      password, JWT signing keys, encryption key) is generated for you with cryptographically
      strong randomness — you never have to think about them.
+   - **The proxy hop count (`TRUST_PROXY_HOPS`) defaults to `1`, and that is deliberate.** The
+     `web` container's nginx proxies `/api` to the `api` container, so every browser request
+     already crosses one proxy. Left at `0`, the API records nginx's address as the client IP for
+     *everyone* and the 20/min login limiter becomes one shared global bucket — silently, with no
+     error and no log line. Answer `2` if you also run `docker-compose.https.yml` (Caddy in front
+     of that nginx), and add one more for anything else in front such as Cloudflare. Full
+     reasoning — including why it is a hop *count* rather than a boolean —
+     is in [docs/DEPLOYMENT.md § Reverse proxies](DEPLOYMENT.md#reverse-proxies-and-client-ip-attribution-trust_proxy_hops).
    - If `.env` already exists, the installer runs a **self-heal check**: it verifies every
      required key is present (catches a stale `.env` from before a feature that added a new
      required variable) and fails with a clear list of exactly what's missing, rather than
-     letting Docker Compose fail opaquely three steps later. Existing values are never
+     letting Docker Compose fail opaquely three steps later. It also warns — without failing —
+     when `TRUST_PROXY_HOPS` is absent, since that one has a default and so would otherwise start
+     up perfectly while attributing every request to the proxy. Existing values are never
      modified — re-running the installer against an already-configured deployment is always
      safe.
 4. **Build + start** — `docker compose up -d --build`. First run pulls the MySQL 8.4 image and
@@ -144,19 +155,37 @@ Updating later is one command — see docs/DEPLOYMENT.md's "Updating a running d
 Full walkthrough already lives in [README.md § Installation](../README.md#installation-local-no-docker)
 — summarized here with the decision points called out:
 
-**One-liner, once `.env` is filled in** (step 2 below is the only manual one — everything after
-it is automated and self-healing):
+**One command, from a clean clone** — start MySQL first, then:
 
 ```bash
 npm run setup
+npm run dev
 ```
+
+`setup` is `npm install && npm run bootstrap && npm run db:generate && npm run doctor:heal &&
+npm run seed`, which covers, in order: dependencies (`postinstall` builds `packages/shared`);
+`apps/api/.env` created from `.env.example` if it doesn't exist, plus a dev TLS certificate if
+this machine has none; Prisma clients generated for **both** schemas (tenant and control-plane);
+`.env` validated, both databases created if missing, and every pending migration applied to each;
+then roles/permissions/demo data and the control-plane plan tiers seeded. **Every step is
+idempotent** — re-running `setup` on an existing install regenerates nothing it would overwrite.
+
+Two things it deliberately does *not* do. It never overwrites an `apps/api/.env` you already have,
+and it never regenerates a certificate you have already trusted on your devices — both would
+destroy something you cannot get back. What it does instead, on an *upgrade*, is **list any
+variable that has been added to `.env.example` since your `.env` was written**, so a new feature
+looks unconfigured rather than broken. Append them (commented out) with `npm run bootstrap:sync`.
+
+If the placeholder `DATABASE_URL` doesn't match this machine, `setup` stops at the `doctor:heal`
+step and names the problem — see [§ Self-diagnosis](#self-diagnosis-npm-run-doctor) below. Fix
+`apps/api/.env` and re-run `npm run setup`; it picks up where it left off.
 
 Equivalent step-by-step, if you'd rather run each yourself or see what's happening:
 
 1. `npm install` (builds `packages/shared` automatically via `postinstall`).
-2. `cp .env.example apps/api/.env`, then fill in `DATABASE_URL`/`CONTROL_DATABASE_URL` (XAMPP
-   default: `mysql://root:@localhost:3306/...`, empty password), three JWT secrets, and
-   `ENCRYPTION_KEY` (`openssl rand -hex 32`).
+2. `npm run bootstrap` (copies `.env.example` → `apps/api/.env` and mints dev certificates), then
+   fill in `DATABASE_URL`/`CONTROL_DATABASE_URL` (XAMPP default: `mysql://root:@localhost:3306/...`,
+   empty password), three JWT secrets, and `ENCRYPTION_KEY` (`openssl rand -hex 32`).
 3. Start MySQL (XAMPP Control Panel, or your own install).
 4. **Run `npm run doctor:heal -w apps/api` before anything else.** This is the single
    highest-value step — validates `.env`, auto-creates both databases if they don't exist, and
@@ -261,18 +290,42 @@ the admin-configurable settings surfaces this app has:
 | Ticket types, labels, SLA hours | Workspace Settings → **Ticketing** | |
 | Plan tiers, seat limits, AI budget ceilings | `/platform-admin` console | Cross-org, platform-admin-only. |
 | User designation (job title) | Users page → create/edit form, or bulk-upload CSV's `designation` column | Free text, display-only — shown on the Users table and org chart. Has no effect on RBAC (that's the separate `role` field). |
-| API request telemetry (latency percentiles, slowest endpoints, per-host/pod split) | Workspace Settings → **Maintenance → API performance** | **The one row here that is not a UI toggle** — the panel reads and reports, but collection is switched on in the environment. Off by default. |
+| API request telemetry (latency percentiles, slowest endpoints, per-host/pod split) | Workspace Settings → **Maintenance → API performance** | **Not a UI toggle** — the panel reads and reports, but collection is switched on in the environment. Off by default. |
+| Where uploaded files live, and rotating log files | Workspace Settings → **Storage & logs** | **Read-only by design** — shows the resolved documents/avatars/face directories, which variable set each one, and whether each is really writable; validates a candidate path before you commit it. Changing a path is a `.env` edit plus a restart, never a save button — see [docs/DEPLOYMENT.md § Relocating file storage](DEPLOYMENT.md#relocating-file-storage) and [§ Log files](DEPLOYMENT.md#log-files). |
 
-Every row above except the last reads live from the database on the next request — no server
-restart. API telemetry is the exception: it sits in the hot path of every request, so an operator
-has to ask for that cost in the environment rather than an admin flipping it from a settings page.
+Every row above except the last two reads live from the database on the next request — no server
+restart. API telemetry sits in the hot path of every request, so an operator has to ask for that
+cost in the environment rather than an admin flipping it from a settings page; the storage and log
+paths are process-wide while a super admin is per-tenant, and an arbitrary absolute path the app
+then writes to is close enough to arbitrary file write that it is not something one compromised
+admin account should be able to set.
+
+### Environment variables for storage and logs
+
+All optional, all inert when unset, all forwarded by both compose files and the Helm chart:
+
+- `STORAGE_ROOT` — absolute directory that becomes the parent of the documents/avatars/face
+  subtrees. Empty keeps today's layout under `UPLOAD_DIR` exactly.
+- `STORAGE_DOCUMENTS_DIR` / `STORAGE_AVATARS_DIR` / `STORAGE_FACE_DIR` — pin one subtree somewhere
+  else entirely (face imagery on an encrypted volume, documents on a NAS).
+- `LOG_DIR` — absolute directory for rotating file logs. **Empty means off**, which is the
+  default; stdout is never taken away either way.
+- `LOG_ROTATE_HOURS` (default `4`), `LOG_RETENTION_DAYS` (default `30`),
+  `LOG_COMPRESS_ON_ROLLOVER` (default `true`).
+
+Every one of these must be an **absolute** path with no `..` segments, and the directory must
+already exist and be writable — a relative path resolves against whatever directory the service
+started in, which is different for `npm run dev`, a systemd unit and a container. Inside a
+container the path must also sit inside a mounted volume or it dies with the pod.
 
 ### Environment variables for API telemetry
 
-Add these to `apps/api/.env` (manual install) and restart the API. Docker Compose and the Helm
-chart forward an explicit list of variables rather than the whole file, so those shapes also need
-the variable added to `docker-compose.yml`'s `api.environment` block or the chart's ConfigMap —
-see [docs/DEPLOYMENT.md § Operating API request telemetry](DEPLOYMENT.md#operating-api-request-telemetry)
+Add these to `apps/api/.env` (manual install), or to the root `.env` on the Compose shape, and
+restart the API. Both compose files and the chart's ConfigMap already forward this set, so no file
+needs editing to switch it on — but note that Compose passes an *explicit list* of variables to
+the container rather than the whole `.env`, so anything **not** named in `api.environment` does not
+exist inside it. See
+[docs/DEPLOYMENT.md § Operating API request telemetry](DEPLOYMENT.md#operating-api-request-telemetry)
 for the full operational picture (row volume, retention, sampling, and what the CPU/RAM columns
 can and cannot tell you).
 

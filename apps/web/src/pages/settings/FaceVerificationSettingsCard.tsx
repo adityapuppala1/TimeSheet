@@ -831,7 +831,13 @@ function FaceOutcomeAnalyticsCard({ readOnly }: { readOnly: boolean }) {
           )}
         </div>
 
-        <div className="grid gap-6 lg:grid-cols-2">
+        {/* `grid-cols-[minmax(0,1fr)]` is load-bearing below lg, the same trap DataTable and the
+            settings tab grid already document: a grid item defaults to `min-width: auto`, so the
+            implicit single track sized itself to these cards' min-content (381px, set by the
+            charts inside them) and pushed the whole settings page 24px past a 390px phone. An
+            explicit minmax(0,1fr) track lets the item shrink; the charts scroll or squeeze
+            inside it, which is where the overflow belongs. */}
+        <div className="grid grid-cols-[minmax(0,1fr)] gap-6 lg:grid-cols-2">
           <div className="rounded-lg border border-border bg-muted/30 p-4">
             <p className="text-sm font-medium">Review funnel</p>
             <p className="mb-3 text-sm text-muted-foreground">

@@ -7,7 +7,7 @@
  */
 import { test, expect } from "@playwright/test";
 import { suspendFaceGate, type FaceGateSnapshot } from "./helpers/face-gate";
-import { pickDate, signIn } from "./helpers/sign-in";
+import { accessToken, pickDate, signIn } from "./helpers/sign-in";
 
 // Own snapshot, not shared with timesheet.spec.ts's "employee.json" — both specs rotate their
 // session's refresh secret via POST /auth/refresh, and two specs sharing one snapshot race to
@@ -39,8 +39,7 @@ test.describe("Dashboard day timeline", () => {
   test("shows an entry logged today, and the date picker walks to an empty day", async ({ page }) => {
     await signIn(page, "employee");
     await page.goto("/app");
-    const { accessToken } = await (await page.request.post("/api/auth/refresh")).json();
-    const headers = { Authorization: `Bearer ${accessToken}` };
+    const headers = await accessToken(page);
 
     // A draft is enough — the timeline shows every status — and never trips the face gate.
     const projects = await (await page.request.get("/api/projects", { headers })).json();

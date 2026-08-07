@@ -90,6 +90,34 @@ env:
   webOrigin: https://timesphere.example.com
   appBaseUrl: https://timesphere.example.com
   tz: Asia/Kolkata
+  # Number of reverse proxies in front of the api pods. 1 is correct for this chart as shipped:
+  # ingress.yaml routes /api straight to the api Service, so the ingress controller is the single
+  # hop. Add one for anything in front of it (Cloudflare, an external LB terminating TLS) and set
+  # it to 0 if you disable the ingress and expose the Service directly.
+  #
+  # It is a hop COUNT, not a boolean, because trusting X-Forwarded-For wholesale lets any caller
+  # forge req.ip — and req.ip is what every per-IP rate limit in the app reads. Wrong-low means
+  # one shared global bucket for every user; wrong-high means a forgeable one.
+  trustProxyHops: 1
+
+# Relocatable, segregated file storage (docs/DEPLOYMENT.md → "Relocating file storage").
+# EMPTY = unchanged: everything lives under UPLOAD_DIR (/app/uploads), which is the PVC this
+# chart already mounts. Any path set here must resolve INSIDE a mounted volume — the api
+# container's filesystem is otherwise ephemeral, so a file written elsewhere dies with the pod.
+storage:
+  root: ""
+  documentsDir: ""
+  avatarsDir: ""
+  faceDir: ""
+
+# Rotating file logs. Empty logDir = OFF, which is the right default on Kubernetes: stdout is
+# what `kubectl logs` and every cluster log shipper already collect, and files inside a pod are
+# lost on restart. Set logDir only when it points at a mounted, retained volume.
+logging:
+  dir: ""
+  rotateHours: 4
+  retentionDays: 30
+  compressOnRollover: true
 
 # API request telemetry — per-request latency/DB-time samples behind Workspace Settings →
 # Maintenance → "API performance". See docs/DEPLOYMENT.md → "Operating API request telemetry".

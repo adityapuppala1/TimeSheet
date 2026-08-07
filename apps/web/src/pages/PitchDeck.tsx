@@ -1,8 +1,8 @@
 /**
  * WHAT: the pitch — a standalone public page at `/pitch` that explains what TimeSphere is, who
- * it's for, why it exists, how it makes money, and what makes it hard to copy. Structured as
- * numbered slides so it reads top-to-bottom in a browser and also survives being printed or
- * screen-shared in a meeting.
+ * it's for, why it exists, how it makes money, where it runs, and what makes it hard to copy.
+ * Structured as numbered slides so it reads top-to-bottom in a browser and also survives being
+ * printed or screen-shared in a meeting.
  *
  * WHY IT'S A PAGE AND NOT A PDF: a deck goes out of date the day after it's exported, and then
  * three versions of it circulate. This reads from the same claims the landing page makes and uses
@@ -13,18 +13,24 @@
  * below is either a property of the code or is explicitly labelled as a target rather than a
  * result. Nothing here claims traction, revenue, or customers, because there aren't any to claim.
  *
+ * WHY SLIDE NUMBERS AND COUNTS ARE DERIVED: the previous version had a slide headed "Four things
+ * that aren't a weekend's work" above a list of five, and "Three things, honestly labelled" above
+ * a list of four. In a document whose entire pitch is "we don't overstate", a headline that can't
+ * count is the most expensive kind of small error. Numbers now come from `SLIDES` and from the
+ * arrays themselves, so they cannot drift again.
+ *
  * WHO renders this: `App.tsx`'s `/pitch` (public, unauthenticated) route.
  */
-import { motion } from "framer-motion";
 import {
   ArrowRight,
   Building2,
   CircleDollarSign,
   FileCheck2,
-  GanttChartSquare,
   FlaskConical,
+  GanttChartSquare,
   Layers,
   Lock,
+  ServerCog,
   Target,
   TrendingUp,
   Users,
@@ -35,7 +41,34 @@ import { Link } from "react-router";
 import { Badge } from "../components/ui/badge";
 import { Button } from "../components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "../components/ui/card";
+import { Reveal, useScrollProgress, useSectionSpy } from "../components/marketing/Reveal";
 import { ScreenshotFrame } from "../components/marketing/ScreenshotFrame";
+
+/**
+ * The running order. It drives the slide numbers, the jump-to navigation and the scroll-spy, so
+ * inserting a slide is one edit rather than four.
+ *
+ * `nav` is short on purpose: the full labels total wider than the content column, which left the
+ * rail permanently mid-scroll on a desktop — reading as clipped rather than as scrollable. The
+ * long form still heads each slide, where there is room for it.
+ */
+const SLIDES = [
+  { id: "cover", label: "The pitch", nav: "Pitch" },
+  { id: "problem", label: "The problem", nav: "Problem" },
+  { id: "audience", label: "Who it's for", nav: "Audience" },
+  { id: "product", label: "The product", nav: "Product" },
+  { id: "deployment", label: "Where it runs", nav: "Hosting" },
+  { id: "moat", label: "Why it's hard to copy", nav: "Moat" },
+  { id: "ai", label: "The AI position", nav: "AI" },
+  { id: "revenue", label: "How it makes money", nav: "Revenue" },
+  { id: "next", label: "What's next", nav: "Next" },
+  { id: "close", label: "In one line", nav: "One line" }
+] as const;
+
+type SlideId = (typeof SLIDES)[number]["id"];
+
+/** "01", "02"… Position in `SLIDES` is the single source of a slide's number. */
+const slideNumber = (id: SlideId) => String(SLIDES.findIndex((slide) => slide.id === id) + 1).padStart(2, "0");
 
 /** Who this is for, and what specifically hurts for them today. */
 const AUDIENCES = [
@@ -82,7 +115,7 @@ const MOATS = [
   {
     icon: Lock,
     title: "Bring-your-own-key as the default",
-    body: "Nineteen AI capabilities, every one off until switched on, all running against the customer's own provider key under a budget the product enforces per call. We never resell inference.",
+    body: "Every AI capability is off until switched on, and all of them run against the customer's own provider key under a budget the product enforces per call. We never resell inference.",
     why: "It removes the single most common blocker to AI adoption in a regulated buyer: 'where does our data go, and what will this cost?' Both answers are the customer's own."
   },
   {
@@ -102,13 +135,39 @@ const REVENUE = [
   },
   {
     label: "Enterprise tier",
-    detail: "Dedicated database, SAML and SSO-only mode, adjustable seat and AI-budget ceilings, support with an uptime SLA. This is where compliance-heavy buyers land.",
+    detail: "Dedicated database, SAML and SSO-only mode, capacity planning, custom workflows, the AI copilot, adjustable seat and AI-budget ceilings, support with an uptime SLA. This is where compliance-heavy buyers land.",
     tone: "Expansion"
   },
   {
     label: "Not charged: AI usage",
     detail: "Customers bring their own provider key and pay that provider directly. Refusing the inference markup removes the objection that kills most AI upsells, and keeps our margin independent of token prices.",
     tone: "Deliberate"
+  }
+];
+
+/** What ships in the box today, as a spread rather than a wall of bullets. */
+const SURFACES = [
+  { title: "Plan", body: "Gantt with four dependency types, baselines, critical path, portfolios, capacity, budgets, and a risk score from six measured signals." },
+  { title: "Track", body: "Timesheets and Jira-style ticketing on the same rows, with saved views, custom fields and admin-defined workflows." },
+  { title: "Intake", body: "Email, Slack, Teams, Google Chat, Telegram and public request forms — all landing as routed, prioritized tickets." },
+  { title: "Connect", body: "GitHub repo, branch and PR pickers; webhooks from GitLab, Bitbucket, Gitea, Forgejo and Azure DevOps; an optional CI gate on Resolved." },
+  { title: "Report", body: "Insights, a 22-column CSV, a real Excel workbook, truncation-honest PDFs, and dashboards scheduled to people with no account." },
+  { title: "Prove", body: "Approved, identity-verified work as a signed attestation PDF, shareable by link, priced from the rate that applied at approval." }
+];
+
+/** Deployment posture. All of it is a property of the repository, not a plan. */
+const DEPLOYMENT = [
+  {
+    title: "One codebase, two shapes",
+    body: "A single-organization on-premise install is the same code as multi-organization SaaS, with the tenant count set to one — not a stripped fork that drifts behind the hosted build."
+  },
+  {
+    title: "Nothing calls home",
+    body: "Your AI provider key, your GitHub OAuth app, your Google and Microsoft clients, your database. No vendor-operated model client ever sits between a customer and their data."
+  },
+  {
+    title: "Ships the way ops expects",
+    body: "A one-command installer, Docker Compose with overlays for an external database and HTTPS, and a Helm chart with autoscaling. Air-gapped installs read release notes from the bundled changelog."
   }
 ];
 
@@ -121,7 +180,7 @@ const NEXT = [
   },
   {
     title: "Retrieval for Ask AI",
-    body: "Today Ask AI stuffs the 150 most recently updated tickets into the prompt and never uses the question to choose which ones. Ticket 151 is invisible, and no amount of prompt tuning fixes that — it needs real retrieval.",
+    body: "Today Ask AI stuffs the most recently updated tickets into the prompt and never uses the question to choose which ones. A ticket outside that window is invisible, and no amount of prompt tuning fixes that — it needs real retrieval.",
     status: "Scoped, not started"
   },
   {
@@ -137,242 +196,344 @@ const NEXT = [
 ];
 
 export function PitchDeck() {
+  const active = useSectionSpy(SLIDES.map((slide) => slide.id));
+  const progress = useScrollProgress();
+
   return (
     <div className="min-h-screen overflow-x-clip bg-background">
-      <nav className="sticky top-0 z-30 border-b border-border bg-background/80 backdrop-blur-xl print:hidden">
-        <div className="mx-auto flex max-w-6xl items-center justify-between gap-3 px-4 py-4 sm:px-5">
-          <Link to="/" className="flex min-w-0 items-center gap-3 font-bold">
+      <header className="sticky top-0 z-30 border-b border-border bg-background/85 backdrop-blur-xl print:hidden">
+        <nav aria-label="Primary" className="mx-auto flex max-w-6xl items-center justify-between gap-3 px-4 py-3 sm:px-5 sm:py-4">
+          <Link to="/" className="focus-ring flex min-w-0 items-center gap-3 rounded-md font-bold">
             <span className="grid h-9 w-9 shrink-0 place-items-center rounded-lg bg-primary text-primary-foreground shadow-glow">T</span>
             <span className="truncate">TimeSphere</span>
           </Link>
           <div className="flex shrink-0 items-center gap-2">
-            <Link to="/" className="hidden text-sm font-semibold text-muted-foreground hover:text-foreground sm:inline">
+            <Link
+              to="/"
+              className="focus-ring hidden rounded-md px-3 py-2 text-sm font-semibold text-muted-foreground hover:text-foreground sm:inline"
+            >
               Product
             </Link>
             <Button asChild size="sm">
               <Link to="/login">Sign in <ArrowRight className="h-4 w-4" /></Link>
             </Button>
           </div>
-        </div>
-      </nav>
+        </nav>
 
-      {/* ---------------------------------------------------------- 01 Cover */}
-      <Slide number="01" label="The pitch">
-        <motion.div initial={{ opacity: 0, y: 14 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.5 }}>
-          <Badge variant="info" className="w-fit">Enterprise timesheets, ticketing &amp; governed AI</Badge>
-          <h1 className="mt-5 max-w-4xl text-3xl font-black leading-tight tracking-tight sm:text-5xl">
-            {/* Two-stop ramp for the same reason as Landing's hero — see the comment there. */}
-            The work happened. <span className="bg-gradient-to-r from-primary to-info bg-clip-text text-transparent">Prove it.</span>
-          </h1>
-          <p className="mt-5 max-w-2xl text-base leading-8 text-muted-foreground">
-            TimeSphere is one system for the hours a team logs, the tickets that work belongs to, and the evidence a
-            client or auditor asks for afterwards — with an AI layer that runs on your own key, under your own budget,
-            and can be measured rather than trusted.
-          </p>
-          <div className="mt-8 grid gap-3 sm:grid-cols-3">
-            {[
-              ["One record", "Hours and tickets are the same rows — nothing to reconcile."],
-              ["One control surface", "Every AI capability, its budget, and its measured quality on one screen."],
-              ["One database per customer", "Isolation as architecture, not as a WHERE clause."]
-            ].map(([title, body]) => (
-              <div key={title} className="rounded-xl border border-border bg-card p-4">
-                <p className="text-sm font-bold">{title}</p>
-                <p className="mt-1 text-xs leading-5 text-muted-foreground">{body}</p>
-              </div>
+        {/* The deck's table of contents. It scrolls INSIDE its own container rather than wrapping,
+            so ten slides read as one continuous rail at every width and the page itself never
+            gains a horizontal scrollbar. */}
+        <nav aria-label="Slides" className="border-t border-border/70">
+          <ul className="scrollbar-thin mx-auto flex max-w-6xl gap-1 overflow-x-auto px-4 py-2 sm:px-5">
+            {SLIDES.map((slide) => (
+              <li key={slide.id}>
+                <a
+                  href={`#${slide.id}`}
+                  aria-current={active === slide.id ? "true" : undefined}
+                  className={`focus-ring inline-flex shrink-0 items-center gap-2 whitespace-nowrap rounded-full border px-3 py-1 text-xs font-semibold transition ${
+                    active === slide.id
+                      ? "border-primary bg-primary/10 text-primary"
+                      : "border-transparent text-muted-foreground hover:border-border hover:text-foreground"
+                  }`}
+                >
+                  <span className="tabular-nums opacity-70">{slideNumber(slide.id)}</span>
+                  {slide.nav}
+                </a>
+              </li>
+            ))}
+          </ul>
+        </nav>
+
+        <div aria-hidden className="absolute inset-x-0 bottom-0 h-0.5">
+          <div className="h-full origin-left bg-primary" style={{ transform: `scaleX(${progress})` }} />
+        </div>
+      </header>
+
+      <main>
+        {/* -------------------------------------------------------- Cover */}
+        <Slide id="cover">
+          <div className="motion-safe:animate-in motion-safe:fade-in motion-safe:slide-in-from-bottom-3 motion-safe:duration-700">
+            <Badge variant="info" className="w-fit">Enterprise timesheets, ticketing &amp; governed AI</Badge>
+            <h1 className="mt-5 max-w-4xl text-3xl font-black leading-tight tracking-tight sm:text-5xl">
+              {/* Two-stop ramp for the same reason as Landing's hero — see the comment there. */}
+              The work happened. <span className="bg-gradient-to-r from-primary to-info bg-clip-text text-transparent">Prove it.</span>
+            </h1>
+            <p className="mt-5 max-w-2xl text-base leading-8 text-muted-foreground">
+              TimeSphere is one system for the hours a team logs, the tickets that work belongs to, and the evidence a
+              client or auditor asks for afterwards — with an AI layer that runs on your own key, under your own budget,
+              and can be measured rather than trusted.
+            </p>
+            <div className="mt-8 grid gap-3 sm:grid-cols-3">
+              {[
+                ["One record", "Hours and tickets are the same rows — nothing to reconcile."],
+                ["One control surface", "Every AI capability, its budget, and its measured quality on one screen."],
+                ["One database per customer", "Isolation as architecture, not as a WHERE clause."]
+              ].map(([title, body], index) => (
+                <div
+                  key={title}
+                  style={{ animationDelay: `${150 + index * 90}ms` }}
+                  className="rounded-xl border border-border bg-card p-4 transition motion-safe:animate-in motion-safe:fade-in motion-safe:slide-in-from-bottom-2 motion-safe:duration-500 motion-safe:fill-mode-backwards motion-safe:hover:-translate-y-1"
+                >
+                  <p className="text-sm font-bold">{title}</p>
+                  <p className="mt-1 text-xs leading-5 text-muted-foreground">{body}</p>
+                </div>
+              ))}
+            </div>
+          </div>
+        </Slide>
+
+        {/* -------------------------------------------------------- Problem */}
+        <Slide id="problem" tinted>
+          <Reveal>
+            <SlideTitle icon={Target} title="Teams run two systems and reconcile them by hand" />
+          </Reveal>
+          <div className="mt-6 grid gap-8 lg:grid-cols-2 lg:items-center">
+            <div className="grid gap-4">
+              {[
+                ["The numbers disagree", "A ticket gets closed in one tool; the time lands against something else in the other. Before every invoice somebody exports both and argues with a spreadsheet."],
+                ["Proof is an assertion", "Asked to justify an invoice, most teams produce a CSV they generated themselves. It proves nothing a client couldn't have written."],
+                ["AI is banned or ungoverned", "Either it's blocked because nobody can answer where the data goes, or it's on with no budget, no audit, and no way to tell whether it's any good."],
+                ["Isolation is a promise", "Most multi-tenant SaaS filters a shared table by tenant ID. One missing WHERE clause is a cross-customer breach, and buyers have learned to ask."]
+              ].map(([title, body], index) => (
+                <Reveal key={title} delay={index * 70}>
+                  <Point title={title} body={body} />
+                </Reveal>
+              ))}
+            </div>
+            <Reveal delay={120}>
+              <ScreenshotFrame
+                src="/product/insights.png"
+                alt="The Insights dashboard: velocity, SLA compliance, cycle-time distribution and workload."
+                caption="Analytics computed from the same rows the approvals ran against."
+              />
+            </Reveal>
+          </div>
+        </Slide>
+
+        {/* -------------------------------------------------------- Audience */}
+        <Slide id="audience">
+          <Reveal>
+            <SlideTitle icon={Users} title="Three buyers, one shared shape" />
+            <p className="mt-3 max-w-2xl text-sm leading-7 text-muted-foreground">
+              All three bill or account for time against work someone else will scrutinise. That's the wedge.
+            </p>
+          </Reveal>
+          <div className="mt-8 grid gap-4 lg:grid-cols-3">
+            {AUDIENCES.map((item, index) => (
+              <Reveal key={item.who} delay={index * 80} className="h-full">
+                <Card className="h-full transition hover:border-primary/40 hover:shadow-lg motion-safe:hover:-translate-y-1">
+                  <CardHeader className="pb-3">
+                    <span className="grid h-9 w-9 place-items-center rounded-lg bg-primary/10 text-primary">
+                      <item.icon className="h-5 w-5" aria-hidden />
+                    </span>
+                    <CardTitle className="mt-3 text-base">{item.who}</CardTitle>
+                  </CardHeader>
+                  <CardContent className="grid gap-3">
+                    <div>
+                      <p className="text-xs font-bold uppercase tracking-wider text-muted-foreground">Today</p>
+                      <p className="mt-1 text-sm leading-6 text-muted-foreground">{item.pain}</p>
+                    </div>
+                    <div>
+                      <p className="text-xs font-bold uppercase tracking-wider text-primary">With TimeSphere</p>
+                      <p className="mt-1 text-sm leading-6 text-muted-foreground">{item.fit}</p>
+                    </div>
+                  </CardContent>
+                </Card>
+              </Reveal>
             ))}
           </div>
-        </motion.div>
-      </Slide>
+        </Slide>
 
-      {/* ---------------------------------------------------------- 02 Problem */}
-      <Slide number="02" label="The problem" tinted>
-        <SlideTitle icon={Target} title="Teams run two systems and reconcile them by hand" />
-        <div className="mt-6 grid gap-8 lg:grid-cols-[1fr_1fr] lg:items-center">
-          <div className="grid gap-4">
-            <Point
-              title="The numbers disagree"
-              body="A ticket gets closed in one tool; the time lands against something else in the other. Before every invoice somebody exports both and argues with a spreadsheet."
-            />
-            <Point
-              title="Proof is an assertion"
-              body="Asked to justify an invoice, most teams produce a CSV they generated themselves. It proves nothing a client couldn't have written."
-            />
-            <Point
-              title="AI is banned or ungoverned"
-              body="Either it's blocked because nobody can answer where the data goes, or it's on with no budget, no audit, and no way to tell whether it's any good."
-            />
-            <Point
-              title="Isolation is a promise"
-              body="Most multi-tenant SaaS filters a shared table by tenant ID. One missing WHERE clause is a cross-customer breach, and buyers have learned to ask."
-            />
-          </div>
-          <ScreenshotFrame
-            src="/product/insights.png"
-            alt="The Insights dashboard: velocity, SLA compliance, cycle-time distribution and workload."
-            caption="Analytics computed from the same rows the approvals ran against."
-          />
-        </div>
-      </Slide>
-
-      {/* ---------------------------------------------------------- 03 Audience */}
-      <Slide number="03" label="Who it's for">
-        <SlideTitle icon={Users} title="Three buyers, one shared shape" />
-        <p className="mt-3 max-w-2xl text-sm leading-7 text-muted-foreground">
-          All three bill or account for time against work someone else will scrutinise. That's the wedge.
-        </p>
-        <div className="mt-8 grid gap-4 lg:grid-cols-3">
-          {AUDIENCES.map((item) => (
-            <Card key={item.who} className="h-full">
-              <CardHeader className="pb-3">
-                <item.icon className="h-5 w-5 text-primary" />
-                <CardTitle className="mt-2 text-base">{item.who}</CardTitle>
-              </CardHeader>
-              <CardContent className="grid gap-3">
-                <div>
-                  <p className="text-xs font-bold uppercase tracking-wider text-muted-foreground">Today</p>
-                  <p className="mt-1 text-sm leading-6 text-muted-foreground">{item.pain}</p>
+        {/* -------------------------------------------------------- Product */}
+        <Slide id="product" tinted>
+          <Reveal>
+            <SlideTitle icon={Workflow} title="Report → triage → approve → escalate → analyze → prove" />
+            <p className="mt-3 max-w-2xl text-sm leading-7 text-muted-foreground">
+              Six stages, one dataset. The last one is the one competitors don't have.
+            </p>
+          </Reveal>
+          <div className="mt-8 grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+            {SURFACES.map((surface, index) => (
+              <Reveal key={surface.title} delay={index * 60} className="h-full">
+                <div className="h-full rounded-xl border border-border bg-card p-4 transition hover:border-primary/40 motion-safe:hover:-translate-y-1">
+                  <p className="text-xs font-bold uppercase tracking-wider text-primary">{surface.title}</p>
+                  <p className="mt-2 text-sm leading-6 text-muted-foreground">{surface.body}</p>
                 </div>
-                <div>
-                  <p className="text-xs font-bold uppercase tracking-wider text-primary">With TimeSphere</p>
-                  <p className="mt-1 text-sm leading-6 text-muted-foreground">{item.fit}</p>
-                </div>
-              </CardContent>
-            </Card>
-          ))}
-        </div>
-      </Slide>
-
-      {/* ---------------------------------------------------------- 04 Product */}
-      <Slide number="04" label="The product" tinted>
-        <SlideTitle icon={Workflow} title="Report → triage → approve → escalate → analyze → prove" />
-        <p className="mt-3 max-w-2xl text-sm leading-7 text-muted-foreground">
-          Six stages, one dataset. The last one is the one competitors don't have.
-        </p>
-        <div className="mt-8 grid gap-6 lg:grid-cols-2">
-          <ScreenshotFrame src="/product/tickets.png" alt="The Tickets list with intake and AI review badges." caption="Tickets, already triaged and routed." />
-          <ScreenshotFrame src="/product/dashboard.png" alt="The dashboard with weekly hours, daily rhythm and a day timeline." caption="A dashboard that changes shape by role." />
-        </div>
-      </Slide>
-
-      {/* ---------------------------------------------------------- 05 Moat */}
-      <Slide number="05" label="Why it's hard to copy">
-        <SlideTitle icon={Lock} title="Four things that aren't a weekend's work" />
-        <div className="mt-8 grid gap-4 lg:grid-cols-2">
-          {MOATS.map((item) => (
-            <Card key={item.title} className="h-full">
-              <CardHeader className="pb-3">
-                <item.icon className="h-5 w-5 text-primary" />
-                <CardTitle className="mt-2 text-base">{item.title}</CardTitle>
-              </CardHeader>
-              <CardContent>
-                <p className="text-sm leading-6 text-muted-foreground">{item.body}</p>
-                <p className="mt-3 border-l-2 border-primary/40 pl-3 text-sm leading-6">
-                  <span className="font-semibold">Why it holds: </span>
-                  <span className="text-muted-foreground">{item.why}</span>
-                </p>
-              </CardContent>
-            </Card>
-          ))}
-        </div>
-      </Slide>
-
-      {/* ---------------------------------------------------------- 06 AI */}
-      <Slide number="06" label="The AI position" tinted>
-        <SlideTitle icon={FlaskConical} title="Everyone added AI. Almost nobody can tell you if it works." />
-        <div className="mt-6 grid gap-8 lg:grid-cols-[1fr_1.2fr] lg:items-center">
-          <div className="grid gap-4">
-            <Point
-              title="The industry default"
-              body="Ship a feature, collect thumbs up and down, read none of it. Feedback becomes a column nothing queries — we know, because that's exactly what this product did before the loop was built."
-            />
-            <Point
-              title="What we do instead"
-              body="Record what the model was asked and answered. Turn real failures into ground truth. Change prompts without a deploy. Replay the set and score it. A prompt change becomes a number, not an opinion."
-            />
-            <Point
-              title="The safety property"
-              body="A bad prompt cannot break a feature. The runtime falls back to the built-in one and records that it fell back — so the failure is visible instead of silent."
-            />
+              </Reveal>
+            ))}
           </div>
-          <ScreenshotFrame
-            src="/product/settings-ai.png"
-            alt="The AI tab of Workspace Settings, showing provider configuration, capability toggles, budget and the quality cards."
-            caption="One screen: provider, budget, every toggle, and measured quality."
-          />
-        </div>
-      </Slide>
-
-      {/* ---------------------------------------------------------- 07 Revenue */}
-      <Slide number="07" label="How it makes money">
-        <SlideTitle icon={CircleDollarSign} title="Per seat, with the AI markup deliberately left on the table" />
-        <div className="mt-8 grid gap-4 lg:grid-cols-3">
-          {REVENUE.map((item) => (
-            <Card key={item.label} className="h-full">
-              <CardHeader className="pb-3">
-                <Badge variant={item.tone === "Primary" ? "default" : item.tone === "Expansion" ? "info" : "muted"} className="w-fit">
-                  {item.tone}
-                </Badge>
-                <CardTitle className="mt-2 text-base">{item.label}</CardTitle>
-              </CardHeader>
-              <CardContent>
-                <p className="text-sm leading-6 text-muted-foreground">{item.detail}</p>
-              </CardContent>
-            </Card>
-          ))}
-        </div>
-        <div className="mt-6 rounded-xl border border-dashed border-border bg-muted/30 p-5">
-          <p className="text-sm leading-7 text-muted-foreground">
-            <span className="font-semibold text-foreground">The expansion path is structural, not promotional.</span> A team
-            starts free, hits the ten-seat ceiling, and moves to Team — the limit is enforced on every request, so growth
-            converts on its own. Compliance requirements, not a sales cycle, are what pull an account to Enterprise: SAML,
-            SSO-only, and a dedicated database are the things a security review asks for by name.
-          </p>
-        </div>
-      </Slide>
-
-      {/* ---------------------------------------------------------- 08 Roadmap */}
-      <Slide number="08" label="What's next" tinted>
-        <SlideTitle icon={TrendingUp} title="Three things, honestly labelled" />
-        <p className="mt-3 max-w-2xl text-sm leading-7 text-muted-foreground">
-          None of these is shipped. They're listed as intent so nobody mistakes them for the product.
-        </p>
-        <div className="mt-8 grid gap-4 lg:grid-cols-3">
-          {NEXT.map((item) => (
-            <Card key={item.title} className="h-full">
-              <CardHeader className="pb-3">
-                <Badge variant="warning" className="w-fit">{item.status}</Badge>
-                <CardTitle className="mt-2 text-base">{item.title}</CardTitle>
-              </CardHeader>
-              <CardContent>
-                <p className="text-sm leading-6 text-muted-foreground">{item.body}</p>
-              </CardContent>
-            </Card>
-          ))}
-        </div>
-      </Slide>
-
-      {/* ---------------------------------------------------------- 09 Close */}
-      <section className="border-t border-border bg-gradient-to-br from-primary via-info to-accent">
-        <div className="mx-auto max-w-4xl px-4 py-16 text-center text-primary-foreground sm:px-5">
-          <p className="text-xs font-bold uppercase tracking-[0.2em] opacity-80">09 — In one line</p>
-          <h2 className="mt-4 text-2xl font-black leading-tight tracking-tight sm:text-4xl">
-            The only timesheet system whose output a client can verify — and whose AI you can prove is getting better.
-          </h2>
-          <div className="mt-8 flex flex-col items-center justify-center gap-3 sm:flex-row">
-            <Button asChild size="lg" variant="secondary" className="w-full sm:w-auto">
-              <Link to="/login">Open the portal <ArrowRight className="h-4 w-4" /></Link>
-            </Button>
-            <Button
-              asChild
-              size="lg"
-              variant="outline"
-              className="w-full border-white/40 bg-transparent text-primary-foreground hover:bg-white/10 sm:w-auto"
-            >
-              <Link to="/">Back to the product page</Link>
-            </Button>
+          <div className="mt-8 grid gap-6 lg:grid-cols-2">
+            <Reveal>
+              <ScreenshotFrame src="/product/tickets.png" alt="The Tickets list with intake and AI review badges." caption="Tickets, already triaged and routed." />
+            </Reveal>
+            <Reveal delay={90}>
+              <ScreenshotFrame src="/product/dashboard.png" alt="The dashboard with weekly hours, daily rhythm and a day timeline." caption="A dashboard that changes shape by role." />
+            </Reveal>
           </div>
-        </div>
-      </section>
+        </Slide>
+
+        {/* -------------------------------------------------------- Deployment */}
+        <Slide id="deployment">
+          <Reveal>
+            <SlideTitle icon={ServerCog} title="It runs on their infrastructure, or on ours" />
+            <p className="mt-3 max-w-2xl text-sm leading-7 text-muted-foreground">
+              The buyers most likely to pay for proof are the ones least likely to accept a black box. Self-hosting is
+              not a concession here; it's the same build.
+            </p>
+          </Reveal>
+          <div className="mt-8 grid gap-4 lg:grid-cols-3">
+            {DEPLOYMENT.map((item, index) => (
+              <Reveal key={item.title} delay={index * 80} className="h-full">
+                <Card className="h-full transition hover:border-primary/40 hover:shadow-lg motion-safe:hover:-translate-y-1">
+                  <CardHeader className="pb-3">
+                    <CardTitle className="text-base">{item.title}</CardTitle>
+                  </CardHeader>
+                  <CardContent>
+                    <p className="text-sm leading-6 text-muted-foreground">{item.body}</p>
+                  </CardContent>
+                </Card>
+              </Reveal>
+            ))}
+          </div>
+        </Slide>
+
+        {/* -------------------------------------------------------- Moat */}
+        <Slide id="moat" tinted>
+          <Reveal>
+            <SlideTitle icon={Lock} title={`${MOATS.length} things that aren't a weekend's work`} />
+          </Reveal>
+          <div className="mt-8 grid gap-4 lg:grid-cols-2">
+            {MOATS.map((item, index) => (
+              <Reveal key={item.title} delay={index * 70} className="h-full">
+                <Card className="h-full transition hover:border-primary/40 hover:shadow-lg motion-safe:hover:-translate-y-1">
+                  <CardHeader className="pb-3">
+                    <span className="grid h-9 w-9 place-items-center rounded-lg bg-primary/10 text-primary">
+                      <item.icon className="h-5 w-5" aria-hidden />
+                    </span>
+                    <CardTitle className="mt-3 text-base">{item.title}</CardTitle>
+                  </CardHeader>
+                  <CardContent>
+                    <p className="text-sm leading-6 text-muted-foreground">{item.body}</p>
+                    <p className="mt-3 border-l-2 border-primary/40 pl-3 text-sm leading-6">
+                      <span className="font-semibold">Why it holds: </span>
+                      <span className="text-muted-foreground">{item.why}</span>
+                    </p>
+                  </CardContent>
+                </Card>
+              </Reveal>
+            ))}
+          </div>
+        </Slide>
+
+        {/* -------------------------------------------------------- AI */}
+        <Slide id="ai">
+          <Reveal>
+            <SlideTitle icon={FlaskConical} title="Everyone added AI. Almost nobody can tell you if it works." />
+          </Reveal>
+          <div className="mt-6 grid gap-8 lg:grid-cols-[1fr_1.2fr] lg:items-center">
+            <div className="grid gap-4">
+              {[
+                ["The industry default", "Ship a feature, collect thumbs up and down, read none of it. Feedback becomes a column nothing queries — we know, because that's exactly what this product did before the loop was built."],
+                ["What we do instead", "Record what the model was asked and answered. Turn real failures into ground truth. Change prompts without a deploy. Replay the set and score it. A prompt change becomes a number, not an opinion."],
+                ["The safety property", "A bad prompt cannot break a feature. The runtime falls back to the built-in one and records that it fell back — so the failure is visible instead of silent."]
+              ].map(([title, body], index) => (
+                <Reveal key={title} delay={index * 70}>
+                  <Point title={title} body={body} />
+                </Reveal>
+              ))}
+            </div>
+            <Reveal delay={120}>
+              <ScreenshotFrame
+                src="/product/settings-ai.png"
+                alt="The AI tab of Workspace Settings, showing provider configuration, capability toggles, budget and the quality cards."
+                caption="One screen: provider, budget, every toggle, and measured quality."
+              />
+            </Reveal>
+          </div>
+        </Slide>
+
+        {/* -------------------------------------------------------- Revenue */}
+        <Slide id="revenue" tinted>
+          <Reveal>
+            <SlideTitle icon={CircleDollarSign} title="Per seat, with the AI markup deliberately left on the table" />
+          </Reveal>
+          <div className="mt-8 grid gap-4 lg:grid-cols-3">
+            {REVENUE.map((item, index) => (
+              <Reveal key={item.label} delay={index * 80} className="h-full">
+                <Card className="h-full transition hover:border-primary/40 hover:shadow-lg motion-safe:hover:-translate-y-1">
+                  <CardHeader className="pb-3">
+                    <Badge variant={item.tone === "Primary" ? "default" : item.tone === "Expansion" ? "info" : "muted"} className="w-fit">
+                      {item.tone}
+                    </Badge>
+                    <CardTitle className="mt-2 text-base">{item.label}</CardTitle>
+                  </CardHeader>
+                  <CardContent>
+                    <p className="text-sm leading-6 text-muted-foreground">{item.detail}</p>
+                  </CardContent>
+                </Card>
+              </Reveal>
+            ))}
+          </div>
+          <Reveal delay={100}>
+            <div className="mt-6 rounded-xl border border-dashed border-border bg-muted/30 p-5">
+              <p className="text-sm leading-7 text-muted-foreground">
+                <span className="font-semibold text-foreground">The expansion path is structural, not promotional.</span> A team
+                starts free, hits the ten-seat ceiling, and moves to Team — the limit is enforced on every request, so growth
+                converts on its own. Compliance requirements, not a sales cycle, are what pull an account to Enterprise: SAML,
+                SSO-only, and a dedicated database are the things a security review asks for by name.
+              </p>
+            </div>
+          </Reveal>
+        </Slide>
+
+        {/* -------------------------------------------------------- Roadmap */}
+        <Slide id="next">
+          <Reveal>
+            <SlideTitle icon={TrendingUp} title={`${NEXT.length} things, honestly labelled`} />
+            <p className="mt-3 max-w-2xl text-sm leading-7 text-muted-foreground">
+              None of these is shipped. They're listed as intent so nobody mistakes them for the product.
+            </p>
+          </Reveal>
+          <div className="mt-8 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+            {NEXT.map((item, index) => (
+              <Reveal key={item.title} delay={index * 70} className="h-full">
+                <Card className="h-full transition hover:border-warning/50 motion-safe:hover:-translate-y-1">
+                  <CardHeader className="pb-3">
+                    <Badge variant="warning" className="w-fit">{item.status}</Badge>
+                    <CardTitle className="mt-2 text-base">{item.title}</CardTitle>
+                  </CardHeader>
+                  <CardContent>
+                    <p className="text-sm leading-6 text-muted-foreground">{item.body}</p>
+                  </CardContent>
+                </Card>
+              </Reveal>
+            ))}
+          </div>
+        </Slide>
+
+        {/* -------------------------------------------------------- Close */}
+        <section id="close" className="scroll-mt-32 break-inside-avoid border-t border-border bg-gradient-to-br from-primary via-info to-accent">
+          <div className="mx-auto max-w-4xl px-4 py-16 text-center text-primary-foreground sm:px-5">
+            <p className="text-xs font-bold uppercase tracking-[0.2em] opacity-80">{slideNumber("close")} — In one line</p>
+            <h2 className="mt-4 text-2xl font-black leading-tight tracking-tight sm:text-4xl">
+              The only timesheet system whose output a client can verify — and whose AI you can prove is getting better.
+            </h2>
+            <div className="mt-8 flex flex-col items-center justify-center gap-3 sm:flex-row">
+              <Button asChild size="lg" variant="secondary" className="w-full sm:w-auto">
+                <Link to="/login">Open the portal <ArrowRight className="h-4 w-4" /></Link>
+              </Button>
+              <Button
+                asChild
+                size="lg"
+                variant="outline"
+                className="w-full border-white/40 bg-transparent text-primary-foreground hover:bg-white/10 sm:w-auto"
+              >
+                <Link to="/">Back to the product page</Link>
+              </Button>
+            </div>
+          </div>
+        </section>
+      </main>
 
       <footer className="border-t border-border bg-background">
         <div className="mx-auto flex max-w-6xl flex-col items-center justify-between gap-3 px-4 py-8 text-sm text-muted-foreground sm:flex-row sm:px-5">
@@ -394,26 +555,19 @@ export function PitchDeck() {
  * specific to the deck and shouldn't leak into the app's design system.
  * ------------------------------------------------------------------ */
 
-function Slide({
-  number,
-  label,
-  tinted = false,
-  children
-}: {
-  number: string;
-  label: string;
-  tinted?: boolean;
-  children: ReactNode;
-}) {
+function Slide({ id, tinted = false, children }: { id: SlideId; tinted?: boolean; children: ReactNode }) {
+  const meta = SLIDES.find((slide) => slide.id === id);
   return (
     // break-inside-avoid keeps a slide from being split across two sheets when someone prints the
-    // deck, which is the most likely way it reaches a meeting room.
-    <section className={`break-inside-avoid border-b border-border ${tinted ? "bg-muted/30" : ""}`}>
+    // deck, which is the most likely way it reaches a meeting room. scroll-mt-32 clears BOTH sticky
+    // rows of the header — the brand bar and the slide rail — so a jump link doesn't land with the
+    // slide's own number hidden underneath them.
+    <section id={id} className={`scroll-mt-32 break-inside-avoid border-b border-border ${tinted ? "bg-muted/30" : ""}`}>
       <div className="mx-auto max-w-6xl px-4 py-14 sm:px-5 sm:py-20">
         <p className="mb-6 flex items-center gap-3 text-xs font-bold uppercase tracking-[0.2em] text-primary">
-          <span className="tabular-nums">{number}</span>
+          <span className="tabular-nums">{slideNumber(id)}</span>
           <span aria-hidden className="h-px w-8 bg-primary/40" />
-          <span className="text-muted-foreground">{label}</span>
+          <span className="text-muted-foreground">{meta?.label}</span>
         </p>
         {children}
       </div>
@@ -425,7 +579,7 @@ function SlideTitle({ icon: Icon, title }: { icon: typeof Target; title: string 
   return (
     <div className="flex items-start gap-3">
       <span className="mt-1 grid h-9 w-9 shrink-0 place-items-center rounded-lg bg-primary/10 text-primary">
-        <Icon className="h-5 w-5" />
+        <Icon className="h-5 w-5" aria-hidden />
       </span>
       <h2 className="text-2xl font-black leading-tight tracking-tight sm:text-3xl">{title}</h2>
     </div>
@@ -434,7 +588,7 @@ function SlideTitle({ icon: Icon, title }: { icon: typeof Target; title: string 
 
 function Point({ title, body }: { title: string; body: string }) {
   return (
-    <div className="rounded-lg border border-border bg-card p-4">
+    <div className="rounded-lg border border-border bg-card p-4 transition hover:border-primary/40">
       <p className="text-sm font-bold">{title}</p>
       <p className="mt-1.5 text-sm leading-6 text-muted-foreground">{body}</p>
     </div>

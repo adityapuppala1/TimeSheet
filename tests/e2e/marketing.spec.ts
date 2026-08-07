@@ -130,6 +130,55 @@ test.describe("marketing pages", () => {
     await expect(page).toHaveURL(/\/login/);
   });
 
+  test("the capability filter narrows the grid and can be cleared", async ({ page }) => {
+    // The grid is the longest section on the page, so the filter is the only thing making it
+    // navigable. It is also the one control here that changes what a visitor believes ships:
+    // a chip that silently matches nothing would read as "that capability doesn't exist".
+    await page.goto("/#features");
+    // The route is lazy-loaded, so counting before the chunk resolves measures an empty document.
+    const allChip = page.getByRole("button", { name: /^Everything/ });
+    await expect(allChip).toBeVisible();
+
+    // Every capability card titles itself with an h3; the section's own heading is an h2.
+    const cards = page.locator("#features h3");
+    const total = await cards.count();
+    expect(total).toBeGreaterThan(10);
+
+    const aiChip = page.getByRole("button", { name: /^AI, governed/ });
+    await aiChip.click();
+    await expect(aiChip).toHaveAttribute("aria-pressed", "true");
+    const filtered = await cards.count();
+    expect(filtered).toBeGreaterThan(0);
+    expect(filtered).toBeLessThan(total);
+
+    await allChip.click();
+    await expect(cards).toHaveCount(total);
+  });
+
+  test("the phone menu opens, navigates, and closes behind it", async ({ page }) => {
+    // Below md the section links collapse into this menu, so without it a phone visitor has no
+    // way to reach pricing except by scrolling the entire page.
+    await page.setViewportSize({ width: 390, height: 844 });
+    await page.goto("/");
+
+    const toggle = page.getByRole("button", { name: /open the menu/i });
+    await expect(toggle).toBeVisible();
+    await toggle.click();
+    await expect(page.getByRole("button", { name: /close the menu/i })).toBeVisible();
+
+    await page.locator("#mobile-nav").getByRole("link", { name: "Pricing" }).click();
+    await expect(page).toHaveURL(/#pricing/);
+    // Choosing a destination has to dismiss the menu, or it covers the section just jumped to.
+    await expect(page.getByRole("button", { name: /open the menu/i })).toBeVisible();
+  });
+
+  test("the pitch deck's slide rail jumps to a slide", async ({ page }) => {
+    await page.goto("/pitch");
+    await page.getByRole("navigation", { name: "Slides" }).getByRole("link", { name: /Revenue/ }).click();
+    await expect(page).toHaveURL(/#revenue/);
+    await expect(page.getByRole("heading", { name: /AI markup deliberately left on the table/i })).toBeInViewport();
+  });
+
   test("sign-in shows the brand panel on desktop and hides it on a phone", async ({ page }) => {
     await page.goto("/login");
     // The form is what matters at any width, so it's asserted first and unconditionally.

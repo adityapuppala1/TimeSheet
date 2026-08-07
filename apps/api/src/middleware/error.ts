@@ -74,6 +74,24 @@ export const errorHandler: ErrorRequestHandler = (error, req, res, _next) => {
     }
   }
 
+  // express.json()/body-parser raise-time failures — malformed JSON, an oversized body, a bad
+  // charset — arrive here as plain errors that already carry an HTTP status and a `type`, NOT as
+  // AppError. Without this branch they fall through to the 500 below, so a single malformed
+  // request body both mislabels a client mistake as a server fault AND echoes the parser's own
+  // message ("Expected property name … at position 1") straight back to the caller, while logging
+  // a stack trace on every hit. Same class as the Prisma/Zod translations above: map to the
+  // status the parser already chose, with a stable message that leaks nothing.
+  const parserError = error as { type?: unknown; statusCode?: unknown };
+  if (typeof parserError.type === "string" && typeof parserError.statusCode === "number" && parserError.statusCode < 500) {
+    const message =
+      parserError.type === "entity.parse.failed"
+        ? "Malformed JSON in request body."
+        : parserError.type === "entity.too.large"
+          ? "Request body is too large."
+          : "The request body could not be read.";
+    return res.status(parserError.statusCode).json({ message });
+  }
+
   const statusCode = error instanceof AppError ? error.statusCode : 500;
   // The maintenance lockout is a 503 by protocol but a DELIBERATE state, not a fault — during a
   // real window every locked-out user's polling would otherwise flood the log with identical

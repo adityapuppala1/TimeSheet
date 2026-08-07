@@ -12,6 +12,7 @@ import { test, expect, request as playwrightRequest } from "@playwright/test";
 import { expectCleanupOk, withAdminRequest } from "./helpers/admin-request";
 
 import { E2E_BASE_URL as BASE_URL } from "./helpers/base-url";
+import { signIn } from "./helpers/sign-in";
 /** Per-run unique: cleanup soft-deletes (the app has no hard delete, on purpose), and a
  *  soft-deleted row KEEPS its unique email while being invisible to every list — so a fixed
  *  address collides with its own ghost on the second run. Learned the hard way: this spec
@@ -271,11 +272,7 @@ test.describe("user management — filtering and bulk actions", () => {
     // Signs in for THIS test rather than replaying a shared snapshot — refresh tokens rotate on
     // every /app load, so a multi-test spec exhausts one snapshot and later tests land on /login.
     // Documented at length in auth.setup.ts.
-    await page.goto("/login");
-    await page.getByLabel("Email", { exact: true }).fill("superadmin@timesheet.local");
-    await page.getByLabel("Password", { exact: true }).fill("Admin@12345");
-    await page.getByRole("button", { name: /sign in/i }).click();
-    await expect(page).toHaveURL(/\/app/, { timeout: 15_000 });
+    await signIn(page, "superadmin");
 
     await page.goto("/app/users");
     await expect(page.getByRole("heading", { name: /user management/i })).toBeVisible({ timeout: 15_000 });

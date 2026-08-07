@@ -28,6 +28,72 @@ test.describe("Workspace settings", () => {
     // Restore original state so this test is idempotent across runs.
     await page.locator("#weekdays-only").click();
   });
+
+  /**
+   * The Email channels matrix — a category × role grid where the two gates per cell are stored
+   * DIFFERENTLY and it matters.
+   *
+   * The row switch is a plain boolean on GlobalSettings. The per-role ticks are stored INVERTED,
+   * as `emailRoleMutes` (a map of category → muted roles), so a workspace that never opens this
+   * screen keeps defaulting to "everyone receives it" with no backfill. An inversion bug there
+   * reads correctly on screen and sends mail to exactly the wrong set, which is why this asserts
+   * a tick SURVIVES A RELOAD rather than that clicking it changed the pixel.
+   *
+   * The save also REPLACES the whole map rather than merging it, so a round trip is the only
+   * thing that proves the other categories were not dropped on the way through.
+   */
+  test("the email channels matrix renders and a role tick persists across reload", async ({ page }) => {
+    await signIn(page, "superadmin");
+    await page.goto("/app/settings");
+    await page.getByRole("tab", { name: /email channels/i }).click();
+
+    // Seven columns on a phone is the reason this table lives in its own scroll container; the
+    // matrix existing at all is the first thing to assert.
+    await expect(page.getByRole("columnheader", { name: "Email template" })).toBeVisible({ timeout: 15_000 });
+    // By `title`, not by accessible name: each column header renders the full label and an
+    // abbreviation and hides one by width, so the name is "Employee" at this viewport and "Emp" on
+    // a phone. The title is the same at every width.
+    for (const role of ["Employee", "Team Leader", "Manager", "Admin", "Super Admin"]) {
+      await expect(page.locator(`button[title$="every category for ${role}"]`)).toBeVisible();
+    }
+
+    // "Timesheet approved" is on in every seeded workspace, which matters: the ticks are disabled
+    // while their row's master switch is off, so a muted category would make this untestable.
+    const master = page.getByRole("switch", { name: /^Timesheet approved — email on or off for everyone$/ });
+    await expect(master).toBeVisible({ timeout: 15_000 });
+    if ((await master.getAttribute("data-state")) !== "checked") await master.click();
+    await expect(master).toHaveAttribute("data-state", "checked", { timeout: 10_000 });
+
+    const cell = page.getByRole("checkbox", { name: "Team Leader receives Timesheet approved" });
+    await expect(cell).toBeEnabled({ timeout: 10_000 });
+    const before = await cell.getAttribute("data-state");
+
+    // Waits on the PATCH rather than on a toast: every switch on this card raises its own "Saved",
+    // so a toast assertion passes against a stale one and the reload below races the real request.
+    const saved = page.waitForResponse(
+      (res) => res.url().includes("/api/settings") && res.request().method() === "PATCH" && res.status() < 400
+    );
+    await cell.click();
+    await saved;
+    await expect(cell).not.toHaveAttribute("data-state", before ?? "", { timeout: 10_000 });
+
+    await page.reload();
+    await page.getByRole("tab", { name: /email channels/i }).click();
+    const reloaded = page.getByRole("checkbox", { name: "Team Leader receives Timesheet approved" });
+    await expect(reloaded).not.toHaveAttribute("data-state", before ?? "", { timeout: 15_000 });
+
+    // A neighbouring category must be untouched — the map is REPLACED on save, so a partial write
+    // would quietly mute or unmute everything this test never looked at.
+    await expect(page.getByRole("checkbox", { name: "Manager receives Approval SLA breached" })).toBeVisible();
+
+    // Restore, so the workspace's real mail routing is exactly as it was found.
+    const restored = page.waitForResponse(
+      (res) => res.url().includes("/api/settings") && res.request().method() === "PATCH" && res.status() < 400
+    );
+    await reloaded.click();
+    await restored;
+    await expect(reloaded).toHaveAttribute("data-state", before ?? "", { timeout: 10_000 });
+  });
 });
 
 /* ------------------------------------------------------------------------------------------- *
@@ -51,11 +117,7 @@ test.describe("settings forms keep what you typed", () => {
   test.use({ storageState: { cookies: [], origins: [] } });
 
   test("an unrelated toggle does not revert an edited face threshold, and the edit saves", async ({ page }) => {
-    await page.goto("/login");
-    await page.getByLabel("Email", { exact: true }).fill("superadmin@timesheet.local");
-    await page.getByLabel("Password", { exact: true }).fill("Admin@12345");
-    await page.getByRole("button", { name: /sign in/i }).click();
-    await expect(page).toHaveURL(/\/app/, { timeout: 15_000 });
+    await signIn(page, "superadmin");
 
     await page.goto("/app/settings");
     await page.getByRole("tab", { name: /face verification/i }).click();
@@ -123,11 +185,7 @@ test.describe("face verification review log", () => {
    * it in-app, so this test asserts the image ACTUALLY LOADS, not merely that a dialog opened.
    */
   test("an admin can view a stored capture from the log", async ({ page }) => {
-    await page.goto("/login");
-    await page.getByLabel("Email", { exact: true }).fill("superadmin@timesheet.local");
-    await page.getByLabel("Password", { exact: true }).fill("Admin@12345");
-    await page.getByRole("button", { name: /sign in/i }).click();
-    await expect(page).toHaveURL(/\/app/, { timeout: 15_000 });
+    await signIn(page, "superadmin");
 
     await page.goto("/app/settings");
     await page.getByRole("tab", { name: /face verification/i }).click();

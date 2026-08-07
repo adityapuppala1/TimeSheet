@@ -38,6 +38,27 @@ if ((git status --porcelain | Measure-Object).Count -gt 0) {
   Write-Fail "This checkout has local modifications. Updating would checkout over them - stash or commit first (git status)."
 }
 
+# -- Proxy-attribution check --------------------------------------------------------------------
+# TRUST_PROXY_HOPS has a default (0), so an .env written before it existed is not "broken" - it
+# just quietly attributes every request to the proxy, which passes every check this script runs
+# (health, migrations, login) while the login rate limiter is one shared bucket for the whole
+# internet. EVERY compose deployment is at least one hop: apps/web/nginx.conf proxies /api to the
+# api container. The HTTPS_DOMAIN/CADDYFILE signal only sharpens the recommended NUMBER.
+$trustProxyMatch = [regex]::Match((Get-Content ".env" -Raw), "(?m)^TRUST_PROXY_HOPS=(.*)$")
+$trustProxyValue = if ($trustProxyMatch.Success) { $trustProxyMatch.Groups[1].Value.Trim() } else { "" }
+$ProxyWarned = ($trustProxyValue -eq "" -or $trustProxyValue -eq "0")
+if ($ProxyWarned) {
+  $suggestedHops = if (Select-String -Path ".env" -Pattern "^(HTTPS_DOMAIN|CADDYFILE)=.+" -Quiet) { 2 } else { 1 }
+  $shown = if ($trustProxyValue -eq "") { "unset" } else { $trustProxyValue }
+  Write-Warn "TRUST_PROXY_HOPS is $shown - this deployment sits behind a proxy."
+  Write-Warn "  The web container's nginx proxies /api to the api container, so req.ip is nginx's"
+  Write-Warn "  address for EVERY caller: the 20/min login limiter and every other per-IP limit are"
+  Write-Warn "  currently one shared global bucket, and nothing logs that they are."
+  Write-Warn "  Fix: put TRUST_PROXY_HOPS=$suggestedHops in .env and re-run this script (or restart the api"
+  Write-Warn "  container). Add one more hop for anything else in front, e.g. Cloudflare."
+  Write-Warn "  Not a blocker - this update continues. See docs/DEPLOYMENT.md."
+}
+
 # -- Resolve the target release ----------------------------------------------------------------
 if ([string]::IsNullOrWhiteSpace($To)) {
   Write-Step "Fetching release tags..."
@@ -128,6 +149,9 @@ if (Invoke-Verification $TargetVersion) {
   Write-Host "Updated to $To." -ForegroundColor Green
   Write-Step "Everyone with the app open will be offered a refresh automatically (the version rides on the health poll)."
   Write-Step "Database backup kept at: $BackupFile"
+  # Repeated deliberately: the same warning was printed before a multi-minute docker build, which
+  # is exactly how a warning stops being read. This is the last thing on screen instead.
+  if ($ProxyWarned) { Write-Warn "Still to do: set TRUST_PROXY_HOPS in .env (see the warning near the start of this run)." }
   exit 0
 }
 

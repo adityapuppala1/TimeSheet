@@ -48,9 +48,15 @@ latest version and isolating one org's failure from the rest — see
 `scripts/migrate-all-tenants.ts`. `docker-compose.yml`'s `prisma migrate deploy` only ever migrates
 one database.
 
-Both migrations in the 2026-08-07 batch need this step: `20260807090000_email_role_mutes` adds a
-column read on every outbound-email path, and `20260807140000_api_request_telemetry` creates the
-table the request-telemetry middleware writes into. A tenant left behind has neither.
+All three migrations in the 2026-08-07 batch need this step: `20260807090000_email_role_mutes`
+adds a column read on every outbound-email path, `20260807140000_api_request_telemetry` creates the
+table the request-telemetry middleware writes into, and `20260807170000_hash_guest_and_public_tokens`
+adds the columns every guest-approval and public-form lookup now resolves through. A tenant left
+behind has none of them.
+
+`update.sh`/`update.ps1` already run this fan-out for you on the Compose shape (unconditionally,
+before verification — it is a fast no-op when the default org is the only one). Manual and
+Kubernetes deployments run it themselves; nothing else will.
 
 ## Backfills
 
@@ -181,6 +187,51 @@ ALTER TABLE `GlobalNotificationSettings` ADD COLUMN `emailRoleMutes` JSON NULL;
 MySQL JSON is free-form, so the Zod schema on `PATCH /api/settings/notifications` is this column's
 **only** integrity check — unknown keys and roles are rejected there. See
 [API.md](API.md#the-emailrolemutes-map).
+
+## Guest and public link tokens are stored hashed
+
+`20260807170000_hash_guest_and_public_tokens` moves guest approval links and public request-form
+links onto SHA-256 lookups, the way `AttestationShareLink.tokenHash` already worked. They were
+stored in the clear, so any read of the database — a backup, a dump, one injected `SELECT` —
+handed over live, usable capabilities.
+
+```sql
+ALTER TABLE `ApprovalStep` ADD COLUMN `guestTokenHash` VARCHAR(64) NULL,
+                           ADD COLUMN `guestTokenExpiresAt` DATETIME(3) NULL;
+ALTER TABLE `RequestForm`  ADD COLUMN `publicTokenHash` VARCHAR(64) NULL;
+UPDATE `ApprovalStep` SET `guestTokenHash` = SHA2(`guestToken`, 256) WHERE `guestToken` IS NOT NULL;
+UPDATE `RequestForm`  SET `publicTokenHash` = SHA2(`publicToken`, 256) WHERE `publicToken` IS NOT NULL;
+CREATE UNIQUE INDEX `ApprovalStep_guestTokenHash_key` ON `ApprovalStep`(`guestTokenHash`);
+CREATE UNIQUE INDEX `RequestForm_publicTokenHash_key` ON `RequestForm`(`publicTokenHash`);
+```
+
+- **This is phase 1 of two, and it deliberately does not drop or blank the plaintext columns.**
+  Keeping `ApprovalStep.guestToken` and `RequestForm.publicToken` for one release is what makes
+  `update.sh`'s code-only rollback honest: roll back and the older code still finds the column it
+  reads, instead of stranding every outstanding guest approval and every printed form URL. Phase 2
+  drops them in a separate migration, once no row still needs the fallback.
+- **The backfill is the exception the [Backfills](#backfills) rule exists for**, and it is done in
+  SQL rather than application code so it cannot be half-applied. `SHA2(x, 256)` returns the
+  lowercase hex digest, byte-for-byte what `node:crypto`'s `createHash("sha256").digest("hex")`
+  produces for the same input — which is why an existing link keeps working without anyone
+  re-issuing it.
+- **Unique, not merely indexed.** The hash is now the identity the public routes look a row up by,
+  and a duplicate would make that lookup ambiguous. The index is added *after* the backfill so the
+  constraint is validated against the final data in one pass.
+- **No expiry is backfilled.** `guestTokenExpiresAt` stays NULL on pre-existing rows, which the
+  application reads as "open-ended, as it always was". Stamping a date onto links already sitting
+  in people's inboxes would have invalidated them retroactively — a silent breakage disguised as a
+  security improvement.
+
+## Columns added since the last DATABASE.md pass
+
+Small additions that need no section of their own, recorded so the file stays a complete account:
+
+| Column | Migration | Notes |
+|---|---|---|
+| `Timesheet.submittedAt` `DATETIME(3)` NULL, plus index `Timesheet_submittedAt_reviewedAt_idx` | `20260804123000_timesheet_submitted_at` | When a timesheet entered the approval queue, so approval **latency** is measurable rather than inferred from `createdAt`. Not backfilled: NULL means "submitted before this column existed", and consumers report those rows as `unmeasurable` rather than dropping them, so a median over a handful is never mistaken for one over everything. Reconstructing it from `approvalDeadline - project.slaApprovalHours` is correct only while that project's SLA setting has never changed. The composite index serves the latency query directly. |
+| `User.mustChangePassword` `BOOLEAN NOT NULL DEFAULT false` | `20260805071631_reset_hardening_and_insecure_bypass` | Set by admin account creation and by every admin-driven reset; cleared when the user picks their own password. **Drives a prompt, never a lockout** — the default of `false` is what keeps every existing account unaffected. |
+| `GlobalFaceVerificationSettings.insecureContextBypass` `BOOLEAN NOT NULL DEFAULT false` | `20260805071631_reset_hardening_and_insecure_bypass` | Lets a workspace proceed without a face check when the browser origin is not a secure context (no camera is available there at all). Off by default, and an attempt taken under it is recorded as a `SKIPPED_INSECURE` row rather than as a pass — the audit trail must not claim a check that never happened. |
 
 ## API request telemetry (`ApiRequestSample`)
 

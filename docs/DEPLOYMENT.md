@@ -517,6 +517,57 @@ flow; not a deployment.
 - **Do not conclude the camera is broken because it works on your laptop.** It will always work on
   `localhost`. Test from a phone on the real address before deciding anything.
 
+## Reverse proxies and client IP attribution (`TRUST_PROXY_HOPS`)
+
+**Set this. It is the one setting whose wrong value is completely silent.**
+
+Every per-IP control in the app reads `req.ip`: the 20/min login limiter, the 900/min blanket
+limiter, the tighter limits on the public share routes, and the IP hash the public request form
+records. Express derives `req.ip` from the socket address unless `trust proxy` is set — so behind
+a proxy, with `TRUST_PROXY_HOPS` at its default of `0`, **`req.ip` is the proxy's address for
+every caller on earth**. Each of those limiters silently becomes one shared global bucket: a
+single attacker exhausts the login budget for everybody, and one noisy tenant throttles the rest.
+Nothing errors, nothing is logged, and every health check still passes.
+
+**The Compose stack is already proxied, even without the HTTPS overlay.** The browser talks to the
+`web` container, whose nginx (`apps/web/nginx.conf`) proxies `/api/` to the `api` container and
+appends `X-Forwarded-For`. So a default install that never touched this setting is misattributing
+every browser request.
+
+| Deployment | Hops | Why |
+|---|---|---|
+| `docker-compose.yml` (or `.external-db.yml`) as shipped | **1** | the `web` container's nginx |
+| …plus `docker-compose.https.yml` | **2** | Caddy in front of that nginx |
+| …plus Cloudflare / a corporate LB in front of Caddy | **3** | add one per additional proxy |
+| Helm chart with `ingress.enabled: true` | **1** | `templates/ingress.yaml` routes `/api` straight to the api Service, so the ingress controller is the single hop |
+| Port 4000 exposed directly, nothing in front (`npm run dev` included) | **0** | `req.ip` is the socket address and always truthful |
+
+**Why a hop COUNT and not `true`.** `trust proxy: true` tells Express to believe the *left-most*
+`X-Forwarded-For` entry — which is supplied by the caller. Anyone could then forge `req.ip`,
+bypass every per-IP limit, and poison the recorded IP hash. A number means "trust exactly the last
+N entries", which is only correct when it matches the real topology; that is why it is an explicit
+opt-in per deployment rather than a boolean anyone can wave at.
+
+**The corollary: don't leave the API port publicly reachable once the count is above 0.** Both
+compose files publish `4000:4000`. A caller who reaches port 4000 *directly* is not going through
+the proxy the count describes, so their forged `X-Forwarded-For` is exactly the header the count
+tells Express to trust. On an exposed host, bind it to loopback in an override
+(`"127.0.0.1:4000:4000"`, and the same for `5173` when Caddy is fronting it) so the only route in
+is the one you counted.
+
+Where it goes:
+
+- **Compose** — a line in the root `.env`: `TRUST_PROXY_HOPS=1`. Both compose files forward it
+  (`TRUST_PROXY_HOPS: ${TRUST_PROXY_HOPS:-0}`). `install.sh` / `install.ps1` prompt for it on a
+  fresh install, defaulting to `1`; `update.sh` / `update.ps1` warn on every run when an existing
+  deployment has it unset or `0`, before and after the rebuild. Changing it needs an api restart —
+  it is read once at boot by `config/env.ts`.
+- **Helm** — `env.trustProxyHops` in `values.yaml` (default `1`), emitted by the ConfigMap.
+- **Manual / systemd** — `TRUST_PROXY_HOPS` in `apps/api/.env`.
+
+The valid range is `0`–`10`; anything else fails Zod validation at boot with a message naming the
+variable.
+
 ## CI/CD
 
 `.github/workflows/ci.yml` runs on every push/PR: typecheck + build both packages, then (on
@@ -569,26 +620,34 @@ helm upgrade timesphere deploy/helm/timesphere --reuse-values --set image.tag=v1
 kubectl rollout status deploy/timesphere-api     # and `helm rollback timesphere` to go back
 ```
 
-### What this release adds to that dance (email channel matrix + API telemetry)
+### What the 2026-08-07 batch adds to that dance (email channel matrix + API telemetry + token hashing)
 
-Two migrations ship with this release, and **both are additive**, which is the whole reason the
-existing rollback policy above still holds:
+Three migrations carry the recent releases, and **all three are additive**, which is the whole
+reason the existing rollback policy above still holds:
 
 | Migration | What it does | Shape |
 |---|---|---|
 | `20260807090000_email_role_mutes` | `ALTER TABLE GlobalNotificationSettings ADD COLUMN emailRoleMutes JSON NULL` | one nullable column |
 | `20260807140000_api_request_telemetry` | `CREATE TABLE ApiRequestSample` (+ five indexes) | one brand-new table |
+| `20260807170000_hash_guest_and_public_tokens` | Adds `ApprovalStep.guestTokenHash` / `guestTokenExpiresAt` and `RequestForm.publicTokenHash`, backfills the hashes from the existing plaintext with MySQL's own `SHA2(…, 256)`, then adds a unique index on each | three nullable columns + a backfill |
 
-Nothing is dropped, renamed, narrowed, or backfilled. Old code running against the new schema
-ignores a column and a table it has never heard of, so the auto-rollback path in `update.sh` —
-which restores the previous *code* and deliberately never restores the database dump — behaves
-exactly as documented above. See [docs/DATABASE.md](DATABASE.md) for the policy itself.
+Nothing is dropped, renamed or narrowed. The third migration *does* write data — but only into
+columns it just created, and it deliberately **leaves the plaintext `guestToken`/`publicToken`
+columns in place** for exactly one release. That is what keeps `update.sh`'s auto-rollback honest:
+the older code still finds the columns it reads, so a rollback does not strand every outstanding
+guest approval link and every printed public form URL. Dropping them is a separate phase-2
+migration, once no row needs the fallback. See [docs/DATABASE.md](DATABASE.md) for the policy and
+[the token-hashing section](DATABASE.md#guest-and-public-link-tokens-are-stored-hashed) for the
+two-phase detail.
 
-**Neither migration changes observable behaviour on its own.** `emailRoleMutes` reads back `NULL`
+**None of the three changes observable behaviour on its own.** `emailRoleMutes` reads back `NULL`
 on every existing row, which the application treats as "no role is muted anywhere" — byte-for-byte
 today's email delivery — until a super admin actually unticks a cell in Workspace settings → Email
-channels. `ApiRequestSample` stays empty until an operator opts into telemetry (next section). An
-upgrade that changes nothing until somebody asks it to is the point, not an oversight.
+channels. `ApiRequestSample` stays empty until an operator opts into telemetry (next section). The
+token hashes are backfilled from links that already exist, so every guest approval and public form
+URL already in somebody's inbox keeps working unchanged — no expiry is stamped retroactively onto
+them either. An upgrade that changes nothing until somebody asks it to is the point, not an
+oversight.
 
 **Compose deployments: this is an ordinary `./update.sh`.** There is no manual step, no
 pre-migration, and nothing to run by hand.
@@ -655,16 +714,19 @@ under, is in the root `.env.example`; the short version:
 | `API_TELEMETRY_RETENTION_DAYS` | `14` | Age past which rows are pruned nightly. |
 | `POD_NAME` / `POD_NAMESPACE` / `CLUSTER_NAME` | unset | Host identity stamped on each row. |
 
-**Compose and Helm do not forward these yet.** `docker-compose.yml` passes an explicit list of
-variables to the `api` service rather than the whole `.env`, and the chart's ConfigMap does the
-same — so putting `API_TELEMETRY_ENABLED=true` in the root `.env` alone has no effect. Add it to
-`docker-compose.yml`'s `api.environment` block (`API_TELEMETRY_ENABLED: ${API_TELEMETRY_ENABLED:-false}`,
-matching the pattern every other optional variable there already uses) or to the chart's
-`templates/configmap.yaml`, then restart. On Kubernetes this is also where `POD_NAME`/
-`POD_NAMESPACE` earn their names — they are deliberately spelled for the downward API, so a
-Deployment can map them straight through with `fieldRef: metadata.name` / `metadata.namespace`
-instead of inventing an identity. Off-cluster, leave them unset: those columns are written `NULL`
-rather than filled with a guess, and the hostname still comes from `os.hostname()`.
+**Compose and Helm now forward these.** Both compose files list `API_TELEMETRY_*` in the `api`
+service's `environment:` block, so `API_TELEMETRY_ENABLED=true` in the root `.env` reaches the
+container after a `docker compose up -d`; the chart emits the same set from `telemetry.*` in
+`values.yaml` via `templates/configmap.yaml`. This matters because Compose passes an *explicit
+list* of variables rather than the whole `.env` — a variable that is not named in that block
+simply does not exist inside the container, which is why every optional setting has to be added
+there deliberately. On Kubernetes, `POD_NAME`/`POD_NAMESPACE` are the exception to the ConfigMap:
+`templates/api-deployment.yaml` maps them from the downward API (`fieldRef: metadata.name` /
+`metadata.namespace`) when `telemetry.enabled` is true, because a ConfigMap is one object shared
+by every replica and cannot know which pod is reading it. `CLUSTER_NAME` stays in the ConfigMap —
+it is the one value Kubernetes cannot report about itself. Off-cluster, leave all three unset:
+those columns are written `NULL` rather than filled with a guess, and the hostname still comes
+from `os.hostname()`.
 
 **On a busy deployment, turn the rate down rather than the feature off.** Percentiles computed
 from a 10% sample are still percentiles; no data answers nothing. `API_TELEMETRY_SAMPLE_RATE=0.1`
@@ -706,6 +768,96 @@ collection (liveness probes and a self-polling observer would otherwise be the h
 id-shaped segments redacted if Express cannot supply one — never the raw URL. Request bodies,
 query strings, headers, cookies, IPs and user-agents are not collected at all; `userId` is the
 whole of the recorded identity and is resolved to a name only at read time.
+
+## Relocating file storage
+
+By default `UPLOAD_DIR` is the **relative** path `uploads`, which means every uploaded file lives
+inside the working directory the API was started from — for a normal checkout, inside the repo
+tree, where a `git checkout`, a `git clean` or a redeploy that replaces the directory destroys it.
+Four variables move storage onto its own volume and split it into three subtrees an admin can back
+up, encrypt and audit separately:
+
+| Variable | Default when empty | Holds |
+|---|---|---|
+| `STORAGE_ROOT` | `UPLOAD_DIR` (`uploads`) | the parent of the three subtrees below |
+| `STORAGE_DOCUMENTS_DIR` | `<root>` | ticket/timesheet attachments and email-intake attachments |
+| `STORAGE_AVATARS_DIR` | `<root>/avatars` | profile pictures |
+| `STORAGE_FACE_DIR` | `<root>/face` | face (biometric) imagery |
+
+**Leaving all four empty changes nothing** — the resolved layout is byte-for-byte what the
+deployment already uses. Setting only `STORAGE_ROOT` moves all three together keeping that shape
+(`STORAGE_ROOT=/srv/timesphere/uploads` → `/srv/timesphere/uploads/{,avatars/,face/}`); the three
+`*_DIR` overrides pin one subtree somewhere else entirely, which is how you put face imagery on an
+encrypted volume while documents live on a NAS.
+
+Rules, enforced at boot with a named error (`config/env.ts`):
+
+- **Absolute paths only.** A relative path resolves against whatever directory the service happens
+  to start in, which differs between `npm run dev`, `node dist/src/server.js`, a systemd unit and a
+  container — and "a redeploy can't touch it" is precisely the promise a relative path cannot make.
+- **No `..` segments.** Rejected outright rather than normalised.
+- **The directory must already exist and be writable by the service account.** Create it and grant
+  access *before* restarting.
+
+**Changing a path affects new files only.** Nothing is moved, renamed or deleted for you. Reads of
+existing documents fall back to the previous root automatically, so relocating never 404s an old
+attachment; to finish the move, copy the old tree across yourself while the API is stopped.
+
+**Containers: the path must be inside a mounted volume.** Both compose files forward all four
+variables, but a path that isn't backed by a volume is written into the container's ephemeral
+layer and disappears on the next `up --build`. The shipped mount is the `api-uploads` volume at
+`/app/uploads`, which is what `UPLOAD_DIR` already points at — so on Compose you usually want a
+new bind mount rather than a `STORAGE_ROOT` alone. The Helm chart is the same story with
+`storage.*` in `values.yaml`: `api-deployment.yaml` mounts the uploads PVC at `/app/uploads` and
+nothing else.
+
+Workspace Settings → **Storage & logs** (SUPER_ADMIN) shows the resolved layout, which variable
+set each path, and the live writability of each directory — and validates a candidate path for you
+before you commit it to `.env`. It deliberately has **no save button**: the paths are process-wide
+while a super admin is per-tenant, and an arbitrary absolute path the app then writes to is close
+enough to arbitrary file write that compromising one admin account must not also yield a
+filesystem foothold. Applying a new path is one `.env` line and a restart. See
+[docs/API.md § Storage & log paths](API.md#storage--log-paths) for the endpoints.
+
+## Log files
+
+The API logs to stdout unconditionally — Docker, `npm run dev` and systemd journals all read it,
+and nothing here takes that away. `LOG_DIR` **additionally** mirrors everything the process prints
+into rotating files:
+
+| Variable | Default | What it controls |
+|---|---|---|
+| `LOG_DIR` | *(empty — file logging OFF)* | Absolute directory to write files into. Same absolute-path rules as the storage variables above. |
+| `LOG_ROTATE_HOURS` | `4` | Hours per file within a day. `4` → six files a day; `24` → one. Range 1–24. |
+| `LOG_RETENTION_DAYS` | `30` | Whole day-directories older than this are deleted. Range 1–3650. |
+| `LOG_COMPRESS_ON_ROLLOVER` | `true` | Gzip a day's files once the date rolls over. |
+
+Layout — one directory per calendar date, `LOG_ROTATE_HOURS`-sized files inside it:
+
+```
+<LOG_DIR>/2026-08-07/app-2026-08-07_00-04.log      ← 00:00–03:59 local time, current
+<LOG_DIR>/2026-08-06/app-2026-08-06_20-24.log.gz   ← previous day, gzipped on rollover
+```
+
+The date appears in both the directory and the filename on purpose: the directory makes "delete
+everything older than N days" a directory operation, and the repeated date means a file copied out
+of its directory — attached to a ticket, dropped into a chat — still says which day it is. Windows
+are local-time and derived from the wall clock, so a restart mid-window appends to the file it was
+already writing rather than starting a new one.
+
+Retention runs on the first write after midnight: the previous day's files are gzipped, then
+day-directories past `LOG_RETENTION_DAYS` are deleted. A process restarted after being down
+overnight does the same catch-up at boot, so retention is honoured even by an instance that never
+observes a rollover.
+
+**An unwritable `LOG_DIR` degrades to console-only with one warning — it never stops the app.**
+Workspace Settings → **Storage & logs** reports that degraded state, the current file, and the
+effective rotation/retention values.
+
+**On Kubernetes, leave `logging.dir` empty.** `kubectl logs` and every cluster log shipper already
+collect stdout, and files inside a pod are lost on restart. The chart forwards `logging.*` for the
+cases where the directory really is a mounted, retained volume; that is the exception, not the
+default.
 
 ## Kubernetes deployment
 
@@ -842,6 +994,16 @@ summarized:
 | `PLATFORM_ADMIN_JWT_SECRET` | Both shapes | Signs `/platform-admin` tokens — must differ from `JWT_ACCESS_SECRET`/`JWT_REFRESH_SECRET` |
 | `TENANT_DB_PROVISION_BASE_URL` | SaaS shape, only if using in-console provisioning | The MySQL server new tenant databases get created on |
 | `APP_BASE_URL` | Both shapes | Also doubles as the one fixed OIDC/SAML callback URL for every org's SSO |
+
+The operational ones this guide has its own sections for — all optional, all inert when unset,
+and all forwarded by both compose files and the Helm chart:
+
+| Variable | Default | Section |
+|---|---|---|
+| `TRUST_PROXY_HOPS` | `0` | [Reverse proxies and client IP attribution](#reverse-proxies-and-client-ip-attribution-trust_proxy_hops) — **the default is wrong for every proxied deployment, including the shipped Compose stack** |
+| `STORAGE_ROOT`, `STORAGE_DOCUMENTS_DIR`, `STORAGE_AVATARS_DIR`, `STORAGE_FACE_DIR` | empty (today's layout under `UPLOAD_DIR`) | [Relocating file storage](#relocating-file-storage) |
+| `LOG_DIR`, `LOG_ROTATE_HOURS`, `LOG_RETENTION_DAYS`, `LOG_COMPRESS_ON_ROLLOVER` | empty / `4` / `30` / `true` | [Log files](#log-files) |
+| `API_TELEMETRY_*`, `POD_NAME`, `POD_NAMESPACE`, `CLUSTER_NAME` | off / unset | [Operating API request telemetry](#operating-api-request-telemetry) |
 
 ## Testing before you ship a change
 

@@ -20,6 +20,7 @@
 import { expect, request as playwrightRequest, type APIRequestContext } from "@playwright/test";
 
 import { E2E_BASE_URL as BASE_URL } from "./base-url";
+import { waitForApiReady } from "./api-ready";
 /** Access tokens last ~15m; refresh well inside that but rarely enough to stay under the limiter. */
 const TOKEN_TTL_MS = 5 * 60 * 1000;
 
@@ -32,9 +33,19 @@ export async function withAdminRequest<T>(
   const ctx = await playwrightRequest.newContext({ baseURL: BASE_URL, ignoreHTTPSErrors: true });
   try {
     if (!cachedToken || Date.now() - cachedToken.obtainedAt > TOKEN_TTL_MS) {
-      const res = await ctx.post("/api/auth/login", {
+      let res = await ctx.post("/api/auth/login", {
         data: { email: "superadmin@timesheet.local", password: "Admin@12345" }
       });
+      // A 5xx here is the API being unreachable, not a rejected credential — and against a
+      // `reuseExistingServer` dev stack the usual cause is `tsx watch` restarting because somebody
+      // saved a file. Wait for the liveness probe (a real readiness condition, on a budget) and
+      // try once more; a genuinely dead API still fails, with the status it actually returned.
+      if (res.status() >= 500) {
+        await waitForApiReady(ctx);
+        res = await ctx.post("/api/auth/login", {
+          data: { email: "superadmin@timesheet.local", password: "Admin@12345" }
+        });
+      }
       if (!res.ok()) throw new Error(`admin-request helper could not sign in as superadmin: ${res.status()}`);
       cachedToken = { value: (await res.json()).accessToken, obtainedAt: Date.now() };
     }

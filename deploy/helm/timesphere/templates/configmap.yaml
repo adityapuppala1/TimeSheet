@@ -12,6 +12,24 @@ data:
   APP_BASE_URL: {{ .Values.env.appBaseUrl | quote }}
   API_PORT: "4000"
   UPLOAD_DIR: "/app/uploads"
+  # Hop count, not a boolean — see values.yaml's env.trustProxyHops. Left out of the ConfigMap,
+  # env.ts defaults it to 0 and every per-IP rate limit behind the ingress becomes one bucket.
+  TRUST_PROXY_HOPS: {{ .Values.env.trustProxyHops | quote }}
+  {{- with .Values.storage }}
+  # Empty = the default layout under UPLOAD_DIR above. A path set here must land inside a mounted
+  # volume; api-deployment.yaml mounts the uploads PVC at /app/uploads and nothing else.
+  STORAGE_ROOT: {{ .root | quote }}
+  STORAGE_DOCUMENTS_DIR: {{ .documentsDir | quote }}
+  STORAGE_AVATARS_DIR: {{ .avatarsDir | quote }}
+  STORAGE_FACE_DIR: {{ .faceDir | quote }}
+  {{- end }}
+  {{- with .Values.logging }}
+  # Empty dir = console only, which is what `kubectl logs` and cluster log shippers read.
+  LOG_DIR: {{ .dir | quote }}
+  LOG_ROTATE_HOURS: {{ .rotateHours | quote }}
+  LOG_RETENTION_DAYS: {{ .retentionDays | quote }}
+  LOG_COMPRESS_ON_ROLLOVER: {{ .compressOnRollover | quote }}
+  {{- end }}
   {{- with .Values.telemetry }}
   # API request telemetry — see docs/DEPLOYMENT.md → "Operating API request telemetry".
   # Recording is off unless `telemetry.enabled` is set, so these are inert by default. Pod and

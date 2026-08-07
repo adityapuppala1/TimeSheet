@@ -17,6 +17,12 @@ that those should not be two systems.
 
 > **v2.0.0 — the planning layer.** Everything in it ships **off by default**: upgrading changes
 > nothing a user can see until an admin turns it on. See [CHANGELOG.md](CHANGELOG.md).
+>
+> **v2.2.0 — one thing you must set.** `TRUST_PROXY_HOPS` defaults to `0`, which preserves the
+> previous behaviour. If anything sits in front of this API — nginx, a load balancer, Cloudflare,
+> or the Docker Compose stack as shipped — set it to the real number of hops, or every per-IP
+> rate limit stays one shared global bucket. See
+> [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md#reverse-proxies-and-client-ip-attribution-trust_proxy_hops).
 
 ## Feature areas
 
@@ -105,7 +111,7 @@ docs/
    npm install
    ```
 
-2. **Create the API's env file.** The API loads `.env` from its own working directory (`apps/api/`), not the repo root, so copy the template there:
+2. **Create the API's env file.** The API loads `.env` from its own working directory (`apps/api/`), not the repo root, so copy the template there (`npm run setup` in step 3 does this for you, and never overwrites an existing one):
 
    ```bash
    cp .env.example apps/api/.env
@@ -128,12 +134,17 @@ docs/
    npm run setup
    ```
 
-   This runs `npm install`, `npm run db:generate`, `npm run doctor:heal` (validates `.env`,
-   auto-creates `timesheet_portal`/`timesphere_control` if they don't exist, then runs
-   `prisma migrate deploy` for both schemas), and `npm run seed`. Safe to re-run — creating an
-   already-existing database or re-running a migration that already applied is a no-op, and
-   seeding is idempotent. If you'd rather run each step yourself (or just want to see what
-   `setup` is doing), the equivalent steps are below.
+   This runs `npm install` (which builds `packages/shared`), `npm run bootstrap` (creates
+   `apps/api/.env` from `.env.example` if it doesn't exist, and mints this machine's dev TLS
+   certificate if it has none — step 8), `npm run db:generate` (both Prisma clients),
+   `npm run doctor:heal` (validates `.env`, auto-creates `timesheet_portal`/`timesphere_control`
+   if they don't exist, then runs `prisma migrate deploy` for both schemas), and `npm run seed`.
+   Safe to re-run — creating an already-existing database or re-running a migration that already
+   applied is a no-op, and seeding is idempotent. It never overwrites an `apps/api/.env` you
+   already have; on an **upgrade** it instead lists any variable added to `.env.example` since
+   yours was written, so a new feature reads as unconfigured rather than broken
+   (`npm run bootstrap:sync` appends them, commented out). If you'd rather run each step yourself
+   (or just want to see what `setup` is doing), the equivalent steps are below.
 
    **Run the doctor script before going any further:**
 
@@ -193,11 +204,13 @@ docs/
 
    The web dev server proxies `/api` and `/uploads` to the API, so there's no separate URL/CORS config to manage in dev.
 
-8. **(Optional) HTTPS on the LAN — required for the camera from other devices.** A fresh clone
-   always serves **http**: the TLS certificates are per-machine private keys, deliberately
-   git-ignored, so no `npm run setup` on a new machine can bring them along. Generate this
-   machine's own pair (needs [mkcert](https://github.com/FiloSottile/mkcert), e.g.
-   `winget install FiloSottile.mkcert`):
+8. **(Optional) HTTPS on the LAN — required for the camera from other devices.** The TLS
+   certificates are per-machine private keys, deliberately git-ignored, so a clone can never
+   bring them along — `npm run setup` mints this machine's own pair for you when there isn't one
+   (and never regenerates one you have already trusted on your devices). It needs
+   [mkcert](https://github.com/FiloSottile/mkcert) (e.g. `winget install FiloSottile.mkcert`); if
+   that's missing, setup warns and carries on serving http, and you can generate the pair later
+   with:
 
    ```bash
    npm run certs        # dispatches to scripts/make-lan-certs.{ps1,sh} for your OS
@@ -630,6 +643,9 @@ See `.env.example` for all supported variables. Remember: the actual file the AP
 - **Ticket SLA**: `TICKET_SLA_*` — resolution-hour defaults per priority, seeded into `GlobalTicketSettings`, editable at runtime from Workspace Settings after that
 - **AI**: `ANTHROPIC_API_KEY` — an Anthropic-only fallback key; everything else about AI (which provider, which features are on, model, base URL, BYOK key, budget, confidence threshold) lives in the DB via `GlobalAISettings` and is admin-editable at runtime from Workspace Settings → AI
 - **API telemetry**: `API_TELEMETRY_ENABLED` (off by default), `API_TELEMETRY_SAMPLE_RATE`, `API_TELEMETRY_FLUSH_MS`, `API_TELEMETRY_MAX_BUFFER`, `API_TELEMETRY_RETENTION_DAYS`, and `POD_NAME`/`POD_NAMESPACE`/`CLUSTER_NAME` for host identity. Deliberately env-only rather than an admin toggle — it runs on every request, so an operator has to ask for that cost. See [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md#operating-api-request-telemetry)
+- **Reverse proxies**: `TRUST_PROXY_HOPS` — the number of proxies in front of this API, `0` by default. **Set it if anything sits in front**, including the Docker Compose stack as shipped (the web container's nginx proxies `/api` to the API): every per-IP rate limit reads `req.ip`, and at `0` behind a proxy that is the proxy's address for every caller, so the login limiter becomes one shared global bucket — silently. A hop *count* rather than a boolean because trusting `X-Forwarded-For` wholesale lets anyone forge `req.ip`. See [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md#reverse-proxies-and-client-ip-attribution-trust_proxy_hops)
+- **File storage**: `STORAGE_ROOT`, `STORAGE_DOCUMENTS_DIR`, `STORAGE_AVATARS_DIR`, `STORAGE_FACE_DIR` — all empty by default, which keeps uploads exactly where they are today (under `UPLOAD_DIR`, relative to the API's working directory). Set them to move storage onto its own volume, segregated into documents / avatars / face subtrees you can back up and encrypt separately. Absolute paths only, and changing one affects new files only — nothing is moved for you, and reads fall back to the previous root. See [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md#relocating-file-storage)
+- **Log files**: `LOG_DIR` (empty = off), `LOG_ROTATE_HOURS`, `LOG_RETENTION_DAYS`, `LOG_COMPRESS_ON_ROLLOVER` — mirrors everything the process prints into rotating, date-bucketed files. Console output is never taken away, and an unwritable directory degrades to console-only with one warning rather than stopping the app. See [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md#log-files)
 
 ## Further docs
 

@@ -49,6 +49,32 @@ services:
       SMTP_PASS: ${SMTP_PASS:-}
       SMTP_SECURE: ${SMTP_SECURE:-false}
       UPLOAD_DIR: /app/uploads
+      # Reverse-proxy hop count. NOT cosmetic: the `web` container's nginx proxies /api to this
+      # service (apps/web/nginx.conf), so EVERY browser request already arrives through one hop.
+      # At 0 the api sees nginx's address as req.ip for every caller on earth and each per-IP rate
+      # limit — the 20/min login limiter above all — collapses into one shared global bucket.
+      # 1 for this stack as shipped; 2 with docker-compose.https.yml (Caddy in front of nginx);
+      # +1 for anything else in front (Cloudflare, a corporate LB).
+      # Default stays 0 so an `./update.sh` never silently changes an existing deployment's IP
+      # attribution — install.sh prompts for it, and update.sh warns when it looks wrong.
+      # CAVEAT: with a hop count set, anything that can reach port 4000 DIRECTLY can forge
+      # X-Forwarded-For and therefore req.ip. Bind that port to localhost (127.0.0.1:4000:4000)
+      # on an exposed host so the only route in is through the proxy the count describes.
+      TRUST_PROXY_HOPS: ${TRUST_PROXY_HOPS:-0}
+      # Relocatable file storage (docs/DEPLOYMENT.md → "Relocating file storage"). Empty = today's
+      # layout under UPLOAD_DIR, unchanged. A path set here must live inside a mounted volume or
+      # it is written into the container's ephemeral layer and lost on the next `up --build` —
+      # add the bind mount to `volumes:` below at the same time.
+      STORAGE_ROOT: ${STORAGE_ROOT:-}
+      STORAGE_DOCUMENTS_DIR: ${STORAGE_DOCUMENTS_DIR:-}
+      STORAGE_AVATARS_DIR: ${STORAGE_AVATARS_DIR:-}
+      STORAGE_FACE_DIR: ${STORAGE_FACE_DIR:-}
+      # Rotating file logs. Empty LOG_DIR = off (console only), which is what `docker compose logs`
+      # already reads — same volume caveat as the storage paths above when you do set it.
+      LOG_DIR: ${LOG_DIR:-}
+      LOG_ROTATE_HOURS: ${LOG_ROTATE_HOURS:-4}
+      LOG_RETENTION_DAYS: ${LOG_RETENTION_DAYS:-30}
+      LOG_COMPRESS_ON_ROLLOVER: ${LOG_COMPRESS_ON_ROLLOVER:-true}
       SLA_ENABLED: ${SLA_ENABLED:-true}
       TICKET_SLA_ENABLED: ${TICKET_SLA_ENABLED:-true}
       TICKET_SLA_CRON_SCHEDULE: ${TICKET_SLA_CRON_SCHEDULE:-*/15 * * * *}

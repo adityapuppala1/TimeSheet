@@ -18,6 +18,7 @@
  * snapshot in any spec with more than one test, or that runs in more than one project.
  */
 import { expect, type Page } from "@playwright/test";
+import { waitForApiReady } from "./api-ready";
 
 export const DEMO_PASSWORD = "Admin@12345";
 
@@ -31,11 +32,26 @@ export type DemoRole = keyof typeof DEMO_USERS;
 
 /** Signs in and waits for the app shell. Leaves the page on `/app`. */
 export async function signIn(page: Page, role: DemoRole = "superadmin"): Promise<void> {
-  await page.goto("/login");
-  await page.getByLabel("Email", { exact: true }).fill(DEMO_USERS[role]);
-  await page.getByLabel("Password", { exact: true }).fill(DEMO_PASSWORD);
-  await page.getByRole("button", { name: /sign in/i }).click();
-  await expect(page).toHaveURL(/\/app/, { timeout: 15_000 });
+  const submit = async () => {
+    await page.goto("/login");
+    await page.getByLabel("Email", { exact: true }).fill(DEMO_USERS[role]);
+    await page.getByLabel("Password", { exact: true }).fill(DEMO_PASSWORD);
+    await page.getByRole("button", { name: /sign in/i }).click();
+  };
+
+  await submit();
+  try {
+    await expect(page).toHaveURL(/\/app/, { timeout: 15_000 });
+  } catch (error) {
+    // Still on /login. Either the credentials are wrong — in which case the retry fails the same
+    // way and the original error stands — or the API was unreachable when the POST went out. The
+    // second is routine against a `reuseExistingServer` dev stack: `tsx watch` restarts on every
+    // save under apps/api/src, and the Vite proxy answers 502 for the second or two it is down,
+    // which surfaces here as a login that silently did nothing. See helpers/api-ready.ts.
+    if (!(await waitForApiReady(page.request))) throw error;
+    await submit();
+    await expect(page).toHaveURL(/\/app/, { timeout: 15_000 });
+  }
 }
 
 /**
@@ -46,7 +62,15 @@ export async function signIn(page: Page, role: DemoRole = "superadmin"): Promise
  * and thread it through — a second call later in the same test will fail for the reason above.
  */
 export async function accessToken(page: Page): Promise<Record<string, string>> {
-  const res = await page.request.post("/api/auth/refresh");
+  let res = await page.request.post("/api/auth/refresh");
+  // A 5xx is the API being unreachable, not a rejected session — the dev server restarting under
+  // `tsx watch` is the routine cause, and the proxy's 502 has an EMPTY body, so calling `.json()`
+  // on it fails with "Unexpected end of JSON input" pointing at the test rather than the cause.
+  // See helpers/api-ready.ts. A rotated-away cookie still 401s and still fails, as it should.
+  if (res.status() >= 500) {
+    await waitForApiReady(page.request);
+    res = await page.request.post("/api/auth/refresh");
+  }
   expect(res.ok(), `could not mint an access token (${res.status()})`).toBe(true);
   const { accessToken: token } = await res.json();
   return { Authorization: `Bearer ${token}` };

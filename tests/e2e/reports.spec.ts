@@ -135,6 +135,47 @@ test.describe("timesheet reporting", () => {
     await page.getByRole("option", { name: "Activity" }).click();
     await expect(hoursTile).toHaveText(before ?? "", { timeout: 15_000 });
   });
+
+  /**
+   * The three export buttons, clicked — which the API assertions above cannot cover.
+   *
+   * These routes need a bearer token, so the page cannot use a bare `<a href>`: it fetches the
+   * blob and clicks a synthesised anchor. That indirection is where a browser-side export breaks
+   * while the endpoint itself is perfectly healthy — a 401 comes back as a Blob too, gets the same
+   * `.xlsx` filename, and downloads without a single error anywhere. So each file is opened and
+   * its MAGIC BYTES checked, not just its name.
+   */
+  test("the CSV, Excel and PDF buttons download real files from the page", async ({ page }) => {
+    await signIn(page, "superadmin");
+    await page.goto("/app/reports");
+    await expect(page.getByRole("heading", { name: /timesheet report/i })).toBeVisible({ timeout: 15_000 });
+
+    const stamp = new Date().toISOString().slice(0, 10);
+    const signatures: Array<{ button: string; extension: string; magic: string }> = [
+      // BOM-first UTF-8, so Excel does not mangle accented names.
+      { button: "CSV", extension: "csv", magic: "efbbbf" },
+      // "PK" — every .xlsx is a zip container. A JSON error body starts with "{".
+      { button: "Excel", extension: "xlsx", magic: "504b" },
+      { button: "PDF", extension: "pdf", magic: "255044462d" }
+    ];
+
+    for (const { button, extension, magic } of signatures) {
+      const download = page.waitForEvent("download", { timeout: 20_000 });
+      await page.getByRole("button", { name: button, exact: true }).click();
+      const file = await download;
+      expect(file.suggestedFilename()).toBe(`timesheet-report-${stamp}.${extension}`);
+
+      const stream = await file.createReadStream();
+      const chunks: Buffer[] = [];
+      for await (const chunk of stream) chunks.push(chunk as Buffer);
+      const body = Buffer.concat(chunks);
+      expect(body.length, `${button} downloaded an empty file`).toBeGreaterThan(0);
+      expect(
+        body.subarray(0, magic.length / 2).toString("hex"),
+        `${button} downloaded something that is not a ${extension}`
+      ).toBe(magic);
+    }
+  });
 });
 
 /* ------------------------------------------------------------------------------------------- *

@@ -785,6 +785,39 @@ read-only dashboard would drown the audit log.
   [DATABASE.md](DATABASE.md#api-request-telemetry-apirequestsample) for why the table itself holds
   no identity beyond a `userId`.
 
+## Storage & log paths
+
+Where uploaded files actually land, and whether rotating file logs are on. Both routes are
+SUPER_ADMIN. Configuration lives in the environment, not the database — see
+[DEPLOYMENT.md § Relocating file storage](DEPLOYMENT.md#relocating-file-storage) and
+[§ Log files](DEPLOYMENT.md#log-files) for the variables themselves.
+
+- `GET /settings/storage` *(SUPER_ADMIN)* — returns `storage` and `logging`.
+
+  - `storage` — a probe of each resolved directory (`root`, `documents`, `avatars`, `face`),
+    `documentFallbacks[]` (the previous roots a read still falls back to after a relocation, which
+    is why moving storage never 404s an old attachment), and `configuredBy`: which variable set
+    each path (`STORAGE_ROOT` or `UPLOAD_DIR` for the root, `STORAGE_DOCUMENTS_DIR`,
+    `STORAGE_AVATARS_DIR`, `STORAGE_FACE_DIR`, or `null` where nothing did). "Configured" and
+    "actually writable by this process" are reported separately, because they are different claims.
+  - `logging` — `enabled`, `directory`, `rotateHours`, `retentionDays`, `compressOnRollover`,
+    `currentFile`, `namingExample`, and `degraded`/`degradedReason` for the case where `LOG_DIR`
+    was set but could not be written and the process fell back to console-only.
+
+- `POST /settings/storage/validate-directory` *(SUPER_ADMIN)* — body `{ path }`, strict, 4096
+  chars max. Returns `{ ok: true, path }` or `{ ok: false, message }`. It stats the candidate and
+  then creates and deletes a uniquely-named probe file, because "the directory exists" and "this
+  service account can write into it" are the two different failures worth telling apart before a
+  restart. It never lists or returns directory contents. Audited as
+  `settings.storage_path_validated`.
+
+**There is deliberately no PATCH.** Three reasons, and each is sufficient on its own: the paths are
+process-wide while SUPER_ADMIN is per-tenant (one Node process, database-per-org — so org A's admin
+persisting a storage root would silently redirect org B's uploads); an arbitrary absolute path the
+app then writes to is close enough to arbitrary file write, and the static mounts turn part of it
+into arbitrary file read; and compromising one super-admin account must not also yield a filesystem
+foothold. Applying a new path is one `.env` line and a restart.
+
 ## Verified work attestations
 
 A client-facing record that approved hours map to real tickets, done by identity-verified people,

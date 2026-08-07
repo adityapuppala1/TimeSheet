@@ -16,9 +16,10 @@
 import { test, expect, type APIRequestContext, type Page } from "@playwright/test";
 import { expectCleanupOk, expectGone, sweepLeftoverTimesheetDrafts, withAdminRequest } from "./helpers/admin-request";
 import { suspendFaceGate, type FaceGateSnapshot } from "./helpers/face-gate";
+import { DEMO_USERS, signIn } from "./helpers/sign-in";
 
 const MARKER_PREFIX = "Playwright smoke test entry";
-const ACTOR = "employee@timesheet.local";
+const ACTOR = DEMO_USERS.employee;
 
 /**
  * Finds an hour today that this user has nothing booked in.
@@ -80,13 +81,7 @@ async function findFreeHour(
  */
 test.use({ storageState: { cookies: [], origins: [] } });
 
-async function signInAsEmployee(page: import("@playwright/test").Page) {
-  await page.goto("/login");
-  await page.getByLabel("Email", { exact: true }).fill(ACTOR);
-  await page.getByLabel("Password", { exact: true }).fill("Admin@12345");
-  await page.getByRole("button", { name: /sign in/i }).click();
-  await expect(page).toHaveURL(/\/app/, { timeout: 15_000 });
-}
+const signInAsEmployee = (page: Page) => signIn(page, "employee");
 
 let faceGate: FaceGateSnapshot;
 test.beforeAll(async () => {
@@ -212,6 +207,55 @@ test.describe("Timesheet", () => {
     // Postcondition, not just the status: this spec's whole history is of teardowns that reported
     // success while leaving the row behind.
     await expectGone(findDraft, `timesheet draft ${match!.id}`);
+  });
+
+  /**
+   * Submitting an incomplete form must TAKE YOU TO the field that stopped it.
+   *
+   * react-hook-form's own `shouldFocusError` only fires for fields it holds a DOM ref for, and
+   * every select on this form is a Radix trigger rendered through `<Controller>` — so RHF has no
+   * ref for any of them. Before `focusFirstInvalid`, pressing Submit with an empty Project scrolled
+   * nowhere, focused nothing and raised no toast: the form simply appeared not to respond to the
+   * button, with the offending field off-screen above.
+   *
+   * The assertion is on `document.activeElement`, not on the error text. An error message can
+   * render perfectly while the user is still looking at the wrong part of a long form, which is
+   * exactly the bug.
+   */
+  test("submitting an incomplete form focuses the first invalid field", async ({ page }) => {
+    await signInAsEmployee(page);
+    await page.goto("/app/timesheet");
+
+    // Project is the first field in document order and the first that can fail, so it is both the
+    // trigger and the expected destination.
+    const project = page.getByLabel("Project", { exact: true });
+    await expect(project).toBeVisible({ timeout: 15_000 });
+
+    // Times first, deliberately: "Submit for approval" is disabled while the total is zero, so an
+    // entirely empty form cannot reach the submit path at all. One hour makes the button live
+    // while Project is still empty — which is the state a real person submits from.
+    await fillTime(page, "Start time", "09:00");
+    await fillTime(page, "End time", "10:00");
+
+    await page.getByRole("button", { name: /submit for approval/i }).click();
+
+    // Keyed off `aria-invalid` for the same reason the app is: it is stamped on whichever element
+    // is in error, so this keeps working as fields move or are added.
+    await expect(project).toHaveAttribute("aria-invalid", "true", { timeout: 10_000 });
+    await expect(project).toBeFocused({ timeout: 10_000 });
+
+    // And the first invalid field is the FIRST one in document order — focusing some later error
+    // would scroll past the one the user has to fix first.
+    const focusedIsFirstInvalid = await page.evaluate(() => {
+      const form = document.querySelector("form");
+      const first = form?.querySelector('[aria-invalid="true"]');
+      return Boolean(first) && first === document.activeElement;
+    });
+    expect(focusedIsFirstInvalid, "focus landed on an invalid field, but not the first one").toBe(true);
+
+    // The toast names the field, so a keyboard user who lost the scroll position still knows what
+    // is being asked of them.
+    await expect(page.getByText(/check the highlighted field/i)).toBeVisible({ timeout: 10_000 });
   });
 
   test("refuses to delete an approved entry, even for a superadmin", async ({}, testInfo) => {

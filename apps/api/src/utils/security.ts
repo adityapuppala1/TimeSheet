@@ -25,6 +25,18 @@ export const verifyPassword = (password: string, hash: string) => bcrypt.compare
 export const opaqueToken = () => nanoid(48);
 
 /**
+ * A constant bcrypt digest (cost 12, a throwaway sentinel) that `login` compares against when the
+ * email is unknown — so a non-existent account costs the same one bcrypt round (~200ms) as a
+ * wrong password on a real one. Without it, `verifyPassword` is short-circuited away entirely for
+ * a missing user, and the reply returns in a few ms versus ~200ms for a real account: a timing
+ * oracle that discloses which emails are registered, one guess at a time, straight through the
+ * deliberately-identical "Invalid email or password". A precomputed literal (not a boot-time
+ * `hashSync`) so importing this module — which every request path and most tests do — costs
+ * nothing. The exact hash is irrelevant; only that comparing to it does a full cost-12 round.
+ */
+export const DUMMY_PASSWORD_HASH = "$2b$12$bCeTa7tNbMS12WtSV0Kb/.szOuSeRd4V6SHhkUr6yxEx3QgLjRQtG";
+
+/**
  * A one-time password for admin resets: 12 chars from an unambiguous alphabet (no 0/O/1/l/I)
  * plus a fixed "!7a" tail so it clears any complexity rule without the generator needing to
  * know one. Replaces the old fixed "Admin@12345" default, which is publicly documented in this

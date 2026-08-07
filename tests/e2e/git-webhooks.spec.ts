@@ -48,12 +48,30 @@ test.describe("multi-provider git webhooks", () => {
           }
         });
         const signature = crypto.createHmac("sha256", secret).update(Buffer.from(giteaBody, "utf8")).digest("hex");
-        const giteaPr = await ctx.post(`/api/git/webhook/${orgSlug}/gitea`, {
-          headers: { "Content-Type": "application/json", "X-Gitea-Signature": signature, "X-Gitea-Event": "pull_request" },
-          data: giteaBody
-        });
+        //    `X-Gitea-Delivery` is mandatory on the HMAC providers now (gitea/forgejo/bitbucket):
+        //    an HMAC proves WHO sent the body but not WHEN, so without a per-delivery id one
+        //    captured request replays forever. Gitea always sends one, so a missing header is a
+        //    stripped header — see GIT_PROVIDERS_WITH_GUARANTEED_DELIVERY_ID.
+        const giteaDelivery = crypto.randomUUID();
+        const postGitea = (delivery: string | null) =>
+          ctx.post(`/api/git/webhook/${orgSlug}/gitea`, {
+            headers: {
+              "Content-Type": "application/json",
+              "X-Gitea-Signature": signature,
+              "X-Gitea-Event": "pull_request",
+              ...(delivery ? { "X-Gitea-Delivery": delivery } : {})
+            },
+            data: giteaBody
+          });
+
+        const giteaPr = await postGitea(giteaDelivery);
         expect(giteaPr.status(), await giteaPr.text()).toBe(200);
         expect((await giteaPr.json()).matched).toBe(true);
+
+        // 2b. The replay guard, both halves: the SAME delivery id is refused, and dropping the
+        //     header entirely — the obvious way to sidestep a dedupe store — is refused too.
+        expect((await postGitea(giteaDelivery)).status(), "a replayed delivery id must be refused").toBe(409);
+        expect((await postGitea(null)).status(), "a delivery with no id must be refused, not deduped-by-luck").toBe(401);
 
         // 3. The rows actually landed on the ticket, in the shape the Dev tab renders.
         const detail = await (await ctx.get(`/api/tickets/${ticket.id}`, { headers })).json();

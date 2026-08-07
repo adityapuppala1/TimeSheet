@@ -69,6 +69,14 @@ number of hops or your per-IP rate limits stay one shared global bucket. See bel
   shown once, when you publish it.
 - **Resending a guest approval link** minted a working link for any step id with no ownership check,
   contradicting that file's own header comment.
+- **Sign-in leaked which email addresses are registered — found by timing it, not by reading it.**
+  The response was already identical for an unknown address and a wrong password, so the code
+  looked hardened. It wasn't: the password check was skipped entirely when the account didn't
+  exist, so an unknown address answered in 6ms and a real one in ~200ms. A 30x tell. Sign-in now
+  always does the same work either way, verified by measurement.
+- **A malformed request body returned a server error** carrying the JSON parser's internal
+  message, logging a stack trace each time — a cheap way to bury real faults in the log. It now
+  answers with a plain 400.
 - **Replay protection** was added for webhooks where the signing secret never leaves our server, and
   deliberately *not* where the credential travels with the request — there, anyone who captured a
   delivery captured the credential and can mint fresh ones, so a replay store proves nothing and
@@ -122,6 +130,24 @@ number of hops or your per-IP rate limits stay one shared global bucket. See bel
   result. It also surfaced that some genuine rejections were caused by the per-person adaptive
   threshold, which only ever tightens, rather than by the setting you can see.
 
+### 🎨 Landing, pitch deck and sign-in, rebuilt
+
+- All three rebuilt with real semantic structure, working keyboard focus, and **every animation
+  behind `prefers-reduced-motion`**. They also got *faster*: the animation library is gone from all
+  three, so a first-time visitor no longer downloads 39 kB (gzipped) of it to read a landing page.
+- The landing page finally works on a phone — the section navigation previously just vanished below
+  tablet width with nothing in its place. Capabilities are now filterable, and the plan badges are
+  **derived from the same limits table the API enforces**, so a card can't promise something your
+  tier will refuse.
+- The pitch deck had two counts that disagreed with their own content ("four things" over five
+  items, "three things" over four). Counts and slide numbers are now derived rather than typed, and
+  two unverifiable claims were removed.
+- Sign-in keeps every existing route — password, Google, Microsoft, SAML, LDAP, forgot-password —
+  and adds a failure panel that **stays put while you retype** (a toast vanishes exactly when you
+  need to reread it, and lockout messages need to persist), Caps Lock warnings, and a distinct
+  label for the directory password field, since two fields called "Password" on one page is
+  ambiguous to a screen reader.
+
 ### 🧹 Also
 
 - **Who's online** now shows each person's device, browser, IP address and when their session
@@ -133,6 +159,10 @@ number of hops or your per-IP rate limits stay one shared global bucket. See bel
   the machine has none, and — the part that matters on an upgrade — tells you which variables have
   been added to `.env.example` since your `.env` was written. A new feature flag that your config
   has never heard of looks like a broken feature, not an unconfigured one.
+- **A fresh clone would not have started on Linux or macOS.** `.env.example` shipped a Windows
+  absolute path as a live default for the log directory; the setup script copies that file
+  verbatim, and the path validator is platform-native, so validation failed before the server ever
+  booted. Now inert by default, like every other optional path.
 - Request telemetry is **on by default in development** and off in production. A panel that reports
   "recording is switched off" to the person who just built it is a bad first impression.
 

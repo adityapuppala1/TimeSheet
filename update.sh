@@ -44,6 +44,33 @@ if [ -n "$(git status --porcelain)" ]; then
   fail "This checkout has local modifications. Updating would checkout over them — stash or commit first (git status)."
 fi
 
+# ── Proxy-attribution check ───────────────────────────────────────────────────────────────────
+# TRUST_PROXY_HOPS has a default (0), so an .env written before it existed is not "broken" — it
+# just quietly attributes every request to the proxy. That makes it invisible to every check in
+# this script: health passes, migrations pass, login passes, and the login rate limiter is one
+# shared bucket for the whole internet. An updater that says nothing here is the reason a
+# deployment can sit misconfigured for a year.
+#
+# EVERY compose deployment is at least one hop: apps/web/nginx.conf proxies /api to the api
+# container, so browser traffic never reaches the API directly. The extra signals below only
+# sharpen the recommended NUMBER; they are not what triggers the warning.
+TRUST_PROXY_LINE="$(grep -E '^TRUST_PROXY_HOPS=' .env | head -n1 | cut -d= -f2- | tr -d '[:space:]' || true)"
+PROXY_WARNED=0
+if [ -z "$TRUST_PROXY_LINE" ] || [ "$TRUST_PROXY_LINE" = "0" ]; then
+  PROXY_WARNED=1
+  SUGGESTED_HOPS=1
+  # Caddy in front of the web container's nginx is a second hop. Either variable being present is
+  # how docker-compose.https.yml is switched on, so either one is the signal.
+  if grep -qE '^(HTTPS_DOMAIN|CADDYFILE)=.+' .env; then SUGGESTED_HOPS=2; fi
+  warn "TRUST_PROXY_HOPS is ${TRUST_PROXY_LINE:-unset} — this deployment sits behind a proxy."
+  warn "  The web container's nginx proxies /api to the api container, so req.ip is nginx's"
+  warn "  address for EVERY caller: the 20/min login limiter and every other per-IP limit are"
+  warn "  currently one shared global bucket, and nothing logs that they are."
+  warn "  Fix: put TRUST_PROXY_HOPS=$SUGGESTED_HOPS in .env and re-run this script (or restart the api"
+  warn "  container). Add one more hop for anything else in front, e.g. Cloudflare."
+  warn "  Not a blocker — this update continues. See docs/DEPLOYMENT.md."
+fi
+
 # ── Resolve the target release ────────────────────────────────────────────────────────────────
 TARGET_TAG="${2:-}"
 if [ "${1:-}" = "--to" ] && [ -n "$TARGET_TAG" ]; then
@@ -139,6 +166,11 @@ if run_verification "$TARGET_VERSION"; then
   printf '\033[1;32m✓ Updated to %s.\033[0m\n' "$TARGET_TAG"
   log "Everyone with the app open will be offered a refresh automatically (the version rides on the health poll)."
   log "Database backup kept at: $BACKUP_FILE"
+  # Repeated deliberately: the same warning was printed before a multi-minute docker build, which
+  # is exactly how a warning stops being read. This is the last thing on screen instead.
+  if [ "$PROXY_WARNED" = "1" ]; then
+    warn "Still to do: set TRUST_PROXY_HOPS in .env (see the warning near the start of this run)."
+  fi
   exit 0
 fi
 

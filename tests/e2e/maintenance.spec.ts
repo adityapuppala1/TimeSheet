@@ -18,6 +18,7 @@
  */
 import { test, expect, request as playwrightRequest, type APIRequestContext } from "@playwright/test";
 import { withAdminRequest } from "./helpers/admin-request";
+import { signIn } from "./helpers/sign-in";
 
 import { E2E_BASE_URL as BASE_URL } from "./helpers/base-url";
 const MAINTENANCE_MESSAGE = "E2E maintenance drill — database upgrade in progress.";
@@ -252,4 +253,74 @@ test.describe("service status page", () => {
     });
   });
 
+});
+
+/**
+ * The API performance panel on the Maintenance tab.
+ *
+ * WHAT IS WORTH ASSERTING HERE, and it is not "a chart appeared": the panel's whole reason for
+ * existing is that an empty chart must never be ambiguous. Recording off and recording on with
+ * nothing served look identical unless the page says which — and a monitoring page that cannot
+ * tell "we measured nothing" from "nothing happened" is mistrusted the first week it is used.
+ *
+ * Recording is an environment variable read at boot (`API_TELEMETRY_ENABLED`), so the OFF state
+ * cannot be produced by clicking anything. It is produced here by rewriting the overview response,
+ * which is exactly the payload the panel branches on — the alternative is restarting the API
+ * mid-suite, which would take the rest of the run with it.
+ */
+test.describe("API performance panel", () => {
+  test.use({ storageState: { cookies: [], origins: [] } });
+
+  const openPanel = async (page: import("@playwright/test").Page) => {
+    await page.goto("/app/settings");
+    await page.getByRole("tab", { name: /maintenance/i }).click();
+    await expect(page.getByRole("heading", { name: "API performance" })).toBeVisible({ timeout: 20_000 });
+  };
+
+  test("renders with recording on, and says so when it is off", async ({ page }) => {
+    await signIn(page, "superadmin");
+
+    const overview = page.waitForResponse(
+      (res) => res.url().includes("/api/maintenance/api-performance?") && res.status() === 200
+    );
+    await openPanel(page);
+    const collection = (await (await overview).json()).collection;
+    expect(typeof collection.enabled, "the panel cannot explain an empty chart without this flag").toBe("boolean");
+
+    if (collection.enabled) {
+      // Recording is on in this environment, so the off-state banner must NOT be showing — the
+      // wrong one of the two is worse than neither.
+      await expect(page.getByText(/request recording is switched off/i)).toBeHidden();
+      // The suite itself has been generating traffic for minutes, so there is real data: the tiles
+      // and the four drill-down tabs are what the panel is for.
+      await expect(page.getByText("p95 latency")).toBeVisible({ timeout: 20_000 });
+      for (const tab of ["Latency & errors", "Endpoints", "Hosts & pods", "Request log"]) {
+        await expect(page.getByRole("tab", { name: tab })).toBeVisible();
+      }
+      await page.getByRole("tab", { name: "Endpoints" }).click();
+      await expect(page.getByRole("columnheader", { name: "Endpoint" })).toBeVisible({ timeout: 15_000 });
+    }
+
+    // Now the other branch, from the same page: the response is rewritten to a workspace whose
+    // recorder is off and has never written a row.
+    await page.route("**/api/maintenance/api-performance?*", async (route) => {
+      const response = await route.fetch();
+      const body = await response.json();
+      await route.fulfill({
+        response,
+        json: {
+          ...body,
+          collection: { ...body.collection, enabled: false },
+          totals: { ...body.totals, total: 0 }
+        }
+      });
+    });
+    await page.reload();
+    await openPanel(page);
+
+    await expect(page.getByText(/request recording is switched off/i)).toBeVisible({ timeout: 20_000 });
+    // "never recorded", not "none in this window" — the distinction IS the feature.
+    await expect(page.getByText(/no requests were ever recorded/i)).toBeVisible();
+    await expect(page.getByText("API_TELEMETRY_ENABLED=true")).toBeVisible();
+  });
 });

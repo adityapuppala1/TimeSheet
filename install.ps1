@@ -17,6 +17,11 @@
   DATABASE_URL this script already provisions, via the migrations
   that run automatically on container boot. Nothing in this script needs to change to pick them
   up.
+
+  The one setting this script asks about beyond URLs and the database is TRUST_PROXY_HOPS: it has
+  a default, so it is not "required", but the default is wrong for this stack and its wrongness is
+  invisible (see the prompt below). Relocatable storage (STORAGE_*) and file logging (LOG_*) are
+  forwarded by docker-compose.yml and inert when unset - configure them afterwards, not here.
 #>
 
 $ErrorActionPreference = "Stop"
@@ -88,6 +93,17 @@ if (Test-Path $EnvFile) {
     Write-Fail "Refusing to start the stack with an incomplete .env - see the missing keys above."
   }
   Write-Step ".env has every required key - leaving it as-is. Delete it first if you want fresh generated secrets."
+  # TRUST_PROXY_HOPS is deliberately NOT in $RequiredKeys: it has a default, so a missing one
+  # starts fine - which is exactly the problem. At 0 behind a proxy every per-IP rate limit shares
+  # one bucket and nothing anywhere says so, so an .env that predates this key gets told here.
+  if ($envText -notmatch "(?m)^TRUST_PROXY_HOPS=") {
+    Write-Warn "TRUST_PROXY_HOPS is not set in .env (it defaults to 0)."
+    Write-Warn "  The web container's nginx proxies /api to the api container, so every browser request"
+    Write-Warn "  already arrives through one hop. At 0 the API records nginx's address as the client IP"
+    Write-Warn "  for EVERYONE, and the 20/min login limiter becomes one shared global bucket."
+    Write-Warn "  Add to .env and re-run:  TRUST_PROXY_HOPS=1   (2 with docker-compose.https.yml's Caddy;"
+    Write-Warn "  add one more for anything else in front, e.g. Cloudflare). See docs/DEPLOYMENT.md."
+  }
   # MYSQL_ROOT_PASSWORD only ever gets written when a previous run chose the bundled-Docker-MySQL
   # path (see the else branch below) - its absence is exactly how a re-run recognizes "this
   # deployment uses its own external MySQL server" without asking again.
@@ -102,6 +118,30 @@ if (Test-Path $EnvFile) {
   $WebOrigin = if ([string]::IsNullOrWhiteSpace($WebOriginInput)) { "http://localhost:5173" } else { $WebOriginInput }
   $AppBaseUrlInput = Ask "Public URL for the API (used as the SSO callback base) [$WebOrigin]" ""
   $AppBaseUrl = if ([string]::IsNullOrWhiteSpace($AppBaseUrlInput)) { $WebOrigin } else { $AppBaseUrlInput }
+
+  # Asked, not assumed, and asked HERE rather than buried in docs: this is the one setting whose
+  # wrong value is completely silent. Every per-IP rate limit in the app reads req.ip, and Express
+  # only derives that from X-Forwarded-For when this is set - so at 0 behind a proxy the login
+  # limiter degrades from "20/min per attacker" to "20/min for the entire internet", with no error
+  # and no log line. The default offered is 1 because it is correct for this stack as shipped: the
+  # web container's nginx proxies /api to the api container (apps/web/nginx.conf), so a browser
+  # request already crosses one proxy before it arrives.
+  #
+  # A COUNT and not a boolean because 'trust proxy: true' believes the left-most X-Forwarded-For
+  # entry, which the caller supplies - anyone could then forge req.ip and walk past every limiter.
+  Write-Host ""
+  Write-Host "How many reverse proxies sit in front of the API?"
+  Write-Host "  1 - this stack as shipped (the web container's nginx proxies /api to the api container)"
+  Write-Host "  2 - plus docker-compose.https.yml's Caddy in front of that"
+  Write-Host "  +1 more for anything else in front (Cloudflare, a corporate load balancer)"
+  Write-Host "  0 - only if you expose port 4000 directly with nothing in between"
+  $TrustProxyHops = Ask "Proxy hop count [1]" "1"
+  # Non-numeric input would fail Zod at boot with a message about a variable the operator never
+  # typed a number into - cheaper to catch the typo while they are still looking at the prompt.
+  if ($TrustProxyHops -notmatch '^\d+$') {
+    Write-Warn "'$TrustProxyHops' isn't a number - using 1 (this stack's shipped topology)."
+    $TrustProxyHops = "1"
+  }
 
   Write-Host ""
   Write-Host "Where should the database live?"
@@ -201,6 +241,9 @@ PLATFORM_ADMIN_JWT_SECRET=$(New-RandomBase64 48)
 ENCRYPTION_KEY=$(New-RandomHex32)
 WEB_ORIGIN=$WebOrigin
 APP_BASE_URL=$AppBaseUrl
+# Reverse-proxy hops in front of the API. Every per-IP rate limit reads req.ip, which Express
+# derives from X-Forwarded-For only when this is set. See docs/DEPLOYMENT.md.
+TRUST_PROXY_HOPS=$TrustProxyHops
 ANTHROPIC_API_KEY=
 MAIL_FROM=$MailFrom
 SMTP_HOST=$SmtpHost
