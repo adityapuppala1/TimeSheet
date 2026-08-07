@@ -85,7 +85,12 @@ timesheetRouter.get("/", async (req, res) => {
   );
 });
 
-async function saveTimesheet(req: any, status: "DRAFT" | "SUBMITTED") {
+/** Exported for services/mcp-tools.ts's `log_timesheet_entry`, which passes a synthetic
+ *  `{ user, body, files }` rather than a real request. Every rule below — the Serializable
+ *  overlap check, the project-assignment gate, the identity gate, the sanitisation — has to hold
+ *  for an MCP client exactly as it does for the web app, and the only way to guarantee that is
+ *  for there to be one copy of them. */
+export async function saveTimesheet(req: any, status: "DRAFT" | "SUBMITTED") {
   const hours = calculateHours(req.body.startTime, req.body.endTime);
   const [year, month, day] = String(req.body.workDate).split("-").map(Number);
   const workDate = new Date(Date.UTC(year, month - 1, day));

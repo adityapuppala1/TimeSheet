@@ -37,6 +37,7 @@ import { chatWebhookRouter } from "./controllers/chat-webhook.controller.js";
 import { devopsWebhookRouter } from "./controllers/devops-webhook.controller.js";
 import { gitConnectionRouter } from "./controllers/git-connection.controller.js";
 import { gitWebhookRouter } from "./controllers/git-webhook.controller.js";
+import { mcpRouter } from "./controllers/mcp.controller.js";
 import { publicApiRouter } from "./controllers/public-api.controller.js";
 import { scimRouter } from "./controllers/scim.controller.js";
 import { emailIntakeRouter } from "./controllers/email-intake.controller.js";
@@ -488,6 +489,12 @@ app.use("/api/email-templates", emailTemplatesRouter);
 // before it. Its own lighter rate limit reflects "external integration polling," not "human
 // clicking a UI."
 app.use("/api/public/v1", rateLimit({ windowMs: 60_000, limit: 120, standardHeaders: true }), publicApiRouter);
+// TimeSphere AS an MCP server — see controllers/mcp.controller.ts's header. Mounted after
+// resolveTenant for the same reason as the public REST API directly above: the client connects to
+// its own workspace's URL, so the Host header has already chosen the database and no MCP tool
+// needs (or gets) an org parameter. Same 120/min ceiling too — an agent taking a few tool turns
+// per human message is external-integration traffic, not a UI fanning out ten fetches per page.
+app.use("/api/mcp", rateLimit({ windowMs: 60_000, limit: 120, standardHeaders: true }), mcpRouter);
 
 app.use(notFound);
 app.use(errorHandler);

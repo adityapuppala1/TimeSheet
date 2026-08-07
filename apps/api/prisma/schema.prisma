@@ -214,6 +214,8 @@ model User {
   aiUsageLogs               AIUsageLog[]
   ticketBranchesAdded       TicketBranch[]
   apiKeysCreated            ApiKey[]
+  mcpCredentials            McpCredential[]           @relation("McpCredentialSubject")
+  mcpCredentialsIssued      McpCredential[]           @relation("McpCredentialCreator")
   aiInteractions            AIInteraction[]           @relation("AIInteractionUser")
   aiInteractionFeedback     AIInteraction[]           @relation("AIInteractionFeedbackBy")
   aiDatasets                AIDataset[]
@@ -2004,6 +2006,75 @@ model ApiKey {
   revokedAt   DateTime?
 
   @@index([keyHash])
+}
+
+/// MCP (Model Context Protocol) server configuration — the switchboard for the tool surface
+/// exposed at `/api/mcp` (controllers/mcp.controller.ts), which lets Claude Desktop, Claude Code,
+/// the Anthropic MCP connector and Managed Agents read and act on this workspace.
+///
+/// WHY EVERY DEFAULT IS OFF: the client on the other end is an LLM, and the text it reads to
+/// decide what to call includes ticket titles, descriptions and comments this workspace ingests
+/// from people outside it — services/email-intake.service.ts turns inbound mail from a stranger
+/// into a Ticket, and the chat webhooks do the same. Prompt injection is therefore an ordinary
+/// input on this surface, not a hypothetical one. So a workspace that has never opened this
+/// settings page has no live MCP endpoint at all, and one that has still has no write tools until
+/// a super admin turned each of them on by name.
+model GlobalMcpSettings {
+  id String @id
+
+  /// Master switch. While false `/api/mcp` refuses every caller, valid credential included.
+  enabled Boolean @default(false)
+
+  /// The read-only latch. While false, no tool that mutates anything is listed OR callable no
+  /// matter what `toolOverrides` says — so "stop the agent writing, now" is one boolean, not an
+  /// audit of which individual tools happen to be on.
+  allowWrites Boolean @default(false)
+
+  /// Per-tool opt-in/opt-out, `{ "<tool name>": true | false }`. A tool ABSENT from this map uses
+  /// its own default from services/mcp-tools.ts (reads on, writes off), which is what makes a
+  /// write tool added by a future release arrive DISABLED in every existing workspace instead of
+  /// switching itself on during an upgrade.
+  toolOverrides Json @default("{}")
+
+  updatedAt   DateTime @updatedAt
+  updatedById String?
+}
+
+/// A bearer credential for the MCP endpoint, BOUND TO ONE USER.
+///
+/// WHY `userId` IS REQUIRED, unlike ApiKey.createdById: every authorization helper in this
+/// codebase decides from `req.user` — middleware/auth.ts#requirePermission, ticket.service.ts's
+/// ticketProjectScope/assertTicketVisible/canModifyTicket, team.controller.ts's `managerId`
+/// predicate, project.controller.ts's visibilityScope. A credential with no acting user would
+/// have to either skip those helpers or reimplement them, and both roads end with an MCP client
+/// holding more authority than any human in the workspace. So the credential IS a user: every
+/// tool call runs as `user`, sees exactly what they see, and is refused exactly what they are.
+model McpCredential {
+  id          String @id @default(uuid())
+  name        String @db.VarChar(120)
+  /// SHA-256 of the plaintext token, never the token itself — same one-time-reveal convention as
+  /// ApiKey.keyHash, AttestationShareLink.tokenHash and the security-ingestion token.
+  tokenHash   String @unique @db.VarChar(64)
+  /// Leading characters only, so two credentials can be told apart in the settings list without
+  /// the full token ever being readable again.
+  tokenPrefix String @db.VarChar(16)
+
+  /// The acting user. Cascade on delete because an offboarded person's MCP credential must stop
+  /// working the moment their account does, rather than linger as an orphan holding their rights.
+  userId String
+  user   User   @relation("McpCredentialSubject", fields: [userId], references: [id], onDelete: Cascade)
+
+  /// The super admin who issued it — separate from `userId`, because "who granted this" and "who
+  /// does it act as" are different questions and an audit trail needs both.
+  createdById String?
+  createdBy   User?   @relation("McpCredentialCreator", fields: [createdById], references: [id], onDelete: SetNull)
+
+  lastUsedAt DateTime?
+  createdAt  DateTime  @default(now())
+  revokedAt  DateTime?
+
+  @@index([tokenHash])
+  @@index([userId])
 }
 
 /// Outbound event notifications for external systems (Zapier, Make, a customer's own

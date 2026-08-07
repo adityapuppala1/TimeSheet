@@ -29,6 +29,7 @@
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.115.0",
+    "@modelcontextprotocol/sdk": "^1.30.0",
     "@node-saml/node-saml": "^5.1.0",
     "@prisma/client": "^6.7.0",
     "@tensorflow/tfjs-backend-wasm": "^4.22.0",
