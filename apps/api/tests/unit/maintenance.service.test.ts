@@ -172,8 +172,19 @@ describe("updateMaintenanceSettings validation", () => {
 });
 
 describe("getOnlineUsers", () => {
-  const sessionFor = (userId: string, minutesAgo: number, over: Partial<Record<string, unknown>> = {}) => ({
+  let sessionSeq = 0;
+  const sessionFor = (
+    userId: string,
+    minutesAgo: number,
+    over: Partial<Record<string, unknown>> = {},
+    session: Partial<Record<string, unknown>> = {}
+  ) => ({
+    id: `sess-${++sessionSeq}`,
     lastSeenAt: new Date(Date.now() - minutesAgo * 60_000),
+    createdAt: new Date(Date.now() - 60 * 60_000),
+    userAgent: null,
+    ipAddress: null,
+    ...session,
     user: { id: userId, name: `User ${userId}`, email: `${userId}@x.io`, deletedAt: null, role: { name: "EMPLOYEE" }, ...over }
   });
 
@@ -183,11 +194,37 @@ describe("getOnlineUsers", () => {
       sessionFor("u1", 9),
       sessionFor("u2", 4)
     ] as never);
-    const { count, users } = await runInTenant(client, () => getOnlineUsers(), freshOrg());
+    const { count, sessionCount, users } = await runInTenant(client, () => getOnlineUsers(), freshOrg());
     expect(count).toBe(2);
+    // …but the device-level total is reported alongside it rather than lost.
+    expect(sessionCount).toBe(3);
     expect(users.find((u) => u.id === "u1")!.lastSeenAt).toEqual(expect.any(Date));
     // Kept the most recent sighting (1 min ago), not the stale one.
     expect(Date.now() - users.find((u) => u.id === "u1")!.lastSeenAt!.getTime()).toBeLessThan(5 * 60_000);
+  });
+
+  it("KEEPS the second device rather than dropping it — the unexpected session is the point", async () => {
+    vi.mocked(client.session.findMany).mockResolvedValue([
+      sessionFor("u1", 1, {}, { userAgent: "Mozilla/5.0 (iPhone; CPU iPhone OS 17_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.5 Mobile/15E148 Safari/604.1", ipAddress: "203.0.113.9" }),
+      sessionFor("u1", 9, {}, { userAgent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36", ipAddress: "::ffff:192.168.1.5" })
+    ] as never);
+    const { users } = await runInTenant(client, () => getOnlineUsers(), freshOrg());
+    const [phone, laptop] = users[0]!.sessions; // freshest first, matching the query's ordering
+    expect(users[0]!.sessions).toHaveLength(2);
+    expect(phone!.device).toBe("Safari on iOS 17");
+    expect(phone!.formFactor).toBe("mobile");
+    expect(phone!.ipIsPrivate).toBe(false);
+    expect(laptop!.device).toBe("Chrome on Windows 10/11");
+    expect(laptop!.ipIsPrivate).toBe(true);
+    expect(laptop!.signedInAt).toBeInstanceOf(Date);
+  });
+
+  it("never selects the refresh-token hashes — a leak here would be a credential leak", async () => {
+    vi.mocked(client.session.findMany).mockResolvedValue([sessionFor("u1", 1)] as never);
+    await runInTenant(client, () => getOnlineUsers(), freshOrg());
+    const select = (vi.mocked(client.session.findMany).mock.calls[0]![0] as { select: Record<string, unknown> }).select;
+    expect(select.refreshHash).toBeUndefined();
+    expect(select.previousRefreshHash).toBeUndefined();
   });
 
   it("excludes soft-deleted users even when their session rows survive", async () => {
@@ -195,8 +232,9 @@ describe("getOnlineUsers", () => {
       sessionFor("ghost", 2, { deletedAt: new Date() }),
       sessionFor("real", 3)
     ] as never);
-    const { count, users } = await runInTenant(client, () => getOnlineUsers(), freshOrg());
+    const { count, sessionCount, users } = await runInTenant(client, () => getOnlineUsers(), freshOrg());
     expect(count).toBe(1);
+    expect(sessionCount).toBe(1); // the ghost's session isn't counted either
     expect(users[0]!.id).toBe("real");
   });
 });

@@ -10,7 +10,25 @@
  * from the lockout by design — the card says so rather than leaving admins to discover it.
  */
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Bell, CalendarClock, Loader2, LogOut, RefreshCw, Save, Users, Wrench } from "lucide-react";
+import {
+  Bell,
+  CalendarClock,
+  ChevronDown,
+  ChevronRight,
+  Globe,
+  Loader2,
+  LogIn,
+  LogOut,
+  Monitor,
+  MonitorSmartphone,
+  Network,
+  RefreshCw,
+  Save,
+  Smartphone,
+  Tablet,
+  Users,
+  Wrench
+} from "lucide-react";
 import { useEffect, useState } from "react";
 import {
   AlertDialog,
@@ -32,7 +50,12 @@ import { Skeleton } from "../../components/ui/skeleton";
 import { Switch } from "../../components/ui/switch";
 import { Textarea } from "../../components/ui/textarea";
 import { toast } from "../../components/ui/toaster";
-import { maintenanceApi, type MaintenancePhase } from "../../services/api";
+import {
+  maintenanceApi,
+  type MaintenanceOnlineSession,
+  type MaintenanceOnlineUser,
+  type MaintenancePhase
+} from "../../services/api";
 import { DateTimePicker, buildTimeSlots } from "../../components/ui/date-picker";
 import { ServerHealthCard } from "./ServerHealthCard";
 import { ServiceStatusPage } from "../../components/ServiceStatusPage";
@@ -58,12 +81,106 @@ function fromLocalInputValue(value: string): string | null {
   return Number.isNaN(date.getTime()) ? null : date.toISOString();
 }
 
-function formatLastSeen(iso: string | null): string {
+/** Relative "when". Last-activity is always inside the 15-minute online window, so it only ever
+ *  reaches the minutes branch — but a session's SIGN-IN can be up to 30 days old (see the Session
+ *  model's expiry), and "43200 mins ago" is not an answer. */
+function formatRelativeTime(iso: string | null): string {
   if (!iso) return "—";
   const minutes = Math.max(0, Math.round((Date.now() - new Date(iso).getTime()) / 60_000));
   if (minutes === 0) return "just now";
   if (minutes === 1) return "1 min ago";
-  return `${minutes} mins ago`;
+  if (minutes < 60) return `${minutes} mins ago`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${hours} hr${hours === 1 ? "" : "s"} ago`;
+  const days = Math.floor(hours / 24);
+  return `${days} day${days === 1 ? "" : "s"} ago`;
+}
+
+/** Form factor → icon. `unknown` gets its own generic glyph rather than borrowing the desktop
+ *  one, so "we couldn't tell" never renders as a confident "this is a desktop". */
+const DEVICE_ICON = {
+  desktop: Monitor,
+  mobile: Smartphone,
+  tablet: Tablet,
+  unknown: MonitorSmartphone
+} as const;
+
+/**
+ * One session line: what it's running on, where from, when it started and when it was last active.
+ * The IP is shown verbatim — an admin chasing a session needs the actual address — with private
+ * ranges labelled, because on a LAN deployment EVERY address is a 192.168.x and an unlabelled
+ * column of them tells the admin nothing.
+ */
+function SessionLine({ session }: { session: MaintenanceOnlineSession }) {
+  const DeviceIcon = DEVICE_ICON[session.formFactor];
+  return (
+    <div className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted-foreground">
+      <span className="flex min-w-0 items-center gap-1.5">
+        <DeviceIcon className="h-3.5 w-3.5 shrink-0" />
+        <span className="truncate font-medium text-foreground">{session.device}</span>
+      </span>
+      <span className="flex min-w-0 items-center gap-1.5">
+        {session.ipIsPrivate ? <Network className="h-3.5 w-3.5 shrink-0" /> : <Globe className="h-3.5 w-3.5 shrink-0" />}
+        <span className="truncate font-mono">{session.ipAddress ?? "Unknown IP"}</span>
+        {session.ipIsPrivate && <span className="shrink-0">(local network)</span>}
+      </span>
+      <span className="flex items-center gap-1.5">
+        <LogIn className="h-3.5 w-3.5 shrink-0" />
+        <span className="tabular-nums">Signed in {formatRelativeTime(session.signedInAt)}</span>
+      </span>
+      <span className="tabular-nums">Active {formatRelativeTime(session.lastSeenAt)}</span>
+    </div>
+  );
+}
+
+/**
+ * One person, with EVERY live session they have.
+ *
+ * WHY the extra sessions are never collapsed away: an admin opening this panel is often not asking
+ * "how many people" but "why is that account also on a phone". The freshest session is always
+ * visible; the rest are one click away rather than lost.
+ */
+function OnlineUserRow({ user }: { user: MaintenanceOnlineUser }) {
+  const [expanded, setExpanded] = useState(false);
+  const [freshest, ...others] = user.sessions;
+  return (
+    <li className="grid gap-2 px-4 py-2.5">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <div className="min-w-0">
+          <p className="truncate text-sm font-medium">{user.name}</p>
+          <p className="truncate text-xs text-muted-foreground">{user.email}</p>
+        </div>
+        <div className="flex shrink-0 items-center gap-2">
+          {user.role === "SUPER_ADMIN" && <Badge variant="info">exempt</Badge>}
+          <Badge variant="outline">{user.role.replace(/_/g, " ").toLowerCase()}</Badge>
+          <span className="text-xs tabular-nums text-muted-foreground">{formatRelativeTime(user.lastSeenAt)}</span>
+        </div>
+      </div>
+
+      {freshest && <SessionLine session={freshest} />}
+
+      {others.length > 0 && (
+        <>
+          <button
+            type="button"
+            onClick={() => setExpanded((open) => !open)}
+            aria-expanded={expanded}
+            className="flex w-fit items-center gap-1 text-xs font-medium text-primary hover:underline"
+          >
+            {expanded ? <ChevronDown className="h-3.5 w-3.5" /> : <ChevronRight className="h-3.5 w-3.5" />}
+            {user.sessions.length} devices
+          </button>
+          {expanded && (
+            <div className="grid gap-1.5 border-l pl-3">
+              {others.map((session) => (
+                <SessionLine key={session.id} session={session} />
+              ))}
+            </div>
+          )}
+        </>
+      )}
+    </li>
+  );
 }
 
 const PHASE_BADGE: Record<MaintenancePhase, { label: string; variant: "muted" | "info" | "destructive" | "warning" }> = {
@@ -184,7 +301,7 @@ export function MaintenanceSettingsCard({ readOnly }: { readOnly: boolean }) {
   }
 
   const phase = adminView.data?.phase ?? "off";
-  const online = adminView.data?.online ?? { count: 0, users: [] };
+  const online = adminView.data?.online ?? { count: 0, sessionCount: 0, users: [] };
   const badge = PHASE_BADGE[phase];
   const nonAdminOnline = online.users.filter((user) => user.role !== "SUPER_ADMIN").length;
 
@@ -323,6 +440,11 @@ export function MaintenanceSettingsCard({ readOnly }: { readOnly: boolean }) {
           <CardDescription>
             People with an authenticated request in the last 15 minutes. Warn them before the window, then
             force-log-out anyone still here. Auto-refreshes every 30 seconds.
+            {/* The badge counts PEOPLE — the device total only earns a mention when the two differ,
+                which is exactly the case an admin would otherwise misread. */}
+            {online.sessionCount > online.count && (
+              <> Across {online.sessionCount} devices — expand a row to see each one.</>
+            )}
           </CardDescription>
         </CardHeader>
         <CardContent className="grid gap-4">
@@ -331,19 +453,9 @@ export function MaintenanceSettingsCard({ readOnly }: { readOnly: boolean }) {
               Nobody is online right now — a good moment for maintenance.
             </p>
           ) : (
-            <ul className="divide-y rounded-lg border">
+            <ul className="min-w-0 divide-y rounded-lg border">
               {online.users.map((user) => (
-                <li key={user.id} className="flex flex-wrap items-center justify-between gap-2 px-4 py-2.5">
-                  <div className="min-w-0">
-                    <p className="truncate text-sm font-medium">{user.name}</p>
-                    <p className="truncate text-xs text-muted-foreground">{user.email}</p>
-                  </div>
-                  <div className="flex shrink-0 items-center gap-2">
-                    {user.role === "SUPER_ADMIN" && <Badge variant="info">exempt</Badge>}
-                    <Badge variant="outline">{user.role.replace(/_/g, " ").toLowerCase()}</Badge>
-                    <span className="text-xs tabular-nums text-muted-foreground">{formatLastSeen(user.lastSeenAt)}</span>
-                  </div>
-                </li>
+                <OnlineUserRow key={user.id} user={user} />
               ))}
             </ul>
           )}

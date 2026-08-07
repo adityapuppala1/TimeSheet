@@ -319,18 +319,38 @@ export interface MaintenanceSettingsRow {
   updatedAt: string;
 }
 
+/** One live session, already decoded server-side (api/src/utils/user-agent.ts) — the browser never
+ *  receives other people's raw UA strings, only the label the panel displays. */
+export interface MaintenanceOnlineSession {
+  id: string;
+  ipAddress: string | null;
+  /** LAN/loopback address — the UI says "local network" so a 192.168.x isn't read as an intruder. */
+  ipIsPrivate: boolean;
+  browser: string;
+  os: string;
+  formFactor: "desktop" | "mobile" | "tablet" | "unknown";
+  /** "Chrome on Windows 10/11", or "Unknown device" when the UA couldn't be decoded. */
+  device: string;
+  signedInAt: string;
+  lastSeenAt: string | null;
+}
+
 export interface MaintenanceOnlineUser {
   id: string;
   name: string;
   email: string;
   role: string;
   lastSeenAt: string | null;
+  /** One entry per live session — a phone AND a laptop is two, and both are shown. */
+  sessions: MaintenanceOnlineSession[];
 }
 
 export interface MaintenanceAdminView {
   settings: MaintenanceSettingsRow;
   phase: MaintenancePhase;
-  online: { count: number; users: MaintenanceOnlineUser[] };
+  /** `count` is PEOPLE (what the badge and the warn flow mean by "online"); `sessionCount` is
+   *  devices, reported separately so the two are never confused for each other. */
+  online: { count: number; sessionCount: number; users: MaintenanceOnlineUser[] };
 }
 
 /** Mirrors api/src/services/system-health.service.ts#SystemHealthSnapshot — everything measured
@@ -1464,10 +1484,50 @@ export interface EffectiveWorkspaceFlags {
   enableLeaderboard: boolean;
 }
 
+/** Mirrors api/src/config/storage-paths.ts#DirectoryProbe — probed live on every GET, so
+ *  `writable` reflects a real write attempt at that moment, not a cached boot-time answer. */
+export interface DirectoryProbe {
+  path: string;
+  exists: boolean;
+  writable: boolean;
+  problem: string | null;
+}
+
+/** Mirrors api/src/config/storage-paths.ts#StorageLayout + config/logger.ts#LoggingStatus. */
+export interface StorageAndLogStatus {
+  storage: {
+    root: DirectoryProbe;
+    documents: DirectoryProbe;
+    avatars: DirectoryProbe;
+    face: DirectoryProbe;
+    documentFallbacks: string[];
+    configuredBy: Record<"root" | "documents" | "avatars" | "face", string | null>;
+  };
+  logging: {
+    enabled: boolean;
+    directory: string;
+    rotateHours: number;
+    retentionDays: number;
+    compressOnRollover: boolean;
+    degraded: boolean;
+    degradedReason: string | null;
+    currentFile: string | null;
+    namingExample: string;
+  };
+}
+
 export const settingsApi = {
   /** Safe for any authenticated role. Use this from non-settings pages instead of `getAI`/
    *  `getTicketing`, which are super-admin-only. */
   getEffectiveFlags: async () => (await api.get<EffectiveWorkspaceFlags>("/settings/effective-flags")).data,
+  /** Read-only: the paths themselves are env-only by design — see the header comment on the
+   *  `/settings/storage` route in api/src/controllers/settings.controller.ts. */
+  getStorage: async () => (await api.get<StorageAndLogStatus>("/settings/storage")).data,
+  /** Dry-runs a candidate directory (absolute? no ".."? exists? really writable?) without
+   *  changing anything, so an operator can check a path before editing .env and restarting. */
+  validateStorageDirectory: async (candidate: string) =>
+    (await api.post<{ ok: boolean; path?: string; message?: string }>("/settings/storage/validate-directory", { path: candidate }))
+      .data,
   getNotifications: async () => (await api.get<GlobalSettings>("/settings/notifications")).data,
   updateNotifications: async (payload: Partial<GlobalSettings>) =>
     (await api.patch<GlobalSettings>("/settings/notifications", payload)).data,
@@ -2458,6 +2518,28 @@ export interface FaceAnalytics {
   };
 }
 
+/** Why one covered user cannot verify reliably today. Mirrors EnrollmentGapKind in
+ *  apps/api/src/services/face.service.ts. */
+export type FaceEnrollmentGapKind = "NOT_ENROLLED" | "STALE_MODEL" | "SINGLE_POSE";
+
+export interface FaceEnrollmentGap {
+  userId: string;
+  name: string;
+  email: string;
+  kind: FaceEnrollmentGapKind;
+  /** Comparable templates on the current model — 0 when not enrolled or on a superseded model. */
+  templateCount: number;
+  enrolledAt: string | null;
+  /** Last enrollment nudge of either category; a fresh remind inside 72h is deduped away. */
+  lastRemindedAt: string | null;
+}
+
+export interface FaceEnrollmentGaps {
+  multiPoseTemplateMin: number;
+  gaps: FaceEnrollmentGap[];
+  counts: { notEnrolled: number; staleModel: number; singlePose: number };
+}
+
 export interface FaceThresholdRecommendation {
   currentThreshold: number;
   recommendedThreshold: number | null;
@@ -2611,6 +2693,17 @@ export const faceApi = {
    *  Separate from `stats`, which answers the fixed-window CALIBRATION question. */
   analytics: async (days: FaceAnalyticsWindow = 30) =>
     (await api.get<FaceAnalytics>("/face/analytics", { params: { days } })).data,
+  /** The per-user worklist behind the coverage chart — the rows an admin can actually chase,
+   *  where `analytics().enrollment` only has counts. */
+  enrollmentGaps: async () => (await api.get<FaceEnrollmentGaps>("/face/enrollment-gaps")).data,
+  /** Sends the standard enrollment reminder (worded for each user's actual gap). The server
+   *  intersects with its own gap list and drops anyone nudged in the last 72h, so `sent` is
+   *  routinely lower than the number requested — that is the dedupe working, not a failure. */
+  remindEnrollment: async (userIds: string[]) =>
+    (await api.post<{ requested: number; matched: number; sent: number; skipped: number }>(
+      "/face/enrollment-gaps/remind",
+      { userIds }
+    )).data,
   /** Threshold recommendation computed from this workspace's own distribution; `narrative` is the
    *  optional AI explanation of that same number (null when AI is off). */
   policyRecommendation: async () => (await api.get<FaceThresholdRecommendation>("/face/policy-recommendation")).data,

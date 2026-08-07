@@ -24,7 +24,8 @@
     "test:integration": "vitest run --config vitest.integration.config.ts",
     "verify:face": "tsx scripts/verify-face-service.ts",
     "verify:face:e2e": "tsx scripts/verify-face-e2e.ts",
-    "verify:face:pad": "tsx scripts/verify-face-pad.ts"
+    "verify:face:pad": "tsx scripts/verify-face-pad.ts",
+    "eval:face": "tsx scripts/evaluate-face-embeddings.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.115.0",

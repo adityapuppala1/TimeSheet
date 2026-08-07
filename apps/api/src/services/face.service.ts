@@ -36,7 +36,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { createRequire } from "node:module";
 import sharp from "sharp";
-import { env } from "../config/env.js";
+import { faceDir } from "../config/storage-paths.js";
 import { prisma } from "../config/prisma.js";
 import { requireTenantContext } from "../config/tenant-context.js";
 import { AppError } from "../middleware/error.js";
@@ -535,11 +535,19 @@ export const DEFAULT_CONSENT_TEXT =
   "retained only for the period shown above, and that I may withdraw this consent at any time " +
   "— which permanently deletes my stored face data.";
 
-/** Face images NEVER go under the public `/uploads` static mount: app.ts serves that with no
- *  authentication at all, so anyone who guesses a filename could read them cross-tenant. They
- *  live in a separate tree served only by an authenticated API route. */
+/**
+ * Face images NEVER go under the public `/uploads` static mount: app.ts serves that with no
+ * authentication at all, so anyone who guesses a filename could read them cross-tenant. They
+ * live in a separate tree served only by an authenticated API route.
+ *
+ * That claim used to be enforced by nothing. The default location is `<storage root>/face`, and
+ * the documents static mount is rooted at the storage root — so `/uploads/face/<orgId>/<userId>/…`
+ * WAS reachable. app.ts now rejects any `/uploads` request resolving inside this tree
+ * (`isInsideNonPublicSubtree`), and `STORAGE_FACE_DIR` lets an operator put the tree on a
+ * different volume entirely, which is the stronger control of the two.
+ */
 export function faceStorageDir(): string {
-  return path.join(env.UPLOAD_DIR, "face");
+  return faceDir();
 }
 
 /** Org-scoped: face/<orgId>/<userId>/. The orgId level exists so one organization's biometric
@@ -568,7 +576,11 @@ export async function storeFaceImage(userId: string, kind: "reference" | "attemp
     .resize({ width: 640, height: 640, fit: "inside", withoutEnlargement: true })
     .jpeg({ quality: 82 })
     .toBuffer();
-  const filename = `${kind}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.jpg`;
+  // `crypto.randomBytes`, not `Math.random()`: Math.random is a PRNG whose output is predictable
+  // from prior draws, so it is never the right source for the only unguessable part of a path to
+  // BIOMETRIC imagery. `kind` and the timestamp stay because they make a stray file on disk
+  // identifiable, which is exactly what a retention/deletion audit needs.
+  const filename = `${kind}-${Date.now()}-${crypto.randomBytes(8).toString("hex")}.jpg`;
   const full = path.join(dir, filename);
   await fs.writeFile(full, jpeg);
   return full;
@@ -799,10 +811,22 @@ export async function redeemChallenge(params: {
   return params.withIssuedAt ? { instruction, issuedAt: row.createdAt } : instruction;
 }
 
+/** Why a pose was refused. `TOO_SMALL` and `WRONG_AXIS` need opposite advice — "further" versus
+ *  "not that way" — and telling somebody to turn harder when the problem is that they tilted is
+ *  how a retry reproduces the original failure. */
+export type ChallengeFailureReason = "TOO_SMALL" | "WRONG_AXIS";
+
 export interface ChallengePoseResult {
   ok: boolean;
   yawDelta: number;
   pitchDelta: number;
+  /** null when `ok`. */
+  reason: ChallengeFailureReason | null;
+  /** |delta| on the axis the instruction demanded, and the bar it had to clear. Exposed so the
+   *  refusal message can quote how close the person actually got instead of saying only that
+   *  they did not get there. */
+  achieved: number;
+  required: number;
 }
 
 /** Pure function — measures whether the gesture frame actually performed the instruction
@@ -810,11 +834,18 @@ export interface ChallengePoseResult {
 export function verifyChallengePose(instruction: ChallengeInstruction, neutral: FaceAnalysis, gesture: FaceAnalysis): ChallengePoseResult {
   const yawDelta = Math.abs(gesture.yaw - neutral.yaw);
   const pitchDelta = Math.abs(gesture.pitch - neutral.pitch);
-  const ok =
-    instruction === "LOOK_UP"
-      ? pitchDelta >= CHALLENGE_PITCH_MIN && pitchDelta >= yawDelta
-      : yawDelta >= CHALLENGE_YAW_MIN && yawDelta >= pitchDelta;
-  return { ok, yawDelta, pitchDelta };
+  const wantsPitch = instruction === "LOOK_UP";
+  const achieved = wantsPitch ? pitchDelta : yawDelta;
+  const offAxis = wantsPitch ? yawDelta : pitchDelta;
+  const required = wantsPitch ? CHALLENGE_PITCH_MIN : CHALLENGE_YAW_MIN;
+
+  const bigEnough = achieved >= required;
+  const dominant = achieved >= offAxis;
+  const ok = bigEnough && dominant;
+  // Magnitude first when both fail: someone who barely moved has a size problem, and the axis
+  // comparison between two near-zero deltas is noise rather than a finding.
+  const reason: ChallengeFailureReason | null = ok ? null : !bigEnough ? "TOO_SMALL" : "WRONG_AXIS";
+  return { ok, yawDelta, pitchDelta, reason, achieved, required };
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -896,12 +927,19 @@ export function assessProvenance(input: ProvenanceInput): ProvenanceVerdict {
   };
 }
 
-/** Human-readable instruction text, shared by the API response so every client says exactly
- *  what the server will enforce. */
+/**
+ * Human-readable instruction text, shared by the API response so every client says exactly what
+ * the server will enforce.
+ *
+ * EACH PROMPT NAMES THE AXIS CONSTRAINT, and that clause is load-bearing rather than padding. The
+ * check requires the demanded axis to DOMINATE, and 8 of the 19 recorded real-browser failures
+ * lost on exactly that: a tilt when a turn was asked for, or a turn when a tilt was. "Turn your
+ * head" alone does not tell anybody that tilting at the same time invalidates it, so a person
+ * doing a natural, generous head movement could fail for being too helpful. */
 export const CHALLENGE_PROMPTS: Record<ChallengeInstruction, string> = {
-  TURN_LEFT: "Slowly turn your head to one side",
-  TURN_RIGHT: "Slowly turn your head to one side",
-  LOOK_UP: "Slowly tilt your head up"
+  TURN_LEFT: "Slowly turn your head to one side — keep it level",
+  TURN_RIGHT: "Slowly turn your head to one side — keep it level",
+  LOOK_UP: "Slowly tilt your head up — keep facing the camera"
 };
 
 /**
@@ -951,6 +989,114 @@ export async function findCoveredUnenrolledUserIds(): Promise<string[]> {
   return users.map((u) => u.id);
 }
 
+/** How many templates (primary embedding included) make an enrollment "multi-pose". Mirrors the
+ *  test behind /face/status#needsBetterEnrollment — one constant so the employee's prompt, the
+ *  admin's coverage chart and the admin's worklist can never disagree about who needs retraining. */
+export const MULTI_POSE_TEMPLATE_MIN = 3;
+
+/** Why a covered user cannot verify reliably today, worst first. */
+export type EnrollmentGapKind = "NOT_ENROLLED" | "STALE_MODEL" | "SINGLE_POSE";
+
+export interface EnrollmentGap {
+  userId: string;
+  name: string;
+  email: string;
+  kind: EnrollmentGapKind;
+  /** Comparable templates this person has — primary embedding plus extras on the CURRENT model.
+   *  0 for STALE_MODEL: templates from a superseded model can't be compared against anything. */
+  templateCount: number;
+  enrolledAt: Date | null;
+  /** Last enrollment nudge of EITHER category, so an admin can see they already asked (and why a
+   *  fresh "remind" may be deduped away rather than sent). */
+  lastRemindedAt: Date | null;
+}
+
+/**
+ * The per-user detail behind the enrollment-coverage chart: every covered user whose face model
+ * is missing, incomparable, or thin.
+ *
+ * WHY this exists alongside the counts in GET /face/analytics: a count tells an admin that three
+ * people have a single-pose model, which is not something anyone can act on. The measured
+ * NO_MATCH rate is driven by exactly those people, and the fix is asking them by name.
+ *
+ * Read-only and cheap by design (one user query + two aggregates), because it is rendered inside
+ * the same settings card as the charts.
+ */
+export async function listEnrollmentGaps(): Promise<EnrollmentGap[]> {
+  const settings = await getFaceSettings();
+  if (!settings.enabled) return [];
+  if (!(await isFaceFeatureAllowedForOrg())) return [];
+
+  const users = await prisma.user.findMany({
+    where: {
+      status: "ACTIVE",
+      deletedAt: null,
+      // Same coverage test as findCoveredUnenrolledUserIds / GET /face/analytics: in SELECTED mode
+      // only individually-flagged users are covered, so listing everyone would invent a gap.
+      ...(settings.enforcementMode === "ALL" ? {} : { faceVerificationRequired: true })
+    },
+    select: {
+      id: true,
+      name: true,
+      email: true,
+      faceEnrollment: { select: { id: true, modelVersion: true, createdAt: true } }
+    },
+    orderBy: { name: "asc" }
+  });
+
+  const currentIds = users
+    .filter((u) => u.faceEnrollment?.modelVersion === FACE_MODEL_VERSION)
+    .map((u) => u.faceEnrollment!.id);
+
+  const [templateGroups, reminderGroups] = await Promise.all([
+    currentIds.length
+      ? prisma.faceEnrollmentTemplate.groupBy({
+          by: ["enrollmentId"],
+          where: { enrollmentId: { in: currentIds }, modelVersion: FACE_MODEL_VERSION },
+          _count: { _all: true }
+        })
+      : Promise.resolve([]),
+    users.length
+      ? prisma.notification.groupBy({
+          by: ["userId"],
+          where: {
+            userId: { in: users.map((u) => u.id) },
+            category: { in: ["face.enrollment_required", "face.enrollment_reminder"] }
+          },
+          _max: { createdAt: true }
+        })
+      : Promise.resolve([])
+  ]);
+  const extras = new Map(templateGroups.map((g) => [g.enrollmentId, g._count._all]));
+  const reminded = new Map(reminderGroups.map((g) => [g.userId, g._max.createdAt ?? null]));
+
+  const gaps: EnrollmentGap[] = [];
+  for (const user of users) {
+    const enrollment = user.faceEnrollment;
+    const base = {
+      userId: user.id,
+      name: user.name,
+      email: user.email,
+      enrolledAt: enrollment?.createdAt ?? null,
+      lastRemindedAt: reminded.get(user.id) ?? null
+    };
+
+    if (!enrollment) {
+      gaps.push({ ...base, kind: "NOT_ENROLLED", templateCount: 0 });
+      continue;
+    }
+    if (enrollment.modelVersion !== FACE_MODEL_VERSION) {
+      gaps.push({ ...base, kind: "STALE_MODEL", templateCount: 0 });
+      continue;
+    }
+    const templateCount = (extras.get(enrollment.id) ?? 0) + 1;
+    if (templateCount < MULTI_POSE_TEMPLATE_MIN) {
+      gaps.push({ ...base, kind: "SINGLE_POSE", templateCount });
+    }
+  }
+  return gaps;
+}
+
 /**
  * Tells users the policy now covers them BEFORE a blocked submission does. Without this, the
  * first a person hears of an admin flagging them is a refused timesheet at 6pm on a Friday —
@@ -959,10 +1105,16 @@ export async function findCoveredUnenrolledUserIds(): Promise<string[]> {
  * Deduped per-user via the Notification table (72h window across BOTH enrollment categories),
  * so the admin toggling settings back and forth, the user-management flag, and the daily
  * reminder worker can all call this without spamming anyone.
+ *
+ * `variant` picks the WORDING only — an already-enrolled person told to "enroll, it takes under a
+ * minute" reads it as a bug and ignores it, which is how a thin-enrollment nudge becomes noise.
+ * The category, dedupe window and email template stay shared deliberately: from the recipient's
+ * side both are the same ask (spend fifteen seconds in the wizard), so they must share one budget.
  */
 export async function notifyEnrollmentRequired(
   userIds: string[],
-  category: "face.enrollment_required" | "face.enrollment_reminder" = "face.enrollment_required"
+  category: "face.enrollment_required" | "face.enrollment_reminder" = "face.enrollment_required",
+  variant: "not-enrolled" | "thin-enrollment" = "not-enrolled"
 ): Promise<number> {
   if (userIds.length === 0) return 0;
   const dedupeSince = new Date(Date.now() - 72 * 60 * 60 * 1000);
@@ -982,12 +1134,14 @@ export async function notifyEnrollmentRequired(
     const user = await prisma.user.findUnique({ where: { id: userId }, select: { name: true } });
     if (!user) continue;
 
+    const thin = variant === "thin-enrollment";
     await dispatchNotification({
       userId,
       category,
-      title: "Set up face verification",
-      body:
-        category === "face.enrollment_required"
+      title: thin ? "Improve your face model" : "Set up face verification",
+      body: thin
+        ? "Your face model holds only one angle, which is why identity checks come back as a non-match. Retraining with the guided steps takes about fifteen seconds in your profile."
+        : category === "face.enrollment_required"
           ? "Your workspace now requires an identity check for some of your actions. Enroll your face in your profile so your next submission isn't held up."
           : "Reminder: face verification is required for some of your actions and you haven't enrolled yet. It takes under a minute in your profile.",
       link: "/app/profile",
@@ -995,8 +1149,12 @@ export async function notifyEnrollmentRequired(
         templateKey: "face.enrollment_required",
         vars: { name: user.name },
         fallback: {
-          subject: "Action needed: set up face verification",
-          html: templates.faceEnrollmentRequired({ name: user.name, reminder: category === "face.enrollment_reminder" })
+          subject: thin ? "Two minutes to make your identity checks work" : "Action needed: set up face verification",
+          html: templates.faceEnrollmentRequired({
+            name: user.name,
+            reminder: category === "face.enrollment_reminder",
+            thin
+          })
         }
       }
     });

@@ -491,7 +491,11 @@ async function checkFaceReadiness(env: { APP_BASE_URL: string; UPLOAD_DIR: strin
     );
   }
 
-  const faceDir = path.join(env.UPLOAD_DIR, "face");
+  // Mirrors config/storage-paths.ts's resolution rather than importing it: that module pulls in
+  // config/env.ts, which hard-fails on any missing required variable — and diagnosing exactly
+  // that failure is what doctor exists for. Read straight from process.env instead.
+  const faceDir =
+    process.env.STORAGE_FACE_DIR?.trim() || path.join(process.env.STORAGE_ROOT?.trim() || env.UPLOAD_DIR, "face");
   try {
     fs.mkdirSync(faceDir, { recursive: true });
     const probeFile = path.join(faceDir, `.doctor-probe-${Date.now()}`);

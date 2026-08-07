@@ -26,7 +26,7 @@ import { Check, Loader2, RefreshCw, ScanFace } from "lucide-react";
 
 import { Button } from "./ui/button";
 import { FaceCapture, type FaceCaptureHandle } from "./FaceCapture";
-import { awaitNeutral, awaitPose, type PoseTarget } from "../lib/face-pose";
+import { awaitNeutral, awaitPose, poseCoaching, type PoseBlock, type PoseTarget } from "../lib/face-pose";
 import { cn } from "../lib/utils";
 
 interface Step {
@@ -86,7 +86,7 @@ export function GuidedFaceEnrollment({
   const cancelledRef = useRef(false);
   const [running, setRunning] = useState(false);
   const [stepIndex, setStepIndex] = useState(0);
-  const [progress, setProgress] = useState(0);
+  const [pose, setPose] = useState<{ progress: number; block: PoseBlock }>({ progress: 0, block: "short" });
   const [captured, setCaptured] = useState<Blob[]>([]);
   const [note, setNote] = useState<string | null>(null);
 
@@ -124,7 +124,7 @@ export function GuidedFaceEnrollment({
       for (let i = 1; i < STEPS.length; i += 1) {
         if (cancelledRef.current) return;
         setStepIndex(i);
-        setProgress(0);
+        setPose({ progress: 0, block: "short" });
         const step = STEPS[i];
         const target: PoseTarget = {
           ...step.target!,
@@ -137,7 +137,7 @@ export function GuidedFaceEnrollment({
           neutral,
           target,
           windowMs: STEP_WINDOW_MS,
-          onProgress: setProgress,
+          onProgress: (progress, block) => setPose({ progress, block }),
           isCancelled
         });
         if (cancelledRef.current) return;
@@ -163,7 +163,7 @@ export function GuidedFaceEnrollment({
       }
       onComplete(frames);
     } finally {
-      setProgress(0);
+      setPose({ progress: 0, block: "short" });
       setRunning(false);
     }
   }, [onComplete]);
@@ -181,7 +181,11 @@ export function GuidedFaceEnrollment({
           <p className="text-xs text-muted-foreground">
             {running
               ? step.help
-              : "We'll capture your face from a few angles. It takes about fifteen seconds and makes later checks far more reliable."}
+              : // Says WHAT the angles buy, not just that there are angles. A model built from one
+                // pose scores 0.52-0.82 against a 0.75 bar the moment you sit differently — which
+                // is felt later as an unexplained "we couldn't confirm it's you", with no visible
+                // connection back to the fifteen seconds skipped here.
+                "Four angles, about fifteen seconds. A model built from a single pose only recognises you sitting exactly as you are now — these four cover how you'll actually be sitting on the day, which is what stops later checks failing for no visible reason."}
           </p>
         </div>
         <div className="flex shrink-0 gap-1" aria-label={`${done} of ${STEPS.length} captured`}>
@@ -213,19 +217,39 @@ export function GuidedFaceEnrollment({
         busy={busy || running}
         autoStart
         overlayText={running ? step.title : null}
+        poseMeter={
+          running && step.target
+            ? {
+                progress: pose.progress,
+                satisfied: pose.block === "ready",
+                coaching: poseCoaching(pose.block, step.target.axis, pose.progress),
+                secondsLeft: null
+              }
+            : null
+        }
         controls="none"
       />
 
       {running && step.target && (
-        <div className="grid gap-1.5" role="status" aria-live="polite">
-          <div className="h-2 w-full overflow-hidden rounded-full bg-muted">
+        <div className="grid gap-1.5">
+          <div
+            role="progressbar"
+            aria-label={`${step.title} progress`}
+            aria-valuemin={0}
+            aria-valuemax={100}
+            aria-valuenow={Math.round(pose.progress * 100)}
+            className="h-2 w-full overflow-hidden rounded-full bg-muted"
+          >
             <div
-              className={cn("h-full rounded-full transition-[width] duration-100", progress >= 1 ? "bg-success" : "bg-primary")}
-              style={{ width: `${Math.round(progress * 100)}%` }}
+              className={cn(
+                "h-full rounded-full motion-safe:transition-[width,background-color] motion-safe:duration-100",
+                pose.block === "ready" ? "bg-success" : "bg-primary"
+              )}
+              style={{ width: `${Math.round(pose.progress * 100)}%` }}
             />
           </div>
-          <p className="text-center text-xs text-muted-foreground">
-            {progress >= 1 ? "Got it" : progress > 0.5 ? "Keep going…" : "Turn a little further"}
+          <p className="text-center text-xs text-muted-foreground" role="status" aria-live="polite">
+            {poseCoaching(pose.block, step.target.axis, pose.progress)}
           </p>
         </div>
       )}

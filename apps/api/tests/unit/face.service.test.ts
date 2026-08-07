@@ -22,11 +22,16 @@ const {
   isFaceVerificationRequired,
   redeemChallenge,
   verifyChallengePose,
+  CHALLENGE_YAW_MIN,
+  CHALLENGE_PITCH_MIN,
   scoreQuality,
   effectiveMatchThreshold,
   assessProvenance,
   recommendMatchThreshold,
-  autoTriageHonestFailures
+  autoTriageHonestFailures,
+  listEnrollmentGaps,
+  FACE_MODEL_VERSION,
+  MULTI_POSE_TEMPLATE_MIN
 } = await import("../../src/services/face.service.js");
 
 // getFaceSettings is exported from the same module under test, so it can't be vi.mock'd out of
@@ -548,5 +553,123 @@ describe("verifyChallengePose", () => {
 
   it("passes a clear tilt for LOOK_UP", () => {
     expect(verifyChallengePose("LOOK_UP", face(0, 0), face(0.05, 0.3)).ok).toBe(true);
+  });
+
+  // The reason drives the refusal copy, and "further" vs "not that way" are opposite
+  // instructions — getting them the wrong way round makes the retry reproduce the failure.
+  it("distinguishes not-far-enough from wrong-axis", () => {
+    // 0.09 rad of yaw — the mean of the 19 measured real-browser failures, against a 0.35 bar.
+    const short = verifyChallengePose("TURN_LEFT", face(0, 0), face(0.09, 0.02));
+    expect(short.reason).toBe("TOO_SMALL");
+    expect(short.achieved).toBeCloseTo(0.09, 5);
+    expect(short.required).toBe(0.35);
+
+    // Turned far enough, but tilted further — the dominance rule, which 8 of those 19 lost on.
+    const offAxis = verifyChallengePose("TURN_LEFT", face(0, 0), face(0.4, 0.6));
+    expect(offAxis.ok).toBe(false);
+    expect(offAxis.reason).toBe("WRONG_AXIS");
+
+    // A tilt asked for and a turn delivered reports on the PITCH axis it demanded.
+    const wrongWay = verifyChallengePose("LOOK_UP", face(0, 0), face(0.6, 0.1));
+    expect(wrongWay.reason).toBe("TOO_SMALL");
+    expect(wrongWay.required).toBe(0.22);
+  });
+
+  it("reports no reason on success", () => {
+    const ok = verifyChallengePose("LOOK_UP", face(0, 0), face(0.05, 0.3));
+    expect(ok.reason).toBeNull();
+    expect(ok.achieved).toBeCloseTo(0.3, 5);
+  });
+
+  // Both thresholds are demonstrably reachable — real users recorded 0.37-0.74 rad of yaw and
+  // 0.21-0.40 of pitch on attempts that cleared this gate. Pinning them here so "the check keeps
+  // failing" is never answered by quietly lowering the bar, which would weaken the only defence
+  // this codebase has against a virtual camera replaying a recording.
+  it("holds the published thresholds", () => {
+    expect(CHALLENGE_YAW_MIN).toBe(0.35);
+    expect(CHALLENGE_PITCH_MIN).toBe(0.22);
+    expect(verifyChallengePose("TURN_LEFT", face(0, 0), face(0.37, 0.05)).ok).toBe(true);
+    expect(verifyChallengePose("LOOK_UP", face(0, 0), face(0.05, 0.21)).ok).toBe(false);
+  });
+});
+
+/**
+ * The classification behind the admin worklist AND behind the reminder endpoint's authorisation —
+ * POST /face/enrollment-gaps/remind only notifies people this function returns, so a user wrongly
+ * included here is a user who can be emailed on demand.
+ */
+describe("listEnrollmentGaps", () => {
+  /** Templates are counted as extras + the primary embedding, exactly as matching does. */
+  function withUsers(users: Array<{ id: string; enrollment?: { id: string; modelVersion?: string }; extras?: number }>) {
+    vi.mocked(client.user.findMany).mockResolvedValue(
+      users.map((u) => ({
+        id: u.id,
+        name: u.id,
+        email: `${u.id}@example.test`,
+        faceEnrollment: u.enrollment
+          ? { id: u.enrollment.id, modelVersion: u.enrollment.modelVersion ?? FACE_MODEL_VERSION, createdAt: new Date() }
+          : null
+      })) as never
+    );
+    vi.mocked(client.faceEnrollmentTemplate.groupBy).mockResolvedValue(
+      users
+        .filter((u) => u.enrollment && u.extras)
+        .map((u) => ({ enrollmentId: u.enrollment!.id, _count: { _all: u.extras } })) as never
+    );
+    vi.mocked(client.notification.groupBy).mockResolvedValue([] as never);
+  }
+
+  it("classifies each covered user by the gap that actually blocks them", async () => {
+    vi.mocked(client.globalFaceVerificationSettings.upsert).mockResolvedValue(settings({ enforcementMode: "ALL" }) as never);
+    withUsers([
+      { id: "none" },
+      { id: "stale", enrollment: { id: "e-stale", modelVersion: "human-2-legacy" }, extras: 5 },
+      { id: "thin", enrollment: { id: "e-thin" } },
+      { id: "good", enrollment: { id: "e-good" }, extras: 3 }
+    ]);
+
+    const gaps = await runInTenant(client, () => listEnrollmentGaps());
+
+    // "good" is absent, and that absence is the assertion: a fully enrolled user must never
+    // appear on a worklist that doubles as the reminder endpoint's allowlist.
+    expect(gaps.map((g) => [g.userId, g.kind])).toEqual([
+      ["none", "NOT_ENROLLED"],
+      ["stale", "STALE_MODEL"],
+      ["thin", "SINGLE_POSE"]
+    ]);
+    // A stale enrollment reports 0 comparable templates however many it holds — templates from a
+    // superseded model cannot be compared against anything.
+    expect(gaps.find((g) => g.userId === "stale")?.templateCount).toBe(0);
+    expect(gaps.find((g) => g.userId === "thin")?.templateCount).toBe(1);
+  });
+
+  it("treats the multi-pose bar as extras + the primary embedding", async () => {
+    vi.mocked(client.globalFaceVerificationSettings.upsert).mockResolvedValue(settings({ enforcementMode: "ALL" }) as never);
+    // 2 extras + primary = 3 = the bar, so this user is NOT a gap. Off-by-one here would nag
+    // somebody who already did the wizard.
+    withUsers([{ id: "boundary", enrollment: { id: "e" }, extras: MULTI_POSE_TEMPLATE_MIN - 1 }]);
+
+    await expect(runInTenant(client, () => listEnrollmentGaps())).resolves.toEqual([]);
+  });
+
+  it("returns nothing when the feature is off or the plan entitlement is gone", async () => {
+    vi.mocked(client.globalFaceVerificationSettings.upsert).mockResolvedValue(settings({ enabled: false }) as never);
+    withUsers([{ id: "none" }]);
+    await expect(runInTenant(client, () => listEnrollmentGaps())).resolves.toEqual([]);
+
+    vi.mocked(client.globalFaceVerificationSettings.upsert).mockResolvedValue(settings({ enforcementMode: "ALL" }) as never);
+    mockIsAllowed.mockResolvedValue(false);
+    await expect(runInTenant(client, () => listEnrollmentGaps())).resolves.toEqual([]);
+  });
+
+  it("in SELECTED mode only considers individually-flagged users", async () => {
+    vi.mocked(client.globalFaceVerificationSettings.upsert).mockResolvedValue(settings() as never);
+    withUsers([{ id: "none" }]);
+
+    await runInTenant(client, () => listEnrollmentGaps());
+
+    expect(vi.mocked(client.user.findMany).mock.calls[0][0]).toMatchObject({
+      where: { faceVerificationRequired: true }
+    });
   });
 });

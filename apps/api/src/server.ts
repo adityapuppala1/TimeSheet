@@ -13,6 +13,7 @@
  * src/server.ts` in dev).
  */
 import type { Server } from "node:http";
+import { closeFileLogging, initFileLogging } from "./config/logger.js";
 import { app } from "./app.js";
 import { controlPrisma } from "./config/control-prisma.js";
 import { env, serverTimezone } from "./config/env.js";
@@ -115,6 +116,10 @@ function assertProductionSafety() {
 }
 
 assertProductionSafety();
+
+// Before anything else this process prints. A no-op unless LOG_DIR is set, and it never throws:
+// an unusable log directory degrades to console-only with one warning (see config/logger.ts).
+initFileLogging();
 
 const server: Server = app.listen(env.API_PORT, async () => {
   /* startup banner below */
@@ -251,6 +256,9 @@ function shutdown(signal: NodeJS.Signals) {
     } catch (error) {
       console.error("[shutdown] prisma disconnect error:", (error as Error).message);
     }
+    // Last, so the two lines above still reach the file. A rolling deploy replaces this process
+    // every release; without the flush its final moments exist only in a container's stdout.
+    closeFileLogging();
     process.exit(err ? 1 : 0);
   });
 }

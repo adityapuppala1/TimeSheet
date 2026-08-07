@@ -15,13 +15,15 @@
     "db:generate": "npm run prisma:generate -w apps/api && npm run control:generate -w apps/api",
     "db:migrate": "npm run prisma:migrate -w apps/api && npm run control:migrate -w apps/api",
     "seed": "npm run seed -w apps/api && npm run control:seed -w apps/api",
-    "setup": "npm install && npm run db:generate && npm run doctor:heal && npm run seed",
+    "setup": "npm install && npm run bootstrap && npm run db:generate && npm run doctor:heal && npm run seed",
     "certs": "node scripts/make-lan-certs.mjs",
     "test:e2e": "playwright test",
     "test:e2e:quick": "playwright test --project=desktop",
     "test:e2e:responsive": "playwright test --project=responsive-phone --project=responsive-tablet --project=responsive-laptop --project=responsive-4k --workers=2",
     "test:e2e:browsers": "playwright test --project=firefox --project=webkit",
-    "test:e2e:report": "playwright show-report"
+    "test:e2e:report": "playwright show-report",
+    "bootstrap": "node scripts/bootstrap-dev.mjs",
+    "bootstrap:sync": "node scripts/bootstrap-dev.mjs --sync"
   },
   "devDependencies": {
     "@playwright/test": "^1.61.1",

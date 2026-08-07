@@ -17,6 +17,7 @@ import { requireTenantContext } from "../config/tenant-context.js";
 import { AppError } from "../middleware/error.js";
 import { env } from "../config/env.js";
 import { dispatchNotification } from "./notify.service.js";
+import { isPrivateIpAddress, parseUserAgent, type DeviceFormFactor } from "../utils/user-agent.js";
 
 import { templates } from "./mail-templates.js";
 
@@ -160,41 +161,94 @@ export async function getOnlineSeenByUser(): Promise<Map<string, Date>> {
   return byUser;
 }
 
+/** One live session, decoded for display. Deliberately NOT the Prisma row: refreshHash and
+ *  previousRefreshHash are credentials and must never leave the service, let alone the API. */
+export interface OnlineSession {
+  id: string;
+  ipAddress: string | null;
+  /** True for LAN/loopback addresses — see utils/user-agent.ts#isPrivateIpAddress for why. */
+  ipIsPrivate: boolean;
+  browser: string;
+  os: string;
+  formFactor: DeviceFormFactor;
+  /** "Chrome on macOS", or "Unknown device" when the UA string couldn't be decoded. */
+  device: string;
+  signedInAt: Date;
+  lastSeenAt: Date | null;
+}
+
+export interface OnlineUser {
+  id: string;
+  name: string;
+  email: string;
+  role: string;
+  lastSeenAt: Date | null;
+  /** Every live session this person has, freshest first — a phone AND a laptop is two entries. */
+  sessions: OnlineSession[];
+}
+
 /**
  * Who is using the app right now. "Online" = an unrevoked, unexpired session whose lastSeenAt is
  * inside the window — expiresAt alone would count everyone who logged in this month.
+ *
+ * ONE ROW PER PERSON, BUT EVERY SESSION ATTACHED. `count` stays a headcount because that is what
+ * the panel's badge, the warn-users flow and the admin's mental model all mean by "online" —
+ * "7 online" that turns out to be 3 people makes an admin over-warn. But the extra sessions are
+ * carried rather than discarded: "who is online" is very often really "why is that account on a
+ * second device", and an answer that silently collapses the two devices destroys the only
+ * evidence of it. `sessionCount` is the honest device-level total alongside the headcount.
  */
-export async function getOnlineUsers(): Promise<{
-  count: number;
-  users: Array<{ id: string; name: string; email: string; role: string; lastSeenAt: Date | null }>;
-}> {
+export async function getOnlineUsers(): Promise<{ count: number; sessionCount: number; users: OnlineUser[] }> {
   const since = new Date(Date.now() - ONLINE_WINDOW_MS);
   const sessions = await prisma.session.findMany({
     where: { revokedAt: null, expiresAt: { gt: new Date() }, lastSeenAt: { gt: since } },
+    // Field-by-field, never a bare `include`: this row also holds refresh-token hashes.
     select: {
+      id: true,
       lastSeenAt: true,
+      createdAt: true,
+      userAgent: true,
+      ipAddress: true,
       user: { select: { id: true, name: true, email: true, deletedAt: true, role: { select: { name: true } } } }
     },
     orderBy: { lastSeenAt: "desc" }
   });
 
-  // One row per person, keeping their most recent activity — several tabs/devices are still one
-  // human, and "7 online" meaning "3 people" makes the admin over-warn.
-  const byUser = new Map<string, { id: string; name: string; email: string; role: string; lastSeenAt: Date | null }>();
+  const byUser = new Map<string, OnlineUser>();
+  let sessionCount = 0;
   for (const session of sessions) {
     if (session.user.deletedAt) continue;
-    if (!byUser.has(session.user.id)) {
-      byUser.set(session.user.id, {
-        id: session.user.id,
-        name: session.user.name,
-        email: session.user.email,
-        role: session.user.role.name,
-        lastSeenAt: session.lastSeenAt
-      });
+    sessionCount += 1;
+    const existing = byUser.get(session.user.id);
+    const parsed = parseUserAgent(session.userAgent);
+    const detail: OnlineSession = {
+      id: session.id,
+      ipAddress: session.ipAddress,
+      ipIsPrivate: isPrivateIpAddress(session.ipAddress),
+      browser: parsed.browser,
+      os: parsed.os,
+      formFactor: parsed.formFactor,
+      device: parsed.label,
+      signedInAt: session.createdAt,
+      lastSeenAt: session.lastSeenAt
+    };
+    if (existing) {
+      // The query is already lastSeenAt-desc, so appending keeps sessions freshest-first and the
+      // user's own lastSeenAt (set from the first session seen) stays the most recent one.
+      existing.sessions.push(detail);
+      continue;
     }
+    byUser.set(session.user.id, {
+      id: session.user.id,
+      name: session.user.name,
+      email: session.user.email,
+      role: session.user.role.name,
+      lastSeenAt: session.lastSeenAt,
+      sessions: [detail]
+    });
   }
   const users = [...byUser.values()];
-  return { count: users.length, users };
+  return { count: users.length, sessionCount, users };
 }
 
 /**

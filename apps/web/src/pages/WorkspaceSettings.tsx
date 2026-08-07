@@ -41,6 +41,7 @@ import {
   AlarmClock,
   BellRing,
   CalendarClock,
+  ChevronRight,
   Check,
   Clock,
   Hourglass,
@@ -108,6 +109,7 @@ import { SecurityDevOpsSettingsCard } from "./settings/SecurityDevOpsSettingsCar
 import { FaceVerificationSettingsCard } from "./settings/FaceVerificationSettingsCard";
 import { MaintenanceSettingsCard } from "./settings/MaintenanceSettingsCard";
 import { PlanningSettingsCard } from "./settings/PlanningSettingsCard";
+import { StorageAndLogsCard } from "./settings/StorageAndLogsCard";
 
 // Matches the exact chart styling convention used in Insights.tsx (this repo's `dataviz`
 // skill): CSS-variable colors only, fixed categorical order never re-cycled by rank.
@@ -275,6 +277,7 @@ export function WorkspaceSettingsPage() {
           <TabsTrigger value="public-api">Public API</TabsTrigger>
           <TabsTrigger value="sso">Single sign-on</TabsTrigger>
           <TabsTrigger value="maintenance">Maintenance</TabsTrigger>
+          <TabsTrigger value="storage">Storage & logs</TabsTrigger>
           <TabsTrigger value="bcc">BCC & forms</TabsTrigger>
         </TabsList>
 
@@ -336,6 +339,12 @@ export function WorkspaceSettingsPage() {
 
         <TabsContent value="maintenance">
           <MaintenanceSettingsCard readOnly={!isSuperAdmin} />
+        </TabsContent>
+
+        {/* No readOnly prop: this tab is diagnostics only — the paths are env-managed and there
+            is nothing on it to write. See StorageAndLogsCard's header for why. */}
+        <TabsContent value="storage">
+          <StorageAndLogsCard />
         </TabsContent>
 
         <TabsContent value="bcc">
@@ -566,6 +575,24 @@ function EmailChannelsCard({ readOnly }: { readOnly: boolean }) {
 
   const columnFullyOn = (role: RoleName) => emailRows.every((row) => !isEmailRoleMuted(mutes, row.key, role));
 
+  // Collapsed sections are held as a set of what's CLOSED, so a group added later opens by
+  // default rather than being invisible until someone thinks to look for it.
+  const [collapsedGroups, setCollapsedGroups] = useState<ReadonlySet<ToggleRow["group"]>>(new Set());
+  const toggleGroup = (group: ToggleRow["group"]) =>
+    setCollapsedGroups((previous) => {
+      const next = new Set(previous);
+      if (!next.delete(group)) next.add(group);
+      return next;
+    });
+
+  /** How many cells in a group are muted — the one fact worth surfacing on a collapsed header,
+   *  since a closed section that is silently muting mail is exactly what this screen exists to
+   *  prevent. `0` renders nothing rather than a "0 muted" badge nobody needs to read. */
+  const mutedCountIn = (group: ToggleRow["group"]) =>
+    emailRows
+      .filter((row) => row.group === group)
+      .reduce((total, row) => total + MATRIX_ROLES.filter((c) => isEmailRoleMuted(mutes, row.key, c.role)).length, 0);
+
   return (
     <Card>
       <CardHeader>
@@ -653,20 +680,38 @@ function EmailChannelsCard({ readOnly }: { readOnly: boolean }) {
                 {EMAIL_GROUP_ORDER.flatMap((group) => {
                   const rowsInGroup = emailRows.filter((row) => row.group === group);
                   if (rowsInGroup.length === 0) return [];
+                  const collapsed = collapsedGroups.has(group);
+                  const mutedInGroup = mutedCountIn(group);
                   return [
                     <tr key={`group-${group}`} className="bg-muted/40">
                       {/* Not sticky, unlike the data rows' first cell: this cell already spans the
                           full table width, so pinning it left would only risk it ghosting over the
-                          columns scrolling beneath a translucent background. */}
-                      <th
-                        scope="colgroup"
-                        colSpan={2 + MATRIX_ROLES.length}
-                        className="px-4 py-2 text-left text-xs font-semibold uppercase tracking-wide text-muted-foreground"
-                      >
-                        {group}
+                          columns scrolling beneath a translucent background.
+
+                          Collapsing hides rows inside ONE table rather than giving each group its
+                          own — separate tables would size their columns independently, and a
+                          matrix whose role columns stop lining up between sections is unreadable. */}
+                      <th scope="colgroup" colSpan={2 + MATRIX_ROLES.length} className="p-0">
+                        <button
+                          type="button"
+                          onClick={() => toggleGroup(group)}
+                          aria-expanded={!collapsed}
+                          className="focus-ring flex w-full items-center gap-2 px-4 py-2 text-left text-xs font-semibold uppercase tracking-wide text-muted-foreground transition hover:text-foreground"
+                        >
+                          <ChevronRight className={`h-3.5 w-3.5 shrink-0 transition-transform ${collapsed ? "" : "rotate-90"}`} />
+                          <span>{group}</span>
+                          <span className="font-normal normal-case text-muted-foreground/70">
+                            {rowsInGroup.length} {rowsInGroup.length === 1 ? "email" : "emails"}
+                          </span>
+                          {mutedInGroup > 0 && (
+                            <Badge variant="muted" className="ml-auto font-normal normal-case">
+                              {mutedInGroup} muted
+                            </Badge>
+                          )}
+                        </button>
                       </th>
                     </tr>,
-                    ...rowsInGroup.map((row) => {
+                    ...(collapsed ? [] : rowsInGroup.map((row) => {
                   const enabled = Boolean(settings.data?.[row.key]);
                   const inputId = `gns-${row.key}`;
                   const isUpdatingThis =
@@ -723,7 +768,7 @@ function EmailChannelsCard({ readOnly }: { readOnly: boolean }) {
                       })}
                     </tr>
                   );
-                    })
+                    }))
                   ];
                 })}
               </tbody>

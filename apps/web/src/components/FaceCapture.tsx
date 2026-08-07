@@ -20,7 +20,7 @@
  * stack vertically under `sm` and sit inline above it.
  */
 import { forwardRef, useCallback, useEffect, useImperativeHandle, useRef, useState } from "react";
-import { Camera, CameraOff, RefreshCw, ShieldCheck } from "lucide-react";
+import { Camera, CameraOff, RefreshCw, ShieldCheck, Users } from "lucide-react";
 import { Button } from "./ui/button";
 import { cn } from "../lib/utils";
 import { useFaceTracker, type FaceTrackerReading } from "../lib/use-face-tracker";
@@ -31,16 +31,25 @@ export type FaceCaptureState = "idle" | "starting" | "ready" | "captured" | "den
  *  grab an EXTRA frame from the live stream without the user pressing anything, read the current
  *  head pose, and read the active camera's label (sent to the server as the virtual-camera review
  *  signal). */
-/** What the head-turn challenge needs from the camera surface: which axis to watch, how far the
- *  server will demand, and the pose the neutral frame was taken at. Given these, the preview can
- *  show a meter that fills as the person turns and fire the shutter the instant it is satisfied —
- *  which is the difference between "turn your head" and knowing when you have turned enough. */
-export interface PoseChallenge {
-  axis: "yaw" | "pitch";
-  /** Radians. Deliberately passed in from the caller, which reads it from the server, so the
-   *  client and the server can never disagree about where the line is. */
-  minDelta: number;
-  neutral: { yaw: number; pitch: number };
+/**
+ * The live head-turn meter, drawn over the preview.
+ *
+ * PRESENTATIONAL ON PURPOSE. This component used to own a second, self-driving copy of the
+ * challenge loop — which nothing ever mounted, because the dialog ran its own. Two loops that
+ * disagreed about the fire threshold and the axis rule is precisely how a bar reading "done" ends
+ * up attached to a refused frame. The measurement now lives in exactly one place
+ * (lib/face-pose.ts) and this just draws what it is told.
+ */
+export interface PoseMeter {
+  /** 0-1. Full at the moment the shutter fires — see PoseTarget#fireMargin for why that is above
+   *  the server's own line rather than exactly on it. */
+  progress: number;
+  /** The single line of coaching for whatever is currently blocking, from `poseCoaching`. */
+  coaching: string;
+  /** Reached. Drives the colour AND the wording — never colour alone. */
+  satisfied: boolean;
+  /** Whole seconds left in the movement window, or null to hide the countdown. */
+  secondsLeft?: number | null;
 }
 
 export interface FaceCaptureHandle {
@@ -77,11 +86,9 @@ interface FaceCaptureProps {
    *  tracker, which needs WebGL; where that is unavailable the manual button remains, unchanged.
    *  Re-arms automatically when `busy` drops back to false. */
   autoCapture?: boolean;
-  /** When set, the preview shows a live "turn further" meter and fires `onCapture` by itself the
-   *  moment the demanded rotation is reached. Null disables it. */
-  poseChallenge?: PoseChallenge | null;
-  /** Fired every tick with the challenge progress 0-1, so the parent can mirror it in its own UI. */
-  onPoseProgress?: (progress: number) => void;
+  /** When set, the preview shows the live "turn further" meter over the video. The parent owns
+   *  the measurement and the shutter; this only draws. Null hides it. */
+  poseMeter?: PoseMeter | null;
   /**
    * Which of this component's own buttons to render.
    * - "full": shutter + "Turn off" (standalone usage).
@@ -107,8 +114,7 @@ export const FaceCapture = forwardRef<FaceCaptureHandle, FaceCaptureProps>(funct
     overlayText = null,
     autoStart = false,
     autoCapture = false,
-    poseChallenge = null,
-    onPoseProgress,
+    poseMeter = null,
     controls = "full"
   }: FaceCaptureProps,
   ref
@@ -125,8 +131,6 @@ export const FaceCapture = forwardRef<FaceCaptureHandle, FaceCaptureProps>(funct
   /** Live, pre-upload coaching from the local quality score ("Move a little closer"). This is
    *  what turns a binary pass/fail into a cooperative interaction. */
   const [liveHint, setLiveHint] = useState<string | null>(null);
-  /** 0-1 progress toward the demanded head rotation, for the on-screen meter. */
-  const [poseProgress, setPoseProgress] = useState(0);
 
   // The live tracker. Only runs while the camera is actually up, so nothing is loaded for a user
   // who never opens it. `status === "unavailable"` (no WebGL, models blocked) simply means the
@@ -198,7 +202,22 @@ export const FaceCapture = forwardRef<FaceCaptureHandle, FaceCaptureProps>(funct
     }
   }, [autoStart, start]);
 
-  /** Grabs one un-mirrored JPEG frame off the live stream, or null when the camera isn't up. */
+  /**
+   * Grabs one un-mirrored JPEG frame off the live stream, or null when the camera isn't up.
+   *
+   * THE WHOLE FRAME GOES UP, DELIBERATELY — and this has been proposed and rejected more than
+   * once, so the reasoning lives here. Cropping to the tracked face box before upload would cut
+   * bandwidth and would make MULTIPLE_FACES rejections disappear. That last part is the problem:
+   * it would make them disappear by hiding the second person from the detector, not by there not
+   * being one. `faceCount > 1` is a security decision — "is somebody standing behind this
+   * employee, coaching or coercing them?" — and the server can only answer it from what it is
+   * sent. Letting the client choose the crop hands that answer to the client, and a client that
+   * decides what the server is allowed to see is not a control at all; anyone could crop from
+   * devtools. The frame stays whole so the server keeps deciding.
+   *
+   * The honest version of "warn me before I'm rejected" is the live multi-face banner below,
+   * which tells the person to move BEFORE the shutter without changing what the server judges.
+   */
   const grabFrame = useCallback((): Promise<Blob | null> => {
     const video = videoRef.current;
     if (!video || !video.videoWidth) return Promise.resolve(null);
@@ -234,7 +253,7 @@ export const FaceCapture = forwardRef<FaceCaptureHandle, FaceCaptureProps>(funct
   // remains entirely the server's call.
   const supportsAutoCapture = autoCapture && tracker.status === "tracking";
   useEffect(() => {
-    if (!supportsAutoCapture || state !== "ready" || busy || poseChallenge) {
+    if (!supportsAutoCapture || state !== "ready" || busy || poseMeter) {
       setScanPhase(null);
       return;
     }
@@ -251,8 +270,8 @@ export const FaceCapture = forwardRef<FaceCaptureHandle, FaceCaptureProps>(funct
     const interval = setInterval(async () => {
       if (cancelled || fired) return;
       const reading = tracker.latest();
-      setLiveHint(reading.hint);
-
+      // The hint itself belongs to the ambient effect below — one owner, so the two loops can't
+      // race each other to write different text into the same line.
       if (reading.faceCount !== 1 || reading.hint !== null) {
         goodTicks = 0;
         best = null;
@@ -270,7 +289,6 @@ export const FaceCapture = forwardRef<FaceCaptureHandle, FaceCaptureProps>(funct
       if (goodTicks >= 3 && best) {
         fired = true;
         setScanPhase(null);
-        setLiveHint(null);
         onCapture(best.blob);
       }
     }, 320);
@@ -278,82 +296,27 @@ export const FaceCapture = forwardRef<FaceCaptureHandle, FaceCaptureProps>(funct
     return () => {
       cancelled = true;
       clearInterval(interval);
-      setLiveHint(null);
     };
-  }, [supportsAutoCapture, state, busy, poseChallenge, grabFrame, onCapture, tracker]);
+  }, [supportsAutoCapture, state, busy, poseMeter, grabFrame, onCapture, tracker]);
 
   /**
-   * The head-turn challenge, closed-loop.
+   * Ambient pre-shutter coaching, whether or not the hands-free scanner is running.
    *
-   * THE PROBLEM THIS SOLVES, measured rather than assumed: in production the challenge failed 107
-   * times against 69 passes, and the recorded yaw deltas on those failures were 0.02-0.26 radians
-   * against a 0.35 requirement. Nobody was refusing to turn their head. The instruction was static
-   * text, the frame was grabbed at a moment the person could not anticipate, and there was no
-   * signal for "further" — so people turned a little, guessed, and were told afterwards that they
-   * had failed. The more it happened the less they trusted it.
-   *
-   * Here the same requirement becomes visible: progress fills as the head turns, and the shutter
-   * fires by itself the moment the server's own threshold is crossed, at the peak of the turn
-   * rather than wherever the person happened to stop. The security property is untouched — the
-   * server still measures the delta itself from the two frames and still decides. This only means
-   * the honest user reliably produces the movement that was asked for.
-   *
-   * A margin above the server's minimum is deliberate: the client and server measure the same
-   * pose from slightly different frames, and firing exactly at the line would land marginal
-   * captures on the wrong side of it.
+   * WHY IT IS SEPARATE FROM THE SCANNER: guidance used to be a side effect of the auto-capture
+   * loop, so it appeared only when auto-capture was armed. Every OTHER path — the manual shutter
+   * after the auto-scan ceiling, the enrollment wizard between steps, any browser where
+   * auto-capture is off — showed a live preview with no feedback at all, which is the exact
+   * "press the button and find out afterwards" flow that produced unexplained rejections. The
+   * hint is the cheap half of the fix and it belongs to the preview, not to one of its modes.
    */
-  const CHALLENGE_FIRE_MARGIN = 1.15;
   useEffect(() => {
-    if (!poseChallenge || state !== "ready" || busy || tracker.status !== "tracking") {
-      setPoseProgress(0);
-      return;
-    }
-    let cancelled = false;
-    let fired = false;
-    let bestDelta = 0;
-    let bestBlob: Blob | null = null;
-
-    const interval = setInterval(async () => {
-      if (cancelled || fired) return;
-      const reading = tracker.latest();
-      if (reading.faceCount !== 1) {
-        setLiveHint(reading.faceCount === 0 ? "Keep your face in view" : "Make sure you're alone in the frame");
-        return;
-      }
-      setLiveHint(null);
-
-      const yawDelta = Math.abs(reading.yaw - poseChallenge.neutral.yaw);
-      const pitchDelta = Math.abs(reading.pitch - poseChallenge.neutral.pitch);
-      const onAxis = poseChallenge.axis === "yaw" ? yawDelta : pitchDelta;
-      const offAxis = poseChallenge.axis === "yaw" ? pitchDelta : yawDelta;
-
-      const progress = Math.max(0, Math.min(1, onAxis / poseChallenge.minDelta));
-      setPoseProgress(progress);
-      onPoseProgress?.(progress);
-
-      // The server also requires the demanded axis to DOMINATE, so a shrug that happens to move
-      // both is not accepted. Mirroring that here keeps the client from firing on a frame the
-      // server will then reject.
-      if (onAxis >= poseChallenge.minDelta * CHALLENGE_FIRE_MARGIN && onAxis >= offAxis) {
-        const blob = await grabFrame();
-        if (cancelled || fired) return;
-        if (blob && onAxis > bestDelta) {
-          bestDelta = onAxis;
-          bestBlob = blob;
-        }
-        if (bestBlob) {
-          fired = true;
-          setPoseProgress(1);
-          onCapture(bestBlob);
-        }
-      }
-    }, 90);
-
+    if (state !== "ready" || tracker.status !== "tracking" || poseMeter) return;
+    const interval = setInterval(() => setLiveHint(tracker.latest().hint), 200);
     return () => {
-      cancelled = true;
       clearInterval(interval);
+      setLiveHint(null);
     };
-  }, [poseChallenge, state, busy, tracker, grabFrame, onCapture, onPoseProgress]);
+  }, [state, tracker, poseMeter]);
 
   const captureBurst = useCallback(
     async (count: number, gapMs = 260): Promise<Blob[]> => {
@@ -415,8 +378,25 @@ export const FaceCapture = forwardRef<FaceCaptureHandle, FaceCaptureProps>(funct
             </div>
           )}
 
-          {live && !overlayText && scanPhase && (
-            <div role="status" className="pointer-events-none absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/75 to-transparent px-3 pb-3 pt-8 text-center">
+          {/* SECOND FACE, BEFORE the shutter rather than after the rejection. The server decides
+              MULTIPLE_FACES on the frame it receives and nothing here changes that — this is a
+              chance to step out of shot instead of submitting and being refused. It warns, it
+              does not block: the detector is a guidance model, and letting it veto a capture
+              would strand anyone it mis-fires on (a poster, a reflection) with no way through. */}
+          {live && tracker.status === "tracking" && tracker.reading.faceCount > 1 && (
+            <div
+              role="alert"
+              className="pointer-events-none absolute inset-x-2 top-2 flex items-center justify-center gap-1.5 rounded-lg bg-amber-500 px-2 py-1.5 text-center"
+            >
+              <Users className="h-3.5 w-3.5 shrink-0 text-amber-950" />
+              <span className="text-[11px] font-semibold leading-tight text-amber-950">
+                {tracker.reading.faceCount} faces in view — you need to be alone in frame
+              </span>
+            </div>
+          )}
+
+          {live && !overlayText && (liveHint || scanPhase) && (
+            <div role="status" aria-live="polite" className="pointer-events-none absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/75 to-transparent px-3 pb-3 pt-8 text-center">
               <p className="text-sm font-semibold text-white drop-shadow">
                 {liveHint ?? (scanPhase === "locking" ? "Hold still…" : "Looking for you — face the camera")}
               </p>
@@ -424,24 +404,35 @@ export const FaceCapture = forwardRef<FaceCaptureHandle, FaceCaptureProps>(funct
           )}
 
           {live && overlayText && (
-            /* Challenge instruction + countdown, announced for screen readers too. */
+            /* Challenge instruction + meter, announced for screen readers too. */
             <div role="status" className="pointer-events-none absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/75 to-transparent px-3 pb-3 pt-8 text-center">
               <p className="text-sm font-semibold text-white drop-shadow sm:text-base">{overlayText}</p>
-              {poseChallenge && (
+              {poseMeter && (
                 <>
                   {/* The bar IS the fix. The requirement never changed — what changed is that it
-                      is now visible while you move, instead of being scored after you guess. */}
-                  <div className="mx-auto mt-2 h-1.5 w-40 overflow-hidden rounded-full bg-white/25 sm:w-52">
+                      is now visible while you move, instead of being scored after you guess.
+                      It lives ON the video because that is where the person is looking while
+                      their head is moving. aria-valuenow carries the same number for anyone who
+                      cannot see the fill; the coaching line below never depends on colour. */}
+                  <div
+                    role="progressbar"
+                    aria-label="Head movement progress"
+                    aria-valuemin={0}
+                    aria-valuemax={100}
+                    aria-valuenow={Math.round(poseMeter.progress * 100)}
+                    className="mx-auto mt-2 h-1.5 w-40 overflow-hidden rounded-full bg-white/25 sm:w-52"
+                  >
                     <div
                       className={cn(
-                        "h-full rounded-full transition-[width,background-color] duration-100",
-                        poseProgress >= 1 ? "bg-success" : "bg-primary"
+                        "h-full rounded-full motion-safe:transition-[width,background-color] motion-safe:duration-100",
+                        poseMeter.satisfied ? "bg-success" : "bg-primary"
                       )}
-                      style={{ width: `${Math.round(poseProgress * 100)}%` }}
+                      style={{ width: `${Math.round(poseMeter.progress * 100)}%` }}
                     />
                   </div>
                   <p className="mt-1 text-xs font-medium text-white/90 drop-shadow">
-                    {liveHint ?? (poseProgress >= 1 ? "Got it" : poseProgress > 0.55 ? "Keep going…" : "Turn a little further")}
+                    {poseMeter.coaching}
+                    {poseMeter.secondsLeft != null && !poseMeter.satisfied ? ` · ${poseMeter.secondsLeft}s` : ""}
                   </p>
                 </>
               )}
@@ -450,14 +441,17 @@ export const FaceCapture = forwardRef<FaceCaptureHandle, FaceCaptureProps>(funct
 
           {/* Live quality ring — the ambient "the camera can see you properly" signal. Shown only
               while tracking and not mid-challenge, where the pose bar is the thing to watch. */}
-          {live && tracker.status === "tracking" && !poseChallenge && tracker.reading.faceCount === 1 && (
-            <div aria-hidden className="pointer-events-none absolute right-2 top-2 flex items-center gap-1.5 rounded-full bg-black/45 px-2 py-1">
+          {live && tracker.status === "tracking" && !poseMeter && tracker.reading.faceCount === 1 && (
+            <div className="pointer-events-none absolute right-2 top-2 flex items-center gap-1.5 rounded-full bg-black/45 px-2 py-1">
               <span
+                aria-hidden
                 className={cn(
                   "h-2 w-2 rounded-full",
                   tracker.reading.quality > 0.7 ? "bg-success" : tracker.reading.quality > 0.4 ? "bg-warning" : "bg-destructive"
                 )}
               />
+              {/* The word, not just the dot — the ring is the one place a colour could have been
+                  the whole message. */}
               <span className="text-[10px] font-semibold uppercase tracking-wide text-white/90">
                 {tracker.reading.quality > 0.7 ? "Good" : tracker.reading.quality > 0.4 ? "Fair" : "Poor"}
               </span>

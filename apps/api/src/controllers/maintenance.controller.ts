@@ -51,6 +51,11 @@ maintenanceRouter.get("/status", async (_req, res) => {
 
 /* ---------------------------- SUPER_ADMIN surface ---------------------------- */
 
+/**
+ * The online list carries per-session device and IP — personal data about OTHER people, which is
+ * why this route is SUPER_ADMIN-gated and why nothing else exposes the same payload. Widening the
+ * gate here widens who can see where every employee is signing in from.
+ */
 maintenanceRouter.get("/admin", requireAuth, requireSuperAdmin, async (_req, res) => {
   const [settings, online] = await Promise.all([getMaintenanceSettings(), getOnlineUsers()]);
   res.json({ settings, phase: phaseOf(settings), online });

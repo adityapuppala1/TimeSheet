@@ -42,6 +42,9 @@ import {
   isFaceFeatureAllowedForOrg,
   isFaceVerificationRequired,
   issueChallenge,
+  listEnrollmentGaps,
+  MULTI_POSE_TEMPLATE_MIN,
+  notifyEnrollmentRequired,
   CHALLENGE_AXIS,
   CHALLENGE_YAW_MIN,
   CHALLENGE_PITCH_MIN,
@@ -54,6 +57,8 @@ import {
   similarity,
   storeFaceImage,
   verifyChallengePose,
+  type ChallengeInstruction,
+  type ChallengePoseResult,
   type FaceAnalysis,
   type FaceContext,
   type FaceOutcome
@@ -129,7 +134,9 @@ faceRouter.get("/status", async (req, res) => {
      * happen — the UI should offer retraining, not force it: fewer templates is degraded
      * accuracy, never a lockout.
      */
-    needsBetterEnrollment: Boolean(enrollment && enrollment.modelVersion === FACE_MODEL_VERSION && templateCount < 3),
+    needsBetterEnrollment: Boolean(
+      enrollment && enrollment.modelVersion === FACE_MODEL_VERSION && templateCount < MULTI_POSE_TEMPLATE_MIN
+    ),
     enrolledAt: enrollment?.createdAt ?? null,
     consentAt: enrollment?.consentAt ?? null,
     consentText: settings.consentText?.trim() || DEFAULT_CONSENT_TEXT,
@@ -180,6 +187,36 @@ faceRouter.post("/challenge", validate(challengeSchema), async (req, res) => {
     minDelta: axis === "yaw" ? CHALLENGE_YAW_MIN : CHALLENGE_PITCH_MIN
   });
 });
+
+/**
+ * The refusal message for a failed head-turn, written from what was actually measured.
+ *
+ * WHY THE SERVER OWNS THIS WORDING rather than the client mapping an outcome code: the client
+ * never sees the deltas the decision was made on, so any advice it invents is a guess about a
+ * number it does not have. The measured failures split cleanly — most people moved a fraction of
+ * the way, a minority moved the wrong axis entirely — and those two need opposite instructions.
+ * One sentence covering both ("make the movement clearly") is advice for neither.
+ */
+function describeChallengeRefusal(
+  instruction: ChallengeInstruction,
+  pose: ChallengePoseResult,
+  gestureFaceCount: number
+): string {
+  if (gestureFaceCount === 0) return "We lost sight of your face during the movement. Stay in frame while you move, then try again.";
+  if (gestureFaceCount > 1) return "More than one face was in the second frame. Please make sure you're alone in shot and try again.";
+
+  const turning = instruction !== "LOOK_UP";
+  if (pose.reason === "WRONG_AXIS") {
+    return turning
+      ? "That read as a tilt rather than a turn. Keep your head level and turn to one side, then try again."
+      : "That read as a turn rather than a tilt. Keep facing the camera and lift your chin, then try again.";
+  }
+  const pct = Math.min(99, Math.max(0, Math.round((pose.achieved / pose.required) * 100)));
+  const move = turning ? "turn a little further" : "lift your chin a little further";
+  return pct >= 15
+    ? `That movement was about ${pct}% of what we need — ${move} and hold it for a moment, then try again.`
+    : "We couldn't see the requested head movement — face the camera, then make the movement clearly and hold it for a moment.";
+}
 
 const enrollSchema = z.object({ body: z.object({ consent: z.string() }) });
 
@@ -491,7 +528,7 @@ faceRouter.post("/verify", preserveTenantContext(faceCaptureUpload.array("captur
         outcome: "CHALLENGE_FAILED",
         attemptId: attempt.id,
         flagged: attempt.flaggedForReview,
-        message: "We couldn't see the requested head movement — face the camera, then make the movement clearly and try again."
+        message: describeChallengeRefusal(instruction, pose, gestureAnalysis.faceCount)
       });
     }
   }
@@ -1079,7 +1116,7 @@ faceRouter.get("/analytics", requireAdmin, validate(analyticsQuerySchema), async
 
   let multiPose = 0;
   for (const id of currentModelIds) {
-    if ((extraTemplates.get(id) ?? 0) + 1 >= 3) multiPose++;
+    if ((extraTemplates.get(id) ?? 0) + 1 >= MULTI_POSE_TEMPLATE_MIN) multiPose++;
   }
 
   res.json({
@@ -1108,6 +1145,62 @@ faceRouter.get("/analytics", requireAdmin, validate(analyticsQuerySchema), async
       singlePose: currentModelIds.size - multiPose
     }
   });
+});
+
+/**
+ * GET /face/enrollment-gaps — the per-user worklist behind the coverage chart: who is not
+ * enrolled, who is stuck on a superseded model, and who has a single-pose model.
+ *
+ * WHY this is a separate route from /face/analytics: analytics returns COUNTS and stays constant
+ * weight for any workforce size. This returns rows, and rows are what an admin can act on — a
+ * chart saying "3 single-pose" cannot be chased, and single-pose users are the measured cause of
+ * this workspace's NO_MATCH rate. Admin-only, and it deliberately carries no scores or biometrics.
+ */
+faceRouter.get("/enrollment-gaps", requireAdmin, async (_req, res) => {
+  const gaps = await listEnrollmentGaps();
+  res.json({
+    multiPoseTemplateMin: MULTI_POSE_TEMPLATE_MIN,
+    gaps,
+    counts: {
+      notEnrolled: gaps.filter((g) => g.kind === "NOT_ENROLLED").length,
+      staleModel: gaps.filter((g) => g.kind === "STALE_MODEL").length,
+      singlePose: gaps.filter((g) => g.kind === "SINGLE_POSE").length
+    }
+  });
+});
+
+const remindSchema = z.object({ body: z.object({ userIds: z.array(z.string().min(1)).min(1).max(500) }) });
+
+/**
+ * POST /face/enrollment-gaps/remind — nudges the selected users, reusing the same
+ * `face.enrollment_reminder` notification the daily worker sends (dedupe window and all), with
+ * wording chosen per user from the gap they actually have.
+ *
+ * The request is INTERSECTED with the current gap list rather than trusted: an admin must not be
+ * able to turn this into a general-purpose "email any user" endpoint by posting arbitrary ids, and
+ * a user who fixed their enrollment between page load and click must not be told to fix it again.
+ * `sent < matched` is normal — notifyEnrollmentRequired drops anyone nudged in the last 72h.
+ */
+faceRouter.post("/enrollment-gaps/remind", requireAdmin, validate(remindSchema), async (req, res) => {
+  const requested: string[] = req.body.userIds;
+  const gaps = await listEnrollmentGaps();
+  const wanted = new Set(requested);
+  const targets = gaps.filter((g) => wanted.has(g.userId));
+
+  const thin = targets.filter((g) => g.kind === "SINGLE_POSE").map((g) => g.userId);
+  const missing = targets.filter((g) => g.kind !== "SINGLE_POSE").map((g) => g.userId);
+  const sent =
+    (await notifyEnrollmentRequired(thin, "face.enrollment_reminder", "thin-enrollment")) +
+    (await notifyEnrollmentRequired(missing, "face.enrollment_reminder"));
+
+  if (sent > 0) {
+    await audit(req.user!.id, "face.enrollment_reminded", "User", undefined, {
+      matched: targets.length,
+      sent,
+      thin: thin.length
+    });
+  }
+  res.json({ requested: requested.length, matched: targets.length, sent, skipped: targets.length - sent });
 });
 
 /**

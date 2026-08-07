@@ -13,6 +13,7 @@ import { MaintenanceBanner } from "../components/MaintenanceBanner";
 import { authApi } from "../services/api";
 import { PasswordChangeBanner } from "../components/PasswordChangeBanner";
 import { OnboardingGate } from "../components/OnboardingGate";
+import { FaceModelUpgradePrompt } from "../components/FaceModelUpgradePrompt";
 import { SessionEndedDialog } from "../components/SessionEndedDialog";
 import { MobileNav, Sidebar } from "../components/Sidebar";
 import { Topbar } from "../components/Topbar";
@@ -63,6 +64,9 @@ export function AppLayout() {
           unmounting the app would destroy in-progress state, and the gate lifts on its own the
           moment the server says the requirements are met. */}
       <OnboardingGate />
+      {/* Deliberately BELOW the gate: an unenrolled user is held by OnboardingGate and has no
+          thin model to improve, so the two can never stack. Dismissible, never blocking. */}
+      <FaceModelUpgradePrompt />
       {/* Heartbeat + "you've been signed out" dialog — how an admin's force-logout reaches
           this tab within seconds rather than on the next hard refresh. */}
       <SessionEndedDialog />

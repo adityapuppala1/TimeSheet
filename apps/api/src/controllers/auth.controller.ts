@@ -12,6 +12,7 @@ import path from "node:path";
 import { Router } from "express";
 import { z } from "zod";
 import { env } from "../config/env.js";
+import { avatarsDir, resolveWithin } from "../config/storage-paths.js";
 import { prisma } from "../config/prisma.js";
 import { controlPrisma } from "../config/control-prisma.js";
 import { requireTenantContext } from "../config/tenant-context.js";
@@ -253,11 +254,32 @@ authRouter.patch("/profile", requireAuth, validate(profilePatchSchema), async (r
   res.json(await buildProfilePayload(req.user!.id));
 });
 
+/**
+ * Maps a stored `User.avatarUrl` back to the file it names, or `null` if it names nothing we own.
+ *
+ * The value comes out of the database, but it was ALSO written there by this controller in two
+ * different shapes across two versions (flat `avatars/<file>`, and per-user `avatars/<id>/<file>`),
+ * so it can't be parsed by assuming either. `resolveWithin` is what makes reading it safe: the
+ * relative part is joined onto the avatars directory and rejected outright if it lands anywhere
+ * else, so even a row someone managed to poison can only ever address a file inside that tree.
+ */
+function resolveAvatarFile(avatarUrl: string | null | undefined): string | null {
+  const prefix = "/uploads/avatars/";
+  if (!avatarUrl?.startsWith(prefix)) return null;
+  return resolveWithin(avatarsDir(), decodeURIComponent(avatarUrl.slice(prefix.length)));
+}
+
 authRouter.post("/avatar", requireAuth, preserveTenantContext(avatarUpload.single("avatar")), async (req, res) => {
   const file = (req as any).file as Express.Multer.File | undefined;
   if (!file?.buffer) throw new AppError(422, "No avatar file provided");
 
-  const destDir = path.join(env.UPLOAD_DIR, "avatars");
+  // Per-user subdirectory: an avatar tree with one flat directory per install becomes tens of
+  // thousands of sibling files (every re-upload adds one until the old is unlinked), which is
+  // slow to list and impossible to reason about when someone asks "delete this person's data".
+  // Legacy flat avatars are untouched and keep serving — see the deletion path below, which
+  // resolves whatever URL is on the row rather than assuming either layout.
+  const destDir = path.join(avatarsDir(), req.user!.id);
+  await fs.promises.mkdir(destDir, { recursive: true });
   let processed;
   try {
     processed = await processAvatar(file.buffer, req.user!.id, destDir);
@@ -266,7 +288,7 @@ authRouter.post("/avatar", requireAuth, preserveTenantContext(avatarUpload.singl
   }
 
   const before = await prisma.user.findUnique({ where: { id: req.user!.id }, select: { avatarUrl: true } });
-  const avatarUrl = `/uploads/avatars/${processed.filename}`;
+  const avatarUrl = `/uploads/avatars/${req.user!.id}/${processed.filename}`;
 
   await prisma.user.update({ where: { id: req.user!.id }, data: { avatarUrl } });
   await audit(req.user!.id, "user.avatar_updated", "User", req.user!.id, {
@@ -276,10 +298,8 @@ authRouter.post("/avatar", requireAuth, preserveTenantContext(avatarUpload.singl
     mimeType: processed.mimeType
   });
 
-  if (before?.avatarUrl && before.avatarUrl.startsWith("/uploads/avatars/")) {
-    const oldPath = path.join(env.UPLOAD_DIR, "avatars", path.basename(before.avatarUrl));
-    fs.promises.unlink(oldPath).catch(() => undefined);
-  }
+  const oldPath = resolveAvatarFile(before?.avatarUrl);
+  if (oldPath) fs.promises.unlink(oldPath).catch(() => undefined);
 
   res.json(await buildProfilePayload(req.user!.id));
 });
@@ -288,9 +308,7 @@ authRouter.delete("/avatar", requireAuth, async (req, res) => {
   const before = await prisma.user.findUnique({ where: { id: req.user!.id }, select: { avatarUrl: true } });
   await prisma.user.update({ where: { id: req.user!.id }, data: { avatarUrl: null } });
   await audit(req.user!.id, "user.avatar_removed", "User", req.user!.id);
-  if (before?.avatarUrl && before.avatarUrl.startsWith("/uploads/avatars/")) {
-    const oldPath = path.join(env.UPLOAD_DIR, "avatars", path.basename(before.avatarUrl));
-    fs.promises.unlink(oldPath).catch(() => undefined);
-  }
+  const oldPath = resolveAvatarFile(before?.avatarUrl);
+  if (oldPath) fs.promises.unlink(oldPath).catch(() => undefined);
   res.json(await buildProfilePayload(req.user!.id));
 });

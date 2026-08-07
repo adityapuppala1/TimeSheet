@@ -334,16 +334,29 @@ export const templates = {
      archived, and read on unmanaged devices, so they say THAT something needs attention and
      link into the app, where authorization is actually checked. ---- */
 
-  faceEnrollmentRequired: (params: { name: string; reminder?: boolean }) =>
+  /** `thin` addresses somebody who IS enrolled but whose model holds a single angle — a different
+   *  ask from "enroll", and telling an enrolled person to enroll is how a nudge gets ignored. */
+  faceEnrollmentRequired: (params: { name: string; reminder?: boolean; thin?: boolean }) =>
     shell(
-      { title: "Set up face verification", preheader: "Your workspace requires an identity check for some actions." },
-      heading(`Hi ${escape(params.name.split(" ")[0])}, one quick setup step`) +
+      {
+        title: params.thin ? "Improve your face model" : "Set up face verification",
+        preheader: params.thin
+          ? "Your identity checks are failing because your face model holds one angle."
+          : "Your workspace requires an identity check for some actions."
+      },
+      heading(
+        params.thin
+          ? `Hi ${escape(params.name.split(" ")[0])}, fifteen seconds fixes your failed checks`
+          : `Hi ${escape(params.name.split(" ")[0])}, one quick setup step`
+      ) +
         paragraph(
-          params.reminder
-            ? "A reminder: your workspace requires a face identity check for some of your actions, and you haven't enrolled yet. Until you do, those submissions will be held up."
-            : "Your workspace now requires a quick face identity check for some of your actions (like submitting a timesheet). Enrolling takes under a minute — you'll review and agree to a consent notice first."
+          params.thin
+            ? "Your face was enrolled from a single angle, so identity checks taken from any other angle come back as a non-match. Retraining walks you through four quick head positions and replaces your reference set — it is the one change most likely to stop the failures."
+            : params.reminder
+              ? "A reminder: your workspace requires a face identity check for some of your actions, and you haven't enrolled yet. Until you do, those submissions will be held up."
+              : "Your workspace now requires a quick face identity check for some of your actions (like submitting a timesheet). Enrolling takes under a minute — you'll review and agree to a consent notice first."
         ) +
-        paragraph(button("Enroll in your profile", appUrl("/app/profile"))) +
+        paragraph(button(params.thin ? "Retrain in your profile" : "Enroll in your profile", appUrl("/app/profile"))) +
         paragraph(`<span style="color:${MUTED};">Why this exists: it confirms the person submitting is the account owner. Your face data is encrypted, never shared, and you can delete it from your profile at any time.</span>`)
     ),
 

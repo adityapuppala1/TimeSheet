@@ -816,7 +816,8 @@ export function UsersPage() {
             <AlertDialogTitle>Reset password for {pendingReset?.name}?</AlertDialogTitle>
             <AlertDialogDescription>
               A random one-time password is generated and shown to you exactly once — share it securely.
-              They'll be prompted to choose their own at next sign-in.
+              They'll be prompted to choose their own at next sign-in, and they're signed out on every device
+              they're currently using.
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>

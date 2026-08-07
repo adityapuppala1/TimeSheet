@@ -25,11 +25,13 @@
  * lighting and glasses make honest failures common, so the copy never accuses.
  */
 import { useCallback, useEffect, useRef, useState } from "react";
-import { ShieldAlert, ShieldCheck } from "lucide-react";
+import { Link } from "react-router";
+import { ScanFace, ShieldAlert, ShieldCheck } from "lucide-react";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "./ui/dialog";
 import { Button } from "./ui/button";
 import { FaceCapture, type FaceCaptureHandle } from "./FaceCapture";
 import { faceApi, type FaceChallenge, type FaceOutcome } from "../services/api";
+import { awaitPose, poseCoaching, type PoseBlock } from "../lib/face-pose";
 import { cn } from "../lib/utils";
 import { isSecureContext } from "../lib/clipboard";
 import { useFaceStatus } from "../lib/use-face-status";
@@ -65,17 +67,66 @@ const FRIENDLY: Record<FaceOutcome, string> = {
  * How long to wait for the head movement before giving up on it.
  *
  * This REPLACED a fixed 3-second countdown, and the reason is the most instructive number in this
- * feature: in production the challenge failed 107 times against 69 passes, with recorded yaw
- * deltas of 0.02-0.26 radians against a 0.35 requirement. The countdown grabbed whatever frame
- * existed when the timer expired — which, for someone who turned early and relaxed, or who turned
- * slowly and was still moving, was routinely a frame with almost no rotation in it. People were
- * being failed for the timing of their movement rather than its absence.
+ * feature. Of the 107 recorded CHALLENGE_FAILED attempts, 19 came from a real browser (the rest
+ * were a scripted load posting one frame twice, or a stale challenge id). EVERY ONE of those 19
+ * fell SHORT on the demanded axis — mean 0.09 rad against a 0.35 yaw requirement, 0.12 against a
+ * 0.22 pitch one, roughly a quarter of the way. Not one failed for turning far enough in the
+ * wrong direction. People were not refusing to move their heads; they had no way to know how far
+ * was far enough, and the countdown then grabbed whatever frame the timer landed on.
  *
  * Now the shutter is fired by the movement itself, at the peak of the turn, and this is only the
- * ceiling on how long to keep watching. Generous on purpose: an unhurried, correct capture beats
- * a fast wrong one, and the challenge's own server-side lifetime (90s) is the real bound.
+ * ceiling on how long to keep watching. Raised from 9s to match enrollment's per-step window: the
+ * meter means the window is now spent doing something useful — reading the instruction, moving,
+ * watching the bar — rather than waiting out a timer, and an unhurried correct capture beats a
+ * fast wrong one. The challenge's own server-side lifetime (90s) is the real bound.
  */
-const GESTURE_WINDOW_MS = 9000;
+const GESTURE_WINDOW_MS = 12_000;
+
+/**
+ * Fire the shutter this far ABOVE the server's stated minimum.
+ *
+ * The client measures pose from the preview stream; the server re-measures from the two JPEGs it
+ * receives, at a different instant and a different resolution. Firing exactly on the line lands a
+ * meaningful share of captures on the wrong side of it — and a check refused after the meter read
+ * "done" makes the feature look broken rather than strict, which is worse than showing no meter.
+ * 1.15 is about 3° of extra yaw: unnoticeable to perform, comfortably outside the disagreement.
+ *
+ * This only ever TIGHTENS what the client submits. The server still measures the delta itself and
+ * still decides; nothing here can make a movement acceptable that the server would refuse.
+ */
+const CHALLENGE_FIRE_MARGIN = 1.15;
+
+/**
+ * Turns a missed movement into something the person can act on next time.
+ *
+ * The old copy said "we couldn't see the head movement" whether they had moved 5% of the way or
+ * had tilted when asked to turn — and the measured failures were overwhelmingly the former, with
+ * a meaningful minority of the latter (8 of the 19 real-browser failures had the wrong axis
+ * dominating). A number and a direction are the two things that make the retry different from
+ * the attempt.
+ *
+ * The percentage is against the same point the meter fills to, so the message and the bar can
+ * never tell the person two different stories about how close they got.
+ */
+function describeMiss(block: PoseBlock, bestDelta: number, challenge: FaceChallenge): string {
+  switch (block) {
+    case "no-face":
+      return "We lost sight of your face while you moved. Keep looking towards the camera as you turn, and try again.";
+    case "multiple-faces":
+      return "Someone else came into frame during the check. Make sure you're alone in shot, then try again.";
+    case "wrong-axis":
+      return challenge.axis === "yaw"
+        ? "That read as a tilt rather than a turn. Keep your head level and turn to one side until the bar fills."
+        : "That read as a turn rather than a tilt. Keep facing the camera and lift your chin until the bar fills.";
+    default: {
+      const pct = Math.min(99, Math.round((bestDelta / (challenge.minDelta * CHALLENGE_FIRE_MARGIN)) * 100));
+      const move = challenge.axis === "yaw" ? "Turn your head to one side" : "Tilt your head up";
+      return pct >= 15
+        ? `You got about ${pct}% of the way. ${move} a little further and hold it until the bar fills.`
+        : `We didn't see the movement. ${move} until the bar fills, then hold it for a moment.`;
+    }
+  }
+}
 
 /** Hands-free attempts before the dialog falls back to the manual button. A ceiling, because
  *  an auto-retrying scanner pointed at the WRONG face would otherwise hammer the rate limit
@@ -90,13 +141,23 @@ export function FaceVerificationDialog({ open, onOpenChange, context, onVerified
   const [message, setMessage] = useState<string | null>(null);
   const [tone, setTone] = useState<"info" | "error" | "success">("info");
   const [flagged, setFlagged] = useState(false);
+  /** The last refusal, so the dialog can offer the fix that actually matches it — a thin
+   *  enrollment and a missed head-turn need completely different advice. */
+  const [lastOutcome, setLastOutcome] = useState<FaceOutcome | null>(null);
   const [overlay, setOverlay] = useState<string | null>(null);
-  /** 0-1 progress through the demanded head movement, mirrored under the preview so the person
-   *  can see they are getting there. The whole point of the rework. */
-  const [poseProgress, setPoseProgress] = useState(0);
+  /** The live state of the head movement: how far through, what is currently blocking, and how
+   *  long is left. The whole point of the rework — the requirement was always this, it was just
+   *  invisible until the frame had already been judged. */
+  const [pose, setPose] = useState<{ progress: number; block: PoseBlock }>({ progress: 0, block: "short" });
+  const [secondsLeft, setSecondsLeft] = useState<number | null>(null);
+  /** The challenge being performed right now — kept in state because the coaching copy needs its
+   *  axis, and the meter needs to know it is running at all. */
+  const [activeChallenge, setActiveChallenge] = useState<FaceChallenge | null>(null);
   /** Set when this attempt starts, so the server can be told what the human actually waited
    *  for — the number the <1s p50 budget is tracked against. */
   const startedAtRef = useRef<number | null>(null);
+  /** Wall-clock end of the movement window, so the countdown and the loop can't disagree. */
+  const gestureDeadlineRef = useRef<number | null>(null);
 
   const status = useFaceStatus(open);
   const challengeOn = status.data?.challengeEnabled ?? true;
@@ -132,59 +193,39 @@ export function FaceVerificationDialog({ open, onOpenChange, context, onVerified
       setMessage(null);
       setTone("info");
       setFlagged(false);
+      setLastOutcome(null);
       setBusy(false);
       setOverlay(null);
+      setActiveChallenge(null);
+      setSecondsLeft(null);
+      setPose({ progress: 0, block: "short" });
     } else {
       cancelledRef.current = true;
     }
   }, [open]);
+
+  // The countdown that goes with the meter. Time pressure has to be VISIBLE: a window that
+  // expires silently is indistinguishable from a check that has hung, and both end with the
+  // person closing the dialog.
+  useEffect(() => {
+    if (!activeChallenge) {
+      setSecondsLeft(null);
+      return;
+    }
+    const tick = () => {
+      const remaining = gestureDeadlineRef.current ? gestureDeadlineRef.current - Date.now() : 0;
+      setSecondsLeft(Math.max(0, Math.ceil(remaining / 1000)));
+    };
+    tick();
+    const id = setInterval(tick, 250);
+    return () => clearInterval(id);
+  }, [activeChallenge]);
 
   // Hands-free while the first attempts are honest misses; manual after the ceiling so a
   // wrong-face loop can't keep firing on its own.
   const autoScanActive = attempts < MAX_AUTO_ATTEMPTS;
 
   const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
-
-  /**
-   * Watches the live head pose and returns the frame at the PEAK of the movement, rather than
-   * whichever frame a timer landed on.
-   *
-   * "Peak" matters: people overshoot and settle back, so the best evidence that the movement
-   * happened is the largest delta seen during the window, not the delta at the end of it. The
-   * server's own axis-dominance rule is mirrored here so the client never submits a frame that
-   * satisfies the magnitude but fails the axis test.
-   */
-  const awaitPose = useCallback(
-    async (challenge: FaceChallenge, neutral: { yaw: number; pitch: number }): Promise<Blob | null> => {
-      const deadline = Date.now() + GESTURE_WINDOW_MS;
-      let best: { blob: Blob; delta: number } | null = null;
-
-      while (Date.now() < deadline && !cancelledRef.current) {
-        const reading = captureRef.current?.getReading();
-        if (reading && reading.faceCount === 1) {
-          const yawDelta = Math.abs(reading.yaw - neutral.yaw);
-          const pitchDelta = Math.abs(reading.pitch - neutral.pitch);
-          const onAxis = challenge.axis === "yaw" ? yawDelta : pitchDelta;
-          const offAxis = challenge.axis === "yaw" ? pitchDelta : yawDelta;
-
-          setPoseProgress(Math.max(0, Math.min(1, onAxis / challenge.minDelta)));
-
-          if (onAxis >= challenge.minDelta && onAxis >= offAxis) {
-            const blob = await captureRef.current?.captureFrame();
-            if (blob && (!best || onAxis > best.delta)) best = { blob, delta: onAxis };
-            // Keep watching briefly past the line to catch the true peak, then stop. Without
-            // this the frame is taken the instant the threshold is crossed, which is the
-            // shallowest qualifying angle rather than the clearest one.
-            if (best && onAxis < best.delta) break;
-          }
-        }
-        await sleep(80);
-      }
-      setPoseProgress(0);
-      return best?.blob ?? null;
-    },
-    []
-  );
 
   const handleCapture = useCallback(
     async (neutralFrame: Blob) => {
@@ -198,6 +239,7 @@ export function FaceVerificationDialog({ open, onOpenChange, context, onVerified
         const neutralCapturedAt = Date.now();
         let gestureCapturedAt: number | undefined;
         let challengeId: string | undefined;
+        let missReason: string | null = null;
 
         if (challengeOn) {
           // The instruction is requested only now — AFTER the neutral frame exists — so a
@@ -208,26 +250,58 @@ export function FaceVerificationDialog({ open, onOpenChange, context, onVerified
           // The pose the neutral frame was taken at. Every delta below is measured against this,
           // exactly as the server measures it against the neutral frame it receives.
           const neutralPose = captureRef.current?.getReading();
+          const trackerLive = Boolean(neutralPose && neutralPose.faceCount > 0);
           setOverlay(challenge.prompt);
 
-          const gestureFrame = neutralPose
-            ? await awaitPose(challenge, neutralPose)
-            : // No tracker (no WebGL, models blocked): fall back to the old timed grab. Worse,
-              // but it is the behaviour that shipped, and it is better than refusing to verify.
-              await (async () => {
-                setOverlay(`${challenge.prompt} — capturing in 3…`);
-                await sleep(3000);
-                return (await captureRef.current?.captureFrame()) ?? null;
-              })();
+          let gestureFrame: Blob | null = null;
+          if (trackerLive && neutralPose) {
+            gestureDeadlineRef.current = Date.now() + GESTURE_WINDOW_MS;
+            setActiveChallenge(challenge);
+            setPose({ progress: 0, block: "short" });
+            // ONE implementation of this loop, shared with guided enrollment. The dialog used to
+            // carry its own copy that fired exactly on the server's minimum and mis-handled the
+            // peak hold — two loops that disagreed about where the line is.
+            const result = await awaitPose({
+              getReading: () => captureRef.current?.getReading(),
+              captureFrame: async () => (await captureRef.current?.captureFrame()) ?? null,
+              neutral: neutralPose,
+              target: {
+                axis: challenge.axis,
+                minDelta: challenge.minDelta,
+                // Both mirror rules the server enforces, so the client never submits a frame it
+                // can already tell will be refused.
+                requireDominance: true,
+                fireMargin: CHALLENGE_FIRE_MARGIN
+              },
+              windowMs: GESTURE_WINDOW_MS,
+              onProgress: (progress, block) => setPose({ progress, block }),
+              isCancelled: () => cancelledRef.current
+            });
+            gestureFrame = result.blob;
+            if (!gestureFrame) missReason = describeMiss(result.block, result.bestAttemptDelta, challenge);
+          } else {
+            // No tracker (no WebGL, models blocked): fall back to the old timed grab. Worse, but
+            // it is the behaviour that shipped, and it is better than refusing to verify.
+            setOverlay(`${challenge.prompt} — capturing in 3…`);
+            await sleep(3000);
+            gestureFrame = (await captureRef.current?.captureFrame()) ?? null;
+          }
 
           gestureCapturedAt = Date.now();
           setOverlay(null);
+          setActiveChallenge(null);
           if (cancelledRef.current) return;
           if (!gestureFrame) {
+            // Counts toward the ceiling even though no attempt row exists server-side. Without
+            // this the hands-free scanner re-arms the moment `busy` drops, so somebody who can't
+            // produce the movement is put straight back into another window — an unbreakable
+            // loop that burns a fresh challenge each pass and never offers the manual button.
+            setAttempts((n) => n + 1);
             setTone("error");
-            setMessage(
-              "We didn't see the head movement in time. Face the camera, then turn clearly and hold it for a moment."
-            );
+            // Naming what actually went wrong is the difference between a person learning the
+            // movement and a person concluding the check is broken. The old copy said the same
+            // thing whether they turned 5% of the way or tilted instead of turning.
+            setMessage(missReason ?? "We didn't see the head movement in time. Face the camera, then move clearly and hold it for a moment.");
             return;
           }
           frames.push(gestureFrame);
@@ -261,6 +335,7 @@ export function FaceVerificationDialog({ open, onOpenChange, context, onVerified
         }
         setAttempts((n) => n + 1);
         setFlagged(Boolean(result.flagged));
+        setLastOutcome(result.outcome);
         setTone("error");
         setMessage(result.message ?? FRIENDLY[result.outcome] ?? FRIENDLY.ERROR);
       } catch {
@@ -270,11 +345,21 @@ export function FaceVerificationDialog({ open, onOpenChange, context, onVerified
         setMessage(FRIENDLY.ERROR);
       } finally {
         setOverlay(null);
+        setActiveChallenge(null);
         setBusy(false);
       }
     },
     [challengeOn, context, onOpenChange, onVerified]
   );
+
+  const poseMeter = activeChallenge
+    ? {
+        progress: pose.progress,
+        satisfied: pose.block === "ready",
+        coaching: poseCoaching(pose.block, activeChallenge.axis, pose.progress),
+        secondsLeft
+      }
+    : null;
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -305,6 +390,7 @@ export function FaceVerificationDialog({ open, onOpenChange, context, onVerified
           hintTone={tone}
           captureLabel={challengeOn ? "Start check" : "Verify me"}
           overlayText={overlay}
+          poseMeter={poseMeter}
           autoStart
           autoCapture={autoScanActive}
           // The dialog's own Cancel closes and unmounting stops the camera — FaceCapture's
@@ -315,21 +401,57 @@ export function FaceVerificationDialog({ open, onOpenChange, context, onVerified
         {/* The movement meter, repeated below the preview. The overlay version sits on a dark
             gradient over live video, which is exactly where a thin progress bar is hardest to
             read — and this is the one signal the person most needs while their head is turned
-            away from the screen. */}
-        {overlay && poseProgress > 0 && (
-          <div className="grid gap-1.5" role="status" aria-live="polite">
-            <div className="h-2 w-full overflow-hidden rounded-full bg-muted">
+            away from the screen. Rendered from the FIRST tick rather than waiting for progress
+            to be non-zero: appearing only once you have already moved is backwards, because not
+            knowing to move is the failure being fixed. */}
+        {poseMeter && (
+          <div className="grid gap-1.5">
+            <div
+              role="progressbar"
+              aria-label="Head movement progress"
+              aria-valuemin={0}
+              aria-valuemax={100}
+              aria-valuenow={Math.round(poseMeter.progress * 100)}
+              className="h-2 w-full overflow-hidden rounded-full bg-muted"
+            >
               <div
                 className={cn(
-                  "h-full rounded-full transition-[width] duration-100",
-                  poseProgress >= 1 ? "bg-success" : "bg-primary"
+                  "h-full rounded-full motion-safe:transition-[width,background-color] motion-safe:duration-100",
+                  poseMeter.satisfied ? "bg-success" : "bg-primary"
                 )}
-                style={{ width: `${Math.round(poseProgress * 100)}%` }}
+                style={{ width: `${Math.round(poseMeter.progress * 100)}%` }}
               />
             </div>
-            <p className="text-center text-xs text-muted-foreground">
-              {poseProgress >= 1 ? "Got it — hold there" : "Keep turning until the bar fills"}
+            {/* aria-live on the text only. The bar's own value updates ~12 times a second, and a
+                live region over it would talk continuously; the coaching line changes only when
+                the advice actually changes. */}
+            <p className="text-center text-xs text-muted-foreground" role="status" aria-live="polite">
+              {poseMeter.coaching}
+              {secondsLeft != null && !poseMeter.satisfied ? ` · ${secondsLeft}s left` : ""}
             </p>
+          </div>
+        )}
+
+        {/* THE FIX THAT MATCHES THE FAILURE. A no-match against a single-angle enrollment is not
+            a "try again" problem — retrying the same thin reference set from the same chair
+            produces the same marginal score, which is what the 0.80-0.84 cluster in the review
+            log is. Shown only when the server says the model is thin, so it never nags somebody
+            whose enrollment is already good. */}
+        {lastOutcome === "NO_MATCH" && status.data?.needsBetterEnrollment && (
+          <div className="flex items-start gap-2 rounded-lg border border-primary/40 bg-primary/5 p-3 text-sm">
+            <ScanFace className="mt-0.5 h-4 w-4 shrink-0 text-primary" />
+            <div className="min-w-0">
+              <p className="text-muted-foreground">
+                Your face model holds only {status.data.templateCount === 1 ? "one angle" : "two angles"}, which makes
+                checks from any other angle marginal. Retraining takes about fifteen seconds and is the thing most
+                likely to fix this.
+              </p>
+              <Button asChild variant="outline" size="sm" className="mt-2">
+                <Link to="/profile" onClick={() => onOpenChange(false)}>
+                  Retrain my face model
+                </Link>
+              </Button>
+            </div>
           </div>
         )}
 

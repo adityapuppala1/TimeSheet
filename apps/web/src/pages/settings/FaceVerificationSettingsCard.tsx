@@ -25,6 +25,7 @@ import {
   ShieldAlert,
   RotateCcw,
   Search,
+  Send,
   ShieldCheck,
   Sparkles,
   VideoOff,
@@ -49,6 +50,7 @@ import {
   settingsApi,
   type FaceAnalyticsWindow,
   type FaceAttemptRow,
+  type FaceEnrollmentGapKind,
   type FaceOutcome,
   type FaceReviewAiSummary,
   type FaceThresholdRecommendation,
@@ -399,7 +401,7 @@ export function FaceVerificationSettingsCard({ readOnly = false }: { readOnly?: 
       </Card>
 
       {enabled && <FaceStatsCard />}
-      {enabled && <FaceOutcomeAnalyticsCard />}
+      {enabled && <FaceOutcomeAnalyticsCard readOnly={readOnly} />}
       <FaceReviewLog readOnly={readOnly} />
     </div>
   );
@@ -705,7 +707,7 @@ function StackedShareBar({ segments, empty }: { segments: Array<{ key: string; l
  * Every number here is a COUNT aggregated in the database (GET /face/analytics); no attempt rows
  * reach the browser, so this stays the same weight for a workspace with a million checks.
  */
-function FaceOutcomeAnalyticsCard() {
+function FaceOutcomeAnalyticsCard({ readOnly }: { readOnly: boolean }) {
   const [days, setDays] = useState<FaceAnalyticsWindow>(30);
   const analytics = useQuery({ queryKey: ["face", "analytics", days], queryFn: () => faceApi.analytics(days) });
   const data = analytics.data;
@@ -906,10 +908,101 @@ function FaceOutcomeAnalyticsCard() {
                 }
               ]}
             />
+            <EnrollmentGapList readOnly={readOnly} />
           </div>
         </div>
       </CardContent>
     </Card>
+  );
+}
+
+const GAP_LABEL: Record<FaceEnrollmentGapKind, string> = {
+  SINGLE_POSE: "Single-pose",
+  STALE_MODEL: "Needs re-enrollment",
+  NOT_ENROLLED: "Not enrolled"
+};
+
+const GAP_TONE: Record<FaceEnrollmentGapKind, string> = {
+  SINGLE_POSE: "bg-amber-500/10 text-amber-600 dark:text-amber-400",
+  STALE_MODEL: "bg-destructive/10 text-destructive",
+  NOT_ENROLLED: "bg-muted text-muted-foreground"
+};
+
+/**
+ * WHO, by name, behind the coverage bar above.
+ *
+ * WHY the bar alone wasn't enough: "3 single-pose" is a fact, not a task. Those three people are
+ * the measured source of this workspace's no-match rate, and the only fix is one of them spending
+ * fifteen seconds in the wizard — which needs an ask addressed to a person. The reminder reuses
+ * the workspace's existing enrollment-reminder notification (same 72h dedupe as the daily worker),
+ * so this button cannot become a way to spam anybody.
+ */
+function EnrollmentGapList({ readOnly }: { readOnly: boolean }) {
+  const queryClient = useQueryClient();
+  const gaps = useQuery({ queryKey: ["face", "enrollment-gaps"], queryFn: faceApi.enrollmentGaps });
+
+  const remind = useMutation({
+    mutationFn: (userIds: string[]) => faceApi.remindEnrollment(userIds),
+    onSuccess: (result) => {
+      // `skipped` is the dedupe, not an error — saying "0 sent" without saying why reads as broken.
+      toast.success(result.sent > 0 ? `Reminded ${result.sent} ${result.sent === 1 ? "person" : "people"}` : "Nobody reminded", {
+        description:
+          result.skipped > 0
+            ? `${result.skipped} already had an enrollment reminder in the last 72 hours and were skipped.`
+            : undefined
+      });
+      queryClient.invalidateQueries({ queryKey: ["face", "enrollment-gaps"] });
+    },
+    onError: () => toast.error("Could not send the reminder")
+  });
+
+  if (gaps.isLoading) return <Skeleton className="mt-4 h-24 w-full" />;
+  const rows = gaps.data?.gaps ?? [];
+  if (rows.length === 0) {
+    return <p className="mt-4 text-sm text-muted-foreground">Every covered user has a multi-pose face model. Nothing to chase.</p>;
+  }
+
+  return (
+    <div className="mt-4">
+      <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+        <p className="text-sm font-medium">
+          {rows.length} {rows.length === 1 ? "person needs" : "people need"} attention
+        </p>
+        {!readOnly && (
+          <Button size="sm" variant="outline" onClick={() => remind.mutate(rows.map((r) => r.userId))} disabled={remind.isPending}>
+            {remind.isPending ? <Loader2 className="mr-2 h-3.5 w-3.5 animate-spin" /> : <Send className="mr-2 h-3.5 w-3.5" />}
+            Remind everyone
+          </Button>
+        )}
+      </div>
+      {/* Own scroll container: a long name plus an email must never widen the settings page. */}
+      <div className="max-h-64 overflow-auto rounded-lg border border-border">
+        <ul className="divide-y divide-border">
+          {rows.map((row) => (
+            <li key={row.userId} className="flex flex-wrap items-center justify-between gap-2 p-2 text-sm">
+              <div className="min-w-0">
+                <p className="truncate font-medium">{row.name}</p>
+                <p className="truncate text-xs text-muted-foreground">
+                  {row.email}
+                  {row.kind === "SINGLE_POSE" && ` · ${row.templateCount} of ${gaps.data?.multiPoseTemplateMin ?? 3} angles`}
+                  {row.lastRemindedAt && ` · last reminded ${new Date(row.lastRemindedAt).toLocaleDateString()}`}
+                </p>
+              </div>
+              <div className="flex shrink-0 items-center gap-2">
+                <Badge variant="secondary" className={GAP_TONE[row.kind]}>
+                  {GAP_LABEL[row.kind]}
+                </Badge>
+                {!readOnly && (
+                  <Button size="sm" variant="ghost" onClick={() => remind.mutate([row.userId])} disabled={remind.isPending}>
+                    Remind
+                  </Button>
+                )}
+              </div>
+            </li>
+          ))}
+        </ul>
+      </div>
+    </div>
   );
 }
 
