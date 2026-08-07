@@ -1,6 +1,9 @@
 /**
  * Replay protection for inbound webhooks: a bounded, TTL'd set of delivery ids that have already
- * been acted on.
+ * been acted on. Also backs the one non-webhook single-use token in the app — the GitHub OAuth
+ * connect `state`'s `jti` (services/git-provider.service.ts) — which wants exactly this contract
+ * ("record an id, tell me whether it was already recorded") and should not get a second
+ * implementation of it.
  *
  * WHY IT'S NEEDED AT ALL: an HMAC signature proves a body came from someone holding the secret.
  * It says nothing about WHEN, so a delivery captured once (a proxy log, a CI artifact, a
@@ -26,6 +29,9 @@
  * - BOUNDED. Past `MAX_ENTRIES` the oldest ids are dropped, so an attacker who can flood the
  *   endpoint with fresh signed deliveries could evict a specific id and then replay it. Flooding
  *   with valid signatures already requires the secret, at which point replay is the least of it.
+ *   The OAuth-state nonces share that cap, so the same flood could in principle evict one and
+ *   reopen a single state for the rest of its 10 minutes — still gated on holding a webhook
+ *   secret, and still narrower than the unlimited replay it replaced.
  * - TTL'd. A capture replayed after `TTL_MS` is not caught. The window is the trade between
  *   memory and coverage, not a claim that older captures are harmless.
  */

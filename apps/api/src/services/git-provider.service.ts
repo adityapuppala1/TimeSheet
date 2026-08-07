@@ -17,13 +17,21 @@
  * creating/updating TicketBranch rows from GitHub's own webhooks — deliberately left for a
  * later pass so this phase stays testable and reviewable on its own).
  */
+import { randomUUID } from "node:crypto";
+
 import jwt from "jsonwebtoken";
 import { env } from "../config/env.js";
 import { prisma } from "../config/prisma.js";
 import { AppError } from "../middleware/error.js";
 import { decryptSecret } from "../utils/encryption.js";
+import { JWT_ALGORITHM } from "../utils/security.js";
+import { isReplayedDelivery } from "./webhook-replay.js";
 
 const STATE_TTL_SECONDS = 10 * 60;
+
+/** The nonce store is keyed by a UUID this server minted, so unlike the webhook namespaces it
+ *  needs no tenant segment — no two orgs can produce the same `jti`. */
+const GIT_STATE_NONCE_NAMESPACE = "git-oauth-state";
 const GITHUB_AUTHORIZE_URL = "https://github.com/login/oauth/authorize";
 const GITHUB_TOKEN_URL = "https://github.com/login/oauth/access_token";
 const GITHUB_API_BASE = "https://api.github.com";
@@ -35,17 +43,56 @@ interface GitConnectStatePayload {
 
 /** Signed with the same secret as every other short-lived OAuth-redirect state in this app
  *  (see sso.service.ts#signSsoState) — carries no session-granting power on its own, it only
- *  identifies which org/admin resumes after GitHub's redirect back to our fixed callback URL. */
+ *  identifies which org/admin resumes after GitHub's redirect back to our fixed callback URL.
+ *  `jti` is what makes it single-use; see verifyGitConnectState. */
 export function signGitConnectState(payload: GitConnectStatePayload): string {
-  return jwt.sign(payload, env.JWT_ACCESS_SECRET, { expiresIn: STATE_TTL_SECONDS, issuer: "timesphere-git" });
+  return jwt.sign(payload, env.JWT_ACCESS_SECRET, {
+    expiresIn: STATE_TTL_SECONDS,
+    issuer: "timesphere-git",
+    algorithm: JWT_ALGORITHM,
+    jwtid: randomUUID()
+  });
 }
 
+/**
+ * Verifies AND CONSUMES a connect state — calling this twice for the same state fails the second
+ * time, by design.
+ *
+ * WHY single-use matters here specifically: `git-connection.controller.ts` takes `orgId` and
+ * `userId` straight out of this token and writes the resulting GitHub access token into that
+ * org's GitConnection row. A signature alone proves the state was minted by us; it says nothing
+ * about how many times it may be spent. So a state that leaked the way redirect URLs leak — a
+ * Referer header, a proxy log, browser history, a screenshot of the address bar — could be
+ * replayed inside its 10-minute window with an attacker's own `code`, binding the ATTACKER's
+ * GitHub account into the VICTIM's workspace. Everything the connection can then reach (private
+ * repo names, branches, PR titles) is theirs to feed the victim, and the victim's admins see a
+ * connection that looks legitimately established.
+ *
+ * The nonce is the token's own `jti`, recorded in services/webhook-replay.ts's bounded, TTL'd
+ * store — PER PROCESS, with the caveats that module's header spells out (a second Node process
+ * behind a load balancer keeps its own set; a restart forgets). That is a weaker guarantee than a
+ * DB row, and it is stated rather than implied: this app runs as a single Node process, and the
+ * window a forgotten nonce reopens is the state's own 10 minutes.
+ *
+ * A state minted before this claim existed has no `jti` and is refused — the cost is that an
+ * OAuth connect in flight across a deploy has to be restarted, which is a click.
+ */
 export function verifyGitConnectState(state: string): GitConnectStatePayload {
+  const invalid = new AppError(400, "This GitHub connection link has expired or is invalid — try connecting again from Workspace Settings.");
+  let payload: GitConnectStatePayload & { jti?: string };
   try {
-    return jwt.verify(state, env.JWT_ACCESS_SECRET, { issuer: "timesphere-git" }) as unknown as GitConnectStatePayload;
+    payload = jwt.verify(state, env.JWT_ACCESS_SECRET, {
+      algorithms: [JWT_ALGORITHM],
+      issuer: "timesphere-git"
+    }) as unknown as GitConnectStatePayload & { jti?: string };
   } catch {
-    throw new AppError(400, "This GitHub connection link has expired or is invalid — try connecting again from Workspace Settings.");
+    throw invalid;
   }
+
+  // Identical error for "already spent" and "never valid": which one it was is information the
+  // holder of a stolen state does not need.
+  if (!payload.jti || isReplayedDelivery(GIT_STATE_NONCE_NAMESPACE, payload.jti)) throw invalid;
+  return { orgId: payload.orgId, userId: payload.userId };
 }
 
 export function gitCallbackUrl(): string {

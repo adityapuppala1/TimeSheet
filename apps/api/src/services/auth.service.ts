@@ -87,13 +87,40 @@ export async function buildProfilePayload(userId: string): Promise<ProfilePayloa
  * would lock that address out of EVERY org. orgId comes from the resolved tenant context, never
  * from the request body — the caller can pick which tenant it talks to via the host/slug the
  * tenant middleware already validated, but it can't forge a key for a tenant it isn't addressing.
+ *
+ * ENTRIES EXPIRE, and that is a memory property before it is a policy one: every key here is
+ * (tenant, ATTACKER-SUPPLIED EMAIL), written on the unauthenticated login path — "no such user"
+ * records a failure too, deliberately, so the map cannot be probed for which addresses exist.
+ * Without expiry the map is an append-only log of every address ever typed at a login form, and
+ * it grows for the life of the process. `FAILURE_WINDOW_MS` doubles as the counter's decay
+ * window: four failures a fortnight ago should not combine with one today into a lockout.
+ *
+ * NO HARD ENTRY CAP, on purpose. A cap needs an eviction rule, and every eviction rule hands an
+ * attacker the same primitive: flood the map with fresh keys until the victim's ARMED lockout is
+ * the one evicted, and the lockout is gone. The bound is instead the TTL multiplied by what the
+ * rate limiters allow through (app.ts: 20/min/IP on /api/auth/login, 900/min/IP overall) — tens
+ * of thousands of small entries in the worst case, which costs single-digit megabytes and no
+ * security.
  */
 const FAILED_LOGIN_LIMIT = 5;
 const LOCKOUT_MS = 5 * 60 * 1000;
-const failedLogins = new Map<string, { count: number; lockedUntil: number | null }>();
+/** Longer than LOCKOUT_MS so an entry always outlives the lock it may be holding. */
+const FAILURE_WINDOW_MS = 15 * 60 * 1000;
+const failedLogins = new Map<string, { count: number; lockedUntil: number | null; expiresAt: number }>();
 
 /** A NUL separator can't occur in an orgId or an email, so no (org, email) pair can collide. */
 const lockoutKey = (orgId: string, email: string) => `${orgId}\u0000${email.toLowerCase()}`;
+
+/** Swept on write, not on a timer: a per-entry `setTimeout` would mean one live timer per email
+ *  an attacker types, which is the same unbounded growth wearing a different hat. Every entry is
+ *  (re)inserted with the same constant TTL, so insertion order IS expiry order and the first key
+ *  that is still live ends the scan. */
+function purgeExpiredLockouts(now: number) {
+  for (const [key, entry] of failedLogins) {
+    if (entry.expiresAt > now) break;
+    failedLogins.delete(key);
+  }
+}
 
 function checkAccountLockout(orgId: string, email: string) {
   const entry = failedLogins.get(lockoutKey(orgId, email));
@@ -104,13 +131,23 @@ function checkAccountLockout(orgId: string, email: string) {
 }
 
 function recordFailedLogin(orgId: string, email: string) {
+  const now = Date.now();
+  purgeExpiredLockouts(now);
+
   const key = lockoutKey(orgId, email);
-  const entry = failedLogins.get(key) ?? { count: 0, lockedUntil: null };
+  const existing = failedLogins.get(key);
+  // Only a live entry carries its count forward; one past its window starts counting again.
+  const entry = existing && existing.expiresAt > now ? existing : { count: 0, lockedUntil: null, expiresAt: 0 };
   entry.count += 1;
   if (entry.count >= FAILED_LOGIN_LIMIT) {
-    entry.lockedUntil = Date.now() + LOCKOUT_MS;
+    entry.lockedUntil = now + LOCKOUT_MS;
     entry.count = 0;
   }
+  entry.expiresAt = now + FAILURE_WINDOW_MS;
+
+  // Delete-then-set so a refreshed key moves to the back of the insertion order and
+  // purgeExpiredLockouts' early `break` stays correct.
+  failedLogins.delete(key);
   failedLogins.set(key, entry);
 }
 
@@ -121,6 +158,11 @@ function clearFailedLogins(orgId: string, email: string) {
 /** Test-only: the map is module state that survives across tests in one Vitest file. */
 export function __resetLoginLockoutsForTests() {
   failedLogins.clear();
+}
+
+/** Test-only: the sweep leaves no trace in any response, so pin it on the size directly. */
+export function __loginLockoutEntryCountForTests() {
+  return failedLogins.size;
 }
 
 /* ================================== Login =================================== */

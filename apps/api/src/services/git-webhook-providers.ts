@@ -26,6 +26,8 @@
  */
 import crypto from "node:crypto";
 
+import { constantTimeEqual } from "../utils/security.js";
+
 export const GIT_WEBHOOK_PROVIDERS = ["gitlab", "bitbucket", "gitea", "forgejo", "azure-devops"] as const;
 export type GitWebhookProvider = (typeof GIT_WEBHOOK_PROVIDERS)[number];
 
@@ -47,15 +49,6 @@ const header = (headers: Record<string, unknown>, name: string): string | null =
   const value = headers[name];
   if (Array.isArray(value)) return value[0] ?? null;
   return typeof value === "string" ? value : null;
-};
-
-/** Constant-time equality for values of possibly different lengths: compare digests, not the
- *  raw strings — `timingSafeEqual` throws on length mismatch, and an early length check would
- *  itself leak length. */
-const safeEqual = (a: string, b: string): boolean => {
-  const ha = crypto.createHash("sha256").update(a).digest();
-  const hb = crypto.createHash("sha256").update(b).digest();
-  return crypto.timingSafeEqual(ha, hb);
 };
 
 const hmacHex = (secret: string, rawBody: Buffer): string =>
@@ -81,7 +74,7 @@ export function verifyGitWebhook(params: {
   switch (provider) {
     case "gitlab": {
       const token = header(headers, "x-gitlab-token");
-      return Boolean(token) && safeEqual(token as string, secret);
+      return Boolean(token) && constantTimeEqual(token as string, secret);
     }
     case "gitea":
     case "forgejo": {
@@ -90,21 +83,21 @@ export function verifyGitWebhook(params: {
         header(headers, "x-gitea-signature") ??
         header(headers, "x-hub-signature-256")?.replace(/^sha256=/, "") ??
         null;
-      return Boolean(sig) && safeEqual(sig as string, hmacHex(secret, rawBody));
+      return Boolean(sig) && constantTimeEqual(sig as string, hmacHex(secret, rawBody));
     }
     case "bitbucket": {
       const sig = header(headers, "x-hub-signature")?.replace(/^sha256=/, "") ?? null;
-      return Boolean(sig) && safeEqual(sig as string, hmacHex(secret, rawBody));
+      return Boolean(sig) && constantTimeEqual(sig as string, hmacHex(secret, rawBody));
     }
     case "azure-devops": {
       const auth = header(headers, "authorization");
       if (auth?.startsWith("Basic ")) {
         const decoded = Buffer.from(auth.slice(6), "base64").toString("utf8");
         const password = decoded.includes(":") ? decoded.slice(decoded.indexOf(":") + 1) : decoded;
-        if (safeEqual(password, secret)) return true;
+        if (constantTimeEqual(password, secret)) return true;
       }
       const token = typeof query.token === "string" ? query.token : null;
-      return Boolean(token) && safeEqual(token as string, secret);
+      return Boolean(token) && constantTimeEqual(token as string, secret);
     }
   }
 }

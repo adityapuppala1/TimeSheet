@@ -10,11 +10,10 @@
  * Auth model: unlike Slack (HMAC)/Teams (JWT), there's no single signature scheme shared across
  * arbitrary SAST/DAST/CI vendors — so this follows the Google Chat receiver's simpler pattern
  * instead: one shared bearer token per org (IngestionSettings.encryptedToken, generated from
- * Workspace Settings), compared with `crypto.timingSafeEqual`. A 404 (not 401) when no token has
+ * Workspace Settings), compared with `constantTimeEqual`. A 404 (not 401) when no token has
  * ever been generated — same "ingestion was never enabled" signal
  * chat-webhook.controller.ts gives for an unconfigured platform.
  */
-import crypto from "node:crypto";
 import { Router, type Request } from "express";
 import { z } from "zod";
 import { securityFindingSeverities, testRunStatuses } from "@timesheet/shared";
@@ -31,6 +30,7 @@ import {
   maybeTriageFindingWithAI
 } from "../services/security-report.service.js";
 import { decryptSecret } from "../utils/encryption.js";
+import { constantTimeEqual } from "../utils/security.js";
 
 export const devopsWebhookRouter = Router();
 
@@ -51,10 +51,7 @@ async function requireValidIngestionToken(req: Request): Promise<void> {
   const authHeaderRaw = req.headers.authorization;
   const authHeader = (Array.isArray(authHeaderRaw) ? authHeaderRaw[0] : authHeaderRaw) ?? "";
   const bearerToken = authHeader.replace(/^Bearer\s+/i, "");
-  const expectedToken = decryptSecret(settings.encryptedToken);
-  const authBuf = Buffer.from(bearerToken, "utf8");
-  const expectedBuf = Buffer.from(expectedToken, "utf8");
-  if (authBuf.length !== expectedBuf.length || !crypto.timingSafeEqual(authBuf, expectedBuf)) {
+  if (!constantTimeEqual(bearerToken, decryptSecret(settings.encryptedToken))) {
     throw new AppError(401, "Invalid ingestion token.");
   }
 }

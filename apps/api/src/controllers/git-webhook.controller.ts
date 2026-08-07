@@ -28,6 +28,7 @@ import { tenantContext } from "../config/tenant-context.js";
 import { resolveActiveOrgBySlug } from "../middleware/tenant.js";
 import { AppError } from "../middleware/error.js";
 import { decryptSecret } from "../utils/encryption.js";
+import { constantTimeEqual } from "../utils/security.js";
 import { fetchGitHubPullRequestFiles, GIT_INTEGRATION_SYSTEM_EMAIL, postGitHubPullRequestReview } from "../services/git-provider.service.js";
 import { reviewPullRequestDiff, summarizePullRequest } from "../services/ai.service.js";
 import {
@@ -70,9 +71,18 @@ function extractTicketKey(branchName: string): string | null {
 // BEFORE the global json() parser) does the same thing.
 gitWebhookRouter.post("/webhook/:orgSlug", express.raw({ type: "application/json" }), async (req, res, next) => {
   try {
-    const rawBody = req.body as Buffer;
+    // `express.raw()` fills req.body only for a MATCHING content-type, so a `text/plain` POST
+    // leaves it undefined and the old unguarded `.toString()` was a 500 for the price of one
+    // edited header. An empty body keeps the request on the normal path, where the signature
+    // check rejects it as the 401 it is — same guard as the provider route below.
+    const rawBody = Buffer.isBuffer(req.body) ? req.body : Buffer.alloc(0);
     const payloadText = rawBody.toString("utf8");
-    const parsedBody = JSON.parse(payloadText || "{}") as Record<string, unknown>;
+    let parsedBody: Record<string, unknown>;
+    try {
+      parsedBody = JSON.parse(payloadText || "{}") as Record<string, unknown>;
+    } catch {
+      throw new AppError(400, "Malformed JSON in request body.");
+    }
     const signatureHeader = req.headers["x-hub-signature-256"];
     const signature = Array.isArray(signatureHeader) ? signatureHeader[0] : signatureHeader;
     const githubEvent = req.headers["x-github-event"];
@@ -89,9 +99,7 @@ gitWebhookRouter.post("/webhook/:orgSlug", express.raw({ type: "application/json
 
       const secret = decryptSecret(connection.encryptedWebhookSecret);
       const expected = `sha256=${crypto.createHmac("sha256", secret).update(rawBody).digest("hex")}`;
-      const sigBuf = Buffer.from(signature);
-      const expectedBuf = Buffer.from(expected);
-      if (sigBuf.length !== expectedBuf.length || !crypto.timingSafeEqual(sigBuf, expectedBuf)) {
+      if (!constantTimeEqual(signature, expected)) {
         throw new AppError(401, "Invalid webhook signature.");
       }
 
@@ -245,8 +253,16 @@ gitWebhookRouter.post("/webhook/:orgSlug/:provider", express.raw({ type: "applic
     if (!GIT_WEBHOOK_PROVIDERS.includes(provider)) {
       throw new AppError(404, `Unknown git provider "${provider}". Supported: ${GIT_WEBHOOK_PROVIDERS.join(", ")}.`);
     }
-    const rawBody = (req.body ?? Buffer.alloc(0)) as Buffer;
-    const parsedBody = JSON.parse(rawBody.toString("utf8") || "{}") as Record<string, unknown>;
+    // `?? Buffer.alloc(0)` was not quite enough: `Buffer.isBuffer` also catches a body-parser
+    // that handed back a plain object, where `.toString()` yields "[object Object]" and the
+    // JSON.parse below throws a 500 instead of failing verification.
+    const rawBody = Buffer.isBuffer(req.body) ? req.body : Buffer.alloc(0);
+    let parsedBody: Record<string, unknown>;
+    try {
+      parsedBody = JSON.parse(rawBody.toString("utf8") || "{}") as Record<string, unknown>;
+    } catch {
+      throw new AppError(400, "Malformed JSON in request body.");
+    }
 
     await withOrgTenant(String(req.params.orgSlug), async () => {
       const connection = await prisma.gitConnection.findUnique({ where: { id: "global" } });

@@ -27,6 +27,33 @@ import { AppError } from "./error.js";
 const lastSeenWrites = new Map<string, number>();
 const LAST_SEEN_THROTTLE_MS = 5 * 60 * 1000;
 
+/**
+ * Swept on write, because an entry is worthless the moment it is older than the throttle window
+ * — the next request for that session writes regardless — while the map itself kept every
+ * session id the process had ever seen, for the life of the process. Long-lived deployments
+ * accumulate one entry per session ever authenticated: not a leak, just an unbounded map.
+ *
+ * No timer, and no per-entry timer least of all: entries are (re)inserted with a constant TTL, so
+ * insertion order IS expiry order and the first live key ends the scan. The delete-then-set in
+ * the caller is what keeps that invariant true when an existing session is refreshed.
+ */
+function purgeStaleLastSeen(now: number) {
+  for (const [sid, writtenAt] of lastSeenWrites) {
+    if (writtenAt + LAST_SEEN_THROTTLE_MS > now) break;
+    lastSeenWrites.delete(sid);
+  }
+}
+
+/** Test-only: the sweep is invisible in any response, so pin it on the size directly. */
+export function __lastSeenTrackerSizeForTests() {
+  return lastSeenWrites.size;
+}
+
+/** Test-only: module state shared by every test in a file. */
+export function __resetLastSeenTrackerForTests() {
+  lastSeenWrites.clear();
+}
+
 export interface RequestUser {
   id: string;
   name: string;
@@ -110,9 +137,12 @@ export async function requireAuth(req: Request, _res: Response, next: NextFuncti
   // 15-minute online window. Fire-and-forget — liveness bookkeeping must never fail a request.
   if (typeof payload.sid === "string") {
     const sid = payload.sid;
+    const now = Date.now();
     const last = lastSeenWrites.get(sid) ?? 0;
-    if (Date.now() - last > LAST_SEEN_THROTTLE_MS) {
-      lastSeenWrites.set(sid, Date.now());
+    if (now - last > LAST_SEEN_THROTTLE_MS) {
+      purgeStaleLastSeen(now);
+      lastSeenWrites.delete(sid);
+      lastSeenWrites.set(sid, now);
       void prisma.session.update({ where: { id: sid }, data: { lastSeenAt: new Date() } }).catch(() => {
         lastSeenWrites.delete(sid); // let the next request retry rather than sticking silent
       });

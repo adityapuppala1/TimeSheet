@@ -16,15 +16,20 @@
  * are represented by the Session DB table + JWT, not `req.session`), so instead of adding one
  * just for this one flow, the code_verifier travels inside the same signed `state` JWT as the
  * org id — it never needs to be looked up server-side between the redirect and the callback.
+ * SAML is the one exception, and only because it has to be: `validateInResponseTo` compares an
+ * assertion against a request id that CANNOT travel in the RelayState (the IdP echoes the id
+ * from the AuthnRequest it received, not from RelayState), so that one flow keeps a small
+ * module-level store — see samlRequestIdCache below for its limits.
  */
 import * as client from "openid-client";
-import { SAML } from "@node-saml/node-saml";
+import { SAML, ValidateInResponseTo, type CacheProvider } from "@node-saml/node-saml";
 import { Client as LdapClient, type Entry as LdapEntry } from "ldapts";
 import jwt from "jsonwebtoken";
 import { env } from "../config/env.js";
 import { AppError } from "../middleware/error.js";
 import { controlPrisma } from "../config/control-prisma.js";
 import { decryptSecret } from "../utils/encryption.js";
+import { JWT_ALGORITHM } from "../utils/security.js";
 
 export type OidcProviderType = "GOOGLE" | "MICROSOFT";
 export type SsoProviderType = OidcProviderType | "SAML" | "LDAP";
@@ -44,12 +49,21 @@ interface SsoStatePayload {
  *  Doubles as SAML's RelayState value — same signed-JWT-carries-org-identity trick, just
  *  handed to `getAuthorizeUrlAsync` instead of an OAuth `state` parameter. */
 export function signSsoState(payload: SsoStatePayload): string {
-  return jwt.sign(payload, env.JWT_ACCESS_SECRET, { expiresIn: STATE_TTL_SECONDS, issuer: "timesphere-sso" });
+  return jwt.sign(payload, env.JWT_ACCESS_SECRET, {
+    expiresIn: STATE_TTL_SECONDS,
+    issuer: "timesphere-sso",
+    algorithm: JWT_ALGORITHM
+  });
 }
 
 export function verifySsoState(state: string): SsoStatePayload {
   try {
-    return jwt.verify(state, env.JWT_ACCESS_SECRET, { issuer: "timesphere-sso" }) as unknown as SsoStatePayload;
+    // `algorithms` pinned for the same reason utils/security.ts pins it on every other verify in
+    // this app: the algorithm must come from us, never from the token's own header.
+    return jwt.verify(state, env.JWT_ACCESS_SECRET, {
+      algorithms: [JWT_ALGORITHM],
+      issuer: "timesphere-sso"
+    }) as unknown as SsoStatePayload;
   } catch {
     throw new AppError(400, "This sign-in link has expired or is invalid — please try signing in again.");
   }
@@ -170,20 +184,109 @@ export async function getEnabledSamlConfig(orgId: string): Promise<SamlConfig> {
   return { idpEntityId: config.idpEntityId, idpSsoUrl: config.idpSsoUrl, idpCertificate: config.idpCertificate, spEntityId: config.spEntityId };
 }
 
+/**
+ * The AuthnRequest ids this server has issued and not yet seen answered — what makes
+ * `validateInResponseTo` possible at all.
+ *
+ * WHY IT IS NEEDED: node-saml defaults `validateInResponseTo` to `never`, and with it off a
+ * captured `SAMLResponse` is replayable against the ACS endpoint for its entire `NotOnOrAfter`
+ * window (minutes, at most IdP defaults). The assertion is signed, so replaying it mints a real
+ * session for the user it names — the signature proves WHO, never HOW MANY TIMES. Pinning each
+ * response to a request WE issued, and forgetting that request the moment it is answered, is the
+ * control that closes it.
+ *
+ * WHY A SHARED MODULE-LEVEL STORE rather than node-saml's built-in InMemoryCacheProvider: this
+ * file builds a FRESH `SAML` instance per call (see buildSamlClient), so the default provider —
+ * which lives on the instance — would save the request id into an object that is garbage by the
+ * time the ACS POST arrives, and every login would fail. The `orgId` prefix keeps two tenants'
+ * ids disjoint even though the store is one map.
+ *
+ * WHY `always` AND NOT `ifPresent`: `ifPresent` validates only when the IdP echoed an
+ * InResponseTo, so stripping that one attribute from a captured response skips the check
+ * entirely. `always` costs nothing here because IdP-INITIATED SSO IS ALREADY IMPOSSIBLE in this
+ * implementation — completeSamlLogin refuses any ACS POST without a RelayState that we signed,
+ * and only buildSamlAuthorizationRedirect below ever mints one. So there is no working flow that
+ * `always` breaks.
+ *
+ * LIMITATIONS, stated rather than implied (same shape as services/webhook-replay.ts's):
+ * - PER PROCESS. A second Node process behind a load balancer has its own map, so an AuthnRequest
+ *   issued by one and answered at the other fails to validate. Unlike the webhook store, that is
+ *   a FAILED LOGIN rather than a missed replay catch — this is safe here only because the app
+ *   runs as a single Node process (see the database-per-organization note in the root README),
+ *   and it is the thing to revisit first if that ever stops being true.
+ * - A RESTART mid-login costs the user one retry, for the same reason.
+ */
+const SAML_REQUEST_TTL_MS = STATE_TTL_SECONDS * 1000;
+/** `/saml/start` is unauthenticated, so the number of ids in flight is attacker-influenced.
+ *  Evicting the oldest can only cost a genuine user a retry — it grants nothing — which makes a
+ *  hard cap the right trade against unbounded growth. */
+const SAML_MAX_PENDING_REQUESTS = 10_000;
+const samlRequestIds = new Map<string, { value: string; expiresAt: number }>();
+
+function purgeExpiredSamlRequestIds(now: number): void {
+  // Constant TTL, so insertion order IS expiry order: the first live key means every later one is.
+  for (const [key, entry] of samlRequestIds) {
+    if (entry.expiresAt > now) break;
+    samlRequestIds.delete(key);
+  }
+}
+
+/** node-saml's CacheProvider contract, backed by the shared map above and scoped to one org —
+ *  NUL separator for the same reason auth.service.ts's lockoutKey uses one: it cannot occur in
+ *  either half, so no two (org, request id) pairs can collide into one key. */
+function samlRequestIdCache(orgId: string): CacheProvider {
+  const scope = (key: string | null) => `${orgId}\u0000${key ?? ""}`;
+  return {
+    async saveAsync(key, value) {
+      const now = Date.now();
+      purgeExpiredSamlRequestIds(now);
+      if (samlRequestIds.has(scope(key))) return null;
+      samlRequestIds.set(scope(key), { value, expiresAt: now + SAML_REQUEST_TTL_MS });
+      while (samlRequestIds.size > SAML_MAX_PENDING_REQUESTS) {
+        const oldest = samlRequestIds.keys().next();
+        if (oldest.done) break;
+        samlRequestIds.delete(oldest.value);
+      }
+      return { value, createdAt: now };
+    },
+    async getAsync(key) {
+      const entry = samlRequestIds.get(scope(key));
+      return entry && entry.expiresAt > Date.now() ? entry.value : null;
+    },
+    async removeAsync(key) {
+      samlRequestIds.delete(scope(key));
+      return key;
+    }
+  };
+}
+
+/** Test seam — the map is module state shared by every test in a file. */
+export function __resetSamlRequestIdsForTests(): void {
+  samlRequestIds.clear();
+}
+
+/** Test seam — lets a test assert that issuing an AuthnRequest actually recorded its id. */
+export function __hasSamlRequestIdForTests(orgId: string, requestId: string): boolean {
+  return samlRequestIds.has(`${orgId}\u0000${requestId}`);
+}
+
 /** Not cached across calls — same reasoning as buildOidcConfig: constructing a SAML instance
- *  is cheap (no network round-trip, unlike OIDC discovery), so there's nothing worth caching. */
-function buildSamlClient(config: SamlConfig): SAML {
+ *  is cheap (no network round-trip, unlike OIDC discovery), so there's nothing worth caching.
+ *  The request-id cache it is handed deliberately IS shared across instances; see above. */
+function buildSamlClient(config: SamlConfig, orgId: string): SAML {
   return new SAML({
     callbackUrl: samlCallbackUrl(),
     entryPoint: config.idpSsoUrl,
     issuer: config.spEntityId || DEFAULT_SP_ENTITY_ID,
-    idpCert: config.idpCertificate
+    idpCert: config.idpCertificate,
+    validateInResponseTo: ValidateInResponseTo.always,
+    cacheProvider: samlRequestIdCache(orgId)
   });
 }
 
 export async function buildSamlAuthorizationRedirect(orgId: string): Promise<string> {
   const config = await getEnabledSamlConfig(orgId);
-  const saml = buildSamlClient(config);
+  const saml = buildSamlClient(config, orgId);
   const relayState = signSsoState({ orgId, provider: "SAML" });
   return saml.getAuthorizeUrlAsync(relayState, "", {});
 }
@@ -200,8 +303,10 @@ export async function completeSamlLogin(body: Record<string, string>): Promise<{
   if (provider !== "SAML") throw new AppError(400, "State/provider mismatch.");
 
   const config = await getEnabledSamlConfig(orgId);
-  const saml = buildSamlClient(config);
+  const saml = buildSamlClient(config, orgId);
 
+  // Rejects a response whose InResponseTo names a request this server never issued, or already
+  // saw answered — see samlRequestIdCache above for why that is the replay boundary.
   const { profile } = await saml.validatePostResponseAsync(body);
   const email = profile?.email ?? (typeof profile?.nameID === "string" ? profile.nameID : null);
   if (!email) {

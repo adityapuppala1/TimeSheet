@@ -1,6 +1,7 @@
 /**
- * WHAT: password hashing (bcrypt) and access/refresh JWT sign/verify helpers for **tenant**
- * auth — the platform-admin equivalent lives separately in utils/platform-admin-security.ts,
+ * WHAT: password hashing (bcrypt), access/refresh JWT sign/verify helpers for **tenant**
+ * auth, and the one constant-time string comparison every shared-secret check in this app uses
+ * — the platform-admin equivalent lives separately in utils/platform-admin-security.ts,
  * deliberately never sharing a secret or a function with this file.
  * WHY: every login method (password, Google/Microsoft/SAML/LDAP SSO) ends at the same
  * `establishSession()` in services/auth.service.ts, which needs one consistent way to mint
@@ -13,7 +14,7 @@
  * "alg: none" JWT vulnerability class).
  * WHO calls this: `services/auth.service.ts` (mint), `middleware/auth.ts` (verify).
  */
-import { randomInt } from "node:crypto";
+import { createHash, randomInt, timingSafeEqual } from "node:crypto";
 
 import bcrypt from "bcryptjs";
 import jwt from "jsonwebtoken";
@@ -48,6 +49,23 @@ export const generateTempPassword = () =>
   `${Array.from({ length: 12 }, () => TEMP_PASSWORD_ALPHABET[randomInt(TEMP_PASSWORD_ALPHABET.length)]).join("")}!7a`;
 export const hashToken = (token: string) => bcrypt.hash(token, 10);
 export const verifyTokenHash = (token: string, hash: string) => bcrypt.compare(token, hash);
+
+/**
+ * Constant-time equality for two secrets of possibly different lengths — compare SHA-256
+ * digests, never the raw bytes.
+ *
+ * WHY NOT `a.length === b.length && timingSafeEqual(a, b)`: `timingSafeEqual` throws on a length
+ * mismatch, so callers reach for a length pre-check — and that pre-check IS a side channel. It
+ * answers "is my guess the right LENGTH?" in one request, which for a variable-length shared
+ * secret (a SCIM/ingestion bearer token, a Google Chat verification token) hands an attacker the
+ * search space for free. Hashing first makes both sides a fixed 32 bytes, so the comparison
+ * always runs to completion and reveals nothing but the answer.
+ *
+ * Originally `safeEqual` in services/git-webhook-providers.ts; lives here so every shared-secret
+ * comparison in the app is the same one implementation rather than a per-file re-derivation.
+ */
+export const constantTimeEqual = (a: string, b: string): boolean =>
+  timingSafeEqual(createHash("sha256").update(a).digest(), createHash("sha256").update(b).digest());
 
 /** Fixed issuer/audience pair so a token minted for a different purpose (or a different
  *  deployment sharing the same secret by mistake) can't be replayed here. */

@@ -19,10 +19,18 @@ import { tenantContext } from "../config/tenant-context.js";
 import { resolveActiveOrgBySlug } from "../middleware/tenant.js";
 import { AppError } from "../middleware/error.js";
 import { decryptSecret } from "../utils/encryption.js";
+import { constantTimeEqual } from "../utils/security.js";
 import { processInboundChatMessage, type ParsedInboundChatMessage } from "../services/chat-intake.service.js";
 import { isReplayedDelivery } from "../services/webhook-replay.js";
 
 export const chatWebhookRouter = Router();
+
+/** `express.raw()` populates `req.body` only for a MATCHING content-type — a `text/plain` (or
+ *  bodyless) POST leaves it undefined, so `(req.body as Buffer).toString()` was a 500 anybody
+ *  could trigger by editing one header. An empty body keeps the request on the normal path,
+ *  where the signature check rejects it as the 401 it is. Same guard as
+ *  git-webhook.controller.ts's provider route. */
+const rawBodyText = (body: unknown): string => (Buffer.isBuffer(body) ? body.toString("utf8") : "");
 
 /** Resolves the org from its slug and runs `fn` inside that org's tenant context — the
  *  webhook equivalent of controllers/sso.controller.ts's finishSsoLogin tenant-resolution
@@ -47,24 +55,22 @@ function verifySlackSignature(signingSecret: string, timestamp: string, rawBody:
 
   const baseString = `v0:${timestamp}:${rawBody}`;
   const expected = `v0=${crypto.createHmac("sha256", signingSecret).update(baseString).digest("hex")}`;
-  const expectedBuf = Buffer.from(expected, "utf8");
-  const actualBuf = Buffer.from(signature, "utf8");
-  return expectedBuf.length === actualBuf.length && crypto.timingSafeEqual(expectedBuf, actualBuf);
+  return constantTimeEqual(expected, signature);
 }
 
 chatWebhookRouter.post("/slack/events/:orgSlug", express.raw({ type: "application/json" }), async (req, res, next) => {
   try {
-    const rawBody = (req.body as Buffer).toString("utf8");
-    const payload = JSON.parse(rawBody || "{}") as Record<string, unknown>;
-
-    // Slack's one-time endpoint-verification handshake — no tenant/signature context needed
-    // yet the very first time an admin points a new Events API subscription at this URL.
-    if (payload.type === "url_verification" && typeof payload.challenge === "string") {
-      res.json({ challenge: payload.challenge });
-      return;
+    const rawBody = rawBodyText(req.body);
+    let payload: Record<string, unknown>;
+    try {
+      payload = JSON.parse(rawBody || "{}") as Record<string, unknown>;
+    } catch {
+      // Reaches here only for a body that claimed application/json and wasn't — the same client
+      // mistake express.json() reports as a 400 elsewhere, not a server fault.
+      throw new AppError(400, "Malformed JSON in request body.");
     }
 
-    await withOrgTenant(req.params.orgSlug, async () => {
+    const challenge = await withOrgTenant(req.params.orgSlug, async () => {
       const integration = await prisma.chatIntegration.findUnique({ where: { platform: "SLACK" } });
       if (!integration?.isEnabled || !integration.encryptedSigningSecret) throw new AppError(404, "Slack isn't configured for this workspace.");
 
@@ -73,6 +79,17 @@ chatWebhookRouter.post("/slack/events/:orgSlug", express.raw({ type: "applicatio
       const signingSecret = decryptSecret(integration.encryptedSigningSecret);
       if (!verifySlackSignature(signingSecret, timestamp, rawBody, signature)) {
         throw new AppError(401, "Invalid Slack request signature.");
+      }
+
+      // Slack's one-time endpoint-verification handshake, handled AFTER the signature check
+      // rather than before it. Slack signs `url_verification` exactly like every other delivery,
+      // so verifying first costs nothing — while answering it first made this route an
+      // unauthenticated reflector: any caller, naming any org (or none that exists), got
+      // attacker-chosen text echoed back before this app had resolved a tenant or checked a
+      // secret. The ordering consequence, stated plainly: the workspace's Slack integration must
+      // be saved WITH its signing secret before the URL is pasted into Slack's console.
+      if (payload.type === "url_verification" && typeof payload.challenge === "string") {
+        return payload.challenge;
       }
 
       // The ±5 minute timestamp window above narrows replay to that window; it does not close
@@ -102,8 +119,13 @@ chatWebhookRouter.post("/slack/events/:orgSlug", express.raw({ type: "applicatio
         };
         await processInboundChatMessage(message);
       }
+      return undefined;
     });
 
+    if (challenge !== undefined) {
+      res.json({ challenge });
+      return;
+    }
     res.status(200).send();
   } catch (error) {
     next(error);
@@ -186,10 +208,7 @@ chatWebhookRouter.post("/google/events/:orgSlug", express.json(), async (req, re
       if (!integration?.isEnabled || !integration.encryptedSigningSecret) throw new AppError(404, "Google Chat isn't configured for this workspace.");
 
       const authHeader = String(req.headers.authorization ?? "").replace(/^Bearer\s+/i, "");
-      const expectedToken = decryptSecret(integration.encryptedSigningSecret);
-      const authBuf = Buffer.from(authHeader, "utf8");
-      const expectedBuf = Buffer.from(expectedToken, "utf8");
-      if (authBuf.length !== expectedBuf.length || !crypto.timingSafeEqual(authBuf, expectedBuf)) {
+      if (!constantTimeEqual(authHeader, decryptSecret(integration.encryptedSigningSecret))) {
         throw new AppError(401, "Invalid Google Chat verification token.");
       }
 

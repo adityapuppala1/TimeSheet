@@ -8,7 +8,7 @@
  * from the URL path (`/:orgSlug/v2/...`).
  *
  * Auth: one shared bearer token per org (ScimSettings.encryptedToken, generated from Workspace
- * Settings → Integrations), compared with `crypto.timingSafeEqual` — same pattern as
+ * Settings → Integrations), compared with `constantTimeEqual` — same pattern as
  * IngestionSettings' token. A 404 (not 401) when SCIM was never enabled for the org, same
  * "never configured" signal every other webhook receiver in this app gives.
  *
@@ -17,7 +17,6 @@
  * discovery endpoints, and PUT (full-replace) on Users — most IdPs work fine with PATCH alone
  * for the lifecycle operations that matter (provision, deprovision, reactivate).
  */
-import crypto from "node:crypto";
 import { Router, type Request } from "express";
 import { z } from "zod";
 import { getTenantClient, prisma } from "../config/prisma.js";
@@ -27,7 +26,7 @@ import { resolveActiveOrgBySlug } from "../middleware/tenant.js";
 import { AppError } from "../middleware/error.js";
 import { getEffectiveSeatLimit } from "../services/plan-limits.service.js";
 import { decryptSecret } from "../utils/encryption.js";
-import { hashPassword, opaqueToken } from "../utils/security.js";
+import { constantTimeEqual, hashPassword, opaqueToken } from "../utils/security.js";
 
 export const scimRouter = Router();
 
@@ -48,10 +47,7 @@ async function requireValidScimToken(req: Request): Promise<void> {
   const authHeaderRaw = req.headers.authorization;
   const authHeader = (Array.isArray(authHeaderRaw) ? authHeaderRaw[0] : authHeaderRaw) ?? "";
   const bearerToken = authHeader.replace(/^Bearer\s+/i, "");
-  const expectedToken = decryptSecret(settings.encryptedToken);
-  const authBuf = Buffer.from(bearerToken, "utf8");
-  const expectedBuf = Buffer.from(expectedToken, "utf8");
-  if (authBuf.length !== expectedBuf.length || !crypto.timingSafeEqual(authBuf, expectedBuf)) {
+  if (!constantTimeEqual(bearerToken, decryptSecret(settings.encryptedToken))) {
     throw new AppError(401, "Invalid SCIM bearer token.");
   }
 }
