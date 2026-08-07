@@ -3,10 +3,12 @@
  * and the ticket detail sheet (status/assignee/labels/links/checklist/comments/attachments/
  * time-logged/activity tabs).
  *
- * WHY the AI bits live inline here (AI-assist chip, "Improve with AI", AI summary) rather than
- * in a separate file: they're small, ticket-scoped affordances that read straight from
- * `aiApi` and only ever render one at a time — splitting them out would mean prop-drilling the
- * same ticket/project context back in for no real separation-of-concerns benefit.
+ * WHY the AI bits live inline here (AI-assist chip, AI summary) rather than in a separate file:
+ * they're small, ticket-scoped affordances that read straight from `aiApi` and only ever render
+ * one at a time — splitting them out would mean prop-drilling the same ticket/project context
+ * back in for no real separation-of-concerns benefit. The exception is the per-field "Refine with
+ * AI" affordance (components/AiRefine.tsx): it is shared with the timesheet form, and its
+ * accept/reject/undo contract is the same wherever it appears.
  *
  * WHO can see/do what: gated at the route level (`RequirePermission` in App.tsx) for the page
  * itself; per-action gates (assign, reopen a closed ticket, etc.) are re-checked here against
@@ -60,6 +62,7 @@ import {
 } from "lucide-react";
 import { useState } from "react";
 import { useSearchParams } from "react-router";
+import { AiRefinePanel, AiRefineTrigger, useAiRefine } from "../components/AiRefine";
 import { PlanCalendar } from "../components/PlanCalendar";
 import { TicketApprovalsPanel } from "../components/TicketApprovalsPanel";
 import { ProofingPanel } from "../components/ProofingPanel";
@@ -131,18 +134,6 @@ export function initialsFor(name?: string) {
 function formatDate(value?: string | null) {
   if (!value) return "—";
   return new Date(value).toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" });
-}
-
-function escapeHtml(value: string) {
-  return value.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
-}
-
-/** aiApi.improveText returns plain text — wrap it as paragraphs for the RichTextEditor's HTML value. */
-function plainTextToHtml(text: string) {
-  return text
-    .split(/\n{2,}/)
-    .map((para) => `<p>${escapeHtml(para).replace(/\n/g, "<br>")}</p>`)
-    .join("");
 }
 
 /** Column defs for the desktop list view's DataTable — module-level since these don't depend on
@@ -736,10 +727,18 @@ function CreateTicketDialog({
     }
   });
 
-  const improveDescription = useMutation({
-    mutationFn: () => aiApi.improveText({ text: draft.description, context: "ticket_description" }),
-    onSuccess: (res) => setDraft((d) => ({ ...d, description: plainTextToHtml(res.improved) })),
-    onError: (err: any) => toast.error("Could not improve text", { description: serverMessage(err, "AI may be disabled for this workspace.") })
+  // Refinement is offered per field and never lands on its own — see components/AiRefine.tsx.
+  const refineTitle = useAiRefine({
+    field: "ticket_title",
+    label: "title",
+    value: draft.title,
+    onChange: (next) => setDraft((d) => ({ ...d, title: next }))
+  });
+  const refineDescription = useAiRefine({
+    field: "ticket_description",
+    label: "description",
+    value: draft.description,
+    onChange: (next) => setDraft((d) => ({ ...d, description: next }))
   });
 
   function acceptSuggestion() {
@@ -781,22 +780,17 @@ function CreateTicketDialog({
             </div>
           </div>
           <div className="grid gap-1.5">
-            <Label>Title</Label>
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <Label>Title</Label>
+              <AiRefineTrigger state={refineTitle} />
+            </div>
             <Input value={draft.title} onChange={(e) => setDraft((d) => ({ ...d, title: e.target.value }))} placeholder="Short, specific summary" />
+            <AiRefinePanel state={refineTitle} />
           </div>
           <div className="grid gap-1.5">
-            <div className="flex items-center justify-between">
+            <div className="flex flex-wrap items-center justify-between gap-2">
               <Label>Description <span className="text-muted-foreground">(optional)</span></Label>
-              <Button
-                type="button"
-                variant="ghost"
-                size="sm"
-                className="h-7 gap-1 text-xs"
-                onClick={() => improveDescription.mutate()}
-                disabled={draft.description.replace(/<[^>]+>/g, "").trim().length === 0 || improveDescription.isPending}
-              >
-                <Sparkles className="h-3 w-3" />Improve with AI
-              </Button>
+              <AiRefineTrigger state={refineDescription} />
             </div>
             <RichTextEditor
               value={draft.description}
@@ -805,6 +799,7 @@ function CreateTicketDialog({
               minHeight="min-h-28"
               ariaLabel="Ticket description"
             />
+            <AiRefinePanel state={refineDescription} />
           </div>
 
           <div className="flex items-center justify-between rounded-md border border-dashed border-border px-3 py-2">
@@ -1296,11 +1291,7 @@ function CommentsPanel({
     mutationFn: () => aiApi.summarizeTicket(ticketId),
     onError: (err: any) => toast.error("Could not summarize", { description: serverMessage(err, "AI may be disabled for this workspace.") })
   });
-  const improveComment = useMutation({
-    mutationFn: () => aiApi.improveText({ text: body, context: "comment" }),
-    onSuccess: (res) => setBody(plainTextToHtml(res.improved)),
-    onError: (err: any) => toast.error("Could not improve comment", { description: serverMessage(err, "AI may be disabled for this workspace.") })
-  });
+  const refineComment = useAiRefine({ field: "ticket_comment", label: "comment", value: body, onChange: setBody });
   const plainLength = body.replace(/<[^>]+>/g, "").trim().length;
 
   return (
@@ -1345,18 +1336,10 @@ function CommentsPanel({
         </div>
       </ScrollArea>
       <div className="flex items-center justify-end">
-        <Button
-          type="button"
-          variant="ghost"
-          size="sm"
-          className="h-7 gap-1 text-xs"
-          onClick={() => improveComment.mutate()}
-          disabled={plainLength === 0 || improveComment.isPending}
-        >
-          <Sparkles className="h-3 w-3" />Improve with AI
-        </Button>
+        <AiRefineTrigger state={refineComment} />
       </div>
       <RichTextEditor value={body} onChange={setBody} placeholder="Add a comment..." minHeight="min-h-20" ariaLabel="New comment" />
+      <AiRefinePanel state={refineComment} />
       <Button size="sm" className="justify-self-end" disabled={plainLength === 0 || post.isPending} onClick={() => post.mutate()}>
         Post comment
       </Button>

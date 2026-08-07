@@ -66,6 +66,45 @@ Original text:
 Respond with ONLY the improved text — no preamble, no explanation.`
   },
   {
+    feature: "text_refine",
+    label: "Refine text",
+    description:
+      "Cleans up what someone typed into a description, note, title or comment. Separate from the writing assistant because this one is forbidden from restructuring or adding anything — it is used on records of work.",
+    placeholders: [
+      { name: "fieldLabel", description: "Which field is being refined, in the user's words.", sample: "timesheet task description" },
+      {
+        name: "guidance",
+        description: "The one extra rule the app supplies for this particular field (a title stays a single line; a timesheet entry is a compliance record).",
+        sample: "This text is a record of work that has already happened, kept for approval and audit."
+      },
+      { name: "text", description: "The user's original text, plain (HTML already stripped, paragraph and list breaks kept).", sample: "fixd the login bug on safri, took abt 3 hrs, see WEB-12" }
+    ],
+    required: ["text"],
+    // The "never invent" rules are load-bearing, not politeness: this capability runs over timesheet
+    // entries, which are what an approver and an auditor later read as a statement of what was done.
+    // An AI that smooths "mostly fixed" into "fixed", or helpfully adds a next step nobody committed
+    // to, has changed a record — so the constraint lives in the prompt and `required` keeps {{text}}
+    // in place no matter how an admin edits the rest.
+    defaultTemplate: `Clean up the text below. A person typed it into the "{{fieldLabel}}" field of a work-tracking app, and a colleague will read it.
+
+Fix spelling, grammar and punctuation, and improve clarity. Keep it concise — no longer than the original unless the original is genuinely hard to follow.
+
+Rules you must not break:
+- Preserve the author's meaning exactly. Never add a fact, cause, result, next step or opinion that isn't already there.
+- Keep every specific detail exactly as written: numbers, durations, dates, ticket keys (like WEB-12), file paths, error text, product names and people's names.
+- Never make a claim stronger or weaker than the author made it — "mostly working" must not become "working".
+- Don't add greetings, sign-offs, headings, or filler like "In summary".
+- Keep the author's existing structure: if they wrote a list, return a list; if they wrote one paragraph, return one paragraph.
+- If it is already clear, return it essentially unchanged rather than rewriting it for the sake of it.
+
+{{guidance}}
+
+Original text:
+{{text}}
+
+Respond with ONLY the cleaned-up text — no preamble, no explanation, no quotation marks around it.`
+  },
+  {
     feature: "comment_summary",
     label: "Comment thread summary",
     description: "Condenses a ticket's comment thread into a short status recap.",

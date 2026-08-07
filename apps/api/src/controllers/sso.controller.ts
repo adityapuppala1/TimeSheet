@@ -74,7 +74,7 @@ async function finishSsoLogin(
 // more general pattern registered against the same router.
 ssoRouter.get("/saml/start", async (req, res, next) => {
   try {
-    const org = await resolveActiveOrgBySlug(resolveOrgSlug(req));
+    const org = await resolveActiveOrgBySlug(resolveOrgSlug(req), req);
     const redirectUrl = await buildSamlAuthorizationRedirect(org.id);
     res.redirect(redirectUrl);
   } catch (error) {
@@ -97,7 +97,7 @@ ssoRouter.post("/saml/acs", express.urlencoded({ extended: false }), async (req,
 ssoRouter.get("/:provider/start", async (req, res, next) => {
   try {
     const provider = providerParam.parse(req.params.provider);
-    const org = await resolveActiveOrgBySlug(resolveOrgSlug(req));
+    const org = await resolveActiveOrgBySlug(resolveOrgSlug(req), req);
     const redirectUrl = await buildAuthorizationRedirect(org.id, provider);
     res.redirect(redirectUrl);
   } catch (error) {

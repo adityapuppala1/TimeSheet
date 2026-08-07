@@ -33,6 +33,8 @@ import { getGlobalAISettings, getMonthlyAIUsageSummary, getWeeklyAIUsageTrend, g
 import { getAIQualitySummary } from "../services/ai-quality.service.js";
 import { getAllowedSsoProviders } from "../services/plan-limits.service.js";
 import { getGlobalTicketSettings } from "../services/ticket.service.js";
+import { describeMcpCatalogue, generateMcpToken, getGlobalMcpSettings, updateGlobalMcpSettings } from "../services/mcp.service.js";
+import { MCP_TOOLS } from "../services/mcp-tools.js";
 import { decryptSecret, encryptSecret } from "../utils/encryption.js";
 import { getTransportStatus, invalidateMailTransportCache } from "../services/mail.service.js";
 import { attemptWebhookDelivery, nextRetryAt, WEBHOOK_EVENTS } from "../services/webhook-dispatch.service.js";
@@ -945,6 +947,122 @@ settingsRouter.delete("/api-keys/:id", requireSuperAdmin, async (req, res) => {
   if (!existing) throw new AppError(404, "API key not found");
   await prisma.apiKey.update({ where: { id: existing.id }, data: { revokedAt: new Date() } });
   await audit(req.user!.id, "settings.api_key_revoked", "ApiKey", existing.id, { name: existing.name });
+  res.status(204).send();
+});
+
+// ---------- MCP server ----------
+// The admin surface for controllers/mcp.controller.ts. Super-admin only, like every other
+// credential-issuing surface in this file — but the stakes are higher here than for an API key,
+// because an MCP credential acts AS a named person and the thing holding it is a language model
+// reading text this workspace ingests from strangers. See prisma/schema.prisma#GlobalMcpSettings
+// for why every default is the closed one.
+
+settingsRouter.get("/mcp", requireSuperAdmin, async (_req, res) => {
+  const settings = await getGlobalMcpSettings();
+  const credentials = await prisma.mcpCredential.findMany({
+    where: { revokedAt: null },
+    orderBy: { createdAt: "desc" },
+    select: {
+      id: true,
+      name: true,
+      tokenPrefix: true,
+      lastUsedAt: true,
+      createdAt: true,
+      user: { select: { id: true, name: true, email: true, role: { select: { name: true } } } },
+      createdBy: { select: { name: true } }
+    }
+  });
+  res.json({
+    enabled: settings.enabled,
+    allowWrites: settings.allowWrites,
+    updatedAt: settings.updatedAt,
+    tools: describeMcpCatalogue(settings),
+    credentials: credentials.map((c) => ({
+      id: c.id,
+      name: c.name,
+      tokenPrefix: c.tokenPrefix,
+      lastUsedAt: c.lastUsedAt,
+      createdAt: c.createdAt,
+      actingAs: { id: c.user.id, name: c.user.name, email: c.user.email, role: c.user.role.name },
+      createdBy: c.createdBy?.name ?? null
+    }))
+  });
+});
+
+const updateMcpSchema = z.object({
+  body: z.object({
+    enabled: z.boolean().optional(),
+    allowWrites: z.boolean().optional(),
+    /// `{ "<tool name>": true | false }`. Only names the server actually publishes are accepted —
+    /// a typo silently persisting as a key nobody reads would look exactly like a tool that
+    /// refuses to turn on.
+    toolOverrides: z.record(z.string(), z.boolean()).optional()
+  })
+});
+
+settingsRouter.patch("/mcp", requireSuperAdmin, validate(updateMcpSchema), async (req, res) => {
+  const overrides = req.body.toolOverrides as Record<string, boolean> | undefined;
+  if (overrides) {
+    const known = new Set(MCP_TOOLS.map((t) => t.name));
+    const unknown = Object.keys(overrides).filter((name) => !known.has(name));
+    if (unknown.length) throw new AppError(422, `Unknown MCP tool(s): ${unknown.join(", ")}`);
+  }
+  const settings = await updateGlobalMcpSettings(req.user!.id, {
+    enabled: req.body.enabled,
+    allowWrites: req.body.allowWrites,
+    toolOverrides: overrides
+  });
+  await audit(req.user!.id, "settings.mcp_updated", "GlobalMcpSettings", "global", {
+    enabled: settings.enabled,
+    allowWrites: settings.allowWrites,
+    toolOverrides: overrides
+  });
+  res.json({
+    enabled: settings.enabled,
+    allowWrites: settings.allowWrites,
+    updatedAt: settings.updatedAt,
+    tools: describeMcpCatalogue(settings)
+  });
+});
+
+const createMcpCredentialSchema = z.object({
+  body: z.object({ name: z.string().min(1).max(120), userId: z.string().uuid() })
+});
+
+settingsRouter.post("/mcp/credentials", requireSuperAdmin, validate(createMcpCredentialSchema), async (req, res) => {
+  // The bound user must be a real, live account in THIS workspace — the whole security model is
+  // that the credential's authority is that person's authority, which is meaningless if they are
+  // deactivated or belong somewhere else.
+  const target = await prisma.user.findFirst({
+    where: { id: req.body.userId, deletedAt: null, status: "ACTIVE" },
+    select: { id: true, name: true, email: true, role: { select: { name: true } } }
+  });
+  if (!target) throw new AppError(422, "Pick an active user in this workspace for the credential to act as.");
+
+  const { plaintext, tokenHash, tokenPrefix } = generateMcpToken();
+  const created = await prisma.mcpCredential.create({
+    data: { name: req.body.name, tokenHash, tokenPrefix, userId: target.id, createdById: req.user!.id }
+  });
+  await audit(req.user!.id, "settings.mcp_credential_created", "McpCredential", created.id, {
+    name: created.name,
+    actingAsUserId: target.id,
+    actingAsRole: target.role.name
+  });
+  // Same one-time-plaintext-reveal convention as the API key above — this response is the only
+  // place the full token is ever visible.
+  res.status(201).json({
+    id: created.id,
+    name: created.name,
+    token: plaintext,
+    actingAs: { id: target.id, name: target.name, email: target.email, role: target.role.name }
+  });
+});
+
+settingsRouter.delete("/mcp/credentials/:id", requireSuperAdmin, async (req, res) => {
+  const existing = await prisma.mcpCredential.findUnique({ where: { id: String(req.params.id) } });
+  if (!existing) throw new AppError(404, "MCP credential not found");
+  await prisma.mcpCredential.update({ where: { id: existing.id }, data: { revokedAt: new Date() } });
+  await audit(req.user!.id, "settings.mcp_credential_revoked", "McpCredential", existing.id, { name: existing.name });
   res.status(204).send();
 });
 

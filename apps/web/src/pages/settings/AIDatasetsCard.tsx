@@ -36,6 +36,7 @@ const FEATURES = [
   { value: "pr_review_summary", label: "PR review summary" },
   { value: "comment_summary", label: "Comment summary" },
   { value: "writing_assistant", label: "Writing assistant" },
+  { value: "text_refine", label: "Refine text" },
   { value: "ask_ai", label: "Ask AI" }
 ];
 

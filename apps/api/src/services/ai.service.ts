@@ -44,7 +44,7 @@ import { AppError } from "../middleware/error.js";
 import { decryptSecret } from "../utils/encryption.js";
 import { resolvePrompt } from "./ai-prompt.service.js";
 import { getEffectiveAiBudgetCeiling } from "./plan-limits.service.js";
-import { htmlToText } from "../utils/sanitize.js";
+import { htmlToPlainText, htmlToText, plainTextToRichText } from "../utils/sanitize.js";
 
 const GLOBAL_ID = "global";
 
@@ -1380,6 +1380,174 @@ export async function improveText(params: { text: string; context: "ticket_descr
   });
 
   return { improved: result.text || plain };
+}
+
+/* ------------------------------- Refine (inline, per-field) -------------------------------- */
+
+/**
+ * The fields the "Refine with AI" affordance is offered on. An allow-list rather than a free
+ * string: `guidance` is prompt content, so letting a caller pass its own would hand any
+ * authenticated user a way to write into the prompt — and `format` decides whether the answer is
+ * turned back into HTML, which is a sanitization decision, not a caller preference.
+ */
+export type RefineField =
+  | "ticket_title"
+  | "ticket_description"
+  | "ticket_comment"
+  | "timesheet_description"
+  | "timesheet_notes";
+
+interface RefineFieldSpec {
+  label: string;
+  guidance: string;
+  format: "plain" | "html";
+  /** Deliberately tight. This is an inline affordance someone is waiting on with a cursor in a
+   *  form, and a cap is also the cheapest guard against a model that decides to pad. */
+  maxTokens: number;
+}
+
+const REFINE_FIELDS: Record<RefineField, RefineFieldSpec> = {
+  ticket_title: {
+    label: "ticket title",
+    guidance: "This is a one-line summary. Return a single line of at most 120 characters, with no trailing full stop.",
+    format: "plain",
+    maxTokens: 100
+  },
+  ticket_description: {
+    label: "ticket description",
+    guidance: "This describes a problem or a piece of work for whoever picks it up. Do not turn it into a template or add sections the author didn't write.",
+    format: "html",
+    maxTokens: 700
+  },
+  ticket_comment: {
+    label: "ticket comment",
+    guidance: "This is one message in a thread. Keep the author's tone — a blunt comment stays blunt, it doesn't become corporate.",
+    format: "html",
+    maxTokens: 500
+  },
+  timesheet_description: {
+    label: "timesheet task description",
+    guidance:
+      "This is a record of work that has already happened; a manager approves it and an auditor may read it later. Never make the work sound larger, more complete or more certain than the author wrote it.",
+    format: "html",
+    maxTokens: 600
+  },
+  timesheet_notes: {
+    label: "timesheet notes",
+    guidance:
+      "These are side notes on a record of work — blockers, dependencies, follow-ups. Never upgrade a tentative note into a commitment, and never drop a caveat because it reads awkwardly.",
+    format: "html",
+    maxTokens: 400
+  }
+};
+
+/** Some models wrap a rewrite in quotes despite being told not to; that would otherwise land in
+ *  the user's field verbatim the moment they accept it. */
+function stripWrappingQuotes(text: string): string {
+  const trimmed = text.trim();
+  const match = /^(["'])([\s\S]*)\1$/.exec(trimmed) ?? /^“([\s\S]*)”$/.exec(trimmed);
+  if (!match) return trimmed;
+  const inner = (match[2] ?? match[1]).trim();
+  // Only unwrap when the quotes really are a wrapper: the same quote appearing inside means the
+  // outer pair may belong to the text (`"no" was the answer`), and mangling it is worse than a
+  // stray pair of quotes the user can see and reject.
+  return inner.includes(trimmed[0]) ? trimmed : inner;
+}
+
+export interface RefineResult {
+  /** The refined text as plain text — what a plain `<input>` field takes, and what is compared. */
+  refined: string;
+  /** Sanitized rich-text HTML for the rich-text fields; null for plain ones. */
+  refinedHtml: string | null;
+  format: "plain" | "html";
+  /** The original, plain, as the model actually saw it — so the UI diffs like for like instead of
+   *  showing the user's HTML next to the model's prose. */
+  original: string;
+}
+
+/**
+ * Cleans up one free-text field a user is currently typing into, and hands BOTH versions back so
+ * the caller can show them side by side. This never writes anything: accepting is a separate,
+ * explicit act in the UI.
+ *
+ * Gated on `writingAssistantEnabled` rather than a toggle of its own — it is the same admin
+ * decision ("may this workspace's AI help people write?") over the same budget, and a second
+ * boolean that always moved with the first would be a settings column pretending to be a choice.
+ */
+export async function refineText(params: { text: string; field: RefineField; userId?: string }): Promise<RefineResult> {
+  const spec = REFINE_FIELDS[params.field];
+  if (!spec) throw new AppError(422, "That field can't be refined.");
+
+  // Plain in, plain out: the model never sees markup, so it can never be talked into emitting any.
+  // Checked before the preflight because an empty field costs nothing to reject and the settings
+  // read + budget aggregate behind `preflight` are two queries there is no reason to spend.
+  const plain = spec.format === "html" ? htmlToPlainText(params.text) : params.text.trim();
+  if (!plain) throw new AppError(422, "There's nothing to refine yet — write something first.");
+
+  const { settings } = await preflight("writingAssistantEnabled");
+
+  const p = await resolvePrompt("text_refine", { fieldLabel: spec.label, guidance: spec.guidance, text: plain });
+
+  const startedAt = Date.now();
+  const result = await callChat(settings, { model: settings.model, maxTokens: spec.maxTokens, prompt: p.text });
+
+  const refined = spec.format === "plain"
+    ? stripWrappingQuotes(result.text).replace(/\s*\n+\s*/g, " ").slice(0, 255)
+    : stripWrappingQuotes(result.text);
+
+  await logAIUsage({
+    feature: "text_refine",
+    params: { text: params.text, field: params.field },
+    model: settings.model,
+    inputTokens: result.usage.inputTokens,
+    outputTokens: result.usage.outputTokens,
+    userId: params.userId,
+    prompt: p.text,
+    output: result.text,
+    latencyMs: Date.now() - startedAt,
+    promptVersionId: p.promptVersionId,
+    promptFallbackReason: p.fallbackReason
+  });
+
+  // An empty answer is a failure, not a refinement — returning the original would look like the
+  // model had considered the text and left it alone.
+  if (!refined) throw new AppError(502, "The AI returned an empty result. Your text hasn't been changed.");
+
+  return {
+    refined,
+    refinedHtml: spec.format === "html" ? plainTextToRichText(refined) : null,
+    format: spec.format,
+    original: plain
+  };
+}
+
+export interface RefineAvailability {
+  available: boolean;
+  reason: "ok" | "disabled" | "budget" | "unavailable";
+  message: string;
+}
+
+/**
+ * Answers "would a refine call be allowed right now?" WITHOUT calling a model, so the affordance
+ * can be disabled with a real reason instead of inviting a click that 403s.
+ *
+ * Implemented by running the exact same `preflight` the capability runs and reading the error,
+ * rather than re-deriving the rules here — a second copy of the gating logic is a second copy that
+ * can disagree with the enforced one, and the disagreement always shows up as a button that
+ * promises something the server then refuses.
+ */
+export async function getTextRefineAvailability(): Promise<RefineAvailability> {
+  try {
+    await preflight("writingAssistantEnabled");
+    return { available: true, reason: "ok", message: "" };
+  } catch (error) {
+    const status = error instanceof AppError ? error.statusCode : 0;
+    if (status === 403) return { available: false, reason: "disabled", message: "AI writing help is turned off for this workspace." };
+    if (status === 402) {
+      return { available: false, reason: "budget", message: "This month's AI budget has been used up. It resets at the start of next month." };
+    }
+    return { available: false, reason: "unavailable", message: "AI is unavailable right now." };
+  }
 }
 
 /** Summarizes a ticket's comment thread into a short status recap. */

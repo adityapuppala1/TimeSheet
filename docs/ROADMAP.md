@@ -2013,16 +2013,45 @@ much here as a finding.
 - [ ] **Phase 2 of token hashing**: drop `ApprovalStep.guestToken` / `RequestForm.publicToken` and
   the plaintext fallback, once the hashed columns have been live long enough that a rollback is no
   longer plausible.
-- [ ] **SSO/OAuth hardening**: `sso.service.ts` and `git-provider.service.ts` call `jwt.verify`
-  without pinning `algorithms`, the one place the codebase's own rule (`utils/security.ts`) is not
-  followed. SAML runs with node-saml defaults, so `validateInResponseTo` is `never` and a captured
-  `SAMLResponse` is replayable for its whole `NotOnOrAfter` window. `git-connection.controller.ts`
-  takes `orgId` and `userId` from a signed-but-not-single-use `state`, so a leaked state is
-  replayable within 10 minutes to bind an attacker's GitHub token into the victim org.
-- [ ] **Unauthenticated org-slug enumeration**: every `withOrgTenant` resolves the org BEFORE
-  authenticating, and `middleware/tenant.ts` returns three distinguishable statuses (404 unknown /
-  403 suspended / 503 not ready), so an anonymous caller can enumerate which orgs exist and their
-  lifecycle state, forcing a DSN decrypt per guess at 120/min/IP.
+- [x] **SSO/OAuth hardening** (2026-08-08), all three parts:
+  - **`algorithms` now pinned** on both state verifies (`sso.service.ts`, `git-provider.service.ts`),
+    and on the matching signs. Never exploitable with a string secret under jsonwebtoken 9 — the
+    inferred set is HMAC-only — but it was the one place the rule `utils/security.ts` states for
+    every other verify was not followed, and rules that hold "almost everywhere" are how the next
+    key type sneaks in. `tests/unit/oauth-state-hardening.test.ts` mints an HS512 state with the
+    same secret — accepted before, refused after — and 6 of its 8 cases fail pre-fix.
+  - **The GitHub connect `state` is single-use.** It now carries a `jti` that
+    `verifyGitConnectState` spends through `services/webhook-replay.ts`'s bounded TTL store, with
+    the same identical error for "already spent" and "never valid". A state that leaked the way
+    redirect URLs leak was replayable for its whole 10 minutes to bind an ATTACKER's GitHub token
+    into the victim's workspace. PER PROCESS, with that module's stated caveats; a state minted
+    before the claim existed is refused, so a connect in flight across a deploy costs one click.
+  - **SAML `validateInResponseTo` is on, set to `always`.** node-saml's own InMemoryCacheProvider
+    could not be used: `buildSamlClient` builds a fresh `SAML` per call, so the request id would be
+    saved into an object already garbage by the time the ACS POST arrived and every login would
+    fail. It is backed instead by a shared, org-scoped, 10-minute store in `sso.service.ts`.
+    `always` rather than `ifPresent` because `ifPresent` is bypassed by deleting one attribute —
+    and it breaks nothing, since IdP-initiated SSO is ALREADY impossible here (the ACS route
+    refuses any POST without a RelayState we signed). `tests/unit/saml-response-replay.test.ts`
+    drives the real flow — build the redirect, dig the AuthnRequest id back out of it, POST an ACS
+    response — and all 9 of its cases fail against the pre-fix service, which has no store to
+    check against at all.
+    **Single process only** — an AuthnRequest issued by one Node process and answered at another
+    would fail to validate. Unlike the webhook store that is a failed LOGIN, not a missed replay
+    catch, and it is the first thing to revisit if this ever runs behind more than one process.
+- [x] **Unauthenticated org-slug enumeration** (2026-08-08). Fixed in `middleware/tenant.ts`, NOT at
+  the webhook entry points: the `/:orgSlug` receivers are the cheapest oracle but not the only one,
+  since `resolveTenant` takes the slug from a `Host` header the caller equally controls — fixing
+  only the receivers would leave the same walk available one route over. `resolveActiveOrgBySlug`
+  now answers unknown / suspended / provisioning with one identical 404, and takes an optional
+  `req` so the real 403/503 survives for a caller holding a valid access token whose `org` claim
+  matches — signature only, since by definition the tenant database is not reachable on that path.
+  `tests/unit/tenant-slug-enumeration.test.ts`: 7 of 10 cases fail against the pre-fix middleware.
+  Stated honestly, and NOT claimed as fixed: an ACTIVE workspace still answers requests, so a
+  correct slug reaches a login form and a wrong one does not. What is closed is the LIFECYCLE STATE
+  of workspaces that are not serving traffic. The "DSN decrypt per guess" in the original finding
+  was also overstated — the decrypt happens in `resolveTenant` only AFTER the status check passes,
+  so it was never reached by a guess at an unknown or suspended slug.
 - [x] **`GET /ai-proposals` was unscoped** (2026-08-08). `tickets:view` is held tenant-wide by every
   non-viewer role, so it gated nothing: any employee listing proposals saw every project's pending
   plan changes and the model's reasoning for projects they cannot open. Now filtered through
@@ -2044,14 +2073,39 @@ much here as a finding.
   is not the same class of bug as the ticket routes. The real question is whether a template
   library should be visible to every role that holds `tickets:view`, which is a product decision,
   not a missing predicate. Recorded separately so it stops being counted as a scoping leak.
-- [ ] **Unbounded module maps**: `failedLogins` and `middleware/auth.ts`'s `lastSeenWrites` are never
-  swept and grow for the process lifetime; the former on unauthenticated input. Neither is a tenant
-  leak, both want a TTL sweep.
-- [ ] **Minor (code)**: `chat-webhook.controller.ts` echoes an attacker-supplied `challenge` before any
-  signature check; two `(req.body as Buffer).toString()` calls are unguarded and 500 on a
-  `text/plain` request; three comparisons pre-check byte length before `timingSafeEqual`, leaking
-  token length, while the correct hash-then-compare helper already exists in
-  `git-webhook-providers.ts`.
+- [x] **Unbounded module maps** (2026-08-08). Both swept on write — no timer, and no per-entry timer
+  least of all, since one live timer per email an attacker types is the same unbounded growth
+  wearing a different hat. Entries are re-inserted with a constant TTL, so insertion order IS
+  expiry order and the first live key ends each scan. `failedLogins` gets a 15-minute window that
+  doubles as the counter's decay (four failures a fortnight ago should not combine with one today),
+  deliberately longer than the 5-minute lock so an entry always outlives the lock it holds;
+  `lastSeenWrites` drops anything older than its own 5-minute throttle, past which the next request
+  writes anyway. **No hard entry cap on `failedLogins`, on purpose**: every eviction rule hands an
+  attacker the same primitive — flood the map until the victim's ARMED lockout is the one evicted.
+  The bound is the TTL times what the rate limiters allow through. `tests/unit/auth-memory-sweeps.test.ts`
+  (4 of 8 cases fail against the pre-fix maps; the other 4 pin that the lockout semantics and the
+  liveness throttle did not move, alongside the untouched `auth-login-lockout.test.ts`).
+- [x] **Minor (code)** (2026-08-08).
+  - Slack's `url_verification` handshake is answered AFTER the tenant lookup and the signature
+    check. Slack signs it like every other delivery, so verifying first costs nothing — while
+    answering first made the route an unauthenticated reflector for attacker-chosen text, naming
+    any workspace or none. Ordering consequence, stated: the integration must be saved with its
+    signing secret BEFORE the URL is pasted into Slack's console.
+  - The raw-body reads are `Buffer.isBuffer(...)`-guarded, not `?? Buffer.alloc(0)` — the sibling's
+    `??` misses a parser that handed back a plain object, whose `.toString()` is "[object Object]"
+    and whose `JSON.parse` is the same 500 one header earlier. Malformed JSON is now a 400.
+  - The three length-pre-checked comparisons (`devops-webhook`, `scim`, `chat-webhook`) use
+    `utils/security.ts#constantTimeEqual` — `git-webhook-providers.ts`'s `safeEqual` MOVED there
+    rather than exported from it, so SCIM does not import the git module and there is still exactly
+    one implementation. `tests/unit/shared-secret-compare.test.ts` observes the real
+    `timingSafeEqual` calls (the difference is invisible in the response and flaky to time): 6 of
+    12 cases fail against the pre-fix controllers, where a wrong-length guess never reached a
+    constant-time comparison at all. The two fixed-length HMAC comparisons in the same request
+    path (Slack's and GitHub's signature checks) were converted along with them — a hex digest's length
+    leaks nothing, so that is tidiness, not a fix: it leaves ONE comparison idiom in the request
+    path instead of two that a reader has to tell apart. `utils/file-url.ts`'s is deliberately
+    untouched — different module, its own documented reasoning, and not part of this finding.
+  - `tests/unit/webhook-request-hardening.test.ts` covers the first two: 7 of 10 cases fail before.
 - [x] **`docs/ARCHITECTURE.md` section 5's "bypasses tenant resolution" table was stale** — split
   out of "Minor" and fixed 2026-08-07: the four missing routes (`/api/git/webhook/:orgSlug`,
   `/api/git/callback`, `/api/billing/webhook`, `/api/scim/:orgSlug/v2/Users*`) are listed, with a
@@ -2064,3 +2118,34 @@ much here as a finding.
   results scored at or above the configured 0.75 and were rejected by `effectiveMatchThreshold`'s
   per-user tightening, which can only ever tighten. With genuine live scores averaging 0.709, a user
   who has drifted upward can effectively never pass again. Re-check with `npm run eval:face`.
+
+## "Refine with AI" next to the fields people actually write in (2026-08-08)
+
+The workspace already had a writing assistant, and it had the one flaw that matters: clicking it
+**overwrote what you had written**. On a ticket description that is annoying. On a timesheet task
+description — a record of work a manager approves and an auditor may later read — it is a
+compliance problem, because the sentence that gets approved is one nobody chose.
+
+- **The affordance is now per field and always a proposal.** `components/AiRefine.tsx` (a hook plus
+  a trigger and a result panel, so a caller keeps its own layout) shows the suggestion beside the
+  original, requires "Use this" or "Keep mine", and keeps the replaced value so Undo is real.
+  Offered on: timesheet task description and notes, ticket title and description, ticket comments.
+- **Routed through the existing choke point.** `refineText` in `ai.service.ts` runs the same
+  `preflight` every capability runs — master switch, the `writingAssistantEnabled` toggle, the
+  plan-clamped monthly budget — and logs to `AIUsageLog`/`AIInteraction` under its own
+  `text_refine` feature, so it shows up in the usage panel and the activity log like everything
+  else. No new settings column: it is the same admin decision over the same budget.
+- **Its own prompt, not the writing assistant's.** Registered in the `SPECS` allow-list, so it is
+  editable and versioned in Workspace Settings → Prompts. The default forbids adding facts,
+  padding, restructuring, or making any claim stronger or weaker than the author made it, and
+  `required: ["text"]` means no admin edit can drop the user's own words from it.
+- **The model's answer is treated as untrusted input, because it is.** It comes back as plain text,
+  is HTML-escaped character by character, and the assembled markup still goes through
+  `sanitizeRichText` — the same allow-list as any stored rich text — before the client re-sanitizes
+  with `safeHtml` to render the preview. `<script>`, `onerror` and `javascript:` end up as visible
+  text the author can read and reject, never as markup. Pinned in `tests/unit/sanitize.test.ts` and
+  `tests/unit/ai.service.test.ts`.
+- **Honest when it cannot help.** `GET /ai/text/refine/availability` (deliberately above the AI
+  router's 20/min limiter — it costs nothing and every form asks on mount) answers from the same
+  `preflight`, so the button is disabled with the actual reason: AI off, budget exhausted, or field
+  still empty. A timeout, a provider error and a 429 each say so rather than spinning forever.

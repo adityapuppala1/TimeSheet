@@ -27,7 +27,8 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from ".
 import { Separator } from "../components/ui/separator";
 import { toast } from "../components/ui/toaster";
 import { DatePicker, TimeField } from "../components/ui/date-picker";
-import { faceApi, projectApi, ticketApi, timesheetApi } from "../services/api";
+import { faceApi, projectApi, ticketApi, timesheetApi, type AIRefineField } from "../services/api";
+import { AiRefinePanel, AiRefineTrigger, useAiRefine } from "../components/AiRefine";
 import { FaceVerificationDialog } from "../components/FaceVerificationDialog";
 import { useFaceStatus } from "../lib/use-face-status";
 
@@ -134,6 +135,61 @@ function TicketPicker({
         </Command>
       </PopoverContent>
     </Popover>
+  );
+}
+
+/**
+ * A rich-text field with the AI refine affordance wired in. Its own component, not an inline
+ * fragment, because `useAiRefine` is a hook and react-hook-form's `render` prop is a plain
+ * callback — hooks called in there would belong to `FormField`, not to the field.
+ *
+ * The trigger sits beside the label rather than inside it: `FormLabel` renders a real `<label>`,
+ * and a button inside a label is a click that can activate the labelled control instead of itself.
+ */
+function RefinableRichText({
+  refineField,
+  refineLabel,
+  label,
+  value,
+  onChange,
+  placeholder,
+  minHeight,
+  ariaLabel,
+  meta
+}: {
+  refineField: AIRefineField;
+  refineLabel: string;
+  label: React.ReactNode;
+  value: string;
+  onChange: (html: string) => void;
+  placeholder: string;
+  minHeight: string;
+  ariaLabel: string;
+  /** Anything shown at the right of the label row alongside the trigger (e.g. a character count). */
+  meta?: React.ReactNode;
+}) {
+  const refine = useAiRefine({ field: refineField, value, onChange, label: refineLabel });
+
+  return (
+    <>
+      <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1">
+        <FormLabel>{label}</FormLabel>
+        <div className="flex items-center gap-2">
+          {meta}
+          <AiRefineTrigger state={refine} />
+        </div>
+      </div>
+      <FormControl>
+        <RichTextEditor
+          value={value}
+          onChange={onChange}
+          placeholder={placeholder}
+          minHeight={minHeight}
+          ariaLabel={ariaLabel}
+        />
+      </FormControl>
+      <AiRefinePanel state={refine} />
+    </>
   );
 }
 
@@ -462,21 +518,21 @@ export function Timesheet() {
                   const length = stripHtml(field.value || "").length;
                   return (
                     <FormItem>
-                      <FormLabel className="flex items-center justify-between">
-                        <span>Task description</span>
-                        <span className={`text-xs font-normal ${length < 10 ? "text-destructive" : "text-muted-foreground"}`}>
-                          {length} / min 10
-                        </span>
-                      </FormLabel>
-                      <FormControl>
-                        <RichTextEditor
-                          value={field.value}
-                          onChange={field.onChange}
-                          placeholder="What did you build, fix, document, or review? Use formatting to keep it scannable."
-                          minHeight="min-h-36"
-                          ariaLabel="Task description"
-                        />
-                      </FormControl>
+                      <RefinableRichText
+                        refineField="timesheet_description"
+                        refineLabel="task description"
+                        label="Task description"
+                        value={field.value}
+                        onChange={field.onChange}
+                        placeholder="What did you build, fix, document, or review? Use formatting to keep it scannable."
+                        minHeight="min-h-36"
+                        ariaLabel="Task description"
+                        meta={
+                          <span className={`text-xs font-normal ${length < 10 ? "text-destructive" : "text-muted-foreground"}`}>
+                            {length} / min 10
+                          </span>
+                        }
+                      />
                       <FormDescription>Supports bold, lists, headings, quotes, links — great for handoffs and audit clarity.</FormDescription>
                       <FormMessage />
                     </FormItem>
@@ -489,16 +545,16 @@ export function Timesheet() {
                 name="notes"
                 render={({ field }) => (
                   <FormItem>
-                    <FormLabel>Additional notes <span className="text-muted-foreground">(optional)</span></FormLabel>
-                    <FormControl>
-                      <RichTextEditor
-                        value={field.value ?? ""}
-                        onChange={field.onChange}
-                        placeholder="Blockers, dependencies, follow-ups..."
-                        minHeight="min-h-24"
-                        ariaLabel="Additional notes"
-                      />
-                    </FormControl>
+                    <RefinableRichText
+                      refineField="timesheet_notes"
+                      refineLabel="notes"
+                      label={<>Additional notes <span className="text-muted-foreground">(optional)</span></>}
+                      value={field.value ?? ""}
+                      onChange={field.onChange}
+                      placeholder="Blockers, dependencies, follow-ups..."
+                      minHeight="min-h-24"
+                      ariaLabel="Additional notes"
+                    />
                   </FormItem>
                 )}
               />

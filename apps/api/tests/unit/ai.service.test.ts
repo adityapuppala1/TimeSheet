@@ -24,9 +24,15 @@ vi.mock("../../src/services/plan-limits.service.js", () => ({
   getEffectiveAiBudgetCeiling: mockGetEffectiveAiBudgetCeiling
 }));
 
-const { assertAIFeatureEnabled, assertWithinBudget, classifyTicket, estimateCostUsd, reviewPullRequestDiff } = await import(
-  "../../src/services/ai.service.js"
-);
+const {
+  assertAIFeatureEnabled,
+  assertWithinBudget,
+  classifyTicket,
+  estimateCostUsd,
+  getTextRefineAvailability,
+  refineText,
+  reviewPullRequestDiff
+} = await import("../../src/services/ai.service.js");
 
 function fakeGlobalAiSettings(overrides: Partial<Record<string, unknown>> = {}) {
   return {
@@ -197,6 +203,169 @@ describe("classifyTicket", () => {
     });
 
     await expect(runInTenant(client, () => classifyTicket(CLASSIFY_PARAMS))).rejects.toMatchObject({ statusCode: 502 });
+  });
+});
+
+/**
+ * The inline "Refine with AI" affordance (components/AiRefine.tsx on the client).
+ *
+ * What's pinned here is the promise the feature makes: it is gated like every other capability
+ * BEFORE any money is spent, it never returns live markup for whatever the model felt like
+ * emitting, and it never quietly hands back the user's own text as though it had been refined.
+ */
+describe("refineText", () => {
+  const DESCRIPTION_HTML = "<p>fixd the login bug on safri, took abt 3 hrs, see WEB-12</p>";
+
+  function enabledClient(overrides: Partial<Record<string, unknown>> = {}) {
+    const client = createFakeTenantClient();
+    vi.mocked(client.globalAISettings.upsert).mockResolvedValue(
+      fakeGlobalAiSettings({ writingAssistantEnabled: true, ...overrides }) as never
+    );
+    vi.mocked(client.aIUsageLog.aggregate).mockResolvedValue({ _sum: { costUsdEstimate: 0 } } as never);
+    return client;
+  }
+
+  function modelAnswers(text: string) {
+    mockAnthropicCreate.mockResolvedValue({
+      content: [{ type: "text", text }],
+      usage: { input_tokens: 90, output_tokens: 30 }
+    });
+  }
+
+  it("blocks the call before ever reaching the model when the workspace AI switch is off", async () => {
+    const client = createFakeTenantClient();
+    vi.mocked(client.globalAISettings.upsert).mockResolvedValue(
+      fakeGlobalAiSettings({ aiEnabled: false, writingAssistantEnabled: true }) as never
+    );
+
+    await expect(
+      runInTenant(client, () => refineText({ text: DESCRIPTION_HTML, field: "timesheet_description" }))
+    ).rejects.toMatchObject({ statusCode: 403 });
+    expect(mockAnthropicCreate).not.toHaveBeenCalled();
+  });
+
+  it("blocks the call before ever reaching the model when the writing-assistant toggle is off", async () => {
+    const client = enabledClient({ writingAssistantEnabled: false });
+
+    await expect(
+      runInTenant(client, () => refineText({ text: DESCRIPTION_HTML, field: "ticket_description" }))
+    ).rejects.toMatchObject({ statusCode: 403 });
+    expect(mockAnthropicCreate).not.toHaveBeenCalled();
+  });
+
+  it("blocks the call before ever reaching the model when the monthly budget is exhausted", async () => {
+    const client = enabledClient({ monthlyBudgetUsd: 5 });
+    vi.mocked(client.aIUsageLog.aggregate).mockResolvedValue({ _sum: { costUsdEstimate: 5 } } as never);
+
+    await expect(
+      runInTenant(client, () => refineText({ text: DESCRIPTION_HTML, field: "timesheet_notes" }))
+    ).rejects.toMatchObject({ statusCode: 402 });
+    expect(mockAnthropicCreate).not.toHaveBeenCalled();
+  });
+
+  it("refuses an empty field without spending a call", async () => {
+    const client = enabledClient();
+
+    await expect(
+      runInTenant(client, () => refineText({ text: "<p></p>", field: "timesheet_description" }))
+    ).rejects.toMatchObject({ statusCode: 422 });
+    expect(mockAnthropicCreate).not.toHaveBeenCalled();
+  });
+
+  it("returns both versions and logs usage under its own feature, changing nothing itself", async () => {
+    const client = enabledClient();
+    modelAnswers("Fixed the login bug on Safari. Took about 3 hours. See WEB-12.");
+
+    const result = await runInTenant(client, () =>
+      refineText({ text: DESCRIPTION_HTML, field: "timesheet_description", userId: "user-1" })
+    );
+
+    expect(result.format).toBe("html");
+    expect(result.refined).toBe("Fixed the login bug on Safari. Took about 3 hours. See WEB-12.");
+    expect(result.refinedHtml).toBe("<p>Fixed the login bug on Safari. Took about 3 hours. See WEB-12.</p>");
+    // The caller's own text comes back untouched alongside it — accepting is the client's job.
+    expect(result.original).toBe("fixd the login bug on safri, took abt 3 hrs, see WEB-12");
+    expect(client.aIUsageLog.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({ feature: "text_refine", inputTokens: 90, outputTokens: 30, userId: "user-1" })
+      })
+    );
+  });
+
+  it("escapes markup the model emits instead of handing back live HTML", async () => {
+    // The stored-XSS path this feature would otherwise open: model output is written into a
+    // rich-text editor and then persisted, so it is exactly as untrusted as anything pasted in.
+    const client = enabledClient();
+    modelAnswers('<script>alert(1)</script><img src=x onerror="alert(1)"> <a href="javascript:alert(1)">click</a>');
+
+    const result = await runInTenant(client, () => refineText({ text: DESCRIPTION_HTML, field: "ticket_comment" }));
+
+    // It survives as visible text — the author can see exactly what the model produced — but not
+    // as markup: the only tags left are the paragraph wrapper this code built itself, so there is
+    // no element for `onerror` or a `javascript:` href to hang off.
+    expect(result.refinedHtml).toBe(
+      '<p>&lt;script&gt;alert(1)&lt;/script&gt;&lt;img src=x onerror="alert(1)"&gt; &lt;a href="javascript:alert(1)"&gt;click&lt;/a&gt;</p>'
+    );
+    expect(result.refinedHtml?.replace(/<\/?p>/g, "")).not.toMatch(/<[a-z]/i);
+  });
+
+  it("keeps a plain field on one line and offers no HTML for it", async () => {
+    const client = enabledClient();
+    modelAnswers('"Login fails on Safari\nafter the cookie change"');
+
+    const result = await runInTenant(client, () => refineText({ text: "login broke safri", field: "ticket_title" }));
+
+    expect(result.format).toBe("plain");
+    expect(result.refinedHtml).toBeNull();
+    // Wrapping quotes stripped, newline flattened — a title is one line and this one would
+    // otherwise land in the input verbatim the moment the user accepted it.
+    expect(result.refined).toBe("Login fails on Safari after the cookie change");
+  });
+
+  it("treats an empty answer as a failure rather than pretending the text was reviewed", async () => {
+    const client = enabledClient();
+    modelAnswers("   ");
+
+    await expect(
+      runInTenant(client, () => refineText({ text: DESCRIPTION_HTML, field: "ticket_description" }))
+    ).rejects.toMatchObject({ statusCode: 502 });
+  });
+});
+
+describe("getTextRefineAvailability", () => {
+  // The UI disables the affordance from this, so a wrong answer is either a button that 403s on
+  // click or a feature that looks switched off while it works.
+  it("reports the same verdict the capability enforces", async () => {
+    const client = createFakeTenantClient();
+    vi.mocked(client.globalAISettings.upsert).mockResolvedValue(
+      fakeGlobalAiSettings({ writingAssistantEnabled: true }) as never
+    );
+    vi.mocked(client.aIUsageLog.aggregate).mockResolvedValue({ _sum: { costUsdEstimate: 0 } } as never);
+
+    await expect(runInTenant(client, getTextRefineAvailability)).resolves.toMatchObject({ available: true, reason: "ok" });
+  });
+
+  it("says the feature is off rather than throwing", async () => {
+    const client = createFakeTenantClient();
+    vi.mocked(client.globalAISettings.upsert).mockResolvedValue(fakeGlobalAiSettings({ aiEnabled: false }) as never);
+
+    await expect(runInTenant(client, getTextRefineAvailability)).resolves.toMatchObject({
+      available: false,
+      reason: "disabled"
+    });
+  });
+
+  it("distinguishes an exhausted budget from a disabled feature", async () => {
+    const client = createFakeTenantClient();
+    vi.mocked(client.globalAISettings.upsert).mockResolvedValue(
+      fakeGlobalAiSettings({ writingAssistantEnabled: true, monthlyBudgetUsd: 5 }) as never
+    );
+    vi.mocked(client.aIUsageLog.aggregate).mockResolvedValue({ _sum: { costUsdEstimate: 5 } } as never);
+
+    await expect(runInTenant(client, getTextRefineAvailability)).resolves.toMatchObject({
+      available: false,
+      reason: "budget"
+    });
   });
 });
 

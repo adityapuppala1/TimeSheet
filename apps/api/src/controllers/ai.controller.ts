@@ -19,8 +19,11 @@ import {
   answerWorkspaceQuestion,
   classifyTicket,
   findDuplicateTickets,
+  getTextRefineAvailability,
   improveText,
-  summarizeComments
+  refineText,
+  summarizeComments,
+  type RefineField
 } from "../services/ai.service.js";
 import {
   addDatasetItemFromInteraction,
@@ -44,6 +47,16 @@ import { ticketProjectScope } from "../services/ticket.service.js";
 
 export const aiRouter = Router();
 aiRouter.use(requireAuth);
+
+/**
+ * "Can I offer the Refine button, and if not, what do I tell the user?" — registered ABOVE the
+ * rate limiter on purpose: it makes no model call and costs nothing, and every form carrying the
+ * affordance asks on mount. Counting it against the 20/min AI budget would mean opening the
+ * timesheet form twenty times locks a user out of the actual refinements.
+ */
+aiRouter.get("/text/refine/availability", async (_req, res) => {
+  res.json(await getTextRefineAvailability());
+});
 
 // AI calls cost real money and take longer than a normal request — a tighter cap
 // than the global 120/min limiter in app.ts.
@@ -113,6 +126,36 @@ const improveSchema = z.object({
 
 aiRouter.post("/text/improve", requirePermission(permissions.TICKETS_WRITE), validate(improveSchema), async (req, res) => {
   const result = await improveText({ text: req.body.text, context: req.body.context, userId: req.user!.id });
+  res.json(result);
+});
+
+const refineSchema = z.object({
+  body: z.object({
+    text: z.string().min(1).max(20000),
+    field: z.enum(["ticket_title", "ticket_description", "ticket_comment", "timesheet_description", "timesheet_notes"])
+  })
+});
+
+/**
+ * Which permission each refinable field needs. The rest of this router is ticket work, so it can
+ * hang one `requirePermission(TICKETS_WRITE)` off each route; refine also covers timesheet fields,
+ * and an EMPLOYEE who fills in a timesheet has no reason to hold tickets:write. Gating on the
+ * field keeps "can you edit this text at all" and "can you have the AI tidy it" the same answer.
+ */
+const REFINE_FIELD_PERMISSION: Record<RefineField, string> = {
+  ticket_title: permissions.TICKETS_WRITE,
+  ticket_description: permissions.TICKETS_WRITE,
+  ticket_comment: permissions.TICKETS_WRITE,
+  timesheet_description: permissions.TIMESHEETS_WRITE,
+  timesheet_notes: permissions.TIMESHEETS_WRITE
+};
+
+// `validate` runs first so `field` is a known value by the time the permission is looked up.
+aiRouter.post("/text/refine", validate(refineSchema), async (req, res) => {
+  const field = req.body.field as RefineField;
+  if (!req.user!.permissions.includes(REFINE_FIELD_PERMISSION[field])) throw new AppError(403, "Forbidden");
+
+  const result = await refineText({ text: req.body.text, field, userId: req.user!.id });
   res.json(result);
 });
 

@@ -1656,6 +1656,17 @@ export const settingsApi = {
     (await api.post<ApiKeyCreated>("/settings/api-keys", payload)).data,
   revokeApiKey: async (id: string) => api.delete(`/settings/api-keys/${id}`),
 
+  // MCP server — TimeSphere exposed AS an MCP server for Claude Desktop / Claude Code / the
+  // Anthropic MCP connector. `getMcp` returns the tool catalogue with each tool's *effective*
+  // state already resolved server-side, so the UI never re-derives the enablement rule.
+  getMcp: async () => (await api.get<McpSettingsResponse>("/settings/mcp")).data,
+  updateMcp: async (payload: { enabled?: boolean; allowWrites?: boolean; toolOverrides?: Record<string, boolean> }) =>
+    (await api.patch<Omit<McpSettingsResponse, "credentials">>("/settings/mcp", payload)).data,
+  /** Returns the bearer token exactly once — the server only ever stores its hash. */
+  createMcpCredential: async (payload: { name: string; userId: string }) =>
+    (await api.post<McpCredentialCreated>("/settings/mcp/credentials", payload)).data,
+  revokeMcpCredential: async (id: string) => api.delete(`/settings/mcp/credentials/${id}`),
+
   listWebhooks: async () => (await api.get<OutboundWebhookRow[]>("/settings/webhooks")).data,
   createWebhook: async (payload: { name: string; url: string; events: OutboundWebhookEvent[] }) =>
     (await api.post<OutboundWebhookCreated>("/settings/webhooks", payload)).data,
@@ -1722,6 +1733,48 @@ export interface ApiKeyCreated {
   scope: ApiKeyScope;
   /** Shown exactly once — the server never returns it again after this response. */
   key: string;
+}
+
+export interface McpToolRow {
+  name: string;
+  title: string;
+  description: string;
+  /** Permission the acting user must hold, or null for tools scoped to the caller themselves. */
+  permission: string | null;
+  mutating: boolean;
+  destructive: boolean;
+  /** Results can contain text written by people outside the workspace (email/chat intake). */
+  untrustedContent: boolean;
+  /** The workspace's explicit choice; null when it has never made one. */
+  override: boolean | null;
+  defaultEnabled: boolean;
+  /** What the MCP endpoint itself would answer — already folds in the master switch and the
+   *  read-only latch, so a tool can read "on" here only if it is genuinely callable. */
+  effectiveEnabled: boolean;
+}
+export interface McpCredentialRow {
+  id: string;
+  name: string;
+  tokenPrefix: string;
+  lastUsedAt: string | null;
+  createdAt: string;
+  /** The person every tool call made with this credential runs as. */
+  actingAs: { id: string; name: string; email: string; role: string };
+  createdBy: string | null;
+}
+export interface McpSettingsResponse {
+  enabled: boolean;
+  allowWrites: boolean;
+  updatedAt: string;
+  tools: McpToolRow[];
+  credentials: McpCredentialRow[];
+}
+export interface McpCredentialCreated {
+  id: string;
+  name: string;
+  /** Shown exactly once — the server stores only a SHA-256 hash of it. */
+  token: string;
+  actingAs: { id: string; name: string; email: string; role: string };
 }
 
 export interface OutboundWebhookRow {
@@ -2339,7 +2392,34 @@ export interface AIDuplicateMatch {
   reasoning: string;
 }
 
-/** On-demand AI capabilities (auto-triage, duplicate check, writing assistant, comment summary, workspace Q&A) — see apps/api/src/services/ai.service.ts for the gating/budget logic each of these goes through server-side. */
+/** The free-text fields the inline "Refine with AI" affordance is offered on. Mirrors `RefineField`
+ *  in apps/api/src/services/ai.service.ts — the server owns the list, this is the client's copy of
+ *  it so a typo is a compile error rather than a 422. */
+export type AIRefineField =
+  | "ticket_title"
+  | "ticket_description"
+  | "ticket_comment"
+  | "timesheet_description"
+  | "timesheet_notes";
+
+export interface AIRefineResult {
+  /** Plain text — what a plain input takes, and what the compare view shows. */
+  refined: string;
+  /** Sanitized rich-text HTML for rich-text fields; null for plain ones. Already through the
+   *  server's `sanitizeRichText` allow-list, and re-sanitized again on render via `safeHtml`. */
+  refinedHtml: string | null;
+  format: "plain" | "html";
+  /** The user's own text as the model saw it (plain), so the comparison is like for like. */
+  original: string;
+}
+
+export interface AIRefineAvailability {
+  available: boolean;
+  reason: "ok" | "disabled" | "budget" | "unavailable";
+  message: string;
+}
+
+/** On-demand AI capabilities (auto-triage, duplicate check, writing assistant, inline refine, comment summary, workspace Q&A) — see apps/api/src/services/ai.service.ts for the gating/budget logic each of these goes through server-side. */
 export const aiApi = {
   suggestTriage: async (payload: { projectId: string; title: string; description?: string }) =>
     (await api.post<AITriageSuggestion>("/ai/tickets/suggest-triage", payload)).data,
@@ -2347,6 +2427,9 @@ export const aiApi = {
     (await api.post<{ matches: AIDuplicateMatch[] }>("/ai/tickets/duplicates", payload)).data,
   improveText: async (payload: { text: string; context?: "ticket_description" | "comment" }) =>
     (await api.post<{ improved: string }>("/ai/text/improve", payload)).data,
+  refineText: async (payload: { text: string; field: AIRefineField }) =>
+    (await api.post<AIRefineResult>("/ai/text/refine", payload)).data,
+  refineAvailability: async () => (await api.get<AIRefineAvailability>("/ai/text/refine/availability")).data,
   summarizeTicket: async (id: string) => (await api.post<{ summary: string }>(`/ai/tickets/${id}/summarize`)).data,
   ask: async (question: string) => (await api.post<{ answer: string }>("/ai/ask", { question })).data
 };

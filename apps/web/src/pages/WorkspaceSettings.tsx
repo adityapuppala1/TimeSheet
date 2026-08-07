@@ -100,6 +100,7 @@ import { useAuthStore } from "../store/auth";
 import { ChatIntegrationsSettingsCard } from "./settings/ChatIntegrationsSettingsCard";
 import { MailServerSettingsCard } from "./settings/MailServerSettingsCard";
 import { PublicApiSettingsCard } from "./settings/PublicApiSettingsCard";
+import { McpServerSettingsCard } from "./settings/McpServerSettingsCard";
 import { BillingSettingsCard } from "./settings/BillingSettingsCard";
 import { IntegrationsSettingsCard } from "./settings/IntegrationsSettingsCard";
 import { AIDatasetsCard } from "./settings/AIDatasetsCard";
@@ -275,6 +276,10 @@ export function WorkspaceSettingsPage() {
           <TabsTrigger value="integrations">Integrations</TabsTrigger>
           <TabsTrigger value="billing">Billing</TabsTrigger>
           <TabsTrigger value="public-api">Public API</TabsTrigger>
+          {/* Next to Public API on purpose: both hand an outside system a bearer token against
+              this workspace. The difference an admin must not miss is that this one's caller is a
+              language model, which is why its own tab leads with that. */}
+          <TabsTrigger value="mcp">MCP server</TabsTrigger>
           <TabsTrigger value="sso">Single sign-on</TabsTrigger>
           <TabsTrigger value="maintenance">Maintenance</TabsTrigger>
           <TabsTrigger value="storage">Storage & logs</TabsTrigger>
@@ -331,6 +336,10 @@ export function WorkspaceSettingsPage() {
 
         <TabsContent value="public-api">
           <PublicApiSettingsCard readOnly={!isSuperAdmin} />
+        </TabsContent>
+
+        <TabsContent value="mcp">
+          <McpServerSettingsCard readOnly={!isSuperAdmin} />
         </TabsContent>
 
         <TabsContent value="sso">
@@ -1446,7 +1455,7 @@ function AISettingsCard({ readOnly }: { readOnly: boolean }) {
     { key: "autoTriageEnabled", label: "Auto-triage suggestions", description: "Suggest type, priority, and module when a ticket is created." },
     { key: "autoTriageAutoApply", label: "Auto-apply triage suggestions", description: "Pre-fill the suggestion instead of showing an accept/dismiss chip." },
     { key: "duplicateDetectionEnabled", label: "Duplicate detection", description: "Flag likely-duplicate tickets when a new one is created." },
-    { key: "writingAssistantEnabled", label: "Writing assistant", description: "\"Improve with AI\" button in ticket and comment editors." },
+    { key: "writingAssistantEnabled", label: "Writing assistant", description: "\"Refine with AI\" next to timesheet and ticket text fields — the suggestion is always shown for the author to accept or reject." },
     { key: "commentSummaryEnabled", label: "Comment thread summaries", description: "AI summary of long comment threads on a ticket." },
     { key: "workspaceSearchEnabled", label: "\"Ask AI\" ticket search", description: "Natural-language Q&A over your accessible tickets and workspace analytics (velocity, SLA, workload, cost) from the command palette." },
     { key: "emailIngestionEnabled", label: "Email-to-ticket intake", description: "Parse inbound bug-report emails and auto-create tickets." },

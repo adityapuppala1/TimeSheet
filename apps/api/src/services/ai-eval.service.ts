@@ -39,6 +39,7 @@ import {
   getGlobalAISettings,
   improveText,
   judgeAnswerEquivalence,
+  refineText,
   summarizeComments,
   summarizePullRequest,
   suggestStaleTicketNextAction
@@ -137,6 +138,14 @@ const REPLAYERS: Record<string, Replayer> = {
     structured: false,
     schema: z.object({ text: z.string(), context: z.enum(["ticket_description", "comment"]) }),
     invoke: async (p) => (await improveText(p)).improved
+  },
+  text_refine: {
+    structured: false,
+    schema: z.object({
+      text: z.string(),
+      field: z.enum(["ticket_title", "ticket_description", "ticket_comment", "timesheet_description", "timesheet_notes"])
+    }),
+    invoke: async (p) => (await refineText(p)).refined
   },
   comment_summary: {
     structured: false,
