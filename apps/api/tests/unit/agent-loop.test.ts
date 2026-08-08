@@ -181,6 +181,51 @@ describe("the allowlist", () => {
     expect(JSON.stringify(secondCall.transcript)).toContain("not in this capability's allowlist");
   });
 
+  it("refuses a call it already made, with the answer it already got", async () => {
+    // The first live run of this loop spent NINE of twelve steps re-issuing identical
+    // search_tickets calls that returned nothing. The prompt already asked it not to; an
+    // instruction is not a bound, so the envelope enforces it.
+    vi.mocked(planAgentStep)
+      .mockResolvedValueOnce({ decision: { action: "tool", tool: "get_ticket", args: { key: "WEB-1" } }, costUsd: 0.01, raw: "{}" })
+      .mockResolvedValueOnce({ decision: { action: "tool", tool: "get_ticket", args: { key: "WEB-1" } }, costUsd: 0.01, raw: "{}" })
+      .mockResolvedValueOnce({ decision: { action: "finish", summary: "ok" }, costUsd: 0.01, raw: "{}" });
+    vi.mocked(invokeMcpTool).mockResolvedValue({ count: 0 } as never);
+
+    await runInTenant(client, () => executeAgentRun("run-1"));
+
+    // The tool ran once, not twice — the repeat cost no invocation and no fresh read.
+    expect(vi.mocked(invokeMcpTool)).toHaveBeenCalledTimes(1);
+    expect(stepKinds()).toContain("refusal");
+    // And the refusal carries the earlier ANSWER, so the model can act on it rather than guess.
+    const third = vi.mocked(planAgentStep).mock.calls[2][0];
+    expect(JSON.stringify(third.transcript)).toContain("already called get_ticket");
+  });
+
+  it("treats argument key order as the same call — otherwise the check is trivially defeated", async () => {
+    vi.mocked(planAgentStep)
+      .mockResolvedValueOnce({ decision: { action: "tool", tool: "get_ticket", args: { a: 1, b: 2 } }, costUsd: 0.01, raw: "{}" })
+      .mockResolvedValueOnce({ decision: { action: "tool", tool: "get_ticket", args: { b: 2, a: 1 } }, costUsd: 0.01, raw: "{}" })
+      .mockResolvedValueOnce({ decision: { action: "finish", summary: "ok" }, costUsd: 0.01, raw: "{}" });
+    vi.mocked(invokeMcpTool).mockResolvedValue({ ok: true } as never);
+
+    await runInTenant(client, () => executeAgentRun("run-1"));
+
+    expect(vi.mocked(invokeMcpTool)).toHaveBeenCalledTimes(1);
+  });
+
+  it("still lets the same tool run with different arguments", async () => {
+    vi.mocked(planAgentStep)
+      .mockResolvedValueOnce({ decision: { action: "tool", tool: "get_ticket", args: { key: "WEB-1" } }, costUsd: 0.01, raw: "{}" })
+      .mockResolvedValueOnce({ decision: { action: "tool", tool: "get_ticket", args: { key: "WEB-2" } }, costUsd: 0.01, raw: "{}" })
+      .mockResolvedValueOnce({ decision: { action: "finish", summary: "ok" }, costUsd: 0.01, raw: "{}" });
+    vi.mocked(invokeMcpTool).mockResolvedValue({ ok: true } as never);
+
+    await runInTenant(client, () => executeAgentRun("run-1"));
+
+    expect(vi.mocked(invokeMcpTool)).toHaveBeenCalledTimes(2);
+    expect(finalStatus()).toBe("COMPLETED");
+  });
+
   it("reading stranger-authored content taints the run through the tool door", async () => {
     // search_tickets is untrustedContent: true in the real registry — the loop calls it through
     // callToolForRun, which is the only place the taint bit is set.

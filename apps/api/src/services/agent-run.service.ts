@@ -298,6 +298,39 @@ export async function executeAgentRun(runId: string): Promise<void> {
 const TRANSCRIPT_RESULT_LIMIT = 4_000;
 
 /**
+ * A repeated call is the same tool with the same arguments — identified by signature so the
+ * envelope can refuse it rather than ask the model not to.
+ *
+ * WHY THIS EXISTS: the first live run of this loop spent NINE of its twelve steps re-issuing
+ * identical `search_tickets` calls that returned nothing, and opened by calling `list_projects`
+ * twice in a row. The prompt already said "do not re-fetch what you already have"; the model
+ * ignored it, because an instruction is not a bound. Every one of those steps was a paid model
+ * call that bought no new information, and the run hit its ceiling without ever answering.
+ *
+ * Stringify with sorted keys so `{a,b}` and `{b,a}` are one signature — otherwise key order alone
+ * would defeat the check.
+ */
+function callSignature(tool: string, args: unknown): string {
+  const stable = (value: unknown): unknown => {
+    if (Array.isArray(value)) return value.map(stable);
+    if (value !== null && typeof value === "object") {
+      return Object.fromEntries(
+        Object.entries(value as Record<string, unknown>)
+          .sort(([a], [b]) => a.localeCompare(b))
+          .map(([k, v]) => [k, stable(v)])
+      );
+    }
+    return value;
+  };
+  try {
+    return `${tool}:${JSON.stringify(stable(args))}`;
+  } catch {
+    // Unserialisable args cannot be compared, so they are never treated as repeats.
+    return `${tool}:${Math.random()}`;
+  }
+}
+
+/**
  * The loop: the model chooses each step, the envelope decides whether it may take it.
  *
  * Every control this file promised is checked BETWEEN steps, in order: abort (a person said stop),
@@ -320,6 +353,8 @@ async function runModelDrivenLoop(
   }));
   const transcript: Array<{ tool: string; args: unknown; result: string }> = [];
   const maxCost = run.maxCostUsd !== null ? Number(run.maxCostUsd) : null;
+  /** Every (tool, args) already issued this run — see callSignature for why asking wasn't enough. */
+  const seenCalls = new Set<string>();
   let costUsd = Number(run.costUsd ?? 0);
   let step = 0;
 
@@ -367,6 +402,22 @@ async function runModelDrivenLoop(
       transcript.push({ tool: decision.tool, args: decision.args, result: refusal });
       continue;
     }
+
+    // Refuse a call this run has already made, with the answer it already got. Same treatment a
+    // disallowed tool gets — recorded, fed back as data, and charged as a step so a model that
+    // insists on looping still runs out — but it costs no tool invocation and no fresh read.
+    const signature = callSignature(decision.tool, decision.args);
+    if (seenCalls.has(signature)) {
+      const previous = transcript.find((entry) => callSignature(entry.tool, entry.args) === signature);
+      const refusal =
+        `You already called ${decision.tool} with exactly those arguments this run and got: ` +
+        `${(previous?.result ?? "(no result recorded)").slice(0, 400)}. ` +
+        `Calling it again cannot return anything new — either use a different tool or different arguments, or finish.`;
+      await recordStep(run.id, step, { kind: "refusal", toolName: decision.tool, args: decision.args, error: "Repeated call refused." });
+      transcript.push({ tool: decision.tool, args: decision.args, result: refusal });
+      continue;
+    }
+    seenCalls.add(signature);
 
     try {
       const result = await callToolForRun(run.id, ctx, spec.id, run.level, decision.tool, decision.args, step);

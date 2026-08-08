@@ -107,6 +107,7 @@ import { AIDatasetsCard } from "./settings/AIDatasetsCard";
 import { AIEvalsCard } from "./settings/AIEvalsCard";
 import { AIPromptsCard } from "./settings/AIPromptsCard";
 import { AIAutonomyCard } from "./settings/AIAutonomyCard";
+import { AgentRunsCard } from "./settings/AgentRunsCard";
 import { SecurityDevOpsSettingsCard } from "./settings/SecurityDevOpsSettingsCard";
 import { FaceVerificationSettingsCard } from "./settings/FaceVerificationSettingsCard";
 import { MaintenanceSettingsCard } from "./settings/MaintenanceSettingsCard";
@@ -1814,6 +1815,11 @@ function AISettingsCard({ readOnly }: { readOnly: boolean }) {
         settings={settings.data}
         onToggleFeature={(key, value) => update.mutate({ [key]: value } as never)}
       />
+
+      {/* Directly under the ladder on purpose: you set how much authority a capability holds up
+          there, and watch it actually used down here. Only when AI is on — with the master switch
+          off nothing can be queued, and an empty panel would just raise questions. */}
+      {settings.data?.aiEnabled && !readOnly && <AgentRunsCard />}
 
       <AIQualityCard enabled={Boolean(settings.data?.aiEnabled)} captureOn={Boolean(settings.data?.aiCaptureEnabled)} />
 

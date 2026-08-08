@@ -13,6 +13,7 @@ import {
   Briefcase,
   CalendarDays,
   FileClock,
+  FileStack,
   FolderKanban,
   GanttChartSquare,
   Gauge,
@@ -95,6 +96,7 @@ export const nav: NavItem[] = [
   { to: "/app/timeline", label: "Timeline", icon: GanttChartSquare, permission: permissions.TICKETS_VIEW, section: "Plan", feature: "timeline" },
   { to: "/app/portfolio", label: "Portfolio", icon: Briefcase, permission: permissions.REPORTS_VIEW, section: "Plan", feature: "planning" },
   { to: "/app/workload", label: "Workload", icon: Gauge, permission: permissions.RESOURCES_MANAGE, section: "Plan", feature: "resourceManagement" },
+  { to: "/app/blueprints", label: "Blueprints", icon: FileStack, permission: permissions.TICKETS_VIEW, section: "Plan", feature: "planning" },
   { to: "/app/proposals", label: "AI suggestions", icon: Sparkles, permission: permissions.TICKETS_VIEW, section: "Plan", feature: "planning" },
 
   { to: "/app/approvals", label: "Approvals", icon: Shield, permission: permissions.TIMESHEETS_APPROVE, section: "Team" },

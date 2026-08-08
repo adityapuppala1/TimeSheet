@@ -3592,6 +3592,54 @@ export const blueprintApi = {
     (await api.post<BlueprintRow>("/blueprints/derive", { projectId, name })).data
 };
 
+/* ---------------------------------- Agent runs ---------------------------------- */
+
+export interface AgentRunStepRow {
+  id: string;
+  index: number;
+  /** "tool" | "note" | "refusal" | "error" | "finish" | "proposal" */
+  kind: string;
+  toolName: string | null;
+  argsJson: unknown;
+  resultText: string | null;
+  error: string | null;
+  createdAt: string;
+}
+
+export interface AgentRunRow {
+  id: string;
+  capability: string;
+  trigger: string;
+  /** QUEUED | RUNNING | COMPLETED | PARTIAL | BLOCKED | ABORTED | FAILED */
+  status: string;
+  level: string;
+  goal: string | null;
+  /** Set the moment the run reads text authored outside the workspace — from then on it may not
+   *  write, whatever its level says. */
+  taintedAt: string | null;
+  stepCount: number;
+  maxSteps: number;
+  costUsd: string | number | null;
+  maxCostUsd: string | number | null;
+  proposalId: string | null;
+  error: string | null;
+  startedAt: string | null;
+  finishedAt: string | null;
+  createdAt: string;
+  onBehalfOf?: { id: string; name: string } | null;
+  steps?: AgentRunStepRow[];
+}
+
+export const agentRunApi = {
+  capabilities: async () =>
+    (await api.get<Array<{ id: string; title: string; description: string; needsProject: boolean }>>("/agent-runs/capabilities")).data,
+  list: async (limit = 25) => (await api.get<AgentRunRow[]>("/agent-runs", { params: { limit } })).data,
+  get: async (id: string) => (await api.get<AgentRunRow>(`/agent-runs/${id}`)).data,
+  queue: async (payload: { capability: string; goal?: string; projectId?: string }) =>
+    (await api.post<{ runId: string; created: boolean }>("/agent-runs", payload)).data,
+  abort: async (id: string) => (await api.post<{ ok: true }>(`/agent-runs/${id}/abort`)).data
+};
+
 export interface ApprovalStepRow {
   id: string;
   order: number;

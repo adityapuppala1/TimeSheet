@@ -2455,10 +2455,42 @@ reservation, the three producers, the quality-loop join, and the capture middle 
   the retention sweep) lets `listPromotableInteractions` surface interactions whose proposal a
   human rejected, undid, or declined rows of. Undo — a person explicitly reversing the machine —
   finally reaches the eval harness instead of being admired in a comment.
-- [ ] **Still open, deliberately small:** UI affordances for `blueprint-instantiate` (API + client
-  method exist; the Blueprints surface needs a "propose into project" action) and an agent-runs
-  panel in the AI tab (`/api/agent-runs` is live; the trace view has no screen yet). Both are
-  wiring, not design.
+- [x] **The two remaining affordances shipped 2026-08-09, and the blueprint one was bigger than
+  recorded.** There was no Blueprints surface to add an action to — `blueprintApi` (list, get,
+  create, update, remove, preview, instantiate, derive) had **no caller anywhere in the web app**,
+  the same unreachable-feature shape `copilotApi.planBreakdown` had. `/app/blueprints` now exists:
+  cards per blueprint, a live preview that runs the same expander the real instantiation runs
+  (writing nothing), and both paths offered side by side with the difference stated at the point
+  of decision — "Propose for review" through the envelope, "Create directly" for a known-good
+  template landing in an empty project. Plus "Learn from a project" for `derive`.
+  `AgentRunsCard` sits under the autonomy ladder in the AI tab: queue a run, watch it live
+  (polling only while something is in flight), read the full step trace, stop it mid-flight.
+
+### The first live runs found a real bug the unit tests could not (2026-08-09)
+
+Two `status_report` runs against the dev workspace. **Every safety control fired exactly as
+designed** — the taint clamp engaged the moment `search_tickets` returned, a failed `get_ticket`
+surfaced as data and the run recovered, the step ceiling produced PARTIAL (not FAILED), cost was
+tracked to $0.058, and a doubled queue collapsed to one run on the `triggerKey`.
+
+**What only a live run could show: the model spent NINE of its twelve steps re-issuing identical
+`search_tickets` calls that returned nothing, and opened by calling `list_projects` twice in a
+row.** The prompt already said "do not re-fetch what you already have". It ignored it — because an
+instruction is not a bound. Every one of those steps was a paid model call that bought no
+information, and the run hit its ceiling without answering.
+
+Fixed by refusing a repeated `(tool, args)` signature the same way a disallowed tool is refused:
+recorded, fed back as data *carrying the answer it already got*, charged as a step so a model that
+insists on looping still runs out — but costing no tool invocation. Argument key order is
+normalised, or the check would be defeated by `{a,b}` vs `{b,a}`. Verified live: the second run's
+trace shows two refusals and real work done (25 tickets found, one fetched).
+
+- [ ] **Still open, and honestly a prompt problem rather than a bounds one:** the second run still
+  spent six steps on *differently-argued* `search_tickets` calls that each returned zero. The
+  repeat guard correctly does not block those — they are legitimately different calls — but the
+  model is not learning from consecutive empty results. The fix is prompt work (tell it what an
+  empty result means and what to try instead), which is exactly what the eval harness and the
+  now-connected proposal-decision signal exist to measure.
 ## Dependency advisories: one open, and why the suggested fix is worse (2026-08-08)
 
 Pushing 2.3.0 tripped a Dependabot alert on the default branch. Recording the analysis here rather

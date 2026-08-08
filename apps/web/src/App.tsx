@@ -42,6 +42,7 @@ const History = lazy(() => import("./pages/History").then((m) => ({ default: m.H
 const TimelinePage = lazy(() => import("./pages/Timeline").then((m) => ({ default: m.TimelinePage })));
 const MyWorkPage = lazy(() => import("./pages/MyWork").then((m) => ({ default: m.MyWorkPage })));
 const PortfolioPage = lazy(() => import("./pages/Portfolio").then((m) => ({ default: m.PortfolioPage })));
+const BlueprintsPage = lazy(() => import("./pages/Blueprints").then((m) => ({ default: m.BlueprintsPage })));
 const WorkloadPage = lazy(() => import("./pages/Workload").then((m) => ({ default: m.WorkloadPage })));
 const RequestsPage = lazy(() => import("./pages/Requests").then((m) => ({ default: m.RequestsPage })));
 const ProposalsPage = lazy(() => import("./pages/Proposals").then((m) => ({ default: m.ProposalsPage })));
@@ -113,6 +114,9 @@ const router = createBrowserRouter([
       // experiences, and the second is the one that sells the feature.
       { path: "timeline", element: <RequirePermission permission={permissions.TICKETS_VIEW}><PageShell><TimelinePage /></PageShell></RequirePermission> },
       { path: "portfolio", element: <RequirePermission permission={permissions.REPORTS_VIEW}><PageShell><PortfolioPage /></PageShell></RequirePermission> },
+      // Readable with tickets:view (the API lists blueprints at that level); using one needs
+      // plan:write, checked inside the page so a viewer sees the shapes without dead buttons.
+      { path: "blueprints", element: <RequirePermission permission={permissions.TICKETS_VIEW}><PageShell><BlueprintsPage /></PageShell></RequirePermission> },
       // Shows every person's capacity and hours, so it needs the resource right rather than a
       // reporting one — this is people data, not project data.
       { path: "workload", element: <RequirePermission permission={permissions.RESOURCES_MANAGE}><PageShell><WorkloadPage /></PageShell></RequirePermission> },
