@@ -3814,6 +3814,28 @@ export const copilotApi = {
     (await api.get<AiProposalRow[]>("/ai-proposals", { params })).data,
   planBreakdown: async (payload: { projectId: string; parentTicketId?: string | null; goal: string; context?: string }) =>
     (await api.post<AiProposalRow>("/ai-proposals/plan-breakdown", payload)).data,
+  /** Deterministic — the solver's own corrections for dates that contradict a dependency. */
+  scheduleAdjust: async (projectId: string) =>
+    (await api.post<{ proposalId: string | null; reason: string | null; heldForReview: string | null; corrections: number }>(
+      "/ai-proposals/schedule-adjust",
+      { projectId }
+    )).data,
+  /** Deterministic — realigns a committed end date with measured slip. SUGGEST-capped server-side. */
+  riskMitigation: async (projectId: string) =>
+    (await api.post<{
+      proposalId: string | null;
+      reason: string | null;
+      heldForReview: string | null;
+      riskScore: number;
+      band: string;
+      snapshotId: string | null;
+    }>("/ai-proposals/risk-mitigation", { projectId })).data,
+  /** Expands a saved blueprint into a reviewable change set instead of an all-or-nothing stamp. */
+  blueprintInstantiate: async (payload: { blueprintId: string; projectId: string; startDate: string }) =>
+    (await api.post<{ proposalId: string; heldForReview: string | null; items: number; dependencies: number }>(
+      "/ai-proposals/blueprint-instantiate",
+      payload
+    )).data,
   /** Save per-row decisions without applying, so a long review can be done in sittings. */
   saveDecisions: async (id: string, decisions: Record<string, boolean>) =>
     (await api.patch<{ updated: number }>(`/ai-proposals/${id}/decisions`, { decisions })).data,

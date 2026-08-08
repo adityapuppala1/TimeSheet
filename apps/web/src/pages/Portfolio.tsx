@@ -16,7 +16,7 @@
  * WHO renders this: `App.tsx` at `/app/portfolio`.
  */
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { AlertTriangle, Briefcase, Loader2, Lock, Plus, Trash2, TrendingUp } from "lucide-react";
+import { AlertTriangle, Briefcase, Loader2, Lock, Plus, Trash2, TrendingUp, Wrench } from "lucide-react";
 import { useState } from "react";
 import { useNavigate } from "react-router";
 import { permissions } from "@timesheet/shared";
@@ -70,6 +70,25 @@ export function PortfolioPage() {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const canManage = Boolean(user?.permissions.includes(permissions.PORTFOLIOS_MANAGE));
+  const canPlan = Boolean(user?.permissions.includes(permissions.PLAN_WRITE));
+
+  // The producer only ever proposes (its ceiling is SUGGEST) — the toast's Review action is the
+  // real next step. "Nothing to propose" comes back with the reason and is worth showing: "the
+  // drivers need human decisions" is the honest answer, not a failure.
+  const mitigate = useMutation({
+    mutationFn: (projectId: string) => copilotApi.riskMitigation(projectId),
+    onSuccess: (outcome) => {
+      if (!outcome.proposalId) {
+        toast.info("Nothing to propose", { description: outcome.reason ?? undefined });
+        return;
+      }
+      toast.success("Mitigation proposed", {
+        description: "The committed end date would move to match the schedule — review before anything changes.",
+        action: { label: "Review", onClick: () => navigate("/app/proposals") }
+      });
+    },
+    onError: (err: any) => toast.error("Could not assess that project", { description: err?.response?.data?.message ?? "Try again." })
+  });
 
   const [selected, setSelected] = useState<string>("__all__");
 
@@ -328,21 +347,37 @@ export function PortfolioPage() {
                             const risk = riskByProject.get(p.id);
                             if (!risk) return <span className="text-muted-foreground">—</span>;
                             return (
-                              <Tooltip>
-                                <TooltipTrigger asChild>
-                                  <Badge variant={risk.band === "RED" ? "destructive" : risk.band === "AMBER" ? "warning" : "success"}>
-                                    {risk.riskScore}
-                                  </Badge>
-                                </TooltipTrigger>
-                                <TooltipContent className="max-w-sm">
-                                  {/* The narrative is a convenience; the score and its breakdown are the
-                                      product, and they are computed arithmetically. */}
-                                  <p className="text-xs">{risk.narrative ?? `Computed risk ${risk.riskScore}/100.`}</p>
-                                  <p className="mt-1 text-[10px] text-muted-foreground">
-                                    Scored {new Date(risk.computedAt).toLocaleString()}
-                                  </p>
-                                </TooltipContent>
-                              </Tooltip>
+                              <span className="inline-flex items-center justify-end gap-1">
+                                <Tooltip>
+                                  <TooltipTrigger asChild>
+                                    <Badge variant={risk.band === "RED" ? "destructive" : risk.band === "AMBER" ? "warning" : "success"}>
+                                      {risk.riskScore}
+                                    </Badge>
+                                  </TooltipTrigger>
+                                  <TooltipContent className="max-w-sm">
+                                    {/* The narrative is a convenience; the score and its breakdown are the
+                                        product, and they are computed arithmetically. */}
+                                    <p className="text-xs">{risk.narrative ?? `Computed risk ${risk.riskScore}/100.`}</p>
+                                    <p className="mt-1 text-[10px] text-muted-foreground">
+                                      Scored {new Date(risk.computedAt).toLocaleString()}
+                                    </p>
+                                  </TooltipContent>
+                                </Tooltip>
+                                {/* Only where the score says something is wrong, and only to someone who
+                                    could apply the result — a green project has nothing to mitigate. */}
+                                {canPlan && risk.band !== "GREEN" && (
+                                  <Button
+                                    variant="ghost"
+                                    size="icon"
+                                    className="h-6 w-6"
+                                    title="Propose a mitigation — realigns the committed end date with the schedule, as a proposal you review"
+                                    disabled={mitigate.isPending}
+                                    onClick={() => mitigate.mutate(p.id)}
+                                  >
+                                    {mitigate.isPending ? <Loader2 className="h-3 w-3 animate-spin" /> : <Wrench className="h-3 w-3" />}
+                                  </Button>
+                                )}
+                              </span>
                             );
                           })()}
                         </TableCell>

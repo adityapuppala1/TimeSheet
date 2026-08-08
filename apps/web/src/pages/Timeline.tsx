@@ -9,20 +9,22 @@
  * WHO renders this: `App.tsx` at `/app/timeline`, gated on `plan:write` for editing but readable
  * by anyone with `tickets:view` — reading the schedule is not a privilege.
  */
-import { useQuery } from "@tanstack/react-query";
-import { CalendarRange, Flag, Loader2, Lock } from "lucide-react";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { CalendarRange, Flag, Loader2, Lock, Wrench } from "lucide-react";
 import { useState } from "react";
 import { useNavigate } from "react-router";
 import { permissions } from "@timesheet/shared";
 import { PlanTimeline, TimelineLegend, scheduledItemIds, type TimelineZoom } from "../components/PlanTimeline";
 import { PlanBreakdownDialog } from "../components/PlanBreakdownDialog";
 import { Badge } from "../components/ui/badge";
+import { Button } from "../components/ui/button";
 import { Card, CardContent } from "../components/ui/card";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../components/ui/select";
 import { Skeleton } from "../components/ui/skeleton";
 import { Switch } from "../components/ui/switch";
+import { toast } from "../components/ui/toaster";
 import { useAuthStore } from "../store/auth";
-import { planApi, planningApi, projectApi } from "../services/api";
+import { copilotApi, planApi, planningApi, projectApi } from "../services/api";
 
 export function TimelinePage() {
   const user = useAuthStore((s) => s.user);
@@ -44,10 +46,29 @@ export function TimelinePage() {
   const projectIds = projectId === "__all__" ? undefined : [projectId];
   const enabled = Boolean(config.data?.effective.timeline);
 
+  const queryClient = useQueryClient();
   const timeline = useQuery({
     queryKey: ["plan", "timeline", projectId, includeClosed],
     queryFn: () => planApi.timeline({ projectIds, includeClosed }),
     enabled
+  });
+
+  // The producer never applies anything itself — it emits a proposal whose rows are reviewed on
+  // /app/proposals, so the toast's Review action is the actual next step, not decoration.
+  const fixConflicts = useMutation({
+    mutationFn: () => copilotApi.scheduleAdjust(projectId),
+    onSuccess: (outcome) => {
+      if (!outcome.proposalId) {
+        toast.info("Nothing to fix", { description: outcome.reason ?? undefined });
+        return;
+      }
+      queryClient.invalidateQueries({ queryKey: ["ai-proposals"] });
+      toast.success(`${outcome.corrections} correction${outcome.corrections === 1 ? "" : "s"} suggested`, {
+        description: "Nothing has moved yet — review and apply the ones you want.",
+        action: { label: "Review", onClick: () => navigate("/app/proposals") }
+      });
+    },
+    onError: (err: any) => toast.error("Could not compute corrections", { description: err?.response?.data?.message ?? "Try again." })
   });
   const dependencies = useQuery({
     queryKey: ["plan", "dependencies", projectId],
@@ -122,6 +143,14 @@ export function TimelinePage() {
               projectId={projectId === "__all__" ? null : projectId}
               projectName={(projects.data ?? []).find((p: any) => p.id === projectId)?.name ?? null}
             />
+          )}
+          {/* Only rendered when the legend is already showing a conflict badge — the button IS
+              the answer to that badge. One project at a time: the proposal needs a scope. */}
+          {canEdit && projectId !== "__all__" && (data?.violations.length ?? 0) > 0 && (
+            <Button variant="outline" size="sm" disabled={fixConflicts.isPending} onClick={() => fixConflicts.mutate()}>
+              {fixConflicts.isPending ? <Loader2 className="mr-2 h-3.5 w-3.5 animate-spin" /> : <Wrench className="mr-2 h-3.5 w-3.5" />}
+              Fix {data!.violations.length} conflict{data!.violations.length === 1 ? "" : "s"}
+            </Button>
           )}
         </div>
       </div>

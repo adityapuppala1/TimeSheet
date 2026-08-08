@@ -2411,17 +2411,54 @@ Tests: `tests/unit/ai.service.test.ts` (+4 cases, all 4 fail pre-fix), `ai-propo
   a documented deployment. It is super-admin-only, and a super-admin already configures the provider
   every prompt is sent to. The mitigation if this ever needs one is an allow-list per deployment,
   not a blocklist of address ranges.
-- [ ] **Secret-bearing scanner findings and CI logs can be captured as prompt text.** A `gitleaks`
-  finding's title carries the leaked secret (the schema's own comment names gitleaks as an expected
-  tool), and CI logs routinely contain tokens. With `aiCaptureContentEnabled` on, both are stored on
-  `AIInteraction` under the retention sweep. Adding `ci_failure_triage` / `security_finding_triage`
-  to `CONTENT_CAPTURE_DENYLIST` would fix it and would also silently break dataset replay and evals
-  for those two capabilities — a product decision, not a bug fix.
-- [ ] **The budget cap is still a read-then-check race for genuinely concurrent callers.** Fixing the
-  devops fan-out removed the one path that could lose that race 500 times over, but two users
-  clicking at the same moment can each pass a cap only one should. The honest fix is a serialised
-  reservation, which is a schema change; the overshoot is now bounded by one call per concurrent
-  request rather than by the batch size.
+- [x] **Secret-bearing scanner findings and CI logs — resolved 2026-08-09 with the middle path
+  neither option offered.** The binary was denylist (breaking dataset replay for exactly the
+  capabilities that most need a golden set) or store raw secrets. `redactSecrets` in ai.service.ts
+  is the third option: capture stays on for `ci_failure_triage`/`security_finding_triage`, and
+  every stored prompt, output and params blob is masked first — PEM blocks, JWTs,
+  provider-prefixed tokens, bearer headers, secret-looking assignments. Structure survives (evals
+  still replay), the credential does not. Agent step traces pass through the same screen. A secret
+  with no recognisable shape still passes — the capabilities' ceilingReasons already price that.
+- [x] **The budget cap race — resolved 2026-08-09 with the serialised reservation.** `AiSpendMonth`
+  (one row per calendar month) turns admission into an atomic conditional increment
+  (`UPDATE … WHERE committedUsd < budget`) placed inside `callChat` — the one function that
+  reaches a provider — so a capability that skips preflight still cannot skip the gate. Seeded
+  from the reporting aggregate (no fresh budget on a mid-month upgrade), reconciled periodically
+  (a crash-leaked provision cannot shrink the month forever), overshoot bounded by ONE in-flight
+  reservation rather than by the number of concurrent callers.
+
+## The agentic backlog closes (2026-08-09)
+
+The five items open since the autonomy phases landed together in one change set — the loop, the
+reservation, the three producers, the quality-loop join, and the capture middle path above.
+
+- **The model-driven loop is real.** `planAgentStep` (ai.service.ts) asks for one JSON decision
+  per call — provider-agnostic on purpose, because native function-calling differs across every
+  BYOK backend and the bounds/abort/taint controls must live in the loop
+  (`runModelDrivenLoop`, agent-run.service.ts), not a provider SDK callback. The envelope's
+  promised bounds are now enforced: step/cost ceilings → PARTIAL, unparseable decision → FAILED,
+  disallowed tool → refused as data and fed back, untrusted tool results → taint via
+  `callToolForRun`, the only door. Routing is the registry itself: a capability becomes
+  loop-runnable by declaring `tools` + a `featureToggle`, not by a new branch.
+  `status_report` went first (read-only tools) and PAID the honest price: reading ticket text
+  moved it into the untrusted-input class, the invariant test refused AUTONOMOUS, and its ceiling
+  dropped to AUTO_APPLY. `/api/agent-runs` (super admin) queues, traces, aborts.
+- **All four declared ProposalKinds produce.** `SCHEDULE_ADJUSTMENT` re-solves the plan with the
+  violating items' dates stripped, so the solver itself names the correction (ai-schedule-adjust);
+  `RISK_MITIGATION` realigns a committed end date with measured overrun — SUGGEST-capped, a
+  promise is a conversation — and writes `ProjectRiskSnapshot.aiProposalId` for the first time
+  (ai-risk-mitigation); `BLUEPRINT_SUGGESTION` stamps a blueprint out as reviewable rows, item
+  indexes aligned with change orders so parent/dependency references resolve at apply
+  (ai-blueprint-propose). Timeline grew "Fix N conflicts"; Portfolio grew a per-row mitigation
+  action on amber/red scores.
+- **The quality loop is joined.** `AiProposal.sourceInteractionId` (no FK — provenance outlives
+  the retention sweep) lets `listPromotableInteractions` surface interactions whose proposal a
+  human rejected, undid, or declined rows of. Undo — a person explicitly reversing the machine —
+  finally reaches the eval harness instead of being admired in a comment.
+- [ ] **Still open, deliberately small:** UI affordances for `blueprint-instantiate` (API + client
+  method exist; the Blueprints surface needs a "propose into project" action) and an agent-runs
+  panel in the AI tab (`/api/agent-runs` is live; the trace view has no screen yet). Both are
+  wiring, not design.
 ## Dependency advisories: one open, and why the suggested fix is worse (2026-08-08)
 
 Pushing 2.3.0 tripped a Dependabot alert on the default branch. Recording the analysis here rather
