@@ -15,6 +15,7 @@ import { useState } from "react";
 import { useNavigate } from "react-router";
 import { permissions } from "@timesheet/shared";
 import { PlanTimeline, TimelineLegend, scheduledItemIds, type TimelineZoom } from "../components/PlanTimeline";
+import { PlanBreakdownDialog } from "../components/PlanBreakdownDialog";
 import { Badge } from "../components/ui/badge";
 import { Card, CardContent } from "../components/ui/card";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../components/ui/select";
@@ -113,6 +114,15 @@ export function TimelinePage() {
             <Switch checked={includeClosed} onCheckedChange={setIncludeClosed} />
             Closed items
           </label>
+          {/* The entry point the Proposals page's empty state has always promised. Only offered to
+              someone who could apply the result — suggesting a plan to a person who cannot act on
+              it is a dead end dressed up as a feature. */}
+          {canEdit && (
+            <PlanBreakdownDialog
+              projectId={projectId === "__all__" ? null : projectId}
+              projectName={(projects.data ?? []).find((p: any) => p.id === projectId)?.name ?? null}
+            />
+          )}
         </div>
       </div>
 

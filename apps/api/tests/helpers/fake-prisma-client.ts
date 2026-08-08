@@ -76,6 +76,6 @@ export function createFakeTenantClient(): PrismaClient {
     aiProposal: { findUnique: vi.fn(), findMany: vi.fn(), update: vi.fn(), create: vi.fn() },
     aiProposalChange: { update: vi.fn(), findMany: vi.fn() },
     ticketLink: { deleteMany: vi.fn(), upsert: vi.fn() },
-    resourceBooking: { findUnique: vi.fn(), create: vi.fn(), update: vi.fn(), deleteMany: vi.fn() }
+    resourceBooking: { findUnique: vi.fn(), findMany: vi.fn(), create: vi.fn(), update: vi.fn(), deleteMany: vi.fn() }
   } as unknown as PrismaClient;
 }

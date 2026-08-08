@@ -22,6 +22,7 @@ import { requireAuth, requirePermission } from "../middleware/auth.js";
 import { AppError } from "../middleware/error.js";
 import { validate } from "../middleware/validate.js";
 import { applyProposal, createProposal, undoProposal, type DraftChange } from "../services/ai-proposal.service.js";
+import { proposeAssignmentRebalance } from "../services/ai-rebalance.service.js";
 import { narrateProjectRisk, proposePlanBreakdown } from "../services/ai.service.js";
 import { audit } from "../services/audit.service.js";
 import { getPlanningEntitlements } from "../services/plan-limits.service.js";
@@ -343,6 +344,50 @@ aiProposalRouter.post(
       actorId: req.user!.id
     });
     res.json(result);
+  }
+);
+
+/**
+ * Ask for a rebalance of one project's bookings.
+ *
+ * No `assertCopilotAllowed` here, unlike plan-breakdown: this reaches no model, spends nothing from
+ * the AI budget and works with AI switched off entirely, so tier-gating it as an AI feature would
+ * be charging for arithmetic. It is gated on PLAN_WRITE and project visibility like everything else
+ * that can change a plan.
+ */
+aiProposalRouter.post(
+  "/rebalance",
+  requirePermission(permissions.PLAN_WRITE),
+  validate(
+    z.object({
+      body: z
+        .object({
+          projectId: z.string().uuid(),
+          from: z.coerce.date(),
+          to: z.coerce.date()
+        })
+        .strict()
+        .refine((b) => b.to > b.from, { message: "The window must end after it starts." })
+    })
+  ),
+  async (req, res) => {
+    await assertPlanningEnabled();
+    await assertTicketVisible(req, String(req.body.projectId));
+
+    const outcome = await proposeAssignmentRebalance({
+      projectId: String(req.body.projectId),
+      from: req.body.from as Date,
+      to: req.body.to as Date,
+      requestedById: req.user!.id
+    });
+
+    if (outcome.proposalId) {
+      await audit(req.user!.id, "ai_proposal.created", "AiProposal", outcome.proposalId, {
+        kind: "ASSIGNMENT_REBALANCE",
+        changes: outcome.moves
+      });
+    }
+    res.json(outcome);
   }
 );
 
