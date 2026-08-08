@@ -9,16 +9,23 @@ metadata:
     {{- include "timesphere.labels" . | nindent 4 }}
     app.kubernetes.io/component: migration
   annotations:
-    # NOTE on first `helm install` when mysql.enabled=true (this chart's own MySQL
-    # StatefulSet, not an external managed database): Helm runs pre-install hooks BEFORE
-    # creating the chart's own non-hook resources, so the MySQL pod this Job's wait-loop
-    # below polls for doesn't exist yet on a true first install - the Job will exhaust its
-    # retries and fail, and `helm install` will report the failure. This is expected on that
-    # one specific path; fix by running `helm upgrade` once MySQL's pod is Ready (its
-    # pre-upgrade hook then finds a real database to migrate). Deployments against an
-    # already-running external MySQL (mysql.enabled=false, the recommended production setup -
-    # see values.yaml) don't hit this at all, since the database already exists.
-    "helm.sh/hook": pre-install,pre-upgrade
+    # post-install + pre-upgrade, and the asymmetry is the point:
+    #
+    # An earlier revision used pre-install here, and its documented recovery ("run `helm
+    # upgrade` once MySQL's pod is Ready") was impossible to follow on the one path it existed
+    # for - a FAILED pre-install hook aborts the install before the chart's non-hook resources
+    # are ever created, so with mysql.enabled=true there was no MySQL to become Ready and no
+    # first install could ever succeed. Found by actually running the documented first-install
+    # path on a fresh cluster, which is how a chart bug of this shape has to be found.
+    #
+    # post-install runs AFTER the resources exist: MySQL starts, the init container below waits
+    # for it, migrations run, and the api pods (which crash-restart until the schema exists -
+    # that is what a readiness probe and restartPolicy are for) come up on their next restart.
+    # Upgrades keep the stricter ordering: pre-upgrade migrates the schema BEFORE the new code
+    # rolls out, so a pod never serves requests against a schema older than it expects.
+    # External-MySQL deployments (mysql.enabled=false, the recommended production setup) work
+    # identically on both paths, since their database exists before Helm ever runs.
+    "helm.sh/hook": post-install,pre-upgrade
     "helm.sh/hook-weight": "0"
     "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
 spec:

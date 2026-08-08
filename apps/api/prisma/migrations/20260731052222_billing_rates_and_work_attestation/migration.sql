@@ -1,15 +1,15 @@
 -- AlterTable
-ALTER TABLE `globalticketsettings` ADD COLUMN `defaultCurrency` VARCHAR(3) NOT NULL DEFAULT 'USD',
+ALTER TABLE `GlobalTicketSettings` ADD COLUMN `defaultCurrency` VARCHAR(3) NOT NULL DEFAULT 'USD',
     ADD COLUMN `enableAttestationSharing` BOOLEAN NOT NULL DEFAULT false,
     ADD COLUMN `enableAttestations` BOOLEAN NOT NULL DEFAULT false;
 
 -- AlterTable
-ALTER TABLE `project` ADD COLUMN `billingCurrency` VARCHAR(3) NULL,
+ALTER TABLE `Project` ADD COLUMN `billingCurrency` VARCHAR(3) NULL,
     ADD COLUMN `clientName` VARCHAR(160) NULL,
     ADD COLUMN `defaultHourlyRate` DECIMAL(10, 2) NULL;
 
 -- AlterTable
-ALTER TABLE `timesheet` ADD COLUMN `billable` BOOLEAN NOT NULL DEFAULT true,
+ALTER TABLE `Timesheet` ADD COLUMN `billable` BOOLEAN NOT NULL DEFAULT true,
     ADD COLUMN `billedAmount` DECIMAL(12, 2) NULL,
     ADD COLUMN `billedCurrency` VARCHAR(3) NULL,
     ADD COLUMN `billedRate` DECIMAL(10, 2) NULL,

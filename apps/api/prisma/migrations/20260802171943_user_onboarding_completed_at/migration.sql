@@ -1,5 +1,5 @@
 -- AlterTable
-ALTER TABLE `user` ADD COLUMN `onboardingCompletedAt` DATETIME(3) NULL;
+ALTER TABLE `User` ADD COLUMN `onboardingCompletedAt` DATETIME(3) NULL;
 
 -- Backfill: every user who ALREADY EXISTS is treated as onboarded.
 --
@@ -9,5 +9,5 @@ ALTER TABLE `user` ADD COLUMN `onboardingCompletedAt` DATETIME(3) NULL;
 -- exactly the objection the old dismissible checklist was written to avoid.
 --
 -- Only the new column is written. No existing column, row, or table is modified or removed.
-UPDATE `user` SET `onboardingCompletedAt` = `createdAt` WHERE `onboardingCompletedAt` IS NULL;
+UPDATE `User` SET `onboardingCompletedAt` = `createdAt` WHERE `onboardingCompletedAt` IS NULL;
 

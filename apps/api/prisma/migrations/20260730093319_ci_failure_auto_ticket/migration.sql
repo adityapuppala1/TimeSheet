@@ -1,2 +1,2 @@
 -- AlterTable
-ALTER TABLE `ingestionsettings` ADD COLUMN `autoCreateTicketOnCiFailureEnabled` BOOLEAN NOT NULL DEFAULT false;
+ALTER TABLE `IngestionSettings` ADD COLUMN `autoCreateTicketOnCiFailureEnabled` BOOLEAN NOT NULL DEFAULT false;

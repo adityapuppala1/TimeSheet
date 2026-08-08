@@ -26,6 +26,13 @@ spec:
         - name: web
           image: {{ include "timesphere.image" (dict "root" . "component" "web") }}
           imagePullPolicy: {{ .Values.image.pullPolicy }}
+          env:
+            # The nginx image's envsubst renders this into proxy_pass at startup. The image's
+            # baked default is `api:4000` (the compose service name); under Kubernetes the API
+            # answers at the release's own service, and without this override nginx failed
+            # upstream DNS at startup and the pod crash-looped.
+            - name: API_UPSTREAM
+              value: {{ include "timesphere.fullname" . }}-api:4000
           ports:
             - name: http
               containerPort: 80

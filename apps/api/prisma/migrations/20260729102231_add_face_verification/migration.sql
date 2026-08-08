@@ -1,5 +1,5 @@
 -- AlterTable
-ALTER TABLE `user` ADD COLUMN `faceVerificationRequired` BOOLEAN NOT NULL DEFAULT false;
+ALTER TABLE `User` ADD COLUMN `faceVerificationRequired` BOOLEAN NOT NULL DEFAULT false;
 
 -- CreateTable
 CREATE TABLE `GlobalFaceVerificationSettings` (

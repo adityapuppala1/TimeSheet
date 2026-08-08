@@ -2073,12 +2073,15 @@ much here as a finding.
   permission EMPLOYEE holds), `timesheet.controller.ts` approve/reject (no `managerId` predicate —
   and its own `DELETE` sibling does check, so the file is inconsistent with itself), plus the
   `resource`, `ai` and `report` controllers.
-- [ ] **`GET /blueprints` is workspace-wide, and that may be intended** — listed here originally as
-  part of the set above, but re-checking the model shows `Blueprint` has NO project relation at all
-  (`schema.prisma:2728`): name, kind, payload, createdBy. There is nothing to scope it *by*, so it
-  is not the same class of bug as the ticket routes. The real question is whether a template
-  library should be visible to every role that holds `tickets:view`, which is a product decision,
-  not a missing predicate. Recorded separately so it stops being counted as a scoping leak.
+- [x] **`GET /blueprints` is workspace-wide — and that is now decided, not merely suspected**
+  (closed 2026-08-09). Originally listed as part of the set above, but `Blueprint` has NO project
+  relation at all (`schema.prisma`): name, kind, payload, createdBy — nothing to scope it *by*, so
+  it was never the same class of bug as the ticket routes. The product question it left open
+  ("should a template library be visible to every role holding `tickets:view`?") got its answer
+  when `/app/blueprints` shipped: the page deliberately lists at `tickets:view` (a viewer sees the
+  shapes, with no dead buttons) and gates *using* one — propose, create, derive, delete — on
+  `plan:write`, checked inside the page. The route comment in `App.tsx` states the split. A
+  template library is reference material; instantiating it is a plan change.
 - [x] **Unbounded module maps** (2026-08-08). Both swept on write — no timer, and no per-entry timer
   least of all, since one live timer per email an attacker types is the same unbounded growth
   wearing a different hat. Entries are re-inserted with a constant TTL, so insertion order IS
@@ -2405,12 +2408,14 @@ Tests: `tests/unit/ai.service.test.ts` (+4 cases, all 4 fail pre-fix), `ai-propo
   writes four fields onto `SecurityFinding` and the PR summary posts a comment, neither audited.
   Both are visible in the UI, so this is completeness rather than a hole — but "every automated
   decision is auditable" is the principle this codebase states, and these two do not meet it.
-- [ ] **`POST /settings/ai/available-models` fetches a caller-supplied `baseUrl`** — SSRF-shaped, and
-  `callChat` sends prompts to that same stored URL. NOT fixed, because the shape is the feature:
-  BYOK explicitly supports Ollama and LM Studio on localhost, so blocking private ranges would break
-  a documented deployment. It is super-admin-only, and a super-admin already configures the provider
-  every prompt is sent to. The mitigation if this ever needs one is an allow-list per deployment,
-  not a blocklist of address ranges.
+- [x] **`POST /settings/ai/available-models` fetches a caller-supplied `baseUrl`** — closed as a
+  RECORDED DECISION (2026-08-09), with the code deliberately unchanged. SSRF-shaped, and `callChat`
+  sends prompts to that same stored URL — but the shape is the feature: BYOK explicitly supports
+  Ollama and LM Studio on localhost, so blocking private ranges would break a documented
+  deployment. It is super-admin-only, and a super-admin already configures the provider every
+  prompt is sent to. Ticked because there is no pending work behind this box — only a trigger:
+  if a deployment ever needs the tightening, it is an allow-list per deployment, never a blocklist
+  of address ranges.
 - [x] **Secret-bearing scanner findings and CI logs — resolved 2026-08-09 with the middle path
   neither option offered.** The binary was denylist (breaking dataset replay for exactly the
   capabilities that most need a golden set) or store raw secrets. `redactSecrets` in ai.service.ts

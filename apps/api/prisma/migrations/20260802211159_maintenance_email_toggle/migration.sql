@@ -1,2 +1,2 @@
 -- AlterTable
-ALTER TABLE `globalnotificationsettings` ADD COLUMN `emailMaintenanceScheduled` BOOLEAN NOT NULL DEFAULT true;
+ALTER TABLE `GlobalNotificationSettings` ADD COLUMN `emailMaintenanceScheduled` BOOLEAN NOT NULL DEFAULT true;

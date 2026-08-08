@@ -1,5 +1,5 @@
 -- AlterTable
-ALTER TABLE `plantierlimit` ADD COLUMN `aiPmCopilotEnabled` BOOLEAN NOT NULL DEFAULT false,
+ALTER TABLE `PlanTierLimit` ADD COLUMN `aiPmCopilotEnabled` BOOLEAN NOT NULL DEFAULT false,
     ADD COLUMN `approvalsEnabled` BOOLEAN NOT NULL DEFAULT false,
     ADD COLUMN `customWorkflowsEnabled` BOOLEAN NOT NULL DEFAULT false,
     ADD COLUMN `ganttEnabled` BOOLEAN NOT NULL DEFAULT false,
@@ -31,7 +31,7 @@ ALTER TABLE `plantierlimit` ADD COLUMN `aiPmCopilotEnabled` BOOLEAN NOT NULL DEF
 -- statement a genuine one-time initialisation rather than a policy that reasserts itself.
 -- ===================================================================================
 
-UPDATE `plantierlimit`
+UPDATE `PlanTierLimit`
 SET `ganttEnabled`           = TRUE,
     `approvalsEnabled`       = TRUE,
     `proofingEnabled`        = TRUE,
@@ -45,7 +45,7 @@ WHERE `tier` = 'TEAM'
   AND `approvalsEnabled` = FALSE
   AND `maxPortfolios` = 0;
 
-UPDATE `plantierlimit`
+UPDATE `PlanTierLimit`
 SET `ganttEnabled`           = TRUE,
     `resourceMgmtEnabled`    = TRUE,
     `approvalsEnabled`       = TRUE,

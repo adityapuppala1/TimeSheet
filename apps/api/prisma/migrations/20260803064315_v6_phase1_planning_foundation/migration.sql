@@ -1,5 +1,5 @@
 -- AlterTable
-ALTER TABLE `project` ADD COLUMN `budgetAlertPct` INTEGER NULL,
+ALTER TABLE `Project` ADD COLUMN `budgetAlertPct` INTEGER NULL,
     ADD COLUMN `budgetAmount` DECIMAL(14, 2) NULL,
     ADD COLUMN `budgetCurrency` VARCHAR(3) NULL,
     ADD COLUMN `plannedEndDate` DATE NULL,
@@ -7,7 +7,7 @@ ALTER TABLE `project` ADD COLUMN `budgetAlertPct` INTEGER NULL,
     ADD COLUMN `portfolioId` VARCHAR(191) NULL;
 
 -- AlterTable
-ALTER TABLE `ticket` ADD COLUMN `baselineEffortHours` DECIMAL(7, 2) NULL,
+ALTER TABLE `Ticket` ADD COLUMN `baselineEffortHours` DECIMAL(7, 2) NULL,
     ADD COLUMN `baselineEndDate` DATE NULL,
     ADD COLUMN `baselineSetAt` DATETIME(3) NULL,
     ADD COLUMN `baselineStartDate` DATE NULL,
@@ -20,11 +20,11 @@ ALTER TABLE `ticket` ADD COLUMN `baselineEffortHours` DECIMAL(7, 2) NULL,
     ADD COLUMN `workflowStatusId` VARCHAR(191) NULL;
 
 -- AlterTable
-ALTER TABLE `ticketlink` ADD COLUMN `lagDays` INTEGER NULL,
+ALTER TABLE `TicketLink` ADD COLUMN `lagDays` INTEGER NULL,
     MODIFY `type` ENUM('BLOCKS', 'DUPLICATE', 'RELATES', 'FINISH_TO_START', 'START_TO_START', 'FINISH_TO_FINISH', 'START_TO_FINISH') NOT NULL;
 
 -- AlterTable
-ALTER TABLE `user` ADD COLUMN `plannedUtilizationPct` INTEGER NULL,
+ALTER TABLE `User` ADD COLUMN `plannedUtilizationPct` INTEGER NULL,
     ADD COLUMN `weeklyCapacityHours` DECIMAL(5, 2) NULL;
 
 -- CreateTable

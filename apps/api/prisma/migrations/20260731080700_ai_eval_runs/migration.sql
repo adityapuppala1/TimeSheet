@@ -1,5 +1,5 @@
 -- AlterTable
-ALTER TABLE `globalaisettings` ADD COLUMN `aiEvalJudgeEnabled` BOOLEAN NOT NULL DEFAULT false;
+ALTER TABLE `GlobalAISettings` ADD COLUMN `aiEvalJudgeEnabled` BOOLEAN NOT NULL DEFAULT false;
 
 -- CreateTable
 CREATE TABLE `AIEvalRun` (

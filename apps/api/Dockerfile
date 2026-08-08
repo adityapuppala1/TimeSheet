@@ -48,6 +48,15 @@ COPY --from=build --chown=app:app /app/apps/api/prisma apps/api/prisma
 # under apps/api/dist on its own — copy it to the exact path config/control-prisma.js's
 # compiled relative import (`../generated/control-client/index.js`) expects to find it at.
 COPY --from=build --chown=app:app /app/apps/api/src/generated apps/api/dist/src/generated
+# The SOURCE tree rides along too, and this line is load-bearing for every documented seed:
+# `npm run seed` / `npm run control:seed` invoke tsx against prisma/*.ts, whose imports fan out
+# through src/services and src/generated — paths that only existed compiled under dist/ in this
+# image. Without src/, BOTH deployment paths' one-time seeds failed identically: install.sh's
+# `docker compose exec api npm run control:seed` (whose retry loop then mislabeled the failure
+# "often already-seeded, safe to ignore") and docs/DEPLOYMENT.md's kubectl-exec equivalents.
+# Found by running the documented Kubernetes seed on a live cluster. ~3MB of TypeScript buys
+# every runbook command working exactly as written.
+COPY --from=build --chown=app:app /app/apps/api/src apps/api/src
 COPY --from=build --chown=app:app /app/packages/shared/dist packages/shared/dist
 COPY --from=build --chown=app:app /app/packages/shared/package.json packages/shared/package.json
 COPY --chown=app:app package.json ./

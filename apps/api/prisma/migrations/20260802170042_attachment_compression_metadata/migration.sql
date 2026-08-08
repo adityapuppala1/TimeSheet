@@ -1,5 +1,5 @@
 -- AlterTable
-ALTER TABLE `attachment` ADD COLUMN `checksumSha256` VARCHAR(64) NULL,
+ALTER TABLE `Attachment` ADD COLUMN `checksumSha256` VARCHAR(64) NULL,
     ADD COLUMN `compression` VARCHAR(10) NULL,
     ADD COLUMN `fileCategory` VARCHAR(20) NULL,
     ADD COLUMN `height` INTEGER NULL,
@@ -9,7 +9,7 @@ ALTER TABLE `attachment` ADD COLUMN `checksumSha256` VARCHAR(64) NULL,
     ADD COLUMN `width` INTEGER NULL;
 
 -- AlterTable
-ALTER TABLE `ticketattachment` ADD COLUMN `checksumSha256` VARCHAR(64) NULL,
+ALTER TABLE `TicketAttachment` ADD COLUMN `checksumSha256` VARCHAR(64) NULL,
     ADD COLUMN `compression` VARCHAR(10) NULL,
     ADD COLUMN `fileCategory` VARCHAR(20) NULL,
     ADD COLUMN `height` INTEGER NULL,

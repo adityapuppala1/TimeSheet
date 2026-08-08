@@ -1,5 +1,5 @@
 -- AlterTable
-ALTER TABLE `faceverificationattempt` ADD COLUMN `challengeInstruction` VARCHAR(20) NULL,
+ALTER TABLE `FaceVerificationAttempt` ADD COLUMN `challengeInstruction` VARCHAR(20) NULL,
     ADD COLUMN `challengePitchDelta` DOUBLE NULL,
     ADD COLUMN `challengeYawDelta` DOUBLE NULL,
     ADD COLUMN `deviceLabel` VARCHAR(255) NULL,
@@ -8,15 +8,15 @@ ALTER TABLE `faceverificationattempt` ADD COLUMN `challengeInstruction` VARCHAR(
     ADD COLUMN `virtualCameraSuspected` BOOLEAN NOT NULL DEFAULT false;
 
 -- AlterTable
-ALTER TABLE `globalaisettings` ADD COLUMN `faceReviewSummaryEnabled` BOOLEAN NOT NULL DEFAULT false;
+ALTER TABLE `GlobalAISettings` ADD COLUMN `faceReviewSummaryEnabled` BOOLEAN NOT NULL DEFAULT false;
 
 -- AlterTable
-ALTER TABLE `globalfaceverificationsettings` ADD COLUMN `challengeEnabled` BOOLEAN NOT NULL DEFAULT true,
+ALTER TABLE `GlobalFaceVerificationSettings` ADD COLUMN `challengeEnabled` BOOLEAN NOT NULL DEFAULT true,
     ADD COLUMN `entitlementLostAt` DATETIME(3) NULL,
     ADD COLUMN `requireForApproval` BOOLEAN NOT NULL DEFAULT false;
 
 -- AlterTable
-ALTER TABLE `globalnotificationsettings` ADD COLUMN `emailFaceDataDeleted` BOOLEAN NOT NULL DEFAULT true,
+ALTER TABLE `GlobalNotificationSettings` ADD COLUMN `emailFaceDataDeleted` BOOLEAN NOT NULL DEFAULT true,
     ADD COLUMN `emailFaceEnrollmentReminder` BOOLEAN NOT NULL DEFAULT true,
     ADD COLUMN `emailFaceEnrollmentRequired` BOOLEAN NOT NULL DEFAULT true,
     ADD COLUMN `emailFaceEntitlementLost` BOOLEAN NOT NULL DEFAULT true,

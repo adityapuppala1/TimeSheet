@@ -1,5 +1,5 @@
 -- AlterTable
-ALTER TABLE `session` ADD COLUMN `lastSeenAt` DATETIME(3) NULL;
+ALTER TABLE `Session` ADD COLUMN `lastSeenAt` DATETIME(3) NULL;
 
 -- CreateTable
 CREATE TABLE `MaintenanceSettings` (

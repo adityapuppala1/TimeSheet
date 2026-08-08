@@ -1,5 +1,5 @@
 -- AlterTable
-ALTER TABLE `faceverificationattempt` ADD COLUMN `durationMs` INTEGER NULL,
+ALTER TABLE `FaceVerificationAttempt` ADD COLUMN `durationMs` INTEGER NULL,
     ADD COLUMN `effectiveThreshold` DOUBLE NULL,
     ADD COLUMN `qualityScore` DOUBLE NULL;
 

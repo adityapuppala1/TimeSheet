@@ -1022,16 +1022,16 @@ separate compose files:
 2. `helm install my-release deploy/helm/timesphere -f my-values.yaml` (point `image.repository`
    at wherever `cd.yml` published your images, and set `ingress.host`/`ingress.tls` for your real
    domain).
-3. A `pre-install,pre-upgrade` Helm hook Job runs `prisma migrate deploy` against both schemas
-   before the API rolls out — the Kubernetes equivalent of `docker-compose.yml`'s inline
-   migrate-then-start command, just as its own short-lived Job instead of baked into every
-   container's startup. **One first-install caveat with `mysql.enabled: true`**: Helm runs
-   pre-install hooks *before* creating the chart's own non-hook resources, so on a genuinely
-   first install the MySQL pod this Job waits for doesn't exist yet and the Job will fail (see
-   its own annotation for the full explanation) — run `helm upgrade` once MySQL's pod is `Ready`
-   and its `pre-upgrade` hook will find a real database to migrate. Deployments against an
-   already-running external MySQL (`mysql.enabled: false`) never hit this, since the database
-   already exists before you ever run `helm install`.
+3. A `post-install,pre-upgrade` Helm hook Job runs `prisma migrate deploy` against both schemas —
+   the Kubernetes equivalent of `docker-compose.yml`'s inline migrate-then-start command, just as
+   its own short-lived Job instead of baked into every container's startup. The asymmetric hook
+   pair is deliberate: on a **first install** the Job runs *after* the chart's resources exist
+   (so with `mysql.enabled: true` the bundled MySQL is actually there for its wait-loop to find —
+   an earlier `pre-install` revision could never complete a first install on that path, because a
+   failed pre-install hook aborts before MySQL is ever created); on **upgrades** it keeps the
+   stricter `pre-upgrade` ordering, migrating the schema before the new code rolls out. During a
+   first install the API pods restart until migrations land, then come up on their own — that is
+   the readiness probe doing its job, not a failure to intervene in.
 4. Run the one-time seed the same way `install.sh`/`install.ps1` do for Compose (not something
    the chart runs automatically, for the same "not idempotent the way migrations are" reason):
    ```bash

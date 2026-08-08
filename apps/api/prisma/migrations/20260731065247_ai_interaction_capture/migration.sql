@@ -1,5 +1,5 @@
 -- AlterTable
-ALTER TABLE `globalaisettings` ADD COLUMN `aiCaptureContentEnabled` BOOLEAN NOT NULL DEFAULT false,
+ALTER TABLE `GlobalAISettings` ADD COLUMN `aiCaptureContentEnabled` BOOLEAN NOT NULL DEFAULT false,
     ADD COLUMN `aiCaptureEnabled` BOOLEAN NOT NULL DEFAULT false,
     ADD COLUMN `aiCaptureRetentionDays` INTEGER NOT NULL DEFAULT 30;
 
