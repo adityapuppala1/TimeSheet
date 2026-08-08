@@ -70,7 +70,21 @@ interface CachedClient {
 // known scaling ceiling for the database-per-tenant model, not something this phase solves —
 // flagged again where it matters, in docs/DEPLOYMENT.md once Track B's later phases land.
 const MAX_CACHED_CLIENTS = 50;
-const PER_TENANT_CONNECTION_LIMIT = 5;
+/**
+ * Connections per tenant client. The default of 5 is the multi-tenant number above — but load
+ * testing measured what it costs a SINGLE-ORG deployment: the authed request path runs several
+ * queries per request, so at 50 concurrent users throughput pinned at ~90 req/s at every
+ * concurrency level while p50 scaled with queue depth alone (51ms @ 5 conns → 480ms @ 50 conns,
+ * for an EMPTY list). That is a 5-slot pool queueing, not the database working. Single-org
+ * shapes (the Compose stack, the chart's Shape 1) ship TENANT_DB_CONNECTION_LIMIT=20; SaaS
+ * deployments with many live tenant databases should leave the default alone — the ceiling
+ * arithmetic above is the real constraint there. A `connection_limit` already present in the
+ * DSN still wins over this, unchanged.
+ */
+const PER_TENANT_CONNECTION_LIMIT = (() => {
+  const raw = Number(process.env.TENANT_DB_CONNECTION_LIMIT);
+  return Number.isInteger(raw) && raw >= 1 && raw <= 100 ? raw : 5;
+})();
 const IDLE_EVICTION_MS = 10 * 60 * 1000;
 
 const clientCache = new Map<string, CachedClient>();

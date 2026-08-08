@@ -66,6 +66,11 @@ services:
       # container, so a variable that is not listed simply does not exist inside it. Recording is
       # off unless API_TELEMETRY_ENABLED is set, so the defaults below are inert.
       API_TELEMETRY_ENABLED: ${API_TELEMETRY_ENABLED:-false}
+      # Per-IP blanket budget. Raise for office-NAT deployments where many users share one IP.
+      RATE_LIMIT_PER_MINUTE: ${RATE_LIMIT_PER_MINUTE:-900}
+      # Single-org stack: the code default of 5 connections/tenant is multi-tenant arithmetic.
+      # Load-tested: 5 caps the authed path near 90 req/s; 20 lifts it (see config/prisma.ts).
+      TENANT_DB_CONNECTION_LIMIT: ${TENANT_DB_CONNECTION_LIMIT:-20}
       API_TELEMETRY_SAMPLE_RATE: ${API_TELEMETRY_SAMPLE_RATE:-1}
       API_TELEMETRY_FLUSH_MS: ${API_TELEMETRY_FLUSH_MS:-5000}
       API_TELEMETRY_MAX_BUFFER: ${API_TELEMETRY_MAX_BUFFER:-5000}

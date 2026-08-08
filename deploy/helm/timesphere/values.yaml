@@ -99,6 +99,16 @@ env:
   # forge req.ip — and req.ip is what every per-IP rate limit in the app reads. Wrong-low means
   # one shared global bucket for every user; wrong-high means a forgeable one.
   trustProxyHops: 1
+  # Per-IP blanket request budget per minute. Raise for deployments where many real users share
+  # one egress IP (office NAT, corporate proxy) — the per-surface limiters (auth, public shares,
+  # webhooks) stay fixed regardless. Default matches what the code has always shipped.
+  rateLimitPerMinute: 900
+  # Connections per tenant Prisma client. The code default (5) is multi-tenant arithmetic —
+  # 50 cached tenant clients x 5 must stay under MySQL max_connections. A Shape-1 single-org
+  # install has ONE live tenant, and load testing showed 5 caps the authed path near 90 req/s
+  # purely on pool queueing. 20 is the single-org default; SaaS multi-tenant fleets should
+  # lower it back toward 5 and mind the ceiling arithmetic in config/prisma.ts.
+  tenantDbConnectionLimit: 20
 
 # Relocatable, segregated file storage (docs/DEPLOYMENT.md → "Relocating file storage").
 # EMPTY = unchanged: everything lives under UPLOAD_DIR (/app/uploads), which is the PVC this

@@ -132,6 +132,18 @@ const schema = z.object({
   TRUST_PROXY_HOPS: z.coerce.number().int().min(0).max(10).default(0),
 
   /**
+   * The blanket per-IP request budget, requests per minute. The default is the number the code
+   * has always shipped (900/min ≈ 15 req/s), which bounds abuse hard while staying above what a
+   * busy single user's SPA produces. WHY IT IS TUNABLE NOW: load testing surfaced the case the
+   * default punishes — many real users behind ONE egress IP (an office NAT, a corporate proxy)
+   * share one bucket, and a 9am login rush across a hundred people is easily >900 requests in a
+   * minute from the limiter's point of view. Raise it for NAT-heavy deployments; the strict
+   * per-surface limiters (auth 20/min, public shares, webhooks) keep guarding the genuinely
+   * sensitive paths regardless of what this is set to.
+   */
+  RATE_LIMIT_PER_MINUTE: z.coerce.number().int().min(60).max(1_000_000).default(900),
+
+  /**
    * Relocatable, segregated file storage. See config/storage-paths.ts for how these four resolve
    * into the effective layout — this is only the validation.
    *

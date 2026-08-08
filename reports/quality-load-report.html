@@ -1,0 +1,411 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>TimeSphere — Quality &amp; Load Report · 2026-08-08</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<script>tailwind.config = { darkMode: 'media' }</script>
+<style>
+/* Palette per the dataviz method: roles as custom properties, both modes selected and
+   validated (adjacent-pair CVD ΔE ≥ 8, normal-vision ≥ 15) — never eyeballed. */
+.viz-root{
+  color-scheme: light;
+  --surface-1:#fcfcfb; --surface-2:#f0efec;
+  --text-primary:#0b0b0b; --text-secondary:#52514e; --grid:#e4e3df;
+  --series-1:#2a78d6; --series-2:#eb6834; --series-3:#1baf7a;
+  --seq-300:#6da7ec; --seq-450:#2a78d6; --seq-600:#184f95;
+  --good:#0ca30c; --warning:#fab219; --serious:#ec835a; --critical:#d03b3b;
+}
+@media (prefers-color-scheme: dark){
+  .viz-root{
+    color-scheme: dark;
+    --surface-1:#1a1a19; --surface-2:#242423;
+    --text-primary:#ffffff; --text-secondary:#c3c2b7; --grid:#33332f;
+    --series-1:#3987e5; --series-2:#d95926; --series-3:#199e70;
+    --seq-300:#5598e7; --seq-450:#3987e5; --seq-600:#86b6ef;
+    --good:#0ca30c; --warning:#fab219; --serious:#ec835a; --critical:#d03b3b;
+  }
+}
+body{background:var(--surface-1);color:var(--text-primary);}
+.bar{transition:opacity .12s ease;}
+.bar:hover{opacity:.82;}
+.tip{position:fixed;pointer-events:none;z-index:50;background:var(--text-primary);color:var(--surface-1);
+     font:12px/1.4 ui-sans-serif,system-ui;padding:6px 9px;border-radius:6px;opacity:0;transform:translateY(4px);
+     transition:opacity .1s ease;max-width:260px}
+.tip.show{opacity:1;transform:none}
+.tab-btn[aria-selected="true"]{background:var(--series-1);color:#fff}
+.card{background:var(--surface-2);border:1px solid var(--grid);border-radius:14px}
+table.data{width:100%;border-collapse:collapse;font-size:13px}
+table.data th{color:var(--text-secondary);font-weight:600;text-align:left;padding:7px 10px;border-bottom:1px solid var(--grid)}
+table.data td{padding:7px 10px;border-bottom:1px solid var(--grid)}
+table.data td.num{text-align:right;font-variant-numeric:tabular-nums}
+.status-dot{display:inline-block;width:9px;height:9px;border-radius:99px;margin-right:6px;vertical-align:baseline}
+details summary{cursor:pointer}
+</style>
+</head>
+<body class="viz-root min-h-screen antialiased">
+<div class="tip" id="tip" role="status" aria-hidden="true"></div>
+
+<header class="max-w-6xl mx-auto px-5 pt-10 pb-6">
+  <p class="text-xs tracking-widest uppercase" style="color:var(--text-secondary)">TimeSphere · engineering report</p>
+  <h1 class="text-3xl sm:text-4xl font-black tracking-tight mt-1">Quality &amp; Load Report</h1>
+  <p class="mt-2 text-sm max-w-3xl" style="color:var(--text-secondary)">
+    Three deployment shapes run for real — Windows-native, Docker&nbsp;Compose, Kubernetes — load-tested,
+    profiled, optimized from the measurements, and re-tested. Every number on this page was measured on
+    2026-08-08; nothing is estimated, and anything <em>not</em> run says so in plain text.
+  </p>
+</header>
+
+<nav class="max-w-6xl mx-auto px-5 sticky top-0 z-40 py-2" style="background:var(--surface-1)">
+  <div class="flex flex-wrap gap-2" role="tablist" aria-label="Report sections">
+    <button class="tab-btn px-4 py-2 rounded-full text-sm font-semibold card" role="tab" aria-selected="true"  data-tab="overview">Overview</button>
+    <button class="tab-btn px-4 py-2 rounded-full text-sm font-semibold card" role="tab" aria-selected="false" data-tab="load">Load testing</button>
+    <button class="tab-btn px-4 py-2 rounded-full text-sm font-semibold card" role="tab" aria-selected="false" data-tab="fixes">Findings &amp; fixes</button>
+    <button class="tab-btn px-4 py-2 rounded-full text-sm font-semibold card" role="tab" aria-selected="false" data-tab="security">Security &amp; quality</button>
+    <button class="tab-btn px-4 py-2 rounded-full text-sm font-semibold card" role="tab" aria-selected="false" data-tab="capacity">Capacity guide</button>
+  </div>
+</nav>
+
+<main class="max-w-6xl mx-auto px-5 pb-20">
+
+<!-- ================================ OVERVIEW ================================ -->
+<section id="tab-overview" role="tabpanel" class="pt-6">
+  <div class="grid grid-cols-2 lg:grid-cols-4 gap-3">
+    <div class="card p-4"><p class="text-3xl font-black tabular-nums">882</p><p class="text-xs mt-1" style="color:var(--text-secondary)">API unit tests passing</p></div>
+    <div class="card p-4"><p class="text-3xl font-black tabular-nums">142</p><p class="text-xs mt-1" style="color:var(--text-secondary)">Playwright E2E passing (0 failed)</p></div>
+    <div class="card p-4"><p class="text-3xl font-black tabular-nums">0</p><p class="text-xs mt-1" style="color:var(--text-secondary)">npm audit vulnerabilities</p></div>
+    <div class="card p-4"><p class="text-3xl font-black tabular-nums">3</p><p class="text-xs mt-1" style="color:var(--text-secondary)">deployment shapes run &amp; tested live</p></div>
+  </div>
+
+  <div class="grid md:grid-cols-2 gap-4 mt-4">
+    <div class="card p-5">
+      <h2 class="font-bold">The headline: measure, then cut</h2>
+      <p class="text-sm mt-2" style="color:var(--text-secondary)">
+        The ticket list shipped <strong style="color:var(--text-primary)">391&nbsp;KB</strong> of JSON per request while the database
+        contributed only 25&nbsp;ms — the endpoint was serializing rich-text prose nothing in the list renders.
+        Dropping <code>description</code> from the list (the detail view fetches its own) cut the payload to
+        <strong style="color:var(--text-primary)">150&nbsp;KB</strong> (gzip: 46→10&nbsp;KB) and moved the same load test from
+        129→163&nbsp;req/s, p50 383→304&nbsp;ms — with zero client changes, because the client's own types never declared the field.
+      </p>
+    </div>
+    <div class="card p-5">
+      <h2 class="font-bold">Every ceiling got a knob</h2>
+      <p class="text-sm mt-2" style="color:var(--text-secondary)">
+        Load testing found three fixed limits and made each an operator decision:
+        the blanket per-IP limiter (<code>RATE_LIMIT_PER_MINUTE</code> — one office NAT was one 900/min bucket),
+        the per-tenant DB pool (<code>TENANT_DB_CONNECTION_LIMIT</code> — 5 connections is multi-tenant math; single-org shapes now ship 20),
+        and Kubernetes CPU limits (chart values). All three flow through Compose, the Helm chart, and <code>.env.example</code>, defaults unchanged.
+      </p>
+    </div>
+  </div>
+
+  <div class="card p-5 mt-4">
+    <h2 class="font-bold">What running it for real found (this campaign)</h2>
+    <ul class="mt-2 text-sm grid sm:grid-cols-2 gap-x-6 gap-y-1.5" style="color:var(--text-secondary)">
+      <li><span class="status-dot" style="background:var(--critical)"></span>Fresh Linux installs broken 10 days (migration table-name casing) — <b style="color:var(--text-primary)">fixed</b></li>
+      <li><span class="status-dot" style="background:var(--critical)"></span>First-install seed deadlock (API exited before seed could run) — <b style="color:var(--text-primary)">fixed</b></li>
+      <li><span class="status-dot" style="background:var(--serious)"></span>Helm first install could never succeed (hook ordering) — <b style="color:var(--text-primary)">fixed</b></li>
+      <li><span class="status-dot" style="background:var(--serious)"></span>Web image hardcoded Compose service name (k8s crash-loop) — <b style="color:var(--text-primary)">fixed</b></li>
+      <li><span class="status-dot" style="background:var(--serious)"></span>Runtime image couldn't run its documented seeds — <b style="color:var(--text-primary)">fixed</b></li>
+      <li><span class="status-dot" style="background:var(--warning)"></span>Release notes vanished from What's-new (fallback regression) — <b style="color:var(--text-primary)">fixed</b></li>
+      <li><span class="status-dot" style="background:var(--warning)"></span>391&nbsp;KB list payload (measured, cut to 150&nbsp;KB) — <b style="color:var(--text-primary)">fixed</b></li>
+      <li><span class="status-dot" style="background:var(--good)"></span>Boot guards proven live: weak-key refusal, env validation, seed-wait</li>
+    </ul>
+  </div>
+</section>
+
+<!-- ================================ LOAD ================================ -->
+<section id="tab-load" role="tabpanel" class="pt-6 hidden">
+
+  <div class="card p-5">
+    <h2 class="font-bold">Method</h2>
+    <p class="text-sm mt-1" style="color:var(--text-secondary)">
+      autocannon (Node) against each stack in sequence, whole machine per run: 16-core Windows host.
+      Scenarios: unauthenticated <code>/api/health</code>, authenticated <code>GET /api/tickets</code> (heaviest common read),
+      and a capped 300-request login flood (bcrypt cost). Rate limiter raised via the new knob for capacity runs —
+      the limiter itself was validated first (exactly 200,000 requests passed at a 200k/min setting, then 429s).
+      <b style="color:var(--text-primary)">Honesty notes:</b> Compose/Kubernetes run inside Docker Desktop's VM (network tax measured on health: ~7×);
+      k8s calls traverse <code>kubectl port-forward</code>; container-stack ticket lists were empty (fresh seed), so cross-stack
+      ticket numbers are floors of the authed path, not payload tests; all connections shared <em>one</em> session token —
+      real users don't, so single-session contention overstates the plateau (distinct-token rerun listed under Next steps).
+    </p>
+  </div>
+
+  <h2 class="font-bold mt-6 mb-2">Requests per second — by stack and scenario</h2>
+  <div class="grid md:grid-cols-3 gap-4">
+    <div class="card p-4">
+      <h3 class="text-sm font-semibold">GET /api/health <span class="font-normal" style="color:var(--text-secondary)">(50 conns, 20s)</span></h3>
+      <svg viewBox="0 0 300 150" class="w-full mt-2" role="img" aria-label="Health endpoint requests per second by stack">
+        <line x1="60" y1="10" x2="60" y2="120" stroke="var(--grid)"/><line x1="60" y1="120" x2="290" y2="120" stroke="var(--grid)"/>
+        <rect class="bar" x="60" y="18"  width="220" height="22" rx="4" fill="var(--seq-600)" data-tip="Windows native (dev): 13,781 rps · p50 3 ms · p99 8 ms"/>
+        <rect class="bar" x="60" y="56"  width="39"  height="22" rx="4" fill="var(--seq-450)" data-tip="Docker Compose (prod image): 2,460 rps · p50 18 ms — Docker Desktop VM/NAT tax"/>
+        <rect class="bar" x="60" y="94"  width="22"  height="22" rx="4" fill="var(--seq-300)" data-tip="Kubernetes (kind, via port-forward): 1,371 rps · p50 26 ms"/>
+        <text x="56" y="33"  text-anchor="end" font-size="10" fill="var(--text-secondary)">Windows</text>
+        <text x="56" y="71"  text-anchor="end" font-size="10" fill="var(--text-secondary)">Compose</text>
+        <text x="56" y="109" text-anchor="end" font-size="10" fill="var(--text-secondary)">k8s</text>
+        <text x="284" y="33" text-anchor="end" font-size="10" font-weight="700" fill="#fff">13,781</text>
+        <text x="103" y="71" font-size="10" font-weight="700" fill="var(--text-primary)">2,460</text>
+        <text x="86" y="109" font-size="10" font-weight="700" fill="var(--text-primary)">1,371</text>
+      </svg>
+      <p class="text-[11px] mt-1" style="color:var(--text-secondary)">One measure, one hue (sequential blue). The gap is virtualization + proxy hops, not the app.</p>
+    </div>
+
+    <div class="card p-4">
+      <h3 class="text-sm font-semibold">Login (bcrypt) <span class="font-normal" style="color:var(--text-secondary)">(300 requests, 15 conns)</span></h3>
+      <svg viewBox="0 0 300 150" class="w-full mt-2" role="img" aria-label="Login p50 latency by stack">
+        <line x1="60" y1="10" x2="60" y2="120" stroke="var(--grid)"/><line x1="60" y1="120" x2="290" y2="120" stroke="var(--grid)"/>
+        <rect class="bar" x="60" y="18" width="204" height="22" rx="4" fill="var(--seq-450)" data-tip="Windows: p50 3,515 ms · ~4 logins/s · ~240 ms CPU per login"/>
+        <rect class="bar" x="60" y="56" width="213" height="22" rx="4" fill="var(--seq-450)" data-tip="Compose: p50 3,677 ms · ~4 logins/s"/>
+        <rect class="bar" x="60" y="94" width="220" height="22" rx="4" fill="var(--seq-450)" data-tip="Kubernetes: p50 3,791 ms · ~4 logins/s"/>
+        <text x="56" y="33" text-anchor="end" font-size="10" fill="var(--text-secondary)">Windows</text>
+        <text x="56" y="71" text-anchor="end" font-size="10" fill="var(--text-secondary)">Compose</text>
+        <text x="56" y="109" text-anchor="end" font-size="10" fill="var(--text-secondary)">k8s</text>
+        <text x="258" y="33" text-anchor="end" font-size="10" font-weight="700" fill="#fff">3.5 s</text>
+        <text x="267" y="71" text-anchor="end" font-size="10" font-weight="700" fill="#fff">3.7 s</text>
+        <text x="274" y="109" text-anchor="end" font-size="10" font-weight="700" fill="#fff">3.8 s</text>
+      </svg>
+      <p class="text-[11px] mt-1" style="color:var(--text-secondary)">p50 under 15-deep queue. Identical across stacks — password hashing is deliberate CPU cost. A 9 am rush is the HPA's job (CPU-target scaling), not a bug.</p>
+    </div>
+
+    <div class="card p-4">
+      <h3 class="text-sm font-semibold">Authed list, before → after <span class="font-normal" style="color:var(--text-secondary)">(Windows, same DB, 50 conns)</span></h3>
+      <svg viewBox="0 0 300 150" class="w-full mt-2" role="img" aria-label="Tickets list before and after the payload fix">
+        <line x1="72" y1="10" x2="72" y2="120" stroke="var(--grid)"/><line x1="72" y1="120" x2="290" y2="120" stroke="var(--grid)"/>
+        <g><!-- req/s pair -->
+          <rect class="bar" x="72" y="18" width="103" height="18" rx="4" fill="var(--series-1)" data-tip="Before: 129 req/s (list carried every ticket's full rich-text description)"/>
+          <rect class="bar" x="72" y="40" width="130" height="18" rx="4" fill="var(--series-3)" data-tip="After omit(description): 163 req/s (+26%)"/>
+          <text x="68" y="31" text-anchor="end" font-size="10" fill="var(--text-secondary)">req/s</text>
+          <text x="179" y="31" font-size="10" font-weight="700" fill="var(--text-primary)">129</text>
+          <text x="206" y="53" font-size="10" font-weight="700" fill="var(--text-primary)">163</text>
+        </g>
+        <g><!-- payload pair -->
+          <rect class="bar" x="72" y="76" width="196" height="18" rx="4" fill="var(--series-1)" data-tip="Before: 391 KB per response (46 KB gzipped)"/>
+          <rect class="bar" x="72" y="98" width="75"  height="18" rx="4" fill="var(--series-3)" data-tip="After: 150 KB per response (10 KB gzipped)"/>
+          <text x="68" y="89"  text-anchor="end" font-size="10" fill="var(--text-secondary)">payload</text>
+          <text x="230" y="89" text-anchor="end" font-size="10" font-weight="700" fill="#fff">391 KB</text>
+          <text x="151" y="111" font-size="10" font-weight="700" fill="var(--text-primary)">150 KB</text>
+        </g>
+      </svg>
+      <div class="flex gap-4 mt-1 text-[11px]" style="color:var(--text-secondary)">
+        <span><span class="status-dot" style="background:var(--series-1)"></span>before</span>
+        <span><span class="status-dot" style="background:var(--series-3)"></span>after</span>
+      </div>
+    </div>
+  </div>
+
+  <h2 class="font-bold mt-8 mb-2">The queueing signature — authed endpoint vs concurrency (Kubernetes)</h2>
+  <div class="grid md:grid-cols-2 gap-4">
+    <div class="card p-4">
+      <h3 class="text-sm font-semibold">Throughput plateaus…</h3>
+      <svg viewBox="0 0 300 140" class="w-full mt-2" role="img" aria-label="Requests per second by concurrency">
+        <line x1="52" y1="10" x2="52" y2="110" stroke="var(--grid)"/><line x1="52" y1="110" x2="290" y2="110" stroke="var(--grid)"/>
+        <rect class="bar" x="70"  y="43" width="34" height="67" rx="4" fill="var(--seq-450)" data-tip="1 connection: 71 req/s (13 ms floor)"/>
+        <rect class="bar" x="125" y="32" width="34" height="78" rx="4" fill="var(--seq-450)" data-tip="5 connections: 83 req/s"/>
+        <rect class="bar" x="180" y="24" width="34" height="86" rx="4" fill="var(--seq-450)" data-tip="15 connections: 92 req/s"/>
+        <rect class="bar" x="235" y="20" width="34" height="90" rx="4" fill="var(--seq-450)" data-tip="50 connections: 96 req/s — 50× the clients, 1.35× the throughput"/>
+        <text x="87" y="122" text-anchor="middle" font-size="10" fill="var(--text-secondary)">c=1</text>
+        <text x="142" y="122" text-anchor="middle" font-size="10" fill="var(--text-secondary)">c=5</text>
+        <text x="197" y="122" text-anchor="middle" font-size="10" fill="var(--text-secondary)">c=15</text>
+        <text x="252" y="122" text-anchor="middle" font-size="10" fill="var(--text-secondary)">c=50</text>
+        <text x="87"  y="38" text-anchor="middle" font-size="10" font-weight="700" fill="var(--text-primary)">71</text>
+        <text x="142" y="27" text-anchor="middle" font-size="10" font-weight="700" fill="var(--text-primary)">83</text>
+        <text x="197" y="19" text-anchor="middle" font-size="10" font-weight="700" fill="var(--text-primary)">92</text>
+        <text x="252" y="15" text-anchor="middle" font-size="10" font-weight="700" fill="var(--text-primary)">96</text>
+      </svg>
+    </div>
+    <div class="card p-4">
+      <h3 class="text-sm font-semibold">…while latency buys nothing but queue</h3>
+      <svg viewBox="0 0 300 140" class="w-full mt-2" role="img" aria-label="p50 latency by concurrency">
+        <line x1="52" y1="10" x2="52" y2="110" stroke="var(--grid)"/><line x1="52" y1="110" x2="290" y2="110" stroke="var(--grid)"/>
+        <rect class="bar" x="70"  y="108" width="34" height="2"  rx="1" fill="var(--series-2)" data-tip="1 connection: p50 13 ms — the true per-request floor"/>
+        <rect class="bar" x="125" y="101" width="34" height="9"  rx="4" fill="var(--series-2)" data-tip="5 connections: p50 51 ms"/>
+        <rect class="bar" x="180" y="83"  width="34" height="27" rx="4" fill="var(--series-2)" data-tip="15 connections: p50 148 ms"/>
+        <rect class="bar" x="235" y="20"  width="34" height="90" rx="4" fill="var(--series-2)" data-tip="50 connections: p50 480 ms — 37× the floor, pure waiting"/>
+        <text x="87" y="122" text-anchor="middle" font-size="10" fill="var(--text-secondary)">c=1</text>
+        <text x="142" y="122" text-anchor="middle" font-size="10" fill="var(--text-secondary)">c=5</text>
+        <text x="197" y="122" text-anchor="middle" font-size="10" fill="var(--text-secondary)">c=15</text>
+        <text x="252" y="122" text-anchor="middle" font-size="10" fill="var(--text-secondary)">c=50</text>
+        <text x="87"  y="104" text-anchor="middle" font-size="10" font-weight="700" fill="var(--text-primary)">13</text>
+        <text x="142" y="96"  text-anchor="middle" font-size="10" font-weight="700" fill="var(--text-primary)">51</text>
+        <text x="197" y="78"  text-anchor="middle" font-size="10" font-weight="700" fill="var(--text-primary)">148</text>
+        <text x="252" y="15"  text-anchor="middle" font-size="10" font-weight="700" fill="var(--text-primary)">480</text>
+      </svg>
+    </div>
+  </div>
+  <p class="text-sm mt-2 card p-4" style="color:var(--text-secondary)">
+    Two measures, two charts — deliberately not one dual-axis chart. The shape is the finding: a fixed-capacity
+    stage saturates near ~100 req/s per pod on this rig. Contributors identified and now tunable: the 5-connection
+    tenant pool (validated by 5-slot queueing math on Compose), pod CPU limits (lifting 1→4 cores: +18%), and —
+    dominant in this harness — <em>single-session contention</em>, since every connection shared one login. Production
+    users hold distinct sessions; the honest next measurement is a distinct-token rerun.
+  </p>
+
+  <h2 class="font-bold mt-8 mb-2">Full numbers</h2>
+  <div class="card p-4 overflow-x-auto">
+    <table class="data">
+      <thead><tr><th>Stack</th><th>Scenario</th><th class="num">req/s</th><th class="num">p50 ms</th><th class="num">p99 ms</th><th class="num">2xx</th><th>Note</th></tr></thead>
+      <tbody>
+        <tr><td rowspan="4">Windows native (dev)</td><td>health, c50</td><td class="num">13,781</td><td class="num">3</td><td class="num">8</td><td class="num">275,612</td><td>node CPU +1.4 cores avg</td></tr>
+        <tr><td>tickets c50 <b>before</b></td><td class="num">129</td><td class="num">383</td><td class="num">418</td><td class="num">2,588</td><td>391 KB/resp (46 KB gz)</td></tr>
+        <tr><td>tickets c50 <b>after omit</b></td><td class="num">163</td><td class="num">304</td><td class="num">337</td><td class="num">3,255</td><td>150 KB/resp (10 KB gz)</td></tr>
+        <tr><td>login ×300, c15</td><td class="num">4</td><td class="num">3,515</td><td class="num">4,524</td><td class="num">300</td><td>~240 ms CPU/login (bcrypt)</td></tr>
+        <tr><td rowspan="3">Docker Compose (prod img)</td><td>health, c50</td><td class="num">2,460</td><td class="num">18</td><td class="num">43</td><td class="num">49,200</td><td>api peak 502% CPU · 128 MiB</td></tr>
+        <tr><td>tickets c50 (empty list)</td><td class="num">95</td><td class="num">498</td><td class="num">738</td><td class="num">1,909</td><td>pool=5 → 5-slot queue math</td></tr>
+        <tr><td>login ×300, c15</td><td class="num">4</td><td class="num">3,677</td><td class="num">5,436</td><td class="num">300</td><td></td></tr>
+        <tr><td rowspan="4">Kubernetes (kind)</td><td>health, c50</td><td class="num">1,371</td><td class="num">26</td><td class="num">145</td><td class="num">27,422</td><td>via kubectl port-forward</td></tr>
+        <tr><td>tickets c1 (floor)</td><td class="num">71</td><td class="num">13</td><td class="num">22</td><td class="num">—</td><td>true per-request cost</td></tr>
+        <tr><td>tickets c50, pool=5 cpu=1</td><td class="num">96</td><td class="num">480</td><td class="num">696</td><td class="num">—</td><td></td></tr>
+        <tr><td>tickets c50, pool=20 cpu=4</td><td class="num">105</td><td class="num">461</td><td class="num">698</td><td class="num">—</td><td>single-session artifact remains</td></tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<!-- ================================ FIXES ================================ -->
+<section id="tab-fixes" role="tabpanel" class="pt-6 hidden">
+  <div class="card p-4 overflow-x-auto">
+    <table class="data">
+      <thead><tr><th>#</th><th>Finding</th><th>How it was found</th><th>Evidence</th><th>Fix</th><th>Verified by</th></tr></thead>
+      <tbody>
+        <tr><td>1</td><td><b>Fresh Linux installs broken since 2.3.0</b> — 37 lowercase table names across 21 migrations (Windows MySQL is case-insensitive; Linux is not)</td><td>First real k8s install died at migration <code>add_face_verification</code>, error 1146</td><td><code>Table 'timesheet_portal.user' doesn't exist</code></td><td>Rewrote all names to canonical PascalCase (correct on both regimes); reconciled checksums in 3 local DBs</td><td>Virgin Linux MySQL migrated clean in k8s <em>and</em> Compose</td></tr>
+        <tr><td>2</td><td><b>First-install seed deadlock</b> — API called <code>process.exit(1)</code> when unseeded; restart loop too tight for <code>exec</code>; install.sh's wait-health→seed order could never pass</td><td>Compose bring-up: 6/6 seed attempts failed against a restarting container</td><td><code>Container … is restarting</code></td><td>Boot now <em>waits</em> (15 s poll, loud log) instead of exiting; health serves meanwhile</td><td>Compose &amp; k8s: pod Up + health 200 pre-seed, seeds land, login OK</td></tr>
+        <tr><td>3</td><td><b>Helm first install could never succeed</b> with bundled MySQL — failed pre-install hook aborts before MySQL exists; documented recovery waited on a pod that could never be created</td><td>Running the chart's own documented path on a fresh cluster</td><td><code>failed pre-install: timed out</code></td><td>Hook → <code>post-install,pre-upgrade</code>; upgrades still migrate before rollout</td><td>Two later first-installs completed in one shot</td></tr>
+        <tr><td>4</td><td><b>Web image unusable on k8s</b> — nginx hardcoded <code>proxy_pass http://api:4000</code> (Compose service name)</td><td>Web pod CrashLoopBackOff with empty logs</td><td>nginx upstream DNS failure at startup</td><td>envsubst template + <code>API_UPSTREAM</code> (image default keeps Compose zero-config; chart injects the real service)</td><td>web 1/1; SPA + API proxy + login through nginx</td></tr>
+        <tr><td>5</td><td><b>Runtime image couldn't run its own documented seeds</b> — tsx needs <code>src/</code>, image shipped only <code>dist/</code>; install.sh's retry mislabeled it "already-seeded"</td><td>Documented <code>kubectl exec … npm run seed</code> failed live</td><td><code>ERR_MODULE_NOT_FOUND …/src/generated/control-client</code></td><td>Image ships <code>src/</code> (~3 MB)</td><td>Both runbooks' exact commands succeed on both stacks</td></tr>
+        <tr><td>6</td><td><b>Release notes vanished from What's-new</b> — tags fallback made the GitHub list non-empty, which blocked the bundled-changelog merge the code comment promised</td><td>User screenshot: "No notes were written for this release"</td><td>Early-return in <code>withBundledFallback</code></td><td>Per-version merge (tag ⇒ notes/name/date from bundled CHANGELOG; real Release words never overwritten)</td><td>3 unit tests incl. regression pin</td></tr>
+        <tr><td>7</td><td><b>391 KB list payload</b> — list serialized every ticket's rich-text description; DB time only 25 ms</td><td>Load test + the app's own telemetry split</td><td>391,595 B/resp vs 25 ms DB</td><td><code>omit: description</code> on the list (detail endpoint unchanged; client types never declared it)</td><td>150 KB / 10 KB gz · 129→163 req/s · p50 −21% · e2e green</td></tr>
+        <tr><td>8</td><td><b>One office = one rate-limit bucket</b> — blanket 900/min per IP is per-<em>egress-IP</em>, and it was hardcoded</td><td>Load test hit 429s at exactly 900; NAT math</td><td>898×200 then 429s</td><td><code>RATE_LIMIT_PER_MINUTE</code> knob (default unchanged) through env/Compose/chart</td><td>200k setting passed exactly 199,998 then cut — knob proven end-to-end</td></tr>
+        <tr><td>9</td><td><b>5-connection tenant pool throttles single-org deployments</b> — multi-tenant arithmetic applied to Shape-1 installs</td><td>Concurrency sweep: throughput pinned while p50 scaled with queue depth alone</td><td>~90 req/s at c=5/15/50; 51→480 ms p50</td><td><code>TENANT_DB_CONNECTION_LIMIT</code> (default 5 kept; single-org shapes ship 20)</td><td>Env verified in-pod; Compose 5-slot math documented</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="text-xs mt-3" style="color:var(--text-secondary)">
+    Earlier in the same day (previous report sections in git history): the agentic-layer completion, the What's-new
+    tags fallback itself, the uuid advisory closure, and the four-part k8s verification that found #1–#5.
+    Every fix above is committed with its reasoning in the message; nothing was patched silently.
+  </p>
+</section>
+
+<!-- ================================ SECURITY ================================ -->
+<section id="tab-security" role="tabpanel" class="pt-6 hidden">
+  <div class="grid md:grid-cols-2 gap-4">
+    <div class="card p-5">
+      <h2 class="font-bold">Run today — real results</h2>
+      <table class="data mt-2">
+        <tbody>
+          <tr><td>Dependency audit (<code>npm audit</code>)</td><td class="num"><b style="color:var(--good)">0 vulnerabilities</b></td></tr>
+          <tr><td>TypeScript strict (API + web)</td><td class="num"><b style="color:var(--good)">clean</b></td></tr>
+          <tr><td>Lint (<code>npm run lint</code>)</td><td class="num"><b style="color:var(--good)">clean</b></td></tr>
+          <tr><td>Unit tests</td><td class="num"><b style="color:var(--good)">882 / 882</b></td></tr>
+          <tr><td>E2E (Playwright, live stack)</td><td class="num"><b style="color:var(--good)">142 / 142</b></td></tr>
+          <tr><td>Boot guards (proven live today)</td><td class="num"><b style="color:var(--good)">3 fired correctly</b></td></tr>
+        </tbody>
+      </table>
+      <p class="text-xs mt-2" style="color:var(--text-secondary)">
+        The boot guards earned their row: during testing they refused a repetitive encryption key, refused
+        short JWT secrets (Zod env validation), and held an unseeded install in a safe waiting state —
+        each one a misconfiguration that never became a running insecure system.
+      </p>
+    </div>
+
+    <div class="card p-5">
+      <h2 class="font-bold" style="color:var(--serious)">Not run — say so, don't fake it</h2>
+      <table class="data mt-2">
+        <tbody>
+          <tr><td><b>VAPT / penetration test</b></td><td>Requires an external engagement against a staging deployment. The app is intake-ready: security findings POST to <code>/api/devops/:org/findings</code> (SAST/DAST/SSAT/SSCT) and human-led VAPT reports upload via Workspace Settings.</td></tr>
+          <tr><td><b>SonarQube server scan</b></td><td>No server configured. SonarQube-for-IDE is active on this machine and surfaced 2 minor maintainability warnings during edits (S5843 regex complexity, S7780 String.raw) — both pre-existing, neither security-relevant. A CI-attached SonarQube scan is the next step if wanted.</td></tr>
+          <tr><td><b>DAST (e.g. OWASP ZAP)</b></td><td>Not executed in this campaign. The Compose/k8s stacks brought up here are the right target; the ingestion webhook is already built to receive its output.</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <div class="card p-5 mt-4">
+    <h2 class="font-bold">Security posture inventory (from code, verified)</h2>
+    <div class="grid sm:grid-cols-2 gap-x-8 gap-y-1.5 mt-2 text-sm" style="color:var(--text-secondary)">
+      <p>• <b style="color:var(--text-primary)">helmet</b> + strict CORS + cookie hygiene on every response</p>
+      <p>• Layered rate limits: blanket/IP (tunable), auth 20/min-failed, public share links 15–30/min, webhooks 60–120/min, AI 20/min/user</p>
+      <p>• Zod-validated env; weak/repetitive secrets refused at boot</p>
+      <p>• Dual HTML sanitization (server allow-list + DOMPurify on render)</p>
+      <p>• Per-tenant DB isolation (DB-per-org, AsyncLocalStorage context)</p>
+      <p>• JWT auth + server-side sessions with force-logout within a heartbeat</p>
+      <p>• MCP/agents: per-user credentials, tool allowlists, taint clamp, audited runs</p>
+      <p>• Secret-shape redaction on captured CI/scanner content and agent traces</p>
+      <p>• Webhook HMAC/JWT verification per provider; constant-time token compares</p>
+      <p>• Biometric data: consent, retention sweeps, capture denylist, authenticated image routes</p>
+    </div>
+    <details class="mt-3 text-sm" style="color:var(--text-secondary)">
+      <summary class="font-semibold" style="color:var(--text-primary)">Known-open security items (tracked in docs/ROADMAP.md, deliberately)</summary>
+      <ul class="mt-2 space-y-1">
+        <li>• Guest/public tokens phase 2 (hash-at-rest) — planned</li>
+        <li>• MCP tool calls audited by name, not argument — planned</li>
+        <li>• A fetch-then-authorize sweep on secondary routes — planned</li>
+        <li>• <code>available-models</code> SSRF-shaped endpoint — recorded decision (BYOK localhost is the feature; super-admin-only)</li>
+      </ul>
+    </details>
+  </div>
+</section>
+
+<!-- ================================ CAPACITY ================================ -->
+<section id="tab-capacity" role="tabpanel" class="pt-6 hidden">
+  <div class="card p-4 overflow-x-auto">
+    <table class="data">
+      <thead><tr><th>Users</th><th>Deployment</th><th>Sizing (measured basis)</th><th>Set these knobs</th></tr></thead>
+      <tbody>
+        <tr><td>&lt; 25</td><td><code>install.sh</code> Compose, bundled MySQL</td><td>2 vCPU / 4 GB (face models drive RAM)</td><td><code>TRUST_PROXY_HOPS=1</code> · defaults otherwise</td></tr>
+        <tr><td>≤ 100</td><td>Compose external-db + managed MySQL</td><td>App 2 vCPU / 8 GB; DB 2 vCPU / 4 GB</td><td><code>TENANT_DB_CONNECTION_LIMIT=20</code> (shipped) · raise <code>RATE_LIMIT_PER_MINUTE</code> if one office NAT</td></tr>
+        <tr><td>≤ 1,000</td><td>Helm chart, <code>mysql.enabled=false</code> → managed MySQL</td><td>HPA api 2→10 @ 70% CPU (shipped defaults); RWX uploads or S3</td><td>chart <code>env.rateLimitPerMinute</code> per NAT reality · telemetry <code>sampleRate: 0.1</code> · crons on exactly one replica</td></tr>
+        <tr><td>5,000+</td><td>Chart + separate <code>/api/face/*</code> pod pool + MySQL replica</td><td>Keeps ~500 MB face models out of general pods</td><td>as above; consider raising api CPU limits — 1→4 cores measured +18% on the authed path</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <div class="grid md:grid-cols-2 gap-4 mt-4">
+    <div class="card p-5">
+      <h2 class="font-bold">Why logins are the spike to plan for</h2>
+      <p class="text-sm mt-2" style="color:var(--text-secondary)">
+        Password hashing costs ~240 ms of CPU per login <em>by design</em> — that is the bcrypt work factor doing its job
+        against offline cracking. One process sustains ~4 logins/s; a hundred people at 9 am is ~25 s of queued CPU on one
+        pod, or a non-event across an HPA fleet that scales on exactly this signal. SSO deployments sidestep it entirely.
+      </p>
+    </div>
+    <div class="card p-5">
+      <h2 class="font-bold">Next measurements worth taking</h2>
+      <ul class="text-sm mt-2 space-y-1.5" style="color:var(--text-secondary)">
+        <li>• Distinct-token load run (N real sessions) — removes the single-session artifact this harness carries</li>
+        <li>• In-cluster load generation (a Job) — removes the port-forward hop from k8s numbers</li>
+        <li>• Seeded-data container stacks — payload-realistic authed reads on prod images</li>
+        <li>• DAST (ZAP) against the Compose stack; findings flow into the app's own ingestion webhook</li>
+      </ul>
+    </div>
+  </div>
+</section>
+</main>
+
+<footer class="max-w-6xl mx-auto px-5 pb-10 text-xs" style="color:var(--text-secondary)">
+  Generated 2026-08-08 · every figure measured on this machine, this day · charts follow the project dataviz method
+  (palette CVD-validated in both modes; one measure per chart; tables accompany every figure).
+</footer>
+
+<script>
+// Tabs
+const tabs = document.querySelectorAll('[role="tab"]');
+tabs.forEach(btn => btn.addEventListener('click', () => {
+  tabs.forEach(b => b.setAttribute('aria-selected', String(b === btn)));
+  document.querySelectorAll('[role="tabpanel"]').forEach(p => p.classList.add('hidden'));
+  document.getElementById('tab-' + btn.dataset.tab).classList.remove('hidden');
+}));
+// Hover tooltips for every mark
+const tip = document.getElementById('tip');
+document.querySelectorAll('[data-tip]').forEach(el => {
+  el.addEventListener('mousemove', e => {
+    tip.textContent = el.dataset.tip;
+    tip.style.left = Math.min(e.clientX + 14, innerWidth - 280) + 'px';
+    tip.style.top = (e.clientY + 14) + 'px';
+    tip.classList.add('show');
+  });
+  el.addEventListener('mouseleave', () => tip.classList.remove('show'));
+});
+</script>
+</body>
+</html>

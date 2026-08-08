@@ -190,7 +190,10 @@ app.use("/api/platform-admin/auth/login", authLimiter);
 // 429s on ticket fetches and looked like flaky UI bugs). 900/min ≈ 15 req/s per IP still
 // bounds abuse hard, while the strict limiters below (auth 20/min, face 60/min, webhooks)
 // keep guarding the actually-sensitive/expensive paths.
-app.use(rateLimit({ windowMs: 60_000, limit: 900, standardHeaders: true }));
+// 900/min by default; RATE_LIMIT_PER_MINUTE raises it for deployments where many real users
+// share one egress IP (office NAT, corporate proxy) — see env.ts for the full reasoning. The
+// strict limiters above and below this line are deliberately NOT tunable by it.
+app.use(rateLimit({ windowMs: 60_000, limit: env.RATE_LIMIT_PER_MINUTE, standardHeaders: true }));
 app.use(compression());
 app.use(cookieParser());
 app.use(express.json({ limit: "2mb" }));

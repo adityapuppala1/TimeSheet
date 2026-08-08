@@ -46,3 +46,7 @@ deploy/caddy/certs/*
 .env.*
 !.env.example
 !.env.*.example
+
+# Never commit tokens or bench artifacts
+tok*.txt
+*.bench.json

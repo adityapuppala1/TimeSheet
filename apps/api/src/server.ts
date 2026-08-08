@@ -163,11 +163,21 @@ server.on("listening", async () => {
   // now checks the DB (Workspace Settings → Mail server) in addition to env vars, and `prisma`
   // is only resolvable inside a request/tenantContext.run(), never at bare module scope.
   try {
-    const org = await controlPrisma.organization.findUnique({ where: { slug: env.DEFAULT_ORG_SLUG }, include: { database: true } });
-    if (!org || !org.database) {
-      console.error(`[boot] FATAL: control-plane Organization "${env.DEFAULT_ORG_SLUG}" is missing or has no database record.`);
-      console.error("[boot] Run: npm run control:seed -w apps/api");
-      process.exit(1);
+    // WAIT for the one-time seed rather than exiting — and the difference is a first install
+    // that works versus one that deadlocks. An earlier revision did `process.exit(1)` here, and
+    // under any supervisor that restarts the container (compose `restart:`, a Kubernetes
+    // Deployment) that produced a crash loop too tight for `docker compose exec`/`kubectl exec`
+    // to land the seed in — while install.sh's documented order (wait for health, THEN seed)
+    // could never see a healthy API in the first place, because health died with the process.
+    // The listener is already up by this point, so waiting keeps /api/health serving, keeps the
+    // container Up for the seed command, and turns "unseeded" into a state an operator can read
+    // in the logs and fix — which is what it always actually was.
+    let org = await controlPrisma.organization.findUnique({ where: { slug: env.DEFAULT_ORG_SLUG }, include: { database: true } });
+    while (!org?.database) {
+      console.error(`[boot] control-plane Organization "${env.DEFAULT_ORG_SLUG}" is missing or has no database record — waiting for the one-time seed.`);
+      console.error("[boot] Run: npm run control:seed -w apps/api   (then: npm run seed -w apps/api)");
+      await new Promise((resolve) => setTimeout(resolve, 15_000));
+      org = await controlPrisma.organization.findUnique({ where: { slug: env.DEFAULT_ORG_SLUG }, include: { database: true } });
     }
     const defaultClient = await getTenantClient(org.id, decryptSecret(org.database.encryptedDsn));
 

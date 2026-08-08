@@ -109,6 +109,13 @@ ticketRouter.get("/", requirePermission(permissions.TICKETS_VIEW), async (req, r
       ...(labelId ? { labels: { some: { labelId } } } : {}),
       ...(aiOnly ? { OR: [{ source: "EMAIL" }, { aiConfidence: { not: null } }] } : {})
     },
+    // The one column the LIST must not carry: description is rich HTML that can run to tens of
+    // kilobytes per ticket, and load testing measured the cost of shipping it — a 200-ticket list
+    // weighed 391KB uncompressed (46KB gzipped) with only 25ms of DB time, so the endpoint spent
+    // its latency serializing prose nothing here renders. No list consumer reads it: the table
+    // shows titles, the Kanban shows cards, and the detail sheet fetches GET /:id, which still
+    // returns it in full.
+    omit: { description: true },
     include: {
       project: { select: { id: true, code: true, name: true } },
       module: { select: { id: true, name: true } },
