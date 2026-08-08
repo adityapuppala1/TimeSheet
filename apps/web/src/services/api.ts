@@ -1207,6 +1207,34 @@ export interface TeamHoursTrend {
   monthly: Array<{ monthStart: string; hours: number; entries: number }>;
 }
 
+/** Mirrors the API's AiAutonomyLevel enum, weakest first. */
+export type AutonomyLevel = "SUGGEST" | "AUTO_APPLY" | "AUTONOMOUS";
+
+export interface AutonomyEntry {
+  capability: string;
+  title: string;
+  description: string;
+  /** What this workspace asked for. */
+  requestedLevel: AutonomyLevel;
+  /** What it actually gets. THE ONLY VALUE THE UI SHOULD ACT ON — the server applies the master
+   *  latch, the feature toggle and the product's own ceiling before returning it. */
+  effectiveLevel: AutonomyLevel;
+  /** The highest level the product permits for this capability. Rungs above it are locked. */
+  maxLevel: AutonomyLevel;
+  /** Why the effective level is lower than the requested one, when it is. */
+  clampedReason: string | null;
+  /** Why the locked rungs are locked. Rendered next to them — a disabled option is only worth
+   *  showing if it explains itself. */
+  ceilingReason: string | null;
+  actsOnUntrustedInput: boolean;
+  featureEnabled: boolean;
+}
+
+export interface AutonomyCatalogue {
+  autonomyEnabled: boolean;
+  capabilities: AutonomyEntry[];
+}
+
 export interface AIUsageSummary {
   monthStart: string;
   totalCostUsd: number;
@@ -1547,6 +1575,14 @@ export const settingsApi = {
    *  omit to leave the stored key untouched, pass "" to clear it back to the env-var fallback. */
   updateAI: async (payload: Partial<GlobalAISettings> & { apiKey?: string }) =>
     (await api.patch<GlobalAISettings>("/settings/ai", payload)).data,
+  /** How much authority each AI capability holds, as opposed to whether it runs at all.
+   *  The server returns BOTH `requestedLevel` and `effectiveLevel`; the UI must render the
+   *  second and never re-derive it, or the screen will eventually disagree with the server. */
+  getAIAutonomy: async () => (await api.get<AutonomyCatalogue>("/settings/ai/autonomy")).data,
+  /** 422s when `level` is above the capability's ceiling — that refusal is the point, so the
+   *  caller should surface the server's message rather than a generic one. */
+  updateAIAutonomy: async (payload: { capability: string; level: AutonomyLevel }) =>
+    (await api.patch<AutonomyEntry>("/settings/ai/autonomy", payload)).data,
   getAIUsageSummary: async () => (await api.get<AIUsageSummary>("/settings/ai/usage-summary")).data,
   /** AI QUALITY (not cost) — see api/src/services/ai-quality.service.ts for why the headline
    *  number is parse-failure rate rather than thumbs-up rate. */

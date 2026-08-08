@@ -106,6 +106,7 @@ import { IntegrationsSettingsCard } from "./settings/IntegrationsSettingsCard";
 import { AIDatasetsCard } from "./settings/AIDatasetsCard";
 import { AIEvalsCard } from "./settings/AIEvalsCard";
 import { AIPromptsCard } from "./settings/AIPromptsCard";
+import { AIAutonomyCard } from "./settings/AIAutonomyCard";
 import { SecurityDevOpsSettingsCard } from "./settings/SecurityDevOpsSettingsCard";
 import { FaceVerificationSettingsCard } from "./settings/FaceVerificationSettingsCard";
 import { MaintenanceSettingsCard } from "./settings/MaintenanceSettingsCard";
@@ -1815,6 +1816,11 @@ function AISettingsCard({ readOnly }: { readOnly: boolean }) {
       {/* Sits directly under the monthly total it explains: that card answers "what did we spend",
           this one answers "what is spending it". */}
       {settings.data?.aiEnabled && <AiFeatureUsagePanel />}
+
+      {/* Placed above the quality/prompt/dataset cards because it answers the question people
+          arrive at this tab asking once AI is on: not "how well is it doing" but "what is it
+          allowed to do without me". */}
+      <AIAutonomyCard readOnly={readOnly} aiEnabled={Boolean(settings.data?.aiEnabled)} />
 
       <AIQualityCard enabled={Boolean(settings.data?.aiEnabled)} captureOn={Boolean(settings.data?.aiCaptureEnabled)} />
 

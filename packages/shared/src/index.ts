@@ -393,6 +393,11 @@ export interface GlobalAISettings {
   /** Allows an eval to spend extra model calls judging free-text answers. The only part of a run
    *  that costs more than the replay itself, so it's opt-in and logged under its own feature. */
   aiEvalJudgeEnabled: boolean;
+  /** MASTER LATCH for per-capability autonomy. While false every capability only suggests,
+   *  whatever its AiCapabilityPolicy row says — see api/src/services/ai-autonomy.service.ts.
+   *  Orthogonal to the toggles above: those answer "does this run", this answers "how much
+   *  authority does it have when it does". */
+  aiAutonomyEnabled: boolean;
   model: string;
   confidenceThreshold: number;
   monthlyBudgetUsd: number | null;
