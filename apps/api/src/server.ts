@@ -33,6 +33,7 @@ import { startFaceRetentionWorker } from "./workers/face-retention.worker.js";
 import { startWebhookRetryWorker } from "./workers/webhook-retry.worker.js";
 import { startBugPatternDigestWorker } from "./workers/bug-pattern-digest.worker.js";
 import { startAIEvalWorker } from "./workers/ai-eval.worker.js";
+import { startAgentRunWorker } from "./workers/agent-run.worker.js";
 import { startAIRetentionWorker } from "./workers/ai-retention.worker.js";
 import { runForEveryOrg } from "./workers/run-for-every-org.js";
 import { warmFaceModelsIfEnabled } from "./services/face.service.js";
@@ -208,6 +209,7 @@ server.on("listening", async () => {
   startBugPatternDigestWorker();
   startAIRetentionWorker();
   startAIEvalWorker();
+  startAgentRunWorker();
   startApiTelemetryRetentionWorker();
   // Starts the machine-snapshot refresh and the buffer's flush timer. A no-op unless
   // API_TELEMETRY_ENABLED is set, so an untouched deployment starts no extra timers.

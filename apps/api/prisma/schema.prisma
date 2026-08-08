@@ -250,6 +250,7 @@ model User {
   aiProposalsReviewed  AiProposal[]         @relation("AiProposalReviewer")
   aiCapabilityPolicies AiCapabilityPolicy[] @relation("AiCapabilityPolicyEditor")
   aiProposalsUndone    AiProposal[]         @relation("AiProposalUndoer")
+  agentRuns            AgentRun[]           @relation("AgentRunActor")
 
   createdAt DateTime  @default(now())
   updatedAt DateTime  @updatedAt
@@ -1149,6 +1150,102 @@ enum AiAutonomyLevel {
 /// AN ABSENT ROW MEANS SUGGEST. That is the whole point of storing only what was chosen: a
 /// capability added next year arrives at the floor in every existing workspace instead of
 /// inheriting a neighbour's setting, which is the direction a mistake should fail in.
+/// One execution of an AI capability, with everything needed to bound it, stop it and explain it
+/// afterwards.
+///
+/// AN AGENT RUN IS A DELEGATION, NOT A PRINCIPAL. `onBehalfOfId` is required for exactly the reason
+/// `McpCredential.userId` is: every authorization helper in this codebase decides from `req.user`,
+/// and a run with no acting person would have to skip them or reimplement them — both roads end
+/// with an agent holding more authority than any human in the workspace. The `ai-agent@system.local`
+/// account is a foreign-key target for rows it authors, never the identity it acts as.
+model AgentRun {
+  id         String @id @default(uuid())
+  /// Matches AiCapabilitySpec.id in services/ai-capability.registry.ts.
+  capability String @db.VarChar(60)
+  /// "manual" | "cron" | "event:<name>"
+  trigger    String @db.VarChar(80)
+
+  /// THE IDEMPOTENCY KEY, and the reason there is no separate queue table. A doubled cron tick, a
+  /// retried webhook, or a restart mid-tick all collapse to this one row, because the database
+  /// refuses the second insert. An in-memory set could not survive the restart, which is precisely
+  /// the case that matters.
+  triggerKey String @unique @db.VarChar(190)
+
+  onBehalfOfId String
+  onBehalfOf   User   @relation("AgentRunActor", fields: [onBehalfOfId], references: [id], onDelete: Cascade)
+
+  /// The level this run was AUTHORISED at, copied when it was queued. A run must be judged by what
+  /// it was allowed when it started — and, more importantly, a run already in flight must not be
+  /// ESCALATED by somebody editing the policy underneath it.
+  level AiAutonomyLevel
+
+  /// Set the first time a tool carrying externally-authored content returns. From that moment the
+  /// run's context holds text written outside this workspace, so its effective autonomy is clamped
+  /// to SUGGEST for the rest of its life. The authority generalisation of the confidence ceiling
+  /// the intakes already apply: there, stranger-authored text buys less CONFIDENCE; here it buys
+  /// less AUTHORITY.
+  taintedAt DateTime?
+
+  /// QUEUED | RUNNING | COMPLETED | PARTIAL | FAILED | ABORTED | BLOCKED
+  ///
+  /// PARTIAL and BLOCKED are their own states rather than FAILED, for the reason AIEvalRun's status
+  /// gives: work already done is real, and calling it a failure throws away good data. BLOCKED means
+  /// the run produced something its level does not let it apply — degradation to propose-only, which
+  /// is an outcome and not an error.
+  status String @default("QUEUED") @db.VarChar(20)
+
+  /// Polled between steps rather than held as an in-process signal, so it survives a restart and so
+  /// the tick that reads it need not be the tick that started the run.
+  abortRequestedAt DateTime?
+  abortedById      String?
+
+  stepCount  Int      @default(0)
+  maxSteps   Int
+  costUsd    Decimal? @db.Decimal(10, 4)
+  maxCostUsd Decimal? @db.Decimal(10, 4)
+
+  scopeProjectId String?
+  goal           String? @db.Text
+  /// The proposal this run produced, if any. Not a relation: a proposal can be deleted while the
+  /// record of the run that made it should survive.
+  proposalId     String? @db.VarChar(64)
+  error          String? @db.VarChar(500)
+
+  steps AgentRunStep[]
+
+  startedAt  DateTime?
+  finishedAt DateTime?
+  createdAt  DateTime  @default(now())
+
+  @@index([status, createdAt])
+  @@index([capability, createdAt])
+}
+
+/// One step within a run — what it thought, what it called, what came back.
+model AgentRunStep {
+  id    String   @id @default(uuid())
+  runId String
+  run   AgentRun @relation(fields: [runId], references: [id], onDelete: Cascade)
+
+  index Int
+  /// "tool_call" | "tool_result" | "refusal" | "proposal" | "note"
+  kind     String  @db.VarChar(20)
+  toolName String? @db.VarChar(60)
+
+  /// GOVERNED BY GlobalAISettings.aiCaptureContentEnabled, exactly like AIInteraction.promptText.
+  /// An agent trace is prompt content by another name, and a second content store outside
+  /// ai-retention.worker.ts's sweep would be the same compliance regression the face capture
+  /// denylist exists to prevent.
+  argsJson        Json?
+  resultText      String? @db.Text
+  aiInteractionId String? @db.VarChar(64)
+  error           String? @db.VarChar(500)
+
+  createdAt DateTime @default(now())
+
+  @@index([runId, index])
+}
+
 /// One recorded MCP tool call, so a retried write does not happen twice.
 ///
 /// WHY IT IS NEEDED AT ALL: `create_ticket` called twice creates two tickets, and retrying is what

@@ -2494,3 +2494,53 @@ Still open, and deliberately not built yet:
   The providers return cache-read and cache-creation counts separately, and without them there is no
   way to show whether either item above actually worked. This is the prerequisite for the two, not
   a follow-up to them.
+## The agentic layer — an envelope before a loop (2026-08-09)
+
+Nine phases turning "AI that suggests" into "AI that can act, inside something that bounds it". The
+shape of the work is the finding: almost none of it was the loop. `ai-proposal.service.ts` was
+already a human-in-the-loop write envelope with per-row review, a field allowlist, referential
+validation of model-authored ids and — the load-bearing part — a staleness check that refuses any
+row moved since the proposal was computed. What was missing was everything around it.
+
+- [x] **Every automated actor has a name.** `AuditLog` gained `actorType`/`actorLabel`,
+  `before`/`after` and `aiInteractionId`/`agentRunId`; the eight sites writing `actorId: NULL` now
+  say who they were. `ipAddress` had existed since the first migration and had never been written.
+- [x] **Autonomy is a ceiling the code sets and an administrator lowers.** `AiCapabilityPolicy` +
+  `ai-capability.registry.ts`. Effective level is `min(stored, maxLevel)`, recomputed on every read,
+  so a row edited by hand cannot outrank the code. `applyProposal` — the single function that writes
+  an AI-authored change — asks the policy itself rather than trusting its caller.
+- [x] **Undo, with the staleness check pointed the other way.** A row is reverted only while it
+  still holds what the assistant wrote; anything edited since is left alone, because reverting it
+  would erase that person's change exactly as invisibly as applying a stale row would have.
+- [x] **PROJECT and BOOKING targets**, declared since the envelope was written and previously
+  throwing "unsupported change type", plus link types and lag.
+- [x] **AUTO_APPLY**, which is not a second write path — it is `applyProposal` with every row
+  accepted and an agent as the applier, so a tainted or stale row is still refused. Guardrails
+  degrade to review rather than failing.
+- [x] **A domain-event seam.** The "a status change to CLOSED also fires ticket.closed" rule had
+  been written out three times, once per write path. It is now written once.
+- [x] **MCP hardened**: per-credential throttling, credentials that expire, credentials narrower
+  than their holder (an intersection, never a union), and at-most-once writes with the key claimed
+  BEFORE the handler runs.
+- [x] **An agent run envelope** — `AgentRun`/`AgentRunStep`, a worker on the eval worker's pattern,
+  a unique `triggerKey` so a doubled tick collapses to one run, a level frozen at queue time so
+  policy edits cannot escalate a run in flight, an abort that survives a restart, and the taint
+  clamp: once a tool carrying externally-authored text returns, the run cannot write again.
+
+Still open, and deliberately so:
+
+- [ ] **The model-driven tool loop.** `callChat` is single-shot; multi-turn tool use needs new SDK
+  plumbing. The envelope above is what makes that safe to add rather than the other way round, and
+  it already runs the deterministic capabilities usefully on its own. `callToolForRun` is the door
+  that loop will use, and it is the only place the taint bit is set — so the loop cannot reach a
+  tool without it.
+- [ ] **Producers for SCHEDULE_ADJUSTMENT, RISK_MITIGATION and BLUEPRINT_SUGGESTION.** The apply and
+  undo paths take all three; nothing emits them yet. `ASSIGNMENT_REBALANCE` is the worked example,
+  and it contains no model call at all — who is overloaded is arithmetic `workload.service.ts`
+  already does.
+- [ ] **Per-row accept/reject is still not fed to the quality loop.** `ai-proposal.service.ts` has
+  declared it "a far richer signal than the thumbs-up/down on AIInteraction" since it was written,
+  and nothing aggregates it. Undo is a stronger signal still — a person explicitly reversing a
+  machine — and neither reaches `ai-dataset.service.ts`.
+- [ ] **The budget cap is still check-then-act.** Serial execution bounds the agent case; two
+  request-path callers can still each pass a cap only one should.

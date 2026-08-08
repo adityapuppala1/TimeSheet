@@ -169,7 +169,7 @@ describe("dispatch", () => {
     expect(payload.actingAs).toMatchObject({ email: "priya@acme.test", role: "EMPLOYEE" });
     // The workspace comes from the resolved tenant context, never from the caller.
     expect(payload.workspace).toBe("acme");
-    expect(auditSpy).toHaveBeenCalledWith("user-1", "mcp.tool_called", "McpCredential", "cred-1", { tool: "whoami" });
+    expect(auditSpy).toHaveBeenCalledWith("user-1", "mcp.tool_called", "McpCredential", "cred-1", { tool: "whoami" }, expect.anything());
   });
 
   it("refuses an unauthenticated call, and a revoked credential, identically", async () => {
@@ -238,10 +238,16 @@ describe("permissions", () => {
     expect(response.body.result.isError).toBe(true);
     expect(toolText(response.body)).toContain(permissions.TICKETS_VIEW);
     expect(client.ticket.findMany).not.toHaveBeenCalled();
-    expect(auditSpy).toHaveBeenCalledWith("user-1", "mcp.tool_denied", "McpCredential", "cred-1", {
-      tool: "search_tickets",
-      reason: "missing_permission"
-    });
+    // The 6th argument is provenance — actorType/agentRunId, which vary by caller kind. Asserted
+    // loosely here so this stays a test about the DENIAL being audited, not about that shape.
+    expect(auditSpy).toHaveBeenCalledWith(
+      "user-1",
+      "mcp.tool_denied",
+      "McpCredential",
+      "cred-1",
+      { tool: "search_tickets", reason: "missing_permission" },
+      expect.anything()
+    );
   });
 
   it("every tool that reads or writes shared data names a permission", () => {
@@ -259,7 +265,7 @@ describe("permissions", () => {
     await expect(
       runInTenant(client, () =>
         invokeMcpTool(
-          { user: { id: "user-1", name: "Priya", email: "priya@acme.test", role: "EMPLOYEE", permissions: [] }, req: { user: { id: "user-1", name: "Priya", email: "priya@acme.test", role: "EMPLOYEE", permissions: [] } }, credentialId: "cred-1" },
+          { user: { id: "user-1", name: "Priya", email: "priya@acme.test", role: "EMPLOYEE", permissions: [] }, req: { user: { id: "user-1", name: "Priya", email: "priya@acme.test", role: "EMPLOYEE", permissions: [] } }, caller: { kind: "MCP_CREDENTIAL", id: "cred-1" } },
           "search_tickets",
           {},
           { enabled: true, allowWrites: true, toolOverrides: { search_tickets: true } }

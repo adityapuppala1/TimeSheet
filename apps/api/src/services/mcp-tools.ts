@@ -63,7 +63,15 @@ export interface McpToolContext {
   /** The synthetic request the shared authorization helpers read. `user` only, by design. */
   req: { user: RequestUser };
   /** For the audit trail — which credential drove this call. */
-  credentialId: string;
+  /**
+   * WHO is calling, and what kind of thing that is.
+   *
+   * Widened from a bare credential id because the agent runtime reuses this whole dispatcher: an
+   * agent run is not an McpCredential, and writing `entity: "McpCredential"` with a run id would
+   * produce audit rows pointing at a row that does not exist. An audit trail that names the wrong
+   * kind of thing is worse than one that names nothing.
+   */
+  caller: { kind: "MCP_CREDENTIAL" | "AGENT_RUN"; id: string };
 }
 
 /** The public view of a tool: everything the settings UI, the MCP tools/list response and the
@@ -764,6 +772,11 @@ export function isToolEnabled(spec: McpToolSpec, settings: McpEnablementSettings
   return typeof override === "boolean" ? override : defaultEnabledFor(spec);
 }
 
+/** The AuditLog entity name for whoever is calling — see McpToolContext.caller. */
+function callerEntity(ctx: McpToolContext): string {
+  return ctx.caller.kind === "AGENT_RUN" ? "AgentRun" : "McpCredential";
+}
+
 export class McpToolDenied extends AppError {}
 
 /**
@@ -816,7 +829,7 @@ export async function recordUnavailableToolCalls(
     if (!call || call.method !== "tools/call" || typeof call.params?.name !== "string") continue;
     const unavailable = unavailableReason(call.params.name, settings);
     if (!unavailable) continue;
-    await audit(ctx.user.id, "mcp.tool_denied", "McpCredential", ctx.credentialId, {
+    await audit(ctx.user.id, "mcp.tool_denied", callerEntity(ctx), ctx.caller.id, {
       tool: call.params.name,
       reason: unavailable.reason
     }).catch(() => undefined);
@@ -837,7 +850,8 @@ export async function invokeMcpTool(
   settings: McpEnablementSettings
 ): Promise<unknown> {
   const deny = async (reason: string, error: AppError): Promise<never> => {
-    await audit(ctx.user.id, "mcp.tool_denied", "McpCredential", ctx.credentialId, { tool: name, reason });
+    await audit(ctx.user.id, "mcp.tool_denied", callerEntity(ctx), ctx.caller.id, { tool: name, reason },
+      { actorType: ctx.caller.kind === "AGENT_RUN" ? "AGENT" : "INTEGRATION", agentRunId: ctx.caller.kind === "AGENT_RUN" ? ctx.caller.id : undefined });
     throw error;
   };
 
@@ -885,7 +899,7 @@ export async function invokeMcpTool(
    */
   const idempotencyKey = typeof args.idempotencyKey === "string" ? args.idempotencyKey : null;
   if (spec.mutating && idempotencyKey) {
-    const callerId = ctx.credentialId;
+    const callerId = ctx.caller.id;
     try {
       await prisma.mcpToolInvocation.create({ data: { callerId, toolName: name, idempotencyKey } });
     } catch {
@@ -895,7 +909,7 @@ export async function invokeMcpTool(
         where: { callerId_toolName_idempotencyKey: { callerId, toolName: name, idempotencyKey } }
       });
       if (existing?.completedAt) {
-        await audit(ctx.user.id, "mcp.tool_replayed", "McpCredential", callerId, { tool: name, idempotencyKey });
+        await audit(ctx.user.id, "mcp.tool_replayed", callerEntity(ctx), callerId, { tool: name, idempotencyKey });
         return existing.resultJson;
       }
       await deny(
@@ -909,11 +923,12 @@ export async function invokeMcpTool(
       where: { callerId_toolName_idempotencyKey: { callerId, toolName: name, idempotencyKey } },
       data: { resultJson: (result ?? null) as Prisma.InputJsonValue, completedAt: new Date() }
     });
-    await audit(ctx.user.id, "mcp.tool_called", "McpCredential", callerId, { tool: name, idempotencyKey });
+    await audit(ctx.user.id, "mcp.tool_called", callerEntity(ctx), callerId, { tool: name, idempotencyKey });
     return result;
   }
 
   const result = await spec.handler(ctx, args);
-  await audit(ctx.user.id, "mcp.tool_called", "McpCredential", ctx.credentialId, { tool: name });
+  await audit(ctx.user.id, "mcp.tool_called", callerEntity(ctx), ctx.caller.id, { tool: name },
+    { actorType: ctx.caller.kind === "AGENT_RUN" ? "AGENT" : "INTEGRATION", agentRunId: ctx.caller.kind === "AGENT_RUN" ? ctx.caller.id : undefined });
   return result;
 }

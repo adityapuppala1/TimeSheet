@@ -137,7 +137,7 @@ async function handleMcp(req: McpRequest, res: Response) {
   const ctx: McpToolContext = {
     user: principal.user,
     req: { user: principal.user },
-    credentialId: principal.credentialId
+    caller: { kind: "MCP_CREDENTIAL", id: principal.credentialId }
   };
 
   const server = buildServer(ctx, settings);
