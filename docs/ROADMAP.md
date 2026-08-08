@@ -68,6 +68,12 @@ step ships/tests/ships before the next starts, same discipline as the DevOps clu
 ### Integrations
 - [x] **Public REST API + outbound webhooks** — already shipped (`public-api.controller.ts`,
   `webhook-dispatch.service.ts`) — see [docs/API.md § Public API](API.md#public-api).
+- [x] **MCP server** (2026-08-08) — `POST /api/mcp` (`controllers/mcp.controller.ts`,
+  `middleware/mcp-auth.ts`, `services/mcp.service.ts`, `services/mcp-tools.ts`), 11 tools bounded by
+  one user's permissions, off by default with writes off individually. The integration surface that
+  needed no integration built for it: a customer points their own assistant at the URL. See the
+  [dated entry below](#timesphere-as-an-mcp-server--read-only-until-asked-otherwise-2026-08-08) and
+  [docs/API.md § MCP server](API.md#mcp-server).
 - [ ] **Calendar sync** (Google/Outlook) — deadline-aware scheduling, reads the SLA due dates that
   already exist on tickets. Needs the org's own Google/Microsoft OAuth App credentials (same BYOK
   model as SSO/GitHub — no TimeSphere-operated client ever touches a customer's calendar). Not
@@ -2118,6 +2124,99 @@ much here as a finding.
   results scored at or above the configured 0.75 and were rejected by `effectiveMatchThreshold`'s
   per-user tightening, which can only ever tighten. With genuine live scores averaging 0.709, a user
   who has drifted upward can effectively never pass again. Re-check with `npm run eval:face`.
+
+## TimeSphere as an MCP server — read-only until asked otherwise (2026-08-08)
+
+The workspace could already be *called* by a script (the public REST API) and could already *call*
+a model (`ai.service.ts`). What it could not do is let somebody's own assistant work with it —
+"what's in my approval queue?", "log two hours against WEB for the payment refactor" — without a
+human retyping the answer into a form. `POST /api/mcp` closes that: JSON-RPC over Streamable HTTP,
+which is the transport the hosted clients this exists for actually take (they are configured with a
+URL; they cannot spawn a process on this server, so stdio would have served only a developer's own
+laptop).
+
+**The direction is the thing to hold onto.** This is the server half. `ai.service.ts` is the app
+calling a model and shares no code with it — the MCP server calls no model at all, spends nothing
+from the AI budget, and works with AI switched off entirely.
+
+- [x] **The credential is a person, not a key.** `middleware/public-api-auth.ts` authenticates an
+  `ApiKey` to `{id, scope}` with no acting user, which a coarse read API can live with. Tools that
+  ACT cannot: `requirePermission`, `ticketProjectScope`, `assertTicketVisible`, `canModifyTicket`,
+  `team.controller.ts`'s `managerId` predicate and `project.controller.ts`'s `visibilityScope` all
+  decide from `req.user`, so a caller without one would have to skip every one of them — and an MCP
+  client that skips the RBAC model is an MCP client with more authority than the person who set it
+  up. `McpCredential.userId` is therefore required, and `resolveMcpPrincipal` builds the identical
+  `RequestUser` shape `requireAuth` does, role and permissions loaded in full. Offboarding is
+  covered twice over: `ON DELETE CASCADE` on the account, and a per-request re-read that refuses a
+  deactivated one without any row changing.
+- [x] **The registry cannot leak a handler.** `MCP_TOOLS` is exported as `McpToolSpec[]`, a type
+  with **no handler field**, so outside `services/mcp-tools.ts` there is nothing to call and
+  `invokeMcpTool` is the only path — the same failure mode `assertTicketVisible`'s comment
+  describes for sub-resource routes, closed by the compiler rather than by review. Enablement, the
+  write latch, the permission (through the *same* `requirePermission` factory the REST routes use,
+  not a second copy of the rule) and argument validation are all settled before a handler runs.
+- [x] **Three closed defaults, and they cannot skew.** Master switch off, workspace write latch
+  off, and per-tool defaults of *reads on, writes off* — that third one is what makes a write tool
+  added by a **future** release arrive disabled in every existing workspace instead of switching
+  itself on during an upgrade. One predicate, `isToolEnabled`, backs both `tools/list` and
+  `tools/call`, so a tool cannot be hidden from the list yet still callable by a client that
+  guessed its name.
+- [x] **A disabled workspace answers 404, not 403** — checked *after* authentication, so only a
+  credential holder learns the difference, and every auth failure (unknown, revoked, deactivated,
+  maintenance) returns one identical 401 so the endpoint cannot enumerate tokens or users.
+- [x] **A fresh server per request, stateless transport.** Tool availability is per workspace and
+  the acting user is per credential, so the tool list is a function of who is asking; a long-lived
+  shared `McpServer` would have to mutate its registry per request — one race from listing tenant
+  A's tools to tenant B — and, built outside any request, would sit outside the `AsyncLocalStorage`
+  tenant context `prisma` resolves through. Construction is pure object graph, no I/O.
+- [x] **The tenant is not an argument.** Mounted after the blanket `resolveTenant`, exactly like
+  the public REST API, so the client's own URL carries the workspace. No tool accepts an org id or
+  slug — pinned by a test that walks every `inputSchema`, not by a convention.
+- [x] **Denials are auditable, including the ones this app never sees.** The MCP SDK answers a
+  `tools/call` for an unregistered name with its own protocol error before any handler runs, which
+  would have made a probe at a switched-off tool the one refusal that left no trace.
+  `recordUnavailableToolCalls` inspects the JSON-RPC body first and writes the `mcp.tool_denied`
+  row; the client's answer is unchanged.
+- [x] **Logging time creates a draft and never submits.** Submitting starts an approval SLA clock
+  and, where configured, requires an identity check — not something an assistant should do on
+  somebody's behalf. It also goes through `timesheet.controller.ts`'s own `saveTimesheet`, so the
+  overlap, future-date and project-assignment refusals are the same ones the UI gets.
+- [x] **Untrusted content is marked, and the marking is not claimed to be a fix.** This app ingests
+  attacker-authored prose on purpose (a stranger emails support@, that becomes a Ticket), so
+  ticket-reading tools carry `UNTRUSTED_CONTENT_NOTICE`, an output warning appended to the
+  description, and MCP's `openWorldHint`. Stated in the code: a determined injection can still be
+  read. The controls that hold regardless are the ones the model cannot argue with — read-only by
+  default, per-tool opt-in, one person's permissions.
+
+Tests: `tests/unit/mcp-server.test.ts`, 18 cases across dispatch, permissions, tenant isolation,
+per-tool enablement, read-only mode and the injection posture — including three that are
+*structural* rather than behavioural (every shared-data tool names a permission; no tool takes an
+org parameter; reads default on and writes default off), so a twelfth tool added carelessly fails
+the suite rather than shipping. Schema: `20260808120000_mcp_server`, two new tables, additive, no
+backfill. Docs: [ARCHITECTURE.md §3.11](ARCHITECTURE.md#311-mcp-server--a-second-inbound-surface-that-acts-as-a-person),
+[API.md](API.md#mcp-server), [DATABASE.md](DATABASE.md#mcp-server-tables-globalmcpsettings-mcpcredential),
+[DEPLOYMENT.md](DEPLOYMENT.md#operating-the-mcp-server).
+
+### Open — reported, not fixed
+
+- [ ] **`/api/mcp`'s rate limit is keyed on the IP, not the credential.** `app.ts` mounts a plain
+  120/min limiter whose default `keyGenerator` is `req.ip` — which is exactly the wrong axis for
+  the same reason `middleware/ai-rate-limit.ts` was rewritten in this release: two credentials
+  behind one office NAT share an allowance, and one credential reaching the server from a laptop
+  and a VPN gets two. The fix is the same shape (key on `req.mcp.credentialId`, IP as the
+  fallback), and it is not done here only because the limiter is mounted in `app.ts` *before*
+  `mcpAuth` has run, so the key is not available yet without reordering the mount.
+- [ ] **A tool call is audited by name, not by argument.** `invokeMcpTool` writes
+  `{ tool: name }` — so the log shows that `transition_ticket` ran, but not which ticket it moved.
+  For a surface whose entire premise is "a language model acted as this person", "what did it
+  actually do" is the question the audit row exists to answer. Deliberately not fixed blind:
+  arguments include free text a model composed (`taskDescription`, comment bodies), and deciding
+  what is safe to persist into `AuditLog` is a retention decision, not a one-line change.
+- [ ] **An MCP credential never expires.** There is `revokedAt` but no `expiresAt` — unlike the
+  guest approval links, which took a 30-day expiry in the 2026-08-07 batch precisely because a
+  long-lived capability nobody revisits is a capability nobody revokes. `lastUsedAt` makes a stale
+  credential *visible* in the settings list, which is the cheap half; automatic expiry is a schema
+  column plus a decision about what an expiring integration should do to the person relying on it.
 
 ## "Refine with AI" next to the fields people actually write in (2026-08-08)
 

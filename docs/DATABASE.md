@@ -54,9 +54,18 @@ table the request-telemetry middleware writes into, and `20260807170000_hash_gue
 adds the columns every guest-approval and public-form lookup now resolves through. A tenant left
 behind has none of them.
 
+2.3.0 adds one more: **`20260808120000_mcp_server`**, which creates `GlobalMcpSettings` and
+`McpCredential` (see [below](#mcp-server-tables-globalmcpsettings-mcpcredential)). A tenant that
+misses it does not merely lack the feature — `getGlobalMcpSettings` upserts the settings singleton
+on first read, so the *settings page* itself fails against a database where the table does not
+exist. Nothing else in 2.3.0 touches the schema.
+
 `update.sh`/`update.ps1` already run this fan-out for you on the Compose shape (unconditionally,
-before verification — it is a fast no-op when the default org is the only one). Manual and
-Kubernetes deployments run it themselves; nothing else will.
+before verification — it is a fast no-op when the default org is the only one), and `npm run setup`
+runs it as its last step on a local checkout. Neither needs a per-release edit: the target is
+whatever `getLatestMigrationName()` reads off the checked-out `prisma/migrations` directory, so each
+release's newest migration is picked up by name. Manual and Kubernetes deployments run it
+themselves; nothing else will.
 
 ## Backfills
 
@@ -305,6 +314,75 @@ tenant's backlog cannot hold the org loop open and starve the tenants after it; 
 tick continues where it stopped. 04:10 sits after the AI sweep at 03:40 so the two never contend
 for the same tenant connections, and the schedule runs even when collection is switched off —
 turning recording off must not strand the rows it already wrote.
+
+## MCP server tables (`GlobalMcpSettings`, `McpCredential`)
+
+The two tables behind TimeSphere's own MCP server — the second authenticated inbound surface, after
+the public REST API. Created by `20260808120000_mcp_server` (2.3.0); written and read by
+`services/mcp.service.ts` and `controllers/settings.controller.ts`, consumed per request by
+`controllers/mcp.controller.ts` and `middleware/mcp-auth.ts`. Concept and threat model:
+[ARCHITECTURE.md §3.11](ARCHITECTURE.md#311-mcp-server--a-second-inbound-surface-that-acts-as-a-person).
+Endpoints: [API.md](API.md#mcp-server).
+
+**The migration inserts no rows at all**, on purpose. The settings singleton is upserted on first
+read (the same convention every other `Global*` settings table uses), and every column defaults to
+the closed position — so an upgraded workspace has no live MCP endpoint until a super admin turns
+one on, and nothing needs backfilling.
+
+### `GlobalMcpSettings`
+
+One row, `id = "global"`, matching `GlobalAISettings`/`GlobalTicketSettings`.
+
+| Column | Type | Notes |
+|---|---|---|
+| `id` | `VARCHAR(191)` PK | Always the literal `global` — a singleton, not a UUID. |
+| `enabled` | `BOOLEAN NOT NULL DEFAULT false` | The master switch. While false `/api/mcp` refuses every caller, valid credential included — with a **404**, so a workspace that has not switched this on does not confirm the endpoint exists. |
+| `allowWrites` | `BOOLEAN NOT NULL DEFAULT false` | The read-only latch. While false, no mutating tool is listed *or* callable whatever `toolOverrides` says, so "stop the agent writing, now" is one boolean rather than an audit of individual tools. |
+| `toolOverrides` | `JSON NOT NULL` (Prisma default `{}`) | Per-tool opt-in/opt-out, `{ "<tool name>": true \| false }`. A tool **absent** from the map falls back to its own default in `services/mcp-tools.ts` — reads on, writes off — which is what makes a write tool added by a future release arrive disabled in every existing workspace instead of switching itself on during an upgrade. |
+| `updatedAt` | `DATETIME(3)` | `@updatedAt`. |
+| `updatedById` | `VARCHAR(191)` NULL | The super admin who last changed it. A bare column, no foreign key — the same choice `ApiRequestSample.userId` makes, so deleting an account cannot rewrite or block a settings row. |
+
+MySQL JSON is free-form, so the Zod schema on `PATCH /api/settings/mcp` is this column's **only**
+integrity check: it rejects any key that is not a tool the server actually publishes, because a
+typo persisting as a key nobody reads looks exactly like a tool that refuses to turn on.
+
+### `McpCredential`
+
+A bearer credential for `/api/mcp`, **bound to one user**. There is no such thing as an
+unattributed MCP credential here: every authorization helper in this codebase decides from
+`req.user`, so the credential *is* a user, and a tool call sees exactly what that person sees.
+
+| Column | Type | Notes |
+|---|---|---|
+| `id` | `VARCHAR(191)` PK | UUID. |
+| `name` | `VARCHAR(120)` | Operator-chosen label, e.g. "Priya's Claude Desktop". |
+| `tokenHash` | `VARCHAR(64)` **UNIQUE** | SHA-256 hex of the plaintext token, never the token — the same one-time-reveal convention as `ApiKey.keyHash`, `AttestationShareLink.tokenHash` and the security-ingestion token. The plaintext (`tsm_` + 32 random bytes, hex) is returned exactly once, by `POST /api/settings/mcp/credentials`. |
+| `tokenPrefix` | `VARCHAR(16)` | The leading 12 characters only, so two credentials can be told apart in the settings list without the full token ever being readable again. |
+| `userId` | `VARCHAR(191)` NOT NULL | The acting user. **Required**, unlike `ApiKey.createdById` — see the cascade below. |
+| `createdById` | `VARCHAR(191)` NULL | The super admin who issued it. Separate from `userId` because "who granted this" and "who does it act as" are different questions and an audit trail needs both. |
+| `lastUsedAt` | `DATETIME(3)` NULL | Stamped fire-and-forget on every successful resolve; bookkeeping must never fail a call. NULL means never used. |
+| `createdAt` | `DATETIME(3)` default now | |
+| `revokedAt` | `DATETIME(3)` NULL | Revocation is a soft stamp, not a delete, so the audit rows that reference this credential id still resolve. A revoked row is refused by `resolveMcpPrincipal` and hidden from the settings list. |
+
+Two indexes beyond the unique constraint:
+
+| Index | Serves |
+|---|---|
+| `McpCredential_tokenHash_idx` | Every authenticated request — the token→principal lookup, which is the one query on the hot path. |
+| `McpCredential_userId_idx` | The per-user view, and the cascade below. |
+
+**`userId` cascades on delete; `createdById` sets null.** The asymmetry is the point:
+
+- **A credential must die with the account it acts as.** An offboarded person's credential is that
+  person's permissions in a form nobody is watching — surviving as an orphan is the one outcome
+  that turns account deletion into a silent no-op for the integration surface. `ON DELETE CASCADE`.
+- **An issuer leaving must not delete other people's credentials.** `createdById` is provenance,
+  so it degrades to NULL (`ON DELETE SET NULL`) exactly like every other "who did this" column
+  here, rather than taking live credentials with it.
+
+Deactivation is covered separately and does not rely on the cascade: `resolveMcpPrincipal` re-reads
+the bound user on every request and returns null for a deleted, soft-deleted or non-`ACTIVE`
+account — so suspending someone stops their credential immediately, without a row changing.
 
 Design notes:
 

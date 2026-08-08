@@ -126,6 +126,11 @@ These are the actual failure modes you're likely to hit, in the order you'd hit 
   `PlatformAdmin@12345` (**change this immediately** — it has cross-org access)
 - **Configure real SMTP** (if you skipped it above) from **Workspace Settings → Mail server** —
   see [§ Configuring things after install](#configuring-things-after-install).
+- **Nothing AI-facing is listening yet.** The MCP server (`POST /api/mcp`, new in 2.3.0) ships
+  switched off, with its write tools off individually — a fresh install has no MCP endpoint at all
+  until a super admin enables it in **Workspace Settings → MCP server** and issues a credential.
+  What that decision actually grants is spelled out in
+  [docs/DEPLOYMENT.md § Operating the MCP server](DEPLOYMENT.md#operating-the-mcp-server).
 
 ---
 
@@ -150,6 +155,15 @@ The one-click scripts are environment-aware and end with evidence, not hope:
 
 Updating later is one command — see docs/DEPLOYMENT.md's "Updating a running deployment".
 
+**Upgrading to 2.3.0 specifically** is an ordinary `./update.sh` (Windows: `.\update.cmd`). It
+carries **one** migration, `20260808120000_mcp_server`, which only creates the two new MCP tables —
+additive, no backfill, nothing dropped or narrowed, so the updater's code-only auto-rollback still
+holds. It introduces **no new environment variable** in any deployment shape, so there is nothing
+to add to `.env`, either compose file, or the Helm chart. And because the updater's fan-out step
+runs `npm run migrate:tenants` unconditionally, that migration reaches every organization's
+database, not just the default one. Details:
+[docs/DEPLOYMENT.md § What 2.3.0 adds to that dance](DEPLOYMENT.md#what-230-adds-to-that-dance-the-mcp-server).
+
 ## Manual local install (no Docker)
 
 Full walkthrough already lives in [README.md § Installation](../README.md#installation-local-no-docker)
@@ -163,12 +177,23 @@ npm run dev
 ```
 
 `setup` is `npm install && npm run bootstrap && npm run db:generate && npm run doctor:heal &&
-npm run seed`, which covers, in order: dependencies (`postinstall` builds `packages/shared`);
-`apps/api/.env` created from `.env.example` if it doesn't exist, plus a dev TLS certificate if
-this machine has none; Prisma clients generated for **both** schemas (tenant and control-plane);
-`.env` validated, both databases created if missing, and every pending migration applied to each;
-then roles/permissions/demo data and the control-plane plan tiers seeded. **Every step is
-idempotent** — re-running `setup` on an existing install regenerates nothing it would overwrite.
+npm run seed && npm run db:migrate:tenants`, which covers, in order: dependencies (`postinstall`
+builds `packages/shared`); `apps/api/.env` created from `.env.example` if it doesn't exist, plus a
+dev TLS certificate if this machine has none; Prisma clients generated for **both** schemas (tenant
+and control-plane); `.env` validated, both databases created if missing, and every pending
+migration applied to each; then roles/permissions/demo data and the control-plane plan tiers
+seeded; and finally the **tenant fan-out**, which walks the control-plane org registry and brings
+every organization's own database to the newest migration. **Every step is idempotent** —
+re-running `setup` on an existing install regenerates nothing it would overwrite.
+
+The fan-out is last because it needs the control-plane schema *and* its seeded org registry to
+exist first. On a clean clone it finds exactly one organization, already migrated, and is a fast
+no-op — which is precisely why it is safe to run unconditionally. It earns its place on a checkout
+where you have since provisioned a second organization from `/platform-admin`: that org has its own
+physical database that `doctor:heal` never touches, and running new code against its old schema is
+the one drift the additive-only migration policy cannot excuse. Same command, same reasoning as
+`update.sh` on a deployed stack — see
+[docs/DEPLOYMENT.md § Keeping every tenant's schema current](DEPLOYMENT.md#keeping-every-tenants-schema-current).
 
 Two things it deliberately does *not* do. It never overwrites an `apps/api/.env` you already have,
 and it never regenerates a certificate you have already trusted on your devices — both would
@@ -193,7 +218,9 @@ Equivalent step-by-step, if you'd rather run each yourself or see what's happeni
 5. `npm run db:generate`
 6. `npm run db:migrate` (redundant if you ran `doctor:heal` above — safe to run either way)
 7. `npm run seed`
-8. `npm run dev`
+8. `npm run db:migrate:tenants` (a no-op unless you have provisioned a second organization — see
+   above)
+9. `npm run dev`
 
 ---
 
@@ -284,6 +311,8 @@ the admin-configurable settings surfaces this app has:
 | Kanban grouped by manager / org-chart | Tickets → Kanban view ("Group by manager") · Team page | Reads the existing `User.managerId` reporting-line relation — no extra configuration needed. |
 | Block resolve while CI is failing | Workspace Settings → **Ticketing** | Off by default; needs CI actually POSTing test runs to the Security & DevOps webhook to have any effect. |
 | Public API keys & outbound webhooks | Workspace Settings → **Public API** | Generate a bearer key (READ or WRITE scope) or register a webhook URL — see [docs/API.md](API.md#public-api) for the endpoint/signature reference. |
+| MCP server (connect an AI assistant to this workspace) | Workspace Settings → **MCP server** | **Off by default, and off after an upgrade** — new in 2.3.0. Turn on the server, then issue a credential **bound to one user**: every tool runs with exactly that person's permissions, and the token is shown once. Write tools need the workspace write latch *and* their own per-tool switch, both off initially. Read [docs/DEPLOYMENT.md § Operating the MCP server](DEPLOYMENT.md#operating-the-mcp-server) before enabling — this is an authenticated endpoint that lets an external LLM client read (and, if you allow writes, act on) this workspace as that user. Endpoint reference: [docs/API.md](API.md#mcp-server). |
+| AI refine ("tidy this up" beside a field) | Workspace Settings → **AI** | Nothing of its own to configure — it rides the existing AI master switch, the **writing assistant** toggle and the same monthly budget. Off wherever AI is off, and the button says which. |
 | Live GitHub connection | Workspace Settings → **Security & DevOps → Git provider** | Bring your own GitHub OAuth App (client ID/secret) — set its callback URL to `<your-url>/api/git/callback`, then Connect. Once connected, generate a webhook secret from the same card and add a webhook (URL + secret shown there) to each repo you want auto-synced, for push/PR-driven `TicketBranch` updates and (opt-in) AI PR-review summaries. |
 | Face (identity) verification | Workspace Settings → **Face verification** | Off by default. Master switch, per-action scope, match/liveness thresholds, retention window, consent wording, plus the review log of every attempt. Per-user opt-in lives on Users → edit → *Require face verification*. Employees enroll from their own Profile. Needs **HTTPS** (browsers only expose a camera on a secure origin). Collects biometric data — read [docs/FACE_VERIFICATION.md](FACE_VERIFICATION.md) first. |
 | SSO (Google/Microsoft/SAML/LDAP) | Workspace Settings → **Single sign-on** | Independent per-provider toggles. |

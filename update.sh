@@ -150,6 +150,11 @@ migrate_extra_tenants() {
   # finds only the default org (already migrated) and is a fast no-op — so this is safe to run
   # unconditionally, and skipping it would leave any extra org on the OLD schema while the NEW
   # code runs against it: precisely the drift the additive-only policy cannot excuse.
+  #
+  # NO PER-RELEASE EDIT IS EVER NEEDED HERE. The target is whatever `getLatestMigrationName()`
+  # (services/provisioning.service.ts) reads off the CHECKED-OUT prisma/migrations directory, so
+  # each release's new migration is picked up by name — 2.3.0's `20260808120000_mcp_server` is
+  # applied to every tenant by this call without a line of this script changing.
   log "Migrating any additional tenant databases..."
   docker compose -f "$COMPOSE_FILE" exec -T api npm run migrate:tenants -w apps/api     || warn "migrate:tenants reported a problem — check which org failed above; the default org is unaffected."
 }

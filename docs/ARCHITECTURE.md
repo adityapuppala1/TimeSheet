@@ -457,6 +457,77 @@ recorded; `userId` is the whole of the identity, there is deliberately **no fore
 `User`, and names are resolved at read time — so the table never holds a person's details and a
 deleted user disappears from the view rather than cascading.
 
+### 3.11 MCP server — a second inbound surface that acts as a person
+
+TimeSphere exposes **itself** as an MCP (Model Context Protocol) server: `POST /api/mcp`, JSON-RPC
+over Streamable HTTP, so Claude Desktop, Claude Code or a hosted agent can read and act on a
+workspace from outside the app. **Direction matters and is the first thing to get right** — this is
+the *server* half. The app *calling* a model is §3.3's choke point (`services/ai.service.ts`) and
+shares nothing with this beyond the tenant proxy.
+
+Architecturally it is the **second** authenticated inbound surface, after the public REST API
+(`middleware/public-api-auth.ts`), and it is the first one that carries an **identity** rather than
+a scope. That difference drives everything below.
+
+**The credential is a user, not a key.** `ApiKey` authenticates to `{id, scope}` with no acting
+user — workable for a coarse read API. It is not workable here, because every authorization helper
+in this codebase decides from `req.user`: `requirePermission`, `ticketProjectScope`,
+`assertTicketVisible`, `canModifyTicket`, `team.controller.ts`'s `managerId` predicate,
+`project.controller.ts`'s `visibilityScope`. A caller with no `req.user` would have to skip all of
+them, and **an MCP client that skips the RBAC model is an MCP client with more authority than the
+person who set it up.** So `McpCredential` is bound to exactly one user (`onDelete: Cascade`), and
+`middleware/mcp-auth.ts` resolves a bearer token into the identical `RequestUser` shape
+`requireAuth` builds — role and permissions loaded in full, re-read per request, and refused for a
+deleted, deactivated or maintenance-locked account exactly as the web path would be.
+
+**The tenant is never an argument.** The router is mounted after the blanket `resolveTenant` in
+`app.ts`, exactly like the public REST API: the client connects to its own workspace's URL
+(`acme.timesphere.app/api/mcp`), so the Host header has already chosen the database before any tool
+runs. No tool accepts an org id or slug — there is nowhere for one to have an effect, so a model
+cannot be talked into naming someone else's workspace.
+
+**A fresh `McpServer` is constructed per request**, and the transport is stateless
+(`sessionIdGenerator: undefined`). Tool availability is per workspace and the acting user is per
+credential, so the tool list is a function of who is asking. A long-lived shared server would have
+to mutate its registry per request — one race away from listing tenant A's tools to tenant B — and,
+being built outside any request, would sit outside the `AsyncLocalStorage` tenant context that
+`prisma` resolves through. Building it inside the request makes both structurally impossible;
+construction is pure object graph, no I/O.
+
+**Three gates, all closed by default, and they cannot skew.** `GlobalMcpSettings.enabled` is the
+master switch (a disabled workspace answers **404** — after authentication, so only a credential
+holder learns the difference); `allowWrites` is a single read-only latch that overrides every
+per-tool setting; `toolOverrides` is per-tool opt-in/opt-out, defaulting to *reads on, writes off*
+so a write tool added by a future release arrives disabled everywhere. One predicate,
+`isToolEnabled`, backs both `tools/list` and `tools/call` — a tool cannot be hidden from the list
+yet remain callable by a client that guessed its name.
+
+**One dispatcher, and the registry cannot leak a handler.** `MCP_TOOLS` is exported as
+`McpToolSpec[]`, a type with **no handler field**, so outside `services/mcp-tools.ts` there is no
+reference to a tool's implementation to call: `invokeMcpTool` is the only path, and it settles
+existence, enablement, the write latch, the permission (via the *same* `requirePermission` factory
+the REST routes use, not a reimplementation) and argument validation before any handler runs. The
+compiler enforces that, not a reviewer.
+
+**Every refusal is audited, including the ones the SDK answers itself.** `invokeMcpTool` writes an
+`mcp.tool_denied` row for each denial and `mcp.tool_called` on success. A `tools/call` naming a tool
+this session never registered is rejected by the MCP SDK before any of this app's code runs, so
+`recordUnavailableToolCalls` inspects the JSON-RPC body first and records that too — a switched-off
+tool being probed is exactly the event an operator wants to find later.
+
+**Untrusted content is marked, not claimed to be solved.** This app ingests attacker-authored prose
+by design (§3.4: a stranger emails support@, that becomes a Ticket), so any tool returning ticket
+text sets `untrustedContent`, which prefixes the result with `UNTRUSTED_CONTENT_NOTICE`, appends an
+output warning to the tool description, and sets MCP's `openWorldHint`. Stated honestly in the
+code: this is a mitigation a determined injection can still argue past. The controls that hold
+regardless are the ones a model cannot negotiate with — read-only by default, per-tool opt-in, and
+every tool bounded by one specific person's permissions.
+
+**What the operator is actually turning on.** An enabled endpoint plus an issued credential lets an
+external LLM client read this workspace as one named user — and, if writes are enabled, act as
+them. Tables and threat notes: [DATABASE.md](DATABASE.md#mcp-server-tables-globalmcpsettings-mcpcredential).
+Endpoints: [API.md](API.md#mcp-server). Operating it: [DEPLOYMENT.md](DEPLOYMENT.md#operating-the-mcp-server).
+
 ---
 
 ## 4. Request lifecycle (a normal, tenant-resolved API call)
@@ -512,8 +583,10 @@ direct POST with a body, resolved via the normal Host-header tenant middleware e
 password login (`controllers/auth.controller.ts`).
 
 Mounted **after** `resolveTenant` despite also being caller-facing: `/api/public/v1/*` (the public
-API — a caller already knows their own org's URL, so the Host header resolves normally) and the
-three `/api/shared/*` guest routes (attestations, request forms, approvals — the link itself
+API — a caller already knows their own org's URL, so the Host header resolves normally),
+`POST /api/mcp` (the MCP server, §3.11 — an MCP client is configured with its own workspace's URL,
+which is precisely why no tool takes an org parameter: there is nowhere for one to have an effect)
+and the three `/api/shared/*` guest routes (attestations, request forms, approvals — the link itself
 carries the org). Being "public" is not what decides this; not having a resolvable Host header is.
 
 ---
@@ -555,6 +628,8 @@ service depends on `config/prisma.ts`; not repeated below unless it's the point 
 | File | Purpose | Depends on | Depended on by |
 |---|---|---|---|
 | `services/ai.service.ts` | The one AI choke point — see §3.3. | `@anthropic-ai/sdk`, `openai`, `plan-limits.service.ts` | `email-intake.service.ts`, `chat-intake.service.ts`, `ticket.controller.ts`, `ai.controller.ts` |
+| `middleware/ai-rate-limit.ts` | The throttle every router that can reach a model mounts — 20/min, keyed on **`req.user.id`, not `req.ip`**. Spend is attributed to a user (`AIUsageLog.userId` is what the usage panel breaks down by), so the bucket is too: a NAT'd office no longer shares one allowance while one person on a phone and a laptop has two. IP is the fallback for a request that somehow arrives unauthenticated (collapsed to a /64 for IPv6), because degrading to a single global bucket would be worse. Bounds how fast one account can spend; `ai.service.ts#preflight`'s budget cap bounds what the workspace can spend in a month. | `express-rate-limit` | `controllers/ai.controller.ts`, `controllers/ai-proposal.controller.ts` |
+| `components/AiRefine.tsx` (web) | The per-field "refine this text" affordance — a hook plus a trigger and a result panel, so each caller keeps its own layout. Always a **proposal**: original and suggestion side by side, nothing changes until "Use this", and the replaced value is kept so Undo is real. Replaced two older "Improve with AI" buttons that overwrote what the author had typed. | `services/api.ts`, `lib/safe-html.ts` | Timesheet form (description, notes), ticket title/description, ticket comments |
 | `services/email-intake.service.ts` | Email → ticket pipeline (see §3.4). | `ai.service.ts`, `ticket.service.ts`, `notify.service.ts` | `workers/inbound-email.worker.ts`, `controllers/email-intake.controller.ts` |
 | `services/chat-intake.service.ts` | Chat → ticket pipeline, same shape as email intake (see §3.4). | `ai.service.ts`, `chat-outbound.service.ts`, `ticket.service.ts`, `notify.service.ts` | `controllers/chat-webhook.controller.ts`, `workers/chat-telegram.worker.ts` |
 | `services/chat-outbound.service.ts` | Sends the "ticket created" reply back into Slack/Teams/Google Chat/Telegram — one function per platform, same "single entry point, branch per provider" shape as `ai.service.ts#callChat`. | `utils/encryption.ts` | `chat-intake.service.ts` |
@@ -603,6 +678,20 @@ service depends on `config/prisma.ts`; not repeated below unless it's the point 
 | `controllers/git-connection.controller.ts` | The GitHub OAuth **callback** only — mounted pre-tenant-resolution (same reason as `sso.controller.ts`: one fixed callback URL shared across every org, so org identity has to travel in the signed `state` param instead of the Host header). Every other `/git/*` action (connect-URL generation, app-credential save, live repo/branch/PR lookups) is a normal authenticated route in `settings.controller.ts`, since those are admin actions taken from an already-tenant-resolved session. | `git-provider.service.ts`, `config/prisma.ts#getTenantClient` | `app.ts` |
 | `services/webhook-replay.ts` | Inbound-webhook replay protection: a bounded (10k), TTL'd (24h), **per-process** set of delivery ids already acted on. An HMAC proves a body came from the secret holder; it says nothing about *when*, and replaying `pull_request:opened` re-runs the AI summary and posts another review on somebody else's budget. Applied only where the credential does **not** transit with the request (GitHub/Gitea/Forgejo/Bitbucket signatures) — for GitLab's `X-Gitlab-Token`, Azure DevOps' basic auth, and the static bearers on devops-webhook/SCIM, whoever captured a delivery also captured the credential, so a nonce store there is theatre. Its header states the limits rather than implying them: per-process (lost on restart, not shared across replicas), bounded, TTL'd. | — (no imports, by design) | `controllers/git-webhook.controller.ts`, `controllers/chat-webhook.controller.ts` |
 | `controllers/git-webhook.controller.ts` | `POST /api/git/webhook/:orgSlug` — receives GitHub's `push`/`pull_request` repo webhooks (a **per-repo** webhook the admin adds manually on GitHub, since an OAuth App has no org-wide webhook the way a GitHub App does), `X-Hub-Signature-256`-verified against `GitConnection.encryptedWebhookSecret`. Matches a ticket-key-shaped token in the branch name to auto-create/update `TicketBranch`, and on a PR's `opened` action, optionally calls `ai.service.ts#summarizePullRequest` (`aiPrReviewSummaryEnabled`) to post an AI review-summary comment — failures there are caught and logged, never fail the webhook delivery. Mounted before `express.json()` (own `express.raw()`, same reason `chat-webhook.controller.ts`'s Slack route needs it: the signature is computed over the exact raw bytes). | `git-provider.service.ts`, `ai.service.ts#summarizePullRequest` | `app.ts` |
+
+### MCP server (§3.11)
+
+The other direction from `services/ai.service.ts`: this is TimeSphere **as** an MCP server, not
+TimeSphere calling a model. Nothing here imports `ai.service.ts` and nothing here calls a provider.
+
+| File | Purpose | Depends on | Depended on by |
+|---|---|---|---|
+| `controllers/mcp.controller.ts` | `POST /api/mcp` — the Streamable HTTP transport. Builds a **fresh** `McpServer` per request (per-workspace tool list + per-credential acting user; see §3.11), registers only the tools `isToolEnabled` allows, and returns a refusal as `isError` content rather than a protocol fault so the model can explain it. Answers **404** while `GlobalMcpSettings.enabled` is false — after auth, so only a credential holder learns the endpoint exists. `GET`/`DELETE` are routed here too, purely so the spec's 405 lands on the authenticated handler instead of `app.ts`'s generic 404. | `@modelcontextprotocol/sdk`, `middleware/mcp-auth.ts`, `services/mcp.service.ts`, `services/mcp-tools.ts` | `app.ts` (mounted after `resolveTenant`, behind its own 120/min limiter) |
+| `middleware/mcp-auth.ts` | `Authorization: Bearer <token>` → `McpPrincipal`. Sets `WWW-Authenticate` so a client knows to prompt, and answers **one** message for every failure mode (unknown, revoked, deactivated, maintenance) so the endpoint cannot enumerate tokens or users. Resolves no tenant — the router is already behind `resolveTenant`. | `services/mcp.service.ts#resolveMcpPrincipal` | `controllers/mcp.controller.ts` |
+| `services/mcp.service.ts` | The workspace-side half: the `GlobalMcpSettings` singleton (upserted on read, same convention as every other `Global*` table), token generation (`tsm_` + 32 random bytes, SHA-256 stored) and `resolveMcpPrincipal`, which loads the bound user's **role and permissions in full** so an MCP caller is evaluated against the same notion of identity as a web caller. Also `describeMcpCatalogue`, the settings-UI projection that already accounts for the master switch and the write latch so the UI never re-derives the rule. | `config/prisma.ts`, `services/maintenance.service.ts`, `services/mcp-tools.ts` | `middleware/mcp-auth.ts`, `controllers/settings.controller.ts`'s `/mcp*` routes |
+| `services/mcp-tools.ts` | The tool catalogue **and** `invokeMcpTool`, the one function allowed to run one. Handlers are deliberately **not exported**: `MCP_TOOLS` is typed as `McpToolSpec[]`, which has no handler field, so the compiler — not a convention — guarantees enablement, the write latch, the permission and the audit entry cannot be bypassed. Reuses the app's own helpers rather than reimplementing them (`requirePermission`, `assertTicketVisible`, `ticketProjectScope`, `saveTimesheet`, `buildTimesheetReport`), so an access rule can never have two copies that drift. `unavailableReason` + `recordUnavailableToolCalls` make a denial auditable even when the SDK answers it first. | `@timesheet/shared` permissions, `middleware/auth.ts#requirePermission`, `services/ticket.service.ts`, `services/timesheet-report.service.ts`, `services/audit.service.ts`, `services/webhook-dispatch.service.ts` | `controllers/mcp.controller.ts`, `services/mcp.service.ts`, `controllers/settings.controller.ts` |
+| `controllers/settings.controller.ts#/mcp*` | The admin surface: `GET /settings/mcp` (settings + tool catalogue + live credentials), `PATCH /settings/mcp` (rejects an override naming a tool the server does not publish), `POST /settings/mcp/credentials` (one-time plaintext reveal, bound user must be an active account in this workspace), `DELETE /settings/mcp/credentials/:id` (revoke — a `revokedAt` stamp, so audit rows still resolve). Super-admin only, and every action audited. | `services/mcp.service.ts`, `services/mcp-tools.ts` | `pages/settings/McpServerSettingsCard.tsx` |
+| `pages/settings/McpServerSettingsCard.tsx` (web) | Workspace Settings → MCP server: master switch, the write latch, the per-tool matrix (showing each tool's permission, whether it mutates, and whether it is live *right now*), and credential issue/revoke with the one-time token reveal. Rendered read-only for a non-super-admin rather than hidden. | `services/api.ts` | `pages/WorkspaceSettings.tsx` |
 
 ### Planning layer (V6)
 
@@ -781,6 +870,9 @@ flowchart TB
 | **System reporter user** | `email-intake@system.local` / `chat-intake@system.local` — seeded accounts satisfying `Ticket.reporterId`'s FK for externally-sourced tickets; nobody logs in as them. |
 | **`needsReview`** | Set when a ticket's (capped) AI confidence falls below the org's configured threshold — surfaces to reviewers instead of silent auto-assignment. |
 | **`EXTERNAL_INTAKE_CONFIDENCE_CEILING`** | 0.85 — the cap on how much a single self-reported AI confidence value (from untrusted external content) can suppress `needsReview`, defined once in `ai.service.ts` and shared by both intake pipelines. |
+| **MCP** | Model Context Protocol. Here it always means TimeSphere **as a server** (§3.11, `POST /api/mcp`) — the app calling a model is §3.3 and shares no code with it. |
+| **MCP credential** | `McpCredential` — a bearer token bound to exactly **one user**, whose permissions bound every tool call made with it. Not an `ApiKey`: that authenticates to a scope with no acting user. |
+| **Tool** | An operation the MCP server exposes, declared in `services/mcp-tools.ts` with its required permission and whether it mutates. Reads default on, writes default off. |
 
 ---
 

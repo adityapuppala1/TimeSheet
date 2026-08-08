@@ -295,6 +295,12 @@ version on `OrgDatabase.schemaVersion` per success. Run this as its own deploy s
 shape — it's the multi-org replacement for `docker-compose.yml`'s single `prisma migrate deploy`
 command, which only ever migrates one database and is correct only for Shape 1.
 
+The target is always the newest directory under `prisma/migrations` in the **checked-out** tree, so
+no release requires editing this step: 2.3.0's `20260808120000_mcp_server` reaches every tenant
+through the same command. `update.sh`/`update.ps1` already run it for the Compose shape, and
+`npm run setup` runs it as its last step on a local checkout — see
+[Updating a running deployment](#updating-a-running-deployment).
+
 ### Per-organization configuration
 
 Everything below is already isolated per org by the database-per-tenant model — no extra setup
@@ -693,6 +699,44 @@ render the full category × role grid (every gateable category now has a row, in
 `emailTicket*` ones that previously had no UI at all), and Workspace settings → Maintenance should
 show an **API performance** panel stating that recording is switched off.
 
+### What 2.3.0 adds to that dance (the MCP server)
+
+**One migration, additive, and it inserts no rows:**
+
+| Migration | What it does | Shape |
+|---|---|---|
+| `20260808120000_mcp_server` | `CREATE TABLE GlobalMcpSettings` and `CREATE TABLE McpCredential` (+ one unique index and two ordinary ones, plus two foreign keys onto `User`) | two brand-new tables |
+
+Nothing is dropped, renamed or narrowed, and no existing table is touched — so `update.sh`'s
+code-only auto-rollback is as honest here as it was for the 2026-08-07 batch. The rest of 2.3.0
+(AI refine, the AI guardrails, the SSO/OAuth hardening) is code only: **no schema change and no new
+environment variable anywhere.** Nothing to add to your `.env`, your compose file, or your Helm
+values.
+
+**No backfill row is written, deliberately.** The settings singleton is upserted the first time it
+is read, and every column defaults to the closed position — so an upgraded workspace has **no live
+MCP endpoint** until a super admin turns one on. An upgrade that changes nothing until somebody
+asks it to is the point; see [Operating the MCP server](#operating-the-mcp-server) below for what
+turning it on actually means.
+
+**Compose deployments: an ordinary `./update.sh`** (Windows: `.\update.cmd`). No manual step.
+
+**And, again, this is a database per organization.** `20260808120000_mcp_server` reaches the
+default org on container boot and every *other* org through the same fan-out documented above —
+`update.sh`/`update.ps1` run `npm run migrate:tenants -w apps/api` unconditionally before
+verification, and neither script needed a line changed to pick this migration up: the target is
+whatever `getLatestMigrationName()` reads off the checked-out `prisma/migrations` directory, so the
+newest migration is always the one applied. Manual and Kubernetes deployments still run the fan-out
+themselves.
+
+A tenant that misses this migration does not merely lack the feature — `getGlobalMcpSettings()`
+upserts the settings singleton on read, so Workspace settings → MCP server errors against a
+database where the table does not exist. That is the one visible symptom to expect if a fan-out was
+skipped.
+
+Post-deploy check: Workspace settings → **MCP server** should render, showing the master switch
+**off**, writes **off**, and no credentials.
+
 ## Operating API request telemetry
 
 New in this release: per-request timings (latency percentiles, slowest endpoints, per-host/pod
@@ -768,6 +812,100 @@ collection (liveness probes and a self-polling observer would otherwise be the h
 id-shaped segments redacted if Express cannot supply one — never the raw URL. Request bodies,
 query strings, headers, cookies, IPs and user-agents are not collected at all; `userId` is the
 whole of the recorded identity and is resolved to a name only at read time.
+
+## Operating the MCP server
+
+New in 2.3.0: TimeSphere exposes **itself** as an MCP (Model Context Protocol) server at
+`POST /api/mcp`, so an AI assistant — Claude Desktop, Claude Code, a hosted agent — can read and
+act on a workspace from outside the app. It is **switched off in every deployment**, existing and
+new, until a super admin turns it on.
+
+**Read this before you do.** An enabled endpoint plus an issued credential means: *an external LLM
+client can read this workspace's data as one specific named user, and — if you also enable writes —
+act as them.* That is the whole of it, stated plainly. Everything below is about bounding it.
+
+### What is and is not configured here
+
+- **No environment variable. None.** The whole feature is database-backed
+  (`GlobalMcpSettings`, `McpCredential`) and admin-edited at runtime. There is nothing to add to
+  `.env`, `docker-compose.yml`, `docker-compose.external-db.yml`, or the Helm chart's
+  `values.yaml`/`configmap.yaml`, and nothing an operator can accidentally switch on from the
+  outside. The npm dependency `@modelcontextprotocol/sdk` needs no configuration.
+- **No new port, no new process.** It is a route on the existing API, behind the same
+  `resolveTenant` middleware, the same TLS and the same reverse proxy — so `TRUST_PROXY_HOPS`
+  applies to it exactly as it does to everything else, and its own 120/min limiter buckets per IP.
+- **It ships closed at three levels**: the server itself, the workspace-wide write latch, and each
+  individual write tool. A workspace that never opens the settings tab has no endpoint listening —
+  a request to `/api/mcp` on a disabled workspace answers `404` even with a valid credential.
+
+### Turning it on
+
+Workspace Settings → **MCP server** (SUPER_ADMIN only, like every other credential-issuing surface):
+
+1. **Enable the server.** Read tools become live immediately; every write tool stays refused.
+2. **Issue a credential.** Give it a name you will recognise later ("Priya's Claude Desktop") and
+   pick the **user it acts as**. The token is displayed **once** — it is stored only as a SHA-256
+   hash, exactly like a public API key, and cannot be shown again. Re-issue rather than recover.
+3. **Configure the client** with the workspace URL and that token:
+   `https://acme.timesphere.app/api/mcp`, `Authorization: Bearer tsm_…`. The URL *is* the
+   workspace; no tool takes an org parameter, so a client cannot be talked into reaching another
+   one.
+4. **Only then, if you want writes:** flip the workspace write latch *and* enable the specific
+   write tools you want. Both are required — leaving the latch off keeps every write tool refused
+   regardless of its own setting, which is the switch to reach for if you ever need to stop an
+   agent writing immediately.
+
+### What to decide before issuing a credential
+
+- **Which user it acts as is the entire permission model.** The credential inherits that person's
+  role and permissions, re-read on every request, and nothing more: a credential bound to an
+  employee sees exactly what that employee sees. Binding one to a SUPER_ADMIN hands a language
+  model super-admin reach — occasionally what you want, rarely.
+- **Prefer a real person over a shared service account.** Every tool call is audited against the
+  bound user (`mcp.tool_called` / `mcp.tool_denied`, with the credential id), so a per-person
+  credential keeps that trail meaningful.
+- **Offboarding is covered, in two independent ways.** Deleting the account deletes its credentials
+  (`ON DELETE CASCADE`), and simply *deactivating* the account stops them working on the next
+  request, because the bound user is re-read every time. Neither depends on anyone remembering to
+  revoke.
+- **Revoking is instant and reversible in the audit sense**, not in the token sense: it stamps
+  `revokedAt` so historic audit rows still resolve, and the token is dead from the next request.
+- **Writes are visible to other people.** `transition_ticket` moves a ticket everyone else can see,
+  fires your outbound webhooks and stops or restarts its SLA clock; `add_ticket_comment` posts a
+  comment under the bound user's name.
+  Logging time is the deliberate exception — it creates a **draft** and never submits, because
+  submitting starts an approval clock and can require an identity check.
+- **This workspace's ticket text is not all written by your people.** Inbound email and chat become
+  tickets automatically, so an assistant reading a ticket may be reading a stranger's prose. The
+  server marks that boundary on every result that can contain it, and the tool descriptions tell
+  the model to treat it as data rather than instructions — a mitigation, not a guarantee. The
+  controls that hold regardless are the ones above: read-only by default, per-tool opt-in, and one
+  person's permissions.
+
+### Verifying and monitoring it
+
+- **Is it reachable?** From a machine that can see the deployment:
+  ```bash
+  curl -s -X POST https://acme.timesphere.app/api/mcp \
+    -H "Authorization: Bearer tsm_…" \
+    -H "Content-Type: application/json" \
+    -H "Accept: application/json, text/event-stream" \
+    --data '{"jsonrpc":"2.0","id":1,"method":"tools/list"}'
+  ```
+  A `401` means the credential is wrong, revoked, or its user is gone. A `404` means the server is
+  switched off for that workspace. A `406` means that `Accept` header — the spec requires **both**
+  content types, and it is the one thing a hand-rolled `curl` gets wrong that a real MCP client
+  never does. A tool list means it works, and the list itself is the answer to "what did I actually
+  expose", since it contains exactly the tools that are live right now.
+- **Who used it?** The settings list shows each credential's `lastUsedAt`, the user it acts as, and
+  the token's first 12 characters — enough to tell two credentials apart, and all that is kept.
+  The audit log carries every call and every refusal.
+- **AI budget is not involved.** The MCP server calls no model of its own — the model is the
+  *client*. Nothing here spends the workspace's AI budget or touches `GlobalAISettings`.
+
+Contract and tool list: [API.md](API.md#mcp-server). Design: [ARCHITECTURE.md
+§3.11](ARCHITECTURE.md#311-mcp-server--a-second-inbound-surface-that-acts-as-a-person). Tables:
+[DATABASE.md](DATABASE.md#mcp-server-tables-globalmcpsettings-mcpcredential).
 
 ## Relocating file storage
 
@@ -1004,6 +1142,12 @@ and all forwarded by both compose files and the Helm chart:
 | `STORAGE_ROOT`, `STORAGE_DOCUMENTS_DIR`, `STORAGE_AVATARS_DIR`, `STORAGE_FACE_DIR` | empty (today's layout under `UPLOAD_DIR`) | [Relocating file storage](#relocating-file-storage) |
 | `LOG_DIR`, `LOG_ROTATE_HOURS`, `LOG_RETENTION_DAYS`, `LOG_COMPRESS_ON_ROLLOVER` | empty / `4` / `30` / `true` | [Log files](#log-files) |
 | `API_TELEMETRY_*`, `POD_NAME`, `POD_NAMESPACE`, `CLUSTER_NAME` | off / unset | [Operating API request telemetry](#operating-api-request-telemetry) |
+
+**Not in this table, on purpose:** the MCP server has **no environment variable at all**. It is
+configured entirely from the database and admin-edited at runtime — see
+[Operating the MCP server](#operating-the-mcp-server). The same is true of AI refine and the AI
+rate limiter (a fixed 20 requests/minute per user, not tunable): 2.3.0 introduced no new
+environment variable in any deployment shape.
 
 ## Testing before you ship a change
 

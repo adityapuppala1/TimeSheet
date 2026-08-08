@@ -682,6 +682,52 @@ The whole `/email-templates` router is `requireAuth` + `requireSuperAdmin`, thes
   `sampledFailures` precisely so the UI can say when it is looking at a sample rather than at
   everything.
 
+## AI text refine
+
+Both routes need the normal JWT session. They sit on the `/ai` router, which mounts
+`requireAuth` for everything and `middleware/ai-rate-limit.ts` (20/min, keyed on the **user**, not
+the IP) for everything that can reach a model.
+
+- `GET /ai/text/refine/availability` — "can I offer the Refine button, and if not, what do I tell
+  the user?" Returns `{ available, reason: "ok"|"disabled"|"budget"|"unavailable", message }`.
+
+  **Registered above the AI rate limiter, deliberately.** It makes no model call and costs nothing,
+  and every form carrying the affordance asks on mount — counting it against the 20/min AI budget
+  would mean opening the timesheet form twenty times locks a user out of the actual refinements.
+  It answers from the same `preflight` the refine call itself runs, so the button is disabled with
+  the real reason rather than failing when clicked.
+
+- `POST /ai/text/refine` — `{ text, field }`, where `field` is one of `ticket_title`,
+  `ticket_description`, `ticket_comment`, `timesheet_description`, `timesheet_notes`
+  (`text`: 1–20 000 chars). Returns:
+
+  ```json
+  { "refined": "…", "refinedHtml": "…or null", "format": "plain" | "html", "original": "…" }
+  ```
+
+  `original` is the caller's own text **as the model saw it** (rich text flattened to plain), so
+  the compare view in the UI is like for like. `refinedHtml` is populated only for rich-text
+  fields, already through the server's `sanitizeRichText` allow-list.
+
+  **Permission depends on the field, not on the route.** The rest of this router is ticket work and
+  can hang one `requirePermission(tickets:write)` off each route; refine also covers timesheet
+  fields, and an EMPLOYEE filling in a timesheet has no reason to hold `tickets:write`. So the
+  three `ticket_*` fields require `tickets:write` and the two `timesheet_*` fields require
+  `timesheets:write` — "can you edit this text at all" and "can you have the AI tidy it" give the
+  same answer. Validation runs first, so `field` is a known value before the permission is looked
+  up; a mismatch is `403`.
+
+  Gated by the AI master switch **and** the `writingAssistantEnabled` toggle, and charged against
+  the same monthly budget as every other capability (logged to `AIUsageLog`/`AIInteraction` under
+  its own `text_refine` feature). `422` when the field is empty or unrefinable, `402` when the
+  budget is spent, `403` when AI or the writing assistant is off, `502` if the model returns
+  nothing — returning the original unchanged would look like the model had considered it and
+  chosen to leave it alone.
+
+- `POST /ai/text/improve` — `{ text, context }` — the older whole-field rewrite, still mounted and
+  still gated on `tickets:write`. No longer surfaced in the UI: it replaced what the author had
+  typed, with no preview and no way back.
+
 ## AI usage
 
 - `GET /settings/ai/usage-summary` — this month's spend, calls and tokens, by feature and by model.
@@ -956,4 +1002,107 @@ marked `exhausted` rather than retried forever. `GET /settings/webhooks/:id/deli
 /settings/webhooks/:id/deliveries/:deliveryId/retry` retries one immediately (resetting its
 attempt count, since a human retrying implies they believe the endpoint is fixed now) — both also
 surfaced in Workspace Settings → Public API under each webhook's "Failed deliveries."
+
+## MCP server
+
+`POST /api/mcp` is **not REST**. It is a [Model Context Protocol](https://modelcontextprotocol.io)
+server speaking **JSON-RPC 2.0 over Streamable HTTP** — one URL, one method, and the operation is
+named in the request body (`initialize`, `tools/list`, `tools/call`). Nothing here has a path per
+resource, a status code per outcome, or a stable JSON shape you should parse by hand: point an MCP
+client at it (Claude Desktop, Claude Code, a hosted agent) and let the client speak the protocol.
+Design and threat model: [ARCHITECTURE.md §3.11](ARCHITECTURE.md#311-mcp-server--a-second-inbound-surface-that-acts-as-a-person).
+
+Base URL: `<your-workspace-url>/api/mcp` (e.g. `https://acme.timesphere.app/api/mcp`). The URL
+*is* the workspace — no tool takes an org parameter.
+
+```
+Authorization: Bearer tsm_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+Content-Type: application/json
+Accept: application/json, text/event-stream
+```
+
+**Auth is an `McpCredential`, not an `ApiKey`.** A public-API key authenticates to a *scope* with
+no acting user; an MCP credential is bound to exactly **one user**, and every tool runs with that
+person's role and permissions — the same `RequestUser` shape `requireAuth` builds. Issued by a
+super admin from Workspace Settings → MCP server, shown once in full at creation.
+
+| Response | Meaning |
+|---|---|
+| `401` | Missing, unknown, revoked, or bound to a deleted/deactivated account — **one identical message for all of them**, so the endpoint cannot be used to enumerate tokens or users. Also returned while a maintenance window is active, for the same reason `requireAuth` does. |
+| `404` | This workspace's MCP server is switched off. Deliberately not `403`, and checked *after* authentication, so only a credential holder learns the difference between "off" and "no such URL". |
+| `405` | `GET` and `DELETE`. Both are spec methods for a *stateful* server (server-initiated notifications, session teardown); this transport is stateless and sends nothing unprompted. Routed to the authenticated handler anyway so they don't fall through to the generic 404, which a client would misread as a wrong URL. |
+| `406` | The `Accept` header does not list **both** `application/json` and `text/event-stream`. Required by the Streamable HTTP spec and enforced by the SDK's transport — a real MCP client always sends both; this is the one you hit hand-rolling a `curl`. |
+
+Rate limit: 120 requests/minute per IP, the same cap the other webhook-style routes carry.
+
+### Tools
+
+Which tools a client sees is a function of the workspace's settings **and** the acting user's
+permissions. `tools/list` and `tools/call` are backed by the same enablement predicate, so a tool
+hidden from the list is not callable by a client that guessed its name.
+
+| Tool | Permission required | Mutates | Default |
+|---|---|---|---|
+| `whoami` | — | no | on |
+| `search_tickets` | `tickets:view` | no | on |
+| `get_ticket` | `tickets:view` | no | on |
+| `list_projects` | — | no | on |
+| `list_my_timesheets` | — | no | on |
+| `get_team_summary` | — | no | on |
+| `get_timesheet_report` | `reports:view` | no | on |
+| `log_timesheet_entry` | `timesheets:write` | yes | **off** |
+| `create_ticket` | `tickets:write` | yes | **off** |
+| `add_ticket_comment` | `tickets:write` | yes | **off** |
+| `transition_ticket` | `tickets:write` | yes (**destructive**) | **off** |
+
+- A dash under *Permission* means the tool's scope is the caller themselves (their own timesheets,
+  their own direct reports), so there is nothing a permission would have protected.
+- **Reads default on, writes default off.** A read tool added by a later release therefore works
+  without re-visiting settings, and a *write* tool added by a later release arrives switched off in
+  every existing workspace rather than turning itself on during an upgrade.
+- No write tool is callable at all while the workspace's `allowWrites` latch is off, whatever the
+  per-tool setting says.
+- `log_timesheet_entry` creates a **DRAFT** and never submits: submitting starts an approval SLA
+  clock and, where configured, requires an identity check.
+- `transition_ticket` is flagged `destructiveHint`, because a status change is visible to everyone
+  who can see the ticket, fires this workspace's outbound webhooks (`ticket.status_changed`, plus
+  `ticket.closed` on close) and stops or restarts the SLA clock. It enforces the same three rules
+  the UI does: transition legality from `ticketStatusTransitions`, the CI gate if this workspace
+  has it on, and — because visibility is not permission to edit — the same
+  reporter/assignee-or-privileged predicate the UI's status route applies on top of
+  `tickets:write`.
+- A refusal comes back as MCP `isError` content the model can read and explain, not as a transport
+  fault. Refusals — including a `tools/call` naming a tool that was never registered — are written
+  to the audit log as `mcp.tool_denied`; a successful call is `mcp.tool_called`.
+- Any tool that can return ticket text (`search_tickets`, `get_ticket`) prefixes its result with an
+  explicit untrusted-content warning and sets MCP's `openWorldHint`, because this workspace ingests
+  tickets from inbound email and chat — that text was not necessarily written by anyone in it.
+
+### MCP settings (`/api/settings/mcp*`)
+
+The admin surface, on the normal JWT session. **SUPER_ADMIN only**, and every action audited.
+
+- `GET /settings/mcp` — returns `{ enabled, allowWrites, updatedAt, tools[], credentials[] }`.
+  `tools[]` is the full catalogue with, per tool, its `permission`, `mutating`, `destructive` and
+  `untrustedContent` flags, the workspace's `override` (`true`/`false`/`null` for "never expressed
+  an opinion"), its `defaultEnabled`, and `effectiveEnabled` — the answer the MCP endpoint itself
+  would give, already accounting for the master switch and the write latch so the UI never
+  re-derives the rule and gets it subtly wrong. `credentials[]` lists unrevoked credentials with
+  `tokenPrefix`, `lastUsedAt`, `actingAs` (id, name, email, role) and `createdBy` — never a token.
+- `PATCH /settings/mcp` — `{ enabled?, allowWrites?, toolOverrides? }`, where `toolOverrides` is
+  `{ "<tool name>": true | false }`. A name the server does not publish is rejected with `422`
+  rather than persisted: a typo silently stored as a key nobody reads looks exactly like a tool
+  that refuses to turn on. Audited as `settings.mcp_updated`.
+- `POST /settings/mcp/credentials` — `{ name, userId }`. The bound user must be an **active**,
+  non-deleted account in this workspace (`422` otherwise) — the whole security model is that the
+  credential's authority is that person's authority. Returns `201` with
+  `{ id, name, token, actingAs }`; `token` is the **only** time the plaintext is ever visible, the
+  same one-time-reveal convention as a public API key. Audited as
+  `settings.mcp_credential_created`, recording who it acts as and with what role.
+- `DELETE /settings/mcp/credentials/:id` — `204`. Revocation stamps `revokedAt` rather than
+  deleting the row, so the audit entries referencing that credential id still resolve. Audited as
+  `settings.mcp_credential_revoked`.
+
+Operating guidance — what an operator is actually turning on, and how to connect a client — is in
+[DEPLOYMENT.md](DEPLOYMENT.md#operating-the-mcp-server).
 

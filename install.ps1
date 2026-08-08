@@ -13,10 +13,12 @@
   just brings the stack up again.
 
   Feature work (the V6 planning layer, face verification, reports, multi-provider git webhooks,
-  HTTPS tooling) has added NO new required .env keys - everything reads from the same
-  DATABASE_URL this script already provisions, via the migrations
+  HTTPS tooling, and 2.3.0's MCP server + AI refine) has added NO new required .env keys -
+  everything reads from the same DATABASE_URL this script already provisions, via the migrations
   that run automatically on container boot. Nothing in this script needs to change to pick them
-  up.
+  up. The MCP server in particular is configured entirely from the database
+  (GlobalMcpSettings/McpCredential, Workspace Settings -> MCP server) and ships switched off, so
+  there is nothing for this script to ask about and nothing it could turn on by accident.
 
   The one setting this script asks about beyond URLs and the database is TRUST_PROXY_HOPS: it has
   a default, so it is not "required", but the default is wrong for this stack and its wrongness is
@@ -409,6 +411,9 @@ Write-Host "  - Tickets/Team tables fall back to a mobile card view below the sm
 Write-Host "  - Security & DevOps findings ingestion (SAST/DAST/SSAT/SSCT via CI webhook, VAPT via" -ForegroundColor DarkGray
 Write-Host "    JSON upload) - configure the webhook token from Workspace Settings -> Security & DevOps" -ForegroundColor DarkGray
 Write-Host "  - BYOK AI (off by default), SSO, chat-to-ticket connectors - all opt-in from Workspace Settings" -ForegroundColor DarkGray
+Write-Host "  - MCP server at POST /api/mcp so an AI assistant can read/act on this workspace - ships" -ForegroundColor DarkGray
+Write-Host "    DISABLED with its write tools off individually; a super admin enables it and issues a" -ForegroundColor DarkGray
+Write-Host "    per-user credential from Workspace Settings -> MCP server. See docs/DEPLOYMENT.md." -ForegroundColor DarkGray
 Write-Host ""
 Write-Host "Next steps are in docs/DEPLOYMENT.md -first org admin login, SMTP setup, backups, and" -ForegroundColor DarkGray
 Write-Host "(if you outgrow one company) the SaaS multi-org shape. Full feature walkthrough:" -ForegroundColor DarkGray

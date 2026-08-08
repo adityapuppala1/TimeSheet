@@ -136,6 +136,10 @@ Invoke-DeployRef $To
 # install each have their OWN database that boot never touches — migrate-all-tenants.ts walks the
 # control-plane registry and brings every one to the latest migration. Fast no-op when there are
 # none; skipping it would run new code against an old schema for any extra org. See update.sh.
+#
+# No per-release edit is ever needed here: the target is whatever getLatestMigrationName() reads
+# off the CHECKED-OUT prisma/migrations directory, so 2.3.0's 20260808120000_mcp_server reaches
+# every tenant through this same call without a line of this script changing.
 for ($i = 0; $i -lt 60; $i++) {
   try { if ((Invoke-WebRequest -Uri "http://localhost:4000/health" -UseBasicParsing -TimeoutSec 3).StatusCode -eq 200) { break } } catch {}
   Start-Sleep -Seconds 3
