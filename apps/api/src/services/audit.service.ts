@@ -65,9 +65,9 @@ export async function audit(
       entity,
       entityId,
       metadata,
-      // Spread rather than assign field-by-field so an absent provenance writes nothing at all and
-      // the row is byte-identical to what this function produced before the parameter existed.
-      ...(provenance ?? {})
+      // Spreading `undefined` contributes nothing, so an absent provenance writes exactly the row
+      // this function produced before the parameter existed.
+      ...provenance
     }
   });
 }

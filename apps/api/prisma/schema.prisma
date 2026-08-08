@@ -248,6 +248,7 @@ model User {
   reportSubscriptions  ReportSubscription[]
   aiProposalsRequested AiProposal[]         @relation("AiProposalRequester")
   aiProposalsReviewed  AiProposal[]         @relation("AiProposalReviewer")
+  aiCapabilityPolicies AiCapabilityPolicy[] @relation("AiCapabilityPolicyEditor")
 
   createdAt DateTime  @default(now())
   updatedAt DateTime  @updatedAt
@@ -1106,8 +1107,72 @@ model GlobalAISettings {
   /// exposes only an `apiKeySet: boolean`, same masking convention as
   /// EmailIntakeSettings.imapPassword.
   apiKey              String?    @db.Text
+  /// THE MASTER LATCH FOR AUTONOMY. While false, `resolveAutonomy()` returns SUGGEST for every
+  /// capability no matter what any AiCapabilityPolicy row says — so "stop the assistants acting,
+  /// now" is one boolean rather than an audit of which of twenty-two capabilities happen to be
+  /// elevated. Same argument, and same closed default, as GlobalMcpSettings.allowWrites.
+  ///
+  /// Note this is ORTHOGONAL to the per-feature *Enabled booleans above: those answer "does this
+  /// run at all", this answers "how much authority does it have when it runs". Collapsing the two
+  /// would mean turning a feature off and on again silently restored its autonomy.
+  aiAutonomyEnabled   Boolean    @default(false)
   updatedAt           DateTime   @updatedAt
   updatedById         String?
+}
+
+/// How much authority one AI capability has when it runs.
+///
+/// The ladder is deliberately short and its rungs are deliberately unequal in size: almost
+/// everything belongs on the bottom one, and that is the honest outcome for a product where the
+/// same database holds timesheets that become payroll.
+enum AiAutonomyLevel {
+  /// Every write goes through an AiProposal a human applies row by row. The floor, and until this
+  /// enum existed the only behaviour the product had.
+  SUGGEST
+  /// The SAME proposal envelope, applied immediately by the agent and fully reversible. The
+  /// human's job moves from approve to veto. Note this is not a second write path — see
+  /// ai-proposal.service.ts.
+  AUTO_APPLY
+  /// Acts repeatedly inside a bounded step/cost/scope envelope without a per-action review
+  /// artefact. Reachable by very few capabilities; see AiCapabilitySpec.maxLevel.
+  AUTONOMOUS
+}
+
+/// One row per AI capability, holding what the workspace asked for.
+///
+/// WHY A TABLE AND NOT TWENTY-TWO COLUMNS ON GlobalAISettings: that row's PATCH schema is
+/// `.strict()` and carries an in-code warning that a field missing from it 400s with no obvious
+/// cause — twenty-two more columns there is the most likely way this quietly breaks. A table also
+/// means a capability shipped by a later release needs no tenant migration.
+///
+/// AN ABSENT ROW MEANS SUGGEST. That is the whole point of storing only what was chosen: a
+/// capability added next year arrives at the floor in every existing workspace instead of
+/// inheriting a neighbour's setting, which is the direction a mistake should fail in.
+model AiCapabilityPolicy {
+  id String @id @default(uuid())
+
+  /// Matches AiCapabilitySpec.id in services/ai-capability.registry.ts. Deliberately a string and
+  /// not a Prisma enum: the registry is code, code ships faster than a migration across every
+  /// tenant database, and an id here that the running build does not recognise is ignored rather
+  /// than being a schema error.
+  capability String          @unique @db.VarChar(60)
+  /// What the workspace ASKED for. Never trusted on its own — the effective level is the minimum
+  /// of this and the registry's ceiling, recomputed on every read.
+  level      AiAutonomyLevel @default(SUGGEST)
+
+  /// Guardrails, read only above SUGGEST. Null means the registry's own default, which is always
+  /// the tighter of the two.
+  maxChangesPerRun Int?
+  maxRunsPerDay    Int?
+  maxCostUsdPerRun Decimal? @db.Decimal(10, 4)
+  undoWindowHours  Int?
+  /// Project ids this capability may act inside. Absent means every project the acting person can
+  /// already see — which is not the same thing as everywhere.
+  scopeProjectIds  Json?
+
+  updatedAt   DateTime @updatedAt
+  updatedById String?
+  updatedBy   User?    @relation("AiCapabilityPolicyEditor", fields: [updatedById], references: [id], onDelete: SetNull)
 }
 
 enum AIProvider {

@@ -21,6 +21,7 @@ import { env } from "../config/env.js";
 import { AppError } from "../middleware/error.js";
 import { validate } from "../middleware/validate.js";
 import { audit } from "../services/audit.service.js";
+import { describeAutonomyCatalogue, setCapabilityLevel } from "../services/ai-autonomy.service.js";
 import {
   assertFaceEntitlement,
   findCoveredUnenrolledUserIds,
@@ -358,6 +359,11 @@ const aiSettingsSchema = z.object({
       aiCaptureContentEnabled: z.boolean().optional(),
       aiCaptureRetentionDays: z.coerce.number().int().min(1).max(365).optional(),
       aiEvalJudgeEnabled: z.boolean().optional(),
+      // The master latch for autonomy. Per-capability levels are NOT here — they live in their own
+      // table behind /settings/ai/autonomy, precisely so this `.strict()` schema does not grow a
+      // field per capability. This one boolean is the exception, and it is listed here because the
+      // comment above is right: leaving it out would 400 the PATCH with no obvious cause.
+      aiAutonomyEnabled: z.boolean().optional(),
       model: z.string().min(1).max(80).optional(),
       confidenceThreshold: z.coerce.number().min(0).max(1).optional(),
       monthlyBudgetUsd: z.coerce.number().min(0).optional().nullable(),
@@ -384,6 +390,66 @@ settingsRouter.patch("/ai", requireSuperAdmin, validate(aiSettingsSchema), async
   await audit(req.user!.id, "settings.ai_updated", "GlobalAISettings", "global", { ...req.body, apiKey: undefined });
   const { apiKey: _omit, ...safeUpdated } = updated;
   res.json({ ...safeUpdated, apiKeySet: Boolean(updated.apiKey) });
+});
+
+/**
+ * AUTONOMY — how much authority each AI capability has, as opposed to whether it runs at all.
+ *
+ * Deliberately its own sub-resource rather than more fields on `aiSettingsSchema`: that schema is
+ * `.strict()` and there are twenty-two capabilities, each with a level and five guardrails. Folding
+ * them in would make the most-edited schema in the file grow by a field per capability shipped.
+ *
+ * `requireSuperAdmin` and NOT a new permission key — adding one would need idempotent backfill SQL
+ * across every tenant database, for a screen only super admins can reach anyway.
+ */
+settingsRouter.get("/ai/autonomy", requireSuperAdmin, async (_req, res) => {
+  res.json(await describeAutonomyCatalogue());
+});
+
+const autonomySchema = z.object({
+  body: z
+    .object({
+      capability: z.string().min(1).max(60),
+      level: z.enum(["SUGGEST", "AUTO_APPLY", "AUTONOMOUS"]),
+      // Guardrails are only read above SUGGEST. `null` clears one back to the registry default;
+      // omitting it leaves whatever is stored.
+      maxChangesPerRun: z.coerce.number().int().min(1).max(200).nullable().optional(),
+      maxRunsPerDay: z.coerce.number().int().min(1).max(1000).nullable().optional(),
+      maxCostUsdPerRun: z.coerce.number().min(0).max(1000).nullable().optional(),
+      undoWindowHours: z.coerce.number().int().min(1).max(720).nullable().optional(),
+      scopeProjectIds: z.array(z.string().uuid()).nullable().optional()
+    })
+    .strict()
+});
+
+settingsRouter.patch("/ai/autonomy", requireSuperAdmin, validate(autonomySchema), async (req, res) => {
+  const { capability, level, ...guardrails } = req.body as {
+    capability: string;
+    level: "SUGGEST" | "AUTO_APPLY" | "AUTONOMOUS";
+  } & Record<string, unknown>;
+
+  // setCapabilityLevel throws 404 for an unknown capability and 422 for a level above the
+  // product's ceiling — the first of the two clamps. resolveAutonomy applies the same rule again
+  // on read, because a bad request and a row that arrived some other way are different threats.
+  const resolved = await setCapabilityLevel({
+    capability,
+    level,
+    updatedById: req.user!.id,
+    guardrails: guardrails as Parameters<typeof setCapabilityLevel>[0]["guardrails"]
+  });
+
+  await audit(req.user!.id, "settings.ai_autonomy_updated", "AiCapabilityPolicy", capability, {
+    requested: level,
+    effective: resolved.effectiveLevel
+  }, {
+    // An administrator raising what a machine may do unattended is exactly the row an auditor
+    // comes looking for, so it records the transition rather than just the new value.
+    before: { level: resolved.requestedLevel === level ? undefined : resolved.requestedLevel },
+    after: { level, effective: resolved.effectiveLevel },
+    ipAddress: req.ip
+  });
+
+  res.json(resolved);
 });
 
 const availableModelsSchema = z.object({

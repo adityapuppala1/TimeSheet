@@ -27,6 +27,7 @@ import { Prisma } from "@prisma/client";
 import { prisma } from "../config/prisma.js";
 import { AppError } from "../middleware/error.js";
 import { audit } from "./audit.service.js";
+import { assertLevelAtLeast } from "./ai-autonomy.service.js";
 import { assertNoParentCycle, toDay } from "./plan-schedule.service.js";
 
 export type ProposalKind = "PLAN_BREAKDOWN" | "SCHEDULE_ADJUSTMENT" | "ASSIGNMENT_REBALANCE" | "RISK_MITIGATION" | "BLUEPRINT_SUGGESTION";
@@ -179,7 +180,26 @@ export async function applyProposal(params: {
   /** `{ changeId: accepted }`. Rows absent from the map keep whatever they already had. */
   decisions: Record<string, boolean>;
   actorId: string;
+  /**
+   * WHO is doing the applying — a person who read the rows, or a capability acting on its own.
+   *
+   * Optional and defaulting to HUMAN so every existing call site compiles and behaves untouched.
+   *
+   * THIS IS THE CHOKEPOINT, and its placement is the whole design. There is exactly one function
+   * in this codebase that writes an AI-authored change, and when the applier is an agent that
+   * function asks the autonomy policy ITSELF rather than trusting its caller to have asked. A
+   * capability added in a hurry that forgets to check gets refused by the only function it can use
+   * to act — the same discipline that makes `invokeMcpTool` the one door for tools.
+   */
+  appliedBy?: { kind: "HUMAN" } | { kind: "AGENT"; capability: string; runId: string };
 }): Promise<ApplyResult> {
+  const appliedBy = params.appliedBy ?? { kind: "HUMAN" as const };
+  if (appliedBy.kind === "AGENT") {
+    // Throws 403 unless this capability currently holds AUTO_APPLY or better — after the master
+    // latch, the feature toggle and the product's own ceiling have all been applied.
+    await assertLevelAtLeast(appliedBy.capability, "AUTO_APPLY");
+  }
+
   const proposal = await prisma.aiProposal.findUnique({
     where: { id: params.proposalId },
     include: { changes: { orderBy: { order: "asc" } } }
@@ -322,6 +342,14 @@ export async function applyProposal(params: {
     applied,
     skipped,
     failed: failed.length
+  }, {
+    // `actorId` stays the delegating person either way — that is whose permissions were checked.
+    // `actorType` is what records that they did not press anything, which is the distinction the
+    // whole provenance change exists to make.
+    actorType: appliedBy.kind === "AGENT" ? "AGENT" : "USER",
+    ...(appliedBy.kind === "AGENT"
+      ? { actorLabel: `agent:${appliedBy.capability}`, agentRunId: appliedBy.runId }
+      : {})
   });
 
   return { applied, skipped, failed, status };

@@ -242,7 +242,7 @@ async function callChat(settings: AISettingsRow, params: CallChatParams): Promis
   return settings.provider === "OPENAI_COMPATIBLE" ? callOpenAICompatible(settings, apiKey, params) : callAnthropic(apiKey, params);
 }
 
-type AIFeatureToggle =
+export type AIFeatureToggle =
   | "aiEvalJudgeEnabled"
   | "autoTriageEnabled"
   | "duplicateDetectionEnabled"
