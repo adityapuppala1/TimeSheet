@@ -56,6 +56,7 @@ import {
   type FaceThresholdRecommendation,
   type FaceVerificationSettings
 } from "../../services/api";
+import { AiStrands } from "../../components/ui/ai-strands";
 import { Button } from "../../components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../../components/ui/card";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "../../components/ui/dialog";
@@ -229,7 +230,13 @@ export function FaceVerificationSettingsCard({ readOnly = false }: { readOnly?: 
             <Switch checked={enabled} disabled={readOnly || (!enabled && !allowedByPlan)} onCheckedChange={(v) => update.mutate({ enabled: v })} />
           </div>
 
-          <div className="grid gap-3 sm:grid-cols-2">
+          {/* Two columns from xl up: what the policy GATES on the left, how it JUDGES (calibration)
+              and what it TELLS people (consent) on the right. One column of everything was ~2
+              screens tall on a desktop, which is the "very huge" this restructure exists to fix.
+              min-w-0 on both columns so a long consent line can never widen the settings page. */}
+          <div className="grid gap-4 xl:grid-cols-2">
+            <div className="min-w-0 space-y-3">
+          <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-1">
             <div className="flex items-center justify-between rounded-lg border border-border bg-muted/30 p-4">
               <div className="space-y-0.5 pr-4">
                 <Label>Require on timesheet submit</Label>
@@ -322,7 +329,9 @@ export function FaceVerificationSettingsCard({ readOnly = false }: { readOnly?: 
               onCheckedChange={(v) => update.mutate({ enforcementMode: v ? "ALL" : "SELECTED" })}
             />
           </div>
+            </div>
 
+            <div className="min-w-0 space-y-4">
           <div className="rounded-lg border border-border bg-muted/30 p-4">
             <p className="mb-3 text-sm font-medium">Calibration</p>
             <p className="mb-3 text-sm text-muted-foreground">
@@ -396,6 +405,8 @@ export function FaceVerificationSettingsCard({ readOnly = false }: { readOnly?: 
               <Save className="mr-2 h-4 w-4" />
               Save wording
             </Button>
+          </div>
+            </div>
           </div>
         </CardContent>
       </Card>
@@ -539,9 +550,12 @@ function PolicyCopilot() {
         </div>
         <Button variant="outline" size="sm" disabled={recommend.isPending} onClick={() => recommend.mutate()}>
           <Wand2 className={`mr-2 h-3.5 w-3.5 ${recommend.isPending ? "animate-pulse" : ""}`} />
-          Get recommendation
+          <span className="ai-gradient-text">Get recommendation</span>
         </Button>
       </div>
+      {recommend.isPending && (
+        <AiStrands className="mt-3" label="Working through this workspace's own pass/reject scores…" />
+      )}
       {result && (
         <div className="mt-3 space-y-2 text-sm">
           <p>{result.summary}</p>

@@ -226,7 +226,10 @@ export function ServerHealthCard() {
             unscannable text line before, which is exactly what a status panel must not be. */}
         <div>
           <p className="mb-2 text-xs font-medium uppercase tracking-wider text-muted-foreground">Server details</p>
-          <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+          {/* 2-up even on a phone — these are single-fact tiles, and one per row made eight facts
+              a full screen of scrolling. Back to 2-up at 2xl because the card shares a row with
+              the status page there and four columns don't fit half the width. */}
+          <div className="grid grid-cols-2 gap-3 lg:grid-cols-4 2xl:grid-cols-2">
             <DetailTile icon={<Monitor className="h-4 w-4" />} label="Operating system" value={snapshot.server.platform} />
             <DetailTile icon={<CircuitBoard className="h-4 w-4" />} label="Architecture" value={snapshot.server.arch} />
             <DetailTile icon={<Hexagon className="h-4 w-4" />} label="Node.js" value={snapshot.server.nodeVersion} />

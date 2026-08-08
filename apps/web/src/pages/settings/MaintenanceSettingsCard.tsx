@@ -307,8 +307,13 @@ export function MaintenanceSettingsCard({ readOnly }: { readOnly: boolean }) {
 
   return (
     <div className="grid min-w-0 gap-4">
+      {/* The schedule and the people it affects, side by side from xl up — deciding a window and
+          checking who it would hit are one act, and stacking them meant the answer to "who's still
+          in there?" was a full screen below the switch. min-w-0 on both cells so neither card's
+          content can widen the page. */}
+      <div className="grid min-w-0 gap-4 xl:grid-cols-2 xl:items-start">
       {/* ------------------------------- Schedule card ------------------------------- */}
-      <Card>
+      <Card className="min-w-0">
         <CardHeader>
           <div className="flex flex-wrap items-center justify-between gap-2">
             <CardTitle className="flex items-center gap-2">
@@ -416,7 +421,7 @@ export function MaintenanceSettingsCard({ readOnly }: { readOnly: boolean }) {
       </Card>
 
       {/* ------------------------------ Online users card ----------------------------- */}
-      <Card>
+      <Card className="min-w-0">
         <CardHeader>
           <div className="flex flex-wrap items-center justify-between gap-2">
             <CardTitle className="flex items-center gap-2">
@@ -517,13 +522,25 @@ export function MaintenanceSettingsCard({ readOnly }: { readOnly: boolean }) {
         </CardContent>
       </Card>
 
-      {/* Live vitals of the box the admin is about to take down / bring back. */}
-      <ServerHealthCard />
+      </div>
 
-      {/* And the other half of the question: the box can be perfectly healthy while a feature is
-          not. This one is per-feature and has a memory — "was it down on Tuesday" is the question
-          the vitals panel above structurally cannot answer. */}
-      <ServiceStatusPage />
+      {/* The two monitoring views pair from 2xl up: the box's vitals and the features' history
+          answer sibling questions, and both are built to shrink (the status page's day squares are
+          flex-1, the health card's tile grids re-column). Below 2xl there isn't room for two
+          readable columns of tiles, so they stack. */}
+      <div className="grid min-w-0 gap-4 2xl:grid-cols-2 2xl:items-start">
+        {/* Live vitals of the box the admin is about to take down / bring back. */}
+        <div className="min-w-0">
+          <ServerHealthCard />
+        </div>
+
+        {/* And the other half of the question: the box can be perfectly healthy while a feature is
+            not. This one is per-feature and has a memory — "was it down on Tuesday" is the question
+            the vitals panel above structurally cannot answer. */}
+        <div className="min-w-0">
+          <ServiceStatusPage />
+        </div>
+      </div>
 
       {/* The third question, which neither of the two above can reach: not "is it up" but "why was
           it SLOW, when, and on which server". That needs per-request measurement rather than a

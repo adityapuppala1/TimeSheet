@@ -365,3 +365,132 @@
     transition: background-color 160ms ease, border-color 160ms ease, color 160ms ease, transform 160ms ease, box-shadow 160ms ease;
   }
 }
+
+/* ─────────────────────────────── AI effect layer ───────────────────────────────
+   One visual grammar for every AI surface, so "this is the machine talking" reads
+   the same across the app: a slowly-orbiting border glow on containers where AI is
+   working, gradient text on the buttons that invoke it, and flowing strands while
+   an answer is being produced (see components/ui/ai-strands.tsx).
+
+   Everything derives from the primary/info theme tokens — both themes and any
+   future re-brand come along for free — and every animation is switched off as a
+   group under prefers-reduced-motion. The static gradient remains in that case:
+   the point is identifying AI surfaces, and identity must survive without motion. */
+
+@property --ai-glow-angle {
+  syntax: "<angle>";
+  initial-value: 0deg;
+  inherits: false;
+}
+
+.ai-glow {
+  position: relative;
+}
+/* The ring is a masked conic gradient on a pseudo-element, so it follows the
+   element's own border-radius and never touches its layout. On browsers without
+   @property the ring simply holds still — informative, just not animated. */
+.ai-glow::before {
+  content: "";
+  pointer-events: none;
+  position: absolute;
+  inset: -1px;
+  border-radius: inherit;
+  padding: 1.5px;
+  background: conic-gradient(
+    from var(--ai-glow-angle),
+    transparent 0%,
+    hsl(var(--primary) / 0.9) 10%,
+    transparent 24%,
+    transparent 50%,
+    hsl(var(--info) / 0.75) 62%,
+    transparent 78%
+  );
+  -webkit-mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0);
+  -webkit-mask-composite: xor;
+  mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0);
+  mask-composite: exclude;
+  animation: ai-glow-spin 3.2s linear infinite;
+}
+
+@keyframes ai-glow-spin {
+  to {
+    --ai-glow-angle: 360deg;
+  }
+}
+
+.ai-gradient-text {
+  background-image: linear-gradient(
+    90deg,
+    hsl(var(--primary)),
+    hsl(var(--info)),
+    hsl(var(--primary))
+  );
+  background-size: 200% 100%;
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  animation: ai-gradient-slide 3s linear infinite;
+}
+/* Pause on hover: a label somebody is trying to read must hold still for them. */
+.ai-gradient-text:hover {
+  animation-play-state: paused;
+}
+
+@keyframes ai-gradient-slide {
+  to {
+    background-position: -200% 0;
+  }
+}
+
+/* The strands' flow — dash segments travelling along each path, staggered per
+   strand by an inline animation-delay. */
+.ai-strand {
+  stroke-dasharray: 46 150;
+  animation: ai-strand-flow 2.6s cubic-bezier(0.45, 0, 0.55, 1) infinite;
+}
+
+@keyframes ai-strand-flow {
+  to {
+    stroke-dashoffset: -196;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ai-glow::before,
+  .ai-gradient-text,
+  .ai-strand {
+    animation: none;
+  }
+}
+
+/* ──────────────────────────── Rendered rich text ────────────────────────────
+   `.prose-sm` is the class every read-only rich-text surface already carries —
+   ticket descriptions and comments, the task descriptions in Approvals and
+   History. Until now it was defined NOWHERE (the Tailwind typography plugin is
+   not installed), so formatting survived the save round-trip and then rendered
+   as bare tags: lists without bullets, headings at body size, code
+   indistinguishable from prose. These rules mirror the `.tiptap` editing rules
+   above, so content reads the same rendered as it did while being written. */
+.prose-sm p { @apply my-1; }
+.prose-sm ul { @apply ml-5 list-disc; }
+.prose-sm ol { @apply ml-5 list-decimal; }
+.prose-sm a { @apply text-primary underline underline-offset-4; }
+.prose-sm code { @apply rounded bg-muted px-1.5 py-0.5 font-mono text-xs; }
+.prose-sm blockquote { @apply my-2 border-l-4 border-border pl-3 italic text-muted-foreground; }
+.prose-sm h1 { @apply mb-1 mt-3 text-xl font-bold; }
+.prose-sm h2 { @apply mb-1 mt-3 text-lg font-bold; }
+.prose-sm h3 { @apply mb-1 mt-2 text-base font-bold; }
+.prose-sm hr { @apply my-3 border-border; }
+
+/* Code blocks — in the editor and in every rendered view. Scrolls inside its own
+   box: a long log line or stack trace must never widen a ticket card. The inline
+   `code` chip styling is reset inside `pre`, or every line of a block would wear
+   its own pill background. */
+.tiptap pre,
+.prose-sm pre {
+  @apply my-2 overflow-x-auto rounded-md border border-border bg-muted/60 p-3 font-mono text-xs leading-relaxed;
+}
+.tiptap pre code,
+.prose-sm pre code {
+  @apply block whitespace-pre bg-transparent p-0;
+}

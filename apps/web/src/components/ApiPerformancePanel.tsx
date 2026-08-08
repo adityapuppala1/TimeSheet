@@ -27,7 +27,7 @@
  */
 import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { Activity, AlertTriangle, Database, Gauge, Server, Timer } from "lucide-react";
+import { Activity, AlertTriangle, ArrowDown, ArrowUp, ArrowUpDown, Database, Gauge, Server, Timer } from "lucide-react";
 import {
   Bar,
   BarChart,
@@ -162,9 +162,48 @@ function StatTile({ icon, label, value, hint, tone }: {
   );
 }
 
+/** The numeric columns of the endpoints table an admin can rank by. The Endpoint column itself is
+ *  deliberately not sortable — the filter box answers "which endpoint?", and an alphabetical sort
+ *  over route patterns ranks nothing anyone asks about. */
+type EndpointSortKey = "total" | "p50Ms" | "p95Ms" | "p99Ms" | "maxMs" | "avgDbMs" | "errorRate";
+
+/** Sortable column header — a real <button> inside the <th> so it is keyboard-reachable and
+ *  announces its state, the same shape the face-verification log uses. */
+function SortableHead({
+  field,
+  sort,
+  onSort,
+  className,
+  children
+}: {
+  field: EndpointSortKey;
+  sort: { by: EndpointSortKey; dir: "asc" | "desc" };
+  onSort: (field: EndpointSortKey) => void;
+  className?: string;
+  children: React.ReactNode;
+}) {
+  const active = sort.by === field;
+  return (
+    <TableHead className={className} aria-sort={active ? (sort.dir === "asc" ? "ascending" : "descending") : "none"}>
+      <button type="button" onClick={() => onSort(field)} className="inline-flex items-center gap-1 rounded hover:text-foreground focus-ring">
+        {children}
+        {active ? (
+          sort.dir === "asc" ? <ArrowUp className="h-3 w-3" /> : <ArrowDown className="h-3 w-3" />
+        ) : (
+          <ArrowUpDown className="h-3 w-3 opacity-40" />
+        )}
+      </button>
+    </TableHead>
+  );
+}
+
 export function ApiPerformancePanel() {
   const [hours, setHours] = useState("24");
   const [drilldown, setDrilldownRaw] = useState<ApiRequestQuery>({ sort: "slowest", limit: 50, offset: 0 });
+  const [endpointFilter, setEndpointFilter] = useState("");
+  const [endpointSort, setEndpointSort] = useState<{ by: EndpointSortKey; dir: "asc" | "desc" }>({ by: "p95Ms", dir: "desc" });
+  const toggleEndpointSort = (by: EndpointSortKey) =>
+    setEndpointSort((prev) => (prev.by === by ? { by, dir: prev.dir === "asc" ? "desc" : "asc" } : { by, dir: "desc" }));
   /** Every filter change resets to the first page. Without this, narrowing a filter while on page
    *  four shows an empty table and looks like "no results" rather than "you are past the end". */
   const setDrilldown = (next: ApiRequestQuery) => setDrilldownRaw({ ...next, offset: 0 });
@@ -197,11 +236,26 @@ export function ApiPerformancePanel() {
   const presentStatusClasses = STATUS_CLASS_ORDER.filter((cls) => (data?.statusMix ?? []).some((s) => s.statusClass === cls));
 
   /** Top 12 by p95 — a bar chart with 25 categories is a wall, and the full set is in the table
-   *  right below it. */
+   *  right below it. Always the unfiltered set: the chart is the overview, the table drills. */
   const slowestChart = (data?.endpoints ?? []).slice(0, 12).map((row) => ({
     ...row,
     label: row.apiName.length > 42 ? `${row.apiName.slice(0, 41)}…` : row.apiName
   }));
+
+  /** The table's rows: filter, then rank. Client-side because the overview already carries the
+   *  full endpoint set — there is no second page to fetch. A null avg-DB time ranks below every
+   *  measured value in both directions ("not measured" is not "0 ms"). */
+  const filterNeedle = endpointFilter.trim().toLowerCase();
+  const endpointRows = (data?.endpoints ?? [])
+    .filter((row) => !filterNeedle || row.apiName.toLowerCase().includes(filterNeedle))
+    .sort((a, b) => {
+      const av = a[endpointSort.by];
+      const bv = b[endpointSort.by];
+      if (av === null && bv === null) return 0;
+      if (av === null) return 1;
+      if (bv === null) return -1;
+      return endpointSort.dir === "asc" ? av - bv : bv - av;
+    });
 
   return (
     <Card>
@@ -256,7 +310,9 @@ export function ApiPerformancePanel() {
 
         {!overview.isLoading && data && data.totals.total > 0 && (
           <>
-            <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-5">
+            {/* 2-up from the smallest screens — these are compact fact tiles, and one per row made
+                the summary a full screen tall on a phone before any chart appeared. */}
+            <div className="grid grid-cols-2 gap-3 xl:grid-cols-5">
               <StatTile icon={<Activity className="h-4 w-4" />} label="Requests" value={formatCount(data.totals.total)} hint={`${formatCount(data.totals.distinctUsers)} distinct users`} />
               <StatTile
                 icon={<Timer className="h-4 w-4" />}
@@ -398,22 +454,41 @@ export function ApiPerformancePanel() {
                   </div>
                 </div>
 
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <Input
+                    className="h-9 w-full sm:w-64"
+                    placeholder="Filter endpoints…"
+                    aria-label="Filter endpoints by path"
+                    value={endpointFilter}
+                    onChange={(event) => setEndpointFilter(event.target.value)}
+                  />
+                  {filterNeedle && (
+                    <span className="text-xs text-muted-foreground">
+                      {endpointRows.length} of {data.endpoints.length} endpoints
+                    </span>
+                  )}
+                </div>
+                {endpointRows.length === 0 ? (
+                  <p className="rounded-lg border border-dashed p-6 text-center text-sm text-muted-foreground">
+                    No endpoint matches that filter in this window.
+                  </p>
+                ) : (
                 <div className="min-w-0 overflow-x-auto rounded-lg border border-border">
                   <Table>
                     <TableHeader>
                       <TableRow>
                         <TableHead className="min-w-[16rem]">Endpoint</TableHead>
-                        <TableHead className="text-right">Calls</TableHead>
-                        <TableHead className="text-right">p50</TableHead>
-                        <TableHead className="text-right">p95</TableHead>
-                        <TableHead className="text-right">p99</TableHead>
-                        <TableHead className="text-right">Max</TableHead>
-                        <TableHead className="text-right">Avg. DB</TableHead>
-                        <TableHead className="text-right">Errors</TableHead>
+                        <SortableHead field="total" sort={endpointSort} onSort={toggleEndpointSort} className="text-right">Calls</SortableHead>
+                        <SortableHead field="p50Ms" sort={endpointSort} onSort={toggleEndpointSort} className="text-right">p50</SortableHead>
+                        <SortableHead field="p95Ms" sort={endpointSort} onSort={toggleEndpointSort} className="text-right">p95</SortableHead>
+                        <SortableHead field="p99Ms" sort={endpointSort} onSort={toggleEndpointSort} className="text-right">p99</SortableHead>
+                        <SortableHead field="maxMs" sort={endpointSort} onSort={toggleEndpointSort} className="text-right">Max</SortableHead>
+                        <SortableHead field="avgDbMs" sort={endpointSort} onSort={toggleEndpointSort} className="text-right">Avg. DB</SortableHead>
+                        <SortableHead field="errorRate" sort={endpointSort} onSort={toggleEndpointSort} className="text-right">Errors</SortableHead>
                       </TableRow>
                     </TableHeader>
                     <TableBody>
-                      {data.endpoints.map((row) => (
+                      {endpointRows.map((row) => (
                         <TableRow key={row.apiName}>
                           <TableCell className="font-mono text-xs">
                             <Badge variant="outline" className="mr-2">{row.method}</Badge>
@@ -439,6 +514,7 @@ export function ApiPerformancePanel() {
                     </TableBody>
                   </Table>
                 </div>
+                )}
               </TabsContent>
 
               {/* -------------------------------- Hosts & pods -------------------------------- */}

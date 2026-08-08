@@ -207,7 +207,9 @@ export function AiRefineTrigger({ state, className }: { state: AiRefineState; cl
         )}
       >
         <Sparkles className={cn("h-3.5 w-3.5", busy && !reduced && "animate-pulse")} aria-hidden="true" />
-        Refine with AI
+        {/* Gradient only while usable: a transparent-fill label fights the opacity-60 blocked
+            treatment, and a blocked button shouldn't advertise. */}
+        <span className={cn(!blocked && "ai-gradient-text")}>Refine with AI</span>
       </Button>
       {blocked && (
         <span id={state.reasonId} className="sr-only">
@@ -242,6 +244,9 @@ export function AiRefinePanel({ state, className }: { state: AiRefineState; clas
       className={cn(
         "grid gap-3 rounded-md border border-primary/30 bg-primary/5 p-3 text-sm",
         !reduced && "animate-fade-in",
+        // The orbiting ring marks "the model is working on this box right now" — it comes off the
+        // moment there is a result, so glow means in-flight, never merely AI-related.
+        state.phase === "loading" && "ai-glow",
         className
       )}
     >
@@ -272,13 +277,11 @@ export function AiRefinePanel({ state, className }: { state: AiRefineState; clas
             </Comparison>
             <Comparison title="AI suggestion" highlight>
               {state.result.format === "html" && state.result.refinedHtml ? (
-                // Mirrors index.css's `.tiptap` list/paragraph rules so the preview reads the way
-                // it will once accepted — the class itself can't be reused, it carries the
-                // editor's own min-height and padding.
-                <div
-                  className="break-words [&_ol]:ml-5 [&_ol]:list-decimal [&_p]:my-1 [&_ul]:ml-5 [&_ul]:list-disc"
-                  dangerouslySetInnerHTML={safeHtml(state.result.refinedHtml)}
-                />
+                // `.prose-sm` is the app's rendered-rich-text class (index.css), so the preview
+                // reads exactly the way the content will once accepted — including code blocks.
+                // `.tiptap` itself can't be reused here; it carries the editor's own min-height
+                // and padding.
+                <div className="prose-sm break-words" dangerouslySetInnerHTML={safeHtml(state.result.refinedHtml)} />
               ) : (
                 <p className="whitespace-pre-wrap break-words">{state.result.refined}</p>
               )}

@@ -20,6 +20,7 @@ import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { Sparkles, Loader2 } from "lucide-react";
 import { useNavigate } from "react-router";
 import { copilotApi } from "../services/api";
+import { AiStrands } from "./ui/ai-strands";
 import { Button } from "./ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle, DialogTrigger } from "./ui/dialog";
 import { Label } from "./ui/label";
@@ -81,7 +82,7 @@ export function PlanBreakdownDialog({
           }}
         >
           <Sparkles className="mr-2 h-3.5 w-3.5" aria-hidden />
-          Break work down
+          <span className={disabled || noProject ? undefined : "ai-gradient-text"}>Break work down</span>
         </Button>
       </DialogTrigger>
 
@@ -116,6 +117,10 @@ export function PlanBreakdownDialog({
             />
           </div>
         </div>
+
+        {ask.isPending && (
+          <AiStrands label="Breaking the goal into tasks — nothing is created until you review and apply." />
+        )}
 
         <DialogFooter>
           <Button variant="ghost" onClick={() => setOpen(false)} disabled={ask.isPending}>

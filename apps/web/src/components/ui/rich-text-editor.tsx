@@ -7,6 +7,7 @@ import TextAlign from "@tiptap/extension-text-align";
 import {
   Bold,
   Code,
+  SquareCode,
   Heading1,
   Heading2,
   Heading3,
@@ -107,6 +108,12 @@ function Toolbar({ editor }: { editor: Editor }) {
         </Btn>
         <Btn onClick={() => editor.chain().focus().toggleCode().run()} active={editor.isActive("code")} label="Inline code">
           <Code className="h-3.5 w-3.5" />
+        </Btn>
+        {/* StarterKit has shipped the CodeBlock node all along — it was reachable only by pasting
+            or typing ``` and there was no button, so nobody discovered it. Now pasted stack traces
+            and snippets get monospace, their own scroll box, and preserved whitespace. */}
+        <Btn onClick={() => editor.chain().focus().toggleCodeBlock().run()} active={editor.isActive("codeBlock")} label="Code block">
+          <SquareCode className="h-3.5 w-3.5" />
         </Btn>
       </Group>
       <Divider />
