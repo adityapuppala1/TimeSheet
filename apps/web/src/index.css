@@ -158,6 +158,10 @@
   * {
     @apply border-border;
     box-sizing: border-box;
+    /* Firefox's half of the themed scrollbar — see the scrollbar block further down for why the
+     * thumb derives from --muted-foreground and why both engines are declared separately. */
+    scrollbar-width: thin;
+    scrollbar-color: hsl(var(--muted-foreground) / 0.4) transparent;
   }
 
   /*
@@ -214,6 +218,77 @@
       radial-gradient(circle at 92% 10%, hsl(var(--accent) / 0.12), transparent 36%);
   }
 
+  /*
+   * SCROLLBARS — themed from the same tokens as everything else, so they flip with `.dark`
+   * instead of needing a second set of values maintained by hand.
+   *
+   * WHY `--muted-foreground` AND NOT `--border`: border is 86% lightness on the light theme,
+   * which is invisible as a thumb against a 98% background — the scrollbar would read as missing
+   * rather than as subtle. muted-foreground is the one neutral in this file already chosen to be
+   * legible against BOTH grounds (42% light / 65% dark), so one alpha of it works in both modes.
+   *
+   * Firefox and Chromium are not alternatives here, they are different engines reading different
+   * properties: Firefox implements `scrollbar-width`/`scrollbar-color` and no ::-webkit
+   * pseudo-elements; Chromium/WebKit the reverse. Both are declared, each ignores the other's.
+   */
+  ::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
+  }
+  ::-webkit-scrollbar-track {
+    background: transparent;
+  }
+  ::-webkit-scrollbar-thumb {
+    background-color: hsl(var(--muted-foreground) / 0.35);
+    border-radius: 9999px;
+    /*
+     * A transparent border plus `background-clip: content-box` is the only way to inset a
+     * scrollbar thumb — the pseudo-element has no usable padding — and insetting it is what keeps
+     * the 10px track from reading as a heavy grey stripe down the page.
+     */
+    border: 2px solid transparent;
+    background-clip: content-box;
+  }
+  ::-webkit-scrollbar-thumb:hover {
+    background-color: hsl(var(--muted-foreground) / 0.6);
+  }
+  /* Where a vertical and horizontal bar meet, the default is an opaque grey square. */
+  ::-webkit-scrollbar-corner {
+    background: transparent;
+  }
+
+  /*
+   * CUSTOM POINTER — the product's own arrow, 32px, hotspot `4 0`.
+   *
+   * The hotspot is MEASURED, not eyeballed: the source art's alpha channel puts the arrow's point
+   * at (93,42) inside a 512px canvas whose content starts at (42,42), which lands on 4 0 once the
+   * padding is cropped and it is scaled to 32. A wrong hotspot is the defect that makes a custom
+   * cursor feel broken — every click lands somewhere other than the tip.
+   *
+   * SCOPED TO `(hover: hover) and (pointer: fine)`: on touch there is no pointer to draw, and on a
+   * coarse pointer a 32px arrow is worse than the platform's own.
+   *
+   * ONLY THE DEFAULT ARROW IS REPLACED. `cursor: pointer` (buttons, links), `text` (inputs) and
+   * the resize cursors stay native on purpose — the hand is how people know a thing is clickable,
+   * and swapping the whole set for one arrow deletes that signal app-wide. `.cursor-default` is
+   * listed alongside because every shadcn menu, select and dropdown item carries it; without it
+   * the pointer would flip back to the system arrow inside every open menu.
+   *
+   * ACCESSIBILITY COST, stated rather than buried: ANY custom cursor overrides the OS pointer, so
+   * a user running Windows' enlarged or high-contrast pointer loses it in this app. That is a real
+   * regression for the people who need it most. `html[data-cursor="system"]` turns the whole block
+   * off, so a per-user preference can be wired to one attribute later without touching CSS.
+   */
+  @media (hover: hover) and (pointer: fine) {
+    html:not([data-cursor="system"]),
+    html:not([data-cursor="system"]) .cursor-default {
+      /* Plain url() first as the floor; `image-set` then wins wherever it parses, giving retina
+       * screens the 2x art. A browser that cannot parse the second line keeps the first. */
+      cursor: url("/cursors/arrow.png") 4 0, auto;
+      cursor: image-set(url("/cursors/arrow.png") 1x, url("/cursors/arrow@2x.png") 2x) 4 0, auto;
+    }
+  }
+
   button,
   input,
   select,
@@ -227,12 +302,24 @@
     @apply focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background;
   }
 
+  /*
+   * The opt-in narrow variant, for dense panels that would look heavy with the 10px default.
+   * It keeps its own width but takes the same thumb colour as the global rule — it previously
+   * used `bg-border`, which on the light theme is 86% lightness against a 98% background and so
+   * read as no thumb at all.
+   */
   .scrollbar-thin::-webkit-scrollbar {
     width: 8px;
     height: 8px;
   }
   .scrollbar-thin::-webkit-scrollbar-thumb {
-    @apply rounded-full bg-border;
+    background-color: hsl(var(--muted-foreground) / 0.35);
+    border-radius: 9999px;
+    border: 2px solid transparent;
+    background-clip: content-box;
+  }
+  .scrollbar-thin::-webkit-scrollbar-thumb:hover {
+    background-color: hsl(var(--muted-foreground) / 0.6);
   }
 
   /* Tiptap content baseline */
