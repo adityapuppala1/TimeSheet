@@ -5,6 +5,94 @@ and a GitHub Release whose body is copied from the matching section here — the
 documented in CONTRIBUTING.md, and the in-app **What's new** page renders these notes for every
 user of a running installation.
 
+## 2.3.0 — your assistant can drive it, and the model is on a short leash — 2026-08-08
+
+Two additions that point in opposite directions and belong in the same release. TimeSphere now
+speaks **MCP**, so your own AI assistant can read and act on this workspace from wherever you
+already work. And because that widens what a model can touch, the AI surface it widens got audited
+first — every path where a stranger's text reaches a prompt, and every place a model's answer was
+trusted more than it had earned.
+
+**Upgrading is a normal `./update.sh`.** One migration, additive. **Nothing turns on by itself:**
+the MCP server ships disabled, its write tools ship disabled *individually*, and a workspace that
+never opens the new settings tab has no endpoint listening at all.
+
+---
+
+### 🔌 MCP — connect your assistant to your workspace
+
+- **TimeSphere is now an MCP server.** Point Claude Desktop, Claude Code, or a hosted agent at your
+  workspace and ask it things — *"what's in my approval queue?"*, *"log two hours against
+  HICS-ERP for the payment refactor"* — without opening the app. Enabled and configured by a super
+  admin from **Workspace settings → MCP**.
+- **Every tool runs as one specific person.** A credential is bound to a user, and each tool
+  enforces the same permission that user would need in the app. An assistant connected with an
+  employee's credential sees exactly what that employee sees — no more.
+- **Nothing is on until you say so.** The server, the master write switch, and every individual
+  write tool all start off. That third one is deliberate: a write tool added in a *future* release
+  arrives switched off in your workspace rather than turning itself on during an upgrade.
+- **Logging time creates a draft, never a submission.** Submitting starts an approval clock and can
+  require an identity check — not something an assistant should do on your behalf.
+- **The workspace it acts on is not something the assistant can choose.** It comes from the
+  connection, not from anything the model can be talked into saying.
+
+### 🛡️ AI guardrails — the audit that came with it
+
+This app has always fed outside text to models: inbound email from strangers becomes a ticket, so
+do Slack and Teams messages, CI logs, and scanner findings. That's six doors, and an assistant
+reading a ticket is reading whatever the sender wrote. So before widening what AI can reach, we
+went through what it could already be talked into.
+
+- **A ticket's type could be set to anything by whoever emailed you.** The list of allowed types was
+  sent to the model as a request rather than enforced on the way back — fine with one provider,
+  not with another. Priority and module were already pinned; type wasn't. It is now.
+- **One upload could spend the whole month's AI budget.** A findings ingest ran AI triage for up to
+  500 items at once, and all 500 budget checks read the same figure before any of them recorded
+  what they'd spent. Every individual check passed while the total sailed past the cap. Now
+  sequential and capped.
+- **The AI planning copilot proposes and never applies — that held.** What didn't: *who* was allowed
+  to accept a proposal. Approving one was gated on a permission held workspace-wide, so someone
+  outside a project could accept changes to it. Now scoped to the project, like everything else.
+- **A model's answer is no longer taken as permission.** When AI suggests an assignee or a parent
+  task, that person must actually exist and be active, and that task must be in the same project,
+  before anything is applied. Previously the suggestion was applied on trust.
+- **AI limits are now per person, not per network address** — one account could previously spend
+  another's allowance from a different connection.
+- Also fixed: an AI-invented ticket reference could crash a duplicate check, and one AI-written
+  ticket comment stored raw model output where its two siblings escaped it.
+
+**Checked and found correct**, so the record shows it: no AI path can skip the master switch or the
+budget; no prompt can be built from another workspace's data; nothing sensitive — biometrics,
+password hashes, tokens, keys — can reach a prompt or a stored AI log; and model output never
+reaches a database query, a shell, or a file path.
+
+### ✨ AI refine — a suggestion, not a replacement
+
+- An **AI tidy-up button beside the fields you write for other people to read**: timesheet task
+  descriptions and notes, ticket titles and descriptions, and ticket comments.
+- **It never silently replaces what you wrote.** You see your text and the suggestion side by side,
+  and nothing changes until you press **Use this**. **Undo** puts your original back — and quietly
+  disappears once you start typing again, because by then "undo" would throw away your own edits.
+- Replaces two older *"Improve with AI"* buttons on the ticket screen that **did** overwrite what
+  you'd typed, with no preview and no way back.
+- **It cannot embellish, and that's the point.** A timesheet description is a record an approver
+  signs and an auditor may read, so refining is constrained to grammar and clarity: it may not add
+  a fact, change a number, date or ticket reference, or make a claim stronger — *"mostly working"*
+  will not come back as *"working"*.
+- Off when AI is off or the budget is spent, and it says which — rather than failing when you click.
+
+### 🔐 Also hardened
+
+- **A captured SSO response could be replayed** for the life of its validity window; sign-in now
+  remembers which request it issued and accepts only the matching answer.
+- **A GitHub connection link could be reused** within its ten-minute window; it is now single-use.
+- **Which workspaces exist, and their state, is no longer probeable** — an unknown, suspended, and
+  still-provisioning workspace now answer an outsider identically, while a signed-in user still
+  gets the real reason.
+- Two internal tables that grew for the life of the server process are now swept.
+
+---
+
 ## 2.2.0 — what the code assumed, and what it actually did — 2026-08-07
 
 A security release. The theme is a single question asked of every shared value in the system — *if
