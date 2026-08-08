@@ -1699,7 +1699,7 @@ export const settingsApi = {
   updateMcp: async (payload: { enabled?: boolean; allowWrites?: boolean; toolOverrides?: Record<string, boolean> }) =>
     (await api.patch<Omit<McpSettingsResponse, "credentials">>("/settings/mcp", payload)).data,
   /** Returns the bearer token exactly once — the server only ever stores its hash. */
-  createMcpCredential: async (payload: { name: string; userId: string }) =>
+  createMcpCredential: async (payload: { name: string; userId: string; allowedTools?: string[]; expiresAt?: string }) =>
     (await api.post<McpCredentialCreated>("/settings/mcp/credentials", payload)).data,
   revokeMcpCredential: async (id: string) => api.delete(`/settings/mcp/credentials/${id}`),
 
@@ -1797,6 +1797,10 @@ export interface McpCredentialRow {
   /** The person every tool call made with this credential runs as. */
   actingAs: { id: string; name: string; email: string; role: string };
   createdBy: string | null;
+  /** Tool names this credential may call, or null for "whatever the workspace allows".
+   *  Only ever narrows — it can never grant something the workspace or the holder lacks. */
+  allowedTools: string[] | null;
+  expiresAt: string | null;
 }
 export interface McpSettingsResponse {
   enabled: boolean;

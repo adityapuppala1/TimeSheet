@@ -25,6 +25,7 @@ import { Switch } from "../../components/ui/switch";
 import { toast } from "../../components/ui/toaster";
 import { SERVER_ORIGIN, settingsApi, userApi, type McpToolRow } from "../../services/api";
 import { copyText } from "../../lib/clipboard";
+import { cn } from "../../lib/utils";
 
 function CopyableSecret({ value }: { value: string }) {
   const [copied, setCopied] = useState(false);
@@ -110,6 +111,9 @@ export function McpServerSettingsCard({ readOnly }: { readOnly: boolean }) {
 
   const [newName, setNewName] = useState("");
   const [newUserId, setNewUserId] = useState("");
+  /** Empty = unrestricted, which is what every credential issued before this existed does. */
+  const [newTools, setNewTools] = useState<string[]>([]);
+  const [newExpiry, setNewExpiry] = useState("");
   const [revealedToken, setRevealedToken] = useState<string | null>(null);
 
   const update = useMutation({
@@ -118,11 +122,21 @@ export function McpServerSettingsCard({ readOnly }: { readOnly: boolean }) {
     onError: (err: any) => toast.error("Could not save", { description: err?.response?.data?.message ?? "Try again." })
   });
   const createCredential = useMutation({
-    mutationFn: () => settingsApi.createMcpCredential({ name: newName.trim(), userId: newUserId }),
+    mutationFn: () =>
+      settingsApi.createMcpCredential({
+        name: newName.trim(),
+        userId: newUserId,
+        // Empty means "whatever the workspace allows" — the pre-existing behaviour, and still the
+        // default. A listing can only ever narrow.
+        ...(newTools.length ? { allowedTools: newTools } : {}),
+        ...(newExpiry ? { expiresAt: new Date(newExpiry).toISOString() } : {})
+      }),
     onSuccess: (created) => {
       setRevealedToken(created.token);
       setNewName("");
       setNewUserId("");
+      setNewTools([]);
+      setNewExpiry("");
       queryClient.invalidateQueries({ queryKey: ["settings", "mcp"] });
     },
     onError: (err: any) =>
@@ -298,6 +312,20 @@ export function McpServerSettingsCard({ readOnly }: { readOnly: boolean }) {
                   <Badge variant="muted">
                     acts as {c.actingAs.name} ({c.actingAs.role})
                   </Badge>
+                  {/* A narrowed credential must not look identical to an unrestricted one — that
+                      is the difference between a limit somebody relies on and one nobody trusts. */}
+                  {c.allowedTools && (
+                    <Badge variant="outline" title={c.allowedTools.join(", ")}>
+                      {c.allowedTools.length} tool{c.allowedTools.length === 1 ? "" : "s"} only
+                    </Badge>
+                  )}
+                  {c.expiresAt && (
+                    <Badge variant={new Date(c.expiresAt) <= new Date() ? "destructive" : "outline"}>
+                      {new Date(c.expiresAt) <= new Date()
+                        ? "Expired"
+                        : `Expires ${new Date(c.expiresAt).toLocaleDateString()}`}
+                    </Badge>
+                  )}
                   <span className="ml-auto text-xs text-muted-foreground">
                     {c.lastUsedAt ? `Last used ${new Date(c.lastUsedAt).toLocaleString()}` : "Never used"}
                   </span>
@@ -338,6 +366,14 @@ export function McpServerSettingsCard({ readOnly }: { readOnly: boolean }) {
                     ))}
                   </SelectContent>
                 </Select>
+                <Input
+                  type="date"
+                  className="w-40"
+                  value={newExpiry}
+                  onChange={(e) => setNewExpiry(e.target.value)}
+                  aria-label="Expires on (optional)"
+                  title="Expires on — leave blank for a credential that never expires"
+                />
                 <Button
                   size="sm"
                   disabled={!newName.trim() || !newUserId || createCredential.isPending}
@@ -346,6 +382,45 @@ export function McpServerSettingsCard({ readOnly }: { readOnly: boolean }) {
                   <Plus className="h-4 w-4" />
                   Issue
                 </Button>
+              </div>
+            )}
+
+            {/*
+              Tool narrowing. Left blank this behaves exactly as it always has — the credential can
+              use whatever the workspace allows. Ticking anything turns it into an intersection:
+              the tool must be enabled by the workspace AND ticked here, so this can only ever take
+              authority away. That is what makes it safe to hand a model a credential belonging to
+              somebody with admin powers.
+            */}
+            {!readOnly && (
+              <div className="rounded-md border bg-muted/30 p-2.5">
+                <p className="text-xs font-medium">Limit this credential to certain tools</p>
+                <p className="mb-2 text-[11px] text-muted-foreground">
+                  Leave everything unticked to let it use whatever this workspace allows. Ticking narrows it — it can
+                  never grant more than the person it acts as already has.
+                </p>
+                <div className="flex flex-wrap gap-1.5">
+                  {(mcp.data?.tools ?? []).map((tool: McpToolRow) => {
+                    const picked = newTools.includes(tool.name);
+                    return (
+                      <button
+                        key={tool.name}
+                        type="button"
+                        aria-pressed={picked}
+                        onClick={() =>
+                          setNewTools((prev) => (picked ? prev.filter((n) => n !== tool.name) : [...prev, tool.name]))
+                        }
+                        className={cn(
+                          "rounded-full border px-2 py-0.5 text-[11px] transition",
+                          picked ? "border-primary bg-primary/10 text-foreground" : "text-muted-foreground hover:border-primary/50"
+                        )}
+                      >
+                        {tool.name}
+                        {tool.mutating ? " ✎" : ""}
+                      </button>
+                    );
+                  })}
+                </div>
               </div>
             )}
           </CardContent>

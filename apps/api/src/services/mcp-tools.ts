@@ -27,6 +27,7 @@
 import type { Request, Response } from "express";
 import { z } from "zod";
 import { permissions, ticketStatusTransitions, type TicketStatus } from "@timesheet/shared";
+import { Prisma } from "@prisma/client";
 import { prisma } from "../config/prisma.js";
 import { requireTenantContext } from "../config/tenant-context.js";
 import { requirePermission, type RequestUser } from "../middleware/auth.js";
@@ -723,6 +724,23 @@ const TOOLS: readonly McpToolRegistration[] = [
 ];
 
 /** The catalogue, minus every handler — see this file's header for why the omission is the point. */
+/**
+ * Every MUTATING tool accepts an optional `idempotencyKey`, added centrally rather than repeated in
+ * eleven schemas — a write tool added later gets it without anybody remembering to.
+ *
+ * Optional, not required: a client that does not send one behaves exactly as before, which is what
+ * keeps this from being a breaking change to a published tool surface.
+ */
+for (const tool of TOOLS) {
+  if (tool.mutating) {
+    (tool.inputSchema as Record<string, z.ZodTypeAny>).idempotencyKey = z
+      .string()
+      .max(120)
+      .optional()
+      .describe("Optional. Send the same value when retrying so the call happens at most once.");
+  }
+}
+
 export const MCP_TOOLS: ReadonlyArray<McpToolSpec> = TOOLS;
 
 /** A tool's state when the workspace has never expressed an opinion about it. Reads are on so an
@@ -851,7 +869,51 @@ export async function invokeMcpTool(
     await deny("invalid_arguments", new McpToolDenied(422, `Invalid arguments for ${name} — ${detail}`));
   }
 
-  const result = await spec.handler(ctx, (parsed as { data: unknown }).data);
+  const args = (parsed as { data: Record<string, unknown> }).data;
+
+  /*
+   * IDEMPOTENCY, for writes only.
+   *
+   * Retrying is what agents do — a timeout, a dropped connection, a model that decides its first
+   * attempt failed — and `create_ticket` called twice creates two tickets. Reads need none of this
+   * (they already advertise `idempotentHint`), so the cost is paid only where it buys something.
+   *
+   * THE KEY IS CLAIMED BEFORE THE HANDLER RUNS. Checking first and recording after leaves exactly
+   * the window that matters open: two calls arriving together both find nothing and both create.
+   * Claiming first lets the unique constraint decide which one wins, and the loser is answered from
+   * the winner's stored result instead of doing the work again.
+   */
+  const idempotencyKey = typeof args.idempotencyKey === "string" ? args.idempotencyKey : null;
+  if (spec.mutating && idempotencyKey) {
+    const callerId = ctx.credentialId;
+    try {
+      await prisma.mcpToolInvocation.create({ data: { callerId, toolName: name, idempotencyKey } });
+    } catch {
+      // Somebody already claimed this key. Answer from their result if it is finished; if it is
+      // not, say so rather than returning an empty success that a model would read as "done".
+      const existing = await prisma.mcpToolInvocation.findUnique({
+        where: { callerId_toolName_idempotencyKey: { callerId, toolName: name, idempotencyKey } }
+      });
+      if (existing?.completedAt) {
+        await audit(ctx.user.id, "mcp.tool_replayed", "McpCredential", callerId, { tool: name, idempotencyKey });
+        return existing.resultJson;
+      }
+      await deny(
+        "idempotency_in_flight",
+        new McpToolDenied(409, `An earlier ${name} call with that idempotency key is still running.`)
+      );
+    }
+
+    const result = await spec.handler(ctx, args);
+    await prisma.mcpToolInvocation.update({
+      where: { callerId_toolName_idempotencyKey: { callerId, toolName: name, idempotencyKey } },
+      data: { resultJson: (result ?? null) as Prisma.InputJsonValue, completedAt: new Date() }
+    });
+    await audit(ctx.user.id, "mcp.tool_called", "McpCredential", callerId, { tool: name, idempotencyKey });
+    return result;
+  }
+
+  const result = await spec.handler(ctx, args);
   await audit(ctx.user.id, "mcp.tool_called", "McpCredential", ctx.credentialId, { tool: name });
   return result;
 }

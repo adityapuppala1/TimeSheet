@@ -1055,7 +1055,11 @@ settingsRouter.get("/mcp", requireSuperAdmin, async (_req, res) => {
       lastUsedAt: c.lastUsedAt,
       createdAt: c.createdAt,
       actingAs: { id: c.user.id, name: c.user.name, email: c.user.email, role: c.user.role.name },
-      createdBy: c.createdBy?.name ?? null
+      createdBy: c.createdBy?.name ?? null,
+      // Null means "whatever the workspace allows". The UI needs to be able to tell the two
+      // apart — a narrowed credential that looks unrestricted is a narrowing nobody trusts.
+      allowedTools: Array.isArray(c.allowedTools) ? (c.allowedTools as string[]) : null,
+      expiresAt: c.expiresAt
     }))
   });
 });

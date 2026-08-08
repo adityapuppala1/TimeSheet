@@ -1149,6 +1149,38 @@ enum AiAutonomyLevel {
 /// AN ABSENT ROW MEANS SUGGEST. That is the whole point of storing only what was chosen: a
 /// capability added next year arrives at the floor in every existing workspace instead of
 /// inheriting a neighbour's setting, which is the direction a mistake should fail in.
+/// One recorded MCP tool call, so a retried write does not happen twice.
+///
+/// WHY IT IS NEEDED AT ALL: `create_ticket` called twice creates two tickets, and retrying is what
+/// agents do — a timeout, a dropped connection, a model that decides its first attempt failed. The
+/// MCP annotations already advertise `idempotentHint` for read tools, which was honest, and
+/// nothing for writes, which was also honest and worse.
+///
+/// WHY THE KEY IS CLAIMED BEFORE THE HANDLER RUNS: checking first and writing after leaves the
+/// window that matters wide open — two calls arriving together both find nothing and both create a
+/// ticket. Claiming the row first means the database's unique constraint decides which one wins,
+/// and the loser can be answered from the winner's result instead of doing the work again.
+model McpToolInvocation {
+  id String @id @default(uuid())
+
+  /// Who called. A plain string rather than a foreign key: a credential can be revoked and deleted
+  /// while its record of what it did should outlive it, and a future agent run will use this same
+  /// table with an id that is not a credential at all.
+  callerId       String @db.VarChar(64)
+  toolName       String @db.VarChar(60)
+  idempotencyKey String @db.VarChar(120)
+
+  /// The result to replay. NULL while the first call is still running — a second call arriving in
+  /// that window is told to wait rather than being given an empty answer that looks like success.
+  resultJson  Json?
+  completedAt DateTime?
+
+  createdAt DateTime @default(now())
+
+  @@unique([callerId, toolName, idempotencyKey])
+  @@index([createdAt])
+}
+
 model AiCapabilityPolicy {
   id String @id @default(uuid())
 

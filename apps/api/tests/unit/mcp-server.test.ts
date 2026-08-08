@@ -107,6 +107,11 @@ function buildClient(overrides: Partial<Record<string, unknown>> = {}): PrismaCl
     timesheet: { aggregate: vi.fn().mockResolvedValue({ _sum: { totalHours: 0 } }), findMany: vi.fn().mockResolvedValue([]) },
     globalTicketSettings: { findUnique: vi.fn().mockResolvedValue(null), upsert: vi.fn().mockResolvedValue({}) },
     testRun: { findFirst: vi.fn().mockResolvedValue(null) },
+    mcpToolInvocation: {
+      create: vi.fn().mockResolvedValue({}),
+      findUnique: vi.fn().mockResolvedValue(null),
+      update: vi.fn().mockResolvedValue({})
+    },
     ...overrides
   } as unknown as PrismaClient;
 }
@@ -496,5 +501,72 @@ describe("a credential can be narrower than its holder", () => {
     const names = (await rpc(buildApp(), "tools/list")).body.result.tools.map((t: { name: string }) => t.name);
     expect(names).toContain("search_tickets");
     expect(names).toContain("whoami");
+  });
+});
+
+/**
+ * At-most-once for writes. Retrying is what agents do, and `create_ticket` called twice created two
+ * tickets — the annotations advertised `idempotentHint` for reads, which was honest, and nothing
+ * for writes, which was also honest and worse.
+ *
+ * The property that matters is that the key is CLAIMED BEFORE the handler runs. Checking first and
+ * recording afterwards leaves exactly the window two concurrent retries arrive in.
+ */
+describe("a retried write happens at most once", () => {
+  beforeEach(() => {
+    grant(permissions.TICKETS_WRITE, permissions.TICKETS_VIEW);
+    mcpSettings.allowWrites = true;
+    mcpSettings.toolOverrides = { add_ticket_comment: true };
+  });
+
+  it("claims the key before doing the work, not after", async () => {
+    const app = buildApp();
+    await rpc(app, "tools/call", {
+      name: "add_ticket_comment",
+      arguments: { ticketKey: "WEB-1", body: "hello", idempotencyKey: "abc" }
+    });
+
+    const claimAt = vi.mocked(client.mcpToolInvocation.create).mock.invocationCallOrder[0];
+    const workAt = vi.mocked(client.ticketComment.create).mock.invocationCallOrder[0];
+    expect(claimAt).toBeLessThan(workAt);
+  });
+
+  it("replays the first result instead of doing the work again", async () => {
+    // The claim fails because the key is taken, and the earlier call finished.
+    vi.mocked(client.mcpToolInvocation.create).mockRejectedValueOnce(new Error("unique"));
+    vi.mocked(client.mcpToolInvocation.findUnique).mockResolvedValue({
+      completedAt: new Date(),
+      resultJson: { replayed: true }
+    } as never);
+
+    const res = await rpc(buildApp(), "tools/call", {
+      name: "add_ticket_comment",
+      arguments: { ticketKey: "WEB-1", body: "hello", idempotencyKey: "abc" }
+    });
+
+    expect(res.status).toBe(200);
+    expect(client.ticketComment.create).not.toHaveBeenCalled();
+    expect(auditSpy).toHaveBeenCalledWith("user-1", "mcp.tool_replayed", "McpCredential", "cred-1", expect.objectContaining({ tool: "add_ticket_comment" }));
+  });
+
+  it("refuses rather than answering emptily while the first call is still running", async () => {
+    // An empty success is the one answer a model would confidently read as "done".
+    vi.mocked(client.mcpToolInvocation.create).mockRejectedValueOnce(new Error("unique"));
+    vi.mocked(client.mcpToolInvocation.findUnique).mockResolvedValue({ completedAt: null, resultJson: null } as never);
+
+    const res = await rpc(buildApp(), "tools/call", {
+      name: "add_ticket_comment",
+      arguments: { ticketKey: "WEB-1", body: "hello", idempotencyKey: "abc" }
+    });
+
+    expect(res.body.result?.isError || res.body.error).toBeTruthy();
+    expect(client.ticketComment.create).not.toHaveBeenCalled();
+  });
+
+  it("leaves a call without a key exactly as it was — every existing client", async () => {
+    await rpc(buildApp(), "tools/call", { name: "add_ticket_comment", arguments: { ticketKey: "WEB-1", body: "hello" } });
+
+    expect(client.mcpToolInvocation.create).not.toHaveBeenCalled();
+    expect(client.ticketComment.create).toHaveBeenCalled();
   });
 });
