@@ -106,12 +106,26 @@ function computeAutonomy(
   if (spec.featureToggle && !settings[spec.featureToggle]) return clamp("This capability itself is switched off.");
   if (!settings.aiAutonomyEnabled) return clamp("Autonomy is switched off for this workspace.");
 
-  const effectiveLevel = min(requestedLevel, maxLevel);
+  /*
+   * COMPATIBILITY: `autoTriageAutoApply` predates this ladder and is the same decision wearing a
+   * different name — its own schema comment says "AI triage suggestions are applied directly".
+   * Left independent, a workspace could have the toggle on and the level at SUGGEST and the two
+   * would disagree about whether triage applies itself, which is exactly the confusion two
+   * controls for one thing produces.
+   *
+   * Read as a FLOOR, not an override: it can raise triage to AUTO_APPLY for a workspace that
+   * already had it on, and it can never lower a level somebody has since chosen deliberately.
+   */
+  const legacyFloor: AiAutonomyLevel =
+    capabilityId === "triage" && (settings as Record<string, unknown>).autoTriageAutoApply === true ? "AUTO_APPLY" : FLOOR;
+  const asked = levelRank(legacyFloor) > levelRank(requestedLevel) ? legacyFloor : requestedLevel;
+
+  const effectiveLevel = min(asked, maxLevel);
   return {
     ...base,
     effectiveLevel,
     clampedReason:
-      levelRank(effectiveLevel) < levelRank(requestedLevel)
+      levelRank(effectiveLevel) < levelRank(asked)
         ? spec.ceilingReason ?? "This capability is capped by the product."
         : null
   };
@@ -148,6 +162,13 @@ export interface AutonomyCatalogueEntry extends ResolvedAutonomy {
   /** Whether the underlying feature is on at all — the UI greys the whole row when it is not,
    *  rather than showing a level that cannot currently apply to anything. */
   featureEnabled: boolean;
+  /** The GlobalAISettings switch that turns this capability on, so ONE row can carry both
+   *  controls. Null for a capability that reaches no model and therefore has no switch.
+   *
+   *  WHY THE UI NEEDS THIS: "does it run" and "how much authority when it runs" are different
+   *  questions, but they are questions about the SAME capability — and asking them in two separate
+   *  lists of twenty-odd rows made the screen look like it held two copies of everything. */
+  featureToggle: string | null;
 }
 
 /**
@@ -169,6 +190,7 @@ export async function describeAutonomyCatalogue(): Promise<{ autonomyEnabled: bo
     description: spec.description,
     ceilingReason: spec.ceilingReason,
     actsOnUntrustedInput: spec.actsOnUntrustedInput,
+    featureToggle: spec.featureToggle,
     // A capability with no toggle reaches no model, so nothing about the AI switches
     // determines whether it is available.
     featureEnabled: spec.featureToggle ? Boolean(settings.aiEnabled && settings[spec.featureToggle]) : true

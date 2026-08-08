@@ -1454,29 +1454,16 @@ function AISettingsCard({ readOnly }: { readOnly: boolean }) {
   }
 
   const toggles: Array<{ key: keyof GlobalAISettings; label: string; description: string }> = [
-    { key: "autoTriageEnabled", label: "Auto-triage suggestions", description: "Suggest type, priority, and module when a ticket is created." },
-    { key: "autoTriageAutoApply", label: "Auto-apply triage suggestions", description: "Pre-fill the suggestion instead of showing an accept/dismiss chip." },
-    { key: "duplicateDetectionEnabled", label: "Duplicate detection", description: "Flag likely-duplicate tickets when a new one is created." },
-    { key: "writingAssistantEnabled", label: "Writing assistant", description: "\"Refine with AI\" next to timesheet and ticket text fields — the suggestion is always shown for the author to accept or reject." },
-    { key: "commentSummaryEnabled", label: "Comment thread summaries", description: "AI summary of long comment threads on a ticket." },
-    { key: "workspaceSearchEnabled", label: "\"Ask AI\" ticket search", description: "Natural-language Q&A over your accessible tickets and workspace analytics (velocity, SLA, workload, cost) from the command palette." },
-    { key: "emailIngestionEnabled", label: "Email-to-ticket intake", description: "Parse inbound bug-report emails and auto-create tickets." },
-    { key: "chatIngestionEnabled", label: "Chat-to-ticket intake", description: "Turn Slack/Teams/Google Chat/Telegram messages into auto-created tickets." },
-    { key: "weeklyDigestEnabled", label: "AI weekly digest", description: "LLM-authored weekly summary of ticket + timesheet activity." },
-    { key: "ciFailureTriageEnabled", label: "CI-failure triage", description: "AI-authored root-cause/severity comment when a CI test run fails with a log excerpt attached (Security & DevOps tab)." },
-    { key: "aiPrReviewSummaryEnabled", label: "AI PR-review summaries", description: "AI-authored summary comment on a ticket when its linked PR opens on a connected GitHub repo (Security & DevOps tab)." },
-    { key: "findingTriageEnabled", label: "Security finding exploitability triage", description: "AI classifies each CRITICAL/HIGH ingested finding as a true/false positive and suggests a fix (Security & DevOps tab, and the ticket's Security tab if attached)." },
-    { key: "securityWeeklyDigestEnabled", label: "AI weekly security digest", description: "Monday-morning org-wide security recap (open findings, risk score, tickets past SLA) emailed to every admin. Also needs the matching toggle in Reminders & schedule." },
-    { key: "statusReportEnabled", label: "AI-drafted status reports", description: "On-demand \"generate a stakeholder update\" button on a project's Reports tab — plain-language recap of tickets and hours for that project." },
-    { key: "faceReviewSummaryEnabled", label: "AI identity-review summaries", description: "One-click review brief for a flagged face-verification attempt (Face verification tab) — attempt history, device/network signals, and a recommendation. Uses attempt metadata only; captured images never leave this server." },
-    { key: "facePolicyCopilotEnabled", label: "Face-verification policy copilot", description: "AI narration of the deterministically-computed match-threshold recommendation (Face verification tab \"Get recommendation\" button) — explains the number, never sets it." },
-    { key: "bugPatternDigestEnabled", label: "AI monthly bug-pattern digest", description: "\"What kept breaking\" recap on the 1st of every month — recurring CI failures, tickets accumulating failed runs, and security-finding hotspots. Also needs the matching toggle in Reminders & schedule." },
-    { key: "assigneeSuggestionAiEnabled", label: "AI-explained assignee suggestions", description: "One-sentence explanation of why the top suggested assignee was ranked there (ticket creation) — narrates the existing open-load/expertise ranking, never re-ranks it." },
-    { key: "staleTicketNudgeEnabled", label: "AI stale-ticket nudge", description: "A dismissible suggested next action on tickets the SLA sweep already flags as stale. Never acts on its own." },
-    { key: "aiPrInlineReviewEnabled", label: "AI inline PR review comments", description: "Deeper than the PR-review summary above: per-line review comments on a PR's actual diff when it opens (Security & DevOps tab). Opt-in separately because a wrong or noisy inline comment costs developer trust fast — start with the summary alone and enable this once you trust the triage pipeline's behavior on your repos." },
+    // ONLY the settings that are NOT a capability. Every per-capability switch moved into
+    // AIAutonomyCard, where it sits beside that capability's autonomy level — the two answer
+    // different questions about the same thing, and listing them separately made this tab look
+    // like it held two copies of everything.
+    //
+    // What is left is data retention, which is genuinely a different subject: it governs what is
+    // KEPT about an AI call, not what the call is allowed to do.
+    { key: "autoTriageAutoApply", label: "Auto-apply triage suggestions (legacy)", description: "Pre-fills the suggestion instead of showing an accept/dismiss chip. This predates the autonomy ladder and means the same thing as setting Ticket triage to “Apply, reversible” above — leaving it on holds triage at that level. Prefer the capability setting; this stays so workspaces that already use it keep working." },
     { key: "aiCaptureEnabled", label: "Record AI quality metrics", description: "Logs one row per AI call — which feature, which model, whether the response parsed, and how long it took. No prompt text, no user content, just a hash. Without this there is no way to answer \"is our AI actually any good?\" — cost is the only AI signal the system otherwise keeps." },
     { key: "aiCaptureContentEnabled", label: "Also store prompts and responses", description: "Additionally keeps the prompt text, the model's answer, and the inputs it was given. This retains real user content (ticket descriptions, timesheet notes, PR diffs), so it's a deliberate privacy decision — but it's required before you can build a test set from real failures or compare one prompt against another. Face-verification prompts are never stored regardless of this setting." },
-    { key: "aiEvalJudgeEnabled", label: "Let evals grade free-text answers with AI", description: "When an eval scores a written answer (a digest, a summary, an explanation), ask a model whether it means the same thing as the expected one. Structured answers are always scored for free by comparing fields directly — this only affects free-text, and it's the one part of an eval that costs extra calls. Judge spend is logged separately and counts against the same monthly budget." }
   ];
 
   return (
@@ -1821,7 +1808,12 @@ function AISettingsCard({ readOnly }: { readOnly: boolean }) {
       {/* Placed above the quality/prompt/dataset cards because it answers the question people
           arrive at this tab asking once AI is on: not "how well is it doing" but "what is it
           allowed to do without me". */}
-      <AIAutonomyCard readOnly={readOnly} aiEnabled={Boolean(settings.data?.aiEnabled)} />
+      <AIAutonomyCard
+        readOnly={readOnly}
+        aiEnabled={Boolean(settings.data?.aiEnabled)}
+        settings={settings.data}
+        onToggleFeature={(key, value) => update.mutate({ [key]: value } as never)}
+      />
 
       <AIQualityCard enabled={Boolean(settings.data?.aiEnabled)} captureOn={Boolean(settings.data?.aiCaptureEnabled)} />
 

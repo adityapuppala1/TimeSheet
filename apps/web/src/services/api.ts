@@ -1228,6 +1228,9 @@ export interface AutonomyEntry {
   ceilingReason: string | null;
   actsOnUntrustedInput: boolean;
   featureEnabled: boolean;
+  /** The GlobalAISettings switch behind this capability, so one row can carry both controls.
+   *  Null for a capability that reaches no model. */
+  featureToggle: string | null;
 }
 
 export interface AutonomyCatalogue {
