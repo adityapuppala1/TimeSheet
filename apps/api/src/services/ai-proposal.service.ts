@@ -110,6 +110,35 @@ export async function createProposal(params: {
 const TICKET_WRITABLE = new Set(["startDate", "endDate", "assigneeId", "estimatedHours", "parentId", "priority", "progressPct", "isMilestone", "sortOrder"]);
 const DATE_FIELDS = new Set(["startDate", "endDate"]);
 
+/**
+ * Fields a proposal may touch on a PROJECT. Deliberately just the two planning dates.
+ *
+ * Everything else on a Project is either identity (`code`, `name`), lifecycle (`status` — the
+ * archive switch), or money (`budgetAmount`, `defaultHourlyRate`, `billingCurrency`). None of
+ * those is a scheduling decision, and a SCHEDULE_ADJUSTMENT proposal that could quietly re-band a
+ * project's budget or archive it would be a very different feature than the one being built.
+ */
+const PROJECT_WRITABLE = new Set(["plannedStartDate", "plannedEndDate"]);
+
+/**
+ * Fields a proposal may touch on a RESOURCE BOOKING — the ASSIGNMENT_REBALANCE surface.
+ *
+ * `userId` IS included, because moving a booking from an overloaded person to someone with room is
+ * the entire point of a rebalance. It is also the most consequential field here, so it is
+ * validated against a live, active account below rather than trusted.
+ *
+ * `isTimeOff` is excluded: flipping a booking between "working" and "on leave" is a statement
+ * about a person's time off, not a scheduling adjustment, and no model should make it.
+ */
+const BOOKING_WRITABLE = new Set(["startDate", "endDate", "hoursPerDay", "note", "userId"]);
+
+/** Dependency kinds a proposal may express. Mirrors the TicketLinkType enum; an unrecognised
+ *  value falls back to FINISH_TO_START rather than failing the row. */
+const LINK_TYPES = new Set(["BLOCKS", "DUPLICATE", "RELATES", "FINISH_TO_START", "START_TO_START", "FINISH_TO_FINISH", "START_TO_FINISH"]);
+
+const PROJECT_DATE_FIELDS = new Set(["plannedStartDate", "plannedEndDate"]);
+const BOOKING_DATE_FIELDS = new Set(["startDate", "endDate"]);
+
 function projectTicketData(after: Record<string, unknown>): Record<string, unknown> {
   const data: Record<string, unknown> = {};
   for (const [key, value] of Object.entries(after)) {
@@ -117,6 +146,42 @@ function projectTicketData(after: Record<string, unknown>): Record<string, unkno
     data[key] = DATE_FIELDS.has(key) && value ? toDay(String(value)) : value;
   }
   return data;
+}
+
+/** Same shape as projectTicketData, for the other two targets. Kept as three small functions
+ *  rather than one parameterised one so each allowlist sits next to the fields it governs. */
+function projectProjectData(after: Record<string, unknown>): Record<string, unknown> {
+  const data: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(after)) {
+    if (!PROJECT_WRITABLE.has(key)) continue;
+    data[key] = PROJECT_DATE_FIELDS.has(key) && value ? toDay(String(value)) : value;
+  }
+  return data;
+}
+
+function projectBookingData(after: Record<string, unknown>): Record<string, unknown> {
+  const data: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(after)) {
+    if (!BOOKING_WRITABLE.has(key)) continue;
+    data[key] = BOOKING_DATE_FIELDS.has(key) && value ? toDay(String(value)) : value;
+  }
+  return data;
+}
+
+/** The one place a booking's own shape is checked, so apply and undo cannot disagree about it. */
+async function assertBookingReferencesExist(data: Record<string, unknown>): Promise<void> {
+  if (data.userId) {
+    const person = await prisma.user.findFirst({
+      where: { id: String(data.userId), deletedAt: null, status: "ACTIVE" },
+      select: { id: true }
+    });
+    if (!person) throw new Error("the suggested person is not an active user");
+  }
+  // A booking that ends before it starts is not a scheduling opinion, it is a broken row, and the
+  // database has no constraint that stops one.
+  if (data.startDate && data.endDate && new Date(String(data.startDate)) > new Date(String(data.endDate))) {
+    throw new Error("that booking would end before it starts");
+  }
 }
 
 /**
@@ -158,6 +223,38 @@ function sameValue(a: unknown, b: unknown): boolean {
     return da.toISOString().slice(0, 10) === db.toISOString().slice(0, 10);
   }
   return String(a) === String(b);
+}
+
+/**
+ * THE staleness check. If any field moved since the proposal was computed, refuse — applying would
+ * silently revert whoever moved it, and they would never know.
+ *
+ * Extracted so all three UPDATE targets share one implementation. When it lived inline in the
+ * ticket branch, adding the project and booking branches meant copying it twice, and the copy that
+ * eventually drifted would be a branch where a machine could quietly overwrite somebody's edit —
+ * which is the one thing this envelope exists to prevent.
+ */
+function assertNotStale(before: unknown, current: Record<string, unknown>): void {
+  for (const [key, expected] of Object.entries((before ?? {}) as Record<string, unknown>)) {
+    if (!sameValue(current[key], expected)) {
+      throw new Error(`"${key}" has changed since this was suggested`);
+    }
+  }
+}
+
+/**
+ * The same check, pointed the other way, for undo.
+ *
+ * Apply asks "does this row still hold what the proposal was computed against?". Undo asks "does
+ * it still hold what WE wrote?" — because if somebody has edited it since, putting it back would
+ * erase their change exactly as invisibly as applying a stale row would have erased it.
+ */
+function assertStillOurs(written: Record<string, unknown>, current: Record<string, unknown>): void {
+  for (const [key, value] of Object.entries(written)) {
+    if (!sameValue(current[key], value)) {
+      throw new Error(`"${key}" has been changed since, so putting it back would undo somebody else's edit`);
+    }
+  }
 }
 
 export interface ApplyResult {
@@ -237,14 +334,7 @@ export async function applyProposal(params: {
         const current = await prisma.ticket.findFirst({ where: { id: change.targetId, deletedAt: null } });
         if (!current) throw new Error("that work item no longer exists");
 
-        // THE staleness check. If any field moved since the proposal was computed, refuse —
-        // applying would silently revert whoever moved it, and they would never know.
-        const before = (change.before ?? {}) as Record<string, unknown>;
-        for (const [key, expected] of Object.entries(before)) {
-          if (!sameValue((current as Record<string, unknown>)[key], expected)) {
-            throw new Error(`"${key}" has changed since this was suggested`);
-          }
-        }
+        assertNotStale(change.before, current as unknown as Record<string, unknown>);
 
         if (after.parentId) {
           const all = await prisma.ticket.findMany({
@@ -297,14 +387,75 @@ export async function applyProposal(params: {
         });
         createdByOrder.set(change.order, created.id);
         await prisma.aiProposalChange.update({ where: { id: change.id }, data: { targetId: created.id } });
+      } else if (change.op === "UPDATE" && change.targetType === "PROJECT" && change.targetId) {
+        // The scope wins over the payload, exactly as it does for a ticket CREATE below: a
+        // proposal scoped to one project must not be able to move a different one.
+        if (proposal.scopeProjectId && proposal.scopeProjectId !== change.targetId) {
+          throw new Error("this change names a different project than the proposal is scoped to");
+        }
+        const current = await prisma.project.findFirst({ where: { id: change.targetId, deletedAt: null } });
+        if (!current) throw new Error("that project no longer exists");
+
+        assertNotStale(change.before, current as unknown as Record<string, unknown>);
+
+        const data = projectProjectData(after);
+        if (Object.keys(data).length === 0) throw new Error("nothing in this change is applicable");
+        if (data.plannedStartDate && data.plannedEndDate && new Date(String(data.plannedStartDate)) > new Date(String(data.plannedEndDate))) {
+          throw new Error("that would end the project before it starts");
+        }
+        await prisma.project.update({ where: { id: current.id }, data });
+      } else if (change.op === "UPDATE" && change.targetType === "BOOKING" && change.targetId) {
+        const current = await prisma.resourceBooking.findUnique({ where: { id: change.targetId } });
+        if (!current) throw new Error("that booking no longer exists");
+
+        assertNotStale(change.before, current as unknown as Record<string, unknown>);
+
+        const data = projectBookingData(after);
+        if (Object.keys(data).length === 0) throw new Error("nothing in this change is applicable");
+        // Merged with the current row so a change that moves only the end date is still checked
+        // against the start date it will actually sit next to.
+        await assertBookingReferencesExist({ ...(current as unknown as Record<string, unknown>), ...data });
+        await prisma.resourceBooking.update({ where: { id: current.id }, data });
+      } else if (change.op === "CREATE" && change.targetType === "BOOKING") {
+        const data = projectBookingData(after);
+        if (!data.userId || !data.startDate || !data.endDate) throw new Error("a booking needs a person and a date range");
+        await assertBookingReferencesExist(data);
+        const created = await prisma.resourceBooking.create({
+          data: {
+            userId: String(data.userId),
+            // The proposal's scope wins over the payload, same rule as a ticket CREATE.
+            projectId: proposal.scopeProjectId ?? (after.projectId ? String(after.projectId) : null),
+            ticketId: after.ticketId ? String(after.ticketId) : null,
+            startDate: data.startDate as Date,
+            endDate: data.endDate as Date,
+            hoursPerDay: typeof data.hoursPerDay === "number" ? data.hoursPerDay : 8,
+            note: data.note ? String(data.note).slice(0, 300) : null,
+            createdById: params.actorId
+          }
+        });
+        createdByOrder.set(change.order, created.id);
+        await prisma.aiProposalChange.update({ where: { id: change.id }, data: { targetId: created.id } });
       } else if (change.op === "LINK") {
         const fromId = typeof after.fromIndex === "number" ? createdByOrder.get(after.fromIndex) : String(after.fromId ?? "");
         const toId = typeof after.toIndex === "number" ? createdByOrder.get(after.toIndex) : String(after.toId ?? "");
         if (!fromId || !toId) throw new Error("one end of this dependency was not created");
+        // The link TYPE and lag are now taken from the change rather than hardcoded, so a schedule
+        // proposal can express "start together" or "finish two days before" and not only
+        // finish-to-start. Unrecognised values fall back rather than throwing: a link with the
+        // wrong kind is a worse outcome than a link with the default kind, but neither is worth
+        // discarding the rest of the proposal over.
+        const type = LINK_TYPES.has(String(after.type)) ? (String(after.type) as never) : ("FINISH_TO_START" as never);
+        const lagDays = Number.isFinite(Number(after.lagDays)) ? Math.trunc(Number(after.lagDays)) : 0;
         await prisma.ticketLink.upsert({
-          where: { sourceTicketId_targetTicketId_type: { sourceTicketId: fromId, targetTicketId: toId, type: "FINISH_TO_START" } },
-          update: {},
-          create: { sourceTicketId: fromId, targetTicketId: toId, type: "FINISH_TO_START", lagDays: 0 }
+          where: { sourceTicketId_targetTicketId_type: { sourceTicketId: fromId, targetTicketId: toId, type } },
+          update: { lagDays },
+          create: { sourceTicketId: fromId, targetTicketId: toId, type, lagDays }
+        });
+        // Written back so undo can find this exact row later — without it, a link created from
+        // index-based ends cannot be identified once the proposal is closed.
+        await prisma.aiProposalChange.update({
+          where: { id: change.id },
+          data: { after: { ...after, fromId, toId, type, lagDays } as Prisma.InputJsonValue }
         });
       } else {
         throw new Error("unsupported change type");
@@ -419,16 +570,32 @@ export async function undoProposal(params: { proposalId: string; actorId: string
         const current = await prisma.ticket.findFirst({ where: { id: change.targetId, deletedAt: null } });
         if (!current) throw new Error("that work item no longer exists");
 
-        // The mirror of apply's check: refuse unless the row still holds what we wrote.
-        for (const [key, written] of Object.entries(projectTicketData(after))) {
-          if (!sameValue((current as Record<string, unknown>)[key], written)) {
-            throw new Error(`"${key}" has been changed since, so putting it back would undo somebody else's edit`);
-          }
-        }
+        assertStillOurs(projectTicketData(after), current as unknown as Record<string, unknown>);
 
         const restore = projectTicketData(before);
         if (Object.keys(restore).length === 0) throw new Error("there is no recorded previous value for this");
         await prisma.ticket.update({ where: { id: current.id }, data: restore });
+      } else if (change.op === "UPDATE" && change.targetType === "PROJECT" && change.targetId) {
+        const current = await prisma.project.findFirst({ where: { id: change.targetId, deletedAt: null } });
+        if (!current) throw new Error("that project no longer exists");
+        assertStillOurs(projectProjectData(after), current as unknown as Record<string, unknown>);
+
+        const restore = projectProjectData(before);
+        if (Object.keys(restore).length === 0) throw new Error("there is no recorded previous value for this");
+        await prisma.project.update({ where: { id: current.id }, data: restore });
+      } else if (change.op === "UPDATE" && change.targetType === "BOOKING" && change.targetId) {
+        const current = await prisma.resourceBooking.findUnique({ where: { id: change.targetId } });
+        if (!current) throw new Error("that booking no longer exists");
+        assertStillOurs(projectBookingData(after), current as unknown as Record<string, unknown>);
+
+        const restore = projectBookingData(before);
+        if (Object.keys(restore).length === 0) throw new Error("there is no recorded previous value for this");
+        await prisma.resourceBooking.update({ where: { id: current.id }, data: restore });
+      } else if (change.op === "CREATE" && change.targetType === "BOOKING" && change.targetId) {
+        // A booking is DELETED, not soft-deleted, because ResourceBooking has no `deletedAt` — a
+        // booking is a scheduling row with nothing hanging off it, and this is how the rest of the
+        // app removes one. A ticket is the opposite case, which is why it is soft-deleted below.
+        await prisma.resourceBooking.deleteMany({ where: { id: change.targetId } });
       } else if (change.op === "CREATE" && change.targetType === "TICKET" && change.targetId) {
         const current = await prisma.ticket.findFirst({ where: { id: change.targetId, deletedAt: null } });
         // Already gone is the outcome undo wanted, so it is a success and not a refusal.

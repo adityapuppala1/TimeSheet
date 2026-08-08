@@ -216,3 +216,78 @@ describe("the audit row", () => {
     );
   });
 });
+
+/**
+ * PROJECT and BOOKING targets. `ChangeTarget` declared both from the start but `applyProposal`
+ * threw "unsupported change type" for either, so the two kinds of proposal that need them —
+ * SCHEDULE_ADJUSTMENT and ASSIGNMENT_REBALANCE — had nowhere to land.
+ *
+ * The undo side is asserted here rather than only the apply side, because a target that can be
+ * applied but not reversed is worse than one that cannot be applied at all: it is the state where
+ * "you can always undo it" stops being true without anybody noticing.
+ */
+describe("the targets beyond TICKET can be put back too", () => {
+  it("restores a project's planned dates", async () => {
+    vi.mocked(client.aiProposal.findUnique).mockResolvedValue(
+      proposal([{
+        id: "c1", op: "UPDATE", targetType: "PROJECT", targetId: "proj-1",
+        before: { plannedEndDate: "2026-09-30" }, after: { plannedEndDate: "2026-10-31" },
+        summary: "Push the end date", appliedAt: new Date(), undoneAt: null, order: 0
+      }]) as never
+    );
+    vi.mocked(client.project.findFirst).mockResolvedValue({ id: "proj-1", plannedEndDate: new Date("2026-10-31") } as never);
+
+    const result = await runInTenant(client, () => undoProposal({ proposalId: "p1", actorId: "u1" }));
+    expect(result.undone).toBe(1);
+    expect(client.project.update).toHaveBeenCalledWith(
+      expect.objectContaining({ where: { id: "proj-1" }, data: expect.objectContaining({ plannedEndDate: expect.any(Date) }) })
+    );
+  });
+
+  it("refuses to restore a project date somebody has moved since", async () => {
+    vi.mocked(client.aiProposal.findUnique).mockResolvedValue(
+      proposal([{
+        id: "c1", op: "UPDATE", targetType: "PROJECT", targetId: "proj-1",
+        before: { plannedEndDate: "2026-09-30" }, after: { plannedEndDate: "2026-10-31" },
+        summary: "Push the end date", appliedAt: new Date(), undoneAt: null, order: 0
+      }]) as never
+    );
+    vi.mocked(client.project.findFirst).mockResolvedValue({ id: "proj-1", plannedEndDate: new Date("2026-12-01") } as never);
+
+    const result = await runInTenant(client, () => undoProposal({ proposalId: "p1", actorId: "u1" }));
+    expect(result.refused[0].reason).toMatch(/changed since/i);
+    expect(client.project.update).not.toHaveBeenCalled();
+  });
+
+  it("moves a booking back to the person it was taken from", async () => {
+    vi.mocked(client.aiProposal.findUnique).mockResolvedValue(
+      proposal([{
+        id: "c1", op: "UPDATE", targetType: "BOOKING", targetId: "b1",
+        before: { userId: "ana" }, after: { userId: "ben" },
+        summary: "Move the booking to Ben", appliedAt: new Date(), undoneAt: null, order: 0
+      }]) as never
+    );
+    vi.mocked(client.resourceBooking.findUnique).mockResolvedValue({ id: "b1", userId: "ben" } as never);
+
+    const result = await runInTenant(client, () => undoProposal({ proposalId: "p1", actorId: "u1" }));
+    expect(result.undone).toBe(1);
+    expect(client.resourceBooking.update).toHaveBeenCalledWith(
+      expect.objectContaining({ where: { id: "b1" }, data: { userId: "ana" } })
+    );
+  });
+
+  it("hard-deletes a booking it created, because a booking has no soft delete", async () => {
+    // Unlike a ticket, which is soft-deleted so its comments and attachments survive. A booking is
+    // a scheduling row with nothing hanging off it, and this is how the rest of the app removes one.
+    vi.mocked(client.aiProposal.findUnique).mockResolvedValue(
+      proposal([{
+        id: "c1", op: "CREATE", targetType: "BOOKING", targetId: "b9",
+        before: null, after: { userId: "ben" }, summary: "Book Ben", appliedAt: new Date(), undoneAt: null, order: 0
+      }]) as never
+    );
+
+    const result = await runInTenant(client, () => undoProposal({ proposalId: "p1", actorId: "u1" }));
+    expect(result.undone).toBe(1);
+    expect(client.resourceBooking.deleteMany).toHaveBeenCalledWith({ where: { id: "b9" } });
+  });
+});

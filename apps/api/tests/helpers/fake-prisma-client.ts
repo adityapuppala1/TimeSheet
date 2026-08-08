@@ -57,7 +57,7 @@ export function createFakeTenantClient(): PrismaClient {
     },
     role: { findUniqueOrThrow: vi.fn() },
     // Billing / attestation (services/billing-rate.service.ts, attestation.service.ts)
-    project: { findUnique: vi.fn(), findFirst: vi.fn(), findMany: vi.fn() },
+    project: { findUnique: vi.fn(), findFirst: vi.fn(), findMany: vi.fn(), update: vi.fn() },
     ticket: { findUnique: vi.fn(), findFirst: vi.fn(), findMany: vi.fn(), count: vi.fn(), update: vi.fn(), groupBy: vi.fn() },
     globalTicketSettings: { upsert: vi.fn(), findUnique: vi.fn() },
     timesheet: { findMany: vi.fn(), findFirst: vi.fn(), groupBy: vi.fn(), update: vi.fn(), count: vi.fn(), aggregate: vi.fn() },
@@ -75,6 +75,7 @@ export function createFakeTenantClient(): PrismaClient {
     aiCapabilityPolicy: { findUnique: vi.fn(), findMany: vi.fn(), upsert: vi.fn() },
     aiProposal: { findUnique: vi.fn(), findMany: vi.fn(), update: vi.fn(), create: vi.fn() },
     aiProposalChange: { update: vi.fn(), findMany: vi.fn() },
-    ticketLink: { deleteMany: vi.fn(), upsert: vi.fn() }
+    ticketLink: { deleteMany: vi.fn(), upsert: vi.fn() },
+    resourceBooking: { findUnique: vi.fn(), create: vi.fn(), update: vi.fn(), deleteMany: vi.fn() }
   } as unknown as PrismaClient;
 }
