@@ -128,10 +128,36 @@ describe("update detection does not depend on somebody writing release notes", (
 
   it("leaves notes empty rather than inventing them for a tag", async () => {
     // A tag carries no notes. The bundled-CHANGELOG fallback fills them where it can; making
-    // something up here would put words in a release's mouth.
+    // something up here would put words in a release's mouth. 9.9.9 exists in no changelog, so
+    // it must stay empty — which is also what makes the merge test below non-vacuous.
     global.fetch = githubWith({ releases: [], tags: [{ name: "v9.9.9" }] });
 
     const status = await freshStatus();
     expect(status.releases.find((r) => r.version === "9.9.9")?.notes ?? "").toBe("");
+  });
+
+  it("fills a tag's notes and name from this build's own changelog", async () => {
+    // The regression this pins: the moment the tags fallback made the GitHub list non-empty, an
+    // early return blocked the changelog fallback entirely, and the What's-new page showed
+    // "No notes were written for this release" for every version — notes that were sitting in
+    // the build's own CHANGELOG.md the whole time. The merge is per version, not all-or-nothing.
+    global.fetch = githubWith({ releases: [], tags: [{ name: "v2.3.0" }] });
+
+    const status = await freshStatus();
+    const release = status.releases.find((r) => r.version === "2.3.0");
+    expect(release?.notes ?? "").not.toBe("");
+    // The changelog heading's human name replaces the bare tag string.
+    expect(release?.name).not.toBe("v2.3.0");
+  });
+
+  it("never overwrites a real Release's own words with the changelog's", async () => {
+    global.fetch = githubWith({
+      releases: [{ tag_name: "v2.3.0", name: "GitHub title", body: "github body", published_at: "2026-08-08", html_url: "u" }],
+      tags: []
+    });
+
+    const status = await freshStatus();
+    expect(status.releases[0].notes).toBe("github body");
+    expect(status.releases[0].name).toBe("GitHub title");
   });
 });

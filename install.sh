@@ -244,7 +244,7 @@ else
   # only derives that from X-Forwarded-For when this is set — so at 0 behind a proxy the login
   # limiter degrades from "20/min per attacker" to "20/min for the entire internet", with no error
   # and no log line. The default offered is 1 because it is correct for this stack as shipped: the
-  # web container's nginx proxies /api to the api container (apps/web/nginx.conf), so a browser
+  # web container's nginx proxies /api to the api container (apps/web/nginx.conf.template), so a browser
   # request already crosses one proxy before it arrives.
   #
   # A COUNT and not a boolean because `trust proxy: true` believes the left-most X-Forwarded-For

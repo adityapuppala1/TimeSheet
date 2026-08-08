@@ -50,7 +50,7 @@ services:
       SMTP_SECURE: ${SMTP_SECURE:-false}
       UPLOAD_DIR: /app/uploads
       # Reverse-proxy hop count. NOT cosmetic: the `web` container's nginx proxies /api to this
-      # service (apps/web/nginx.conf), so EVERY browser request already arrives through one hop.
+      # service (apps/web/nginx.conf.template), so EVERY browser request already arrives through one hop.
       # At 0 the api sees nginx's address as req.ip for every caller on earth and each per-IP rate
       # limit — the 20/min login limiter above all — collapses into one shared global bucket.
       # 1 for this stack as shipped; 2 with docker-compose.https.yml (Caddy in front of nginx);

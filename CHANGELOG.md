@@ -5,6 +5,62 @@ and a GitHub Release whose body is copied from the matching section here — the
 documented in CONTRIBUTING.md, and the in-app **What's new** page renders these notes for every
 user of a running installation.
 
+## Unreleased
+
+Everything below ships in the next tag. The parser that feeds the in-app What's-new page ignores
+this section until it gains a version number, on purpose — an installation must never render
+history for a version that does not exist yet.
+
+**One upgrade note that matters: fresh installs on Linux MySQL (Docker Compose and Kubernetes
+alike) were broken from 2.3.0's migrations onward** — 37 table names generated in the
+case-insensitive Windows dialect died on case-sensitive Linux servers mid-migration. Fixed by
+rewriting them to the canonical casing, which is correct on both. Existing installations are
+unaffected; their migration checksums were reconciled in place.
+
+### 🤖 The agentic layer
+
+- **A per-capability autonomy ladder** — Suggest / Apply / Act — set by a super admin in the AI
+  tab, with product-enforced ceilings the UI shows greyed-out with the reason. Timesheet
+  approvals, identity policy, and anything leaving the workspace can never run unattended, and
+  the screen says so — that sentence is the audit answer.
+- **Proposals with real undo**: every AI-suggested change is a row a person accepts or rejects,
+  stale-checked against what it was computed from, and reversible afterwards without clobbering
+  anyone's later edits. Auto-apply is the same envelope with the same undo, never a second path.
+- **Agent runs**: bounded, abortable, fully traced executions — step and cost ceilings that stop
+  a run rather than fail it, a taint clamp that strips write authority the moment outside text is
+  read, and a live trace panel in the AI tab. A model-driven loop chooses tools from a
+  per-capability allowlist; repeated and circling calls are refused by the envelope, and the last
+  step is always reserved for the answer.
+- **Every declared proposal kind now has a producer**: schedule-conflict fixes from the solver's
+  own arithmetic (Timeline), committed-end-date realignment from measured slip (Portfolio), and
+  blueprint instantiation as a reviewable change set (`/app/blueprints`, a new page).
+- **The quality loop is closed**: agent steps are captured replayably, rated from the datasets
+  browser, promoted into golden sets, and scored by the eval runner. A rejected or undone
+  proposal names the exact interaction to correct. Secret-shaped content in CI-log and
+  scanner-finding captures is redacted, structure preserved.
+- **The AI budget is a reservation, not a check** — concurrent calls can no longer jointly
+  overshoot the monthly cap.
+
+### 🎨 UI/UX
+
+- One visual grammar for AI everywhere: an orbiting border glow while a model works on a
+  container, gradient labels on the buttons that invoke it, flowing strands while an answer is
+  produced — all theme-token derived, all still under `prefers-reduced-motion`.
+- Rendered rich text is finally styled (ticket descriptions, comments, and history rendered as
+  bare tags before), code blocks land properly in the editor and every rendered view, settings
+  tabs are re-organized into grids, and the request-log and endpoint tables gained real
+  pagination, search, and sort.
+
+### 🚢 Deployment
+
+- Kubernetes first installs complete in one shot (the migration hook ordering could previously
+  never succeed with bundled MySQL), the web image's API upstream is configurable instead of
+  hardcoded to the Compose service name, and the API image can run its own documented seed
+  commands. The Helm chart, Compose files, and installers were verified end to end on a live
+  cluster.
+- Release history in What's-new now merges tag-only versions with this build's own changelog
+  notes — versions no longer show "No notes were written" while the notes sit in the bundle.
+
 ## 2.3.0 — your assistant can drive it, and the model is on a short leash — 2026-08-08
 
 Two additions that point in opposite directions and belong in the same release. TimeSphere now

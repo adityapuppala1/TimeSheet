@@ -51,7 +51,7 @@ fi
 # shared bucket for the whole internet. An updater that says nothing here is the reason a
 # deployment can sit misconfigured for a year.
 #
-# EVERY compose deployment is at least one hop: apps/web/nginx.conf proxies /api to the api
+# EVERY compose deployment is at least one hop: apps/web/nginx.conf.template proxies /api to the api
 # container, so browser traffic never reaches the API directly. The extra signals below only
 # sharpen the recommended NUMBER; they are not what triggers the warning.
 TRUST_PROXY_LINE="$(grep -E '^TRUST_PROXY_HOPS=' .env | head -n1 | cut -d= -f2- | tr -d '[:space:]' || true)"

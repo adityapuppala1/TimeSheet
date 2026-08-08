@@ -204,8 +204,32 @@ export async function getUpdateStatus(): Promise<UpdateStatus> {
  * be a lie with a straight face.
  */
 function withBundledFallback(status: UpdateStatus): UpdateStatus {
-  if (status.releases.length > 0) return status;
   const bundled = getBundledReleases(REPO);
   if (bundled.length === 0) return status;
-  return { ...status, releases: bundled, releasesSource: "changelog" };
+
+  // Nothing from GitHub at all — the bundled history IS the history.
+  if (status.releases.length === 0) {
+    return { ...status, releases: bundled, releasesSource: "changelog" };
+  }
+
+  // GitHub answered, but possibly thinly: the tags fallback returns real versions with EMPTY
+  // notes, and a Release somebody published in a hurry can be empty too. This merge is the
+  // promise fetchTagsAsReleases' comment was already making — an earlier revision returned
+  // early on any non-empty list, so the moment tags became visible every release's notes
+  // VANISHED from the What's-new page, replaced by "No notes were written". The notes were in
+  // this build's own CHANGELOG the whole time; per-version fill is what actually keeps them.
+  const byVersion = new Map(bundled.map((release) => [release.version, release]));
+  const releases = status.releases.map((release) => {
+    const local = byVersion.get(release.version);
+    if (!local) return release;
+    return {
+      ...release,
+      notes: release.notes.trim() ? release.notes : local.notes,
+      // A bare tag has no human name; the changelog's heading does. A real GitHub Release
+      // title (anything beyond the tag string itself) always wins.
+      name: release.name && release.name !== `v${release.version}` && release.name !== release.version ? release.name : local.name,
+      publishedAt: release.publishedAt ?? local.publishedAt
+    };
+  });
+  return { ...status, releases };
 }

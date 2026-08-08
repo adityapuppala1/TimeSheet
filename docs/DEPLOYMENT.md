@@ -536,7 +536,7 @@ single attacker exhausts the login budget for everybody, and one noisy tenant th
 Nothing errors, nothing is logged, and every health check still passes.
 
 **The Compose stack is already proxied, even without the HTTPS overlay.** The browser talks to the
-`web` container, whose nginx (`apps/web/nginx.conf`) proxies `/api/` to the `api` container and
+`web` container, whose nginx (`apps/web/nginx.conf.template`) proxies `/api/` to the `api` container and
 appends `X-Forwarded-For`. So a default install that never touched this setting is misattributing
 every browser request.
 

@@ -42,7 +42,7 @@ if ((git status --porcelain | Measure-Object).Count -gt 0) {
 # TRUST_PROXY_HOPS has a default (0), so an .env written before it existed is not "broken" - it
 # just quietly attributes every request to the proxy, which passes every check this script runs
 # (health, migrations, login) while the login rate limiter is one shared bucket for the whole
-# internet. EVERY compose deployment is at least one hop: apps/web/nginx.conf proxies /api to the
+# internet. EVERY compose deployment is at least one hop: apps/web/nginx.conf.template proxies /api to the
 # api container. The HTTPS_DOMAIN/CADDYFILE signal only sharpens the recommended NUMBER.
 $trustProxyMatch = [regex]::Match((Get-Content ".env" -Raw), "(?m)^TRUST_PROXY_HOPS=(.*)$")
 $trustProxyValue = if ($trustProxyMatch.Success) { $trustProxyMatch.Groups[1].Value.Trim() } else { "" }

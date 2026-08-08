@@ -120,7 +120,7 @@ avatar/attachment uploads still write successfully as the non-root user.
 `apps/web`'s Dockerfile was left as-is — it's nginx-based (`nginx:1.27-alpine`), and the official
 image already drops its worker processes to an unprivileged `nginx` user by default (only the
 master process binds port 80 as root, which is standard/expected). Forcing full non-root there
-would mean rebinding to a port ≥1024 and adjusting `nginx.conf`, for marginal benefit over what
+would mean rebinding to a port ≥1024 and adjusting `nginx.conf.template`, for marginal benefit over what
 the base image already does.
 
 ### 6. Configure real outbound email
