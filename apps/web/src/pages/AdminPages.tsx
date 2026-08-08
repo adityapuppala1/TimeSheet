@@ -58,6 +58,7 @@ import {
 import { ProjectBudgetPanel } from "../components/ProjectBudgetPanel";
 import { Avatar, AvatarFallback, AvatarImage } from "../components/ui/avatar";
 import { Badge } from "../components/ui/badge";
+import { AiStrands } from "../components/ui/ai-strands";
 import { Button } from "../components/ui/button";
 import { CsvBulkUploadDialog } from "../components/CsvBulkUploadDialog";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../components/ui/card";
@@ -3131,6 +3132,7 @@ function StatusReportCard() {
             {generate.isPending ? "Generating..." : "Generate update"}
           </Button>
         </div>
+        {generate.isPending && <AiStrands label="Reading the period's tickets, hours and risks…" />}
         {result && (
           <div className="rounded-md border border-primary/30 bg-primary/5 p-4 text-sm leading-relaxed">
             <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-primary">

@@ -72,6 +72,7 @@ import { PlanTimeline, TimelineLegend, scheduledItemIds, type TimelineZoom } fro
 import { TicketKanban } from "../components/TicketKanban";
 import { Avatar, AvatarFallback, AvatarImage } from "../components/ui/avatar";
 import { Badge, type BadgeProps } from "../components/ui/badge";
+import { AiStrands } from "../components/ui/ai-strands";
 import { Button } from "../components/ui/button";
 import { Card, CardContent } from "../components/ui/card";
 import { Checkbox } from "../components/ui/checkbox";
@@ -811,9 +812,16 @@ function CreateTicketDialog({
               onClick={() => aiAssist.mutate()}
               disabled={!draft.projectId || draft.title.trim().length < 3 || aiAssist.isPending}
             >
-              <Sparkles className="h-3.5 w-3.5" />AI assist
+              <Sparkles className="h-3.5 w-3.5" />
+              {/* Gradient only while pressable — a transparent-fill label fights the disabled
+                  dimming, the same call AiRefine's trigger makes. */}
+              <span className={!draft.projectId || draft.title.trim().length < 3 || aiAssist.isPending ? undefined : "ai-gradient-text"}>
+                AI assist
+              </span>
             </Button>
           </div>
+
+          {aiAssist.isPending && <AiStrands label="Reading the title and description…" />}
 
           {suggestion && (
             <div className="grid gap-2 rounded-md border border-primary/30 bg-primary/5 p-3 text-sm">
@@ -1307,12 +1315,12 @@ function CommentsPanel({
               if (next && !summarize.data && !summarize.isPending) summarize.mutate();
             }}
           >
-            <span className="flex items-center gap-1.5"><Sparkles className="h-3.5 w-3.5" />AI summary</span>
+            <span className="flex items-center gap-1.5"><Sparkles className="h-3.5 w-3.5" /><span className="ai-gradient-text">AI summary</span></span>
             <span>{showSummary ? "Hide" : "Show"}</span>
           </button>
           {showSummary && (
             <div className="border-t border-border p-3 text-sm">
-              {summarize.isPending && <Skeleton className="h-4 w-full" />}
+              {summarize.isPending && <AiStrands label="Reading the thread…" />}
               {summarize.data && <p>{summarize.data.summary}</p>}
               {summarize.isError && (
                 <p className="text-xs text-destructive">{serverMessage(summarize.error, "Could not generate a summary.")}</p>

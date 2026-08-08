@@ -53,7 +53,7 @@ import { Button } from "./ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "./ui/dialog";
 import { Input } from "./ui/input";
 import { ScrollArea } from "./ui/scroll-area";
-import { Skeleton } from "./ui/skeleton";
+import { AiStrands } from "./ui/ai-strands";
 import { useAuthStore } from "../store/auth";
 import { usePlanningFeatures } from "../lib/use-planning";
 import { aiApi, authApi, type PlanningEffective } from "../services/api";
@@ -192,7 +192,7 @@ export function CommandPalette({ open, onOpenChange }: Props) {
               }}
             >
               <Sparkles className="text-muted-foreground" />
-              <span>Ask AI</span>
+              <span className="ai-gradient-text">Ask AI</span>
             </CommandItem>
           )}
           <CommandItem value="toggle theme dark light" onSelect={toggleTheme}>
@@ -267,7 +267,7 @@ function AskAIDialog({ open, onOpenChange }: { open: boolean; onOpenChange: (ope
                 <p className="whitespace-pre-wrap text-sm text-muted-foreground">{turn.answer}</p>
               </div>
             ))}
-            {ask.isPending && <Skeleton className="h-4 w-full" />}
+            {ask.isPending && <AiStrands label="Searching your tickets…" />}
           </div>
         </ScrollArea>
         <div className="flex gap-2">
