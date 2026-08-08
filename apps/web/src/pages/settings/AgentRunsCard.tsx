@@ -234,6 +234,8 @@ export function AgentRunsCard() {
           />
         )}
 
+        <RunOutcomeStats rows={rows} />
+
         {/* --------------------------------- The runs --------------------------------- */}
         {runs.isLoading ? (
           <Skeleton className="h-32 w-full" />
@@ -297,6 +299,70 @@ export function AgentRunsCard() {
 
       <RunTraceDialog runId={openRunId} onClose={() => setOpenRunId(null)} />
     </Card>
+  );
+}
+
+/**
+ * The loop's health at a glance, from the runs already fetched.
+ *
+ * "Answered" is the headline on purpose: the first live pilot runs proved a run can burn its whole
+ * budget and end silent, and every bound added since exists to push this number up. The others are
+ * outcomes, not failures — held-for-review is the autonomy ceiling working, stopped-at-a-limit is
+ * a bound working. Only "failed" is red. Computed client-side over the visible window and labelled
+ * as such, because a number that quietly means "the last 25" while looking like "all time" is how
+ * a dashboard loses trust.
+ */
+function RunOutcomeStats({ rows }: { rows: AgentRunRow[] }) {
+  const done = rows.filter((r) => !IN_FLIGHT.has(r.status));
+  if (done.length < 2) return null;
+
+  const count = (statuses: string[]) => done.filter((r) => statuses.includes(r.status)).length;
+  const answered = count(["COMPLETED"]);
+  const totalCost = done.reduce((sum, r) => sum + (Number(r.costUsd) || 0), 0);
+  const avgSteps = done.reduce((sum, r) => sum + r.stepCount, 0) / done.length;
+
+  const tiles: Array<{ label: string; value: string; tone?: string; hint: string }> = [
+    {
+      label: "Answered",
+      value: `${answered} of ${done.length}`,
+      tone: answered === done.length ? "text-success" : undefined,
+      hint: "Runs that finished with a summary. A run that spends its budget and ends silent wasted every step it took."
+    },
+    {
+      label: "Held for review",
+      value: String(count(["BLOCKED"])),
+      hint: "Produced something its autonomy level may not apply — the ceiling working, not a failure."
+    },
+    {
+      label: "Stopped at a limit",
+      value: String(count(["PARTIAL", "ABORTED"])),
+      hint: "A step/cost bound or a person ended it early. The work already recorded is real."
+    },
+    {
+      label: "Failed",
+      value: String(count(["FAILED"])),
+      tone: count(["FAILED"]) > 0 ? "text-destructive" : undefined,
+      hint: "Died on an error or an unparseable decision — the only column that is actually bad news."
+    }
+  ];
+
+  return (
+    <div className="grid gap-2">
+      <div className="grid grid-cols-2 gap-2 lg:grid-cols-4">
+        {tiles.map((tile) => (
+          <div key={tile.label} className="rounded-lg border border-border bg-muted/30 p-3 text-center" title={tile.hint}>
+            <p className={cn("text-lg font-bold tabular-nums", tile.tone)}>{tile.value}</p>
+            <p className="text-xs text-muted-foreground">{tile.label}</p>
+          </div>
+        ))}
+      </div>
+      <p className="text-[11px] text-muted-foreground">
+        Last {done.length} finished run{done.length === 1 ? "" : "s"} shown here · {avgSteps.toFixed(1)} steps and{" "}
+        {money(totalCost / done.length)} per run on average. Each step is captured — promote the interesting ones into a golden
+        dataset (AI tab → Datasets, feature <code className="rounded bg-muted px-1">agent_step</code>) and the eval runner can
+        replay them against any change.
+      </p>
+    </div>
   );
 }
 

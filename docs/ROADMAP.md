@@ -2499,6 +2499,24 @@ trace shows two refusals and real work done (25 tickets found, one fetched).
   found real data, and finished COMPLETED at step 8 of 12 with a genuine stakeholder summary —
   the first of the three pilot runs to end with an answer. What remains for the eval harness is
   tuning, not correctness.
+- [x] **And the harness itself now measures the loop (2026-08-09).** Each agent step is captured
+  as its own feature, `agent_step`, with its COMPLETE decision input — capability, goal, tools,
+  transcript, stepsRemaining, mustFinish — so a step is promotable into a golden dataset and the
+  eval runner can replay it ("given this state, the right decision was X", scored EXACT_FIELDS).
+  Deliberately its own feature rather than the capability's: dataset replay dispatches per
+  feature, so an agent step filed under `status_report` would collide with the one-shot report's
+  replayer; and the loop is honestly its own cost centre in "where the tokens go". The replayer
+  re-resolves the feature toggle (replay respects the workspace's switches) but replays the TOOLS
+  as captured — the decision being judged was made against the list the model actually saw.
+  `agent_step` is NOT in the prompt-template allowlist, by that allowlist's own two rules: its
+  output must parse (an unparseable decision fails the run) and its transcript delimiters are a
+  prompt-injection control an admin must not be able to edit away. Tuning happens through
+  code-shipped prompt changes measured by eval runs, not through admin edits. Captured content
+  passes the same secret redaction the triage features and step traces do. Verified end to end
+  live: run 4 finished COMPLETED at 6 steps (the pilots' arc: 12 silent → 8 → 6), its steps
+  landed as replayable candidates — including the mustFinish step, the exact material the "did it
+  answer well when demanded" question needs. AgentRunsCard shows the outcome numbers ("Answered
+  N of M" as the headline) with a pointer into the dataset flow.
 ## Dependency advisories: one open, and why the suggested fix is worse (2026-08-08)
 
 Pushing 2.3.0 tripped a Dependabot alert on the default branch. Recording the analysis here rather

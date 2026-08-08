@@ -27,7 +27,10 @@ const STRUCTURED_FEATURES = new Set([
   "security_finding_triage",
   "duplicate_detection",
   "pr_review_summary",
-  "pr_inline_review"
+  "pr_inline_review",
+  // An agent step's answer is a JSON decision — "call this tool" or "finish" — so field-by-field
+  // comparison is the honest default: the eval question is "did it pick the right action".
+  "agent_step"
 ]);
 
 export function defaultExpectedKind(feature: string): ExpectedKind {

@@ -454,7 +454,15 @@ const CONTENT_CAPTURE_DENYLIST = new Set(["face_review_summary", "face_policy_co
  * output and params blob passes through `redactSecrets` first. The structure survives (an eval can
  * still replay "classify this finding"), the credential does not.
  */
-const REDACTED_CAPTURE_FEATURES = new Set(["ci_failure_triage", "security_finding_triage"]);
+const REDACTED_CAPTURE_FEATURES = new Set([
+  "ci_failure_triage",
+  "security_finding_triage",
+  // An agent step's transcript embeds tool results wholesale — ticket text born from inbound
+  // email, and whatever else a tool returned. The step traces already pass through redactSecrets
+  // (agent-run.service.ts#recordStep); the captured interaction must not become the one store
+  // that keeps what the trace masked.
+  "agent_step"
+]);
 
 /**
  * Masks common credential shapes in text. Ordered longest-context first (a PEM block would
@@ -2816,13 +2824,31 @@ export async function planAgentStep(input: {
   const decision = parseJsonResponse(chat.text, AgentDecisionSchema);
 
   await logAIUsage({
-    feature: input.capability,
+    // Logged as its own feature rather than under the capability, for two reasons that both bit
+    // during design: dataset items are replayed by a per-feature registry, so an agent-step
+    // interaction filed under "status_report" would collide with generateStatusReport's replayer
+    // and fail its schema; and the loop is honestly its own cost centre — "where the tokens go"
+    // should show the stepping separately from the capability's one-shot path. Which capability
+    // was stepping is in the params.
+    feature: "agent_step",
     model: settings.model,
     inputTokens: chat.usage.inputTokens,
     outputTokens: chat.usage.outputTokens,
     prompt,
     output: chat.text,
-    params: { goal: input.goal, step: input.transcript.length + 1 },
+    // The COMPLETE decision input, captured verbatim — this is what makes an agent step
+    // promotable to a golden dataset and replayable by the eval runner: "given this goal, these
+    // tools and this transcript, the right decision was X". A transcript too large for the params
+    // cap is dropped whole and flagged un-replayable, per sizedParams' own rule — an honestly
+    // un-replayable item beats a silently truncated one.
+    params: {
+      capability: input.capability,
+      goal: input.goal,
+      tools: input.tools,
+      transcript: input.transcript,
+      stepsRemaining: input.stepsRemaining,
+      mustFinish: Boolean(input.mustFinish)
+    },
     parseOk: decision !== null,
     userId: input.userId
   });

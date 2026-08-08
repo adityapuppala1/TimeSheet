@@ -39,11 +39,13 @@ import {
   getGlobalAISettings,
   improveText,
   judgeAnswerEquivalence,
+  planAgentStep,
   refineText,
   summarizeComments,
   summarizePullRequest,
   suggestStaleTicketNextAction
 } from "./ai.service.js";
+import { findCapability } from "./ai-capability.registry.js";
 
 /** A run this size already costs real money; past it you're paying to re-learn what you know. */
 export const MAX_ITEMS_PER_RUN = 100;
@@ -243,11 +245,46 @@ const REPLAYERS: Record<string, Replayer> = {
       hasLinkedBranch: z.boolean()
     }),
     invoke: async (p) => (await suggestStaleTicketNextAction(p)) ?? ""
+  },
+  /**
+   * One agent-loop decision: given this goal, these tools and this transcript, what did the model
+   * choose? This is how the loop's quality becomes measurable rather than anecdotal — the three
+   * live pilot runs each taught something the unit tests could not, and promoting their captured
+   * steps into a golden set turns those lessons into a number a prompt change has to beat.
+   *
+   * The TOOLS are replayed as captured, not rebuilt from today's registry: the decision being
+   * judged was made against the tool list the model actually saw. Only the featureToggle is
+   * re-resolved, because replay still has to respect the workspace's toggles and budget.
+   */
+  agent_step: {
+    structured: true,
+    schema: z.object({
+      capability: z.string(),
+      goal: z.string(),
+      tools: z.array(z.object({ name: z.string(), description: z.string() })),
+      transcript: z.array(z.object({ tool: z.string(), args: z.unknown(), result: z.string() })),
+      stepsRemaining: z.number(),
+      mustFinish: z.boolean().optional()
+    }),
+    invoke: async (p) => {
+      const spec = findCapability(p.capability);
+      if (!spec?.featureToggle) {
+        throw new Error(`"${p.capability}" is not a model-driven capability in this build, so this item cannot be replayed.`);
+      }
+      const { decision } = await planAgentStep({ ...p, featureToggle: spec.featureToggle });
+      return JSON.stringify(decision);
+    }
   }
 };
 
 export function isReplayable(feature: string): boolean {
   return feature in REPLAYERS;
+}
+
+/** Read access to one replayer. The run loop keeps parse and invoke separate for their distinct
+ *  error handling; this lets tests (and any future caller) exercise the same two phases. */
+export function replayerFor(feature: string): Replayer | undefined {
+  return REPLAYERS[feature];
 }
 
 /* ------------------------------- Scoring -------------------------------------------------- */
