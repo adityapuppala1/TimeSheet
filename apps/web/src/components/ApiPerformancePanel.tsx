@@ -43,6 +43,7 @@ import {
 
 import { Badge } from "./ui/badge";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "./ui/card";
+import { Button } from "./ui/button";
 import { Input } from "./ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "./ui/select";
 import { Skeleton } from "./ui/skeleton";
@@ -163,7 +164,10 @@ function StatTile({ icon, label, value, hint, tone }: {
 
 export function ApiPerformancePanel() {
   const [hours, setHours] = useState("24");
-  const [drilldown, setDrilldown] = useState<ApiRequestQuery>({ sort: "slowest", limit: 50 });
+  const [drilldown, setDrilldownRaw] = useState<ApiRequestQuery>({ sort: "slowest", limit: 50, offset: 0 });
+  /** Every filter change resets to the first page. Without this, narrowing a filter while on page
+   *  four shows an empty table and looks like "no results" rather than "you are past the end". */
+  const setDrilldown = (next: ApiRequestQuery) => setDrilldownRaw({ ...next, offset: 0 });
 
   const overview = useQuery({
     queryKey: ["api-performance", hours],
@@ -552,6 +556,64 @@ export function ApiPerformancePanel() {
                   <p className="rounded-lg border border-dashed p-6 text-center text-sm text-muted-foreground">
                     No requests match these filters in this window.
                   </p>
+                )}
+
+                {/*
+                  Position, not just navigation. "50 slowest of 23,783" and "all 50 there are" used
+                  to render identically, so somebody hunting a slow endpoint could not tell whether
+                  they had seen everything — which is the wrong thing to be unsure about.
+                */}
+                {requests.data && requests.data.total > 0 && (
+                  <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-muted-foreground">
+                    <span>
+                      Showing <strong className="text-foreground">{requests.data.offset + 1}</strong>–
+                      <strong className="text-foreground">
+                        {Math.min(requests.data.offset + requests.data.rows.length, requests.data.total)}
+                      </strong>{" "}
+                      of <strong className="text-foreground">{formatCount(requests.data.total)}</strong>
+                      {drilldown.sort === "slowest" ? " — slowest first" : " — most recent first"}
+                    </span>
+                    <span className="flex items-center gap-1.5">
+                      <Select
+                        value={String(drilldown.limit ?? 50)}
+                        onValueChange={(value) => setDrilldownRaw({ ...drilldown, limit: Number(value), offset: 0 })}
+                      >
+                        <SelectTrigger className="h-8 w-[6.5rem]"><SelectValue /></SelectTrigger>
+                        <SelectContent>
+                          {[25, 50, 100, 200].map((n) => (
+                            <SelectItem key={n} value={String(n)}>{n} per page</SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        className="h-8"
+                        disabled={(requests.data.offset ?? 0) <= 0 || requests.isFetching}
+                        onClick={() =>
+                          setDrilldownRaw({
+                            ...drilldown,
+                            offset: Math.max(0, (drilldown.offset ?? 0) - (drilldown.limit ?? 50))
+                          })
+                        }
+                      >
+                        Previous
+                      </Button>
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        className="h-8"
+                        disabled={
+                          requests.data.offset + requests.data.rows.length >= requests.data.total || requests.isFetching
+                        }
+                        onClick={() =>
+                          setDrilldownRaw({ ...drilldown, offset: (drilldown.offset ?? 0) + (drilldown.limit ?? 50) })
+                        }
+                      >
+                        Next
+                      </Button>
+                    </span>
+                  </div>
                 )}
                 {requests.data && requests.data.rows.length > 0 && (
                   <div className="min-w-0 overflow-x-auto rounded-lg border border-border">

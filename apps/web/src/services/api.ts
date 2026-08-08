@@ -1076,6 +1076,8 @@ export interface ApiRequestQuery {
   statusClass?: number;
   sort?: "slowest" | "recent";
   limit?: number;
+  /** Rows to skip. Bounded server-side — this is a drill-down, not a log export. */
+  offset?: number;
 }
 
 export const apiPerformanceApi = {
@@ -1085,7 +1087,7 @@ export const apiPerformanceApi = {
     (await api.get<ApiPerformanceOverview>("/maintenance/api-performance", { params: { hours } })).data,
   /** The drill-down after the aggregates point somewhere. Server-capped at 200 rows. */
   requests: async (query: ApiRequestQuery) =>
-    (await api.get<{ since: string; rows: ApiRequestRow[] }>("/maintenance/api-performance/requests", { params: query })).data
+    (await api.get<{ since: string; total: number; limit: number; offset: number; rows: ApiRequestRow[] }>("/maintenance/api-performance/requests", { params: query })).data
 };
 
 export const statusPageApi = {

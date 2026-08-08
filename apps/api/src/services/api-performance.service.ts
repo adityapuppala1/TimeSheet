@@ -362,6 +362,10 @@ export interface RequestFilter {
   statusClass?: number;
   sort: "slowest" | "recent";
   limit: number;
+  /** Rows to skip. Paging exists because "top 50 of 23,783" with no total is indistinguishable
+   *  from "these are all of them" — which is the wrong thing for somebody to conclude while
+   *  looking for a slow endpoint. */
+  offset?: number;
 }
 
 /**
@@ -385,10 +389,15 @@ export async function listApiRequests(filter: RequestFilter) {
     where.statusCode = { gte: filter.statusClass * 100, lt: (filter.statusClass + 1) * 100 };
   }
 
+  // Counted alongside the page, not derived from it. The count is what turns a page into a
+  // position — without it the last page and a full page look the same.
+  const total = await prisma.apiRequestSample.count({ where });
+
   const rows = await prisma.apiRequestSample.findMany({
     where,
     orderBy: filter.sort === "slowest" ? { apiResponseTime: "desc" } : { createdAt: "desc" },
     take: filter.limit,
+    skip: filter.offset ?? 0,
     select: {
       id: true,
       apiName: true,
@@ -420,6 +429,9 @@ export async function listApiRequests(filter: RequestFilter) {
 
   return {
     since: since.toISOString(),
+    total,
+    limit: filter.limit,
+    offset: filter.offset ?? 0,
     rows: rows.map((row) => ({
       ...row,
       apiRequestAt: row.apiRequestAt.toISOString(),

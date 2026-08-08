@@ -157,9 +157,13 @@ maintenanceRouter.get("/api-performance", requireAuth, requireSuperAdmin, async 
 
 /**
  * GET /maintenance/api-performance/requests — the drill-down, once the aggregates above have
- * pointed somewhere. Returns individual requests, hard-capped at 200: this is the "show me the
- * actual slow calls" step, not a log export, and an uncapped version would be exactly the raw dump
- * the aggregate endpoints exist to avoid.
+ * pointed somewhere. Returns individual requests, hard-capped at 200 PER PAGE: this is the "show
+ * me the actual slow calls" step, not a log export, and an uncapped version would be exactly the
+ * raw dump the aggregate endpoints exist to avoid.
+ *
+ * It also returns the TOTAL matching the filters. Without it, "the 50 slowest" and "all 50 there
+ * are" render identically, and somebody hunting a slow endpoint cannot tell which they are looking
+ * at. The offset is bounded for the same reason the page size is.
  */
 maintenanceRouter.get("/api-performance/requests", requireAuth, requireSuperAdmin, async (req, res) => {
   const statusClass = Number(req.query.statusClass);
@@ -174,7 +178,11 @@ maintenanceRouter.get("/api-performance/requests", requireAuth, requireSuperAdmi
       minMs: Number.isFinite(minMs) && minMs > 0 ? Math.round(minMs) : undefined,
       statusClass: Number.isInteger(statusClass) && statusClass >= 1 && statusClass <= 5 ? statusClass : undefined,
       sort: req.query.sort === "recent" ? "recent" : "slowest",
-      limit: Math.min(200, Math.max(10, Number(req.query.limit) || 50))
+      limit: Math.min(200, Math.max(10, Number(req.query.limit) || 50)),
+      // Bounded like the page size is, and for the same reason: this is a drill-down, not a log
+      // export. Deep enough to walk a day's slow calls, shallow enough that nobody paginates
+      // through a hundred thousand rows one screen at a time.
+      offset: Math.min(10_000, Math.max(0, Number(req.query.offset) || 0))
     })
   );
 });

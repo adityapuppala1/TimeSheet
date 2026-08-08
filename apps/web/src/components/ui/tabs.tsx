@@ -50,6 +50,22 @@ export const TabsContent = React.forwardRef<
   React.ElementRef<typeof TabsPrimitive.Content>,
   React.ComponentPropsWithoutRef<typeof TabsPrimitive.Content>
 >(({ className, ...props }, ref) => (
-  <TabsPrimitive.Content ref={ref} className={cn("focus-ring mt-3", className)} {...props} />
+  <TabsPrimitive.Content
+    ref={ref}
+    /*
+     * `data-[state=inactive]:hidden` is NOT redundant with the `hidden` attribute Radix already
+     * sets. Callers pass a display class (`grid`, `flex`) to lay the panel out, `cn` runs
+     * tailwind-merge, and merge treats `grid` as replacing the UA `display:none` — so every
+     * inactive panel kept its grid box and went on occupying space. On the API performance panel
+     * that showed as a large blank gap between the tabs and the table: three hidden panels still
+     * taking rows.
+     *
+     * Written as a data-state variant rather than plain `hidden` on purpose: the variant compiles
+     * to an attribute selector, which outranks a bare utility class, so a caller's display class
+     * can never silently win again.
+     */
+    className={cn("focus-ring mt-3 data-[state=inactive]:hidden", className)}
+    {...props}
+  />
 ));
 TabsContent.displayName = TabsPrimitive.Content.displayName;
