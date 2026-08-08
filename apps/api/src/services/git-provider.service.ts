@@ -24,6 +24,7 @@ import { env } from "../config/env.js";
 import { prisma } from "../config/prisma.js";
 import { AppError } from "../middleware/error.js";
 import { decryptSecret } from "../utils/encryption.js";
+import { escapeHtmlText } from "../utils/sanitize.js";
 import { JWT_ALGORITHM } from "../utils/security.js";
 import { isReplayedDelivery } from "./webhook-replay.js";
 
@@ -238,6 +239,29 @@ export async function fetchGitHubPullRequestFiles(
     `/repos/${fullName}/pulls/${prNumber}/files?per_page=100`
   );
   return files.map((f) => ({ path: f.filename, patch: f.patch }));
+}
+
+/**
+ * Builds the stored ticket comment for ai.service.ts#summarizePullRequest's answer.
+ *
+ * The two prose fields are RAW MODEL OUTPUT, produced from a prompt whose inputs are a PR title,
+ * description and diff — text written by whoever opened the pull request. Interpolating them into
+ * an HTML string, which is what the webhook handler used to do inline, meant anyone able to open a
+ * PR against a connected repo could ask the model to include markup and have it persisted as a
+ * comment. The web client re-sanitizes with DOMPurify on render, so this was not a live XSS, but
+ * that is one layer standing alone in front of stored third-party markup, and every sibling AI
+ * comment (security-report.service.ts's CI-failure and finding triage) already escapes.
+ *
+ * Lives here rather than in the webhook handler so it is a pure function with a test, and next to
+ * the fetch/post pair that is the rest of this feature's plumbing.
+ */
+export function renderPrReviewSummaryComment(result: { summary: string; riskLevel: "LOW" | "MEDIUM" | "HIGH"; reviewFocus: string }): string {
+  const riskBadge = result.riskLevel === "HIGH" ? "🔴 HIGH" : result.riskLevel === "MEDIUM" ? "🟡 MEDIUM" : "🟢 LOW";
+  return [
+    `<p><strong>AI PR-review summary</strong> (${riskBadge} risk):</p>`,
+    `<p>${escapeHtmlText(result.summary)}</p>`,
+    `<p><em>Review focus: ${escapeHtmlText(result.reviewFocus)}</em></p>`
+  ].join("");
 }
 
 /**

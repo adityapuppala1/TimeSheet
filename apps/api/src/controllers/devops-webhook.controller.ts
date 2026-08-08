@@ -96,6 +96,27 @@ const findingsBatchSchema = z.object({
 
 type FindingInput = z.infer<typeof findingSchema>;
 
+/**
+ * How many findings in one ingest request may reach a model.
+ *
+ * A batch is up to 500 findings and the AI triage in it used to run inside the same `Promise.all`
+ * as the row creation, one model call per CRITICAL/HIGH finding. Two problems, both reachable with
+ * nothing but a CI ingestion token:
+ *
+ *  - COST. One HTTP request the per-IP limiter counts once could issue ~500 model calls. The
+ *    monthly budget cap is the only thing standing between that and the whole month's spend.
+ *  - THE BUDGET CAP ITSELF. `ai.service.ts#preflight` reads the month's spend so far and compares
+ *    it to the ceiling; `logAIUsage` writes the row that moves that number. Fired concurrently,
+ *    all 500 read the same total before any of them has written anything, so all 500 pass a cap
+ *    that only one of them should have. The clamp was not skipped, it was raced.
+ *
+ * Sequential-and-capped fixes both: each call's usage row lands before the next one's preflight
+ * reads it, so the cap does what it says, and the fan-out per request is bounded regardless.
+ * Findings past the cap are still ingested and still auto-ticketed — they just do not get an AI
+ * opinion, which is the part that costs money and the part a scanner can trivially produce more of.
+ */
+const MAX_AI_TRIAGED_FINDINGS_PER_BATCH = 20;
+
 /** Shared by both /findings (native JSON) and /findings/sarif (translated below) so the two
  *  ingestion paths can never drift on create-then-maybe-auto-create-ticket behavior. */
 async function ingestFindingsBatch(findings: FindingInput[]): Promise<number> {
@@ -136,15 +157,21 @@ async function ingestFindingsBatch(findings: FindingInput[]): Promise<number> {
           console.warn(`[devops-webhook] auto-reopen check failed for ticket ${ticketId}: ${(error as Error).message}`)
         );
       }
-      // Opt-in AI exploitability triage (GlobalAISettings.findingTriageEnabled) — CRITICAL/HIGH
-      // only, see security-report.service.ts#maybeTriageFindingWithAI. Never throws: a disabled
-      // toggle or AI-budget cap shouldn't fail ingestion, just skip the triage for this finding.
-      await maybeTriageFindingWithAI(finding).catch((error) =>
-        console.warn(`[devops-webhook] AI triage failed for finding ${finding.id}: ${(error as Error).message}`)
-      );
       return finding;
     })
   );
+
+  // Opt-in AI exploitability triage (GlobalAISettings.findingTriageEnabled) — CRITICAL/HIGH only,
+  // see security-report.service.ts#maybeTriageFindingWithAI. Deliberately AFTER the batch and one
+  // at a time rather than inside the Promise.all above; see
+  // MAX_AI_TRIAGED_FINDINGS_PER_BATCH for why concurrency here defeated the budget cap. Never
+  // throws: a disabled toggle or an exhausted budget should skip triage, not fail ingestion.
+  for (const finding of created.slice(0, MAX_AI_TRIAGED_FINDINGS_PER_BATCH)) {
+    await maybeTriageFindingWithAI(finding).catch((error) =>
+      console.warn(`[devops-webhook] AI triage failed for finding ${finding.id}: ${(error as Error).message}`)
+    );
+  }
+
   return created.length;
 }
 

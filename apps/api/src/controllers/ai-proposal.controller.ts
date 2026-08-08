@@ -13,10 +13,11 @@
  *
  * WHO MOUNTS THIS: `app.ts`, after the blanket `resolveTenant`.
  */
-import { Router } from "express";
+import { Router, type Request } from "express";
 import { z } from "zod";
 import { permissions } from "@timesheet/shared";
 import { prisma } from "../config/prisma.js";
+import { aiRateLimit } from "../middleware/ai-rate-limit.js";
 import { requireAuth, requirePermission } from "../middleware/auth.js";
 import { AppError } from "../middleware/error.js";
 import { validate } from "../middleware/validate.js";
@@ -31,6 +32,9 @@ import { assertTicketVisible, ticketProjectScope } from "../services/ticket.serv
 
 export const aiProposalRouter = Router();
 aiProposalRouter.use(requireAuth);
+// Reaching a model costs money and takes seconds; `POST /plan-breakdown` had only the global
+// 900/min limiter until now. Same per-user bucket /api/ai uses — see middleware/ai-rate-limit.ts.
+aiProposalRouter.use(aiRateLimit);
 
 /** The copilot family is tier-gated as a whole; spend is still bounded by the existing monthly
  *  AI budget, so this only decides whether the features are offered at all. */
@@ -39,6 +43,33 @@ async function assertCopilotAllowed() {
   if (!entitlements.aiPmCopilotEnabled) {
     throw new AppError(403, "The AI planning copilot is an Enterprise feature.");
   }
+}
+
+/**
+ * Loads a proposal and refuses one whose plan the caller cannot see.
+ *
+ * `plan:write` is a permission, not a boundary — exactly the argument `GET /` below already makes
+ * about `tickets:view`, and it applies with more force here because these routes are the human
+ * step in "the AI proposes, a person applies". Without this, the review that makes an AI-authored
+ * change set safe could be performed by someone who cannot open the project the tickets land in,
+ * on a proposal they were never shown, given only its id.
+ *
+ * A proposal with no `scopeProjectId` is workspace-wide rather than unowned, so it is matched on
+ * authorship instead — the same rule the list route uses, so what you can apply is exactly what
+ * you could see.
+ */
+async function loadReviewableProposal(req: Request, id: string) {
+  const proposal = await prisma.aiProposal.findUnique({ where: { id }, select: { id: true, scopeProjectId: true, requestedById: true } });
+  if (!proposal) throw new AppError(404, "Proposal not found");
+
+  if (proposal.scopeProjectId) {
+    await assertTicketVisible(req, proposal.scopeProjectId);
+    return proposal;
+  }
+
+  const scope = await ticketProjectScope(req);
+  if (!scope.unrestricted && proposal.requestedById !== req.user!.id) throw new AppError(403, "Forbidden");
+  return proposal;
 }
 
 /* ---------- Risk ---------- */
@@ -273,11 +304,23 @@ aiProposalRouter.patch(
   ),
   async (req, res) => {
     await assertPlanningEnabled();
+    const proposal = await loadReviewableProposal(req, String(req.params.id));
+
+    // The row ids come from the request body, and this route used to update whatever they named:
+    // the `:id` in the URL was decorative, so a decision map could pre-accept rows belonging to a
+    // DIFFERENT proposal — including one scoped to a project the caller cannot see. Restricting
+    // the update to rows of the proposal that was actually authorized makes the URL load-bearing.
     const entries = Object.entries(req.body.decisions as Record<string, boolean>);
-    await prisma.$transaction(
-      entries.map(([id, accepted]) => prisma.aiProposalChange.update({ where: { id }, data: { accepted } }))
+    const owned = new Set(
+      (await prisma.aiProposalChange.findMany({ where: { proposalId: proposal.id, id: { in: entries.map(([id]) => id) } }, select: { id: true } })).map(
+        (c) => c.id
+      )
     );
-    res.json({ updated: entries.length });
+    const applicable = entries.filter(([id]) => owned.has(id));
+    await prisma.$transaction(
+      applicable.map(([id, accepted]) => prisma.aiProposalChange.update({ where: { id }, data: { accepted } }))
+    );
+    res.json({ updated: applicable.length });
   }
 );
 
@@ -292,8 +335,9 @@ aiProposalRouter.post(
   ),
   async (req, res) => {
     await assertPlanningEnabled();
+    const proposal = await loadReviewableProposal(req, String(req.params.id));
     const result = await applyProposal({
-      proposalId: String(req.params.id),
+      proposalId: proposal.id,
       decisions: (req.body.decisions as Record<string, boolean>) ?? {},
       actorId: req.user!.id
     });
@@ -307,8 +351,9 @@ aiProposalRouter.post(
   validate(z.object({ params: z.object({ id: z.string().uuid() }) })),
   async (req, res) => {
     await assertPlanningEnabled();
+    const proposal = await loadReviewableProposal(req, String(req.params.id));
     const updated = await prisma.aiProposal.update({
-      where: { id: String(req.params.id) },
+      where: { id: proposal.id },
       data: { status: "REJECTED", reviewedById: req.user!.id, reviewedAt: new Date() }
     });
     await audit(req.user!.id, "ai_proposal.rejected", "AiProposal", updated.id);

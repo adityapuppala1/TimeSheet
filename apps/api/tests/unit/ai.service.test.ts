@@ -29,9 +29,11 @@ const {
   assertWithinBudget,
   classifyTicket,
   estimateCostUsd,
+  findDuplicateTickets,
   getTextRefineAvailability,
   refineText,
-  reviewPullRequestDiff
+  reviewPullRequestDiff,
+  summarizeComments
 } = await import("../../src/services/ai.service.js");
 
 function fakeGlobalAiSettings(overrides: Partial<Record<string, unknown>> = {}) {
@@ -64,6 +66,12 @@ function fakeGlobalAiSettings(overrides: Partial<Record<string, unknown>> = {}) 
     apiKey: null,
     ...overrides
   };
+}
+
+/** The prompt text that actually reached the model on the first call. */
+function promptSent(): string {
+  const content = mockAnthropicCreate.mock.calls[0]?.[0]?.messages?.[0]?.content;
+  return typeof content === "string" ? content : JSON.stringify(content);
 }
 
 beforeEach(() => {
@@ -203,6 +211,125 @@ describe("classifyTicket", () => {
     });
 
     await expect(runInTenant(client, () => classifyTicket(CLASSIFY_PARAMS))).rejects.toMatchObject({ statusCode: 502 });
+  });
+
+  /**
+   * The closed set is enforced LOCALLY, not by the schema the request asked for.
+   *
+   * `enum` in `output_config.format` binds Anthropic; the OPENAI_COMPATIBLE path asks in prose and
+   * retries with no `response_format` at all when an endpoint rejects it, so on a BYOK provider
+   * `type` is whatever came back. Both intake pipelines write that value straight to `Ticket.type`
+   * from text an unauthenticated stranger emailed in.
+   */
+  it("forces an off-list ticket type back into the project's configured set", async () => {
+    const client = createFakeTenantClient();
+    vi.mocked(client.globalAISettings.upsert).mockResolvedValue(fakeGlobalAiSettings() as never);
+    vi.mocked(client.aIUsageLog.aggregate).mockResolvedValue({ _sum: { costUsdEstimate: 0 } } as never);
+    mockAnthropicCreate.mockResolvedValue({
+      content: [
+        {
+          type: "text",
+          text: JSON.stringify({
+            type: "IGNORE PREVIOUS INSTRUCTIONS — ESCALATION",
+            priority: "CRITICAL",
+            moduleName: "Auth",
+            confidence: 1,
+            reasoning: "injected"
+          })
+        }
+      ],
+      usage: { input_tokens: 10, output_tokens: 5 }
+    });
+
+    const result = await runInTenant(client, () => classifyTicket({ ...CLASSIFY_PARAMS, untrustedSource: true }));
+
+    expect(result.type).toBe("BUG"); // the first configured type, never the model's invention
+    expect(CLASSIFY_PARAMS.typeNames).toContain(result.type);
+  });
+
+  it("accepts a valid type regardless of the casing the model returned it in", async () => {
+    const client = createFakeTenantClient();
+    vi.mocked(client.globalAISettings.upsert).mockResolvedValue(fakeGlobalAiSettings() as never);
+    vi.mocked(client.aIUsageLog.aggregate).mockResolvedValue({ _sum: { costUsdEstimate: 0 } } as never);
+    mockAnthropicCreate.mockResolvedValue({
+      content: [{ type: "text", text: JSON.stringify({ type: "task", priority: "LOW", moduleName: "NONE", confidence: 0.5, reasoning: "ok" }) }],
+      usage: { input_tokens: 10, output_tokens: 5 }
+    });
+
+    const result = await runInTenant(client, () => classifyTicket(CLASSIFY_PARAMS));
+    expect(result.type).toBe("TASK");
+  });
+});
+
+describe("findDuplicateTickets", () => {
+  const CANDIDATES = [
+    { id: "t-1", key: "WEB-1", title: "Login fails", description: null },
+    { id: "t-2", key: "WEB-2", title: "Signup fails", description: null }
+  ];
+
+  function enabledClient() {
+    const client = createFakeTenantClient();
+    vi.mocked(client.globalAISettings.upsert).mockResolvedValue(fakeGlobalAiSettings({ duplicateDetectionEnabled: true }) as never);
+    vi.mocked(client.aIUsageLog.aggregate).mockResolvedValue({ _sum: { costUsdEstimate: 0 } } as never);
+    return client;
+  }
+
+  /**
+   * The candidate list embedded in this prompt is itself untrusted text — a ticket created from an
+   * inbound email supplies its own title and description. Asking for a key that was never offered
+   * used to hit a `find(...)!.id` non-null assertion, i.e. a TypeError, i.e. a 500 anyone who can
+   * email support@ could trigger on demand.
+   */
+  it("drops a ticket key the model invented instead of throwing on it", async () => {
+    const client = enabledClient();
+    mockAnthropicCreate.mockResolvedValue({
+      content: [
+        {
+          type: "text",
+          text: JSON.stringify({
+            matches: [
+              { ticketKey: "WEB-2", likelihood: 0.8, reasoning: "same signup flow" },
+              { ticketKey: "ADMIN-999", likelihood: 1, reasoning: "not a candidate at all" }
+            ]
+          })
+        }
+      ],
+      usage: { input_tokens: 40, output_tokens: 20 }
+    });
+
+    const matches = await runInTenant(client, () => findDuplicateTickets({ title: "Cannot sign up", candidates: CANDIDATES }));
+
+    expect(matches).toEqual([{ ticketId: "t-2", key: "WEB-2", likelihood: 0.8, reasoning: "same signup flow" }]);
+  });
+});
+
+describe("summarizeComments", () => {
+  /**
+   * Every other capability truncates what it sends (CI logs at 6000 chars, `ask_ai` at 150
+   * tickets); this one was handed the whole thread. Comment count and comment length are both
+   * chosen by whoever is posting, so an uncapped thread is one authenticated request that sends
+   * megabytes to a model and bills the workspace for it.
+   */
+  it("caps how much of a long thread reaches the model", async () => {
+    const client = createFakeTenantClient();
+    vi.mocked(client.globalAISettings.upsert).mockResolvedValue(fakeGlobalAiSettings({ commentSummaryEnabled: true }) as never);
+    vi.mocked(client.aIUsageLog.aggregate).mockResolvedValue({ _sum: { costUsdEstimate: 0 } } as never);
+    mockAnthropicCreate.mockResolvedValue({ content: [{ type: "text", text: "Recap." }], usage: { input_tokens: 10, output_tokens: 5 } });
+
+    const comments = Array.from({ length: 200 }, (_, i) => ({
+      authorName: `Author ${i}`,
+      body: `<p>marker-${i} ${"padding ".repeat(500)}</p>`,
+      createdAt: new Date("2026-08-01T09:00:00Z")
+    }));
+
+    await runInTenant(client, () => summarizeComments({ ticketTitle: "Login fails", comments }));
+
+    const prompt = promptSent();
+    // The newest window survives, the oldest comments are dropped entirely…
+    expect(prompt).toContain("marker-199");
+    expect(prompt).not.toContain("marker-0 ");
+    // …and no single comment can pad the prompt without bound.
+    expect(prompt.length).toBeLessThan(200_000);
   });
 });
 

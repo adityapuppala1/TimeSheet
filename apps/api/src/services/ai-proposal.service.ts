@@ -118,6 +118,33 @@ function projectTicketData(after: Record<string, unknown>): Record<string, unkno
   return data;
 }
 
+/**
+ * Every id inside `after` is checked against the database before it is written.
+ *
+ * The allowlist above decides which FIELDS may move; this decides whether the VALUES name real
+ * rows. `after` is a JSON blob authored by whatever produced the proposal — today only
+ * `proposePlanBreakdown`, whose output is model text, and an assignment-rebalance kind is already
+ * declared in `ProposalKind`. An id that came out of a model is a suggestion, never an
+ * authorization decision: a rebalance that names an id is asking for a person, and "does that
+ * person exist, are they still active" has to be answered here rather than assumed, or the first
+ * feature to emit one silently assigns work to a deactivated account or a foreign uuid.
+ *
+ * Tenant isolation is NOT what this provides — the `prisma` proxy already scopes every read to the
+ * caller's own database, so a foreign id simply finds nothing. This is about a live row.
+ */
+async function assertReferencedRowsExist(data: Record<string, unknown>, projectId: string): Promise<void> {
+  if (data.assigneeId) {
+    const assignee = await prisma.user.findFirst({ where: { id: String(data.assigneeId), deletedAt: null, status: "ACTIVE" }, select: { id: true } });
+    if (!assignee) throw new Error("the suggested assignee is not an active user");
+  }
+  if (data.parentId) {
+    // Same project, deliberately: a parent in another project would reparent work across a
+    // boundary the plan views (and `assertNoParentCycle`, which only walks one project) assume.
+    const parent = await prisma.ticket.findFirst({ where: { id: String(data.parentId), projectId, deletedAt: null }, select: { id: true } });
+    if (!parent) throw new Error("the suggested parent is not a work item in this project");
+  }
+}
+
 /** Normalises for comparison so a Date and its ISO string, or 5 and "5", are not treated as a
  *  conflict. Over-strict staleness detection would block legitimate applications constantly. */
 function sameValue(a: unknown, b: unknown): boolean {
@@ -209,12 +236,19 @@ export async function applyProposal(params: {
 
         const data = projectTicketData(after);
         if (Object.keys(data).length === 0) throw new Error("nothing in this change is applicable");
+        await assertReferencedRowsExist(data, current.projectId);
         await prisma.ticket.update({ where: { id: current.id }, data });
       } else if (change.op === "CREATE" && change.targetType === "TICKET") {
         const { issueTicketKey, computeTicketDueDate, getGlobalTicketSettings } = await import("./ticket.service.js");
         const settings = await getGlobalTicketSettings();
-        const projectId = String(after.projectId ?? proposal.scopeProjectId ?? "");
+        // The proposal's own scope WINS over anything in `after` when it has one. The scope is what
+        // the caller was authorized against when the proposal was created and again when it was
+        // applied; `after.projectId` is part of the change set. Letting the change set choose would
+        // mean a row could land in a project neither check ever looked at.
+        const projectId = String(proposal.scopeProjectId ?? after.projectId ?? "");
         if (!projectId) throw new Error("no project to create this in");
+        const project = await prisma.project.findFirst({ where: { id: projectId, deletedAt: null }, select: { id: true } });
+        if (!project) throw new Error("that project no longer exists");
 
         // A parent referenced by the index of an earlier CREATE row in this same proposal.
         const parentId =

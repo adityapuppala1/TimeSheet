@@ -29,7 +29,12 @@ import { resolveActiveOrgBySlug } from "../middleware/tenant.js";
 import { AppError } from "../middleware/error.js";
 import { decryptSecret } from "../utils/encryption.js";
 import { constantTimeEqual } from "../utils/security.js";
-import { fetchGitHubPullRequestFiles, GIT_INTEGRATION_SYSTEM_EMAIL, postGitHubPullRequestReview } from "../services/git-provider.service.js";
+import {
+  fetchGitHubPullRequestFiles,
+  GIT_INTEGRATION_SYSTEM_EMAIL,
+  postGitHubPullRequestReview,
+  renderPrReviewSummaryComment
+} from "../services/git-provider.service.js";
 import { reviewPullRequestDiff, summarizePullRequest } from "../services/ai.service.js";
 import {
   GIT_PROVIDERS_WITH_GUARANTEED_DELIVERY_ID,
@@ -194,12 +199,12 @@ gitWebhookRouter.post("/webhook/:orgSlug", express.raw({ type: "application/json
               filesChanged: files,
               ticketKey
             });
-            const riskBadge = result.riskLevel === "HIGH" ? "🔴 HIGH" : result.riskLevel === "MEDIUM" ? "🟡 MEDIUM" : "🟢 LOW";
             await prisma.ticketComment.create({
               data: {
                 ticketId: ticket.id,
                 authorId: systemUser.id,
-                body: `<p><strong>AI PR-review summary</strong> (${riskBadge} risk):</p><p>${result.summary}</p><p><em>Review focus: ${result.reviewFocus}</em></p>`
+                // Escaped, not interpolated — see renderPrReviewSummaryComment's own comment.
+                body: renderPrReviewSummaryComment(result)
               }
             });
 

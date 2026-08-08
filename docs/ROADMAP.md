@@ -2061,9 +2061,9 @@ much here as a finding.
   Prisma — 3 of its 5 cases fail against the pre-fix route.
 - [ ] **The wider fetch-then-don't-check set** — same shape as the six ticket routes, but each needs
   a product decision on the intended boundary: `approval.controller.ts` `DELETE /:id` (hard delete
-  straight from `req.params`, while both siblings scope correctly), `ai-proposal.controller.ts`
-  (still updates change rows by body-supplied ids never checked against the parent — the LIST is
-  fixed above, this is not), `request-form.controller.ts` (unscoped submission inbox under a
+  straight from `req.params`, while both siblings scope correctly), ~~`ai-proposal.controller.ts`~~
+  (**closed 2026-08-08** by the AI-surface audit below — apply/reject/decisions are scoped and the
+  change rows are bound to the proposal in the URL), `request-form.controller.ts` (unscoped submission inbox under a
   permission EMPLOYEE holds), `timesheet.controller.ts` approve/reject (no `managerId` predicate —
   and its own `DELETE` sibling does check, so the file is inconsistent with itself), plus the
   `resource`, `ai` and `report` controllers.
@@ -2149,3 +2149,168 @@ compliance problem, because the sentence that gets approved is one nobody chose.
   router's 20/min limiter — it costs nothing and every form asks on mount) answers from the same
   `preflight`, so the button is disabled with the actual reason: AI off, budget exhausted, or field
   still empty. A timeout, a provider error and a 429 each say so rather than spinning forever.
+
+### Security audit: the AI surface — prompt injection, leakage, abuse (2026-08-08)
+
+A pass over everything that reaches a model, prompted by one property this product has and most
+LLM-using apps do not: **it ingests attacker-authored prose on purpose.** A stranger emails
+support@, `email-intake.service.ts` turns it into a Ticket, and eight AI features then read that
+ticket. So the question throughout was not "could a prompt be injected" — it can, by design — but
+"what can an injected answer actually make the app DO", and the fixes are structural rather than
+extra sentences in a prompt. Every fix below has a test that fails against the pre-fix code and
+passes after; the negative results are recorded too.
+
+**The untrusted-content-to-prompt paths, enumerated.** Third-party text reaches a model through
+exactly six doors: inbound email (`email-intake.service.ts:176` → `classifyTicket`), chat messages
+on four platforms (`chat-intake.service.ts:107` → `classifyChatMessage`), CI failure logs
+(`security-report.service.ts:505`/`:557` → `classifyCiFailure`), scanner findings
+(`security-report.service.ts:663` → `classifySecurityFinding`), GitHub PR titles/descriptions/diffs
+(`git-webhook.controller.ts:191`/`:210`), and — second-hand but most numerous — every feature that
+reads stored ticket text afterwards (`ask_ai`, `comment_summary`, `duplicate_detection`,
+`plan_breakdown`'s existing-titles context). The MCP server is NOT a seventh: `mcp-tools.ts` calls
+no model, it exposes ticket content TO one, and it already marks the boundary
+(`UNTRUSTED_CONTENT_NOTICE`) and bounds every tool by one user's permissions.
+
+#### Fixed
+
+- [x] **The closed set of ticket types was a request, not a guarantee.** `classifyTicket` and
+  `classifyChatMessage` put `enum` in the JSON schema and then validated with `z.string()`. Only
+  Anthropic's `output_config.format` enforces that enum; the OPENAI_COMPATIBLE path asks in prose
+  and, when an endpoint rejects `response_format`, **retries with no constraint at all** — its own
+  comment says so. Both intake pipelines write the result straight to `Ticket.type` from text an
+  unauthenticated stranger wrote. `priority` was already pinned by a Zod enum and `moduleName` by a
+  name-to-id lookup that yields null on a miss; `type` was the one field nothing checked. Now
+  `coerceToConfiguredType` forces it back into the project's real rows after the response comes
+  back, falling back to the first configured type rather than throwing — an inbound email should
+  stay a ticket. The model-authored chat title is capped at the column's 255 in the same place.
+- [x] **A model-invented ticket key was a remote 500.** `findDuplicateTickets` mapped its answer
+  through `params.candidates.find(...)!.id` — a non-null assertion on a lookup that can miss. The
+  candidate list embedded in that prompt is itself untrusted (email-sourced tickets supply their own
+  title and description), so "return key ADMIN-999" was a TypeError anyone able to email support@
+  could trigger on demand. Unknown keys are now dropped.
+- [x] **Raw model output was stored as HTML.** `git-webhook.controller.ts` interpolated
+  `result.summary` and `result.reviewFocus` — answers to a prompt made of a PR's own title,
+  description and diff — into a ticket comment's markup. Both sibling AI comment paths
+  (`security-report.service.ts`'s CI-failure and finding triage) had escaped all along; this one
+  never did. Now `git-provider.service.ts#renderPrReviewSummaryComment`, a pure function with a
+  test, using a single `escapeHtmlText` exported from `utils/sanitize.ts` instead of the third
+  private copy. **Stated honestly: this was not a live XSS** — the web client re-sanitizes comment
+  bodies with DOMPurify (`lib/safe-html.ts`) on render. It was stored third-party markup with one
+  layer standing alone in front of it, and any non-browser consumer had no layer at all.
+- [x] **One ingest request could spend the whole month's AI budget, and defeat the cap while doing
+  it.** `POST /devops/:orgSlug/findings` takes up to 500 findings and ran `maybeTriageFindingWithAI`
+  for every one inside the same `Promise.all` as the row creation — one model call each, from a CI
+  ingestion token, counted by the per-IP limiter as a single request. The cost was the smaller half.
+  `preflight` reads the month's spend and compares it to the ceiling; `logAIUsage` writes the row
+  that moves that number. Fired concurrently, **all 500 read the same total before any had written
+  anything, so all 500 passed a cap only one of them should have.** The clamp was not skipped, it
+  was raced. Now capped at 20 per batch and run sequentially, so each call's usage row lands before
+  the next one's preflight reads it. Findings past the cap are still ingested and still
+  auto-ticketed — the cap is on the AI opinion, which is the part that costs money and the part a
+  scanner can trivially produce more of.
+- [x] **The human step in "proposes, never applies" could be performed by someone who could not see
+  the plan.** `POST /ai-proposals/:id/apply`, `/reject` and `PATCH /:id/decisions` were gated on
+  `plan:write` alone — a permission every lead and manager holds tenant-wide, which is exactly the
+  argument the `GET` route in the same file already makes about `tickets:view`. Given an id, a lead
+  on an unrelated project could apply an AI-authored change set to a project they cannot open. All
+  three now go through `loadReviewableProposal`, which applies `assertTicketVisible` for a scoped
+  proposal and falls back to authorship for a workspace-wide one — so what you can apply is exactly
+  what you could see. `/decisions` additionally binds the body-supplied change ids to the proposal
+  in the URL, which was the outstanding half of the "fetch-then-don't-check" item above.
+- [x] **Ids inside a proposal are checked before they are written.** `TICKET_WRITABLE` already
+  permits `assigneeId`, and `ProposalKind` already declares `ASSIGNMENT_REBALANCE` — so the first
+  feature to emit a model-chosen person would have had it applied unverified. `applyProposal` now
+  requires an `assigneeId` to be a live ACTIVE user and a `parentId` to be a work item in the same
+  project, and a CREATE row's project comes from the proposal's own `scopeProjectId` (the thing
+  authorization was checked against) in preference to `after.projectId` (part of the change set).
+  Not a tenant-isolation fix — the `prisma` proxy already prevents that — a liveness one.
+- [x] **Two `/api/ai` routes took a project id and used it.** `suggest-triage` and `duplicates` are
+  gated on `tickets:write`, which answers "may you create tickets at all", not "in which projects";
+  `POST /tickets/:id/summarize` and `POST /ask` in the same router already ran the caller's scope.
+  `duplicates` in particular answered with the ticket keys, titles and model reasoning of a project
+  the caller cannot open. Both now call `assertTicketVisible` first, before any spend.
+- [x] **The AI throttle counted addresses, not spenders.** `express-rate-limit` defaults to `req.ip`
+  and no limiter in the repo overrode it, so one NAT'd office shared a single 20/min allowance while
+  one person with a phone and a laptop had two. Spend is attributed to a user (`AIUsageLog.userId`
+  is what the usage panel breaks down by), so the bucket now is too — `middleware/ai-rate-limit.ts`,
+  with IP as the fallback for a request that somehow arrives unauthenticated, collapsed to a /64 for
+  IPv6. The same limiter is now also mounted on `aiProposalRouter`, whose `POST /plan-breakdown`
+  reaches a model and had only the global 900/min.
+- [x] **`summarizeComments` was the one capability handed an unbounded collection.** Every other one
+  truncates — CI logs at 6000 chars, PR diffs at 6000, `ask_ai` at 150 tickets x 200 chars. Comment
+  count and comment length are both chosen by whoever is posting (10 000 chars each is all the
+  comment route enforces), so a long thread was one authenticated request sending megabytes to a
+  model. Now the newest 60 comments, 1000 chars each.
+
+Tests: `tests/unit/ai.service.test.ts` (+4 cases, all 4 fail pre-fix), `ai-proposal-scope.test.ts`
+(+7, 6 fail pre-fix), and three new files — `ai-route-hardening.test.ts` (3 of 5 fail pre-fix),
+`ai-write-path.test.ts` (4 of 5), `devops-ingest-ai-fanout.test.ts` (2 of 2). Suite: 62 files /
+698 tests, up from 59 / 675.
+
+#### Checked and found clean — recorded because the negative result is the point
+
+- **Every capability goes through `preflight`.** All 22 model-calling functions in `ai.service.ts`
+  call it as their first statement, and `callChat` is module-private, so there is no path to a model
+  that skips the master switch, the per-feature toggle or the plan-clamped budget. The one export
+  that reaches a provider without it — `listAvailableOpenAICompatibleModels` — lists model ids and
+  consumes no tokens.
+- **No prompt can be built outside tenant context.** `preflight` calls `requireTenantContext()`,
+  which throws when absent, and `assertWithinBudget` aggregates through the tenant-scoped `prisma`
+  proxy. A cross-tenant prompt would require a tenant client that does not exist.
+- **The 22 per-feature toggles already ARE the kill switch** the brief asked whether to add, and
+  `GlobalAISettings.aiEnabled` is the master. Nothing added: a 23rd boolean that always moved with
+  an existing one would be a settings column pretending to be a choice.
+- **Biometrics stay out of prompts.** `summarizeFaceReviewAttempt` sends attempt metadata only, and
+  `CONTENT_CAPTURE_DENYLIST` covers both face features so no text of theirs is ever stored — already
+  pinned by `ai-capture.test.ts`. No password hash, token, API key or encrypted DSN is reachable
+  from any prompt builder or from `logAIUsage`'s captured params.
+- **Model output never reaches SQL, a shell, a file path, or a fetched URL.** Every DB write from a
+  model's answer goes through Prisma's parameterised client; there is no `$executeRawUnsafe` on any
+  AI path, no child process, and no model-supplied URL is fetched. The only outbound URL a model can
+  influence is the PR review post, whose `(path, line)` pairs are validated against the actual diff
+  hunks first (`validNewFileLines`).
+- **AI text rendered in the web app is text.** Only `AiRefine`'s preview passes model output to
+  `dangerouslySetInnerHTML`, through `safeHtml`; the risk narrative, status report, Ask AI answer
+  and comment summary are all rendered as plain strings.
+- **Email templates escape.** The stale-ticket nudge puts a model sentence into an email;
+  `templates.ticketStaleNudge` runs it through `escape()` like every other variable.
+- **Input caps on the authenticated HTTP surface are real** — Zod bounds every AI route's body
+  (title 255, description/text 20 000, question 500, goal 2000, context 4000) under a global 2 MB
+  `express.json` limit. The gap was the two places nothing bounded a *collection*, both fixed above.
+- **The narrate-don't-decide split holds.** `explainThresholdRecommendation`, `narrateProjectRisk`
+  and `explainAssigneeSuggestion` all receive a number computed arithmetically elsewhere and are
+  asked only to explain it; none of the three can change what it narrates.
+
+#### Open — reported, not fixed
+
+- [ ] **`isLikelyFlaky` lets CI-log content suppress a ticket.** `maybeAutoCreateTicketForCiFailure`
+  skips creating a first ticket when AI triage calls the failure flaky, and the failure text is
+  external CI output. The output is already a delimited boolean — there is no tighter structural
+  constraint available — so the residual risk is inherent to the feature, not a defect. Two things
+  bound it: the deterministic 24-hour repeat check runs regardless of what AI says, and the whole
+  behaviour is behind its own opt-in. **What is missing is a trace**: a suppressed ticket leaves no
+  audit row at all, so "the AI decided not to file this" is invisible. Worth an
+  `audit(undefined, "ticket.ci_failure_suppressed_as_flaky", ...)`, deferred only because there is
+  no entity id to hang it on and inventing one is a schema decision.
+- [ ] **AI-influenced writes are audited unevenly.** Email intake, chat intake, auto-reopen,
+  auto-create-from-CI and proposal application all stamp an audit row. `maybeTriageFindingWithAI`
+  writes four fields onto `SecurityFinding` and the PR summary posts a comment, neither audited.
+  Both are visible in the UI, so this is completeness rather than a hole — but "every automated
+  decision is auditable" is the principle this codebase states, and these two do not meet it.
+- [ ] **`POST /settings/ai/available-models` fetches a caller-supplied `baseUrl`** — SSRF-shaped, and
+  `callChat` sends prompts to that same stored URL. NOT fixed, because the shape is the feature:
+  BYOK explicitly supports Ollama and LM Studio on localhost, so blocking private ranges would break
+  a documented deployment. It is super-admin-only, and a super-admin already configures the provider
+  every prompt is sent to. The mitigation if this ever needs one is an allow-list per deployment,
+  not a blocklist of address ranges.
+- [ ] **Secret-bearing scanner findings and CI logs can be captured as prompt text.** A `gitleaks`
+  finding's title carries the leaked secret (the schema's own comment names gitleaks as an expected
+  tool), and CI logs routinely contain tokens. With `aiCaptureContentEnabled` on, both are stored on
+  `AIInteraction` under the retention sweep. Adding `ci_failure_triage` / `security_finding_triage`
+  to `CONTENT_CAPTURE_DENYLIST` would fix it and would also silently break dataset replay and evals
+  for those two capabilities — a product decision, not a bug fix.
+- [ ] **The budget cap is still a read-then-check race for genuinely concurrent callers.** Fixing the
+  devops fan-out removed the one path that could lose that race 500 times over, but two users
+  clicking at the same moment can each pass a cap only one should. The honest fix is a serialised
+  reservation, which is a schema change; the overshoot is now bounded by one call per concurrent
+  request rather than by the batch size.

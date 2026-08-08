@@ -138,7 +138,23 @@ export function htmlToPlainText(html: string | null | undefined): string {
     .trim();
 }
 
-function escapeHtmlText(value: string): string {
+/**
+ * Escapes text being interpolated into an HTML string this code is building itself.
+ *
+ * Exported because it is NOT only a `plainTextToRichText` detail: several places assemble a small
+ * HTML fragment around model output or third-party text and store it (AI CI-failure triage and
+ * finding triage in security-report.service.ts, the AI PR-review summary in
+ * git-provider.service.ts). Those had a private copy each, and the one that did not have a copy
+ * was the one that shipped raw model output into a stored comment. One implementation, so a new
+ * caller has something to reach for besides a template literal.
+ *
+ * Not a substitute for `sanitizeRichText` — that decides which tags survive in HTML somebody
+ * AUTHORED; this makes text that must not be markup at all incapable of being any. Escapes the
+ * three characters that matter between tags and deliberately not quotes: every caller
+ * interpolates into TEXT position, and quote-escaping would change what
+ * `plainTextToRichText` already round-trips through `sanitizeRichText` below.
+ */
+export function escapeHtmlText(value: string): string {
   return value.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;");
 }
 

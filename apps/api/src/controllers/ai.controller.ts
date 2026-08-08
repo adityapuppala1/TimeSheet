@@ -7,10 +7,10 @@
  * longer than a normal request, so this router gets its own stricter cap.
  */
 import { Router } from "express";
-import rateLimit from "express-rate-limit";
 import { z } from "zod";
 import { permissions } from "@timesheet/shared";
 import { prisma } from "../config/prisma.js";
+import { aiRateLimit } from "../middleware/ai-rate-limit.js";
 import { requireAuth, requirePermission, requireSuperAdmin } from "../middleware/auth.js";
 import { AppError } from "../middleware/error.js";
 import { validate } from "../middleware/validate.js";
@@ -43,7 +43,7 @@ import {
 import { enqueueEvalRun, getEvalRun, isReplayable, listEvalRuns } from "../services/ai-eval.service.js";
 import { setInteractionFeedback } from "../services/ai-quality.service.js";
 import { computeTimesheetCost } from "../services/billing-rate.service.js";
-import { ticketProjectScope } from "../services/ticket.service.js";
+import { assertTicketVisible, ticketProjectScope } from "../services/ticket.service.js";
 
 export const aiRouter = Router();
 aiRouter.use(requireAuth);
@@ -59,8 +59,9 @@ aiRouter.get("/text/refine/availability", async (_req, res) => {
 });
 
 // AI calls cost real money and take longer than a normal request — a tighter cap
-// than the global 120/min limiter in app.ts.
-aiRouter.use(rateLimit({ windowMs: 60_000, limit: 20, standardHeaders: true }));
+// than the global limiter in app.ts, and keyed per USER rather than per IP so a shared office
+// address isn't one allowance for everyone in it. See middleware/ai-rate-limit.ts.
+aiRouter.use(aiRateLimit);
 
 const triageSchema = z.object({
   body: z.object({
@@ -70,7 +71,16 @@ const triageSchema = z.object({
   })
 });
 
+/**
+ * `tickets:write` is held tenant-wide, so it says whether you may create tickets AT ALL, not which
+ * projects you may create them in — the same distinction `POST /tickets/:id/summarize` below and
+ * `GET /ai-proposals` already draw. Without `assertTicketVisible` this route (and `/duplicates`)
+ * accepted any project id in the workspace, spending the workspace's AI budget on a project the
+ * caller cannot open and, for duplicates, answering with its ticket keys and titles.
+ */
 aiRouter.post("/tickets/suggest-triage", requirePermission(permissions.TICKETS_WRITE), validate(triageSchema), async (req, res) => {
+  await assertTicketVisible(req, req.body.projectId);
+
   const project = await prisma.project.findFirst({
     where: { id: req.body.projectId, deletedAt: null },
     include: { modules: { select: { id: true, name: true } } }
@@ -101,6 +111,8 @@ const duplicatesSchema = z.object({
 });
 
 aiRouter.post("/tickets/duplicates", requirePermission(permissions.TICKETS_WRITE), validate(duplicatesSchema), async (req, res) => {
+  await assertTicketVisible(req, req.body.projectId);
+
   const candidates = await prisma.ticket.findMany({
     where: {
       projectId: req.body.projectId,
