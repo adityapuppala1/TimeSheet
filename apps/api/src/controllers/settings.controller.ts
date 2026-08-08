@@ -10,6 +10,7 @@
 import { Router } from "express";
 import { z } from "zod";
 import { notificationPreferenceKeys, permissions, roles } from "@timesheet/shared";
+import { Prisma } from "@prisma/client";
 import { prisma } from "../config/prisma.js";
 import { controlPrisma } from "../config/control-prisma.js";
 import { requireTenantContext } from "../config/tenant-context.js";
@@ -1034,6 +1035,10 @@ settingsRouter.get("/mcp", requireSuperAdmin, async (_req, res) => {
       tokenPrefix: true,
       lastUsedAt: true,
       createdAt: true,
+      // So the list can say what a credential is limited to. A narrowed credential that looks
+      // identical to an unrestricted one in the UI is a narrowing nobody trusts.
+      allowedTools: true,
+      expiresAt: true,
       user: { select: { id: true, name: true, email: true, role: { select: { name: true } } } },
       createdBy: { select: { name: true } }
     }
@@ -1092,7 +1097,16 @@ settingsRouter.patch("/mcp", requireSuperAdmin, validate(updateMcpSchema), async
 });
 
 const createMcpCredentialSchema = z.object({
-  body: z.object({ name: z.string().min(1).max(120), userId: z.string().uuid() })
+  body: z.object({
+    name: z.string().min(1).max(120),
+    userId: z.string().uuid(),
+    /** Tool names this credential may call. Omitted or empty means "whatever the workspace
+     *  allows", which is what every credential issued before this existed does. It can only
+     *  narrow — see services/mcp.service.ts#narrowEnablementToCredential. */
+    allowedTools: z.array(z.string().max(60)).optional(),
+    /** Absolute expiry. Omitted means it never expires, which is the pre-existing behaviour. */
+    expiresAt: z.coerce.date().optional()
+  })
 });
 
 settingsRouter.post("/mcp/credentials", requireSuperAdmin, validate(createMcpCredentialSchema), async (req, res) => {
@@ -1105,22 +1119,48 @@ settingsRouter.post("/mcp/credentials", requireSuperAdmin, validate(createMcpCre
   });
   if (!target) throw new AppError(422, "Pick an active user in this workspace for the credential to act as.");
 
+  // Refused rather than silently dropped: a super admin who mistypes a tool name should find out
+  // now, not when the assistant reports that a tool they thought they had granted does not exist.
+  const requestedTools = (req.body.allowedTools as string[] | undefined)?.filter(Boolean) ?? [];
+  if (requestedTools.length) {
+    const known = new Set(MCP_TOOLS.map((t) => t.name));
+    const unknown = requestedTools.filter((n) => !known.has(n));
+    if (unknown.length) throw new AppError(422, `Unknown MCP tool(s): ${unknown.join(", ")}`);
+  }
+  if (req.body.expiresAt && (req.body.expiresAt as Date) <= new Date()) {
+    throw new AppError(422, "That expiry is already in the past.");
+  }
+
   const { plaintext, tokenHash, tokenPrefix } = generateMcpToken();
   const created = await prisma.mcpCredential.create({
-    data: { name: req.body.name, tokenHash, tokenPrefix, userId: target.id, createdById: req.user!.id }
+    data: {
+      name: req.body.name,
+      tokenHash,
+      tokenPrefix,
+      userId: target.id,
+      createdById: req.user!.id,
+      allowedTools: requestedTools.length ? requestedTools : Prisma.DbNull,
+      expiresAt: (req.body.expiresAt as Date | undefined) ?? null
+    }
   });
   await audit(req.user!.id, "settings.mcp_credential_created", "McpCredential", created.id, {
     name: created.name,
     actingAsUserId: target.id,
-    actingAsRole: target.role.name
-  });
+    actingAsRole: target.role.name,
+    // What it was NARROWED to is the interesting half of this row — "acts as an admin" and "acts
+    // as an admin but may only read tickets" are very different grants.
+    allowedTools: requestedTools.length ? requestedTools : "all",
+    expiresAt: created.expiresAt
+  }, { ipAddress: req.ip });
   // Same one-time-plaintext-reveal convention as the API key above — this response is the only
   // place the full token is ever visible.
   res.status(201).json({
     id: created.id,
     name: created.name,
     token: plaintext,
-    actingAs: { id: target.id, name: target.name, email: target.email, role: target.role.name }
+    actingAs: { id: target.id, name: target.name, email: target.email, role: target.role.name },
+    allowedTools: requestedTools.length ? requestedTools : null,
+    expiresAt: created.expiresAt
   });
 });
 

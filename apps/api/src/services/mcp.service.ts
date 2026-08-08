@@ -118,6 +118,35 @@ export interface McpPrincipal {
   credentialId: string;
   credentialName: string;
   user: RequestUser;
+  /** Tool names this credential may call, or null for "whatever the workspace allows". */
+  allowedTools: string[] | null;
+}
+
+/**
+ * Narrow the workspace's MCP settings to what one credential may do.
+ *
+ * INTERSECTION, NEVER UNION — the returned settings can only ever be more restrictive than the
+ * ones passed in. That direction is the whole point: a credential is handed to a language model,
+ * and the useful thing to be able to say is "this one reads tickets", not "this one has everything
+ * its holder has, plus whatever I list here".
+ *
+ * Applied by turning off the tools that are not listed rather than by turning on the ones that
+ * are, so the workspace's own `enabled`, `allowWrites` latch and per-tool overrides all still
+ * decide first. And because `isToolEnabled` is the single predicate behind BOTH `tools/list` and
+ * `tools/call`, narrowing here means a restricted credential cannot even see the tools it may not
+ * call — no separate filtering, and no way for the two to disagree.
+ */
+export function narrowEnablementToCredential(
+  settings: McpEnablementSettings,
+  allowedTools: string[] | null
+): McpEnablementSettings {
+  if (!allowedTools) return settings;
+  const allowed = new Set(allowedTools);
+  const overrides: Record<string, boolean> = { ...((settings.toolOverrides ?? {}) as Record<string, boolean>) };
+  for (const tool of MCP_TOOLS) {
+    if (!allowed.has(tool.name)) overrides[tool.name] = false;
+  }
+  return { ...settings, toolOverrides: overrides };
 }
 
 /**
@@ -136,7 +165,7 @@ export interface McpPrincipal {
 export async function resolveMcpPrincipal(plaintextToken: string): Promise<McpPrincipal | null> {
   const record = await prisma.mcpCredential.findUnique({
     where: { tokenHash: hashMcpToken(plaintextToken) },
-    select: { id: true, name: true, userId: true, revokedAt: true, expiresAt: true }
+    select: { id: true, name: true, userId: true, revokedAt: true, expiresAt: true, allowedTools: true }
   });
   if (!record || record.revokedAt) return null;
   // Checked here rather than swept by a worker, so an expiry takes effect at the exact moment it
@@ -163,5 +192,12 @@ export async function resolveMcpPrincipal(plaintextToken: string): Promise<McpPr
   // Fire-and-forget: "last used" is bookkeeping and must never fail a call.
   void prisma.mcpCredential.update({ where: { id: record.id }, data: { lastUsedAt: new Date() } }).catch(() => undefined);
 
-  return { credentialId: record.id, credentialName: record.name, user };
+  return {
+    credentialId: record.id,
+    credentialName: record.name,
+    user,
+    allowedTools: Array.isArray(record.allowedTools) && record.allowedTools.every((t) => typeof t === "string")
+      ? (record.allowedTools as string[])
+      : null
+  };
 }

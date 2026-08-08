@@ -57,6 +57,8 @@ const actor = {
 };
 
 let mcpSettings: { enabled: boolean; allowWrites: boolean; toolOverrides: Record<string, boolean> };
+/** null = this credential may use whatever the workspace allows. */
+let credentialTools: string[] | null;
 let client: PrismaClient;
 
 function grant(...keys: string[]) {
@@ -82,7 +84,8 @@ function buildClient(overrides: Partial<Record<string, unknown>> = {}): PrismaCl
         id: "cred-1",
         name: "Priya's Claude Desktop",
         revokedAt: null,
-        userId: actor.id
+        userId: actor.id,
+        allowedTools: credentialTools
       })),
       update: vi.fn().mockResolvedValue({})
     },
@@ -139,6 +142,7 @@ beforeEach(() => {
   saveTimesheetSpy.mockClear();
   actor.role = { name: "EMPLOYEE", permissions: [] };
   mcpSettings = { enabled: true, allowWrites: false, toolOverrides: {} };
+  credentialTools = null;
   client = buildClient();
 });
 
@@ -418,5 +422,79 @@ describe("prompt-injection posture", () => {
 
   it("the ticket-reading tools are exactly the ones flagged as carrying external text", () => {
     expect(MCP_TOOLS.filter((t) => t.untrustedContent).map((t) => t.name).sort()).toEqual(["get_ticket", "search_tickets"]);
+  });
+});
+
+/**
+ * Per-credential narrowing. A credential is handed to a language model, and until this existed the
+ * only thing it could be is "everything its holder can do" — so a super admin issuing one for their
+ * own desktop assistant put every admin power they have into a model's context window.
+ *
+ * The property under test is that it can only ever NARROW. It is applied by turning tools off, not
+ * on, so the workspace's own switches still decide first and nothing here can grant anything.
+ */
+describe("a credential can be narrower than its holder", () => {
+  it("hides and refuses a tool the credential does not list, even though the user could call it", async () => {
+    grant(permissions.TICKETS_VIEW);
+    credentialTools = ["whoami"];
+    const app = buildApp();
+
+    const listed = await rpc(app, "tools/list");
+    const names = listed.body.result.tools.map((t: { name: string }) => t.name);
+    expect(names).toEqual(["whoami"]);
+    // Not merely hidden — isToolEnabled is the single predicate behind both, so a client that
+    // guessed the name is refused too.
+    expect(names).not.toContain("search_tickets");
+
+    const called = await rpc(app, "tools/call", { name: "search_tickets", arguments: {} });
+    expect(called.body.result?.isError || called.status !== 200).toBeTruthy();
+  });
+
+  it("cannot grant a tool the WORKSPACE has switched off — it intersects, never unions", async () => {
+    // The listing is the credential's, but the workspace's own override still wins.
+    grant(permissions.TICKETS_VIEW);
+    mcpSettings.toolOverrides = { search_tickets: false };
+    credentialTools = ["whoami", "search_tickets"];
+
+    const listed = await rpc(buildApp(), "tools/list");
+    expect(listed.body.result.tools.map((t: { name: string }) => t.name)).not.toContain("search_tickets");
+  });
+
+  it("cannot grant a write while the workspace read-only latch is down", async () => {
+    grant(permissions.TICKETS_WRITE);
+    mcpSettings.allowWrites = false;
+    credentialTools = ["create_ticket"];
+    const app = buildApp();
+
+    // The security property: the one tool this credential lists is a write, and the workspace
+    // latch is down, so it is not callable.
+    const called = await rpc(app, "tools/call", { name: "create_ticket", arguments: { projectCode: "WEB", title: "x" } });
+    expect(called.body.result?.isError || called.body.error).toBeTruthy();
+    expect(client.ticket.findMany).not.toHaveBeenCalled();
+
+    // And a quirk worth pinning rather than discovering later: with EVERY tool narrowed away the
+    // SDK never registers the tools capability at all, so `tools/list` answers "Method not found"
+    // rather than an empty array. Harmless — nothing is callable either way — but a client will
+    // report it as a broken server, so it is the behaviour, not an empty list.
+    const listed = await rpc(app, "tools/list");
+    expect(listed.body.error?.code).toBe(-32601);
+  });
+
+  it("cannot grant a tool whose permission the acting person lacks", async () => {
+    // The credential narrows; it never widens. Listing a tool does not confer the permission.
+    grant(); // no permissions at all
+    credentialTools = ["search_tickets"];
+
+    const called = await rpc(buildApp(), "tools/call", { name: "search_tickets", arguments: {} });
+    expect(called.body.result?.isError || called.status !== 200).toBeTruthy();
+  });
+
+  it("leaves a credential with no listing exactly as it was — every existing one", async () => {
+    grant(permissions.TICKETS_VIEW);
+    credentialTools = null;
+
+    const names = (await rpc(buildApp(), "tools/list")).body.result.tools.map((t: { name: string }) => t.name);
+    expect(names).toContain("search_tickets");
+    expect(names).toContain("whoami");
   });
 });

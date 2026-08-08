@@ -29,7 +29,7 @@ import { appVersion } from "../config/version.js";
 import { mcpAuth, type McpRequest } from "../middleware/mcp-auth.js";
 import { mcpRateLimit } from "../middleware/ai-rate-limit.js";
 import { AppError } from "../middleware/error.js";
-import { getGlobalMcpSettings } from "../services/mcp.service.js";
+import { getGlobalMcpSettings, narrowEnablementToCredential } from "../services/mcp.service.js";
 import {
   invokeMcpTool,
   isToolEnabled,
@@ -124,7 +124,9 @@ function buildServer(ctx: McpToolContext, settings: McpEnablementSettings): McpS
 
 async function handleMcp(req: McpRequest, res: Response) {
   const principal = req.mcp!;
-  const settings = await getGlobalMcpSettings();
+  // Narrowed to this credential before anything reads it, so a restricted credential cannot even
+  // LIST the tools it may not call — isToolEnabled is the one predicate behind both.
+  const settings = narrowEnablementToCredential(await getGlobalMcpSettings(), req.mcp!.allowedTools);
 
   // 404, not 403: a workspace that has not switched this on should not confirm the endpoint is
   // there. Checked AFTER authentication so only a credential holder learns the difference.

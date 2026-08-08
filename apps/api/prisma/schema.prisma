@@ -2201,6 +2201,15 @@ model McpCredential {
   /// nobody revisits — the same argument the guest approval links took a 30-day expiry for.
   expiresAt  DateTime?
 
+  /// Tool names this credential may call, as a JSON array. NULL means "whatever the workspace
+  /// allows", which is what every credential issued before this column existed does.
+  ///
+  /// APPLIED AS AN INTERSECTION, NEVER A UNION: a tool has to be enabled by the workspace AND
+  /// listed here. This can only ever narrow, so a credential can never reach past its holder or
+  /// past the workspace's own settings — it exists so a super admin can hand a language model a
+  /// read-only credential without handing it their own admin powers along with it.
+  allowedTools Json?
+
   @@index([tokenHash])
   @@index([userId])
 }
