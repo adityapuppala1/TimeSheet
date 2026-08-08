@@ -20,7 +20,7 @@
  *
  * WHO CALLS THIS: `controllers/ai-proposal.controller.ts`.
  */
-import { createProposal, type DraftChange } from "./ai-proposal.service.js";
+import { createProposalAndMaybeApply, type DraftChange } from "./ai-proposal.service.js";
 import { loadWorkload, OVER_ALLOCATION_THRESHOLD_PCT } from "./workload.service.js";
 import { prisma } from "../config/prisma.js";
 import { AppError } from "../middleware/error.js";
@@ -147,7 +147,10 @@ export async function proposeAssignmentRebalance(params: {
   }
 
   const worst = overloaded[0];
-  const proposal = await createProposal({
+  const outcome = await createProposalAndMaybeApply({
+    // The producer does not decide whether it may act — createProposalAndMaybeApply asks the
+    // policy. A producer that made its own call would be one more place to get it wrong.
+    capability: "assignment_rebalance",
     kind: "ASSIGNMENT_REBALANCE",
     title: `Rebalance ${project.name}`,
     rationale:
@@ -161,5 +164,11 @@ export async function proposeAssignmentRebalance(params: {
     changes
   });
 
-  return { proposalId: proposal.id, reason: null, moves: changes.length };
+  return {
+    proposalId: outcome.proposalId,
+    // A proposal held back by a guardrail is not a failure — it is the state the product had
+    // before autonomy existed, and the caller should say so rather than show nothing.
+    reason: outcome.heldForReview,
+    moves: changes.length
+  };
 }

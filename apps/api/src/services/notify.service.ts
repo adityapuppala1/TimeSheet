@@ -49,7 +49,8 @@ export type NotificationCategory =
   | "digest.identity_weekly"
   | "digest.bug_pattern"
   | "ticket.stale_nudge"
-  | "maintenance.scheduled";
+  | "maintenance.scheduled"
+  | "ai.autonomy_applied";
 
 interface EmailPayload {
   templateKey: string;
@@ -95,7 +96,8 @@ const SETTINGS_FIELD: Record<NotificationCategory, string> = {
   "digest.identity_weekly": "emailIdentityWeeklyDigest",
   "digest.bug_pattern": "emailBugPatternDigest",
   "ticket.stale_nudge": "emailTicketStaleNudge",
-  "maintenance.scheduled": "emailMaintenanceScheduled"
+  "maintenance.scheduled": "emailMaintenanceScheduled",
+  "ai.autonomy_applied": "emailAiAutonomyApplied"
 };
 
 const GLOBAL_ID = "global";

@@ -102,7 +102,8 @@ function computeAutonomy(
   // Order matters only for which reason the UI shows; each of these independently forces the floor.
   if (!spec) return clamp("This build does not recognise that capability.");
   if (!settings.aiEnabled) return clamp("AI is switched off for this workspace.");
-  if (!settings[spec.featureToggle]) return clamp("This capability itself is switched off.");
+  // A capability with no toggle reaches no model, so there is no AI switch that could be off.
+  if (spec.featureToggle && !settings[spec.featureToggle]) return clamp("This capability itself is switched off.");
   if (!settings.aiAutonomyEnabled) return clamp("Autonomy is switched off for this workspace.");
 
   const effectiveLevel = min(requestedLevel, maxLevel);
@@ -168,7 +169,9 @@ export async function describeAutonomyCatalogue(): Promise<{ autonomyEnabled: bo
     description: spec.description,
     ceilingReason: spec.ceilingReason,
     actsOnUntrustedInput: spec.actsOnUntrustedInput,
-    featureEnabled: Boolean(settings.aiEnabled && settings[spec.featureToggle])
+    // A capability with no toggle reaches no model, so nothing about the AI switches
+    // determines whether it is available.
+    featureEnabled: spec.featureToggle ? Boolean(settings.aiEnabled && settings[spec.featureToggle]) : true
   }));
 
   return { autonomyEnabled: Boolean(settings.aiAutonomyEnabled), capabilities };

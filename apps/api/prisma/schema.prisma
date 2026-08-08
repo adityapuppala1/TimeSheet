@@ -1539,6 +1539,14 @@ model GlobalNotificationSettings {
   /// Default ON: the admin pressed a button that says "notify users" — suppressing the email
   /// leg by default would make that button quietly half-work.
   emailMaintenanceScheduled Boolean @default(true)
+  /// "The assistant changed six things on your project." Sent when a capability set to
+  /// AUTO_APPLY applies its own proposal — see services/ai-proposal.service.ts.
+  ///
+  /// Default ON, and this one is not a preference so much as a precondition. AUTO_APPLY moves a
+  /// person's job from approving a change to vetoing it, and a veto nobody is told about is not a
+  /// veto. A workspace can still switch it off, but doing so is the decision to let a machine
+  /// change the plan silently.
+  emailAiAutonomyApplied    Boolean @default(true)
 
   /// Hour (0–23, server local time) for the "log today's time" reminder.
   dailyReminderHour        Int     @default(16)

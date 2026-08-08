@@ -44,9 +44,16 @@ export interface AiCapabilitySpec {
   readonly id: string;
   readonly title: string;
   readonly description: string;
-  /** The existing GlobalAISettings boolean that must already be on. Reusing it rather than adding
-   *  a second switch is deliberate — see the schema comment on aiAutonomyEnabled. */
-  readonly featureToggle: AIFeatureToggle;
+  /**
+   * The existing GlobalAISettings boolean that must already be on. Reusing it rather than adding a
+   * second switch is deliberate — see the schema comment on aiAutonomyEnabled.
+   *
+   * NULL for a capability that reaches no model. Not every entry here is AI: the rebalance
+   * producer is pure arithmetic over the workload figures, so gating it on an AI toggle would mean
+   * switching off AI stopped a feature that never used any. It still sits in this registry, because
+   * "how much may this act on its own" is the same question whatever computes the answer.
+   */
+  readonly featureToggle: AIFeatureToggle | null;
   /** THE CEILING. The highest level a SUPER_ADMIN may select for this capability. */
   readonly maxLevel: AiAutonomyLevel;
   /** Rendered next to the disabled rungs. Null only when maxLevel is AUTONOMOUS. */
@@ -124,6 +131,17 @@ const CAPABILITIES: ReadonlyArray<AiCapabilitySpec> = [
 
   // ── Plan-shaped changes. Reversible, scoped to a project, and reviewed row by row — the
   //    capabilities the proposal envelope was actually built for.
+  {
+    id: "assignment_rebalance",
+    title: "Rebalance workload",
+    description: "Moves bookings off people over capacity and onto people with room. Uses no AI — the figures are arithmetic.",
+    featureToggle: null,
+    maxLevel: "AUTO_APPLY",
+    ceilingReason:
+      "Moving somebody's work to somebody else is a management act. It can apply its own moves when you allow it, but it will not run unattended on a schedule.",
+    actsOnUntrustedInput: false,
+    tools: []
+  },
   {
     id: "plan_breakdown",
     title: "Break work down",

@@ -65,7 +65,7 @@ import {
   Trash2,
   Wrench,
   X,
-  Zap
+  Zap, Bot
 } from "lucide-react";
 import type { ReactNode } from "react";
 import { useEffect, useState } from "react";
@@ -141,7 +141,7 @@ interface ToggleRow {
  * no admin can find — which is exactly what had happened to the six `emailTicket*` rows below.
  * The `emailChannelCoverage` assertion under this list keeps that from recurring.
  */
-const emailRows: ToggleRow[] = [
+const emailRows = [
   { group: "Timesheets", key: "emailTimesheetSubmitted", label: "Submission confirmation", description: "Email the submitter when a timesheet enters the approval queue.", icon: <Check className="h-4 w-4 text-info" /> },
   { group: "Timesheets", key: "emailTimesheetApproved", label: "Timesheet approved", description: "Email the employee when their entry is approved.", icon: <Check className="h-4 w-4 text-success" /> },
   { group: "Timesheets", key: "emailTimesheetRejected", label: "Timesheet rejected", description: "Email the employee with the reviewer's reason and a fix link.", icon: <X className="h-4 w-4 text-destructive" /> },
@@ -155,6 +155,7 @@ const emailRows: ToggleRow[] = [
   { group: "Digests", key: "emailBugPatternDigest", label: "Monthly bug-pattern digest", description: "AI-authored \"what kept breaking\" recap on the 1st of every month — recurring CI failures and security-finding hotspots. Requires the AI monthly bug-pattern digest toggle in the AI tab.", icon: <BellRing className="h-4 w-4 text-info" /> },
   { group: "Tickets", key: "emailTicketStaleNudge", label: "Stale-ticket nudge", description: "AI-suggested next action when the SLA sweep flags a ticket as stale. Requires the AI stale-ticket nudge toggle in the AI tab.", icon: <Hourglass className="h-4 w-4 text-warning" /> },
   { group: "Workspace", key: "emailMaintenanceScheduled", label: "Maintenance warning", description: "\"Save your work\" email when a super admin sends the maintenance-window notice from the Maintenance tab. The in-app notification always fires — this only gates the email copy.", icon: <Wrench className="h-4 w-4 text-warning" /> },
+  { group: "Workspace", key: "emailAiAutonomyApplied", label: "Assistant acted on its own", description: "Tells the person a change was made for them when a capability set to Apply or Act freely in the AI tab applies its own change set. On by default — those levels move your job from approving a change to vetoing it, and a veto nobody is told about is not a veto.", icon: <Bot className="h-4 w-4 text-primary" /> },
   { group: "Tickets", key: "emailTicketNeedsReview", label: "Email-sourced ticket needs review", description: "Alert project admins/managers when an inbound email is classified with low confidence.", icon: <Sparkles className="h-4 w-4 text-warning" /> },
   // Face (identity) verification lifecycle — none of these ever carry a captured image or a
   // score; they link into the app, where authorization is checked.
@@ -173,7 +174,7 @@ const emailRows: ToggleRow[] = [
   { group: "Tickets", key: "emailTicketSlaBreach", label: "Ticket SLA breached", description: "Email the assignee when a ticket passes its priority's SLA window.", icon: <Hourglass className="h-4 w-4 text-warning" /> },
   { group: "Tickets", key: "emailTicketEscalation", label: "Ticket escalation", description: "Email the assignee's manager when a breached ticket escalates.", icon: <ShieldX className="h-4 w-4 text-destructive" /> },
   { group: "Tickets", key: "emailTicketClosedDigest", label: "Ticket-closed security digest", description: "Security/test-status recap to whoever closed a ticket, their manager, and this org's admins. Needs a connected scan source to be meaningful.", icon: <ShieldCheck className="h-4 w-4 text-success" /> }
-];
+] as const satisfies readonly ToggleRow[];
 
 /**
  * Compile-time proof that every gateable email category has a row above. If a new key is added

@@ -27,7 +27,9 @@ import { Prisma } from "@prisma/client";
 import { prisma } from "../config/prisma.js";
 import { AppError } from "../middleware/error.js";
 import { audit } from "./audit.service.js";
-import { assertLevelAtLeast } from "./ai-autonomy.service.js";
+import { assertLevelAtLeast, resolveAutonomy } from "./ai-autonomy.service.js";
+import { levelRank } from "./ai-capability.registry.js";
+import { dispatchNotification } from "./notify.service.js";
 import { assertNoParentCycle, toDay } from "./plan-schedule.service.js";
 
 export type ProposalKind = "PLAN_BREAKDOWN" | "SCHEDULE_ADJUSTMENT" | "ASSIGNMENT_REBALANCE" | "RISK_MITIGATION" | "BLUEPRINT_SUGGESTION";
@@ -504,6 +506,91 @@ export async function applyProposal(params: {
   });
 
   return { applied, skipped, failed, status };
+}
+
+/**
+ * Create a proposal and, if the capability is allowed to, apply it immediately.
+ *
+ * THIS IS THE ONLY PLACE AUTO_APPLY HAPPENS. Producers call this instead of `createProposal` and
+ * do not decide anything themselves — a producer that made its own call about whether it may act
+ * would be a producer that could get it wrong, and there would be as many chances to get it wrong
+ * as there are producers.
+ *
+ * AND IT IS STILL THE SAME WRITE PATH. AUTO_APPLY is not a second way to change the database; it
+ * is `applyProposal` with every row accepted and an agent as the applier. So it inherits, unchanged
+ * and untouchable: the per-row staleness refusal, the field allowlist, the referential validation,
+ * per-row independence, the audit row — and, because the proposal is a real reviewed artefact
+ * rather than a bare write, `undoProposal` works on it exactly as it does on a human's.
+ *
+ * WHAT DEGRADES RATHER THAN FAILS: every guardrail below leaves the proposal PENDING_REVIEW rather
+ * than throwing. A capability that exceeded its change budget has not done anything wrong — it has
+ * produced something that needs a person, which is precisely the state the product had before
+ * autonomy existed. Falling back to "a human decides" is never an error.
+ */
+export async function createProposalAndMaybeApply(
+  params: Parameters<typeof createProposal>[0] & { capability: string }
+): Promise<{ proposalId: string; autoApplied: boolean; applied: number; heldForReview: string | null }> {
+  const { capability, ...draft } = params;
+  const proposal = await createProposal(draft);
+
+  const autonomy = await resolveAutonomy(capability);
+  if (levelRank(autonomy.effectiveLevel) < levelRank("AUTO_APPLY")) {
+    return { proposalId: proposal.id, autoApplied: false, applied: 0, heldForReview: null };
+  }
+
+  const held = (reason: string) => ({ proposalId: proposal.id, autoApplied: false, applied: 0, heldForReview: reason });
+
+  // A change budget is how an administrator says "act on small things by yourself". A proposal
+  // that blows through it is exactly the one a person should look at.
+  const maxChanges = autonomy.guardrails.maxChangesPerRun;
+  if (maxChanges !== null && proposal.changes.length > maxChanges) {
+    return held(`${proposal.changes.length} changes is more than the ${maxChanges} this capability may apply unattended.`);
+  }
+
+  // A project allowlist is how an administrator says "act on THIS project by yourself". Absent
+  // means every project the acting person can see, which is not the same as everywhere.
+  const scopeIds = autonomy.guardrails.scopeProjectIds;
+  if (scopeIds && (!proposal.scopeProjectId || !scopeIds.includes(proposal.scopeProjectId))) {
+    return held("This capability may only act unattended on specific projects, and this is not one of them.");
+  }
+
+  const result = await applyProposal({
+    proposalId: proposal.id,
+    // Every row accepted. The reviewer's per-row judgement is what an administrator gave up when
+    // they raised the level; it is not silently reintroduced here as a partial acceptance.
+    decisions: Object.fromEntries(proposal.changes.map((c) => [c.id, true])),
+    actorId: params.requestedById,
+    appliedBy: { kind: "AGENT", capability, runId: proposal.id }
+  });
+
+  await notifyAutoApplied(proposal.id, params.requestedById, capability, result);
+  return { proposalId: proposal.id, autoApplied: true, applied: result.applied, heldForReview: null };
+}
+
+/**
+ * Tell the person whose name is on this that a machine changed things.
+ *
+ * NOT best-effort by accident — best-effort on purpose, and wrapped: a notification that fails must
+ * not roll back a change that already landed, because then the database and the person's inbox
+ * would disagree about what happened. But it is also the load-bearing half of AUTO_APPLY, so it is
+ * sent for a partial application too. "Six changed, two refused" is more worth reading than six.
+ */
+async function notifyAutoApplied(proposalId: string, userId: string, capability: string, result: ApplyResult): Promise<void> {
+  try {
+    const refused = result.failed.length;
+    await dispatchNotification({
+      userId,
+      category: "ai.autonomy_applied",
+      title: `The assistant changed ${result.applied} thing${result.applied === 1 ? "" : "s"}`,
+      body:
+        refused > 0
+          ? `${capability} applied ${result.applied} change${result.applied === 1 ? "" : "s"} and left ${refused} alone. Review or undo them.`
+          : `${capability} applied ${result.applied} change${result.applied === 1 ? "" : "s"} without waiting. Review or undo them.`,
+      link: "/app/proposals"
+    });
+  } catch {
+    // Swallowed deliberately — see above.
+  }
 }
 
 export interface UndoResult {

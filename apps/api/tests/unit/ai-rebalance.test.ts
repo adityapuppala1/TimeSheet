@@ -22,8 +22,10 @@ vi.mock("../../src/services/workload.service.js", async (importOriginal) => ({
   loadWorkload: loadWorkloadMock
 }));
 
-const createProposalMock = vi.fn().mockResolvedValue({ id: "prop-1" });
-vi.mock("../../src/services/ai-proposal.service.js", () => ({ createProposal: createProposalMock }));
+// The producer goes through createProposalAndMaybeApply, not createProposal — it does not decide
+// for itself whether it may act, so the thing to mock is the function that asks the policy.
+const createProposalMock = vi.fn().mockResolvedValue({ proposalId: "prop-1", autoApplied: false, applied: 0, heldForReview: null });
+vi.mock("../../src/services/ai-proposal.service.js", () => ({ createProposalAndMaybeApply: createProposalMock }));
 
 const { proposeAssignmentRebalance } = await import("../../src/services/ai-rebalance.service.js");
 
@@ -42,7 +44,7 @@ const WINDOW = { from: new Date("2026-08-10"), to: new Date("2026-08-21"), reque
 
 beforeEach(() => {
   client = createFakeTenantClient();
-  createProposalMock.mockClear().mockResolvedValue({ id: "prop-1" });
+  createProposalMock.mockClear().mockResolvedValue({ proposalId: "prop-1", autoApplied: false, applied: 0, heldForReview: null });
   loadWorkloadMock.mockReset();
   vi.mocked(client.project.findFirst).mockResolvedValue({ id: "proj-1", name: "Web" } as never);
   vi.mocked(client.resourceBooking.findMany).mockResolvedValue([] as never);
