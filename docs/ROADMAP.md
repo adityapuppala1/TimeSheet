@@ -2413,3 +2413,26 @@ Tests: `tests/unit/ai.service.test.ts` (+4 cases, all 4 fail pre-fix), `ai-propo
   clicking at the same moment can each pass a cap only one should. The honest fix is a serialised
   reservation, which is a schema change; the overshoot is now bounded by one call per concurrent
   request rather than by the batch size.
+## Dependency advisories: one open, and why the suggested fix is worse (2026-08-08)
+
+Pushing 2.3.0 tripped a Dependabot alert on the default branch. Recording the analysis here rather
+than leaving a bare "1 moderate" for the next person to re-derive.
+
+- [ ] **`uuid` < 11.1.1 via `exceljs` — reachable only through a code path we never call.**
+  [GHSA-w5hq-g745-h8pq](https://github.com/advisories/GHSA-w5hq-g745-h8pq) is a missing buffer
+  bounds check in uuid's **v3/v5/v6** generators, and only when the caller passes a `buf` argument.
+  `exceljs@4.4.0` is the only consumer in the tree (`npm ls uuid --all` resolves exactly one copy,
+  8.3.2), it imports `{v4: uuidv4}` alone, and it calls `uuidv4()` with no arguments — the affected
+  generators are never constructed, let alone with a buffer. Not exploitable as shipped.
+- **`npm audit fix --force` would make this worse, so do not run it.** Its proposed remedy is
+  `exceljs@3.4.0` — a major *downgrade* from 4.4.0, against which
+  `services/timesheet-report-xlsx.service.ts` is written. Trading a non-reachable advisory for a
+  broken Excel export is not a fix.
+- **A scoped `overrides` entry does not currently work here, which is worth knowing before someone
+  tries it.** `uuid: "^11.1.1"` was added to the root `overrides`, installed, and re-resolved with
+  `npm install --package-lock-only`; uuid stayed at 8.3.2 and the lockfile gained no `overrides`
+  key — it has never recorded one, including the `form-data` entry that has been sitting there.
+  Under npm 11.16.0 / lockfileVersion 3 this repo's root overrides are not reaching resolution, so
+  the change was reverted rather than committed as a no-op that reads like a remediation. **The
+  `form-data` override is therefore also suspect** and should not be assumed to be holding
+  anything. The real fix is upstream: `exceljs` widening its `uuid` range.
