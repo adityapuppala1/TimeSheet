@@ -355,8 +355,29 @@ async function runModelDrivenLoop(
   const maxCost = run.maxCostUsd !== null ? Number(run.maxCostUsd) : null;
   /** Every (tool, args) already issued this run — see callSignature for why asking wasn't enough. */
   const seenCalls = new Set<string>();
+  /** Every distinct RESULT this run has been shown. A call whose answer is byte-identical to one
+   *  already seen bought no information, whatever its arguments were — the second live pilot run
+   *  spent six steps on differently-argued searches that all returned the same empty answer, which
+   *  the args-repeat guard correctly could not block. */
+  const seenResults = new Set<string>();
+  /** Consecutive steps that produced nothing new. Two earns one steering note; three means the
+   *  run is circling and the envelope demands the answer. */
+  let consecutiveNoNew = 0;
+  let steered = false;
   let costUsd = Number(run.costUsd ?? 0);
   let step = 0;
+
+  /** Dedup-aware transcript append: tracks whether this result taught the run anything. */
+  const pushResult = (tool: string, args: unknown, result: string) => {
+    transcript.push({ tool, args, result: result.slice(0, TRANSCRIPT_RESULT_LIMIT) });
+    const key = result.slice(0, TRANSCRIPT_RESULT_LIMIT);
+    if (seenResults.has(key)) {
+      consecutiveNoNew++;
+    } else {
+      seenResults.add(key);
+      consecutiveNoNew = 0;
+    }
+  };
 
   while (step < run.maxSteps) {
     if (await abortRequested(run.id)) {
@@ -369,6 +390,12 @@ async function runModelDrivenLoop(
       return;
     }
 
+    // The last allowed step is RESERVED for the answer, always — both live pilot runs spent their
+    // whole budget on tool calls and ended at the ceiling having never said what they found, which
+    // wastes every step they took. Circling (three no-new results) forfeits the remaining tool
+    // budget for the same reason: the data it is going to answer from already exists.
+    const mustFinish = step === run.maxSteps - 1 || consecutiveNoNew >= 3;
+
     const { decision, costUsd: stepCost, raw } = await planAgentStep({
       capability: spec.id,
       featureToggle: spec.featureToggle!,
@@ -376,6 +403,7 @@ async function runModelDrivenLoop(
       tools,
       transcript,
       stepsRemaining: run.maxSteps - step,
+      mustFinish,
       userId: run.onBehalfOfId
     });
     costUsd += stepCost;
@@ -391,6 +419,19 @@ async function runModelDrivenLoop(
     if (decision.action === "finish") {
       await recordStep(run.id, step, { kind: "finish", result: decision.summary });
       await finish(run.id, "COMPLETED", null);
+      return;
+    }
+
+    if (mustFinish) {
+      // Asked for its answer, reached for a tool anyway. PARTIAL, not FAILED: the recorded steps
+      // are real work somebody can read — what is missing is the summary, and the trace says so.
+      await recordStep(run.id, step, {
+        kind: "error",
+        toolName: decision.tool,
+        error: "Asked for its final answer, tried to call another tool instead.",
+        result: raw.slice(0, 500)
+      });
+      await finish(run.id, "PARTIAL", "The run was asked for its answer and tried to keep working instead.");
       return;
     }
 
@@ -415,21 +456,35 @@ async function runModelDrivenLoop(
         `Calling it again cannot return anything new — either use a different tool or different arguments, or finish.`;
       await recordStep(run.id, step, { kind: "refusal", toolName: decision.tool, args: decision.args, error: "Repeated call refused." });
       transcript.push({ tool: decision.tool, args: decision.args, result: refusal });
-      continue;
+      // A repeat is, by definition, nothing new — it counts toward the circling threshold.
+      consecutiveNoNew++;
+    } else {
+      seenCalls.add(signature);
+      try {
+        const result = await callToolForRun(run.id, ctx, spec.id, run.level, decision.tool, decision.args, step);
+        const resultText = typeof result === "string" ? result : JSON.stringify(result);
+        await recordStep(run.id, step, { kind: "tool", toolName: decision.tool, args: decision.args, result: resultText });
+        pushResult(decision.tool, decision.args, resultText);
+      } catch (error) {
+        // A refused or failed tool call is information the model can act on — surfaced as data,
+        // charged as a step, never silently retried. It goes through the same result-identity
+        // tracking: the third differently-argued call failing with the same message is circling.
+        const message = (error as Error).message.slice(0, 500);
+        await recordStep(run.id, step, { kind: "error", toolName: decision.tool, args: decision.args, error: message });
+        pushResult(decision.tool, decision.args, `That call failed: ${message}`);
+      }
     }
-    seenCalls.add(signature);
 
-    try {
-      const result = await callToolForRun(run.id, ctx, spec.id, run.level, decision.tool, decision.args, step);
-      const resultText = typeof result === "string" ? result : JSON.stringify(result);
-      await recordStep(run.id, step, { kind: "tool", toolName: decision.tool, args: decision.args, result: resultText });
-      transcript.push({ tool: decision.tool, args: decision.args, result: resultText.slice(0, TRANSCRIPT_RESULT_LIMIT) });
-    } catch (error) {
-      // A refused or failed tool call is information the model can act on — surfaced as data,
-      // charged as a step, never silently retried.
-      const message = (error as Error).message.slice(0, 500);
-      await recordStep(run.id, step, { kind: "error", toolName: decision.tool, args: decision.args, error: message });
-      transcript.push({ tool: decision.tool, args: decision.args, result: `That call failed: ${message}` });
+    // One explicit course-correction before the envelope forces the answer: at two consecutive
+    // no-new results the model gets told, in its own transcript, what its results have been
+    // telling it. If it still circles, the mustFinish gate above ends the search on the next turn.
+    if (consecutiveNoNew === 2 && !steered) {
+      steered = true;
+      const note =
+        "Your recent calls returned nothing you had not already seen. More of the same search cannot help — " +
+        "make ONE genuinely different call, or finish now with what you have.";
+      await recordStep(run.id, step, { kind: "note", result: note });
+      transcript.push({ tool: "system", args: {}, result: note });
     }
   }
 

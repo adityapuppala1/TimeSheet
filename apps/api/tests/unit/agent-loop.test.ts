@@ -163,6 +163,71 @@ describe("the bounds", () => {
   });
 });
 
+describe("ending with an answer", () => {
+  /** Overrides the run row (e.g. maxSteps) while keeping the select-shape dispatch intact. */
+  function mockRun(over: Record<string, unknown>) {
+    vi.mocked(client.agentRun.findUnique).mockImplementation((async (args: { select?: Record<string, boolean> }) => {
+      if (args?.select?.abortRequestedAt && Object.keys(args.select).length === 1) return { abortRequestedAt: null };
+      if (args?.select?.taintedAt && Object.keys(args.select).length === 1) return { taintedAt: null };
+      return baseRun(over);
+    }) as never);
+  }
+
+  it("reserves the last step for the answer — a run that never says what it found wasted every step", async () => {
+    // Both live pilot runs spent their whole budget on tool calls and hit the ceiling silent.
+    vi.mocked(planAgentStep)
+      .mockResolvedValueOnce({ decision: { action: "tool", tool: "get_ticket", args: { key: "A-1" } }, costUsd: 0.01, raw: "{}" })
+      .mockResolvedValueOnce({ decision: { action: "tool", tool: "get_ticket", args: { key: "A-2" } }, costUsd: 0.01, raw: "{}" })
+      .mockResolvedValueOnce({ decision: { action: "finish", summary: "Here is what I found." }, costUsd: 0.01, raw: "{}" });
+    vi.mocked(invokeMcpTool).mockResolvedValueOnce({ a: 1 } as never).mockResolvedValueOnce({ a: 2 } as never);
+
+    await runInTenant(client, () => executeAgentRun("run-1"));
+
+    expect(finalStatus()).toBe("COMPLETED");
+    // The first two decisions were free choices; the third — the last allowed step — was not.
+    expect(vi.mocked(planAgentStep).mock.calls[0][0].mustFinish).toBeFalsy();
+    expect(vi.mocked(planAgentStep).mock.calls[1][0].mustFinish).toBeFalsy();
+    expect(vi.mocked(planAgentStep).mock.calls[2][0].mustFinish).toBe(true);
+  });
+
+  it("identical answers to different questions count as circling: steer once, then demand the answer", async () => {
+    // The live gap the args-repeat guard correctly could not close — six differently-argued
+    // searches, one identical empty answer. Result identity is what circling actually is.
+    mockRun({ maxSteps: 8 });
+    vi.mocked(planAgentStep).mockImplementation(async (input: { mustFinish?: boolean; transcript: unknown[] }) => {
+      if (input.mustFinish) return { decision: { action: "finish", summary: "Nothing moved this week." }, costUsd: 0.01, raw: "{}" };
+      const n = vi.mocked(planAgentStep).mock.calls.length;
+      return { decision: { action: "tool", tool: "search_tickets", args: { query: `angle-${n}` } }, costUsd: 0.01, raw: "{}" };
+    });
+    vi.mocked(invokeMcpTool).mockResolvedValue({ count: 0, tickets: [] } as never);
+
+    await runInTenant(client, () => executeAgentRun("run-1"));
+
+    expect(finalStatus()).toBe("COMPLETED");
+    // Four searches ran (1 new + 3 identical), then the envelope demanded the answer — with four
+    // steps still unspent. Circling forfeits the tool budget; it does not get to exhaust it.
+    expect(vi.mocked(invokeMcpTool)).toHaveBeenCalledTimes(4);
+    const finalCall = vi.mocked(planAgentStep).mock.calls.at(-1)![0];
+    expect(finalCall.mustFinish).toBe(true);
+    // The steering note reached the model before the demand did.
+    expect(JSON.stringify(finalCall.transcript)).toContain("nothing you had not already seen");
+  });
+
+  it("a run asked for its answer that reaches for a tool anyway lands PARTIAL, and the tool never runs", async () => {
+    mockRun({ maxSteps: 1 }); // the only step IS the last step
+    vi.mocked(planAgentStep).mockResolvedValue({
+      decision: { action: "tool", tool: "get_ticket", args: {} },
+      costUsd: 0.01,
+      raw: "{}"
+    });
+
+    await runInTenant(client, () => executeAgentRun("run-1"));
+
+    expect(finalStatus()).toBe("PARTIAL");
+    expect(vi.mocked(invokeMcpTool)).not.toHaveBeenCalled();
+  });
+});
+
 describe("the allowlist", () => {
   it("a tool outside the capability's allowlist is refused as data, never invoked", async () => {
     vi.mocked(planAgentStep)

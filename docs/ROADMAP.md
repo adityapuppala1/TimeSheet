@@ -2485,12 +2485,20 @@ insists on looping still runs out — but costing no tool invocation. Argument k
 normalised, or the check would be defeated by `{a,b}` vs `{b,a}`. Verified live: the second run's
 trace shows two refusals and real work done (25 tickets found, one fetched).
 
-- [ ] **Still open, and honestly a prompt problem rather than a bounds one:** the second run still
-  spent six steps on *differently-argued* `search_tickets` calls that each returned zero. The
-  repeat guard correctly does not block those — they are legitimately different calls — but the
-  model is not learning from consecutive empty results. The fix is prompt work (tell it what an
-  empty result means and what to try instead), which is exactly what the eval harness and the
-  now-connected proposal-decision signal exist to measure.
+- [x] **Closed 2026-08-09, and the diagnosis was half wrong: it was a bounds problem after all.**
+  "Prompt work" alone would have repeated the original mistake — the prompt already forbade
+  re-fetching and was ignored, because an instruction is not a bound. Three changes, third run
+  proved them: (1) the prompt now *teaches* what an empty result means ("an EMPTY result is an
+  answer: that avenue has nothing"); (2) the loop tracks RESULT identity — a call whose answer is
+  byte-identical to one already seen bought nothing, whatever its arguments — two consecutive
+  no-new results earn one steering note in the transcript, three forfeit the remaining tool
+  budget; (3) **the last step is always reserved for the answer**, because runs 1 and 2 spent
+  their whole budget searching and hit the ceiling *silent*, which wastes every step taken. A run
+  demanded its answer that reaches for a tool anyway lands PARTIAL with the trace saying exactly
+  that. Live run 3: repeat guard fired twice, steering note fired, the model changed course and
+  found real data, and finished COMPLETED at step 8 of 12 with a genuine stakeholder summary —
+  the first of the three pilot runs to end with an answer. What remains for the eval harness is
+  tuning, not correctness.
 ## Dependency advisories: one open, and why the suggested fix is worse (2026-08-08)
 
 Pushing 2.3.0 tripped a Dependabot alert on the default branch. Recording the analysis here rather
