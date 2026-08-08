@@ -2549,3 +2549,31 @@ Still open, and deliberately so:
   decision about what a proposal's "expected output" even is.
 - [ ] **The budget cap is still check-then-act.** Serial execution bounds the agent case; two
   request-path callers can still each pass a cap only one should.
+## Three bugs found by looking for them (2026-08-09)
+
+Written up because two of the three are the same shape — something declared, documented and wired
+into a UI, that could never actually happen. That shape does not announce itself: the code reads
+correctly, the tests pass, and the feature is simply absent.
+
+- [x] **`AgentRun.status = BLOCKED` was unreachable.** The state was designed, documented in the
+  schema, and had its own domain event — and the ternary choosing it could only produce it when two
+  values were both null, which could not occur. Root cause was one field meaning two things:
+  `RebalanceOutcome.reason` carried both "there was nothing to do" and "a guardrail held this back",
+  so the runner could not tell a completed run from a blocked one and every run reported COMPLETED.
+  Split into `reason` and `heldForReview`; both cases now have a test.
+- [x] **`maxRunsPerDay` was enforced nowhere.** The settings route validated it, the policy table
+  stored it, `describeAutonomyCatalogue` surfaced it — and no code read it. An administrator could
+  set "at most 3 runs a day" and get unlimited runs. Enforced in `queueAgentRun`, counted after the
+  `triggerKey` check so re-asking for an existing run does not eat the day's allowance.
+- [x] **An update was invisible until somebody wrote release notes.** `update-check.service.ts` read
+  GitHub *Releases*, but the CD pipeline publishes on a *tag* — creating the Release object is a
+  separate manual step. At the time of writing this repo had four version tags and zero releases, so
+  **every installation in existence was being told it was up to date**. That is the worst direction
+  for an update check to fail in: silent, and reassuring. It now falls back to the tags endpoint,
+  with notes still coming from the bundled CHANGELOG. Tagging is sufficient; a Release adds the
+  written notes and nothing else.
+
+Two things left deliberately unenforced, and now stated in the code rather than left to be found:
+`AgentRun.maxSteps` and `maxCostUsd` are recorded but not checked, because there is no multi-step
+loop yet to check them between steps — and `status = PARTIAL` is in the same position. The comment
+now says so, since a bound that looks enforced and is not is worse than no bound.

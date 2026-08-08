@@ -34,7 +34,18 @@ import { invokeMcpTool, MCP_TOOLS, type McpEnablementSettings, type McpToolConte
 import { proposeAssignmentRebalance } from "./ai-rebalance.service.js";
 import { emitDomainEvent } from "./domain-events.js";
 
-/** Steps a run may take before it is stopped and called PARTIAL. */
+/**
+ * Steps a run may take before it is stopped and called PARTIAL.
+ *
+ * RECORDED NOW, ENFORCED BY THE LOOP. There is no multi-step loop yet — `callChat` is single-shot —
+ * so nothing currently counts steps, and `maxSteps`/`maxCostUsd` are carried on the run rather than
+ * checked. That is stated here rather than left to be discovered, because a bound that looks
+ * enforced and is not is worse than no bound: `AgentRun.status`'s own PARTIAL state is in the same
+ * position, and the BLOCKED state was in it too until a test caught that it could never happen.
+ *
+ * The loop that lands must check both between steps, and must produce PARTIAL rather than FAILED
+ * when it stops early — work already done is real.
+ */
 const DEFAULT_MAX_STEPS = 12;
 
 export interface QueueRunParams {
@@ -70,6 +81,21 @@ export async function queueAgentRun(params: QueueRunParams): Promise<{ runId: st
 
   const existing = await prisma.agentRun.findUnique({ where: { triggerKey: params.triggerKey }, select: { id: true } });
   if (existing) return { runId: existing.id, created: false };
+
+  // The daily ceiling an administrator set. Checked HERE and not at execution, because refusing to
+  // queue is the only refusal that costs nothing — a run rejected after being queued would still
+  // occupy the worker and still have to be explained.
+  //
+  // Counted AFTER the triggerKey check above on purpose: re-queueing something that already exists
+  // is not a new run and must not consume the day's allowance.
+  const perDay = autonomy.guardrails.maxRunsPerDay;
+  if (perDay !== null) {
+    const since = new Date(Date.now() - 24 * 3_600_000);
+    const used = await prisma.agentRun.count({ where: { capability: params.capability, createdAt: { gte: since } } });
+    if (used >= perDay) {
+      throw new AppError(429, `"${params.capability}" has already run ${used} time(s) in the last 24 hours, which is its limit.`);
+    }
+  }
 
   try {
     const run = await prisma.agentRun.create({
@@ -240,12 +266,17 @@ export async function executeAgentRun(runId: string): Promise<void> {
         requestedById: run.onBehalfOfId
       });
 
-      await recordStep(runId, 0, { kind: "proposal", result: outcome.reason ?? `${outcome.moves} move(s) proposed` });
+      await recordStep(runId, 0, {
+        kind: "proposal",
+        result: outcome.heldForReview ?? outcome.reason ?? `${outcome.moves} move(s) proposed`
+      });
       await prisma.agentRun.update({ where: { id: runId }, data: { proposalId: outcome.proposalId, stepCount: 1 } });
 
-      // BLOCKED rather than FAILED when a guardrail held it back: the run did its work and
-      // produced something a person now has to look at. That is degradation, not an error.
-      await finish(runId, outcome.reason && !outcome.proposalId ? "COMPLETED" : outcome.proposalId ? "COMPLETED" : "BLOCKED", null);
+      // BLOCKED means the run produced something its level does not let it apply — degradation to
+      // propose-only, which is an outcome and not an error. Everything else is a completion,
+      // including "there was nothing to rebalance": having correctly decided to do nothing is a
+      // successful run, not a blocked one.
+      await finish(runId, outcome.heldForReview ? "BLOCKED" : "COMPLETED", null);
       return;
     }
 

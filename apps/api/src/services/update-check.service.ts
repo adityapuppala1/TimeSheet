@@ -71,8 +71,9 @@ export function compareSemver(a: string, b: string): number {
   return aMajor - bMajor || aMinor - bMinor || aPatch - bPatch;
 }
 
-async function fetchReleases(): Promise<ReleaseInfo[]> {
-  const response = await fetch(`https://api.github.com/repos/${REPO}/releases?per_page=${RELEASE_HISTORY_LIMIT}`, {
+/** One authenticated-or-not GitHub GET, with the headers this check always sends. */
+function githubFetch(path: string): Promise<Response> {
+  return fetch(`https://api.github.com/repos/${REPO}/${path}`, {
     headers: {
       Accept: "application/vnd.github+json",
       "User-Agent": "timesphere-update-check",
@@ -80,6 +81,43 @@ async function fetchReleases(): Promise<ReleaseInfo[]> {
     },
     signal: AbortSignal.timeout(10_000)
   });
+}
+
+/**
+ * TAGS, when there are no Releases.
+ *
+ * WHY THIS EXISTS: the CD pipeline builds and publishes on a `v*.*.*` TAG. Creating the GitHub
+ * *Release* object on top of it is a separate, manual step — and until somebody does it, every
+ * running installation is told it is up to date while a newer version has in fact shipped. That is
+ * the worst possible failure direction for an update check: silent, and wrong in the reassuring
+ * direction.
+ *
+ * A tag carries no notes, which is exactly what the bundled-CHANGELOG fallback below already
+ * handles. So this answers "is there something newer" from the artefact that always exists, and
+ * the notes come from where they already came from. Tagging is now sufficient; a Release is a
+ * nicety that adds the written notes.
+ */
+async function fetchTagsAsReleases(): Promise<ReleaseInfo[]> {
+  const response = await githubFetch(`tags?per_page=${RELEASE_HISTORY_LIMIT}`);
+  if (!response.ok) throw new Error(`GitHub answered ${response.status}`);
+
+  const rows = (await response.json()) as Array<{ name?: string }>;
+  return rows
+    .filter((row) => /^v?\d+\.\d+\.\d+$/.test(row.name ?? ""))
+    .map((row) => ({
+      version: (row.name ?? "").replace(/^v/, ""),
+      name: row.name ?? "",
+      // Deliberately empty rather than invented. `withBundledFallback` fills notes from this
+      // build's own CHANGELOG where it can, and a version with no notes is far better than a
+      // version nobody is told about.
+      notes: "",
+      publishedAt: null,
+      url: `https://github.com/${REPO}/releases/tag/${row.name}`
+    }));
+}
+
+async function fetchReleases(): Promise<ReleaseInfo[]> {
+  const response = await githubFetch(`releases?per_page=${RELEASE_HISTORY_LIMIT}`);
   if (!response.ok) throw new Error(`GitHub answered ${response.status}`);
 
   const rows = (await response.json()) as Array<{
@@ -92,7 +130,7 @@ async function fetchReleases(): Promise<ReleaseInfo[]> {
     prerelease?: boolean;
   }>;
 
-  return rows
+  const releases = rows
     // Drafts aren't shipped and prereleases aren't for operators — offering either as "the
     // update" would point update.sh at an image the CD pipeline may never have built.
     .filter((row) => !row.draft && !row.prerelease && /^v?\d+\.\d+\.\d+$/.test(row.tag_name ?? ""))
@@ -103,6 +141,12 @@ async function fetchReleases(): Promise<ReleaseInfo[]> {
       publishedAt: row.published_at ?? null,
       url: row.html_url ?? `https://github.com/${REPO}/releases`
     }));
+
+  // No Releases published yet, but the CD pipeline tags every version it builds. Reading the tags
+  // means an installation learns about a new version from the artefact that always exists, rather
+  // than being told it is up to date until somebody remembers to write release notes.
+  if (releases.length === 0) return fetchTagsAsReleases();
+  return releases;
 }
 
 /**

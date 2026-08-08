@@ -36,9 +36,18 @@ const MAX_MOVES = 12;
 
 export interface RebalanceOutcome {
   proposalId: string | null;
-  /** Why nothing was proposed, when nothing was — so the caller can say something useful rather
-   *  than showing an empty result that looks like a failure. */
+  /**
+   * Why nothing was proposed, when nothing was — so the caller can say something useful rather
+   * than showing an empty result that looks like a failure.
+   *
+   * ONLY set when there is no proposal. It used to also carry "a proposal exists but a guardrail
+   * held it back", and one field meaning two things is how the agent runner ended up unable to
+   * tell a completed run from a blocked one. That case is `heldForReview` now.
+   */
   reason: string | null;
+  /** Set when a proposal WAS produced but its capability was not allowed to apply it — the
+   *  degradation to propose-only, which is an outcome and not an error. */
+  heldForReview: string | null;
   moves: number;
 }
 
@@ -68,12 +77,12 @@ export async function proposeAssignmentRebalance(params: {
   });
 
   if (rows.length < 2) {
-    return { proposalId: null, reason: "There is only one person assigned to this project, so there is nothing to rebalance.", moves: 0 };
+    return { proposalId: null, reason: "There is only one person assigned to this project, so there is nothing to rebalance.", heldForReview: null, moves: 0 };
   }
 
   const overloaded = rows.filter((r) => (r.totals.allocationPct ?? 0) >= OVER_ALLOCATION_THRESHOLD_PCT);
   if (overloaded.length === 0) {
-    return { proposalId: null, reason: "Nobody on this project is over capacity in that window.", moves: 0 };
+    return { proposalId: null, reason: "Nobody on this project is over capacity in that window.", heldForReview: null, moves: 0 };
   }
 
   // Sorted so the emptiest person is offered work first; a stable tiebreak on id keeps the same
@@ -86,6 +95,7 @@ export async function proposeAssignmentRebalance(params: {
     return {
       proposalId: null,
       reason: "Somebody is over capacity, but nobody else on this project has room — this needs more people or a later deadline, not a reshuffle.",
+      heldForReview: null,
       moves: 0
     };
   }
@@ -142,6 +152,7 @@ export async function proposeAssignmentRebalance(params: {
     return {
       proposalId: null,
       reason: "The overloaded work is in blocks too large for anyone else's remaining capacity — splitting it would need a person to decide how.",
+      heldForReview: null,
       moves: 0
     };
   }
@@ -166,9 +177,11 @@ export async function proposeAssignmentRebalance(params: {
 
   return {
     proposalId: outcome.proposalId,
-    // A proposal held back by a guardrail is not a failure — it is the state the product had
-    // before autonomy existed, and the caller should say so rather than show nothing.
-    reason: outcome.heldForReview,
+    // Nothing to report here: a proposal exists. Whether it was applied or held is `heldForReview`,
+    // deliberately a separate field — folding the two into `reason` made a blocked run
+    // indistinguishable from a completed one.
+    reason: null,
+    heldForReview: outcome.heldForReview,
     moves: changes.length
   };
 }

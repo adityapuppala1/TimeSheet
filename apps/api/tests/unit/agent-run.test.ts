@@ -35,7 +35,7 @@ vi.mock("../../src/services/mcp-tools.js", async (importOriginal) => ({
   invokeMcpTool: invokeMcpToolMock
 }));
 
-const rebalanceMock = vi.fn().mockResolvedValue({ proposalId: "prop-1", reason: null, moves: 2 });
+const rebalanceMock = vi.fn().mockResolvedValue({ proposalId: "prop-1", reason: null, heldForReview: null, moves: 2 });
 vi.mock("../../src/services/ai-rebalance.service.js", () => ({ proposeAssignmentRebalance: rebalanceMock }));
 
 const { queueAgentRun, executeAgentRun, requestAbort, callToolForRun, reapOrphanedRuns } = await import(
@@ -61,7 +61,7 @@ beforeEach(() => {
   });
   loadRequestUserMock.mockReset().mockResolvedValue(ACTOR);
   invokeMcpToolMock.mockClear().mockResolvedValue({ ok: true });
-  rebalanceMock.mockClear().mockResolvedValue({ proposalId: "prop-1", reason: null, moves: 2 });
+  rebalanceMock.mockClear().mockResolvedValue({ proposalId: "prop-1", reason: null, heldForReview: null, moves: 2 });
   vi.mocked(client.agentRun.findUnique).mockResolvedValue(null as never);
   vi.mocked(client.agentRun.create).mockResolvedValue({ id: "run-1" } as never);
   vi.mocked(client.agentRun.update).mockResolvedValue({ id: "run-1", capability: "assignment_rebalance", status: "COMPLETED", onBehalfOfId: "u1", proposalId: "prop-1" } as never);
@@ -89,6 +89,45 @@ describe("one trigger, one run", () => {
     vi.mocked(client.agentRun.create).mockRejectedValueOnce(new Error("unique constraint"));
 
     expect(await runInTenant(client, () => queueAgentRun(QUEUE))).toEqual({ runId: "run-winner", created: false });
+  });
+
+  it("refuses to queue past the daily ceiling an administrator set", async () => {
+    // This limit was accepted by the settings API, stored, shown in the catalogue — and enforced
+    // nowhere. A configurable limit that silently does nothing is worse than no limit, because
+    // somebody is relying on it.
+    resolveAutonomyMock.mockResolvedValue({
+      effectiveLevel: "AUTO_APPLY",
+      guardrails: { maxRunsPerDay: 3, maxCostUsdPerRun: null, maxChangesPerRun: null, undoWindowHours: null, scopeProjectIds: null }
+    });
+    vi.mocked(client.agentRun.count).mockResolvedValue(3 as never);
+
+    await expect(runInTenant(client, () => queueAgentRun(QUEUE))).rejects.toMatchObject({ statusCode: 429 });
+    expect(client.agentRun.create).not.toHaveBeenCalled();
+  });
+
+  it("queues while still under the ceiling", async () => {
+    resolveAutonomyMock.mockResolvedValue({
+      effectiveLevel: "AUTO_APPLY",
+      guardrails: { maxRunsPerDay: 3, maxCostUsdPerRun: null, maxChangesPerRun: null, undoWindowHours: null, scopeProjectIds: null }
+    });
+    vi.mocked(client.agentRun.count).mockResolvedValue(2 as never);
+
+    await runInTenant(client, () => queueAgentRun(QUEUE));
+    expect(client.agentRun.create).toHaveBeenCalled();
+  });
+
+  it("does not spend the day's allowance re-queueing something that already exists", async () => {
+    // Counted after the triggerKey check: asking twice for the same logical run is one run, and
+    // charging the second ask against the ceiling would make a retry eat the quota.
+    resolveAutonomyMock.mockResolvedValue({
+      effectiveLevel: "AUTO_APPLY",
+      guardrails: { maxRunsPerDay: 1, maxCostUsdPerRun: null, maxChangesPerRun: null, undoWindowHours: null, scopeProjectIds: null }
+    });
+    vi.mocked(client.agentRun.findUnique).mockResolvedValue({ id: "run-existing" } as never);
+
+    const result = await runInTenant(client, () => queueAgentRun(QUEUE));
+    expect(result).toEqual({ runId: "run-existing", created: false });
+    expect(client.agentRun.count).not.toHaveBeenCalled();
   });
 
   it("freezes the level at queue time, so policy edits cannot escalate a run in flight", async () => {
@@ -243,6 +282,40 @@ describe("executing the work", () => {
           agentRunId: "run-1"
         })
       })
+    );
+  });
+
+  it("lands BLOCKED when a guardrail held the proposal back", async () => {
+    // BLOCKED was unreachable: `reason` carried both "nothing to do" and "held for review", so the
+    // runner could not tell a completed run from a blocked one and every run reported COMPLETED.
+    // The state existed, was documented, and emitted its own event — and could never happen.
+    rebalanceMock.mockResolvedValue({
+      proposalId: "prop-1",
+      reason: null,
+      heldForReview: "5 changes is more than the 2 this capability may apply unattended.",
+      moves: 5
+    });
+
+    await runInTenant(client, () => executeAgentRun("run-1"));
+
+    expect(client.agentRun.update).toHaveBeenCalledWith(
+      expect.objectContaining({ data: expect.objectContaining({ status: "BLOCKED" }) })
+    );
+  });
+
+  it("still COMPLETES when it correctly decided there was nothing to do", async () => {
+    // Having nothing to rebalance is a successful run, not a blocked one.
+    rebalanceMock.mockResolvedValue({
+      proposalId: null,
+      reason: "Nobody on this project is over capacity in that window.",
+      heldForReview: null,
+      moves: 0
+    });
+
+    await runInTenant(client, () => executeAgentRun("run-1"));
+
+    expect(client.agentRun.update).toHaveBeenCalledWith(
+      expect.objectContaining({ data: expect.objectContaining({ status: "COMPLETED" }) })
     );
   });
 

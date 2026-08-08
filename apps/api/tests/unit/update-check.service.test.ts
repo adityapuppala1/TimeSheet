@@ -58,3 +58,80 @@ describe("getUpdateStatus", () => {
     await expect(getUpdateStatus()).resolves.toMatchObject({ updateAvailable: false });
   });
 });
+
+/**
+ * TAGS AS A FALLBACK.
+ *
+ * The CD pipeline builds and publishes on a `v*.*.*` tag. Creating the GitHub *Release* object on
+ * top of it is a separate, manual step — and until somebody did it, every running installation was
+ * told it was up to date while a newer version had in fact shipped. That is the worst direction for
+ * an update check to fail in: silent, and reassuring.
+ *
+ * This was not hypothetical. At the time it was written the repo had four version tags and zero
+ * releases, so every installation in existence was being told it was current.
+ */
+describe("update detection does not depend on somebody writing release notes", () => {
+  const realFetch = global.fetch;
+  afterEach(() => {
+    global.fetch = realFetch;
+  });
+
+  /**
+   * A FRESH module per test. `update-check.service.ts` caches its answer for an hour in a
+   * module-level variable — deliberately, so a thousand browsers produce one GitHub request — and
+   * that cache is shared by everything importing it. Without this, the second test in this block
+   * reads the first one's answer and asserts nothing.
+   */
+  async function freshStatus() {
+    vi.resetModules();
+    const mod = await import("../../src/services/update-check.service.js");
+    return mod.getUpdateStatus();
+  }
+
+  /** Answers /releases and /tags differently, like GitHub does. */
+  function githubWith({ releases, tags }: { releases: unknown[]; tags: unknown[] }) {
+    return vi.fn().mockImplementation((url: string) =>
+      Promise.resolve({
+        ok: true,
+        status: 200,
+        json: async () => (String(url).includes("/tags") ? tags : releases)
+      })
+    ) as never;
+  }
+
+  it("reads tags when no Releases have been published", async () => {
+    global.fetch = githubWith({ releases: [], tags: [{ name: "v9.9.9" }, { name: "v1.0.0" }] });
+
+    const status = await freshStatus();
+
+    expect(status.latestVersion).toBe("9.9.9");
+    expect(status.updateAvailable).toBe(true);
+  });
+
+  it("ignores tags that are not plain versions", async () => {
+    global.fetch = githubWith({ releases: [], tags: [{ name: "nightly" }, { name: "v9.9.9-rc1" }, { name: "v9.9.9" }] });
+
+    const status = await freshStatus();
+    expect(status.releases.map((r) => r.version)).toEqual(["9.9.9"]);
+  });
+
+  it("prefers real Releases when they exist, because those carry notes", async () => {
+    global.fetch = githubWith({
+      releases: [{ tag_name: "v9.9.9", name: "Nine", body: "the notes", published_at: "2026-01-01", html_url: "u" }],
+      tags: [{ name: "v8.8.8" }]
+    });
+
+    const status = await freshStatus();
+    expect(status.latestVersion).toBe("9.9.9");
+    expect(status.releases[0].notes).toBe("the notes");
+  });
+
+  it("leaves notes empty rather than inventing them for a tag", async () => {
+    // A tag carries no notes. The bundled-CHANGELOG fallback fills them where it can; making
+    // something up here would put words in a release's mouth.
+    global.fetch = githubWith({ releases: [], tags: [{ name: "v9.9.9" }] });
+
+    const status = await freshStatus();
+    expect(status.releases.find((r) => r.version === "9.9.9")?.notes ?? "").toBe("");
+  });
+});
