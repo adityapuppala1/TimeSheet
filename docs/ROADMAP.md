@@ -2436,3 +2436,52 @@ than leaving a bare "1 moderate" for the next person to re-derive.
   the change was reverted rather than committed as a no-op that reads like a remediation. **The
   `form-data` override is therefore also suspect** and should not be assumed to be holding
   anything. The real fix is upstream: `exceljs` widening its `uuid` range.
+## AI cost: pricing the mechanical work separately from the judgement (2026-08-08)
+
+Two changes aimed at the same thing — paying for the model you actually need — plus one proposal
+withdrawn after reading the code that already did it.
+
+- [x] **Mechanical features no longer ride the workspace's expensive model.** `GlobalAISettings.model`
+  is a single workspace-wide choice and all 45 call sites in `ai.service.ts` read it directly, so a
+  workspace that raised its model to get better answers out of Ask AI silently re-priced every
+  ticket triage and stale-ticket nudge at the same rate — the highest-VOLUME features paying the
+  highest-JUDGEMENT feature's bill. `economyModelFor()` routes triage, duplicate detection, text
+  refine, the stale nudge and the assignee explanation to Haiku. It **never upgrades**, does nothing
+  for non-Anthropic providers, and does nothing for a model it has no price for — an unrecognised
+  name is a deployment pinning something on purpose. Ask AI, both face assessments, plan breakdown,
+  the risk narrative and the PR reviews deliberately keep the workspace's model; `eval_judge` most
+  deliberately of all, since it grades the others and cheapening it would move the measuring stick
+  along with the thing being measured. The usage row records the model that *ran*, not the one
+  configured — logging the wrong one would overstate spend and trip the monthly cap early.
+- [x] **The face review summary sends a summary, not the whole log.** It was the most expensive call
+  in the product (~2.1k input tokens against 143 out) because it shipped 60 attempt rows of which
+  ~50 were indistinguishable `PASSED sim=0.9xx` lines — while *also* sending the `outcomeCounts`
+  aggregate it had already computed. Routine passes now collapse to a count and a similarity range.
+  Everything the assessment asks about is kept verbatim: every non-pass, every virtual-camera or
+  unfamiliar-network flag **including on a PASS** (the prompt asks about exactly that coincidence,
+  and an aggregate would erase it), and the lowest-scoring passes, which are the lookalike signal.
+  Measured on one fixture: 5,760 chars → 1,838, 60 attempt lines → 7, a 68% cut. The cost was the
+  smaller half of the problem — asking a model to find four rows that matter inside fifty that do
+  not is how you get a confident answer about the wrong attempt.
+- **Withdrawn: "rules-based capture-failure coaching".** Proposed before reading `face.service.ts`.
+  `scoreQuality()` already returns a hint for no-face, too-dark, washed-out and too-far, with hard
+  per-dimension floors rather than a weighted sum, and `face.controller.ts` already returns it
+  *before* falling through to NO_MATCH — the exact "we don't believe you're you when the truth was
+  we couldn't see you" problem it would have solved. Recorded so it is not proposed a third time.
+
+Still open, and deliberately not built yet:
+
+- [ ] **No response cache, though the key already exists.** `AIInteraction.promptHash` is stored on
+  every call, so replaying a stored `outputText` for an identical prompt is mostly wiring. Not built
+  because the cache key must include the tenant and anything that varies per user, and in a
+  database-per-org product a subtly wrong key is a cross-tenant disclosure rather than a stale
+  answer. Worth doing under real traffic, with that as the first test.
+- [ ] **Prompt caching is not wired, and may not fire if it were.** Every call ships one
+  concatenated `user` string with no `system` block, and the variable data is placed FIRST — caching
+  works on a stable prefix, so as written there is nothing cacheable. Reordering is cheap; the open
+  question is whether these prompts clear the provider's minimum cacheable prefix at all on the
+  economy model, which needs checking against current provider docs before any work is planned on it.
+- [ ] **Cache-token usage is not captured.** `CallChatResult.usage` records input and output only.
+  The providers return cache-read and cache-creation counts separately, and without them there is no
+  way to show whether either item above actually worked. This is the prerequisite for the two, not
+  a follow-up to them.

@@ -68,6 +68,41 @@ const MODEL_PRICING_PER_MILLION: Record<string, { input: number; output: number 
 };
 const DEFAULT_PRICING = { input: 3, output: 15 };
 
+/** The cheapest model this product will route a mechanical task to. */
+const ECONOMY_ANTHROPIC_MODEL = "claude-haiku-4-5";
+
+/**
+ * Picks the model for a MECHANICAL task — one that fills a fixed schema (triage's type/priority/
+ * module, a duplicate verdict, a grammar-only rewrite) rather than one that reasons in prose.
+ *
+ * WHY THIS EXISTS: `GlobalAISettings.model` is a single workspace-wide choice, and every one of
+ * this file's call sites read it directly. So a workspace that raises the model to get better
+ * answers out of Ask AI or the planning copilot silently re-priced its stale-ticket nudges and
+ * every ticket triage at the same rate — the highest-VOLUME features in the product paying the
+ * highest-JUDGEMENT feature's bill. This decouples the two: quality where it is asked for, the
+ * economy model where the answer is a label.
+ *
+ * Three deliberate refusals, because each one is a way this could quietly do harm:
+ *  - It NEVER upgrades. A workspace that has chosen something cheaper than the economy model,
+ *    or that is on a plan tier pinned low, keeps its own choice.
+ *  - It does nothing for non-Anthropic providers. `settings.model` is then a name on somebody
+ *    else's catalogue and "claude-haiku-4-5" is not a model they serve.
+ *  - It does nothing for a model it has no price for. An unrecognised name is a deployment
+ *    pinning something deliberately, and guessing that this file knows better would be wrong.
+ *
+ * Judgement features are NOT routed here — Ask AI, the face review/policy assessments, plan
+ * breakdown, risk narrative and the PR reviews all keep the workspace's model. `eval_judge` is
+ * excluded most deliberately of all: it grades the other features, so cheapening it would move
+ * the measuring stick along with the thing being measured.
+ */
+function economyModelFor(settings: { provider: string; model: string }): string {
+  if (settings.provider !== "ANTHROPIC") return settings.model;
+  const chosen = MODEL_PRICING_PER_MILLION[settings.model];
+  const economy = MODEL_PRICING_PER_MILLION[ECONOMY_ANTHROPIC_MODEL];
+  if (!chosen || !economy) return settings.model;
+  return economy.input < chosen.input ? ECONOMY_ANTHROPIC_MODEL : settings.model;
+}
+
 /** Upsert-on-read singleton row (id="global") — first call ever made seeds the defaults (AI off). */
 export async function getGlobalAISettings() {
   return prisma.globalAISettings.upsert({
@@ -734,9 +769,12 @@ export async function classifyTicket(params: {
     .filter(Boolean)
     .join("\n");
 
+  // Resolved once and used for BOTH the call and the usage row: logging a different model than
+  // the one that ran would make the cost estimate — and the monthly budget built on it — wrong.
+  const model = economyModelFor(settings);
   const startedAt = Date.now();
   const result = await callChat(settings, {
-    model: settings.model,
+    model,
     maxTokens: 1024,
     prompt,
     images: params.images,
@@ -764,7 +802,7 @@ export async function classifyTicket(params: {
 
   await logAIUsage({
     feature: "triage",
-    model: settings.model,
+    model,
     inputTokens: result.usage.inputTokens,
     outputTokens: result.usage.outputTokens,
     userId: params.userId,
@@ -1330,9 +1368,10 @@ export async function findDuplicateTickets(params: {
     "Identify which (if any) existing tickets are likely duplicates of the new one. Only include genuinely similar matches — an empty list is a valid answer."
   ].join("\n");
 
+  const model = economyModelFor(settings);
   const startedAt = Date.now();
   const result = await callChat(settings, {
-    model: settings.model,
+    model,
     maxTokens: 1024,
     prompt,
     jsonSchema: {
@@ -1368,7 +1407,7 @@ export async function findDuplicateTickets(params: {
   await logAIUsage({
     feature: "duplicate_detection",
     params: { title: params.title, description: params.description, candidates: params.candidates },
-    model: settings.model,
+    model,
     inputTokens: result.usage.inputTokens,
     outputTokens: result.usage.outputTokens,
     userId: params.userId,
@@ -1528,8 +1567,9 @@ export async function refineText(params: { text: string; field: RefineField; use
 
   const p = await resolvePrompt("text_refine", { fieldLabel: spec.label, guidance: spec.guidance, text: plain });
 
+  const model = economyModelFor(settings);
   const startedAt = Date.now();
-  const result = await callChat(settings, { model: settings.model, maxTokens: spec.maxTokens, prompt: p.text });
+  const result = await callChat(settings, { model, maxTokens: spec.maxTokens, prompt: p.text });
 
   const refined = spec.format === "plain"
     ? stripWrappingQuotes(result.text).replace(/\s*\n+\s*/g, " ").slice(0, 255)
@@ -1538,7 +1578,7 @@ export async function refineText(params: { text: string; field: RefineField; use
   await logAIUsage({
     feature: "text_refine",
     params: { text: params.text, field: params.field },
-    model: settings.model,
+    model,
     inputTokens: result.usage.inputTokens,
     outputTokens: result.usage.outputTokens,
     userId: params.userId,
@@ -1945,12 +1985,13 @@ export async function explainAssigneeSuggestion(params: {
 
   const p = await resolvePrompt("assignee_suggestion_explanation", { ticketTitle: params.ticketTitle, candidates: lines });
 
+  const model = economyModelFor(settings);
   const startedAt = Date.now();
-  const result = await callChat(settings, { model: settings.model, maxTokens: 150, prompt: p.text });
+  const result = await callChat(settings, { model, maxTokens: 150, prompt: p.text });
   await logAIUsage({
     feature: "assignee_suggestion_explanation",
     params: { candidates: params.candidates, ticketTitle: params.ticketTitle },
-    model: settings.model,
+    model,
     inputTokens: result.usage.inputTokens,
     outputTokens: result.usage.outputTokens,
     promptVersionId: p.promptVersionId,
@@ -1987,12 +2028,13 @@ export async function suggestStaleTicketNextAction(params: {
     linkedBranchPhrase: params.hasLinkedBranch ? "a" : "no"
   });
 
+  const model = economyModelFor(settings);
   const startedAt = Date.now();
-  const result = await callChat(settings, { model: settings.model, maxTokens: 150, prompt: p.text });
+  const result = await callChat(settings, { model, maxTokens: 150, prompt: p.text });
   await logAIUsage({
     feature: "stale_ticket_nudge",
     params: { ticketTitle: params.ticketTitle, ticketType: params.ticketType, priority: params.priority, hoursOverdue: params.hoursOverdue, commentCount: params.commentCount, hasLinkedBranch: params.hasLinkedBranch },
-    model: settings.model,
+    model,
     inputTokens: result.usage.inputTokens,
     outputTokens: result.usage.outputTokens,
     userId: params.userId,
@@ -2037,6 +2079,7 @@ export async function summarizeFaceReviewAttempt(params: {
     orderBy: { createdAt: "desc" },
     take: 60,
     select: {
+      id: true,
       outcome: true, similarity: true, createdAt: true, context: true,
       deviceLabel: true, virtualCameraSuspected: true, unfamiliarNetwork: true
     }
@@ -2056,7 +2099,54 @@ export async function summarizeFaceReviewAttempt(params: {
   }
   const implausibleDays = [...heavyDays.entries()].filter(([, h]) => h > 16).map(([d, h]) => `${d} (${h.toFixed(1)}h)`);
 
-  const historyLines = history
+  const outcomeCounts = history.reduce<Record<string, number>>((acc, h) => {
+    acc[h.outcome] = (acc[h.outcome] ?? 0) + 1;
+    return acc;
+  }, {});
+
+  /*
+   * WHY THIS IS NOT `history.map(...)` OVER ALL 60 ROWS.
+   *
+   * The window holds up to 60 attempts and for an ordinary person ~50 of them are
+   * indistinguishable `PASSED sim=0.9xx` lines. Sending every one made this the most expensive
+   * call in the product — measured at ~2.1k input tokens against 143 out — and the cost was the
+   * smaller half of the problem: it asked the model to find the four rows that matter inside
+   * fifty that don't, which is the same needle/haystack framing that produces confident answers
+   * about the wrong attempt.
+   *
+   * So the routine passes collapse to a count and a similarity range, and everything the
+   * assessment below actually asks about is kept VERBATIM:
+   *   - anything that is not a clean pass (every failure keeps its timestamp, so "failures
+   *     clustered at unusual hours" and the correlation with implausible logged hours survive);
+   *   - anything flagged virtual-camera or unfamiliar-network — the prompt asks specifically
+   *     about those "coinciding with passes", so a FLAGGED PASS must never be collapsed;
+   *   - the lowest-scoring passes, which are the lookalike signal. A pass sitting just over the
+   *     line is invisible in an aggregate and is exactly what the reviewer is looking for.
+   *
+   * The prompt states how many rows were collapsed, so the model knows it is reading a summary
+   * rather than the whole log and cannot mistake "not shown" for "did not happen".
+   */
+  const NOTABLE_LIMIT = 16;
+  const LOWEST_PASSES_KEPT = 3;
+
+  const lowestScoringPassIds = new Set(
+    history
+      .filter((h) => h.outcome === "PASSED" && h.similarity != null)
+      .sort((a, b) => a.similarity! - b.similarity!)
+      .slice(0, LOWEST_PASSES_KEPT)
+      .map((h) => h.id)
+  );
+  const isNotable = (h: (typeof history)[number]) =>
+    h.outcome !== "PASSED" ||
+    h.virtualCameraSuspected ||
+    h.unfamiliarNetwork ||
+    lowestScoringPassIds.has(h.id);
+
+  const notable = history.filter(isNotable);
+  const shown = notable.slice(0, NOTABLE_LIMIT);
+  const routine = history.filter((h) => !isNotable(h));
+
+  const historyLines = shown
     .map((h) => {
       const flags = [
         h.virtualCameraSuspected ? "virtual-camera?" : null,
@@ -2066,10 +2156,32 @@ export async function summarizeFaceReviewAttempt(params: {
     })
     .join("\n");
 
-  const outcomeCounts = history.reduce<Record<string, number>>((acc, h) => {
-    acc[h.outcome] = (acc[h.outcome] ?? 0) + 1;
-    return acc;
-  }, {});
+  /** Devices are summarised across the WHOLE window, not just the shown rows — "signed in from a
+   *  device seen twice in thirty days" is a signal that lives in the collapsed half. */
+  const deviceCounts = new Map<string, number>();
+  for (const h of history) {
+    if (h.deviceLabel) deviceCounts.set(h.deviceLabel, (deviceCounts.get(h.deviceLabel) ?? 0) + 1);
+  }
+  const deviceSummary = [...deviceCounts.entries()]
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 5)
+    .map(([label, n]) => `"${label}" ×${n}`)
+    .join(", ");
+
+  const routineSims = routine
+    .map((h) => h.similarity)
+    .filter((s): s is number => s != null)
+    .sort((a, b) => a - b);
+  const collapsedLine = routine.length
+    ? `(${routine.length} further routine passes not listed individually` +
+      (routineSims.length
+        ? `; similarity ${routineSims[0].toFixed(3)}–${routineSims[routineSims.length - 1].toFixed(3)}, median ${routineSims[Math.floor(routineSims.length / 2)].toFixed(3)}`
+        : "") +
+      ")"
+    : null;
+  const truncatedLine = notable.length > shown.length
+    ? `(${notable.length - shown.length} further NOTABLE attempts omitted for length — treat the list above as a sample, not the full set)`
+    : null;
 
   const prompt = [
     "You are helping a workspace administrator review a flagged identity-verification attempt.",
@@ -2083,7 +2195,13 @@ export async function summarizeFaceReviewAttempt(params: {
       `${attempt.unfamiliarNetwork ? " UNFAMILIAR_NETWORK" : ""}`,
     `Subject: ${attempt.user.name} (role ${attempt.user.role.name}, account since ${attempt.user.createdAt.toISOString().slice(0, 10)})`,
     `Last 30 days, ${history.length} attempts: ${JSON.stringify(outcomeCounts)}`,
-    historyLines || "(no prior attempts)",
+    // Spreads rather than `""` entries: this array's empty strings are deliberate blank lines in
+    // the prompt's layout, so an absent optional line must contribute nothing at all.
+    ...(deviceSummary ? [`Devices used in that window: ${deviceSummary}`] : []),
+    "Notable attempts (every failure, every flagged attempt, and the lowest-scoring passes):",
+    historyLines || "(none — no failures, no flags, no marginal passes)",
+    ...(truncatedLine ? [truncatedLine] : []),
+    ...(collapsedLine ? [collapsedLine] : []),
     `Timesheet pattern last 30 days: ${timesheets.length} entries, ${totalHours.toFixed(1)} total hours.`,
     `Days over 16 logged hours: ${implausibleDays.length ? implausibleDays.join(", ") : "none"}`,
     "=== END ATTEMPT DATA ===",
