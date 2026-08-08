@@ -48,6 +48,38 @@ export interface AIQualitySummary {
   /** Pre-existing per-ticket thumbs data, reported SEPARATELY and never merged into the
    *  per-interaction numbers above — see the note in getAIQualitySummary. */
   legacyTicketFeedback: { up: number; down: number };
+  /**
+   * What people did with AI-authored change sets. Reported in its OWN bucket for the same reason
+   * the legacy ticket thumbs are: this counts change ROWS, not model calls, so adding it to the
+   * numbers above would produce a figure that means nothing.
+   *
+   * WHY IT IS WORTH MORE THAN THUMBS: `ai-proposal.service.ts` has said since it was written that
+   * per-row accept/reject is "a far richer signal than the thumbs-up/down on AIInteraction, and
+   * produced as a by-product of people doing their normal work rather than as a favour to the
+   * model" — and until now nothing read it. Thumbs are self-selected and rare; every applied
+   * proposal produces a decision on every row whether anybody feels like rating it or not.
+   *
+   * UNDO IS THE STRONGEST SIGNAL HERE and is counted separately from a rejection: rejecting a row
+   * is "I read this and disagreed"; undoing one is "I let it happen and then took it back", which
+   * is a worse outcome and worth being able to see on its own.
+   */
+  proposalDecisions: ProposalDecisionStats[];
+}
+
+export interface ProposalDecisionStats {
+  kind: string;
+  /** Rows a person explicitly ticked. */
+  accepted: number;
+  /** Rows a person explicitly left unticked. */
+  rejected: number;
+  /** Rows that were applied and then put back. */
+  undone: number;
+  /** Rows refused at apply time — usually a stale before-state, which is the envelope working
+   *  rather than the model being wrong. Kept apart from `rejected` so the two are never confused. */
+  refused: number;
+  /** Of the rows a person actually decided, the share they accepted. Null below the same
+   *  threshold the thumbs rate uses, for the same reason. */
+  acceptRate: number | null;
 }
 
 /** Below this many ratings a percentage is more misleading than no number at all. */
@@ -115,8 +147,47 @@ export async function getAIQualitySummary(windowDays = 30): Promise<AIQualitySum
     totalInteractions: rows.length,
     overallParseFailureRate,
     features,
-    legacyTicketFeedback: { up: legacyUp, down: legacyDown }
+    legacyTicketFeedback: { up: legacyUp, down: legacyDown },
+    proposalDecisions: await getProposalDecisionStats(since)
   };
+}
+
+/**
+ * What happened to AI-authored change rows in the window, grouped by proposal kind.
+ *
+ * NOT gated on `aiCaptureEnabled`, unlike everything else on this screen. Capture is about
+ * retaining prompt and output CONTENT; these are decisions people made about their own plan, they
+ * already live in `AiProposalChange` as a normal part of the feature, and no new content is being
+ * stored to report them.
+ */
+export async function getProposalDecisionStats(since: Date): Promise<ProposalDecisionStats[]> {
+  const changes = await prisma.aiProposalChange.findMany({
+    where: { createdAt: { gte: since } },
+    select: { accepted: true, appliedAt: true, undoneAt: true, applyError: true, proposal: { select: { kind: true } } }
+  });
+
+  const byKind = new Map<string, ProposalDecisionStats>();
+  for (const change of changes) {
+    const kind = change.proposal?.kind ?? "UNKNOWN";
+    const bucket = byKind.get(kind) ?? { kind, accepted: 0, rejected: 0, undone: 0, refused: 0, acceptRate: null };
+
+    if (change.undoneAt) bucket.undone++;
+    else if (change.applyError) bucket.refused++;
+    else if (change.accepted === true) bucket.accepted++;
+    else if (change.accepted === false) bucket.rejected++;
+    // `accepted === null` is a row nobody has decided yet — deliberately counted nowhere. An
+    // undecided row is not a rejection, and treating it as one would make every unreviewed
+    // proposal look like a failure.
+
+    byKind.set(kind, bucket);
+  }
+
+  return [...byKind.values()]
+    .map((b) => {
+      const decided = b.accepted + b.rejected + b.undone;
+      return { ...b, acceptRate: decided >= MIN_RATINGS_FOR_RATE ? round(b.accepted / decided) : null };
+    })
+    .sort((a, b) => b.accepted + b.rejected + b.undone - (a.accepted + a.rejected + a.undone));
 }
 
 function round(value: number): number {

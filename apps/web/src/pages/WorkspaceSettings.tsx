@@ -1904,6 +1904,45 @@ function AIQualityCard({ enabled, captureOn }: { enabled: boolean; captureOn: bo
                   </div>
                 </div>
 
+                {/*
+                  What people did with AI-authored change sets. This is a better signal than the
+                  thumbs beside it and worth showing next to them: a rating only happens when
+                  somebody chooses to leave one, whereas every reviewed proposal produces a decision
+                  on every row as a by-product of ordinary work.
+
+                  Undone is shown apart from rejected on purpose. Rejecting is "I read this and
+                  disagreed"; undoing is "I let it happen and then took it back", which is worse and
+                  should not be hidden inside the same number.
+                */}
+                {quality.data.proposalDecisions.length > 0 && (
+                  <div className="rounded-lg border border-border p-4">
+                    <p className="text-xs uppercase text-muted-foreground">What people did with AI suggestions</p>
+                    <p className="mb-3 mt-0.5 text-[11px] text-muted-foreground">
+                      Per change row, not per AI call — so these are not comparable with the numbers above. Refused means the
+                      row was left alone because somebody had already changed it, which is the safeguard working rather than a
+                      bad suggestion.
+                    </p>
+                    <div className="grid gap-2 sm:grid-cols-2">
+                      {quality.data.proposalDecisions.map((d) => (
+                        <div key={d.kind} className="rounded-md border border-border bg-muted/20 p-3">
+                          <p className="text-xs font-medium">{d.kind.replaceAll("_", " ").toLowerCase()}</p>
+                          <p className="mt-1 text-sm">
+                            <span className="font-semibold text-success">{d.accepted}</span> kept ·{" "}
+                            <span className="font-semibold">{d.rejected}</span> rejected ·{" "}
+                            <span className="font-semibold text-warning-foreground">{d.undone}</span> undone
+                            {d.refused > 0 && <span className="text-muted-foreground"> · {d.refused} refused</span>}
+                          </p>
+                          <p className="mt-0.5 text-[11px] text-muted-foreground">
+                            {d.acceptRate === null
+                              ? "Too few decisions to read a rate into yet"
+                              : `${Math.round(d.acceptRate * 100)}% of decided rows were kept`}
+                          </p>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
                 {/* The honesty note. Without it, the thumbs column below invites exactly the wrong
                     conclusion. */}
                 <p className="rounded-md border border-dashed border-border bg-muted/20 p-3 text-xs text-muted-foreground">

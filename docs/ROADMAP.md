@@ -2538,9 +2538,14 @@ Still open, and deliberately so:
   undo paths take all three; nothing emits them yet. `ASSIGNMENT_REBALANCE` is the worked example,
   and it contains no model call at all — who is overloaded is arithmetic `workload.service.ts`
   already does.
-- [ ] **Per-row accept/reject is still not fed to the quality loop.** `ai-proposal.service.ts` has
-  declared it "a far richer signal than the thumbs-up/down on AIInteraction" since it was written,
-  and nothing aggregates it. Undo is a stronger signal still — a person explicitly reversing a
-  machine — and neither reaches `ai-dataset.service.ts`.
+- [x] **Per-row accept/reject now feeds the quality screen** (2026-08-09) —
+  `ai-quality.service.ts#getProposalDecisionStats`, reported in its own bucket beside the thumbs
+  because it counts change ROWS rather than model calls and adding them would produce a figure that
+  means nothing. Four states kept apart deliberately: an undecided row is not a rejection (or every
+  unreviewed proposal would look like a failure), a row refused at apply time is the staleness check
+  working rather than the model being wrong, and an UNDONE row is counted apart from a rejected one
+  because "I let it happen and took it back" is a worse outcome than "I read it and disagreed".
+  Still open: promoting these into `ai-dataset.service.ts` as replayable items, which needs a
+  decision about what a proposal's "expected output" even is.
 - [ ] **The budget cap is still check-then-act.** Serial execution bounds the agent case; two
   request-path callers can still each pass a cap only one should.

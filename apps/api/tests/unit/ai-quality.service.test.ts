@@ -32,6 +32,10 @@ const row = (over: Partial<Row> = {}): Row => ({ feature: "triage", parseOk: tru
 
 beforeEach(() => {
   client = createFakeTenantClient();
+  // The summary now also reports what people did with AI-authored change rows. Defaulted to none
+  // here so these tests stay about the per-call numbers they were written for — the decision
+  // counting has its own file.
+  vi.mocked(client.aiProposalChange.findMany).mockResolvedValue([] as never);
 });
 
 describe("getAIQualitySummary", () => {

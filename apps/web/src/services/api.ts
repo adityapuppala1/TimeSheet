@@ -1300,6 +1300,19 @@ export interface AIQualitySummary {
   /** The pre-existing per-TICKET thumbs flag, reported separately and never merged into the
    *  per-call numbers above — different unit, would produce a meaningless total. */
   legacyTicketFeedback: { up: number; down: number };
+  /** What people did with AI-authored change rows. Its own bucket, never merged with the
+   *  per-call numbers above — these count ROWS, not model calls. */
+  proposalDecisions: Array<{
+    kind: string;
+    accepted: number;
+    rejected: number;
+    /** Applied and then put back — a worse outcome than a rejection, counted apart from one. */
+    undone: number;
+    /** Refused at apply time, almost always a stale before-state. That is the envelope working,
+     *  not the model being wrong, so it never counts against the rate. */
+    refused: number;
+    acceptRate: number | null;
+  }>;
 }
 
 /** Golden datasets — see api/src/services/ai-dataset.service.ts. */
