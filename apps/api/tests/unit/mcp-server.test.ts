@@ -167,6 +167,36 @@ describe("dispatch", () => {
     expect((await rpc(app, "tools/list")).status).toBe(401);
   });
 
+  it("refuses an EXPIRED credential, and says nothing different than for a bad one", async () => {
+    // A standing bearer token held by a language model is the capability nobody revisits, so it
+    // can now stop working on its own. Checked at resolve time rather than swept, so the moment it
+    // passes is the moment it stops — and so it still expires if a sweep is ever broken.
+    const app = buildApp();
+    vi.mocked(client.mcpCredential.findUnique).mockResolvedValue({
+      id: "cred-1",
+      revokedAt: null,
+      userId: actor.id,
+      expiresAt: new Date(Date.now() - 1000)
+    } as never);
+    expect((await rpc(app, "tools/list")).status).toBe(401);
+  });
+
+  it("still accepts a credential whose expiry has not arrived, and one with no expiry at all", async () => {
+    // NULL means never, which is every credential issued before the column existed. Expiring those
+    // retroactively on upgrade would break working integrations with no warning.
+    const app = buildApp();
+    for (const expiresAt of [new Date(Date.now() + 60_000), null]) {
+      vi.mocked(client.mcpCredential.findUnique).mockResolvedValue({
+        id: "cred-1",
+        name: "c",
+        revokedAt: null,
+        userId: actor.id,
+        expiresAt
+      } as never);
+      expect((await rpc(app, "tools/list")).status, String(expiresAt)).toBe(200);
+    }
+  });
+
   it("refuses a credential whose person has been deactivated, without the row changing", async () => {
     // The per-request re-read is what makes offboarding take effect: nobody has to remember to
     // revoke the credential when the account is disabled. Now that it lives in loadRequestUser,

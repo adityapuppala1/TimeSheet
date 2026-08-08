@@ -27,6 +27,7 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import { appVersion } from "../config/version.js";
 import { mcpAuth, type McpRequest } from "../middleware/mcp-auth.js";
+import { mcpRateLimit } from "../middleware/ai-rate-limit.js";
 import { AppError } from "../middleware/error.js";
 import { getGlobalMcpSettings } from "../services/mcp.service.js";
 import {
@@ -163,6 +164,11 @@ async function handleMcp(req: McpRequest, res: Response) {
 }
 
 mcpRouter.use(mcpAuth);
+// AFTER mcpAuth, because the bucket is the credential and `req.mcp` does not exist before it.
+// app.ts also mounts a coarse IP limiter in front of this router; that one bounds a flood from one
+// address, this one bounds a single credential — a runaway agent and a hostile stranger are
+// different problems and neither limiter catches the other's.
+mcpRouter.use(mcpRateLimit);
 mcpRouter.post("/", (req, res, next) => {
   handleMcp(req as McpRequest, res).catch(next);
 });

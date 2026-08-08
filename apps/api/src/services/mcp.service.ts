@@ -136,9 +136,13 @@ export interface McpPrincipal {
 export async function resolveMcpPrincipal(plaintextToken: string): Promise<McpPrincipal | null> {
   const record = await prisma.mcpCredential.findUnique({
     where: { tokenHash: hashMcpToken(plaintextToken) },
-    select: { id: true, name: true, userId: true, revokedAt: true }
+    select: { id: true, name: true, userId: true, revokedAt: true, expiresAt: true }
   });
   if (!record || record.revokedAt) return null;
+  // Checked here rather than swept by a worker, so an expiry takes effect at the exact moment it
+  // passes rather than at the next tick — and so a credential expires even if the sweep is broken.
+  // NULL means "never", which is every credential issued before the column existed.
+  if (record.expiresAt && record.expiresAt <= new Date()) return null;
 
   // The one shared definition of "what is this person allowed to do" — see
   // services/principal.service.ts for why this is not built inline here any more. It returns null

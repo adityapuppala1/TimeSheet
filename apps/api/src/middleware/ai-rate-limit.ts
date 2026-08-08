@@ -38,3 +38,37 @@ export const aiRateLimit = rateLimit({
   standardHeaders: true,
   keyGenerator: (req: Request) => (req.user ? `user:${req.user.id}` : ipBucket(req))
 });
+
+/**
+ * The same idea for `/api/mcp`, which had no per-caller throttle at all.
+ *
+ * WHY IT NEEDED ITS OWN: an MCP credential is a bearer token carrying one person's full authority,
+ * handed to a language model that decides for itself how many calls to make. `app.ts` mounts a
+ * plain 120/min limiter in front of the router, but that one keys on `req.ip` — the exact axis the
+ * comment at the top of this file explains is wrong, and wrong here for a third reason too: an
+ * agent runs from wherever it is hosted, so every credential pointed at the same hosted assistant
+ * shares one bucket while a self-hosted one gets its own.
+ *
+ * WHY IT IS KEYED ON THE CREDENTIAL AND NOT THE USER: a person may hold several credentials — one
+ * per client — and revoking a misbehaving one should be enough. Keying on the user would mean a
+ * runaway agent throttling that person's other, well-behaved clients, and would make "which
+ * credential is doing this" unanswerable from the limiter's own behaviour.
+ *
+ * MUST BE MOUNTED AFTER `mcpAuth`, because `req.mcp` does not exist before it. That ordering is
+ * the reason this could not simply be added to the existing mount in app.ts.
+ *
+ * The limit is higher than the AI one on purpose: these are ordinary reads against the database,
+ * not model calls, and a tool-using agent legitimately makes several in a row while working
+ * through one request. Spend is still bounded by the monthly budget, which this does not replace.
+ */
+const MCP_REQUESTS_PER_MINUTE = 120;
+
+export const mcpRateLimit = rateLimit({
+  windowMs: 60_000,
+  limit: MCP_REQUESTS_PER_MINUTE,
+  standardHeaders: true,
+  keyGenerator: (req: Request) => {
+    const credentialId = (req as Request & { mcp?: { credentialId?: string } }).mcp?.credentialId;
+    return credentialId ? `mcp:${credentialId}` : ipBucket(req);
+  }
+});

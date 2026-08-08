@@ -2182,6 +2182,16 @@ model McpCredential {
   lastUsedAt DateTime?
   createdAt  DateTime  @default(now())
   revokedAt  DateTime?
+  /// When this credential stops working on its own.
+  ///
+  /// NULL means it never expires, which is what every credential issued before this column
+  /// existed does — expiring them retroactively would break working integrations on upgrade with
+  /// no warning. New ones are offered an expiry at creation.
+  ///
+  /// WHY IT MATTERS MORE THAN revokedAt: revoking requires somebody to remember. A standing bearer
+  /// token carrying a person's full authority, held by a language model, is exactly the capability
+  /// nobody revisits — the same argument the guest approval links took a 30-day expiry for.
+  expiresAt  DateTime?
 
   @@index([tokenHash])
   @@index([userId])

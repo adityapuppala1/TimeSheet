@@ -2199,7 +2199,12 @@ backfill. Docs: [ARCHITECTURE.md §3.11](ARCHITECTURE.md#311-mcp-server--a-secon
 
 ### Open — reported, not fixed
 
-- [ ] **`/api/mcp`'s rate limit is keyed on the IP, not the credential.** `app.ts` mounts a plain
+- [x] **`/api/mcp`'s rate limit is keyed on the IP, not the credential.** (closed 2026-08-08 —
+  `middleware/ai-rate-limit.ts#mcpRateLimit`, mounted inside `mcpRouter` AFTER `mcpAuth` so
+  `req.mcp.credentialId` exists. Keyed on the credential rather than the user so revoking one
+  misbehaving client does not throttle that person's well-behaved ones. The coarse IP limiter in
+  `app.ts` stays: a flood from one address and a runaway agent are different problems and neither
+  limiter catches the other's.) ~~The original finding:~~ `app.ts` mounts a plain
   120/min limiter whose default `keyGenerator` is `req.ip` — which is exactly the wrong axis for
   the same reason `middleware/ai-rate-limit.ts` was rewritten in this release: two credentials
   behind one office NAT share an allowance, and one credential reaching the server from a laptop
@@ -2212,7 +2217,11 @@ backfill. Docs: [ARCHITECTURE.md §3.11](ARCHITECTURE.md#311-mcp-server--a-secon
   actually do" is the question the audit row exists to answer. Deliberately not fixed blind:
   arguments include free text a model composed (`taskDescription`, comment bodies), and deciding
   what is safe to persist into `AuditLog` is a retention decision, not a one-line change.
-- [ ] **An MCP credential never expires.** There is `revokedAt` but no `expiresAt` — unlike the
+- [x] **An MCP credential never expires.** (closed 2026-08-08 — `McpCredential.expiresAt`, checked
+  in `resolveMcpPrincipal` rather than swept, so it takes effect the moment it passes and still
+  works if a sweep is ever broken. NULL means never, which is every credential issued before the
+  column existed — expiring working integrations retroactively on upgrade is the wrong direction
+  for a mistake to fail in.) ~~The original finding:~~ There is `revokedAt` but no `expiresAt` — unlike the
   guest approval links, which took a 30-day expiry in the 2026-08-07 batch precisely because a
   long-lived capability nobody revisits is a capability nobody revokes. `lastUsedAt` makes a stale
   credential *visible* in the settings list, which is the cheap half; automatic expiry is a schema
