@@ -204,6 +204,10 @@ requestFormPublicRouter.post("/:token", validate(submitSchema), async (req, res)
   await audit(undefined, "request_form.submitted", "RequestFormSubmission", submission.id, {
     form: form.slug,
     ticket: ticket.key
+  }, {
+    actorType: "GUEST",
+    actorLabel: `request-form:${form.slug}`,
+    ipAddress: req.ip
   });
 
   // Best-effort: an intake that fails because a mailbox is down would be a worse outcome than a

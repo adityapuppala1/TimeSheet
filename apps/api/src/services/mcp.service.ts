@@ -14,6 +14,7 @@ import { prisma } from "../config/prisma.js";
 import type { RequestUser } from "../middleware/auth.js";
 import { isMaintenanceActive } from "./maintenance.service.js";
 import { defaultEnabledFor, isToolEnabled, MCP_TOOLS, type McpEnablementSettings } from "./mcp-tools.js";
+import { loadRequestUser } from "./principal.service.js";
 
 const GLOBAL_ID = "global";
 
@@ -135,30 +136,28 @@ export interface McpPrincipal {
 export async function resolveMcpPrincipal(plaintextToken: string): Promise<McpPrincipal | null> {
   const record = await prisma.mcpCredential.findUnique({
     where: { tokenHash: hashMcpToken(plaintextToken) },
-    include: { user: { include: { role: { include: { permissions: { include: { permission: true } } } } } } }
+    select: { id: true, name: true, userId: true, revokedAt: true }
   });
   if (!record || record.revokedAt) return null;
 
-  const user = record.user;
-  if (!user || user.deletedAt || user.status !== "ACTIVE") return null;
+  // The one shared definition of "what is this person allowed to do" — see
+  // services/principal.service.ts for why this is not built inline here any more. It returns null
+  // for a deleted or deactivated account, which is the per-request re-read that makes offboarding
+  // take effect without any row here changing.
+  const user = await loadRequestUser(record.userId);
+  if (!user) return null;
 
   // Same maintenance gate requireAuth applies, for the same reason: while a workspace is closed
   // for maintenance it is closed to integrations too, otherwise the one class of caller that
   // never sees the maintenance banner keeps writing to a database somebody is working on.
-  if (user.role.name !== "SUPER_ADMIN" && (await isMaintenanceActive())) return null;
+  //
+  // Deliberately NOT inside loadRequestUser: this is a property of the SURFACE, not of the person.
+  // A worker sweeping SLAs during a maintenance window is fine; an external client writing through
+  // MCP is not.
+  if (user.role !== "SUPER_ADMIN" && (await isMaintenanceActive())) return null;
 
   // Fire-and-forget: "last used" is bookkeeping and must never fail a call.
   void prisma.mcpCredential.update({ where: { id: record.id }, data: { lastUsedAt: new Date() } }).catch(() => undefined);
 
-  return {
-    credentialId: record.id,
-    credentialName: record.name,
-    user: {
-      id: user.id,
-      name: user.name,
-      email: user.email,
-      role: user.role.name,
-      permissions: user.role.permissions.map((p) => p.permission.key)
-    }
-  };
+  return { credentialId: record.id, credentialName: record.name, user };
 }

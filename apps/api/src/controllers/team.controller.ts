@@ -13,10 +13,22 @@ import { AppError } from "../middleware/error.js";
 import { CHAT_INTAKE_SYSTEM_EMAIL } from "../services/chat-intake.service.js";
 import { EMAIL_INTAKE_SYSTEM_EMAIL } from "../services/email-intake.service.js";
 import { SECURITY_INGESTION_SYSTEM_EMAIL } from "../services/security-report.service.js";
+import { GIT_INTEGRATION_SYSTEM_EMAIL } from "../services/git-provider.service.js";
+import { AGENT_SYSTEM_EMAIL } from "../services/principal.service.js";
 
 /** Unusable-password reporter-of-record accounts (see each constant's own file) — never real
- *  people, so they'd otherwise show up as noise root nodes in the org chart below. */
-const SYSTEM_ACCOUNT_EMAILS = new Set([CHAT_INTAKE_SYSTEM_EMAIL, EMAIL_INTAKE_SYSTEM_EMAIL, SECURITY_INGESTION_SYSTEM_EMAIL]);
+ *  people, so they'd otherwise show up as noise root nodes in the org chart below.
+ *
+ *  This list must name EVERY such account. `GIT_INTEGRATION_SYSTEM_EMAIL` was missing from it and
+ *  so was appearing as a person in the org chart — the failure mode is silent, because a system
+ *  account looks exactly like a real employee with no manager and no reports. */
+const SYSTEM_ACCOUNT_EMAILS = new Set([
+  CHAT_INTAKE_SYSTEM_EMAIL,
+  EMAIL_INTAKE_SYSTEM_EMAIL,
+  SECURITY_INGESTION_SYSTEM_EMAIL,
+  GIT_INTEGRATION_SYSTEM_EMAIL,
+  AGENT_SYSTEM_EMAIL
+]);
 
 export const teamRouter = Router();
 teamRouter.use(requireAuth);

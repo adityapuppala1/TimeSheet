@@ -12,6 +12,7 @@ import { EMAIL_INTAKE_SYSTEM_EMAIL } from "../src/services/email-intake.service.
 import { CHAT_INTAKE_SYSTEM_EMAIL } from "../src/services/chat-intake.service.js";
 import { SECURITY_INGESTION_SYSTEM_EMAIL } from "../src/services/security-report.service.js";
 import { GIT_INTEGRATION_SYSTEM_EMAIL } from "../src/services/git-provider.service.js";
+import { AGENT_SYSTEM_EMAIL } from "../src/services/principal.service.js";
 import { hashPassword } from "../src/utils/security.js";
 import { SEED_TEMPLATES } from "./email-templates-seed.js";
 
@@ -382,6 +383,34 @@ export async function seedTenant(client: PrismaClient, options: SeedTenantOption
       roleId: employeeRole.id,
       status: "ACTIVE",
       bio: "System account — author of record for branch/PR sync and AI PR-review summaries from the connected GitHub account.",
+      emailVerifiedAt: new Date()
+    }
+  });
+
+  // Author of record for rows created by an AI agent run.
+  //
+  // ALSO created by migration `20260808180000_audit_actor_provenance`, and that is not a
+  // duplication to tidy away — the two cover different databases. Migrations run BEFORE this seed,
+  // so on a brand-new workspace the Role table is still empty when that migration runs and its
+  // guarded INSERT correctly does nothing; this upsert is what covers the fresh install. The
+  // migration covers the opposite case, an already-seeded workspace being upgraded, which this
+  // file never runs against again. Both are idempotent, so whichever gets there first wins and the
+  // other is a no-op.
+  await client.user.upsert({
+    where: { email: AGENT_SYSTEM_EMAIL },
+    update: {},
+    create: {
+      name: "AI Agent",
+      email: AGENT_SYSTEM_EMAIL,
+      passwordHash: await hashPassword(randomUUID()),
+      roleId: employeeRole.id,
+      // INACTIVE on purpose, unlike the four above. This account is a foreign-key target and never
+      // a principal, and `principal.service.ts#loadRequestUser` refuses any account that is not
+      // ACTIVE — so this makes "the agent account can never be loaded as an acting identity" a
+      // property of the data rather than a rule someone has to remember. A foreign key only needs
+      // the row to exist, so it works as `reporterId`/`authorId` exactly the same.
+      status: "INACTIVE",
+      bio: "System account — author of record for rows created by an AI agent run. Never a principal: every agent run acts as the named person who is accountable for it, and is refused exactly what they are refused.",
       emailVerifiedAt: new Date()
     }
   });

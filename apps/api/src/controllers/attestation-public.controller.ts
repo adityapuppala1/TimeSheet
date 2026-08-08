@@ -105,6 +105,13 @@ attestationPublicRouter.get("/:token", async (req, res) => {
   await audit(undefined, "attestation.share_viewed", "WorkAttestation", link.attestationId, {
     reference: link.attestation.reference,
     scope: link.scope
+  }, {
+    // Someone holding a valid share link and no session. `ipAddress` matters more here than almost
+    // anywhere else in the app: this is an outsider reading somebody's verified work record, and
+    // "who looked at it" is the whole question the share log exists to answer.
+    actorType: "GUEST",
+    actorLabel: "attestation-share-link",
+    ipAddress: req.ip
   }).catch(() => undefined);
 
   res.setHeader("X-Robots-Tag", "noindex, nofollow");

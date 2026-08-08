@@ -230,6 +230,9 @@ export async function processInboundChatMessage(message: ParsedInboundChatMessag
     confidence,
     needsReview,
     reasoning: classification?.reasoning ?? "(AI classification unavailable — used defaults)"
+  }, {
+    actorType: "INTEGRATION",
+    actorLabel: "chat-intake"
   });
 
   return { created: true, ticketId: ticket.id, ticketKey: ticket.key };

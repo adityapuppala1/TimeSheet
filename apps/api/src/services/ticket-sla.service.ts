@@ -170,7 +170,10 @@ export async function processTicketSlaSweep(now: Date = new Date()) {
       });
     }
 
-    await audit(undefined, "ticket.sla_breach", "Ticket", ticket.id, { hoursOverdue: Number(hoursOverdue.toFixed(2)) });
+    await audit(undefined, "ticket.sla_breach", "Ticket", ticket.id, { hoursOverdue: Number(hoursOverdue.toFixed(2)) }, {
+      actorType: "SYSTEM",
+      actorLabel: "ticket-sla-sweep"
+    });
   }
 
   return { breaches: overdue.length, escalations };

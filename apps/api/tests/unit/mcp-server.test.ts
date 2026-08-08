@@ -70,17 +70,21 @@ function buildClient(overrides: Partial<Record<string, unknown>> = {}): PrismaCl
       }))
     },
     mcpCredential: {
+      // The credential row no longer carries the user: `resolveMcpPrincipal` selects `userId` and
+      // then goes through `principal.service.ts#loadRequestUser`, so that MCP and the agent
+      // runtime share ONE definition of "what is this person allowed to do" rather than each
+      // building `req.user` themselves. The second lookup below is that shared one.
       findUnique: vi.fn().mockImplementation(async () => ({
         id: "cred-1",
         name: "Priya's Claude Desktop",
         revokedAt: null,
-        user: actor
+        userId: actor.id
       })),
       update: vi.fn().mockResolvedValue({})
     },
     // ticketProjectScope: this employee is assigned to proj-mine only.
     userProjectAssignment: { findMany: vi.fn().mockResolvedValue([{ projectId: "proj-mine" }]) },
-    user: { findMany: vi.fn().mockResolvedValue([]) },
+    user: { findMany: vi.fn().mockResolvedValue([]), findUnique: vi.fn().mockImplementation(async () => actor) },
     project: {
       findFirst: vi.fn().mockResolvedValue({ id: "proj-mine", code: "WEB", name: "Web", status: "ACTIVE" }),
       findMany: vi.fn().mockResolvedValue([{ code: "WEB", name: "Web", description: null, status: "ACTIVE", modules: [] }])
@@ -159,7 +163,19 @@ describe("dispatch", () => {
     const app = buildApp();
     expect((await rpc(app, "tools/list", {}, null)).status).toBe(401);
 
-    vi.mocked(client.mcpCredential.findUnique).mockResolvedValue({ id: "cred-1", revokedAt: new Date(), user: actor } as never);
+    vi.mocked(client.mcpCredential.findUnique).mockResolvedValue({ id: "cred-1", revokedAt: new Date(), userId: actor.id } as never);
+    expect((await rpc(app, "tools/list")).status).toBe(401);
+  });
+
+  it("refuses a credential whose person has been deactivated, without the row changing", async () => {
+    // The per-request re-read is what makes offboarding take effect: nobody has to remember to
+    // revoke the credential when the account is disabled. Now that it lives in loadRequestUser,
+    // it is worth pinning here rather than trusting it survived the extraction.
+    const app = buildApp();
+    vi.mocked(client.user.findUnique).mockResolvedValue({ ...actor, status: "INACTIVE" } as never);
+    expect((await rpc(app, "tools/list")).status).toBe(401);
+
+    vi.mocked(client.user.findUnique).mockResolvedValue({ ...actor, deletedAt: new Date() } as never);
     expect((await rpc(app, "tools/list")).status).toBe(401);
   });
 

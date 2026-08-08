@@ -196,6 +196,9 @@ export async function processSlaSweep(now: Date = new Date()) {
 
     await audit(undefined, "timesheet.sla_breach", "Timesheet", ts.id, {
       hoursOverdue: Number(hoursOverdue.toFixed(2))
+    }, {
+      actorType: "SYSTEM",
+      actorLabel: "timesheet-sla-sweep"
     });
   }
 

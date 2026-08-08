@@ -314,6 +314,9 @@ export async function processInboundEmail(email: ParsedInboundEmail): Promise<Pr
     confidence,
     needsReview,
     reasoning: classification?.reasoning ?? "(AI classification unavailable — used defaults)"
+  }, {
+    actorType: "INTEGRATION",
+    actorLabel: "email-intake"
   });
 
   return { created: true, ticketId: ticket.id, ticketKey: ticket.key };

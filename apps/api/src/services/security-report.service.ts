@@ -472,7 +472,11 @@ export async function maybeReopenTicketOnRegression(ticketId: string, reason: st
   if (!allowed.includes("REOPENED")) return; // stays consistent with the one source of truth for legal transitions, even though both current states already allow it
 
   await prisma.ticket.update({ where: { id: ticket.id }, data: { status: "REOPENED", resolvedAt: null, closedAt: null } });
-  await audit(undefined, "ticket.auto_reopened", "Ticket", ticket.id, { reason, from: currentStatus });
+  await audit(undefined, "ticket.auto_reopened", "Ticket", ticket.id, { reason, from: currentStatus }, {
+    actorType: "INTEGRATION",
+    actorLabel: "security-ingestion",
+    before: { status: currentStatus }
+  });
 
   if (ticket.assigneeId) {
     await dispatchNotification({
@@ -630,7 +634,10 @@ export async function maybeAutoCreateTicketForCiFailure(testRun: {
     }
   }
 
-  await audit(undefined, "ticket.auto_created_from_ci_failure", "Ticket", ticket.id, { provider: testRun.provider, branch: testRun.branch });
+  await audit(undefined, "ticket.auto_created_from_ci_failure", "Ticket", ticket.id, { provider: testRun.provider, branch: testRun.branch }, {
+    actorType: "INTEGRATION",
+    actorLabel: "ci-ingestion"
+  });
 }
 
 /**

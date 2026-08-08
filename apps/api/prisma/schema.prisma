@@ -583,6 +583,26 @@ model Notification {
   @@index([userId, createdAt])
 }
 
+/// WHO acted, when `actorId` alone cannot say.
+///
+/// Until this existed, every automated actor in the product — email intake, chat intake, the SLA
+/// sweeps, the security ingest, a guest clicking an emailed approval link — wrote `actorId: NULL`,
+/// and the only way to tell them apart was to string-match the `action` column. That was tolerable
+/// while every write traced back to a person somewhere. It stops being tolerable the moment
+/// anything acts on its own: "what did the machine change" has to be a query, not an inference.
+enum AuditActorType {
+  /// A signed-in person. The default, so every existing call site keeps its meaning untouched.
+  USER
+  /// The app itself: cron sweeps, retention workers, scheduled digests. No human in the loop.
+  SYSTEM
+  /// An AI agent run, acting as a delegated human. `actorId` is still that person — see AgentRun.
+  AGENT
+  /// An inbound integration acting on someone else's behalf: email/chat intake, SCIM, git, CI.
+  INTEGRATION
+  /// Someone holding a single-use link but no session — the guest approval path.
+  GUEST
+}
+
 model AuditLog {
   id        String   @id @default(uuid())
   actorId   String?
@@ -594,7 +614,31 @@ model AuditLog {
   ipAddress String?
   createdAt DateTime @default(now())
 
+  /// Defaults to USER so all 181 existing call sites keep writing exactly what they wrote before.
+  actorType AuditActorType @default(USER)
+
+  /// Human-readable name for a non-USER actor — "email-intake", "agent:schedule_adjustment".
+  /// `actorId` answers "whose authority", this answers "what was holding it".
+  actorLabel String? @db.VarChar(120)
+
+  /// The state that changed. `metadata` is freeform and every call site invented its own shape, so
+  /// it can describe an action but cannot be diffed. These two can: an autonomous change nobody
+  /// can reconstruct is an autonomous change nobody can review.
+  before Json?
+  after  Json?
+
+  /// Provenance for AI-caused writes: which model call, and which agent run.
+  ///
+  /// NOT foreign keys, deliberately. `ai-retention.worker.ts` deletes AIInteraction rows on the
+  /// workspace's retention schedule, and an audit trail that loses its provenance the day
+  /// retention runs is worse than one that never claimed to have it. Same reasoning as
+  /// `AIInteraction.promptVersionId`, which is a plain string for the same reason.
+  aiInteractionId String? @db.VarChar(64)
+  agentRunId      String? @db.VarChar(64)
+
   @@index([actorId, entity, createdAt])
+  @@index([actorType, createdAt])
+  @@index([agentRunId])
 }
 
 model FormConfiguration {

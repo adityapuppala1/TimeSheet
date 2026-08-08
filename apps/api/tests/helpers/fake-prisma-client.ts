@@ -70,6 +70,7 @@ export function createFakeTenantClient(): PrismaClient {
     outboundWebhook: { count: vi.fn() },
     globalPlanningSettings: { findUnique: vi.fn() },
     serviceHealthSample: { createMany: vi.fn(), deleteMany: vi.fn(), findMany: vi.fn() },
-    serviceIncident: { findMany: vi.fn(), findUnique: vi.fn(), create: vi.fn(), update: vi.fn() }
+    serviceIncident: { findMany: vi.fn(), findUnique: vi.fn(), create: vi.fn(), update: vi.fn() },
+    auditLog: { create: vi.fn(), findMany: vi.fn(), count: vi.fn() }
   } as unknown as PrismaClient;
 }
