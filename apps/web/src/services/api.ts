@@ -2712,6 +2712,8 @@ export interface FaceAttemptRow {
   autoResolvedReason?: string | null;
   user: { id: string; name: string; email: string; avatarUrl: string | null };
   reviewedBy: { id: string; name: string } | null;
+  undoneAt: string | null;
+  undoneBy: { id: string; name: string } | null;
 }
 
 /** One page of the verification log plus the true total, so the footer can say "of N". */
@@ -3740,6 +3742,9 @@ export interface AiProposalChangeRow {
   appliedAt: string | null;
   /** Set when application was attempted and refused — usually a stale before-state. */
   applyError: string | null;
+  undoneAt: string | null;
+  /** Why this row could not be put back — almost always "somebody changed it since". */
+  undoError: string | null;
   order: number;
 }
 
@@ -3750,7 +3755,7 @@ export interface AiProposalRow {
   rationale: string | null;
   confidence: number | null;
   model: string | null;
-  status: "PENDING_REVIEW" | "PARTIALLY_APPLIED" | "APPLIED" | "REJECTED" | "EXPIRED";
+  status: "PENDING_REVIEW" | "PARTIALLY_APPLIED" | "APPLIED" | "REJECTED" | "EXPIRED" | "UNDONE" | "PARTIALLY_UNDONE";
   createdAt: string;
   expiresAt: string | null;
   reviewedAt: string | null;
@@ -3766,6 +3771,14 @@ export interface ApplyProposalResult {
   skipped: number;
   failed: Array<{ id: string; summary: string; reason: string }>;
   status: "APPLIED" | "PARTIALLY_APPLIED" | "REJECTED";
+}
+
+export interface UndoProposalResult {
+  undone: number;
+  /** Rows that could not be put back, each with the reason — nearly always that somebody has
+   *  edited the row since, in which case reverting it would erase THEIR change. */
+  refused: Array<{ id: string; summary: string; reason: string }>;
+  status: "UNDONE" | "PARTIALLY_UNDONE";
 }
 
 export const copilotApi = {
@@ -3784,7 +3797,11 @@ export const copilotApi = {
     (await api.patch<{ updated: number }>(`/ai-proposals/${id}/decisions`, { decisions })).data,
   apply: async (id: string, decisions: Record<string, boolean>) =>
     (await api.post<ApplyProposalResult>(`/ai-proposals/${id}/apply`, { decisions })).data,
-  reject: async (id: string) => (await api.post(`/ai-proposals/${id}/reject`)).data
+  reject: async (id: string) => (await api.post(`/ai-proposals/${id}/reject`)).data,
+  /** Put back what an applied proposal changed. Refuses per row rather than wholesale: a field
+   *  somebody has edited since is deliberately left alone, because reverting it would clobber
+   *  them exactly the way applying a stale row would have. */
+  undo: async (id: string) => (await api.post<UndoProposalResult>(`/ai-proposals/${id}/undo`)).data
 };
 
 /* ------------------------------------------------------------------ *

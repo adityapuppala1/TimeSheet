@@ -249,6 +249,7 @@ model User {
   aiProposalsRequested AiProposal[]         @relation("AiProposalRequester")
   aiProposalsReviewed  AiProposal[]         @relation("AiProposalReviewer")
   aiCapabilityPolicies AiCapabilityPolicy[] @relation("AiCapabilityPolicyEditor")
+  aiProposalsUndone    AiProposal[]         @relation("AiProposalUndoer")
 
   createdAt DateTime  @default(now())
   updatedAt DateTime  @updatedAt
@@ -3120,6 +3121,12 @@ enum AiProposalStatus {
   APPLIED
   REJECTED
   EXPIRED
+  /// Every applied row was reversed.
+  UNDONE
+  /// Some rows were reversed and some refused — a row somebody has edited since is deliberately
+  /// NOT reverted, because reverting it would clobber them exactly the way applying a stale row
+  /// would have. The refusal is recorded per row, so a half-undone proposal explains itself.
+  PARTIALLY_UNDONE
 }
 
 enum AiProposalChangeOp {
@@ -3171,6 +3178,16 @@ model AiProposal {
   reviewedBy    User?     @relation("AiProposalReviewer", fields: [reviewedById], references: [id], onDelete: SetNull)
   reviewedAt    DateTime?
   appliedAt     DateTime?
+
+  undoneById      String?
+  undoneBy        User?     @relation("AiProposalUndoer", fields: [undoneById], references: [id], onDelete: SetNull)
+  undoneAt        DateTime?
+  /// How long the one-click undo banner is offered for. Past it the banner goes away and undo has
+  /// to be asked for deliberately — but it still WORKS, because the clock is an affordance and the
+  /// staleness check is the actual safety property. An expired window does not make a revert
+  /// unsafe; a row somebody has since edited does.
+  undoWindowHours Int?
+
   /// Unreviewed proposals go stale — a schedule proposal computed against last week's plan is
   /// worse than no proposal. The sweep marks these EXPIRED rather than letting someone apply one.
   expiresAt     DateTime?
@@ -3213,6 +3230,10 @@ model AiProposalChange {
   /// Set when application was attempted and refused (stale before-state, permission, validation),
   /// so a partially-applied proposal explains itself.
   applyError String?   @db.VarChar(500)
+
+  undoneAt  DateTime?
+  /// Why this row could not be put back — almost always "somebody changed it since".
+  undoError String?   @db.VarChar(500)
 
   order Int @default(0)
 

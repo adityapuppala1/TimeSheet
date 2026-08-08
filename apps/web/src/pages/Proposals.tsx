@@ -54,7 +54,9 @@ const STATUS_VARIANT: Record<AiProposalRow["status"], "warning" | "success" | "d
   PARTIALLY_APPLIED: "secondary",
   APPLIED: "success",
   REJECTED: "destructive",
-  EXPIRED: "secondary"
+  EXPIRED: "secondary",
+  UNDONE: "secondary",
+  PARTIALLY_UNDONE: "warning"
 };
 
 const STATUS_LABEL: Record<AiProposalRow["status"], string> = {
@@ -62,7 +64,9 @@ const STATUS_LABEL: Record<AiProposalRow["status"], string> = {
   PARTIALLY_APPLIED: "Partly applied",
   APPLIED: "Applied",
   REJECTED: "Rejected",
-  EXPIRED: "Expired"
+  EXPIRED: "Expired",
+  UNDONE: "Undone",
+  PARTIALLY_UNDONE: "Partly undone"
 };
 
 /** Renders one row's change as before → after, so a reviewer sees what actually moves. */
@@ -122,6 +126,26 @@ export function ProposalsPage() {
       queryClient.invalidateQueries({ queryKey: ["tickets"] });
     },
     onError: (err: any) => toast.error("Could not apply", { description: serverMessage(err, "Try again.") })
+  });
+
+  const undo = useMutation({
+    mutationFn: (id: string) => copilotApi.undo(id),
+    onSuccess: (result) => {
+      if (result.refused.length > 0) {
+        // Named, not summarised — same reason apply does it. A refusal here means somebody's later
+        // edit was PROTECTED from being reverted, which is a good outcome the reviewer should see
+        // rather than a failure to hide.
+        toast.warning(`Put back ${result.undone}, left ${result.refused.length} alone`, {
+          description: result.refused.map((r) => `${r.summary}: ${r.reason}`).join(" · ").slice(0, 200)
+        });
+      } else {
+        toast.success(`Put back ${result.undone} change${result.undone === 1 ? "" : "s"}`);
+      }
+      queryClient.invalidateQueries({ queryKey: ["ai-proposals"] });
+      queryClient.invalidateQueries({ queryKey: ["plan"] });
+      queryClient.invalidateQueries({ queryKey: ["tickets"] });
+    },
+    onError: (err: any) => toast.error("Could not undo", { description: serverMessage(err, "Try again.") })
   });
 
   const reject = useMutation({
@@ -336,6 +360,25 @@ export function ProposalsPage() {
                     <Button size="sm" variant="outline" disabled={reject.isPending} onClick={() => reject.mutate(proposal.id)}>
                       Dismiss
                     </Button>
+                  </div>
+                )}
+
+                {!pending && canApply && (proposal.status === "APPLIED" || proposal.status === "PARTIALLY_APPLIED") && (
+                  <div className="flex flex-wrap items-center gap-2">
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      disabled={undo.isPending}
+                      onClick={() => undo.mutate(proposal.id)}
+                    >
+                      {undo.isPending ? <Loader2 className="mr-2 h-3.5 w-3.5 animate-spin" /> : null}
+                      Undo
+                    </Button>
+                    {/* Said plainly, because it is the reason undo is safe to offer at all rather
+                        than a caveat: anything edited since is left exactly as it is. */}
+                    <span className="text-xs text-muted-foreground">
+                      Puts these changes back. Anything edited since is left alone.
+                    </span>
                   </div>
                 )}
 

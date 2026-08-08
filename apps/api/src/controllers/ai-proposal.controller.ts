@@ -21,7 +21,7 @@ import { aiRateLimit } from "../middleware/ai-rate-limit.js";
 import { requireAuth, requirePermission } from "../middleware/auth.js";
 import { AppError } from "../middleware/error.js";
 import { validate } from "../middleware/validate.js";
-import { applyProposal, createProposal, type DraftChange } from "../services/ai-proposal.service.js";
+import { applyProposal, createProposal, undoProposal, type DraftChange } from "../services/ai-proposal.service.js";
 import { narrateProjectRisk, proposePlanBreakdown } from "../services/ai.service.js";
 import { audit } from "../services/audit.service.js";
 import { getPlanningEntitlements } from "../services/plan-limits.service.js";
@@ -189,6 +189,7 @@ aiProposalRouter.get("/", requirePermission(permissions.TICKETS_VIEW), async (re
       changes: { orderBy: { order: "asc" } },
       requestedBy: { select: { id: true, name: true } },
       reviewedBy: { select: { id: true, name: true } },
+      undoneBy: { select: { id: true, name: true } },
       scopeProject: { select: { id: true, code: true, name: true } },
       scopeTicket: { select: { id: true, key: true, title: true } }
     },
@@ -342,6 +343,24 @@ aiProposalRouter.post(
       actorId: req.user!.id
     });
     res.json(result);
+  }
+);
+
+/**
+ * Put back what an applied proposal changed.
+ *
+ * Behind `loadReviewableProposal` and `PLAN_WRITE` exactly like apply, and for the same reason:
+ * reversing a change to a project is as much a change to that project as making it was, so it
+ * cannot be reachable to anyone who could not have applied it in the first place.
+ */
+aiProposalRouter.post(
+  "/:id/undo",
+  requirePermission(permissions.PLAN_WRITE),
+  validate(z.object({ params: z.object({ id: z.string().uuid() }) })),
+  async (req, res) => {
+    await assertPlanningEnabled();
+    const proposal = await loadReviewableProposal(req, String(req.params.id));
+    res.json(await undoProposal({ proposalId: proposal.id, actorId: req.user!.id }));
   }
 );
 

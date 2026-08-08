@@ -355,6 +355,137 @@ export async function applyProposal(params: {
   return { applied, skipped, failed, status };
 }
 
+export interface UndoResult {
+  undone: number;
+  /** Rows that could not be put back, each with the reason. */
+  refused: Array<{ id: string; summary: string; reason: string }>;
+  status: "UNDONE" | "PARTIALLY_UNDONE";
+}
+
+/**
+ * Put back what a proposal changed.
+ *
+ * WHY UNDO IS SCOPED TO PROPOSALS AND NOT GENERAL: a general undo would mean capturing before and
+ * after on every write in the application — every controller, every service — which is the maximal
+ * version of "changing how the product works" in exchange for a feature nobody asks for. Nobody
+ * needs to undo a colleague's edit from a machine. "Put back what the assistant just did" is the
+ * only undo anyone actually wants, and this is exactly that.
+ *
+ * WHY IT NEEDS NO NEW DATA: `createProposal` refuses an UPDATE that arrives without a `before`
+ * (see its guard), so every applied UPDATE row already carries its own inverse. A CREATE's inverse
+ * is a soft delete of the row whose id was written back onto `targetId` at apply time. A LINK's
+ * inverse is deleting a row with a natural unique key.
+ *
+ * THE SYMMETRIC STALENESS CHECK — the property that makes this safe rather than merely reversible.
+ * `applyProposal` refuses a row whose current value no longer matches the `before` it was computed
+ * against, because applying it would silently revert whoever moved it. Undo faces the identical
+ * hazard from the opposite direction: if somebody has edited a field SINCE the assistant set it,
+ * putting it back to `before` would clobber that person just as invisibly. So a row is only
+ * reverted while it still holds exactly what we wrote. Anything else is refused, with the reason
+ * recorded on the row.
+ *
+ * ORDER IS REVERSED for the same reason apply's is forward: apply creates parents before the
+ * children and links that point at them, so undo has to remove the links first and the parents
+ * last, or it would be deleting a row somebody still points to.
+ */
+export async function undoProposal(params: { proposalId: string; actorId: string }): Promise<UndoResult> {
+  const proposal = await prisma.aiProposal.findUnique({
+    where: { id: params.proposalId },
+    include: { changes: { orderBy: { order: "asc" } } }
+  });
+  if (!proposal) throw new AppError(404, "Proposal not found");
+  if (proposal.status !== "APPLIED" && proposal.status !== "PARTIALLY_APPLIED") {
+    throw new AppError(409, "Only a proposal that was applied can be undone.");
+  }
+
+  // Only rows that actually landed. A row that was skipped or that failed at apply time has
+  // nothing to put back, and treating it as an undo failure would be a lie.
+  const applied = proposal.changes.filter((c) => c.appliedAt && !c.undoneAt);
+  if (applied.length === 0) throw new AppError(409, "Nothing from this proposal is still applied.");
+
+  // LINK → UPDATE → CREATE, then latest first inside each group.
+  const rank = (op: string) => (op === "LINK" ? 0 : op === "UPDATE" ? 1 : 2);
+  const ordered = [...applied].sort((a, b) => rank(a.op) - rank(b.op) || b.order - a.order);
+
+  const refused: UndoResult["refused"] = [];
+  let undone = 0;
+
+  for (const change of ordered) {
+    try {
+      const after = (change.after ?? {}) as Record<string, unknown>;
+      const before = (change.before ?? {}) as Record<string, unknown>;
+
+      if (change.op === "UPDATE" && change.targetType === "TICKET" && change.targetId) {
+        const current = await prisma.ticket.findFirst({ where: { id: change.targetId, deletedAt: null } });
+        if (!current) throw new Error("that work item no longer exists");
+
+        // The mirror of apply's check: refuse unless the row still holds what we wrote.
+        for (const [key, written] of Object.entries(projectTicketData(after))) {
+          if (!sameValue((current as Record<string, unknown>)[key], written)) {
+            throw new Error(`"${key}" has been changed since, so putting it back would undo somebody else's edit`);
+          }
+        }
+
+        const restore = projectTicketData(before);
+        if (Object.keys(restore).length === 0) throw new Error("there is no recorded previous value for this");
+        await prisma.ticket.update({ where: { id: current.id }, data: restore });
+      } else if (change.op === "CREATE" && change.targetType === "TICKET" && change.targetId) {
+        const current = await prisma.ticket.findFirst({ where: { id: change.targetId, deletedAt: null } });
+        // Already gone is the outcome undo wanted, so it is a success and not a refusal.
+        if (current) {
+          // Soft delete, matching how this product deletes a ticket everywhere else — a hard
+          // delete would take its comments and attachments with it, and somebody may have added
+          // both since. Children first, so nothing is left pointing at a deleted parent.
+          const children = await prisma.ticket.count({ where: { parentId: current.id, deletedAt: null } });
+          if (children > 0) throw new Error("work has been filed underneath this since, so removing it would orphan it");
+          await prisma.ticket.update({ where: { id: current.id }, data: { deletedAt: new Date() } });
+        }
+      } else if (change.op === "LINK") {
+        const fromId = String(after.fromId ?? "");
+        const toId = String(after.toId ?? "");
+        // Apply resolves index-based ends at apply time and does not write them back, so a link
+        // created from a `fromIndex`/`toIndex` pair cannot be identified now. Refuse rather than
+        // guess — deleting the wrong dependency is worse than leaving this one.
+        if (!fromId || !toId) throw new Error("this dependency cannot be identified well enough to remove safely");
+        await prisma.ticketLink.deleteMany({
+          where: { sourceTicketId: fromId, targetTicketId: toId, type: "FINISH_TO_START" }
+        });
+      } else {
+        throw new Error("this kind of change cannot be put back");
+      }
+
+      undone++;
+      await prisma.aiProposalChange.update({
+        where: { id: change.id },
+        data: { undoneAt: new Date(), undoError: null }
+      });
+    } catch (error) {
+      const reason = (error as Error).message;
+      refused.push({ id: change.id, summary: change.summary, reason });
+      await prisma.aiProposalChange.update({ where: { id: change.id }, data: { undoError: reason.slice(0, 500) } });
+    }
+  }
+
+  const status: UndoResult["status"] = refused.length === 0 ? "UNDONE" : "PARTIALLY_UNDONE";
+  await prisma.aiProposal.update({
+    where: { id: proposal.id },
+    data: { status, undoneById: params.actorId, undoneAt: new Date() }
+  });
+
+  await audit(params.actorId, "ai_proposal.undone", "AiProposal", proposal.id, {
+    kind: proposal.kind,
+    undone,
+    refused: refused.length
+  }, {
+    // A person reversing what a machine did is the single strongest quality signal this system
+    // will ever produce, and the row an operator most wants to find. It records the transition.
+    before: { status: proposal.status },
+    after: { status }
+  });
+
+  return { undone, refused, status };
+}
+
 /** Marks unreviewed proposals past their TTL. Called by the risk worker's tick so it needs no
  *  cron of its own — an expired proposal must not be applicable, and that is all this enforces. */
 export async function expireStaleProposals(): Promise<number> {
