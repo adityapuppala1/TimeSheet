@@ -38,7 +38,7 @@ import { renderSecurityReportPdf } from "../services/security-report-pdf.service
 import { buildTicketLineage } from "../services/ticket-lineage.service.js";
 import { explainAssigneeSuggestion } from "../services/ai.service.js";
 import { setInteractionFeedback } from "../services/ai-quality.service.js";
-import { dispatchOutboundWebhooks } from "../services/webhook-dispatch.service.js";
+import { emitDomainEvent, emitTicketStatusChanged } from "../services/domain-events.js";
 import { createGitHubBranch, getGitAccessTokenOrNull, listGitHubRepos } from "../services/git-provider.service.js";
 import {
   applyTicketRules,
@@ -340,7 +340,7 @@ ticketRouter.post("/", requirePermission(permissions.TICKETS_WRITE), validate(cr
   }
 
   await audit(req.user!.id, "ticket.created", "Ticket", ticket.id, { key: ticket.key });
-  await dispatchOutboundWebhooks("ticket.created", { ticket });
+  emitDomainEvent("ticket.created", { ticket });
 
   // Rules engine (Workspace Settings → Ticketing → Automation) — only runs when the creator
   // didn't already pick an assignee, so an explicit human choice always wins over an automated
@@ -591,8 +591,7 @@ ticketRouter.patch("/:id/status", requirePermission(permissions.TICKETS_WRITE), 
     }
   });
   await audit(req.user!.id, "ticket.status_changed", "Ticket", ticket.id, { from: currentStatus, to: nextStatus });
-  await dispatchOutboundWebhooks("ticket.status_changed", { ticket, from: currentStatus, to: nextStatus });
-  if (nextStatus === "CLOSED") await dispatchOutboundWebhooks("ticket.closed", { ticket });
+  emitTicketStatusChanged(ticket, currentStatus, nextStatus);
 
   const recipients = new Set<string>();
   if (existing.reporterId !== req.user!.id) recipients.add(existing.reporterId);

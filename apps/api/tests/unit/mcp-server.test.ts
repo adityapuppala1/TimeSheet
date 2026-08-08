@@ -20,7 +20,11 @@ import { runInTenant } from "../helpers/tenant-context.js";
 const auditSpy = vi.fn().mockResolvedValue(undefined);
 vi.mock("../../src/services/audit.service.js", () => ({ audit: auditSpy }));
 vi.mock("../../src/services/maintenance.service.js", () => ({ isMaintenanceActive: vi.fn().mockResolvedValue(false) }));
-vi.mock("../../src/services/webhook-dispatch.service.js", () => ({
+// Only the network call is stubbed. WEBHOOK_EVENTS stays real, because services/domain-events.ts
+// derives the internal event vocabulary from it — a hand-written copy here would let the two drift
+// and the test would keep passing while the seam forwarded the wrong set.
+vi.mock("../../src/services/webhook-dispatch.service.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../src/services/webhook-dispatch.service.js")>()),
   dispatchOutboundWebhooks: vi.fn().mockResolvedValue(undefined)
 }));
 // Stubbed rather than exercised: `log_timesheet_entry` REUSES the controller's saveTimesheet on

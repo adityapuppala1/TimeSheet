@@ -35,7 +35,7 @@ import { AppError } from "../middleware/error.js";
 import { publicApiAuth, requireWriteScope, type PublicApiRequest } from "../middleware/public-api-auth.js";
 import { validate } from "../middleware/validate.js";
 import { audit } from "../services/audit.service.js";
-import { dispatchOutboundWebhooks } from "../services/webhook-dispatch.service.js";
+import { emitDomainEvent, emitTicketStatusChanged } from "../services/domain-events.js";
 import { assertValidTicketType, computeTicketDueDate, getGlobalTicketSettings, issueTicketKey } from "../services/ticket.service.js";
 import { sanitizeRichText } from "../utils/sanitize.js";
 
@@ -130,7 +130,7 @@ publicApiRouter.post("/tickets", requireWriteScope, validate(createTicketSchema)
   });
 
   await audit(reporterId, "ticket.created_via_api", "Ticket", ticket.id, { apiKeyId: req.apiKey!.id });
-  await dispatchOutboundWebhooks("ticket.created", { ticket });
+  emitDomainEvent("ticket.created", { ticket });
 
   res.status(201).json(ticket);
 });
@@ -185,8 +185,7 @@ publicApiRouter.patch(
       to: nextStatus,
       apiKeyId: req.apiKey!.id
     });
-    await dispatchOutboundWebhooks("ticket.status_changed", { ticket, from: currentStatus, to: nextStatus });
-    if (nextStatus === "CLOSED") await dispatchOutboundWebhooks("ticket.closed", { ticket });
+    emitTicketStatusChanged(ticket, currentStatus, nextStatus);
 
     res.json(ticket);
   }

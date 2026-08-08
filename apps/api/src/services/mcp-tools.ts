@@ -33,7 +33,7 @@ import { requirePermission, type RequestUser } from "../middleware/auth.js";
 import { AppError } from "../middleware/error.js";
 import { audit } from "../services/audit.service.js";
 import { saveTimesheet } from "../controllers/timesheet.controller.js";
-import { dispatchOutboundWebhooks } from "./webhook-dispatch.service.js";
+import { emitDomainEvent, emitTicketStatusChanged } from "./domain-events.js";
 import {
   assertTicketVisible,
   assertValidTicketType,
@@ -623,7 +623,7 @@ const TOOLS: readonly McpToolRegistration[] = [
         });
       });
 
-      await dispatchOutboundWebhooks("ticket.created", { ticket });
+      emitDomainEvent("ticket.created", { ticket });
       return { created: true, ...ticket };
     }
   },
@@ -715,8 +715,7 @@ const TOOLS: readonly McpToolRegistration[] = [
       }
 
       const ticket = await prisma.ticket.update({ where: { id: existing.id }, data, select: TICKET_SELECT });
-      await dispatchOutboundWebhooks("ticket.status_changed", { ticket, from: currentStatus, to: nextStatus });
-      if (nextStatus === "CLOSED") await dispatchOutboundWebhooks("ticket.closed", { ticket });
+      emitTicketStatusChanged(ticket, currentStatus, nextStatus);
 
       return { updated: true, key: ticket.key, from: currentStatus, to: nextStatus };
     }

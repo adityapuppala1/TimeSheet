@@ -25,7 +25,7 @@ import { buildRateSnapshotPatch } from "../services/billing-rate.service.js";
 import { dispatchNotification } from "../services/notify.service.js";
 import { templates } from "../services/mail-templates.js";
 import { computeApprovalDeadline, resolveEscalationsFor } from "../services/sla.service.js";
-import { dispatchOutboundWebhooks } from "../services/webhook-dispatch.service.js";
+import { emitDomainEvent } from "../services/domain-events.js";
 import { processUpload } from "../services/attachment-storage.service.js";
 import { sanitizeRichText } from "../utils/sanitize.js";
 import { bindVerificationToRecord, consumeVerification, getTimesheetVerificationBadges, isFaceVerificationRequired } from "../services/face.service.js";
@@ -218,7 +218,7 @@ export async function saveTimesheet(req: any, status: "DRAFT" | "SUBMITTED") {
   await audit(req.user.id, `timesheet.${status.toLowerCase()}`, "Timesheet", timesheet.id);
 
   if (status === "SUBMITTED") {
-    await dispatchOutboundWebhooks("timesheet.submitted", { timesheet });
+    emitDomainEvent("timesheet.submitted", { timesheet });
     const dateLabel = workDate.toISOString().slice(0, 10);
     const managerName = timesheet.user.manager?.name ?? null;
 
@@ -319,7 +319,7 @@ timesheetRouter.patch("/:id/approve", requirePermission(permissions.TIMESHEETS_A
     include: { project: true, user: true }
   });
   await resolveEscalationsFor(item.id);
-  await dispatchOutboundWebhooks("timesheet.approved", { timesheet: item });
+  emitDomainEvent("timesheet.approved", { timesheet: item });
 
   const dateLabel = item.workDate.toISOString().slice(0, 10);
   const reviewer = req.user!.name ?? req.user!.email;
