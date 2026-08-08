@@ -61,6 +61,24 @@ unaffected; their migration checksums were reconciled in place.
 - Release history in What's-new now merges tag-only versions with this build's own changelog
   notes — versions no longer show "No notes were written" while the notes sit in the bundle.
 
+### ⚡ Performance — measured, then fixed
+
+All three deployment shapes (Windows-native, Docker Compose, Kubernetes) were run and
+load-tested for real; every change below carries its measurement, and the full interactive
+report ships in `reports/quality-load-report.html`.
+
+- **The ticket list lost 60% of its weight.** It was serializing every ticket's full rich-text
+  description — 391 KB per response against 25 ms of database time — for a list that renders
+  titles. Now 150 KB (10 KB gzipped), +26% throughput, −21% p50, zero client changes.
+- **Two new capacity knobs, both born from a measured ceiling** and wired through env, Compose
+  and the Helm chart with defaults unchanged: `RATE_LIMIT_PER_MINUTE` (the blanket per-IP budget
+  is per *egress* IP — an office NAT was one 900/min bucket) and `TENANT_DB_CONNECTION_LIMIT`
+  (5 connections is multi-tenant arithmetic; single-org shapes ship 20, because 5 pinned the
+  authed path near 90 req/s on pool queueing alone).
+- **First installs no longer deadlock.** An unseeded API used to exit, restart too fast to seed,
+  and defeat the installer's own wait-for-health-then-seed order. It now waits with
+  `/api/health` serving and a loud log until the one-time seed lands.
+
 ## 2.3.0 — your assistant can drive it, and the model is on a short leash — 2026-08-08
 
 Two additions that point in opposite directions and belong in the same release. TimeSphere now

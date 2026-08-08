@@ -1139,6 +1139,8 @@ and all forwarded by both compose files and the Helm chart:
 | Variable | Default | Section |
 |---|---|---|
 | `TRUST_PROXY_HOPS` | `0` | [Reverse proxies and client IP attribution](#reverse-proxies-and-client-ip-attribution-trust_proxy_hops) — **the default is wrong for every proxied deployment, including the shipped Compose stack** |
+| `RATE_LIMIT_PER_MINUTE` | `900` | The blanket per-IP request budget. Per **egress** IP — an office NAT or corporate proxy is ONE bucket, and a 9 am rush across a hundred people behind it exceeds 900/min easily. Raise it for NAT-heavy deployments; the strict per-surface limiters (auth 20/min-failed, public share links, webhooks, AI) are deliberately not affected. Load-validated: the cut lands at exactly the configured budget. |
+| `TENANT_DB_CONNECTION_LIMIT` | `5` (code) / `20` (shipped by Compose + chart) | Connections per tenant Prisma client. 5 is multi-tenant arithmetic — 50 cached tenant clients × 5 must stay under MySQL `max_connections` (151). A single-org install has ONE live tenant, and load testing measured what 5 costs it: the authed path pinned near 90 req/s at every concurrency while p50 scaled with queue depth alone (51 ms → 480 ms). SaaS fleets with many live tenant databases should set it back toward 5 and mind the ceiling arithmetic in `config/prisma.ts`. A `connection_limit` already present in the DSN still wins. |
 | `STORAGE_ROOT`, `STORAGE_DOCUMENTS_DIR`, `STORAGE_AVATARS_DIR`, `STORAGE_FACE_DIR` | empty (today's layout under `UPLOAD_DIR`) | [Relocating file storage](#relocating-file-storage) |
 | `LOG_DIR`, `LOG_ROTATE_HOURS`, `LOG_RETENTION_DAYS`, `LOG_COMPRESS_ON_ROLLOVER` | empty / `4` / `30` / `true` | [Log files](#log-files) |
 | `API_TELEMETRY_*`, `POD_NAME`, `POD_NAMESPACE`, `CLUSTER_NAME` | off / unset | [Operating API request telemetry](#operating-api-request-telemetry) |
@@ -1147,7 +1149,10 @@ and all forwarded by both compose files and the Helm chart:
 configured entirely from the database and admin-edited at runtime — see
 [Operating the MCP server](#operating-the-mcp-server). The same is true of AI refine and the AI
 rate limiter (a fixed 20 requests/minute per user, not tunable): 2.3.0 introduced no new
-environment variable in any deployment shape.
+environment variable in any deployment shape. (The post-2.3.0 load-testing campaign then added
+exactly two — `RATE_LIMIT_PER_MINUTE` and `TENANT_DB_CONNECTION_LIMIT` above — each the direct
+product of a measured ceiling, with the measurement recorded in
+`reports/quality-load-report.html`.)
 
 ## Testing before you ship a change
 

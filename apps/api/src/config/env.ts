@@ -73,7 +73,7 @@ function absoluteDirectory(name: string) {
     .transform((value) => value.trim())
     .refine(
       (value) => value === "" || (isAbsolute(value) && !value.split(/[\\/]+/).includes("..") && !value.includes("\0")),
-      `${name} must be an ABSOLUTE filesystem path with no ".." segments (e.g. C:\\TimeSphere_Uploads or /srv/timesphere/uploads). Leave it unset to keep the current default.`
+      String.raw`${name} must be an ABSOLUTE filesystem path with no ".." segments (e.g. C:\TimeSphere_Uploads or /srv/timesphere/uploads). Leave it unset to keep the current default.`
     );
 }
 

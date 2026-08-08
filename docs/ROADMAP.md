@@ -2682,3 +2682,32 @@ Two things left deliberately unenforced, and now stated in the code rather than 
 `AgentRun.maxSteps` and `maxCostUsd` are recorded but not checked, because there is no multi-step
 loop yet to check them between steps — and `status = PARTIAL` is in the same position. The comment
 now says so, since a bound that looks enforced and is not is worse than no bound.
+
+## The load campaign: three stacks, nine findings, every ceiling a knob (2026-08-08)
+
+Windows-native, Compose (prod images) and Kubernetes (kind) were each brought up for real,
+load-tested with autocannon, profiled, optimized from the measurements, and re-tested. The full
+interactive report — every number, before/after, and what was deliberately NOT run — lives in
+`reports/quality-load-report.html` and is linked from the README.
+
+- [x] **391 KB ticket-list payload → 150 KB** (`omit: description`; the detail endpoint still
+  carries it; the client's own `TicketRow` never declared it). 129→163 req/s, p50 −21%, at 50
+  connections on the same database. Found by pairing autocannon with the app's OWN telemetry —
+  25 ms of DB time under 383 ms responses is a serialization bill, not a database problem.
+- [x] **`RATE_LIMIT_PER_MINUTE`** — the blanket limiter is per *egress* IP and was hardcoded at
+  900/min; one office NAT is one bucket. Env-tunable through every shape, default unchanged.
+  The knob validated itself: set to 200k, exactly 199,998 requests passed before the cut.
+- [x] **`TENANT_DB_CONNECTION_LIMIT`** — the 5-connection tenant pool (multi-tenant arithmetic)
+  pinned single-org authed throughput near 90 req/s at every concurrency while p50 scaled with
+  queue depth alone. Default 5 kept; Compose and the chart ship 20 for Shape 1.
+- [x] **First-install seed deadlock** — an unseeded API `process.exit(1)`'d, the supervisor
+  restarted it too fast for `exec` to land a seed, and install.sh's wait-for-health-then-seed
+  order could never see health. Boot now waits (15 s polls, loud log, health serving).
+- [x] Boot guards *proven* against deliberate misconfiguration during the campaign: repetitive
+  encryption key refused, short JWT secrets refused, unseeded install held safely.
+- [ ] **Honest limits of this harness, and the next measurements:** every load connection shared
+  ONE session token (real users don't — a distinct-token rerun will lift the plateau);
+  Kubernetes numbers traverse `kubectl port-forward`; container-stack ticket lists were empty
+  (fresh seeds), so their authed numbers are path floors, not payload tests. DAST (ZAP) against
+  the Compose stack is the natural next security step — its findings flow into this product's
+  own ingestion webhook.
