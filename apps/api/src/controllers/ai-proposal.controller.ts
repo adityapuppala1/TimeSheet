@@ -23,6 +23,9 @@ import { AppError } from "../middleware/error.js";
 import { validate } from "../middleware/validate.js";
 import { applyProposal, createProposal, undoProposal, type DraftChange } from "../services/ai-proposal.service.js";
 import { proposeAssignmentRebalance } from "../services/ai-rebalance.service.js";
+import { proposeScheduleAdjustment } from "../services/ai-schedule-adjust.service.js";
+import { proposeRiskMitigation } from "../services/ai-risk-mitigation.service.js";
+import { proposeBlueprintInstantiation } from "../services/ai-blueprint-propose.service.js";
 import { narrateProjectRisk, proposePlanBreakdown } from "../services/ai.service.js";
 import { audit } from "../services/audit.service.js";
 import { getPlanningEntitlements } from "../services/plan-limits.service.js";
@@ -280,6 +283,10 @@ aiProposalRouter.post(
       title: `Breakdown: ${req.body.goal.slice(0, 120)}`,
       rationale: breakdown.rationale,
       model: breakdown.model,
+      // Provenance for the quality loop: a rejected or undone breakdown names the exact captured
+      // interaction to promote into a dataset. Null when capture is off, which is fine — the
+      // promotion path already explains that absence to the person.
+      sourceInteractionId: breakdown.interactionId,
       scopeProjectId: project.id,
       scopeTicketId: req.body.parentTicketId ?? null,
       requestedById: req.user!.id,
@@ -388,6 +395,86 @@ aiProposalRouter.post(
       });
     }
     res.json(outcome);
+  }
+);
+
+/**
+ * Fix schedule conflicts: dates that contradict a dependency, corrected to the earliest legal
+ * dates by the same solver the timeline uses. No `assertCopilotAllowed`, same as the rebalance —
+ * this reaches no model and works with AI switched off entirely.
+ */
+aiProposalRouter.post(
+  "/schedule-adjust",
+  requirePermission(permissions.PLAN_WRITE),
+  validate(z.object({ body: z.object({ projectId: z.string().uuid() }).strict() })),
+  async (req, res) => {
+    await assertPlanningEnabled();
+    await assertTicketVisible(req, String(req.body.projectId));
+
+    const outcome = await proposeScheduleAdjustment({ projectId: String(req.body.projectId), requestedById: req.user!.id });
+    if (outcome.proposalId) {
+      await audit(req.user!.id, "ai_proposal.created", "AiProposal", outcome.proposalId, {
+        kind: "SCHEDULE_ADJUSTMENT",
+        changes: outcome.corrections
+      });
+    }
+    res.json(outcome);
+  }
+);
+
+/**
+ * Risk mitigation: when the schedule provably runs past the committed end date, propose making
+ * the commitment match the plan. SUGGEST-capped by the registry — this can never auto-apply.
+ */
+aiProposalRouter.post(
+  "/risk-mitigation",
+  requirePermission(permissions.PLAN_WRITE),
+  validate(z.object({ body: z.object({ projectId: z.string().uuid() }).strict() })),
+  async (req, res) => {
+    await assertPlanningEnabled();
+    await assertTicketVisible(req, String(req.body.projectId));
+
+    const outcome = await proposeRiskMitigation({ projectId: String(req.body.projectId), requestedById: req.user!.id });
+    if (outcome.proposalId) {
+      await audit(req.user!.id, "ai_proposal.created", "AiProposal", outcome.proposalId, { kind: "RISK_MITIGATION", changes: 1 });
+    }
+    res.json(outcome);
+  }
+);
+
+/**
+ * Instantiate a blueprint as a reviewed change set — every item and dependency its own row,
+ * against the direct instantiation path's all-or-nothing.
+ */
+aiProposalRouter.post(
+  "/blueprint-instantiate",
+  requirePermission(permissions.PLAN_WRITE),
+  validate(
+    z.object({
+      body: z
+        .object({
+          blueprintId: z.string().uuid(),
+          projectId: z.string().uuid(),
+          startDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "startDate must be YYYY-MM-DD")
+        })
+        .strict()
+    })
+  ),
+  async (req, res) => {
+    await assertPlanningEnabled();
+    await assertTicketVisible(req, String(req.body.projectId));
+
+    const outcome = await proposeBlueprintInstantiation({
+      blueprintId: String(req.body.blueprintId),
+      projectId: String(req.body.projectId),
+      startDate: String(req.body.startDate),
+      requestedById: req.user!.id
+    });
+    await audit(req.user!.id, "ai_proposal.created", "AiProposal", outcome.proposalId, {
+      kind: "BLUEPRINT_SUGGESTION",
+      changes: outcome.items + outcome.dependencies
+    });
+    res.status(201).json(outcome);
   }
 );
 

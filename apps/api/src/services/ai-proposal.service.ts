@@ -60,6 +60,9 @@ export async function createProposal(params: {
   confidence?: number | null;
   model?: string | null;
   promptVersionId?: string | null;
+  /** The captured AIInteraction this was parsed from — what the quality loop promotes when a
+   *  human rejects or undoes the result. Null for arithmetic producers and when capture is off. */
+  sourceInteractionId?: string | null;
   scopeProjectId?: string | null;
   scopeTicketId?: string | null;
   requestedById: string;
@@ -84,6 +87,7 @@ export async function createProposal(params: {
       confidence: params.confidence ?? null,
       model: params.model ?? null,
       promptVersionId: params.promptVersionId ?? null,
+      sourceInteractionId: params.sourceInteractionId ?? null,
       scopeProjectId: params.scopeProjectId ?? null,
       scopeTicketId: params.scopeTicketId ?? null,
       requestedById: params.requestedById,

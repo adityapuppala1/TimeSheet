@@ -76,9 +76,18 @@ export function createFakeTenantClient(): PrismaClient {
     agentRun: { findUnique: vi.fn(), findFirst: vi.fn(), create: vi.fn(), update: vi.fn(), updateMany: vi.fn(), count: vi.fn() },
     agentRunStep: { create: vi.fn() },
     mcpToolInvocation: { create: vi.fn(), findUnique: vi.fn(), update: vi.fn() },
-    aiProposal: { findUnique: vi.fn(), findMany: vi.fn(), update: vi.fn(), create: vi.fn() },
+    aiProposal: { findUnique: vi.fn(), findMany: vi.fn().mockResolvedValue([]), update: vi.fn(), create: vi.fn() },
+    // The spend ledger defaults to "a fresh month, well under budget" so every capability test
+    // passes the gate without knowing it exists; the ledger's own tests override these.
+    aiSpendMonth: {
+      findUnique: vi.fn().mockResolvedValue({ id: "month", committedUsd: 0, reconciledAt: new Date(), updatedAt: new Date() }),
+      create: vi.fn().mockResolvedValue({}),
+      update: vi.fn().mockResolvedValue({}),
+      updateMany: vi.fn().mockResolvedValue({ count: 1 })
+    },
+    blueprint: { findFirst: vi.fn() },
     aiProposalChange: { update: vi.fn(), findMany: vi.fn(), groupBy: vi.fn() },
-    ticketLink: { deleteMany: vi.fn(), upsert: vi.fn() },
+    ticketLink: { deleteMany: vi.fn(), upsert: vi.fn(), findMany: vi.fn() },
     resourceBooking: { findUnique: vi.fn(), findMany: vi.fn(), create: vi.fn(), update: vi.fn(), deleteMany: vi.fn() }
   } as unknown as PrismaClient;
 }

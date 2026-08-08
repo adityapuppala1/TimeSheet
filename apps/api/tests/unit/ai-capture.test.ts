@@ -134,7 +134,9 @@ describe("AI interaction capture", () => {
     vi.mocked(client.globalAISettings.upsert).mockResolvedValue(settings({ aiCaptureEnabled: true }) as never);
     vi.mocked(client.aIInteraction.create).mockRejectedValue(new Error("table is on fire"));
 
-    await expect(runInTenant(client, () => logAIUsage(CALL))).resolves.toBeUndefined();
+    // Resolves with a null interaction id — the capture failed, but saying so is the caller's
+    // choice to ignore, not an exception to survive.
+    await expect(runInTenant(client, () => logAIUsage(CALL))).resolves.toEqual({ interactionId: null });
     expect(client.aIUsageLog.create).toHaveBeenCalledOnce();
   });
 });

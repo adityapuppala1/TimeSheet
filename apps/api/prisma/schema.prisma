@@ -3326,6 +3326,13 @@ model AiProposal {
   /// a prompt change. See AIPromptVersion.
   promptVersionId String?
 
+  /// The captured AIInteraction this proposal was parsed from, when the producer used a model.
+  /// NOT a foreign key, deliberately — the retention sweep prunes interactions after ~30 days and
+  /// a proposal's provenance must outlive them (the same rule AuditLog.aiInteractionId follows).
+  /// What this buys: a rejected or undone proposal names the exact interaction to promote into a
+  /// dataset, which is how per-row human judgement finally reaches the eval harness.
+  sourceInteractionId String? @db.VarChar(64)
+
   status AiProposalStatus @default(PENDING_REVIEW)
 
   requestedById String?
@@ -3356,6 +3363,27 @@ model AiProposal {
   @@index([status, createdAt])
   @@index([scopeProjectId, status])
   @@index([expiresAt])
+}
+
+/// One row per calendar month: the serialized gate the AI budget check goes through.
+///
+/// WHY THIS EXISTS when AIUsageLog already records spend: the cap used to be enforced by reading
+/// an aggregate and comparing — a check, not a reservation — so two calls arriving together both
+/// saw the same remaining figure and both spent it. This row turns admission into an ATOMIC
+/// conditional increment (`UPDATE ... WHERE committedUsd < budget`), which MySQL serializes on the
+/// row lock: of N simultaneous calls, only those that fit are admitted, and the overshoot is
+/// bounded by a single in-flight reservation rather than by N.
+///
+/// AIUsageLog remains the source of truth for REPORTING; this row is only the gate. The two are
+/// reconciled periodically (see reserveAiSpend) so a reservation leaked by a crash mid-call cannot
+/// shrink the month's budget forever.
+model AiSpendMonth {
+  /// Calendar month key, "YYYY-MM".
+  id           String   @id @db.VarChar(7)
+  /// Actual logged spend plus in-flight reservations, in USD.
+  committedUsd Decimal  @default(0) @db.Decimal(12, 6)
+  reconciledAt DateTime @default(now())
+  updatedAt    DateTime @updatedAt
 }
 
 /// One individually accept/rejectable change within a proposal. `before` is re-checked at APPLY

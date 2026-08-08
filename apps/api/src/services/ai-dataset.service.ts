@@ -132,14 +132,40 @@ export async function deleteDatasetItem(datasetId: string, itemId: string) {
 }
 
 /**
+ * Interactions whose proposals a human REFUSED — rejected outright, undone after applying, or
+ * with individual rows declined. This is the signal ai-proposal.service.ts has called "far richer
+ * than the thumbs-up/down" since it was written: produced by people doing their normal work, not
+ * as a favour to the model. An undo especially — a human explicitly reversing the machine — is
+ * the strongest negative example a golden set will ever get.
+ */
+async function proposalProblemInteractionIds(): Promise<string[]> {
+  const proposals = await prisma.aiProposal.findMany({
+    where: {
+      sourceInteractionId: { not: null },
+      OR: [
+        { status: { in: ["REJECTED", "UNDONE", "PARTIALLY_UNDONE"] } },
+        { changes: { some: { OR: [{ accepted: false }, { undoneAt: { not: null } }] } } }
+      ]
+    },
+    select: { sourceInteractionId: true },
+    take: 200
+  });
+  return [...new Set(proposals.map((p) => p.sourceInteractionId!))];
+}
+
+/**
  * Candidate interactions to promote — defaults to the ones worth looking at: responses that
- * failed to parse, or that a human rated down. Those are where a golden set earns its keep.
+ * failed to parse, that a human rated down, or whose PROPOSAL a human refused (rejected, undone,
+ * or rows declined). Those are where a golden set earns its keep.
  */
 export async function listPromotableInteractions(params: { feature: string; onlyProblems?: boolean; limit?: number }) {
+  const problemIds = params.onlyProblems === false ? [] : await proposalProblemInteractionIds();
   const rows = await prisma.aIInteraction.findMany({
     where: {
       feature: params.feature,
-      ...(params.onlyProblems === false ? {} : { OR: [{ parseOk: false }, { feedback: "down" }] })
+      ...(params.onlyProblems === false
+        ? {}
+        : { OR: [{ parseOk: false }, { feedback: "down" }, ...(problemIds.length > 0 ? [{ id: { in: problemIds } }] : [])] })
     },
     orderBy: { createdAt: "desc" },
     take: Math.min(params.limit ?? 25, 100),
@@ -153,10 +179,13 @@ export async function listPromotableInteractions(params: { feature: string; only
       createdAt: true
     }
   });
+  const problemSet = new Set(problemIds);
   return rows.map((row) => ({
     ...row,
     // Tells the UI up front whether this one can actually be promoted, instead of letting someone
     // fill in an expected answer and only then hit a 422.
-    replayable: row.paramsJson != null
+    replayable: row.paramsJson != null,
+    /** True when a human refused this interaction's proposal — the reason it is on this list. */
+    proposalRefused: problemSet.has(row.id)
   }));
 }

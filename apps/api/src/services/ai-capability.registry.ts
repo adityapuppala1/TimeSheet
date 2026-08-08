@@ -111,12 +111,21 @@ const CAPABILITIES: ReadonlyArray<AiCapabilitySpec> = [
   {
     id: "status_report",
     title: "Stakeholder status report",
-    description: "Turns project counts into a written update. Produces text on request only.",
+    description:
+      "Turns project counts into a written update. As an agent run it may also READ tickets to ground what it writes — it still changes no records.",
     featureToggle: "statusReportEnabled",
-    maxLevel: "AUTONOMOUS",
-    ceilingReason: null,
-    actsOnUntrustedInput: false,
-    tools: []
+    // Was AUTONOMOUS while it only read pre-aggregated counts. Giving it ticket-reading tools
+    // moved it into the untrusted-input class — titles and bodies can be born from inbound email —
+    // and the invariant test enforcing "so marked, capped below AUTONOMOUS" caught the mismatch
+    // immediately, which is that test doing its job. Losing the top rung is the honest price of
+    // the richer reports.
+    maxLevel: "AUTO_APPLY",
+    ceilingReason:
+      "As an agent it reads ticket text, which can arrive by email from outside the workspace — and text a stranger authored should buy as little authority as possible, even for a report.",
+    actsOnUntrustedInput: true,
+    /** Read-only, deliberately: the first capability through the model-driven loop writes nothing,
+     *  so a bad decision costs a wasted step, never a record. */
+    tools: ["list_projects", "search_tickets", "get_ticket"]
   },
   {
     id: "project_risk_narrative",
@@ -131,6 +140,42 @@ const CAPABILITIES: ReadonlyArray<AiCapabilitySpec> = [
 
   // ── Plan-shaped changes. Reversible, scoped to a project, and reviewed row by row — the
   //    capabilities the proposal envelope was actually built for.
+  {
+    id: "schedule_adjustment",
+    title: "Fix schedule conflicts",
+    description:
+      "Moves items whose explicit dates contradict their dependencies to the earliest dates the plan allows. Uses no AI — the solver already knows the answer.",
+    featureToggle: null,
+    maxLevel: "AUTO_APPLY",
+    ceilingReason:
+      "Dates on a plan are commitments people read. It can apply its own corrections when you allow it, but it will not run unattended on a schedule.",
+    actsOnUntrustedInput: false,
+    tools: []
+  },
+  {
+    id: "risk_mitigation",
+    title: "Risk mitigation",
+    description:
+      "When the schedule already runs past the committed end date, proposes realigning the project's planned end with what the plan actually says. Uses no AI — the risk score is arithmetic.",
+    featureToggle: null,
+    maxLevel: "SUGGEST",
+    ceilingReason:
+      "A planned end date is a commitment made to people outside the plan. Moving it is a conversation, not a correction — so this only ever proposes, whatever the workspace asks for.",
+    actsOnUntrustedInput: false,
+    tools: []
+  },
+  {
+    id: "blueprint_instantiate",
+    title: "Instantiate a blueprint",
+    description:
+      "Stamps a saved blueprint into a project as a reviewed change set — every item and dependency a row to accept or reject. Uses no AI — expansion is arithmetic.",
+    featureToggle: null,
+    maxLevel: "AUTO_APPLY",
+    ceilingReason:
+      "Creates real work items people are assigned to, exactly like a plan breakdown. It can apply its own change set when you allow it, but it will not run unattended on a schedule.",
+    actsOnUntrustedInput: false,
+    tools: []
+  },
   {
     id: "assignment_rebalance",
     title: "Rebalance workload",

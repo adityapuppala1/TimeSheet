@@ -29,7 +29,7 @@ import { audit } from "./audit.service.js";
 import { findCapability, levelRank } from "./ai-capability.registry.js";
 import { resolveAutonomy } from "./ai-autonomy.service.js";
 import { loadRequestUser } from "./principal.service.js";
-import { getGlobalAISettings } from "./ai.service.js";
+import { getGlobalAISettings, planAgentStep, redactSecrets } from "./ai.service.js";
 import { invokeMcpTool, MCP_TOOLS, type McpEnablementSettings, type McpToolContext } from "./mcp-tools.js";
 import { proposeAssignmentRebalance } from "./ai-rebalance.service.js";
 import { emitDomainEvent } from "./domain-events.js";
@@ -37,14 +37,10 @@ import { emitDomainEvent } from "./domain-events.js";
 /**
  * Steps a run may take before it is stopped and called PARTIAL.
  *
- * RECORDED NOW, ENFORCED BY THE LOOP. There is no multi-step loop yet — `callChat` is single-shot —
- * so nothing currently counts steps, and `maxSteps`/`maxCostUsd` are carried on the run rather than
- * checked. That is stated here rather than left to be discovered, because a bound that looks
- * enforced and is not is worse than no bound: `AgentRun.status`'s own PARTIAL state is in the same
- * position, and the BLOCKED state was in it too until a test caught that it could never happen.
- *
- * The loop that lands must check both between steps, and must produce PARTIAL rather than FAILED
- * when it stops early — work already done is real.
+ * ENFORCED by `runModelDrivenLoop` below, between every step, alongside `maxCostUsd` — both
+ * produce PARTIAL rather than FAILED when they stop a run early, because work already done is
+ * real. (An earlier revision of this file recorded the bounds without a loop to enforce them, and
+ * said so here; the loop exists now, and the tests hold it to both.)
  */
 const DEFAULT_MAX_STEPS = 12;
 
@@ -176,7 +172,10 @@ async function recordStep(
       kind: step.kind,
       toolName: step.toolName ?? null,
       argsJson: keepContent && step.args !== undefined ? (step.args as never) : undefined,
-      resultText: keepContent && step.result ? step.result.slice(0, 8_000) : null,
+      // Redacted like the triage captures are: a tool result can quote a CI log or a scanner
+      // finding, and an agent trace is prompt content by another name — it must not become the
+      // one store that keeps the credential the capture path masked.
+      resultText: keepContent && step.result ? redactSecrets(step.result).slice(0, 8_000) : null,
       error: step.error?.slice(0, 500) ?? null
     }
   });
@@ -242,7 +241,6 @@ export async function executeAgentRun(runId: string): Promise<void> {
     req: { user: actor },
     caller: { kind: "AGENT_RUN", id: runId }
   };
-  void ctx; // handed to callToolForRun by capabilities that use tools
 
   try {
     if (await abortRequested(runId)) {
@@ -251,7 +249,7 @@ export async function executeAgentRun(runId: string): Promise<void> {
     }
 
     // The capability's own work. Deterministic capabilities do their arithmetic and emit a
-    // proposal; a model-driven one will step through callToolForRun under the same bounds.
+    // proposal; a model-driven one steps through callToolForRun under the same bounds.
     if (run.capability === "assignment_rebalance") {
       if (!run.scopeProjectId) {
         await finish(runId, "FAILED", "A rebalance run needs a project.");
@@ -280,10 +278,111 @@ export async function executeAgentRun(runId: string): Promise<void> {
       return;
     }
 
+    // Model-driven capabilities: anything whose registry entry names tools and a feature toggle.
+    // The registry is the routing table on purpose — a new capability becomes loop-runnable by
+    // declaring its allowlist, not by adding a branch here.
+    const spec = findCapability(run.capability);
+    if (spec && spec.tools.length > 0 && spec.featureToggle) {
+      await runModelDrivenLoop(run, spec, ctx);
+      return;
+    }
+
     await finish(runId, "FAILED", `No runner is implemented for "${run.capability}".`);
   } catch (error) {
     await finish(runId, "FAILED", (error as Error).message);
   }
+}
+
+/** Tool results handed back to the model are truncated hard — a 200KB ticket list would blow the
+ *  context and the budget for information the next decision does not need. */
+const TRANSCRIPT_RESULT_LIMIT = 4_000;
+
+/**
+ * The loop: the model chooses each step, the envelope decides whether it may take it.
+ *
+ * Every control this file promised is checked BETWEEN steps, in order: abort (a person said stop),
+ * step ceiling and cost ceiling (both land on PARTIAL — work already done is real), then the
+ * decision itself. A tool outside the capability's allowlist is refused and the refusal is fed
+ * back as data — the model may recover; a run that cannot produce valid JSON is FAILED, because
+ * an agent whose decisions cannot be parsed has no decisions.
+ *
+ * Tool calls go through `callToolForRun` and nothing else — that is where the taint clamp lives,
+ * and the loop deliberately has no other way to reach `invokeMcpTool`.
+ */
+async function runModelDrivenLoop(
+  run: NonNullable<Awaited<ReturnType<typeof prisma.agentRun.findUnique>>>,
+  spec: NonNullable<ReturnType<typeof findCapability>>,
+  ctx: McpToolContext
+): Promise<void> {
+  const tools = MCP_TOOLS.filter((t) => spec.tools.includes(t.name)).map((t) => ({
+    name: t.name,
+    description: t.description
+  }));
+  const transcript: Array<{ tool: string; args: unknown; result: string }> = [];
+  const maxCost = run.maxCostUsd !== null ? Number(run.maxCostUsd) : null;
+  let costUsd = Number(run.costUsd ?? 0);
+  let step = 0;
+
+  while (step < run.maxSteps) {
+    if (await abortRequested(run.id)) {
+      await finish(run.id, "ABORTED", null);
+      return;
+    }
+    if (maxCost !== null && costUsd >= maxCost) {
+      await recordStep(run.id, step, { kind: "note", result: `Stopped: the run's cost ceiling ($${maxCost.toFixed(2)}) was reached.` });
+      await finish(run.id, "PARTIAL", `Cost ceiling of $${maxCost.toFixed(2)} reached after ${step} step(s).`);
+      return;
+    }
+
+    const { decision, costUsd: stepCost, raw } = await planAgentStep({
+      capability: spec.id,
+      featureToggle: spec.featureToggle!,
+      goal: run.goal ?? spec.description,
+      tools,
+      transcript,
+      stepsRemaining: run.maxSteps - step,
+      userId: run.onBehalfOfId
+    });
+    costUsd += stepCost;
+    step++;
+    await prisma.agentRun.update({ where: { id: run.id }, data: { stepCount: step, costUsd } });
+
+    if (!decision) {
+      await recordStep(run.id, step, { kind: "error", error: "The model's reply was not a valid decision.", result: raw.slice(0, 500) });
+      await finish(run.id, "FAILED", "The model's reply could not be parsed as a decision.");
+      return;
+    }
+
+    if (decision.action === "finish") {
+      await recordStep(run.id, step, { kind: "finish", result: decision.summary });
+      await finish(run.id, "COMPLETED", null);
+      return;
+    }
+
+    if (!spec.tools.includes(decision.tool)) {
+      // Refused, recorded, and fed back as data. Not FAILED: one bad pick from a model that may
+      // correct itself is a wasted step, and the step ceiling already prices wasted steps.
+      const refusal = `Tool "${decision.tool}" is not in this capability's allowlist.`;
+      await recordStep(run.id, step, { kind: "refusal", toolName: decision.tool, args: decision.args, error: refusal });
+      transcript.push({ tool: decision.tool, args: decision.args, result: refusal });
+      continue;
+    }
+
+    try {
+      const result = await callToolForRun(run.id, ctx, spec.id, run.level, decision.tool, decision.args, step);
+      const resultText = typeof result === "string" ? result : JSON.stringify(result);
+      await recordStep(run.id, step, { kind: "tool", toolName: decision.tool, args: decision.args, result: resultText });
+      transcript.push({ tool: decision.tool, args: decision.args, result: resultText.slice(0, TRANSCRIPT_RESULT_LIMIT) });
+    } catch (error) {
+      // A refused or failed tool call is information the model can act on — surfaced as data,
+      // charged as a step, never silently retried.
+      const message = (error as Error).message.slice(0, 500);
+      await recordStep(run.id, step, { kind: "error", toolName: decision.tool, args: decision.args, error: message });
+      transcript.push({ tool: decision.tool, args: decision.args, result: `That call failed: ${message}` });
+    }
+  }
+
+  await finish(run.id, "PARTIAL", `Step ceiling of ${run.maxSteps} reached before the goal was finished.`);
 }
 
 async function finish(runId: string, status: string, error: string | null): Promise<void> {

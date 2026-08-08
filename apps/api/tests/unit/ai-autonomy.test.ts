@@ -245,10 +245,12 @@ describe("the ceilings themselves", () => {
   });
 
   it("only lets capabilities that write nothing reach AUTONOMOUS", async () => {
-    // If this list grows, it should be a decision somebody made on purpose, not a default.
+    // If this list changes, it should be a decision somebody made on purpose, not a default.
+    // status_report LEFT it deliberately: gaining ticket-reading tools for the agent loop moved
+    // it into the untrusted-input class, and the invariant above priced that at the top rung.
     const autonomous = AI_CAPABILITIES.filter((c) => c.maxLevel === "AUTONOMOUS").map((c) => c.id).sort();
     expect(autonomous).toEqual(
-      ["bug_pattern_digest", "project_risk_narrative", "security_weekly_digest", "status_report", "weekly_digest"].sort()
+      ["bug_pattern_digest", "project_risk_narrative", "security_weekly_digest", "weekly_digest"].sort()
     );
   });
 
