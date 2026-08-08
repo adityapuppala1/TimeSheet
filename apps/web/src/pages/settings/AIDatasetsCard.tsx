@@ -11,7 +11,7 @@
  * says that up front rather than letting someone write out a correction and then hit an error.
  */
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Check, Database, Play, Plus, Trash2 } from "lucide-react";
+import { Check, Database, Play, Plus, ThumbsDown, ThumbsUp, Trash2 } from "lucide-react";
 import { useState } from "react";
 import { Badge } from "../../components/ui/badge";
 import { Button } from "../../components/ui/button";
@@ -181,6 +181,16 @@ function DatasetDetailDialog({
     enabled: Boolean(datasetId) && contentCaptureOn
   });
 
+  // The rating the promotion filter reads. Toggling "down" is how an admin browsing candidates
+  // marks "this answer was wrong" without correcting it yet — the row then stays on the problems
+  // list for whoever does the correcting. Same endpoint the activity log's thumbs never used.
+  const rate = useMutation({
+    mutationFn: ({ id, feedback }: { id: string; feedback: "up" | "down" | null }) =>
+      aiDatasetApi.setInteractionFeedback(id, feedback),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["ai", "datasets", datasetId, "candidates"] }),
+    onError: (err: any) => toast.error("Could not save the rating", { description: err?.response?.data?.message ?? "Try again." })
+  });
+
   const runEval = useMutation({
     mutationFn: () => aiEvalApi.enqueue({ datasetId: datasetId! }),
     onSuccess: (run) => {
@@ -295,6 +305,30 @@ function DatasetDetailDialog({
                         {c.outputText ? c.outputText.slice(0, 90) : "(no output recorded)"}
                       </span>
                       <span className="shrink-0 text-xs text-muted-foreground">{new Date(c.createdAt).toLocaleDateString()}</span>
+                      {!readOnly && (
+                        <span className="flex shrink-0 items-center gap-0.5">
+                          <Button
+                            size="icon"
+                            variant={c.feedback === "up" ? "default" : "ghost"}
+                            className="h-7 w-7"
+                            title="This answer was right — clears it off the problems list"
+                            disabled={rate.isPending}
+                            onClick={() => rate.mutate({ id: c.id, feedback: c.feedback === "up" ? null : "up" })}
+                          >
+                            <ThumbsUp className="h-3.5 w-3.5" />
+                          </Button>
+                          <Button
+                            size="icon"
+                            variant={c.feedback === "down" ? "destructive" : "ghost"}
+                            className="h-7 w-7"
+                            title="This answer was wrong — keeps it on the problems list for correcting"
+                            disabled={rate.isPending}
+                            onClick={() => rate.mutate({ id: c.id, feedback: c.feedback === "down" ? null : "down" })}
+                          >
+                            <ThumbsDown className="h-3.5 w-3.5" />
+                          </Button>
+                        </span>
+                      )}
                       <Button size="sm" variant="outline" className="h-7 shrink-0" disabled={!c.replayable} onClick={() => setPromoting(c)}>
                         {c.replayable ? "Correct it" : "Inputs not kept"}
                       </Button>

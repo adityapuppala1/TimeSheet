@@ -1412,6 +1412,11 @@ export const aiDatasetApi = {
    *  correcting. Pass `all` to browse everything. */
   candidates: async (id: string, all = false) =>
     (await api.get<AIPromotableInteraction[]>(`/ai/datasets/${id}/candidates`, { params: { all } })).data,
+  /** The rating `listPromotableInteractions` filters on ("down" = a problem worth correcting).
+   *  The endpoint predates any web caller — the signal it reads could never be produced from the
+   *  UI until the candidates browser grew its thumbs. Null clears a rating. */
+  setInteractionFeedback: async (id: string, feedback: "up" | "down" | null) =>
+    (await api.patch<{ id: string; feedback: "up" | "down" | null }>(`/ai/interactions/${id}/feedback`, { feedback })).data,
   addItem: async (
     id: string,
     payload: { interactionId: string; expectedOutput: string; expectedKind?: "EXACT_FIELDS" | "CONTAINS" | "JUDGE"; notes?: string }

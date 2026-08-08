@@ -2625,17 +2625,16 @@ row moved since the proposal was computed. What was missing was everything aroun
   policy edits cannot escalate a run in flight, an abort that survives a restart, and the taint
   clamp: once a tool carrying externally-authored text returns, the run cannot write again.
 
-Still open, and deliberately so:
+Still open when this section was written; all three closed since (see "The agentic backlog
+closes", below, for the full write-ups — these entries are ticked here so nobody re-derives work
+from a stale list):
 
-- [ ] **The model-driven tool loop.** `callChat` is single-shot; multi-turn tool use needs new SDK
-  plumbing. The envelope above is what makes that safe to add rather than the other way round, and
-  it already runs the deterministic capabilities usefully on its own. `callToolForRun` is the door
-  that loop will use, and it is the only place the taint bit is set — so the loop cannot reach a
-  tool without it.
-- [ ] **Producers for SCHEDULE_ADJUSTMENT, RISK_MITIGATION and BLUEPRINT_SUGGESTION.** The apply and
-  undo paths take all three; nothing emits them yet. `ASSIGNMENT_REBALANCE` is the worked example,
-  and it contains no model call at all — who is overloaded is arithmetic `workload.service.ts`
-  already does.
+- [x] **The model-driven tool loop** — closed 2026-08-09. `planAgentStep` + `runModelDrivenLoop`,
+  one JSON decision per call, every bound enforced between steps, verified against a live model
+  four times. `callToolForRun` is indeed the loop's only door, exactly as this entry predicted.
+- [x] **Producers for SCHEDULE_ADJUSTMENT, RISK_MITIGATION and BLUEPRINT_SUGGESTION** — closed
+  2026-08-09, all three model-free on the rebalance pattern, each with a UI entry point (Timeline,
+  Portfolio, /app/blueprints).
 - [x] **Per-row accept/reject now feeds the quality screen** (2026-08-09) —
   `ai-quality.service.ts#getProposalDecisionStats`, reported in its own bucket beside the thumbs
   because it counts change ROWS rather than model calls and adding them would produce a figure that
@@ -2643,10 +2642,13 @@ Still open, and deliberately so:
   unreviewed proposal would look like a failure), a row refused at apply time is the staleness check
   working rather than the model being wrong, and an UNDONE row is counted apart from a rejected one
   because "I let it happen and took it back" is a worse outcome than "I read it and disagreed".
-  Still open: promoting these into `ai-dataset.service.ts` as replayable items, which needs a
-  decision about what a proposal's "expected output" even is.
-- [ ] **The budget cap is still check-then-act.** Serial execution bounds the agent case; two
-  request-path callers can still each pass a cap only one should.
+  The promotion question this entry left open was answered by `AiProposal.sourceInteractionId`:
+  a refused proposal names its captured interaction, the interaction is what gets promoted, and
+  the "expected output" is whatever the human corrects it to at promotion time — the same
+  correct-don't-author flow every other dataset item uses.
+- [x] **The budget cap became a serialised reservation** — closed 2026-08-09, `AiSpendMonth`'s
+  atomic conditional increment inside `callChat`; the request-path race this entry describes is
+  gone. Full write-up under "Dependency advisories"' neighbouring section.
 ## Three bugs found by looking for them (2026-08-09)
 
 Written up because two of the three are the same shape — something declared, documented and wired
