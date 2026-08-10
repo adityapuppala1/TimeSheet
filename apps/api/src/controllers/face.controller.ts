@@ -896,6 +896,67 @@ faceRouter.patch("/attempts/:id/review", requireAdmin, validate(reviewSchema), a
   res.json({ id: updated.id, reviewedAt: updated.reviewedAt });
 });
 
+const bulkReviewSchema = z.object({
+  body: z
+    .object({
+      /** Explicit selection. Mutually exclusive with `filter`. */
+      ids: z.array(z.string()).min(1).max(200).optional(),
+      /** "Everything matching what I'm looking at" — the SAME filter fields the list accepts, so
+       *  the set the server clears can never differ from the set the table showed. The same
+       *  two-mode contract userApi.bulkAction established. */
+      filter: z
+        .object({
+          userId: z.string().optional(),
+          outcome: z.string().optional(),
+          context: z.string().optional(),
+          search: z.string().max(120).optional()
+        })
+        .optional(),
+      note: z.string().max(2000).optional()
+    })
+    .refine((body) => Boolean(body.ids) !== Boolean(body.filter), {
+      message: "Send either ids or filter, not both and not neither."
+    })
+});
+
+/**
+ * PATCH /face/attempts/review-bulk — clear the review flag on a selection, or on everything the
+ * current filter matches. Only rows that are actually FLAGGED are touched, so the returned count
+ * is the number of flags cleared, never a flattering total of no-ops. One audit entry carries
+ * the count and the shared note — the per-row reviewedBy/reviewedAt still land on every row, so
+ * "who cleared this and when" stays answerable per attempt.
+ */
+faceRouter.patch("/attempts/review-bulk", requireAdmin, validate(bulkReviewSchema), async (req, res) => {
+  const { ids, filter, note } = req.body as {
+    ids?: string[];
+    filter?: { userId?: string; outcome?: string; context?: string; search?: string };
+    note?: string;
+  };
+
+  const term = filter?.search?.trim();
+  const where = ids
+    ? { id: { in: ids }, flaggedForReview: true }
+    : {
+        flaggedForReview: true,
+        ...(filter?.userId ? { userId: filter.userId } : {}),
+        ...(filter?.outcome ? { outcome: filter.outcome } : {}),
+        ...(filter?.context ? { context: filter.context } : {}),
+        ...(term ? { user: { OR: [{ name: { contains: term } }, { email: { contains: term } }] } } : {})
+      };
+
+  const { count } = await prisma.faceVerificationAttempt.updateMany({
+    where,
+    data: { flaggedForReview: false, reviewedById: req.user!.id, reviewedAt: new Date(), reviewNote: note ?? null }
+  });
+
+  await audit(req.user!.id, "face.attempts_bulk_reviewed", "FaceVerificationAttempt", "bulk", {
+    reviewed: count,
+    mode: ids ? "selection" : "filter",
+    note: note ?? null
+  });
+  res.json({ reviewed: count });
+});
+
 /**
  * POST /face/attempts/:id/ai-summary — AI-drafted review brief for one flagged attempt. Gated
  * by GlobalAISettings.faceReviewSummaryEnabled and the org's AI budget (both enforced inside

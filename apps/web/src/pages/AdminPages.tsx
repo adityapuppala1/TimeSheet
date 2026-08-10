@@ -27,6 +27,7 @@ import {
   MoreHorizontal,
   Paperclip,
   Pencil,
+  Loader2,
   Plus,
   RotateCcw,
   Save,
@@ -58,6 +59,7 @@ import {
 import { ProjectBudgetPanel } from "../components/ProjectBudgetPanel";
 import { Avatar, AvatarFallback, AvatarImage } from "../components/ui/avatar";
 import { Badge } from "../components/ui/badge";
+import { Checkbox } from "../components/ui/checkbox";
 import { AiStrands } from "../components/ui/ai-strands";
 import { Button } from "../components/ui/button";
 import { CsvBulkUploadDialog } from "../components/CsvBulkUploadDialog";
@@ -1980,6 +1982,46 @@ export function ApprovalsPage() {
     }
     approve.mutate({ id });
   };
+
+  /** Ticked SUBMITTED rows. Selection follows the FILTERED set (not just the visible page),
+   *  because the filters are client-side over the whole capped list — "select everything
+   *  matching" is exact here, never an approximation the server re-derives. */
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [bulkRejectOpen, setBulkRejectOpen] = useState(false);
+  const [bulkRejectReason, setBulkRejectReason] = useState("");
+  /** Face-gated batch parking spot, mirroring pendingApproveId for singles. */
+  const [pendingBulkIds, setPendingBulkIds] = useState<string[] | null>(null);
+
+  const decideBulk = useMutation({
+    mutationFn: (payload: Parameters<typeof timesheetApi.decideBulk>[0]) => timesheetApi.decideBulk(payload),
+    onSuccess: ({ done, failed }, variables) => {
+      const verb = variables.decision === "approve" ? "Approved" : "Rejected";
+      if (failed.length > 0) {
+        // Named, not summarised: a refused row usually means its status changed under the
+        // reviewer, which is worth knowing rather than hiding in a count.
+        toast.warning(`${verb} ${done}, ${failed.length} refused`, {
+          description: failed.map((f) => f.reason).slice(0, 3).join(" · ")
+        });
+      } else {
+        toast.success(`${verb} ${done} entr${done === 1 ? "y" : "ies"}`, {
+          description: "Each submitter gets the same notification a single decision sends."
+        });
+      }
+      setSelected(new Set());
+      setBulkRejectOpen(false);
+      setBulkRejectReason("");
+      queryClient.invalidateQueries({ queryKey: ["timesheets"] });
+    },
+    onError: (err: any) => toast.error("Bulk decision failed", { description: serverMessage(err, "Try again.") })
+  });
+
+  const requestBulkApprove = (ids: string[]) => {
+    if (faceStatus.data?.requiredForApproval) {
+      setPendingBulkIds(ids);
+      return;
+    }
+    decideBulk.mutate({ ids, decision: "approve" });
+  };
   const reject = useMutation({
     mutationFn: ({ id, reason }: { id: string; reason: string }) => timesheetApi.reject(id, reason),
     onSuccess: () => {
@@ -2077,8 +2119,52 @@ export function ApprovalsPage() {
     setRange({ from: "", to: "" });
   }
 
+  // The decidable subset of what the filters currently show. Selection is pruned (not cleared)
+  // when a filter change removes rows — ticks the reviewer can still see survive, ticks on rows
+  // that just left the screen do not.
+  const decidable = useMemo(() => filtered.filter((row) => row.status === "SUBMITTED"), [filtered]);
+  useEffect(() => {
+    setSelected((current) => {
+      const visible = new Set(decidable.map((row) => row.id as string));
+      const next = new Set([...current].filter((id) => visible.has(id)));
+      return next.size === current.size ? current : next;
+    });
+  }, [decidable]);
+  const allDecidableSelected = decidable.length > 0 && decidable.every((row) => selected.has(row.id));
+  const toggleAllDecidable = () =>
+    setSelected(allDecidableSelected ? new Set() : new Set(decidable.map((row) => row.id as string)));
+  const toggleRowSelection = (id: string) =>
+    setSelected((current) => {
+      const next = new Set(current);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+
   const approvalColumns = useMemo<ColumnDef<any, any>[]>(
     () => [
+      {
+        id: "select",
+        enableSorting: false,
+        header: () => (
+          <Checkbox
+            checked={allDecidableSelected}
+            disabled={decidable.length === 0}
+            onCheckedChange={toggleAllDecidable}
+            aria-label={`Select all ${decidable.length} undecided entries matching the filters`}
+          />
+        ),
+        // Only SUBMITTED rows get a box: the bulk actions decide, and a tick on an already-decided
+        // row would promise something the server rightly refuses.
+        cell: ({ row }) =>
+          row.original.status === "SUBMITTED" ? (
+            <Checkbox
+              checked={selected.has(row.original.id)}
+              onCheckedChange={() => toggleRowSelection(row.original.id)}
+              aria-label={`Select ${row.original.user?.name}'s entry`}
+            />
+          ) : null
+      },
       {
         id: "sno",
         header: "S.No",
@@ -2110,17 +2196,13 @@ export function ApprovalsPage() {
         )
       },
       {
-        id: "date",
-        accessorFn: (row: any) => row.workDate,
-        header: "Date",
-        cell: ({ row }) => <span className="whitespace-nowrap text-muted-foreground">{String(row.original.workDate).slice(0, 10)}</span>
-      },
-      {
         id: "project",
         accessorFn: (row: any) => row.project?.name,
         header: "Project / Module",
         // The module and submodule are the difference between "four hours on Apollo" and "four
         // hours on Apollo's payments importer" — the latter is a thing an approver can judge.
+        // The activity rides here as a third line instead of owning a column: it's one word, and
+        // a one-word column is horizontal space the Task column needs far more.
         cell: ({ row }) => (
           <div className="min-w-0">
             <p className="truncate font-medium">{row.original.project?.name}</p>
@@ -2129,18 +2211,24 @@ export function ApprovalsPage() {
               {row.original.module?.name}
               {row.original.submodule ? ` / ${row.original.submodule.name}` : ""}
             </p>
-            {row.original.ticket && <Badge variant="outline" className="mt-1 font-mono text-[10px]">{row.original.ticket.key}</Badge>}
+            <p className="mt-0.5 flex flex-wrap items-center gap-1">
+              {row.original.activityType && <Badge variant="secondary" className="text-[10px]">{row.original.activityType}</Badge>}
+              {row.original.ticket && <Badge variant="outline" className="font-mono text-[10px]">{row.original.ticket.key}</Badge>}
+            </p>
           </div>
         )
       },
-      { accessorKey: "activityType", header: "Activity" },
       {
         id: "time",
-        accessorFn: (row: any) => row.startTime,
-        header: "Time frame",
+        accessorFn: (row: any) => row.workDate,
+        header: "When",
+        // Date, clock span and hours stacked in ONE narrow column — they answer a single
+        // question ("when, and how long?") and answering it across three columns was a third of
+        // the table's width.
         cell: ({ row }) => (
           <div className="whitespace-nowrap">
-            <span className="inline-flex items-center gap-1 text-muted-foreground">
+            <p className="text-muted-foreground">{String(row.original.workDate).slice(0, 10)}</p>
+            <span className="inline-flex items-center gap-1 text-xs text-muted-foreground">
               <Clock className="h-3 w-3" />
               {row.original.startTime} → {row.original.endTime}
             </span>
@@ -2177,48 +2265,30 @@ export function ApprovalsPage() {
         )
       },
       {
-        accessorKey: "updatedAt",
-        header: "Last updated",
-        cell: (info) => <span className="whitespace-nowrap text-xs tabular-nums text-muted-foreground">{formatTimestamp(info.getValue())}</span>
-      },
-      {
         accessorKey: "status",
         header: "Status",
-        cell: (info) => <Badge variant={APPROVAL_STATUS_VARIANT[info.getValue() as string] ?? "muted"}>{info.getValue() as string}</Badge>
-      },
-      {
-        id: "identity",
-        header: "Identity",
-        enableSorting: false,
-        // Three distinguishable states so absence is never ambiguous: verified (face check spent
-        // on this row), "unverified" (the policy covers this person but the row predates it or
-        // slipped through a gap — worth a manager's glance), or a quiet dash (not covered).
-        cell: ({ row }) =>
-          row.original.identityVerified ? (
-            <div className="flex items-center gap-1">
+        // Status and identity stacked: both are one badge answering "what state is this in?",
+        // and each owning a column was two more reasons to scroll sideways. Last-updated left
+        // the table entirely — it lives in the detail dialog, where a timestamp is read rather
+        // than scanned. Same for the two download actions: the name is already the door to the
+        // full entry, and that is where filing/evidence downloads belong.
+        cell: ({ row }) => (
+          <div className="grid justify-items-start gap-1">
+            <Badge variant={APPROVAL_STATUS_VARIANT[row.original.status as string] ?? "muted"}>{row.original.status}</Badge>
+            {row.original.identityVerified ? (
               <Badge
                 variant="success"
                 title={row.original.identityVerifiedAt ? `Face check passed ${new Date(row.original.identityVerifiedAt).toLocaleString()}` : undefined}
               >
                 <ShieldCheck className="mr-1 h-3 w-3" />Verified
               </Badge>
-              <Button
-                variant="ghost"
-                size="icon"
-                className="h-7 w-7"
-                title="Download the dispute-ready identity evidence pack for this entry"
-                onClick={() => downloadEvidencePack(row.original.id)}
-              >
-                <Download className="h-3.5 w-3.5" />
-              </Button>
-            </div>
-          ) : row.original.identityVerificationApplies ? (
-            <Badge variant="outline" title="This person is covered by face verification, but this entry carries no identity check (it may predate the policy).">
-              Unverified
-            </Badge>
-          ) : (
-            <span className="text-muted-foreground">—</span>
-          )
+            ) : row.original.identityVerificationApplies ? (
+              <Badge variant="outline" title="This person is covered by face verification, but this entry carries no identity check (it may predate the policy).">
+                Unverified
+              </Badge>
+            ) : null}
+          </div>
+        )
       },
       {
         id: "decision",
@@ -2226,16 +2296,6 @@ export function ApprovalsPage() {
         enableSorting: false,
         cell: ({ row }) => (
           <div className="flex justify-end gap-2">
-            <Button
-              variant="ghost"
-              size="icon"
-              className="h-8 w-8"
-              title="Download this entry's full detail"
-              aria-label="Download this entry's full detail"
-              onClick={() => downloadEntry(row.original)}
-            >
-              <Download className="h-4 w-4" />
-            </Button>
             {/* Only a SUBMITTED entry is awaiting a decision. With the status filter widened past
                 the queue, offering Approve on an already-approved row would be a button that can
                 only fail — the API refuses anything but SUBMITTED for the same reason. */}
@@ -2254,7 +2314,7 @@ export function ApprovalsPage() {
       }
     ],
     // eslint-disable-next-line react-hooks/exhaustive-deps -- requestApprove closes over stable refs
-    [approve, faceStatus.data?.requiredForApproval, downloadEvidencePack, downloadEntry]
+    [approve, faceStatus.data?.requiredForApproval, selected, decidable, allDecidableSelected]
   );
 
   return (
@@ -2338,6 +2398,28 @@ export function ApprovalsPage() {
 
       <Card>
         <CardContent className="p-4">
+          {/* The bulk bar. Selection follows the filtered set (the filters are client-side over
+              the whole capped list), so "select all" is exact — never a server approximation. */}
+          {selected.size > 0 && (
+            <div className="mb-3 flex flex-wrap items-center gap-2 rounded-lg border border-primary/30 bg-primary/5 p-2.5">
+              <p className="text-sm">
+                <strong>{selected.size}</strong> of {decidable.length} undecided entr{decidable.length === 1 ? "y" : "ies"} selected
+              </p>
+              <div className="ml-auto flex items-center gap-2">
+                <Button size="sm" variant="success" disabled={decideBulk.isPending} onClick={() => requestBulkApprove([...selected])}>
+                  {decideBulk.isPending ? <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" /> : <Check className="mr-1.5 h-4 w-4" />}
+                  Approve {selected.size}
+                </Button>
+                <Button size="sm" variant="outline" disabled={decideBulk.isPending} onClick={() => setBulkRejectOpen(true)}>
+                  <ShieldX className="mr-1.5 h-4 w-4" />
+                  Reject {selected.size}
+                </Button>
+                <Button size="sm" variant="ghost" onClick={() => setSelected(new Set())}>
+                  Clear
+                </Button>
+              </div>
+            </div>
+          )}
           <DataTable
             columns={approvalColumns}
             data={filtered}
@@ -2427,6 +2509,13 @@ export function ApprovalsPage() {
             <Button variant="outline" onClick={() => detail && downloadEntry(detail)}>
               <Download className="h-4 w-4" />Download
             </Button>
+            {/* Moved here from the table's identity column: a download belongs where the entry is
+                read in full, and it was one of the columns forcing the table to side-scroll. */}
+            {detail?.identityVerified ? (
+              <Button variant="outline" onClick={() => detail && downloadEvidencePack(detail.id)}>
+                <ShieldCheck className="h-4 w-4" />Evidence pack
+              </Button>
+            ) : null}
             {detail?.status === "SUBMITTED" ? (
               <>
                 <Button
@@ -2489,6 +2578,53 @@ export function ApprovalsPage() {
           if (id) approve.mutate({ id, faceVerificationId: verificationId });
         }}
       />
+
+      {/* One identity check covers the whole batch — it asserts the APPROVER's presence at
+          decision time, and ten webcam captures for ten ticks would teach managers to avoid the
+          gate rather than use it. */}
+      <FaceVerificationDialog
+        open={pendingBulkIds !== null}
+        onOpenChange={(open) => !open && setPendingBulkIds(null)}
+        context="APPROVAL"
+        actionLabel={`approve ${pendingBulkIds?.length ?? 0} timesheets`}
+        onVerified={(verificationId) => {
+          const ids = pendingBulkIds;
+          setPendingBulkIds(null);
+          if (ids?.length) decideBulk.mutate({ ids, decision: "approve", faceVerificationId: verificationId });
+        }}
+      />
+
+      <Dialog open={bulkRejectOpen} onOpenChange={(open) => { if (!open) { setBulkRejectOpen(false); setBulkRejectReason(""); } }}>
+        <DialogContent className="w-[min(95vw,520px)] max-w-none">
+          <DialogHeader>
+            <DialogTitle>Reject {selected.size} entr{selected.size === 1 ? "y" : "ies"}?</DialogTitle>
+            <DialogDescription>
+              One reason goes to every submitter, word for word — write it the way {selected.size === 1 ? "that person" : "each of them"} should read it.
+              Each rejection sends the same notification a single rejection sends.
+            </DialogDescription>
+          </DialogHeader>
+          <Textarea
+            rows={3}
+            maxLength={500}
+            value={bulkRejectReason}
+            placeholder="e.g. Logged against the wrong project — please re-submit under HICS-OPS."
+            onChange={(event) => setBulkRejectReason(event.target.value)}
+          />
+          <DialogFooter>
+            <Button variant="ghost" onClick={() => { setBulkRejectOpen(false); setBulkRejectReason(""); }}>
+              Cancel
+            </Button>
+            <Button
+              variant="destructive"
+              disabled={!bulkRejectReason.trim() || decideBulk.isPending}
+              onClick={() => decideBulk.mutate({ ids: [...selected], decision: "reject", reason: bulkRejectReason.trim() })}
+            >
+              {decideBulk.isPending ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <ShieldX className="mr-2 h-4 w-4" />}
+              Reject {selected.size}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </Workspace>
   );
 }

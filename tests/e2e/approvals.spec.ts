@@ -121,11 +121,19 @@ test.describe("approvals queue", () => {
     await openApprovals(page);
     await shownTotal(page);
 
+    // The per-row download moved into the entry dialog when the table shed the columns that
+    // forced side-scrolling — so the export now starts by opening the entry.
+    await page.locator('button[title="Open the full entry"]').filter({ visible: true }).first().click();
+    const dialog = page.getByRole("dialog");
+    // Wait for the detail fetch to land before clicking: the footer renders immediately but its
+    // Download handler no-ops until `detail` exists.
+    await expect(dialog.getByText("Task", { exact: true })).toBeVisible({ timeout: 10_000 });
+
     // The route needs a bearer token, so this is an authenticated fetch turned into a blob and
     // clicked — a bare <a href> would download an unauthenticated error page with a .csv name.
     // Waiting on the download EVENT is what distinguishes the two.
     const download = page.waitForEvent("download", { timeout: 15_000 });
-    await page.getByRole("button", { name: "Download this entry's full detail" }).first().click();
+    await dialog.getByRole("button", { name: "Download", exact: true }).click();
     const file = await download;
     expect(file.suggestedFilename()).toMatch(/^timesheet-\d{4}-\d{2}-\d{2}-[0-9a-f]{8}\.csv$/);
 

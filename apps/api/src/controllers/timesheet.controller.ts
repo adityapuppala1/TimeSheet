@@ -276,24 +276,18 @@ timesheetRouter.post("/submit-with-files", requirePermission(permissions.TIMESHE
   res.status(201).json(await saveTimesheet(req, "SUBMITTED"));
 });
 
-timesheetRouter.patch("/:id/approve", requirePermission(permissions.TIMESHEETS_APPROVE), async (req, res) => {
-  const existing = await prisma.timesheet.findFirst({ where: { id: String(req.params.id), deletedAt: null } });
+/**
+ * The decision cores, shared VERBATIM by the single routes and the bulk route below — approval
+ * freezes billing rates and rejection notifies with a reason, and two copies of either is how a
+ * payroll-relevant path drifts. Each takes an id and re-checks status itself, so a bulk loop
+ * gets the same per-row refusals ("already decided") the single routes give, as data rather than
+ * as a failed batch.
+ */
+async function approveCore(id: string, reviewerUser: { id: string; name?: string | null; email: string }) {
+  const existing = await prisma.timesheet.findFirst({ where: { id, deletedAt: null } });
   if (!existing) throw new AppError(404, "Timesheet not found");
   if (existing.status !== "SUBMITTED") {
     throw new AppError(422, `Cannot approve a timesheet in ${existing.status} status — only SUBMITTED entries can be approved.`);
-  }
-
-  // Identity gate on the APPROVER — approval is where the hours become payable, which makes it
-  // at least as worth protecting as submission. Checked before the status write so a failed
-  // check changes nothing. (Rejection is deliberately ungated: it moves no money, and demanding
-  // a webcam capture to DECLINE something only discourages review.)
-  if (await isFaceVerificationRequired(req.user!.id, "APPROVAL")) {
-    await consumeVerification({
-      verificationId: typeof req.body?.faceVerificationId === "string" ? req.body.faceVerificationId : undefined,
-      userId: req.user!.id,
-      context: "APPROVAL",
-      timesheetId: existing.id
-    });
   }
 
   // Freeze the rate that applies to these hours, in the SAME write that approves them — see
@@ -315,14 +309,14 @@ timesheetRouter.patch("/:id/approve", requirePermission(permissions.TIMESHEETS_A
 
   const item = await prisma.timesheet.update({
     where: { id: existing.id },
-    data: { status: "APPROVED", reviewedAt: new Date(), reviewedById: req.user!.id, ...ratePatch },
+    data: { status: "APPROVED", reviewedAt: new Date(), reviewedById: reviewerUser.id, ...ratePatch },
     include: { project: true, user: true }
   });
   await resolveEscalationsFor(item.id);
   emitDomainEvent("timesheet.approved", { timesheet: item });
 
   const dateLabel = item.workDate.toISOString().slice(0, 10);
-  const reviewer = req.user!.name ?? req.user!.email;
+  const reviewer = reviewerUser.name ?? reviewerUser.email;
   const hours = Number(item.totalHours);
   await dispatchNotification({
     userId: item.userId,
@@ -346,15 +340,12 @@ timesheetRouter.patch("/:id/approve", requirePermission(permissions.TIMESHEETS_A
     }
   });
 
-  await audit(req.user!.id, "timesheet.approved", "Timesheet", item.id);
-  res.json(item);
-});
+  await audit(reviewerUser.id, "timesheet.approved", "Timesheet", item.id);
+  return item;
+}
 
-timesheetRouter.patch("/:id/reject", requirePermission(permissions.TIMESHEETS_APPROVE), async (req, res) => {
-  const reason = typeof req.body?.reason === "string" ? req.body.reason : "";
-  if (!reason.trim()) throw new AppError(422, "Rejection reason is required");
-
-  const existing = await prisma.timesheet.findFirst({ where: { id: String(req.params.id), deletedAt: null } });
+async function rejectCore(id: string, reason: string, reviewerUser: { id: string; name?: string | null; email: string }) {
+  const existing = await prisma.timesheet.findFirst({ where: { id, deletedAt: null } });
   if (!existing) throw new AppError(404, "Timesheet not found");
   if (existing.status !== "SUBMITTED") {
     throw new AppError(422, `Cannot reject a timesheet in ${existing.status} status — only SUBMITTED entries can be rejected.`);
@@ -362,10 +353,88 @@ timesheetRouter.patch("/:id/reject", requirePermission(permissions.TIMESHEETS_AP
 
   const item = await prisma.timesheet.update({
     where: { id: existing.id },
-    data: { status: "REJECTED", reviewedAt: new Date(), reviewedById: req.user!.id, rejectionReason: reason.trim() },
+    data: { status: "REJECTED", reviewedAt: new Date(), reviewedById: reviewerUser.id, rejectionReason: reason.trim() },
     include: { project: true, user: true }
   });
   await resolveEscalationsFor(item.id);
+  return item;
+}
+
+timesheetRouter.patch("/:id/approve", requirePermission(permissions.TIMESHEETS_APPROVE), async (req, res) => {
+  // Identity gate on the APPROVER — approval is where the hours become payable, which makes it
+  // at least as worth protecting as submission. Checked before the status write so a failed
+  // check changes nothing. (Rejection is deliberately ungated: it moves no money, and demanding
+  // a webcam capture to DECLINE something only discourages review.)
+  if (await isFaceVerificationRequired(req.user!.id, "APPROVAL")) {
+    await consumeVerification({
+      verificationId: typeof req.body?.faceVerificationId === "string" ? req.body.faceVerificationId : undefined,
+      userId: req.user!.id,
+      context: "APPROVAL",
+      timesheetId: String(req.params.id)
+    });
+  }
+  res.json(await approveCore(String(req.params.id), req.user!));
+});
+
+/**
+ * PATCH /timesheets/decide-bulk — one decision across an explicit selection (the approvals page
+ * filters client-side over a capped list, so the client sends exactly the ids it showed; there is
+ * no server-side filter mode to drift from).
+ *
+ * PER-ROW INDEPENDENCE, same rule as applyProposal: each entry runs the SAME core the single
+ * routes run — rate snapshot, escalation resolution, notification, per-row audit — and one entry
+ * refusing ("already decided while you were reading") is reported on its own row rather than
+ * failing the eleven a manager explicitly ticked.
+ *
+ * THE IDENTITY CHECK IS CONSUMED ONCE for the batch, not once per row: it asserts the APPROVER's
+ * presence at decision time, and demanding ten webcam captures to approve ten rows would push
+ * managers toward not using the gate at all. The batch audit records it covered the whole set.
+ */
+timesheetRouter.patch("/decide-bulk", requirePermission(permissions.TIMESHEETS_APPROVE), async (req, res) => {
+  const ids: unknown = req.body?.ids;
+  const decision = req.body?.decision === "reject" ? "reject" : req.body?.decision === "approve" ? "approve" : null;
+  const reason = typeof req.body?.reason === "string" ? req.body.reason.trim() : "";
+  if (!Array.isArray(ids) || ids.length === 0 || ids.length > 100 || !ids.every((v) => typeof v === "string")) {
+    throw new AppError(422, "Send between 1 and 100 timesheet ids.");
+  }
+  if (!decision) throw new AppError(422, "decision must be approve or reject.");
+  if (decision === "reject" && !reason) throw new AppError(422, "Rejection reason is required");
+
+  if (decision === "approve" && (await isFaceVerificationRequired(req.user!.id, "APPROVAL"))) {
+    await consumeVerification({
+      verificationId: typeof req.body?.faceVerificationId === "string" ? req.body.faceVerificationId : undefined,
+      userId: req.user!.id,
+      context: "APPROVAL",
+      timesheetId: ids[0] as string
+    });
+  }
+
+  let done = 0;
+  const failed: Array<{ id: string; reason: string }> = [];
+  for (const id of ids as string[]) {
+    try {
+      if (decision === "approve") await approveCore(id, req.user!);
+      else await rejectCore(id, reason, req.user!);
+      done++;
+    } catch (error) {
+      failed.push({ id, reason: error instanceof AppError ? error.message : "Could not decide this entry." });
+    }
+  }
+
+  await audit(req.user!.id, `timesheet.bulk_${decision}`, "Timesheet", "bulk", {
+    requested: ids.length,
+    done,
+    failed: failed.length,
+    ...(decision === "reject" ? { reason } : {})
+  });
+  res.json({ done, failed });
+});
+
+timesheetRouter.patch("/:id/reject", requirePermission(permissions.TIMESHEETS_APPROVE), async (req, res) => {
+  const reason = typeof req.body?.reason === "string" ? req.body.reason : "";
+  if (!reason.trim()) throw new AppError(422, "Rejection reason is required");
+
+  const item = await rejectCore(String(req.params.id), reason, req.user!);
 
   const dateLabel = item.workDate.toISOString().slice(0, 10);
   const reviewer = req.user!.name ?? req.user!.email;

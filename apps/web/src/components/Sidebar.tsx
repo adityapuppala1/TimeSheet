@@ -21,6 +21,8 @@ import {
   LayoutDashboard,
   ListTodo,
   Mail,
+  PanelLeftClose,
+  PanelLeftOpen,
   ScrollText,
   Settings,
   Shield,
@@ -31,6 +33,7 @@ import {
   Users,
   Users2
 } from "lucide-react";
+import { useState } from "react";
 import { NavLink } from "react-router";
 import { permissions } from "@timesheet/shared";
 import { cn } from "../lib/utils";
@@ -39,6 +42,7 @@ import type { PlanningEffective } from "../services/api";
 import { useAuthStore } from "../store/auth";
 import { Avatar, AvatarFallback, AvatarImage } from "./ui/avatar";
 import { Sheet, SheetContent, SheetDescription, SheetTitle } from "./ui/sheet";
+import { Tooltip, TooltipContent, TooltipTrigger } from "./ui/tooltip";
 import { fileUrl } from "../services/api";
 
 /**
@@ -153,8 +157,8 @@ export function isVisible(
   return true;
 }
 
-function NavLinkRow({ item, onNavigate }: { item: NavItem; onNavigate?: () => void }) {
-  return (
+function NavLinkRow({ item, onNavigate, slim = false }: { item: NavItem; onNavigate?: () => void; slim?: boolean }) {
+  const link = (
     <NavLink
       to={item.to}
       end={item.end ?? false}
@@ -162,19 +166,30 @@ function NavLinkRow({ item, onNavigate }: { item: NavItem; onNavigate?: () => vo
       className={({ isActive }) =>
         cn(
           "group flex items-center gap-3 rounded-md px-3 py-2.5 text-sm font-medium text-muted-foreground transition hover:bg-muted hover:text-foreground",
+          slim && "justify-center px-0",
           isActive && "bg-primary/10 text-primary hover:bg-primary/15"
         )
       }
     >
       {({ isActive }) => (
         <>
-          <span className={cn("grid h-7 w-7 place-items-center rounded-md text-muted-foreground transition", isActive && "bg-primary/15 text-primary")}>
+          <span className={cn("grid h-7 w-7 shrink-0 place-items-center rounded-md text-muted-foreground transition", isActive && "bg-primary/15 text-primary")}>
             <item.icon className="h-4 w-4" />
           </span>
-          {item.label}
+          {/* The label leaves the layout in slim mode rather than being clipped — a truncated
+              "Wor…" next to an icon reads as broken, an icon with a tooltip reads as designed. */}
+          {!slim && item.label}
         </>
       )}
     </NavLink>
+  );
+
+  if (!slim) return link;
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>{link}</TooltipTrigger>
+      <TooltipContent side="right" sideOffset={8}>{item.label}</TooltipContent>
+    </Tooltip>
   );
 }
 
@@ -186,13 +201,13 @@ function NavLinkRow({ item, onNavigate }: { item: NavItem; onNavigate?: () => vo
  * Groups by `section`, omitting any section (heading included) whose items are all filtered out by
  * permission, so nobody sees an empty heading for a group they can't access.
  */
-function NavList({ items, onNavigate }: { items: NavItem[]; onNavigate?: () => void }) {
+function NavList({ items, onNavigate, slim = false }: { items: NavItem[]; onNavigate?: () => void; slim?: boolean }) {
   const ungrouped = items.filter((item) => !item.section);
 
   return (
     <nav className="grid gap-0.5">
       {ungrouped.map((item) => (
-        <NavLinkRow key={item.to} item={item} onNavigate={onNavigate} />
+        <NavLinkRow key={item.to} item={item} onNavigate={onNavigate} slim={slim} />
       ))}
 
       {SECTION_ORDER.map((section) => {
@@ -200,9 +215,14 @@ function NavList({ items, onNavigate }: { items: NavItem[]; onNavigate?: () => v
         if (sectionItems.length === 0) return null;
         return (
           <div key={section} className="grid gap-0.5">
-            <p className="px-3 pb-1 pt-4 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground/70">{section}</p>
+            {slim ? (
+              // Headings have no room at 68px; a hairline keeps the grouping legible without text.
+              <div aria-hidden className="mx-2 mb-1 mt-3 border-t border-border" />
+            ) : (
+              <p className="px-3 pb-1 pt-4 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground/70">{section}</p>
+            )}
             {sectionItems.map((item) => (
-              <NavLinkRow key={item.to} item={item} onNavigate={onNavigate} />
+              <NavLinkRow key={item.to} item={item} onNavigate={onNavigate} slim={slim} />
             ))}
           </div>
         );
@@ -211,47 +231,107 @@ function NavList({ items, onNavigate }: { items: NavItem[]; onNavigate?: () => v
   );
 }
 
-function BrandMark() {
+function BrandMark({ slim = false }: { slim?: boolean }) {
   return (
-    <div className="mb-8 flex items-center gap-3">
-      <div className="grid h-10 w-10 place-items-center rounded-lg bg-primary text-lg font-black text-primary-foreground shadow-glow">T</div>
-      <div>
-        <p className="text-base font-bold tracking-tight">TimeSphere</p>
-        <p className="text-xs text-muted-foreground">Enterprise Timesheets</p>
-      </div>
+    <div className={cn("mb-8 flex items-center gap-3", slim && "justify-center")}>
+      <div className="grid h-10 w-10 shrink-0 place-items-center rounded-lg bg-primary text-lg font-black text-primary-foreground shadow-glow">T</div>
+      {!slim && (
+        <div>
+          <p className="text-base font-bold tracking-tight">TimeSphere</p>
+          <p className="text-xs text-muted-foreground">Enterprise Timesheets</p>
+        </div>
+      )}
     </div>
   );
 }
+
+/** Persisted per browser: a person who works slim works slim every day, and re-choosing daily
+ *  would make the control a nag rather than a preference. */
+const SIDEBAR_COLLAPSED_KEY = "ts.sidebar.collapsed";
 
 export function Sidebar() {
   const user = useAuthStore((s) => s.user);
   const { features } = usePlanningFeatures();
   const visible = nav.filter((item) => isVisible(item, user, features));
   const avatarSrc = fileUrl(user?.avatarUrl);
+  // Defaults to expanded — the responsive e2e suite (and first-time users) must find every link
+  // visible with no interaction; slim is an opt-in the browser remembers.
+  const [collapsed, setCollapsed] = useState(() => {
+    try {
+      return localStorage.getItem(SIDEBAR_COLLAPSED_KEY) === "1";
+    } catch {
+      return false;
+    }
+  });
+  const toggle = () => {
+    setCollapsed((current) => {
+      try {
+        localStorage.setItem(SIDEBAR_COLLAPSED_KEY, current ? "0" : "1");
+      } catch {
+        /* private mode — the preference just doesn't persist */
+      }
+      return !current;
+    });
+  };
 
   return (
     // `sticky top-0 h-screen` keeps the sidebar pinned while the page scrolls; the nav area gets
-    // its own overflow so section headings can't push the user card off-screen on a short viewport
-    // (the flat list used to fit without this, the grouped one is ~140px taller).
+    // its own overflow so section headings can't push the user card off-screen on a short viewport.
+    // The width is the ONLY layout change slim mode makes: the main content is this aside's flex
+    // sibling, so it reflows to the freed width on its own — every page adapts with zero page code.
     <aside
       data-tour="sidebar"
-      className="sticky top-0 hidden h-screen w-72 shrink-0 border-r border-border bg-card/60 p-4 backdrop-blur-xl lg:flex lg:flex-col"
+      className={cn(
+        "sticky top-0 hidden h-screen shrink-0 border-r border-border bg-card/60 backdrop-blur-xl transition-[width] duration-200 lg:flex lg:flex-col",
+        collapsed ? "w-[68px] p-2.5" : "w-72 p-4"
+      )}
     >
-      <BrandMark />
+      <BrandMark slim={collapsed} />
       <div className="-mx-1 min-h-0 flex-1 overflow-y-auto px-1">
-        <NavList items={visible} />
+        <NavList items={visible} slim={collapsed} />
       </div>
-      <div className="mt-4 shrink-0 rounded-lg border border-border bg-background p-3">
-        <div className="flex items-center gap-3">
-          <Avatar>
-            {avatarSrc ? <AvatarImage src={avatarSrc} alt={user?.name ?? "Profile photo"} /> : null}
-            <AvatarFallback>{initialsFor(user?.name)}</AvatarFallback>
-          </Avatar>
-          <div className="min-w-0">
-            <p className="truncate text-sm font-semibold">{user?.name ?? "Guest"}</p>
-            <p className="truncate text-xs text-muted-foreground">{user?.role?.replace("_", " ")}</p>
+
+      <button
+        type="button"
+        onClick={toggle}
+        aria-label={collapsed ? "Expand the sidebar" : "Collapse the sidebar"}
+        aria-expanded={!collapsed}
+        className={cn(
+          "focus-ring mt-3 flex shrink-0 items-center gap-2 rounded-md px-3 py-2 text-xs font-medium text-muted-foreground transition hover:bg-muted hover:text-foreground",
+          collapsed && "justify-center px-0"
+        )}
+      >
+        {collapsed ? <PanelLeftOpen className="h-4 w-4" /> : <PanelLeftClose className="h-4 w-4" />}
+        {!collapsed && "Collapse"}
+      </button>
+
+      <div className={cn("mt-2 shrink-0 rounded-lg border border-border bg-background", collapsed ? "p-1.5" : "p-3")}>
+        {collapsed ? (
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <div className="flex justify-center">
+                <Avatar>
+                  {avatarSrc ? <AvatarImage src={avatarSrc} alt={user?.name ?? "Profile photo"} /> : null}
+                  <AvatarFallback>{initialsFor(user?.name)}</AvatarFallback>
+                </Avatar>
+              </div>
+            </TooltipTrigger>
+            <TooltipContent side="right" sideOffset={8}>
+              {user?.name ?? "Guest"} · {user?.role?.replace("_", " ").toLowerCase()}
+            </TooltipContent>
+          </Tooltip>
+        ) : (
+          <div className="flex items-center gap-3">
+            <Avatar>
+              {avatarSrc ? <AvatarImage src={avatarSrc} alt={user?.name ?? "Profile photo"} /> : null}
+              <AvatarFallback>{initialsFor(user?.name)}</AvatarFallback>
+            </Avatar>
+            <div className="min-w-0">
+              <p className="truncate text-sm font-semibold">{user?.name ?? "Guest"}</p>
+              <p className="truncate text-xs text-muted-foreground">{user?.role?.replace("_", " ")}</p>
+            </div>
           </div>
-        </div>
+        )}
       </div>
     </aside>
   );

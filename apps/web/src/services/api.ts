@@ -511,6 +511,12 @@ export const timesheetApi = {
         headers: { "Content-Type": "multipart/form-data" }
       })
     ).data,
+  /** One decision across a ticked selection — per-row independence server-side, so "already
+   *  decided while you were reading" refuses that row alone and the rest land. On a face-gated
+   *  workspace ONE verification covers the batch: the check asserts the approver's presence at
+   *  decision time, not once per row. */
+  decideBulk: async (payload: { ids: string[]; decision: "approve" | "reject"; reason?: string; faceVerificationId?: string }) =>
+    (await api.patch<{ done: number; failed: Array<{ id: string; reason: string }> }>("/timesheets/decide-bulk", payload)).data,
   approve: async (id: string, faceVerificationId?: string) =>
     (await api.patch(`/timesheets/${id}/approve`, faceVerificationId ? { faceVerificationId } : {})).data,
   reject: async (id: string, reason: string) => (await api.patch(`/timesheets/${id}/reject`, { reason })).data,
@@ -2829,6 +2835,14 @@ export const faceApi = {
     page?: number;
     pageSize?: number;
   }) => (await api.get<FaceAttemptPage>("/face/attempts", { params })).data,
+  /** One action across many attempts — explicit `ids`, or `filter` for "everything matching what
+   *  I'm looking at" (the server re-derives that set with the same query the table used, so the
+   *  two can never diverge). Only flagged rows are touched; the count returned is flags cleared. */
+  reviewAttemptsBulk: async (payload: {
+    ids?: string[];
+    filter?: { userId?: string; outcome?: string; context?: string; search?: string };
+    note?: string;
+  }) => (await api.patch<{ reviewed: number }>("/face/attempts/review-bulk", payload)).data,
   reviewAttempt: async (id: string, note?: string) =>
     (await api.patch<{ id: string; reviewedAt: string }>(`/face/attempts/${id}/review`, { note })).data,
   /** Blob, not a bare URL, for the same reason as downloadEvidencePack below: the route is

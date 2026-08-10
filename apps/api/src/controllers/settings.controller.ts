@@ -331,12 +331,21 @@ settingsRouter.get("/ai/feature-usage", requireSuperAdmin, async (req, res) => {
   res.json(await getAIFeatureUsage(days));
 });
 
-const aiSettingsSchema = z.object({
+// Exported for the schema-vs-registry guard test: every featureToggle the capability registry
+// declares MUST be accepted here, because the AI tab's per-capability switches PATCH this exact
+// route with exactly those keys — and this schema is `.strict()`, so a missing key is a 400 an
+// admin sees as "Unrecognized key(s)" with no obvious cause. That is not hypothetical: the
+// Project-risk, Plan-breakdown and Chat-triage switches all 400'd for exactly this reason after
+// the autonomy card unified the toggles.
+export const aiSettingsSchema = z.object({
   body: z
     .object({
       aiEnabled: z.boolean().optional(),
       autoTriageEnabled: z.boolean().optional(),
       autoTriageAutoApply: z.boolean().optional(),
+      chatIngestionEnabled: z.boolean().optional(),
+      projectRiskAgentEnabled: z.boolean().optional(),
+      planBreakdownEnabled: z.boolean().optional(),
       duplicateDetectionEnabled: z.boolean().optional(),
       writingAssistantEnabled: z.boolean().optional(),
       commentSummaryEnabled: z.boolean().optional(),

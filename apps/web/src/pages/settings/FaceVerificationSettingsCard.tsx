@@ -56,8 +56,20 @@ import {
   type FaceThresholdRecommendation,
   type FaceVerificationSettings
 } from "../../services/api";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+  AlertDialogTrigger
+} from "../../components/ui/alert-dialog";
 import { AiStrands } from "../../components/ui/ai-strands";
 import { Button } from "../../components/ui/button";
+import { Checkbox } from "../../components/ui/checkbox";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../../components/ui/card";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "../../components/ui/dialog";
 import { Input } from "../../components/ui/input";
@@ -1086,6 +1098,11 @@ function FaceReviewLog({ readOnly }: { readOnly: boolean }) {
   const [outcome, setOutcome] = useState("all");
   const [context, setContext] = useState("all");
   const [sort, setSort] = useState<{ by: AttemptSortField; dir: "asc" | "desc" }>({ by: "createdAt", dir: "desc" });
+  /** Explicitly ticked flagged rows on the CURRENT page. Cleared whenever the result set's shape
+   *  changes — a selection that silently survives a filter change is how the wrong rows get
+   *  bulk-cleared. */
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [bulkNote, setBulkNote] = useState("");
 
   // Debounced so typing a name doesn't fire a query per keystroke against a server-paged endpoint.
   const search = useDebouncedValue(searchInput, 300);
@@ -1109,10 +1126,15 @@ function FaceReviewLog({ readOnly }: { readOnly: boolean }) {
   });
 
   // Any change to the SHAPE of the result set returns to page 1 — staying on page 4 of a set that
-  // now has one page shows a truthful-but-useless empty table.
+  // now has one page shows a truthful-but-useless empty table. The selection resets with it, and
+  // ALSO on page turns: ticked boxes the viewer can no longer see are not a selection, they are
+  // a trap for the bulk button.
   useEffect(() => {
     setPage(1);
   }, [search, outcome, context, flaggedOnly, pageSize, sort]);
+  useEffect(() => {
+    setSelected(new Set());
+  }, [search, outcome, context, flaggedOnly, pageSize, sort, page]);
 
   const toggleSort = (by: AttemptSortField) =>
     setSort((prev) => (prev.by === by ? { by, dir: prev.dir === "asc" ? "desc" : "asc" } : { by, dir: "desc" }));
@@ -1165,6 +1187,37 @@ function FaceReviewLog({ readOnly }: { readOnly: boolean }) {
   const refreshLog = () => {
     setRefreshing(true);
     queryClient.invalidateQueries({ queryKey: ["face", "attempts"] }).finally(() => setRefreshing(false));
+  };
+
+  const bulkReview = useMutation({
+    mutationFn: (payload: Parameters<typeof faceApi.reviewAttemptsBulk>[0]) => faceApi.reviewAttemptsBulk(payload),
+    onSuccess: ({ reviewed }) => {
+      toast.success(reviewed > 0 ? `Marked ${reviewed} attempt${reviewed === 1 ? "" : "s"} reviewed` : "Nothing was flagged in that set");
+      setSelected(new Set());
+      setBulkNote("");
+      queryClient.invalidateQueries({ queryKey: ["face", "attempts"] });
+      queryClient.invalidateQueries({ queryKey: ["face", "analytics"] });
+    },
+    onError: () => toast.error("Could not mark those reviewed")
+  });
+
+  const flaggedOnPage = rows.filter((a) => a.flaggedForReview);
+  const allPageSelected = flaggedOnPage.length > 0 && flaggedOnPage.every((a) => selected.has(a.id));
+  const togglePageSelection = () =>
+    setSelected(allPageSelected ? new Set() : new Set(flaggedOnPage.map((a) => a.id)));
+  const toggleRow = (id: string) =>
+    setSelected((current) => {
+      const next = new Set(current);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  /** The filter as the server will re-derive it — kept next to the query args so the bulk set and
+   *  the table can never be built from different inputs. */
+  const bulkFilter = {
+    outcome: outcome === "all" ? undefined : outcome,
+    context: context === "all" ? undefined : context,
+    search: search || undefined
   };
 
   const autoTriage = useMutation({
@@ -1278,6 +1331,69 @@ function FaceReviewLog({ readOnly }: { readOnly: boolean }) {
           </div>
         </div>
 
+        {/* The bulk bar — appears whenever the current view contains flagged rows. Two modes,
+            mirroring the users page: the ticked selection, or EVERYTHING the filter matches
+            (server re-derives that set from the same fields, so it cannot drift from the table). */}
+        {!readOnly && (selected.size > 0 || (flaggedOnly && total > 0)) && (
+          <div className="flex flex-wrap items-center gap-2 rounded-lg border border-primary/30 bg-primary/5 p-2.5">
+            <p className="text-sm">
+              {selected.size > 0 ? (
+                <>
+                  <strong>{selected.size}</strong> selected
+                </>
+              ) : (
+                <>
+                  <strong>{total}</strong> flagged match{total === 1 ? "es" : ""} the current filters
+                </>
+              )}
+            </p>
+            <Input
+              className="h-8 w-full sm:w-72"
+              placeholder="Shared review note (optional, audited)"
+              maxLength={2000}
+              value={bulkNote}
+              onChange={(e) => setBulkNote(e.target.value)}
+            />
+            <div className="ml-auto flex items-center gap-2">
+              {selected.size > 0 && (
+                <Button
+                  size="sm"
+                  disabled={bulkReview.isPending}
+                  onClick={() => bulkReview.mutate({ ids: [...selected], note: bulkNote.trim() || undefined })}
+                >
+                  {bulkReview.isPending ? <Loader2 className="mr-2 h-3.5 w-3.5 animate-spin" /> : <ShieldCheck className="mr-2 h-3.5 w-3.5" />}
+                  Mark {selected.size} reviewed
+                </Button>
+              )}
+              {flaggedOnly && total > selected.size && (
+                <AlertDialog>
+                  <AlertDialogTrigger asChild>
+                    <Button size="sm" variant={selected.size > 0 ? "outline" : "default"} disabled={bulkReview.isPending}>
+                      Mark all {total} matching
+                    </Button>
+                  </AlertDialogTrigger>
+                  <AlertDialogContent>
+                    <AlertDialogHeader>
+                      <AlertDialogTitle>Clear {total} review flag{total === 1 ? "" : "s"}?</AlertDialogTitle>
+                      <AlertDialogDescription>
+                        Every flagged attempt matching the current filters — including pages you haven&apos;t looked at — is
+                        marked reviewed under your name{bulkNote.trim() ? ", with your note attached to each" : ""}. This is
+                        the whole filtered set, not just this page.
+                      </AlertDialogDescription>
+                    </AlertDialogHeader>
+                    <AlertDialogFooter>
+                      <AlertDialogCancel>Cancel</AlertDialogCancel>
+                      <AlertDialogAction onClick={() => bulkReview.mutate({ filter: bulkFilter, note: bulkNote.trim() || undefined })}>
+                        Mark all reviewed
+                      </AlertDialogAction>
+                    </AlertDialogFooter>
+                  </AlertDialogContent>
+                </AlertDialog>
+              )}
+            </div>
+          </div>
+        )}
+
         {attempts.isLoading ? (
           <Skeleton className="h-32 w-full" />
         ) : rows.length === 0 ? (
@@ -1292,6 +1408,16 @@ function FaceReviewLog({ readOnly }: { readOnly: boolean }) {
               <table className="w-full text-sm">
                 <thead className="text-left text-muted-foreground">
                   <tr>
+                    {!readOnly && (
+                      <th className="w-8 p-2">
+                        <Checkbox
+                          checked={allPageSelected}
+                          disabled={flaggedOnPage.length === 0}
+                          onCheckedChange={togglePageSelection}
+                          aria-label="Select every flagged attempt on this page"
+                        />
+                      </th>
+                    )}
                     {/* "User" isn't sortable: the search box above already answers "whose?", and a
                         name sort over a server-paged log invites scrolling for someone rather than
                         searching for them. */}
@@ -1307,6 +1433,19 @@ function FaceReviewLog({ readOnly }: { readOnly: boolean }) {
                 <tbody>
                   {rows.map((a) => (
                     <tr key={a.id} className="border-t border-border">
+                      {!readOnly && (
+                        <td className="p-2">
+                          {/* Only flagged rows are selectable — the bulk action clears flags, and a
+                              ticked box on an unflagged row would promise something it can't do. */}
+                          {a.flaggedForReview && (
+                            <Checkbox
+                              checked={selected.has(a.id)}
+                              onCheckedChange={() => toggleRow(a.id)}
+                              aria-label={`Select ${a.user.name}'s ${a.outcome.replaceAll("_", " ").toLowerCase()} attempt`}
+                            />
+                          )}
+                        </td>
+                      )}
                       <td className="p-2">
                         <div className="font-medium">{a.user.name}</div>
                         <div className="text-xs text-muted-foreground">{a.user.email}</div>

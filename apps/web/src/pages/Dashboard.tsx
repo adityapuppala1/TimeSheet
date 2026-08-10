@@ -24,16 +24,21 @@ import {
   ArrowRight,
   CalendarClock,
   CalendarPlus2,
+  Check,
   CheckCircle2,
   ChevronLeft,
   ChevronRight,
   Clock,
+  Clock3,
   FolderKanban,
   Gauge,
+  Maximize2,
+  PencilLine,
   Send,
   Ticket as TicketIcon,
   TrendingUp,
-  Users2
+  Users2,
+  X
 } from "lucide-react";
 import { useMemo, useState } from "react";
 import { Link } from "react-router";
@@ -43,7 +48,10 @@ import { SetupChecklistCard } from "../components/SetupChecklistCard";
 import { Badge } from "../components/ui/badge";
 import { Button } from "../components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../components/ui/card";
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "../components/ui/dialog";
+import { Input } from "../components/ui/input";
 import { Progress } from "../components/ui/progress";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../components/ui/select";
 import { Skeleton } from "../components/ui/skeleton";
 import { StatCard, TrendBadge } from "../components/ui/stat-card";
 import { computeTrend, type Trend } from "../lib/trend";
@@ -94,6 +102,10 @@ interface TimesheetRowLite {
   activityType?: string;
   identityVerified?: boolean;
   project?: { id?: string; name?: string; code?: string };
+  /** Present on the admin/approver view — the list endpoint returns everyone they can see, which
+   *  is exactly why the timeline lanes by user rather than piling every person onto one track. */
+  user?: { id?: string; name?: string };
+  userId?: string;
 }
 
 export function Dashboard() {
@@ -609,6 +621,94 @@ function TickMeter({ label, percent, detail, tone }: { label: string; percent: n
  * The date picker walks any day present in the loaded list (the API returns the latest 100
  * entries, so recent weeks are all navigable).
  */
+/**
+ * Identity hues for the per-user lanes — the validated categorical palette, in its fixed order.
+ * The LANE LABEL is the identity channel (every lane is named); the hue is reinforcement, which
+ * is why repeating past eight users is acceptable here where it never would be in a legend-keyed
+ * chart: two same-hued lanes are still two labeled rows, not one ambiguous series.
+ */
+const LANE_HUES = ["#2a78d6", "#eb6834", "#1baf7a", "#eda100", "#e87ba4", "#008300", "#4a3aa7", "#e34948"];
+
+/** Status is no longer the block's color (the USER is), so it becomes an icon + tooltip — a
+ *  channel colorblind-safe by construction. */
+const STATUS_GLYPH: Record<string, { Icon: typeof Check; label: string }> = {
+  APPROVED: { Icon: Check, label: "Approved" },
+  SUBMITTED: { Icon: Clock3, label: "Pending review" },
+  REJECTED: { Icon: X, label: "Rejected" },
+  DRAFT: { Icon: PencilLine, label: "Draft" }
+};
+
+interface DayLane {
+  key: string;
+  name: string;
+  hours: number;
+  entries: TimesheetRowLite[];
+}
+
+/** One user's clock row. Shared verbatim by the card and the expanded dialog so the two views
+ *  can never disagree about what a block means. */
+function TimelineLane({
+  lane,
+  hue,
+  windowStart,
+  span,
+  hourTicks,
+  showNow,
+  nowMinutes,
+  dense
+}: {
+  lane: DayLane;
+  hue: string;
+  windowStart: number;
+  span: number;
+  hourTicks: number[];
+  showNow: boolean;
+  nowMinutes: number;
+  dense: boolean;
+}) {
+  const pct = (minutes: number) => ((minutes - windowStart) / span) * 100;
+  return (
+    <div className="grid grid-cols-[minmax(6rem,8.5rem)_minmax(0,1fr)] items-center gap-2">
+      <div className="min-w-0">
+        <p className="truncate text-xs font-semibold" title={lane.name}>
+          <span className="mr-1.5 inline-block h-2 w-2 rounded-full align-baseline" style={{ background: hue }} aria-hidden />
+          {lane.name}
+        </p>
+        <p className="text-[11px] tabular-nums text-muted-foreground">{lane.hours.toFixed(2)}h</p>
+      </div>
+      <div className={`relative rounded-lg border border-border bg-muted/20 ${dense ? "h-10" : "h-12"}`}>
+        {hourTicks.map((m) => (
+          <span key={m} className="absolute inset-y-0 border-l border-dashed border-border/60" style={{ left: `${pct(m)}%` }} aria-hidden />
+        ))}
+        {showNow && nowMinutes >= windowStart && nowMinutes <= windowStart + span && (
+          <span className="absolute inset-y-0 z-10 w-0.5 bg-primary" style={{ left: `${pct(nowMinutes)}%` }} aria-hidden />
+        )}
+        {lane.entries.map((entry) => {
+          const start = toMinutes(entry.startTime);
+          const end = toMinutes(entry.endTime);
+          const width = Math.max(pct(end) - pct(start), 1.5);
+          const glyph = STATUS_GLYPH[entry.status] ?? STATUS_GLYPH.DRAFT;
+          const label = `${entry.project?.name ?? entry.activityType ?? "Entry"} · ${Number(entry.totalHours).toFixed(2)}h`;
+          return (
+            <Link
+              key={entry.id}
+              to="/app/history"
+              data-testid="timeline-entry"
+              className="absolute bottom-1 top-1 flex items-center gap-1 overflow-hidden rounded-md border px-1.5 text-[11px] font-medium text-foreground ring-1 ring-background transition-transform hover:z-10 hover:scale-[1.03]"
+              style={{ left: `${pct(start)}%`, width: `${width}%`, background: `${hue}26`, borderColor: `${hue}8c` }}
+              title={`${lane.name} · ${entry.startTime}–${entry.endTime} · ${label} · ${glyph.label}`}
+            >
+              <glyph.Icon className="h-3 w-3 shrink-0 opacity-70" aria-label={glyph.label} />
+              <span className="truncate">{label}</span>
+            </Link>
+          );
+        })}
+        {lane.entries.length === 0 && <span className="absolute inset-0" aria-hidden />}
+      </div>
+    </div>
+  );
+}
+
 function DayTimeline({
   entriesByDate,
   todayKey,
@@ -619,6 +719,9 @@ function DayTimeline({
   loading: boolean;
 }) {
   const [selectedKey, setSelectedKey] = useState(todayKey);
+  const [expanded, setExpanded] = useState(false);
+  const [laneSearch, setLaneSearch] = useState("");
+  const [laneSort, setLaneSort] = useState<"name" | "hours">("name");
   const isToday = selectedKey === todayKey;
   const entries = entriesByDate.get(selectedKey) ?? [];
   const dayHours = entries.reduce((sum, e) => sum + Number(e.totalHours ?? 0), 0);
@@ -647,12 +750,31 @@ function DayTimeline({
   const hourTicks: number[] = [];
   for (let m = windowStart; m <= windowEnd; m += 120) hourTicks.push(m);
 
-  const blockTone: Record<string, string> = {
-    APPROVED: "border-success/50 bg-success/15 text-success",
-    SUBMITTED: "border-warning/50 bg-warning/15 text-warning",
-    REJECTED: "border-destructive/50 bg-destructive/15 text-destructive",
-    DRAFT: "border-border bg-muted text-muted-foreground"
-  };
+  // One lane per person. The approver's list endpoint returns everyone they can see, which is
+  // what used to pile every user onto one track; an employee's own list has no `user` and
+  // collapses to a single "My entries" lane — same code path, no role branch.
+  const laneMap = new Map<string, DayLane>();
+  for (const entry of entries) {
+    const key = entry.user?.id ?? entry.userId ?? "me";
+    let lane = laneMap.get(key);
+    if (!lane) {
+      lane = { key, name: entry.user?.name ?? "My entries", hours: 0, entries: [] };
+      laneMap.set(key, lane);
+    }
+    lane.hours += Number(entry.totalHours ?? 0);
+    lane.entries.push(entry);
+  }
+  const lanes = [...laneMap.values()].sort((a, b) => a.name.localeCompare(b.name));
+  // Hue is assigned from the day's name-sorted order and looked up by lane key, so the dialog's
+  // filter/sort can never recolor a person mid-session.
+  const laneHue = new Map(lanes.map((lane, i) => [lane.key, LANE_HUES[i % LANE_HUES.length]]));
+
+  const search = laneSearch.trim().toLowerCase();
+  const dialogLanes = lanes
+    .filter((lane) => !search || lane.name.toLowerCase().includes(search))
+    .sort((a, b) => (laneSort === "hours" ? b.hours - a.hours : a.name.localeCompare(b.name)));
+
+  const statusesInDay = Object.keys(STATUS_GLYPH).filter((s) => entries.some((e) => e.status === s));
 
   const [sy, sm, sd] = selectedKey.split("-").map(Number);
   const selectedLabel = new Date(sy, (sm || 1) - 1, sd || 1).toLocaleDateString(undefined, {
@@ -672,7 +794,7 @@ function DayTimeline({
             <CalendarClock className="h-4 w-4 text-primary" />
             Day timeline
           </CardTitle>
-          <CardDescription>Your logged entries on the clock — colors follow entry status. Covers your latest 100 entries.</CardDescription>
+          <CardDescription>One lane per person, one color per person — status is the icon on each block. Covers the latest 100 entries.</CardDescription>
         </div>
         <div className="flex flex-wrap items-center gap-2">
           <Badge variant={dayHours > 0 ? "success" : "muted"} className="whitespace-nowrap">
@@ -713,6 +835,10 @@ function DayTimeline({
           <Button asChild size="sm" variant="outline">
             <Link to="/app/timesheet"><CalendarPlus2 className="h-3.5 w-3.5" />Add</Link>
           </Button>
+          <Button size="sm" variant="outline" onClick={() => setExpanded(true)} aria-label="Expand timeline">
+            <Maximize2 className="h-3.5 w-3.5" />
+            Expand
+          </Button>
         </div>
       </CardHeader>
       <CardContent>
@@ -721,53 +847,44 @@ function DayTimeline({
         ) : (
           <div className="overflow-x-auto">
             <div className="min-w-[560px]">
-              {/* Hour axis. Edge labels anchor inward (first left-aligned, last right-aligned)
-                  instead of centering on the tick — a centered edge label hangs half outside
-                  the container, which manifested as a phantom horizontal scrollbar. */}
-              <div className="relative h-5 text-[11px] text-muted-foreground">
-                {hourTicks.map((m, i) => (
-                  <span
-                    key={m}
-                    className={`absolute tabular-nums ${i === 0 ? "" : i === hourTicks.length - 1 ? "-translate-x-full" : "-translate-x-1/2"}`}
-                    style={{ left: `${pct(m)}%` }}
-                  >
-                    {String(Math.floor(m / 60)).padStart(2, "0")}:00
-                  </span>
-                ))}
+              {/* Hour axis, gutter-aligned with the lanes below. Edge labels anchor inward
+                  (first left-aligned, last right-aligned) instead of centering on the tick —
+                  a centered edge label hangs half outside the container, which manifested as
+                  a phantom horizontal scrollbar. */}
+              <div className="grid grid-cols-[minmax(6rem,8.5rem)_minmax(0,1fr)] gap-2">
+                <div aria-hidden />
+                <div className="relative h-5 text-[11px] text-muted-foreground">
+                  {hourTicks.map((m, i) => (
+                    <span
+                      key={m}
+                      className={`absolute tabular-nums ${i === 0 ? "" : i === hourTicks.length - 1 ? "-translate-x-full" : "-translate-x-1/2"}`}
+                      style={{ left: `${pct(m)}%` }}
+                    >
+                      {String(Math.floor(m / 60)).padStart(2, "0")}:00
+                    </span>
+                  ))}
+                </div>
               </div>
 
-              <div className="relative h-16 rounded-lg border border-border bg-muted/20" data-testid="day-timeline-track">
-                {/* Grid lines every 2h, recessive */}
-                {hourTicks.map((m) => (
-                  <span key={m} className="absolute inset-y-0 border-l border-dashed border-border/60" style={{ left: `${pct(m)}%` }} aria-hidden />
+              {/* Capped at ~4 lanes tall; beyond that the card scrolls internally rather than
+                  growing — this is the "many users" case the expand dialog exists for. */}
+              <div className="max-h-[13.5rem] space-y-2 overflow-y-auto pr-1" data-testid="day-timeline-track">
+                {lanes.map((lane) => (
+                  <TimelineLane
+                    key={lane.key}
+                    lane={lane}
+                    hue={laneHue.get(lane.key)!}
+                    windowStart={windowStart}
+                    span={span}
+                    hourTicks={hourTicks}
+                    showNow={isToday}
+                    nowMinutes={nowMinutes}
+                    dense
+                  />
                 ))}
 
-                {/* "Now" marker — only meaningful on today's view */}
-                {isToday && nowMinutes >= windowStart && nowMinutes <= windowEnd && (
-                  <span className="absolute inset-y-0 z-10 w-0.5 bg-primary" style={{ left: `${pct(nowMinutes)}%` }} title="Now" aria-label="Current time" />
-                )}
-
-                {entries.map((entry) => {
-                  const start = toMinutes(entry.startTime);
-                  const end = toMinutes(entry.endTime);
-                  const width = Math.max(pct(end) - pct(start), 2);
-                  const label = `${entry.project?.name ?? entry.activityType ?? "Entry"} · ${Number(entry.totalHours).toFixed(2)}h`;
-                  return (
-                    <Link
-                      key={entry.id}
-                      to="/app/history"
-                      data-testid="timeline-entry"
-                      className={`absolute top-2 bottom-2 flex items-center overflow-hidden rounded-md border px-2 text-xs font-medium ring-2 ring-background transition-transform hover:scale-[1.02] ${blockTone[entry.status] ?? blockTone.DRAFT}`}
-                      style={{ left: `${pct(start)}%`, width: `${width}%` }}
-                      title={`${entry.startTime}–${entry.endTime} · ${label} · ${entry.status}`}
-                    >
-                      <span className="truncate">{label}</span>
-                    </Link>
-                  );
-                })}
-
                 {entries.length === 0 && (
-                  <div className="absolute inset-0 flex items-center justify-center gap-2 px-4 text-center text-sm text-muted-foreground">
+                  <div className="flex h-16 items-center justify-center gap-2 rounded-lg border border-border bg-muted/20 px-4 text-center text-sm text-muted-foreground">
                     {isToday ? "Nothing logged yet today." : `Nothing logged on ${selectedLabel}.`}
                     {isToday && (
                       <Link to="/app/timesheet" className="font-semibold text-primary hover:underline">
@@ -778,21 +895,101 @@ function DayTimeline({
                 )}
               </div>
 
-              {/* Status key — labels, not color-alone */}
-              {entries.length > 0 && (
+              {/* Status key — icons carry status now that color carries identity */}
+              {statusesInDay.length > 0 && (
                 <div className="mt-2 flex flex-wrap gap-3 text-xs text-muted-foreground">
-                  {WEEK_SEGMENTS.map((s) => (
-                    <span key={s.key} className="inline-flex items-center gap-1.5">
-                      <span className={`h-2 w-2 rounded-full ${s.dot}`} aria-hidden />
-                      {s.label}
-                    </span>
-                  ))}
+                  {statusesInDay.map((s) => {
+                    const glyph = STATUS_GLYPH[s];
+                    return (
+                      <span key={s} className="inline-flex items-center gap-1.5">
+                        <glyph.Icon className="h-3 w-3" aria-hidden />
+                        {glyph.label}
+                      </span>
+                    );
+                  })}
                 </div>
               )}
             </div>
           </div>
         )}
       </CardContent>
+
+      {/* Full-width day view. Radix supplies every requested close affordance natively:
+          the X in DialogContent, Esc, and click-outside all call onOpenChange(false). */}
+      <Dialog
+        open={expanded}
+        onOpenChange={(open) => {
+          setExpanded(open);
+          if (!open) setLaneSearch("");
+        }}
+      >
+        <DialogContent className="w-[96vw] max-w-[min(96vw,1400px)]">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <CalendarClock className="h-4 w-4 text-primary" />
+              Day timeline — {selectedLabel}
+            </DialogTitle>
+            <DialogDescription>
+              {lanes.length} {lanes.length === 1 ? "person" : "people"} · {dayHours.toFixed(2)}h logged. Click a block to open its history.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="flex flex-wrap items-center gap-2">
+            <Input
+              value={laneSearch}
+              onChange={(e) => setLaneSearch(e.target.value)}
+              placeholder="Filter people…"
+              className="h-8 w-56"
+            />
+            <Select value={laneSort} onValueChange={(v) => setLaneSort(v as "name" | "hours")}>
+              <SelectTrigger className="h-8 w-40">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="name">Name A–Z</SelectItem>
+                <SelectItem value="hours">Most hours</SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
+          <div className="overflow-x-auto">
+            <div className="min-w-[640px]">
+              <div className="grid grid-cols-[minmax(6rem,8.5rem)_minmax(0,1fr)] gap-2">
+                <div aria-hidden />
+                <div className="relative h-5 text-[11px] text-muted-foreground">
+                  {hourTicks.map((m, i) => (
+                    <span
+                      key={m}
+                      className={`absolute tabular-nums ${i === 0 ? "" : i === hourTicks.length - 1 ? "-translate-x-full" : "-translate-x-1/2"}`}
+                      style={{ left: `${pct(m)}%` }}
+                    >
+                      {String(Math.floor(m / 60)).padStart(2, "0")}:00
+                    </span>
+                  ))}
+                </div>
+              </div>
+              <div className="max-h-[62vh] space-y-2.5 overflow-y-auto pr-1">
+                {dialogLanes.map((lane) => (
+                  <TimelineLane
+                    key={lane.key}
+                    lane={lane}
+                    hue={laneHue.get(lane.key)!}
+                    windowStart={windowStart}
+                    span={span}
+                    hourTicks={hourTicks}
+                    showNow={isToday}
+                    nowMinutes={nowMinutes}
+                    dense={false}
+                  />
+                ))}
+                {dialogLanes.length === 0 && (
+                  <div className="flex h-16 items-center justify-center rounded-lg border border-border bg-muted/20 text-sm text-muted-foreground">
+                    {lanes.length === 0 ? `Nothing logged on ${selectedLabel}.` : "No one matches that filter."}
+                  </div>
+                )}
+              </div>
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
     </Card>
   );
 }
