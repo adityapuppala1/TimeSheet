@@ -113,6 +113,54 @@ const cellClass = ({
 
 const gridHeaderClass = "pb-1 text-xs font-medium text-muted-foreground";
 
+/* ------------------------------------------------------------- day annotations */
+
+/** One date's hover summary — a titled list of colored count rows ("Approved 3"). */
+export interface CalendarDayAnnotation {
+  /** Headline of the hover card, e.g. "4 entries". */
+  title: string;
+  rows: Array<{ label: string; count: number; dotClassName: string }>;
+}
+
+/** Keyed by ISO `yyyy-mm-dd`. Sparse: only dates that have something to say appear. */
+export type CalendarDayAnnotations = Record<string, CalendarDayAnnotation>;
+
+function annotationKey(date: { year: number; month: number; day: number }): string {
+  return `${date.year}-${String(date.month).padStart(2, "0")}-${String(date.day).padStart(2, "0")}`;
+}
+
+/**
+ * The dot under the day number plus the hover/focus count card. Rendered inside the cell (which
+ * gets `group` when annotated) so hover and keyboard focus both reveal it with zero JS state.
+ * `aria-hidden` on the card: it duplicates counts the pages already present accessibly, and
+ * injecting it into the cell's accessible name would fight React Aria's own date announcement.
+ */
+function DayAnnotationOverlay({ annotation }: { annotation: CalendarDayAnnotation }) {
+  return (
+    <>
+      <span
+        aria-hidden
+        className="absolute bottom-[3px] left-1/2 h-1 w-1 -translate-x-1/2 rounded-full bg-primary group-data-[selected]:bg-primary-foreground/90"
+      />
+      <div
+        aria-hidden
+        className="pointer-events-none absolute bottom-full left-1/2 z-50 mb-1.5 hidden w-max min-w-[8.5rem] -translate-x-1/2 rounded-lg border border-border bg-popover p-2 text-left shadow-lg group-hover:block group-focus-visible:block"
+      >
+        <p className="text-[11px] font-semibold text-popover-foreground">{annotation.title}</p>
+        <div className="mt-1 space-y-0.5">
+          {annotation.rows.map((row) => (
+            <p key={row.label} className="flex items-center gap-1.5 text-[11px] font-normal text-muted-foreground">
+              <span className={cn("h-1.5 w-1.5 shrink-0 rounded-full", row.dotClassName)} aria-hidden />
+              {row.label}
+              <span className="ml-auto pl-3 font-semibold tabular-nums text-popover-foreground">{row.count}</span>
+            </p>
+          ))}
+        </div>
+      </div>
+    </>
+  );
+}
+
 /**
  * A fixed height for the day grid, sized to the tallest month.
  *
@@ -133,51 +181,84 @@ const gridHeaderClass = "pb-1 text-xs font-medium text-muted-foreground";
 const GRID_MIN_HEIGHT = "min-h-[15rem]";
 
 /** One month of a single-date calendar. */
-export function CalendarMonthGrid() {
+export function CalendarMonthGrid({ annotations }: { annotations?: CalendarDayAnnotations }) {
   return (
     <AriaCalendarGrid weekdayStyle="short" className={cn("w-full border-collapse", GRID_MIN_HEIGHT)}>
       <CalendarGridHeader>
         {(day) => <CalendarHeaderCell className={gridHeaderClass}>{day}</CalendarHeaderCell>}
       </CalendarGridHeader>
       <CalendarGridBody>
-        {(date) => (
-          <AriaCalendarCell date={date} className={({ isSelected, isDisabled, isUnavailable, isOutsideMonth, isFocused: _f }) =>
-            cellClass({ isSelected, isDisabled, isUnavailable, isOutsideMonth, isToday: false })
-          }>
-            {({ formattedDate }) => formattedDate}
-          </AriaCalendarCell>
-        )}
+        {(date) => {
+          const annotation = annotations?.[annotationKey(date)];
+          return (
+            <AriaCalendarCell date={date} className={({ isSelected, isDisabled, isUnavailable, isOutsideMonth, isFocused: _f }) =>
+              cn(cellClass({ isSelected, isDisabled, isUnavailable, isOutsideMonth, isToday: false }), annotation && "group")
+            }>
+              {({ formattedDate }) =>
+                annotation ? (
+                  <>
+                    {formattedDate}
+                    <DayAnnotationOverlay annotation={annotation} />
+                  </>
+                ) : (
+                  formattedDate
+                )
+              }
+            </AriaCalendarCell>
+          );
+        }}
       </CalendarGridBody>
     </AriaCalendarGrid>
   );
 }
 
 /** One month of a range calendar — same cells, plus the in-range bar. */
-export function RangeCalendarMonthGrid({ offset }: { offset?: { months: number } }) {
+export function RangeCalendarMonthGrid({
+  offset,
+  annotations
+}: {
+  offset?: { months: number };
+  annotations?: CalendarDayAnnotations;
+}) {
   return (
     <AriaCalendarGrid weekdayStyle="short" offset={offset} className={cn("w-full border-collapse", GRID_MIN_HEIGHT)}>
       <CalendarGridHeader>
         {(day) => <CalendarHeaderCell className={gridHeaderClass}>{day}</CalendarHeaderCell>}
       </CalendarGridHeader>
       <CalendarGridBody>
-        {(date) => (
-          <AriaCalendarCell
-            date={date}
-            className={({ isSelected, isSelectionStart, isSelectionEnd, isDisabled, isUnavailable, isOutsideMonth }) =>
-              cellClass({
-                isSelected: isSelectionStart || isSelectionEnd,
-                isSelectionStart,
-                isSelectionEnd,
-                inRange: isSelected,
-                isDisabled,
-                isUnavailable,
-                isOutsideMonth
-              })
-            }
-          >
-            {({ formattedDate }) => formattedDate}
-          </AriaCalendarCell>
-        )}
+        {(date) => {
+          const annotation = annotations?.[annotationKey(date)];
+          return (
+            <AriaCalendarCell
+              date={date}
+              className={({ isSelected, isSelectionStart, isSelectionEnd, isDisabled, isUnavailable, isOutsideMonth }) =>
+                cn(
+                  cellClass({
+                    isSelected: isSelectionStart || isSelectionEnd,
+                    isSelectionStart,
+                    isSelectionEnd,
+                    inRange: isSelected,
+                    isDisabled,
+                    isUnavailable,
+                    isOutsideMonth
+                  }),
+                  annotation && "group"
+                )
+              }
+            >
+              {({ formattedDate }) =>
+                annotation ? (
+                  <>
+                    {formattedDate}
+                    <DayAnnotationOverlay annotation={annotation} />
+                  </>
+                ) : (
+                  formattedDate
+                )
+              }
+            </AriaCalendarCell>
+          );
+        }}
       </CalendarGridBody>
     </AriaCalendarGrid>
   );

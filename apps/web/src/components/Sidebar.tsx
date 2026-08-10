@@ -231,9 +231,9 @@ function NavList({ items, onNavigate, slim = false }: { items: NavItem[]; onNavi
   );
 }
 
-function BrandMark({ slim = false }: { slim?: boolean }) {
+function BrandMark({ slim = false, className = "mb-8" }: { slim?: boolean; className?: string }) {
   return (
-    <div className={cn("mb-8 flex items-center gap-3", slim && "justify-center")}>
+    <div className={cn("flex items-center gap-3", slim && "justify-center", className)}>
       <div className="grid h-10 w-10 shrink-0 place-items-center rounded-lg bg-primary text-lg font-black text-primary-foreground shadow-glow">T</div>
       {!slim && (
         <div>
@@ -286,24 +286,31 @@ export function Sidebar() {
         collapsed ? "w-[68px] p-2.5" : "w-72 p-4"
       )}
     >
-      <BrandMark slim={collapsed} />
+      {/* The collapse control lives in the header row, where slim-sidebar patterns put it —
+          a toggle at the bottom is off-screen muscle memory; up here it is the first thing the
+          eye meets, next to the brand it is shrinking. Slim mode stacks it under the logo. */}
+      <div className={cn("mb-6 flex shrink-0 items-center", collapsed ? "flex-col gap-2" : "justify-between gap-2")}>
+        <BrandMark slim={collapsed} className="mb-0" />
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <button
+              type="button"
+              onClick={toggle}
+              aria-label={collapsed ? "Expand the sidebar" : "Collapse the sidebar"}
+              aria-expanded={!collapsed}
+              className="focus-ring grid h-8 w-8 shrink-0 place-items-center rounded-md text-muted-foreground transition hover:bg-muted hover:text-foreground"
+            >
+              {collapsed ? <PanelLeftOpen className="h-4 w-4" /> : <PanelLeftClose className="h-4 w-4" />}
+            </button>
+          </TooltipTrigger>
+          <TooltipContent side="right" sideOffset={8}>
+            {collapsed ? "Expand the sidebar" : "Collapse the sidebar"}
+          </TooltipContent>
+        </Tooltip>
+      </div>
       <div className="-mx-1 min-h-0 flex-1 overflow-y-auto px-1">
         <NavList items={visible} slim={collapsed} />
       </div>
-
-      <button
-        type="button"
-        onClick={toggle}
-        aria-label={collapsed ? "Expand the sidebar" : "Collapse the sidebar"}
-        aria-expanded={!collapsed}
-        className={cn(
-          "focus-ring mt-3 flex shrink-0 items-center gap-2 rounded-md px-3 py-2 text-xs font-medium text-muted-foreground transition hover:bg-muted hover:text-foreground",
-          collapsed && "justify-center px-0"
-        )}
-      >
-        {collapsed ? <PanelLeftOpen className="h-4 w-4" /> : <PanelLeftClose className="h-4 w-4" />}
-        {!collapsed && "Collapse"}
-      </button>
 
       <div className={cn("mt-2 shrink-0 rounded-lg border border-border bg-background", collapsed ? "p-1.5" : "p-3")}>
         {collapsed ? (

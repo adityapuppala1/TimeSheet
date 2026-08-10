@@ -22,7 +22,7 @@ import { CalendarIcon } from "lucide-react";
 
 import { Button } from "./button";
 import { Popover, PopoverContent, PopoverTrigger } from "./popover";
-import { Calendar, CalendarHeader, CalendarMonthGrid } from "./calendar-primitives";
+import { Calendar, CalendarHeader, CalendarMonthGrid, type CalendarDayAnnotations } from "./calendar-primitives";
 import { cn } from "../../lib/utils";
 
 function toCalendarDate(iso: string): CalendarDate | null {
@@ -86,8 +86,14 @@ export function DatePicker({
   className,
   disabled,
   minValue,
-  maxValue
-}: BasePickerProps & { value: string; onChange: (iso: string) => void }) {
+  maxValue,
+  dayAnnotations
+}: BasePickerProps & {
+  value: string;
+  onChange: (iso: string) => void;
+  /** Per-date hover summaries (dot + count card) — see CalendarDayAnnotations. */
+  dayAnnotations?: CalendarDayAnnotations;
+}) {
   const [open, setOpen] = useState(false);
 
   return (
@@ -119,7 +125,7 @@ export function DatePicker({
           }}
         >
           <CalendarHeader />
-          <CalendarMonthGrid />
+          <CalendarMonthGrid annotations={dayAnnotations} />
         </Calendar>
         <div className="mt-2 flex justify-between border-t border-border pt-2">
           <Button variant="ghost" size="sm" onClick={() => { onChange(toIso(today(getLocalTimeZone()))); setOpen(false); }}>

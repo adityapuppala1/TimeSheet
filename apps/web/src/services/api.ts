@@ -2034,6 +2034,8 @@ export interface EmailFailureReason {
   templates: Array<{ template: string; count: number }>;
   recipients: EmailFailureRecipient[];
   recipientsTruncated: boolean;
+  /** Recipient domains across the whole group, top 10 — "8 addresses at gmail.com" at a glance. */
+  domains: Array<{ domain: string; count: number }>;
 }
 
 export interface EmailFailureBreakdown {
@@ -2044,11 +2046,42 @@ export interface EmailFailureBreakdown {
   reasons: EmailFailureReason[];
 }
 
+/** The AI diagnosis of one failure group — POST /email-templates/analytics/failures/analyze. */
+export interface EmailFailureAnalysis {
+  diagnosis: string;
+  likelyCause: string;
+  transient: boolean;
+  actions: string[];
+}
+
+export interface EmailDomainRow {
+  domain: string;
+  total: number;
+  sent: number;
+  failed: number;
+  queued: number;
+  /** sent / (sent + failed); null until something has settled. In-flight mail is excluded. */
+  successRate: number | null;
+}
+
+export interface EmailDomainStats {
+  from: string;
+  to: string;
+  totals: EmailDomainRow;
+  domains: EmailDomainRow[];
+  truncated: boolean;
+  daily: EmailVolumeBucket[];
+}
+
 export const emailTemplateApi = {
   list: async () => (await api.get<EmailTemplateRow[]>("/email-templates")).data,
   analytics: async () => (await api.get<EmailAnalytics>("/email-templates/analytics")).data,
   failures: async (days: number) =>
     (await api.get<EmailFailureBreakdown>("/email-templates/analytics/failures", { params: { days } })).data,
+  domains: async (from?: string, to?: string) =>
+    (await api.get<EmailDomainStats>("/email-templates/analytics/domains", { params: { from: from || undefined, to: to || undefined } })).data,
+  analyzeFailure: async (reasonId: string, days: number) =>
+    (await api.post<EmailFailureAnalysis>("/email-templates/analytics/failures/analyze", { reasonId, days })).data,
   transportStatus: async () => (await api.get<MailTransportStatus>("/email-templates/transport-status")).data,
   log: async (key: string) => (await api.get<EmailLogRow[]>(`/email-templates/${encodeURIComponent(key)}/log`)).data,
   save: async (key: string, payload: { subject: string; bodyHtml: string; enabled?: boolean }) =>

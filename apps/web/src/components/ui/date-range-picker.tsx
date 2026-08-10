@@ -23,7 +23,13 @@ import { CalendarIcon } from "lucide-react";
 
 import { Button } from "./button";
 import { Popover, PopoverContent, PopoverTrigger } from "./popover";
-import { Calendar, CalendarHeader, RangeCalendar, RangeCalendarMonthGrid } from "./calendar-primitives";
+import {
+  Calendar,
+  CalendarHeader,
+  RangeCalendar,
+  RangeCalendarMonthGrid,
+  type CalendarDayAnnotations
+} from "./calendar-primitives";
 import { cn } from "../../lib/utils";
 
 export interface DateRangeValue {
@@ -108,6 +114,8 @@ export interface DateRangePickerProps {
   id?: string;
   className?: string;
   disabled?: boolean;
+  /** Per-date hover summaries (dot + count card) — see CalendarDayAnnotations. */
+  dayAnnotations?: CalendarDayAnnotations;
 }
 
 export function DateRangePicker({
@@ -117,7 +125,8 @@ export function DateRangePicker({
   allowAllTime = true,
   id,
   className,
-  disabled
+  disabled,
+  dayAnnotations
 }: DateRangePickerProps) {
   const [open, setOpen] = useState(false);
   const [draft, setDraft] = useState<DateRangeValue>(value);
@@ -174,8 +183,10 @@ export function DateRangePicker({
 
       {/* Width is content-driven and the whole thing scrolls on small screens: two months plus a
           preset rail cannot fit a 390px phone, and squeezing them produces a grid too small to tap
-          accurately. Below `sm` the second month is hidden rather than shrunk. */}
-      <PopoverContent align="start" className="w-auto max-w-[min(46rem,calc(100vw-2rem))] overflow-x-auto p-0">
+          accurately. Below `sm` the second month is hidden rather than shrunk. From `sm` up the
+          panel is overflow-visible instead — the day-annotation hover cards extend past the top
+          edge on the first week row, and a scroll container would turn each one into a scrollbar. */}
+      <PopoverContent align="start" className="w-auto max-w-[min(46rem,calc(100vw-2rem))] overflow-x-auto p-0 sm:overflow-visible">
         <div className="flex flex-col sm:flex-row">
           <div className="flex shrink-0 gap-1 overflow-x-auto border-b border-border p-2 sm:flex-col sm:overflow-visible sm:border-b-0 sm:border-r">
             {presets.map((preset) => {
@@ -207,10 +218,10 @@ export function DateRangePicker({
             >
               <CalendarHeader />
               <div className="flex gap-6">
-                <RangeCalendarMonthGrid />
+                <RangeCalendarMonthGrid annotations={dayAnnotations} />
                 {/* Second month is desktop-only — see the width note above. */}
                 <div className="hidden md:block">
-                  <RangeCalendarMonthGrid offset={{ months: 1 }} />
+                  <RangeCalendarMonthGrid offset={{ months: 1 }} annotations={dayAnnotations} />
                 </div>
               </div>
             </RangeCalendar>

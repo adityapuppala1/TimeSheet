@@ -18,7 +18,6 @@ import {
   AlertCircle,
   BarChart3,
   CheckCircle2,
-  ChevronDown,
   ChevronRight,
   Eye,
   History as HistoryIcon,
@@ -32,9 +31,9 @@ import {
   Save,
   Send,
   ServerCog,
+  Sparkles,
   TrendingDown,
   TrendingUp,
-  Users,
   Variable
 } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
@@ -80,6 +79,8 @@ import {
   type EmailTemplateVolumeRow,
   type EmailVolumeBucket
 } from "../services/api";
+import { DateRangePicker, type DateRangeValue } from "../components/ui/date-range-picker";
+import { categoriesIn, triageEmailFailure, type EmailFailureTriage } from "../lib/email-failure-triage";
 import { safeHtml } from "../lib/safe-html";
 import { computeTrend } from "../lib/trend";
 import { useAuthStore } from "../store/auth";
@@ -588,48 +589,95 @@ function AnalyticsTab({ data, loading }: { data?: EmailAnalytics; loading: boole
       </Card>
 
       <FailureBreakdownCard />
+
+      <DomainDeliveryCard />
     </div>
   );
 }
 
 const FAILURE_WINDOWS = [7, 30, 90, 365];
 
+const TONE_BADGE: Record<EmailFailureTriage["tone"], "destructive" | "warning" | "muted"> = {
+  destructive: "destructive",
+  warning: "warning",
+  muted: "muted"
+};
+
 /**
- * Failure debugging: what broke, how often, and for whom.
+ * Failure debugging: what broke, how often, and for whom — as a readable table, not raw SMTP.
  *
- * Reasons are grouped on a NORMALISED form of the SMTP message (volatile queue ids, addresses,
- * timestamps replaced with markers) — otherwise one misconfiguration reads as hundreds of
- * unrelated one-off errors. The verbatim message is kept one click away so nothing is lost.
+ * Reasons are grouped server-side on a NORMALISED form of the SMTP message, then classified
+ * client-side (lib/email-failure-triage.ts) into a human title + first actions. The verbatim
+ * message survives one click away in the detail dialog, alongside the optional AI diagnosis.
  */
 function FailureBreakdownCard() {
   const [days, setDays] = useState(30);
-  const [expanded, setExpanded] = useState<string | null>(null);
+  const [search, setSearch] = useState("");
+  const [category, setCategory] = useState("all");
+  const [detailId, setDetailId] = useState<string | null>(null);
   const failures = useQuery({
     queryKey: ["email-templates", "analytics", "failures", days],
     queryFn: () => emailTemplateApi.failures(days)
   });
 
   const data = failures.data;
+  const categories = useMemo(() => categoriesIn(data?.reasons ?? []), [data?.reasons]);
+
+  const filtered = useMemo(() => {
+    const needle = search.trim().toLowerCase();
+    return (data?.reasons ?? []).filter((reason) => {
+      const triage = triageEmailFailure(reason.reason);
+      if (category !== "all" && triage.key !== category) return false;
+      if (!needle) return true;
+      return (
+        triage.title.toLowerCase().includes(needle) ||
+        reason.reason.toLowerCase().includes(needle) ||
+        reason.recipients.some((r) => r.to.toLowerCase().includes(needle)) ||
+        reason.templates.some((t) => t.template.toLowerCase().includes(needle)) ||
+        reason.domains.some((d) => d.domain.toLowerCase().includes(needle))
+      );
+    });
+  }, [data?.reasons, search, category]);
+
+  const detail = filtered.find((r) => r.id === detailId) ?? data?.reasons.find((r) => r.id === detailId) ?? null;
 
   return (
     <Card>
-      <CardHeader className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+      <CardHeader className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
         <div className="grid gap-1">
           <CardTitle className="flex items-center gap-2 text-base">
             <MailX className="h-4 w-4 text-destructive" />Why sends failed
           </CardTitle>
           <CardDescription>
-            Identical reasons are grouped. Expand one to see the exact SMTP text and every recipient it affected.
+            Identical reasons are grouped and translated into plain language. Open a row for the exact SMTP text,
+            the affected recipients, the recommended fix — and an AI diagnosis of that specific case.
           </CardDescription>
         </div>
-        <Select value={String(days)} onValueChange={(value) => setDays(Number(value))}>
-          <SelectTrigger className="w-full sm:w-[160px]"><SelectValue /></SelectTrigger>
-          <SelectContent>
-            {FAILURE_WINDOWS.map((window) => (
-              <SelectItem key={window} value={String(window)}>Last {window} days</SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
+        <div className="flex flex-wrap items-center gap-2">
+          <Input
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            placeholder="Search reason, recipient, domain…"
+            className="h-9 w-full sm:w-60"
+          />
+          <Select value={category} onValueChange={setCategory}>
+            <SelectTrigger className="h-9 w-full sm:w-[190px]"><SelectValue /></SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">All categories</SelectItem>
+              {categories.map((c) => (
+                <SelectItem key={c.key} value={c.key}>{c.title}</SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+          <Select value={String(days)} onValueChange={(value) => setDays(Number(value))}>
+            <SelectTrigger className="h-9 w-full sm:w-[150px]"><SelectValue /></SelectTrigger>
+            <SelectContent>
+              {FAILURE_WINDOWS.map((window) => (
+                <SelectItem key={window} value={String(window)}>Last {window} days</SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </div>
       </CardHeader>
       <CardContent className="grid gap-3">
         {failures.isLoading && <Skeleton className="h-24 w-full" />}
@@ -646,48 +694,201 @@ function FailureBreakdownCard() {
                 Grouping the {data.sampledFailures.toLocaleString()} most recent of {data.totalFailures.toLocaleString()} failures in this window.
               </p>
             )}
-            {data.reasons.map((reason) => (
-              <FailureReasonRow
-                key={reason.id}
-                reason={reason}
-                open={expanded === reason.id}
-                onToggle={() => setExpanded((current) => (current === reason.id ? null : reason.id))}
-              />
-            ))}
+            {filtered.length === 0 && (
+              <p className="py-6 text-center text-sm text-muted-foreground">Nothing matches the current search and filters.</p>
+            )}
+
+            {/* Desktop: a scannable table. */}
+            {filtered.length > 0 && (
+              <div className="hidden overflow-x-auto sm:block">
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead>What went wrong</TableHead>
+                      <TableHead>Domains hit</TableHead>
+                      <TableHead>Recipients</TableHead>
+                      <TableHead>Last seen</TableHead>
+                      <TableHead className="text-right">Failures</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {filtered.map((reason) => {
+                      const triage = triageEmailFailure(reason.reason);
+                      return (
+                        <TableRow
+                          key={reason.id}
+                          className="cursor-pointer"
+                          onClick={() => setDetailId(reason.id)}
+                          title="Open details and actions"
+                        >
+                          <TableCell className="max-w-[26rem]">
+                            <p className="text-sm font-medium">{triage.title}</p>
+                            <p className="mt-0.5 flex flex-wrap items-center gap-1.5 text-xs text-muted-foreground">
+                              <Badge variant={TONE_BADGE[triage.tone]} className="px-1.5 py-0 text-[10px]">
+                                {triage.transient ? "usually clears itself" : "needs action"}
+                              </Badge>
+                              <span className="truncate font-mono">{reason.reason.slice(0, 80)}{reason.reason.length > 80 ? "…" : ""}</span>
+                            </p>
+                          </TableCell>
+                          <TableCell className="text-xs text-muted-foreground">
+                            {reason.domains.slice(0, 3).map((d) => `${d.domain} ×${d.count}`).join(", ")}
+                            {reason.domains.length > 3 ? ` +${reason.domains.length - 3}` : ""}
+                          </TableCell>
+                          <TableCell className="tabular-nums">
+                            {reason.recipients.length}{reason.recipientsTruncated ? "+" : ""}
+                          </TableCell>
+                          <TableCell className="whitespace-nowrap text-xs text-muted-foreground">
+                            {new Date(reason.lastSeen).toLocaleString()}
+                          </TableCell>
+                          <TableCell className="text-right">
+                            <Badge variant="destructive">{reason.count.toLocaleString()}</Badge>
+                          </TableCell>
+                        </TableRow>
+                      );
+                    })}
+                  </TableBody>
+                </Table>
+              </div>
+            )}
+
+            {/* Phones: the same rows as tappable cards. */}
+            <div className="grid gap-2 sm:hidden">
+              {filtered.map((reason) => {
+                const triage = triageEmailFailure(reason.reason);
+                return (
+                  <button
+                    key={reason.id}
+                    type="button"
+                    onClick={() => setDetailId(reason.id)}
+                    className="focus-ring rounded-lg border border-border p-3 text-left transition hover:bg-muted/40"
+                  >
+                    <span className="flex items-start justify-between gap-2">
+                      <span className="text-sm font-medium">{triage.title}</span>
+                      <Badge variant="destructive" className="shrink-0">{reason.count.toLocaleString()}</Badge>
+                    </span>
+                    <span className="mt-1 block text-xs text-muted-foreground">
+                      {reason.recipients.length}{reason.recipientsTruncated ? "+" : ""} recipient(s) · last{" "}
+                      {new Date(reason.lastSeen).toLocaleDateString()}
+                    </span>
+                    <span className="mt-1 block truncate font-mono text-[11px] text-muted-foreground">{reason.reason}</span>
+                  </button>
+                );
+              })}
+            </div>
           </>
         )}
       </CardContent>
+
+      {/* Keyed by reason id so switching rows remounts the dialog and resets the AI state. */}
+      <FailureDetailDialog key={detail?.id ?? "none"} reason={detail} days={days} onClose={() => setDetailId(null)} />
     </Card>
   );
 }
 
-function FailureReasonRow({ reason, open, onToggle }: { reason: EmailFailureReason; open: boolean; onToggle: () => void }) {
-  return (
-    <div className="rounded-lg border border-border">
-      <button
-        type="button"
-        onClick={onToggle}
-        className="flex w-full items-start gap-2.5 p-3 text-left transition hover:bg-muted/40"
-        aria-expanded={open}
-      >
-        {open ? <ChevronDown className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground" /> : <ChevronRight className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground" />}
-        <span className="min-w-0 flex-1">
-          <span className="block break-words text-sm font-medium">{reason.reason}</span>
-          <span className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted-foreground">
-            <span className="inline-flex items-center gap-1"><Users className="h-3 w-3" />{reason.recipients.length}{reason.recipientsTruncated ? "+" : ""} recipient(s)</span>
-            <span>last {new Date(reason.lastSeen).toLocaleString()}</span>
-            <span>{reason.templates.map((t) => `${t.template} (${t.count})`).join(" · ")}</span>
-          </span>
-        </span>
-        <Badge variant="destructive" className="shrink-0">{reason.count.toLocaleString()}</Badge>
-      </button>
+/** One failure group in full: triage advice, AI diagnosis, raw SMTP, and the recipient list. */
+function FailureDetailDialog({
+  reason,
+  days,
+  onClose
+}: {
+  reason: EmailFailureReason | null;
+  days: number;
+  onClose: () => void;
+}) {
+  const analyze = useMutation({
+    mutationFn: () => emailTemplateApi.analyzeFailure(reason!.id, days),
+    onError: (err: any) =>
+      toast.error("AI diagnosis unavailable", {
+        description: err?.response?.data?.message ?? "Check that AI and the email-failure diagnosis toggle are enabled."
+      })
+  });
+  if (!reason) return null;
+  const triage = triageEmailFailure(reason.reason);
 
-      {open && (
-        <div className="grid gap-3 border-t border-border p-3">
+  return (
+    <Dialog open onOpenChange={(open) => { if (!open) onClose(); }}>
+      <DialogContent className="w-[min(95vw,780px)] max-w-none">
+        <DialogHeader>
+          <DialogTitle className="flex items-center gap-2">
+            <MailX className="h-4 w-4 text-destructive" />
+            {triage.title}
+          </DialogTitle>
+          <DialogDescription>
+            {reason.count.toLocaleString()} failures · first {new Date(reason.firstSeen).toLocaleDateString()} · last{" "}
+            {new Date(reason.lastSeen).toLocaleString()} ·{" "}
+            {reason.templates.map((t) => `${t.template} (${t.count})`).join(", ")}
+          </DialogDescription>
+        </DialogHeader>
+
+        <div className="grid max-h-[65vh] gap-4 overflow-y-auto pr-1">
+          <div className="grid gap-1.5 rounded-lg border border-border p-3">
+            <p className="flex items-center gap-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+              What this means
+              <Badge variant={TONE_BADGE[triage.tone]} className="px-1.5 py-0 text-[10px]">
+                {triage.transient ? "usually clears itself" : "needs action"}
+              </Badge>
+            </p>
+            <p className="text-sm">{triage.meaning}</p>
+            <p className="mt-1 text-xs font-semibold uppercase tracking-wide text-muted-foreground">Recommended actions</p>
+            <ol className="grid list-decimal gap-1 pl-5 text-sm">
+              {triage.actions.map((action) => (
+                <li key={action}>{action}</li>
+              ))}
+            </ol>
+          </div>
+
+          <div className="grid gap-2 rounded-lg border border-primary/30 bg-primary/5 p-3">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">AI diagnosis of this case</p>
+              <Button
+                size="sm"
+                variant="outline"
+                className="ai-gradient-text"
+                disabled={analyze.isPending}
+                onClick={() => analyze.mutate()}
+              >
+                {analyze.isPending ? <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" /> : <Sparkles className="mr-1.5 h-3.5 w-3.5" />}
+                {analyze.data ? "Re-analyze" : "Analyze with AI"}
+              </Button>
+            </div>
+            {analyze.isPending && <Skeleton className="h-16 w-full" />}
+            {analyze.data && (
+              <div className="grid gap-2 text-sm">
+                <p>{analyze.data.diagnosis}</p>
+                <p className="text-xs text-muted-foreground">
+                  <strong className="text-foreground">Likely cause:</strong> {analyze.data.likelyCause} ·{" "}
+                  {analyze.data.transient ? "Expected to clear on its own or on retry." : "Needs an admin to change something."}
+                </p>
+                <ol className="grid list-decimal gap-1 pl-5">
+                  {analyze.data.actions.map((action) => (
+                    <li key={action}>{action}</li>
+                  ))}
+                </ol>
+              </div>
+            )}
+            {!analyze.data && !analyze.isPending && (
+              <p className="text-xs text-muted-foreground">
+                Sends this group's counts and SMTP text (recipient domains only, never addresses) to your configured AI
+                model for a case-specific reading.
+              </p>
+            )}
+          </div>
+
           <div className="grid gap-1">
             <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Raw SMTP message</p>
             <p className="break-words rounded-md bg-muted/50 p-2 font-mono text-xs">{reason.sample}</p>
           </div>
+
+          {reason.domains.length > 0 && (
+            <div className="flex flex-wrap items-center gap-1.5">
+              {reason.domains.map((d) => (
+                <Badge key={d.domain} variant="muted" className="font-mono text-[11px]">
+                  {d.domain} ×{d.count}
+                </Badge>
+              ))}
+            </div>
+          )}
+
           <div className="overflow-x-auto">
             <Table>
               <TableHeader>
@@ -716,8 +917,147 @@ function FailureReasonRow({ reason, open, onToggle }: { reason: EmailFailureReas
             </p>
           )}
         </div>
-      )}
-    </div>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+/**
+ * Delivery split by recipient DOMAIN over a chosen date range — which mail systems are failing
+ * us, which are still holding mail in flight, and each one's success rate. The success rate
+ * excludes in-flight mail: it hasn't been judged yet, and counting it either way would swing
+ * the number on every worker tick.
+ */
+function DomainDeliveryCard() {
+  const [range, setRange] = useState<DateRangeValue>({ from: "", to: "" });
+  const stats = useQuery({
+    queryKey: ["email-templates", "analytics", "domains", range.from, range.to],
+    queryFn: () => emailTemplateApi.domains(range.from || undefined, range.to || undefined)
+  });
+
+  const data = stats.data;
+  const ratePct = (rate: number | null) => (rate === null ? "—" : `${(rate * 100).toFixed(1)}%`);
+
+  return (
+    <Card>
+      <CardHeader className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+        <div className="grid gap-1">
+          <CardTitle className="flex items-center gap-2 text-base">
+            <Mails className="h-4 w-4 text-primary" />Delivery by domain
+          </CardTitle>
+          <CardDescription>
+            Where mail is landing, failing, or still in flight. Defaults to the last 30 days.
+          </CardDescription>
+        </div>
+        <DateRangePicker
+          id="email-domain-range"
+          value={range}
+          onChange={setRange}
+          allowAllTime={false}
+          placeholder="Last 30 days"
+          className="w-full lg:w-auto"
+        />
+      </CardHeader>
+      <CardContent className="grid gap-4">
+        {stats.isLoading && <Skeleton className="h-40 w-full" />}
+        {data && (
+          <>
+            <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+              <div className="rounded-lg border border-border p-3">
+                <p className="text-xs text-muted-foreground">Delivered</p>
+                <p className="text-lg font-bold tabular-nums text-success">{data.totals.sent.toLocaleString()}</p>
+              </div>
+              <div className="rounded-lg border border-border p-3">
+                <p className="text-xs text-muted-foreground">Failed</p>
+                <p className="text-lg font-bold tabular-nums text-destructive">{data.totals.failed.toLocaleString()}</p>
+              </div>
+              <div className="rounded-lg border border-border p-3">
+                <p className="text-xs text-muted-foreground">In flight</p>
+                <p className="text-lg font-bold tabular-nums text-warning">{data.totals.queued.toLocaleString()}</p>
+              </div>
+              <div className="rounded-lg border border-border p-3">
+                <p className="text-xs text-muted-foreground">Success rate</p>
+                <p className="text-lg font-bold tabular-nums">{ratePct(data.totals.successRate)}</p>
+              </div>
+            </div>
+
+            {data.totals.total === 0 ? (
+              <p className="py-6 text-center text-sm text-muted-foreground">No mail was sent in this period.</p>
+            ) : (
+              <>
+                <div className="h-56 w-full">
+                  <ResponsiveContainer width="100%" height="100%">
+                    <BarChart data={data.daily} margin={{ top: 4, right: 8, bottom: 0, left: -18 }}>
+                      <CartesianGrid {...GRID_STYLE} vertical={false} />
+                      <XAxis
+                        dataKey="bucket"
+                        tick={AXIS_STYLE}
+                        tickLine={false}
+                        axisLine={false}
+                        tickFormatter={(bucket: string) =>
+                          new Date(`${bucket}T00:00:00`).toLocaleDateString(undefined, { day: "numeric", month: "short" })
+                        }
+                        minTickGap={28}
+                      />
+                      <YAxis tick={AXIS_STYLE} tickLine={false} axisLine={false} allowDecimals={false} />
+                      <RTooltip {...TOOLTIP_STYLE} />
+                      <Legend wrapperStyle={{ fontSize: 12, color: "hsl(var(--muted-foreground))" }} />
+                      <Bar dataKey="sent" name={OUTCOME_LABEL.sent} stackId="day" fill={OUTCOME_COLOR.sent} />
+                      <Bar dataKey="queued" name={OUTCOME_LABEL.queued} stackId="day" fill={OUTCOME_COLOR.queued} />
+                      <Bar dataKey="failed" name={OUTCOME_LABEL.failed} stackId="day" fill={OUTCOME_COLOR.failed} radius={[3, 3, 0, 0]} />
+                    </BarChart>
+                  </ResponsiveContainer>
+                </div>
+
+                <div className="overflow-x-auto">
+                  <Table>
+                    <TableHeader>
+                      <TableRow>
+                        <TableHead>Domain</TableHead>
+                        <TableHead className="text-right">Delivered</TableHead>
+                        <TableHead className="text-right">Failed</TableHead>
+                        <TableHead className="text-right">In flight</TableHead>
+                        <TableHead className="w-40">Success rate</TableHead>
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                      {data.domains.map((row) => (
+                        <TableRow key={row.domain}>
+                          <TableCell className="font-mono text-xs">{row.domain}</TableCell>
+                          <TableCell className="text-right tabular-nums text-success">{row.sent.toLocaleString()}</TableCell>
+                          <TableCell className="text-right tabular-nums">
+                            {row.failed > 0 ? (
+                              <span className="font-semibold text-destructive">{row.failed.toLocaleString()}</span>
+                            ) : (
+                              <span className="text-muted-foreground">0</span>
+                            )}
+                          </TableCell>
+                          <TableCell className="text-right tabular-nums text-muted-foreground">{row.queued.toLocaleString()}</TableCell>
+                          <TableCell>
+                            <div className="flex items-center gap-2">
+                              {/* Not the Progress component: this bar is a judged ratio, and its
+                                  color must carry the verdict (healthy vs bleeding), which
+                                  Progress's single primary fill can't express. */}
+                              <div className="h-1.5 w-full max-w-[6.5rem] overflow-hidden rounded-full bg-muted">
+                                <div
+                                  className={`h-full ${row.successRate !== null && row.successRate < 0.9 ? "bg-destructive" : "bg-success"}`}
+                                  style={{ width: `${Math.round((row.successRate ?? 0) * 100)}%` }}
+                                />
+                              </div>
+                              <span className="text-xs tabular-nums text-muted-foreground">{ratePct(row.successRate)}</span>
+                            </div>
+                          </TableCell>
+                        </TableRow>
+                      ))}
+                    </TableBody>
+                  </Table>
+                </div>
+              </>
+            )}
+          </>
+        )}
+      </CardContent>
+    </Card>
   );
 }
 

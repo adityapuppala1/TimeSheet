@@ -68,6 +68,22 @@ describe("normalizeErrorMessage", () => {
     );
   });
 
+  it("collapses Gmail's compound session token INCLUDING its ordinal suffix", () => {
+    // The real-world shape that motivated this: identical 421 throttles were splitting into one
+    // group per `.N` because the two token halves normalise to <id> but the joiner and ordinal
+    // survived — `<id>-<id>.2` vs `<id>-<id>.6` are different strings.
+    const a = normalizeErrorMessage(
+      "Data command failed: 421-4.3.0 Temporary System Problem. Try again later. For more information, go to 421 4.3.0 https://support.google.com/a/answer/3221692 a1b2c3d4e5-f6a7b8c9d0.2 - gsmtp"
+    );
+    const b = normalizeErrorMessage(
+      "Data command failed: 421-4.3.0 Temporary System Problem. Try again later. For more information, go to 421 4.3.0 https://support.google.com/a/answer/3221692 e5d4c3b2a1-x9y8z7w6v5.6 - gsmtp"
+    );
+    expect(a).toBe(b);
+    // The SMTP status code is the signal and must survive the compound-id collapse untouched.
+    expect(a).toContain("421-4.3.0");
+    expect(a).toContain("421 4.3.0");
+  });
+
   it("collapses whitespace and caps runaway multi-line SMTP transcripts", () => {
     expect(normalizeErrorMessage("  550   line one\n  line two  ")).toBe("550 line one line two");
     expect(normalizeErrorMessage("x".repeat(1000)).length).toBe(300);

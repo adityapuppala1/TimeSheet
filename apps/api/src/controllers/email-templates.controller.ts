@@ -18,7 +18,8 @@ import { requireAuth, requireSuperAdmin } from "../middleware/auth.js";
 import { AppError } from "../middleware/error.js";
 import { validate } from "../middleware/validate.js";
 import { audit } from "../services/audit.service.js";
-import { getEmailAnalytics, getEmailFailureBreakdown } from "../services/email-analytics.service.js";
+import { analyzeEmailFailure } from "../services/ai.service.js";
+import { getEmailAnalytics, getEmailDomainStats, getEmailFailureBreakdown } from "../services/email-analytics.service.js";
 import { getTransportStatus, sendMail } from "../services/mail.service.js";
 import { sanitizeEmailHtml } from "../utils/sanitize.js";
 import {
@@ -47,6 +48,54 @@ const failuresSchema = z.object({
 
 emailTemplatesRouter.get("/analytics/failures", validate(failuresSchema), async (req, res) => {
   res.json(await getEmailFailureBreakdown(Number(req.query.days ?? 30)));
+});
+
+const domainsSchema = z.object({
+  query: z.object({
+    from: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+    to: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional()
+  })
+});
+
+emailTemplatesRouter.get("/analytics/domains", validate(domainsSchema), async (req, res) => {
+  res.json(await getEmailDomainStats(req.query.from as string | undefined, req.query.to as string | undefined));
+});
+
+const analyzeFailureSchema = z.object({
+  body: z.object({
+    /** The FNV reason id from GET /analytics/failures — an opaque handle, never free text. */
+    reasonId: z.string().min(1).max(32),
+    days: z.coerce.number().int().min(1).max(365).optional()
+  })
+});
+
+/**
+ * AI diagnosis of ONE failure group. The client sends only the group's id — the reason text,
+ * sample and counts are re-derived here from EmailLog, so the model's input is always what the
+ * server measured, never a string a browser composed. (The SMTP text itself is still
+ * external-authored; ai.service fences it as data.)
+ */
+emailTemplatesRouter.post("/analytics/failures/analyze", validate(analyzeFailureSchema), async (req, res) => {
+  const days = Number(req.body.days ?? 30);
+  const breakdown = await getEmailFailureBreakdown(days);
+  const reason = breakdown.reasons.find((r) => r.id === req.body.reasonId);
+  if (!reason) throw new AppError(404, "That failure group no longer exists in this window — refresh and retry.");
+
+  const transport = await getTransportStatus();
+  const analysis = await analyzeEmailFailure({
+    reason: reason.reason,
+    sample: reason.sample,
+    count: reason.count,
+    windowDays: days,
+    firstSeen: reason.firstSeen,
+    lastSeen: reason.lastSeen,
+    templates: reason.templates,
+    recipientDomains: reason.domains,
+    smtpConfigured: transport.configured,
+    userId: req.user!.id
+  });
+  if (!analysis) throw new AppError(502, "The model returned nothing usable — try again.");
+  res.json(analysis);
 });
 
 emailTemplatesRouter.get("/", async (_req, res) => {

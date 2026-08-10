@@ -371,6 +371,22 @@ const CAPABILITIES: ReadonlyArray<AiCapabilitySpec> = [
     tools: []
   },
 
+  // ── Operations diagnostics.
+  {
+    id: "email_failure_triage",
+    title: "Email failure diagnosis",
+    description:
+      "Explains a group of failed sends — what the SMTP rejection means and what to do. The grouping and counts are computed deterministically; it only narrates them.",
+    featureToggle: "emailFailureTriageEnabled",
+    maxLevel: "SUGGEST",
+    ceilingReason:
+      "It reads SMTP rejection text authored by external mail servers, and its advice touches transport configuration — a suggestion an admin weighs, never a change it makes itself.",
+    // The rejection strings it analyses are written by the RECEIVING mail server, not by anyone
+    // in this workspace — the same external-authorship bar the intake capabilities are held to.
+    actsOnUntrustedInput: true,
+    tools: []
+  },
+
   // ── The measuring stick.
   {
     id: "eval_judge",

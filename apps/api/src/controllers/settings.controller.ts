@@ -363,6 +363,7 @@ export const aiSettingsSchema = z.object({
       assigneeSuggestionAiEnabled: z.boolean().optional(),
       staleTicketNudgeEnabled: z.boolean().optional(),
       aiPrInlineReviewEnabled: z.boolean().optional(),
+      emailFailureTriageEnabled: z.boolean().optional(),
       // AI quality loop — see prisma AIInteraction. NOTE: this schema is `.strict()`, so a new
       // GlobalAISettings field MUST be listed here or the PATCH 400s with no obvious cause.
       aiCaptureEnabled: z.boolean().optional(),

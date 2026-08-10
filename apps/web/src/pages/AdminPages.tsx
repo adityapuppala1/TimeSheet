@@ -67,6 +67,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../co
 import { DataTable } from "../components/ui/data-table";
 import { TimesheetReportPanel } from "../components/TimesheetReportPanel";
 import { DateRangePicker, type DateRangeValue } from "../components/ui/date-range-picker";
+import type { CalendarDayAnnotations } from "../components/ui/calendar-primitives";
 import { TimesheetAnalyticsPanel } from "../components/TimesheetAnalyticsPanel";
 import {
   EMPTY_FILTERS,
@@ -2085,6 +2086,33 @@ export function ApprovalsPage() {
     [rows]
   );
 
+  // Per-day hover counts for the range picker's calendar — built from the UNFILTERED rows, so the
+  // dots describe what exists on each day, not what the current filters happen to show.
+  const rangeAnnotations = useMemo(() => {
+    const byDay = new Map<string, Record<string, number>>();
+    for (const row of rows) {
+      const day = String(row.workDate).slice(0, 10);
+      const counts = byDay.get(day) ?? {};
+      counts[row.status] = (counts[row.status] ?? 0) + 1;
+      byDay.set(day, counts);
+    }
+    const map: CalendarDayAnnotations = {};
+    for (const [day, counts] of byDay) {
+      const total = Object.values(counts).reduce((a, b) => a + b, 0);
+      map[day] = {
+        title: `${total} ${total === 1 ? "entry" : "entries"}`,
+        rows: [
+          { label: "Total", count: total, dotClassName: "bg-primary" },
+          { label: "Approved", count: counts.APPROVED ?? 0, dotClassName: "bg-success" },
+          { label: "Submitted", count: counts.SUBMITTED ?? 0, dotClassName: "bg-warning" },
+          { label: "Draft", count: counts.DRAFT ?? 0, dotClassName: "bg-muted-foreground" },
+          { label: "Rejected", count: counts.REJECTED ?? 0, dotClassName: "bg-destructive" }
+        ].filter((entry) => entry.count > 0)
+      };
+    }
+    return map;
+  }, [rows]);
+
   // Client-side, because the list route does not paginate — it returns one capped page (100 rows,
   // newest work first) and always has. Filtering on the server here would mean either inventing
   // pagination semantics this page's callers do not share, or a second cache key competing with
@@ -2390,6 +2418,7 @@ export function ApprovalsPage() {
                 onChange={setRange}
                 placeholder="All time"
                 className="w-full"
+                dayAnnotations={rangeAnnotations}
               />
             </div>
           </div>

@@ -385,6 +385,9 @@ export interface GlobalAISettings {
   /** Gates per-line AI review comments on a PR's actual diff — deeper and riskier than
    *  aiPrReviewSummaryEnabled's 2-3 sentence summary, so its own explicit opt-in. */
   aiPrInlineReviewEnabled: boolean;
+  /** Gates the on-demand AI diagnosis of a grouped email-send failure on the analytics screen.
+   *  The grouping is deterministic; the model only explains it. */
+  emailFailureTriageEnabled: boolean;
   /** Records one AIInteraction row per AI call (feature, model, prompt hash, parse success,
    *  latency) — metadata only, no user content. Makes AI quality measurable at all. */
   aiCaptureEnabled: boolean;

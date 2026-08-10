@@ -58,6 +58,7 @@ import { computeTrend, type Trend } from "../lib/trend";
 import { reportApi, ticketApi, timesheetApi, type TicketRow } from "../services/api";
 import { useAuthStore } from "../store/auth";
 import { DatePicker } from "../components/ui/date-picker";
+import type { CalendarDayAnnotations } from "../components/ui/calendar-primitives";
 
 function startOfWeek(date: Date) {
   const d = new Date(date);
@@ -776,6 +777,29 @@ function DayTimeline({
 
   const statusesInDay = Object.keys(STATUS_GLYPH).filter((s) => entries.some((e) => e.status === s));
 
+  // Hover counts for the date picker: a dot on every day that has entries, and a status
+  // breakdown card on hover — built from the same map the timeline itself renders from, so the
+  // calendar can never advertise a day the track would then show empty.
+  const dayAnnotations = useMemo(() => {
+    const map: CalendarDayAnnotations = {};
+    for (const [key, list] of entriesByDate) {
+      if (list.length === 0) continue;
+      const byStatus: Record<string, number> = {};
+      for (const e of list) byStatus[e.status] = (byStatus[e.status] ?? 0) + 1;
+      map[key] = {
+        title: `${list.length} ${list.length === 1 ? "entry" : "entries"}`,
+        rows: [
+          { label: "Total", count: list.length, dotClassName: "bg-primary" },
+          { label: "Approved", count: byStatus.APPROVED ?? 0, dotClassName: "bg-success" },
+          { label: "Submitted", count: byStatus.SUBMITTED ?? 0, dotClassName: "bg-warning" },
+          { label: "Draft", count: byStatus.DRAFT ?? 0, dotClassName: "bg-muted-foreground" },
+          { label: "Rejected", count: byStatus.REJECTED ?? 0, dotClassName: "bg-destructive" }
+        ].filter((row) => row.count > 0)
+      };
+    }
+    return map;
+  }, [entriesByDate]);
+
   const [sy, sm, sd] = selectedKey.split("-").map(Number);
   const selectedLabel = new Date(sy, (sm || 1) - 1, sd || 1).toLocaleDateString(undefined, {
     weekday: "short",
@@ -796,7 +820,9 @@ function DayTimeline({
           </CardTitle>
           <CardDescription>One lane per person, one color per person — status is the icon on each block. Covers the latest 100 entries.</CardDescription>
         </div>
-        <div className="flex flex-wrap items-center gap-2">
+        {/* lg:justify-end so that when the controls wrap to a second row on middling widths,
+            that row hugs the same right edge as the first instead of dangling at the left. */}
+        <div className="flex flex-wrap items-center gap-2 lg:justify-end">
           <Badge variant={dayHours > 0 ? "success" : "muted"} className="whitespace-nowrap">
             {dayHours.toFixed(2)}h {isToday ? "today" : `on ${selectedLabel}`}
           </Badge>
@@ -810,6 +836,7 @@ function DayTimeline({
               id="dashboard-date"
               value={selectedKey}
               maxValue={todayKey}
+              dayAnnotations={dayAnnotations}
               onChange={(iso) => {
                 if (iso && iso <= todayKey) setSelectedKey(iso);
               }}
@@ -835,9 +862,17 @@ function DayTimeline({
           <Button asChild size="sm" variant="outline">
             <Link to="/app/timesheet"><CalendarPlus2 className="h-3.5 w-3.5" />Add</Link>
           </Button>
-          <Button size="sm" variant="outline" onClick={() => setExpanded(true)} aria-label="Expand timeline">
+          {/* Icon-only: the labeled version was wide enough to wrap onto its own lonely row at
+              laptop widths, which read as misplacement rather than a control. */}
+          <Button
+            size="icon"
+            variant="outline"
+            className="h-8 w-8"
+            onClick={() => setExpanded(true)}
+            aria-label="Expand the timeline"
+            title="Expand the timeline"
+          >
             <Maximize2 className="h-3.5 w-3.5" />
-            Expand
           </Button>
         </div>
       </CardHeader>

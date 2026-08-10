@@ -311,6 +311,12 @@ export function normalizeErrorMessage(raw: string): string {
     // markers). The lookaheads keep plain words ("authentication") and plain numbers (status
     // codes, port numbers) out of it.
     .replace(/\b(?=[A-Za-z0-9]*\d)(?=[A-Za-z0-9]*[A-Za-z])[A-Za-z0-9]{8,}\b/g, "<id>")
+    // Compound ids: Gmail rejections end in a session token like `a1b2c3d4e5-f6g7h8i9j0.7`,
+    // whose HALVES the rule above catches but whose joiner and ordinal survive — so the same
+    // "421 Temporary System Problem" grouped into one bucket per `.N` suffix and the pattern
+    // (dozens of throttled sends, one cause) read as six unrelated errors. Real SMTP status
+    // codes ("4.3.0") never contain an `<id>`, so they are untouched.
+    .replace(/<id>(?:\s*-\s*<id>)*(?:\.\d+)?/g, "<id>")
     .replace(/\s+/g, " ")
     .trim()
     .slice(0, 300);
@@ -348,6 +354,10 @@ export interface FailureReason {
   recipients: FailureRecipient[];
   /** True when `recipients` was capped — the list is a sample, not the whole set. */
   recipientsTruncated: boolean;
+  /** Recipient domains across the WHOLE group (not just the capped recipient sample) — what the
+   *  AI diagnosis is given instead of addresses, and what tells an admin "this is a gmail.com
+   *  problem" at a glance. Top 10 by count. */
+  domains: Array<{ domain: string; count: number }>;
 }
 
 export interface EmailFailureBreakdown {
@@ -381,6 +391,7 @@ export async function getEmailFailureBreakdown(windowDays: number): Promise<Emai
     lastSeen: Date;
     templates: Map<string, number>;
     recipients: Map<string, { count: number; lastAt: Date; lastMessage: string }>;
+    domains: Map<string, number>;
   }
   const groups = new Map<string, Group>();
 
@@ -396,12 +407,15 @@ export async function getEmailFailureBreakdown(windowDays: number): Promise<Emai
       firstSeen: row.createdAt,
       lastSeen: row.createdAt,
       templates: new Map<string, number>(),
-      recipients: new Map<string, { count: number; lastAt: Date; lastMessage: string }>()
+      recipients: new Map<string, { count: number; lastAt: Date; lastMessage: string }>(),
+      domains: new Map<string, number>()
     };
     group.count += 1;
     if (row.createdAt < group.firstSeen) group.firstSeen = row.createdAt;
     if (row.createdAt > group.lastSeen) group.lastSeen = row.createdAt;
     group.templates.set(row.template, (group.templates.get(row.template) ?? 0) + 1);
+    const domain = row.to.includes("@") ? row.to.split("@").pop()!.toLowerCase() : "(invalid address)";
+    group.domains.set(domain, (group.domains.get(domain) ?? 0) + 1);
 
     const recipient = group.recipients.get(row.to);
     if (!recipient) {
@@ -432,7 +446,11 @@ export async function getEmailFailureBreakdown(windowDays: number): Promise<Emai
         .map(([to, r]) => ({ to, count: r.count, lastAt: r.lastAt.toISOString(), lastMessage: r.lastMessage }))
         .sort((a, b) => b.count - a.count || (a.to < b.to ? -1 : 1))
         .slice(0, RECIPIENTS_PER_REASON_CAP),
-      recipientsTruncated: group.recipients.size > RECIPIENTS_PER_REASON_CAP
+      recipientsTruncated: group.recipients.size > RECIPIENTS_PER_REASON_CAP,
+      domains: Array.from(group.domains.entries())
+        .map(([domain, count]) => ({ domain, count }))
+        .sort((a, b) => b.count - a.count || (a.domain < b.domain ? -1 : 1))
+        .slice(0, 10)
     }));
 
   return {
@@ -441,5 +459,131 @@ export async function getEmailFailureBreakdown(windowDays: number): Promise<Emai
     totalFailures,
     sampledFailures: rows.length,
     reasons
+  };
+}
+
+/* ============================== Delivery by domain ============================== */
+
+/** Domains listed individually; the tail beyond this is aggregated into one "(other)" row so a
+ *  workspace mailing 400 distinct domains still gets a readable table AND honest totals. */
+const DOMAIN_ROWS_CAP = 20;
+/** Zero-filled chart buckets are capped so an "entire year" range cannot mint 4000 DOM nodes;
+ *  past the cap the series simply contains only the days that had traffic. */
+const DAILY_FILL_CAP = 400;
+
+export interface EmailDomainRow {
+  domain: string;
+  total: number;
+  sent: number;
+  failed: number;
+  queued: number;
+  /** sent / (sent + failed). Queued is excluded — in-flight mail hasn't been judged yet, and
+   *  counting it either way would swing the rate on every worker tick. Null until something
+   *  settles. */
+  successRate: number | null;
+}
+
+export interface EmailDomainStats {
+  /** Echo of the resolved window (ISO datetimes) so the client renders what was measured, not
+   *  what it asked for. */
+  from: string;
+  to: string;
+  totals: EmailDomainRow;
+  domains: EmailDomainRow[];
+  /** True when more distinct domains existed than are listed individually. */
+  truncated: boolean;
+  daily: VolumeBucket[];
+}
+
+function rateOf(sent: number, failed: number): number | null {
+  return sent + failed > 0 ? sent / (sent + failed) : null;
+}
+
+/**
+ * Per-recipient-domain delivery split over a date range — which domains fail, which are still in
+ * flight, and each one's success rate. `from`/`to` are ISO dates (inclusive); omitted bounds
+ * default to the last 30 days ending today.
+ */
+export async function getEmailDomainStats(fromIso?: string, toIso?: string): Promise<EmailDomainStats> {
+  const todayStart = startOfLocalDay();
+  const since = fromIso ? new Date(`${fromIso}T00:00:00`) : new Date(todayStart.getTime() - 29 * DAY_MS);
+  const untilExclusive = toIso ? new Date(new Date(`${toIso}T00:00:00`).getTime() + DAY_MS) : new Date(todayStart.getTime() + DAY_MS);
+
+  const [byDomain, dailyRows] = await Promise.all([
+    // `to` needs backticks — it is a MySQL reserved word as well as this table's recipient column.
+    prisma.$queryRaw<Array<{ domain: string | null; status: string; n: bigint | number }>>`
+      SELECT LOWER(SUBSTRING_INDEX(\`to\`, '@', -1)) AS domain, status, COUNT(*) AS n
+      FROM EmailLog
+      WHERE createdAt >= ${since} AND createdAt < ${untilExclusive}
+      GROUP BY domain, status
+    `,
+    prisma.$queryRaw<Array<{ day: Date | string; status: string; n: bigint | number }>>`
+      SELECT DATE(createdAt) AS day, status, COUNT(*) AS n
+      FROM EmailLog
+      WHERE createdAt >= ${since} AND createdAt < ${untilExclusive}
+      GROUP BY day, status
+    `
+  ]);
+
+  const perDomain = new Map<string, { sent: number; failed: number; queued: number; total: number }>();
+  const totalsAcc = { sent: 0, failed: 0, queued: 0, total: 0 };
+  for (const row of byDomain) {
+    // An address with no "@" makes SUBSTRING_INDEX return the whole string; bucket those (and
+    // NULLs) explicitly rather than letting garbage pose as a domain.
+    const key = row.domain && row.domain.includes(".") ? row.domain : "(invalid address)";
+    const bucket = perDomain.get(key) ?? { sent: 0, failed: 0, queued: 0, total: 0 };
+    addStatus(bucket, row.status, Number(row.n));
+    addStatus(totalsAcc, row.status, Number(row.n));
+    perDomain.set(key, bucket);
+  }
+
+  const ranked = Array.from(perDomain.entries())
+    .map(([domain, counts]) => ({ domain, ...counts, successRate: rateOf(counts.sent, counts.failed) }))
+    .sort((a, b) => b.total - a.total || (a.domain < b.domain ? -1 : 1));
+
+  const listed = ranked.slice(0, DOMAIN_ROWS_CAP);
+  const tail = ranked.slice(DOMAIN_ROWS_CAP);
+  if (tail.length > 0) {
+    const other = tail.reduce(
+      (acc, row) => ({
+        sent: acc.sent + row.sent,
+        failed: acc.failed + row.failed,
+        queued: acc.queued + row.queued,
+        total: acc.total + row.total
+      }),
+      { sent: 0, failed: 0, queued: 0, total: 0 }
+    );
+    listed.push({
+      domain: `(${tail.length} other domains)`,
+      ...other,
+      successRate: rateOf(other.sent, other.failed)
+    });
+  }
+
+  // Zero-filled daily series across the window (bounded — see DAILY_FILL_CAP).
+  const dayMap = new Map<string, VolumeBucket>();
+  for (const row of dailyRows) {
+    const day = row.day instanceof Date ? row.day : new Date(`${String(row.day)}T00:00:00`);
+    const key = isoDate(day);
+    const bucket = dayMap.get(key) ?? emptyBucket(key);
+    addStatus(bucket, row.status, Number(row.n));
+    dayMap.set(key, bucket);
+  }
+  const spanDays = Math.round((untilExclusive.getTime() - since.getTime()) / DAY_MS);
+  const daily: VolumeBucket[] =
+    spanDays <= DAILY_FILL_CAP
+      ? Array.from({ length: Math.max(spanDays, 1) }, (_, i) => {
+          const key = isoDate(new Date(since.getTime() + i * DAY_MS));
+          return dayMap.get(key) ?? emptyBucket(key);
+        })
+      : Array.from(dayMap.values()).sort((a, b) => (a.bucket < b.bucket ? -1 : 1));
+
+  return {
+    from: since.toISOString(),
+    to: new Date(untilExclusive.getTime() - 1).toISOString(),
+    totals: { domain: "all", ...totalsAcc, successRate: rateOf(totalsAcc.sent, totalsAcc.failed) },
+    domains: listed,
+    truncated: tail.length > 0,
+    daily
   };
 }

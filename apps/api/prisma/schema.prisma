@@ -1073,6 +1073,14 @@ model GlobalAISettings {
   /// lower-risk 2-3 sentence summary feature.
   aiPrInlineReviewEnabled Boolean @default(false)
 
+  /// Gates ai.service.ts#analyzeEmailFailure — an on-demand diagnosis of one GROUP of failed
+  /// sends from the email analytics screen: what the SMTP rejection means, whether it is
+  /// transient, and what an admin should do about it. Same narrate-don't-decide division as
+  /// facePolicyCopilotEnabled: the grouping/normalisation is deterministic (email-analytics.
+  /// service.ts), the model only explains it. The SMTP text it reads was authored by an
+  /// EXTERNAL mail server, so the capability is marked untrusted-input in the registry.
+  emailFailureTriageEnabled Boolean @default(false)
+
   /// --- AI quality loop (see prisma AIInteraction + services/ai.service.ts) ------------------
   /// Records one AIInteraction row per AI call: feature, model, prompt HASH, whether the response
   /// parsed, latency. No user content. This is what makes "is our AI any good?" answerable at all —
