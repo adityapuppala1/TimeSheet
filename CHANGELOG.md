@@ -45,11 +45,64 @@ unaffected; their migration checksums were reconciled in place.
 
 - One visual grammar for AI everywhere: an orbiting border glow while a model works on a
   container, gradient labels on the buttons that invoke it, flowing strands while an answer is
-  produced — all theme-token derived, all still under `prefers-reduced-motion`.
+  produced — all theme-token derived, all still under `prefers-reduced-motion`. The grammar
+  gained its frame: **every AI surface now sits in a BorderGlow card** (a mesh-gradient border
+  that follows the pointer, with an intro sweep when an answer lands) — AI refine, plan
+  breakdown, ticket suggestions and comment summaries, the status report, the identity policy
+  copilot, Ask AI, and the email failure diagnosis all wear it, in both themes.
 - Rendered rich text is finally styled (ticket descriptions, comments, and history rendered as
   bare tags before), code blocks land properly in the editor and every rendered view, settings
   tabs are re-organized into grids, and the request-log and endpoint tables gained real
   pagination, search, and sort.
+- **Bulk actions where reviewers actually batch**: the face verification log gained select +
+  "Mark reviewed" (by ticked rows or by the whole filtered set, server-re-derived); Timesheet
+  Approvals gained filter → select → bulk Approve/Reject with per-row refusal reasons, one
+  identity check covering the whole batch, and a table that fits the viewport instead of
+  side-scrolling (downloads moved into the entry dialog, where the entry is actually read).
+- **The Dashboard day timeline lanes by person** — one row and one identity color per teammate,
+  status carried by icons instead of color, inner scroll past four people, and an Expand dialog
+  (full-width, filter + sort, closes on X/Esc/click-outside) for the whole team at once.
+- **Calendars show what's on a day before you click it**: the Dashboard date picker and the
+  Approvals range picker mark dates that have entries with a dot, and hovering (or keyboard
+  focus) pops a count card — total / approved / submitted / draft / rejected in status colors.
+- The sidebar collapses to a slim icon rail with tooltips, remembered per browser, with the
+  toggle in the header row where slim-sidebar patterns put it — and every page reflows to the
+  freed width with zero page-level code.
+- **A phone-width overflow class was fixed at its mechanism and fenced with tests**: no-wrap
+  truncated text inside a grid item (and recharts' stamped pixel widths) can hold a page wider
+  than the screen after the viewport shrinks. The responsive suite now sweeps the email
+  analytics tab, walks a render-wide-then-shrink path that reproduces the deadlock, and names
+  the offending elements when an overflow check fails.
+
+### 📬 Email deliverability — from a wall of SMTP text to a triage desk
+
+- **"Why sends failed" now reads like a diagnosis, not a log.** Grouped failures are translated
+  into plain language — *Provider temporarily refused (throttling)*, *SMTP sign-in rejected*,
+  *Recipient address does not exist* — each with a "needs action / usually clears itself"
+  verdict, what it means, and ordered first steps. Searchable and filterable by category; a real
+  table on desktop, tappable cards on phones; the exact SMTP text, every recipient, and the
+  affected domains one click away in the detail view. The translation is deterministic code, so
+  the page stays legible with AI off entirely.
+- **Grouping got honest**: provider session tokens are now collapsed *including* their ordinal
+  suffix, so one Gmail throttling pattern no longer splits into six "different" errors.
+- **An AI diagnosis on demand** (new capability, off by default like every AI toggle): one click
+  sends a failure group's counts and SMTP text — recipient *domains* only, never addresses — for
+  a case-specific reading: what it means, the likely cause, whether it will clear on its own,
+  and concrete next steps. The group is re-derived server-side from the log, so the model only
+  ever reads what the server measured.
+- **Delivery by domain**: pick a date range and see, per recipient domain, delivered / failed /
+  in-flight and a judged success rate (in-flight mail is excluded — it hasn't been decided yet),
+  with a stacked daily chart. Domains that are bleeding get a *needs attention* headline with
+  their diagnosis and first step; every domain row expands in place with its top failure reasons
+  and the age of its oldest stuck in-flight message.
+
+### 🐞 Fixed
+
+- The AI tab's Project-risk, Plan-breakdown and Chat-triage switches failed to save with
+  *"Unrecognized key(s) in object"* — the strict settings schema was missing three toggles the
+  capability registry already shipped. Fixed, and a guard test now parses **every** registry
+  toggle through that schema, so this class of drift is a failing build instead of a 400 an
+  admin meets in production.
 
 ### 🚢 Deployment
 

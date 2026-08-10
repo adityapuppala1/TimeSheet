@@ -2711,3 +2711,46 @@ interactive report — every number, before/after, and what was deliberately NOT
   (fresh seeds), so their authed numbers are path floors, not payload tests. DAST (ZAP) against
   the Compose stack is the natural next security step — its findings flow into this product's
   own ingestion webhook.
+
+## Four screenshots and a follow-up: the review-screen batch pass (2026-08-10)
+
+A user-driven round, every item traced to a screenshot of the running product. All shipped same
+day (`9d02435`, `7b53446`, `9d6b738` on V7 + main), each behind the full gate (API suite, web
+build, desktop + responsive e2e).
+
+- [x] **"Unrecognized key(s): projectRiskAgentEnabled"** - the strict AI settings schema was
+  missing three toggles the capability registry already shipped. The fix that matters is the
+  guard test: every registry `featureToggle` must parse through `aiSettingsSchema`, so this
+  drift class is now a failing build. (The new `emailFailureTriageEnabled` toggle was added
+  under that guard the same day - the test did its job on its first outing.)
+- [x] **Bulk review verbs where reviewers batch** - face verification log (`review-bulk`,
+  ids-XOR-refiltered, always scoped to flagged rows) and Timesheet Approvals (`decide-bulk`,
+  per-row independence, ONE identity check per batch, single/bulk sharing one extracted core so
+  the payroll path cannot fork). Approvals table went 11 -> 8 columns; downloads moved into the
+  entry dialog; the export e2e followed them.
+- [x] **The Dashboard day timeline lanes by person** - identity color per lane from the fixed
+  categorical palette, status moved off color onto icons, inner scroll, and a full-width expand
+  dialog with filter/sort. The admin list endpoint returns everyone the approver can see; that
+  was the overlap.
+- [x] **Slim sidebar** (icon rail, tooltips, persisted, toggle in the brand row after a
+  follow-up screenshot called the bottom placement out) and **calendar day-annotations** - both
+  pickers can carry per-day status-colored hover counts; Dashboard and Approvals feed them.
+- [x] **Email deliverability became a triage desk** - grouped SMTP failures translated by ten
+  deterministic rules (lib/email-failure-triage.ts) into title/meaning/verdict/actions; the
+  normalizer collapses compound session tokens WITH ordinals (one Gmail throttle no longer
+  reads as six errors, pinned by test); a per-group AI diagnosis behind a new registry
+  capability (`email_failure_triage`, untrusted-input, SUGGEST ceiling, off by default; group
+  re-derived server-side, domains only, SMTP text fenced as data); and "Delivery by domain"
+  with per-domain top failures, stuck in-flight age, and a needs-attention strip.
+- [x] **BorderGlow** (reactbits pattern, rebuilt in-tree on theme tokens) now frames every AI
+  invoke/answer surface; grammar recorded in the component: frame = AI surface, `.ai-glow` =
+  working now, strands = waiting.
+- [x] **A phone-overflow class fixed at its mechanism, not its symptom.** Two related traps: a
+  `truncate` (nowrap) line inside a grid item with visible overflow makes the UNWRAPPED text
+  the item's automatic minimum width; and recharts stamps pixel widths its ancestors then
+  cannot shrink under after a viewport narrows (the DevTools device-toggle path), deadlocking
+  the ResizeObserver. Fixes are `min-w-0` + `overflow-hidden` at the item, guards on the chart
+  wrappers. The responsive suite now sweeps `/app/email-templates` INCLUDING the analytics tab,
+  walks a render-wide-then-shrink pass that reproduces the deadlock deterministically, and
+  `assertNoOverflow` names the widest elements sorted by extent - the failure message is now a
+  diagnosis instead of a number.

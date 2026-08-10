@@ -80,6 +80,13 @@ outage or an auth failure.
 - `POST /timesheets/submit`
 - `PATCH /timesheets/:id/approve`
 - `PATCH /timesheets/:id/reject`
+- `PATCH /timesheets/decide-bulk` — body `{ ids[] (1–100), decision: "approve"|"reject", reason?,
+  faceVerificationId? }`; `reason` is required for reject. Decides each row **independently**
+  through the same core the single routes use (one payroll path, so the two can never drift) and
+  returns `{ done, failed[] }` with per-row refusal reasons — a batch is never all-or-nothing.
+  When face verification gates approvals, ONE verification covers the whole batch: the check
+  asserts the *approver's* presence, not anything per-row, and per-row captures would only teach
+  people to avoid bulk. One audit entry records the batch; each row keeps its own provenance.
 - `DELETE /timesheets/:id`
 
 **`DELETE /timesheets/:id` accepts only `DRAFT` and `REJECTED`.** Anything else returns **422**,
@@ -162,6 +169,12 @@ All routes require a normal authenticated session, and `/api/face/*` carries its
   `unfamiliarNetwork`, `challengeInstruction`, `provenanceSuspect`, `provenanceNote`,
   `autoResolvedReason`) and `hasImage: boolean` — never the server filesystem path.
 - `PATCH /face/attempts/:id/review` — ADMIN/SUPER_ADMIN clears a review flag, optional `note`.
+- `PATCH /face/attempts/review-bulk` — ADMIN/SUPER_ADMIN; body is `ids[]` (1–200) **xor** a
+  `filter` (`userId`/`outcome`/`context`/`search`) the server re-derives — same
+  selection-vs-filter contract as the users bulk actions, so what gets cleared is what the server
+  matches, never a stale client list. Always scoped to `flaggedForReview: true` (the returned
+  `reviewed` count is flags actually cleared), optional `note` attaches to every row, one audit
+  entry records mode + count.
 - `POST /face/attempts/:id/ai-summary` — ADMIN/SUPER_ADMIN; AI-drafted review brief
   (`{ summary, risk, recommendation }`). Gated by `GlobalAISettings.faceReviewSummaryEnabled` +
   the AI budget; only attempt *metadata* enters the prompt.
@@ -670,17 +683,40 @@ The whole `/email-templates` router is `requireAuth` + `requireSuperAdmin`, thes
 - `GET /email-templates/analytics/failures?days=` *(1–365, default 30)* — `FAILED` rows grouped by
   **reason**. Returns `windowDays`, `since`, `totalFailures`, `sampledFailures` and `reasons[]`:
   `id`, the normalised `reason`, one verbatim `sample`, `count`, `firstSeen`/`lastSeen`,
-  `templates[]` (`{ template, count }`) and up to 50 `recipients[]` (`to`, `count`, `lastAt`,
-  `lastMessage`) with `recipientsTruncated` when that cap bit.
+  `templates[]` (`{ template, count }`), up to 50 `recipients[]` (`to`, `count`, `lastAt`,
+  `lastMessage`) with `recipientsTruncated` when that cap bit, and `domains[]`
+  (`{ domain, count }`, top 10 across the *whole* group, not just the recipient sample) — what
+  lets the UI say "this is a gmail.com problem" without listing addresses.
 
   The grouping is the feature. Queue ids, message ids, IPs, UUIDs, timestamps and the rejected
   address all change on every attempt, so without normalising them away "550 mailbox unavailable"
   for 400 recipients reads as 400 distinct one-off failures and the actual pattern is invisible.
   Numeric SMTP codes (`550`, `5.7.1`) are left intact — those are the signal, not the noise.
+  Compound session tokens are collapsed *including* their ordinal suffix (Gmail's
+  `a1b2…-f6g7….2` vs `.6` used to split one throttling pattern into six "different" reasons).
   Normalisation happens in JS (SQL cannot strip a volatile id out of an SMTP string), so at most
   5,000 rows are inspected per request; `totalFailures` is counted separately from
   `sampledFailures` precisely so the UI can say when it is looking at a sample rather than at
   everything.
+
+- `POST /email-templates/analytics/failures/analyze` — body `{ reasonId, days? }`. AI diagnosis of
+  ONE failure group: returns `{ diagnosis, likelyCause, transient, actions[] }`. Gated on
+  `GlobalAISettings.emailFailureTriageEnabled` (off by default, like every AI toggle) plus the
+  usual master switch and monthly budget. The client sends only the group's opaque `id` — the
+  reason text, counts and SMTP sample are **re-derived server-side** from `EmailLog`, so the
+  model's input is always what the server measured, never a string a browser composed; it is given
+  recipient *domains* only, never addresses, and the external-authored SMTP text is fenced as data
+  in the prompt. 404s when the group no longer exists in the window (refresh and retry).
+
+- `GET /email-templates/analytics/domains?from=&to=` *(ISO dates, both optional; defaults to the
+  last 30 days)* — delivery split by **recipient domain**. Returns the resolved `from`/`to`,
+  `totals`, up to 20 `domains[]` rows (`domain`, `total`, `sent`, `failed`, `queued`,
+  `successRate`, `topFailures[]` — that domain's top 3 normalised failure reasons —, and
+  `oldestQueuedAt`, the oldest still-in-flight send: in-flight mail normally settles within one
+  worker tick, so an old timestamp means *stuck*, not busy), `truncated` plus an aggregate
+  "(N other domains)" row when more domains existed, and a zero-filled `daily` series for the
+  range. `successRate` is `sent / (sent + failed)` — in-flight mail is excluded because it has
+  not been judged yet, and counting it either way would swing the rate on every worker tick.
 
 ## AI text refine
 
