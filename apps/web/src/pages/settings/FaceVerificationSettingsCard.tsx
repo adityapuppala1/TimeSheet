@@ -68,6 +68,7 @@ import {
   AlertDialogTrigger
 } from "../../components/ui/alert-dialog";
 import { AiStrands } from "../../components/ui/ai-strands";
+import { BorderGlow } from "../../components/ui/border-glow";
 import { Button } from "../../components/ui/button";
 import { Checkbox } from "../../components/ui/checkbox";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../../components/ui/card";
@@ -569,7 +570,8 @@ function PolicyCopilot() {
         <AiStrands className="mt-3" label="Working through this workspace's own pass/reject scores…" />
       )}
       {result && (
-        <div className="mt-3 space-y-2 text-sm">
+        <BorderGlow className="mt-3" animated>
+        <div className="space-y-2 p-3 text-sm">
           <p>{result.summary}</p>
           {result.recommendedThreshold != null && (
             <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
@@ -598,6 +600,7 @@ function PolicyCopilot() {
             </div>
           )}
         </div>
+        </BorderGlow>
       )}
     </div>
   );

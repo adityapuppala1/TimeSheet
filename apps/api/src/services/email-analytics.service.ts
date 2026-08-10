@@ -481,6 +481,12 @@ export interface EmailDomainRow {
    *  counting it either way would swing the rate on every worker tick. Null until something
    *  settles. */
   successRate: number | null;
+  /** This domain's top failure reasons in the window (normalised form, top 3) — what turns "12
+   *  failed at gmail.com" into "gmail.com is throttling us" without leaving the table. */
+  topFailures: Array<{ reason: string; count: number }>;
+  /** Oldest still-in-flight send to this domain. In-flight mail normally settles within one
+   *  worker tick, so an old timestamp here means STUCK, not busy. */
+  oldestQueuedAt: string | null;
 }
 
 export interface EmailDomainStats {
@@ -499,6 +505,14 @@ function rateOf(sent: number, failed: number): number | null {
   return sent + failed > 0 ? sent / (sent + failed) : null;
 }
 
+/** One rule for turning a recipient address into a domain bucket, shared by every aggregation in
+ *  this section so a malformed address can never land in different buckets per query. */
+function domainOf(to: string | null | undefined): string {
+  const raw = String(to ?? "");
+  const domain = raw.includes("@") ? raw.split("@").pop()!.toLowerCase() : raw.toLowerCase();
+  return domain.includes(".") ? domain : "(invalid address)";
+}
+
 /**
  * Per-recipient-domain delivery split over a date range — which domains fail, which are still in
  * flight, and each one's success rate. `from`/`to` are ISO dates (inclusive); omitted bounds
@@ -509,7 +523,7 @@ export async function getEmailDomainStats(fromIso?: string, toIso?: string): Pro
   const since = fromIso ? new Date(`${fromIso}T00:00:00`) : new Date(todayStart.getTime() - 29 * DAY_MS);
   const untilExclusive = toIso ? new Date(new Date(`${toIso}T00:00:00`).getTime() + DAY_MS) : new Date(todayStart.getTime() + DAY_MS);
 
-  const [byDomain, dailyRows] = await Promise.all([
+  const [byDomain, dailyRows, failedRows, queuedAges] = await Promise.all([
     // `to` needs backticks — it is a MySQL reserved word as well as this table's recipient column.
     prisma.$queryRaw<Array<{ domain: string | null; status: string; n: bigint | number }>>`
       SELECT LOWER(SUBSTRING_INDEX(\`to\`, '@', -1)) AS domain, status, COUNT(*) AS n
@@ -522,8 +536,44 @@ export async function getEmailDomainStats(fromIso?: string, toIso?: string): Pro
       FROM EmailLog
       WHERE createdAt >= ${since} AND createdAt < ${untilExclusive}
       GROUP BY day, status
+    `,
+    // Same normalise-in-JS reasoning (and the same sample cap) as getEmailFailureBreakdown: SQL
+    // cannot strip volatile ids out of an SMTP string, so grouping happens here.
+    prisma.emailLog.findMany({
+      where: { status: "FAILED", createdAt: { gte: since, lt: untilExclusive } },
+      select: { to: true, errorMessage: true },
+      orderBy: { createdAt: "desc" },
+      take: FAILURE_SAMPLE_CAP
+    }),
+    // "Not settled" mirrors addStatus's queued bucket: anything neither delivered nor refused.
+    prisma.$queryRaw<Array<{ domain: string | null; oldest: Date | string }>>`
+      SELECT LOWER(SUBSTRING_INDEX(\`to\`, '@', -1)) AS domain, MIN(createdAt) AS oldest
+      FROM EmailLog
+      WHERE status NOT IN ('SENT', 'FAILED') AND createdAt >= ${since} AND createdAt < ${untilExclusive}
+      GROUP BY domain
     `
   ]);
+
+  const failuresByDomain = new Map<string, Map<string, number>>();
+  for (const row of failedRows) {
+    const key = domainOf(row.to);
+    const reason = normalizeErrorMessage(row.errorMessage?.trim() || "No error message recorded");
+    const reasons = failuresByDomain.get(key) ?? new Map<string, number>();
+    reasons.set(reason, (reasons.get(reason) ?? 0) + 1);
+    failuresByDomain.set(key, reasons);
+  }
+  const topFailuresFor = (domain: string) =>
+    Array.from((failuresByDomain.get(domain) ?? new Map<string, number>()).entries())
+      .map(([reason, count]) => ({ reason, count }))
+      .sort((a, b) => b.count - a.count)
+      .slice(0, 3);
+
+  const oldestQueuedByDomain = new Map<string, string>();
+  for (const row of queuedAges) {
+    const key = row.domain && row.domain.includes(".") ? row.domain : "(invalid address)";
+    const oldest = row.oldest instanceof Date ? row.oldest : new Date(`${String(row.oldest)}Z`.replace(" ", "T"));
+    if (!Number.isNaN(oldest.getTime())) oldestQueuedByDomain.set(key, oldest.toISOString());
+  }
 
   const perDomain = new Map<string, { sent: number; failed: number; queued: number; total: number }>();
   const totalsAcc = { sent: 0, failed: 0, queued: 0, total: 0 };
@@ -538,7 +588,13 @@ export async function getEmailDomainStats(fromIso?: string, toIso?: string): Pro
   }
 
   const ranked = Array.from(perDomain.entries())
-    .map(([domain, counts]) => ({ domain, ...counts, successRate: rateOf(counts.sent, counts.failed) }))
+    .map(([domain, counts]) => ({
+      domain,
+      ...counts,
+      successRate: rateOf(counts.sent, counts.failed),
+      topFailures: topFailuresFor(domain),
+      oldestQueuedAt: counts.queued > 0 ? oldestQueuedByDomain.get(domain) ?? null : null
+    }))
     .sort((a, b) => b.total - a.total || (a.domain < b.domain ? -1 : 1));
 
   const listed = ranked.slice(0, DOMAIN_ROWS_CAP);
@@ -556,7 +612,9 @@ export async function getEmailDomainStats(fromIso?: string, toIso?: string): Pro
     listed.push({
       domain: `(${tail.length} other domains)`,
       ...other,
-      successRate: rateOf(other.sent, other.failed)
+      successRate: rateOf(other.sent, other.failed),
+      topFailures: [],
+      oldestQueuedAt: null
     });
   }
 
@@ -581,7 +639,13 @@ export async function getEmailDomainStats(fromIso?: string, toIso?: string): Pro
   return {
     from: since.toISOString(),
     to: new Date(untilExclusive.getTime() - 1).toISOString(),
-    totals: { domain: "all", ...totalsAcc, successRate: rateOf(totalsAcc.sent, totalsAcc.failed) },
+    totals: {
+      domain: "all",
+      ...totalsAcc,
+      successRate: rateOf(totalsAcc.sent, totalsAcc.failed),
+      topFailures: [],
+      oldestQueuedAt: null
+    },
     domains: listed,
     truncated: tail.length > 0,
     daily

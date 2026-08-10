@@ -73,6 +73,7 @@ import { TicketKanban } from "../components/TicketKanban";
 import { Avatar, AvatarFallback, AvatarImage } from "../components/ui/avatar";
 import { Badge, type BadgeProps } from "../components/ui/badge";
 import { AiStrands } from "../components/ui/ai-strands";
+import { BorderGlow } from "../components/ui/border-glow";
 import { Button } from "../components/ui/button";
 import { Card, CardContent } from "../components/ui/card";
 import { Checkbox } from "../components/ui/checkbox";
@@ -824,7 +825,8 @@ function CreateTicketDialog({
           {aiAssist.isPending && <AiStrands label="Reading the title and description…" />}
 
           {suggestion && (
-            <div className="grid gap-2 rounded-md border border-primary/30 bg-primary/5 p-3 text-sm">
+            <BorderGlow animated>
+            <div className="grid gap-2 p-3 text-sm">
               <div className="flex items-center gap-1.5 font-semibold text-primary"><Sparkles className="h-3.5 w-3.5" />AI suggestion</div>
               <p>
                 Type <span className="font-semibold">{suggestion.type}</span>, priority{" "}
@@ -847,6 +849,7 @@ function CreateTicketDialog({
                 <Button type="button" size="sm" variant="ghost" onClick={() => setSuggestion(null)}>Dismiss</Button>
               </div>
             </div>
+            </BorderGlow>
           )}
 
           {autoApplied && aiConfidence !== null && (
@@ -1319,12 +1322,17 @@ function CommentsPanel({
             <span>{showSummary ? "Hide" : "Show"}</span>
           </button>
           {showSummary && (
-            <div className="border-t border-border p-3 text-sm">
-              {summarize.isPending && <AiStrands label="Reading the thread…" />}
-              {summarize.data && <p>{summarize.data.summary}</p>}
-              {summarize.isError && (
-                <p className="text-xs text-destructive">{serverMessage(summarize.error, "Could not generate a summary.")}</p>
-              )}
+            <div className="border-t border-border p-2 text-sm">
+              {/* keyed so a freshly generated summary replays the sweep */}
+              <BorderGlow key={summarize.data ? "summary" : "waiting"} animated={Boolean(summarize.data)}>
+                <div className="p-3">
+                  {summarize.isPending && <AiStrands label="Reading the thread…" />}
+                  {summarize.data && <p>{summarize.data.summary}</p>}
+                  {summarize.isError && (
+                    <p className="text-xs text-destructive">{serverMessage(summarize.error, "Could not generate a summary.")}</p>
+                  )}
+                </div>
+              </BorderGlow>
             </div>
           )}
         </div>

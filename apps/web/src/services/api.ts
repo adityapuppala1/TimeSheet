@@ -2062,6 +2062,10 @@ export interface EmailDomainRow {
   queued: number;
   /** sent / (sent + failed); null until something has settled. In-flight mail is excluded. */
   successRate: number | null;
+  /** This domain's top 3 failure reasons (normalised) in the window. */
+  topFailures: Array<{ reason: string; count: number }>;
+  /** Oldest still-in-flight send — an old timestamp means stuck, not busy. */
+  oldestQueuedAt: string | null;
 }
 
 export interface EmailDomainStats {

@@ -36,7 +36,7 @@ import {
   TrendingUp,
   Variable
 } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
+import { Fragment, useEffect, useMemo, useState } from "react";
 import {
   Bar,
   BarChart,
@@ -79,6 +79,7 @@ import {
   type EmailTemplateVolumeRow,
   type EmailVolumeBucket
 } from "../services/api";
+import { BorderGlow } from "../components/ui/border-glow";
 import { DateRangePicker, type DateRangeValue } from "../components/ui/date-range-picker";
 import { categoriesIn, triageEmailFailure, type EmailFailureTriage } from "../lib/email-failure-triage";
 import { safeHtml } from "../lib/safe-html";
@@ -410,14 +411,18 @@ function AnalyticsTab({ data, loading }: { data?: EmailAnalytics; loading: boole
         </CardContent>
       </Card>
 
-      <div className="grid gap-4 lg:grid-cols-2">
+      {/* min-w-0 on the grid ITEMS, not just the container: a grid item's default min-width is
+          auto, which is the other half of the recharts shrink-deadlock documented on the chart
+          wrappers below. */}
+      <div className="grid gap-4 lg:grid-cols-2 [&>*]:min-w-0">
         <Card>
           <CardHeader>
             <CardTitle className="text-base">Delivered vs. failed</CardTitle>
             <CardDescription>All-time outcome mix across every template.</CardDescription>
           </CardHeader>
           <CardContent>
-            <div className="h-16">
+            {/* Same recharts shrink-deadlock guard as the domain chart below. */}
+            <div className="h-16 min-w-0 overflow-hidden">
               <ResponsiveContainer width="100%" height="100%">
                 <BarChart
                   layout="vertical"
@@ -760,10 +765,13 @@ function FailureBreakdownCard() {
                     key={reason.id}
                     type="button"
                     onClick={() => setDetailId(reason.id)}
-                    className="focus-ring rounded-lg border border-border p-3 text-left transition hover:bg-muted/40"
+                    // min-w-0 + overflow-hidden are what make the truncate below actually truncate:
+                    // a grid item with visible overflow takes the UNWRAPPED nowrap SMTP line as its
+                    // automatic minimum width, which forced the whole page ~1150px wide on phones.
+                    className="focus-ring min-w-0 overflow-hidden rounded-lg border border-border p-3 text-left transition hover:bg-muted/40"
                   >
                     <span className="flex items-start justify-between gap-2">
-                      <span className="text-sm font-medium">{triage.title}</span>
+                      <span className="min-w-0 text-sm font-medium">{triage.title}</span>
                       <Badge variant="destructive" className="shrink-0">{reason.count.toLocaleString()}</Badge>
                     </span>
                     <span className="mt-1 block text-xs text-muted-foreground">
@@ -837,7 +845,9 @@ function FailureDetailDialog({
             </ol>
           </div>
 
-          <div className="grid gap-2 rounded-lg border border-primary/30 bg-primary/5 p-3">
+          {/* keyed by whether an answer exists so the sweep replays when the diagnosis lands */}
+          <BorderGlow key={analyze.data ? "answered" : "idle"} animated={Boolean(analyze.data)}>
+            <div className="grid gap-2 p-3">
             <div className="flex flex-wrap items-center justify-between gap-2">
               <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">AI diagnosis of this case</p>
               <Button
@@ -872,7 +882,8 @@ function FailureDetailDialog({
                 model for a case-specific reading.
               </p>
             )}
-          </div>
+            </div>
+          </BorderGlow>
 
           <div className="grid gap-1">
             <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Raw SMTP message</p>
@@ -928,8 +939,17 @@ function FailureDetailDialog({
  * excludes in-flight mail: it hasn't been judged yet, and counting it either way would swing
  * the number on every worker tick.
  */
+/** "3h" / "2d" ago — for the stuck-in-flight signal, where precision past hours is noise. */
+function ageLabel(iso: string): string {
+  const mins = Math.max(0, Math.round((Date.now() - new Date(iso).getTime()) / 60000));
+  if (mins < 60) return `${mins}m`;
+  if (mins < 48 * 60) return `${Math.round(mins / 60)}h`;
+  return `${Math.round(mins / (24 * 60))}d`;
+}
+
 function DomainDeliveryCard() {
   const [range, setRange] = useState<DateRangeValue>({ from: "", to: "" });
+  const [openDomain, setOpenDomain] = useState<string | null>(null);
   const stats = useQuery({
     queryKey: ["email-templates", "analytics", "domains", range.from, range.to],
     queryFn: () => emailTemplateApi.domains(range.from || undefined, range.to || undefined)
@@ -937,6 +957,13 @@ function DomainDeliveryCard() {
 
   const data = stats.data;
   const ratePct = (rate: number | null) => (rate === null ? "—" : `${(rate * 100).toFixed(1)}%`);
+
+  // The domains that deserve a headline: real domains, really bleeding. The 90% bar matches the
+  // success-rate bar's red threshold below so the two views never disagree about "unhealthy".
+  const attention = (data?.domains ?? [])
+    .filter((row) => !row.domain.startsWith("(") && row.failed > 0 && row.successRate !== null && row.successRate < 0.9)
+    .sort((a, b) => b.failed - a.failed)
+    .slice(0, 3);
 
   return (
     <Card>
@@ -946,7 +973,8 @@ function DomainDeliveryCard() {
             <Mails className="h-4 w-4 text-primary" />Delivery by domain
           </CardTitle>
           <CardDescription>
-            Where mail is landing, failing, or still in flight. Defaults to the last 30 days.
+            Where mail is landing, failing, or still in flight — open a domain row for its top failure reasons and what
+            to do about them. Defaults to the last 30 days.
           </CardDescription>
         </div>
         <DateRangePicker
@@ -985,7 +1013,41 @@ function DomainDeliveryCard() {
               <p className="py-6 text-center text-sm text-muted-foreground">No mail was sent in this period.</p>
             ) : (
               <>
-                <div className="h-56 w-full">
+                {attention.length > 0 && (
+                  <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
+                    {attention.map((row) => {
+                      const triage = row.topFailures[0] ? triageEmailFailure(row.topFailures[0].reason) : null;
+                      return (
+                        <button
+                          key={row.domain}
+                          type="button"
+                          onClick={() => setOpenDomain((current) => (current === row.domain ? null : row.domain))}
+                          className="focus-ring min-w-0 overflow-hidden rounded-lg border border-warning/40 bg-warning/5 p-3 text-left transition hover:bg-warning/10"
+                        >
+                          <span className="flex items-center justify-between gap-2">
+                            <span className="truncate font-mono text-xs font-semibold">{row.domain}</span>
+                            <Badge variant="destructive" className="shrink-0">{row.failed} failed</Badge>
+                          </span>
+                          <span className="mt-1 block text-xs text-muted-foreground">
+                            {ratePct(row.successRate)} success rate
+                            {triage ? ` · ${triage.title}` : ""}
+                          </span>
+                          {triage && (
+                            <span className="mt-1 block truncate text-[11px] text-muted-foreground">
+                              First step: {triage.actions[0]}
+                            </span>
+                          )}
+                        </button>
+                      );
+                    })}
+                  </div>
+                )}
+                {/* overflow-hidden is load-bearing: recharts writes an explicit pixel width onto
+                    its wrapper/svg, and a grid/flex ancestor with min-width:auto then cannot
+                    shrink below it when the viewport narrows — the ResizeObserver never fires
+                    again and the page is stuck wider than the screen. Clipping gives this box a
+                    min-content of zero, so ancestors can always shrink and the chart re-measures. */}
+                <div className="h-56 w-full min-w-0 overflow-hidden">
                   <ResponsiveContainer width="100%" height="100%">
                     <BarChart data={data.daily} margin={{ top: 4, right: 8, bottom: 0, left: -18 }}>
                       <CartesianGrid {...GRID_STYLE} vertical={false} />
@@ -1021,34 +1083,86 @@ function DomainDeliveryCard() {
                       </TableRow>
                     </TableHeader>
                     <TableBody>
-                      {data.domains.map((row) => (
-                        <TableRow key={row.domain}>
-                          <TableCell className="font-mono text-xs">{row.domain}</TableCell>
-                          <TableCell className="text-right tabular-nums text-success">{row.sent.toLocaleString()}</TableCell>
-                          <TableCell className="text-right tabular-nums">
-                            {row.failed > 0 ? (
-                              <span className="font-semibold text-destructive">{row.failed.toLocaleString()}</span>
-                            ) : (
-                              <span className="text-muted-foreground">0</span>
+                      {data.domains.map((row) => {
+                        const expandable = row.topFailures.length > 0 || row.oldestQueuedAt !== null;
+                        const open = openDomain === row.domain;
+                        return (
+                          <Fragment key={row.domain}>
+                            <TableRow
+                              className={expandable ? "cursor-pointer" : undefined}
+                              onClick={expandable ? () => setOpenDomain(open ? null : row.domain) : undefined}
+                              title={expandable ? "Show this domain's failure reasons" : undefined}
+                            >
+                              <TableCell className="font-mono text-xs">
+                                <span className="flex items-center gap-1">
+                                  {expandable && (
+                                    <ChevronRight
+                                      className={`h-3 w-3 shrink-0 text-muted-foreground transition-transform ${open ? "rotate-90" : ""}`}
+                                      aria-hidden
+                                    />
+                                  )}
+                                  {row.domain}
+                                </span>
+                              </TableCell>
+                              <TableCell className="text-right tabular-nums text-success">{row.sent.toLocaleString()}</TableCell>
+                              <TableCell className="text-right tabular-nums">
+                                {row.failed > 0 ? (
+                                  <span className="font-semibold text-destructive">{row.failed.toLocaleString()}</span>
+                                ) : (
+                                  <span className="text-muted-foreground">0</span>
+                                )}
+                              </TableCell>
+                              <TableCell className="text-right tabular-nums text-muted-foreground">{row.queued.toLocaleString()}</TableCell>
+                              <TableCell>
+                                <div className="flex items-center gap-2">
+                                  {/* Not the Progress component: this bar is a judged ratio, and its
+                                      color must carry the verdict (healthy vs bleeding), which
+                                      Progress's single primary fill can't express. */}
+                                  <div className="h-1.5 w-full max-w-[6.5rem] overflow-hidden rounded-full bg-muted">
+                                    <div
+                                      className={`h-full ${row.successRate !== null && row.successRate < 0.9 ? "bg-destructive" : "bg-success"}`}
+                                      style={{ width: `${Math.round((row.successRate ?? 0) * 100)}%` }}
+                                    />
+                                  </div>
+                                  <span className="text-xs tabular-nums text-muted-foreground">{ratePct(row.successRate)}</span>
+                                </div>
+                              </TableCell>
+                            </TableRow>
+                            {open && (
+                              <TableRow className="bg-muted/30 hover:bg-muted/30">
+                                <TableCell colSpan={5} className="p-3">
+                                  <div className="grid gap-2 text-sm">
+                                    {row.oldestQueuedAt && (
+                                      <p className="text-xs text-warning">
+                                        Oldest in-flight message has been waiting {ageLabel(row.oldestQueuedAt)} — in-flight mail
+                                        normally settles within a minute, so this is stuck, not busy.
+                                      </p>
+                                    )}
+                                    {row.topFailures.map((failure) => {
+                                      const triage = triageEmailFailure(failure.reason);
+                                      return (
+                                        <div key={failure.reason} className="grid gap-0.5">
+                                          <p className="flex flex-wrap items-center gap-1.5 text-sm font-medium">
+                                            {triage.title}
+                                            <Badge variant={TONE_BADGE[triage.tone]} className="px-1.5 py-0 text-[10px]">
+                                              {triage.transient ? "usually clears itself" : "needs action"}
+                                            </Badge>
+                                            <span className="text-xs tabular-nums text-muted-foreground">×{failure.count}</span>
+                                          </p>
+                                          <p className="text-xs text-muted-foreground">First step: {triage.actions[0]}</p>
+                                        </div>
+                                      );
+                                    })}
+                                    <p className="text-[11px] text-muted-foreground">
+                                      Full detail — exact SMTP text, every recipient, AI diagnosis — lives in "Why sends failed" above.
+                                    </p>
+                                  </div>
+                                </TableCell>
+                              </TableRow>
                             )}
-                          </TableCell>
-                          <TableCell className="text-right tabular-nums text-muted-foreground">{row.queued.toLocaleString()}</TableCell>
-                          <TableCell>
-                            <div className="flex items-center gap-2">
-                              {/* Not the Progress component: this bar is a judged ratio, and its
-                                  color must carry the verdict (healthy vs bleeding), which
-                                  Progress's single primary fill can't express. */}
-                              <div className="h-1.5 w-full max-w-[6.5rem] overflow-hidden rounded-full bg-muted">
-                                <div
-                                  className={`h-full ${row.successRate !== null && row.successRate < 0.9 ? "bg-destructive" : "bg-success"}`}
-                                  style={{ width: `${Math.round((row.successRate ?? 0) * 100)}%` }}
-                                />
-                              </div>
-                              <span className="text-xs tabular-nums text-muted-foreground">{ratePct(row.successRate)}</span>
-                            </div>
-                          </TableCell>
-                        </TableRow>
-                      ))}
+                          </Fragment>
+                        );
+                      })}
                     </TableBody>
                   </Table>
                 </div>

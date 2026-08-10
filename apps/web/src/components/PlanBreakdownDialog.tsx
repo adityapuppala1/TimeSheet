@@ -21,6 +21,7 @@ import { Sparkles, Loader2 } from "lucide-react";
 import { useNavigate } from "react-router";
 import { copilotApi } from "../services/api";
 import { AiStrands } from "./ui/ai-strands";
+import { BorderGlow } from "./ui/border-glow";
 import { Button } from "./ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle, DialogTrigger } from "./ui/dialog";
 import { Label } from "./ui/label";
@@ -95,32 +96,35 @@ export function PlanBreakdownDialog({
           </DialogDescription>
         </DialogHeader>
 
-        <div className="space-y-3">
-          <div className="space-y-1.5">
-            <Label htmlFor="breakdown-goal">What needs doing</Label>
-            <Textarea
-              id="breakdown-goal"
-              value={goal}
-              onChange={(e) => setGoal(e.target.value)}
-              rows={3}
-              placeholder="Ship single sign-on for enterprise customers"
-            />
+        {/* The BorderGlow frame is the app-wide "this surface talks to the model" marker; the
+            sweep plays on open. Strands inside still mean "waiting for the answer". */}
+        <BorderGlow animated>
+          <div className="space-y-3 p-3">
+            <div className="space-y-1.5">
+              <Label htmlFor="breakdown-goal">What needs doing</Label>
+              <Textarea
+                id="breakdown-goal"
+                value={goal}
+                onChange={(e) => setGoal(e.target.value)}
+                rows={3}
+                placeholder="Ship single sign-on for enterprise customers"
+              />
+            </div>
+            <div className="space-y-1.5">
+              <Label htmlFor="breakdown-context">Anything else it should know (optional)</Label>
+              <Textarea
+                id="breakdown-context"
+                value={context}
+                onChange={(e) => setContext(e.target.value)}
+                rows={2}
+                placeholder="We already have SAML; this is the Okta side."
+              />
+            </div>
+            {ask.isPending && (
+              <AiStrands label="Breaking the goal into tasks — nothing is created until you review and apply." />
+            )}
           </div>
-          <div className="space-y-1.5">
-            <Label htmlFor="breakdown-context">Anything else it should know (optional)</Label>
-            <Textarea
-              id="breakdown-context"
-              value={context}
-              onChange={(e) => setContext(e.target.value)}
-              rows={2}
-              placeholder="We already have SAML; this is the Okta side."
-            />
-          </div>
-        </div>
-
-        {ask.isPending && (
-          <AiStrands label="Breaking the goal into tasks — nothing is created until you review and apply." />
-        )}
+        </BorderGlow>
 
         <DialogFooter>
           <Button variant="ghost" onClick={() => setOpen(false)} disabled={ask.isPending}>

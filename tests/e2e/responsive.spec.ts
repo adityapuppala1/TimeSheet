@@ -63,11 +63,37 @@ const PAGES = [
 const OVERFLOW_TOLERANCE_PX = 4;
 
 async function assertNoOverflow(page: import("@playwright/test").Page) {
-  const { scrollWidth, clientWidth } = await page.evaluate(() => ({
-    scrollWidth: document.documentElement.scrollWidth,
-    clientWidth: document.documentElement.clientWidth
-  }));
-  expect(scrollWidth).toBeLessThanOrEqual(clientWidth + OVERFLOW_TOLERANCE_PX);
+  // Offenders are collected up front, not on failure: by the time a bare scrollWidth assertion
+  // fails, the ONLY debugging lead is "something somewhere is wide", which costs a manual
+  // element-by-element hunt (it did, for the email analytics tab). Naming the widest elements in
+  // the failure message turns that hunt into a grep.
+  const { scrollWidth, clientWidth, offenders } = await page.evaluate((tolerance) => {
+    const cw = document.documentElement.clientWidth;
+    const wide: Array<{ width: number; label: string }> = [];
+    for (const el of Array.from(document.querySelectorAll("*"))) {
+      const rect = el.getBoundingClientRect();
+      // right edge, not width: a 300px element positioned at x=900 is what actually stretches
+      // scrollWidth, and it has no over-wide ancestor to point at.
+      const extent = Math.max(rect.right, rect.width);
+      if (extent > cw + tolerance) {
+        const cls = String((el as HTMLElement).className)
+          .split(/\s+/)
+          .slice(0, 5)
+          .join(".");
+        wide.push({ width: Math.round(extent), label: `${el.tagName.toLowerCase()}${cls ? `.${cls}` : ""}` });
+      }
+    }
+    wide.sort((a, b) => b.width - a.width);
+    return {
+      scrollWidth: document.documentElement.scrollWidth,
+      clientWidth: cw,
+      offenders: wide.slice(0, 15).map((o) => `${o.width}px ${o.label}`)
+    };
+  }, OVERFLOW_TOLERANCE_PX);
+  expect(
+    scrollWidth,
+    offenders.length ? `elements wider than the ${clientWidth}px viewport:\n${offenders.join("\n")}` : undefined
+  ).toBeLessThanOrEqual(clientWidth + OVERFLOW_TOLERANCE_PX);
 }
 
 for (const path of PAGES) {
@@ -81,6 +107,48 @@ for (const path of PAGES) {
 test("no horizontal overflow on the public landing page", async ({ page }) => {
   await page.goto("/");
   await page.waitForLoadState("networkidle");
+  await assertNoOverflow(page);
+});
+
+/**
+ * The email templates screen hides its widest content — the analytics tables and charts — behind
+ * a second tab, so the PAGES sweep above never exercised it. That is exactly where a real
+ * overflow shipped (found via a live-device screenshot of the failure breakdown): a page can only
+ * be called viewport-clean if its every tab has been measured.
+ */
+test("no horizontal overflow on either email-templates tab", async ({ page }) => {
+  await page.goto("/app/email-templates");
+  await page.waitForLoadState("networkidle");
+  await assertNoOverflow(page);
+
+  await page.getByRole("tab", { name: /analytics/i }).click();
+  await expect(page.getByRole("heading", { name: /why sends failed/i })).toBeVisible({ timeout: 15_000 });
+  await page.waitForLoadState("networkidle");
+  await assertNoOverflow(page);
+
+  // The failure that shipped was NOT a static-layout bug: recharts stamps a pixel width onto its
+  // svg, and an ancestor chain without min-width:0 then cannot shrink below it when the viewport
+  // narrows — DevTools device toggles and phone rotation both hit it. Render wide first, shrink,
+  // and re-assert, so the deadlock (not just the happy path) stays covered.
+  const original = page.viewportSize();
+  await page.setViewportSize({ width: 1280, height: 800 });
+  // Proof the wide render actually happened — otherwise this test could pass by shrinking
+  // before recharts ever stamped a wide pixel width, which is the very state under test.
+  await page.waitForFunction(() => {
+    const chart = document.querySelector(".recharts-wrapper");
+    return chart instanceof HTMLElement && chart.clientWidth > 600;
+  });
+  await page.setViewportSize(original ?? { width: 390, height: 844 });
+  // Give the ResizeObserver → re-render chain a bounded window to settle; on a healthy layout
+  // this resolves almost immediately, and on the deadlock it times out and the assertion below
+  // reports WHICH elements are stuck wide.
+  await page
+    .waitForFunction(
+      () => document.documentElement.scrollWidth <= document.documentElement.clientWidth + 4,
+      undefined,
+      { timeout: 4000 }
+    )
+    .catch(() => undefined);
   await assertNoOverflow(page);
 });
 

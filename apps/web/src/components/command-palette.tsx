@@ -54,6 +54,7 @@ import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } f
 import { Input } from "./ui/input";
 import { ScrollArea } from "./ui/scroll-area";
 import { AiStrands } from "./ui/ai-strands";
+import { BorderGlow } from "./ui/border-glow";
 import { useAuthStore } from "../store/auth";
 import { usePlanningFeatures } from "../lib/use-planning";
 import { aiApi, authApi, type PlanningEffective } from "../services/api";
@@ -254,22 +255,24 @@ function AskAIDialog({ open, onOpenChange }: { open: boolean; onOpenChange: (ope
           <DialogTitle className="flex items-center gap-2"><Sparkles className="h-5 w-5 text-primary" />Ask AI</DialogTitle>
           <DialogDescription>Ask a question about your accessible tickets — answers cite ticket keys.</DialogDescription>
         </DialogHeader>
-        <ScrollArea className="max-h-80 rounded-md border border-border">
-          <div className="grid gap-4 p-3">
-            {history.length === 0 && (
-              <p className="py-6 text-center text-sm text-muted-foreground">
-                Try "What's overdue in Payments?" or "Summarize open critical bugs."
-              </p>
-            )}
-            {history.map((turn) => (
-              <div key={turn.id} className="grid gap-1.5">
-                <p className="text-sm font-semibold">{turn.question}</p>
-                <p className="whitespace-pre-wrap text-sm text-muted-foreground">{turn.answer}</p>
-              </div>
-            ))}
-            {ask.isPending && <AiStrands label="Searching your tickets…" />}
-          </div>
-        </ScrollArea>
+        <BorderGlow>
+          <ScrollArea className="max-h-80">
+            <div className="grid gap-4 p-3">
+              {history.length === 0 && (
+                <p className="py-6 text-center text-sm text-muted-foreground">
+                  Try "What's overdue in Payments?" or "Summarize open critical bugs."
+                </p>
+              )}
+              {history.map((turn) => (
+                <div key={turn.id} className="grid gap-1.5">
+                  <p className="text-sm font-semibold">{turn.question}</p>
+                  <p className="whitespace-pre-wrap text-sm text-muted-foreground">{turn.answer}</p>
+                </div>
+              ))}
+              {ask.isPending && <AiStrands label="Searching your tickets…" />}
+            </div>
+          </ScrollArea>
+        </BorderGlow>
         <div className="flex gap-2">
           <Input
             value={question}

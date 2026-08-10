@@ -61,6 +61,7 @@ import { Avatar, AvatarFallback, AvatarImage } from "../components/ui/avatar";
 import { Badge } from "../components/ui/badge";
 import { Checkbox } from "../components/ui/checkbox";
 import { AiStrands } from "../components/ui/ai-strands";
+import { BorderGlow } from "../components/ui/border-glow";
 import { Button } from "../components/ui/button";
 import { CsvBulkUploadDialog } from "../components/CsvBulkUploadDialog";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../components/ui/card";
@@ -3299,12 +3300,15 @@ function StatusReportCard() {
         </div>
         {generate.isPending && <AiStrands label="Reading the period's tickets, hours and risks…" />}
         {result && (
-          <div className="rounded-md border border-primary/30 bg-primary/5 p-4 text-sm leading-relaxed">
-            <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-primary">
-              {result.projectName} — {result.periodLabel}
-            </p>
-            <p className="whitespace-pre-wrap">{result.report}</p>
-          </div>
+          // keyed by the report identity so regenerating replays the sweep
+          <BorderGlow key={`${result.projectName}-${result.periodLabel}`} animated>
+            <div className="p-4 text-sm leading-relaxed">
+              <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-primary">
+                {result.projectName} — {result.periodLabel}
+              </p>
+              <p className="whitespace-pre-wrap">{result.report}</p>
+            </div>
+          </BorderGlow>
         )}
       </CardContent>
     </Card>

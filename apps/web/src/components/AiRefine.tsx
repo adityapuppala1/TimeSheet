@@ -26,6 +26,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Check, Sparkles, Undo2, X } from "lucide-react";
 import { useCallback, useEffect, useId, useRef, useState } from "react";
+import { BorderGlow } from "./ui/border-glow";
 import { Button } from "./ui/button";
 import { safeHtml } from "../lib/safe-html";
 import { cn } from "../lib/utils";
@@ -238,16 +239,18 @@ export function AiRefinePanel({ state, className }: { state: AiRefineState; clas
   if (state.phase === "idle") return null;
 
   return (
+    // The BorderGlow frame marks "an AI surface"; its sweep fires when the suggestion lands.
+    // No key — this panel deliberately stays mounted through loading -> ready (see the header
+    // comment), and the sweep effect triggers on the `animated` flip instead of a remount.
+    <BorderGlow className={cn(!reduced && "animate-fade-in", className)} animated={state.phase === "ready"}>
     <div
       role="status"
       aria-live="polite"
       className={cn(
-        "grid gap-3 rounded-md border border-primary/30 bg-primary/5 p-3 text-sm",
-        !reduced && "animate-fade-in",
+        "relative grid gap-3 rounded-md p-3 text-sm",
         // The orbiting ring marks "the model is working on this box right now" — it comes off the
         // moment there is a result, so glow means in-flight, never merely AI-related.
-        state.phase === "loading" && "ai-glow",
-        className
+        state.phase === "loading" && "ai-glow"
       )}
     >
       <div className="flex items-center justify-between gap-2">
@@ -327,6 +330,7 @@ export function AiRefinePanel({ state, className }: { state: AiRefineState; clas
         </div>
       )}
     </div>
+    </BorderGlow>
   );
 }
 
