@@ -31,6 +31,7 @@ import { getUpdateStatus } from "./services/update-check.service.js";
 import { aiRouter } from "./controllers/ai.controller.js";
 import { auditRouter } from "./controllers/audit.controller.js";
 import { authRouter } from "./controllers/auth.controller.js";
+import { brandingRouter } from "./controllers/branding.controller.js";
 import { billingRouter, billingWebhookRouter } from "./controllers/billing.controller.js";
 import { chatIntegrationsRouter } from "./controllers/chat-integrations.controller.js";
 import { chatWebhookRouter } from "./controllers/chat-webhook.controller.js";
@@ -431,6 +432,11 @@ app.use("/api", (_req, res, next) => {
 app.use("/api", recordApiRequest);
 
 app.use("/api/auth", authRouter);
+// Branding's GET half is deliberately unauthenticated (the login page renders the workspace's
+// logo before anyone signs in) while its writes carry requireAuth + requireSuperAdmin on the
+// routes themselves. Mounted here, AFTER resolveTenant, because which logo to serve is a
+// per-tenant question answered by the request's host — exactly like /api/auth/sso-methods.
+app.use("/api/branding", brandingRouter);
 app.use("/api/billing", billingRouter);
 app.use("/api/users", userRouter);
 app.use("/api/projects", projectRouter);

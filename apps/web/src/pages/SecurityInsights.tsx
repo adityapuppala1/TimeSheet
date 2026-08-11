@@ -11,7 +11,7 @@
  */
 import { useQuery } from "@tanstack/react-query";
 import { AlertTriangle, Boxes, Clock, ShieldAlert, ShieldCheck, TrendingUp } from "lucide-react";
-import { Area, AreaChart, Bar, BarChart, CartesianGrid, ResponsiveContainer, Tooltip as RTooltip, XAxis, YAxis } from "recharts";
+import { Area, AreaChart, Bar, BarChart, CartesianGrid, LabelList, ResponsiveContainer, Tooltip as RTooltip, XAxis, YAxis } from "recharts";
 import { Badge } from "../components/ui/badge";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../components/ui/card";
 import { Skeleton } from "../components/ui/skeleton";
@@ -157,7 +157,15 @@ export function SecurityInsightsPage() {
                       <RTooltip
                         contentStyle={{ background: "hsl(var(--popover))", border: "1px solid hsl(var(--border))", borderRadius: 8, color: "hsl(var(--popover-foreground))" }}
                       />
-                      <Bar dataKey="count" fill="hsl(var(--primary))" radius={[6, 6, 0, 0]} />
+                      <Bar dataKey="count" fill="hsl(var(--primary))" radius={[6, 6, 0, 0]}>
+                        <LabelList
+                          dataKey="count"
+                          position="top"
+                          fill="hsl(var(--muted-foreground))"
+                          fontSize={11}
+                          formatter={(value: number) => (value > 0 ? value : "")}
+                        />
+                      </Bar>
                     </BarChart>
                   </ResponsiveContainer>
                 </div>

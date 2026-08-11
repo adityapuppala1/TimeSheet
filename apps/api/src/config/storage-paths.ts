@@ -93,6 +93,13 @@ const resolvedDocuments = env.STORAGE_DOCUMENTS_DIR ? path.resolve(env.STORAGE_D
 const resolvedAvatars = env.STORAGE_AVATARS_DIR ? path.resolve(env.STORAGE_AVATARS_DIR) : path.join(resolvedRoot, "avatars");
 const resolvedFace = env.STORAGE_FACE_DIR ? path.resolve(env.STORAGE_FACE_DIR) : path.join(resolvedRoot, "face");
 /**
+ * Workspace logos. Not configurable and not on the diagnostics card: one small file per tenant,
+ * written by a super admin and streamed back by `GET /api/branding/logo`. It lives OUTSIDE the
+ * documents tree deliberately — those are served under the signed-grant gate, and a logo has to
+ * render on the login page where no grant can exist.
+ */
+const resolvedBranding = path.join(resolvedRoot, "branding");
+/**
  * Where multer lands a raw upload before services/attachment-storage.service.ts re-encodes it and
  * writes the real file under the uploader's org. Not configurable and not in `StorageLayout`: it
  * holds nothing for longer than one request, so an operator has no reason to point it elsewhere
@@ -105,6 +112,7 @@ export const documentsDir = (): string => resolvedDocuments;
 export const avatarsDir = (): string => resolvedAvatars;
 export const faceDir = (): string => resolvedFace;
 export const stagingDir = (): string => resolvedStaging;
+export const brandingDir = (): string => resolvedBranding;
 
 /**
  * Organization ids are control-plane UUIDs. Matching that exact shape (rather than "any path
@@ -155,7 +163,10 @@ export function resolveWithin(baseDir: string, requested: string): string | null
  */
 export function isInsideNonPublicSubtree(absolutePath: string): boolean {
   const target = path.resolve(absolutePath);
-  return [resolvedFace, resolvedStaging].some((dir) => {
+  // Branding joins the list not because logos are secret but because `/uploads` must not be a
+  // second door to them: they have exactly one reader, `GET /api/branding/logo`, which is where
+  // the tenant scoping lives. Two paths to one file is how the two drift.
+  return [resolvedFace, resolvedStaging, resolvedBranding].some((dir) => {
     const relative = path.relative(path.resolve(dir), target);
     return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));
   });
@@ -239,7 +250,7 @@ export function probeDirectory(dir: string): DirectoryProbe {
  */
 export function ensureStorageDirectories(): string[] {
   const failures: string[] = [];
-  for (const dir of [resolvedRoot, resolvedDocuments, resolvedAvatars, resolvedStaging]) {
+  for (const dir of [resolvedRoot, resolvedDocuments, resolvedAvatars, resolvedStaging, resolvedBranding]) {
     try {
       fs.mkdirSync(dir, { recursive: true });
     } catch (error) {

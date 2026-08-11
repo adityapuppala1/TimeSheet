@@ -200,7 +200,11 @@ export function Team() {
       {
         id: "slaBreaches",
         accessorFn: (row: any) => row.stats.slaBreached,
-        header: () => <span className="block text-right">SLA breaches</span>,
+        // "Approval", spelled out: this counts Timesheet.slaBreachAt — submissions that sat past
+        // their approval deadline (sla.service.ts) — and a bare "SLA breaches" on a people page
+        // reads as ticket SLAs, which live in ticket-sla.service.ts and are labeled "Ticket SLA"
+        // wherever they appear.
+        header: () => <span className="block text-right">Approval SLA breaches</span>,
         cell: ({ row }) => (
           <div className="text-right">
             {row.original.stats.slaBreached > 0 ? (
@@ -263,7 +267,7 @@ export function Team() {
           trendLabel="vs yesterday"
         />
         <StatCard
-          label="SLA breached"
+          label="Approval SLA breached"
           value={summary.data?.breached ?? 0}
           icon={<AlertTriangle className="h-4 w-4" />}
           tone={(summary.data?.breached ?? 0) > 0 ? "destructive" : "default"}
@@ -373,7 +377,7 @@ export function Team() {
                       <span>Pending: {person.stats.pending > 0 ? <Badge variant="warning">{person.stats.pending}</Badge> : "0"}</span>
                       <span>Approved: <span className="font-semibold text-success">{person.stats.approved}</span></span>
                       <span>Rejected: {person.stats.rejected}</span>
-                      <span>SLA breaches: {person.stats.slaBreached > 0 ? <Badge variant="destructive">{person.stats.slaBreached}</Badge> : "0"}</span>
+                      <span>Approval SLA breaches: {person.stats.slaBreached > 0 ? <Badge variant="destructive">{person.stats.slaBreached}</Badge> : "0"}</span>
                       <span>Approved hours: <span className="font-semibold text-foreground">{person.stats.approvedHours.toFixed(2)}</span></span>
                     </div>
                   </div>

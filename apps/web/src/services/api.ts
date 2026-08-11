@@ -431,6 +431,33 @@ export const authApi = {
   removeAvatar: async () => (await api.delete<AuthUser>("/auth/avatar")).data
 };
 
+/** The workspace's own logo + display name. The GET half is public — the login page renders it
+ *  before anyone signs in (see controllers/branding.controller.ts for why that is the design). */
+export interface WorkspaceBranding {
+  displayName: string | null;
+  hasLogo: boolean;
+  /** Changes on every upload; used as a cache-busting query param on the image URL. */
+  logoVersion: number | null;
+}
+
+/** Absolute URL for the logo image, or null when none is set. Not a `/uploads` path: branding is
+ *  served by its own route precisely because `/uploads` needs a signed grant. */
+export function brandingLogoUrl(branding?: WorkspaceBranding | null): string | null {
+  if (!branding?.hasLogo) return null;
+  return apiUrl(`/branding/logo?v=${branding.logoVersion ?? 0}`);
+}
+
+export const brandingApi = {
+  get: async () => (await api.get<WorkspaceBranding>("/branding")).data,
+  setName: async (displayName: string | null) => (await api.patch<WorkspaceBranding>("/branding", { displayName })).data,
+  uploadLogo: async (file: File) => {
+    const form = new FormData();
+    form.append("logo", file);
+    return (await api.post<WorkspaceBranding>("/branding/logo", form, { headers: { "Content-Type": "multipart/form-data" } })).data;
+  },
+  removeLogo: async () => (await api.delete<WorkspaceBranding>("/branding/logo")).data
+};
+
 export const notificationApi = {
   list: async () => (await api.get<{ items: Notification[]; unread: number }>("/notifications")).data,
   read: async (id: string) => api.post(`/notifications/${id}/read`),

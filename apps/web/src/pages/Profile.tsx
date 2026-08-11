@@ -401,8 +401,11 @@ export function Profile() {
                   placeholder="A line or two about your role, the projects you own, or how teammates should reach you."
                 />
               </div>
+              {/* content-start on both cells for the same reason FormItem carries it (see
+                  ui/form.tsx): the timezone cell's helper line makes it the taller sibling, and
+                  without packing, the phone cell's stretched rows drifted its controls downward. */}
               <div className="grid gap-4 sm:grid-cols-2">
-                <div className="grid gap-1.5">
+                <div className="grid content-start gap-1.5">
                   <Label htmlFor="profile-phone">Phone</Label>
                   <div className="flex gap-2">
                     {/* Country first, number second — the country picks the validation rules,
@@ -437,7 +440,7 @@ export function Profile() {
                     </p>
                   )}
                 </div>
-                <div className="grid gap-1.5">
+                <div className="grid content-start gap-1.5">
                   <Label htmlFor="profile-tz">Timezone</Label>
                   <div className="flex gap-2">
                     <Select value={effectiveTimezone} onValueChange={setTimezone}>

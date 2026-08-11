@@ -55,7 +55,7 @@ import { Input } from "../components/ui/input";
 import { Label } from "../components/ui/label";
 import { Skeleton } from "../components/ui/skeleton";
 import { toast } from "../components/ui/toaster";
-import { apiUrl, authApi, isMaintenanceLockoutError, type LoginResponse } from "../services/api";
+import { apiUrl, authApi, brandingApi, brandingLogoUrl, isMaintenanceLockoutError, type LoginResponse } from "../services/api";
 import { useAuthStore } from "../store/auth";
 import { AuthBrandPanel } from "../components/marketing/AuthBrandPanel";
 
@@ -228,6 +228,11 @@ export function Login() {
   // pre-SSO behavior — so the page never flashes blank or broken for a workspace that hasn't
   // configured SSO (the overwhelming common case) just because this query hasn't resolved yet.
   const ssoMethods = useQuery({ queryKey: ["auth", "sso-methods"], queryFn: authApi.ssoMethods });
+  // Public read, like sso-methods beside it — the workspace's own logo belongs on their sign-in
+  // page, and it has to render before anyone is authenticated.
+  const branding = useQuery({ queryKey: ["branding"], queryFn: brandingApi.get, staleTime: Infinity });
+  const workspaceLogo = brandingLogoUrl(branding.data);
+  const workspaceName = branding.data?.displayName?.trim() || "TimeSphere";
   const passwordEnabled = ssoMethods.data?.passwordEnabled ?? true;
   const allProviders = ssoMethods.data?.providers ?? [];
   // LDAP is a direct bind, not a redirect, so it's rendered as its own inline form (below)
@@ -272,9 +277,23 @@ export function Login() {
           <Card className="border-border shadow-lg lg:border-transparent lg:bg-transparent lg:shadow-none">
             <CardContent className="pt-6 lg:px-0">
               <Link to="/" className="focus-ring mb-7 inline-flex items-center gap-3 rounded-md font-bold lg:hidden">
-                <span className="grid h-9 w-9 place-items-center rounded-lg bg-primary text-primary-foreground">T</span>
-                TimeSphere
+                {workspaceLogo ? (
+                  <img src={workspaceLogo} alt={workspaceName} className="h-9 w-9 rounded-lg object-contain" />
+                ) : (
+                  <span className="grid h-9 w-9 place-items-center rounded-lg bg-primary text-primary-foreground">T</span>
+                )}
+                {workspaceName}
               </Link>
+              {/* Beside the brand panel (lg and up) the panel carries the product identity, so the
+                  WORKSPACE mark goes here — where a company expects to see their own logo — only
+                  when one is actually set. */}
+              {workspaceLogo && (
+                <img
+                  src={workspaceLogo}
+                  alt={workspaceName}
+                  className="mb-6 hidden h-11 max-w-[13rem] object-contain object-left lg:block"
+                />
+              )}
               <h1 className="text-2xl font-black tracking-tight">Welcome back</h1>
               <p className="mt-2 text-sm text-muted-foreground">
                 Sign in to log time, approve work, and review utilization.

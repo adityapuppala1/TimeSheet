@@ -33,6 +33,7 @@ import {
   Users,
   Users2
 } from "lucide-react";
+import { useQuery } from "@tanstack/react-query";
 import { useState } from "react";
 import { NavLink } from "react-router";
 import { permissions } from "@timesheet/shared";
@@ -43,7 +44,7 @@ import { useAuthStore } from "../store/auth";
 import { Avatar, AvatarFallback, AvatarImage } from "./ui/avatar";
 import { Sheet, SheetContent, SheetDescription, SheetTitle } from "./ui/sheet";
 import { Tooltip, TooltipContent, TooltipTrigger } from "./ui/tooltip";
-import { fileUrl } from "../services/api";
+import { brandingApi, brandingLogoUrl, fileUrl } from "../services/api";
 
 /**
  * Section headings group the nav so 15 items don't read as one undifferentiated list.
@@ -231,14 +232,31 @@ function NavList({ items, onNavigate, slim = false }: { items: NavItem[]; onNavi
   );
 }
 
+/**
+ * The workspace's logo and name when one is set, the product mark otherwise.
+ *
+ * `staleTime: Infinity` deliberately: branding changes when a super admin uploads a file, and that
+ * mutation invalidates this exact key — polling for it on every nav would be a request per page
+ * view forever to catch something that happens once a year.
+ */
 function BrandMark({ slim = false, className = "mb-8" }: { slim?: boolean; className?: string }) {
+  const branding = useQuery({ queryKey: ["branding"], queryFn: brandingApi.get, staleTime: Infinity });
+  const logoSrc = brandingLogoUrl(branding.data);
+  const name = branding.data?.displayName?.trim() || "TimeSphere";
+
   return (
     <div className={cn("flex items-center gap-3", slim && "justify-center", className)}>
-      <div className="grid h-10 w-10 shrink-0 place-items-center rounded-lg bg-primary text-lg font-black text-primary-foreground shadow-glow">T</div>
+      {logoSrc ? (
+        // object-contain + a fixed box: an uploaded mark is any aspect ratio, and letting it set
+        // its own width would push the collapse control off the header row.
+        <img src={logoSrc} alt={name} className="h-10 w-10 shrink-0 rounded-lg object-contain" />
+      ) : (
+        <div className="grid h-10 w-10 shrink-0 place-items-center rounded-lg bg-primary text-lg font-black text-primary-foreground shadow-glow">T</div>
+      )}
       {!slim && (
-        <div>
-          <p className="text-base font-bold tracking-tight">TimeSphere</p>
-          <p className="text-xs text-muted-foreground">Enterprise Timesheets</p>
+        <div className="min-w-0">
+          <p className="truncate text-base font-bold tracking-tight">{name}</p>
+          <p className="truncate text-xs text-muted-foreground">Enterprise Timesheets</p>
         </div>
       )}
     </div>

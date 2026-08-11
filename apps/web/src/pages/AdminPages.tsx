@@ -45,7 +45,7 @@ import {
 } from "lucide-react";
 import type { ReactNode } from "react";
 import { useEffect, useMemo, useState } from "react";
-import { Bar, BarChart, CartesianGrid, ResponsiveContainer, Tooltip as RTooltip, XAxis, YAxis } from "recharts";
+import { Bar, BarChart, CartesianGrid, LabelList, ResponsiveContainer, Tooltip as RTooltip, XAxis, YAxis } from "recharts";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -2663,7 +2663,13 @@ export function ApprovalsPage() {
 export function ReportsPage() {
   const analytics = useQuery({ queryKey: ["admin-summary"], queryFn: reportApi.admin, refetchInterval: 30_000 });
   const ticketAnalytics = useQuery({ queryKey: ["ticket-summary"], queryFn: reportApi.tickets, refetchInterval: 30_000 });
-  const projectData = (analytics.data?.byProject ?? []).map((row: any) => ({ name: row.project, hours: Number(row._sum?.totalHours ?? 0) }));
+  // Codes on the axis, full names in the tooltip — same convention as the Dashboard utilization
+  // chart, for the same reason: long names starved the axis of labels.
+  const projectData = (analytics.data?.byProject ?? []).map((row: any) => ({
+    name: row.project,
+    code: row.projectCode || String(row.project ?? "").slice(0, 10),
+    hours: Number(row._sum?.totalHours ?? 0)
+  }));
   const priorityData = (ticketAnalytics.data?.byPriority ?? []).map((row) => ({ name: row.priority, count: row._count }));
   const slaBreached = analytics.data?.slaBreached ?? 0;
   const openEscalations = analytics.data?.openEscalations ?? 0;
@@ -2701,8 +2707,10 @@ export function ReportsPage() {
           trend={computeTrend(approvedThisWeek, analytics.data?.approvedLastWeek ?? 0, true)}
           trendLabel="vs last week"
         />
+        {/* "Approval" spelled out — this is Timesheet.slaBreachAt (approval deadlines missed),
+            and its sibling tile below already says "Ticket SLA breaches" for the other system. */}
         <StatCard
-          label="SLA breaches"
+          label="Approval SLA breaches"
           value={slaBreached}
           tone={slaBreached > 0 ? "warning" : "default"}
           trend={computeTrend(slaBreached, analytics.data?.slaBreachedYesterday ?? 0, false)}
@@ -2734,14 +2742,24 @@ export function ReportsPage() {
         <CardContent>
           <div className="h-80">
             <ResponsiveContainer width="100%" height="100%">
-              <BarChart data={projectData}>
+              <BarChart data={projectData} margin={{ top: 18 }}>
                 <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" />
-                <XAxis dataKey="name" stroke="hsl(var(--muted-foreground))" fontSize={12} />
+                <XAxis dataKey="code" stroke="hsl(var(--muted-foreground))" fontSize={11} interval={0} />
                 <YAxis stroke="hsl(var(--muted-foreground))" fontSize={12} />
                 <RTooltip
                   contentStyle={{ background: "hsl(var(--popover))", border: "1px solid hsl(var(--border))", borderRadius: 8, color: "hsl(var(--popover-foreground))" }}
+                  labelFormatter={(_, payload: any) => payload?.[0]?.payload?.name ?? ""}
+                  formatter={(value: number) => [`${Number(value).toFixed(2)}h`, "Hours"]}
                 />
-                <Bar dataKey="hours" fill="hsl(var(--primary))" radius={[6, 6, 0, 0]} />
+                <Bar dataKey="hours" fill="hsl(var(--primary))" radius={[6, 6, 0, 0]}>
+                  <LabelList
+                    dataKey="hours"
+                    position="top"
+                    fill="hsl(var(--muted-foreground))"
+                    fontSize={11}
+                    formatter={(value: number) => (value > 0 ? Number(value).toFixed(value >= 100 ? 0 : 1) : "")}
+                  />
+                </Bar>
               </BarChart>
             </ResponsiveContainer>
           </div>

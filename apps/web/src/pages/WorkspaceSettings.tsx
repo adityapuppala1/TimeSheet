@@ -110,6 +110,7 @@ import { AIAutonomyCard } from "./settings/AIAutonomyCard";
 import { AgentRunsCard } from "./settings/AgentRunsCard";
 import { SecurityDevOpsSettingsCard } from "./settings/SecurityDevOpsSettingsCard";
 import { FaceVerificationSettingsCard } from "./settings/FaceVerificationSettingsCard";
+import { BrandingSettingsCard } from "./settings/BrandingSettingsCard";
 import { MaintenanceSettingsCard } from "./settings/MaintenanceSettingsCard";
 import { PlanningSettingsCard } from "./settings/PlanningSettingsCard";
 import { StorageAndLogsCard } from "./settings/StorageAndLogsCard";
@@ -263,6 +264,9 @@ export function WorkspaceSettingsPage() {
           own overflow instead of exporting it to the page. */}
       <Tabs defaultValue="reminders" className="grid min-w-0 grid-cols-[minmax(0,1fr)] gap-4">
         <TabsList data-tour="settings-tabs" className="w-full justify-start sm:w-auto">
+          {/* First: it is the one tab about what the product LOOKS like rather than what it does,
+              and it is the first thing a new workspace personalises. */}
+          <TabsTrigger value="branding">Branding</TabsTrigger>
           <TabsTrigger value="reminders">Reminders & schedule</TabsTrigger>
           <TabsTrigger value="emails">Email channels</TabsTrigger>
           <TabsTrigger value="mail-server">Mail server</TabsTrigger>
@@ -288,6 +292,12 @@ export function WorkspaceSettingsPage() {
           <TabsTrigger value="storage">Storage & logs</TabsTrigger>
           <TabsTrigger value="bcc">BCC & forms</TabsTrigger>
         </TabsList>
+
+        {/* No readOnly prop: the card's own mutations are SUPER_ADMIN-gated on the server, and a
+            non-admin simply never reaches this route (see App.tsx's RequireRole). */}
+        <TabsContent value="branding">
+          <BrandingSettingsCard />
+        </TabsContent>
 
         <TabsContent value="reminders">
           <ReminderScheduleCard readOnly={!isSuperAdmin} />

@@ -42,7 +42,7 @@ import {
 } from "lucide-react";
 import { useMemo, useState } from "react";
 import { Link } from "react-router";
-import { Area, AreaChart, Bar, BarChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
+import { Area, AreaChart, Bar, BarChart, CartesianGrid, LabelList, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 import { Alert, AlertDescription, AlertTitle } from "../components/ui/alert";
 import { SetupChecklistCard } from "../components/SetupChecklistCard";
 import { Badge } from "../components/ui/badge";
@@ -226,7 +226,14 @@ export function Dashboard() {
 
   const projectTrend = useMemo(() => {
     const rows = admin.data?.byProject ?? [];
-    return rows.map((row: any) => ({ name: row.project, value: Number(row._sum?.totalHours ?? 0) }));
+    // The axis shows the project CODE (the identifier people already read in ticket keys) —
+    // two full names used to eat the whole axis while every bar between them went unlabeled.
+    // The full name stays one hover away in the tooltip.
+    return rows.map((row: any) => ({
+      name: row.project,
+      code: row.projectCode || String(row.project ?? "").slice(0, 10),
+      value: Number(row._sum?.totalHours ?? 0)
+    }));
   }, [admin.data]);
 
   const openTicketsByProject = useMemo(() => {
@@ -377,12 +384,25 @@ export function Dashboard() {
           <CardContent>
             <div className="h-64">
               <ResponsiveContainer width="100%" height="100%">
-                <BarChart data={projectTrend}>
+                <BarChart data={projectTrend} margin={{ top: 18 }}>
                   <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" />
-                  <XAxis dataKey="name" stroke="hsl(var(--muted-foreground))" fontSize={12} />
+                  <XAxis dataKey="code" stroke="hsl(var(--muted-foreground))" fontSize={11} interval={0} />
                   <YAxis stroke="hsl(var(--muted-foreground))" fontSize={12} />
-                  <Tooltip contentStyle={{ background: "hsl(var(--popover))", border: "1px solid hsl(var(--border))", borderRadius: 8, color: "hsl(var(--popover-foreground))" }} />
-                  <Bar dataKey="value" fill="hsl(var(--accent))" radius={[6, 6, 0, 0]} />
+                  <Tooltip
+                    contentStyle={{ background: "hsl(var(--popover))", border: "1px solid hsl(var(--border))", borderRadius: 8, color: "hsl(var(--popover-foreground))" }}
+                    labelFormatter={(_, payload) => payload?.[0]?.payload?.name ?? ""}
+                    formatter={(value: number) => [`${Number(value).toFixed(2)}h`, "Hours"]}
+                  />
+                  <Bar dataKey="value" fill="hsl(var(--accent))" radius={[6, 6, 0, 0]}>
+                    {/* Values on the bars — the number is the answer, and it shouldn't cost a hover. */}
+                    <LabelList
+                      dataKey="value"
+                      position="top"
+                      fill="hsl(var(--muted-foreground))"
+                      fontSize={11}
+                      formatter={(value: number) => (value > 0 ? Number(value).toFixed(value >= 100 ? 0 : 1) : "")}
+                    />
+                  </Bar>
                 </BarChart>
               </ResponsiveContainer>
             </div>

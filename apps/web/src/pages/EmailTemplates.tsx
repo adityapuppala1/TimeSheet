@@ -499,54 +499,7 @@ function AnalyticsTab({ data, loading }: { data?: EmailAnalytics; loading: boole
         </CardContent>
       </Card>
 
-      <Card>
-        <CardHeader>
-          <CardTitle className="text-base">Per-template breakdown</CardTitle>
-          <CardDescription>
-            Counts come from <code>EmailLog</code>, reconciled back to these cards. Rows marked <Badge variant="warning">shared</Badge>{" "}
-            report a combined total for two templates that the log cannot tell apart — don't add those two rows together.
-          </CardDescription>
-        </CardHeader>
-        <CardContent className="overflow-x-auto p-0">
-          <Table>
-            <TableHeader>
-              <TableRow>
-                <TableHead>Template</TableHead>
-                <TableHead className="text-right">Total</TableHead>
-                <TableHead className="text-right">Delivered</TableHead>
-                <TableHead className="text-right">Failed</TableHead>
-                <TableHead className="text-right">Test</TableHead>
-                <TableHead className="text-right">Today</TableHead>
-                <TableHead className="text-right">Yesterday</TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {data.perTemplate.map((row) => (
-                <TableRow key={row.key}>
-                  <TableCell className="font-medium">
-                    <span className="flex flex-wrap items-center gap-1.5">
-                      {row.key}
-                      {row.shared && (
-                        <Badge variant="warning" title={`Shared with ${row.sharedWith.join(", ")} — logged as ${row.sources.join(", ")}`}>
-                          shared
-                        </Badge>
-                      )}
-                    </span>
-                  </TableCell>
-                  <TableCell className="text-right tabular-nums">{row.total.toLocaleString()}</TableCell>
-                  <TableCell className="text-right tabular-nums text-success">{row.sent.toLocaleString()}</TableCell>
-                  <TableCell className={`text-right tabular-nums ${row.failed > 0 ? "text-destructive" : "text-muted-foreground"}`}>
-                    {row.failed.toLocaleString()}
-                  </TableCell>
-                  <TableCell className="text-right tabular-nums text-muted-foreground">{row.test.toLocaleString()}</TableCell>
-                  <TableCell className="text-right tabular-nums">{row.today.toLocaleString()}</TableCell>
-                  <TableCell className="text-right tabular-nums text-muted-foreground">{row.yesterday.toLocaleString()}</TableCell>
-                </TableRow>
-              ))}
-            </TableBody>
-          </Table>
-        </CardContent>
-      </Card>
+      <TemplateBreakdownCard rows={data.perTemplate} />
 
       <Card>
         <CardHeader>
@@ -597,6 +550,145 @@ function AnalyticsTab({ data, loading }: { data?: EmailAnalytics; loading: boole
 
       <DomainDeliveryCard />
     </div>
+  );
+}
+
+/**
+ * Per-template send analytics as a working table: search, scope filter (traffic / failures),
+ * sort, a judged delivery-health bar per row (same idiom as the domain table — in-flight mail is
+ * excluded from the rate because it hasn't been decided yet), and a today-vs-yesterday trend
+ * arrow so "which template is suddenly loud" is visible without reading two number columns.
+ */
+function TemplateBreakdownCard({ rows }: { rows: EmailTemplateVolumeRow[] }) {
+  const [search, setSearch] = useState("");
+  const [scope, setScope] = useState<"all" | "traffic" | "failures">("all");
+  const [sort, setSort] = useState<"total" | "failed" | "today" | "name">("total");
+
+  const filtered = useMemo(() => {
+    const needle = search.trim().toLowerCase();
+    return rows
+      .filter((row) => {
+        if (scope === "traffic" && row.total === 0) return false;
+        if (scope === "failures" && row.failed === 0) return false;
+        if (!needle) return true;
+        return row.key.toLowerCase().includes(needle) || row.sources.some((s) => s.toLowerCase().includes(needle));
+      })
+      .sort((a, b) => {
+        if (sort === "name") return a.key.localeCompare(b.key);
+        return (b[sort] as number) - (a[sort] as number) || a.key.localeCompare(b.key);
+      });
+  }, [rows, search, scope, sort]);
+
+  const ratePct = (rate: number | null) => (rate === null ? "—" : `${(rate * 100).toFixed(0)}%`);
+
+  return (
+    <Card>
+      <CardHeader className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+        <div className="grid gap-1">
+          <CardTitle className="text-base">Per-template breakdown</CardTitle>
+          <CardDescription>
+            Counts come from <code>EmailLog</code>, reconciled back to these cards. Rows marked{" "}
+            <Badge variant="warning">shared</Badge> report a combined total for two templates that the log cannot
+            tell apart — don't add those two rows together.
+          </CardDescription>
+        </div>
+        <div className="flex flex-wrap items-center gap-2">
+          <Input
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            placeholder="Search template…"
+            className="h-9 w-full sm:w-52"
+          />
+          <Select value={scope} onValueChange={(v) => setScope(v as typeof scope)}>
+            <SelectTrigger className="h-9 w-full sm:w-[150px]"><SelectValue /></SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">All templates</SelectItem>
+              <SelectItem value="traffic">With traffic</SelectItem>
+              <SelectItem value="failures">With failures</SelectItem>
+            </SelectContent>
+          </Select>
+          <Select value={sort} onValueChange={(v) => setSort(v as typeof sort)}>
+            <SelectTrigger className="h-9 w-full sm:w-[160px]"><SelectValue /></SelectTrigger>
+            <SelectContent>
+              <SelectItem value="total">Most sends</SelectItem>
+              <SelectItem value="failed">Most failures</SelectItem>
+              <SelectItem value="today">Busiest today</SelectItem>
+              <SelectItem value="name">Name A–Z</SelectItem>
+            </SelectContent>
+          </Select>
+        </div>
+      </CardHeader>
+      <CardContent className="overflow-x-auto p-0">
+        {filtered.length === 0 ? (
+          <p className="px-4 py-6 text-center text-sm text-muted-foreground">Nothing matches the current search and filters.</p>
+        ) : (
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead>Template</TableHead>
+                <TableHead className="w-44">Delivery health</TableHead>
+                <TableHead className="text-right">Total</TableHead>
+                <TableHead className="text-right">Delivered</TableHead>
+                <TableHead className="text-right">Failed</TableHead>
+                <TableHead className="text-right">Test</TableHead>
+                <TableHead className="text-right">Today</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {filtered.map((row) => {
+                const judged = row.sent + row.failed;
+                const rate = judged > 0 ? row.sent / judged : null;
+                const TrendIcon = row.today > row.yesterday ? TrendingUp : row.today < row.yesterday ? TrendingDown : Minus;
+                return (
+                  <TableRow key={row.key} className={row.total === 0 ? "opacity-60" : undefined}>
+                    <TableCell className="font-medium">
+                      <span className="flex flex-wrap items-center gap-1.5">
+                        {row.key}
+                        {row.shared && (
+                          <Badge variant="warning" title={`Shared with ${row.sharedWith.join(", ")} — logged as ${row.sources.join(", ")}`}>
+                            shared
+                          </Badge>
+                        )}
+                      </span>
+                    </TableCell>
+                    <TableCell>
+                      {row.total === 0 ? (
+                        <span className="text-xs text-muted-foreground">never sent</span>
+                      ) : (
+                        <div className="flex items-center gap-2">
+                          <div className="h-1.5 w-full max-w-[6.5rem] overflow-hidden rounded-full bg-muted">
+                            <div
+                              className={`h-full ${rate !== null && rate < 0.9 ? "bg-destructive" : "bg-success"}`}
+                              style={{ width: `${Math.round((rate ?? 0) * 100)}%` }}
+                            />
+                          </div>
+                          <span className="text-xs tabular-nums text-muted-foreground">{ratePct(rate)}</span>
+                        </div>
+                      )}
+                    </TableCell>
+                    <TableCell className="text-right tabular-nums">{row.total.toLocaleString()}</TableCell>
+                    <TableCell className="text-right tabular-nums text-success">{row.sent.toLocaleString()}</TableCell>
+                    <TableCell className={`text-right tabular-nums ${row.failed > 0 ? "font-semibold text-destructive" : "text-muted-foreground"}`}>
+                      {row.failed.toLocaleString()}
+                    </TableCell>
+                    <TableCell className="text-right tabular-nums text-muted-foreground">{row.test.toLocaleString()}</TableCell>
+                    <TableCell className="text-right">
+                      <span
+                        className="inline-flex items-center justify-end gap-1 tabular-nums"
+                        title={`${row.today} today vs ${row.yesterday} yesterday`}
+                      >
+                        {row.today.toLocaleString()}
+                        <TrendIcon className="h-3.5 w-3.5 text-muted-foreground" aria-hidden />
+                      </span>
+                    </TableCell>
+                  </TableRow>
+                );
+              })}
+            </TableBody>
+          </Table>
+        )}
+      </CardContent>
+    </Card>
   );
 }
 

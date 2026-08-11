@@ -21,6 +21,32 @@ authenticated route and every login method answers `503 { code: "MAINTENANCE" }`
 non-SUPER_ADMIN users — clients must treat that code as "show the maintenance page", not as an
 outage or an auth failure.
 
+## Workspace branding
+
+The workspace's own logo and display name — what makes the product read as the customer's.
+
+- `GET /branding` — **public** (tenant-resolved by host, exactly like `/auth/sso-methods`).
+  Returns `{ displayName, hasLogo, logoVersion }`. `logoVersion` is a stamp that changes on every
+  upload; the client appends it to the image URL so a new logo is a new URL rather than a stale
+  cache.
+- `GET /branding/logo` — **public**. Streams the image, or 404s when none is set (the client then
+  renders the product mark). Cached for a day, which is safe precisely because the URL carries
+  `?v=<logoVersion>`.
+- `POST /branding/logo` — SUPER_ADMIN, `multipart/form-data` field `logo`. Reuses the avatar
+  uploader (PNG/JPG/JPEG/GIF, 5 MB) and re-encodes through sharp: metadata stripped, polyglots
+  broken. Scaled to **fit** 512×160 and written as PNG — a logo is a designed mark, so it is never
+  cropped square (an avatar is), and PNG keeps the transparency that a JPEG would paint black on a
+  dark theme. Audited; the previous file is unlinked best-effort.
+- `DELETE /branding/logo` — SUPER_ADMIN. Clears the row and unlinks the file. Audited.
+- `PATCH /branding` `{ displayName }` — SUPER_ADMIN; `null`/empty restores the product name.
+
+**Why the read half is unauthenticated, and why the bytes are not under `/uploads`:** the logo has
+to render on the login page, where nobody is signed in and no signed file grant can be minted — and
+a company's mark on their own sign-in screen is public by construction. Rather than carve an
+exception into the `/uploads` grant gate, branding gets its own storage subtree that
+`isInsideNonPublicSubtree` refuses outright, with these routes as its only reader. A test pins both
+halves of that (`tests/unit/branding-storage.test.ts`).
+
 ## Maintenance mode
 
 - `GET /maintenance/status` — **public** (tenant-resolved, rate-limited 30/min per IP). Returns

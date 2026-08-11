@@ -96,7 +96,35 @@ unaffected; their migration checksums were reconciled in place.
   their diagnosis and first step; every domain row expands in place with its top failure reasons
   and the age of its oldest stuck in-flight message.
 
+### 🏷️ Make it yours
+
+- **Upload your company's logo** in Workspace settings → Branding, and optionally the name shown
+  beside it. It appears in the sidebar and on the sign-in page — including before anyone signs
+  in, which is the whole point of a login screen carrying your mark. Uploads are re-encoded
+  (metadata stripped), scaled to fit rather than cropped square, and kept as PNG so a
+  transparent logo doesn't turn black in dark mode. The preview shows both themes at once,
+  because a mark that vanishes on one of them should be discovered here, not from a screenshot.
+
+### 📊 Charts and labels
+
+- **Bar charts state their numbers.** Project utilization, project hours, SLA compliance, cycle
+  time and the security-findings chart all print the value on the bar instead of hiding it
+  behind a hover — a number nobody can see is not a measurement.
+- **Project charts use project codes on the axis**, with the full name in the tooltip. Two long
+  names previously consumed the entire axis while every bar between them went unlabeled.
+- **"SLA breaches" is now "Approval SLA breaches"** on My team and Reports, and "Approval SLA
+  breach rate" in the latency panel. It counts timesheets that sat past their approval deadline;
+  the ticket-side metric was already labeled separately, and one bare "SLA" across both was the
+  ambiguity worth spending three words on.
+- **The per-template email breakdown became a working table**: search, a scope filter (with
+  traffic / with failures), sorting, a delivery-health bar per template, and a today-vs-yesterday
+  trend arrow.
+
 ### 🐞 Fixed
+
+- **Form fields no longer drift out of alignment** when a neighbouring field carries a helper
+  line — the Profile timezone and the Timesheet ticket picker were the visible cases, fixed once
+  at the shared form-item level so every current and future form inherits it.
 
 - The AI tab's Project-risk, Plan-breakdown and Chat-triage switches failed to save with
   *"Unrecognized key(s) in object"* — the strict settings schema was missing three toggles the

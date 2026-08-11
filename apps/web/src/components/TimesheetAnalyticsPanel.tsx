@@ -188,7 +188,7 @@ export function TimesheetAnalyticsPanel() {
                   { label: "Median", value: latency?.medianHours, suffix: "h" },
                   { label: "90th percentile", value: latency?.p90Hours, suffix: "h" },
                   { label: "Slowest", value: latency?.slowestHours, suffix: "h" },
-                  { label: "SLA breach rate", value: latency?.breachRatePct, suffix: "%" }
+                  { label: "Approval SLA breach rate", value: latency?.breachRatePct, suffix: "%" }
                 ].map((s) => (
                   <div key={s.label} className="rounded-lg border border-border bg-muted/30 p-3">
                     <p className="text-xs uppercase text-muted-foreground">{s.label}</p>

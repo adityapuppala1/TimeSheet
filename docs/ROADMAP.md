@@ -2754,3 +2754,37 @@ build, desktop + responsive e2e).
   walks a render-wide-then-shrink pass that reproduces the deadlock deterministically, and
   `assertNoOverflow` names the widest elements sorted by extent - the failure message is now a
   diagnosis instead of a number.
+
+## Seven asks from a working session: labels, alignment, and the product wearing its owner's name (2026-08-11)
+
+- [x] **Field alignment fixed at its cause, not per-form.** A grid item's rows STRETCH by default,
+  so any FormItem sharing a row with a taller sibling (one carrying a FormDescription) had its
+  label and control pushed apart by half the height difference. `content-start` on the shared
+  `FormItem` fixes every current and future form at once; the Profile page's hand-rolled
+  phone/timezone pair got the same treatment.
+- [x] **"SLA breaches" -> "Approval SLA breaches"** on My team, Reports and the latency panel.
+  Verified the source first: it is `Timesheet.slaBreachAt`, set by `sla.service.ts`'s sweep when a
+  SUBMITTED entry passes its approval deadline - nothing to do with ticket SLAs, which live in
+  `ticket-sla.service.ts` and were already labeled "Ticket SLA". One bare "SLA" across two systems
+  was the ambiguity; three words is a cheaper fix than a metric people mistrust.
+- [x] **Bar charts print their values** (Dashboard utilization, Reports project hours, Insights SLA
+  compliance / cycle time / module hotspot, Security findings). The stacked chart labels the STACK
+  TOTAL on its top segment - labeling each segment puts two numbers in a 64px-tall chart.
+- [x] **Project charts axis on `projectCode`**, full name in the tooltip; `/reports/admin-summary`
+  now returns the code alongside the name. Two long names had been eating the whole axis.
+- [x] **Per-template email breakdown rebuilt** as a working table: search, scope filter, sort,
+  per-template delivery-health bar (in-flight excluded from the rate, same rule as the domain
+  table), and a today-vs-yesterday trend arrow.
+- [x] **Resend welcome email investigated and found working.** Both recorded resends
+  (`user.welcome_resent`) have matching `EmailLog` rows with status SENT and no error - SMTP
+  accepted them. The route already 502s with the SMTP text on refusal rather than reporting a
+  false success, so a delivery problem beyond the handoff is a provider/inbox question, not an
+  app one. Recorded rather than "fixed" because there was nothing in the app to fix.
+- [x] **Workspace logo upload.** New `WorkspaceBranding` singleton + migration, reusing the avatar
+  uploader's allow-list and sharp re-encode. The one interesting decision: `/uploads` now requires
+  a signed, expiring, org-bound grant, and the login page needs the logo BEFORE anyone can hold
+  one - so branding gets its own storage subtree that `isInsideNonPublicSubtree` refuses, and one
+  public tenant-resolved route (`GET /api/branding/logo`) as its only reader. Logos scale to fit
+  (never a cover crop - that is right for an avatar, disfiguring for a designed mark) and are
+  always PNG (a JPEG re-encode paints a transparent logo black on dark themes). Both properties
+  pinned by `tests/unit/branding-storage.test.ts`.

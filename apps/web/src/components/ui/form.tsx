@@ -53,7 +53,12 @@ export const FormItem = React.forwardRef<HTMLDivElement, React.HTMLAttributes<HT
     const id = React.useId();
     return (
       <FormItemContext.Provider value={{ id }}>
-        <div ref={ref} className={cn("grid gap-1.5", className)} {...props} />
+        {/* content-start matters whenever FormItems share a grid row: the tallest cell (one with
+            a FormDescription, usually) stretches its siblings, and a stretched grid's auto rows
+            SPREAD by default — so every neighbouring field's control drifted away from its label
+            by half the height difference. Packing rows at the top keeps label+control together
+            and drops the slack at the bottom, where the eye expects it. */}
+        <div ref={ref} className={cn("grid content-start gap-1.5", className)} {...props} />
       </FormItemContext.Provider>
     );
   }

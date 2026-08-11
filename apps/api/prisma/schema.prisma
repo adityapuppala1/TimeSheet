@@ -1711,6 +1711,27 @@ model GlobalNotificationSettings {
   updatedById String?
 }
 
+/// Singleton (id = "global"). The workspace's own logo and display name — what a company puts on
+/// the product so it reads as theirs.
+///
+/// WHY THE LOGO IS SERVED BY ITS OWN ROUTE rather than through `/uploads`: every `/uploads` path
+/// now needs a signed, expiring, org-bound grant (see app.ts), and the logo has to render on the
+/// LOGIN page, where nobody is signed in and no grant can be minted. It is also the one uploaded
+/// asset that is public by nature — a company's own mark, on their own sign-in screen. So the
+/// bytes live outside the granted trees and are streamed by `GET /api/branding/logo`, which
+/// resolves the tenant from the request host exactly like `/api/auth/sso-methods` does.
+model WorkspaceBranding {
+  id String @id
+  /// Filename inside the branding storage subtree — never a path, never client-supplied.
+  /// Null means "no custom logo", and the product's own mark is rendered instead.
+  logoFile    String? @db.VarChar(200)
+  logoMime    String? @db.VarChar(80)
+  /// Optional replacement for the product name shown beside the logo. Null keeps "TimeSphere".
+  displayName String? @db.VarChar(60)
+  updatedAt   DateTime @updatedAt
+  updatedById String?
+}
+
 /// Singleton (id = "global"). IMAP mailbox connection + polling cadence for the
 /// email-to-ticket ingestion pipeline. Master switch is GlobalAISettings.emailIngestionEnabled —
 /// this table only holds *how* to connect and where unmatched mail should land.

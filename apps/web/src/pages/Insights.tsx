@@ -19,6 +19,7 @@ import {
   Bar,
   BarChart,
   CartesianGrid,
+  LabelList,
   Legend,
   Line,
   LineChart,
@@ -332,7 +333,20 @@ export function Insights() {
                       <RTooltip {...TOOLTIP_STYLE} />
                       <Legend wrapperStyle={{ fontSize: 12, color: "hsl(var(--muted-foreground))" }} />
                       <Bar dataKey="compliant" name="Within SLA" stackId="s" fill={STATUS_COLOR.compliant} radius={[0, 0, 0, 0]} />
-                      <Bar dataKey="breached" name="Breached" stackId="s" fill={STATUS_COLOR.breached} radius={[4, 4, 0, 0]} />
+                      <Bar dataKey="breached" name="Breached" stackId="s" fill={STATUS_COLOR.breached} radius={[4, 4, 0, 0]}>
+                        {/* The stack TOTAL, above the whole bar — labeling each segment would put
+                            two numbers per week in a 64px-tall chart. Rides the top Bar because
+                            that's where recharts anchors "top" for a stack. */}
+                        <LabelList
+                          position="top"
+                          fill="hsl(var(--muted-foreground))"
+                          fontSize={11}
+                          valueAccessor={(entry: any) => {
+                            const total = Number(entry?.payload?.compliant ?? 0) + Number(entry?.payload?.breached ?? 0);
+                            return total > 0 ? total : "";
+                          }}
+                        />
+                      </Bar>
                     </BarChart>
                   </ResponsiveContainer>
                 </div>
@@ -352,7 +366,15 @@ export function Insights() {
                       <XAxis dataKey="bucket" {...AXIS_STYLE} />
                       <YAxis {...AXIS_STYLE} allowDecimals={false} />
                       <RTooltip {...TOOLTIP_STYLE} />
-                      <Bar dataKey="count" fill="hsl(var(--primary))" radius={[4, 4, 0, 0]} />
+                      <Bar dataKey="count" fill="hsl(var(--primary))" radius={[4, 4, 0, 0]}>
+                        <LabelList
+                          dataKey="count"
+                          position="top"
+                          fill="hsl(var(--muted-foreground))"
+                          fontSize={11}
+                          formatter={(value: number) => (value > 0 ? value : "")}
+                        />
+                      </Bar>
                     </BarChart>
                   </ResponsiveContainer>
                 </div>
@@ -379,7 +401,16 @@ export function Insights() {
                         {...TOOLTIP_STYLE}
                         formatter={(value: number, _name, entry: any) => [value, entry.payload.projectName]}
                       />
-                      <Bar dataKey="count" fill="hsl(var(--primary))" radius={[0, 4, 4, 0]} />
+                      <Bar dataKey="count" fill="hsl(var(--primary))" radius={[0, 4, 4, 0]}>
+                        {/* Horizontal bars label at the bar's END — "top" would float mid-air. */}
+                        <LabelList
+                          dataKey="count"
+                          position="right"
+                          fill="hsl(var(--muted-foreground))"
+                          fontSize={11}
+                          formatter={(value: number) => (value > 0 ? value : "")}
+                        />
+                      </Bar>
                     </BarChart>
                   </ResponsiveContainer>
                 </div>

@@ -191,7 +191,10 @@ reportRouter.get("/admin-summary", requirePermission(permissions.REPORTS_VIEW), 
 
   const projectNames = await prisma.project.findMany({
     where: { id: { in: byProject.map((row) => row.projectId) } },
-    select: { id: true, name: true }
+    // code included for the chart x-axes: two full project names ate the whole axis while the
+    // bars between them went unlabeled — the code is the identifier people already use in
+    // ticket keys, and the full name stays in the tooltip.
+    select: { id: true, name: true, code: true }
   });
 
   const loggedToday = loggedTodayDistinct.length;
@@ -227,7 +230,10 @@ reportRouter.get("/admin-summary", requirePermission(permissions.REPORTS_VIEW), 
     todayDailyRemindersSentYesterday,
     todayEscalationsSent,
     todayEscalationsSentYesterday,
-    byProject: byProject.map((row) => ({ ...row, project: projectNames.find((p) => p.id === row.projectId)?.name ?? "Unknown" })),
+    byProject: byProject.map((row) => {
+      const project = projectNames.find((p) => p.id === row.projectId);
+      return { ...row, project: project?.name ?? "Unknown", projectCode: project?.code ?? null };
+    }),
     byStatus,
     byActivity
   });
