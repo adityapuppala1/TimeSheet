@@ -143,4 +143,91 @@ test.describe("the gate lifts by itself", () => {
       }
     });
   });
+
+  /**
+   * The API-driven test above sends BOTH fields, so it can never catch the bug that actually
+   * shipped: the Profile page's timezone select DISPLAYED the device timezone as a fallback
+   * while the save sent null. AppLayout's silent backfill usually papers over it — it PATCHes
+   * the device timezone shortly after login — but the gate sends a new joiner STRAIGHT to
+   * /app/profile, so the form can mount and save before that backfill lands, and the old save
+   * then overwrote the backfilled value with null. Field looks set, save reports success, the
+   * popup never leaves. The race is reproduced deterministically here by refusing the
+   * backfill's own request (its shape: a PATCH whose only key is `timezone`), then walking the
+   * form exactly as the stuck user did: fill ONLY the phone, never touch the timezone select,
+   * save. What the form shows must be what the form saves — without help from the backfill.
+   */
+  test("saving the profile form itself lifts the gate — without touching the timezone field", async ({ page }) => {
+    const email = `e2e-gate-form-${Date.now()}@timesheet.local`;
+    const password = "GateForm@1234";
+
+    await withAdminRequest(async (ctx, headers) => {
+      const settings = await (await ctx.get("/api/settings/face-verification", { headers })).json();
+      const originalMode = settings.enforcementMode;
+      await ctx.patch("/api/settings/face-verification", { headers, data: { enforcementMode: "SELECTED" } });
+
+      const created = await ctx.post("/api/users", {
+        headers,
+        data: { name: "Gate Form Drill", email, role: "EMPLOYEE", password }
+      });
+      expect(created.ok(), `could not create drill user (${created.status()})`).toBe(true);
+      const userId = (await created.json()).id as string;
+
+      try {
+        await page.route("**/api/auth/profile", (route) => {
+          const request = route.request();
+          const body = request.method() === "PATCH" ? (request.postDataJSON() as Record<string, unknown> | null) : null;
+          if (body && Object.keys(body).length === 1 && "timezone" in body) {
+            // The AppLayout backfill losing the race — the form must not need it to have landed.
+            return route.abort();
+          }
+          return route.fallback();
+        });
+
+        await page.goto("/login");
+        await page.getByLabel("Email", { exact: true }).fill(email);
+        await page.getByLabel("Password", { exact: true }).fill(password);
+        await page.getByRole("button", { name: /sign in/i }).click();
+        await expect(page).toHaveURL(/\/app/, { timeout: 15_000 });
+
+        const gate = page.getByRole("alertdialog", { name: /finish setting up your account/i });
+        await expect(gate).toBeVisible({ timeout: 15_000 });
+        await gate.getByRole("link", { name: /go to my profile/i }).click();
+        await expect(page).toHaveURL(/\/app\/profile/);
+
+        // Only the phone. The timezone select already shows the device zone — trusting that
+        // display is exactly what the wedged user did.
+        await page.getByRole("combobox", { name: "Country code" }).click();
+        await page.getByRole("option", { name: "IN +91" }).click();
+        await page.locator("#profile-phone").fill("98765 43210");
+        await page.getByRole("button", { name: /save profile/i }).click();
+        await expect(page.getByText("Profile updated").first()).toBeVisible({ timeout: 10_000 });
+
+        // THE assertion, made against the SERVER, not the overlay: right after the form's own
+        // save, the gate must consider this account done. A DOM check here is vacuous — on a
+        // fresh navigation the gate renders nothing until its query resolves, so toBeHidden
+        // passes even while the account is still blocked (this test's first version did exactly
+        // that, and "passed" against the unfixed code).
+        const login = await ctx.post("/api/auth/login", { data: { email, password } });
+        const { accessToken } = await login.json();
+        const status = await (
+          await ctx.get("/api/auth/onboarding-status", { headers: { Authorization: `Bearer ${accessToken}` } })
+        ).json();
+        expect(
+          status.blocked,
+          `the saved form must satisfy the gate — what the form displays must be what it saves (status: ${JSON.stringify(status)})`
+        ).toBe(false);
+
+        // And the overlay agrees once its own query has actually answered.
+        const statusAnswered = page.waitForResponse((r) => r.url().includes("/auth/onboarding-status"));
+        await page.goto("/app");
+        await statusAnswered;
+        await expect(gate).toBeHidden();
+      } finally {
+        const restore = await ctx.patch("/api/settings/face-verification", { headers, data: { enforcementMode: originalMode } });
+        expect(restore.ok(), "failed to restore face enforcement mode").toBe(true);
+        const del = await ctx.delete(`/api/users/${userId}`, { headers });
+        expect(del.status(), "drill-user cleanup failed").toBeLessThan(300);
+      }
+    });
+  });
 });

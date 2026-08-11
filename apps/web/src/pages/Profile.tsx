@@ -87,6 +87,15 @@ export function Profile() {
   const [phoneCountry, setPhoneCountry] = useState<CountryCode>(stored?.country ?? detectDeviceCountry());
   const [phoneNational, setPhoneNational] = useState(stored?.nationalNumber ?? "");
   const [timezone, setTimezone] = useState(user?.timezone ?? "");
+  /**
+   * What the timezone Select DISPLAYS is what saving must PERSIST. The select used to fall back
+   * to the device zone for display only (`value={timezone || DEVICE_TIMEZONE}`) while the save
+   * still sent null — so the field looked complete, Save reported success, and the onboarding
+   * gate went on demanding a timezone that was visibly "set". A new joiner filling in their phone
+   * number could never see what was still missing. There is no "no timezone" state in this UI,
+   * so the effective value is never empty and the save below never sends null.
+   */
+  const effectiveTimezone = timezone.trim() || DEVICE_TIMEZONE;
 
   /** Empty is fine (the field is optional); anything typed must validate for its country. */
   const phoneParsed = phoneNational.trim() ? parsePhoneNumberFromString(phoneNational, phoneCountry) : undefined;
@@ -104,7 +113,7 @@ export function Profile() {
         name: name.trim(),
         bio: bio.trim() ? bio.trim() : null,
         phoneNumber: phoneE164,
-        timezone: timezone.trim() ? timezone.trim() : null
+        timezone: effectiveTimezone
       }),
     onSuccess: (updated) => {
       setUser(updated);
@@ -256,9 +265,11 @@ export function Profile() {
       (name.trim() !== (user?.name ?? "")) ||
       ((bio.trim() || null) !== (user?.bio ?? null)) ||
       (phoneE164 !== (user?.phoneNumber ?? null)) ||
-      ((timezone.trim() || null) !== (user?.timezone ?? null))
+      // Compares the EFFECTIVE value, so an account with no stored timezone starts dirty — the
+      // Save button being active is the honest signal that what's displayed isn't saved yet.
+      (effectiveTimezone !== (user?.timezone ?? null))
     );
-  }, [name, bio, phoneE164, timezone, user]);
+  }, [name, bio, phoneE164, effectiveTimezone, user]);
 
   function pickAvatar() {
     fileInputRef.current?.click();
@@ -429,7 +440,7 @@ export function Profile() {
                 <div className="grid gap-1.5">
                   <Label htmlFor="profile-tz">Timezone</Label>
                   <div className="flex gap-2">
-                    <Select value={timezone || DEVICE_TIMEZONE} onValueChange={setTimezone}>
+                    <Select value={effectiveTimezone} onValueChange={setTimezone}>
                       <SelectTrigger id="profile-tz" className="min-w-0 flex-1">
                         <SelectValue placeholder="Pick a timezone" />
                       </SelectTrigger>
@@ -441,7 +452,7 @@ export function Profile() {
                         ))}
                       </SelectContent>
                     </Select>
-                    {timezone !== DEVICE_TIMEZONE && (
+                    {effectiveTimezone !== DEVICE_TIMEZONE && (
                       <Button type="button" variant="outline" className="shrink-0" onClick={() => setTimezone(DEVICE_TIMEZONE)}>
                         Use device
                       </Button>

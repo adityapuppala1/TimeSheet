@@ -7,7 +7,17 @@ export const ScrollArea = React.forwardRef<
   React.ComponentPropsWithoutRef<typeof ScrollAreaPrimitive.Root>
 >(({ className, children, ...props }, ref) => (
   <ScrollAreaPrimitive.Root ref={ref} className={cn("relative overflow-hidden", className)} {...props}>
-    <ScrollAreaPrimitive.Viewport className="h-full w-full rounded-[inherit]">{children}</ScrollAreaPrimitive.Viewport>
+    {/* max-h-[inherit] is what makes `<ScrollArea className="max-h-…">` actually scroll. With
+        only a max-height, the Root has no definite height, so the Viewport's h-full resolves to
+        auto, the Viewport grows to full content height, and the Root's overflow-hidden CLIPS
+        everything past the cap — a list that silently freezes at its first rows (the email
+        template "Last 30 sends" log shipped that way). Inheriting the cap onto the Viewport —
+        whose own inline overflow style is the thing that scrolls — turns the same markup into a
+        working scroller; when the Root has no max-height, `inherit` computes to `none` and
+        nothing changes. */}
+    <ScrollAreaPrimitive.Viewport className="h-full max-h-[inherit] w-full rounded-[inherit]">
+      {children}
+    </ScrollAreaPrimitive.Viewport>
     <ScrollBar />
     <ScrollAreaPrimitive.Corner />
   </ScrollAreaPrimitive.Root>
