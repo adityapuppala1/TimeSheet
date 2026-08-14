@@ -27,13 +27,21 @@ unaffected; their migration checksums were reconciled in place.
   nothing to click — an approver was being asked to sign off hours on the strength of evidence the
   screen could see and they could not. They are links now, and files can be added to or removed
   from an entry after the fact.
+- **History says who logged each entry and who last changed it.** A "Logged by" column appears
+  whenever the page shows more than one person's work (an admin's History returns everybody's and
+  used to name nobody), and any entry somebody corrected now carries an **Edited** badge naming
+  them — louder when it wasn't the author. The reviewer is shown too.
 - **The day timeline opens the block you clicked.** Every block used to be a link to the History
   *page*: you clicked a specific 3.5h block on a specific person's lane and arrived at a list of
   everything. It opens that entry in place now, with the day and the lane still on screen behind
   it. History rows open the same panel, and the URL carries the entry, so a link points at one
   entry rather than at "the list".
+- **You can fix your own entry until it's approved.** Draft, submitted and rejected are all still
+  yours to correct — previously editing stopped at submission, so changing one word meant asking
+  your approver, whose only way to hand it back is a rejection. Your approver is told when a
+  submitted entry changes, so they re-read it rather than deciding on what they saw before.
 - **Managers and super admins can correct an entry** — project, module, activity, times, date,
-  description, notes — in any status; authors can still fix their own drafts and rejected rows.
+  description, notes — in any status, including approved.
   Every change is recorded field by field with the before and after, and the person who logged it
   is told when somebody else edits it. An approved entry's frozen billing rate is never
   re-resolved: if the hours change, the amount is recomputed from the rate that was already

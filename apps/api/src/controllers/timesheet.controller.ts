@@ -66,7 +66,9 @@ timesheetRouter.get("/", async (req, res) => {
       submodule: true,
       ticket: { select: { id: true, key: true, title: true } },
       attachments: true,
-      user: { select: { name: true, email: true, avatarUrl: true } }
+      // `id` added alongside the name: the History table decides whether to show a "Logged by"
+      // column by counting the DISTINCT authors in the page, and names are not unique.
+      user: { select: { id: true, name: true, email: true, avatarUrl: true } }
     },
     orderBy: [{ workDate: "desc" }, { startTime: "desc" }],
     take: 100
@@ -75,9 +77,14 @@ timesheetRouter.get("/", async (req, res) => {
   // Verified-badge decoration: which rows carry a spent PASSED identity check, and whose
   // authors the policy covers — so a manager can tell "verified", "predates the policy", and
   // "not covered" apart at a glance instead of reading absence as ambiguity.
-  const badges = await getTimesheetVerificationBadges(timesheets.map((t) => ({ id: t.id, userId: t.userId })));
+  const [badges, decorated] = await Promise.all([
+    getTimesheetVerificationBadges(timesheets.map((t) => ({ id: t.id, userId: t.userId }))),
+    // Reviewer and last-editor names, for the whole page, in one query — an entry that somebody
+    // else corrected used to look exactly like one nobody had touched.
+    decorateEditors(timesheets)
+  ]);
   res.json(
-    timesheets.map((t) => ({
+    decorated.map((t) => ({
       ...t,
       identityVerified: badges.get(t.id)?.identityVerified ?? false,
       identityVerifiedAt: badges.get(t.id)?.identityVerifiedAt ?? null,
@@ -132,19 +139,47 @@ async function loadVisibleEntry(req: any, id: string) {
   return isOwner || canViewOthers ? entry : null;
 }
 
+/**
+ * Resolves `reviewedById` and `lastEditedById` — both bare scalars, per the schema note on each —
+ * into `{ id, name, email }` for a whole page of rows in ONE query.
+ *
+ * WHY BATCHED RATHER THAN A JOIN OR A LOOKUP PER ROW: the list route returns up to 100 entries, so
+ * a per-row lookup is a 200-query page. The distinct set of people who reviewed or edited those
+ * 100 rows is realistically a handful, and `IN (…)` over it costs one round trip.
+ */
+async function decorateEditors<T extends { reviewedById: string | null; lastEditedById: string | null }>(
+  rows: T[]
+): Promise<Array<T & { reviewedBy: PersonRef | null; lastEditedBy: PersonRef | null }>> {
+  const ids = [...new Set(rows.flatMap((row) => [row.reviewedById, row.lastEditedById]).filter((id): id is string => Boolean(id)))];
+  const people = ids.length
+    ? await prisma.user.findMany({ where: { id: { in: ids } }, select: { id: true, name: true, email: true } })
+    : [];
+  const byId = new Map(people.map((person) => [person.id, person]));
+  return rows.map((row) => ({
+    ...row,
+    // `?? null` rather than `undefined` for a deleted user: the id is still on the row, and the
+    // reader is better served by "edited by someone no longer here" than by the field vanishing.
+    reviewedBy: (row.reviewedById && byId.get(row.reviewedById)) || null,
+    lastEditedBy: (row.lastEditedById && byId.get(row.lastEditedById)) || null
+  }));
+}
+
+interface PersonRef {
+  id: string;
+  name: string;
+  email: string;
+}
+
 /** Decorated with the identity badge the list route adds, so a dialog opened from the table and
- *  one opened by id can never disagree about whether the entry is verified — plus the reviewer,
- *  which `reviewedById` alone cannot supply (see ENTRY_DETAIL_INCLUDE for why it isn't a join). */
+ *  one opened by id can never disagree about whether the entry is verified — plus the reviewer and
+ *  the last editor, which the bare id columns alone cannot supply. */
 async function respondWithEntry(res: any, entry: NonNullable<Awaited<ReturnType<typeof loadVisibleEntry>>>) {
-  const [badges, reviewedBy] = await Promise.all([
+  const [badges, [decorated]] = await Promise.all([
     getTimesheetVerificationBadges([{ id: entry.id, userId: entry.userId }]),
-    entry.reviewedById
-      ? prisma.user.findUnique({ where: { id: entry.reviewedById }, select: { id: true, name: true, email: true } })
-      : Promise.resolve(null)
+    decorateEditors([entry])
   ]);
   res.json({
-    ...entry,
-    reviewedBy,
+    ...decorated,
     identityVerified: badges.get(entry.id)?.identityVerified ?? false,
     identityVerifiedAt: badges.get(entry.id)?.identityVerifiedAt ?? null,
     identityVerificationApplies: badges.get(entry.id)?.identityVerificationApplies ?? false
@@ -609,9 +644,19 @@ const patchSchema = z.object({
  * fix it is half a feature.
  *
  * WHO MAY EDIT WHAT — two rules, matching who bears the consequence:
- *   • the AUTHOR, while the entry is still theirs to shape (DRAFT or REJECTED). Exactly the
- *     window `DELETE` already allows, for the same reason: nobody is waiting on it and nothing
- *     downstream has consumed it.
+ *   • the AUTHOR, until the entry is APPROVED. DRAFT, SUBMITTED and REJECTED are all still the
+ *     author's to correct.
+ *
+ *     This is deliberately WIDER than the delete rule, which stops at REJECTED. Deleting a
+ *     SUBMITTED entry erases a request somebody is being asked to decide on; fixing a typo in it
+ *     does not. The old rule sent the author to their approver to change one word, and the
+ *     approver's only tool was to reject the entry — so a spelling mistake cost a rejection, a
+ *     notification, and a re-submission. Editing while SUBMITTED does notify the approver (below)
+ *     precisely because they may have already read it.
+ *
+ *     APPROVED stops there for the author: those hours carry a frozen rate and feed cost reports
+ *     and Verified Work Attestations. That is a record somebody may already have been shown, and
+ *     changing it is a reviewer's call.
  *   • TIMESHEETS_APPROVE (manager / admin / super admin), in ANY status. They already decide
  *     whether these hours are payable; withholding "fix the module name" from someone trusted to
  *     approve the hours is a distinction without a difference, and the alternative in practice is
@@ -631,10 +676,10 @@ timesheetRouter.patch("/:id", requirePermission(permissions.TIMESHEETS_WRITE), v
   const isOwner = existing.userId === req.user!.id;
   const canEditOthers = req.user!.permissions.includes(permissions.TIMESHEETS_APPROVE);
   if (!isOwner && !canEditOthers) throw new AppError(403, "You can only edit your own entries.");
-  if (isOwner && !canEditOthers && existing.status !== "DRAFT" && existing.status !== "REJECTED") {
+  if (isOwner && !canEditOthers && existing.status === "APPROVED") {
     throw new AppError(
       422,
-      `This entry is ${existing.status} — it's with your approver now. Ask them to send it back, or to make the correction for you.`
+      "This entry has been approved — the hours are part of the billing record now. Ask your approver to make the correction, or log a correcting entry."
     );
   }
 
@@ -695,7 +740,11 @@ timesheetRouter.patch("/:id", requirePermission(permissions.TIMESHEETS_WRITE), v
     workDate,
     startTime: next.startTime,
     endTime: next.endTime,
-    totalHours: hours
+    totalHours: hours,
+    // Stamped on EVERY edit, including the author's own — "I changed this myself on Tuesday" is
+    // as useful to the person reading their own history as knowing a manager did.
+    lastEditedById: req.user!.id,
+    lastEditedAt: new Date()
   };
   // SECURITY: same rule as the create path — rich text arrives as HTML and is sanitized before it
   // is stored, never on the way out.
@@ -755,16 +804,36 @@ timesheetRouter.patch("/:id", requirePermission(permissions.TIMESHEETS_WRITE), v
     changes
   });
 
-  // The submitter finds out when someone else rewrote their record of work. Silent edits by a
-  // reviewer are how an approval queue loses the submitter's trust.
-  if (!isOwner && Object.keys(changes).length > 0) {
-    await dispatchNotification({
-      userId: updated.userId,
-      category: "timesheet.updated",
-      title: "Your timesheet entry was edited",
-      body: `${req.user!.name ?? req.user!.email} edited your ${Number(updated.totalHours).toFixed(2)}h entry for ${updated.workDate.toISOString().slice(0, 10)} on ${updated.project.name}.`,
-      link: "/app/history"
-    });
+  // Nobody learns about a change to their work from a diff they had to go looking for. Two
+  // directions, and both matter:
+  const dateLabel = updated.workDate.toISOString().slice(0, 10);
+  const editor = req.user!.name ?? req.user!.email;
+  if (Object.keys(changes).length > 0) {
+    if (!isOwner) {
+      // A reviewer rewrote somebody's record of work. Silent edits are how an approval queue
+      // loses the submitter's trust.
+      await dispatchNotification({
+        userId: updated.userId,
+        category: "timesheet.updated",
+        title: "Your timesheet entry was edited",
+        body: `${editor} edited your ${Number(updated.totalHours).toFixed(2)}h entry for ${dateLabel} on ${updated.project.name}.`,
+        link: `/app/history?entry=${updated.id}`
+      });
+    } else if (updated.status === "SUBMITTED") {
+      // The author changed something ALREADY IN the approval queue. This is the counterpart of
+      // widening their edit window past submission: the approver may have read this entry
+      // already, so the thing they are being asked to decide on must not change behind them.
+      const author = await prisma.user.findUnique({ where: { id: updated.userId }, select: { managerId: true } });
+      if (author?.managerId) {
+        await dispatchNotification({
+          userId: author.managerId,
+          category: "timesheet.updated",
+          title: `${editor} edited a timesheet awaiting your review`,
+          body: `The ${Number(updated.totalHours).toFixed(2)}h entry for ${dateLabel} on ${updated.project.name} changed after it was submitted.`,
+          link: "/app/approvals"
+        });
+      }
+    }
   }
 
   await respondWithEntry(res, updated);
@@ -779,8 +848,8 @@ async function assertCanAttach(req: any, entry: { userId: string; status: string
   const isOwner = entry.userId === req.user.id;
   const canEditOthers = req.user.permissions.includes(permissions.TIMESHEETS_APPROVE);
   if (!isOwner && !canEditOthers) throw new AppError(403, "You can only change your own entries.");
-  if (isOwner && !canEditOthers && entry.status !== "DRAFT" && entry.status !== "REJECTED") {
-    throw new AppError(422, `This entry is ${entry.status} — ask your approver to add the file for you.`);
+  if (isOwner && !canEditOthers && entry.status === "APPROVED") {
+    throw new AppError(422, "This entry has been approved — ask your approver to attach the file for you.");
   }
 }
 

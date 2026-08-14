@@ -22,7 +22,7 @@
  */
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import type { ColumnDef } from "@tanstack/react-table";
-import { Clock, Eye, FileText, Filter, Layers, Paperclip, RotateCcw, ShieldCheck, Trash2 } from "lucide-react";
+import { Clock, Eye, FileText, Filter, Layers, Paperclip, PencilLine, RotateCcw, ShieldCheck, Trash2 } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { useSearchParams } from "react-router";
 import {
@@ -131,6 +131,20 @@ export function History() {
 
   const rows: any[] = Array.isArray(timesheets.data) ? timesheets.data : [];
 
+  /**
+   * Does this page show more than one person's work?
+   *
+   * The list route returns only your own entries unless you hold `reports:view`, in which case it
+   * returns everybody's — and it did so with no name anywhere on the row, so an admin's History
+   * was a pile of entries with no author. A "Logged by" column is essential there and pure noise
+   * for an employee, whose every row would repeat their own name. So the column appears exactly
+   * when it carries information.
+   */
+  const spansMultiplePeople = useMemo(
+    () => new Set(rows.map((row) => row.userId ?? row.user?.id).filter(Boolean)).size > 1,
+    [rows]
+  );
+
   const filtered = useMemo(() => {
     return rows.filter((row) => {
       if (status !== "ALL" && row.status !== status) return false;
@@ -214,6 +228,23 @@ export function History() {
           </button>
         )
       },
+      // Only when it says something — see `spansMultiplePeople`. Placed second so the answer to
+      // "whose is this?" sits next to "when was it?", before the detail.
+      ...(spansMultiplePeople
+        ? [
+            {
+              id: "loggedBy",
+              accessorFn: (row: any) => row.user?.name ?? "",
+              header: "Logged by",
+              cell: ({ row }: any) => (
+                <div className="min-w-0">
+                  <p className="truncate font-medium">{row.original.user?.name ?? "—"}</p>
+                  <p className="truncate text-xs text-muted-foreground">{row.original.user?.email}</p>
+                </div>
+              )
+            } as ColumnDef<any, any>
+          ]
+        : []),
       {
         id: "projectModule",
         accessorFn: (row: any) => row.project?.name,
@@ -254,6 +285,22 @@ export function History() {
         cell: ({ row }) => (
           <div className="flex flex-wrap items-center gap-1">
             <Badge variant={statusVariant[row.original.status] ?? "muted"}>{row.original.status}</Badge>
+            {/* An entry somebody corrected used to look exactly like one nobody had touched. The
+                badge names the editor, and says so more loudly when it was not the author — that
+                is the case the person whose work it is actually wants to notice. */}
+            {row.original.lastEditedBy && (
+              <Badge
+                variant={row.original.lastEditedBy.id === (row.original.userId ?? row.original.user?.id) ? "outline" : "info"}
+                title={`Last edited by ${row.original.lastEditedBy.name}${
+                  row.original.lastEditedAt ? ` on ${new Date(row.original.lastEditedAt).toLocaleString()}` : ""
+                }`}
+              >
+                <PencilLine className="mr-1 h-3 w-3" />
+                {row.original.lastEditedBy.id === (row.original.userId ?? row.original.user?.id)
+                  ? "Edited"
+                  : `Edited by ${row.original.lastEditedBy.name.split(" ")[0]}`}
+              </Badge>
+            )}
             {row.original.identityVerified && (
               /* The submitter's own receipt that their identity check was accepted — the
                  in-dialog confirmation vanishes; this persists. */
@@ -282,6 +329,11 @@ export function History() {
               <p className="mt-1 inline-flex items-center gap-1 text-xs text-muted-foreground">
                 <Paperclip className="h-3 w-3" />
                 {row.original.attachments.length} attachment(s)
+              </p>
+            ) : null}
+            {row.original.reviewedBy ? (
+              <p className="mt-1 text-xs text-muted-foreground">
+                {row.original.status === "REJECTED" ? "Rejected" : "Reviewed"} by {row.original.reviewedBy.name}
               </p>
             ) : null}
             {row.original.status === "REJECTED" && row.original.rejectionReason ? (
@@ -329,14 +381,22 @@ export function History() {
       }
     ],
     // eslint-disable-next-line react-hooks/exhaustive-deps -- openEntry closes over stable setters
-    [removeEntry.isPending]
+    [removeEntry.isPending, spansMultiplePeople]
   );
 
   return (
     <div className="grid gap-5">
       <div>
         <h1 className="text-2xl font-black tracking-tight">Timesheet history</h1>
-        <p className="mt-1 text-sm text-muted-foreground">Filter and review every entry you've logged. Hours roll up live as you adjust filters.</p>
+        {/* The list route returns everybody's entries to a `reports:view` holder and only your own
+            to everyone else, so a fixed "every entry you've logged" was simply wrong for an admin
+            — who was also the person most likely to wonder whose rows these were. */}
+        <p className="mt-1 text-sm text-muted-foreground">
+          {spansMultiplePeople
+            ? "Filter and review logged entries across the team. Open any row for the full entry, its attachments and who last changed it."
+            : "Filter and review every entry you've logged. Open any row to read it in full, or to correct it before it's approved."}{" "}
+          Hours roll up live as you adjust filters.
+        </p>
       </div>
 
       <div className="grid grid-cols-2 gap-2.5 sm:gap-3 md:grid-cols-4">

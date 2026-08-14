@@ -471,6 +471,22 @@ model Timesheet {
   reviewedAt      DateTime?
   rejectionReason String?
 
+  /// WHO last corrected this entry, and when — set by `PATCH /timesheets/:id`, never by the
+  /// create or decide paths.
+  ///
+  /// WHY IT IS A COLUMN AND NOT DERIVED FROM THE AUDIT LOG: the audit row exists (and stays the
+  /// authoritative field-by-field record), but answering "who touched this?" for a whole page of
+  /// history from it is a scan per row. This is the one fact a reader needs at a glance, and the
+  /// screens that show it — the History table and the entry dialog — would otherwise have to
+  /// choose between an N+1 and not telling anyone.
+  ///
+  /// A BARE SCALAR with no `@relation`, matching `reviewedById` directly above it: `Timesheet`
+  /// already relates to `User` through `userId`, and a second relation would force both to be
+  /// named. Both names are resolved with one batched lookup at the read boundary instead —
+  /// see `decorateEditors()` in timesheet.controller.ts.
+  lastEditedById  String?
+  lastEditedAt    DateTime?
+
   /// When this entry was submitted for approval.
   ///
   /// WHY IT IS STORED RATHER THAN DERIVED: the submit path already computed this — as a local

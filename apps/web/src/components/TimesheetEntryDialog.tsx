@@ -19,10 +19,10 @@
  * stale fails closed with a message that says to reopen the entry.
  *
  * WHO MAY EDIT is decided by the server (timesheet.controller.ts's PATCH) and mirrored here only
- * to decide whether to render the button: the author while the entry is still DRAFT or REJECTED,
- * or anyone holding timesheets:approve, in any status. Mirroring a rule is a risk — the copy can
- * drift — so this one is written as a single predicate with the server's reasoning quoted next to
- * it, and the server refuses regardless of what this file believes.
+ * to decide whether to render the button: the author until the entry is APPROVED, or anyone
+ * holding timesheets:approve, in any status. Mirroring a rule is a risk — the copy can drift — so
+ * this one is written as a single predicate with the server's reasoning quoted next to it, and the
+ * server refuses regardless of what this file believes.
  *
  * WHO RENDERS THIS: pages/AdminPages.tsx (ApprovalsPage), pages/History.tsx, pages/Dashboard.tsx.
  */
@@ -133,13 +133,20 @@ export function TimesheetEntryDialog({
   // entry to another would show entry B under entry A's unsaved edits.
   useEffect(() => setEditing(false), [entryId]);
 
-  /** The same two rules the server enforces in PATCH /timesheets/:id. Quoted, not invented:
-   *  the author owns the entry while nobody is waiting on it (DRAFT/REJECTED), and anyone
-   *  trusted to APPROVE the hours is trusted to correct them in any status. */
+  /**
+   * The same two rules the server enforces in PATCH /timesheets/:id. Quoted, not invented: the
+   * author may correct their own entry until it is APPROVED, and anyone trusted to approve the
+   * hours may correct them in any status.
+   *
+   * The author's window deliberately extends past SUBMITTED — an entry awaiting a decision is
+   * still the author's account of their own work, and the old rule made a one-word typo cost a
+   * rejection and a re-submission. APPROVED stops there: those hours carry a frozen rate and feed
+   * cost reports and attestations, so changing them is a reviewer's call.
+   */
   const canEdit = useMemo(() => {
     if (!entry || !currentUser) return false;
     if (currentUser.permissions.includes("timesheets:approve" as any)) return true;
-    return entry.userId === currentUser.id && (entry.status === "DRAFT" || entry.status === "REJECTED");
+    return entry.userId === currentUser.id && entry.status !== "APPROVED";
   }, [entry, currentUser]);
 
   const invalidate = () => {
@@ -309,7 +316,17 @@ function EntryReadView({
           {entry.reviewedBy ? <span className="text-muted-foreground"> by {entry.reviewedBy.name}</span> : null}
         </Row>
       ) : null}
-      <Row label="Last updated">{formatTimestamp(entry.updatedAt)}</Row>
+      <Row label="Last updated">
+        {formatTimestamp(entry.lastEditedAt ?? entry.updatedAt)}
+        {/* WHO, not just when. An entry a manager corrected used to look exactly like one nobody
+            had touched, which is the part that matters to the person whose work it is. */}
+        {entry.lastEditedBy ? (
+          <span className="text-muted-foreground">
+            {" "}by <span className="font-medium text-foreground">{entry.lastEditedBy.name}</span>
+            {entry.lastEditedBy.id !== entry.userId ? " (not the author)" : ""}
+          </span>
+        ) : null}
+      </Row>
       {entry.status === "REJECTED" && entry.rejectionReason ? (
         <Row label="Rejection reason">
           <span className="text-destructive">{entry.rejectionReason}</span>
@@ -495,6 +512,12 @@ function EntryEditForm({
         <p className="rounded-md border border-warning/40 bg-warning/10 px-3 py-2 text-xs">
           These hours are already approved and may sit behind a billing record. The change is
           audited field by field and {entry.user?.name ?? "the submitter"} is notified.
+        </p>
+      )}
+      {entry.status === "SUBMITTED" && (
+        <p className="rounded-md border border-border bg-muted/40 px-3 py-2 text-xs text-muted-foreground">
+          This entry is waiting for a decision. You can still correct it — your approver is told
+          that it changed, so they re-read it rather than deciding on what they saw before.
         </p>
       )}
 

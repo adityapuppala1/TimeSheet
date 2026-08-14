@@ -184,12 +184,22 @@ the row keeps its audit trail, and because every read path (including the overla
 
 | Caller | May edit | Why |
 |---|---|---|
-| the **author** | their own `DRAFT` / `REJECTED` entries | Exactly the window `DELETE` allows, for the same reason: nobody is waiting on it and nothing downstream has consumed it. |
+| the **author** | their own entries until `APPROVED` — so `DRAFT`, `SUBMITTED` and `REJECTED` | It is their account of their own work, and it is not yet a billing record. |
 | `TIMESHEETS_APPROVE` | **any** entry, in **any** status | They already decide whether these hours are payable. Withholding "fix the module name" from someone trusted to approve the hours is a distinction without a difference, and the alternative in practice is a rejection round-trip for a typo. |
 
-That is deliberately broader than the delete rule, and the reason the two differ is that **erasure
-and correction are different acts**. Deleting an approved entry would remove a record a client may
-already have been shown; correcting one leaves the record in place and says what changed:
+**The author's window deliberately extends past `SUBMITTED`, unlike `DELETE`'s.** Deleting a
+submitted entry erases a request somebody is being asked to decide on; fixing a typo in it does
+not. The narrower rule sent the author to their approver to change one word — and an approver's
+only "send it back" tool is a **rejection**, so a spelling mistake cost a rejection, a
+notification and a re-submission. Editing a `SUBMITTED` entry **notifies the approver** precisely
+because they may have read it already, so they re-read rather than deciding on what they saw
+before.
+
+`APPROVED` is where the author stops: those hours carry a frozen rate and feed cost reports and
+Verified Work Attestations — a record a client may already have been shown, so changing it is a
+reviewer's call. The reason the edit and delete rules differ at all is that **erasure and
+correction are different acts**. Deleting an approved entry would remove that record; correcting
+one leaves it in place and says what changed:
 
 - **Every edit is audited field-by-field** (`timesheet.updated`, with `{ from, to }` per changed
   field and `onBehalfOf` when a reviewer edited somebody else's row). That audit trail is what
@@ -201,6 +211,14 @@ already have been shown; correcting one leaves the record in place and says what
   disagree with its own hours, and last quarter's work is never silently repriced at today's rate.
 - Overlap is re-checked against the **entry's own author**, not the editor: a manager fixing
   somebody else's row must not be able to push it on top of another of that person's entries.
+- **`lastEditedById` / `lastEditedAt` are stamped on every edit**, including the author's own, and
+  both `GET /timesheets` and `GET /timesheets/:id` return them resolved to `lastEditedBy
+  { id, name, email }` — alongside `reviewedBy`, which the list route had never carried either.
+  Both are bare id columns with no foreign key (matching `reviewedById`, and for the same reason:
+  `Timesheet` already relates to `User` through `userId`, and a second Prisma relation would force
+  both to be named), so the display names are resolved for a whole page in **one** batched query
+  rather than a join or an N+1. `null` means nobody has edited the entry since the column existed —
+  which is what the UI should say, rather than attributing it to whoever created it.
 
 ## Face (identity) verification
 

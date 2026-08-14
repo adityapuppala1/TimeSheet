@@ -531,3 +531,129 @@ test.describe("ticket detail panel sizing", () => {
     await expect(page.getByRole("separator", { name: /resize the ticket panel/i })).toHaveCount(0);
   });
 });
+
+/* ============ 9. The author can read and correct their own work ============ */
+
+test.describe("an employee's own history", () => {
+  /**
+   * THE REPORT: "the user who raised the log entry is not able to view and edit details when I
+   * draft and submitted stage."
+   *
+   * Viewing always worked; editing stopped at DRAFT/REJECTED, so a SUBMITTED entry could only be
+   * fixed by asking an approver — whose only "send it back" tool is a REJECTION. A one-word typo
+   * therefore cost a rejection, a notification and a re-submission. The author's window now runs
+   * to APPROVED.
+   *
+   * Runs as `employee` deliberately: this is precisely the role that holds none of the manage
+   * rights, and testing it as an admin would prove nothing.
+   */
+  /**
+   * Finds one of the employee's OWN entries in the given status, through the admin context.
+   *
+   * NOT `page.request.get("/api/timesheets")`: the access token lives in memory only (see
+   * store/auth.ts), so a bare request from the page context carries no Authorization header and
+   * comes back 401 — which then reads as "the employee has no entries" and skips the test that was
+   * supposed to catch the bug.
+   */
+  async function findEmployeeEntry(status: string): Promise<string | null> {
+    return withAdminRequest(async (ctx, headers) => {
+      // `/api/users` answers with a bare array — asserted rather than assumed, because reading a
+      // paginated envelope that isn't there yields `undefined`, which `.find` turns into "no
+      // employee", which silently SKIPS the test that exists to catch the bug.
+      const users: Array<{ id: string; email: string }> = await (await ctx.get("/api/users", { headers })).json();
+      expect(Array.isArray(users), "/api/users must return an array").toBe(true);
+      const employee = users.find((user) => user.email === "employee@timesheet.local");
+      if (!employee) return null;
+      const rows: Array<{ id: string; status: string }> = await (
+        await ctx.get(`/api/timesheets?userId=${employee.id}`, { headers })
+      ).json();
+      return (Array.isArray(rows) ? rows.find((row) => row.status === status)?.id : null) ?? null;
+    });
+  }
+
+  async function openOwnEntry(page: Page, status: "DRAFT" | "SUBMITTED" | "APPROVED") {
+    const entryId = await findEmployeeEntry(status);
+    test.skip(!entryId, `the employee has no ${status} entry in the demo data`);
+
+    await signIn(page, "employee");
+    await page.goto(`/app/history?entry=${entryId}`);
+    const dialog = page.getByRole("dialog");
+    await expect(dialog).toBeVisible({ timeout: 15_000 });
+    return dialog;
+  }
+
+  for (const status of ["DRAFT", "SUBMITTED"] as const) {
+    test(`can open and edit their own ${status} entry`, async ({ page }) => {
+      const dialog = await openOwnEntry(page, status);
+
+      // Viewing: the detail is really there, not an error or an empty shell.
+      await expect(dialog.getByText("Logged by", { exact: true })).toBeVisible();
+      await expect(dialog.getByText("Task", { exact: true })).toBeVisible();
+
+      // Editing: the control exists AND the form opens — a button that appears and then refuses
+      // is the failure this pins.
+      await dialog.getByRole("button", { name: /edit entry/i }).click();
+      await expect(dialog.getByRole("button", { name: /save changes/i })).toBeVisible({ timeout: 10_000 });
+    });
+  }
+
+  test("cannot edit their own APPROVED entry — that one is the reviewer's call", async ({ page }) => {
+    const dialog = await openOwnEntry(page, "APPROVED");
+    await expect(dialog.getByRole("button", { name: /edit entry/i })).toHaveCount(0);
+  });
+
+  test("a save from the author actually lands, and is attributed to them", async ({ page }) => {
+    const dialog = await openOwnEntry(page, "DRAFT");
+    await dialog.getByRole("button", { name: /edit entry/i }).click();
+
+    const editor = dialog.locator(".tiptap").first();
+    await editor.click();
+    const marker = `edited by the author at ${Date.now()}`;
+    await page.keyboard.press("ControlOrMeta+A");
+    await page.keyboard.type(marker);
+
+    await dialog.getByRole("button", { name: /save changes/i }).click();
+    await expect(dialog.getByText(marker)).toBeVisible({ timeout: 15_000 });
+    // "Who has updated" — the whole point of the second half of the ask.
+    await expect(dialog.getByText(/Last updated/i)).toBeVisible();
+  });
+});
+
+/* ==================== 10. History says whose entry it is ==================== */
+
+test.describe("history names the people involved", () => {
+  /** An admin's History returns EVERYBODY's entries and used to show no author anywhere — a pile
+   *  of rows with no answer to "whose is this?". */
+  test("shows a Logged by column when the page spans more than one person", async ({ page }) => {
+    const distinctAuthors = await withAdminRequest(async (ctx, headers) => {
+      const rows: Array<{ userId: string }> = await (await ctx.get("/api/timesheets", { headers })).json();
+      return new Set(rows.map((row) => row.userId)).size;
+    });
+    test.skip(distinctAuthors < 2, "the demo data has entries from only one person");
+
+    await signIn(page, "superadmin");
+    await page.goto("/app/history");
+    await expect(page.getByRole("columnheader", { name: "Logged by" })).toBeVisible({ timeout: 15_000 });
+  });
+
+  /** …and does NOT show it to an employee, whose every row would repeat their own name. */
+  test("hides that column for someone looking at only their own work", async ({ page }) => {
+    await signIn(page, "employee");
+    await page.goto("/app/history");
+    await expect(page.getByRole("heading", { name: /timesheet history/i })).toBeVisible({ timeout: 15_000 });
+    await expect(page.getByRole("columnheader", { name: "Logged by" })).toHaveCount(0);
+  });
+
+  /** The list route has to carry the names at all — the column and the badge both read them. */
+  test("the list route carries the reviewer and the last editor", async () => {
+    const rows: Array<Record<string, unknown>> = await withAdminRequest(async (ctx, headers) =>
+      (await ctx.get("/api/timesheets", { headers })).json()
+    );
+    expect(Array.isArray(rows) && rows.length).toBeTruthy();
+    // Present as keys on every row, even when null — a field that only appears sometimes is one
+    // the client has to guess about.
+    for (const key of ["reviewedBy", "lastEditedBy", "lastEditedAt"]) {
+      expect(rows[0], `every row must carry ${key}`).toHaveProperty(key);
+    }
+  });
+});

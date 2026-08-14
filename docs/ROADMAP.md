@@ -2916,3 +2916,40 @@ several of them shared a root cause.
 - [x] **Files moved to second, immediately after Comments.** The two are read together — a comment
   almost always refers to a file — and Files sat eighth, past four conditional tabs, far enough
   right to be off the end of the strip on a laptop.
+
+### 2026-08-14 (follow-up) — the author's own window, and who touched an entry
+
+- [x] **An author could not fix their own SUBMITTED entry.** Reported as "unable to view and edit
+  when in draft and submitted stage". Viewing always worked; editing stopped at DRAFT/REJECTED,
+  because the edit rule had been copied from the DELETE rule. That conflated two different acts:
+  deleting a submitted entry erases a request somebody is being asked to decide on, but fixing a
+  typo in it does not. The narrow rule sent the author to their approver to change one word — and
+  an approver's only "send it back" tool is a **rejection**, so a spelling mistake cost a
+  rejection, a notification and a re-submission.
+
+  The author's window now runs to APPROVED. It stops there because approved hours carry a frozen
+  rate and feed cost reports and Verified Work Attestations — a record a client may already have
+  been shown, so changing it is a reviewer's call. The counterpart of the wider window: editing a
+  SUBMITTED entry **notifies the approver**, since they may have read it already and must not
+  decide on something that changed behind them. Ten unit tests pin both edges (each status the
+  author may edit, the one they may not, the reviewer reaching past it) and four e2e tests drive
+  it as the `employee` role — the one that holds none of the manage rights, so testing it as an
+  admin would have proven nothing.
+
+- [x] **History says who logged an entry, and who last changed it.** Two gaps, both invisible
+  until the edit feature made them matter. The list route returns *everybody's* entries to a
+  `reports:view` holder and carried no author name at all, so an admin's History was a pile of
+  rows with no answer to "whose is this?" — a **Logged by** column now appears exactly when the
+  page spans more than one person, and stays out of an employee's way, whose every row would
+  otherwise repeat their own name. And an entry somebody had corrected looked identical to one
+  nobody had touched: rows now carry an **Edited** badge naming the editor, styled more loudly
+  when it was not the author, plus the reviewer where there is one.
+
+  `lastEditedById` / `lastEditedAt` are new columns rather than a derivation from `AuditLog` —
+  the audit row stays the authoritative field-by-field record, but answering "who touched this?"
+  from it for a whole page of history is a scan per row. Both it and the existing `reviewedById`
+  are bare id columns with no foreign key (a second Prisma `Timesheet`↔`User` relation would
+  force both to be named), so the display names resolve for the whole page in **one** batched
+  query. Not backfilled, deliberately: NULL means "nobody has edited this since the column
+  existed", which is the honest answer — inventing an editor from the audit log would attribute
+  edits made before anyone was told they were recorded.

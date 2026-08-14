@@ -570,6 +570,10 @@ export interface TimesheetEntryDetail {
   ticket?: { id: string; key: string; title: string } | null;
   user?: { id: string; name: string; email: string; avatarUrl?: string | null; role?: string } | null;
   reviewedBy?: { id: string; name: string; email: string } | null;
+  /** Who last corrected the entry, and when. Null on one nobody has edited — which is what the
+   *  UI should say, rather than inventing an editor from the create path. */
+  lastEditedBy?: { id: string; name: string; email: string } | null;
+  lastEditedAt?: string | null;
   attachments: TimesheetAttachmentRow[];
   identityVerified: boolean;
   identityVerifiedAt: string | null;
