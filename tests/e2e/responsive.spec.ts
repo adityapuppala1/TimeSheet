@@ -49,6 +49,9 @@ const PAGES = [
   "/app/history",
   "/app/team",
   "/app/users",
+  // Grew an Activity types card (a wrapping row of chips, each with three icon buttons) — the
+  // shape most likely to push a narrow viewport sideways, and it was not swept before.
+  "/app/projects",
   "/app/settings",
   // Planning layer (V6). Worth sweeping specifically: the timeline is the widest thing in the
   // app by construction (a date-scaled chart), and adding two buttons to the Tickets view
@@ -369,4 +372,32 @@ test.describe("platform-admin console", () => {
       await expect(page.getByRole("link", { name: /analytics/i })).toBeVisible({ timeout: 10_000 });
     }
   });
+});
+
+/**
+ * The shared timesheet entry dialog, at every width.
+ *
+ * It is the one surface Approvals, History and the dashboard timeline all open, it holds a
+ * two-column labelled grid that collapses below `sm`, and on a phone it is the ONLY view of an
+ * entry — the tables collapse to cards. A dialog that overflows there is not "a bit cramped", it
+ * is a row of facts the reader cannot reach.
+ */
+test("the timesheet entry dialog fits, and its actions stay reachable", async ({ page }) => {
+  const headers = await accessToken(page);
+  const entries: Array<{ id: string }> = await (await page.request.get("/api/timesheets", { headers })).json();
+  test.skip(entries.length === 0, "no timesheet entries in the demo data to open");
+
+  await page.goto(`/app/history?entry=${entries[0].id}`);
+  const dialog = page.getByRole("dialog");
+  await expect(dialog).toBeVisible({ timeout: 15_000 });
+  await expect(dialog.getByText("Logged by", { exact: true })).toBeVisible({ timeout: 15_000 });
+
+  await assertNoOverflow(page);
+
+  // Header and footer are pinned and only the middle scrolls, so both must be on screen no matter
+  // how much task text the entry carries.
+  const viewport = page.viewportSize()!;
+  const box = (await dialog.boundingBox())!;
+  expect(box.y, "the dialog must not start above the viewport").toBeGreaterThanOrEqual(-1);
+  expect(box.y + box.height, "the dialog must not end below the viewport").toBeLessThanOrEqual(viewport.height + 1);
 });

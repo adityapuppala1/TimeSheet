@@ -24,7 +24,7 @@ import {
   AlignCenter,
   AlignRight
 } from "lucide-react";
-import { useEffect } from "react";
+import { useEffect, useRef } from "react";
 import { cn } from "../../lib/utils";
 
 interface RichTextEditorProps {
@@ -33,6 +33,17 @@ interface RichTextEditorProps {
   placeholder?: string;
   className?: string;
   minHeight?: string;
+  /**
+   * Where the writing area stops growing and starts scrolling. Any Tailwind max-height class.
+   *
+   * WHY THERE IS A DEFAULT AT ALL: an editor with no ceiling grows a pixel per line forever. In a
+   * centre-anchored dialog that pushes the title off the top of the screen and the submit button
+   * off the bottom — which is exactly what typing a long ticket description used to do — and on a
+   * long form it walks the field you are typing in off the bottom of the page. `24rem` is roughly
+   * fifteen lines: enough that scrolling is rare, small enough that the surrounding form stays
+   * put when it isn't.
+   */
+  maxHeight?: string;
   ariaLabel?: string;
 }
 
@@ -42,8 +53,14 @@ export function RichTextEditor({
   placeholder = "Start typing...",
   className,
   minHeight = "min-h-32",
+  maxHeight = "max-h-96",
   ariaLabel
 }: RichTextEditorProps) {
+  /** `editorProps` is captured when the editor is constructed, at which point the `editor` const
+   *  below is still being initialised — so the paste handler reaches the instance through a ref
+   *  rather than closing over a binding that is `null` for the lifetime of the component. */
+  const editorRef = useRef<Editor | null>(null);
+
   const editor = useEditor({
     extensions: [
       StarterKit.configure({ heading: { levels: [1, 2, 3] } }),
@@ -57,10 +74,15 @@ export function RichTextEditor({
       attributes: {
         class: cn("tiptap focus:outline-none", minHeight),
         "aria-label": ariaLabel ?? "Rich text editor"
-      }
+      },
+      handlePaste: (_view, event) => handleSmartPaste(editorRef.current, event)
     },
     onUpdate: ({ editor }) => onChange(editor.getHTML())
   });
+
+  useEffect(() => {
+    editorRef.current = editor;
+  }, [editor]);
 
   useEffect(() => {
     if (!editor) return;
@@ -72,11 +94,214 @@ export function RichTextEditor({
   if (!editor) return null;
 
   return (
-    <div className={cn("overflow-hidden rounded-md border border-input bg-background focus-within:ring-2 focus-within:ring-ring focus-within:ring-offset-2 focus-within:ring-offset-background", className)}>
+    <div className={cn("flex flex-col overflow-hidden rounded-md border border-input bg-background focus-within:ring-2 focus-within:ring-ring focus-within:ring-offset-2 focus-within:ring-offset-background", className)}>
       <Toolbar editor={editor} />
-      <EditorContent editor={editor} />
+      {/* The scroll lives HERE, not on the editor node, so the toolbar stays put while the text
+          moves — a toolbar that scrolls away is a toolbar you have to scroll back to in order to
+          make the next heading. `overscroll-contain` keeps a flick at the end of the text from
+          scrolling the dialog (or the page) behind it. */}
+      <div className={cn("overflow-y-auto overscroll-contain", maxHeight)}>
+        <EditorContent editor={editor} />
+      </div>
     </div>
   );
+}
+
+/* ============================ Paste-time auto-formatting ============================ */
+
+/**
+ * What the editor does when you paste something that isn't prose.
+ *
+ * THE PROBLEM: people paste stack traces, SQL, YAML and shell sessions into ticket descriptions
+ * and timesheet notes constantly, and a plain-text paste turned every one of them into a wall of
+ * single-spaced paragraphs — indentation collapsed, line breaks merged, unreadable to whoever
+ * picked the ticket up. The formatting existed (the code-block node has shipped since the first
+ * version); nothing ever reached for it, because doing so meant noticing the toolbar button
+ * first.
+ *
+ * WHY THIS IS DETERMINISTIC AND NOT A MODEL CALL: it has to run on every paste, in the time
+ * between Ctrl+V and the caret moving, offline, and identically every time. A round trip to a
+ * language model is none of those things, and "sometimes it reformats your paste, sometimes it
+ * doesn't" is worse than never doing it. The AI's half of this job is the "Refine with AI"
+ * button, which is explicit, previewed and reversible — and which now preserves code blocks
+ * rather than flattening them (see `sanitize.ts`'s fence round trip). Between the two, code ends
+ * up formatted whether it arrives by paste or by refinement.
+ *
+ * NOTHING HERE IS DESTRUCTIVE: every branch inserts exactly the characters that were on the
+ * clipboard. The only thing being decided is which node they land in, and Ctrl+Z undoes the whole
+ * paste in one step, as it always did.
+ */
+function handleSmartPaste(editor: Editor | null, event: ClipboardEvent): boolean {
+  if (!editor) return false;
+  // Rich HTML on the clipboard (copied from a web page, a doc, another editor) already carries
+  // its own structure — Tiptap's own handler maps it onto the allowed nodes far better than
+  // guessing from the plain-text twin would.
+  const html = event.clipboardData?.getData("text/html");
+  if (html && html.trim()) return false;
+
+  const text = event.clipboardData?.getData("text/plain");
+  if (!text) return false;
+
+  // Returning `true` is what stops the default paste — ProseMirror calls `preventDefault()` for a
+  // handler that reports it handled the event, so doing it here as well would be noise.
+
+  // Already inside a code block: the paste is more code. Insert it raw and skip every heuristic —
+  // interpreting "# comment" as a heading inside a shell script is exactly the wrong answer.
+  if (editor.isActive("codeBlock")) {
+    editor.chain().focus().insertContent({ type: "text", text }).run();
+    return true;
+  }
+
+  if (looksLikeCode(text)) {
+    // A `{ type: "text" }` node, not an HTML string: `insertContent` parses strings as HTML, so a
+    // snippet containing `<div>` would be inserted as an element instead of as the four
+    // characters the author copied.
+    editor.chain().focus().setNode("codeBlock").insertContent({ type: "text", text: stripFences(text) }).run();
+    return true;
+  }
+
+  const structured = markdownToNodes(text);
+  if (structured) {
+    editor.chain().focus().insertContent(structured).run();
+    return true;
+  }
+
+  return false;
+}
+
+/** A paste that is already fenced is code by the author's own say-so; the fence markers
+ *  themselves are notation, not content, so they don't belong in the block. */
+function stripFences(text: string): string {
+  const fenced = /^\s*```[^\n]*\n([\s\S]*?)\n?\s*```\s*$/.exec(text);
+  return fenced ? fenced[1] : text;
+}
+
+/** Lines that are structurally code rather than sentences. Deliberately narrow — each pattern is
+ *  something that essentially never appears in a sentence someone typed. */
+const CODE_SIGNALS: RegExp[] = [
+  /^\s*(?:at\s+[\w$.<>]+\s*\(|Traceback \(most recent call last\)|Caused by:|Exception in thread)/m, // stack traces
+  /^\s*(?:function|class|const|let|var|def|public|private|protected|import|export|return|if|for|while|switch|try|catch|async|await)\b[^.!?]*[{();:]\s*$/m,
+  /^\s*(?:SELECT|INSERT INTO|UPDATE|DELETE FROM|CREATE TABLE|ALTER TABLE|JOIN|WHERE|GROUP BY)\b/im, // SQL
+  /^\s*[$#>]\s+\S+/m, // shell prompts
+  /^\s*(?:npm|npx|yarn|pnpm|git|docker|kubectl|curl|sudo|apt|pip|python|node|mvn|gradle)\s+\S+/m, // commands
+  /^\s*(?:<\/?[a-z][\w-]*(?:\s[^>]*)?>|<\?xml|<!DOCTYPE)/im, // markup
+  /^\s*[\w"'-]+\s*:\s*(?:[|>]|\S)[^.!?]*$/m, // YAML / JSON-ish key: value
+  /^\s*[{}[\]]\s*[,;]?\s*$/m, // a lone brace or bracket on its own line
+  /^\s*(?:\/\/|\/\*|#!|--\s)/m // comment openers and shebangs
+];
+
+/**
+ * Is this paste code?
+ *
+ * Two independent ways to qualify, because the two kinds of paste look nothing alike:
+ *   • an explicit ``` fence — the author already said so, no guessing needed;
+ *   • multi-line text where a MAJORITY of non-blank lines trip a code signal, or where the
+ *     indentation is structural (leading whitespace on a third of the lines).
+ *
+ * The majority rule is what keeps a prose paragraph that happens to mention `git push` out of a
+ * code block. One matching line out of twelve is a sentence about code; eight out of twelve is
+ * code. A single line is never treated as a block — inline code is a different gesture, and
+ * turning every pasted file path into a full-width block would be obnoxious.
+ */
+function looksLikeCode(text: string): boolean {
+  if (/^\s*```/.test(text)) return true;
+
+  const lines = text.split(/\r?\n/);
+  const meaningful = lines.filter((line) => line.trim().length > 0);
+  if (meaningful.length < 2) return false;
+
+  const signalled = meaningful.filter((line) => CODE_SIGNALS.some((pattern) => pattern.test(line))).length;
+  if (signalled * 2 > meaningful.length) return true;
+
+  // Structural indentation: prose wraps at the margin, code steps in and out. Requires a couple
+  // of corroborating signals too, so an indented quotation isn't mistaken for a program.
+  const indented = meaningful.filter((line) => /^[ \t]{2,}\S/.test(line)).length;
+  return indented * 3 >= meaningful.length && signalled > 0;
+}
+
+/**
+ * Markdown-ish plain text -> the HTML Tiptap parses into real nodes.
+ *
+ * Returns null when the paste has no structure worth converting, so the editor's own handler runs
+ * and the paste behaves exactly as it always has. That null is important: this function must
+ * improve pastes it understands and stay out of the way of every other one.
+ *
+ * Deliberately block-level only — headings, lists, quotes, fences. Inline `**bold**` is left
+ * alone: people write `*` mid-sentence for other reasons, and silently eating asterisks out of a
+ * bug report is the kind of "help" that loses information.
+ */
+function markdownToNodes(text: string): string | null {
+  const lines = text.split(/\r?\n/);
+  const hasStructure = lines.some((line) => /^\s*(?:#{1,3}\s|[-*•]\s|\d+[.)]\s|>\s)/.test(line));
+  if (!hasStructure) return null;
+
+  const blocks: string[] = [];
+  let paragraph: string[] = [];
+  let items: string[] = [];
+  let ordered = false;
+
+  const flushParagraph = () => {
+    if (paragraph.length === 0) return;
+    blocks.push(`<p>${paragraph.map(escapeHtml).join("<br>")}</p>`);
+    paragraph = [];
+  };
+  const flushList = () => {
+    if (items.length === 0) return;
+    const tag = ordered ? "ol" : "ul";
+    blocks.push(`<${tag}>${items.map((item) => `<li><p>${escapeHtml(item)}</p></li>`).join("")}</${tag}>`);
+    items = [];
+  };
+
+  for (const raw of lines) {
+    const line = raw.trim();
+    if (!line) {
+      flushParagraph();
+      flushList();
+      continue;
+    }
+
+    const heading = /^(#{1,3})\s+(.*)$/.exec(line);
+    if (heading) {
+      flushParagraph();
+      flushList();
+      blocks.push(`<h${heading[1].length}>${escapeHtml(heading[2])}</h${heading[1].length}>`);
+      continue;
+    }
+
+    const bullet = /^[-*•]\s+(.*)$/.exec(line);
+    const numbered = /^\d+[.)]\s+(.*)$/.exec(line);
+    if (bullet || numbered) {
+      flushParagraph();
+      const isOrdered = Boolean(numbered);
+      if (items.length > 0 && isOrdered !== ordered) flushList();
+      ordered = isOrdered;
+      items.push((bullet?.[1] ?? numbered?.[1] ?? "").trim());
+      continue;
+    }
+
+    const quote = /^>\s?(.*)$/.exec(line);
+    if (quote) {
+      flushParagraph();
+      flushList();
+      blocks.push(`<blockquote><p>${escapeHtml(quote[1])}</p></blockquote>`);
+      continue;
+    }
+
+    flushList();
+    paragraph.push(line);
+  }
+  flushParagraph();
+  flushList();
+
+  return blocks.length > 0 ? blocks.join("") : null;
+}
+
+/** The pasted text is being put INTO an HTML string here, so anything tag-shaped in it has to
+ *  stop being tag-shaped first — otherwise pasting a bug report that quotes `<img onerror=…>`
+ *  would insert the element instead of the text. Tiptap's schema would strip most of it on the
+ *  way in; this makes that a second line of defence rather than the only one. */
+function escapeHtml(value: string): string {
+  return value.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;");
 }
 
 function Toolbar({ editor }: { editor: Editor }) {

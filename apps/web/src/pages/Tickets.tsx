@@ -43,6 +43,7 @@ import {
   LayoutGrid,
   Link2,
   ListChecks,
+  Loader2,
   Download,
   Mail,
   MessageSquare,
@@ -85,7 +86,16 @@ import { Label } from "../components/ui/label";
 import { RichTextEditor } from "../components/ui/rich-text-editor";
 import { ScrollArea } from "../components/ui/scroll-area";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../components/ui/select";
-import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from "../components/ui/sheet";
+import {
+  Sheet,
+  SheetContent,
+  SheetDescription,
+  SheetHeader,
+  SheetMaximizeButton,
+  SheetResizeHandle,
+  SheetTitle,
+  useSheetResize
+} from "../components/ui/sheet";
 import { Skeleton } from "../components/ui/skeleton";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "../components/ui/table";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "../components/ui/tabs";
@@ -657,17 +667,29 @@ function CreateTicketDialog({
     enabled: Boolean(draft.projectId) && !draft.assigneeId
   });
 
+  /**
+   * Files chosen BEFORE the ticket exists.
+   *
+   * WHY THIS IS ONLY POSSIBLE IN TWO STEPS: the upload route is `POST /tickets/:id/attachments`,
+   * and there is no id until the ticket is created. So the screenshot someone has on their
+   * clipboard at the moment they report a bug used to have no home — they filed the ticket, found
+   * it again, opened the Files tab, and uploaded there. Most people simply didn't, and the
+   * evidence never made it onto the ticket at all.
+   */
+  const [pendingFiles, setPendingFiles] = useState<File[]>([]);
+
   function resetDraft() {
     setDraft({ projectId: "", moduleId: "", type: "BUG", title: "", description: "", priority: "MEDIUM", assigneeId: "" });
     setSuggestion(null);
     setDuplicates([]);
     setAiConfidence(null);
     setAutoApplied(false);
+    setPendingFiles([]);
   }
 
   const create = useMutation({
-    mutationFn: (faceVerificationId?: string) =>
-      ticketApi.create({
+    mutationFn: async (faceVerificationId?: string) => {
+      const ticket = await ticketApi.create({
         projectId: draft.projectId,
         moduleId: draft.moduleId || undefined,
         type: draft.type,
@@ -679,9 +701,27 @@ function CreateTicketDialog({
         // Single-use proof of a live identity check; only sent when the workspace policy
         // covers this user. The server independently decides whether it was required.
         ...(faceVerificationId ? { faceVerificationId } : {})
-      }),
+      });
+
+      // The upload is a SEPARATE, non-fatal step. A failed upload must not read as "the ticket
+      // wasn't created" — it was, and it is the thing the user actually cares about; the files
+      // can be added from the Files tab. Reporting it as a warning names what happened without
+      // throwing away the created ticket.
+      if (pendingFiles.length > 0) {
+        try {
+          await ticketApi.attachments.upload(ticket.id, pendingFiles);
+        } catch (error: any) {
+          toast.warning(`${ticket.key} created without its files`, {
+            description: serverMessage(error, "Add them from the ticket's Files tab.")
+          });
+        }
+      }
+      return ticket;
+    },
     onSuccess: (ticket) => {
-      toast.success("Ticket created", { description: ticket.key });
+      toast.success("Ticket created", {
+        description: pendingFiles.length > 0 ? `${ticket.key} · ${pendingFiles.length} file(s) attached` : ticket.key
+      });
       resetDraft();
       onOpenChange(false);
       onCreated(ticket);
@@ -752,12 +792,24 @@ function CreateTicketDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="w-[min(95vw,560px)] max-w-none">
-        <DialogHeader>
+      {/*
+        Pinned header and footer, scrolling middle.
+
+        THE BUG THIS FIXES: the dialog is centre-anchored and had no height cap, so it grew in
+        BOTH directions as the description did. Around fifteen lines of typing, "New ticket" left
+        the top of the screen and Cancel/Create left the bottom — with no scrollbar, because the
+        dialog is `position: fixed` and the page behind it is scroll-locked. You could still type;
+        you could no longer submit. Capping the height puts the overflow somewhere it can be
+        scrolled, and the editor's own `maxHeight` stops it reaching for that space in the first
+        place. `dvh`, not `vh`, because mobile browsers measure `vh` against the viewport with the
+        URL bar hidden.
+      */}
+      <DialogContent className="flex max-h-[calc(100dvh-2rem)] w-[min(95vw,560px)] max-w-none flex-col overflow-hidden">
+        <DialogHeader className="shrink-0">
           <DialogTitle>New ticket</DialogTitle>
           <DialogDescription>Raise a bug, task, or improvement against a project.</DialogDescription>
         </DialogHeader>
-        <div className="grid gap-4">
+        <div className="grid min-h-0 flex-1 gap-4 overflow-y-auto overscroll-contain px-0.5 pb-1">
           <div className="grid gap-4 sm:grid-cols-2">
             <div className="grid gap-1.5">
               <Label>Project</Label>
@@ -797,11 +849,32 @@ function CreateTicketDialog({
             <RichTextEditor
               value={draft.description}
               onChange={(html) => setDraft((d) => ({ ...d, description: html }))}
-              placeholder="Steps to reproduce, expected vs actual, context..."
+              placeholder="Steps to reproduce, expected vs actual, context... (paste a stack trace or snippet — it formats itself as code)"
               minHeight="min-h-28"
+              // Roughly ten lines, then it scrolls inside its own box. Below the dialog's own cap
+              // so the surrounding form — the AI assist row, the type/priority selects — stays
+              // reachable while a long description is being written rather than being pushed down
+              // out of the scroll viewport.
+              maxHeight="max-h-64"
               ariaLabel="Ticket description"
             />
             <AiRefinePanel state={refineDescription} />
+          </div>
+
+          {/* Attach the evidence NOW, while it is on the clipboard and the reporter is still
+              thinking about the bug. Uploaded immediately after the ticket is created — see the
+              two-step note on the create mutation. */}
+          <div className="grid gap-1.5">
+            <Label>
+              Attachments <span className="text-muted-foreground">(optional)</span>
+            </Label>
+            <FileDropzone
+              files={pendingFiles}
+              onChange={setPendingFiles}
+              maxFiles={8}
+              maxSizeMb={25}
+              hint="Screenshots, logs, exports — attached to the ticket the moment it's created."
+            />
           </div>
 
           <div className="flex items-center justify-between rounded-md border border-dashed border-border px-3 py-2">
@@ -926,7 +999,7 @@ function CreateTicketDialog({
             </div>
           )}
         </div>
-        <DialogFooter>
+        <DialogFooter className="shrink-0 border-t border-border pt-3">
           <Button
             variant="ghost"
             onClick={() => {
@@ -937,7 +1010,8 @@ function CreateTicketDialog({
             Cancel
           </Button>
           <Button onClick={requestCreate} disabled={!draft.projectId || draft.title.trim().length < 3 || create.isPending}>
-            <Plus className="h-4 w-4" />Create ticket
+            {create.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Plus className="h-4 w-4" />}
+            Create ticket
           </Button>
         </DialogFooter>
       </DialogContent>
@@ -1041,6 +1115,10 @@ function TicketDetailSheet({
     onError: (err: any) => toast.error("Could not remove label", { description: serverMessage(err, "Try again.") })
   });
 
+  /** Panel width, remembered per browser. Declared above the early return so the hook order is
+   *  identical whether or not a ticket is open. */
+  const sheetSize = useSheetResize({ storageKey: "timesphere.ticket-sheet-width" });
+
   if (!ticketId) return null;
   const ticket = detail.data;
   const TypeIcon = ticket ? iconForType(ticket.type) : TicketIcon;
@@ -1051,7 +1129,17 @@ function TicketDetailSheet({
 
   return (
     <Sheet open={Boolean(ticketId)} onOpenChange={(open) => !open && onClose()}>
-      <SheetContent className="w-full overflow-y-auto sm:max-w-xl">
+      {/*
+        Resizable and maximizable, because this panel is a working surface rather than a summary:
+        a description, a comment thread, pasted code, a proofing image and a twelve-column
+        activity log all have to be read AND edited in it. At the old fixed 576px a stack trace
+        wrapped into unreadable ribbon and there was nothing the reader could do about it. The
+        width is remembered per browser, so it is set once rather than re-dragged per ticket, and
+        the whole mechanism is inert below `sm` where the sheet is already the entire screen.
+      */}
+      <SheetContent className="w-full overflow-y-auto sm:max-w-xl" style={sheetSize.style}>
+        <SheetResizeHandle state={sheetSize} label="Resize the ticket panel" />
+        <SheetMaximizeButton state={sheetSize} />
         {/* Radix requires a title WHENEVER the sheet is open — including the loading phase
             before `ticket` exists, which is exactly when the visible SheetTitle below hasn't
             rendered yet (this was the source of the recurring DialogTitle console warning).
@@ -1072,7 +1160,11 @@ function TicketDetailSheet({
         )}
         {ticket && (
           <>
-            <SheetHeader>
+            {/* `pr-16` clears the two absolutely-positioned controls in the top-right — close, and
+                now maximize. Without it a long ticket title runs underneath them and the first
+                thing you try to click is the title. Only the header needs it; the body below runs
+                the full width. */}
+            <SheetHeader className="pr-16">
               <div className="text-xs font-mono text-muted-foreground">{ticket.key}</div>
               <SheetTitle className="flex items-start gap-2 text-xl">
                 <TypeIcon className="mt-0.5 h-5 w-5 shrink-0 text-muted-foreground" />
@@ -1196,6 +1288,11 @@ function TicketDetailSheet({
               <Tabs defaultValue="comments" className="grid gap-3">
                 <TabsList>
                   <TabsTrigger value="comments"><MessageSquare className="h-3.5 w-3.5" />Comments ({ticket.comments.length})</TabsTrigger>
+                  {/* Second, immediately after Comments. The two are read together — a comment
+                      almost always refers to a file, and a file almost always needs a comment —
+                      and Files used to sit eighth, past four conditional tabs, which is far
+                      enough right to be off the end of the strip on a laptop. */}
+                  <TabsTrigger value="attachments"><Paperclip className="h-3.5 w-3.5" />Files ({ticket.attachments.length})</TabsTrigger>
                   <TabsTrigger value="checklist"><CheckSquare className="h-3.5 w-3.5" />Checklist ({ticket.checklistItems.length})</TabsTrigger>
                   {/* Gated on the same flags the panels themselves check. The panels degrade to a
                       "this is off" explainer, which is right when planning is ON but a sub-feature
@@ -1212,7 +1309,6 @@ function TicketDetailSheet({
                     <TabsTrigger value="proofing"><MessageSquarePlus className="h-3.5 w-3.5" />Proofing</TabsTrigger>
                   )}
                   <TabsTrigger value="links"><Link2 className="h-3.5 w-3.5" />Linked ({ticket.links.length})</TabsTrigger>
-                  <TabsTrigger value="attachments"><Paperclip className="h-3.5 w-3.5" />Files ({ticket.attachments.length})</TabsTrigger>
                   <TabsTrigger value="time"><TimerReset className="h-3.5 w-3.5" />Time logged</TabsTrigger>
                   <TabsTrigger value="dev"><GitBranch className="h-3.5 w-3.5" />Dev ({ticket.branches.length})</TabsTrigger>
                   <TabsTrigger value="security"><ShieldAlert className="h-3.5 w-3.5" />Security</TabsTrigger>
@@ -1221,6 +1317,9 @@ function TicketDetailSheet({
                 </TabsList>
                 <TabsContent value="comments">
                   <CommentsPanel ticketId={ticket.id} comments={ticket.comments} onPosted={invalidate} />
+                </TabsContent>
+                <TabsContent value="attachments">
+                  <AttachmentsPanel ticketId={ticket.id} attachments={ticket.attachments} onChanged={invalidate} />
                 </TabsContent>
                 <TabsContent value="checklist">
                   <ChecklistPanel ticketId={ticket.id} items={ticket.checklistItems} onChanged={invalidate} />
@@ -1239,9 +1338,6 @@ function TicketDetailSheet({
 
                 <TabsContent value="links">
                   <LinksPanel ticketId={ticket.id} links={ticket.links} onChanged={invalidate} onOpenTicket={onOpenTicket} />
-                </TabsContent>
-                <TabsContent value="attachments">
-                  <AttachmentsPanel ticketId={ticket.id} attachments={ticket.attachments} onChanged={invalidate} />
                 </TabsContent>
                 <TabsContent value="time">
                   <TimeLoggedPanel timesheets={ticket.timesheets} />
@@ -1354,7 +1450,16 @@ function CommentsPanel({
       <div className="flex items-center justify-end">
         <AiRefineTrigger state={refineComment} />
       </div>
-      <RichTextEditor value={body} onChange={setBody} placeholder="Add a comment..." minHeight="min-h-20" ariaLabel="New comment" />
+      {/* Capped low: this box lives at the BOTTOM of a scrolling thread panel, so every line it
+          grows pushes the "Post comment" button further off the end of the sheet. */}
+      <RichTextEditor
+        value={body}
+        onChange={setBody}
+        placeholder="Add a comment... (paste a log or snippet — it formats itself as code)"
+        minHeight="min-h-20"
+        maxHeight="max-h-48"
+        ariaLabel="New comment"
+      />
       <AiRefinePanel state={refineComment} />
       <Button size="sm" className="justify-self-end" disabled={plainLength === 0 || post.isPending} onClick={() => post.mutate()}>
         Post comment

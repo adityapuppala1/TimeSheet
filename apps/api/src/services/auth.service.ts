@@ -447,6 +447,18 @@ export async function refresh(refreshToken: unknown) {
 export async function changePassword(userId: string, currentPassword: string, nextPassword: string, currentSessionId?: string) {
   const user = await prisma.user.findUniqueOrThrow({ where: { id: userId } });
   if (!(await verifyPassword(currentPassword, user.passwordHash))) throw new AppError(422, "Current password is incorrect");
+  // THE POINT OF THE WHOLE FLOW: a new password identical to the current one is not a password
+  // change. It mattered most on the first sign-in, where `mustChangePassword` is set precisely
+  // because an ADMIN knows the current password — re-entering it cleared the flag and left the
+  // account exactly as exposed as before, while the UI reported success.
+  //
+  // Compared against the STORED HASH, not against the `currentPassword` string: they are the same
+  // check here only because the current password was just verified, but a caller reaching this
+  // with a stale/absent `currentPassword` (a future admin-side reset path) would still be caught.
+  // The cost is one extra bcrypt compare on a route nobody calls in a loop.
+  if (await verifyPassword(nextPassword, user.passwordHash)) {
+    throw new AppError(422, "Your new password must be different from your current one.");
+  }
   // Choosing their own password clears the "admin knows this password" prompt flag.
   await prisma.user.update({
     where: { id: userId },
@@ -497,6 +509,15 @@ export async function resetPassword(rawToken: string, nextPassword: string): Pro
     }
   }
   if (!match) throw new AppError(422, "This reset link is invalid or has expired.");
+
+  // Same rule as `changePassword`: re-setting the password you already have is not a reset. Most
+  // reset links are sent precisely because someone else set (or may know) the current password,
+  // so accepting it back would end the flow having changed nothing. Checked AFTER the token is
+  // matched but BEFORE it is burned, so a rejected attempt leaves the link usable for a real one.
+  const resetting = await prisma.user.findUnique({ where: { id: match.userId }, select: { passwordHash: true } });
+  if (resetting && (await verifyPassword(nextPassword, resetting.passwordHash))) {
+    throw new AppError(422, "Your new password must be different from your current one.");
+  }
 
   await prisma.$transaction([
     prisma.passwordResetToken.update({ where: { id: match.id }, data: { usedAt: new Date() } }),

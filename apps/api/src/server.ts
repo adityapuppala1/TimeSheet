@@ -26,6 +26,7 @@ import { startDailyReminderWorker } from "./workers/daily-reminder.worker.js";
 import { startDeadlineReminderWorker } from "./workers/deadline-reminder.worker.js";
 import { startEscalationWorker } from "./workers/escalation.worker.js";
 import { startInboundEmailWorker } from "./workers/inbound-email.worker.js";
+import { startMailQueueWorker } from "./workers/mail-queue.worker.js";
 import { startTicketEscalationWorker } from "./workers/ticket-escalation.worker.js";
 import { startWeeklyDigestWorker } from "./workers/weekly-digest.worker.js";
 import { startSecurityWeeklyDigestWorker } from "./workers/security-weekly-digest.worker.js";
@@ -209,6 +210,10 @@ server.on("listening", async () => {
   startProjectRiskWorker();
   startReportSubscriptionWorker();
   startServiceHealthWorker();
+  // Drains deferred outbound email. Started alongside the inbound poller — the two halves
+  // of the mail path, and the outbound one is the reason a rate-limited send now arrives late
+  // instead of not at all.
+  startMailQueueWorker();
   startInboundEmailWorker();
   startChatTelegramWorker();
   startWeeklyDigestWorker();

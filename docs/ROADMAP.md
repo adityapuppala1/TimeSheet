@@ -2788,3 +2788,131 @@ build, desktop + responsive e2e).
   (never a cover crop - that is right for an avatar, disfiguring for a designed mark) and are
   always PNG (a JPEG re-encode paints a transparent logo black on dark themes). Both properties
   pinned by `tests/unit/branding-storage.test.ts`.
+
+## 2026-08-14 — the team's bug list, and two panels that needed to be windows
+
+Ten asks from the team in one pass. Grouped by what they turned out to actually be, because
+several of them shared a root cause.
+
+### Dialogs that could not be finished
+
+- [x] **The New-ticket dialog walked off both edges of the screen.** Reported as "the description
+  has no scroll", and it did not — but the deeper cause was that the dialog is centre-anchored
+  (`translate(-50%, -50%)`) with **no height cap**, so it grew in both directions as the editor
+  did. Around fifteen lines the title left the top of the window and Cancel/Create left the
+  bottom, with no scrollbar to bring them back: the dialog is `position: fixed` over a
+  scroll-locked page. You could keep typing and could no longer submit. Fixed at three levels:
+  `DialogContent` now caps at `max-h-[calc(100dvh-2rem)]` with internal scroll (which closes this
+  whole class of bug for every dialog in the app at once), the ticket dialog pins its header and
+  footer and scrolls only the middle, and `RichTextEditor` gained a `maxHeight` so it stops
+  growing and starts scrolling on its own — with the **toolbar outside the scroll box**, because a
+  toolbar that scrolls away is one you have to scroll back to. `dvh` not `vh`: mobile browsers
+  measure `vh` against the viewport with the URL bar hidden.
+
+### Text that arrives as code and used to be flattened into prose
+
+- [x] **Pasting a stack trace, SQL, YAML or a shell session now produces a code block.** The
+  code-block node has shipped since the first version and nothing ever reached for it, because
+  doing so meant noticing the toolbar button first. A paste handler classifies the clipboard text
+  and picks the node; markdown-ish structure (headings, lists, quotes, fences) becomes real nodes
+  too.
+
+  **Deterministic, not a model call**, and that is the interesting decision. It has to run between
+  Ctrl+V and the caret moving, offline, and identically every time; "sometimes it reformats your
+  paste" is worse than never doing it. The heuristic is deliberately narrow — a **majority** of
+  non-blank lines must trip a code signal, so a paragraph mentioning `git bisect` stays a
+  paragraph, and a single line is never a block. Pinned by an e2e test that pastes prose and
+  asserts no `pre` element appears.
+
+- [x] **AI refine stopped destroying code blocks.** The other half of the same ask, and a real bug:
+  `htmlToPlainText` flattened `pre` to a paragraph on the way out and the whitespace normalisation
+  stripped its indentation on the way back, so "refine this description" reliably ruined any
+  snippet in it. The pair is now a genuine round trip via fenced blocks, headings and quotes — and
+  the refine prompt gained the rule that code is never prose and never spell-corrected. Eight
+  round-trip cases in `tests/unit/sanitize.test.ts`.
+
+- [x] **Ticket attachments can be chosen before the ticket exists.** The upload route needs an id,
+  so the screenshot on the reporter's clipboard had no home: file the ticket, find it again, open
+  the Files tab. Most people simply did not. Now a dropzone in the create dialog, uploaded
+  immediately after creation as a **separate, non-fatal step** — a failed upload reports as a
+  warning naming the created ticket, never as "the ticket wasn't created".
+
+### One entry, three screens, no way to open it
+
+- [x] **`GET /timesheets/:id` and a shared `TimesheetEntryDialog`.** Approvals had a bespoke
+  read-only dialog that listed attachments as a **count** — "2 file(s)", nothing to click — so an
+  approver was asked to sign off hours on the strength of evidence the screen could see and they
+  could not. History had no detail view at all, which mattered because an approved entry leaves the
+  approvals queue and this table becomes the only remaining record of it. The dashboard's day
+  timeline linked every block to `/app/history`: you clicked a specific 3.5h block on a specific
+  person's lane and arrived at a list of everything. All three now open the same component;
+  attachments are plain download links, because the API already signs every `/uploads` path it
+  emits, so the URL *is* the capability.
+
+- [x] **`PATCH /timesheets/:id` — correcting an entry, with the audit trail that makes it
+  defensible.** Two rules: the author while it is still `DRAFT`/`REJECTED` (the window `DELETE`
+  already allows), or `TIMESHEETS_APPROVE` in any status. Broader than the delete rule on purpose —
+  **erasure and correction are different acts**. Every edit records a field-by-field diff, the
+  submitter is notified when someone else edits their row, and an approved entry's **frozen rate is
+  never re-resolved**: if the hours change, `billedAmount` is recomputed from the already-frozen
+  rate, so the stored total can never disagree with its own hours and last quarter's work is never
+  silently repriced at today's rate.
+
+### A password change that changed nothing
+
+- [x] **The new password could be the current one.** It mattered most exactly where it was most
+  likely: first sign-in. `mustChangePassword` is set *because* an administrator knows the current
+  password — typing it into both boxes cleared the flag, revoked the other sessions, and reported
+  success, leaving the account as exposed as before with the prompt gone. Refused now in three
+  places: a zod refinement for the free case, a hash comparison in `changePassword` (against the
+  **stored hash**, so `resetPassword` — which has no `currentPassword` — is covered by the same
+  rule), and a client-side guard so the user is told while still looking at the field. Seven unit
+  tests, including that a refused attempt writes nothing, revokes nothing, and leaves an emailed
+  reset link unburnt.
+
+### A table that was seeded and never read
+
+- [x] **Activity types are editable.** `ActivityType` has existed since the first migration and
+  **nothing ever queried it** — both apps imported a frozen twelve-item array from
+  `@timesheet/shared`, so a workspace running "Incident response" or "Client call" had no way to
+  say so short of a redeploy. New CRUD router, a management card on the Projects screen (add,
+  rename, enable, disable, delete), and the logging picker plus the report filter now read the
+  workspace's own catalog. `Timesheet.activityType` stays a **string, not a foreign key**, for the
+  reason `ticket-type.controller.ts` already records: an entry is a record of what someone said at
+  the time, and a rename a year later must not rewrite it. Deleting an activity that history uses
+  is refused with the entry count and a pointer at disabling.
+
+### Email that hit the provider's rate limit
+
+- [x] **The rate limits were self-inflicted, and the queue was a status column nobody drained.**
+  Every send built its own SMTP connection and fired immediately, and notifications dispatch
+  detached (for a good reason — awaiting four SMTP round trips made one notify take 8.7s). So a
+  bulk approval, or the daily reminder sweep across fifty people, opened that many **simultaneous**
+  connections in one tick. Office 365 permits three.
+
+  Two mechanisms, solving different halves. The transport is now **pooled and rate-limited**
+  (`maxConnections` / `rateLimit` / `rateDelta`, admin-editable per workspace, clamped server-side,
+  defaults under Office 365's caps) so a burst is *paced* rather than refused. And `EmailLog`
+  became the queue it always claimed to be: `attempts`, `nextAttemptAt`, `payload`, drained every
+  minute by `mail-queue.worker.ts` with 1m/5m/15m/30m jittered backoff and five attempts before
+  `FAILED` as the dead letter. `classifyFailure` distinguishes transient from permanent — a 4xx is
+  transient by RFC 5321, which is exactly what a rate limit is; a 5xx is not, *unless* its text
+  says "quota exceeded", which several providers answer 550 for. Unrecognised failures default to
+  retryable, because the attempt cap bounds the cost of being wrong at four extra tries while the
+  opposite default silently drops mail.
+
+### The ticket panel became a window
+
+- [x] **Maximize/restore, drag-to-resize, and a remembered width.** This is the most-used surface
+  in the product, and it is where a description, a comment thread, pasted code, a proofing image
+  and a twelve-column activity log all have to be read *and* edited. At a fixed 576px a stack trace
+  wrapped into unreadable ribbon and the person triaging it could do nothing about it. Built into
+  the `Sheet` primitive rather than the page: `useSheetResize` + `SheetResizeHandle` +
+  `SheetMaximizeButton`, pointer events (so mouse, pen and touch are one path) with
+  `setPointerCapture` so the drag survives the pointer outrunning the 6px handle. The handle is the
+  WAI-ARIA **window splitter** pattern — a focusable `separator` with arrow-key resizing, because a
+  drag-only control is one a keyboard user does not have. Inert below `sm`, where the sheet is
+  already the whole screen and both controls would be unable to do anything.
+- [x] **Files moved to second, immediately after Comments.** The two are read together — a comment
+  almost always refers to a file — and Files sat eighth, past four conditional tabs, far enough
+  right to be off the end of the strip on a laptop.

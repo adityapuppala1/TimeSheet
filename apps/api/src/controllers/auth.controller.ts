@@ -177,7 +177,13 @@ authRouter.post(
         to: result.user.email,
         templateKey: "reset",
         vars: { resetUrl: result.resetUrl, appUrl: env.APP_BASE_URL },
-        fallback: { subject: "Reset your Timesheet Portal password", html: templates.reset(result.resetUrl) }
+        fallback: { subject: "Reset your Timesheet Portal password", html: templates.reset(result.resetUrl) },
+        // The rendered body contains the LIVE reset token. `PasswordResetToken.tokenHash` is
+        // bcrypt precisely so database access cannot yield a usable one, and the retry queue's
+        // stored body would hand that straight back. Never persisted, therefore never retried —
+        // a token that expires in thirty minutes is worthless by the time a retry would run, and
+        // asking for another link is one click.
+        sensitive: true
       });
     }
     res.status(202).json({ message: "If the account exists, reset instructions were sent." });
@@ -198,10 +204,18 @@ authRouter.post(
   requireAuth,
   validate(
     z.object({
-      body: z.object({
-        currentPassword: z.string().min(8),
-        nextPassword: z.string().min(8)
-      })
+      // The authoritative "not the same password" rule is `changePassword`'s hash comparison —
+      // this is the free half of it: identical strings never need a bcrypt round-trip, and the
+      // error arrives attached to the field the user has to fix.
+      body: z
+        .object({
+          currentPassword: z.string().min(8),
+          nextPassword: z.string().min(8)
+        })
+        .refine((body) => body.currentPassword !== body.nextPassword, {
+          message: "Your new password must be different from your current one.",
+          path: ["nextPassword"]
+        })
     })
   ),
   async (req, res) => {

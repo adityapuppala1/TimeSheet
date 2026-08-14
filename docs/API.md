@@ -99,9 +99,53 @@ halves of that (`tests/unit/branding-storage.test.ts`).
 - `POST /projects/:id/modules`
 - `POST /modules/:id/submodules`
 
+### Activity types
+
+The catalog behind the timesheet form's **Activity** field. Administered on the Projects screen,
+because it is the same kind of thing as a module — a dimension you slice logged work by — under
+the same `projects:manage` right.
+
+- `GET /activity-types` — readable by **any** signed-in user: everyone who logs a timesheet needs
+  it, and an `EMPLOYEE` holds none of the manage rights. `?all=true` additionally returns disabled
+  rows and needs `projects:manage`; offering a retired activity in the logging picker is the thing
+  disabling it was meant to stop.
+- `POST /activity-types` — `{ name }`. A duplicate returns **409**, and a duplicate of a *disabled*
+  row says so, pointing at re-enabling rather than creating a second one.
+- `PATCH /activity-types/:id` — `{ name?, isActive? }`.
+- `DELETE /activity-types/:id` — **only when nothing was ever logged under it.** Otherwise
+  **409** with the entry count and the advice to disable instead.
+
+> **`Timesheet.activityType` stays a string, not a foreign key** — the same reasoning
+> `ticket-type.controller.ts` records for `Ticket.type`. An entry is a record of work that
+> happened; a manager renaming or retiring an activity a year later must not rewrite, or orphan,
+> the history logged under it. The name is copied onto the row at write time, and this catalog
+> governs what the **picker** offers, not what the past says.
+>
+> The `ActivityType` table had been seeded since the first migration and **nothing ever read it** —
+> both apps imported a frozen twelve-item array from `@timesheet/shared` instead, so a workspace
+> whose work did not fit those twelve words had no way to say so short of a redeploy. When the
+> table is empty the list route falls back to those defaults (marked `seeded: true`, with a
+> `seed:` id) so a workspace whose seed never ran still gets a usable form.
+
 ## Timesheets
 
 - `GET /timesheets?from=&to=&userId=&projectId=&status=`
+- `GET /timesheets/:id` — **one entry in full**: project/module/submodule, the linked ticket, the
+  author, the reviewer, every attachment (with a signed download URL) and the identity badge. Your
+  own entries always; anyone's with `reports:view` or `timesheets:approve`. A 404 — never a 403 —
+  for anything else, because "this entry exists but isn't yours" is itself information about a
+  colleague's work. Exists as a route rather than a lookup in the list because the list is capped
+  at 100 rows, so an older entry reached by deep link is simply not in it.
+- `PATCH /timesheets/:id` — **correct an entry after the fact**. Accepts any subset of
+  `projectId`, `moduleId`, `submoduleId`, `ticketId`, `activityType`, `taskDescription`,
+  `workDate`, `startTime`, `endTime`, `notes`. Deliberately NOT `status` or `billable` — those are
+  decisions with their own routes, notifications and rate-freezing behaviour, not descriptions of
+  work. The supplied fields are merged onto the stored row and the **result** is validated, so
+  changing the project cannot leave a module belonging to the old one.
+- `POST /timesheets/:id/attachments` (multipart, field `attachments`) and
+  `DELETE /timesheets/:id/attachments/:attachmentId` — add or remove evidence on an existing
+  entry, through the same processing pipeline (WebP re-encode, gzip, structured filename) the
+  create path uses.
 - `POST /timesheets/draft`
 - `POST /timesheets/submit`
 - `PATCH /timesheets/:id/approve`
@@ -133,6 +177,30 @@ the row keeps its audit trail, and because every read path (including the overla
 > This route did not exist until 2026-08. Its absence meant a mistaken entry could only be edited
 > into something else, and it silently broke the e2e suite's cleanup, which had been calling it and
 > treating Express's 404 as success. See `tests/e2e/helpers/admin-request.ts`.
+
+### Who may edit an entry — and why editing is wider than deleting
+
+`PATCH /timesheets/:id` has **two** rules, matching who bears the consequence:
+
+| Caller | May edit | Why |
+|---|---|---|
+| the **author** | their own `DRAFT` / `REJECTED` entries | Exactly the window `DELETE` allows, for the same reason: nobody is waiting on it and nothing downstream has consumed it. |
+| `TIMESHEETS_APPROVE` | **any** entry, in **any** status | They already decide whether these hours are payable. Withholding "fix the module name" from someone trusted to approve the hours is a distinction without a difference, and the alternative in practice is a rejection round-trip for a typo. |
+
+That is deliberately broader than the delete rule, and the reason the two differ is that **erasure
+and correction are different acts**. Deleting an approved entry would remove a record a client may
+already have been shown; correcting one leaves the record in place and says what changed:
+
+- **Every edit is audited field-by-field** (`timesheet.updated`, with `{ from, to }` per changed
+  field and `onBehalfOf` when a reviewer edited somebody else's row). That audit trail is what
+  makes editing an approved entry defensible rather than alarming.
+- **The submitter is notified** when someone else edits their entry. Silent edits by a reviewer are
+  how an approval queue loses the submitter's trust.
+- **An approved entry's frozen rate is never re-resolved.** If the hours change, `billedAmount` is
+  recomputed from the *already-frozen* `billedRate` in Decimal — so the stored total can never
+  disagree with its own hours, and last quarter's work is never silently repriced at today's rate.
+- Overlap is re-checked against the **entry's own author**, not the editor: a manager fixing
+  somebody else's row must not be able to push it on top of another of that person's entries.
 
 ## Face (identity) verification
 
@@ -683,6 +751,75 @@ again.
 Omitting `emailRoleMutes` from a PATCH leaves the stored map untouched. See
 [DATABASE.md](DATABASE.md#per-role-email-mutes-globalnotificationsettingsemailrolemutes) for the
 column and why NULL is the correct default forever.
+
+## Outbound email: pacing and the send queue
+
+Every outbound email goes through `services/mail.service.ts#sendMail`. Two mechanisms keep it from
+tripping the provider's rate limit, and they solve different halves of the problem.
+
+**1. The transport is pooled and rate-limited.** It was not: each send built its own SMTP
+connection and fired immediately, and `dispatchNotification` deliberately detaches the send (a real
+SMTP round trip costs 1–3s *per recipient*, and awaiting them made a face-verify notify four
+reviewers in 8.7s instead of 200ms). So a bulk approval of twenty timesheets, or the daily reminder
+sweep across a fifty-person workspace, opened that many **simultaneous** connections in one tick.
+Office 365 permits three. The rate limits were self-inflicted from there.
+
+The pool is configured per workspace on **Workspace Settings → Mail server**, stored on
+`GlobalMailSettings`, and clamped server-side regardless of what is stored:
+
+| Setting | Default | Bounds | Maps to |
+|---|---|---|---|
+| `maxConnections` | 3 | 1–20 | nodemailer `maxConnections` |
+| `maxMessagesPerWindow` | 25 | 1–5000 | nodemailer `rateLimit` |
+| `rateWindowMs` | 60000 | 1s–1h | nodemailer `rateDelta` |
+
+The defaults are the conservative intersection of the common providers (Office 365: 30 messages per
+minute and 3 concurrent connections; Gmail SMTP: ~20 concurrent; SES: a per-account send rate), with
+headroom for the audit BCC. Anything over the limit **waits its turn inside the pool** rather than
+being rejected.
+
+**2. What the provider still refuses is retried.** `EmailLog` has carried a `QUEUED` status since
+the first migration and nothing ever re-drove a row out of it — `sendMail` wrote QUEUED, hit the
+server in the same breath, and wrote SENT or FAILED. A `451 too many messages, slow down` therefore
+lost that email permanently, and the only evidence was a FAILED row nobody reads.
+
+`EmailLog` is now the queue itself: `attempts`, `nextAttemptAt`, `lastAttemptAt` and `payload` (the
+rendered body, kept **only** while the row is still deliverable and cleared the moment it is sent or
+given up on, so this stays an audit log rather than a copy of every email ever sent).
+`workers/mail-queue.worker.ts` drains `status = QUEUED AND nextAttemptAt <= now()` every minute,
+oldest first, serially — concurrency here would hand the whole batch to the pool at once and defeat
+the pacing.
+
+- **Retryable vs permanent** is decided by `classifyFailure`. A 4xx SMTP reply is transient by
+  RFC 5321 — which is exactly what a rate limit is. A 5xx is permanent, *unless* its text says
+  otherwise (several providers answer `550` for "sending quota exceeded"). Socket-level errors
+  (`ETIMEDOUT`, `ECONNRESET`, `EAI_AGAIN`, …) are transient: a dropped connection says nothing
+  about whether the message was acceptable. Anything unrecognised defaults to **retryable** — the
+  attempt cap bounds the cost of being wrong at four extra tries, while the opposite default
+  silently drops mail.
+- **Backoff** is 1m / 5m / 15m / 30m with up to 20% jitter, so a burst rejected together does not
+  come back in lockstep and get rejected together again.
+- **`MAX_SEND_ATTEMPTS = 5`**, after which the row goes `FAILED` and stays there. That is the
+  dead-letter, and it is what `/email-templates/analytics/failures` below reports on.
+- A row written but never attempted (the process died mid-send) is picked up as an **orphan** after
+  five minutes. That is why the log row is written *before* the send rather than after.
+
+> **A credential-bearing body is never persisted, and therefore never retried.** `payload` exists
+> so a deferred send has something to send — harmless for a rendered notification, and not harmless
+> for a password-reset email, whose body carries the **live token**. `PasswordResetToken.tokenHash`
+> is bcrypt precisely so that database access cannot yield a usable token; storing the rendered
+> body would hand it straight back. `SendArgs.sensitive` suppresses the stored copy and makes any
+> failure terminal (there is nothing to retry *with*, and a token that expires in thirty minutes is
+> worthless by the time a retry would run — asking for another link is one click). Set explicitly
+> on the reset flow, and backstopped by `looksSensitive()`, which re-checks the **rendered HTML**
+> for token- and password-shaped content regardless of the flag — an admin can edit any template
+> from the Email templates screen, so the template key is not a reliable statement about what the
+> body contains.
+
+`sendMail` still attempts the first delivery **inline**, so the common case keeps its latency and
+the "Send test email" button still reports what actually happened. What changed is the failure path.
+`SendResult.status` gained `QUEUED` for exactly that reason: a caller that reports "could not send"
+for a message the queue is about to deliver is lying to the user.
 
 ## Email delivery analytics
 

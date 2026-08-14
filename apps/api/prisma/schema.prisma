@@ -688,6 +688,16 @@ model NotificationPreference {
 }
 
 /// Append-only log of every outbound transactional email.
+/// Every outbound email, and — since the queue landed — the QUEUE ITSELF.
+///
+/// This table always had a QUEUED status and nothing ever re-drove a row out of it: `sendMail`
+/// wrote QUEUED, hit the SMTP server in the same breath, and wrote SENT or FAILED. A provider
+/// answering "451 too many messages, slow down" therefore lost that email permanently, and a
+/// burst (a bulk approval, the daily reminder sweep) opened one connection per message at once,
+/// which is what earns the 451 in the first place.
+///
+/// The four columns below turn the existing status into a real work queue: FAILED now means
+/// "given up on", and QUEUED means "due at `nextAttemptAt`". See workers/mail-queue.worker.ts.
 model EmailLog {
   id           String      @id @default(uuid())
   to           String      @db.VarChar(255)
@@ -698,9 +708,23 @@ model EmailLog {
   metadata     Json?
   createdAt    DateTime    @default(now())
 
+  /// How many SMTP attempts this message has had. Drives the backoff schedule and the give-up
+  /// ceiling in mail-queue.worker.ts.
+  attempts      Int       @default(0)
+  /// When the queue may next try. NULL on a row that is not waiting (SENT, or FAILED for a
+  /// permanent reason). The drain query is `status = QUEUED AND nextAttemptAt <= now()`.
+  nextAttemptAt DateTime?
+  lastAttemptAt DateTime?
+  /// The rendered message, kept only while the row is still deliverable and cleared the moment it
+  /// is SENT or given up on. Without it a retry has nothing to send — and keeping it forever
+  /// would turn an audit log into a copy of every email the workspace ever sent.
+  payload       Json?
+
   @@index([to, createdAt])
   @@index([status, createdAt])
   @@index([template, createdAt])
+  /// The drain query's index: due-and-queued, oldest first.
+  @@index([status, nextAttemptAt])
 }
 
 /// Admin-editable email templates. Falls back to the compiled defaults if no row exists.
@@ -1751,6 +1775,21 @@ model GlobalMailSettings {
   /// the same way as EmailIntakeSettings.imapPassword (AES-256-GCM via utils/encryption.ts).
   password    String? @db.VarChar(500)
   fromAddress String? @db.VarChar(255)
+
+  /// ── Throttle. The defaults are the conservative intersection of what the common providers
+  /// allow (Office 365: 30 messages/minute, 3 concurrent connections; Gmail SMTP: ~20 concurrent;
+  /// SES: a per-account send rate). They are settings rather than constants because a workspace
+  /// on a dedicated relay is entitled to go much faster, and one on a shared mailbox needs to go
+  /// slower — and the failure mode of guessing wrong is a rate-limit rejection, which is exactly
+  /// what this exists to prevent.
+  ///
+  /// Simultaneous SMTP connections in the nodemailer pool.
+  maxConnections    Int @default(3)
+  /// Messages per `rateWindowMs` across the whole pool.
+  maxMessagesPerWindow Int @default(25)
+  /// The window those messages are counted in. 60s by default, so the default reads as
+  /// "25 per minute" — under Office 365's 30 with room for the audit BCC.
+  rateWindowMs      Int @default(60000)
 
   updatedAt   DateTime @updatedAt
   updatedById String?

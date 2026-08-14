@@ -914,7 +914,13 @@ const mailSettingsSchema = z.object({
       // Empty string clears the stored password (falls back to no-auth or the .env password,
       // same convention as EmailIntakeSettings.imapPassword); omit to leave it untouched.
       password: z.string().max(500).optional(),
-      fromAddress: z.string().max(255).optional().nullable()
+      fromAddress: z.string().max(255).optional().nullable(),
+      // Throttle. The bounds mirror `THROTTLE_BOUNDS` in mail.service.ts, which clamps whatever
+      // is stored anyway — validating here means the admin gets told, rather than silently
+      // getting a different number than the one they typed.
+      maxConnections: z.coerce.number().int().min(1).max(20).optional(),
+      maxMessagesPerWindow: z.coerce.number().int().min(1).max(5000).optional(),
+      rateWindowMs: z.coerce.number().int().min(1000).max(3_600_000).optional()
     })
     .strict()
 });
@@ -927,6 +933,9 @@ settingsRouter.patch("/mail", requireSuperAdmin, validate(mailSettingsSchema), a
   if ("user" in req.body) data.user = req.body.user || null;
   if (typeof req.body.password === "string") data.password = req.body.password.length > 0 ? encryptSecret(req.body.password) : null;
   if ("fromAddress" in req.body) data.fromAddress = req.body.fromAddress || null;
+  if (typeof req.body.maxConnections === "number") data.maxConnections = req.body.maxConnections;
+  if (typeof req.body.maxMessagesPerWindow === "number") data.maxMessagesPerWindow = req.body.maxMessagesPerWindow;
+  if (typeof req.body.rateWindowMs === "number") data.rateWindowMs = req.body.rateWindowMs;
 
   const updated = await prisma.globalMailSettings.upsert({
     where: { id: "global" },

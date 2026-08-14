@@ -54,6 +54,7 @@ import { Progress } from "../components/ui/progress";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../components/ui/select";
 import { Skeleton } from "../components/ui/skeleton";
 import { StatCard, TrendBadge } from "../components/ui/stat-card";
+import { TimesheetEntryDialog } from "../components/TimesheetEntryDialog";
 import { computeTrend, type Trend } from "../lib/trend";
 import { reportApi, ticketApi, timesheetApi, type TicketRow } from "../services/api";
 import { useAuthStore } from "../store/auth";
@@ -676,7 +677,8 @@ function TimelineLane({
   hourTicks,
   showNow,
   nowMinutes,
-  dense
+  dense,
+  onOpenEntry
 }: {
   lane: DayLane;
   hue: string;
@@ -686,6 +688,10 @@ function TimelineLane({
   showNow: boolean;
   nowMinutes: number;
   dense: boolean;
+  /** Opens THAT entry. Every block used to be a `<Link to="/app/history">` — you clicked a
+   *  specific 3.5h block on a specific person's lane and landed on a list of everything, having
+   *  thrown away the one thing your click had said. */
+  onOpenEntry: (entry: TimesheetRowLite) => void;
 }) {
   const pct = (minutes: number) => ((minutes - windowStart) / span) * 100;
   return (
@@ -711,17 +717,18 @@ function TimelineLane({
           const glyph = STATUS_GLYPH[entry.status] ?? STATUS_GLYPH.DRAFT;
           const label = `${entry.project?.name ?? entry.activityType ?? "Entry"} · ${Number(entry.totalHours).toFixed(2)}h`;
           return (
-            <Link
+            <button
               key={entry.id}
-              to="/app/history"
+              type="button"
               data-testid="timeline-entry"
-              className="absolute bottom-1 top-1 flex items-center gap-1 overflow-hidden rounded-md border px-1.5 text-[11px] font-medium text-foreground ring-1 ring-background transition-transform hover:z-10 hover:scale-[1.03]"
+              onClick={() => onOpenEntry(entry)}
+              className="focus-ring absolute bottom-1 top-1 flex items-center gap-1 overflow-hidden rounded-md border px-1.5 text-left text-[11px] font-medium text-foreground ring-1 ring-background transition-transform hover:z-10 hover:scale-[1.03]"
               style={{ left: `${pct(start)}%`, width: `${width}%`, background: `${hue}26`, borderColor: `${hue}8c` }}
-              title={`${lane.name} · ${entry.startTime}–${entry.endTime} · ${label} · ${glyph.label}`}
+              title={`${lane.name} · ${entry.startTime}–${entry.endTime} · ${label} · ${glyph.label} — open this entry`}
             >
               <glyph.Icon className="h-3 w-3 shrink-0 opacity-70" aria-label={glyph.label} />
               <span className="truncate">{label}</span>
-            </Link>
+            </button>
           );
         })}
         {lane.entries.length === 0 && <span className="absolute inset-0" aria-hidden />}
@@ -743,6 +750,14 @@ function DayTimeline({
   const [expanded, setExpanded] = useState(false);
   const [laneSearch, setLaneSearch] = useState("");
   const [laneSort, setLaneSort] = useState<"name" | "hours">("name");
+  /** The block the user clicked. Opened in place rather than navigated to: the timeline IS the
+   *  context — which person, which day, which slot — and a page transition throws all three away
+   *  just to show one row. The expanded dialog closes first so the entry doesn't open behind it. */
+  const [openEntry, setOpenEntry] = useState<TimesheetRowLite | null>(null);
+  const showEntry = (entry: TimesheetRowLite) => {
+    setExpanded(false);
+    setOpenEntry(entry);
+  };
   const isToday = selectedKey === todayKey;
   const entries = entriesByDate.get(selectedKey) ?? [];
   const dayHours = entries.reduce((sum, e) => sum + Number(e.totalHours ?? 0), 0);
@@ -935,6 +950,7 @@ function DayTimeline({
                     showNow={isToday}
                     nowMinutes={nowMinutes}
                     dense
+                    onOpenEntry={showEntry}
                   />
                 ))}
 
@@ -985,7 +1001,7 @@ function DayTimeline({
               Day timeline — {selectedLabel}
             </DialogTitle>
             <DialogDescription>
-              {lanes.length} {lanes.length === 1 ? "person" : "people"} · {dayHours.toFixed(2)}h logged. Click a block to open its history.
+              {lanes.length} {lanes.length === 1 ? "person" : "people"} · {dayHours.toFixed(2)}h logged. Click a block to open that entry in full.
             </DialogDescription>
           </DialogHeader>
           <div className="flex flex-wrap items-center gap-2">
@@ -1033,6 +1049,7 @@ function DayTimeline({
                     showNow={isToday}
                     nowMinutes={nowMinutes}
                     dense={false}
+                    onOpenEntry={showEntry}
                   />
                 ))}
                 {dialogLanes.length === 0 && (
@@ -1045,6 +1062,16 @@ function DayTimeline({
           </div>
         </DialogContent>
       </Dialog>
+
+      {/* The clicked block, in full — task, notes, attachments as downloadable links, and (for a
+          manager or super admin, per the server's own rule) an edit form. Rendered here rather
+          than behind a navigation so the day, the person and the slot the user clicked are still
+          on screen behind it. */}
+      <TimesheetEntryDialog
+        entryId={openEntry?.id ?? null}
+        initialEntry={openEntry}
+        onClose={() => setOpenEntry(null)}
+      />
     </Card>
   );
 }

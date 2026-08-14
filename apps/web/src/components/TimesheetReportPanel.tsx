@@ -24,8 +24,7 @@ import { Label } from "./ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "./ui/select";
 import { Skeleton } from "./ui/skeleton";
 import { toast } from "./ui/toaster";
-import { projectApi, reportApi, userApi, type GroupByKey, type TimesheetReportFilters } from "../services/api";
-import { activityTypes } from "@timesheet/shared";
+import { activityTypeApi, projectApi, reportApi, userApi, type GroupByKey, type TimesheetReportFilters } from "../services/api";
 
 const ANY = "any";
 
@@ -82,6 +81,10 @@ export function TimesheetReportPanel() {
   const filters = toFilters(form);
   const projects = useQuery({ queryKey: ["projects"], queryFn: () => projectApi.list() });
   const users = useQuery({ queryKey: ["users"], queryFn: userApi.list });
+  /** The workspace's own activity catalog, not the frozen defaults — otherwise a workspace that
+   *  added "Incident response" on the Projects screen could log against it and then never filter
+   *  a report by it. */
+  const activityTypes = useQuery({ queryKey: ["activity-types"], queryFn: () => activityTypeApi.list() });
   const report = useQuery({
     queryKey: ["reports", "timesheets", filters, groupBy],
     queryFn: () => reportApi.timesheetReport(filters, groupBy),
@@ -194,8 +197,8 @@ export function TimesheetReportPanel() {
               <SelectTrigger id="report-activity"><SelectValue /></SelectTrigger>
               <SelectContent>
                 <SelectItem value={ANY}>Any activity</SelectItem>
-                {activityTypes.map((a) => (
-                  <SelectItem key={a} value={a}>{a}</SelectItem>
+                {(activityTypes.data ?? []).map((a) => (
+                  <SelectItem key={a.id} value={a.name}>{a.name}</SelectItem>
                 ))}
               </SelectContent>
             </Select>

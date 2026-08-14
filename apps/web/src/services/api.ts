@@ -529,8 +529,91 @@ export const projectApi = {
     (await api.post<{ results: BulkUploadResult[] }>("/projects/bulk", { rows })).data
 };
 
+/** One attachment on a timesheet entry. `url` arrives already signed — every `/uploads/...` path
+ *  leaving the API in a JSON body is rewritten into an expiring, org-bound link (see app.ts), so
+ *  a plain `<a href>` downloads it and a stale link fails closed with a message that says so. */
+export interface TimesheetAttachmentRow {
+  id: string;
+  fileName: string;
+  mimeType: string;
+  url: string;
+  sizeBytes: number;
+  createdAt: string;
+  uploadedBy?: { id: string; name: string } | null;
+}
+
+/** The full entry behind the approvals queue, the history table and the dashboard's day
+ *  timeline — all three now open the same dialog, so they need the same shape. */
+export interface TimesheetEntryDetail {
+  id: string;
+  userId: string;
+  status: "DRAFT" | "SUBMITTED" | "APPROVED" | "REJECTED";
+  activityType: string;
+  taskDescription: string;
+  notes: string | null;
+  workDate: string;
+  startTime: string;
+  endTime: string;
+  totalHours: string | number;
+  billable: boolean;
+  rejectionReason: string | null;
+  submittedAt: string | null;
+  reviewedAt: string | null;
+  updatedAt: string;
+  projectId: string;
+  moduleId: string;
+  submoduleId: string | null;
+  ticketId: string | null;
+  project?: { id: string; name: string; code?: string } | null;
+  module?: { id: string; name: string } | null;
+  submodule?: { id: string; name: string } | null;
+  ticket?: { id: string; key: string; title: string } | null;
+  user?: { id: string; name: string; email: string; avatarUrl?: string | null; role?: string } | null;
+  reviewedBy?: { id: string; name: string; email: string } | null;
+  attachments: TimesheetAttachmentRow[];
+  identityVerified: boolean;
+  identityVerifiedAt: string | null;
+  identityVerificationApplies: boolean;
+}
+
+/** Everything PATCH /timesheets/:id accepts. Every field optional — the server merges onto the
+ *  stored row and validates the RESULT, so a dialog can send only what the user touched. */
+export interface TimesheetEntryPatch {
+  projectId?: string;
+  moduleId?: string;
+  submoduleId?: string | null;
+  ticketId?: string | null;
+  activityType?: string;
+  taskDescription?: string;
+  workDate?: string;
+  startTime?: string;
+  endTime?: string;
+  notes?: string;
+}
+
 export const timesheetApi = {
   list: async () => (await api.get("/timesheets")).data,
+  /** One entry by id, with attachments, reviewer and identity badge. Used by the entry dialog
+   *  rather than a lookup in the list cache: the list is capped at 100 rows, so an older entry
+   *  reached by deep link simply is not in it. */
+  get: async (id: string) => (await api.get<TimesheetEntryDetail>(`/timesheets/${id}`)).data,
+  /** Correct an entry after the fact. The author may edit their own DRAFT/REJECTED entries;
+   *  anyone with timesheets:approve may edit any entry in any status, and every change is
+   *  audited field-by-field with the submitter notified. */
+  update: async (id: string, payload: TimesheetEntryPatch) =>
+    (await api.patch<TimesheetEntryDetail>(`/timesheets/${id}`, payload)).data,
+  attachments: {
+    upload: async (id: string, files: File[]) => {
+      const form = new FormData();
+      files.forEach((file) => form.append("attachments", file));
+      return (
+        await api.post<TimesheetEntryDetail>(`/timesheets/${id}/attachments`, form, {
+          headers: { "Content-Type": "multipart/form-data" }
+        })
+      ).data;
+    },
+    remove: async (id: string, attachmentId: string) => api.delete(`/timesheets/${id}/attachments/${attachmentId}`)
+  },
   submit: async (payload: unknown, draft = false) => (await api.post(`/timesheets/${draft ? "draft" : "submit"}`, payload)).data,
   submitForm: async (payload: FormData, draft = false) =>
     (
@@ -1910,6 +1993,12 @@ export interface GlobalMailSettingsRow {
   user: string | null;
   passwordSet: boolean;
   fromAddress: string | null;
+  /** Sending throttle — simultaneous SMTP connections, and messages per window across the pool.
+   *  These are what keep a burst (a bulk approval, the daily reminder sweep) from opening one
+   *  connection per message and earning the provider's rate limit. */
+  maxConnections: number;
+  maxMessagesPerWindow: number;
+  rateWindowMs: number;
   updatedAt: string | null;
 }
 
@@ -2442,6 +2531,29 @@ export const ticketApi = {
     auto: async (id: string, payload: { repository?: string; baseBranch?: string }) =>
       (await api.post<{ created: boolean; suggestedName?: string; branch?: TicketBranchRow }>(`/tickets/${id}/branches/auto`, payload)).data
   }
+};
+
+/** A row of the admin-editable activity catalog behind the timesheet form's "Activity" field.
+ *  `seeded` marks a synthetic row the API returns when the table is empty (a workspace whose seed
+ *  never ran) — those are read-only placeholders and carry a `seed:` id, never a uuid. */
+export interface ActivityTypeRow {
+  id: string;
+  name: string;
+  isActive: boolean;
+  seeded?: boolean;
+}
+
+export const activityTypeApi = {
+  /** `all` additionally returns disabled rows and needs projects:manage — the management screen
+   *  wants them, the logging picker must never offer them. */
+  list: async (all = false) =>
+    (await api.get<ActivityTypeRow[]>("/activity-types", { params: all ? { all: "true" } : undefined })).data,
+  create: async (name: string) => (await api.post<ActivityTypeRow>("/activity-types", { name })).data,
+  update: async (id: string, payload: { name?: string; isActive?: boolean }) =>
+    (await api.patch<ActivityTypeRow>(`/activity-types/${id}`, payload)).data,
+  /** Refused with a 409 (and a count) when any entry was logged under it — disable those instead,
+   *  so the history stays readable. */
+  remove: async (id: string) => api.delete(`/activity-types/${id}`)
 };
 
 export const ticketTypeApi = {

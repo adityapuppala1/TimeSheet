@@ -8,9 +8,9 @@
  */
 import { zodResolver } from "@hookform/resolvers/zod";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { activityTypes, calculateHours } from "@timesheet/shared";
+import { calculateHours } from "@timesheet/shared";
 import { AlertTriangle, CalendarClock, Check, ChevronsUpDown, Eraser, Save, Send, Sparkles, Ticket } from "lucide-react";
-import { useCallback, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useForm, Controller } from "react-hook-form";
 import { z } from "zod";
 import { Alert, AlertDescription, AlertTitle } from "../components/ui/alert";
@@ -27,7 +27,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from ".
 import { Separator } from "../components/ui/separator";
 import { toast } from "../components/ui/toaster";
 import { DatePicker, TimeField } from "../components/ui/date-picker";
-import { faceApi, projectApi, ticketApi, timesheetApi, type AIRefineField } from "../services/api";
+import { activityTypeApi, faceApi, projectApi, ticketApi, timesheetApi, type AIRefineField } from "../services/api";
 import { AiRefinePanel, AiRefineTrigger, useAiRefine } from "../components/AiRefine";
 import { FaceVerificationDialog } from "../components/FaceVerificationDialog";
 import { useFaceStatus } from "../lib/use-face-status";
@@ -154,6 +154,7 @@ function RefinableRichText({
   onChange,
   placeholder,
   minHeight,
+  maxHeight,
   ariaLabel,
   meta
 }: {
@@ -164,6 +165,9 @@ function RefinableRichText({
   onChange: (html: string) => void;
   placeholder: string;
   minHeight: string;
+  /** Where the writing area starts scrolling instead of growing. Left to the editor's default
+   *  on this page — it is a long form, not a dialog, so there is room. */
+  maxHeight?: string;
   ariaLabel: string;
   /** Anything shown at the right of the label row alongside the trigger (e.g. a character count). */
   meta?: React.ReactNode;
@@ -185,6 +189,7 @@ function RefinableRichText({
           onChange={onChange}
           placeholder={placeholder}
           minHeight={minHeight}
+          maxHeight={maxHeight}
           ariaLabel={ariaLabel}
         />
       </FormControl>
@@ -198,6 +203,15 @@ export function Timesheet() {
   const [files, setFiles] = useState<File[]>([]);
   const projects = useQuery({ queryKey: ["projects"], queryFn: () => projectApi.list() });
   const timesheets = useQuery({ queryKey: ["timesheets"], queryFn: timesheetApi.list });
+  /**
+   * The activity list, from the workspace's own catalog rather than the frozen twelve-item array
+   * in `@timesheet/shared`. A super admin edits it on the Projects screen; this picker is what
+   * their edit is FOR. Only active rows come back — a retired activity must not still be
+   * offered — and the API falls back to the shared defaults when the table is empty, so a
+   * workspace whose seed never ran still gets a usable form instead of an empty dropdown.
+   */
+  const activityTypesQuery = useQuery({ queryKey: ["activity-types"], queryFn: () => activityTypeApi.list() });
+  const activityOptions = activityTypesQuery.data ?? [];
 
   const form = useForm<FormData>({
     resolver: zodResolver(schema),
@@ -216,6 +230,21 @@ export function Timesheet() {
   });
 
   const formRef = useRef<HTMLFormElement>(null);
+
+  /**
+   * The default is the string "Development", which is only a safe default while that activity
+   * exists and is enabled. A workspace that renames or disables it would otherwise open this form
+   * with a select showing nothing, and submit an activity the server no longer offers. Runs when
+   * the catalog lands, and only when the current value is genuinely absent from it — so it never
+   * overwrites a choice the user has already made.
+   */
+  useEffect(() => {
+    if (activityOptions.length === 0) return;
+    const current = form.getValues("activityType");
+    if (activityOptions.some((option) => option.name === current)) return;
+    form.setValue("activityType", activityOptions[0].name);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- `form` is a stable RHF instance
+  }, [activityOptions]);
 
   /**
    * Take the user to the first field that failed validation.
@@ -452,8 +481,8 @@ export function Timesheet() {
                           <SelectTrigger><SelectValue /></SelectTrigger>
                         </FormControl>
                         <SelectContent>
-                          {activityTypes.map((item) => (
-                            <SelectItem key={item} value={item}>{item}</SelectItem>
+                          {activityOptions.map((item) => (
+                            <SelectItem key={item.id} value={item.name}>{item.name}</SelectItem>
                           ))}
                         </SelectContent>
                       </Select>

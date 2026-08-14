@@ -95,34 +95,101 @@ function decodeBasicEntities(value: string): string {
 }
 
 /**
- * HTML -> plain text, preserving paragraph breaks and list markers.
+ * A `<pre>` block, lifted out of the document before the whitespace normalisation below can touch
+ * it and parked behind one of these tokens.
+ *
+ * WHY: the last three `.replace` calls in `htmlToPlainText` collapse runs of spaces and strip the
+ * indentation around every newline. That is exactly right for prose and catastrophic for code —
+ * a pasted stack trace or snippet came back with its indentation flattened, which is both a
+ * change to what the author wrote and the reason a model asked to "tidy this up" would return
+ * prose where code had been. The token is deliberately shaped like nothing anyone types: no
+ * spaces (so the space-collapsing rules ignore it), no HTML (so `sanitizeHtml` passes it
+ * through), and no regex metacharacters in the parts that vary.
+ */
+const CODE_TOKEN_PREFIX = "⁣TIMESPHERE_CODE_";
+const CODE_TOKEN_RE = /⁣TIMESPHERE_CODE_(\d+)⁣/g;
+/** `<pre>` with its optional inner `<code>` — Tiptap emits the pair, other sources emit bare
+ *  `<pre>`, and both have to round-trip. */
+const PRE_BLOCK_RE = /<pre\b[^>]*>([\s\S]*?)<\/pre>/gi;
+
+const HEADING_TAG_RE = /^h[1-6]$/;
+
+/** What `htmlToPlainText` has to remember while walking the block tags in document order: which
+ *  list it is inside (and how far down it), and whether it is inside a quote. */
+interface BlockPassState {
+  listStack: Array<{ ordered: boolean; index: number }>;
+  quoteDepth: number;
+}
+
+/**
+ * One block-level tag -> the plain-text marker that stands for it.
+ *
+ * Headings and quotes carry a marker for the same reason list items always have: this text is
+ * shown to the author as "what you wrote" and handed to a model asked to preserve the structure.
+ * An unmarked heading is indistinguishable from a short paragraph, so it reliably came back as
+ * one. `#` is capped at three because `sanitizeRichText` allows h1–h3 and nothing deeper.
+ */
+function blockTagToMarkers(name: string, isClosing: boolean, state: BlockPassState): string {
+  if (name === "ul" || name === "ol") {
+    if (isClosing) state.listStack.pop();
+    else state.listStack.push({ ordered: name === "ol", index: 0 });
+    return "\n";
+  }
+  if (name === "li") {
+    if (isClosing) return "";
+    const list = state.listStack.at(-1);
+    if (!list) return "\n- ";
+    list.index += 1;
+    return list.ordered ? `\n${list.index}. ` : "\n- ";
+  }
+  if (HEADING_TAG_RE.test(name)) {
+    return isClosing ? "\n" : `\n\n${"#".repeat(Math.min(Number(name[1]), 3))} `;
+  }
+  if (name === "blockquote") {
+    state.quoteDepth = isClosing ? Math.max(0, state.quoteDepth - 1) : state.quoteDepth + 1;
+    return "\n\n";
+  }
+  // A quote's text lives in the `<p>`s inside it, so the marker is emitted per paragraph rather
+  // than once per quote — otherwise a two-paragraph quote comes back with only its first
+  // paragraph quoted.
+  if (name === "p" && !isClosing && state.quoteDepth > 0) return "\n> ";
+  return "\n";
+}
+
+/**
+ * HTML -> plain text, preserving paragraph breaks, list markers and code blocks.
  *
  * Ordered-list items come back as "1." etc. rather than bullets, because a numbered list that
  * silently turns into a bulleted one is a change to what the author wrote — small, but this
  * function exists specifically to feed text the user will be asked to compare against.
+ *
+ * Code blocks come back as ``` fences, which is the notation a language model both recognises on
+ * the way in and reproduces on the way out — and which `plainTextToRichText` turns back into a
+ * real `<pre><code>` node. Without the pair, every refinement of a description containing a
+ * snippet silently demoted the snippet to a paragraph.
  */
 export function htmlToPlainText(html: string | null | undefined): string {
   if (!html) return "";
 
-  const listStack: Array<{ ordered: boolean; index: number }> = [];
-  const withBreaks = html.replace(BLOCK_TAG_RE, (_match, closing: string, tag: string) => {
-    const name = tag.toLowerCase();
-    const isClosing = closing === "/";
-
-    if (name === "ul" || name === "ol") {
-      if (isClosing) listStack.pop();
-      else listStack.push({ ordered: name === "ol", index: 0 });
-      return "\n";
-    }
-    if (name === "li") {
-      if (isClosing) return "";
-      const list = listStack.at(-1);
-      if (!list) return "\n- ";
-      list.index += 1;
-      return list.ordered ? `\n${list.index}. ` : "\n- ";
-    }
-    return "\n";
+  // Lifted FIRST, so nothing downstream — neither the block-tag pass nor the whitespace
+  // normalisation — can see inside a code block.
+  const codeBlocks: string[] = [];
+  const withoutCode = html.replace(PRE_BLOCK_RE, (_match, inner: string) => {
+    // The inner text is already HTML-escaped in stored content (`&lt;div&gt;` for a typed
+    // `<div>`), so stripping tags and then decoding gives back exactly what was typed.
+    const code = decodeBasicEntities(
+      sanitizeHtml(String(inner).replace(/<\/?code\b[^>]*>/gi, ""), { allowedTags: [], allowedAttributes: {} })
+    );
+    // `trimEnd()` rather than a `/\s+$/` replace: identical result, no backtracking on a block
+    // that ends in a long run of whitespace.
+    codeBlocks.push(code.replace(/^\n+/, "").trimEnd());
+    return `\n\n${CODE_TOKEN_PREFIX}${codeBlocks.length - 1}⁣\n\n`;
   });
+
+  const state: BlockPassState = { listStack: [], quoteDepth: 0 };
+  const withBreaks = withoutCode.replace(BLOCK_TAG_RE, (_match, closing: string, tag: string) =>
+    blockTagToMarkers(tag.toLowerCase(), closing === "/", state)
+  );
 
   // sanitize-html strips the remaining tags but re-encodes text on the way out, so "&lt;" survives
   // as "&lt;" — fine for a CSV cell, wrong here: this text is shown back to the author as "what you
@@ -135,7 +202,11 @@ export function htmlToPlainText(html: string | null | undefined): string {
     .replace(/[ \t ]+/g, " ")
     .replace(/ *\n */g, "\n")
     .replace(/\n{3,}/g, "\n\n")
-    .trim();
+    .trim()
+    // Fences go back LAST, after every whitespace rule has run and can no longer reach inside
+    // them. A token whose block is missing (impossible unless this function is re-entered on its
+    // own output) resolves to an empty fence rather than leaking the token into the user's text.
+    .replace(CODE_TOKEN_RE, (_match, index: string) => "```\n" + (codeBlocks[Number(index)] ?? "") + "\n```");
 }
 
 /**
@@ -169,6 +240,11 @@ export function escapeHtmlText(value: string): string {
  * Neither alone is enough to rely on: (1) could be defeated by a future refactor that assembles
  * markup elsewhere, and (2) is an allow-list that would happily keep a well-formed `<a href>` the
  * model invented.
+ *
+ * Understands the same four notations `htmlToPlainText` emits — ``` fences, `#` headings, `>`
+ * quotes and `-`/`1.` lists — so the pair is a round trip rather than a one-way flattening. A
+ * fence is the important one: without it, refining a description that contained a snippet handed
+ * the snippet back as a paragraph with its indentation gone.
  */
 export function plainTextToRichText(text: string | null | undefined): string {
   if (!text?.trim()) return "";
@@ -177,6 +253,9 @@ export function plainTextToRichText(text: string | null | undefined): string {
   let paragraph: string[] = [];
   let listItems: string[] = [];
   let listOrdered = false;
+  /** Non-null while inside a ``` fence. Lines are collected verbatim — no trimming, no list or
+   *  heading interpretation — because inside a code block those characters are code. */
+  let codeLines: string[] | null = null;
 
   const flushParagraph = () => {
     if (paragraph.length === 0) return;
@@ -190,8 +269,38 @@ export function plainTextToRichText(text: string | null | undefined): string {
     blocks.push(`<${tag}>${items}</${tag}>`);
     listItems = [];
   };
+  const flushCode = () => {
+    if (!codeLines) return;
+    // `<pre><code>` — the exact node shape Tiptap's CodeBlock emits, so an accepted suggestion
+    // loads back into the editor as a real code block a user can edit, not as inert markup.
+    // Trailing blank lines dropped; interior ones and all leading indentation kept. Popped from
+    // the array rather than trimmed off the joined string — a `/\n+$/` replace backtracks
+    // super-linearly on a block that is nothing but newlines.
+    const lines = [...codeLines];
+    while (lines.length > 0 && lines.at(-1)!.trim() === "") lines.pop();
+    const body = lines.join("\n");
+    if (body.trim()) blocks.push(`<pre><code>${escapeHtmlText(body)}</code></pre>`);
+    codeLines = null;
+  };
 
   for (const rawLine of text.split(/\r?\n/)) {
+    // A fence marker toggles the mode and is never itself content. Checked before the blank-line
+    // rule so a fence that opens on the first line still registers.
+    if (/^\s*```/.test(rawLine)) {
+      if (codeLines) {
+        flushCode();
+      } else {
+        flushParagraph();
+        flushList();
+        codeLines = [];
+      }
+      continue;
+    }
+    if (codeLines) {
+      codeLines.push(rawLine);
+      continue;
+    }
+
     const line = rawLine.trim();
     if (!line) {
       flushParagraph();
@@ -213,11 +322,33 @@ export function plainTextToRichText(text: string | null | undefined): string {
       continue;
     }
 
+    // Capped at h3 because that is where the editor's own toolbar and the sanitizer's allow-list
+    // both stop; `####` would otherwise be discarded by `sanitizeRichText` and lose its text.
+    const heading = /^(#{1,3})\s(.*)$/.exec(line);
+    if (heading) {
+      flushParagraph();
+      flushList();
+      const level = heading[1].length;
+      blocks.push(`<h${level}>${escapeHtmlText(heading[2].trim())}</h${level}>`);
+      continue;
+    }
+
+    const quote = /^>\s?(.*)$/.exec(line);
+    if (quote) {
+      flushParagraph();
+      flushList();
+      blocks.push(`<blockquote><p>${escapeHtmlText(quote[1].trim())}</p></blockquote>`);
+      continue;
+    }
+
     flushList();
     paragraph.push(line);
   }
   flushParagraph();
   flushList();
+  // An unterminated fence still becomes a code block — the model closing one and not the other is
+  // a formatting slip, and throwing the lines away would lose the user's content.
+  flushCode();
 
   return sanitizeRichText(blocks.join(""));
 }

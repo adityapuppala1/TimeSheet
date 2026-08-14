@@ -138,3 +138,52 @@ describe("plainTextToRichText", () => {
     expect(plainTextToRichText("   \n  ")).toBe("");
   });
 });
+
+/**
+ * Code blocks were the one structure the plain-text round trip silently destroyed: `<pre>` became
+ * a paragraph on the way out, and the whitespace normalisation flattened the indentation on the
+ * way back — so "refine this description" reliably ruined any snippet or stack trace in it. These
+ * pin the fence notation that fixes it, in both directions.
+ */
+describe("code blocks survive the plain-text round trip", () => {
+  const CODE_HTML = "<pre><code>function add(a, b) {\n  return a + b;\n}</code></pre>";
+
+  it("emits a code block as a ``` fence", () => {
+    expect(htmlToPlainText(CODE_HTML)).toBe("```\nfunction add(a, b) {\n  return a + b;\n}\n```");
+  });
+
+  it("keeps indentation that the prose whitespace rules would otherwise flatten", () => {
+    // The two leading spaces on `return` are the whole point — every other line in this file gets
+    // its surrounding whitespace collapsed, and code must not.
+    expect(htmlToPlainText(CODE_HTML)).toContain("\n  return a + b;");
+  });
+
+  it("turns a fence back into a real <pre><code> node", () => {
+    expect(plainTextToRichText("```\nconst x = 1;\n```")).toBe("<pre><code>const x = 1;</code></pre>");
+  });
+
+  it("round-trips prose and code together, unchanged", () => {
+    const original = `<p>Stack trace below</p>${CODE_HTML}<p>Happens on retry</p>`;
+    expect(plainTextToRichText(htmlToPlainText(original))).toBe(original);
+  });
+
+  it("never interprets list, heading or quote markers inside a fence", () => {
+    const shellHtml = "<pre><code># deploy\n- name: web\n&gt; log.txt</code></pre>";
+    expect(plainTextToRichText(htmlToPlainText(shellHtml))).toBe(shellHtml);
+  });
+
+  it("escapes markup inside a fence rather than letting it become live HTML", () => {
+    const out = plainTextToRichText("```\n<script>alert(1)</script>\n```");
+    expect(out).not.toContain("<script>");
+    expect(out).toContain("&lt;script&gt;");
+  });
+
+  it("closes an unterminated fence instead of dropping the lines", () => {
+    expect(plainTextToRichText("```\nnpm run build")).toBe("<pre><code>npm run build</code></pre>");
+  });
+
+  it("understands the heading and quote notation it emits", () => {
+    expect(plainTextToRichText("# Title\n\n> quoted")).toBe("<h1>Title</h1><blockquote><p>quoted</p></blockquote>");
+    expect(plainTextToRichText(htmlToPlainText("<h2>Steps</h2><p>then</p>"))).toBe("<h2>Steps</h2><p>then</p>");
+  });
+});

@@ -13,6 +13,7 @@
  * (ApprovalsPage — approve/reject), `apps/web/src/pages/History.tsx` (list).
  */
 import { Router } from "express";
+import { Prisma } from "@prisma/client";
 import { z } from "zod";
 import { calculateHours, permissions } from "@timesheet/shared";
 import { prisma } from "../config/prisma.js";
@@ -83,6 +84,77 @@ timesheetRouter.get("/", async (req, res) => {
       identityVerificationApplies: badges.get(t.id)?.identityVerificationApplies ?? false
     }))
   );
+});
+
+/**
+ * The full detail of ONE entry — everything the approvals table, the history table and the
+ * dashboard's day timeline each showed a clipped slice of, plus the two things none of them
+ * showed at all: who reviewed it, and the attachments as downloadable links.
+ *
+ * WHY A ROUTE AND NOT A CLIENT-SIDE LOOKUP IN THE LIST: the list is capped at the 100 most recent
+ * rows, so anything older simply is not in the cache a dialog could read. A screen that can open
+ * "this entry" must be able to open one that fell off the end of that page.
+ *
+ * VISIBILITY is the same rule the list applies, stated once here: your own entries always;
+ * anyone's with REPORTS_VIEW or TIMESHEETS_APPROVE (the two rights that already grant a
+ * cross-user view of timesheets, on the reports screen and the approvals queue respectively).
+ * A 404 rather than a 403 for everything else — "this entry exists but isn't yours" is itself
+ * information about a colleague's work.
+ */
+/**
+ * NOT `as const`. A readonly literal is accepted loosely by Prisma's `include` validation, which
+ * is how an earlier version of this shipped a `reviewedBy: {...}` key that does not exist on this
+ * model — it typechecked and threw at runtime on every call. Left mutable so the compiler checks
+ * every field against the schema.
+ *
+ * `reviewedById` is deliberately absent from here: it is a bare scalar with NO relation on
+ * `Timesheet` (unlike FaceVerification and AiProposal, which both declare one), so the reviewer's
+ * name is resolved separately in `respondWithEntry` rather than by adding a migration for a
+ * display string.
+ */
+const ENTRY_DETAIL_INCLUDE = {
+  project: { select: { id: true, name: true, code: true } },
+  module: { select: { id: true, name: true } },
+  submodule: { select: { id: true, name: true } },
+  ticket: { select: { id: true, key: true, title: true } },
+  attachments: { include: { uploadedBy: { select: { id: true, name: true } } }, orderBy: { createdAt: "asc" } },
+  user: { select: { id: true, name: true, email: true, avatarUrl: true, role: true } }
+} satisfies Prisma.TimesheetInclude;
+
+/** Loads one entry and enforces the visibility rule above. Returns null when the caller may not
+ *  see it, so callers answer 404 uniformly rather than each deciding what to leak. */
+async function loadVisibleEntry(req: any, id: string) {
+  const entry = await prisma.timesheet.findFirst({ where: { id, deletedAt: null }, include: ENTRY_DETAIL_INCLUDE });
+  if (!entry) return null;
+  const isOwner = entry.userId === req.user.id;
+  const canViewOthers =
+    req.user.permissions.includes(permissions.REPORTS_VIEW) || req.user.permissions.includes(permissions.TIMESHEETS_APPROVE);
+  return isOwner || canViewOthers ? entry : null;
+}
+
+/** Decorated with the identity badge the list route adds, so a dialog opened from the table and
+ *  one opened by id can never disagree about whether the entry is verified — plus the reviewer,
+ *  which `reviewedById` alone cannot supply (see ENTRY_DETAIL_INCLUDE for why it isn't a join). */
+async function respondWithEntry(res: any, entry: NonNullable<Awaited<ReturnType<typeof loadVisibleEntry>>>) {
+  const [badges, reviewedBy] = await Promise.all([
+    getTimesheetVerificationBadges([{ id: entry.id, userId: entry.userId }]),
+    entry.reviewedById
+      ? prisma.user.findUnique({ where: { id: entry.reviewedById }, select: { id: true, name: true, email: true } })
+      : Promise.resolve(null)
+  ]);
+  res.json({
+    ...entry,
+    reviewedBy,
+    identityVerified: badges.get(entry.id)?.identityVerified ?? false,
+    identityVerifiedAt: badges.get(entry.id)?.identityVerifiedAt ?? null,
+    identityVerificationApplies: badges.get(entry.id)?.identityVerificationApplies ?? false
+  });
+}
+
+timesheetRouter.get("/:id", async (req, res) => {
+  const entry = await loadVisibleEntry(req, String(req.params.id));
+  if (!entry) throw new AppError(404, "Timesheet not found");
+  await respondWithEntry(res, entry);
 });
 
 /** Exported for services/mcp-tools.ts's `log_timesheet_entry`, which passes a synthetic
@@ -503,6 +575,259 @@ timesheetRouter.delete("/:id", requirePermission(permissions.TIMESHEETS_WRITE), 
   await audit(req.user!.id, "timesheet.deleted", "Timesheet", existing.id, {
     status: existing.status,
     workDate: existing.workDate.toISOString().slice(0, 10)
+  });
+  res.status(204).send();
+});
+
+/* ==================== Editing an entry after it was logged ==================== */
+
+const patchSchema = z.object({
+  params: z.object({ id: z.string().uuid() }),
+  body: z
+    .object({
+      projectId: z.string().uuid().optional(),
+      moduleId: z.string().uuid().optional(),
+      submoduleId: z.string().uuid().nullable().optional().or(z.literal("")),
+      ticketId: z.string().uuid().nullable().optional().or(z.literal("")),
+      activityType: z.string().min(2).max(60).optional(),
+      taskDescription: z.string().min(10).optional(),
+      workDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+      startTime: z.string().regex(/^\d{2}:\d{2}$/).optional(),
+      endTime: z.string().regex(/^\d{2}:\d{2}$/).optional(),
+      notes: z.string().optional()
+    })
+    .strict()
+});
+
+/**
+ * PATCH /timesheets/:id — correct an entry in place.
+ *
+ * WHY THIS EXISTS: until now the only way to fix a logged entry was to delete it and re-type it,
+ * and delete refuses everything past DRAFT/REJECTED. So a submitted entry with the wrong module,
+ * or an approved one whose description said the wrong thing, was simply frozen wrong forever. The
+ * approvals and history screens both offer "open this entry" now; being able to read it and not
+ * fix it is half a feature.
+ *
+ * WHO MAY EDIT WHAT — two rules, matching who bears the consequence:
+ *   • the AUTHOR, while the entry is still theirs to shape (DRAFT or REJECTED). Exactly the
+ *     window `DELETE` already allows, for the same reason: nobody is waiting on it and nothing
+ *     downstream has consumed it.
+ *   • TIMESHEETS_APPROVE (manager / admin / super admin), in ANY status. They already decide
+ *     whether these hours are payable; withholding "fix the module name" from someone trusted to
+ *     approve the hours is a distinction without a difference, and the alternative in practice is
+ *     a rejection round-trip for a typo.
+ *
+ * EVERY EDIT IS FULLY AUDITED with a field-by-field before/after — that is the part that makes
+ * editing an APPROVED entry defensible rather than alarming. The record still says what happened;
+ * it now also says who changed it and from what.
+ *
+ * Deliberately NOT editable here: `status` (that is approve/reject, which notify and freeze rates)
+ * and `billable` (a billing decision, not a description of work). Both have their own routes.
+ */
+timesheetRouter.patch("/:id", requirePermission(permissions.TIMESHEETS_WRITE), validate(patchSchema), async (req, res) => {
+  const existing = await prisma.timesheet.findFirst({ where: { id: String(req.params.id), deletedAt: null } });
+  if (!existing) throw new AppError(404, "Timesheet not found");
+
+  const isOwner = existing.userId === req.user!.id;
+  const canEditOthers = req.user!.permissions.includes(permissions.TIMESHEETS_APPROVE);
+  if (!isOwner && !canEditOthers) throw new AppError(403, "You can only edit your own entries.");
+  if (isOwner && !canEditOthers && existing.status !== "DRAFT" && existing.status !== "REJECTED") {
+    throw new AppError(
+      422,
+      `This entry is ${existing.status} — it's with your approver now. Ask them to send it back, or to make the correction for you.`
+    );
+  }
+
+  // Merge first, validate the MERGED entry second: times, dates and the project/module/ticket
+  // triangle are only consistent as a set, and validating just the supplied fields would let
+  // "change the project" quietly leave a module belonging to the old one.
+  const next = {
+    projectId: req.body.projectId ?? existing.projectId,
+    moduleId: req.body.moduleId ?? existing.moduleId,
+    submoduleId: "submoduleId" in req.body ? req.body.submoduleId || null : existing.submoduleId,
+    ticketId: "ticketId" in req.body ? req.body.ticketId || null : existing.ticketId,
+    activityType: req.body.activityType ?? existing.activityType,
+    workDate: req.body.workDate ?? existing.workDate.toISOString().slice(0, 10),
+    startTime: req.body.startTime ?? existing.startTime,
+    endTime: req.body.endTime ?? existing.endTime
+  };
+
+  const hours = calculateHours(next.startTime, next.endTime);
+  if (hours <= 0) throw new AppError(422, "End time must be after start time");
+  if (hours > 12) throw new AppError(422, "A single entry cannot exceed 12 hours");
+
+  const [year, month, day] = next.workDate.split("-").map(Number);
+  const workDate = new Date(Date.UTC(year, month - 1, day));
+  const today = new Date();
+  const todayUtc = new Date(Date.UTC(today.getFullYear(), today.getMonth(), today.getDate()));
+  if (workDate > todayUtc) throw new AppError(422, "Future dates are not allowed");
+
+  // The module has to belong to the project, and the ticket too — the create path gets this for
+  // free from cascading pickers, but a PATCH can name any pair.
+  const moduleRow = await prisma.projectModule.findFirst({ where: { id: next.moduleId } });
+  if (!moduleRow || moduleRow.projectId !== next.projectId) {
+    throw new AppError(422, "Selected module does not belong to this project");
+  }
+  if (next.submoduleId) {
+    const submoduleRow = await prisma.projectSubmodule.findFirst({ where: { id: next.submoduleId } });
+    if (!submoduleRow || submoduleRow.moduleId !== next.moduleId) {
+      throw new AppError(422, "Selected submodule does not belong to this module");
+    }
+  }
+  if (next.ticketId) {
+    const ticket = await prisma.ticket.findFirst({ where: { id: next.ticketId, deletedAt: null } });
+    if (!ticket || ticket.projectId !== next.projectId) {
+      throw new AppError(422, "Selected ticket does not belong to this project");
+    }
+  }
+
+  const [startH, startM] = next.startTime.split(":").map(Number);
+  const [endH, endM] = next.endTime.split(":").map(Number);
+  const start = startH * 60 + startM;
+  const end = endH * 60 + endM;
+
+  const data: Record<string, unknown> = {
+    projectId: next.projectId,
+    moduleId: next.moduleId,
+    submoduleId: next.submoduleId,
+    ticketId: next.ticketId,
+    activityType: next.activityType,
+    workDate,
+    startTime: next.startTime,
+    endTime: next.endTime,
+    totalHours: hours
+  };
+  // SECURITY: same rule as the create path — rich text arrives as HTML and is sanitized before it
+  // is stored, never on the way out.
+  if (typeof req.body.taskDescription === "string") data.taskDescription = sanitizeRichText(req.body.taskDescription);
+  if (typeof req.body.notes === "string") data.notes = req.body.notes ? sanitizeRichText(req.body.notes) : "";
+
+  // An APPROVED entry carries a frozen rate. If the hours moved, the frozen AMOUNT has to move
+  // with them or the attestation would assert a total its own hours don't support. The RATE
+  // itself is untouched — re-resolving it would silently apply today's rate to last quarter's
+  // work, which is exactly what the snapshot exists to prevent.
+  if (existing.status === "APPROVED" && existing.billedRate && Number(existing.totalHours) !== hours) {
+    data.billedAmount = existing.billable ? new Prisma.Decimal(existing.billedRate).mul(new Prisma.Decimal(hours)) : new Prisma.Decimal(0);
+  }
+
+  const updated = await prisma.$transaction(
+    async (tx) => {
+      // Overlap is checked against the ENTRY'S OWN author, not the editor — a manager fixing
+      // someone else's row must not be allowed to push it on top of another of that person's
+      // entries. `id: { not: … }` so an edit that leaves the times alone doesn't collide with
+      // itself.
+      const sameDay = await tx.timesheet.findMany({
+        where: { userId: existing.userId, workDate, deletedAt: null, id: { not: existing.id } }
+      });
+      const overlaps = sameDay.some((entry) => {
+        const [eh, em] = entry.startTime.split(":").map(Number);
+        const [xh, xm] = entry.endTime.split(":").map(Number);
+        return start < xh * 60 + xm && end > eh * 60 + em;
+      });
+      if (overlaps) throw new AppError(409, "This time range overlaps another entry on that day");
+
+      return tx.timesheet.update({ where: { id: existing.id }, data, include: ENTRY_DETAIL_INCLUDE });
+    },
+    { isolationLevel: "Serializable", timeout: 8000 }
+  );
+
+  // Only what actually moved, old and new — an audit entry listing nine unchanged fields is one
+  // nobody reads, and the question this row answers is "what did they change?".
+  const changes: Record<string, { from: unknown; to: unknown }> = {};
+  const compare: Array<[string, unknown, unknown]> = [
+    ["projectId", existing.projectId, updated.projectId],
+    ["moduleId", existing.moduleId, updated.moduleId],
+    ["submoduleId", existing.submoduleId, updated.submoduleId],
+    ["ticketId", existing.ticketId, updated.ticketId],
+    ["activityType", existing.activityType, updated.activityType],
+    ["workDate", existing.workDate.toISOString().slice(0, 10), updated.workDate.toISOString().slice(0, 10)],
+    ["startTime", existing.startTime, updated.startTime],
+    ["endTime", existing.endTime, updated.endTime],
+    ["totalHours", Number(existing.totalHours), Number(updated.totalHours)],
+    ["taskDescription", existing.taskDescription, updated.taskDescription],
+    ["notes", existing.notes ?? "", updated.notes ?? ""]
+  ];
+  for (const [field, from, to] of compare) if (from !== to) changes[field] = { from, to };
+
+  await audit(req.user!.id, "timesheet.updated", "Timesheet", updated.id, {
+    status: updated.status,
+    onBehalfOf: isOwner ? undefined : updated.userId,
+    changes
+  });
+
+  // The submitter finds out when someone else rewrote their record of work. Silent edits by a
+  // reviewer are how an approval queue loses the submitter's trust.
+  if (!isOwner && Object.keys(changes).length > 0) {
+    await dispatchNotification({
+      userId: updated.userId,
+      category: "timesheet.updated",
+      title: "Your timesheet entry was edited",
+      body: `${req.user!.name ?? req.user!.email} edited your ${Number(updated.totalHours).toFixed(2)}h entry for ${updated.workDate.toISOString().slice(0, 10)} on ${updated.project.name}.`,
+      link: "/app/history"
+    });
+  }
+
+  await respondWithEntry(res, updated);
+});
+
+/* ==================== Attachments on an existing entry ==================== */
+
+/** Who may attach to / detach from an entry: its author while it is still theirs to shape, or
+ *  anyone who can approve it. Same two-rule model as PATCH above, kept in one place so the file
+ *  cannot grow a third opinion about it. */
+async function assertCanAttach(req: any, entry: { userId: string; status: string }) {
+  const isOwner = entry.userId === req.user.id;
+  const canEditOthers = req.user.permissions.includes(permissions.TIMESHEETS_APPROVE);
+  if (!isOwner && !canEditOthers) throw new AppError(403, "You can only change your own entries.");
+  if (isOwner && !canEditOthers && entry.status !== "DRAFT" && entry.status !== "REJECTED") {
+    throw new AppError(422, `This entry is ${entry.status} — ask your approver to add the file for you.`);
+  }
+}
+
+timesheetRouter.post(
+  "/:id/attachments",
+  requirePermission(permissions.TIMESHEETS_WRITE),
+  preserveTenantContext(upload.array("attachments")),
+  async (req, res) => {
+    const entry = await prisma.timesheet.findFirst({ where: { id: String(req.params.id), deletedAt: null } });
+    if (!entry) throw new AppError(404, "Timesheet not found");
+    await assertCanAttach(req, entry);
+
+    const files = (req.files ?? []) as Express.Multer.File[];
+    if (files.length === 0) throw new AppError(422, "No files were uploaded");
+
+    // Same pipeline the create path uses — images to WebP, text gzipped, structured filename —
+    // so a file added later is indistinguishable on disk from one attached at submit time.
+    const processed = await Promise.all(
+      files.map((file) =>
+        processUpload(file, { userName: req.user!.name ?? req.user!.email, entityType: "timesheet", entityId: entry.id })
+      )
+    );
+    await prisma.attachment.createMany({
+      data: processed.map((p) => ({ ...p, timesheetId: entry.id, uploadedById: req.user!.id }))
+    });
+    await audit(req.user!.id, "timesheet.attachment_added", "Timesheet", entry.id, { count: processed.length });
+
+    const refreshed = await loadVisibleEntry(req, entry.id);
+    if (!refreshed) throw new AppError(404, "Timesheet not found");
+    await respondWithEntry(res, refreshed);
+  }
+);
+
+timesheetRouter.delete("/:id/attachments/:attachmentId", requirePermission(permissions.TIMESHEETS_WRITE), async (req, res) => {
+  const entry = await prisma.timesheet.findFirst({ where: { id: String(req.params.id), deletedAt: null } });
+  if (!entry) throw new AppError(404, "Timesheet not found");
+  await assertCanAttach(req, entry);
+
+  const attachment = await prisma.attachment.findFirst({
+    where: { id: String(req.params.attachmentId), timesheetId: entry.id }
+  });
+  if (!attachment) throw new AppError(404, "Attachment not found");
+
+  await prisma.attachment.delete({ where: { id: attachment.id } });
+  await audit(req.user!.id, "timesheet.attachment_removed", "Timesheet", entry.id, {
+    attachmentId: attachment.id,
+    fileName: attachment.fileName
   });
   res.status(204).send();
 });

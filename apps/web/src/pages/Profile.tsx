@@ -259,6 +259,10 @@ export function Profile() {
   });
 
   const passwordMismatch = nextPassword.length > 0 && nextPassword !== confirmPassword;
+  /** Re-entering the password you already have is not a password change — and on a first sign-in
+   *  it is the specific non-change that leaves an admin-known password in place while clearing
+   *  the banner that was prompting you to replace it. */
+  const passwordReused = nextPassword.length > 0 && nextPassword === currentPassword;
 
   const profileDirty = useMemo(() => {
     return (
@@ -508,7 +512,7 @@ export function Profile() {
               className="grid gap-4"
               onSubmit={(event) => {
                 event.preventDefault();
-                if (!passwordMismatch && nextPassword.length >= 8) passwordMutation.mutate();
+                if (!passwordMismatch && !passwordReused && nextPassword.length >= 8) passwordMutation.mutate();
               }}
             >
               <div className="grid gap-1.5">
@@ -517,12 +521,31 @@ export function Profile() {
               </div>
               <div className="grid gap-1.5">
                 <Label>New password</Label>
-                <Input type="password" value={nextPassword} onChange={(event) => setNextPassword(event.target.value)} minLength={8} />
+                <Input
+                  type="password"
+                  value={nextPassword}
+                  onChange={(event) => setNextPassword(event.target.value)}
+                  minLength={8}
+                  aria-invalid={passwordReused || undefined}
+                />
               </div>
               <div className="grid gap-1.5">
                 <Label>Confirm new password</Label>
                 <Input type="password" value={confirmPassword} onChange={(event) => setConfirmPassword(event.target.value)} minLength={8} />
               </div>
+              {/* The server refuses this too (auth.service.ts compares the new password against the
+                  stored hash) — this is the half that says so before the round trip, and while the
+                  user is still looking at the field. Both halves exist because the server one is
+                  the rule and this one is the manners. */}
+              {passwordReused && (
+                <Alert variant="warning">
+                  <AlertTitle>That's the password you already have</AlertTitle>
+                  <AlertDescription>
+                    Choose a different one — re-entering the current password wouldn't change anything, and if an
+                    administrator set it, they'd still know it.
+                  </AlertDescription>
+                </Alert>
+              )}
               {passwordMismatch && (
                 <Alert variant="warning">
                   <AlertTitle>Passwords don't match yet</AlertTitle>
@@ -534,6 +557,7 @@ export function Profile() {
                 disabled={
                   passwordMutation.isPending ||
                   passwordMismatch ||
+                  passwordReused ||
                   nextPassword.length < 8 ||
                   currentPassword.length < 8
                 }

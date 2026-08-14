@@ -179,8 +179,12 @@ test.describe("approvals queue", () => {
       const dialog = page.getByRole("dialog");
       await expect(dialog).toBeVisible({ timeout: 10_000 });
       // Eleven table columns collapsed into one readable pane — the fields that make the entry
-      // judgeable, not just a title.
-      for (const label of ["Status", "Project", "Activity", "Time frame", "Hours spent", "Task"]) {
+      // judgeable, not just a title. This is the SHARED `TimesheetEntryDialog` now (History and
+      // the dashboard's day timeline open the same one), so the labels are its: "Logged by" and
+      // "Attachments" are the two the old approvals-only dialog never had, and they are the two
+      // that were actually missing — who stands behind the entry, and the evidence for it.
+      // Status moved into the title as a badge beside the name.
+      for (const label of ["Logged by", "Project", "Activity", "When", "Task", "Attachments", "Identity"]) {
         await expect(dialog.getByText(label, { exact: true })).toBeVisible();
       }
       await expect(dialog.getByRole("button", { name: "Download" })).toBeVisible();

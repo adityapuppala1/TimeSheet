@@ -50,7 +50,10 @@ export type NotificationCategory =
   | "digest.bug_pattern"
   | "ticket.stale_nudge"
   | "maintenance.scheduled"
-  | "ai.autonomy_applied";
+  | "ai.autonomy_applied"
+  /** In-app ONLY — see the `null` in SETTINGS_FIELD. Raised when a reviewer edits somebody
+   *  else's timesheet entry, so the change never happens silently behind the author's back. */
+  | "timesheet.updated";
 
 interface EmailPayload {
   templateKey: string;
@@ -69,7 +72,13 @@ interface DispatchArgs {
   metadata?: Record<string, unknown>;
 }
 
-const SETTINGS_FIELD: Record<NotificationCategory, string> = {
+/**
+ * `null` marks a category with NO email leg and therefore no toggle to gate — it exists only as a
+ * bell-menu row. Written as an explicit null rather than an omission so the `Record` still forces
+ * every new category to make the choice, and so that giving one of them an email payload later is
+ * a visible edit here (adding the settings column) instead of an ungated send.
+ */
+const SETTINGS_FIELD: Record<NotificationCategory, string | null> = {
   "timesheet.submitted": "emailTimesheetSubmitted",
   "timesheet.approved": "emailTimesheetApproved",
   "timesheet.rejected": "emailTimesheetRejected",
@@ -97,7 +106,8 @@ const SETTINGS_FIELD: Record<NotificationCategory, string> = {
   "digest.bug_pattern": "emailBugPatternDigest",
   "ticket.stale_nudge": "emailTicketStaleNudge",
   "maintenance.scheduled": "emailMaintenanceScheduled",
-  "ai.autonomy_applied": "emailAiAutonomyApplied"
+  "ai.autonomy_applied": "emailAiAutonomyApplied",
+  "timesheet.updated": null
 };
 
 const GLOBAL_ID = "global";
@@ -159,7 +169,7 @@ export async function dispatchNotification(args: DispatchArgs) {
       subject: rendered.subject,
       html: rendered.html,
       template: args.category,
-      preferenceKey: field,
+      preferenceKey: field ?? undefined,
       metadata: args.metadata
     });
   })().catch((error) => {
@@ -177,6 +187,9 @@ export async function dispatchTransactional(args: {
   fallback: { subject: string; html: string };
   /** Real Cc, not the hidden super-admin bcc — see mail.service.ts#SendArgs.cc. */
   cc?: string[];
+  /** "The rendered body carries a credential." Set it on anything that emails a reset link or a
+   *  generated password — see mail.service.ts#SendArgs.sensitive for what it changes and why. */
+  sensitive?: boolean;
 }) {
   if (!args.to) {
     return { ok: false, status: "SKIPPED" as const, errorMessage: "Recipient missing" };
@@ -188,7 +201,8 @@ export async function dispatchTransactional(args: {
     cc: args.cc,
     subject: rendered.subject,
     html: rendered.html,
-    template: args.templateKey
+    template: args.templateKey,
+    sensitive: args.sensitive
   });
 }
 

@@ -17,6 +17,8 @@ import {
   Clock,
   DollarSign,
   Download,
+  Eye,
+  EyeOff,
   FileSpreadsheet,
   FileText,
   Filter,
@@ -70,6 +72,7 @@ import { TimesheetReportPanel } from "../components/TimesheetReportPanel";
 import { DateRangePicker, type DateRangeValue } from "../components/ui/date-range-picker";
 import type { CalendarDayAnnotations } from "../components/ui/calendar-primitives";
 import { TimesheetAnalyticsPanel } from "../components/TimesheetAnalyticsPanel";
+import { TimesheetEntryDialog } from "../components/TimesheetEntryDialog";
 import {
   EMPTY_FILTERS,
   TablePager,
@@ -109,6 +112,7 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "../components/ui/toolti
 import { safeHtml } from "../lib/safe-html";
 import { computeTrend } from "../lib/trend";
 import {
+  activityTypeApi,
   attestationApi,
   faceApi,
   fileUrl,
@@ -1364,6 +1368,8 @@ export function ProjectsPage() {
         </CardContent>
       </Card>
 
+      <ActivityTypesCard />
+
       <ProjectTeamDialog project={managingTeam} onClose={() => setManagingTeam(null)} />
 
       <ProjectBillingDialog project={billingProject} onClose={() => setBillingProject(null)} />
@@ -1518,6 +1524,256 @@ export function ProjectsPage() {
         </AlertDialogContent>
       </AlertDialog>
     </Workspace>
+  );
+}
+
+/**
+ * The activity catalog behind the timesheet form's "Activity" field — add, rename, enable,
+ * disable, delete.
+ *
+ * WHY IT LIVES ON THE PROJECTS SCREEN: this is the same kind of thing as a module or a submodule
+ * — a dimension you slice logged work by — and it is administered by the same person under the
+ * same `projects:manage` right. A separate page for one twelve-row list would be a nav entry
+ * nobody finds.
+ *
+ * WHY IT EXISTS AT ALL: the `ActivityType` table has been seeded since the first migration and
+ * nothing ever read it. Both apps imported a frozen twelve-item array from `@timesheet/shared`
+ * instead, so a workspace whose work didn't fit those twelve words — "Incident response",
+ * "Client call", "On-call" — had no way to say so short of a code change and a redeploy.
+ *
+ * DISABLE vs DELETE is the distinction the whole card is built around. Disabling takes an
+ * activity out of the picker and leaves every entry ever logged under it readable. Deleting is
+ * only offered for one that was never used, and the API refuses the rest with a count — because
+ * the approvals filter and every grouped report build their options from this list, so removing
+ * a name that history still contains breaks them silently.
+ */
+function ActivityTypesCard() {
+  const queryClient = useQueryClient();
+  // `all` — this screen manages them, so it has to see the disabled ones. The timesheet picker
+  // calls the same endpoint without it and gets only what may still be logged against.
+  const activities = useQuery({ queryKey: ["activity-types", "all"], queryFn: () => activityTypeApi.list(true) });
+  const [newName, setNewName] = useState("");
+  const [editing, setEditing] = useState<{ id: string; name: string } | null>(null);
+  const [pendingDelete, setPendingDelete] = useState<{ id: string; name: string } | null>(null);
+
+  // Both lists move on every write: this card reads the `all` view, the timesheet form and the
+  // entry-edit dialog read the active-only one.
+  const refresh = () => queryClient.invalidateQueries({ queryKey: ["activity-types"] });
+
+  const create = useMutation({
+    mutationFn: () => activityTypeApi.create(newName.trim()),
+    onSuccess: (row) => {
+      setNewName("");
+      refresh();
+      toast.success(`"${row.name}" added`, { description: "It's in the Activity picker for everyone logging time." });
+    },
+    onError: (err: any) => toast.error("Could not add that activity", { description: serverMessage(err, "Try again.") })
+  });
+
+  const rename = useMutation({
+    mutationFn: (payload: { id: string; name: string }) => activityTypeApi.update(payload.id, { name: payload.name.trim() }),
+    onSuccess: () => {
+      setEditing(null);
+      refresh();
+      toast.success("Renamed", { description: "Entries already logged keep the old name — they are a record of what was said at the time." });
+    },
+    onError: (err: any) => toast.error("Could not rename", { description: serverMessage(err, "Try again.") })
+  });
+
+  const toggle = useMutation({
+    mutationFn: (payload: { id: string; isActive: boolean }) => activityTypeApi.update(payload.id, { isActive: payload.isActive }),
+    onSuccess: (row) => {
+      refresh();
+      toast.success(row.isActive ? `"${row.name}" is selectable again` : `"${row.name}" hidden from the picker`, {
+        description: row.isActive ? undefined : "Existing entries are untouched and still readable."
+      });
+    },
+    onError: (err: any) => toast.error("Could not change that activity", { description: serverMessage(err, "Try again.") })
+  });
+
+  const remove = useMutation({
+    mutationFn: (id: string) => activityTypeApi.remove(id),
+    onSuccess: () => {
+      setPendingDelete(null);
+      refresh();
+      toast.success("Activity deleted");
+    },
+    // The API's 409 carries the entry count and the advice to disable instead — surfaced verbatim
+    // rather than replaced with a generic failure, because it is the actionable half.
+    onError: (err: any) => toast.error("Could not delete", { description: serverMessage(err, "Try again.") })
+  });
+
+  const rows = activities.data ?? [];
+  const seeded = rows.some((row) => row.seeded);
+  const activeCount = rows.filter((row) => row.isActive).length;
+  const duplicate = rows.some((row) => row.name.toLowerCase() === newName.trim().toLowerCase());
+
+  return (
+    <Card>
+      <CardHeader className="flex flex-col gap-3 space-y-0 pb-3 sm:flex-row sm:items-start sm:justify-between">
+        <div className="min-w-0">
+          <CardTitle className="flex items-center gap-2 text-base">
+            <Layers className="h-4 w-4 text-primary" />
+            Activity types
+          </CardTitle>
+          <CardDescription>
+            What the "Activity" dropdown offers when someone logs time. Disabling hides an activity from the
+            picker without touching a single entry already logged under it.
+          </CardDescription>
+        </div>
+        <Badge variant={activeCount > 0 ? "success" : "warning"} className="whitespace-nowrap">
+          {activeCount} selectable
+        </Badge>
+      </CardHeader>
+      <CardContent className="grid gap-4">
+        {seeded && (
+          <p className="rounded-md border border-dashed border-border bg-muted/30 px-3 py-2 text-xs text-muted-foreground">
+            These are the built-in defaults — this workspace has no activity rows of its own yet. Adding one
+            replaces the whole default list, so add every activity you want before people log against them.
+          </p>
+        )}
+
+        <div className="flex flex-col gap-2 sm:flex-row">
+          <Input
+            value={newName}
+            maxLength={60}
+            placeholder="e.g. Incident response"
+            aria-label="New activity type"
+            onChange={(event) => setNewName(event.target.value)}
+            onKeyDown={(event) => {
+              if (event.key === "Enter" && newName.trim().length >= 2 && !duplicate) create.mutate();
+            }}
+          />
+          <Button
+            className="sm:w-auto"
+            disabled={newName.trim().length < 2 || duplicate || create.isPending}
+            onClick={() => create.mutate()}
+          >
+            {create.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Plus className="h-4 w-4" />}
+            Add activity
+          </Button>
+        </div>
+        {duplicate && <p className="-mt-2 text-xs text-destructive">"{newName.trim()}" already exists.</p>}
+
+        {activities.isLoading ? (
+          <Skeleton className="h-24 w-full" />
+        ) : (
+          // Chips, not a table: these are one short word each, and twelve of them in a table is
+          // eleven rows of whitespace. Wraps naturally from a phone to a wide screen.
+          <div className="flex flex-wrap gap-2">
+            {rows.map((row) => (
+              <div
+                key={row.id}
+                className={`flex items-center gap-1 rounded-full border py-1 pl-3 pr-1 text-sm ${
+                  row.isActive ? "border-border bg-background" : "border-dashed border-border bg-muted/40 text-muted-foreground"
+                }`}
+              >
+                <span className={row.isActive ? "font-medium" : "font-medium line-through"}>{row.name}</span>
+                {/* A seeded placeholder has no row to edit — the controls would 404 on a `seed:`
+                    id, so they are simply not offered until the workspace has real rows. */}
+                {!row.seeded && (
+                  <>
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      className="h-7 w-7 text-muted-foreground hover:text-foreground"
+                      aria-label={`Rename ${row.name}`}
+                      title="Rename"
+                      onClick={() => setEditing({ id: row.id, name: row.name })}
+                    >
+                      <Pencil className="h-3 w-3" />
+                    </Button>
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      className="h-7 w-7 text-muted-foreground hover:text-foreground"
+                      aria-label={row.isActive ? `Disable ${row.name}` : `Enable ${row.name}`}
+                      title={row.isActive ? "Disable — hides it from the picker" : "Enable — offers it again"}
+                      disabled={toggle.isPending}
+                      onClick={() => toggle.mutate({ id: row.id, isActive: !row.isActive })}
+                    >
+                      {row.isActive ? <EyeOff className="h-3 w-3" /> : <Eye className="h-3 w-3" />}
+                    </Button>
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      className="h-7 w-7 text-muted-foreground hover:text-destructive"
+                      aria-label={`Delete ${row.name}`}
+                      title="Delete — only possible if nothing was ever logged under it"
+                      onClick={() => setPendingDelete({ id: row.id, name: row.name })}
+                    >
+                      <Trash2 className="h-3 w-3" />
+                    </Button>
+                  </>
+                )}
+              </div>
+            ))}
+            {rows.length === 0 && <p className="text-sm text-muted-foreground">No activity types yet — add the first one above.</p>}
+          </div>
+        )}
+      </CardContent>
+
+      <Dialog open={!!editing} onOpenChange={(open) => !open && setEditing(null)}>
+        <DialogContent className="w-[calc(100vw-2rem)] max-w-md">
+          <DialogHeader>
+            <DialogTitle>Rename activity</DialogTitle>
+            <DialogDescription>
+              Entries already logged keep the name they were logged under — a timesheet is a record of what
+              someone said at the time, not a live reference. From now on the picker offers the new name.
+            </DialogDescription>
+          </DialogHeader>
+          {editing && (
+            <div className="grid gap-1.5">
+              <Label htmlFor="activity-rename">Name</Label>
+              <Input
+                id="activity-rename"
+                value={editing.name}
+                maxLength={60}
+                autoFocus
+                onChange={(event) => setEditing({ ...editing, name: event.target.value })}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter" && editing.name.trim().length >= 2) rename.mutate(editing);
+                }}
+              />
+            </div>
+          )}
+          <DialogFooter>
+            <Button variant="ghost" onClick={() => setEditing(null)}>Cancel</Button>
+            <Button disabled={!editing || editing.name.trim().length < 2 || rename.isPending} onClick={() => editing && rename.mutate(editing)}>
+              Save name
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <AlertDialog open={!!pendingDelete} onOpenChange={(open) => !open && setPendingDelete(null)}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Delete "{pendingDelete?.name}"?</AlertDialogTitle>
+            <AlertDialogDescription>
+              This only works if nothing was ever logged under it. If any entry uses it, the server refuses and
+              tells you how many — disable it instead, which takes it out of the picker and leaves the history
+              readable.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Keep it</AlertDialogCancel>
+            <AlertDialogAction
+              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+              disabled={remove.isPending}
+              onClick={(event) => {
+                // Radix closes on action-click by default; deferring lets the 409's "12 entries
+                // use this" land in a toast the user can actually read.
+                event.preventDefault();
+                if (pendingDelete) remove.mutate(pendingDelete.id);
+              }}
+            >
+              Delete activity
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+    </Card>
   );
 }
 
@@ -1930,17 +2186,6 @@ const APPROVAL_STATUS_VARIANT: Record<string, "success" | "warning" | "destructi
   DRAFT: "muted",
   REJECTED: "destructive"
 };
-
-/** One labelled fact in the mobile detail dialog. Label above value on a phone, beside it once
- *  there is room — a fixed two-column grid at 360px leaves the value about ten characters wide. */
-function ApprovalDetailRow({ label, children }: { label: string; children: ReactNode }) {
-  return (
-    <div className="grid gap-0.5 border-b border-border/60 pb-2 last:border-b-0 sm:grid-cols-[9rem_minmax(0,1fr)] sm:gap-3">
-      <span className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">{label}</span>
-      <div className="min-w-0 break-words [overflow-wrap:anywhere]">{children}</div>
-    </div>
-  );
-}
 
 export function ApprovalsPage() {
   const queryClient = useQueryClient();
@@ -2468,105 +2713,44 @@ export function ApprovalsPage() {
         </CardContent>
       </Card>
 
-      {/* Everything the table shows across eleven columns, in one readable column — the phone's
-          only view of the entry, and on desktop the one place the full task text is not clamped. */}
-      <Dialog open={!!detail} onOpenChange={(open) => !open && setDetail(null)}>
-        <DialogContent className="w-[min(95vw,640px)] max-w-none">
-          <DialogHeader>
-            <DialogTitle className="break-words">{detail?.user?.name}</DialogTitle>
-            <DialogDescription className="break-words">
-              {detail?.user?.email} · {String(detail?.workDate ?? "").slice(0, 10)}
-            </DialogDescription>
-          </DialogHeader>
-          {detail && (
-            <ScrollArea className="max-h-[55vh] pr-3">
-              <div className="grid gap-2 text-sm">
-                <ApprovalDetailRow label="Status">
-                  <Badge variant={APPROVAL_STATUS_VARIANT[detail.status] ?? "muted"}>{detail.status}</Badge>
-                </ApprovalDetailRow>
-                <ApprovalDetailRow label="Project">
-                  <p className="font-medium">{detail.project?.name}</p>
-                  <p className="text-xs text-muted-foreground">
-                    {detail.module?.name}
-                    {detail.submodule ? ` / ${detail.submodule.name}` : ""}
-                  </p>
-                  {detail.ticket && <Badge variant="outline" className="mt-1 font-mono text-[10px]">{detail.ticket.key}</Badge>}
-                </ApprovalDetailRow>
-                <ApprovalDetailRow label="Activity">{detail.activityType}</ApprovalDetailRow>
-                <ApprovalDetailRow label="Time frame">
-                  {detail.startTime} → {detail.endTime}
-                </ApprovalDetailRow>
-                <ApprovalDetailRow label="Hours spent">
-                  <span className="font-semibold tabular-nums">{Number(detail.totalHours).toFixed(2)}h</span>
-                </ApprovalDetailRow>
-                <ApprovalDetailRow label="Last updated">{formatTimestamp(detail.updatedAt)}</ApprovalDetailRow>
-                <ApprovalDetailRow label="Task">
-                  <div className="prose-sm" dangerouslySetInnerHTML={safeHtml(detail.taskDescription)} />
-                </ApprovalDetailRow>
-                {plainText(detail.notes) ? (
-                  <ApprovalDetailRow label="Notes">
-                    <div className="prose-sm" dangerouslySetInnerHTML={safeHtml(detail.notes)} />
-                  </ApprovalDetailRow>
-                ) : null}
-                {detail.attachments?.length ? (
-                  <ApprovalDetailRow label="Attachments">
-                    <span className="inline-flex items-center gap-1 text-muted-foreground">
-                      <Paperclip className="h-3 w-3" />
-                      {detail.attachments.length} file(s)
-                    </span>
-                  </ApprovalDetailRow>
-                ) : null}
-                <ApprovalDetailRow label="Identity">
-                  {detail.identityVerified ? (
-                    <Badge variant="success">
-                      <ShieldCheck className="mr-1 h-3 w-3" />Verified
-                    </Badge>
-                  ) : detail.identityVerificationApplies ? (
-                    <Badge variant="outline">Unverified</Badge>
-                  ) : (
-                    <span className="text-muted-foreground">Not covered by the face policy</span>
-                  )}
-                </ApprovalDetailRow>
-                {detail.status === "REJECTED" && detail.rejectionReason ? (
-                  <ApprovalDetailRow label="Rejection reason">
-                    <span className="text-destructive">{detail.rejectionReason}</span>
-                  </ApprovalDetailRow>
-                ) : null}
-              </div>
-            </ScrollArea>
-          )}
-          <DialogFooter>
-            <Button variant="outline" onClick={() => detail && downloadEntry(detail)}>
+      {/*
+        The full entry, in one readable column — the phone's only view of it, and on desktop the
+        one place the task text is not clamped.
+
+        THIS USED TO BE A BESPOKE READ-ONLY DIALOG living in this file, and it had one hole worth
+        naming: attachments appeared as "2 file(s)", a count with nothing to click. An approver was
+        being asked to sign off hours on the strength of evidence the screen could see and they
+        could not. It is now the SHARED `TimesheetEntryDialog` that History and the dashboard's
+        day timeline also open — the files download, the reviewer is named, and a manager can
+        correct a wrong module without a rejection round-trip. Approve/Reject stay here, passed in,
+        because deciding is this page's job and no other caller's.
+      */}
+      <TimesheetEntryDialog
+        entryId={detail?.id ?? null}
+        initialEntry={detail}
+        onClose={() => setDetail(null)}
+        onApprove={(entry) => requestApprove(entry.id)}
+        onReject={(entry) => {
+          // Closed first: the reject dialog owns the screen from here, and two stacked dialogs
+          // leave no obvious way back on a phone.
+          setRejectTarget({ id: entry.id, user: entry.user?.name ?? "this entry" });
+          setDetail(null);
+        }}
+        footerExtras={(entry) => (
+          <>
+            <Button variant="outline" onClick={() => downloadEntry(entry)}>
               <Download className="h-4 w-4" />Download
             </Button>
-            {/* Moved here from the table's identity column: a download belongs where the entry is
-                read in full, and it was one of the columns forcing the table to side-scroll. */}
-            {detail?.identityVerified ? (
-              <Button variant="outline" onClick={() => detail && downloadEvidencePack(detail.id)}>
+            {/* A download belongs where the entry is read in full — it was one of the columns
+                forcing the table to side-scroll. */}
+            {entry.identityVerified ? (
+              <Button variant="outline" onClick={() => downloadEvidencePack(entry.id)}>
                 <ShieldCheck className="h-4 w-4" />Evidence pack
               </Button>
             ) : null}
-            {detail?.status === "SUBMITTED" ? (
-              <>
-                <Button
-                  variant="outline"
-                  onClick={() => {
-                    // Closed first: the reject dialog owns the screen from here, and two stacked
-                    // dialogs leave no obvious way back on a phone.
-                    setRejectTarget({ id: detail.id, user: detail.user?.name });
-                    setDetail(null);
-                  }}
-                >
-                  <ShieldX className="h-4 w-4" />Reject
-                </Button>
-                <Button variant="success" onClick={() => requestApprove(detail.id)}>
-                  <Check className="h-4 w-4" />Approve
-                </Button>
-              </>
-            ) : null}
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+          </>
+        )}
+      />
 
       <Dialog open={!!rejectTarget} onOpenChange={(open) => { if (!open) { setRejectTarget(null); setRejectReason(""); } }}>
         <DialogContent className="w-[min(95vw,520px)] max-w-none">

@@ -1,18 +1,30 @@
 /**
- * WHAT: read-only, filterable list of a user's past timesheet entries (date range, project,
- * status), via `timesheetApi.list`.
- * WHY almost read-only: editing an already-submitted/approved entry has real audit/SLA
- * implications (see `sla.service.ts`), so this page is for reviewing history, not amending it —
- * `Timesheet.tsx` is where new entries are logged. The ONE exception is deleting a DRAFT or
- * REJECTED entry, which had no home anywhere in the product: an entry logged by mistake could
- * only be edited into something else or left in the list forever. Submitted and approved entries
- * deliberately have no delete control, matching the API rule.
- * WHO calls the backing API: `controllers/timesheet.controller.ts`'s list route.
+ * WHAT: filterable list of a user's past timesheet entries (date range, project, status), via
+ * `timesheetApi.list` — and, since every row is now a door, the way into the full entry.
+ *
+ * WHY IT USED TO BE READ-ONLY, AND WHAT CHANGED: editing a submitted/approved entry has real
+ * audit and SLA implications (see `sla.service.ts`), so this page deliberately showed rather than
+ * amended. The cost of that was steeper than it looked: an approved entry leaves the approvals
+ * queue, so this table became the ONLY remaining record of it — and it showed a two-line clamp of
+ * the task, a COUNT of the attachments, and no reviewer at all. "Who logged this, against what,
+ * and what did they attach" was unanswerable for the entire history of the workspace.
+ *
+ * So the amendment rule moved to where it belongs — the server (`PATCH /timesheets/:id`), which
+ * audits every field change and notifies the submitter — and this page opens the shared
+ * `TimesheetEntryDialog` on any row. Reading is unchanged for everyone; editing appears only for
+ * whoever the API would actually allow. Deleting keeps its narrower rule (DRAFT/REJECTED only),
+ * because erasure and correction are different things.
+ *
+ * DEEP LINK: `?entry=<id>` opens one directly, so a notification, a dashboard timeline block or a
+ * pasted URL can all point at a specific entry rather than at "the list".
+ *
+ * WHO calls the backing API: `controllers/timesheet.controller.ts`'s list + detail routes.
  */
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import type { ColumnDef } from "@tanstack/react-table";
-import { Clock, FileText, Filter, Layers, Paperclip, RotateCcw, ShieldCheck, Trash2 } from "lucide-react";
-import { useMemo, useState } from "react";
+import { Clock, Eye, FileText, Filter, Layers, Paperclip, RotateCcw, ShieldCheck, Trash2 } from "lucide-react";
+import { useEffect, useMemo, useState } from "react";
+import { useSearchParams } from "react-router";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -36,6 +48,7 @@ import { projectApi, timesheetApi } from "../services/api";
 import { safeHtml } from "../lib/safe-html";
 import { toast } from "../components/ui/toaster";
 import { DateRangePicker } from "../components/ui/date-range-picker";
+import { TimesheetEntryDialog } from "../components/TimesheetEntryDialog";
 
 function startOfWeek(date: Date) {
   const d = new Date(date);
@@ -65,6 +78,42 @@ export function History() {
    *  happens on a single click. */
   const [pendingDelete, setPendingDelete] = useState<any | null>(null);
   const queryClient = useQueryClient();
+
+  /**
+   * The open entry. Held in the URL rather than in state alone so the dialog is linkable — the
+   * dashboard's day timeline sends people straight here, and a notification about an edited entry
+   * should be able to as well. The row the user clicked is kept alongside it purely as a paint
+   * seed; the dialog refetches by id regardless, because this list is capped at 100 rows and an
+   * older entry reached by URL is simply not in it.
+   */
+  const [searchParams, setSearchParams] = useSearchParams();
+  const openEntryId = searchParams.get("entry");
+  const [entrySeed, setEntrySeed] = useState<any | null>(null);
+
+  const openEntry = (row: any) => {
+    setEntrySeed(row);
+    // `replace` so the browser Back button leaves the page rather than walking back through every
+    // entry the user peeked at.
+    setSearchParams((params) => {
+      const next = new URLSearchParams(params);
+      next.set("entry", row.id);
+      return next;
+    }, { replace: true });
+  };
+  const closeEntry = () => {
+    setEntrySeed(null);
+    setSearchParams((params) => {
+      const next = new URLSearchParams(params);
+      next.delete("entry");
+      return next;
+    }, { replace: true });
+  };
+
+  // A stale `?entry=` (deleted row, someone else's link) must not leave the dialog stuck open on
+  // an error. The dialog reports the failure; this clears the parameter once it has.
+  useEffect(() => {
+    if (openEntryId && entrySeed && entrySeed.id !== openEntryId) setEntrySeed(null);
+  }, [openEntryId, entrySeed]);
 
   const removeEntry = useMutation({
     mutationFn: (id: string) => timesheetApi.remove(id),
@@ -149,7 +198,21 @@ export function History() {
         id: "date",
         accessorFn: (row: any) => row.workDate,
         header: "Date",
-        cell: ({ row }) => <span className="whitespace-nowrap font-medium">{String(row.original.workDate).slice(0, 10)}</span>
+        // The date is the door into the entry, the same way the employee name is on the approvals
+        // table — one obvious, keyboard-reachable control per row rather than a separate "view"
+        // column stealing width from the task text.
+        cell: ({ row }) => (
+          <button
+            type="button"
+            onClick={() => openEntry(row.original)}
+            className="focus-ring rounded text-left"
+            title="Open the full entry — task, notes, attachments"
+          >
+            <span className="whitespace-nowrap font-medium underline-offset-2 hover:underline">
+              {String(row.original.workDate).slice(0, 10)}
+            </span>
+          </button>
+        )
       },
       {
         id: "projectModule",
@@ -230,25 +293,42 @@ export function History() {
       {
         id: "actions",
         header: "",
-        cell: ({ row }) =>
-          // Only DRAFT and REJECTED can go — the API enforces the same rule for the same reason:
-          // a SUBMITTED entry is awaiting someone's decision, and an APPROVED one underpins the
-          // billing record. Hiding the control on the others means the button never lies about
-          // what it can do.
-          row.original.status === "DRAFT" || row.original.status === "REJECTED" ? (
+        enableSorting: false,
+        cell: ({ row }) => (
+          <div className="flex items-center justify-end gap-1">
+            {/* Always present, on every status — this is the control that answers "what exactly
+                did I log, and what did I attach", which used to have no answer at all once an
+                entry was approved. */}
             <Button
               size="sm"
               variant="ghost"
-              className="h-8 text-muted-foreground hover:bg-destructive/10 hover:text-destructive"
-              aria-label={`Delete entry for ${String(row.original.workDate).slice(0, 10)}`}
-              disabled={removeEntry.isPending}
-              onClick={() => setPendingDelete(row.original)}
+              className="h-8 text-muted-foreground hover:text-foreground"
+              aria-label={`View the entry for ${String(row.original.workDate).slice(0, 10)}`}
+              onClick={() => openEntry(row.original)}
             >
-              <Trash2 className="h-3.5 w-3.5" />
+              <Eye className="h-3.5 w-3.5" />
             </Button>
-          ) : null
+            {/* Only DRAFT and REJECTED can go — the API enforces the same rule for the same
+                reason: a SUBMITTED entry is awaiting someone's decision, and an APPROVED one
+                underpins the billing record. Hiding the control on the others means the button
+                never lies about what it can do. */}
+            {row.original.status === "DRAFT" || row.original.status === "REJECTED" ? (
+              <Button
+                size="sm"
+                variant="ghost"
+                className="h-8 text-muted-foreground hover:bg-destructive/10 hover:text-destructive"
+                aria-label={`Delete entry for ${String(row.original.workDate).slice(0, 10)}`}
+                disabled={removeEntry.isPending}
+                onClick={() => setPendingDelete(row.original)}
+              >
+                <Trash2 className="h-3.5 w-3.5" />
+              </Button>
+            ) : null}
+          </div>
+        )
       }
     ],
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- openEntry closes over stable setters
     [removeEntry.isPending]
   );
 
@@ -339,6 +419,10 @@ export function History() {
           />
         </CardContent>
       </Card>
+
+      {/* The full entry — who logged it, the whole task text, the notes, and the attachments as
+          downloadable links. Editing shows up inside it for whoever the API would allow. */}
+      <TimesheetEntryDialog entryId={openEntryId} initialEntry={entrySeed} onClose={closeEntry} />
 
       <AlertDialog open={Boolean(pendingDelete)} onOpenChange={(open) => !open && setPendingDelete(null)}>
         <AlertDialogContent>

@@ -28,6 +28,7 @@ import { appVersion } from "./config/version.js";
 import { decodeFileKey, signFileUrlsDeep, verifyFileGrant } from "./utils/file-url.js";
 import { resolveStoredFile } from "./services/attachment-storage.service.js";
 import { getUpdateStatus } from "./services/update-check.service.js";
+import { activityTypeRouter } from "./controllers/activity-type.controller.js";
 import { aiRouter } from "./controllers/ai.controller.js";
 import { auditRouter } from "./controllers/audit.controller.js";
 import { authRouter } from "./controllers/auth.controller.js";
@@ -443,6 +444,9 @@ app.use("/api/projects", projectRouter);
 app.use("/api/timesheets", timesheetRouter);
 app.use("/api/tickets", ticketRouter);
 app.use("/api/ticket-types", ticketTypeRouter);
+// The activity catalog behind the timesheet form's "Activity" field. Mounted next to
+// /api/ticket-types because it is the same shape of thing for the other half of the product.
+app.use("/api/activity-types", activityTypeRouter);
 app.use("/api/ai", aiRouter);
 app.use("/api/email-intake", emailIntakeRouter);
 app.use("/api/chat-integrations", chatIntegrationsRouter);

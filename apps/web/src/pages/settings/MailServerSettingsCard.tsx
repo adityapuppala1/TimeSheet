@@ -30,6 +30,9 @@ interface Draft {
   user: string;
   password: string;
   fromAddress: string;
+  maxConnections: number;
+  maxMessagesPerWindow: number;
+  rateWindowMs: number;
 }
 
 export function MailServerSettingsCard({ readOnly }: { readOnly: boolean }) {
@@ -63,7 +66,10 @@ export function MailServerSettingsCard({ readOnly }: { readOnly: boolean }) {
       // Never seeded from the server — the API does not return it, and pre-filling a password box
       // with anything invites saving a placeholder over a working credential.
       password: "",
-      fromAddress: settings.data.fromAddress ?? ""
+      fromAddress: settings.data.fromAddress ?? "",
+      maxConnections: settings.data.maxConnections,
+      maxMessagesPerWindow: settings.data.maxMessagesPerWindow,
+      rateWindowMs: settings.data.rateWindowMs
     });
   }, [settings.data]);
 
@@ -75,7 +81,10 @@ export function MailServerSettingsCard({ readOnly }: { readOnly: boolean }) {
         secure: draft!.secure,
         user: draft!.user || null,
         password: draft!.password || undefined,
-        fromAddress: draft!.fromAddress || null
+        fromAddress: draft!.fromAddress || null,
+        maxConnections: draft!.maxConnections,
+        maxMessagesPerWindow: draft!.maxMessagesPerWindow,
+        rateWindowMs: draft!.rateWindowMs
       }),
     onSuccess: () => {
       toast.success("Saved");
@@ -165,6 +174,74 @@ export function MailServerSettingsCard({ readOnly }: { readOnly: boolean }) {
                   <p className="text-xs text-muted-foreground">Off for STARTTLS on port 587 (most providers, including Gmail) — on for implicit TLS on 465.</p>
                 </div>
                 <Switch checked={draft.secure} onCheckedChange={(value) => setDraft({ ...draft, secure: value })} disabled={readOnly} />
+              </div>
+
+              {/*
+                THE THROTTLE. Before it existed, every send opened its own SMTP connection and
+                fired immediately, and notifications are dispatched detached - so a bulk approval
+                of twenty timesheets, or the daily reminder sweep across a fifty-person workspace,
+                opened that many simultaneous connections in one tick. Office 365 permits three.
+                That is where the "frequent rate limits" came from, and it was self-inflicted.
+
+                Surfaced as settings rather than constants because the right numbers depend
+                entirely on the relay: a dedicated one is entitled to go much faster, a shared
+                mailbox needs to go slower, and guessing wrong costs a rejected send.
+              */}
+              <div className="grid gap-3 rounded-md border border-border p-3">
+                <div>
+                  <p className="text-sm font-medium">Sending rate</p>
+                  <p className="text-xs text-muted-foreground">
+                    How fast this workspace is allowed to hand messages to the relay. Anything over the limit waits its
+                    turn instead of being rejected, and a send the provider still refuses is retried automatically for
+                    about half an hour before it is given up on. Defaults sit under Office 365's 30-per-minute and
+                    three-connection caps.
+                  </p>
+                </div>
+                <div className="grid gap-4 sm:grid-cols-3">
+                  <div className="grid gap-1.5">
+                    <Label htmlFor="mail-max-connections">Simultaneous connections</Label>
+                    <Input
+                      id="mail-max-connections"
+                      type="number"
+                      min={1}
+                      max={20}
+                      value={draft.maxConnections}
+                      disabled={readOnly}
+                      onChange={(e) => setDraft({ ...draft, maxConnections: Number(e.target.value) || 1 })}
+                    />
+                  </div>
+                  <div className="grid gap-1.5">
+                    <Label htmlFor="mail-max-messages">Messages per window</Label>
+                    <Input
+                      id="mail-max-messages"
+                      type="number"
+                      min={1}
+                      max={5000}
+                      value={draft.maxMessagesPerWindow}
+                      disabled={readOnly}
+                      onChange={(e) => setDraft({ ...draft, maxMessagesPerWindow: Number(e.target.value) || 1 })}
+                    />
+                  </div>
+                  <div className="grid gap-1.5">
+                    <Label htmlFor="mail-rate-window">Window (seconds)</Label>
+                    <Input
+                      id="mail-rate-window"
+                      type="number"
+                      min={1}
+                      max={3600}
+                      // Stored in milliseconds because that is what nodemailer's rateDelta takes;
+                      // shown in seconds because nobody thinks about a sending rate in ms.
+                      value={Math.round(draft.rateWindowMs / 1000)}
+                      disabled={readOnly}
+                      onChange={(e) => setDraft({ ...draft, rateWindowMs: (Number(e.target.value) || 1) * 1000 })}
+                    />
+                  </div>
+                </div>
+                <p className="text-xs text-muted-foreground">
+                  Currently: at most <strong>{draft.maxMessagesPerWindow}</strong> message
+                  {draft.maxMessagesPerWindow === 1 ? "" : "s"} every <strong>{Math.round(draft.rateWindowMs / 1000)}s</strong>, over up to{" "}
+                  <strong>{draft.maxConnections}</strong> connection{draft.maxConnections === 1 ? "" : "s"}.
+                </p>
               </div>
 
               {!readOnly && (

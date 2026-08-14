@@ -17,6 +17,92 @@ case-insensitive Windows dialect died on case-sensitive Linux servers mid-migrat
 rewriting them to the canonical casing, which is correct on both. Existing installations are
 unaffected; their migration checksums were reconciled in place.
 
+### 🧾 One timesheet entry, readable and correctable
+
+- **Every logged entry now opens in full** — from the approvals queue, from History, and from the
+  dashboard's day timeline, all three into the same panel. Who logged it, against which project,
+  module and ticket, the whole task text and notes, who reviewed it and when, and the identity
+  badge.
+- **Attachments are downloads, not a number.** The approvals dialog used to say "2 file(s)" with
+  nothing to click — an approver was being asked to sign off hours on the strength of evidence the
+  screen could see and they could not. They are links now, and files can be added to or removed
+  from an entry after the fact.
+- **The day timeline opens the block you clicked.** Every block used to be a link to the History
+  *page*: you clicked a specific 3.5h block on a specific person's lane and arrived at a list of
+  everything. It opens that entry in place now, with the day and the lane still on screen behind
+  it. History rows open the same panel, and the URL carries the entry, so a link points at one
+  entry rather than at "the list".
+- **Managers and super admins can correct an entry** — project, module, activity, times, date,
+  description, notes — in any status; authors can still fix their own drafts and rejected rows.
+  Every change is recorded field by field with the before and after, and the person who logged it
+  is told when somebody else edits it. An approved entry's frozen billing rate is never
+  re-resolved: if the hours change, the amount is recomputed from the rate that was already
+  captured, so last quarter's work is never quietly repriced at today's rate.
+
+### ⚙️ Activity types are yours to define
+
+- **Add, rename, enable, disable and delete the activities people log time against**, from the
+  Projects screen. The list had been hard-coded to twelve words since the first release, so a
+  workspace running "Incident response" or "Client call" had no way to say so. The logging form
+  and the report filter both read the workspace's own list now.
+- Disabling takes an activity out of the picker and leaves every entry ever logged under it
+  readable. Deleting is only offered for one nothing was ever logged against — anything else is
+  refused with the count and a pointer at disabling, because the approvals filter and every grouped
+  report build their options from this list.
+
+### ✍️ Writing surfaces that behave like editors
+
+- **The New-ticket dialog stays inside the window.** It had no height limit, so a long description
+  pushed the title off the top of the screen and the Create button off the bottom, with no
+  scrollbar to bring them back — you could keep typing and could no longer submit. The dialog now
+  pins its header and footer and scrolls the middle, and the same cap was applied to *every* dialog
+  in the app, which closes the whole class of bug at once.
+- **Paste a stack trace, a query, a config block or a shell session and it formats itself as
+  code** — indentation intact — in ticket descriptions, ticket comments, and timesheet task
+  descriptions and notes. Pasted lists, headings and quotes become real lists, headings and quotes.
+  Prose that merely mentions a command stays prose.
+- **Refine with AI no longer flattens code.** Refining a description that contained a snippet used
+  to hand it back as a paragraph with the indentation gone. Code now survives the round trip
+  untouched, and the model is told never to spell-correct inside it.
+- **Attach files while raising a ticket**, instead of creating it, finding it again and opening the
+  Files tab.
+
+### 📤 Email that stops hitting the provider's rate limit
+
+- **Sending is paced.** Each email used to open its own connection and go immediately, so approving
+  twenty timesheets in one go — or the daily reminder run across a fifty-person workspace — opened
+  twenty or fifty connections in the same instant. Most providers allow a handful. Sends now share
+  a small pool at a configurable rate, and anything over it waits its turn instead of being
+  rejected.
+- **A refused send is retried instead of lost.** A "too many messages, slow down" reply used to
+  mark the email failed, permanently, with nothing to re-drive it. Deferred mail is now retried on
+  a backing-off schedule for about half an hour before it is given up on — and a genuinely
+  undeliverable address is still recognised as permanent and not retried at all, which is what
+  keeps a bad address from becoming a reputation problem.
+- **The rate is a setting**, on Workspace Settings → Mail server: simultaneous connections,
+  messages per window, and the window. Defaults sit under Office 365's limits.
+- Password-reset and one-time-password emails are deliberately **excluded from the retry queue**:
+  retrying them means storing the live link, and a reset link that expires in half an hour is worth
+  nothing by the time a retry would run. Asking for another one is a click.
+
+### 🪟 The ticket panel is a window now
+
+- **Maximize to full width, restore, or drag its edge to any width in between** — and it reopens
+  at the width you left it. This is the screen where a description, a comment thread, pasted code,
+  a proofing image and a twelve-column activity log all have to be read and edited, and at its old
+  fixed width a stack trace wrapped into unreadable ribbon.
+- The drag handle answers to the keyboard too: arrow keys resize, Home maximizes, End restores.
+- **Files moved next to Comments**, where it belongs — the two are read together, and Files used to
+  sit eighth, past four other tabs and often off the end of the row.
+
+### 🔐 Fixed: a password change that changed nothing
+
+- **The "new password" box accepted the password you already had.** This bit hardest exactly where
+  it was most likely — the first sign-in after an administrator created or reset your account.
+  Re-entering that password cleared the "choose your own password" prompt and reported success,
+  leaving an account whose password an administrator still knows. It is now refused by the form
+  while you type, by the API, and on the emailed reset link, which had the same hole.
+
 ### 🤖 The agentic layer
 
 - **A per-capability autonomy ladder** — Suggest / Apply / Act — set by a super admin in the AI
