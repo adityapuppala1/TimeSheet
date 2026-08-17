@@ -3343,3 +3343,51 @@ errored, or reported success for work it had not done.
 - [ ] **The `tests/e2e` Playwright suite was not run** against this release. It is configured
   `workers: 1` because every spec shares one seeded MySQL database, and the unit suite (999 tests)
   plus the driven-app verification stood in for it.
+
+## V8 — Agentic Work Management: the research, and what not to rebuild (2026-08-17)
+
+Full plan: [AGENTIC_WORK_MANAGEMENT.md](AGENTIC_WORK_MANAGEMENT.md). Research only — nothing built.
+Branch V8 opened at 2.5.0.
+
+**The finding that shaped the plan.** Measured against asana.com/features, this product is at or
+ahead of parity on nearly everything: tickets-as-work-items with hierarchy and four dependency
+types, all four project views, custom fields, forms, blueprints-as-bundles, portfolios, dashboards,
+capacity/workload, rules, admin/audit/guests, plus timesheets and budgets Asana structurally cannot
+match because it holds estimates where this holds approved hours with a rate snapshot. Four things
+are genuinely missing, and only one of them is a feature:
+
+- [ ] **Goals / OKRs** — no `Goal`, `Objective` or `KeyResult` model exists. The real gap.
+- [ ] **A work Inbox and a per-person daily brief** — `Notification` rows and a bell exist; nothing
+  assembles "what needs me today".
+- [ ] **An agent roster** ("AI Teammates") — 16+ capabilities already run with autonomy levels; what
+  is missing is a name, a scope, an identity and a budget around them. Packaging, not authority.
+- [ ] **A workflow builder** ("AI Studio") — `TicketRule` is deterministic and fires only at ticket
+  creation. No multi-step flows, no human-input gate.
+
+**Why phases 3-5 are weeks rather than quarters.** The dangerous machinery is built and is listed by
+name in the plan: `AgentRun`'s `triggerKey` idempotency, its level copied at queue time so a policy
+edit cannot escalate a run in flight, its `taintedAt` clamp that drops effective autonomy to SUGGEST
+the moment externally-authored text enters the context, `AiCapabilityPolicy`'s code-set ceilings an
+admin may only lower, and the `AiProposal` envelope with its per-row diffs, writable-field allowlist
+and stale-state refusal. A builder that composes these must inherit all of it — the plan states the
+three inviolable rules (authority is the MINIMUM of composed steps, taint propagates, everything
+above SUGGEST writes through a proposal) precisely because a no-code surface is where those
+guarantees would otherwise quietly be lost.
+
+**The differentiator, and it is not having agents.** Every competitor's agent story ends at "it
+ran". `AgentWorkEntry` puts agent work on the same ledger as human work — attributed to a project
+and activity, priced from `AIUsageLog`, with displaced human minutes stated only where this
+workspace's own timesheets provide a baseline and `NULL` (shown as *not measurable*) where they do
+not. Workload then reads human load beside agent load, burn separates human cost from agent cost,
+and an attestation can itemise "240 approved hours, 12 agent-assisted" and prove it, because every
+agent write already has an audit row and a proposal diff. Never billable to a client by default.
+
+**Deferred deliberately**: TimeSphere as an MCP *client* (the StackAI-style reach into other
+systems) is written down as phase 6 so it cannot be smuggled into the builder phase, since outbound
+credentials plus by-definition-tainted input is a security surface of its own.
+
+**Four decisions needed before phase 1 starts** — phase order (Goals first is recommended), whether
+an agent is a dedicated non-login `AGENT` user (recommended, with a hard flag excluding it from seat
+counts and every auth path), whether agent time is ever client-billable (recommended never by
+default), and whether a measured goal may be manually overridden (recommended yes, with the override
+and the measurement both recorded).
