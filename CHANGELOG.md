@@ -11,11 +11,19 @@ Everything below ships in the next tag. The parser that feeds the in-app What's-
 this section until it gains a version number, on purpose — an installation must never render
 history for a version that does not exist yet.
 
-**One upgrade note that matters: fresh installs on Linux MySQL (Docker Compose and Kubernetes
-alike) were broken from 2.3.0's migrations onward** — 37 table names generated in the
-case-insensitive Windows dialect died on case-sensitive Linux servers mid-migration. Fixed by
-rewriting them to the canonical casing, which is correct on both. Existing installations are
-unaffected; their migration checksums were reconciled in place.
+## 2.4.0 — the log you can still fix, and the session list that lists sessions — 2026-08-17
+
+**Two upgrade notes.**
+
+**Fresh installs on Linux MySQL (Docker Compose and Kubernetes alike) were broken from 2.3.0's
+migrations onward** — 37 table names generated in the case-insensitive Windows dialect died on
+case-sensitive Linux servers mid-migration. Fixed by rewriting them to the canonical casing, which
+is correct on both. Existing installations are unaffected; their migration checksums were
+reconciled in place.
+
+**Upgrading tidies up the session table**, keeping each person's ten most recently used sessions
+and ending the rest. Rows are revoked, never deleted, so the audit trail survives. The session
+you are reading this on is kept — nobody is signed out mid-shift.
 
 ### 🛠️ Setup no longer strands a database it half-upgraded
 
