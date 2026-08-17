@@ -490,7 +490,48 @@ export interface Notification {
   link?: string | null;
   readAt: string | null;
   createdAt: string;
+  /** Inbox triage (V8 phase 2). `readAt` is about attention; `handledAt` is about work — see
+   *  the schema comment on Notification. */
+  handledAt?: string | null;
+  snoozedUntil?: string | null;
 }
+
+/* ---- Inbox and the daily brief (V8 phase 2) ----------------------------------------------- */
+
+export type InboxFilterValue = "unhandled" | "snoozed" | "handled" | "all";
+
+export interface InboxCounts {
+  unhandled: number;
+  snoozed: number;
+  handled: number;
+  unread: number;
+}
+
+export interface BriefSection {
+  key: string;
+  label: string;
+  count: number;
+  link: string | null;
+  detail: string | null;
+  tone: "attention" | "ok";
+}
+
+export interface DailyBrief {
+  generatedAt: string;
+  allClear: boolean;
+  sections: BriefSection[];
+}
+
+export const inboxApi = {
+  list: async (filter: InboxFilterValue) =>
+    (await api.get<{ items: Notification[]; counts: InboxCounts }>("/inbox", { params: { filter } })).data,
+  brief: async () => (await api.get<DailyBrief>("/inbox/brief")).data,
+  /** Every field is optional and independent: handling, reading and snoozing are three different
+   *  statements about one row. Returns the fresh counts so the tab badges cannot drift. */
+  update: async (id: string, patch: { handled?: boolean; read?: boolean; snoozeUntil?: string | null }) =>
+    (await api.patch<InboxCounts>(`/inbox/${id}`, patch)).data,
+  handleAll: async () => (await api.post<InboxCounts>("/inbox/handle-all")).data
+};
 
 export interface AuditEntry {
   id: string;

@@ -3457,3 +3457,60 @@ overflow — the `overflow-x: clip` trap from the V6 phase-2 entry.
 **Not done in this phase:** goals are not yet surfaced on the Portfolio page or the dashboard, and
 there is no goal-level e2e spec (the Playwright suite was not run — see the 2026-08-17 deployment
 entry, which records the same gap).
+
+## V8 phase 2 — an Inbox, and a brief that counts rather than guesses (2026-08-17)
+
+Plan: [AGENTIC_WORK_MANAGEMENT.md](AGENTIC_WORK_MANAGEMENT.md) §5 phase 2 — Asana's Inbox and Dash,
+built deterministically first. Additive: two nullable columns and one index on `Notification`,
+nothing else touched.
+
+- [x] **`Notification.handledAt` / `snoozedUntil`, and the distinction that justifies them.** `readAt`
+  is about attention; `handledAt` is about work. Collapsing the two means every glance at the bell
+  empties the queue, which is why an inbox built on "read" alone is never trusted. `snoozedUntil` is a
+  timestamp rather than a boolean because a snooze with no wake-up is a delete that pretends
+  otherwise — hidden from the queue until its time passes, then back with nobody re-filing it.
+- [x] **`handle-all` marks handled; nothing is ever deleted.** The row is the record that a person was
+  told, and it is what answers a support question a month later.
+- [x] **Ownership IS the authorisation.** Every write is an `updateMany` filtered on `{ id, userId }`,
+  so a guessed id matches zero rows and answers 404. There is deliberately no id-lookup-then-check
+  path and no admin view of somebody else's inbox — which is exactly the shape a later "simplification"
+  to `update({ where: { id } })` would break, hence the test that pins it.
+- [x] **The brief is arithmetic.** Eight sections, each calling a definition that already existed:
+  the my-work buckets, the UTC-midnight `workDate` check `/daily-status` performs, the SUBMITTED
+  predicate the approvals page acts on, `ApprovalStep` PENDING, the latest-snapshot-per-project RED
+  count, unread notifications. No model writes any of it. A narration layer is still available later
+  (`daily_brief`, ceiling AUTONOMOUS, explaining figures it cannot change) but the figures are true
+  on their own first — a fluent paragraph whose numbers cannot be reconciled against the pages they
+  came from is worse than no paragraph, because the first disagreement discredits both.
+- [x] **`computeMyWork` extracted to `services/my-work.service.ts`.** The bucketing was inline in
+  `/plan/my-work`; the moment the brief needed the same numbers, inline became two definitions, and
+  "overdue" is precisely the word that must not mean two things in one product. The route's response
+  is byte-identical — a move, not a redesign — and the full suite passing unedited is the evidence.
+- [x] **Discretion, not just arithmetic.** The approval and risk sections appear only for people
+  holding the rights that already grant those pages, and are **not queried at all** otherwise: a
+  cross-user aggregate shown to somebody who cannot act on it is both a leak and an uncleanable
+  to-do. And `allClear` ignores informational rows — if "3 things due today" could raise the alarm,
+  nobody would ever see an all-clear and the signal would be worthless.
+- [x] **Asana-shaped UI**: two panes on desktop (list beside a sticky detail, so triage is
+  read-decide-next rather than navigate-and-back), one list below `lg`, filter tabs carrying their
+  own counts, in-row actions rather than a menu (triage is a two-click loop; a menu makes it three),
+  and a genuine per-filter empty state rather than one generic "nothing here".
+
+**The bug the browser found that no test would have.** The first render of this workspace's inbox was
+**24,299 pixels tall** — 200 rows, no windowing, and the sticky detail pane lost somewhere in the
+middle of its own layout. That is not a queue, it is a log. Fixed with a 25-row reveal and a
+scrolling list pane; the same page is now 1,016px at laptop size. Also corrected: the category label
+map had been written from guessed keys, so real categories like `ticket.escalation` and
+`face.verification_flagged` rendered raw — it now keys on the categories producers actually write,
+with a family prefix fallback so a NEW producer still reads sensibly instead of being pooled into
+"Other" and hidden.
+
+Verified: 1053 unit tests (+25 — the ownership boundary, the snooze semantics, and the brief's
+discretion); lint clean; the triage loop driven against the live API end to end (mark done → leaves
+the to-do list and appears under Done → reopen → snooze → hidden → **a past-dated snooze returns by
+itself** → restored, counts 311 → 310 → 311 throughout); and the page checked at 390 / 1366 / 1600 in
+both themes with zero horizontal overflow.
+
+**Not done in this phase:** the optional AI narration of the brief, and there is still no e2e spec
+(unchanged from phase 1). The bell itself is untouched — it remains the glance, and the inbox is the
+queue.

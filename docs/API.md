@@ -563,6 +563,55 @@ makes the same stored value render as two different days across a boundary.
   with zero spend — the arithmetic there produces a confident number that is noise, and
   "forecast: 0" reads as "this will cost nothing".
 
+## Inbox and the daily brief (V8 phase 2)
+
+No permission and no entitlement: this is the caller's own queue over notifications they already
+receive, and selling "your own inbox" as an upsell would be the wrong shape (the same reasoning that
+leaves `/plan/my-work` ungated).
+
+**Ownership IS the authorisation.** Every write is an `updateMany` filtered on `{ id, userId }`, so a
+guessed id belonging to somebody else updates zero rows and answers 404 — there is deliberately no
+id-based lookup that could be pointed at another person's inbox, and no admin view of one.
+
+- `GET /inbox?filter=unhandled|snoozed|handled|all` — the queue plus `counts`. An unknown filter
+  falls back to `unhandled` rather than erroring. Returns at most 200 rows; the page reveals 25 at a
+  time.
+- `GET /inbox/brief` — today's brief (below).
+- `PATCH /inbox/:id` `{ handled?, read?, snoozeUntil? }` — three independent statements about one
+  row. **`handledAt` is not `readAt`**: opening the bell marks things read, which is about attention,
+  not about work; collapsing them would mean every glance empties the queue. Snoozing also marks the
+  row read, because the bell must stop insisting about work somebody has explicitly deferred, and a
+  `snoozeUntil` beyond a year is clamped — a five-year snooze is a delete wearing a friendlier label.
+  Returns fresh counts so tab badges cannot drift.
+- `POST /inbox/handle-all` — clears the visible queue by marking handled. **Never deletes**: the row
+  is the record that somebody was told, and a support question a month later is answered by it.
+
+A snoozed row is hidden from `unhandled` until its time passes and then **reappears on its own**,
+with nobody re-filing it. That is the only behaviour that makes snoozing safe to use.
+
+### The brief is arithmetic, not a prompt
+
+Every figure comes from a definition that already exists elsewhere in the API, called rather than
+restated — a model asked to summarise the workspace would produce a fluent paragraph whose numbers
+nobody can reconcile with the pages they came from, and the first time the brief and the dashboard
+disagree both stop being read. A narration layer can sit on top later (the plan reserves the
+`daily_brief` capability at ceiling `AUTONOMOUS`, explaining figures it cannot change, exactly as
+`project_risk_narrative` does), but the numbers are true on their own first.
+
+| Section | Source |
+|---|---|
+| Past their date · Due today · Blocked | `my-work.service.ts#computeMyWork` — the same buckets `/plan/my-work` renders. The blocked row names the actual blocker, because "you are blocked" is not actionable and "WEB-9 waits on API-2" is. |
+| No time logged today | The caller's own `Timesheet` rows at UTC-midnight `workDate`, matching `/reports/daily-status`. |
+| Timesheets awaiting review | `SUBMITTED` rows other than the caller's — **only present with `timesheets:approve`**, and not even queried without it. |
+| Sign-offs waiting on you | `ApprovalStep` rows with `decision = PENDING` for the caller. |
+| Projects reading red | Latest `ProjectRiskSnapshot` per project, RED band — **only with `reports:view`**. A project that was red in March is not red now, hence `distinct` on the descending query. |
+| Unread notifications | `readAt IS NULL`. |
+
+`allClear` is true only when nothing carries the `attention` tone. Work merely *due today* and
+unread notifications are deliberately `ok`: if informational rows could raise the alarm, nobody would
+ever see an all-clear and the signal would be worthless. A zero section carries a `null` link, so a
+reassuring row is never a dead click.
+
 ## Goals / OKRs (V8 phase 1)
 
 Gated on `enableGoals` (workspace) **AND** the tier's `goalsEnabled` — ANDed server-side in

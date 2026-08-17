@@ -43,6 +43,7 @@ const TimelinePage = lazy(() => import("./pages/Timeline").then((m) => ({ defaul
 const MyWorkPage = lazy(() => import("./pages/MyWork").then((m) => ({ default: m.MyWorkPage })));
 const PortfolioPage = lazy(() => import("./pages/Portfolio").then((m) => ({ default: m.PortfolioPage })));
 const GoalsPage = lazy(() => import("./pages/Goals").then((m) => ({ default: m.GoalsPage })));
+const InboxPage = lazy(() => import("./pages/Inbox").then((m) => ({ default: m.InboxPage })));
 const BlueprintsPage = lazy(() => import("./pages/Blueprints").then((m) => ({ default: m.BlueprintsPage })));
 const WorkloadPage = lazy(() => import("./pages/Workload").then((m) => ({ default: m.WorkloadPage })));
 const RequestsPage = lazy(() => import("./pages/Requests").then((m) => ({ default: m.RequestsPage })));
@@ -120,6 +121,9 @@ const router = createBrowserRouter([
       // checked inside the page for the write affordances, and the page renders its own
       // "goals are off" state for the same reason the planning pages do.
       { path: "goals", element: <PageShell><GoalsPage /></PageShell> },
+      // The inbox is personal: no permission, no entitlement, no feature flag. Everyone has
+      // notifications, so everyone has an inbox — the same reasoning as "my-work" above.
+      { path: "inbox", element: <PageShell><InboxPage /></PageShell> },
       // Readable with tickets:view (the API lists blueprints at that level); using one needs
       // plan:write, checked inside the page so a viewer sees the shapes without dead buttons.
       { path: "blueprints", element: <RequirePermission permission={permissions.TICKETS_VIEW}><PageShell><BlueprintsPage /></PageShell></RequirePermission> },

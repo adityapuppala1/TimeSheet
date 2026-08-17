@@ -619,8 +619,19 @@ model Notification {
   readAt    DateTime?
   createdAt DateTime  @default(now())
 
+  /// --- Inbox triage (V8 phase 2) ------------------------------------------------------------
+  /// WHY "handled" IS SEPARATE FROM "read": opening the bell marks a row read, which is a
+  /// statement about attention, not about work. An inbox needs "I have dealt with this", and
+  /// collapsing the two means every glance at the bell empties the queue.
+  handledAt    DateTime?
+  /// "Not now, ask me later." Deliberately a timestamp rather than a boolean: a snooze with no
+  /// wake-up is a delete that pretends otherwise, and the row must come back on its own.
+  snoozedUntil DateTime?
+
   @@index([userId, readAt])
   @@index([userId, createdAt])
+  /// The inbox's own query: this person's unhandled rows, newest first.
+  @@index([userId, handledAt, createdAt])
 }
 
 /// WHO acted, when `actorId` alone cannot say.

@@ -21,6 +21,7 @@ import {
   LayoutDashboard,
   ListTodo,
   Mail,
+  Mailbox,
   PanelLeftClose,
   PanelLeftOpen,
   ScrollText,
@@ -91,6 +92,9 @@ export const nav: NavItem[] = [
   { to: "/app/timesheet", label: "Log timesheet", icon: CalendarDays, permission: permissions.TIMESHEETS_WRITE, section: "Work" },
   { to: "/app/tickets", label: "Tickets", icon: Ticket, permission: permissions.TICKETS_VIEW, section: "Work" },
   { to: "/app/history", label: "History", icon: FileClock, section: "Work" },
+  // First in Work and deliberately ungated: it is where the day starts, and its brief reads
+  // definitions that exist whether or not any optional feature is on.
+  { to: "/app/inbox", label: "Inbox", icon: Mailbox, section: "Work" },
   { to: "/app/requests", label: "Requests", icon: Inbox, permission: permissions.TICKETS_VIEW, section: "Work", feature: "requestForms" },
 
   // Planning layer (V6). "My work" is deliberately FIRST and deliberately ungated: it is a
