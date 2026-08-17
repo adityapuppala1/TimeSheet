@@ -248,20 +248,35 @@ input by definition — and is written down here so it is not smuggled into phas
 - Fully autonomous writing on stranger-authored input. The `taintedAt` clamp is not negotiable.
 - Charging clients for agent minutes by default.
 
-## 7. Decisions that need your call before phase 1 starts
+## 7. Decisions taken (2026-08-17)
 
-1. **Phase order.** Goals first (closes the only real parity gap, sellable immediately, no AI risk),
-   or Studio first (the differentiator, but the heaviest security surface)? *Recommendation: Goals
-   first — it is the shortest path to a demo, and phase 5 needs phases 3–4 to be honest anyway.*
-2. **Agent identity.** Dedicated non-login `AGENT` users (every existing surface works unchanged,
-   but it touches seat counting and therefore billing), or agents that always act visibly
-   on-behalf-of a human? *Recommendation: dedicated, with a hard `isAgent` flag excluded from seat
-   counts and from every authentication path.*
-3. **Billable agent time.** Never billable, billable per project on opt-in, or always itemised on
-   attestations? *Recommendation: never by default, opt-in per project, always itemised internally.*
-4. **Goal progress.** Measured-only, or measured with a recorded manual override?
-   *Recommendation: measured with a recorded override — measured-only will not survive its first
-   quarter-end.*
+All four confirmed by the product owner before any code was written. They are recorded here rather
+than in a conversation because each one constrains a later phase, and phase 4 in particular must be
+reviewable against them.
+
+1. **Phase order: Goals first.** It closes the only real parity gap, is sellable on its own, carries
+   no AI risk, and phase 5's ledger cannot be honest until phases 3–4 are producing agent work.
+2. **Agent identity: a dedicated non-login `AGENT` user.** Every existing surface — assignment,
+   workload, comments, audit, attestation — then works unchanged. It carries a hard `isAgent` flag
+   that **excludes it from seat counts and from every authentication path**; both exclusions are
+   security/billing invariants and each needs its own test, not a shared one.
+3. **Agent time: never client-billable by default, opt-in per project.** Agent cost stays outside
+   `billedAmount` so `budget.service.ts` keeps its single definition of money, and is always itemised
+   internally. Turning it on is a per-project admin action, never a global default.
+4. **Goal progress: measured, with a recorded manual override.** The override stores who made it,
+   when, and what the measurement said at that moment. Measured-only does not survive its first
+   quarter-end; an unrecorded override ends the feature's credibility the first time somebody
+   notices the number moved.
+
+### What phase 1 therefore builds first
+
+`Goal`, `GoalLink`, and the `progressSource` discriminator with `MANUAL` plus the measured sources
+listed in phase 1; the `GoalProgressOverride` trail implied by decision 4; `goalsEnabled` +
+`maxGoals` on `PlanTierLimit` failing closed; the admin surface and `/app/goals`. Per the V6
+constraint, the schema and entitlement land and are verified **on their own** before any UI beyond a
+settings tab — that is the phase-1 discipline that made the V6 migration safe on live multi-tenant
+data, and the migration here touches `Project`, `Portfolio` and `Ticket` only through new join rows,
+never with a column on those tables.
 
 ## Sources
 
