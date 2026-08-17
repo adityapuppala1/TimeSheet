@@ -33,6 +33,7 @@ import {
   simulateFlow,
   updateFlow
 } from "../services/automation-flow.service.js";
+import { resumeFlowRun, startFlowRun } from "../services/automation-dispatch.service.js";
 import { listCapabilityCatalogue } from "../services/agent-profile.service.js";
 import { DOMAIN_EVENTS } from "../services/domain-events.js";
 import { isPlanningCapabilityAllowed } from "../services/plan-limits.service.js";
@@ -123,6 +124,60 @@ automationFlowRouter.get("/catalogue", requirePermission(permissions.TICKETS_VIE
     labels,
     projects
   });
+});
+
+/**
+ * What the flows have actually DONE. Readable by anybody who can see tickets, for the same reason the
+ * flow list is: "what automation touched my work, and what did it do" is a fair question for the person
+ * whose work it touched.
+ */
+automationFlowRouter.get("/runs", requirePermission(permissions.TICKETS_VIEW), async (req, res) => {
+  await assertStudioAllowed();
+  const limit = Math.min(50, Math.max(1, Number(req.query.limit ?? 20)));
+  const runs = await prisma.automationFlowRun.findMany({
+    where: req.query.flowId ? { flowId: String(req.query.flowId) } : {},
+    orderBy: { startedAt: "desc" },
+    take: limit,
+    include: {
+      flow: { select: { id: true, name: true, emoji: true } },
+      awaitingUser: { select: { id: true, name: true } },
+      steps: { orderBy: { order: "asc" } }
+    }
+  });
+  res.json(runs);
+});
+
+/**
+ * Approve or decline at a gate.
+ *
+ * NOT super-admin: the gate named a person, and that person is who may clear it. A gate anybody with
+ * an admin role could clear would be a gate in name only — and `resumeFlowRun` enforces the same rule
+ * server-side, so this route is not the guarantee, only the door.
+ */
+const decisionSchema = z.object({ body: z.object({ approved: z.boolean() }).strict() });
+
+automationFlowRouter.post("/runs/:runId/decision", validate(decisionSchema), async (req, res) => {
+  await assertStudioAllowed();
+  const { approved } = req.body as z.infer<typeof decisionSchema>["body"];
+  await resumeFlowRun(String(req.params.runId), req.user!.id, approved);
+  res.status(204).end();
+});
+
+/** A manual run, which is what the MANUAL trigger means. Super admin, like every other write here. */
+automationFlowRouter.post("/:id/run", requireSuperAdmin, async (req, res) => {
+  await assertStudioAllowed();
+  const id = String(req.params.id);
+  // The actor and the minute are both in the key: running one flow twice by hand is two runs, and
+  // a double-clicked button is one.
+  const stamp = new Date().toISOString().slice(0, 16);
+  const result = await startFlowRun({
+    flowId: id,
+    trigger: "manual",
+    subject: { type: "workspace", id: null, label: `a manual run by ${req.user!.name}` },
+    triggerKey: `flow:${id}:manual:${req.user!.id}:${stamp}`
+  });
+  await audit(req.user!.id, "flow.run_started", "AutomationFlow", id, { runId: result.runId, created: result.created });
+  res.status(202).json(result);
 });
 
 automationFlowRouter.get("/:id", requirePermission(permissions.TICKETS_VIEW), async (req, res) => {

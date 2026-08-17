@@ -130,6 +130,30 @@ its old schema without the update saying so. After upgrading, run the fan-out on
 - Everything a flow does still goes through the same review, undo and audit path as every other AI
   change here. The Studio composes what already existed; it adds no new way to write to your workspace.
 
+### ▶️ Flows now actually fire, and tell you what they did
+
+- **Three ways in.** A flow can listen for something happening in the workspace, run on a schedule, or
+  wait for somebody to press **Run now**. Nothing fires until you activate it, and switching a flow off
+  always works. (A flow triggered by a request form validates and replays, but does not fire yet.)
+- **The same thing never happens twice.** A doubled event, a retried delivery and a restart mid-run all
+  collapse to one run — while a *second* ticket through the same flow is properly a second run. Both
+  halves matter: get the second one wrong and the first ticket is the only one your flow ever touches.
+- **"What they have done"**, on the Workflows page. Every run, newest first, with what it ran against,
+  a one-line result, and a click to see each step's outcome and the reason in plain words: applied,
+  proposed, sent to a teammate, skipped by a condition, held back, or could not be done. A run stopped
+  by a condition is shown as the flow working, not as a failure — and a run where a step could not be
+  done is never labelled Done.
+- **An approval stops the flow and waits for the person the step named**, for as long as it takes,
+  across restarts. Only that person can clear it, and approving continues from exactly where it stopped.
+- **A flow that may only propose does exactly that.** An assignment goes to the review queue with the
+  state it was computed against, so applying it is still refused if the ticket has moved since. Adding
+  a label is the one change the review queue cannot hold: the step reports that it was held back and
+  why, rather than applying it anyway.
+- **Per-workflow AI spend**, in Workspace Settings → AI, beside the teammate figure — so "what is this
+  automation costing me" has an answer that is separate from the same capability used by hand.
+- **A flow tells its author the first time it runs**, and only the first. An automation nobody notices
+  working is an automation nobody trusts; a message on every run is a message people mute.
+
 ### ⚖️ Agent work on the same ledger as human work
 
 - **When a teammate runs, it is recorded the way a person's work is** — attributed to a project,

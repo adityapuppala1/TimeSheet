@@ -54,6 +54,10 @@ export interface QueueRunParams {
   onBehalfOfId: string;
   scopeProjectId?: string | null;
   goal?: string | null;
+  /** The flow that queued this, when one did. Carried onto the row so a flow's AI spend can be told
+   *  apart from the same capability invoked by hand — which is the last piece of "every AI feature is
+   *  tracked". */
+  flowId?: string | null;
 }
 
 /**
@@ -145,7 +149,8 @@ export async function queueAgentRun(params: QueueRunParams): Promise<{ runId: st
         maxSteps: DEFAULT_MAX_STEPS,
         maxCostUsd: autonomy.guardrails.maxCostUsdPerRun,
         scopeProjectId: params.scopeProjectId ?? null,
-        goal: params.goal ?? null
+        goal: params.goal ?? null,
+        flowId: params.flowId ?? null
       }
     });
     return { runId: run.id, created: true };

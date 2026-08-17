@@ -59,7 +59,12 @@ export type NotificationCategory =
    *  upgrade is the kind of send that gets a domain filtered, and no category in the email role
    *  matrix covers product announcements. Raised once per version per workspace by
    *  services/release-announce.service.ts. */
-  | "release.published";
+  | "release.published"
+  /** In-app ONLY, deliberately — see the `null` in SETTINGS_FIELD. Raised by the Workflow Studio when
+   *  a flow needs an approval or has run for the first time. No email leg because no category in the
+   *  email role matrix covers workflow administration, and inventing one would put a send in front of
+   *  every super admin on every automation they build. */
+  | "workflow.attention";
 
 interface EmailPayload {
   templateKey: string;
@@ -114,7 +119,8 @@ const SETTINGS_FIELD: Record<NotificationCategory, string | null> = {
   "maintenance.scheduled": "emailMaintenanceScheduled",
   "ai.autonomy_applied": "emailAiAutonomyApplied",
   "timesheet.updated": null,
-  "release.published": null
+  "release.published": null,
+  "workflow.attention": null
 };
 
 const GLOBAL_ID = "global";

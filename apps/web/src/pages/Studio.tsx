@@ -30,10 +30,12 @@ import {
   CircleSlash,
   GitBranch,
   Hand,
+  History,
   LayoutList,
   Loader2,
   Lock,
   Network,
+  Play,
   PlayCircle,
   Plus,
   Settings2,
@@ -64,6 +66,7 @@ import {
   agentRosterApi,
   flowApi,
   type FlowCatalogue,
+  type FlowRunRow,
   type FlowPayload,
   type FlowRow,
   type FlowSimulation,
@@ -101,6 +104,31 @@ const OUTCOME_COPY: Record<string, { label: string; className: string }> = {
   "skipped-by-branch": { label: "skipped", className: "text-muted-foreground" }
 };
 
+/**
+ * What a run's status MEANS, in the reader's words.
+ *
+ * STOPPED is deliberately not styled as a failure: a condition that did not match is the flow working,
+ * and colouring it red teaches people to distrust their own guardrails.
+ */
+const RUN_STATUS: Record<string, { label: string; variant: "secondary" | "success" | "warning" | "destructive" }> = {
+  RUNNING: { label: "Running", variant: "secondary" },
+  WAITING: { label: "Waiting for a person", variant: "warning" },
+  COMPLETED: { label: "Done", variant: "success" },
+  STOPPED: { label: "Stopped by a condition", variant: "secondary" },
+  FAILED: { label: "Failed", variant: "destructive" }
+};
+
+const OUTCOME_TONE: Record<string, string> = {
+  ran: "text-success",
+  proposed: "text-primary",
+  queued: "text-primary",
+  waiting: "text-warning-foreground",
+  held: "text-warning-foreground",
+  failed: "text-destructive",
+  skipped: "text-muted-foreground",
+  "not-reached": "text-muted-foreground"
+};
+
 export function StudioPage() {
   const user = useAuthStore((s) => s.user);
   const queryClient = useQueryClient();
@@ -125,6 +153,19 @@ export function StudioPage() {
       invalidate();
     },
     onError: (err) => toast.error("Could not change that", { description: serverMessage(err, "Try again.") })
+  });
+
+  const runNow = useMutation({
+    mutationFn: (id: string) => flowApi.runNow(id),
+    onSuccess: (result) => {
+      toast.success(result.created ? "Running now" : "Already running", {
+        description: result.created
+          ? "Watch it below — a run stopped by a condition is the flow working, not a failure."
+          : "That same run was already started a moment ago."
+      });
+      invalidate();
+    },
+    onError: (err) => toast.error("Could not run that", { description: serverMessage(err, "Try again.") })
   });
 
   const retire = useMutation({
@@ -224,17 +265,20 @@ export function StudioPage() {
                   key={flow.id}
                   flow={flow}
                   canManage={isSuperAdmin}
-                  busy={toggle.isPending || retire.isPending}
+                  busy={toggle.isPending || retire.isPending || runNow.isPending}
                   onToggle={(enabled) => toggle.mutate({ id: flow.id, enabled })}
                   onEdit={() => setEditing(flow)}
                   onSimulate={() => setSimulating(flow)}
                   onRetire={() => retire.mutate(flow.id)}
+                  onRunNow={() => runNow.mutate(flow.id)}
                 />
               ))}
             </div>
           )}
         </>
       )}
+
+      {!gateMessage && !flows.isLoading && rows.length > 0 && <RunFeed currentUserId={user?.id ?? null} />}
 
       {(creating || editing) && (
         <FlowDialog
@@ -247,6 +291,140 @@ export function StudioPage() {
         />
       )}
       {simulating && <SimulationDialog flow={simulating} onClose={() => setSimulating(null)} />}
+    </div>
+  );
+}
+
+/**
+ * What the flows have actually done — the answer to the question the Studio could not answer before
+ * this phase.
+ *
+ * WHY IT IS ONE FEED AND NOT A TAB PER FLOW: an administrator's question is "is my automation behaving",
+ * which is asked across flows and answered by scanning. A per-flow history is the follow-up, and it is
+ * one click away because each row names its flow.
+ *
+ * WHY A WAITING RUN CARRIES ITS BUTTONS HERE: an approval that can only be cleared from somewhere else
+ * is an approval that waits. The buttons appear only for the person the gate named — the server refuses
+ * anybody else, so this is the door and not the lock.
+ */
+function RunFeed({ currentUserId }: Readonly<{ currentUserId: string | null }>) {
+  const queryClient = useQueryClient();
+  const [expanded, setExpanded] = useState<string | null>(null);
+  const runs = useQuery({ queryKey: ["flows", "runs"], queryFn: () => flowApi.runs(undefined, 20), retry: false });
+
+  const decide = useMutation({
+    mutationFn: ({ runId, approved }: { runId: string; approved: boolean }) => flowApi.decide(runId, approved),
+    onSuccess: (_data, variables) => {
+      toast.success(variables.approved ? "Approved" : "Declined", {
+        description: variables.approved ? "The rest of the flow is running now." : "Nothing after the approval happened."
+      });
+      queryClient.invalidateQueries({ queryKey: ["flows"] });
+    },
+    onError: (err) => toast.error("Could not record that", { description: serverMessage(err, "Try again.") })
+  });
+
+  const rows = runs.data ?? [];
+
+  return (
+    <Card className="animate-fade-in">
+      <CardHeader className="pb-3">
+        <CardTitle className="flex items-center gap-2 text-base">
+          <History className="h-4 w-4 text-muted-foreground" />
+          What they have done
+        </CardTitle>
+        <CardDescription className="text-xs">
+          Every run, newest first. A run stopped by a condition is the flow working, not a failure.
+        </CardDescription>
+      </CardHeader>
+      <CardContent className="space-y-2 pt-0">
+        {runs.isLoading && <Skeleton className="h-20" />}
+        {!runs.isLoading && rows.length === 0 && (
+          <p className="rounded-md border border-dashed px-3 py-4 text-center text-xs text-muted-foreground">
+            Nothing has fired yet. A live flow runs when its trigger happens — or you can run one by hand from its card.
+          </p>
+        )}
+        {rows.map((run) => (
+          <RunRow
+            key={run.id}
+            run={run}
+            open={expanded === run.id}
+            onToggle={() => setExpanded(expanded === run.id ? null : run.id)}
+            canDecide={run.status === "WAITING" && run.awaitingUser?.id === currentUserId}
+            busy={decide.isPending}
+            onDecide={(approved) => decide.mutate({ runId: run.id, approved })}
+          />
+        ))}
+      </CardContent>
+    </Card>
+  );
+}
+
+function RunRow({
+  run,
+  open,
+  onToggle,
+  canDecide,
+  busy,
+  onDecide
+}: Readonly<{
+  run: FlowRunRow;
+  open: boolean;
+  onToggle: () => void;
+  canDecide: boolean;
+  busy: boolean;
+  onDecide: (approved: boolean) => void;
+}>) {
+  const status = RUN_STATUS[run.status] ?? RUN_STATUS.RUNNING;
+  return (
+    <div className="rounded-md border">
+      <button type="button" onClick={onToggle} className="flex w-full flex-wrap items-center gap-2 px-3 py-2 text-left hover:bg-muted/40">
+        <span aria-hidden>{run.flow?.emoji ?? "⚙️"}</span>
+        <span className="text-sm font-medium">{run.flow?.name ?? "a retired flow"}</span>
+        <Badge variant={status.variant} className="text-[10px]">
+          {status.label}
+        </Badge>
+        <span className="min-w-0 flex-1 truncate text-xs text-muted-foreground">
+          {run.subjectLabel ?? "no subject"}
+          {run.summary ? ` — ${run.summary}` : ""}
+        </span>
+        <span className="text-[11px] tabular-nums text-muted-foreground">{new Date(run.startedAt).toLocaleString()}</span>
+        <ChevronRight className={cn("h-3.5 w-3.5 shrink-0 text-muted-foreground transition-transform", open && "rotate-90")} />
+      </button>
+
+      {run.status === "WAITING" && (
+        <div className="flex flex-wrap items-center gap-2 border-t bg-warning/5 px-3 py-2 text-xs">
+          <Hand className="h-3.5 w-3.5 text-warning-foreground" />
+          <span>
+            Step {run.awaitingOrder} is waiting for <strong>{run.awaitingUser?.name ?? "somebody"}</strong>.
+          </span>
+          {canDecide && (
+            <span className="ml-auto flex gap-1.5">
+              <Button size="sm" className="h-7 px-2 text-xs" disabled={busy} onClick={() => onDecide(true)}>
+                <CheckCircle2 className="mr-1 h-3 w-3" />
+                Approve
+              </Button>
+              <Button size="sm" variant="outline" className="h-7 px-2 text-xs" disabled={busy} onClick={() => onDecide(false)}>
+                <Ban className="mr-1 h-3 w-3" />
+                Decline
+              </Button>
+            </span>
+          )}
+        </div>
+      )}
+
+      {open && (
+        <ol className="space-y-1 border-t px-3 py-2">
+          {run.steps.map((step) => (
+            <li key={step.id} className="flex flex-wrap items-baseline gap-x-2 text-xs">
+              <span className="tabular-nums text-muted-foreground">{step.order}.</span>
+              <span className="font-medium">{STEP_META[step.kind]?.label ?? step.kind}</span>
+              <span className={cn("font-medium", OUTCOME_TONE[step.outcome] ?? "text-muted-foreground")}>{step.outcome}</span>
+              <span className="w-full text-muted-foreground">{step.detail}</span>
+            </li>
+          ))}
+          {run.steps.length === 0 && <li className="text-xs text-muted-foreground">No steps recorded.</li>}
+        </ol>
+      )}
     </div>
   );
 }
@@ -297,7 +475,8 @@ function FlowCard({
   onToggle,
   onEdit,
   onSimulate,
-  onRetire
+  onRetire,
+  onRunNow
 }: Readonly<{
   flow: FlowRow;
   canManage: boolean;
@@ -306,6 +485,7 @@ function FlowCard({
   onEdit: () => void;
   onSimulate: () => void;
   onRetire: () => void;
+  onRunNow: () => void;
 }>) {
   const trigger = TRIGGERS.find((t) => t.value === flow.trigger);
   const errors = flow.issues.filter((i) => i.severity === "error");
@@ -350,6 +530,15 @@ function FlowCard({
                 <PlayCircle className="mr-1.5 h-3.5 w-3.5" />
                 Replay
               </Button>
+              {/* A manual flow has no trigger but a person, so the button IS the trigger. Offered only
+                  when the flow is live, because running a draft would be running something nobody
+                  activated. */}
+              {flow.trigger === "MANUAL" && flow.enabled && (
+                <Button variant="outline" size="sm" onClick={onRunNow} disabled={busy}>
+                  <Play className="mr-1.5 h-3.5 w-3.5" />
+                  Run now
+                </Button>
+              )}
               <Button
                 variant={flow.enabled ? "ghost" : "default"}
                 size="sm"

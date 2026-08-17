@@ -247,29 +247,30 @@ model User {
   faceChallenges            FaceChallenge[]
 
   /// --- Planning layer (V6) back-relations ---------------------------------------------------
-  portfoliosOwned      Portfolio[]          @relation("PortfolioOwner")
-  goalsOwned           Goal[]               @relation("GoalOwner")
-  goalsCreated         Goal[]               @relation("GoalCreatedBy")
-  goalOverrides        GoalProgressOverride[] @relation("GoalOverrideBy")
-  agentProfile         AgentProfile?        @relation("AgentIdentity")
-  agentWorkEntries     AgentWorkEntry[]     @relation("AgentWorkAgent")
-  agentProfilesCreated AgentProfile[]       @relation("AgentProfileCreatedBy")
-  automationFlowsCreated AutomationFlow[]   @relation("AutomationFlowCreatedBy")
-  savedViews           SavedView[]
-  resourceBookings     ResourceBooking[]    @relation("BookingSubject")
-  resourceBookingsMade ResourceBooking[]    @relation("BookingCreator")
-  requestFormsCreated  RequestForm[]
-  blueprintsCreated    Blueprint[]
-  approvalRequestsMade ApprovalRequest[]    @relation("ApprovalRequester")
-  approvalSteps        ApprovalStep[]       @relation("ApprovalStepApprover")
-  proofAnnotations     ProofAnnotation[]
-  dashboards           Dashboard[]
-  reportSubscriptions  ReportSubscription[]
-  aiProposalsRequested AiProposal[]         @relation("AiProposalRequester")
-  aiProposalsReviewed  AiProposal[]         @relation("AiProposalReviewer")
-  aiCapabilityPolicies AiCapabilityPolicy[] @relation("AiCapabilityPolicyEditor")
-  aiProposalsUndone    AiProposal[]         @relation("AiProposalUndoer")
-  agentRuns            AgentRun[]           @relation("AgentRunActor")
+  portfoliosOwned        Portfolio[]            @relation("PortfolioOwner")
+  goalsOwned             Goal[]                 @relation("GoalOwner")
+  goalsCreated           Goal[]                 @relation("GoalCreatedBy")
+  goalOverrides          GoalProgressOverride[] @relation("GoalOverrideBy")
+  agentProfile           AgentProfile?          @relation("AgentIdentity")
+  agentWorkEntries       AgentWorkEntry[]       @relation("AgentWorkAgent")
+  agentProfilesCreated   AgentProfile[]         @relation("AgentProfileCreatedBy")
+  automationFlowsCreated AutomationFlow[]       @relation("AutomationFlowCreatedBy")
+  flowRunsAwaiting       AutomationFlowRun[]    @relation("FlowRunApprover")
+  savedViews             SavedView[]
+  resourceBookings       ResourceBooking[]      @relation("BookingSubject")
+  resourceBookingsMade   ResourceBooking[]      @relation("BookingCreator")
+  requestFormsCreated    RequestForm[]
+  blueprintsCreated      Blueprint[]
+  approvalRequestsMade   ApprovalRequest[]      @relation("ApprovalRequester")
+  approvalSteps          ApprovalStep[]         @relation("ApprovalStepApprover")
+  proofAnnotations       ProofAnnotation[]
+  dashboards             Dashboard[]
+  reportSubscriptions    ReportSubscription[]
+  aiProposalsRequested   AiProposal[]           @relation("AiProposalRequester")
+  aiProposalsReviewed    AiProposal[]           @relation("AiProposalReviewer")
+  aiCapabilityPolicies   AiCapabilityPolicy[]   @relation("AiCapabilityPolicyEditor")
+  aiProposalsUndone      AiProposal[]           @relation("AiProposalUndoer")
+  agentRuns              AgentRun[]             @relation("AgentRunActor")
 
   createdAt DateTime  @default(now())
   updatedAt DateTime  @updatedAt
@@ -431,9 +432,9 @@ model Project {
   createdAt                 DateTime                @default(now())
   updatedAt                 DateTime                @updatedAt
   deletedAt                 DateTime?
+  agentWorkEntries          AgentWorkEntry[]
 
   @@index([portfolioId])
-  agentWorkEntries AgentWorkEntry[]
 }
 
 model ProjectModule {
@@ -522,8 +523,8 @@ model Timesheet {
   /// already relates to `User` through `userId`, and a second relation would force both to be
   /// named. Both names are resolved with one batched lookup at the read boundary instead —
   /// see `decorateEditors()` in timesheet.controller.ts.
-  lastEditedById  String?
-  lastEditedAt    DateTime?
+  lastEditedById String?
+  lastEditedAt   DateTime?
 
   /// When this entry was submitted for approval.
   ///
@@ -1271,6 +1272,12 @@ model AgentRun {
   onBehalfOfId String
   onBehalfOf   User   @relation("AgentRunActor", fields: [onBehalfOfId], references: [id], onDelete: Cascade)
 
+  /// The flow that queued this run, when one did. Nullable because most runs are not from a flow —
+  /// and SetNull rather than Cascade because a retired flow must not erase the record of what it
+  /// spent.
+  flowId String?
+  flow   AutomationFlow? @relation("AgentRunFlow", fields: [flowId], references: [id], onDelete: SetNull)
+
   /// The level this run was AUTHORISED at, copied when it was queued. A run must be judged by what
   /// it was allowed when it started — and, more importantly, a run already in flight must not be
   /// ESCALATED by somebody editing the policy underneath it.
@@ -1324,7 +1331,7 @@ model AgentRunStep {
   runId String
   run   AgentRun @relation(fields: [runId], references: [id], onDelete: Cascade)
 
-  index Int
+  index    Int
   /// "tool_call" | "tool_result" | "refusal" | "proposal" | "note"
   kind     String  @db.VarChar(20)
   toolName String? @db.VarChar(60)
@@ -1810,13 +1817,13 @@ model GlobalNotificationSettings {
 /// bytes live outside the granted trees and are streamed by `GET /api/branding/logo`, which
 /// resolves the tenant from the request host exactly like `/api/auth/sso-methods` does.
 model WorkspaceBranding {
-  id String @id
+  id          String   @id
   /// Filename inside the branding storage subtree — never a path, never client-supplied.
   /// Null means "no custom logo", and the product's own mark is rendered instead.
-  logoFile    String? @db.VarChar(200)
-  logoMime    String? @db.VarChar(80)
+  logoFile    String?  @db.VarChar(200)
+  logoMime    String?  @db.VarChar(80)
   /// Optional replacement for the product name shown beside the logo. Null keeps "TimeSphere".
-  displayName String? @db.VarChar(60)
+  displayName String?  @db.VarChar(60)
   updatedAt   DateTime @updatedAt
   updatedById String?
 }
@@ -1849,12 +1856,12 @@ model GlobalMailSettings {
   /// what this exists to prevent.
   ///
   /// Simultaneous SMTP connections in the nodemailer pool.
-  maxConnections    Int @default(3)
+  maxConnections       Int @default(3)
   /// Messages per `rateWindowMs` across the whole pool.
   maxMessagesPerWindow Int @default(25)
   /// The window those messages are counted in. 60s by default, so the default reads as
   /// "25 per minute" — under Office 365's 30 with room for the audit BCC.
-  rateWindowMs      Int @default(60000)
+  rateWindowMs         Int @default(60000)
 
   updatedAt   DateTime @updatedAt
   updatedById String?
@@ -3265,17 +3272,17 @@ model ApprovalStep {
   request   ApprovalRequest @relation(fields: [requestId], references: [id], onDelete: Cascade)
   order     Int             @default(0)
 
-  approverId String?
-  approver   User?   @relation("ApprovalStepApprover", fields: [approverId], references: [id], onDelete: SetNull)
-  guestEmail String? @db.VarChar(255)
+  approverId          String?
+  approver            User?     @relation("ApprovalStepApprover", fields: [approverId], references: [id], onDelete: SetNull)
+  guestEmail          String?   @db.VarChar(255)
   /// LEGACY plaintext token. No longer written; read only as a fallback so links minted before
   /// the hashing change keep working. Dropped by the follow-up migration once no row has one.
-  guestToken String? @unique @db.VarChar(64)
+  guestToken          String?   @unique @db.VarChar(64)
   /// SHA-256 of the token, exactly as AttestationShareLink.tokenHash does it — a database read
   /// (a backup, a dump, an injected SELECT) then discloses no live capability. Unsalted SHA-256
   /// is correct here and would be wrong for a password: the input is 256 random bits, so there is
   /// no dictionary to stretch against, and the lookup has to be an equality query on an index.
-  guestTokenHash String? @unique @db.VarChar(64)
+  guestTokenHash      String?   @unique @db.VarChar(64)
   /// A guest link that never expires is a permanent unauthenticated capability, so new ones get
   /// one. NULL means "minted before this column existed" and keeps its old open-ended behaviour —
   /// backfilling an expiry onto live links would have killed every outstanding approval.
@@ -3486,7 +3493,7 @@ model AiProposal {
 
   /// Unreviewed proposals go stale — a schedule proposal computed against last week's plan is
   /// worse than no proposal. The sweep marks these EXPIRED rather than letting someone apply one.
-  expiresAt     DateTime?
+  expiresAt DateTime?
 
   changes       AiProposalChange[]
   riskSnapshots ProjectRiskSnapshot[]
@@ -3744,13 +3751,13 @@ model GoalProgressOverride {
   goal   Goal   @relation(fields: [goalId], references: [id], onDelete: Cascade)
 
   /// The stated progress, 0–100.
-  progressPct Int
+  progressPct   Int
   /// The measured value at the moment of the override — the receipt. NULL only when the
   /// measurement itself was unavailable (no dates, no data), which is itself worth recording.
   measuredValue Decimal? @db.Decimal(14, 2)
   measuredPct   Int?
   /// Required. "Why does the stated number differ from the measured one" is the entire point.
-  note String @db.VarChar(500)
+  note          String   @db.VarChar(500)
 
   createdById String?
   createdBy   User?    @relation("GoalOverrideBy", fields: [createdById], references: [id], onDelete: SetNull)
@@ -3795,7 +3802,7 @@ model AgentProfile {
   /// JSON array of `AiCapabilitySpec.id` strings from services/ai-capability.registry.ts. Stored
   /// as JSON rather than a join table because it is a small set read whole, always, and never
   /// filtered on — the same reasoning `Blueprint` uses for its payload.
-  capabilities Json @default("[]")
+  capabilities    Json @default("[]")
   /// JSON array of project ids, empty meaning workspace-wide. Narrowing only: it intersects with
   /// whatever `AiCapabilityPolicy.scopeProjectIds` already allows, and can never widen it.
   scopeProjectIds Json @default("[]")
@@ -3854,7 +3861,7 @@ model AgentWorkEntry {
   durationSeconds Int
   /// Summed from `AIUsageLog` for this run. Zero is real (a deterministic capability spends nothing);
   /// NULL would mean "not known", which never happens once a run has finished.
-  costUsd Decimal @default(0) @db.Decimal(10, 4)
+  costUsd         Decimal @default(0) @db.Decimal(10, 4)
 
   /// Human minutes this displaced — populated ONLY where this workspace's own timesheets give a
   /// baseline for the same kind of work, and left NULL otherwise. The UI renders NULL as
@@ -3862,7 +3869,7 @@ model AgentWorkEntry {
   /// this is the number a customer would quote back at a renewal.
   displacedMinutes Int?
   /// Where the baseline came from, so the figure above can be checked rather than trusted.
-  displacedBasis String? @db.VarChar(200)
+  displacedBasis   String? @db.VarChar(200)
 
   /// Never priced into `Timesheet.billedAmount` (decision 3, §7): agent cost is real cost, but
   /// invoicing machine minutes is a commercial decision no default should make for an operator. This
@@ -3919,11 +3926,11 @@ model AutomationFlow {
   description String? @db.Text
   emoji       String  @default("⚙️") @db.VarChar(16)
 
-  trigger AutomationTriggerKind @default(MANUAL)
+  trigger       AutomationTriggerKind @default(MANUAL)
   /// Shape depends on `trigger`: `{ event }` for EVENT, `{ cron }` for SCHEDULE, `{ formId }` for
   /// FORM_SUBMISSION, `{}` for MANUAL. JSON because the three shapes share no columns and a
   /// nullable column per trigger kind would be four columns that are always three-quarters empty.
-  triggerConfig Json @default("{}")
+  triggerConfig Json                  @default("{}")
 
   /// The teammate this flow runs as, when it runs one. Optional: a flow of nothing but deterministic
   /// ACTION steps needs no agent. When set, the flow's capability steps must be ones that profile
@@ -3935,7 +3942,11 @@ model AutomationFlow {
   /// rule as the roster and the MCP write latches: nothing switches itself on.
   enabled Boolean @default(false)
 
-  steps AutomationStep[]
+  steps     AutomationStep[]
+  runs      AutomationFlowRun[]
+  /// The AI runs this flow queued. The join behind per-flow spend in AI usage analytics: without it a
+  /// flow's cost is indistinguishable from the same capability invoked by hand.
+  agentRuns AgentRun[]          @relation("AgentRunFlow")
 
   createdById String?
   createdBy   User?     @relation("AutomationFlowCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
@@ -3947,8 +3958,80 @@ model AutomationFlow {
   @@index([trigger, enabled])
 }
 
+/// One execution of one flow against one subject.
+///
+/// WHY IT IS A ROW AND NOT A LOG LINE: a flow stops at a gate and resumes days later, so its progress
+/// has to survive a restart — and "what did this automation actually do to my workspace" is the
+/// question the whole Studio exists to answer. AgentRun made the same call for the same reason.
+///
+/// WHY `triggerKey` IS UNIQUE HERE TOO: a doubled domain event, a retried webhook and a restart
+/// mid-dispatch all collapse to one row, which is the guarantee the runtime already provides for
+/// agent runs. The key carries the SUBJECT id, not just the flow id — without that, the first ticket
+/// through a flow would be the only ticket ever through it.
+model AutomationFlowRun {
+  id     String         @id @default(uuid())
+  flowId String
+  flow   AutomationFlow @relation(fields: [flowId], references: [id], onDelete: Cascade)
+
+  triggerKey String @unique @db.VarChar(190)
+  /// "event:<name>" | "cron" | "manual" | "form"
+  trigger    String @db.VarChar(80)
+
+  /// What it ran against, denormalised so a finished run still reads as itself after the subject is
+  /// renamed or deleted.
+  subjectType  String? @db.VarChar(30)
+  subjectId    String? @db.VarChar(64)
+  subjectLabel String? @db.VarChar(200)
+
+  /// RUNNING | WAITING | COMPLETED | STOPPED | FAILED
+  ///
+  /// STOPPED means a branch condition said no, which is a correct outcome and not a failure — the
+  /// same distinction AgentRun draws with PARTIAL and BLOCKED.
+  status String @default("RUNNING") @db.VarChar(20)
+
+  /// Where a gate stopped it, and who was asked. Both null unless the status is WAITING.
+  awaitingOrder  Int?
+  awaitingUserId String?
+  awaitingUser   User?   @relation("FlowRunApprover", fields: [awaitingUserId], references: [id], onDelete: SetNull)
+
+  /// One line, written when the run settles: what it did, in the words the Inbox will use.
+  summary String? @db.VarChar(500)
+
+  startedAt  DateTime  @default(now())
+  finishedAt DateTime?
+
+  steps AutomationFlowRunStep[]
+
+  @@index([flowId, startedAt])
+  @@index([status])
+}
+
+/// What one step of one flow run actually did.
+model AutomationFlowRunStep {
+  id    String            @id @default(uuid())
+  runId String
+  run   AutomationFlowRun @relation(fields: [runId], references: [id], onDelete: Cascade)
+
+  order Int
+  kind  AutomationStepKind
+
+  /// ran | proposed | queued | waiting | skipped | not-reached | held | failed
+  ///
+  /// `held` is its own outcome: a change this flow's authority does not let it apply AND the review
+  /// queue cannot express. Silently skipping it would read as "nothing to do".
+  outcome String @db.VarChar(20)
+  detail  String @db.VarChar(500)
+
+  /// The AI run this step queued, for a capability step.
+  agentRunId String? @db.VarChar(64)
+
+  createdAt DateTime @default(now())
+
+  @@index([runId, order])
+}
+
 model AutomationStep {
-  id     String @id @default(uuid())
+  id     String         @id @default(uuid())
   flowId String
   flow   AutomationFlow @relation(fields: [flowId], references: [id], onDelete: Cascade)
 
@@ -4032,7 +4115,7 @@ model ServiceIncident {
   /// index, so open-ness has to live in a column the constraint can see. NULLs do not collide in
   /// a MySQL unique index, which is exactly the property needed: any number of CLOSED incidents
   /// per service, never two open ones.
-  openKey     String?       @unique @db.VarChar(60)
+  openKey String? @unique @db.VarChar(60)
 
   @@index([service, startedAt])
   @@index([endedAt])

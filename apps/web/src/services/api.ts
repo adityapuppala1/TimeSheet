@@ -1442,6 +1442,10 @@ export interface AIUsageSummary {
   agentDriven: { costUsd: number; calls: number; inputTokens: number; outputTokens: number };
   byFeature: Array<{ feature: string; costUsd: number; calls: number; inputTokens: number; outputTokens: number }>;
   byModel: Array<{ model: string; costUsd: number; inputTokens: number; outputTokens: number; calls: number }>;
+  /** Per-workflow spend, attributed through the agent runs each flow queued. A subset of
+   *  `agentDriven`, and read from a different table — the usage log records what was asked of a model,
+   *  not who composed the question. */
+  byFlow: Array<{ flowId: string; name: string; emoji: string; costUsd: number; runs: number }>;
 }
 
 /** One feature's consumption over the window. Sorted by tokens, not cost — cost is an estimate
@@ -4590,6 +4594,34 @@ export interface FlowCatalogue {
   projects: Array<{ id: string; code: string; name: string }>;
 }
 
+/** One execution of one flow against one subject. */
+export interface FlowRunRow {
+  id: string;
+  flowId: string;
+  flow: { id: string; name: string; emoji: string } | null;
+  trigger: string;
+  subjectType: string | null;
+  subjectId: string | null;
+  subjectLabel: string | null;
+  /** RUNNING | WAITING | COMPLETED | STOPPED | FAILED. STOPPED means a condition said no, which is a
+   *  correct outcome and not a failure. */
+  status: string;
+  awaitingOrder: number | null;
+  awaitingUser: { id: string; name: string } | null;
+  summary: string | null;
+  startedAt: string;
+  finishedAt: string | null;
+  steps: Array<{
+    id: string;
+    order: number;
+    kind: FlowStepKind;
+    /** ran | proposed | queued | waiting | skipped | not-reached | held | failed */
+    outcome: string;
+    detail: string;
+    agentRunId: string | null;
+  }>;
+}
+
 export const flowApi = {
   list: async () => (await api.get<FlowRow[]>("/flows")).data,
   get: async (id: string) => (await api.get<FlowRow>(`/flows/${id}`)).data,
@@ -4599,6 +4631,14 @@ export const flowApi = {
   create: async (payload: FlowPayload) => (await api.post<FlowRow>("/flows", payload)).data,
   update: async (id: string, payload: Partial<FlowPayload>) => (await api.patch<FlowRow>(`/flows/${id}`, payload)).data,
   setEnabled: async (id: string, enabled: boolean) => (await api.post<FlowRow>(`/flows/${id}/enabled`, { enabled })).data,
+  /** What the flows have actually done. Readable by anybody who can see tickets — see the route. */
+  runs: async (flowId?: string, limit = 20) =>
+    (await api.get<FlowRunRow[]>("/flows/runs", { params: { flowId, limit } })).data,
+  /** Clear a gate. Only the person the step named may — the server enforces it, not this call. */
+  decide: async (runId: string, approved: boolean) => {
+    await api.post(`/flows/runs/${runId}/decision`, { approved });
+  },
+  runNow: async (id: string) => (await api.post<{ runId: string; created: boolean }>(`/flows/${id}/run`)).data,
   retire: async (id: string) => {
     await api.delete(`/flows/${id}`);
   }

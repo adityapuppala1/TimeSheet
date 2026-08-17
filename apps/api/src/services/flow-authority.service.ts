@@ -361,6 +361,27 @@ export function validateFlow(params: {
     }
   }
 
+  /**
+   * A ticket action in a flow that has no ticket.
+   *
+   * A MANUAL or SCHEDULE flow fires on a person or a clock, so nothing it runs against is a ticket —
+   * and "assign it" then has nothing to assign. A warning rather than an error because the flow is
+   * otherwise coherent and its other steps still do their work; it is here at all because the failure
+   * is invisible until the run report says the step could not be done.
+   */
+  const subjectless = params.trigger === "MANUAL" || params.trigger === "SCHEDULE";
+  const ticketActions = steps.filter((s) => s.kind === "ACTION" && ["assign", "label"].includes(asText(s.config?.action)));
+  if (subjectless && ticketActions.length > 0) {
+    issues.push({
+      severity: "warning",
+      order: ticketActions[0].order,
+      message:
+        params.trigger === "MANUAL"
+          ? "This flow runs by hand, so there is no ticket for it to change. Steps that assign or label will report that they could not run."
+          : "A scheduled flow fires on a clock, so there is no ticket for it to change. Steps that assign or label will report that they could not run."
+    });
+  }
+
   const authority = computeFlowAuthority(steps);
   if (authority.taintedFrom) {
     issues.push({

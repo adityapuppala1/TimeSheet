@@ -35,8 +35,10 @@ import { startWebhookRetryWorker } from "./workers/webhook-retry.worker.js";
 import { startBugPatternDigestWorker } from "./workers/bug-pattern-digest.worker.js";
 import { startAIEvalWorker } from "./workers/ai-eval.worker.js";
 import { startAgentRunWorker } from "./workers/agent-run.worker.js";
+import { startFlowScheduleWorker } from "./workers/flow-schedule.worker.js";
 import { startAIRetentionWorker } from "./workers/ai-retention.worker.js";
 import { runForEveryOrg } from "./workers/run-for-every-org.js";
+import { registerFlowDispatch } from "./services/automation-dispatch.service.js";
 import { warmFaceModelsIfEnabled } from "./services/face.service.js";
 import { announceRunningRelease } from "./services/release-announce.service.js";
 import { startIdentityWeeklyDigestWorker } from "./workers/identity-weekly-digest.worker.js";
@@ -226,7 +228,12 @@ server.on("listening", async () => {
   startAIRetentionWorker();
   startAIEvalWorker();
   startAgentRunWorker();
+  startFlowScheduleWorker();
   startApiTelemetryRetentionWorker();
+
+  // The Studio's event triggers. Registered once, for the whole internal event vocabulary — which
+  // flows actually fire is decided by the flows, not by what this file was compiled knowing about.
+  registerFlowDispatch();
   // Starts the machine-snapshot refresh and the buffer's flush timer. A no-op unless
   // API_TELEMETRY_ENABLED is set, so an untouched deployment starts no extra timers.
   startApiTelemetry();

@@ -655,7 +655,7 @@ function localIsoDate(date: Date): string {
 export async function getMonthlyAIUsageSummary() {
   const now = new Date();
   const monthStart = new Date(now.getFullYear(), now.getMonth(), 1);
-  const [total, byFeature, byModel, agentDriven] = await Promise.all([
+  const [total, byFeature, byModel, agentDriven, byFlowRaw] = await Promise.all([
     prisma.aIUsageLog.aggregate({
       where: { createdAt: { gte: monthStart } },
       _sum: { costUsdEstimate: true, inputTokens: true, outputTokens: true },
@@ -691,8 +691,37 @@ export async function getMonthlyAIUsageSummary() {
       where: { createdAt: { gte: monthStart }, user: { isAgent: true } },
       _sum: { costUsdEstimate: true, inputTokens: true, outputTokens: true },
       _count: true
+    }),
+    /**
+     * WHAT EACH WORKFLOW COST (V8 phase 6).
+     *
+     * Read from `AgentRun` rather than from `AIUsageLog`, because the usage log records WHAT was asked
+     * of a model and not WHO composed the question - a `triage` call is the same row whether a person
+     * pressed the button or a flow queued it. `AgentRun.flowId` is the only place that fact exists, so
+     * it is the only honest source for "what is this automation costing me".
+     *
+     * That makes this figure a view from a different table, not a slice of the numbers above: it is
+     * stated as such wherever it is shown, and it is a subset of `agentDriven` rather than an addition
+     * to the total.
+     */
+    prisma.agentRun.groupBy({
+      by: ["flowId"],
+      where: { createdAt: { gte: monthStart }, flowId: { not: null } },
+      _sum: { costUsd: true },
+      _count: true
     })
   ]);
+
+  // Names for the flows that spent something. One query, and only when there is something to name.
+  const flowNames = new Map<string, { name: string; emoji: string }>();
+  const spendingFlowIds = byFlowRaw.map((row) => row.flowId).filter((id): id is string => Boolean(id));
+  if (spendingFlowIds.length > 0) {
+    const rows = await prisma.automationFlow.findMany({
+      where: { id: { in: spendingFlowIds } },
+      select: { id: true, name: true, emoji: true }
+    });
+    for (const row of rows) flowNames.set(row.id, { name: row.name, emoji: row.emoji });
+  }
   return {
     monthStart: localIsoDate(monthStart),
     totalCostUsd: Number(total._sum.costUsdEstimate ?? 0),
@@ -719,7 +748,19 @@ export async function getMonthlyAIUsageSummary() {
       inputTokens: row._sum.inputTokens ?? 0,
       outputTokens: row._sum.outputTokens ?? 0,
       calls: row._count
-    }))
+    })),
+    /** Per-workflow spend, attributed through the agent runs each flow queued. A subset of
+     *  `agentDriven`, read from `AgentRun` - see the query's comment for why it cannot come from the
+     *  usage log. A retired flow keeps its row: the money was still spent. */
+    byFlow: byFlowRaw
+      .map((row) => ({
+        flowId: row.flowId as string,
+        name: flowNames.get(row.flowId as string)?.name ?? "a retired workflow",
+        emoji: flowNames.get(row.flowId as string)?.emoji ?? "⚙️",
+        costUsd: Number(row._sum.costUsd ?? 0),
+        runs: row._count
+      }))
+      .sort((a, b) => b.costUsd - a.costUsd)
   };
 }
 

@@ -1770,6 +1770,35 @@ function AISettingsCard({ readOnly }: { readOnly: boolean }) {
                   )}
                 </div>
 
+                {/* Per-workflow spend. Read from the agent runs each flow queued rather than from the
+                    usage log, which records what was asked of a model and not who composed the
+                    question — said on its face, because it is a view from a different table and the
+                    two will not add up to the penny. */}
+                {usage.data.byFlow.length > 0 && (
+                  <div className="rounded-lg border border-border bg-muted/20 p-4">
+                    <p className="text-xs uppercase text-muted-foreground">Spent by workflows</p>
+                    <ul className="mt-2 space-y-1">
+                      {usage.data.byFlow.map((flow) => (
+                        <li key={flow.flowId} className="flex flex-wrap items-baseline gap-2 text-sm">
+                          <span aria-hidden>{flow.emoji}</span>
+                          <span className="font-medium">{flow.name}</span>
+                          <span className="tabular-nums">${flow.costUsd.toFixed(2)}</span>
+                          <span className="text-xs text-muted-foreground">
+                            across {flow.runs} run{flow.runs === 1 ? "" : "s"}
+                          </span>
+                        </li>
+                      ))}
+                    </ul>
+                    <p className="mt-2 text-xs text-muted-foreground">
+                      Part of the teammate figure above, attributed through the runs each workflow queued — see{" "}
+                      <a className="underline" href="/app/studio">
+                        Workflows
+                      </a>{" "}
+                      for what they did.
+                    </p>
+                  </div>
+                )}
+
                 {usageTrend.data && usageTrend.data.some((w) => w.costUsd > 0) && (
                   <div>
                     <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground">Spend trend, last 8 weeks</p>

@@ -55,21 +55,29 @@ a left rail, matching the reference.
 - **Below `lg` the canvas is not offered at all** — it degrades to the list, the same decision the Gantt
   made rather than shipping a squashed chart.
 
-### 3.2 Flow dispatch, and per-flow AI attribution
+### 3.2 Flow dispatch, and per-flow AI attribution — **shipped**
 
-**Decision: dispatch is opt-in per flow and observable before it is trusted.**
+**Decision taken: dispatch is opt-in per flow and observable before it is trusted.** Nothing fires
+until an administrator activates a flow, and every run is a row anybody with `tickets:view` can read.
 
-- Wire `EVENT` triggers to `domain-events.ts`, `SCHEDULE` to a `runForEveryOrg` sweep, and
-  `FORM_SUBMISSION` to the intake hook. Execution stays `queueAgentRun`, so idempotency, abort, caps
-  and audit are the existing ones.
-- **`triggerKey` must include the subject id** (`flow:<id>:ticket:<id>`), or a doubled event fires twice
-  and the idempotency guarantee the runtime already provides is wasted.
-- **Attribute usage to the flow**, not only to the capability: `AIUsageLog.feature` currently carries the
-  capability id, which is right, but a flow's spend cannot be separated from the same capability run by
-  hand. The cheapest honest fix is a `flowId` column on `AgentRun` (nullable) and a join at read time —
-  and it is the last piece needed for "every AI feature tracked", per the owner's requirement.
-- **A first-run summary.** The first time a flow fires, its result goes to the Inbox of whoever
-  activated it. An automation nobody notices working is an automation nobody trusts.
+- `EVENT` triggers are wired to `domain-events.ts` (one subscriber, filtered by what flows exist rather
+  than by what the file was compiled knowing about), `SCHEDULE` to a per-minute `runForEveryOrg` sweep,
+  and `MANUAL` to a **Run now** button on the flow's card. **`FORM_SUBMISSION` is still not wired** —
+  the trigger validates and simulates, and no dispatcher listens for it yet.
+- **`triggerKey` carries the subject id** (`flow:<id>:ticket:<id>`). A doubled event is one run; a second
+  ticket is a second run. Without the subject in the key the first ticket through a flow would be the
+  only one it ever touched.
+- **`AgentRun.flowId`** (nullable, `SET NULL` on retire) is the join behind per-workflow spend in
+  Workspace Settings → AI. It is read from `AgentRun`, not `AIUsageLog`, because the usage log records
+  what was asked of a model and not who composed the question — the panel says so on its face.
+- **A first-run summary** goes to whoever authored the flow, once. A notification per run is the thing
+  people mute, and muting it costs them the one that mattered.
+- **A gate stops the run and resumes from its own row**, so an approval can take days and survive a
+  restart. Only the person the step named may clear it, enforced server-side.
+- **Known limit, deliberate:** a proposal-only flow routes an assignment into `AiProposal` but can only
+  **hold** a label — the review queue's change vocabulary has no LABEL target. The step reports that in
+  words rather than applying it anyway or skipping it quietly. Giving proposals a LABEL target is the
+  fix, and it is a change to the proposal engine, not to the Studio.
 
 ### 3.3 Per-step configuration in the builder — **shipped**
 
@@ -87,10 +95,11 @@ to explain. Shipped as `priority`, `source`, `projectId` and `senderDomain`, eac
 but "who approves this gate" and "who is notified" are questions about a person, and an identity with no
 mailbox can answer neither.
 
-### 3.4 Run visibility, and the missing links between surfaces
+### 3.4 Run visibility, and the missing links between surfaces — **partly shipped**
 
-- **A run drill-down**: steps, transcript, cost, the proposal it produced. `AgentRunStep` already stores
-  it; nothing renders it.
+- ~~**A run drill-down**~~ — shipped for FLOW runs: *What they have done* on the Studio page lists every
+  run with its subject, status and one-line summary, and expands to each step's outcome and reason. The
+  **agent run's** own transcript and cost (`AgentRunStep`) still render nowhere.
 - **Flow → proposal → applied change** as one navigable chain. A flow proposes, the proposal appears
   under AI suggestions, and nothing links them today — so the question "what did this flow actually do
   to my workspace" has no answer on screen.
@@ -137,9 +146,9 @@ list plus a seed change — say so and it is done.
 
 1. ~~**Per-step configuration** (§3.3)~~ — shipped.
 2. ~~**The canvas** (§3.1)~~ — shipped, less the two-lane branch node.
-3. **Dispatch and per-flow attribution** (§3.2) — next, and now unblocked: the builder can express what
-   should fire.
-4. **Run visibility and the cross-surface links** (§3.4).
+3. ~~**Dispatch and per-flow attribution** (§3.2)~~ — shipped, less the `FORM_SUBMISSION` trigger.
+4. **The rest of run visibility** (§3.4): the agent-run transcript, flow → proposal → applied change as
+   one navigable chain, ledger history, and the "AI in this workspace" landing.
 5. **Workload/budget merge** (§3.5) and **mobile ergonomics** (§3.6).
 
 Written in this order because each step makes the next honest: a canvas over unconfigurable steps, or
