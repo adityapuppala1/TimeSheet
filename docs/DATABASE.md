@@ -33,6 +33,33 @@ Rules that follow from it:
   update the recorded `checksum` in `_prisma_migrations`. Verify constraint counts and row counts
   before and after.
 
+### Two traps when a migration has to READ the table it writes
+
+Both were hit writing `20260817100000_session_device_identity`, whose cleanup revokes each user's
+oldest sessions — inherently "rank rows in a table, then update that same table".
+
+**1. A derived table is not a portable escape from error 1093.** MySQL refuses `UPDATE t … WHERE
+… (SELECT … FROM t)` with *"You can't specify target table for update in FROM clause"*. Wrapping
+the read in a derived table (`UPDATE t JOIN (SELECT … FROM t) d`) is the classic workaround
+because it forces materialisation — and it works on MariaDB. **MySQL 8.0.14+ can MERGE that
+derived table back into the outer query**, which puts 1093 straight back. If your dev machine runs
+one engine and production the other, this passes every local test and breaks provisioning for
+every new organization.
+
+**2. `CREATE TEMPORARY TABLE` does not survive inside a migration.** It looks like the clean fix.
+Temporary tables are **connection-scoped**, and Prisma's migration engine does not guarantee one
+connection for the whole file — the `CREATE` succeeds and the statement that joins it fails with
+a bare *"Please check the query number 5 from the migration file"*, which names nothing.
+
+**What works:** an ordinary table, `DROP TABLE IF EXISTS` before and `DROP TABLE` after. Visible
+from any connection, identical on every engine, and the leading drop makes a resumed or
+previously-failed migration start clean instead of joining stale ids.
+
+> This is exactly what the "replay into an EMPTY database" rule above is for — and it is not
+> sufficient on its own. A replay proves the schema applies; it does **not** exercise a data
+> migration, because every table is empty. Seed representative rows into the probe and re-apply
+> when the migration's whole purpose is to change data.
+
 ## After merging a migration: fan it out to every tenant
 
 Reaching `DATABASE_URL` is not the same as reaching the workspace — every organization has its own

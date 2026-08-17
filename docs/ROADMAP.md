@@ -3134,3 +3134,26 @@ several of them shared a root cause.
   honest reading — "you have too many devices" is only ever a reason to drop the ones nobody is
   using. Fifteen minutes is `maintenance.service.ts`'s existing ONLINE_WINDOW_MS, so the app has
   one definition of "in use" rather than two.
+
+- [x] **`npm run setup` failed on a clean machine, and the doctor would not say why.** It reported
+  `migration failed: Command failed: npx prisma migrate deploy` — which is `execSync`'s own first
+  line and never the diagnosis. The helpers run with `stdio: "pipe"` so a healthy run stays quiet,
+  and the catch blocks were printing `error.message.split("
+")[0]` while Prisma's actual output —
+  the failing migration, the SQL, the MySQL error code — sat unread on the error object's
+  `stdout`/`stderr`. A `--heal` tool whose failure mode is "run this yourself to find out" is not
+  doing the one job it exists for. `childOutput()` now prints what the child actually said.
+
+- [x] **And the migration it was failing on had a real portability bug.** The session cleanup has
+  to rank rows in `Session` and then update `Session`, which MySQL refuses with error 1093. The
+  derived-table workaround materialises on MariaDB — which is what this machine runs, so every
+  local test passed — but MySQL 8.0.14+ can MERGE a derived table back into the outer query and
+  re-raise 1093. A `TEMPORARY` table was the obvious fix and silently is not one: they are
+  connection-scoped and Prisma does not guarantee one connection per migration file, so the
+  `CREATE` succeeds and the join fails with an error naming only "query number 5". Settled on an
+  ordinary scratch table, dropped either side. Both traps are now written up in DATABASE.md.
+
+  Re-verified properly this time: full replay into an empty database, AND a replay stopped before
+  this migration, seeded with 120 sessions across two users, then applied — 120 to 10 per user,
+  scratch table gone. The empty-database replay the docs already mandate proves the schema applies
+  and says nothing about a DATA migration; that gap is now called out there too.

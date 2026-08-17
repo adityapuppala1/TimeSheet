@@ -272,14 +272,47 @@ function ensureDatabaseExists(label: string, parsed: ParsedDsn): void {
   }
 }
 
+/**
+ * Everything the failed child process actually said.
+ *
+ * WHY THIS EXISTS: these helpers run with `stdio: "pipe"` so a healthy run stays quiet — but the
+ * catch blocks then reported only `error.message.split("\n")[0]`, which for `execSync` is always
+ * the same useless sentence: "Command failed: npx prisma migrate deploy …". Prisma's actual
+ * diagnosis — which migration failed, the SQL it was running, the MySQL error code — arrives on
+ * the error object's captured `stdout`/`stderr`, and was being thrown away unread.
+ *
+ * The result was a `--heal` tool whose failure mode is "run this yourself to find out what went
+ * wrong", which is the one job it exists to do. A real report costs one function.
+ */
+function childOutput(error: unknown): string {
+  const failure = error as { stdout?: Buffer | string; stderr?: Buffer | string };
+  const parts = [failure?.stdout, failure?.stderr]
+    .map((stream) => (stream ? stream.toString().trim() : ""))
+    .filter(Boolean);
+  // A thrown non-Error with no captured streams is the last resort; JSON keeps it readable
+  // instead of collapsing to "[object Object]".
+  if (parts.length === 0) {
+    const message = (error as Error)?.message ?? JSON.stringify(error);
+    return `    ${message}`;
+  }
+  // Indented so the child's own multi-line output stays visually distinct from the doctor's
+  // report around it.
+  return parts
+    .join("\n")
+    .split("\n")
+    .map((line) => `    ${line}`)
+    .join("\n");
+}
+
 function runMigrations(label: string, schema: string): void {
   try {
     execSync(`npx prisma migrate deploy --schema=${schema}`, { stdio: ["pipe", "pipe", "pipe"], cwd: apiCwd });
     ok(`${label} — migrations applied (prisma migrate deploy)`);
   } catch (error) {
     fail(
-      `${label} — migration failed: ${(error as Error).message.split("\n")[0]}\n` +
-        `Run manually to see the full error: cd apps/api && npx prisma migrate deploy --schema=${schema}`
+      `${label} — migration failed. Prisma said:\n\n${childOutput(error)}\n\n` +
+        `To reproduce: cd apps/api && npx prisma migrate deploy --schema=${schema}\n` +
+        `If a migration is recorded as FAILED, see docs/DATABASE.md — never answer "reset" on a database holding real data.`
     );
   }
 }
