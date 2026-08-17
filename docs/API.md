@@ -563,6 +563,61 @@ makes the same stored value render as two different days across a boundary.
   with zero spend — the arithmetic there produces a confident number that is noise, and
   "forecast: 0" reads as "this will cost nothing".
 
+## Workflow Studio (V8 phase 4)
+
+Same entitlement as the roster (`aiPmCopilotEnabled`) — a flow composes that capability family, and a
+second switch for one commercial decision is a switch somebody forgets. Reading needs `tickets:view`,
+because what automation touches your work is your business; every write is SUPER_ADMIN.
+
+- `GET /flows` — every flow with its **computed authority** and validation issues.
+- `GET /flows/catalogue` — capabilities with ceilings, the real domain-event list, and the
+  deterministic actions, in one call.
+- `GET /flows/:id` · `POST /flows` · `PATCH /flows/:id` · `DELETE /flows/:id` (soft, and switches it
+  off in the same write — a retired flow must not keep firing).
+- `GET /flows/:id/simulate?limit=` — the replay. **A GET on purpose**: it writes nothing, so it must be
+  safe to re-run and refresh, and a POST would imply otherwise.
+- `POST /flows/:id/enabled` `{ enabled }` — activation, refused with 422 on any validation error and
+  quoting it. **Deactivation is always allowed**, even for a flow that would now fail validation —
+  otherwise a flow invalidated by a retired teammate or a deleted form could not be switched off, the
+  same deadlock the roster's disable-escape avoids.
+
+Steps are replaced wholesale and `order` is assigned from array position, so a reordered builder
+cannot produce gaps or collisions. A flow is **created off**, whatever the request says.
+
+### The three rules, and where they live
+
+All of them are computed in `flow-authority.service.ts`, which touches no database so the whole
+guarantee can be read — and tested exhaustively — in one place. Every failure available here is
+arithmetic that renders plausibly and is wrong, which is why that file has 25 tests of its own.
+
+1. **Authority is the MINIMUM of the capability steps'.** Composing two `AUTO_APPLY` steps must never
+   produce authority neither had. `limitedBy` names the step that set the floor, so a builder can point
+   at it.
+2. **Taint propagates FORWARD.** Once a step reads externally-authored text, every *later writing* step
+   is clamped to `SUGGEST` — generalising `AgentRun.taintedAt` from one run to a composition. This makes
+   **order load-bearing**: triage-then-assign proposes, assign-then-triage applies. The word "later"
+   does real work: a flow whose *only* step reads outside text is not clamped, because composing one
+   step must not be stricter than running that capability alone (a bug caught by a test).
+3. **Anything above `SUGGEST` writes through `AiProposal`.** The Studio adds no write path at all —
+   composition decides what runs and at what authority, and execution goes through `queueAgentRun`, so
+   idempotency, the abort flag, the step cap, the cost cap and the audit trail are the existing ones.
+
+`gatedBeforeWrites` reports whether a `HUMAN_GATE` precedes every writing step, because that is the
+cheapest way to make an ambitious flow acceptable. Activation records the authority **as computed at
+that moment** in the audit row, since "what was this allowed to do when somebody switched it on" must
+not depend on what the policies say weeks later.
+
+### What the simulation is, and is not
+
+Exact about structure: which steps are reached, where a gate stops the run, and whether each writing
+step would apply or propose. Explicit about the rest — it **calls no model, writes nothing, and assumes
+branch conditions pass**, all three stated in the response's own `disclaimer` so nobody reads a replay
+as an execution. Zero samples is a finding with a reason ("no tickets in this workspace yet"), not an
+empty list.
+
+A flow bound to a teammate may only use capabilities that teammate **owns**, which is what stops the
+Studio becoming a way around "one capability, one owner".
+
 ## The agent roster (V8 phase 3)
 
 Gated on the tier's `aiPmCopilotEnabled` — the roster is a bundle of the AI capability family, which

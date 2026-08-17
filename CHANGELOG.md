@@ -94,6 +94,28 @@ its old schema without the update saying so. After upgrading, run the fan-out on
   feature switched off, the badge reads "On, but idle" and explains where to fix it, rather than
   showing a confident green "On" over work it cannot perform.
 
+### 🧩 A Workflow Studio, where what a flow may do is on its face
+
+- **Flows at Plan → Workflows**: a trigger, then steps — an AI capability, a deterministic action, a
+  point where a person is asked, or a condition. Built as a list you read top to bottom, because a
+  canvas demos well and a list is what somebody can actually check in a review.
+- **Every flow states the authority it really has**, which is often less than its steps suggest. A flow
+  can never do more than its most restricted step, and the card names that step. Put two "applies its
+  own changes" steps together and you get exactly that — never something more.
+- **Order matters, and the flow says why.** The moment a step reads text from outside your workspace
+  (inbound email, a chat message, a scanner finding), every change after it becomes a proposal for
+  somebody to accept. Move that step later and the flow's authority changes — the card explains this in
+  place rather than leaving you to discover it.
+- **Replay before you switch it on.** Any flow can be replayed against your own recent triggers: which
+  steps would run, where it would stop for a person, and whether each change would be applied or
+  proposed. It calls no model, writes nothing, and says so on its own face.
+- **A flow with a problem cannot be switched on**, and the reason is quoted — a gate as the last step
+  approves nothing, a condition at the end guards nothing, and a flow bound to a teammate cannot use a
+  capability that teammate does not have. Switching a flow **off** is always allowed, so nothing can
+  ever get stuck on.
+- Everything a flow does still goes through the same review, undo and audit path as every other AI
+  change here. The Studio composes what already existed; it adds no new way to write to your workspace.
+
 ### 🐳 The API image never contained the scripts two runbooks tell you to run
 
 - The runtime stage cherry-picks directories into the image and `apps/api/scripts/` was not among

@@ -34,7 +34,8 @@ import {
   Ticket,
   TrendingUp,
   Users,
-  Users2
+  Users2,
+  Workflow
 } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
 import { useState } from "react";
@@ -116,6 +117,7 @@ export const nav: NavItem[] = [
   // `effective` object does not model, and the page renders its own upgrade state on a 403. Hiding
   // the nav item instead would leave no surface on which to explain what agents are.
   { to: "/app/agents", label: "Agents", icon: Bot, permission: permissions.TICKETS_VIEW, section: "Plan" },
+  { to: "/app/studio", label: "Workflows", icon: Workflow, permission: permissions.TICKETS_VIEW, section: "Plan" },
 
   { to: "/app/approvals", label: "Approvals", icon: Shield, permission: permissions.TIMESHEETS_APPROVE, section: "Team" },
   { to: "/app/team", label: "My team", icon: Users2, permission: permissions.TIMESHEETS_APPROVE, section: "Team" },

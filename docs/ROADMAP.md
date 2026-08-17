@@ -3631,3 +3631,75 @@ against the live workspace — a rival agent created as a draft (201), refused o
 *"📰 Reporter already covers weekly_digest, status_report"*, its per-capability claims visible on the
 draft, all sixteen claimed capabilities named in the settings catalogue, the claim released when the
 owner was switched off, then everything restored.
+
+## V8 phase 4 — the Workflow Studio, and the three rules made computable (2026-08-17)
+
+Plan: [AGENTIC_WORK_MANAGEMENT.md](AGENTIC_WORK_MANAGEMENT.md) §5 phase 4 — the heaviest security
+surface in the programme, and the phase the ownership follow-up was a prerequisite for. Additive: two
+tables, two enums.
+
+- [x] **`flow-authority.service.ts` is the whole safety argument, and it touches no database.** Pure
+  functions, 25 tests, for the reason `plan-schedule.service.ts` is a pure core: every failure here is
+  arithmetic over levels that renders plausibly and is wrong. A minimum computed as a maximum promotes
+  a propose-only capability by putting it in good company; a taint clamp that walks backwards silently
+  trusts inbound email; a `proposalOnly` that is false when it should be true routes a flow's writes
+  around the review path every other AI write in this product uses. None of those throw.
+- [x] **Rule 1 — authority is the MINIMUM.** `limitedBy` names the step that set the floor so a builder
+  can point at it, and a flow of purely deterministic steps is not clamped by a minimum that does not
+  exist.
+- [x] **Rule 2 — taint propagates FORWARD**, which makes step ORDER load-bearing: triage-then-assign
+  proposes, assign-then-triage applies. The card explains that in place, because an author who cannot
+  see it will build a flow that quietly proposes and conclude the feature is broken.
+- [x] **Rule 3 — anything above SUGGEST writes through `AiProposal`.** The Studio adds no write path at
+  all: composition decides what runs and at what authority, and execution goes through `queueAgentRun`,
+  so idempotency, the abort flag, the step cap, the cost cap and the audit trail are the existing ones.
+- [x] **Activation reads validation first**, refuses with the reason quoted, and records the authority
+  **as computed at that moment** — "what was this allowed to do when somebody switched it on" must not
+  depend on what the policies say weeks later. Deactivation is always allowed, the same
+  no-deadlock exception the roster has.
+- [x] **Simulation is exact about structure and explicit about the rest.** Which steps are reached,
+  where a gate stops it, apply-or-propose per step — and it calls no model, writes nothing, and assumes
+  branch conditions pass, all three in its own `disclaimer` so a replay is never read as an execution.
+  Zero samples is a finding with a reason, not an empty list.
+- [x] **A flow bound to a teammate may only use capabilities that teammate owns**, which is what stops
+  the Studio becoming a way around "one capability, one owner" — the exact reason that follow-up had to
+  land first.
+- [x] **UI**: a vertical step list with the authority banner above it, both clamps explained separately
+  (a minimum is fixed by removing a step, a taint clamp by reordering — collapsing them into
+  "restricted" would tell an author nothing), per-step level badges, errors quoted verbatim, and Replay
+  offered before Switch on.
+
+**The semantic bug a test caught, and it is the most interesting thing in this phase.** The first
+implementation clamped a flow to SUGGEST whenever ANY step read untrusted input. That made a flow whose
+only step is `triage` proposal-only — while the existing runtime happily lets that same capability apply
+at AUTO_APPLY on its own. Composing one step would have been stricter than running it, which is a
+regression dressed as caution and the kind that quietly teaches people the Studio is worse than the
+thing it replaces. Rule 2 says "every LATER WRITING step", and the fix was to make that word do its
+work: the flow is clamped only when a step that WRITES is tainted by an earlier one.
+
+**Two migration artifacts worth recording**, both from `prisma migrate diff` on Windows MariaDB: the
+usual lower-cased table names (corrected), and a `MODIFY AgentProfile.emoji` that would not go away. It
+turned out not to be an artifact at all — the phase-3 `DEFAULT '🤖'` had arrived in the database as
+`'?'`, because a multibyte literal in DDL crosses a migration file, a client connection charset and a
+server charset, and this project's stack mangled it. Stored rows were never affected (Prisma sends the
+value), but a diff nobody can make clean is a diff nobody reads. Fixed by removing the emoji from DDL
+entirely — the default now lives in `agent-profile.service.ts`, ordinary UTF-8 source with no charset
+boundary to cross — and the corrective `ALTER` is pure ASCII by design.
+
+Verified: 1135 unit tests (+42: 25 on the rules themselves, 17 on the routes); lint clean; driven end to
+end against the live workspace — read-then-write and write-then-read built as separate flows, the
+minimum rule naming its limiting step, activation refused for a gate-last flow with the message quoted,
+a gated flow activated and its replay showing `waits-for-approval` then `not-reached`, and a
+teammate-bound flow refusing a capability that teammate does not own. Screens checked at 390 / 1366 /
+1600 in both themes with zero horizontal overflow, and every flow created for the drive was deleted
+afterwards so the workspace was left as found.
+
+**Honest limit of the live drive:** with *"Allow AI features to act on their own"* switched off in this
+workspace, every capability resolves to SUGGEST, so the master latch dominates and the order asymmetry
+is not observable through the API there. It is proven in the engine tests, where levels are injected
+directly.
+
+**Not done in this phase:** nothing dispatches a flow yet. The trigger kinds are stored and validated,
+and execution deliberately reuses `queueAgentRun`, but wiring the domain-event bus, the cron sweep and
+the form-submission hook to actually fire flows is the next step — the builder, the rules and the replay
+had to be trustworthy first.

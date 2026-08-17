@@ -45,6 +45,7 @@ const PortfolioPage = lazy(() => import("./pages/Portfolio").then((m) => ({ defa
 const GoalsPage = lazy(() => import("./pages/Goals").then((m) => ({ default: m.GoalsPage })));
 const InboxPage = lazy(() => import("./pages/Inbox").then((m) => ({ default: m.InboxPage })));
 const AgentsPage = lazy(() => import("./pages/Agents").then((m) => ({ default: m.AgentsPage })));
+const StudioPage = lazy(() => import("./pages/Studio").then((m) => ({ default: m.StudioPage })));
 const BlueprintsPage = lazy(() => import("./pages/Blueprints").then((m) => ({ default: m.BlueprintsPage })));
 const WorkloadPage = lazy(() => import("./pages/Workload").then((m) => ({ default: m.WorkloadPage })));
 const RequestsPage = lazy(() => import("./pages/Requests").then((m) => ({ default: m.RequestsPage })));
@@ -129,6 +130,9 @@ const router = createBrowserRouter([
       // it is and what it has been doing. Creating one is SUPER_ADMIN, checked in the page and
       // enforced by the API; the page renders its own "not in this plan" state on a 403.
       { path: "agents", element: <RequirePermission permission={permissions.TICKETS_VIEW}><PageShell><AgentsPage /></PageShell></RequirePermission> },
+      // Same gate as the roster: reading is tickets:view, because what automation touches your work is
+      // your business; every write is SUPER_ADMIN, checked by the API and reflected in the page.
+      { path: "studio", element: <RequirePermission permission={permissions.TICKETS_VIEW}><PageShell><StudioPage /></PageShell></RequirePermission> },
       // Readable with tickets:view (the API lists blueprints at that level); using one needs
       // plan:write, checked inside the page so a viewer sees the shapes without dead buttons.
       { path: "blueprints", element: <RequirePermission permission={permissions.TICKETS_VIEW}><PageShell><BlueprintsPage /></PageShell></RequirePermission> },

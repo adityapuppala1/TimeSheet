@@ -253,6 +253,7 @@ model User {
   goalOverrides        GoalProgressOverride[] @relation("GoalOverrideBy")
   agentProfile         AgentProfile?        @relation("AgentIdentity")
   agentProfilesCreated AgentProfile[]       @relation("AgentProfileCreatedBy")
+  automationFlowsCreated AutomationFlow[]   @relation("AutomationFlowCreatedBy")
   savedViews           SavedView[]
   resourceBookings     ResourceBooking[]    @relation("BookingSubject")
   resourceBookingsMade ResourceBooking[]    @relation("BookingCreator")
@@ -3773,7 +3774,14 @@ model AgentProfile {
   /// One or two emoji. Deliberately not an uploaded image: a roster of teammates needs to be
   /// visually distinguishable at a glance, and an avatar pipeline is a storage surface this does
   /// not need.
-  emoji       String  @default("🤖") @db.VarChar(16)
+  ///
+  /// NO DATABASE DEFAULT, on purpose (fixed in the phase-4 migration). A `DEFAULT '🤖'` in DDL is a
+  /// multibyte literal travelling through a migration file, a client connection charset and a server
+  /// charset — and on this project's own Windows MariaDB it arrived as `'?'`, which left
+  /// `prisma migrate diff` permanently reporting drift that could not be resolved. Rows were never
+  /// affected (Prisma sends the value), but a diff nobody can make clean is a diff nobody reads.
+  /// The default lives in `agent-profile.service.ts` instead, where it is ordinary UTF-8 source.
+  emoji       String  @db.VarChar(16)
   description String? @db.Text
 
   /// The service identity this profile acts as — a `User` row with `isAgent = true`. Required:
@@ -3803,6 +3811,10 @@ model AgentProfile {
   /// can say "this is the stock triage teammate, unmodified" versus "somebody built this".
   templateKey String? @db.VarChar(60)
 
+  /// Flows that run as this teammate. A flow keeps working if the profile is retired (the relation
+  /// is SetNull there) — it simply stops having an agent, and validation catches it on next activate.
+  flows AutomationFlow[]
+
   createdById String?
   createdBy   User?     @relation("AgentProfileCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
   createdAt   DateTime  @default(now())
@@ -3810,6 +3822,100 @@ model AgentProfile {
   deletedAt   DateTime?
 
   @@index([enabled, deletedAt])
+}
+
+/// --- Workflow Studio (V8 phase 4) -------------------------------------------------------------
+/// See docs/AGENTIC_WORK_MANAGEMENT.md §5 phase 4. A flow composes things that already exist —
+/// deterministic rule actions, registered AI capabilities, and a human gate — behind one trigger.
+///
+/// THE THREE RULES THIS SCHEMA EXISTS TO SERVE, restated here because a no-code surface is exactly
+/// where they would otherwise be lost (they are computed in services/flow-authority.service.ts):
+///   1. A flow's authority is the MINIMUM of its capability steps'. Composing two AUTO_APPLY steps
+///      must never produce authority neither had.
+///   2. Taint propagates FORWARD. If any step reads externally-authored text, every later writing
+///      step is clamped to SUGGEST — the same authority downgrade `AgentRun.taintedAt` applies to a
+///      single run, generalised to a composition.
+///   3. Anything above SUGGEST writes through `AiProposal`. The Studio adds no new write path.
+enum AutomationTriggerKind {
+  /// A domain event from services/domain-events.ts.
+  EVENT
+  /// A cron expression, swept by the same worker pattern every other schedule uses.
+  SCHEDULE
+  /// A public request form submission.
+  FORM_SUBMISSION
+  /// Only ever run by hand from the Studio. The default, because a flow nobody has watched run
+  /// should not be wired to a firehose.
+  MANUAL
+}
+
+enum AutomationStepKind {
+  /// Deterministic. The actions `TicketRule` already performs — assign, label, notify. No model.
+  ACTION
+  /// A registered AI capability, at whatever level it resolves to. The only step kind that can
+  /// lower a flow's authority, and the only one that can taint it.
+  CAPABILITY
+  /// Blocks. Everything after it waits for a named approver, so a flow whose writes sit behind one
+  /// is safe by construction whatever its steps could otherwise do.
+  HUMAN_GATE
+  /// A condition on fields the rules engine already evaluates. Skips the remaining steps when false.
+  BRANCH
+}
+
+model AutomationFlow {
+  id          String  @id @default(uuid())
+  name        String  @db.VarChar(120)
+  description String? @db.Text
+  emoji       String  @default("⚙️") @db.VarChar(16)
+
+  trigger AutomationTriggerKind @default(MANUAL)
+  /// Shape depends on `trigger`: `{ event }` for EVENT, `{ cron }` for SCHEDULE, `{ formId }` for
+  /// FORM_SUBMISSION, `{}` for MANUAL. JSON because the three shapes share no columns and a
+  /// nullable column per trigger kind would be four columns that are always three-quarters empty.
+  triggerConfig Json @default("{}")
+
+  /// The teammate this flow runs as, when it runs one. Optional: a flow of nothing but deterministic
+  /// ACTION steps needs no agent. When set, the flow's capability steps must be ones that profile
+  /// owns — which is what stops the Studio becoming a way around "one capability, one owner".
+  agentProfileId String?
+  agentProfile   AgentProfile? @relation(fields: [agentProfileId], references: [id], onDelete: SetNull)
+
+  /// Off until somebody activates it, and activation is refused unless the flow validates. Same
+  /// rule as the roster and the MCP write latches: nothing switches itself on.
+  enabled Boolean @default(false)
+
+  steps AutomationStep[]
+
+  createdById String?
+  createdBy   User?     @relation("AutomationFlowCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+  deletedAt   DateTime?
+
+  @@index([enabled, deletedAt])
+  @@index([trigger, enabled])
+}
+
+model AutomationStep {
+  id     String @id @default(uuid())
+  flowId String
+  flow   AutomationFlow @relation(fields: [flowId], references: [id], onDelete: Cascade)
+
+  /// Explicit ordering rather than a linked list: the builder renders a list and reorders by
+  /// rewriting these, and a broken `nextStepId` chain is unreadable in a database row.
+  order Int
+  kind  AutomationStepKind
+
+  /// For CAPABILITY: the registry id. For ACTION: which action. For BRANCH/HUMAN_GATE: null.
+  capability String? @db.VarChar(60)
+
+  /// Kind-specific: `{ assigneeId }` / `{ labelId }` / `{ notifyUserId }` for ACTION,
+  /// `{ field, op, value }` for BRANCH, `{ approverId }` for HUMAN_GATE.
+  config Json @default("{}")
+
+  createdAt DateTime @default(now())
+
+  @@unique([flowId, order])
+  @@index([flowId, order])
 }
 
 /// Status of one monitored service at one moment. Three levels, not two, because "slow but

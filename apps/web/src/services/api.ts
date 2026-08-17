@@ -4459,3 +4459,104 @@ export const dashboardApi = {
     await api.delete(`/dashboards/subscriptions/${id}`);
   }
 };
+
+/* ---- Workflow Studio (V8 phase 4) --------------------------------------------------------- */
+
+export type FlowTriggerKind = "EVENT" | "SCHEDULE" | "FORM_SUBMISSION" | "MANUAL";
+export type FlowStepKind = "ACTION" | "CAPABILITY" | "HUMAN_GATE" | "BRANCH";
+
+export interface FlowStepAuthority {
+  order: number;
+  kind: FlowStepKind;
+  capability: string | null;
+  ownLevel: string;
+  effectiveLevel: string;
+  /** Names WHICH rule clamped it — a minimum is fixed by removing a step, a taint clamp by
+   *  reordering, so the two must not collapse into "restricted". */
+  clampedReason: string | null;
+  taintedByEarlierStep: boolean;
+}
+
+export interface FlowAuthority {
+  effectiveLevel: string;
+  limitedBy: { order: number; capability: string; level: string } | null;
+  taintedFrom: { order: number; capability: string } | null;
+  proposalOnly: boolean;
+  gatedBeforeWrites: boolean;
+  steps: FlowStepAuthority[];
+}
+
+export interface FlowIssue {
+  severity: "error" | "warning";
+  message: string;
+  order?: number;
+}
+
+export interface FlowRow {
+  id: string;
+  name: string;
+  description: string | null;
+  emoji: string;
+  trigger: FlowTriggerKind;
+  triggerConfig: Record<string, unknown>;
+  enabled: boolean;
+  agentProfile: { id: string; name: string; emoji: string; enabled: boolean } | null;
+  steps: Array<{ id: string; order: number; kind: FlowStepKind; capability: string | null; title: string | null; config: Record<string, unknown> }>;
+  authority: FlowAuthority;
+  issues: FlowIssue[];
+  /** Errors block activation; the badge and the activate route read the same value. */
+  activatable: boolean;
+  createdBy: { id: string; name: string; email: string } | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface FlowSimulation {
+  disclaimer: string;
+  trigger: FlowTriggerKind;
+  sampleCount: number;
+  noSamplesReason: string | null;
+  authority: FlowAuthority;
+  samples: Array<{
+    subject: string;
+    subjectId: string | null;
+    steps: Array<{
+      order: number;
+      kind: FlowStepKind;
+      capability: string | null;
+      title: string | null;
+      outcome: "would-run" | "would-propose" | "skipped-by-branch" | "waits-for-approval" | "not-reached";
+      level: string | null;
+      detail: string;
+    }>;
+  }>;
+}
+
+export interface FlowPayload {
+  name: string;
+  description?: string | null;
+  emoji?: string;
+  trigger?: FlowTriggerKind;
+  triggerConfig?: Record<string, unknown>;
+  agentProfileId?: string | null;
+  steps: Array<{ kind: FlowStepKind; capability?: string | null; config?: Record<string, unknown> }>;
+}
+
+export const flowApi = {
+  list: async () => (await api.get<FlowRow[]>("/flows")).data,
+  get: async (id: string) => (await api.get<FlowRow>(`/flows/${id}`)).data,
+  catalogue: async () =>
+    (await api.get<{
+      capabilities: AgentCapabilityRow[];
+      events: string[];
+      actions: Array<{ key: string; label: string; config: string[] }>;
+    }>("/flows/catalogue")).data,
+  /** A GET because it writes nothing — safe to re-run and refresh. */
+  simulate: async (id: string, limit = 5) => (await api.get<FlowSimulation>(`/flows/${id}/simulate`, { params: { limit } })).data,
+  create: async (payload: FlowPayload) => (await api.post<FlowRow>("/flows", payload)).data,
+  update: async (id: string, payload: Partial<FlowPayload>) => (await api.patch<FlowRow>(`/flows/${id}`, payload)).data,
+  setEnabled: async (id: string, enabled: boolean) => (await api.post<FlowRow>(`/flows/${id}/enabled`, { enabled })).data,
+  retire: async (id: string) => {
+    await api.delete(`/flows/${id}`);
+  }
+};

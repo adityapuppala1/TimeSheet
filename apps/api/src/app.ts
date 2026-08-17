@@ -56,6 +56,7 @@ import { approvalPublicRouter, approvalRouter } from "./controllers/approval.con
 import { blueprintRouter } from "./controllers/blueprint.controller.js";
 import { dashboardRouter } from "./controllers/dashboard.controller.js";
 import { agentRouter } from "./controllers/agent.controller.js";
+import { automationFlowRouter } from "./controllers/automation-flow.controller.js";
 import { goalRouter } from "./controllers/goal.controller.js";
 import { inboxRouter } from "./controllers/inbox.controller.js";
 import { portfolioRouter } from "./controllers/portfolio.controller.js";
@@ -474,6 +475,10 @@ app.use("/api/inbox", inboxRouter);
 // it is); creating one mints a service identity and is SUPER_ADMIN, like every other
 // workspace-wide switch. See controllers/agent.controller.ts.
 app.use("/api/agents", agentRouter);
+// The Workflow Studio. Same gate as the roster (it composes the same capability family), reading at
+// tickets:view because "what automation touches my work" is a fair question for the person whose
+// work it touches. See controllers/automation-flow.controller.ts.
+app.use("/api/flows", automationFlowRouter);
 app.use("/api/resources", resourceRouter);
 app.use("/api/request-forms", requestFormRouter);
 app.use("/api/blueprints", blueprintRouter);
