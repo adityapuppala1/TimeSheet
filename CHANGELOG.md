@@ -11,6 +11,30 @@ Everything below ships in the next tag. The parser that feeds the in-app What's-
 this section until it gains a version number, on purpose — an installation must never render
 history for a version that does not exist yet.
 
+### 🎯 Goals, and progress that measures itself
+
+- **Objectives and key results, where the number is computed rather than typed.** A goal can be
+  wired to something this workspace already records — approved hours, billed spend from the rate
+  snapshots taken at approval, tickets closed, on-time delivery rate, SLA escalations, or average
+  project risk — and its progress then reports itself. The source catalogue is closed on purpose:
+  a metric two goals can define differently will be defined differently, and the person who
+  notices is in a review meeting.
+- **A measured goal can still be overridden, and the override keeps the receipt.** It records who
+  set it, when, why, and **what the measurement said at that moment** — and the page shows both
+  numbers side by side rather than replacing one with the other. Overrides are append-only: a
+  correction is another entry, never an edit, because an unrecorded adjustment is exactly what
+  measuring was supposed to prevent.
+- **"Not measurable" is words, never 0%.** A goal with no period, no target, or no data in scope
+  says so and explains which — "no data yet" and "nothing achieved" are opposite messages that
+  look identical as a zero. A ceiling-style goal (spend, breaches, risk) deliberately shows no
+  percentage at all: "62% of the way to your spending limit" reads as progress.
+- Objectives nest one level into key results, on their own page under **Plan → Goals**, with the
+  workspace toggle under **Workspace Settings → Planning**. Off until an admin turns it on, and
+  Team and Enterprise only — Team gets 25 active goals, Enterprise unlimited.
+- Managers and team leads can write goals, not just admins: a manager who cannot write the goals
+  their team is measured against has nothing to manage. Everyone can read them.
+
+
 ## 2.5.0 — the releases you could not see, and the updates that quietly did not finish — 2026-08-17
 
 **One upgrade note for multi-org installations.** The tenant schema fan-out has never been able to

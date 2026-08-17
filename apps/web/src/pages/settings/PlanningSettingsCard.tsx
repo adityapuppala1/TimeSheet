@@ -218,6 +218,14 @@ function PlanningTogglesCard({ readOnly, config }: { readOnly: boolean; config: 
           disabled={readOnly || update.isPending}
           onChange={(v) => set("enableCustomWorkflows", v)}
         />
+        <ToggleRow
+          label="Goals"
+          description="Objectives with key results, where progress is MEASURED from data this workspace already holds — approved hours, budget spend, tickets closed, on-time rate, SLA breaches or project risk — rather than typed in. A measured goal can still be overridden, and the override records who did it and what the measurement said at the time."
+          checked={draft.enableGoals}
+          entitled={entitlements.goalsEnabled}
+          disabled={readOnly || update.isPending}
+          onChange={(v) => set("enableGoals", v)}
+        />
       </CardContent>
     </Card>
   );

@@ -3103,6 +3103,7 @@ export interface PlanningSettings {
   enableProofing: boolean;
   enableRequestForms: boolean;
   enableCustomWorkflows: boolean;
+  enableGoals: boolean;
   workingDays: number[];
   defaultWeeklyCapacityHours: number | string;
   updatedAt: string;
@@ -3116,11 +3117,13 @@ export interface PlanningEntitlements {
   proofingEnabled: boolean;
   customWorkflowsEnabled: boolean;
   aiPmCopilotEnabled: boolean;
+  goalsEnabled: boolean;
   maxPortfolios: number;
   maxRequestForms: number;
   maxBlueprints: number;
   maxCustomFields: number;
   maxDashboards: number;
+  maxGoals: number;
 }
 
 /** Workspace toggle AND plan entitlement, computed server-side. This is what the UI gates on. */
@@ -3132,6 +3135,7 @@ export interface PlanningEffective {
   proofing: boolean;
   requestForms: boolean;
   customWorkflows: boolean;
+  goals: boolean;
 }
 
 export interface PlanningConfig {
@@ -3206,6 +3210,98 @@ export interface CustomFieldRow {
 }
 
 export type CustomFieldPayload = Omit<CustomFieldRow, "id" | "options"> & { options?: string[] };
+
+/* ---- Goals / OKRs (V8 phase 1) ------------------------------------------------------------ */
+
+export type GoalProgressSourceValue =
+  | "MANUAL"
+  | "APPROVED_HOURS"
+  | "BUDGET_SPEND"
+  | "TICKETS_CLOSED"
+  | "ON_TIME_RATE"
+  | "SLA_BREACHES"
+  | "RISK_SCORE";
+
+export type GoalStatusValue = "ACTIVE" | "ACHIEVED" | "CLOSED";
+export type GoalHealthValue = "ON_TRACK" | "AT_RISK" | "OFF_TRACK";
+export type GoalLinkTargetValue = "PROJECT" | "PORTFOLIO" | "TICKET";
+
+/** `unavailable` is a real state, never rendered as 0 — see goal-progress.service.ts. */
+export interface GoalMeasurement {
+  currentValue: number | null;
+  progressPct: number | null;
+  health: GoalHealthValue | null;
+  unavailable: boolean;
+  unavailableReason: string | null;
+}
+
+export interface GoalOverrideRow {
+  progressPct: number;
+  measuredValue: number | null;
+  measuredPct: number | null;
+  note: string;
+  createdAt: string;
+  createdBy: { id: string; name: string; email: string; avatarUrl?: string | null } | null;
+}
+
+export interface GoalRow {
+  id: string;
+  title: string;
+  description: string | null;
+  parentId: string | null;
+  ownerId: string | null;
+  owner: { id: string; name: string; email: string; avatarUrl?: string | null } | null;
+  createdBy: { id: string; name: string; email: string; avatarUrl?: string | null } | null;
+  startDate: string | null;
+  endDate: string | null;
+  status: GoalStatusValue;
+  progressSource: GoalProgressSourceValue;
+  targetValue: number | null;
+  unit: string | null;
+  manualProgressPct: number | null;
+  direction: "AT_LEAST" | "AT_MOST";
+  measurement: GoalMeasurement;
+  override: GoalOverrideRow | null;
+  /** An override wins the headline; the measurement stays visible beside it. */
+  effectiveProgressPct: number | null;
+  links: Array<{ id: string; targetType: GoalLinkTargetValue; targetId: string }>;
+  _count: { children: number; overrides: number };
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface GoalDetail extends GoalRow {
+  children: GoalRow[];
+}
+
+export interface GoalPayload {
+  title: string;
+  description?: string | null;
+  parentId?: string | null;
+  ownerId?: string | null;
+  startDate?: string | null;
+  endDate?: string | null;
+  progressSource?: GoalProgressSourceValue;
+  targetValue?: number | null;
+  unit?: string | null;
+  manualProgressPct?: number | null;
+  links?: Array<{ targetType: GoalLinkTargetValue; targetId: string }>;
+  status?: GoalStatusValue;
+}
+
+export const goalApi = {
+  list: async () => (await api.get<GoalRow[]>("/goals")).data,
+  get: async (id: string) => (await api.get<GoalDetail>(`/goals/${id}`)).data,
+  create: async (payload: GoalPayload) => (await api.post<GoalRow>("/goals", payload)).data,
+  update: async (id: string, payload: Partial<GoalPayload>) => (await api.patch<GoalRow>(`/goals/${id}`, payload)).data,
+  /** Appends an override; the API captures what the measurement said at that moment. There is
+   *  deliberately no edit or delete — a correction is another override. */
+  override: async (id: string, payload: { progressPct: number; note: string }) =>
+    (await api.post<GoalOverrideRow>(`/goals/${id}/override`, payload)).data,
+  remove: async (id: string) => {
+    await api.delete(`/goals/${id}`);
+  }
+};
 
 export const planningApi = {
   settings: async () => (await api.get<PlanningConfig>("/planning/settings")).data,

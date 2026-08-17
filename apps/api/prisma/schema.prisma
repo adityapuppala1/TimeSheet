@@ -236,6 +236,9 @@ model User {
 
   /// --- Planning layer (V6) back-relations ---------------------------------------------------
   portfoliosOwned      Portfolio[]          @relation("PortfolioOwner")
+  goalsOwned           Goal[]               @relation("GoalOwner")
+  goalsCreated         Goal[]               @relation("GoalCreatedBy")
+  goalOverrides        GoalProgressOverride[] @relation("GoalOverrideBy")
   savedViews           SavedView[]
   resourceBookings     ResourceBooking[]    @relation("BookingSubject")
   resourceBookingsMade ResourceBooking[]    @relation("BookingCreator")
@@ -3576,6 +3579,9 @@ model GlobalPlanningSettings {
   enableProofing           Boolean @default(false)
   enableRequestForms       Boolean @default(false)
   enableCustomWorkflows    Boolean @default(false)
+  /// Goals/OKRs (V8 phase 1). Same two-condition gate as every toggle above: this workspace
+  /// switch AND the tier's `goalsEnabled` entitlement, ANDed server-side in planning.service.ts.
+  enableGoals              Boolean @default(false)
 
   /// JSON array of weekday numbers, 0 = Sunday. The timeline solver and the workload denominator
   /// both read this — a 5-day week and a 6-day week produce genuinely different schedules, and
@@ -3586,6 +3592,143 @@ model GlobalPlanningSettings {
 
   updatedAt   DateTime @updatedAt
   updatedById String?
+}
+
+/// --- Goals / OKRs (V8 phase 1) ---------------------------------------------------------------
+/// See docs/AGENTIC_WORK_MANAGEMENT.md §5 phase 1. The design decision that shapes every column:
+/// progress is MEASURED wherever the product already computes the number, and a goal wired to a
+/// measured source cannot be talked up in a status meeting. MANUAL exists because not everything
+/// worth pursuing is instrumented, not as the default posture.
+
+/// Lifecycle, not health. Health (on track / at risk / off track) is DERIVED on read from the
+/// measurement, the period and the target — storing it would let it drift from the numbers it
+/// claims to summarise, the exact failure the measured design exists to prevent.
+enum GoalStatus {
+  ACTIVE
+  ACHIEVED
+  CLOSED
+}
+
+/// The discriminator. MANUAL behaves like every competitor's OKR. The measured sources each name
+/// a number this product already computes for another surface — the catalogue is CLOSED for the
+/// same two reasons the dashboard widget catalogue is (see Dashboard): two goals wearing the same
+/// label must not quietly disagree, and a user-defined metric is a query surface.
+enum GoalProgressSource {
+  MANUAL
+  /// Sum of APPROVED Timesheet.totalHours in the goal period, scoped by links. Target = hours.
+  APPROVED_HOURS
+  /// Sum of Timesheet.billedAmount (the attestation's own rate snapshots). Target = spend
+  /// ceiling — an AT_MOST metric, "progress" means staying under.
+  BUDGET_SPEND
+  /// Count of tickets closed in the period, scoped by links. Target = count.
+  TICKETS_CLOSED
+  /// Share of tickets closed in the period that closed on or before their planned endDate
+  /// (falling back to the SLA-derived dueAt when no plan date exists). Target = a percentage.
+  ON_TIME_RATE
+  /// Count of ticket SLA escalations recorded in the period. AT_MOST — fewer is better.
+  SLA_BREACHES
+  /// Latest ProjectRiskSnapshot score averaged over linked projects. AT_MOST.
+  RISK_SCORE
+}
+
+enum GoalLinkTarget {
+  PROJECT
+  PORTFOLIO
+  TICKET
+}
+
+model Goal {
+  id          String  @id @default(uuid())
+  title       String  @db.VarChar(200)
+  description String? @db.Text
+
+  /// Objective → key-result nesting, same self-relation shape as Ticket.parentId. Depth is
+  /// enforced in the service (max 2 levels) rather than the schema — a database cannot express
+  /// "no grandchildren" and a CHECK on depth would need a maintained depth column.
+  parentId String?
+  parent   Goal?   @relation("GoalHierarchy", fields: [parentId], references: [id], onDelete: SetNull)
+  children Goal[]  @relation("GoalHierarchy")
+
+  ownerId String?
+  owner   User?   @relation("GoalOwner", fields: [ownerId], references: [id], onDelete: SetNull)
+
+  /// The period progress is measured over. Nullable so a draft can exist before dates are set,
+  /// but a MEASURED goal without dates reports `unavailable` rather than a number — a
+  /// measurement with no window is not a measurement.
+  startDate DateTime? @db.Date
+  endDate   DateTime? @db.Date
+
+  status         GoalStatus         @default(ACTIVE)
+  progressSource GoalProgressSource @default(MANUAL)
+
+  /// What "done" means, in the source's unit (hours, currency, count, percent, score). NULL is
+  /// only meaningful for MANUAL goals, where progress is stated rather than computed.
+  targetValue Decimal? @db.Decimal(14, 2)
+  /// Display unit, e.g. "h", "₹", "%", "tickets". Presentation only — never used in arithmetic.
+  unit        String?  @db.VarChar(20)
+
+  /// MANUAL goals only: the stated progress. Measured goals ignore this column entirely; their
+  /// number comes from the source and their overrides live in GoalProgressOverride rows.
+  manualProgressPct Int?
+
+  links     GoalLink[]
+  overrides GoalProgressOverride[]
+
+  createdById String?
+  createdBy   User?     @relation("GoalCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+  /// Soft delete, same as Portfolio — a goal that shaped a quarter's decisions is audit trail.
+  deletedAt   DateTime?
+
+  @@index([status, deletedAt])
+  @@index([parentId])
+  @@index([ownerId])
+}
+
+/// What a goal is measured OVER. A goal with no links measures the whole workspace; links narrow
+/// the scope to named projects/portfolios (a PORTFOLIO link expands to its projects at read
+/// time — stored expanded it would go stale when the portfolio gains a project). TICKET links
+/// exist for the "this one delivery" goal shape and only affect TICKETS_CLOSED / ON_TIME_RATE.
+model GoalLink {
+  id         String         @id @default(uuid())
+  goalId     String
+  goal       Goal           @relation(fields: [goalId], references: [id], onDelete: Cascade)
+  targetType GoalLinkTarget
+  /// Not a foreign key on purpose: three target tables, one column. Dangling ids are tolerated
+  /// and skipped at read time (the linked project may be soft-deleted), never errors.
+  targetId   String
+
+  createdAt DateTime @default(now())
+
+  @@unique([goalId, targetType, targetId])
+  @@index([targetType, targetId])
+}
+
+/// Decision 4 (docs/AGENTIC_WORK_MANAGEMENT.md §7): a measured goal MAY be overridden, and the
+/// override records who, when, what they claimed, and WHAT THE MEASUREMENT SAID AT THAT MOMENT.
+/// Append-only — an override of an override is a new row, and the display value is the newest
+/// row. Deleting or editing one would be exactly the unrecorded adjustment the feature exists
+/// to make impossible.
+model GoalProgressOverride {
+  id     String @id @default(uuid())
+  goalId String
+  goal   Goal   @relation(fields: [goalId], references: [id], onDelete: Cascade)
+
+  /// The stated progress, 0–100.
+  progressPct Int
+  /// The measured value at the moment of the override — the receipt. NULL only when the
+  /// measurement itself was unavailable (no dates, no data), which is itself worth recording.
+  measuredValue Decimal? @db.Decimal(14, 2)
+  measuredPct   Int?
+  /// Required. "Why does the stated number differ from the measured one" is the entire point.
+  note String @db.VarChar(500)
+
+  createdById String?
+  createdBy   User?    @relation("GoalOverrideBy", fields: [createdById], references: [id], onDelete: SetNull)
+  createdAt   DateTime @default(now())
+
+  @@index([goalId, createdAt])
 }
 
 /// Status of one monitored service at one moment. Three levels, not two, because "slow but

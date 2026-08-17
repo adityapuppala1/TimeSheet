@@ -55,6 +55,7 @@ import { agentRunRouter } from "./controllers/agent-run.controller.js";
 import { approvalPublicRouter, approvalRouter } from "./controllers/approval.controller.js";
 import { blueprintRouter } from "./controllers/blueprint.controller.js";
 import { dashboardRouter } from "./controllers/dashboard.controller.js";
+import { goalRouter } from "./controllers/goal.controller.js";
 import { portfolioRouter } from "./controllers/portfolio.controller.js";
 import { proofRouter } from "./controllers/proof.controller.js";
 import { requestFormPublicRouter } from "./controllers/request-form-public.controller.js";
@@ -459,6 +460,10 @@ app.use("/api/planning", planningRouter);
 // permissions (plan:write vs SUPER_ADMIN), different read volumes, different gates.
 app.use("/api/plan", planRouter);
 app.use("/api/portfolios", portfolioRouter);
+// Goals sit beside the portfolio rather than under /plan: they are gated on their own toggle and
+// entitlement (goals align work whether or not the Gantt is in use — see
+// planning.service.ts#assertGoalsEnabled), and reading them needs no permission at all.
+app.use("/api/goals", goalRouter);
 app.use("/api/resources", resourceRouter);
 app.use("/api/request-forms", requestFormRouter);
 app.use("/api/blueprints", blueprintRouter);

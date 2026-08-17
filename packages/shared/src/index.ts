@@ -59,7 +59,13 @@ export const permissions = {
   /// the existing timesheet-only approval right).
   APPROVALS_MANAGE: "approvals:manage",
   /// Publish a personal dashboard to the whole workspace.
-  DASHBOARDS_SHARE: "dashboards:share"
+  DASHBOARDS_SHARE: "dashboards:share",
+
+  /// --- Goals / OKRs (V8 phase 1) -----------------------------------------------------------
+  /// Create/edit/close goals and record progress overrides. Reading is open to any signed-in
+  /// user — a goal nobody can see aligns nobody. Same migration-backfill rule as the V6 block
+  /// above: the key must ALSO be inserted by idempotent SQL inside the migration introducing it.
+  GOALS_MANAGE: "goals:manage"
 } as const;
 
 export type Permission = (typeof permissions)[keyof typeof permissions];
@@ -564,6 +570,12 @@ export interface PlanTierLimits {
   maxBlueprints: number;
   maxCustomFields: number;
   maxDashboards: number;
+
+  /* --- Goals / OKRs (V8 phase 1) --------------------------------------------------------- */
+  /** Goals with measured progress sources. Fails CLOSED like every planning capability. */
+  goalsEnabled: boolean;
+  /** Ceiling on ACTIVE goals; 0 = the tier cannot use goals at all. */
+  maxGoals: number;
 }
 
 export const PLAN_TIER_LIMITS: Record<PlanTier, PlanTierLimits> = {
@@ -583,7 +595,9 @@ export const PLAN_TIER_LIMITS: Record<PlanTier, PlanTierLimits> = {
     maxRequestForms: 0,
     maxBlueprints: 0,
     maxCustomFields: 0,
-    maxDashboards: 0
+    maxDashboards: 0,
+    goalsEnabled: false,
+    maxGoals: 0
   },
   TEAM: {
     seatLimit: UNLIMITED_SEATS,
@@ -604,7 +618,11 @@ export const PLAN_TIER_LIMITS: Record<PlanTier, PlanTierLimits> = {
     maxRequestForms: 5,
     maxBlueprints: 5,
     maxCustomFields: 10,
-    maxDashboards: 3
+    maxDashboards: 3,
+    // Goals are an everyday alignment surface, not an enterprise luxury — Team gets them with a
+    // ceiling. Measured sources read data the tier already holds, so there is no added cost.
+    goalsEnabled: true,
+    maxGoals: 25
   },
   ENTERPRISE: {
     seatLimit: UNLIMITED_SEATS,
@@ -622,7 +640,9 @@ export const PLAN_TIER_LIMITS: Record<PlanTier, PlanTierLimits> = {
     maxRequestForms: UNLIMITED_PLAN_ITEMS,
     maxBlueprints: UNLIMITED_PLAN_ITEMS,
     maxCustomFields: UNLIMITED_PLAN_ITEMS,
-    maxDashboards: UNLIMITED_PLAN_ITEMS
+    maxDashboards: UNLIMITED_PLAN_ITEMS,
+    goalsEnabled: true,
+    maxGoals: UNLIMITED_PLAN_ITEMS
   }
 };
 

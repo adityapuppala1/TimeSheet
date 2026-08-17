@@ -54,6 +54,7 @@ async function readSettings() {
       enableProofing: false,
       enableRequestForms: false,
       enableCustomWorkflows: false,
+      enableGoals: false,
       workingDays: [1, 2, 3, 4, 5],
       defaultWeeklyCapacityHours: 40,
       updatedAt: new Date(),
@@ -87,7 +88,9 @@ planningRouter.get("/settings", async (req, res) => {
     approvals: settings.enableApprovals && entitlements.approvalsEnabled,
     proofing: settings.enableProofing && entitlements.proofingEnabled,
     requestForms: settings.enableRequestForms,
-    customWorkflows: settings.enableCustomWorkflows && entitlements.customWorkflowsEnabled
+    customWorkflows: settings.enableCustomWorkflows && entitlements.customWorkflowsEnabled,
+    // Goals deliberately do NOT require enablePlanning — see planning.service.ts#assertGoalsEnabled.
+    goals: settings.enableGoals && entitlements.goalsEnabled
   };
 
   res.json({ settings, entitlements, effective });
@@ -102,6 +105,7 @@ const settingsSchema = z.object({
       enableProofing: z.boolean().optional(),
       enableRequestForms: z.boolean().optional(),
       enableCustomWorkflows: z.boolean().optional(),
+      enableGoals: z.boolean().optional(),
       // 0 = Sunday. At least one working day, or the timeline solver divides by zero and the
       // workload board shows infinite utilisation.
       workingDays: z.array(z.number().int().min(0).max(6)).min(1).max(7).optional(),
@@ -119,7 +123,8 @@ planningRouter.patch("/settings", requireSuperAdmin, validate(settingsSchema), a
     "enableApprovals",
     "enableProofing",
     "enableRequestForms",
-    "enableCustomWorkflows"
+    "enableCustomWorkflows",
+    "enableGoals"
   ]) {
     if (typeof body[key] === "boolean") data[key] = body[key];
   }

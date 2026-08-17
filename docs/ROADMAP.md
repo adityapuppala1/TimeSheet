@@ -3391,3 +3391,69 @@ an agent is a dedicated non-login `AGENT` user (recommended, with a hard flag ex
 counts and every auth path), whether agent time is ever client-billable (recommended never by
 default), and whether a measured goal may be manually overridden (recommended yes, with the override
 and the measurement both recorded).
+
+## V8 phase 1 — Goals, and progress that measures itself (2026-08-17)
+
+Plan: [AGENTIC_WORK_MANAGEMENT.md](AGENTIC_WORK_MANAGEMENT.md) §5 phase 1, built to the four
+decisions recorded in §7. The V6 constraint carried over verbatim and held: every table new, the one
+added column defaulted, inert until an admin opts in, and the whole unit suite green.
+
+- [x] **`Goal` / `GoalLink` / `GoalProgressOverride`, plus `GlobalPlanningSettings.enableGoals`.**
+  Objective → key result via `parentId`, two levels enforced in the service because a database
+  cannot express "no grandchildren" without a maintained depth column. Soft-deleted like
+  `Portfolio`: a goal that shaped a quarter's decisions is audit trail.
+- [x] **`progressSource` is the whole feature.** `MANUAL` behaves like every competitor's OKR; the
+  six measured sources each name a number the product already computes — approved hours, billed
+  spend from the rate snapshots an attestation reads, tickets closed, on-time rate, SLA escalations,
+  average project risk. A goal wired that way cannot be talked up in a review, which is the entire
+  point of an OKR and the thing spreadsheet OKRs always lose.
+- [x] **The catalogue is CLOSED**, for the two reasons the dashboard widget catalogue is closed: a
+  metric two goals can define differently will be defined differently, and a user-supplied metric is
+  a query surface. A new source costs a server change; that is the right price for a number somebody
+  is judged against.
+- [x] **Direction is a property of the source, not of the goal.** Spend, breaches and risk are
+  AT_MOST and deliberately return **no percentage at all** — "62% of the way to your spending
+  ceiling" reads as an achievement. The UI shows the raw amount against the ceiling instead.
+- [x] **`unavailable` is a first-class result, never 0.** No period, no target, or no data in scope
+  returns a reason the page prints verbatim. "No data yet" and "nothing achieved" are opposite
+  messages that look identical as a zero — the dashboard-widget rule, applied to the number that
+  matters most.
+- [x] **Nothing is stored.** Every figure is derived on read from the same tables the portfolio
+  roll-up and the client-facing attestation read, so a goals page and a signed document cannot
+  disagree. A stored figure would need a recompute worker, and a stale one is the failure mode.
+- [x] **Overrides keep the receipt** (decision 4). Append-only, note required, and each row stores
+  what the measurement said *at that moment*. The page shows both numbers side by side rather than
+  replacing one with the other, and there is no PATCH or DELETE — a correction is another row.
+- [x] **Two gates, two messages.** `enableGoals` AND the tier's `goalsEnabled`, ANDed server-side.
+  Deliberately NOT behind `enablePlanning`: goals align work whether or not the Gantt is in use.
+  Team gets 25 active goals, Enterprise unlimited, Starter none. The quota counts ACTIVE goals only
+  — counting closed ones would push people to delete the record of what they were aiming at.
+- [x] **Reading needs no permission; `goals:manage` gates writing**, and it goes to MANAGER and
+  TEAM_LEAD as well as the two admin roles. A manager who cannot write the goals their team is
+  measured against has nothing to manage.
+
+**What the replay check caught, and why it is worth running every time.** `migrate deploy` into a
+genuinely empty database (the check DATABASE.md mandates) showed the permission row present and
+**zero role grants** — because on a fresh database the migration's `RolePermission` insert matches
+nothing: roles do not exist until the seed runs. A migration-only change would therefore have
+shipped `goals:manage` to every new install with no role holding it, while every *existing* install
+was correct. Both paths are now covered and were verified to produce identical grants
+(SUPER_ADMIN, ADMIN, MANAGER, TEAM_LEAD). The V6 entry warned about the mirror image of this bug;
+this is the other half of the same lesson.
+
+**Two more things the repo's own guards caught**, both before any human review: the
+migration-portability test rejected an unguarded `ALTER` in a file that ends in DML (fixed with the
+`information_schema` + `PREPARE` pattern, and the same test objected to the words "@rerunnable"
+appearing even inside a comment), and `plan-tier-claims.test.ts` failed until the new entitlement
+was stated in the pricing contract — which is exactly what that test exists to force.
+
+Verified: 1028 unit tests (+29, including 21 that pin what a measurement MEANS — direction, pace
+thresholds, the clamps, and unavailable-is-not-zero); `npm run lint` clean; all 79 migrations
+replayed into an empty database, then seeded, then the backfill re-run to prove idempotence; live
+data untouched throughout (1,718 tickets, 237 timesheets, 346 users, 31 projects before and after);
+and the page driven in the real browser at 390 / 768 / 1366 in both themes with zero horizontal
+overflow — the `overflow-x: clip` trap from the V6 phase-2 entry.
+
+**Not done in this phase:** goals are not yet surfaced on the Portfolio page or the dashboard, and
+there is no goal-level e2e spec (the Playwright suite was not run — see the 2026-08-17 deployment
+entry, which records the same gap).

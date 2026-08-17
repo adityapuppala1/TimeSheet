@@ -563,6 +563,51 @@ makes the same stored value render as two different days across a boundary.
   with zero spend — the arithmetic there produces a confident number that is noise, and
   "forecast: 0" reads as "this will cost nothing".
 
+## Goals / OKRs (V8 phase 1)
+
+Gated on `enableGoals` (workspace) **AND** the tier's `goalsEnabled` — ANDed server-side in
+`planning.service.ts#assertGoalsEnabled`, which returns two deliberately different 403 messages:
+"a super admin can turn it on" points at a setting, "not included in this plan" points at a
+commercial conversation. Deliberately **not** behind `enablePlanning`: goals align work whether or
+not the Gantt is in use, and gating an alignment tool on a scheduling one would be arbitrary.
+
+- `GET /goals` — the whole tree with every measurement resolved. **No permission required**: a goal
+  nobody can see aligns nobody.
+- `GET /goals/:id` — one goal, its children, and its full override history.
+- `POST|PATCH /goals[/:id]` — `goals:manage` (SUPER_ADMIN, ADMIN, MANAGER, TEAM_LEAD by default).
+  Creation is quota-checked against `maxGoals`, counting **ACTIVE goals only** — closed goals are
+  history, and counting them would push people to delete the record of what they were aiming at.
+- `POST /goals/:id/override` `{ progressPct, note }` — `goals:manage`. Append-only, and there is
+  no PATCH or DELETE by design: an override records who said what, when, **and what the
+  measurement said at that moment**, so a correction is another row rather than an edit. Refused on
+  a MANUAL goal, which has nothing to disagree with.
+- `DELETE /goals/:id` — soft delete, and refused while the objective still has key results.
+
+**Progress is never stored.** Every number is derived on read by `goal-progress.service.ts`, from
+the same tables the portfolio roll-up and the client-facing attestation read, so a goals page and a
+signed document cannot disagree. The source catalogue is **closed** for the two reasons the
+dashboard widget catalogue is closed: a metric two goals define differently will be defined
+differently, and a user-supplied metric is a query surface.
+
+| `progressSource` | Direction | Measures |
+|---|---|---|
+| `MANUAL` | at least | A stated percentage. Health is still judged against the period. |
+| `APPROVED_HOURS` | at least | `SUM(Timesheet.totalHours)` where `status = APPROVED` in the period. |
+| `BUDGET_SPEND` | at most | `SUM(Timesheet.billedAmount)` — the rate snapshots taken at approval. |
+| `TICKETS_CLOSED` | at least | Tickets whose `closedAt` falls in the period. |
+| `ON_TIME_RATE` | at least | Share of closed tickets that met `endDate`, falling back to the SLA-derived `dueAt`. Tickets with neither date are excluded from the denominator rather than counted as punctual. |
+| `SLA_BREACHES` | at most | `TicketEscalation` rows created in the period. |
+| `RISK_SCORE` | at most | Latest `ProjectRiskSnapshot` per linked project, averaged. |
+
+**`unavailable` is a first-class result, never `0`.** No period, no target, or no data in scope
+returns `{ unavailable: true, unavailableReason }` and the UI prints the reason — "no data" and
+"nothing achieved" are opposite messages that look identical as a zero. An `AT_MOST` source returns
+`progressPct: null` on purpose: "62% of the way to your spending ceiling" reads as an achievement.
+
+**Scope** comes from `GoalLink` rows (`PROJECT`, `PORTFOLIO`, `TICKET`); no links means the whole
+workspace. A `PORTFOLIO` link expands to its member projects **at read time**, so a portfolio that
+gains a project next week widens every goal linked to it without anyone touching those goals.
+
 ### Resources & budget
 
 Every `/resources` route needs `resources:manage` and both the workspace toggle and the tier

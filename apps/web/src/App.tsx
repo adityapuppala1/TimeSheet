@@ -42,6 +42,7 @@ const History = lazy(() => import("./pages/History").then((m) => ({ default: m.H
 const TimelinePage = lazy(() => import("./pages/Timeline").then((m) => ({ default: m.TimelinePage })));
 const MyWorkPage = lazy(() => import("./pages/MyWork").then((m) => ({ default: m.MyWorkPage })));
 const PortfolioPage = lazy(() => import("./pages/Portfolio").then((m) => ({ default: m.PortfolioPage })));
+const GoalsPage = lazy(() => import("./pages/Goals").then((m) => ({ default: m.GoalsPage })));
 const BlueprintsPage = lazy(() => import("./pages/Blueprints").then((m) => ({ default: m.BlueprintsPage })));
 const WorkloadPage = lazy(() => import("./pages/Workload").then((m) => ({ default: m.WorkloadPage })));
 const RequestsPage = lazy(() => import("./pages/Requests").then((m) => ({ default: m.RequestsPage })));
@@ -114,6 +115,11 @@ const router = createBrowserRouter([
       // experiences, and the second is the one that sells the feature.
       { path: "timeline", element: <RequirePermission permission={permissions.TICKETS_VIEW}><PageShell><TimelinePage /></PageShell></RequirePermission> },
       { path: "portfolio", element: <RequirePermission permission={permissions.REPORTS_VIEW}><PageShell><PortfolioPage /></PageShell></RequirePermission> },
+      // Goals (V8 phase 1) carry NO permission gate: reading the objectives the workspace is
+      // measured against needs no right — a goal nobody can see aligns nobody. goals:manage is
+      // checked inside the page for the write affordances, and the page renders its own
+      // "goals are off" state for the same reason the planning pages do.
+      { path: "goals", element: <PageShell><GoalsPage /></PageShell> },
       // Readable with tickets:view (the API lists blueprints at that level); using one needs
       // plan:write, checked inside the page so a viewer sees the shapes without dead buttons.
       { path: "blueprints", element: <RequirePermission permission={permissions.TICKETS_VIEW}><PageShell><BlueprintsPage /></PageShell></RequirePermission> },

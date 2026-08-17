@@ -189,7 +189,11 @@ export async function seedTenant(client: PrismaClient, options: SeedTenantOption
       permissions.TICKETS_WRITE,
       permissions.TICKETS_ASSIGN,
       permissions.PLAN_WRITE,
-      permissions.APPROVALS_MANAGE
+      permissions.APPROVALS_MANAGE,
+      // V8 phase 1: managers own the alignment surface — a manager who cannot write the goals
+      // their team is measured against has nothing to manage. Mirrored in
+      // migrations/20260817150000_v8_phase1_goals/migration.sql for existing installs.
+      permissions.GOALS_MANAGE
     ],
     TEAM_LEAD: [
       permissions.TIMESHEETS_WRITE,
@@ -199,7 +203,11 @@ export async function seedTenant(client: PrismaClient, options: SeedTenantOption
       permissions.TICKETS_WRITE,
       permissions.TICKETS_ASSIGN,
       permissions.PLAN_WRITE,
-      permissions.APPROVALS_MANAGE
+      permissions.APPROVALS_MANAGE,
+      // V8 phase 1: managers own the alignment surface — a manager who cannot write the goals
+      // their team is measured against has nothing to manage. Mirrored in
+      // migrations/20260817150000_v8_phase1_goals/migration.sql for existing installs.
+      permissions.GOALS_MANAGE
     ],
     EMPLOYEE: [permissions.TIMESHEETS_WRITE, permissions.TICKETS_VIEW, permissions.TICKETS_WRITE]
   };

@@ -258,6 +258,35 @@ under-entitles rather than over-entitles. The values come from `PLAN_TIER_LIMITS
 `@timesheet/shared` — the same constant the pricing table renders from — and are pinned by
 `apps/api/tests/unit/plan-tier-claims.test.ts`.
 
+## Goals / OKRs tables (V8 phase 1)
+
+Plan and rationale: [AGENTIC_WORK_MANAGEMENT.md](AGENTIC_WORK_MANAGEMENT.md). Additive in the same
+way the V6 layer is: three new tables, one defaulted column, and nothing that reads or rewrites an
+existing row.
+
+| Table | Note |
+|---|---|
+| `Goal` | Objective → key result via `parentId` (the `Ticket.parentId` shape). Two levels is enforced in the service, not the schema — a database cannot express "no grandchildren" without a maintained depth column. Soft-deleted like `Portfolio`, because a goal that shaped a quarter's decisions is audit trail. |
+| `GoalLink` | What the goal is measured OVER: `PROJECT`, `PORTFOLIO` or `TICKET`. Deliberately **not** a foreign key — three target tables, one column — so a dangling id (a soft-deleted project) is skipped at read time rather than erroring. A `PORTFOLIO` link is expanded to its projects **on read**, never stored expanded, so a portfolio that gains a project widens every goal linked to it. |
+| `GoalProgressOverride` | Append-only. Records the stated percentage, the note (required), and **`measuredValue`/`measuredPct` as they stood at that moment** — the receipt. There is no update or delete path: a correction is another row. |
+| *(column on `GlobalPlanningSettings`)* | `enableGoals`, default false. Guarded with the `information_schema` + `PREPARE` pattern because the same migration ends in DML and so can die half-applied. |
+
+**Progress is not a column anywhere**, by design. `goal-progress.service.ts` derives every number on
+read from `Timesheet`, `Ticket`, `TicketEscalation` and `ProjectRiskSnapshot` — the same tables the
+portfolio roll-up and the attestation read. A stored progress figure would need a recompute worker,
+and a stale one on a goals page is the "talked up in a status meeting" failure the whole design
+exists to prevent.
+
+Control plane: `PlanTierLimit` gains `goalsEnabled` and `maxGoals`, restrictive-defaulted and
+initialised by a guarded one-time `UPDATE` in
+`prisma/control/migrations/20260817150100_v8_goals_entitlements`, exactly as the V6 block was.
+
+The permission `goals:manage` is backfilled by idempotent SQL inside
+`20260817150000_v8_phase1_goals` **and** granted in `prisma/seed.ts` — both are needed, and the
+replay check proved why: on a fresh database the migration's `RolePermission` insert matches nothing
+because roles do not exist yet, so a migration-only change would have shipped the permission with no
+grants to any role on every new install.
+
 ## Face (identity) verification tables
 
 Only populated when the feature is switched on (it is off by default). These hold **biometric

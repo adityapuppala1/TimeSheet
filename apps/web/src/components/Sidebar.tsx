@@ -28,6 +28,7 @@ import {
   Shield,
   ShieldAlert,
   Sparkles,
+  Target,
   Ticket,
   TrendingUp,
   Users,
@@ -98,6 +99,9 @@ export const nav: NavItem[] = [
   // bottom bar with an everyday destination rather than leaving a gap. The other three carry a
   // `feature`, so they simply do not exist until planning is on.
   { to: "/app/my-work", label: "My work", icon: ListTodo, section: "Plan" },
+  // Goals carry their own `goals` feature rather than "planning": they are gated on their own
+  // toggle and entitlement, so a workspace can align on outcomes without turning the Gantt on.
+  { to: "/app/goals", label: "Goals", icon: Target, section: "Plan", feature: "goals" },
   { to: "/app/timeline", label: "Timeline", icon: GanttChartSquare, permission: permissions.TICKETS_VIEW, section: "Plan", feature: "timeline" },
   { to: "/app/portfolio", label: "Portfolio", icon: Briefcase, permission: permissions.REPORTS_VIEW, section: "Plan", feature: "planning" },
   { to: "/app/workload", label: "Workload", icon: Gauge, permission: permissions.RESOURCES_MANAGE, section: "Plan", feature: "resourceManagement" },
