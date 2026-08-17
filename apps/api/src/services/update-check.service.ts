@@ -11,17 +11,22 @@
  * IP fetch a public page. Deployments that must not call out at all set UPDATE_CHECK=off, and the
  * failure mode is silence: no banner, never an error in anyone's way.
  *
- * WHY GITHUB RELEASES AS THE SOURCE OF TRUTH: the CD pipeline already builds and tags images on
- * `v*.*.*` tags, so a release IS a tag — this reads the same artefact the updater installs, and
- * the release body (markdown notes) is what the What's-new page renders. One process, no second
- * changelog to forget.
+ * WHAT GITHUB IS AUTHORITATIVE FOR, and what it is NOT: it answers "is there something NEWER than
+ * me", because the CD pipeline builds and tags images on `v*.*.*` tags and `update.sh` checks that
+ * tag out — the artefact this reads is the artefact the updater installs. It is NOT the source of
+ * the release HISTORY: a version exists in the product the moment it is cut in CHANGELOG.md and
+ * stamped into VERSION, which is days earlier than somebody pushing the tag, and earlier still
+ * than somebody writing the GitHub Release. That is why `withBundledHistory` builds the list from
+ * this build's own CHANGELOG.md and lets GitHub enrich it, rather than the other way round.
  */
 import { appVersion } from "../config/version.js";
 import { getBundledReleases } from "./changelog-releases.service.js";
 
 /** Owner/repo, overridable for forks. Kept as a plain env read rather than joining env.ts's
- *  validated schema: a bad value here should degrade to "no update info", never block boot. */
-const REPO = process.env.UPDATE_CHECK_REPO?.trim() || "adityapuppala1/TimeSheet";
+ *  validated schema: a bad value here should degrade to "no update info", never block boot.
+ *  Exported because it also decides the release links in the bundled-changelog history, and two
+ *  copies of "which repo is this" is how those links end up pointing somewhere else. */
+export const REPO = process.env.UPDATE_CHECK_REPO?.trim() || "adityapuppala1/TimeSheet";
 const DISABLED = (process.env.UPDATE_CHECK ?? "on").toLowerCase() === "off";
 /** Optional fine-grained PAT (read-only Contents is enough) so a PRIVATE repo's releases are
  *  visible — anonymous calls to a private repo 404. Absent = anonymous, exactly as before. */
@@ -51,11 +56,12 @@ export interface UpdateStatus {
   checkedAt: string | null;
   checkEnabled: boolean;
   releases: ReleaseInfo[];
-  /** Where `releases` came from: live GitHub data (has real URLs/dates), this build's own
-   *  bundled CHANGELOG.md (complete history up to the running version, no knowledge of newer
-   *  ones), or null when even the changelog was missing. The UI states the source rather than
-   *  letting bundled history masquerade as a live feed. */
-  releasesSource: "github" | "changelog" | null;
+  /** Where `releases` came from: "changelog" = this build's bundled CHANGELOG.md alone (no live
+   *  data, so blind to anything newer than this build), "github" = every listed version was also
+   *  known to GitHub, "mixed" = the bundle contributed versions GitHub has not been told about
+   *  yet (the normal state between cutting a release and pushing its tag), null = no history at
+   *  all. The UI states the source rather than letting bundled history masquerade as a live feed. */
+  releasesSource: "github" | "changelog" | "mixed" | null;
 }
 
 let cache: { fetchedAt: number; releases: ReleaseInfo[] } | null = null;
@@ -92,7 +98,7 @@ function githubFetch(path: string): Promise<Response> {
  * the worst possible failure direction for an update check: silent, and wrong in the reassuring
  * direction.
  *
- * A tag carries no notes, which is exactly what the bundled-CHANGELOG fallback below already
+ * A tag carries no notes, which is exactly what the bundled-CHANGELOG history below already
  * handles. So this answers "is there something newer" from the artefact that always exists, and
  * the notes come from where they already came from. Tagging is now sufficient; a Release is a
  * nicety that adds the written notes.
@@ -163,7 +169,7 @@ export async function getUpdateStatus(): Promise<UpdateStatus> {
     releases: cache?.releases ?? [],
     releasesSource: cache?.releases.length ? "github" : null
   };
-  if (DISABLED) return withBundledFallback(base);
+  if (DISABLED) return withBundledHistory(base);
 
   if (!cache || Date.now() - cache.fetchedAt > CHECK_INTERVAL_MS) {
     // Single-flight so a burst of settings-page loads right after cache expiry produces one
@@ -185,8 +191,14 @@ export async function getUpdateStatus(): Promise<UpdateStatus> {
   }
 
   const releases = cache?.releases ?? [];
-  const latest = releases[0]?.version ?? null;
-  return withBundledFallback({
+  // The HIGHEST version GitHub knows, not the first row it happened to return. /releases comes
+  // back newest-first, but /tags does not promise any ordering at all — and "latest" is the value
+  // the update banner and `update.sh` hang off, so it must not depend on GitHub's list order.
+  const latest = releases.reduce<string | null>(
+    (best, release) => (best === null || compareSemver(release.version, best) > 0 ? release.version : best),
+    null
+  );
+  return withBundledHistory({
     ...base,
     latestVersion: latest,
     updateAvailable: latest != null && compareSemver(latest, appVersion.version) > 0,
@@ -196,40 +208,71 @@ export async function getUpdateStatus(): Promise<UpdateStatus> {
   });
 }
 
+/** Which origins the merged list actually drew on — see `UpdateStatus.releasesSource`. */
+function sourceOf(releases: ReleaseInfo[], knownToGithub: Set<string>): UpdateStatus["releasesSource"] {
+  if (knownToGithub.size === 0) return "changelog";
+  return releases.every((release) => knownToGithub.has(release.version)) ? "github" : "mixed";
+}
+
 /**
- * When GitHub yielded nothing — private repo without a token, air-gapped install, no releases
- * published yet, check disabled — the HISTORY comes from this build's own CHANGELOG.md instead
- * of an empty panel. `updateAvailable`/`latestVersion` are left alone: a build's own changelog
- * cannot know about anything newer than itself, and inventing "you're up to date" from it would
- * be a lie with a straight face.
+ * The release HISTORY the What's-new page renders: this build's own CHANGELOG.md as the base list,
+ * with whatever GitHub said merged over it.
+ *
+ * WHY THE CHANGELOG IS THE BASE and not the fallback it started life as. Cutting a release is one
+ * edit to CHANGELOG.md plus one to VERSION; pushing the tag and writing the GitHub Release are
+ * separate, later, manual steps. An earlier revision mapped over GITHUB's list and only filled in
+ * missing notes per version — so any release whose tag had not been pushed was simply ABSENT from
+ * the page, notes and all. Observed on this repo: tags existed for 1.0.0, 1.1.0, 2.0.0 and 2.3.0
+ * only, so 2.1.0, 2.2.0 and the RUNNING 2.4.0 were invisible in Release history while their notes
+ * sat in the very bundle the page was served from — and because 2.3.0 was still GitHub's newest,
+ * the page also confidently said "Up to date". Deriving the list from the changelog means cutting
+ * a release cannot leave the page stale, whatever anyone forgets to push afterwards.
+ *
+ * WHAT GITHUB STILL ADDS: versions NEWER than this build (a bundle cannot know about those), real
+ * release/tag URLs, publish timestamps, and notes an author edited on the Release after shipping.
+ *
+ * WHAT THIS DELIBERATELY DOES NOT TOUCH: `updateAvailable`/`latestVersion`. A build's own changelog
+ * cannot know about anything newer than itself, so answering "is there an update" from it would be
+ * a lie with a straight face — see the caller, which computes both from GitHub data only.
  */
-function withBundledFallback(status: UpdateStatus): UpdateStatus {
+function withBundledHistory(status: UpdateStatus): UpdateStatus {
   const bundled = getBundledReleases(REPO);
   if (bundled.length === 0) return status;
 
-  // Nothing from GitHub at all — the bundled history IS the history.
-  if (status.releases.length === 0) {
-    return { ...status, releases: bundled, releasesSource: "changelog" };
-  }
+  const knownToGithub = new Set(status.releases.map((release) => release.version));
+  const byVersion = new Map(bundled.map((release) => [release.version, release]));
 
   // GitHub answered, but possibly thinly: the tags fallback returns real versions with EMPTY
-  // notes, and a Release somebody published in a hurry can be empty too. This merge is the
-  // promise fetchTagsAsReleases' comment was already making — an earlier revision returned
-  // early on any non-empty list, so the moment tags became visible every release's notes
-  // VANISHED from the What's-new page, replaced by "No notes were written". The notes were in
-  // this build's own CHANGELOG the whole time; per-version fill is what actually keeps them.
-  const byVersion = new Map(bundled.map((release) => [release.version, release]));
-  const releases = status.releases.map((release) => {
-    const local = byVersion.get(release.version);
-    if (!local) return release;
-    return {
-      ...release,
-      notes: release.notes.trim() ? release.notes : local.notes,
-      // A bare tag has no human name; the changelog's heading does. A real GitHub Release
-      // title (anything beyond the tag string itself) always wins.
-      name: release.name && release.name !== `v${release.version}` && release.name !== release.version ? release.name : local.name,
-      publishedAt: release.publishedAt ?? local.publishedAt
-    };
-  });
-  return { ...status, releases };
+  // notes, and a Release somebody published in a hurry can be empty too. So this is a per-field
+  // merge, not a replacement — an earlier revision returned early on any non-empty GitHub list,
+  // and the moment tags became visible every release's notes VANISHED from the page, replaced by
+  // "No notes were written", while the notes were in this build's own CHANGELOG the whole time.
+  for (const remote of status.releases) {
+    const local = byVersion.get(remote.version);
+    byVersion.set(
+      remote.version,
+      local
+        ? {
+            ...remote,
+            notes: remote.notes.trim() ? remote.notes : local.notes,
+            // A bare tag has no human name; the changelog's heading does. A real GitHub Release
+            // title (anything beyond the tag string itself) always wins.
+            name:
+              remote.name && remote.name !== `v${remote.version}` && remote.name !== remote.version
+                ? remote.name
+                : local.name,
+            publishedAt: remote.publishedAt ?? local.publishedAt
+          }
+        : remote
+    );
+  }
+
+  // Newest first by SEMVER, because the list now has two origins and neither one's ordering can
+  // be trusted to interleave with the other's. `slice` keeps the panel bounded the same way the
+  // GitHub query is.
+  const releases = [...byVersion.values()]
+    .sort((a, b) => compareSemver(b.version, a.version))
+    .slice(0, RELEASE_HISTORY_LIMIT);
+
+  return { ...status, releases, releasesSource: sourceOf(releases, knownToGithub) };
 }

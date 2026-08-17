@@ -76,7 +76,10 @@ export function Topbar() {
   // Drives the "What's new" dot. Cheap by construction: the server answers from an hourly cache,
   // and staleTime keeps this tab from asking more than once per session anyway.
   const updates = useQuery({ queryKey: ["system", "updates"], queryFn: systemApi.updates, staleTime: 60 * 60 * 1000, enabled: Boolean(user) });
-  const unseenRelease = hasUnseenRelease(updates.data?.latestVersion);
+  // Keyed on the version this workspace is RUNNING, not the newest one GitHub knows about. Those
+  // differ for days after a release — the tag is pushed later — and keying on the remote value
+  // meant the dot stayed dark through exactly the upgrade it exists to announce.
+  const unseenRelease = hasUnseenRelease(updates.data?.currentVersion);
   useEffect(() => {
     if (!user || !shouldAutoStartTour(onboarding.data?.completedAt)) return;
     // Deferred so it measures a settled layout rather than a half-rendered dashboard.

@@ -16,7 +16,26 @@ COPY VERSION ./
 COPY tsconfig.base.json ./
 COPY packages/shared packages/shared
 COPY apps/web apps/web
-RUN npm run build -w packages/shared && npm run build -w apps/web
+# `VITE_API_URL` is baked in at BUILD time, not read at runtime — Vite substitutes
+# `import.meta.env` into the bundle, so there is no way to change it later with a container env var.
+# It defaults to "/api" (same origin), which is correct for every shape this repo ships: both compose
+# files and the Helm chart put nginx in front and proxy /api to the API service. Only a SPLIT
+# deployment — the SPA on a CDN or a different hostname from the API — needs it, and that deployment
+# has to pass it here as a build arg and rebuild the image:
+#   docker build -f apps/web/Dockerfile --build-arg VITE_API_URL=https://api.example.com/api .
+# The `predev`/`prebuild` hook in apps/web/package.json also runs here, copying the two Human face
+# models the browser needs into the bundle — which is why the built web image can serve
+# /human-models/blazeface.json, and why install.sh and update.sh probe that path as a build check.
+#
+# The `unset` is not defensive noise — it is required. api.ts reads
+# `import.meta.env.VITE_API_URL ?? "/api"`, and `??` only falls back on null/undefined, NOT on an
+# empty string. If this build arg reached Vite as "" the bundle would be compiled with an empty API
+# base and every request in the app would resolve against the wrong path. So an unsupplied arg is
+# removed from the environment entirely rather than passed through as "", which is what keeps the
+# default same-origin "/api" behaviour intact for the builds that do not set it.
+ARG VITE_API_URL
+RUN if [ -z "${VITE_API_URL:-}" ]; then unset VITE_API_URL; fi; \
+    npm run build -w packages/shared && npm run build -w apps/web
 
 FROM nginx:1.27-alpine
 # A TEMPLATE, not a finished conf: the stock nginx entrypoint's 20-envsubst-on-templates.sh

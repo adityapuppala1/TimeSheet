@@ -65,12 +65,42 @@ spec:
           image: {{ include "timesphere.image" (dict "root" . "component" "api") }}
           imagePullPolicy: {{ .Values.image.pullPolicy }}
           workingDir: /app
+          # Plain `migrate deploy` first, then the doctor as a RECOVERY fallback — because there is
+          # exactly one migration failure that retrying cannot fix, and `backoffLimit` above would
+          # otherwise spend its retries walking into it.
+          #
+          # MySQL DDL is not transactional and Prisma does not roll back, so a migration that fails
+          # PART WAY leaves its `ALTER`/`CREATE INDEX` applied while `_prisma_migrations` records
+          # the migration as failed. Every later `migrate deploy` then refuses with P3009 ("migration
+          # failed to apply cleanly"), including the deploy carrying the FIXED version of that same
+          # migration. The Job retries, hits P3009, retries, hits P3009 — and the rollout stays
+          # blocked on a database that no amount of retrying will unstick.
+          #
+          # `doctor:heal` is what clears it: it detects P3009, reads which migration is stranded,
+          # and runs `migrate resolve --rolled-back` followed by `migrate deploy` — but ONLY for a
+          # migration whose own SQL carries the `@rerunnable` marker, i.e. one written to guard its
+          # DDL with information_schema checks so re-running over a partial application is safe.
+          # An unmarked migration is left stranded on purpose and the doctor prints instructions
+          # instead: re-running arbitrary DDL over half-applied state is how you lose data.
+          # It never runs `prisma migrate reset` (which drops the database) and it is idempotent, so
+          # invoking it on the happy path's failure is safe even when the cause was something else
+          # entirely — an unreachable database, a bad credential — which it also diagnoses out loud.
+          #
+          # Exit status is preserved: if the doctor cannot heal it either, this container fails, the
+          # hook fails, and the rollout is BLOCKED rather than proceeding onto a half-migrated
+          # schema. That is the behaviour to want from a pre-upgrade hook.
           command:
             - sh
             - -c
             - |
-              npx prisma migrate deploy --schema=apps/api/prisma/schema.prisma && \
-              npx prisma migrate deploy --schema=apps/api/prisma/control/schema.prisma
+              set -e
+              if npx prisma migrate deploy --schema=apps/api/prisma/schema.prisma && \
+                 npx prisma migrate deploy --schema=apps/api/prisma/control/schema.prisma; then
+                echo "[migrate] both schemas up to date"
+                exit 0
+              fi
+              echo "[migrate] migrate deploy failed — attempting doctor-led recovery (handles P3009 on a re-runnable migration)" >&2
+              npm run doctor:heal -w apps/api
           envFrom:
             - configMapRef:
                 name: {{ include "timesphere.fullname" . }}-config

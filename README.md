@@ -30,6 +30,20 @@ that those should not be two systems.
 > changes nothing until a super admin opens Workspace Settings → MCP server. One additive
 > migration, **no new environment variable in any deployment shape**. See
 > [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md#operating-the-mcp-server) before enabling it.
+>
+> **v2.4.0 — multi-org deployments: run the tenant fan-out once after upgrading.** The API image
+> did not previously ship `apps/api/scripts/`, so `npm run migrate:tenants -w apps/api` — the
+> command that brings every *additional* organization's database up to the latest schema, which
+> `update.sh` runs on every update and the Kubernetes runbook tells you to `kubectl exec` — could
+> not run inside a container at all. It is treated as a warning rather than an error (correctly:
+> one bad tenant must not roll back everyone's upgrade), so the failure was quiet. Single-org
+> installs are unaffected. Everyone else:
+> `docker compose exec -T api npm run migrate:tenants -w apps/api`.
+>
+> Also new: all four deployment paths now recover automatically from a migration stranded mid-apply
+> (Prisma **P3009**) instead of retrying into it forever, and this release's one migration revokes
+> surplus sessions beyond each user's 10 most recent. See
+> [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md#what-240-adds-to-that-dance-session-device-identity--and-the-first-migration-that-can-strand-a-database).
 
 ## Feature areas
 
@@ -676,6 +690,8 @@ See `.env.example` for all supported variables. Remember: the actual file the AP
 - **Reverse proxies**: `TRUST_PROXY_HOPS` — the number of proxies in front of this API, `0` by default. **Set it if anything sits in front**, including the Docker Compose stack as shipped (the web container's nginx proxies `/api` to the API): every per-IP rate limit reads `req.ip`, and at `0` behind a proxy that is the proxy's address for every caller, so the login limiter becomes one shared global bucket — silently. A hop *count* rather than a boolean because trusting `X-Forwarded-For` wholesale lets anyone forge `req.ip`. See [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md#reverse-proxies-and-client-ip-attribution-trust_proxy_hops)
 - **File storage**: `STORAGE_ROOT`, `STORAGE_DOCUMENTS_DIR`, `STORAGE_AVATARS_DIR`, `STORAGE_FACE_DIR` — all empty by default, which keeps uploads exactly where they are today (under `UPLOAD_DIR`, relative to the API's working directory). Set them to move storage onto its own volume, segregated into documents / avatars / face subtrees you can back up and encrypt separately. Absolute paths only, and changing one affects new files only — nothing is moved for you, and reads fall back to the previous root. See [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md#relocating-file-storage)
 - **Log files**: `LOG_DIR` (empty = off), `LOG_ROTATE_HOURS`, `LOG_RETENTION_DAYS`, `LOG_COMPRESS_ON_ROLLOVER` — mirrors everything the process prints into rotating, date-bucketed files. Console output is never taken away, and an unwritable directory degrades to console-only with one warning rather than stopping the app. See [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md#log-files)
+- **Update checks**: `UPDATE_CHECK` (`off` disables the hourly GitHub release call — the air-gapped posture; the **What's new** page then lists the history bundled in this build's own `CHANGELOG.md`), `UPDATE_CHECK_REPO` (override for forks), `UPDATE_CHECK_TOKEN` (a read-only Contents PAT, needed only when the repo is **private**, where anonymous release lookups 404). Note that only the literal `off` disables the check — any other value, `false` included, leaves it on
+- **Token lifetimes**: `ACCESS_TOKEN_TTL` (default `15m`) and `REFRESH_TOKEN_TTL_DAYS` (default `14`). Also surfaced as `env.accessTokenTtl` / `env.refreshTokenTtlDays` in the Helm chart, since shortening the access-token TTL is a standard security-review request
 
 ## Further docs
 

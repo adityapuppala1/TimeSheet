@@ -21,7 +21,7 @@ import { z } from "zod";
 import { prisma } from "../config/prisma.js";
 import { requireAuth, requireRole } from "../middleware/auth.js";
 import { AppError } from "../middleware/error.js";
-import { faceCaptureUpload, preserveTenantContext } from "../middleware/upload.js";
+import { FACE_ENROLL_MAX_FRAMES, FACE_VERIFY_MAX_FRAMES, faceCaptureUpload, preserveTenantContext } from "../middleware/upload.js";
 import { validate } from "../middleware/validate.js";
 import { audit } from "../services/audit.service.js";
 import { dispatchNotification } from "../services/notify.service.js";
@@ -228,7 +228,7 @@ const enrollSchema = z.object({ body: z.object({ consent: z.string() }) });
  * penalise. The exact wording shown at the time is copied onto the row, because an admin can
  * edit the settings text later and the record must reflect what this person actually agreed to.
  */
-faceRouter.post("/enroll", preserveTenantContext(faceCaptureUpload.array("capture", 8)), validate(enrollSchema), async (req, res) => {
+faceRouter.post("/enroll", preserveTenantContext(faceCaptureUpload.array("capture", FACE_ENROLL_MAX_FRAMES)), validate(enrollSchema), async (req, res) => {
   const settings = await getFaceSettings();
   if (!settings.enabled) throw new AppError(403, "Face verification is not enabled for this workspace.");
   // Fail CLOSED: no new biometric data may be collected without the plan entitlement.
@@ -375,7 +375,7 @@ const verifySchema = z.object({
  * times in a row" is precisely the signal this feature exists to surface, so it must survive
  * even when the user simply gives up and closes the dialog.
  */
-faceRouter.post("/verify", preserveTenantContext(faceCaptureUpload.array("capture", 2)), validate(verifySchema), async (req, res) => {
+faceRouter.post("/verify", preserveTenantContext(faceCaptureUpload.array("capture", FACE_VERIFY_MAX_FRAMES)), validate(verifySchema), async (req, res) => {
   const settings = await getFaceSettings();
   if (!settings.enabled) throw new AppError(403, "Face verification is not enabled for this workspace.");
   // Fail CLOSED here too: a verification that can never be consumed (the submit gates are

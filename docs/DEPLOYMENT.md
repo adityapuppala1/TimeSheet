@@ -615,9 +615,13 @@ is kept but never auto-restored: migrations are additive-only (docs/DATABASE.md)
 a newer schema is safe by policy, and restoring a dump over a live database is a human decision.
 
 Everyone with the app open when the server comes back is offered a refresh automatically — the
-version rides on the health poll the client already makes, and the **What's new** page
-(`/app/whats-new`) shows admins the release notes and this command whenever a newer GitHub
-release exists (checked hourly; disable with `UPDATE_CHECK=off`).
+version rides on the health poll the client already makes. **Everyone also gets one in-app
+notification** naming the new version and linking to the release notes, once per version per
+workspace, written at boot by `release-announce.service.ts`; it clears when they read it, like any
+other bell item, and it is never emailed. The **What's new** page (`/app/whats-new`) shows the full
+release history to everyone from the changelog inside the build, plus — for super admins only —
+this upgrade command whenever a newer release exists on GitHub (checked hourly; disable with
+`UPDATE_CHECK=off`, which leaves the history intact and only stops the "newer version" check).
 
 **Kubernetes shape:** don't use update.sh — the platform already owns this dance:
 
@@ -686,10 +690,14 @@ Who runs it for you, and who doesn't:
   individually.
 - **Manual / non-Docker deployments — you must run it yourself**, as its own deploy step after
   `prisma migrate deploy`. Nothing else will.
-- **Kubernetes — you must run it yourself too.** The chart's `pre-install,pre-upgrade` hook Job
+- **Kubernetes — you must run it yourself too.** The chart's `post-install,pre-upgrade` hook Job
   runs `prisma migrate deploy` against the tenant and control-plane *schemas* (i.e. `DATABASE_URL`
-  and `CONTROL_DATABASE_URL`), which is not the same thing as every tenant database. After the
-  rollout completes:
+  and `CONTROL_DATABASE_URL`), which is not the same thing as every tenant database. (The install
+  hook is deliberately `post-install`, not `pre-install`: a failed `pre-install` hook aborts before
+  the chart's own MySQL StatefulSet is ever created, so with `mysql.enabled=true` there was nothing
+  for the Job to connect to and no first install could succeed. Upgrades keep the stricter
+  `pre-upgrade` ordering so the schema is migrated before new code serves traffic. The Job's own
+  annotation block records this.) After the rollout completes:
   ```bash
   kubectl exec deploy/my-release-timesphere-api -- npm run migrate:tenants -w apps/api
   ```
@@ -736,6 +744,89 @@ skipped.
 
 Post-deploy check: Workspace settings → **MCP server** should render, showing the master switch
 **off**, writes **off**, and no credentials.
+
+### What 2.4.0 adds to that dance (session device identity — and the first migration that can strand a database)
+
+**One tenant migration, and it is the first one in this project's history that does more than add
+structure:**
+
+| Migration | What it does | Shape |
+|---|---|---|
+| `20260817100000_session_device_identity` | Adds `Session.deviceId` + an index on `(userId, deviceId, revokedAt)`, then **revokes all but each user's 10 most-recently-active live sessions** | one nullable column, one index, one bounded data cleanup |
+
+The column and index are additive as usual. The cleanup is not: it **writes to existing rows**,
+setting `revokedAt` on surplus live sessions. That was the point — one person on one machine had
+accumulated 7,486 "active devices", because every token refresh minted a new session row with
+nothing tying it back to the device it came from. `deviceId` is what collapses them going forward;
+the cleanup is what clears the backlog that already exists.
+
+**What users see:** anyone with more than 10 live sessions is signed out of the oldest ones. In
+practice that means stale sessions on devices they are not using; the 10 most recent survive, so the
+device someone is actually working on is not signed out. No password reset, no re-enrolment.
+
+**This migration is `@rerunnable`, and that marker is load-bearing.** It carries three
+engine-portability fixes found by shipping it and having it fail on a reporter's MySQL 8.0.46 —
+a dev machine running MariaDB had passed it cleanly:
+
+1. **Error 1093** (can't read from the table being updated). The obvious
+   `UPDATE t JOIN (SELECT … FROM t)` workaround forces materialisation on MariaDB but MySQL 8.0.14+
+   may *merge* the derived table back and re-raise 1093. A `TEMPORARY` table is not an option either
+   — it is connection-scoped, and Prisma does not promise one connection per migration file. The
+   final form uses an ordinary scratch table, dropped at both ends.
+2. **`ADD COLUMN IF NOT EXISTS` does not exist on MySQL** (MariaDB has it). The DDL is guarded by
+   querying `information_schema` and `PREPARE`-ing either the real statement or a no-op — which is
+   also what makes re-running the file over its own partial application safe.
+3. **Error 1267** (illegal mix of collations). Default collations differ by engine — MySQL 8.0 uses
+   `utf8mb4_0900_ai_ci`, MySQL 5.7 and MariaDB use `utf8mb4_general_ci` — so the scratch table is
+   built with `CREATE TABLE … AS SELECT`, inheriting the source collation instead of declaring one.
+
+**The failure mode to understand before upgrading.** MySQL DDL is not transactional and Prisma does
+not roll back. A migration that fails *part way* therefore leaves its `ALTER` applied while
+`_prisma_migrations` records the migration **FAILED**, and every later `migrate deploy` refuses with
+**P3009** — including the deploy carrying the fixed version of that same migration. Rolling the code
+back does not help: the old code's own boot migration hits the identical wall. That is a database
+neither a re-run nor a rollback can free.
+
+**All four deployment paths now clear this automatically**, which is new in 2.4.0:
+
+| Path | What handles it |
+|---|---|
+| `./update.sh` / `.\update.cmd` | If the API does not become healthy, the script checks the logs for P3009 and runs the doctor's repair before falling back to its rollback |
+| `./install.sh` | Same check in the first-boot retry path — a restart alone can never clear a stranded migration |
+| Helm | The migration hook Job runs `migrate deploy` first, then `doctor:heal` as a recovery fallback; a still-failing Job blocks the rollout rather than letting pods onto a half-migrated schema |
+| `npm run setup` (dev) | `doctor:heal` is already part of the sequence |
+
+The repair itself is `prisma migrate resolve --rolled-back <name>` followed by `migrate deploy`, and
+it is applied **only** to a migration whose SQL carries the `@rerunnable` marker — replaying
+arbitrary half-applied DDL is how data gets lost, so anything unmarked is reported to a human
+instead. To run it by hand against a Compose deployment:
+
+```bash
+docker compose run --rm --no-deps --entrypoint sh api -c 'npm run doctor:heal -w apps/api'
+# diagnose only, no changes:
+docker compose run --rm --no-deps --entrypoint sh api -c 'npm run doctor -w apps/api'
+```
+
+> **Never run `prisma migrate reset`.** Prisma's own P3009 error text suggests it. It drops the
+> database. The doctor never calls it.
+
+**Also in 2.4.0, and relevant to every deployment shape:** the API image now ships
+`apps/api/scripts/`, which it previously did not. Two commands the runbooks call routinely —
+`npm run migrate:tenants -w apps/api` (the multi-tenant schema fan-out that `update.sh` runs on
+every update, and that the Kubernetes section above tells you to `kubectl exec`) and
+`npm run doctor:heal -w apps/api` — could not run inside a container at all before this, because
+the files were not there. `update.sh` treats a `migrate:tenants` failure as a warning rather than an
+error, correctly, so the breakage was quiet: **multi-org deployments should assume their non-default
+tenant databases may be behind and run the fan-out explicitly once after upgrading to 2.4.0.**
+
+```bash
+docker compose exec -T api npm run migrate:tenants -w apps/api    # Compose
+kubectl exec deploy/my-release-timesphere-api -- npm run migrate:tenants -w apps/api   # Kubernetes
+```
+
+Post-deploy checks: a signed-in user's own session list (`GET /api/auth/sessions`, surfaced in the
+app's security/active-devices view) should show at most ten live sessions rather than thousands, and
+`npm run migrate:tenants -w apps/api` should report every org as `up-to-date`.
 
 ## Operating API request telemetry
 
@@ -1050,6 +1141,27 @@ it needs the VPA CRDs installed (`kubectl get crd verticalpodautoscalers.autosca
 and not every cluster has them — and running HPA + VPA against the same CPU metric on one
 workload can fight itself, so read the chart's comment before turning both on together.
 
+### Memory: face verification changes the sizing, not just the feature set
+
+`api.resources.limits.memory` ships at **1280Mi**, and that number exists for face verification
+specifically. `face.service.ts` loads the Human/TensorFlow models into the Node process — at boot if
+any org has the feature enabled, otherwise on first use — and they cost roughly **500MB resident per
+API process**. The chart previously shipped a 512Mi limit, which is under that on its own: switching
+face verification on got pods **OOMKilled mid-verification**, and the symptom reads as a flaky camera
+rather than as a resource limit, which is what makes it worth stating here.
+
+Requests deliberately stay at 256Mi. The cost is only paid by deployments that actually use the
+feature, and reserving 1Gi on every node for something most installs leave off is the wrong default
+for the scheduler. If face verification is off and staying off, **512Mi is genuinely enough** and
+lowering the limit back is a reasonable saving across a large fleet. If it is on, also budget the
+same headroom per replica when sizing nodes and when setting HPA maximums — ten replicas at 1280Mi is
+a different node pool than ten at 512Mi.
+
+Face verification additionally requires a **secure origin** (browsers expose `getUserMedia` only over
+HTTPS), which the chart's ingress provides via `ingress.tls`, and a writable face-image directory
+that must resolve inside a mounted volume — on this chart the only mounted volume is the uploads PVC
+at `/app/uploads`, so leave `storage.faceDir` empty unless you have added a volume for it.
+
 ### Verifying the chart without a live cluster
 
 ```bash
@@ -1058,8 +1170,18 @@ helm template my-release deploy/helm/timesphere            # default values
 helm template my-release deploy/helm/timesphere --set mysql.enabled=false --set api.verticalAutoscaling.enabled=true
 ```
 
-Both commands need no cluster access at all — useful for CI or a quick sanity check before an
-actual `helm install`/`helm upgrade`.
+Neither command needs cluster access at all — useful for a quick sanity check before an actual
+`helm install`/`helm upgrade`.
+
+**CI already runs these on every push**, in the `Validate Helm chart + compose files` job: `helm
+lint`, three `helm template` renders (bundled MySQL; external MySQL with the hook disabled; telemetry
+and vertical autoscaling on), each piped through a strict YAML parse, plus `docker compose config`
+against all three compose shapes — the default, the HTTPS overlay, and the external-DB file. Adding
+the job immediately caught something no other check could: `Chart.yaml`'s `appVersion` had drifted to
+`2.1.0` while the repo shipped `2.4.0`, which made `kubectl get deploy -L app.kubernetes.io/version`
+report the wrong version with nothing failing anywhere. The job now asserts `appVersion` equals the
+repo `VERSION` file, so **bump both together when cutting a release** (along with the chart's own
+`version:`, which is the chart-package version and is separate).
 
 ## Cloud provider notes (AWS / GCP / on-prem)
 
@@ -1081,8 +1203,8 @@ managed services back MySQL/ingress/secrets. There is no provider-specific code 
 images, but this app runs its own migration step (`prisma migrate deploy`) and one-time seed as
 separate commands, not baked into request-serving startup — on Cloud Run/Fargate, run those as a
 one-off Job/task (Cloud Run Jobs, or an ECS `RunTask` with the same image and `npm run` command)
-before pointing traffic at a new revision, the same role the Helm chart's `pre-install` hook Job
-plays on Kubernetes.
+before pointing traffic at a new revision, the same role the Helm chart's `post-install,pre-upgrade`
+hook Job plays on Kubernetes.
 
 **Worker/background processing**: there is currently no separate worker process — scheduled jobs
 (daily reminder emails, deadline reminders, SLA escalation sweeps, inbound-email polling,
@@ -1144,6 +1266,11 @@ and all forwarded by both compose files and the Helm chart:
 | `STORAGE_ROOT`, `STORAGE_DOCUMENTS_DIR`, `STORAGE_AVATARS_DIR`, `STORAGE_FACE_DIR` | empty (today's layout under `UPLOAD_DIR`) | [Relocating file storage](#relocating-file-storage) |
 | `LOG_DIR`, `LOG_ROTATE_HOURS`, `LOG_RETENTION_DAYS`, `LOG_COMPRESS_ON_ROLLOVER` | empty / `4` / `30` / `true` | [Log files](#log-files) |
 | `API_TELEMETRY_*`, `POD_NAME`, `POD_NAMESPACE`, `CLUSTER_NAME` | off / unset | [Operating API request telemetry](#operating-api-request-telemetry) |
+| `MAIL_FROM`, `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASS`, `SMTP_SECURE` | empty / `587` / `false` | Outbound email. A **fallback only** — `GlobalMailSettings` in the tenant database (Workspace Settings → Mail server) wins whenever it is configured. With no `SMTP_HOST` anywhere, mail is written to the log instead of sent, which on Kubernetes means a password reset that only ever reached `kubectl logs`. Now carried by the Helm chart too (`mail.*` in values.yaml, `SMTP_PASS` in the Secret) — it previously was not, so a chart install had no way to configure mail at all. |
+| `SLA_ENABLED`, `SLA_CRON_SCHEDULE`, `SLA_DEFAULT_APPROVAL_HOURS`, `TICKET_SLA_*` | on / `*/15 * * * *` / `48` / per-priority hours | Approval and ticket escalation. The cron values are how often the workers scan; the hour values are the deadlines they measure against. Now forwarded by both compose files and the chart (`sla.*`). |
+| `ACCESS_TOKEN_TTL`, `REFRESH_TOKEN_TTL_DAYS` | `15m` / `14` | Token lifetimes. Surfaced in the chart as `env.accessTokenTtl` / `env.refreshTokenTtlDays` because shortening the access-token TTL is a standard security-review request. |
+| `TENANT_DB_PROVISION_BASE_URL` | unset | The MySQL server new tenant databases are created on. Unset disables the `/platform-admin` console's Provision button rather than guessing a server. Now forwarded by both compose files — without the line the variable did not exist inside the container even when the host `.env` set it. |
+| `UPDATE_CHECK`, `UPDATE_CHECK_REPO`, `UPDATE_CHECK_TOKEN` | `on` / this repo / unset | The hourly GitHub release check behind the **What's new** page. `UPDATE_CHECK=off` is the air-gapped posture — the page then lists the history bundled in the image's own `CHANGELOG.md`. **Only the literal `off` disables it**; any other value, `false` included, leaves it on. The token (read-only Contents PAT) is needed only for a private repo. Chart equivalent: `updateCheck.enabled` / `updateCheck.repo`, with the token in the Secret. |
 
 **Not in this table, on purpose:** the MCP server has **no environment variable at all**. It is
 configured entirely from the database and admin-edited at runtime — see
@@ -1157,10 +1284,23 @@ product of a measured ceiling, with the measurement recorded in
 ## Testing before you ship a change
 
 ```bash
-npm run lint                # typecheck both packages
-npm run build               # build both packages
-npm run test:e2e            # full Playwright suite
+npm run lint                          # typecheck both packages
+npm run build                         # build both packages
+npm run test -w apps/api              # unit tier — fully mocked, no DB/network, fastest signal
+npm run test:integration -w apps/api  # integration tier — needs a real MySQL (see below)
+npm run test:e2e                      # full Playwright suite
 ```
+
+Run them in that order; it is the order CI runs them in, and it is cost-ordered so the cheapest
+check is the first to tell you something is wrong. The unit tier mocks everything (no database, no
+network, no LLM or Stripe calls). The integration tier derives its own throwaway `<db>_test`
+databases from `DATABASE_URL`/`CONTROL_DATABASE_URL` and creates, migrates, seeds and drops them
+itself — so it needs a reachable MySQL but never touches your development data. Set `KEEP_TEST_DB=1`
+to keep those databases around for inspection after a failure.
+
+To validate the deployment manifests without a cluster, see
+[Verifying the chart without a live cluster](#verifying-the-chart-without-a-live-cluster) — CI runs
+the same `helm lint` / `helm template` / `docker compose config` checks on every push.
 
 The Playwright suite runs entirely against Shape 1 (one `DEFAULT_ORG_SLUG` org) — it doesn't
 exercise subdomain routing or a second tenant. Multi-org-specific behavior (isolation, SSO

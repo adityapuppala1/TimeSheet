@@ -301,9 +301,11 @@ export interface UpdateStatus {
   checkedAt: string | null;
   checkEnabled: boolean;
   releases: ReleaseInfo[];
-  /** "github" = live release feed; "changelog" = this build's own bundled history (complete up
-   *  to the running version, blind to anything newer); null = nothing available at all. */
-  releasesSource: "github" | "changelog" | null;
+  /** "github" = every listed version was also known to the live release feed; "changelog" = this
+   *  build's own bundled history alone (complete up to the running version, blind to anything
+   *  newer); "mixed" = the bundle supplied versions GitHub hasn't been tagged with yet, which is
+   *  the normal state between cutting a release and pushing its tag; null = nothing at all. */
+  releasesSource: "github" | "changelog" | "mixed" | null;
 }
 
 export const systemApi = {

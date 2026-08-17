@@ -22,6 +22,9 @@ services:
       DATABASE_URL: ${DATABASE_URL:?DATABASE_URL must be set}
       CONTROL_DATABASE_URL: ${CONTROL_DATABASE_URL:?CONTROL_DATABASE_URL must be set}
       DEFAULT_ORG_SLUG: ${DEFAULT_ORG_SLUG:-default}
+      # Tenant-database provisioning target — see docker-compose.yml's block of the same name.
+      # Unset disables the /platform-admin console's Provision button rather than guessing a server.
+      TENANT_DB_PROVISION_BASE_URL: ${TENANT_DB_PROVISION_BASE_URL:-}
       JWT_ACCESS_SECRET: ${JWT_ACCESS_SECRET:?JWT_ACCESS_SECRET must be set}
       JWT_REFRESH_SECRET: ${JWT_REFRESH_SECRET:?JWT_REFRESH_SECRET must be set}
       PLATFORM_ADMIN_JWT_SECRET: ${PLATFORM_ADMIN_JWT_SECRET:?PLATFORM_ADMIN_JWT_SECRET must be set}
@@ -55,6 +58,9 @@ services:
       LOG_RETENTION_DAYS: ${LOG_RETENTION_DAYS:-30}
       LOG_COMPRESS_ON_ROLLOVER: ${LOG_COMPRESS_ON_ROLLOVER:-true}
       SLA_ENABLED: ${SLA_ENABLED:-true}
+      # Approval-escalation scan interval + deadline, matching docker-compose.yml.
+      SLA_CRON_SCHEDULE: ${SLA_CRON_SCHEDULE:-*/15 * * * *}
+      SLA_DEFAULT_APPROVAL_HOURS: ${SLA_DEFAULT_APPROVAL_HOURS:-48}
       TICKET_SLA_ENABLED: ${TICKET_SLA_ENABLED:-true}
       TICKET_SLA_CRON_SCHEDULE: ${TICKET_SLA_CRON_SCHEDULE:-*/15 * * * *}
       TICKET_SLA_LOW_HOURS: ${TICKET_SLA_LOW_HOURS:-168}
@@ -80,7 +86,13 @@ services:
       POD_NAME: ${POD_NAME:-}
       POD_NAMESPACE: ${POD_NAMESPACE:-}
       CLUSTER_NAME: ${CLUSTER_NAME:-}
+      # A fallback only — the tenant database's GlobalAISettings.apiKey wins when set.
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      # Hourly GitHub release check. UPDATE_CHECK=off for an air-gapped install; only the literal
+      # "off" disables it. UPDATE_CHECK_TOKEN is needed only for a PRIVATE repo.
+      UPDATE_CHECK: ${UPDATE_CHECK:-on}
+      UPDATE_CHECK_REPO: ${UPDATE_CHECK_REPO:-}
+      UPDATE_CHECK_TOKEN: ${UPDATE_CHECK_TOKEN:-}
     ports:
       - "4000:4000"
     volumes:

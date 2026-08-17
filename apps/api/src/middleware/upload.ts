@@ -111,13 +111,26 @@ export const avatarUpload = multer({
 const allowedCaptureExtensions = new Set([".png", ".jpg", ".jpeg"]);
 const allowedCaptureMimes = new Set(["image/png", "image/jpeg", "image/jpg"]);
 
+/**
+ * Per-route frame ceilings, exported so the routes and the instance limit below cannot drift.
+ *
+ * WHY THEY LIVE HERE (a real, previously-shipping bug — do not inline these numbers again):
+ * multer enforces `files` on the instance, while `.array(field, maxCount)` enforces its own count
+ * per route, and the instance limit must be >= the largest route or the bigger flow dies with
+ * LIMIT_FILE_COUNT — an unreadable 500 — instead of the route's own limit answering. Enrollment's
+ * route allowed 8 while this instance allowed 5, so a 6-to-8-frame enrollment could only ever
+ * fail. One source for both ends that.
+ */
+export const FACE_ENROLL_MAX_FRAMES = 8;
+export const FACE_VERIFY_MAX_FRAMES = 2;
+
 export const faceCaptureUpload = multer({
   storage: multer.memoryStorage(),
-  // files: 5 — multi-frame ENROLLMENT sends up to 5 frames from one consented session, and the
-  // challenge–response verify sends 2 ([neutral, gesture]). Each route caps its own maxCount, so
-  // this instance limit only needs to be >= the largest of them; lowering it silently 500s the
-  // bigger flow with LIMIT_FILE_COUNT rather than failing anything readable.
-  limits: { fileSize: 4 * 1024 * 1024, files: 5 },
+  // The guided wizard sends one frame per head position (four today) and the challenge–response
+  // verify sends 2 ([neutral, gesture]); the enrollment ceiling leaves room for another pose
+  // without a second mismatch. Each route still caps its own maxCount — this only has to clear
+  // the largest of them.
+  limits: { fileSize: 4 * 1024 * 1024, files: Math.max(FACE_ENROLL_MAX_FRAMES, FACE_VERIFY_MAX_FRAMES) },
   fileFilter: (_req, file, cb) => {
     const ext = path.extname(file.originalname).toLowerCase();
     // The browser's canvas.toBlob() gives us a real filename+mime; a missing extension is fine

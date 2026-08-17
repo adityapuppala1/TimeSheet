@@ -38,6 +38,7 @@ import { startAgentRunWorker } from "./workers/agent-run.worker.js";
 import { startAIRetentionWorker } from "./workers/ai-retention.worker.js";
 import { runForEveryOrg } from "./workers/run-for-every-org.js";
 import { warmFaceModelsIfEnabled } from "./services/face.service.js";
+import { announceRunningRelease } from "./services/release-announce.service.js";
 import { startIdentityWeeklyDigestWorker } from "./workers/identity-weekly-digest.worker.js";
 import { startProjectRiskWorker } from "./workers/project-risk.worker.js";
 import { startReportSubscriptionWorker } from "./workers/report-subscription.worker.js";
@@ -235,6 +236,14 @@ server.on("listening", async () => {
   // with the feature off pay nothing (see warmFaceModelsIfEnabled's header).
   void warmFaceModelsIfEnabled(runForEveryOrg).catch((error) =>
     console.warn(`[face] boot warm-up skipped: ${(error as Error).message}`)
+  );
+
+  // Detached, and at BOOT rather than on a schedule, because "the version changed" only ever
+  // happens when this process is replaced. Writes one bell notification per user per new version,
+  // at most once per workspace (see release-announce.service.ts for the dedupe), so a restart loop
+  // cannot turn into a notification loop.
+  void announceRunningRelease(runForEveryOrg).catch((error) =>
+    console.warn(`[release-announce] skipped: ${(error as Error).message}`)
   );
 });
 

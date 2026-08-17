@@ -21,9 +21,18 @@ existingSecretName: timesphere-secrets
 
 api:
   replicaCount: 2
+  # The memory limit is sized for FACE VERIFICATION, not for an idle API, and that is why it looks
+  # generous. face.service.ts loads the Human/TensorFlow models into the Node process on first use
+  # (or at boot, if any org has face verification enabled) and they cost roughly 500MB resident.
+  # The previous 512Mi limit was under that on its own: any deployment that switched the feature on
+  # got pods OOMKilled mid-verification, which reads as a flaky camera rather than as a resource
+  # limit. Requests stay low because the cost is only paid by deployments that use the feature —
+  # the scheduler should not reserve 1Gi on every node for something most installs leave off.
+  # Face verification OFF and staying off: 512Mi is genuinely enough, and lowering it back is a
+  # reasonable saving on a large fleet.
   resources:
     requests: { cpu: 250m, memory: 256Mi }
-    limits: { cpu: "1", memory: 512Mi }
+    limits: { cpu: "1", memory: 1280Mi }
   # Real autoscaling - this is the capability docker-compose.yml has no equivalent for (its one
   # manual lever is `docker compose up --scale api=N`). HPA here reacts to load automatically.
   autoscaling:
@@ -82,6 +91,15 @@ ingress:
     secretName: timesphere-tls
   annotations:
     cert-manager.io/cluster-issuer: letsencrypt-prod
+    # ingress-nginx defaults proxy-body-size to 1m, exactly like plain nginx — and every browser
+    # upload reaches the api through this ingress. Left at the default, attachments over 1MB die
+    # at the controller with a bare 413 and the api never sees them, so the app's own readable
+    # size/type error never fires. Matches apps/web/nginx.conf.template's client_max_body_size:
+    # 8 x 25MB (middleware/upload.ts's real ceiling) plus multipart framing. multer stays the
+    # enforcer — it is the layer that can name which file was rejected and why.
+    # NOTE: this annotation is ingress-nginx-specific. On Traefik use a buffering middleware; on
+    # an AWS ALB / GCE ingress there is no body-size cap to lift in the first place.
+    nginx.ingress.kubernetes.io/proxy-body-size: 210m
 
 # Non-secret environment - everything with a default in env.ts is safe to leave unset here.
 env:
@@ -109,6 +127,57 @@ env:
   # purely on pool queueing. 20 is the single-org default; SaaS multi-tenant fleets should
   # lower it back toward 5 and mind the ceiling arithmetic in config/prisma.ts.
   tenantDbConnectionLimit: 20
+  # Access/refresh token lifetimes. Same defaults env.ts applies; surfaced here because they are
+  # the two knobs a security review actually asks about, and "it is not in values.yaml" is a poor
+  # answer to "can you shorten the access token TTL?".
+  accessTokenTtl: 15m
+  refreshTokenTtlDays: 14
+
+# Outbound email. This was MISSING from the chart entirely — the ConfigMap carried no SMTP keys and
+# the Secret example carried no password, so a Kubernetes install had no way to configure mail
+# through Helm at all. It did not fail loudly either: mail.service.ts falls back to logging each
+# message to stdout when no host is configured, so password resets and digests were "sent"
+# straight into `kubectl logs` and nowhere else.
+#
+# Precedence, worth knowing before filling this in: GlobalMailSettings in the TENANT DATABASE wins
+# over all of this. These values are the deployment-level fallback for a workspace that has not
+# configured Workspace Settings → Mail server. Leaving host empty keeps the console-only behaviour.
+#
+# SMTP_PASS is deliberately NOT here — it belongs in the Secret alongside the other credentials
+# (see secrets.example.yaml). A password in values.yaml lands in `helm get values` and `helm history`.
+mail:
+  from: "TimeSphere <no-reply@timesphere.example.com>"
+  smtpHost: ""
+  smtpPort: 587
+  smtpUser: ""
+  # false = STARTTLS on 587 (the common case, including Microsoft 365). true = implicit TLS on 465.
+  smtpSecure: false
+
+# Approval and ticket SLA escalation. Also previously absent from the chart, which meant a
+# Kubernetes deployment could not turn escalation off or retune it without editing the ConfigMap by
+# hand — while both compose files exposed most of it. The cron schedules are how often the workers
+# SCAN; the hour values are the deadlines they measure against.
+sla:
+  # Timesheet approval escalation.
+  enabled: true
+  cronSchedule: "*/15 * * * *"
+  defaultApprovalHours: 48
+  # Ticket resolution deadlines by priority, in hours.
+  ticketEnabled: true
+  ticketCronSchedule: "*/15 * * * *"
+  ticketLowHours: 168
+  ticketMediumHours: 72
+  ticketHighHours: 24
+  ticketCriticalHours: 4
+
+# The hourly GitHub release check behind the What's-new page.
+# Set enabled: false for an air-gapped cluster — the page then shows the release history bundled in
+# the image's own CHANGELOG.md instead of calling out, and nothing retries in the background.
+# repo: override for a fork. A PRIVATE repo additionally needs a read-only Contents PAT, which goes
+# in the Secret as UPDATE_CHECK_TOKEN (anonymous release lookups 404 on a private repo).
+updateCheck:
+  enabled: true
+  repo: ""
 
 # Relocatable, segregated file storage (docs/DEPLOYMENT.md → "Relocating file storage").
 # EMPTY = unchanged: everything lives under UPLOAD_DIR (/app/uploads), which is the PVC this

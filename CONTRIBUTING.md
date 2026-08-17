@@ -95,20 +95,38 @@ tenant database — `npm run migrate:tenants -w apps/api` fans it out.
 
 ## Releasing a version
 
-A release is a git tag plus a GitHub Release — that pair is what the whole update system hangs
-off: CD builds `vX.Y.Z`-tagged images from the tag, running installations discover the release
-through the GitHub API (`update-check.service.ts`), the in-app **What's new** page renders the
-release body, and `update.sh` checks the tag out. Skip a step and one of those surfaces lies.
+**`VERSION` + `CHANGELOG.md` ARE the release, and step 1 alone is enough for every surface inside
+a running installation.** The in-app **What's new** page (`/app/whats-new`) builds its Release
+history from the CHANGELOG.md that ships in the build (`changelog-releases.service.ts`), and the
+upgrade announcement in everyone's bell (`release-announce.service.ts`) reads the same file. The
+git tag and the GitHub Release still matter — for CD, for `update.sh`, and for telling *other*
+installations that something newer exists — but nothing in the product waits on them any more.
+
+That is deliberate, and it is the fix for a real failure: the page used to render GitHub's list, so
+`2.1.0`, `2.2.0` and the running `2.4.0` were invisible on it for as long as their tags went
+unpushed — while the notes sat in the very bundle being served. See
+`update-check.service.ts#withBundledHistory`.
 
 1. **Bump `VERSION`** (the repo-root file — the single source; nothing reads package.json
-   versions) and add the release's section to `CHANGELOG.md`, grouped ✨ Features / 🐛 Fixes /
-   🔒 Security. Write for the people using the app, not for the diff.
+   versions) and rename `## Unreleased` in `CHANGELOG.md` to `## <version> — <name> — <date>`,
+   then open a fresh `## Unreleased` above it. Write for the people using the app, not for the
+   diff. Group into `###` sections — ✨ Features / 🐛 Fixes / 🔒 Security / ⚡ Performance /
+   🚢 Deployment / 📦 Dependencies, or a sentence carrying one of those emoji. **The emoji is a
+   category tag, not decoration:** What's-new reads it to label each section (see
+   `NOTE_CATEGORIES` in `apps/web/src/pages/WhatsNew.tsx`), and a section with no recognisable
+   emoji or keyword shows up as a generic grey "Changes" chip.
 2. **Commit, then tag**: `git tag v1.2.0 && git push origin main v1.2.0`. The tag must match
    VERSION exactly (`v` prefix on the tag only) — `update.sh` verifies the server reports the
    tag's version after upgrading, so a mismatch fails every customer's update.
-3. **Create the GitHub Release** for the tag, pasting the CHANGELOG section as the body. This is
-   the step that makes running installations light up with "update available".
+3. **Create the GitHub Release** for the tag, pasting the CHANGELOG section as the body. Optional
+   for the What's-new page (it already has these notes), and still worth doing: a Release body can
+   be corrected after shipping, and GitHub's copy wins the merge when it is non-empty.
 4. CD builds and pushes the tagged images automatically — nothing to do.
+
+**The guard.** `apps/api/tests/unit/changelog-releases.service.test.ts` fails the build when
+`VERSION` has no matching CHANGELOG.md heading, or when the `## Unreleased` section has gone
+missing. Step 1 half-done is therefore a red test, not a stale page nobody notices — which is how
+eighteen sections of finished work once sat under `## Unreleased` for nine days.
 
 ## Security
 

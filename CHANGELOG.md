@@ -11,6 +11,112 @@ Everything below ships in the next tag. The parser that feeds the in-app What's-
 this section until it gains a version number, on purpose — an installation must never render
 history for a version that does not exist yet.
 
+## 2.5.0 — the releases you could not see, and the updates that quietly did not finish — 2026-08-17
+
+**One upgrade note for multi-org installations.** The tenant schema fan-out has never been able to
+run inside a container (see below), so every organization beyond the default one has been left on
+its old schema without the update saying so. After upgrading, run the fan-out once:
+`docker compose exec api npm run migrate:tenants -w apps/api`.
+
+### 🐳 The API image never contained the scripts two runbooks tell you to run
+
+- The runtime stage cherry-picks directories into the image and `apps/api/scripts/` was not among
+  them, so `npm run migrate:tenants -w apps/api` exited "file not found" in every container. That
+  is the **multi-org schema fan-out `update.sh` runs on every single update**, and the command the
+  Kubernetes runbook tells you to `kubectl exec`.
+- It was invisible because the failure is deliberately a warning rather than an error — one bad
+  tenant must not roll back everyone else's upgrade. The result is that the warning was the only
+  thing that ever happened: **non-default tenant databases have been silently staying behind.**
+- The same omission disabled `doctor:heal`, which is the documented P3009 repair.
+
+### 🐛 Uploads over 1MB were rejected before the API ever saw them
+
+- The app accepts attachments up to 25MB each, eight at a time. nginx's default
+  `client_max_body_size` is 1MB and ingress-nginx's `proxy-body-size` default is also 1MB, so the
+  proxy refused the body and the API never got the request. Users saw a bare `413` instead of the
+  app's own readable size and file-type errors, which could never fire.
+- Both are now set to the app's own arithmetic (8 × 25MB), scoped to `/api/` so the SPA keeps the
+  tight default it should have.
+
+### ☸ Enabling face verification got Kubernetes pods OOMKilled
+
+- The face models need roughly 500MB resident per API process; the chart's memory limit was
+  `512Mi`. Turning the feature on therefore killed the pod. The limit is now `1280Mi`, with
+  requests left at `256Mi` because most installations leave the feature off.
+
+### 🐳 Outbound mail had no Helm configuration at all
+
+- No SMTP keys in the ConfigMap and no `SMTP_PASS` in the Secret example, so a chart install had no
+  way to send mail — and it did not complain, because the mail service logs messages to stdout when
+  no host is configured. Password-reset links were "sent" into `kubectl logs`.
+- Added `mail.*` values, the matching ConfigMap keys, and `SMTP_PASS` plus `UPDATE_CHECK_TOKEN` to
+  the Secret example.
+
+### 🩹 A migration stranded mid-apply deadlocked every deployment path
+
+- MySQL DDL is not transactional and Prisma does not roll back, so a migration that half-fails
+  leaves its DDL applied while `_prisma_migrations` records FAILED. Every later `migrate deploy`
+  then refuses — **including the corrected version of the migration that broke.**
+- `update.sh` made it worse by rolling the code back, because the old code hit the same wall.
+- `install.sh`, `update.sh`, `update.ps1` and the Helm migration Job now attempt the doctor's
+  repair as a fallback after a normal `migrate deploy`, preserving exit status so a genuinely
+  failing hook still blocks the rollout. The doctor only clears migrations that declare themselves
+  `@rerunnable`, and never runs `prisma migrate reset`.
+
+### 🔧 Two CI gates had never executed once
+
+- Both the security-scan dogfooding job and the test-run reporting step were gated on
+  `if: secrets.X != ''`. GitHub does not expose the `secrets` context to **any** `if:` key, so the
+  expression resolved to `'' != ''` — permanently false, whether the token was configured or not.
+- Replaced with the documented workarounds: a job-level `env` for the step gate, and a small
+  preflight job whose *output* a job-level `if:` is allowed to read.
+
+### 🔧 The Helm chart reported version 2.1.0 while the repo shipped 2.4.0
+
+- `Chart.yaml`'s `appVersion` had drifted, so `kubectl get deploy -L app.kubernetes.io/version`
+  answered with the wrong version and nothing failed. Corrected, chart `version` moved to `0.2.0`,
+  and CI now asserts the two stay in step.
+
+### 🐳 Documented environment variables that never reached the container
+
+- `TENANT_DB_PROVISION_BASE_URL`, `SLA_CRON_SCHEDULE`, `SLA_DEFAULT_APPROVAL_HOURS` and the
+  `UPDATE_CHECK*` variables were in `.env.example` and read by the code, but absent from the
+  compose service definitions. Compose does not pass the host environment through, so an unlisted
+  variable simply does not exist inside the container.
+
+### 🧰 The deployment manifests are now validated in CI
+
+- A new job runs `helm lint`, renders three `helm template` shapes (bundled MySQL, external
+  database with hooks disabled, telemetry and VPA enabled) and strict-parses each result, runs
+  `docker compose config` across all three compose shapes, and asserts `Chart.yaml` matches
+  `VERSION`. Entirely offline — no cluster, no registry, no push.
+- Also added: Helm values for mail, SLA escalation and token TTLs, and `VITE_API_URL` as a
+  documented web build argument for split deployments.
+
+### 🐛 Face enrollment could not accept the frame count its own route allowed
+
+- The enrollment route accepted up to 8 frames while the shared multer instance allowed 5, so a
+  six-to-eight-frame enrollment died with `LIMIT_FILE_COUNT` — an unreadable 500 — instead of the
+  route's own limit answering. Today's guided wizard sends four, so nothing broke in practice; a
+  fifth pose would have. Both ends now derive from one exported constant.
+
+### 🐛 Emailed dashboard links contained the literal word "auto"
+
+- The scheduled-report worker read `process.env.APP_BASE_URL` directly, bypassing the resolution
+  step that turns `auto` or a `{lan-ip}` token into a real address. Every link in a scheduled
+  dashboard email pointed at `auto/...`.
+
+### 🩹 The Windows updater re-encoded its own database backup
+
+- `update.ps1` piped `mysqldump` through `Out-File -Encoding utf8`, and PowerShell decodes a native
+  command's stdout into strings using the console encoding before re-emitting it with its own line
+  endings. The backup was therefore a rewritten copy of the dump — CRLFs, a possible BOM, any byte
+  the codepage could not round-trip replaced — and nothing says so until restore day.
+- The dump is now written inside the container and copied out with `docker compose cp`, so the
+  bytes are never PowerShell's to touch. It is gzipped and named `.sql.gz` to match `update.sh`, so
+  one restore command works whichever script took the backup, and a size floor catches a dump that
+  died mid-write behind a successful `gzip`.
+
 ## 2.4.0 — the log you can still fix, and the session list that lists sessions — 2026-08-17
 
 **Two upgrade notes.**

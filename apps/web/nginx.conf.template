@@ -14,6 +14,20 @@ server {
     proxy_set_header X-Real-IP $remote_addr;
     proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
     proxy_set_header X-Forwarded-Proto $scheme;
+
+    # nginx's DEFAULT client_max_body_size is 1m, and every browser upload in this product
+    # travels through this location — so the stock default silently capped attachments at 1MB
+    # while middleware/upload.ts accepts 25MB each, up to 8 per request. The failure was the
+    # worst shape available: nginx rejects the body itself, so the API never sees the request
+    # and the app's own readable "Unsupported file type"/size errors never get a chance to fire.
+    # The user just gets a bare nginx 413 page.
+    #
+    # 210m is that limit's own arithmetic (8 x 25MB + multipart framing overhead) rather than a
+    # round guess: the proxy must not be the thing that decides an upload is too big. multer
+    # stays the enforcer, because multer is the layer that can say WHICH file and WHY.
+    # Deliberately scoped to /api/ instead of the server block — the SPA and /uploads/ downloads
+    # have no reason to accept a large body, so they keep the tight stock default.
+    client_max_body_size 210m;
   }
 
   location /uploads/ {

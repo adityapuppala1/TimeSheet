@@ -42,7 +42,7 @@ export function createFakeTenantClient(): PrismaClient {
     },
     faceEnrollmentTemplate: { findMany: vi.fn(), createMany: vi.fn(), deleteMany: vi.fn(), groupBy: vi.fn() },
     faceChallenge: { create: vi.fn(), findUnique: vi.fn(), updateMany: vi.fn(), deleteMany: vi.fn() },
-    notification: { create: vi.fn(), findFirst: vi.fn(), count: vi.fn(), groupBy: vi.fn() },
+    notification: { create: vi.fn(), createMany: vi.fn(), findFirst: vi.fn(), count: vi.fn(), groupBy: vi.fn() },
     // Maintenance mode (services/maintenance.service.ts) + server health pings
     maintenanceSettings: { upsert: vi.fn() },
     session: { findMany: vi.fn(), findUnique: vi.fn(), create: vi.fn(), update: vi.fn(), updateMany: vi.fn(), count: vi.fn() },

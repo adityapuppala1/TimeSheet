@@ -26,8 +26,15 @@ import type { ReleaseInfo } from "./update-check.service.js";
  */
 const CANDIDATES = [resolve(process.cwd(), "CHANGELOG.md"), resolve(process.cwd(), "../../CHANGELOG.md")];
 
-/** Parsed once per process — the file is baked into the build and cannot change under us. */
-let cache: ReleaseInfo[] | null = null;
+/**
+ * Parsed once per process — the file is baked into the build and cannot change under us.
+ *
+ * KEYED BY REPO, which is not decoration: `repo` decides the `url` on every parsed release, so a
+ * single shared cache would hand every later caller the FIRST caller's repo. With one caller that
+ * was invisible; the moment a second one appeared (the release announcer, which needs versions and
+ * names and no links at all) it would have silently rewritten every What's-new link.
+ */
+const cache = new Map<string, ReleaseInfo[]>();
 
 /**
  * Heading dialects this changelog actually uses, all of which must parse:
@@ -79,15 +86,17 @@ export function parseChangelogReleases(markdown: string, repo: string): ReleaseI
 
 /** The bundled history, newest first (document order — the changelog is newest-first by rule). */
 export function getBundledReleases(repo: string): ReleaseInfo[] {
-  if (cache) return cache;
+  const cached = cache.get(repo);
+  if (cached) return cached;
   for (const path of CANDIDATES) {
     try {
-      cache = parseChangelogReleases(readFileSync(path, "utf8"), repo);
-      return cache;
+      const parsed = parseChangelogReleases(readFileSync(path, "utf8"), repo);
+      cache.set(repo, parsed);
+      return parsed;
     } catch {
       /* try the next location */
     }
   }
-  cache = [];
-  return cache;
+  cache.set(repo, []);
+  return [];
 }

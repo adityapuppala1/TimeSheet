@@ -425,6 +425,41 @@ if [ "$API_READY" != true ]; then
   if [ "$API_READY" = true ]; then
     log "API recovered after restart."
   else
+    # A restart cannot fix ONE failure, and it is the failure most likely to be sitting here:
+    # a migration that died part way. MySQL DDL is not transactional and Prisma does not roll back,
+    # so the half-applied migration stays applied while `_prisma_migrations` records it FAILED, and
+    # every subsequent `migrate deploy` refuses with P3009. The restart loop above then re-hits that
+    # same P3009 on every attempt — the container will never come up, no matter how many restarts.
+    # This is not hypothetical: it is what a fresh install hit on MySQL 8.0.46 (see the
+    # session-device migration and its @rerunnable guards).
+    #
+    # `doctor:heal` clears it — it names the stranded migration, then runs `migrate resolve
+    # --rolled-back` and `migrate deploy` again, but only for a migration marked @rerunnable, i.e.
+    # one that guards its own DDL and is safe to replay over a partial application. It never runs
+    # `prisma migrate reset` (which drops the database). `run --rm --no-deps` because the api
+    # container is exactly what is not running, and mysql is healthy and should be left alone.
+    API_LOGS="$(docker compose -f "$COMPOSE_FILE" logs --tail=200 api 2>/dev/null || true)"
+    case "$API_LOGS" in
+      *P3009*|*"migrate found failed migrations"*)
+        warn "A migration is recorded as FAILED in _prisma_migrations (Prisma P3009) — restarting can never clear that."
+        log "Attempting doctor-led recovery (only auto-repairs a migration marked @rerunnable)..."
+        if docker compose -f "$COMPOSE_FILE" run --rm --no-deps --entrypoint sh api \
+             -c 'npm run doctor:heal -w apps/api'; then
+          docker compose -f "$COMPOSE_FILE" up -d api
+          for _ in $(seq 1 30); do
+            if curl -fsS http://localhost:4000/health >/dev/null 2>&1; then API_READY=true; break; fi
+            sleep 3
+          done
+          [ "$API_READY" = true ] && log "API recovered after clearing the stranded migration."
+        else
+          warn "Automatic recovery did not succeed. Run this — it names the migration and the exact commands:"
+          warn "  docker compose -f $COMPOSE_FILE run --rm --no-deps --entrypoint sh api -c 'npm run doctor -w apps/api'"
+          warn "Do NOT run 'prisma migrate reset' — Prisma's own error text suggests it, and it drops the database."
+        fi
+        ;;
+    esac
+  fi
+  if [ "$API_READY" != true ]; then
     warn "Still not healthy — check 'docker compose -f $COMPOSE_FILE logs api' for the actual error."
     if [ "$COMPOSE_FILE" = "docker-compose.yml" ]; then
       warn "Migrations run automatically on boot; a slow first-pull of the mysql:8.4 image is the usual cause on a fresh install."

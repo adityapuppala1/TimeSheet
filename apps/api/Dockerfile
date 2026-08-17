@@ -57,6 +57,22 @@ COPY --from=build --chown=app:app /app/apps/api/src/generated apps/api/dist/src/
 # Found by running the documented Kubernetes seed on a live cluster. ~3MB of TypeScript buys
 # every runbook command working exactly as written.
 COPY --from=build --chown=app:app /app/apps/api/src apps/api/src
+# And the operational scripts, for the same reason one line up — except these were MISSING, and
+# two commands the runbooks call routinely could therefore never have worked inside a container:
+#
+#   npm run migrate:tenants -w apps/api   → tsx scripts/migrate-all-tenants.ts
+#   npm run doctor:heal     -w apps/api   → tsx scripts/doctor.ts --heal
+#
+# The first is the multi-org schema fan-out that update.sh runs through `docker compose exec` on
+# EVERY update, and that docs/DEPLOYMENT.md tells Kubernetes operators to `kubectl exec`. Without
+# scripts/, tsx exits "file not found" — and because update.sh treats that step as a warning
+# rather than a failure (correctly: one bad tenant must not roll back everyone's upgrade), the
+# breakage was invisible. Every non-default org silently stayed on its old schema, which is the
+# exact drift the additive-only migration policy cannot excuse.
+# The second is the P3009 recovery path (see the migration Job in the Helm chart and update.sh):
+# a stranded `_prisma_migrations` row is the one failure mode `migrate deploy` cannot clear by
+# retrying, and the doctor is what clears it. Neither is reachable if the file isn't in the image.
+COPY --from=build --chown=app:app /app/apps/api/scripts apps/api/scripts
 COPY --from=build --chown=app:app /app/packages/shared/dist packages/shared/dist
 COPY --from=build --chown=app:app /app/packages/shared/package.json packages/shared/package.json
 COPY --chown=app:app package.json ./

@@ -46,6 +46,13 @@ jobs:
       WEB_ORIGIN: "http://localhost:5173"
       APP_BASE_URL: "http://localhost:5173"
       DEFAULT_ORG_SLUG: "default"
+      # Hoisted from the reporting step at the bottom of this job to JOB level on purpose: a
+      # step's `if:` cannot read the `secrets` context (see that step's comment), but it CAN read
+      # `env`. Mapping the secrets here is what makes that step's gate actually evaluate.
+      # Unset on forks and until an admin opts in, which is precisely what the gate tests for.
+      TIMESPHERE_INGEST_TOKEN: ${{ secrets.TIMESPHERE_INGEST_TOKEN }}
+      TIMESPHERE_INGEST_URL: ${{ secrets.TIMESPHERE_INGEST_URL }}
+      TIMESPHERE_ORG_SLUG: ${{ secrets.TIMESPHERE_ORG_SLUG }}
     steps:
       - uses: actions/checkout@v4
 
@@ -137,8 +144,15 @@ jobs:
       # even inside an `always()` step, same pattern as a Slack-on-failure notification step.
       # Skipped entirely until TIMESPHERE_INGEST_TOKEN is configured (see security-scan-dogfood
       # job below for the one-time setup), so this is a no-op on forks/until an admin opts in.
+      #
+      # The gate reads `env`, NOT `secrets`, and that distinction is load-bearing: GitHub does not
+      # expose the `secrets` context to any `if:` key (job or step — only github/needs/vars/inputs
+      # at job level, plus env/matrix/steps at step level). A `secrets.X != ''` condition therefore
+      # resolves the context to empty and compares '' != '', which is FALSE — so the previous
+      # version of this gate skipped this step unconditionally, including for the admin who had
+      # just configured the token. The secrets are mapped into job-level `env` above instead.
       - name: Report test-run status to TimeSphere
-        if: always() && secrets.TIMESPHERE_INGEST_TOKEN != ''
+        if: always() && env.TIMESPHERE_INGEST_TOKEN != ''
         run: |
           STATUS="PASSED"
           if [ "${{ job.status }}" != "success" ]; then STATUS="FAILED"; fi
@@ -146,10 +160,30 @@ jobs:
             -H "Authorization: Bearer $TIMESPHERE_INGEST_TOKEN" -H "Content-Type: application/json" \
             --data "{\"provider\":\"github-actions\",\"branch\":\"${{ github.ref_name }}\",\"status\":\"$STATUS\"}" \
             || echo "::warning::Failed to report test-run status to TimeSphere (non-fatal)"
+
+  # Exists solely to answer "is ingestion configured?" as a job OUTPUT, because a job-level `if:`
+  # is the one place that question cannot be asked directly — `secrets` is unavailable there, and
+  # unlike a step's `if:` there is no `env` context to fall back on either. `needs.<job>.outputs`
+  # IS readable from a job-level `if:`, so one trivial job converts the secret's presence into
+  # something the gate below can legally see. This is the documented workaround, not a trick.
+  #
+  # The token's VALUE never leaves this job — only the string "true"/"false" does.
+  ingest-configured:
+    name: Check whether TimeSphere ingestion is configured
+    runs-on: ubuntu-latest
+    outputs:
+      configured: ${{ steps.check.outputs.configured }}
+    steps:
+      - id: check
         env:
           TIMESPHERE_INGEST_TOKEN: ${{ secrets.TIMESPHERE_INGEST_TOKEN }}
-          TIMESPHERE_INGEST_URL: ${{ secrets.TIMESPHERE_INGEST_URL }}
-          TIMESPHERE_ORG_SLUG: ${{ secrets.TIMESPHERE_ORG_SLUG }}
+        run: |
+          if [ -n "$TIMESPHERE_INGEST_TOKEN" ]; then
+            echo "configured=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "configured=false" >> "$GITHUB_OUTPUT"
+            echo "TIMESPHERE_INGEST_TOKEN is not set — the security dogfooding job will be skipped."
+          fi
 
   # Dogfoods TimeSphere's own ingest-only security pipeline against its own source — the exact
   # endpoints docs/SECURITY_DEVOPS_INTEGRATIONS.md documents for customers, exercised for real
@@ -162,7 +196,13 @@ jobs:
   security-scan-dogfood:
     name: Dogfood security scanning (SAST + SCA + SBOM)
     runs-on: ubuntu-latest
-    if: ${{ secrets.TIMESPHERE_INGEST_TOKEN != '' }}
+    # Gated on the preflight job's OUTPUT rather than `secrets.…` directly. The previous
+    # `if: ${{ secrets.TIMESPHERE_INGEST_TOKEN != '' }}` looked correct and was silently always
+    # false — GitHub does not expose `secrets` to a job-level `if:`, so the expression compared an
+    # empty context value against '' and skipped this job on every run, token configured or not.
+    # This entire pipeline had therefore never executed once. See the ingest-configured job above.
+    needs: ingest-configured
+    if: needs.ingest-configured.outputs.configured == 'true'
     continue-on-error: true
     env:
       TIMESPHERE_INGEST_TOKEN: ${{ secrets.TIMESPHERE_INGEST_TOKEN }}
@@ -290,6 +330,104 @@ jobs:
 
       - name: Syntax-check install.sh and update.sh (bash -n, no execution)
         run: bash -n install.sh && bash -n update.sh
+
+  # The deployment manifests had no CI coverage at all until now, and the two things this job
+  # checks are both things that had ALREADY silently drifted by the time it was written: the Helm
+  # chart's appVersion sat at 2.1.0 while the repo shipped 2.4.0, and nothing rendered the chart
+  # to prove its templates still produce valid YAML. Neither failure breaks a build, which is
+  # exactly why only a check can catch them.
+  #
+  # Everything here is offline rendering and parsing — `helm template` and `docker compose config`
+  # resolve manifests locally and talk to no cluster, no registry, and no daemon. There is
+  # deliberately no `helm install`, no `docker compose up`, and no push anywhere.
+  validate-deployment-manifests:
+    name: Validate Helm chart + compose files
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: azure/setup-helm@v4
+
+      # The label a cluster reports as app.kubernetes.io/version comes from Chart.yaml's
+      # appVersion, so a stale value makes `kubectl get deploy -L app.kubernetes.io/version` lie
+      # about what is running. Cheap to assert, invisible to every other kind of test.
+      - name: Chart appVersion must match the repo VERSION file
+        run: |
+          repo_version="$(tr -d ' \t\n\r' < VERSION)"
+          chart_appversion="$(grep -E '^appVersion:' deploy/helm/timesphere/Chart.yaml | sed -E 's/^appVersion:[[:space:]]*"?([^"]*)"?[[:space:]]*$/\1/')"
+          echo "VERSION=$repo_version  Chart.yaml appVersion=$chart_appversion"
+          if [ "$repo_version" != "$chart_appversion" ]; then
+            echo "::error file=deploy/helm/timesphere/Chart.yaml::appVersion ($chart_appversion) does not match the repo VERSION ($repo_version). Bump appVersion (and the chart's own version:) when cutting a release."
+            exit 1
+          fi
+
+      - name: helm lint
+        run: helm lint deploy/helm/timesphere
+
+      # Rendered THREE ways, because the chart's real branches are its conditionals and a single
+      # default render walks past most of them: bundled MySQL + migration hook Job (the evaluation
+      # path), external MySQL with the hook disabled (the recommended production path), and
+      # telemetry on (which is what adds the downward-API env block to the api Deployment).
+      # Piped through a strict YAML parse — `helm template` happily emits text that is not valid
+      # YAML when an indentation helper is wrong, and only parsing it proves otherwise.
+      - name: helm template (default values — bundled MySQL)
+        run: helm template ts deploy/helm/timesphere > /tmp/render-default.yaml
+
+      - name: helm template (external MySQL, no migration hook)
+        run: |
+          helm template ts deploy/helm/timesphere \
+            --set mysql.enabled=false \
+            --set migrationJob.enabled=false \
+            --set ingress.enabled=false > /tmp/render-external.yaml
+
+      - name: helm template (telemetry + vertical autoscaling on)
+        run: |
+          helm template ts deploy/helm/timesphere \
+            --set telemetry.enabled=true \
+            --set api.verticalAutoscaling.enabled=true \
+            --set ingress.wildcardHost='*.timesphere.example.com' > /tmp/render-telemetry.yaml
+
+      # `helm template` will happily emit text that is not valid YAML when an indentation helper is
+      # wrong (a missing `nindent`, a `with` block off by two spaces) — helm itself does not parse
+      # what it prints. Only loading each render proves the chart produces manifests the API server
+      # would accept. PyYAML is installed explicitly rather than assumed: it happens to be present
+      # on today's ubuntu runner image as a transitive dependency, which is not a contract.
+      - name: Every render must parse as YAML
+        run: |
+          python3 -m pip install --quiet --disable-pip-version-check pyyaml
+          python3 - <<'PY'
+          import glob, yaml
+          total = 0
+          for path in sorted(glob.glob("/tmp/render-*.yaml")):
+              docs = [d for d in yaml.safe_load_all(open(path, encoding="utf-8")) if d]
+              kinds = sorted({d.get("kind", "?") for d in docs})
+              print(f"{path}: {len(docs)} documents -> {', '.join(kinds)}")
+              total += len(docs)
+          # A render that silently produced nothing would otherwise "pass" this check.
+          assert total > 0, "helm template produced no manifests at all"
+          PY
+
+      # Validates all three compose SHAPES, not just the default one install.sh exercises below.
+      # The https overlay and the external-db file are the two an install-e2e run never touches,
+      # so a broken key in either used to be discoverable only by a customer choosing that path.
+      # `config` resolves and type-checks the merged model without starting anything.
+      - name: docker compose config (all three shapes)
+        run: |
+          cat > /tmp/compose-validate.env <<'EOF'
+          MYSQL_ROOT_PASSWORD=validate-only
+          DATABASE_URL=mysql://root:validate-only@mysql:3306/timesheet_portal
+          CONTROL_DATABASE_URL=mysql://root:validate-only@mysql:3306/timesphere_control
+          JWT_ACCESS_SECRET=validate-only-access-secret-0123456789
+          JWT_REFRESH_SECRET=validate-only-refresh-secret-0123456789
+          PLATFORM_ADMIN_JWT_SECRET=validate-only-platform-secret-0123456789
+          ENCRYPTION_KEY=0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
+          WEB_ORIGIN=https://timesphere.example.com
+          APP_BASE_URL=https://timesphere.example.com
+          EOF
+          docker compose --env-file /tmp/compose-validate.env -f docker-compose.yml config >/dev/null
+          docker compose --env-file /tmp/compose-validate.env -f docker-compose.yml -f docker-compose.https.yml config >/dev/null
+          docker compose --env-file /tmp/compose-validate.env -f docker-compose.external-db.yml config >/dev/null
+          echo "All three compose shapes resolve."
 
   # The syntax check above catches typos; it cannot catch installer ROT — a compose key that
   # drifted, a seed script that moved, a verification endpoint that changed shape. Only running

@@ -31,6 +31,13 @@ services:
       # section. A database on this same mysql container works fine.
       CONTROL_DATABASE_URL: ${CONTROL_DATABASE_URL:?CONTROL_DATABASE_URL must be set}
       DEFAULT_ORG_SLUG: ${DEFAULT_ORG_SLUG:-default}
+      # The MySQL server that new tenant databases get CREATED on when a platform admin provisions
+      # an org from the /platform-admin console — a DSN with credentials but no database name.
+      # Unset (the default) disables in-app provisioning, and the endpoint says so plainly rather
+      # than guessing a server. Single-org installs never need it; it is forwarded because without
+      # the line the variable does not exist inside the container even when the host .env sets it,
+      # so the console's Provision button failed for reasons the operator could not see from here.
+      TENANT_DB_PROVISION_BASE_URL: ${TENANT_DB_PROVISION_BASE_URL:-}
       JWT_ACCESS_SECRET: ${JWT_ACCESS_SECRET:?JWT_ACCESS_SECRET must be set}
       JWT_REFRESH_SECRET: ${JWT_REFRESH_SECRET:?JWT_REFRESH_SECRET must be set}
       # Deliberately a separate secret from the two above — signs /platform-admin tokens only.
@@ -76,6 +83,11 @@ services:
       LOG_RETENTION_DAYS: ${LOG_RETENTION_DAYS:-30}
       LOG_COMPRESS_ON_ROLLOVER: ${LOG_COMPRESS_ON_ROLLOVER:-true}
       SLA_ENABLED: ${SLA_ENABLED:-true}
+      # The approval-escalation scan interval and deadline. Forwarded because SLA_ENABLED alone was:
+      # an operator could turn escalation off but not retune it, and the two ticket equivalents below
+      # were already here — an asymmetry with no reason behind it.
+      SLA_CRON_SCHEDULE: ${SLA_CRON_SCHEDULE:-*/15 * * * *}
+      SLA_DEFAULT_APPROVAL_HOURS: ${SLA_DEFAULT_APPROVAL_HOURS:-48}
       TICKET_SLA_ENABLED: ${TICKET_SLA_ENABLED:-true}
       TICKET_SLA_CRON_SCHEDULE: ${TICKET_SLA_CRON_SCHEDULE:-*/15 * * * *}
       TICKET_SLA_LOW_HOURS: ${TICKET_SLA_LOW_HOURS:-168}
@@ -101,7 +113,18 @@ services:
       POD_NAME: ${POD_NAME:-}
       POD_NAMESPACE: ${POD_NAMESPACE:-}
       CLUSTER_NAME: ${CLUSTER_NAME:-}
+      # A FALLBACK only — GlobalAISettings.apiKey in the tenant database wins when set, and an
+      # OpenAI-compatible provider (Ollama, Groq, OpenRouter…) is configured exclusively there.
+      # There is deliberately no OPENAI_API_KEY variable anywhere in this application.
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      # The hourly GitHub release check behind the What's-new page. UPDATE_CHECK=off is the
+      # air-gapped posture: the page then lists the release history bundled in this image's own
+      # CHANGELOG.md and nothing calls out. Only the literal "off" disables it — any other value,
+      # including "false", leaves it on. UPDATE_CHECK_TOKEN (read-only Contents PAT) is needed only
+      # when the repo is PRIVATE, where anonymous release lookups 404.
+      UPDATE_CHECK: ${UPDATE_CHECK:-on}
+      UPDATE_CHECK_REPO: ${UPDATE_CHECK_REPO:-}
+      UPDATE_CHECK_TOKEN: ${UPDATE_CHECK_TOKEN:-}
     ports:
       - "4000:4000"
     volumes:

@@ -119,10 +119,55 @@ fi
 log "Backup ready: $BACKUP_FILE"
 
 # ── 2-3. Checkout, rebuild, verify ────────────────────────────────────────────────────────────
+wait_for_health() { # up to 3 minutes, the same budget every caller here used inline before
+  for _ in $(seq 1 60); do curl -fsS http://localhost:4000/health >/dev/null 2>&1 && return 0; sleep 3; done
+  return 1
+}
+
+# The one migration failure that rolling back cannot fix, and that retrying only repeats.
+#
+# MySQL DDL is not transactional and Prisma does not roll back, so a migration that fails PART WAY
+# leaves its ALTER/CREATE INDEX applied while `_prisma_migrations` records the migration as FAILED.
+# Every later `migrate deploy` then refuses with P3009 — including the deploy carrying the FIXED
+# version of that same migration. Left alone, this script made it worse: verification times out,
+# the code rolls back, and the OLD code's own boot migration now hits the same P3009 forever. The
+# deployment ends up stuck in a state neither a re-run nor a rollback can leave.
+#
+# `doctor:heal` is what clears it: it identifies the stranded migration, runs
+# `prisma migrate resolve --rolled-back` and then `migrate deploy` again — but ONLY for a migration
+# whose SQL carries the `@rerunnable` marker, meaning it guards its own DDL with information_schema
+# checks and is safe to replay over a partial application. Anything unmarked is left for a human,
+# because replaying arbitrary half-applied DDL is how data gets lost. It never runs
+# `prisma migrate reset` (which drops the database).
+#
+# `run --rm --no-deps` rather than `exec`: the api container is precisely the thing that is NOT
+# running (its `migrate && migrate && node server.js` chain never reached the server), so there is
+# nothing to exec into. `--no-deps` leaves the healthy mysql container alone.
+heal_stranded_migration() {
+  local logs
+  logs="$(docker compose -f "$COMPOSE_FILE" logs --tail=200 api 2>/dev/null || true)"
+  case "$logs" in
+    *P3009*|*"migrate found failed migrations"*) ;;
+    *) return 1 ;;
+  esac
+  warn "A migration is recorded as FAILED in _prisma_migrations (Prisma P3009) — no later migration can apply until that is cleared."
+  log "Attempting doctor-led recovery (safe + re-runnable; only auto-repairs a migration marked @rerunnable)..."
+  if docker compose -f "$COMPOSE_FILE" run --rm --no-deps --entrypoint sh api \
+       -c 'npm run doctor:heal -w apps/api'; then
+    log "Recovery succeeded — restarting the api container."
+    docker compose -f "$COMPOSE_FILE" up -d api
+    return 0
+  fi
+  warn "Automatic recovery did not succeed. The stranded migration is not marked @rerunnable, or the failure was something else."
+  warn "Run this and read what it says — it names the migration and the exact commands:"
+  warn "  docker compose -f $COMPOSE_FILE run --rm --no-deps --entrypoint sh api -c 'npm run doctor -w apps/api'"
+  warn "Do NOT run 'prisma migrate reset' — Prisma's own error text suggests it, and it drops the database."
+  return 1
+}
+
 run_verification() { # run_verification <expected-version>  — mirrors install.sh's suite
-  local expected="$1" ok=0
-  for _ in $(seq 1 60); do curl -fsS http://localhost:4000/health >/dev/null 2>&1 && { ok=1; break; }; sleep 3; done
-  [ "$ok" = "1" ] || return 1
+  local expected="$1"
+  wait_for_health || return 1
   curl -fsS http://localhost:4000/api/system/version | grep -q "\"version\":\"$expected\"" || return 1
   docker compose -f "$COMPOSE_FILE" exec -T api npx prisma migrate status --schema=apps/api/prisma/schema.prisma >/dev/null 2>&1 || return 1
   docker compose -f "$COMPOSE_FILE" exec -T api npx prisma migrate status --schema=apps/api/prisma/control/schema.prisma >/dev/null 2>&1 || return 1
@@ -162,8 +207,16 @@ migrate_extra_tenants() {
 log "Deploying $TARGET_TAG (build + migrate + restart)..."
 deploy_ref "$TARGET_TAG"
 
-# Wait for the API before tenant migration — the exec needs a running container.
-for _ in $(seq 1 60); do curl -fsS http://localhost:4000/health >/dev/null 2>&1 && break; sleep 3; done
+# Wait for the API before tenant migration — the exec needs a running container. If it never comes
+# up, check for a stranded migration BEFORE going any further: a P3009 caught here can usually be
+# healed in place, which turns a failed-and-rolled-back update into one that simply completes. The
+# rollback below is still the fallback if that doesn't work.
+if ! wait_for_health; then
+  warn "The api container did not become healthy within 3 minutes."
+  if heal_stranded_migration; then
+    wait_for_health || warn "Still not healthy after recovery — the rollback below will take over."
+  fi
+fi
 migrate_extra_tenants
 
 log "Verifying the new version..."
@@ -191,4 +244,10 @@ if run_verification "$CURRENT_VERSION"; then
   exit 1
 fi
 
+# Both the new and the old version failed to verify. A stranded migration is the most likely single
+# cause — it blocks the old code exactly as it blocked the new — so name that check explicitly here
+# rather than leaving "manual attention needed" as the last word.
+warn "Both versions failed to verify. The most common cause is a migration stranded mid-apply, which blocks the old code too:"
+warn "  docker compose -f $COMPOSE_FILE run --rm --no-deps --entrypoint sh api -c 'npm run doctor -w apps/api'"
+warn "That prints exactly which migration is stranded and how to clear it. Do NOT run 'prisma migrate reset'."
 fail "Rollback verification ALSO failed — manual attention needed. Backup: $BACKUP_FILE ; logs: docker compose -f $COMPOSE_FILE logs api"

@@ -272,11 +272,36 @@ And if nothing is running anywhere, it looks for what this machine actually has 
 Windows services matching `mysql`/`mariadb`, a XAMPP/WAMP/MySQL install path, `brew services` on
 macOS, `systemctl` units on Linux — and prints the specific command to start it.
 
-The `:heal` variant runs two more steps once the checks above pass:
+The `:heal` variant runs three more steps once the checks above pass (and skips the advisory
+face preflight, which is diagnostic rather than repair):
 
-7. Creates the `DATABASE_URL`/`CONTROL_DATABASE_URL` databases if the server's reachable but they
+8. Creates the `DATABASE_URL`/`CONTROL_DATABASE_URL` databases if the server's reachable but they
    don't exist yet (`CREATE DATABASE IF NOT EXISTS`).
-8. Runs `prisma migrate deploy` for both the tenant and control-plane schemas.
+9. Runs `prisma migrate deploy` for both the tenant and control-plane schemas.
+10. **Repairs a migration stranded mid-apply** — the one database failure that retrying can never
+    fix, and the reason `doctor:heal` is now wired into the Docker installer, `update.sh`, and the
+    Helm migration Job rather than being a dev-machine convenience.
+
+    MySQL DDL is not transactional and Prisma does not roll back. A migration that fails *part way*
+    therefore leaves its `ALTER`/`CREATE INDEX` applied while `_prisma_migrations` records the
+    migration **FAILED**, and every later `migrate deploy` refuses with **P3009** — including the
+    deploy carrying the *fixed* version of that same migration. The doctor detects that, names the
+    stranded migration, and runs `prisma migrate resolve --rolled-back <name>` followed by
+    `migrate deploy` to replay it.
+
+    **It only auto-repairs a migration whose SQL carries the `@rerunnable` marker**, meaning the
+    migration guards its own DDL with `information_schema` checks and is safe to replay over a
+    partial application. Anything unmarked is reported with instructions instead, because replaying
+    arbitrary half-applied DDL is how data gets lost. It **never** runs `prisma migrate reset` —
+    Prisma's own P3009 error text suggests it, and it drops the database.
+
+    Inside a Docker deployment, where the API container is the thing that failed to start:
+
+    ```bash
+    docker compose run --rm --no-deps --entrypoint sh api -c 'npm run doctor:heal -w apps/api'
+    # diagnose only:
+    docker compose run --rm --no-deps --entrypoint sh api -c 'npm run doctor -w apps/api'
+    ```
 
 `doctor` and `doctor:heal` never modify `.env` — only DB-side state. **`doctor:fix-env` is the one
 mode that edits it**, deliberately opt-in and deliberately narrow: it rewrites *only* the

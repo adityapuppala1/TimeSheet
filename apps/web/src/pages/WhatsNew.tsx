@@ -9,13 +9,20 @@
  *    can do nothing with `./update.sh` except worry — showing them an action they can't take is
  *    noise at best and a support ticket at worst.
  *
- * SECURITY NOTE THAT MUST OUTLIVE REFACTORS: `release.notes` is markdown fetched from the GitHub
- * API — REMOTE content, same trust level as an inbound email. It is rendered exclusively through
- * `marked` piped into `safeHtml` (DOMPurify). Rendering it any other way reopens XSS from anyone
- * who can edit a GitHub release.
+ * WHERE THE HISTORY COMES FROM: the CHANGELOG.md inside the running build, with GitHub merged over
+ * it — see `update-check.service.ts#withBundledHistory` for why that direction and not the reverse.
+ * The practical consequence for this page: every version up to the running one is always present,
+ * whether or not anybody has pushed its tag, and the panel says which source it drew on.
  *
- * WHO renders this: App.tsx's /app/whats-new route; linked from the profile menu ("What's new")
- * and the Workspace Settings About card.
+ * SECURITY NOTE THAT MUST OUTLIVE REFACTORS: `release.notes` is markdown, and it MAY have come from
+ * the GitHub API — REMOTE content, same trust level as an inbound email. It is rendered exclusively
+ * through `marked` piped into `safeHtml` (DOMPurify). Rendering it any other way reopens XSS from
+ * anyone who can edit a GitHub release. The bundled-changelog path is first-party, but the two
+ * merge into one field, so there is exactly one rendering path and it is the safe one.
+ *
+ * WHO renders this: App.tsx's /app/whats-new route; linked from the profile menu ("What's new"),
+ * the Workspace Settings About card, and the `release.published` bell notification raised after an
+ * upgrade (api/src/services/release-announce.service.ts), which arrives with `?release=X.Y.Z`.
  */
 import { useQuery } from "@tanstack/react-query";
 import { marked } from "marked";
@@ -25,16 +32,19 @@ import {
   CheckCircle2,
   Copy,
   ExternalLink,
+  Gauge,
   GitCommitHorizontal,
   History,
   Package,
+  Palette,
   ShieldCheck,
+  Ship,
   Sparkles,
   Wrench,
-  Zap,
   type LucideIcon
 } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
+import { useSearchParams } from "react-router";
 import { Badge } from "../components/ui/badge";
 import { Button } from "../components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../components/ui/card";
@@ -59,31 +69,158 @@ function formatDate(iso: string | null): string {
 
 /* ------------------------------------------------------------------ release-note structure */
 
+interface NoteCategory {
+  label: string;
+  tone: string;
+  icon: LucideIcon;
+  /**
+   * The emoji this project's own changelog headings use for the category. This is the STRONGEST
+   * signal available and it costs nothing to read: `### 🛡️ AI guardrails` was already tagged by
+   * whoever wrote it. Stored without U+FE0F (the variation selector) and compared against a
+   * heading that has had its own selectors stripped, so "🛠️" and "🛠" are the same tag.
+   */
+  emoji?: string[];
+  /**
+   * Fallback for headings with no emoji, and for GitHub Release bodies written by anyone else.
+   * Several small named patterns rather than one long alternation — a single 25-branch regex is
+   * unreadable, un-reviewable, and the thing every linter flags.
+   */
+  match: RegExp[];
+}
+
 /**
- * The industry-standard changelog taxonomy (Keep-a-Changelog / GitHub releases), matched by
- * keyword so it works whether a section was written "### ✨ Features", "### Fixes" or
- * "### 🔐 Password and camera-policy hardening". Order in this list is match priority —
- * "security hardening" must land on security before "hardening" could mean anything else.
+ * The release-note taxonomy — Keep-a-Changelog's categories, widened to the ones this product
+ * actually ships (Performance, Interface, Upgrading) and matched against what the author wrote.
+ *
+ * WHY EMOJI FIRST, THEN KEYWORDS: the headings in this changelog are sentences, not labels —
+ * "💻 \"Active sessions\" is a list of devices again", "🛠️ Setup no longer strands a database it
+ * half-upgraded". A keyword list alone missed nearly all of them, which is how the page ended up
+ * showing a single grey "Changes 20" chip for a release that was four fifths security and
+ * features. Emoji classifies the classic categories exactly; the keyword pass catches the rest.
+ *
+ * ORDER IN THIS LIST IS MATCH PRIORITY, and several entries depend on it:
+ *  - Security before everything, so "Fixed: a password change that changed nothing" is a security
+ *    fix rather than a generic one.
+ *  - Performance before Fixes, so "Performance — measured, then fixed" is not filed under Fixes.
+ *  - Fixes before Infrastructure, so "Setup no longer strands a database" reads as the bug story
+ *    it is rather than as deployment news.
+ *  - Internal before Features, so "Dev-machine and face-flow polish" stays housekeeping.
+ *
+ * TONES ARE FAMILIES, not one colour per label: red = security, amber = something was broken,
+ * blue = operating the thing, teal = the product's own surfaces, green = new capability, grey =
+ * housekeeping. Two labels sharing a family is deliberate — the icon and the word carry the
+ * distinction, and six unrelated hues in one row of chips is noise.
  */
-const NOTE_CATEGORIES: Array<{ match: RegExp; label: string; tone: string; icon: LucideIcon }> = [
-  { match: /security|hardening|password|privacy/i, label: "Security", tone: "bg-destructive/10 text-destructive", icon: ShieldCheck },
-  { match: /fix|bug/i, label: "Fixes", tone: "bg-warning/10 text-warning", icon: Bug },
+const NOTE_CATEGORIES: NoteCategory[] = [
   {
-    match: /feature|new|planning layer|release history|calendar|report|profile|user management|status page|everything else/i,
+    label: "Upgrading",
+    tone: "bg-primary text-primary-foreground",
+    icon: ArrowUpCircle,
+    emoji: ["⬆", "🆙"],
+    // Anchored: "half-upgraded" in a bug story is not an upgrade note. The solid fill is the only
+    // one in the set, because this is the section an operator must read before running update.sh.
+    match: [/^upgrading\b/i, /^upgrade notes?\b/i, /^breaking\b/i, /breaking change/i]
+  },
+  {
+    label: "Security",
+    tone: "bg-destructive/10 text-destructive",
+    icon: ShieldCheck,
+    emoji: ["🔒", "🔐", "🛡", "🔑"],
+    match: [/\bsecurity\b|harden|vulnerab|\bcve\b|\bvapt\b/i, /password|privacy|guardrail|isolation|\breplay\b/i]
+  },
+  {
+    label: "Performance",
+    tone: "bg-info/10 text-info",
+    icon: Gauge,
+    emoji: ["⚡", "🚀"],
+    match: [/\bperformance\b|\bslow(er)?\b|deadlock/i, /latency|throughput|rate limit|load[- ]test|\bmemory\b/i]
+  },
+  {
+    label: "Fixes",
+    tone: "bg-warning/10 text-warning",
+    icon: Bug,
+    emoji: ["🐛", "🐞", "🧯", "🩹", "🛠"],
+    match: [
+      /\bfix(ed|es)?\b|\bbugs?\b|regression|\berrors?\b/i,
+      // How this changelog phrases "this used to be broken" without saying "fix".
+      /no longer|stopped|can't|cannot|\bbroke\b|\bagain\b|never worked/i
+    ]
+  },
+  {
+    label: "Infrastructure",
+    tone: "bg-info/10 text-info",
+    icon: Ship,
+    emoji: ["🚢", "🐳", "☸", "🗄"],
+    match: [
+      /deploy|\binstall|docker|kubernetes|helm|runbook/i,
+      /https|\binfra|storage|\blogs?\b|logging/i,
+      /\bsetup\b|migration|\bdatabase\b|\bbackups?\b/i
+    ]
+  },
+  {
+    label: "Interface",
+    tone: "bg-primary/10 text-primary",
+    icon: Palette,
+    emoji: ["🎨", "🪟", "🗞", "✍", "📊"],
+    match: [
+      /\bui\b|\bux\b|\bcharts?\b|\blabels?\b|layout/i,
+      /dialog|popup|\bmodal\b|panel|window|sidebar/i,
+      /typeset|legible|landing|sign-in|\beditors?\b|\btheme/i
+    ]
+  },
+  {
+    label: "Internal",
+    tone: "bg-muted text-muted-foreground",
+    icon: Wrench,
+    emoji: ["🔧", "🧰", "🧹"],
+    match: [/under the hood|\binternal\b|\bpolish\b|\bdev\b/i, /smaller things|^also\b/i]
+  },
+  {
+    label: "Dependencies",
+    tone: "bg-muted text-muted-foreground",
+    icon: Package,
+    emoji: ["📦"],
+    match: [/\bdependenc|\bpackages?\b|\badvisor(y|ies)\b|\bnpm\b/i]
+  },
+  {
     label: "Features",
     tone: "bg-success/10 text-success",
-    icon: Sparkles
-  },
-  { match: /performance|install|infra|https|deploy|docker/i, label: "Infrastructure", tone: "bg-info/10 text-info", icon: Zap },
-  { match: /dependenc|packages|upgrade/i, label: "Dependencies", tone: "bg-muted text-muted-foreground", icon: Package },
-  { match: /under the hood|internal|polish|dev/i, label: "Internal", tone: "bg-muted text-muted-foreground", icon: Wrench }
+    icon: Sparkles,
+    emoji: ["✨", "🆕", "🎉", "🔌", "🤖", "🪪", "⚙"],
+    match: [
+      /feature|\bnew\b|integrations?\b|\bmcp\b|\banalytics\b/i,
+      /planning layer|release history|everything else|user management|status page/i,
+      // Product areas: a section named after one of these is describing what the product now does.
+      // Last in the list, so anything the categories above claim keeps its more specific label.
+      /timesheet|ticket|approvals?\b|activity type|project|profile/i,
+      /email|calendar|report|\bface\b|identity|branding|\blogos?\b/i
+    ]
+  }
 ];
-const FALLBACK_CATEGORY = { label: "Changes", tone: "bg-muted text-muted-foreground", icon: History };
+/** No pattern can match — a section reaches this only by matching nothing above it. */
+const FALLBACK_CATEGORY: NoteCategory = {
+  label: "Changes",
+  tone: "bg-muted text-muted-foreground",
+  icon: History,
+  match: []
+};
+
+function classifySection(rawTitle: string, cleanTitle: string): NoteCategory {
+  // Variation selectors make "🛠️" and "🛠" different strings; nothing here cares.
+  const tags = rawTitle.replaceAll("️", "");
+  return (
+    NOTE_CATEGORIES.find(
+      (category) =>
+        category.emoji?.some((emoji) => tags.includes(emoji)) ||
+        category.match.some((pattern) => pattern.test(cleanTitle))
+    ) ?? FALLBACK_CATEGORY
+  );
+}
 
 interface NoteSection {
   /** The heading as written, minus its emoji — the author's words stay the headline. */
   title: string;
-  category: (typeof NOTE_CATEGORIES)[number] | typeof FALLBACK_CATEGORY;
+  category: NoteCategory;
   markdown: string;
   /** Top-level bullets — the number shown on the collapsed chip. */
   items: number;
@@ -102,7 +239,9 @@ function parseReleaseSections(notes: string): { intro: string; sections: NoteSec
   const push = () => {
     if (!current) return;
     const cleanTitle = current.title.replace(/[\p{Extended_Pictographic}️]/gu, "").trim();
-    const category = NOTE_CATEGORIES.find((c) => c.match.test(cleanTitle)) ?? FALLBACK_CATEGORY;
+    // The RAW heading is classified (its emoji is the author's own category tag); the CLEAN one is
+    // displayed, because the chip beside it already carries an icon.
+    const category = classifySection(current.title, cleanTitle);
     const markdown = current.body.join("\n").trim();
     sections.push({ title: cleanTitle, category, markdown, items: current.body.filter((l) => /^- /.test(l)).length });
   };
@@ -141,18 +280,35 @@ export function WhatsNewPage() {
   const version = useQuery({ queryKey: ["system", "version"], queryFn: systemApi.version, staleTime: 60_000 });
   const updates = useQuery({ queryKey: ["system", "updates"], queryFn: systemApi.updates, staleTime: 60_000 });
 
+  // `?release=2.4.0` — what the "TimeSphere v2.4.0 is now running" bell notification links to, so
+  // arriving from it opens THAT release rather than making someone hunt for it in the list.
+  const [searchParams] = useSearchParams();
+  const requested = searchParams.get("release");
+
   // The newest release is expanded by default — it's what someone came here to read. The rest
-  // start collapsed so the page is a changelog, not a wall.
+  // start collapsed so the page is a changelog, not a wall. null means "nobody has clicked yet".
   const [expanded, setExpanded] = useState<string | null>(null);
 
-  // Visiting IS reading: clear the menu dot for this release the moment we know what it is.
+  const runningVersion = version.data?.version ?? updates.data?.currentVersion;
+
+  // Visiting IS reading: clear the menu dot for the release this workspace is RUNNING — which is
+  // the version whose notes this page can actually show. Keying it on the newest version GitHub
+  // knows about (as an earlier revision did) means the dot never re-arms for a release whose tag
+  // hasn't been pushed, i.e. exactly the upgrade nobody was told about.
   useEffect(() => {
-    markReleaseSeen(updates.data?.latestVersion);
-  }, [updates.data?.latestVersion]);
+    markReleaseSeen(runningVersion);
+  }, [runningVersion]);
 
   const releases = updates.data?.releases ?? [];
-  const current = version.data?.version ?? "…";
+  const current = runningVersion ?? "…";
   const updateAvailable = Boolean(updates.data?.updateAvailable);
+  const latestRelease = releases.find((release) => release.version === updates.data?.latestVersion);
+
+  // Which card is open before anyone clicks: the one the link asked for, otherwise the newest.
+  // A `?release=` pointing at a version this build has never heard of falls back rather than
+  // leaving the whole list collapsed.
+  const defaultOpen =
+    (requested && releases.some((release) => release.version === requested) ? requested : null) ?? releases[0]?.version;
 
   return (
     <div className="grid gap-5">
@@ -224,7 +380,7 @@ export function WhatsNewPage() {
               Version {updates.data?.latestVersion} is available
             </CardTitle>
             <CardDescription>
-              Released {formatDate(releases[0]?.publishedAt ?? null)}. Read the notes below, then update from the
+              Released {formatDate(latestRelease?.publishedAt ?? null)}. Read the notes below, then update from the
               server that runs this workspace — the command backs up, migrates, verifies, and rolls itself back if
               anything fails.
             </CardDescription>
@@ -267,6 +423,16 @@ export function WhatsNewPage() {
             </p>
           )}
 
+          {/* The normal steady state: the list is this build's changelog, and GitHub has confirmed
+              some of it with published tags/releases. Worth one line so nobody reads a version
+              that isn't on GitHub yet as a page bug. */}
+          {!updates.isLoading && updates.data?.releasesSource === "mixed" && (
+            <p className="text-xs text-muted-foreground">
+              Every version up to v{current} comes from this build's own changelog; the ones already published on GitHub
+              also carry their release links.
+            </p>
+          )}
+
           {!updates.isLoading && releases.length === 0 && (
             <p className="py-4 text-sm text-muted-foreground">
               {updates.data?.checkEnabled
@@ -275,13 +441,13 @@ export function WhatsNewPage() {
             </p>
           )}
 
-          {releases.map((release, index) => (
+          {releases.map((release) => (
             <ReleaseCard
               key={release.version}
               release={release}
               isCurrent={release.version === current}
-              // First card follows the page default (open); the rest follow clicks.
-              open={expanded === null ? index === 0 : expanded === release.version}
+              // Until somebody clicks, the page default is open; after that, clicks decide.
+              open={expanded === null ? release.version === defaultOpen : expanded === release.version}
               onToggle={() => setExpanded(expanded === release.version ? "__none__" : release.version)}
             />
           ))}
@@ -374,6 +540,7 @@ function ReleaseCard({
                     <span className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[11px] font-semibold ${section.category.tone}`}>
                       <section.category.icon className="h-3 w-3" />
                       {section.category.label}
+                      {section.items > 0 && <span className="tabular-nums opacity-70">{section.items}</span>}
                     </span>
                     <h3 className="text-sm font-semibold">{section.title}</h3>
                   </div>

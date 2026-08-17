@@ -4,9 +4,19 @@ TimeSphere ({{ .Chart.AppVersion }}) has been installed as release "{{ .Release.
 
 Migration Job: check its status with
   kubectl get jobs -n {{ .Release.Namespace }} -l app.kubernetes.io/component=migration
-If this is a FIRST install with mysql.enabled=true, that Job may have failed because MySQL's
-own pod didn't exist yet when the pre-install hook ran (see the Job's annotation for why) - run
-`helm upgrade` once the MySQL pod is Ready and the migration will succeed on that pass instead.
+  kubectl logs -n {{ .Release.Namespace }} -l app.kubernetes.io/component=migration
+The install hook is post-install (not pre-install) precisely so a first install with
+mysql.enabled=true works: the Job waits for MySQL via an init container, and the api pods
+crash-restart until the schema exists. Upgrades use pre-upgrade, so the schema is migrated
+before new code serves traffic.
+
+If the Job failed, read its logs before retrying. A migration that died PART WAY leaves
+MySQL's non-transactional DDL applied while _prisma_migrations records it FAILED, and every
+later attempt then refuses with Prisma error P3009 - retrying alone can never clear that. The
+Job runs `doctor:heal` as a recovery fallback for exactly this, which repairs any migration
+marked @rerunnable; if it still failed, the migration needs a human:
+  kubectl exec -n {{ .Release.Namespace }} deploy/{{ include "timesphere.fullname" . }}-api -- npm run doctor -w apps/api
+Never run `prisma migrate reset` - Prisma's own P3009 message suggests it, and it drops the database.
 {{- end }}
 
 {{- if .Values.ingress.enabled }}
@@ -25,6 +35,16 @@ the platform-admin account) - this chart doesn't run it automatically since it's
 in the same "safe to run on every deploy" sense migrations are:
   kubectl exec -n {{ .Release.Namespace }} deploy/{{ include "timesphere.fullname" . }}-api -- npm run control:seed -w apps/api
   kubectl exec -n {{ .Release.Namespace }} deploy/{{ include "timesphere.fullname" . }}-api -- npm run seed -w apps/api
+
+Multi-org installs: the Job above migrates the tenant and control-plane SCHEMAS (DATABASE_URL and
+CONTROL_DATABASE_URL), which is not the same as every tenant database. Each organization a platform
+admin provisions has its OWN database that the Job never touches, so run the fan-out after every
+upgrade (a fast no-op for a single-org install):
+  kubectl exec -n {{ .Release.Namespace }} deploy/{{ include "timesphere.fullname" . }}-api -- npm run migrate:tenants -w apps/api
+
+Outbound email: configure it in-app (Workspace Settings -> Mail server), or set mail.* in values.yaml
+plus SMTP_PASS in your Secret. With no SMTP host configured anywhere, mail is written to the pod log
+instead of being delivered - a password reset that only ever reached `kubectl logs`.
 
 Autoscaling:
   api: {{ .Values.api.autoscaling.enabled }} (min {{ .Values.api.autoscaling.minReplicas }}, max {{ .Values.api.autoscaling.maxReplicas }}, target CPU {{ .Values.api.autoscaling.targetCPUUtilizationPercentage }}%)

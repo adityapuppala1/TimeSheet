@@ -3157,3 +3157,189 @@ several of them shared a root cause.
   this migration, seeded with 120 sessions across two users, then applied — 120 to 10 per user,
   scratch table gone. The empty-database replay the docs already mandate proves the schema applies
   and says nothing about a DATA migration; that gap is now called out there too.
+
+## 2026-08-17 — What's-new stopped waiting for a git tag
+
+A screenshot: `This installation` correctly read **v2.4.0 · Up to date · built August 17**, and the
+Release history directly beneath it stopped at **2.3.0, dated August 8**. Both halves of that page
+were reading the same server response, and both were doing exactly what they had been told to.
+
+- [x] **The release history was GitHub's list, not the product's.** `withBundledFallback` mapped
+  over the versions the GitHub API returned and filled in missing notes per version from the
+  bundled `CHANGELOG.md`. A version GitHub had never heard of therefore did not appear at all. This
+  repo has four tags — 1.0.0, 1.1.0, 2.0.0, 2.3.0 — against seven released versions, and
+  `git ls-remote --tags` confirms the remote has exactly those four. **2.1.0, 2.2.0 and the running
+  2.4.0 were invisible on the page, notes and all, while those notes sat inside the build that was
+  serving it.**
+
+  Worse, the same list decided the badge: `latestVersion` was GitHub's newest (2.3.0), which is not
+  greater than 2.4.0, so the page also said **Up to date** — correct by its own logic, while the
+  one version it could not show you was the one you were running.
+
+  Inverted: the bundled changelog is now the BASE list and GitHub is merged over it
+  (`withBundledHistory`), so cutting a release cannot leave the page stale whatever anyone forgets
+  to push afterwards. GitHub still contributes the one thing a bundle cannot know — versions NEWER
+  than this build — plus real release links, publish timestamps, and notes an author edited after
+  shipping. `updateAvailable`/`latestVersion` stay GitHub-only on purpose: a build's own changelog
+  cannot prove you are current.
+
+  No release data was hand-written to fix this, which is the point. Every recovered version — 2.1.0,
+  2.2.0, 2.4.0 — and every date came out of `CHANGELOG.md`, whose headings match the real commit
+  dates (`f60c683` 2026-08-07, `c6c9ef7` 2026-08-07, `318c516` 2026-08-17).
+
+- [x] **`latestVersion` was `releases[0]`.** Fine for `/releases`, which is newest-first; `/tags` —
+  the fallback that exists precisely because tags are what always exist — promises no ordering
+  whatsoever. It is the highest semver in the answer now, which is what the word means.
+
+- [x] **The bundled-changelog cache ignored its `repo` argument.** `repo` decides the `url` on every
+  parsed release, and the cache was one module-level list, so the first caller's repo would have
+  silently become every later caller's. Invisible with a single caller; a landmine the moment the
+  release announcer became the second. Keyed by repo now.
+
+### Every section of every release wears a real category
+
+- [x] **The taxonomy matched almost nothing this changelog actually writes.** 2.3.0 rendered as a
+  single grey `Changes 20` chip because all four of its sections fell through: `hardening` does not
+  match "Also **hardened**", and nothing in the list knew "MCP", "guardrails" or "AI refine".
+  Headings here are sentences — "Active sessions is a list of devices again" — so a keyword list
+  alone was never going to carry it.
+
+  **The emoji was already the answer.** Every heading carries one, chosen by whoever wrote it, and
+  the lock/shield family has meant security for fifty-nine headings straight. Classification reads
+  the emoji first and falls back to keywords, with ordered priority: Security before Fixes so a
+  password fix files as security, Performance before Fixes so "measured, then fixed" is not a bug,
+  Fixes before Infrastructure so "Setup no longer strands a database" reads as the bug story it is.
+
+  Measured over the real file: **58 of 59 headings classify**, against roughly a dozen before.
+  Categories grew to Upgrading / Security / Performance / Fixes / Infrastructure / Interface /
+  Internal / Dependencies / Features, each with a lucide icon the app already ships and a tone from
+  the existing token set — tones form families rather than nine unrelated hues, because the icon
+  and the word already carry the distinction.
+
+### The upgrade tells you it happened
+
+- [x] **Nobody was told a new version had arrived.** The only signal was a dot on a profile-menu
+  item, and it was keyed on `latestVersion` — GitHub's newest — so after an upgrade to an untagged
+  2.4.0 it never re-armed. It keys on the version the workspace is RUNNING now, which is the
+  version whose notes the page can actually show.
+
+- [x] **And there is a real notification.** `release-announce.service.ts` writes one
+  `release.published` bell row per active user at boot, titled with the version and linking to
+  `/app/whats-new?release=X.Y.Z` — which the page reads and expands on arrival. It clears the way
+  every other bell item clears, and it reaches everyone rather than only admins, matching the
+  What's-new page's own split: the notes are for everyone, only the upgrade command is admin-only.
+
+  **In-app only, and structurally so:** the category is registered with `null` in notify.service's
+  `SETTINGS_FIELD`, and the bulk helper it uses throws if handed a category that has an email leg.
+  Emailing every user of every tenant on every release is how a sending domain gets filtered, and
+  no category in the email role matrix covers product announcements.
+
+  **Dedupe with no new table:** the notification rows are the record. The link carries the version,
+  so "has this workspace been told about this one" is a lookup for that exact link — an answer that
+  survives restarts, redeploys and rollbacks for free. Boots are cheap and can loop under a
+  supervisor; announcements cannot.
+
+- [x] **Documented where the next person will look.** CONTRIBUTING.md's release process now says
+  that VERSION + CHANGELOG.md are the release as far as the product is concerned, that a section's
+  emoji is a category tag rather than decoration, and that the guard test
+  (`changelog-releases.service.test.ts`) fails the build when VERSION has no changelog heading.
+  DEPLOYMENT.md's update section says what users see when a version lands.
+
+## 2026-08-17 — the deployment paths that never ran what they claimed
+
+A completeness audit of every file that installs, upgrades, containerises or CI-checks this product,
+prompted by the observation that the release history in the app had not moved since 8 August. The
+What's-new fix is the entry above; this is what the audit underneath it found. Ten defects, and the
+common shape is that **none of them failed loudly** — each one either warned where it should have
+errored, or reported success for work it had not done.
+
+### Fixed
+
+- [x] **The API image never contained `apps/api/scripts/`.** The runtime stage cherry-picks
+  directories and that one was absent, so `npm run migrate:tenants -w apps/api` exited "file not
+  found" in every container. That is the multi-org schema fan-out `update.sh` runs on *every*
+  update, and the command the Kubernetes runbook says to `kubectl exec`. Its failure is deliberately
+  a warning rather than an error (one bad tenant must not roll back everyone), so the warning was the
+  only thing that ever happened: **every non-default tenant database has been silently staying on its
+  old schema.** The same omission disabled `doctor:heal`, which is the documented P3009 repair.
+  Multi-org installations should run the fan-out once after upgrading to 2.5.0.
+- [x] **Uploads over 1MB were rejected before the API saw them.** `middleware/upload.ts` accepts
+  25MB x 8 files; nginx's `client_max_body_size` and ingress-nginx's `proxy-body-size` both default
+  to 1MB. The proxy refused the body, so the app's own readable size/type errors could never fire and
+  the user got a bare 413. Both now carry the app's own arithmetic (210m), scoped to `/api/` so the
+  SPA keeps the tight default.
+- [x] **Enabling face verification OOMKilled Kubernetes pods.** The models need ~500MB resident per
+  API process against a `512Mi` limit. Now `1280Mi`, requests left at `256Mi` because most
+  installations leave the feature off.
+- [x] **Outbound mail had no Helm configuration at all** — no SMTP keys in the ConfigMap, no
+  `SMTP_PASS` in the Secret example. It did not fail loudly either: `mail.service.ts` logs messages
+  to stdout when no host is set, so password-reset links were "sent" into `kubectl logs`.
+- [x] **A migration stranded mid-apply (Prisma P3009) deadlocked every deployment path.** MySQL DDL
+  is not transactional and Prisma does not roll back, so a half-failed migration leaves its DDL
+  applied while `_prisma_migrations` says FAILED — and every later `migrate deploy` refuses,
+  including the corrected version of the migration that broke. `update.sh` made it worse by rolling
+  the code back into the same wall. `install.sh`, `update.sh`, `update.ps1` and the Helm migration
+  Job now attempt the doctor's repair as a fallback *after* a normal `migrate deploy`, preserving
+  exit status so a genuinely failing hook still blocks the rollout. Only migrations declaring
+  themselves `@rerunnable` are cleared, and `prisma migrate reset` is never run.
+- [x] **Two CI gates had never executed once.** Both the security-scan dogfooding job and the
+  test-run reporting step were gated on `if: secrets.X != ''`. GitHub does not expose the `secrets`
+  context to **any** `if:` key, so the expression was `'' != ''` — permanently false, token
+  configured or not. Replaced with a job-level `env` for the step gate and a preflight job whose
+  *output* a job-level `if:` may legally read.
+- [x] **`Chart.yaml`'s appVersion had drifted to 2.1.0 while the repo shipped 2.4.0**, so
+  `kubectl get deploy -L app.kubernetes.io/version` answered wrongly and nothing failed. Corrected,
+  and CI now asserts appVersion against the repo `VERSION` file on every run — which is why cutting
+  2.5.0 moved both.
+- [x] **Six documented environment variables never reached the container.**
+  `TENANT_DB_PROVISION_BASE_URL`, `SLA_CRON_SCHEDULE`, `SLA_DEFAULT_APPROVAL_HOURS` and the three
+  `UPDATE_CHECK*` variables were in `.env.example` and read by code but absent from the compose
+  service definitions, and Compose does not pass the host environment through. The audit computed
+  the coverage matrix rather than eyeballing it: 59 operator-relevant variables x 4 surfaces
+  (`.env.example`, three compose shapes, Helm ConfigMap/values, docs), now with zero gaps and
+  nothing documented-but-unread.
+- [x] **Face enrollment could not accept the frame count its own route allowed.** The route passed
+  `maxCount` 8 while the shared multer instance capped `files` at 5, so a six-to-eight-frame
+  enrollment died with `LIMIT_FILE_COUNT` — an unreadable 500 — instead of the route's own limit
+  answering. Today's guided wizard sends four, so nothing broke in practice; a fifth pose would
+  have. Both ends now derive from `FACE_ENROLL_MAX_FRAMES` / `FACE_VERIFY_MAX_FRAMES`.
+- [x] **Emailed dashboard links contained the literal word "auto".**
+  `report-subscription.worker.ts` read `process.env.APP_BASE_URL` directly, bypassing the resolution
+  in `config/env.ts` that turns `auto` or a `{lan-ip}` token into a real address.
+- [x] **The Windows updater re-encoded its own database backup.** `update.ps1` piped `mysqldump`
+  through `Out-File -Encoding utf8`; PowerShell decodes a native command's stdout into strings using
+  the console encoding and re-emits it with its own line endings, so the "backup" was a rewritten
+  copy — CRLFs, a possible BOM, any byte the codepage could not round-trip replaced — and nothing
+  says so until restore day. The dump is now written inside the container and copied out with
+  `docker compose cp`, gzipped and named `.sql.gz` to match `update.sh`, with a size floor because
+  the container-side pipe reports gzip's exit status rather than mysqldump's.
+
+### Added
+
+- [x] **`validate-deployment-manifests` CI job** — `helm lint`, three `helm template` renders
+  (bundled MySQL, external database with hooks disabled, telemetry and VPA enabled) each
+  strict-YAML-parsed, `docker compose config` across all three compose shapes, and the
+  Chart.yaml/VERSION assertion. Entirely offline: no cluster, no registry, no push.
+- [x] **A committed way to drive the running app.** `.claude/skills/run-timesphere/` holds a
+  Playwright driver (`driver.mjs`) with `health` / `shot` / `text` / `eval` / `bell` commands and a
+  SKILL.md of the traps found while writing it — the dev server being HTTPS-only, `/api/notifications`
+  answering 401 to a cookie-only client because the SPA holds its token in memory, and `/app/dashboard`
+  not being a route. It is how the 2.5.0 What's-new page and the release notification were verified
+  in the real UI rather than only in tests.
+
+### Open — reported, not fixed
+
+- [ ] **`update.ps1` omits the platform-admin login check** that `update.sh` performs, and
+  **`install.ps1` has no Kubernetes branch** at all. Parity gaps rather than defects, but the
+  Windows path is quietly the weaker one and that should be a decision, not an accident.
+- [ ] **`api-pvc.yaml` offers no `storageClassName`** (the MySQL StatefulSet does), so an uploads
+  PVC lands on whatever the cluster defaults to.
+- [ ] **`helm lint` and `docker build` could not be run on this machine** — helm is not installed
+  and the Docker daemon was not running. Substituted: every `.Values` reference resolved against
+  `values.yaml`, all 14 templates checked for balanced `if/with/range`, and the compose files
+  validated with `docker compose config` (client-side, which is why it worked). The new CI job is
+  what will actually exercise helm; until it runs on a real push, treat the chart changes as
+  reviewed rather than rendered.
+- [ ] **The `tests/e2e` Playwright suite was not run** against this release. It is configured
+  `workers: 1` because every spec shares one seeded MySQL database, and the unit suite (999 tests)
+  plus the driven-app verification stood in for it.

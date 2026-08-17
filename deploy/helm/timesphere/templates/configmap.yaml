@@ -17,6 +17,39 @@ data:
   TRUST_PROXY_HOPS: {{ .Values.env.trustProxyHops | quote }}
   RATE_LIMIT_PER_MINUTE: {{ .Values.env.rateLimitPerMinute | quote }}
   TENANT_DB_CONNECTION_LIMIT: {{ .Values.env.tenantDbConnectionLimit | quote }}
+  ACCESS_TOKEN_TTL: {{ .Values.env.accessTokenTtl | quote }}
+  REFRESH_TOKEN_TTL_DAYS: {{ .Values.env.refreshTokenTtlDays | quote }}
+  {{- with .Values.mail }}
+  # Outbound SMTP. GlobalMailSettings in the tenant database overrides all of this at runtime; these
+  # are the deployment-level fallback. Empty SMTP_HOST = mail is written to stdout instead of sent,
+  # which is a real trap on Kubernetes (a "delivered" password reset that only reached kubectl logs).
+  # SMTP_PASS is absent on purpose — it comes from the Secret, not from here.
+  MAIL_FROM: {{ .from | quote }}
+  SMTP_HOST: {{ .smtpHost | quote }}
+  SMTP_PORT: {{ .smtpPort | quote }}
+  SMTP_USER: {{ .smtpUser | quote }}
+  SMTP_SECURE: {{ .smtpSecure | quote }}
+  {{- end }}
+  {{- with .Values.sla }}
+  # Approval + ticket SLA escalation. The cron values are scan frequency, the hours are deadlines.
+  SLA_ENABLED: {{ .enabled | quote }}
+  SLA_CRON_SCHEDULE: {{ .cronSchedule | quote }}
+  SLA_DEFAULT_APPROVAL_HOURS: {{ .defaultApprovalHours | quote }}
+  TICKET_SLA_ENABLED: {{ .ticketEnabled | quote }}
+  TICKET_SLA_CRON_SCHEDULE: {{ .ticketCronSchedule | quote }}
+  TICKET_SLA_LOW_HOURS: {{ .ticketLowHours | quote }}
+  TICKET_SLA_MEDIUM_HOURS: {{ .ticketMediumHours | quote }}
+  TICKET_SLA_HIGH_HOURS: {{ .ticketHighHours | quote }}
+  TICKET_SLA_CRITICAL_HOURS: {{ .ticketCriticalHours | quote }}
+  {{- end }}
+  {{- with .Values.updateCheck }}
+  # UPDATE_CHECK is read as the literal string "off" to disable — anything else leaves it on, so the
+  # boolean is mapped rather than passed through (a bare "false" here would NOT switch it off).
+  UPDATE_CHECK: {{ ternary "on" "off" .enabled | quote }}
+  {{- if .repo }}
+  UPDATE_CHECK_REPO: {{ .repo | quote }}
+  {{- end }}
+  {{- end }}
   {{- with .Values.storage }}
   # Empty = the default layout under UPLOAD_DIR above. A path set here must land inside a mounted
   # volume; api-deployment.yaml mounts the uploads PVC at /app/uploads and nothing else.

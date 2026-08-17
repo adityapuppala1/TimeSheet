@@ -81,13 +81,32 @@ Write-Step "Updating: v$CurrentVersion ($CurrentRef) -> $To"
 # -- 1. Backup FIRST ---------------------------------------------------------------------------
 New-Item -ItemType Directory -Force "backups" | Out-Null
 $Stamp = (Get-Date).ToUniversalTime().ToString("yyyyMMdd-HHmmss")
-$BackupFile = "backups\pre-update-$CurrentVersion-to-$TargetVersion-$Stamp.sql"
+$BackupFile = "backups\pre-update-$CurrentVersion-to-$TargetVersion-$Stamp.sql.gz"
 if ($ComposeFile -eq "docker-compose.yml") {
   Write-Step "Backing up both databases to $BackupFile ..."
   # Credentials come from the container's own env - never parsed out of .env, so a hand-edited
   # quoting style can't corrupt the command.
-  docker compose -f $ComposeFile exec -T mysql sh -c 'exec mysqldump -uroot -p"$MYSQL_ROOT_PASSWORD" --all-databases --single-transaction --no-tablespaces' | Out-File -Encoding utf8 $BackupFile
+  #
+  # WHY THE DUMP IS WRITTEN INSIDE THE CONTAINER AND COPIED OUT, instead of piped into a file here
+  # (a real restore hazard - do not "simplify" this back into a pipe): PowerShell decodes a native
+  # command's stdout into .NET strings using the console encoding and re-emits it with its own line
+  # endings, so `mysqldump | Out-File` REWROTE the dump rather than copying it - CRLFs, a possible
+  # BOM, and any byte the active codepage could not round-trip replaced. Nothing complains until
+  # restore day, which is the worst possible time to find out. `docker compose cp` writes the file
+  # itself, so the bytes are never PowerShell's to touch. Gzipped and named .sql.gz to match
+  # update.sh, so the same restore command works whichever script took the backup.
+  $ContainerDump = "/tmp/timesphere-pre-update.sql.gz"
+  $DumpCmd = 'exec mysqldump -uroot -p"$MYSQL_ROOT_PASSWORD" --all-databases --single-transaction --no-tablespaces | gzip -c > ' + $ContainerDump
+  docker compose -f $ComposeFile exec -T mysql sh -c $DumpCmd
   if ($LASTEXITCODE -ne 0) { Write-Fail "Backup failed - refusing to update without one. Is the mysql container running (docker compose ps)?" }
+  docker compose -f $ComposeFile cp ("mysql:" + $ContainerDump) $BackupFile
+  if ($LASTEXITCODE -ne 0) { Write-Fail "The dump was written inside the container but could not be copied to $BackupFile - refusing to update without a backup on disk." }
+  docker compose -f $ComposeFile exec -T mysql rm -f $ContainerDump 2>&1 | Out-Null
+  # The exit status above belongs to gzip, the last command in the container-side pipe, so a
+  # mysqldump that died mid-write can still report success (update.sh has the same shape). A gzip
+  # of nothing is a few dozen bytes, so a size floor catches exactly that case.
+  $DumpSize = (Get-Item $BackupFile -ErrorAction SilentlyContinue).Length
+  if (-not $DumpSize -or $DumpSize -lt 1024) { Write-Fail "Backup file $BackupFile is $DumpSize bytes - that is not a dump of both schemas. Refusing to update." }
 } else {
   Write-Warn "External-database deployment: this script cannot reach into your MySQL server to back it up."
   Write-Warn "Take your own backup/snapshot NOW (RDS snapshot, mysqldump from a host that can reach it)."
@@ -99,12 +118,9 @@ Write-Step "Backup ready: $BackupFile"
 
 # -- 2-3. Checkout, rebuild, verify ------------------------------------------------------------
 function Invoke-Verification([string]$Expected) {
-  $healthy = $false
-  for ($i = 0; $i -lt 60; $i++) {
-    try { if ((Invoke-WebRequest -Uri "http://localhost:4000/health" -UseBasicParsing -TimeoutSec 3).StatusCode -eq 200) { $healthy = $true; break } } catch {}
-    Start-Sleep -Seconds 3
-  }
-  if (-not $healthy) { return $false }
+  # Wait-ApiHealth is defined below; PowerShell resolves the call at invocation time, and every
+  # caller of this function runs after both definitions.
+  if (-not (Wait-ApiHealth)) { return $false }
   try {
     $v = (Invoke-WebRequest -Uri "http://localhost:4000/api/system/version" -UseBasicParsing -TimeoutSec 5).Content
     if ($v -notmatch "`"version`":`"$Expected`"") { return $false }
@@ -129,6 +145,51 @@ function Invoke-DeployRef([string]$Ref) {
   docker compose -f $ComposeFile up -d --build
 }
 
+function Wait-ApiHealth {
+  for ($i = 0; $i -lt 60; $i++) {
+    try { if ((Invoke-WebRequest -Uri "http://localhost:4000/health" -UseBasicParsing -TimeoutSec 3).StatusCode -eq 200) { return $true } } catch {}
+    Start-Sleep -Seconds 3
+  }
+  return $false
+}
+
+# The one migration failure that rolling back cannot fix — see update.sh's function of the same
+# name for the full reasoning. Short version: MySQL DDL is not transactional and Prisma does not
+# roll back, so a migration that dies part way leaves its DDL applied while _prisma_migrations
+# records it FAILED. Every later migrate deploy then refuses with P3009, including the one carrying
+# the fix. Rolling the code back does not help — the OLD code's boot migration hits the same wall,
+# so the deployment ends up stuck in a state neither a re-run nor a rollback can leave.
+#
+# doctor:heal clears it (migrate resolve --rolled-back, then migrate deploy) but only for a
+# migration whose SQL is marked @rerunnable, i.e. one that guards its own DDL and is safe to replay
+# over a partial application. It never runs 'prisma migrate reset', which drops the database.
+#
+# 'run --rm --no-deps' rather than 'exec': the api container is exactly what is NOT running, since
+# its migrate-then-start chain never reached the server. --no-deps leaves the healthy mysql alone.
+function Invoke-HealStrandedMigration {
+  $logs = (docker compose -f $ComposeFile logs --tail=200 api 2>$null | Out-String)
+  if ($logs -notmatch 'P3009' -and $logs -notmatch 'migrate found failed migrations') { return $false }
+  Write-Warn "A migration is recorded as FAILED in _prisma_migrations (Prisma P3009) - no later migration can apply until that is cleared."
+  Write-Step "Attempting doctor-led recovery (safe + re-runnable; only auto-repairs a migration marked @rerunnable)..."
+  # `| Out-Host` rather than bare, and rather than `| Out-Null`: a native command's stdout inside a
+  # function joins that function's OUTPUT STREAM, so leaving it bare would make this function return
+  # docker's log lines followed by the boolean — and `if (Invoke-HealStrandedMigration)` would then
+  # be true on a non-empty array even when the recovery failed. Out-Host shows the doctor's report
+  # (which names the stranded migration, the reason to run it at all) while keeping it out of the
+  # return value. Invoke-Verification above uses Out-Null for the same reason where output is noise.
+  docker compose -f $ComposeFile run --rm --no-deps --entrypoint sh api -c 'npm run doctor:heal -w apps/api' | Out-Host
+  if ($LASTEXITCODE -eq 0) {
+    Write-Step "Recovery succeeded - restarting the api container."
+    docker compose -f $ComposeFile up -d api | Out-Host
+    return $true
+  }
+  Write-Warn "Automatic recovery did not succeed. The stranded migration is not marked @rerunnable, or the failure was something else."
+  Write-Warn "Run this and read what it says - it names the migration and the exact commands:"
+  Write-Warn "  docker compose -f $ComposeFile run --rm --no-deps --entrypoint sh api -c 'npm run doctor -w apps/api'"
+  Write-Warn "Do NOT run 'prisma migrate reset' - Prisma's own error text suggests it, and it drops the database."
+  return $false
+}
+
 Write-Step "Deploying $To (build + migrate + restart)..."
 Invoke-DeployRef $To
 
@@ -140,9 +201,14 @@ Invoke-DeployRef $To
 # No per-release edit is ever needed here: the target is whatever getLatestMigrationName() reads
 # off the CHECKED-OUT prisma/migrations directory, so 2.3.0's 20260808120000_mcp_server reaches
 # every tenant through this same call without a line of this script changing.
-for ($i = 0; $i -lt 60; $i++) {
-  try { if ((Invoke-WebRequest -Uri "http://localhost:4000/health" -UseBasicParsing -TimeoutSec 3).StatusCode -eq 200) { break } } catch {}
-  Start-Sleep -Seconds 3
+# If the API never comes up, check for a stranded migration BEFORE going any further: a P3009
+# caught here can usually be healed in place, turning a failed-and-rolled-back update into one that
+# simply completes. The rollback further down is still the fallback if that does not work.
+if (-not (Wait-ApiHealth)) {
+  Write-Warn "The api container did not become healthy within 3 minutes."
+  if (Invoke-HealStrandedMigration) {
+    if (-not (Wait-ApiHealth)) { Write-Warn "Still not healthy after recovery - the rollback below will take over." }
+  }
 }
 Write-Step "Migrating any additional tenant databases..."
 docker compose -f $ComposeFile exec -T api npm run migrate:tenants -w apps/api
@@ -171,4 +237,9 @@ if (Invoke-Verification $CurrentVersion) {
   exit 1
 }
 
+# Both versions failed to verify. A stranded migration blocks the old code exactly as it blocked the
+# new one, so name that check explicitly rather than leaving "manual attention needed" as the last word.
+Write-Warn "Both versions failed to verify. The most common cause is a migration stranded mid-apply, which blocks the old code too:"
+Write-Warn "  docker compose -f $ComposeFile run --rm --no-deps --entrypoint sh api -c 'npm run doctor -w apps/api'"
+Write-Warn "That prints exactly which migration is stranded and how to clear it. Do NOT run 'prisma migrate reset'."
 Write-Fail "Rollback verification ALSO failed - manual attention needed. Backup: $BackupFile ; logs: docker compose -f $ComposeFile logs api"

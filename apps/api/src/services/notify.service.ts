@@ -53,7 +53,13 @@ export type NotificationCategory =
   | "ai.autonomy_applied"
   /** In-app ONLY — see the `null` in SETTINGS_FIELD. Raised when a reviewer edits somebody
    *  else's timesheet entry, so the change never happens silently behind the author's back. */
-  | "timesheet.updated";
+  | "timesheet.updated"
+  /** In-app ONLY, and deliberately so — see the `null` in SETTINGS_FIELD. "The workspace is now
+   *  running vX.Y.Z" is news, not correspondence: emailing every user of every tenant on every
+   *  upgrade is the kind of send that gets a domain filtered, and no category in the email role
+   *  matrix covers product announcements. Raised once per version per workspace by
+   *  services/release-announce.service.ts. */
+  | "release.published";
 
 interface EmailPayload {
   templateKey: string;
@@ -107,7 +113,8 @@ const SETTINGS_FIELD: Record<NotificationCategory, string | null> = {
   "ticket.stale_nudge": "emailTicketStaleNudge",
   "maintenance.scheduled": "emailMaintenanceScheduled",
   "ai.autonomy_applied": "emailAiAutonomyApplied",
-  "timesheet.updated": null
+  "timesheet.updated": null,
+  "release.published": null
 };
 
 const GLOBAL_ID = "global";
@@ -175,6 +182,42 @@ export async function dispatchNotification(args: DispatchArgs) {
   })().catch((error) => {
     console.error(`[notify] detached email send failed for ${args.category}:`, (error as Error).message);
   });
+}
+
+/**
+ * One in-app row for many people at once, for a category that has NO email leg.
+ *
+ * WHY THIS EXISTS ALONGSIDE `dispatchNotification`: that function is per-recipient by necessity —
+ * it reads the user to decide whether to email them and which role mutes apply. A workspace-wide
+ * announcement has no email leg to decide anything about, so paying two queries per employee to
+ * arrive at "write the row" is arithmetic, not safety. The recipient filtering that matters
+ * (active, not deleted) is the caller's `where` clause on the same `User` table.
+ *
+ * The `null` assertion is the invariant, not a formality: giving `category` an email payload later
+ * means adding a SETTINGS_FIELD column, and this path would have silently skipped the gate.
+ */
+export async function dispatchInAppToMany(args: {
+  userIds: string[];
+  category: NotificationCategory;
+  title: string;
+  body: string;
+  link?: string;
+}): Promise<number> {
+  if (SETTINGS_FIELD[args.category] !== null) {
+    throw new Error(`dispatchInAppToMany refuses "${args.category}": it has an email leg, use dispatchNotification`);
+  }
+  if (args.userIds.length === 0) return 0;
+
+  const created = await prisma.notification.createMany({
+    data: args.userIds.map((userId) => ({
+      userId,
+      title: args.title,
+      body: args.body,
+      category: args.category,
+      link: args.link
+    }))
+  });
+  return created.count;
 }
 
 export async function dispatchTransactional(args: {
