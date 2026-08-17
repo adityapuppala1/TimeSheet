@@ -33,7 +33,13 @@ import { describe, expect, it } from "vitest";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { p3009Recovery } from "../../scripts/lib/migration-recovery.js";
+import {
+  failedMigrationName,
+  isP3009,
+  isRerunnable,
+  p3009Recovery,
+  RERUNNABLE_MARKER
+} from "../../scripts/lib/migration-recovery.js";
 
 const MIGRATIONS_DIR = path.resolve(fileURLToPath(new URL("../../prisma/migrations", import.meta.url)));
 
@@ -225,6 +231,58 @@ describe("session_device_identity, specifically", () => {
   });
 });
 
+describe("the @rerunnable marker", () => {
+  // This is the safety-critical one. The marker tells `npm run setup` it may clear a failed
+  // migration record and re-apply the file UNATTENDED, against a database with real data. A
+  // marker on a migration that cannot survive a re-run turns an auto-heal into an outage.
+  const marked = migrations.filter((migration) => migration.sql.includes(RERUNNABLE_MARKER));
+
+  it("is carried only by migrations that guard their DDL", () => {
+    for (const migration of marked) {
+      expect(migration.code, `${migration.name} is marked ${RERUNNABLE_MARKER} but its DDL is unguarded`).toMatch(
+        /\bprepare\b[\s\S]*\bexecute\b[\s\S]*\bdeallocate\s+prepare\b/
+      );
+      expect(migration.code, `${migration.name} is marked ${RERUNNABLE_MARKER} but never reads information_schema`).toMatch(
+        /information_schema/
+      );
+    }
+  });
+
+  it("is carried only by migrations whose data changes are guarded against repetition", () => {
+    // The other half of the promise: running the DML twice must equal running it once. Every
+    // marked migration has to state a condition that its own effect makes false — `SET revokedAt`
+    // behind `WHERE revokedAt IS NULL` is the shape. This cannot be proven statically, so the
+    // check is that SOME such guard exists and a reviewer had to write it.
+    for (const migration of marked) {
+      const statements = migration.code.split(";").filter((statement) => /(^|\s)(update|insert\s+into)\s/.test(statement));
+      for (const statement of statements) {
+        // Writes into a scratch table are exempt — it is created and dropped inside the file.
+        if (/(update|insert\s+into)\s+`?_/.test(statement)) continue;
+        expect(statement, `${migration.name} has an unconditional write; a re-run would repeat it`).toMatch(/\bwhere\b/);
+      }
+    }
+  });
+
+  it("is on the session migration, which is the one setup must be able to auto-heal", () => {
+    expect(marked.map((migration) => migration.name)).toContain("20260817100000_session_device_identity");
+  });
+
+  it("is recognised only inside a SQL comment, so it lives in the checksummed file", () => {
+    expect(isRerunnable(MIGRATIONS_DIR, "20260817100000_session_device_identity")).toBe(true);
+    // A migration without the marker must never be auto-recovered.
+    expect(isRerunnable(MIGRATIONS_DIR, "20260802171943_user_onboarding_completed_at")).toBe(false);
+  });
+
+  it("refuses names that are not migration directories, and migrations this checkout lacks", () => {
+    // `name` reaches this function from Prisma's stdout and is used to build a path.
+    expect(isRerunnable(MIGRATIONS_DIR, "../../../etc/passwd")).toBe(false);
+    expect(isRerunnable(MIGRATIONS_DIR, "20260817100000_session_device_identity/../../foo")).toBe(false);
+    // A database that ran a migration this checkout does not have — a downgrade or another branch.
+    // Re-running something unreadable is exactly the wrong move.
+    expect(isRerunnable(MIGRATIONS_DIR, "29991231235959_from_the_future")).toBe(false);
+  });
+});
+
 describe("p3009Recovery", () => {
   // Verbatim from `prisma migrate deploy` against a database holding a failed migration. If a
   // Prisma upgrade rewords this, this test fails and the doctor's advice gets fixed with it —
@@ -241,6 +299,22 @@ describe("p3009Recovery", () => {
   it("returns null for unrelated failures so the caller keeps its generic advice", () => {
     expect(p3009Recovery("Error: P1001 Can't reach database server", "prisma/schema.prisma")).toBeNull();
     expect(p3009Recovery("", "prisma/schema.prisma")).toBeNull();
+    // The same negative gates the auto-heal path: no P3009, no name, nothing to resolve.
+    expect(isP3009("Error: P1001")).toBe(false);
+    expect(failedMigrationName("Error: P1001 `20260817100000_session_device_identity`")).toBeNull();
+  });
+
+  it("extracts the migration name the doctor will pass to `resolve`", () => {
+    expect(failedMigrationName(REAL_P3009)).toBe("20260817100000_session_device_identity");
+    // A P3009 whose name Prisma phrased differently must yield null rather than a wrong name —
+    // the doctor then prints instructions instead of running `resolve` against a guess.
+    expect(failedMigrationName("Error: P3009\nsomething about `the database`")).toBeNull();
+  });
+
+  it("spells out the directory, because landing in apps/ is the actual reported failure", () => {
+    // An operator followed these steps, ran them from `apps/` rather than `apps/api/`, and got
+    // "Could not load `--schema`" — which reads like a new unrelated problem.
+    expect(p3009Recovery(REAL_P3009, "prisma/schema.prisma")).toContain("cd apps/api          <-");
   });
 
   it("names the failed migration in a runnable command", () => {

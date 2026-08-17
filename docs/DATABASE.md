@@ -111,8 +111,28 @@ The same shape against `information_schema.STATISTICS` (`INDEX_NAME = …`) guar
 
 ### Recovering from P3009 — "failed migrations in the target database"
 
-This is what an operator sees after a migration dies part-way. `npm run setup` surfaces it with
-the recovery commands attached (`apps/api/scripts/doctor.ts`), but in full:
+This is what an operator sees after a migration dies part-way.
+
+**`npm run setup` recovers from this on its own when the migration allows it.** The doctor detects
+P3009, reads the named migration, and if it carries a **`@rerunnable`** marker in its SQL comments
+it clears the failed record and re-applies the file unattended. No row data is deleted or
+rewritten by either step.
+
+Marking a migration `@rerunnable` is a promise about two things, and it is the author's to make:
+
+1. **Re-running the file over its own partial effects completes** — its DDL is guarded per trap (3)
+   above, so `ADD COLUMN` on a column that already exists is a no-op rather than a duplicate error.
+2. **Its data changes are idempotent** — running twice equals running once. The session cleanup
+   qualifies because it writes `revokedAt` behind `WHERE revokedAt IS NULL`; a second pass finds
+   nothing left to do.
+
+Nothing can infer property (2) from the SQL. `UPDATE Ledger SET total = total + 1` is
+indistinguishable from an idempotent backfill to any static check, and re-running it silently
+doubles every row — so **an unmarked migration is never auto-recovered**, and the doctor prints the
+manual steps instead. `apps/api/tests/unit/migration-portability.test.ts` fails the build if a
+migration carries the marker without guarded DDL or with an unconditional write.
+
+To do it by hand — and this is what the doctor prints for an unmarked migration:
 
 ```bash
 cd apps/api

@@ -15,8 +15,12 @@
  *  - `npm run doctor -w apps/api`            diagnose only, never writes anything.
  *  - `npm run doctor:heal -w apps/api`       also creates the two databases if the server is
  *                                            reachable but they don't exist, and runs
- *                                            `prisma migrate deploy` for both schemas. Touches
- *                                            DB-side state only — never `.env`.
+ *                                            `prisma migrate deploy` for both schemas. If a
+ *                                            previous run left a migration recorded as FAILED
+ *                                            (P3009), clears and re-applies it — but only when
+ *                                            that migration declares itself `@rerunnable`; see
+ *                                            lib/migration-recovery.ts. Touches DB-side state
+ *                                            only — never `.env`.
  *  - `npm run doctor:heal -w apps/api -- --fix-env`
  *                                            additionally rewrites the host:port inside
  *                                            DATABASE_URL/CONTROL_DATABASE_URL in `.env` when
@@ -41,7 +45,7 @@ import fs from "node:fs";
 import net from "node:net";
 import os from "node:os";
 import path from "node:path";
-import { p3009Recovery } from "./lib/migration-recovery.js";
+import { failedMigrationName, isRerunnable, p3009Recovery } from "./lib/migration-recovery.js";
 
 const HEAL = process.argv.includes("--heal");
 const FIX_ENV = process.argv.includes("--fix-env");
@@ -305,12 +309,73 @@ function childOutput(error: unknown): string {
     .join("\n");
 }
 
+/**
+ * Clears the failed record for a migration that declares itself safe to re-run, then re-applies.
+ *
+ * WHY THE DOCTOR DOES THIS RATHER THAN PRINTING IT: it printed it, and that was not enough. The
+ * three commands are `cd apps/api` and two long `npx` lines, and the failure they follow already
+ * has the operator several directories deep in a monorepo. Landing in `apps/` instead of
+ * `apps/api/` produces "Could not load `--schema`", which reads like a fourth unrelated problem.
+ *
+ * This only ever runs under `--heal`, and only for a migration carrying the `@rerunnable` marker —
+ * see `lib/migration-recovery.ts` for why that promise cannot be inferred. Neither command deletes
+ * or rewrites row data: `resolve` edits one bookkeeping row, `deploy` re-runs a file whose author
+ * has vouched that re-running is a no-op where it already applied.
+ */
+function autoResolveFailedMigration(label: string, schema: string, migration: string): boolean {
+  info(
+    `\n[doctor] "${migration}" is recorded as failed, and declares itself safe to re-run.\n` +
+      `[doctor] Clearing the failed record and re-applying it. No row data is deleted or rewritten.\n`
+  );
+  try {
+    execSync(`npx prisma migrate resolve --rolled-back ${migration} --schema=${schema}`, {
+      stdio: ["pipe", "pipe", "pipe"],
+      cwd: apiCwd
+    });
+  } catch (error) {
+    fail(
+      `${label} — could not clear the failed migration record. Prisma said:\n\n${childOutput(error)}\n\n` +
+        `  Nothing was changed. See docs/DATABASE.md.`
+    );
+    return false;
+  }
+
+  try {
+    execSync(`npx prisma migrate deploy --schema=${schema}`, { stdio: ["pipe", "pipe", "pipe"], cwd: apiCwd });
+    ok(`${label} — recovered "${migration}" and applied all migrations`);
+    return true;
+  } catch (error) {
+    const said = childOutput(error);
+    // The retry is where a mis-marked migration shows itself, so name that possibility explicitly
+    // rather than leaving a duplicate-column error to be interpreted from scratch.
+    fail(
+      `${label} — the failed record was cleared, but re-applying still failed. Prisma said:\n\n${said}\n\n` +
+        (/duplicate\s+(column|key|index)/i.test(said)
+          ? `  A duplicate column or index means "${migration}" is marked \`@rerunnable\` but is not:\n` +
+            `  it does not guard its DDL against already existing. See docs/DATABASE.md, trap 3.\n`
+          : `  See docs/DATABASE.md.\n`) +
+        `  Your data is untouched — the database is in the same state it was before this ran.`
+    );
+    return false;
+  }
+}
+
 function runMigrations(label: string, schema: string): void {
   try {
     execSync(`npx prisma migrate deploy --schema=${schema}`, { stdio: ["pipe", "pipe", "pipe"], cwd: apiCwd });
     ok(`${label} — migrations applied (prisma migrate deploy)`);
   } catch (error) {
     const said = childOutput(error);
+    const failed = failedMigrationName(said);
+    // Each schema keeps its migrations beside it — `prisma/migrations` for the tenant schema,
+    // `prisma/control/migrations` for the control one.
+    const migrationsDir = path.join(apiCwd, path.dirname(schema), "migrations");
+
+    if (HEAL && failed && isRerunnable(migrationsDir, failed)) {
+      autoResolveFailedMigration(label, schema, failed);
+      return;
+    }
+
     fail(
       `${label} — migration failed. Prisma said:\n\n${said}\n` +
         (p3009Recovery(said, schema) ??

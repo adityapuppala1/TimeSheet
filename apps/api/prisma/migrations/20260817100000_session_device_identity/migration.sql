@@ -13,6 +13,15 @@
 --
 -- Canonical casing throughout, per the CHANGELOG's Linux-MySQL upgrade note.
 --
+-- @rerunnable
+--
+-- That marker is a promise, and `npm run setup` acts on it: if this migration is ever recorded as
+-- failed, the doctor will clear the record and re-apply the file unattended instead of stopping
+-- and printing instructions. It is only true because of the two properties below — the DDL is
+-- guarded against already existing, and the cleanup is `WHERE revokedAt IS NULL`, so running it
+-- twice does the same thing as running it once. Do NOT copy this marker into a migration that
+-- lacks both. See apps/api/scripts/lib/migration-recovery.ts.
+--
 -- ── WHY THE DDL BELOW IS GUARDED ─────────────────────────────────────────────────────────────
 --
 -- An earlier version of this file failed PART-WAY THROUGH on MySQL 8: the two DDL statements

@@ -1,42 +1,109 @@
 /**
- * Turning Prisma's P3009 into instructions someone can follow at 2am.
+ * Recovering a database that a failed migration left blocked — detection, the safety rule that
+ * decides whether the doctor may fix it unattended, and the instructions for when it may not.
  *
- * WHY THIS IS ITS OWN MODULE: it lives here rather than inline in `doctor.ts` because the one
- * thing worth testing about it is that its regex still matches Prisma's wording. `doctor.ts` calls
- * `main()` at import time — importing it from a test would run the doctor — so the helper is
+ * WHY THIS IS ITS OWN MODULE: it lives here rather than inline in `doctor.ts` because the parts
+ * worth testing are the ones that decide whether to touch a production database. `doctor.ts` calls
+ * `main()` at import time — importing it from a test would run the doctor — so the logic is
  * extracted rather than the script restructured.
  *
  * WHAT P3009 MEANS: a previous run left a migration recorded as failed in `_prisma_migrations`.
  * Prisma then refuses to apply ANYTHING, including a corrected version of the very migration that
  * broke, until a human records a verdict on the failed one. Its own error text says as much, but
  * it says it via a docs link that leads with `migrate reset` — and an operator who is already
- * frustrated reads "reset" and drops the database. The whole point of this function is that the
- * safe command appears in the terminal, spelled out, at the moment of failure.
+ * frustrated reads "reset" and drops the database.
+ *
+ * ── THE SAFETY RULE ──────────────────────────────────────────────────────────────────────────
+ *
+ * The recovery is `migrate resolve --rolled-back` (which clears the failed record) followed by
+ * `migrate deploy` (which RE-RUNS the file over whatever the failed attempt already managed to
+ * apply). That is safe only when re-running the file is safe, and that is a property only the
+ * migration's author can vouch for. Consider `UPDATE Ledger SET total = total + 1`: re-running it
+ * after a failure that happened LATER in the file silently doubles every row. No amount of
+ * inspection by this script can tell that apart from an idempotent backfill.
+ *
+ * So the doctor never guesses. A migration is auto-recoverable only if it says so itself, with a
+ * `@rerunnable` marker in a SQL comment. Everything else gets printed instructions and a human.
+ *
+ * The marker is a promise about two things:
+ *   1. Re-running the whole file over its own partial effects completes — DDL is guarded against
+ *      already existing (see `docs/DATABASE.md`, trap 3), and
+ *   2. re-running its data changes is idempotent — running twice equals running once.
  */
+import fs from "node:fs";
+import path from "node:path";
 
 /** The directory-name format Prisma quotes back: 14 digits, underscore, slug. */
 const MIGRATION_NAME_RE = /`(\d{14}_[A-Za-z0-9_]+)`/;
 
 /**
+ * The author's declaration that this migration survives being re-run over a partial application.
+ * Deliberately verbose and unusual — nothing types it by accident.
+ */
+export const RERUNNABLE_MARKER = "@rerunnable";
+
+/** Whether this output is the "a previous migration is recorded as failed" error. */
+export function isP3009(output: string): boolean {
+  return output.includes("P3009");
+}
+
+/**
+ * The migration Prisma named as failed, or `null` if this was a different error or Prisma changed
+ * how it phrases this one. Returning null is what makes the caller fall back to instructions
+ * rather than run `resolve` against a guessed name.
+ */
+export function failedMigrationName(output: string): string | null {
+  if (!isP3009(output)) return null;
+  return MIGRATION_NAME_RE.exec(output)?.[1] ?? null;
+}
+
+/**
+ * Whether `<migrationsDir>/<name>/migration.sql` carries the author's re-runnable declaration.
+ *
+ * Requires the marker to sit in a `--` comment. That is not decoration: it means the marker is
+ * part of the migration file Prisma checksums, so it cannot be added by anything other than an
+ * edit to the migration itself.
+ */
+export function isRerunnable(migrationsDir: string, name: string): boolean {
+  // `name` comes from Prisma's own output, but it is about to be used to build a path — reject
+  // anything that is not the exact directory shape rather than trusting the source.
+  if (!/^\d{14}_[A-Za-z0-9_]+$/.test(name)) return false;
+  const file = path.join(migrationsDir, name, "migration.sql");
+  let sql: string;
+  try {
+    sql = fs.readFileSync(file, "utf8");
+  } catch {
+    // No file means this database ran a migration this checkout does not have — a downgrade, or a
+    // different branch. Re-running something we cannot read is exactly the wrong move.
+    return false;
+  }
+  return sql
+    .split("\n")
+    .some((line) => line.trimStart().startsWith("--") && line.includes(RERUNNABLE_MARKER));
+}
+
+/**
+ * The manual recovery, for when the doctor may not act: a different error, an unreadable
+ * migration, or one whose author has not vouched for re-running it.
+ *
  * @param output  everything the failed `prisma migrate deploy` printed (stdout + stderr).
  * @param schema  the `--schema=` value to repeat in the suggested commands.
  * @returns the recovery block, or `null` when this was not a P3009 — the caller then falls back to
  *          its generic advice rather than guessing.
  */
 export function p3009Recovery(output: string, schema: string): string | null {
-  if (!output.includes("P3009")) return null;
-  // Pull the migration out of Prisma's message so the operator pastes a command instead of
-  // transcribing a 40-character directory name. The placeholder keeps the block useful if Prisma
-  // ever changes how it names the migration.
-  const target = MIGRATION_NAME_RE.exec(output)?.[1] ?? "<the migration named above>";
+  if (!isP3009(output)) return null;
+  const target = failedMigrationName(output) ?? "<the migration named above>";
   return (
     `\n  HOW TO FIX THIS (no data is dropped):\n` +
-    `    cd apps/api\n` +
+    `    cd apps/api          <- this exact directory; the commands below need it\n` +
     `    npx prisma migrate resolve --rolled-back ${target} --schema=${schema}\n` +
     `    npx prisma migrate deploy --schema=${schema}\n\n` +
     `  The first command clears the failed record so the migration is retried; the second re-runs\n` +
-    `  it. Do NOT run \`prisma migrate reset\` — that DROPS the database. If \`deploy\` then fails\n` +
-    `  with a duplicate column or index, that migration is not re-runnable over its own partial\n` +
-    `  effects: stop and see docs/DATABASE.md rather than improvising.`
+    `  it. Do NOT run \`prisma migrate reset\` — that DROPS the database.\n\n` +
+    `  The doctor did not do this for you because the migration does not declare itself safe to\n` +
+    `  re-run (a \`${RERUNNABLE_MARKER}\` marker in its SQL comments). Re-running a migration whose\n` +
+    `  data changes are not idempotent can double them, so it needs a human who knows the file.\n` +
+    `  See docs/DATABASE.md.`
   );
 }

@@ -28,14 +28,12 @@ unaffected; their migration checksums were reconciled in place.
   including the corrected version of the one that broke.
 - The migration now **checks before it changes anything**, so re-running it over a partly-upgraded
   database completes instead of colliding with its own earlier attempt. **No data is dropped or
-  rewritten** — the recovery is two commands, and setup now prints them the moment it hits this:
-
-  ```bash
-  cd apps/api
-  npx prisma migrate resolve --rolled-back <migration_name> --schema=prisma/schema.prisma
-  npx prisma migrate deploy --schema=prisma/schema.prisma
-  ```
-
+  rewritten.**
+- **`npm run setup` now repairs this by itself.** It recognises a database left mid-upgrade, clears
+  the stuck record and re-applies the migration, then carries on to the end — no commands to copy,
+  no directory to be in. It does this only for migrations that declare themselves safe to re-run;
+  anything else still stops and asks, because re-running a migration that isn't built for it can
+  double the data it writes.
 - Setup used to report only `Command failed: npx prisma migrate deploy`, throwing away the part
   that said which migration and why. It now prints what the database actually said.
 - Verified end to end against three databases: a clean install, one left stranded exactly as
