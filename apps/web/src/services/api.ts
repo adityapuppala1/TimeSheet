@@ -1436,6 +1436,10 @@ export interface AIUsageSummary {
   totalCalls: number;
   totalInputTokens: number;
   totalOutputTokens: number;
+  /** The agent-driven SHARE of the totals above — a subset, never an addition. Without this the panel
+   *  can say a workspace spent $40 but not whether that was forty people using refine or one teammate
+   *  running unattended all month. */
+  agentDriven: { costUsd: number; calls: number; inputTokens: number; outputTokens: number };
   byFeature: Array<{ feature: string; costUsd: number; calls: number; inputTokens: number; outputTokens: number }>;
   byModel: Array<{ model: string; costUsd: number; inputTokens: number; outputTokens: number; calls: number }>;
 }
@@ -4066,6 +4070,11 @@ export interface AgentTemplateRow {
   name: string;
   emoji: string;
   description: string;
+  /** For the gallery's filter row — the question somebody arrives with is "is there one for my job". */
+  category: string;
+  /** Plain-English phrases, never capability ids: an admin choosing a teammate should not need to know
+   *  that `pr_review_summary` is a thing. */
+  skills: string[];
   capabilities: string[];
   installed: boolean;
 }
@@ -4095,7 +4104,7 @@ export const agentRosterApi = {
   list: async () => (await api.get<AgentRosterEntry[]>("/agents")).data,
   ledger: async () => (await api.get<AgentLedgerSummary>("/agents/ledger")).data,
   catalogue: async () =>
-    (await api.get<{ templates: AgentTemplateRow[]; capabilities: AgentCapabilityRow[] }>("/agents/catalogue")).data,
+    (await api.get<{ templates: AgentTemplateRow[]; categories: string[]; capabilities: AgentCapabilityRow[] }>("/agents/catalogue")).data,
   install: async (templateKey: string) => (await api.post<AgentRosterEntry>("/agents/install", { templateKey })).data,
   create: async (payload: { name: string; emoji?: string; description?: string | null; capabilities: string[]; maxCostUsdPerDay?: number | null }) =>
     (await api.post<AgentRosterEntry>("/agents", payload)).data,

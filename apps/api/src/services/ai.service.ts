@@ -655,7 +655,7 @@ function localIsoDate(date: Date): string {
 export async function getMonthlyAIUsageSummary() {
   const now = new Date();
   const monthStart = new Date(now.getFullYear(), now.getMonth(), 1);
-  const [total, byFeature, byModel] = await Promise.all([
+  const [total, byFeature, byModel, agentDriven] = await Promise.all([
     prisma.aIUsageLog.aggregate({
       where: { createdAt: { gte: monthStart } },
       _sum: { costUsdEstimate: true, inputTokens: true, outputTokens: true },
@@ -675,6 +675,22 @@ export async function getMonthlyAIUsageSummary() {
       where: { createdAt: { gte: monthStart } },
       _sum: { costUsdEstimate: true, inputTokens: true, outputTokens: true },
       _count: true
+    }),
+    /**
+     * HOW MUCH OF THIS MONTH'S SPEND WAS AN AGENT RATHER THAN A PERSON (V8).
+     *
+     * Every model call already lands here through `callChat`, agent runs included — `AIUsageLog.userId`
+     * carries the identity the run acted as. What was missing was the SPLIT: without it, the panel says
+     * a workspace spent $40 and cannot say whether that was forty people using refine or one teammate
+     * running unattended all month, which are entirely different things to decide about.
+     *
+     * Derived from `User.isAgent` rather than from a flag on the usage row, so it stays correct for the
+     * rows written before the roster existed and needs no backfill.
+     */
+    prisma.aIUsageLog.aggregate({
+      where: { createdAt: { gte: monthStart }, user: { isAgent: true } },
+      _sum: { costUsdEstimate: true, inputTokens: true, outputTokens: true },
+      _count: true
     })
   ]);
   return {
@@ -683,6 +699,13 @@ export async function getMonthlyAIUsageSummary() {
     totalCalls: total._count,
     totalInputTokens: total._sum.inputTokens ?? 0,
     totalOutputTokens: total._sum.outputTokens ?? 0,
+    /** The agent-driven share of the totals above — a subset, never an addition to them. */
+    agentDriven: {
+      costUsd: Number(agentDriven._sum.costUsdEstimate ?? 0),
+      calls: agentDriven._count,
+      inputTokens: agentDriven._sum.inputTokens ?? 0,
+      outputTokens: agentDriven._sum.outputTokens ?? 0
+    },
     byFeature: byFeature.map((row) => ({
       feature: row.feature,
       costUsd: Number(row._sum.costUsdEstimate ?? 0),

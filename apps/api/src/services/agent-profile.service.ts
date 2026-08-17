@@ -31,13 +31,35 @@ import { getGlobalAISettings } from "./ai.service.js";
  * exist would be a roster entry that silently does nothing, so `validateCapabilities` refuses it at
  * creation and the test asserts every template survives that check.
  */
+/**
+ * A gallery template.
+ *
+ * `category` and `skills` exist for the reader, not the runtime: a roster of six is browsable, but the
+ * question somebody arrives with is "is there one for MY job", and a flat list answers it by making
+ * them read all six descriptions. Skills are the plain-English version of what the capability ids do —
+ * an admin choosing a teammate should not have to know that `pr_review_summary` is a thing.
+ */
+export type AgentCategory = "Product & Engineering" | "Operations & PMO" | "Delivery & Planning" | "Security & IT";
+
 export interface AgentTemplate {
   key: string;
   name: string;
   emoji: string;
   description: string;
+  category: AgentCategory;
+  /** Short human phrases, 2-4 of them. Never capability ids — those are shown separately. */
+  skills: string[];
   capabilities: string[];
 }
+
+/** Render order for the gallery's filter row. Fixed rather than derived so it does not reshuffle as
+ *  templates are added. */
+export const AGENT_CATEGORIES: AgentCategory[] = [
+  "Product & Engineering",
+  "Operations & PMO",
+  "Delivery & Planning",
+  "Security & IT"
+];
 
 export const AGENT_TEMPLATES: AgentTemplate[] = [
   {
@@ -46,6 +68,8 @@ export const AGENT_TEMPLATES: AgentTemplate[] = [
     emoji: "🗂️",
     description:
       "Reads what arrives and files it: sets type, priority and module on new tickets, spots duplicates, and explains the assignee ranking. Everything it touches is a judgement a human can overturn in one click.",
+    category: "Product & Engineering",
+    skills: ["Ticket triage", "Duplicate detection", "Assignment insight"],
     capabilities: ["triage", "duplicate_detection", "assignee_suggestion_explanation"]
   },
   {
@@ -54,6 +78,8 @@ export const AGENT_TEMPLATES: AgentTemplate[] = [
     emoji: "🗓️",
     description:
       "Turns an epic into a plan and keeps the schedule honest — proposes child tasks with estimates, suggests date adjustments, and instantiates blueprints. It proposes; it does not move forty dates overnight.",
+    category: "Delivery & Planning",
+    skills: ["Work breakdown", "Schedule suggestions", "Blueprints"],
     capabilities: ["plan_breakdown", "schedule_adjustment", "blueprint_instantiate"]
   },
   {
@@ -62,6 +88,8 @@ export const AGENT_TEMPLATES: AgentTemplate[] = [
     emoji: "📉",
     description:
       "Explains why a project's risk score moved and drafts mitigations for a human to accept. The score itself is arithmetic — this narrates a number it cannot change.",
+    category: "Delivery & Planning",
+    skills: ["Risk narration", "Mitigation drafting"],
     capabilities: ["project_risk_narrative", "risk_mitigation"]
   },
   {
@@ -70,6 +98,8 @@ export const AGENT_TEMPLATES: AgentTemplate[] = [
     emoji: "🛡️",
     description:
       "Triages ingested scanner findings and failing builds, and summarises pull requests. Its input is authored outside the workspace, so its authority is capped and drops to propose-only the moment it reads any.",
+    category: "Security & IT",
+    skills: ["Finding triage", "Build failure analysis", "PR summaries"],
     capabilities: ["security_finding_triage", "ci_failure_triage", "pr_review_summary"]
   },
   {
@@ -78,6 +108,8 @@ export const AGENT_TEMPLATES: AgentTemplate[] = [
     emoji: "📰",
     description:
       "Writes the recaps nobody has time to write: the weekly digest, the security digest, the monthly what-keeps-breaking correlation, and stakeholder status reports. Sends mail; changes no records.",
+    category: "Operations & PMO",
+    skills: ["Weekly digests", "Status reports", "Failure patterns"],
     capabilities: ["weekly_digest", "security_weekly_digest", "bug_pattern_digest", "status_report"]
   },
   {
@@ -86,6 +118,8 @@ export const AGENT_TEMPLATES: AgentTemplate[] = [
     emoji: "⚖️",
     description:
       "Moves bookings off people who are over capacity and onto people with room. Uses no AI at all — the figures are arithmetic over real approved hours — but the question 'how much may this act alone' applies just the same.",
+    category: "Operations & PMO",
+    skills: ["Capacity balancing", "Booking moves", "No AI used"],
     capabilities: ["assignment_rebalance"]
   }
 ];

@@ -1749,6 +1749,27 @@ function AISettingsCard({ readOnly }: { readOnly: boolean }) {
                   </div>
                 </div>
 
+                {/* The agent-driven share. Shown as "X of the total", never as its own total, because
+                    it is a subset — presenting it as a separate figure would invite adding the two. */}
+                <div className="rounded-lg border border-border bg-muted/20 p-4">
+                  <p className="text-xs uppercase text-muted-foreground">Driven by AI teammates</p>
+                  {usage.data.agentDriven.calls === 0 ? (
+                    <p className="mt-1 text-sm text-muted-foreground">
+                      None this month — every call above was made by a person using an AI feature directly.
+                    </p>
+                  ) : (
+                    <p className="mt-1 text-sm">
+                      <span className="text-2xl font-black">${usage.data.agentDriven.costUsd.toFixed(2)}</span>{" "}
+                      <span className="text-muted-foreground">
+                        of the ${usage.data.totalCostUsd.toFixed(2)} above, across {usage.data.agentDriven.calls} call
+                        {usage.data.agentDriven.calls === 1 ? "" : "s"} and{" "}
+                        {(usage.data.agentDriven.inputTokens + usage.data.agentDriven.outputTokens).toLocaleString()} tokens —
+                        see <a className="underline" href="/app/agents">Agents</a> for which teammate.
+                      </span>
+                    </p>
+                  )}
+                </div>
+
                 {usageTrend.data && usageTrend.data.some((w) => w.costUsd > 0) && (
                   <div>
                     <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground">Spend trend, last 8 weeks</p>

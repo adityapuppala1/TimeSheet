@@ -25,6 +25,7 @@ import { requireAuth, requirePermission, requireSuperAdmin } from "../middleware
 import { AppError } from "../middleware/error.js";
 import { validate } from "../middleware/validate.js";
 import {
+  AGENT_CATEGORIES,
   AGENT_TEMPLATES,
   createProfile,
   listCapabilityCatalogue,
@@ -72,7 +73,7 @@ agentRouter.get("/ledger", requirePermission(permissions.TICKETS_VIEW), async (_
  *  and two round trips for one dialog is two chances to render half of it. */
 agentRouter.get("/catalogue", requirePermission(permissions.TICKETS_VIEW), async (_req, res) => {
   await assertRosterAllowed();
-  res.json({ templates: await listTemplates(), capabilities: listCapabilityCatalogue() });
+  res.json({ templates: await listTemplates(), categories: AGENT_CATEGORIES, capabilities: listCapabilityCatalogue() });
 });
 
 const createSchema = z.object({

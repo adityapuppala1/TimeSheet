@@ -41,16 +41,19 @@ import { Link } from "react-router";
 import { Badge } from "../components/ui/badge";
 import { Button } from "../components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../components/ui/card";
-import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "../components/ui/dialog";
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "../components/ui/dialog";
+import { Input } from "../components/ui/input";
+import { Label } from "../components/ui/label";
 import { Progress } from "../components/ui/progress";
 import { Skeleton } from "../components/ui/skeleton";
 import { StatCard } from "../components/ui/stat-card";
 import { Switch } from "../components/ui/switch";
+import { Textarea } from "../components/ui/textarea";
 import { toast } from "../components/ui/toaster";
 import { Tooltip, TooltipContent, TooltipTrigger } from "../components/ui/tooltip";
 import { cn } from "../lib/utils";
 import { useAuthStore } from "../store/auth";
-import { agentRosterApi, type AgentRosterEntry, type AgentTemplateRow } from "../services/api";
+import { agentRosterApi, type AgentCapabilityRow, type AgentRosterEntry, type AgentTemplateRow } from "../services/api";
 
 const serverMessage = (err: any, fallback: string) => err?.response?.data?.message ?? fallback;
 
@@ -91,6 +94,8 @@ export function AgentsPage() {
   const queryClient = useQueryClient();
   const isSuperAdmin = user?.role === "SUPER_ADMIN";
   const [galleryOpen, setGalleryOpen] = useState(false);
+  const [galleryCategory, setGalleryCategory] = useState<string>("All");
+  const [building, setBuilding] = useState(false);
 
   const roster = useQuery({ queryKey: ["agents"], queryFn: agentRosterApi.list, retry: false });
   const ledger = useQuery({ queryKey: ["agents", "ledger"], queryFn: agentRosterApi.ledger, retry: false });
@@ -233,27 +238,82 @@ export function AgentsPage() {
       )}
 
       <Dialog open={galleryOpen} onOpenChange={setGalleryOpen}>
-        <DialogContent className="max-h-[90vh] overflow-y-auto sm:max-w-2xl">
+        <DialogContent className="max-h-[90vh] overflow-y-auto sm:max-w-4xl">
           <DialogHeader>
-            <DialogTitle>Add a teammate</DialogTitle>
+            <DialogTitle>Meet your AI teammates</DialogTitle>
             <DialogDescription>
-              Each template bundles capabilities that already exist in this workspace. Adding one creates it switched off —
-              nothing runs until you say so.
+              Each one bundles capabilities that already exist in this workspace, so adding it grants no new power. They
+              arrive switched off — nothing runs until you say so.
             </DialogDescription>
           </DialogHeader>
           {catalogue.isLoading && <Skeleton className="h-64" />}
-          <div className="space-y-2">
-            {(catalogue.data?.templates ?? []).map((t) => (
-              <TemplateRow
-                key={t.key}
-                template={t}
-                busy={install.isPending}
-                onInstall={() => install.mutate(t.key)}
-              />
-            ))}
-          </div>
+
+          {catalogue.data && (
+            <>
+              {/* Category filter, in Asana's shape: the question somebody arrives with is "is there one
+                  for MY job", and a flat list answers it by making them read every description. */}
+              <div className="flex flex-wrap gap-1.5">
+                {["All", ...(catalogue.data.categories ?? [])].map((c) => {
+                  const active = galleryCategory === c;
+                  return (
+                    <button
+                      key={c}
+                      type="button"
+                      onClick={() => setGalleryCategory(c)}
+                      className={cn(
+                        "rounded-full px-3 py-1.5 text-sm font-medium transition-colors duration-150",
+                        active ? "bg-primary text-primary-foreground" : "bg-muted text-muted-foreground hover:text-foreground"
+                      )}
+                    >
+                      {c}
+                    </button>
+                  );
+                })}
+              </div>
+
+              <div className="grid gap-3 sm:grid-cols-2">
+                {(catalogue.data.templates ?? [])
+                  .filter((t) => galleryCategory === "All" || t.category === galleryCategory)
+                  .map((t) => (
+                    <TemplateCard key={t.key} template={t} busy={install.isPending} onInstall={() => install.mutate(t.key)} />
+                  ))}
+
+                {/* "Create your own", last and always present — the gallery's job is to make the shape of
+                    a teammate obvious, and the card that says "or build one" is what turns six examples
+                    into a pattern. */}
+                <button
+                  type="button"
+                  onClick={() => {
+                    setGalleryOpen(false);
+                    setBuilding(true);
+                  }}
+                  className="flex flex-col items-start gap-2 rounded-xl border border-dashed p-4 text-left transition-colors duration-200 hover:border-primary/50 hover:bg-muted/30"
+                >
+                  <span className="grid h-11 w-11 place-items-center rounded-full bg-muted text-muted-foreground" aria-hidden>
+                    <Plus className="h-5 w-5" />
+                  </span>
+                  <span className="font-medium">Create your own</span>
+                  <span className="text-xs text-muted-foreground">
+                    Pick the capabilities yourself, scope it to projects, and give it a spending ceiling. Everything the
+                    templates do, assembled by you.
+                  </span>
+                </button>
+              </div>
+            </>
+          )}
         </DialogContent>
       </Dialog>
+
+      {building && (
+        <CustomAgentDialog
+          capabilities={catalogue.data?.capabilities ?? []}
+          onClose={() => setBuilding(false)}
+          onSaved={() => {
+            invalidate();
+            queryClient.invalidateQueries({ queryKey: ["agents", "catalogue"] });
+          }}
+        />
+      )}
     </div>
   );
 }
@@ -332,40 +392,222 @@ function LedgerStrip({ data, loading }: Readonly<{ data?: import("../services/ap
   );
 }
 
-function TemplateRow({ template, busy, onInstall }: Readonly<{ template: AgentTemplateRow; busy: boolean; onInstall: () => void }>) {
+/**
+ * A teammate's identity colour, derived from its key.
+ *
+ * WHY DERIVED RATHER THAN CHOSEN: a roster is scanned, not read, and colour is what makes six cards
+ * distinguishable at a glance. Deriving it means a new template gets a stable colour with nobody
+ * picking one, and the same teammate is the same colour everywhere it appears.
+ */
+const AVATAR_TINTS = [
+  "bg-lime-300 text-lime-950",
+  "bg-violet-300 text-violet-950",
+  "bg-orange-300 text-orange-950",
+  "bg-emerald-300 text-emerald-950",
+  "bg-sky-300 text-sky-950",
+  "bg-pink-300 text-pink-950"
+];
+
+export function agentTint(key: string): string {
+  let hash = 0;
+  for (const ch of key) hash = (hash * 31 + ch.charCodeAt(0)) % 997;
+  return AVATAR_TINTS[hash % AVATAR_TINTS.length];
+}
+
+/**
+ * One gallery card: a coloured identity mark, a sentence about what it does FOR you, its skills in
+ * human words, and the capability ids demoted behind a disclosure — an admin verifying the claim needs
+ * them, and nobody browsing does.
+ */
+function TemplateCard({ template, busy, onInstall }: Readonly<{ template: AgentTemplateRow; busy: boolean; onInstall: () => void }>) {
   return (
     <div
       className={cn(
-        "flex items-start gap-3 rounded-lg border p-3 transition-colors duration-200",
-        template.installed ? "bg-muted/40" : "hover:border-primary/40"
+        "flex flex-col gap-3 rounded-xl border p-4 transition-all duration-200",
+        template.installed ? "bg-muted/40" : "hover:border-primary/40 hover:shadow-sm"
       )}
     >
-      <span className="grid h-9 w-9 shrink-0 place-items-center rounded-lg bg-primary/10 text-lg" aria-hidden>
-        {template.emoji}
-      </span>
-      <div className="min-w-0 flex-1">
-        <p className="flex flex-wrap items-center gap-1.5 text-sm font-medium">
-          {template.name}
-          {template.installed && (
-            <Badge variant="secondary" className="gap-1 text-[10px]">
-              <CheckCircle2 className="h-2.5 w-2.5" />
-              On the roster
-            </Badge>
-          )}
-        </p>
-        <p className="mt-0.5 text-xs text-muted-foreground">{template.description}</p>
-        <div className="mt-1.5 flex flex-wrap gap-1">
+      <div className="flex items-start justify-between gap-2">
+        <span className={cn("grid h-11 w-11 shrink-0 place-items-center rounded-full text-xl", agentTint(template.key))} aria-hidden>
+          {template.emoji}
+        </span>
+        {template.installed ? (
+          <Badge variant="secondary" className="gap-1 text-[10px]">
+            <CheckCircle2 className="h-2.5 w-2.5" />
+            On the roster
+          </Badge>
+        ) : (
+          <Button size="sm" variant="outline" disabled={busy} onClick={onInstall}>
+            {busy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : "Add"}
+          </Button>
+        )}
+      </div>
+
+      <div className="space-y-1">
+        <p className="font-medium">{template.name}</p>
+        <p className="text-xs text-muted-foreground">{template.description}</p>
+      </div>
+
+      {template.skills.length > 0 && (
+        <div className="space-y-1">
+          <p className="text-[10px] uppercase tracking-wide text-muted-foreground">Skills</p>
+          <div className="flex flex-wrap gap-1">
+            {template.skills.map((skill) => (
+              <span key={skill} className="rounded bg-muted px-1.5 py-0.5 text-[10px] uppercase tracking-wide text-muted-foreground">
+                {skill}
+              </span>
+            ))}
+          </div>
+        </div>
+      )}
+
+      <details className="text-[11px] text-muted-foreground">
+        <summary className="cursor-pointer">What it actually calls</summary>
+        <div className="mt-1 flex flex-wrap gap-1">
           {template.capabilities.map((c) => (
-            <span key={c} className="rounded bg-muted px-1.5 py-0.5 font-mono text-[10px] text-muted-foreground">
+            <span key={c} className="rounded bg-muted px-1.5 py-0.5 font-mono text-[10px]">
               {c}
             </span>
           ))}
         </div>
-      </div>
-      <Button size="sm" variant={template.installed ? "ghost" : "outline"} disabled={template.installed || busy} onClick={onInstall}>
-        {busy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : template.installed ? "Added" : "Add"}
-      </Button>
+      </details>
     </div>
+  );
+}
+
+/**
+ * "Create your own" — the same fields the templates fill in, exposed.
+ *
+ * WHY EACH CAPABILITY SHOWS ITS CEILING AND ITS UNTRUSTED-INPUT FLAG WHILE BEING CHOSEN: those two
+ * facts decide whether the resulting teammate can act or only propose. Discovering that after creating
+ * it is how somebody concludes the feature is broken, so the picker states it up front.
+ */
+function CustomAgentDialog({
+  capabilities,
+  onClose,
+  onSaved
+}: Readonly<{ capabilities: AgentCapabilityRow[]; onClose: () => void; onSaved: () => void }>) {
+  const [name, setName] = useState("");
+  const [emoji, setEmoji] = useState("🤖");
+  const [description, setDescription] = useState("");
+  const [chosen, setChosen] = useState<string[]>([]);
+  const [budget, setBudget] = useState("");
+
+  const save = useMutation({
+    mutationFn: () =>
+      agentRosterApi.create({
+        name: name.trim(),
+        emoji,
+        description: description.trim() || null,
+        capabilities: chosen,
+        maxCostUsdPerDay: budget ? Number(budget) : null
+      }),
+    onSuccess: (entry) => {
+      toast.success(`${entry.name} created`, { description: "It arrives switched off. Review what it may do, then turn it on." });
+      onSaved();
+      onClose();
+    },
+    onError: (err) => toast.error("Could not create", { description: serverMessage(err, "Check the fields and try again.") })
+  });
+
+  const toggle = (id: string) => setChosen((prev) => (prev.includes(id) ? prev.filter((c) => c !== id) : [...prev, id]));
+
+  return (
+    <Dialog open onOpenChange={(open) => !open && onClose()}>
+      <DialogContent className="max-h-[90vh] overflow-y-auto sm:max-w-2xl">
+        <DialogHeader>
+          <DialogTitle>Create your own teammate</DialogTitle>
+          <DialogDescription>
+            It can only do what its capabilities already allow — a teammate grants no new authority. Pick what it should
+            handle, and it will arrive switched off.
+          </DialogDescription>
+        </DialogHeader>
+
+        <div className="space-y-4">
+          <div className="grid gap-3 sm:grid-cols-[5rem_minmax(0,1fr)]">
+            <div className="space-y-1.5">
+              <Label htmlFor="agent-emoji">Icon</Label>
+              <Input id="agent-emoji" value={emoji} onChange={(e) => setEmoji(e.target.value)} maxLength={4} />
+            </div>
+            <div className="space-y-1.5">
+              <Label htmlFor="agent-name">Name</Label>
+              <Input id="agent-name" value={name} onChange={(e) => setName(e.target.value)} placeholder="Release shepherd" />
+            </div>
+          </div>
+
+          <div className="space-y-1.5">
+            <Label htmlFor="agent-desc">What it is for</Label>
+            <Textarea id="agent-desc" rows={2} value={description} onChange={(e) => setDescription(e.target.value)} />
+          </div>
+
+          <div className="space-y-1.5">
+            <Label htmlFor="agent-budget">Daily spending ceiling (USD, optional)</Label>
+            <Input
+              id="agent-budget"
+              type="number"
+              min={0}
+              step="0.01"
+              value={budget}
+              onChange={(e) => setBudget(e.target.value)}
+              placeholder="No profile cap"
+            />
+            <p className="text-xs text-muted-foreground">Sits under your monthly budget and the platform cap, never above them.</p>
+          </div>
+
+          <div className="space-y-1.5">
+            <Label>Capabilities ({chosen.length} chosen)</Label>
+            <div className="max-h-64 space-y-1 overflow-y-auto rounded-md border p-2">
+              {capabilities.map((c) => {
+                const on = chosen.includes(c.id);
+                return (
+                  <button
+                    key={c.id}
+                    type="button"
+                    onClick={() => toggle(c.id)}
+                    className={cn("flex w-full items-start gap-2 rounded p-2 text-left transition-colors", on ? "bg-primary/10" : "hover:bg-muted")}
+                  >
+                    <span
+                      className={cn(
+                        "mt-0.5 grid h-4 w-4 shrink-0 place-items-center rounded border",
+                        on && "border-primary bg-primary text-primary-foreground"
+                      )}
+                      aria-hidden
+                    >
+                      {on && <CheckCircle2 className="h-3 w-3" />}
+                    </span>
+                    <span className="min-w-0 flex-1">
+                      <span className="flex flex-wrap items-center gap-1.5 text-sm font-medium">
+                        {c.title}
+                        <Badge variant="secondary" className="text-[9px]">
+                          max {c.maxLevel}
+                        </Badge>
+                        {c.actsOnUntrustedInput && (
+                          <Badge variant="outline" className="gap-1 text-[9px]">
+                            <ShieldAlert className="h-2.5 w-2.5" />
+                            outside text
+                          </Badge>
+                        )}
+                      </span>
+                      <span className="block text-xs text-muted-foreground">{c.description}</span>
+                    </span>
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+        </div>
+
+        <DialogFooter>
+          <Button variant="outline" onClick={onClose} disabled={save.isPending}>
+            Cancel
+          </Button>
+          <Button onClick={() => save.mutate()} disabled={save.isPending || name.trim().length === 0 || chosen.length === 0}>
+            {save.isPending && <Loader2 className="mr-1.5 h-4 w-4 animate-spin" />}
+            Create, switched off
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   );
 }
 
