@@ -29,6 +29,8 @@ import { templates } from "../services/mail-templates.js";
 import { processAvatar } from "../utils/image.js";
 import { isValidTimezone, normalizePhoneNumber } from "../utils/phone.js";
 import { sanitizeRichText } from "../utils/sanitize.js";
+import { isPrivateIpAddress, parseUserAgent } from "../utils/user-agent.js";
+import { attachDeviceId } from "../utils/device-cookie.js";
 
 export const authRouter = Router();
 
@@ -72,7 +74,10 @@ authRouter.post(
   "/login",
   validate(z.object({ body: z.object({ email: z.string().email(), password: z.string().min(8), rememberMe: z.boolean().optional() }) })),
   async (req, res) => {
-    const result = await login(req.body.email, req.body.password, req.body.rememberMe, req.headers["user-agent"], req.ip);
+    // One browser, one session row — see utils/device-cookie.ts for why this is a grouping key
+    // and never an authenticator.
+    const deviceId = attachDeviceId(req, res);
+    const result = await login(req.body.email, req.body.password, req.body.rememberMe, req.headers["user-agent"], req.ip, deviceId);
     res.cookie(REFRESH_COOKIE, result.refreshToken, refreshCookieOptions(result.refreshTokenExpiresAt));
     res.json({ accessToken: result.accessToken, user: result.user });
   }
@@ -89,7 +94,8 @@ authRouter.post(
   async (req, res) => {
     const { orgId } = requireTenantContext();
     const identity = await authenticateLdap(orgId, req.body.email, req.body.password);
-    const result = await completeSsoLogin(orgId, identity, req.headers["user-agent"], req.ip);
+    const deviceId = attachDeviceId(req, res);
+    const result = await completeSsoLogin(orgId, identity, req.headers["user-agent"], req.ip, deviceId);
     res.cookie(REFRESH_COOKIE, result.refreshToken, refreshCookieOptions(result.refreshTokenExpiresAt));
     res.json({ accessToken: result.accessToken, user: result.user });
   }
@@ -120,13 +126,50 @@ authRouter.post("/logout-all", requireAuth, async (req, res) => {
   res.status(204).send();
 });
 
+/**
+ * The signed-in person's own devices.
+ *
+ * DECODED, NOT RAW. This used to return the verbatim `userAgent` string and let the page render
+ * it, which meant the answer to "is there a session here that shouldn't be?" was a wall of
+ * "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko)…" — technically
+ * complete and practically unreadable. `parseUserAgent` already existed for the admin panel, which
+ * had the same problem and solved it; this route simply stopped being the exception.
+ *
+ * ORDERED BY LAST ACTIVITY, not creation: "which of these is stale?" is the question being asked,
+ * and creation time answers a different one. `lastSeenAt` is what the heartbeat maintains.
+ *
+ * The raw string is deliberately NOT returned alongside the label. It is a fingerprinting surface
+ * with no remaining purpose once the label exists, and the one place that genuinely needs the
+ * original — an admin investigating — reads the database.
+ */
 authRouter.get("/sessions", requireAuth, async (req, res) => {
   const sessions = await prisma.session.findMany({
     where: { userId: req.user!.id, revokedAt: null, expiresAt: { gt: new Date() } },
-    orderBy: { createdAt: "desc" },
-    select: { id: true, userAgent: true, ipAddress: true, createdAt: true, expiresAt: true }
+    orderBy: [{ lastSeenAt: "desc" }, { createdAt: "desc" }],
+    select: { id: true, userAgent: true, ipAddress: true, createdAt: true, expiresAt: true, lastSeenAt: true }
   });
-  res.json(sessions.map((s) => ({ ...s, current: s.id === req.sessionId })));
+
+  res.json(
+    sessions.map((session) => {
+      const device = parseUserAgent(session.userAgent);
+      return {
+        id: session.id,
+        ipAddress: session.ipAddress,
+        createdAt: session.createdAt,
+        expiresAt: session.expiresAt,
+        lastSeenAt: session.lastSeenAt,
+        current: session.id === req.sessionId,
+        device: device.label,
+        browser: device.browser,
+        os: device.os,
+        formFactor: device.formFactor,
+        // On a LAN deployment every address is a 192.168.x and a column of them tells an admin
+        // nothing. Saying which are local removes that ambiguity where it matters. A display
+        // hint, never an authorization input.
+        privateNetwork: isPrivateIpAddress(session.ipAddress)
+      };
+    })
+  );
 });
 
 authRouter.delete("/sessions/:id", requireAuth, async (req, res) => {

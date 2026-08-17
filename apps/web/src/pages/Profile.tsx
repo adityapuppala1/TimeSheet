@@ -35,11 +35,27 @@ import { Label } from "../components/ui/label";
 import { Separator } from "../components/ui/separator";
 import { Textarea } from "../components/ui/textarea";
 import { toast } from "../components/ui/toaster";
-import { parseUserAgent } from "../lib/user-agent";
 import { authApi, fileUrl, type SessionRow } from "../services/api";
 import { useAuthStore } from "../store/auth";
 
-const DEVICE_ICON = { desktop: Laptop, mobile: Smartphone, tablet: Tablet } as const;
+/** `unknown` gets the laptop too: the parser refuses to guess, and a question-mark glyph would
+ *  read as an error rather than as "we could not tell". */
+const DEVICE_ICON = { desktop: Laptop, mobile: Smartphone, tablet: Tablet, unknown: Laptop } as const;
+
+/** "3 minutes ago" / "2 days ago" — the only framing in which "is this session stale?" is a
+ *  glance rather than a subtraction. Absolute timestamps stay in the title attribute. */
+function relativeTime(iso: string | null): string {
+  if (!iso) return "Not used yet";
+  const seconds = Math.round((Date.now() - new Date(iso).getTime()) / 1000);
+  if (!Number.isFinite(seconds)) return "Unknown";
+  if (seconds < 60) return "Just now";
+  const minutes = Math.round(seconds / 60);
+  if (minutes < 60) return `${minutes} minute${minutes === 1 ? "" : "s"} ago`;
+  const hours = Math.round(minutes / 60);
+  if (hours < 24) return `${hours} hour${hours === 1 ? "" : "s"} ago`;
+  const days = Math.round(hours / 24);
+  return `${days} day${days === 1 ? "" : "s"} ago`;
+}
 
 const ALLOWED_TYPES = ["image/png", "image/jpeg", "image/jpg", "image/gif"];
 const MAX_AVATAR_MB = 5;
@@ -187,18 +203,17 @@ export function Profile() {
     () => [
       {
         id: "device",
-        accessorFn: (row) => parseUserAgent(row.userAgent).browser,
+        accessorFn: (row) => row.device,
         header: "Device",
+        // Decoded by the API now — see SessionRow. The page renders the answer instead of
+        // re-deriving it from a raw UA string it should not have been sent.
         cell: ({ row }) => {
-          const { browser, os, deviceType } = parseUserAgent(row.original.userAgent);
-          const DeviceIcon = DEVICE_ICON[deviceType];
+          const DeviceIcon = DEVICE_ICON[row.original.formFactor] ?? Laptop;
           return (
             <div className="flex items-center gap-2">
               <DeviceIcon className="h-4 w-4 shrink-0 text-muted-foreground" />
               <div className="min-w-0">
-                <p className="truncate font-medium">
-                  {browser} on {os}
-                </p>
+                <p className="truncate font-medium">{row.original.device}</p>
                 {row.original.current && <Badge variant="info" className="mt-0.5">This device</Badge>}
               </div>
             </div>
@@ -209,19 +224,36 @@ export function Profile() {
         id: "ipAddress",
         accessorFn: (row) => row.ipAddress ?? "Unknown IP",
         header: "IP address",
-        cell: ({ row }) => <span className="font-mono text-xs text-muted-foreground">{row.original.ipAddress ?? "Unknown IP"}</span>
+        cell: ({ row }) => (
+          <div className="min-w-0">
+            <span className="block font-mono text-xs text-muted-foreground">{row.original.ipAddress ?? "Unknown IP"}</span>
+            {/* Every address on a LAN deployment is a 192.168.x; saying which are local is the
+                difference between a column of numbers and a column that means something. */}
+            {row.original.privateNetwork && <span className="text-[10px] text-muted-foreground">On your network</span>}
+          </div>
+        )
+      },
+      {
+        id: "lastSeen",
+        accessorFn: (row) => row.lastSeenAt ?? row.createdAt,
+        header: "Last used",
+        // The column that answers the question this table exists for. "Signed in" told you when a
+        // session STARTED, which for a 30-day session says almost nothing about whether it is
+        // still in use.
+        cell: ({ row }) => (
+          <span
+            className="text-xs text-muted-foreground"
+            title={row.original.lastSeenAt ? new Date(row.original.lastSeenAt).toLocaleString() : undefined}
+          >
+            {relativeTime(row.original.lastSeenAt)}
+          </span>
+        )
       },
       {
         id: "signedIn",
         accessorFn: (row) => row.createdAt,
         header: "Signed in",
         cell: ({ row }) => <span className="text-xs text-muted-foreground">{new Date(row.original.createdAt).toLocaleString()}</span>
-      },
-      {
-        id: "expires",
-        accessorFn: (row) => row.expiresAt,
-        header: "Expires",
-        cell: ({ row }) => <span className="text-xs text-muted-foreground">{new Date(row.original.expiresAt).toLocaleString()}</span>
       },
       {
         id: "actions",

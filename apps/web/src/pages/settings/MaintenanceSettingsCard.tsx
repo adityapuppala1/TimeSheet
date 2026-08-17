@@ -194,6 +194,23 @@ const PHASE_BADGE: Record<MaintenancePhase, { label: string; variant: "muted" | 
  *  9-to-6 slot list — the default — would make the most common window unselectable. */
 const MAINTENANCE_SLOTS = buildTimeSlots("00:00", "23:30", 30);
 
+/**
+ * A local `YYYY-MM-DDTHH:mm` moved forward by one minute, or "" for an empty input.
+ *
+ * `DateTimePicker`'s floor is INCLUSIVE — the right default, since "no earlier than now" should
+ * still allow now. The window's END needs an exclusive floor against its START, and one minute is
+ * the smallest step the format can express. Built through `Date` rather than string arithmetic so
+ * it rolls the hour, the day, the month and the year correctly.
+ */
+function oneMinuteAfter(local: string): string {
+  if (!local) return "";
+  const at = new Date(local);
+  if (Number.isNaN(at.getTime())) return "";
+  at.setMinutes(at.getMinutes() + 1);
+  const pad = (value: number) => String(value).padStart(2, "0");
+  return `${at.getFullYear()}-${pad(at.getMonth() + 1)}-${pad(at.getDate())}T${pad(at.getHours())}:${pad(at.getMinutes())}`;
+}
+
 interface Draft {
   enabled: boolean;
   scheduledStartAt: string; // local "YYYY-MM-DDTHH:mm", "" = unset
@@ -225,7 +242,16 @@ export function MaintenanceSettingsCard({ readOnly }: { readOnly: boolean }) {
   const invalidate = () => queryClient.invalidateQueries({ queryKey: ["maintenance", "admin"] });
 
   /** Local today (YYYY-MM-DD) — the earliest date either picker may offer. */
-  const todayLocal = toLocalInputValue(new Date().toISOString()).split("T")[0];
+  /**
+   * The current local moment, as the pickers' floor.
+   *
+   * Recomputed on every render rather than memoised, deliberately: it is a clock reading, and a
+   * card left open for an hour would otherwise keep offering times that have since passed. The
+   * server re-checks anyway (`updateMaintenanceSettings` refuses a new start in the past), so a
+   * few seconds of drift is harmless — an hour of it is not.
+   */
+  const nowLocal = toLocalInputValue(new Date().toISOString());
+  const todayLocal = nowLocal.split("T")[0];
   /**
    * A start in the past is refused for NEW/CHANGED starts only — an admin editing the end or
    * message of a window that is ALREADY RUNNING has a legitimately-past start, and telling
@@ -356,6 +382,9 @@ export function MaintenanceSettingsCard({ readOnly }: { readOnly: boolean }) {
                 placeholder="Not scheduled"
                 disabled={readOnly}
                 minValue={todayLocal}
+                // The calendar already refuses earlier DAYS; this refuses earlier times on today,
+                // which is the same rule the server applies and the form previously let you break.
+                minDateTime={nowLocal}
               />
               {startInPast && (
                 <p className="text-xs text-destructive">
@@ -374,6 +403,12 @@ export function MaintenanceSettingsCard({ readOnly }: { readOnly: boolean }) {
                 slots={MAINTENANCE_SLOTS}
                 placeholder="Not scheduled"
                 disabled={readOnly}
+                // The end's floor is the START, not the clock — "must end after it starts" is the
+                // server's other rule, and on the start's own day that makes every earlier slot
+                // wrong. `oneMinuteAfter` makes the floor exclusive so the start's own slot is
+                // blocked too: a window that ends when it begins is zero-length, which the server
+                // refuses and nobody means.
+                minDateTime={oneMinuteAfter(draft.scheduledStartAt) || nowLocal}
               />
             </div>
           </div>

@@ -20,6 +20,7 @@ import { env } from "../config/env.js";
 import { resolveActiveOrgBySlug, resolveOrgSlug } from "../middleware/tenant.js";
 import { AppError } from "../middleware/error.js";
 import { completeSsoLogin } from "../services/auth.service.js";
+import { attachDeviceId } from "../utils/device-cookie.js";
 import {
   buildAuthorizationRedirect,
   buildSamlAuthorizationRedirect,
@@ -60,8 +61,11 @@ async function finishSsoLogin(
   const dsn = decryptSecret(org.database.encryptedDsn);
   const tenantClient = await getTenantClient(org.id, dsn);
 
+  // Read/mint BEFORE the redirect that ends this response — see utils/device-cookie.ts. Without
+  // it, SSO users would be the one login path still adding a session row per sign-in.
+  const deviceId = attachDeviceId(req, res);
   const result = await tenantContext.run({ orgId: org.id, orgSlug: org.slug, client: tenantClient }, () =>
-    completeSsoLogin(org.id, identity, req.headers["user-agent"], req.ip)
+    completeSsoLogin(org.id, identity, req.headers["user-agent"], req.ip, deviceId)
   );
 
   res.cookie(REFRESH_COOKIE, result.refreshToken, refreshCookieOptions(result.refreshTokenExpiresAt));

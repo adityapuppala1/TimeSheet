@@ -11,7 +11,7 @@
  * WHY BOTH LIVE IN ONE FILE: they are the same widget with one column added. Splitting them meant
  * two calendars to keep in step, and the first thing to drift is always the day-cell states.
  */
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { CalendarDate, Time, getLocalTimeZone, today } from "@internationalized/date";
 import {
   DateInput as AriaDateInput,
@@ -154,7 +154,8 @@ export function DateTimePicker({
   className,
   disabled,
   minValue,
-  maxValue
+  maxValue,
+  minDateTime
 }: BasePickerProps & {
   /** ISO yyyy-mm-dd. */
   date: string;
@@ -163,6 +164,18 @@ export function DateTimePicker({
   onChange: (next: { date: string; time: string }) => void;
   /** Defaults to every half hour of a 9-6 day. */
   slots?: string[];
+  /**
+   * The earliest moment this picker may express, as a local `YYYY-MM-DDTHH:mm`.
+   *
+   * `minValue` already stops the CALENDAR offering an earlier day. This is the other half: on the
+   * floor's own day, the time slots before it are offered too, so a maintenance window could be
+   * scheduled to start at 09:00 on a day when it is already 14:00 — the server refuses it, but
+   * only after the admin has picked it, read a plausible-looking form, and pressed Save.
+   *
+   * Past slots are DISABLED rather than hidden, matching how the calendar treats past dates: a
+   * greyed row says "not that one", a missing row says nothing and quietly renumbers the list.
+   */
+  minDateTime?: string;
 }) {
   const [open, setOpen] = useState(false);
   const [draft, setDraft] = useState({ date, time });
@@ -186,6 +199,44 @@ export function DateTimePicker({
     }
     return base;
   }, [slots, draft.time]);
+
+  /**
+   * Which slots the floor rules out, and whether any are.
+   *
+   * Only ever applies ON the floor's own date — a later date has no earlier moment to be before.
+   * `HH:mm` strings compare correctly with `<` (zero-padded, 24-hour), so no parsing is needed.
+   *
+   * THE VALUE THE PICKER WAS HANDED IS ALWAYS ALLOWED, even when it is below the floor. An
+   * already-running maintenance window legitimately started in the past, and the server says so
+   * explicitly — a picker that refuses to re-express the value it was opened on would make
+   * editing that window's END impossible.
+   */
+  const [minDate, minTime] = minDateTime ? minDateTime.split("T") : [undefined, undefined];
+  const isBlockedSlot = (slot: string) =>
+    Boolean(minDate && minTime) && draft.date === minDate && slot < minTime! && slot !== time;
+  const blockedCount = timeSlots.filter(isBlockedSlot).length;
+
+  /**
+   * Open the list on the first slot the user can actually pick.
+   *
+   * Without this the floor makes the picker WORSE than it was: at 3pm the list opens on 12:00 AM
+   * and the admin scrolls past thirty greyed rows to reach anything live. Runs when the popover
+   * opens and whenever the chosen date changes, because both change which slot is first.
+   *
+   * `block: "start"` on the container's own scroller rather than `scrollIntoView` on the element:
+   * the latter also scrolls the PAGE behind the popover, which drags the trigger out from under
+   * the floating panel.
+   */
+  const slotListRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!open) return;
+    const list = slotListRef.current;
+    if (!list) return;
+    const target = list.querySelector<HTMLButtonElement>("button:not(:disabled)");
+    if (!target) return;
+    list.scrollTop = Math.max(0, target.offsetTop - list.offsetTop);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- re-aims only when the day changes
+  }, [open, draft.date]);
 
   const label = date
     ? `${formatDisplay(date)}${time ? ` · ${formatTimeLabel(time)}` : ""}`
@@ -225,23 +276,37 @@ export function DateTimePicker({
             <p className="px-3 pt-3 text-sm font-semibold">Available times</p>
             {/* Capped height with its own scroll: a full day of half-hours is 48 rows, and letting
                 that grow the popover pushes the Apply button off a laptop screen. */}
-            <div className="max-h-56 min-h-0 flex-1 space-y-1 overflow-y-auto p-3">
-              {timeSlots.map((slot) => (
-                <button
-                  key={slot}
-                  type="button"
-                  onClick={() => setDraft((d) => ({ ...d, time: slot }))}
-                  className={cn(
-                    "focus-ring w-full rounded-md border px-3 py-2 text-sm transition",
-                    draft.time === slot
-                      ? "border-primary bg-primary text-primary-foreground"
-                      : "border-border hover:bg-muted"
-                  )}
-                >
-                  {formatTimeLabel(slot)}
-                </button>
-              ))}
+            <div ref={slotListRef} className="max-h-56 min-h-0 flex-1 space-y-1 overflow-y-auto p-3">
+              {timeSlots.map((slot) => {
+                const blocked = isBlockedSlot(slot);
+                return (
+                  <button
+                    key={slot}
+                    type="button"
+                    disabled={blocked}
+                    title={blocked ? "That time has already passed today." : undefined}
+                    onClick={() => setDraft((d) => ({ ...d, time: slot }))}
+                    className={cn(
+                      "focus-ring w-full rounded-md border px-3 py-2 text-sm transition",
+                      blocked
+                        ? "cursor-not-allowed border-dashed border-border text-muted-foreground/50"
+                        : draft.time === slot
+                          ? "border-primary bg-primary text-primary-foreground"
+                          : "border-border hover:bg-muted"
+                    )}
+                  >
+                    {formatTimeLabel(slot)}
+                  </button>
+                );
+              })}
             </div>
+            {/* Says WHY rows are greyed, once, instead of leaving the reader to infer it from a
+                run of disabled buttons. Only while some actually are. */}
+            {blockedCount > 0 && (
+              <p className="border-t border-border px-3 py-2 text-xs text-muted-foreground">
+                Earlier times today have already passed.
+              </p>
+            )}
           </div>
         </div>
 
@@ -260,8 +325,10 @@ export function DateTimePicker({
             <Button
               size="sm"
               // A date with no time is not a datetime. Refusing to apply is clearer than applying
-              // half of one and letting the caller discover the gap.
-              disabled={!draft.date || !draft.time}
+              // half of one and letting the caller discover the gap. A blocked slot cannot be
+              // clicked, but the draft can still hold one if the date changed under it — so the
+              // floor is enforced here too rather than trusted to the buttons.
+              disabled={!draft.date || !draft.time || isBlockedSlot(draft.time)}
               onClick={() => {
                 onChange(draft);
                 setOpen(false);

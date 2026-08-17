@@ -16,7 +16,7 @@
  * is the app's ordinary single-device-logout mechanism, already exercised elsewhere. Only the
  * endpoint's authorization surface is asserted here, which revokes nothing.
  */
-import { test, expect, request as playwrightRequest, type APIRequestContext } from "@playwright/test";
+import { test, expect, request as playwrightRequest, type APIRequestContext, type Page } from "@playwright/test";
 import { withAdminRequest } from "./helpers/admin-request";
 import { signIn } from "./helpers/sign-in";
 
@@ -322,5 +322,126 @@ test.describe("API performance panel", () => {
     // "never recorded", not "none in this window" — the distinction IS the feature.
     await expect(page.getByText(/no requests were ever recorded/i)).toBeVisible();
     await expect(page.getByText("API_TELEMETRY_ENABLED=true")).toBeVisible();
+  });
+});
+
+/* ============ The scheduling pickers refuse a moment that has passed ============ */
+
+/**
+ * THE GAP: the calendar half of the window pickers refused earlier DAYS (`minValue`), and the
+ * time half offered all forty-eight half-hour slots regardless. So on a day where it is already
+ * 14:00 you could pick 09:00, read a form that looked entirely valid, press Save, and only then
+ * be told "the window can't start in the past" — the server's rule was right and invisible until
+ * after the mistake.
+ *
+ * NOTHING HERE SAVES ANYTHING. This spec drives the picker's popover only; the shared demo
+ * workspace's maintenance settings are never written, which is what keeps it from locking out
+ * every spec that runs after it (see this file's own header).
+ */
+test.describe("maintenance window pickers", () => {
+  /** Local `HH:mm` of the most recent half-hour slot that has already passed today, or null when
+   *  it is so early that none has. Derived from the clock rather than hardcoded, so the test does
+   *  not depend on what time CI happens to run. */
+  function lastPassedSlot(now: Date): string | null {
+    const minutes = now.getHours() * 60 + now.getMinutes();
+    const slot = Math.floor(minutes / 30) * 30 - (minutes % 30 === 0 ? 30 : 0);
+    if (slot < 0) return null;
+    return `${String(Math.floor(slot / 60)).padStart(2, "0")}:${String(slot % 60).padStart(2, "0")}`;
+  }
+
+  /** The picker labels slots in the browser's locale ("2:30 PM"), so the assertion has to speak
+   *  the same language rather than compare `HH:mm` strings. */
+  function slotLabel(page: Page, hhmm: string): Promise<string> {
+    return page.evaluate((value) => {
+      const [h, m] = value.split(":").map(Number);
+      const at = new Date();
+      at.setHours(h, m, 0, 0);
+      return at.toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" });
+    }, hhmm);
+  }
+
+  test("greys out today's already-passed times, and says why", async ({ page }) => {
+    const passed = lastPassedSlot(new Date());
+    test.skip(!passed, "it is before 00:30 locally — no slot has passed yet today");
+
+    await signIn(page, "superadmin");
+    await page.goto("/app/settings");
+    await page.getByRole("tab", { name: /maintenance/i }).click();
+    await page.locator("#maintenance-start").click();
+
+    const popover = page.getByRole("dialog").last();
+    await expect(popover.getByText("Available times")).toBeVisible({ timeout: 10_000 });
+
+    // The picker opens on the saved date, which may not be today — pick today explicitly, since
+    // the floor only applies on the floor's own day.
+    // `exact` matters: the grid's own cell for today is announced as "Today, Monday, August 17,
+    // 2026, …", so a loose match is a strict-mode violation between it and the footer button.
+    await popover.getByRole("button", { name: "Today", exact: true }).click();
+
+    const label = await slotLabel(page, passed!);
+    const blocked = popover.getByRole("button", { name: label, exact: true });
+    await expect(blocked).toBeDisabled();
+    // A run of greyed rows with no explanation is a puzzle, not a restriction.
+    await expect(popover.getByText(/already passed/i)).toBeVisible();
+
+    // The list must OPEN on something pickable. Without this the floor makes the picker worse
+    // than it was: at 3pm it would open on 12:00 AM and the admin scrolls past thirty greyed rows
+    // to reach anything live.
+    const firstVisible = await popover.evaluate((root) => {
+      const list = root.querySelector<HTMLElement>(".overflow-y-auto");
+      if (!list) return null;
+      const live = Array.from(list.querySelectorAll<HTMLButtonElement>("button:not(:disabled)"))[0];
+      if (!live) return null;
+      const listBox = list.getBoundingClientRect();
+      const liveBox = live.getBoundingClientRect();
+      return { withinView: liveBox.top >= listBox.top - 2 && liveBox.top <= listBox.bottom, label: live.textContent };
+    });
+    expect(firstVisible?.withinView, `first selectable slot (${firstVisible?.label}) is scrolled out of view`).toBe(true);
+
+    await page.keyboard.press("Escape");
+  });
+
+  test("still offers a future time on today, and any time on a later day", async ({ page }) => {
+    await signIn(page, "superadmin");
+    await page.goto("/app/settings");
+    await page.getByRole("tab", { name: /maintenance/i }).click();
+    await page.locator("#maintenance-start").click();
+
+    const popover = page.getByRole("dialog").last();
+    await expect(popover.getByText("Available times")).toBeVisible({ timeout: 10_000 });
+    // `exact` matters: the grid's own cell for today is announced as "Today, Monday, August 17,
+    // 2026, …", so a loose match is a strict-mode violation between it and the footer button.
+    await popover.getByRole("button", { name: "Today", exact: true }).click();
+
+    // 23:30 is in the future on every day except the last half hour of it.
+    const now = new Date();
+    const lateEnough = now.getHours() < 23 || now.getMinutes() < 30;
+    if (lateEnough) {
+      await expect(popover.getByRole("button", { name: await slotLabel(page, "23:30"), exact: true })).toBeEnabled();
+    }
+
+    // The restriction is about "has this moment passed", not "is this early in the day" — so a
+    // later date must re-enable everything, including 00:00.
+    //
+    // Day cells are announced with the FULL date ("Tuesday, August 18, 2026"), never the bare
+    // number — see helpers/sign-in.ts#pickDate, which documents the same trap. `.first()` because
+    // React Aria renders a visually-hidden duplicate grid for screen readers.
+    const tomorrow = new Date();
+    tomorrow.setDate(tomorrow.getDate() + 1);
+    if (tomorrow.getMonth() !== new Date().getMonth()) {
+      await popover.getByRole("button", { name: "Next" }).first().click();
+    }
+    const dayLabel = tomorrow.toLocaleDateString("en-US", {
+      weekday: "long",
+      year: "numeric",
+      month: "long",
+      day: "numeric"
+    });
+    await popover.getByRole("button", { name: dayLabel, exact: true }).first().click();
+
+    await expect(popover.getByRole("button", { name: await slotLabel(page, "00:00"), exact: true })).toBeEnabled();
+    await expect(popover.getByText(/already passed/i)).toHaveCount(0);
+
+    await page.keyboard.press("Escape");
   });
 });

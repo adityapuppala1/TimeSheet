@@ -3053,3 +3053,84 @@ several of them shared a root cause.
   time; `getBBox()` reported a sane width. Only rendering the chart and looking at it showed it.
   The e2e test now asserts on the painted result (stroke width and rendered width), not on
   `textContent`.
+
+- [x] **The maintenance window's time pickers respect "now".** `minValue` already stopped the
+  CALENDAR offering an earlier day; the slot list offered all forty-eight half-hours regardless,
+  so on an afternoon an admin could pick 9 AM, read a wholly valid-looking form, press Save, and
+  only then meet the server's "the window can't start in the past". The rule existed and was
+  invisible until after the mistake.
+
+  `DateTimePicker` gained one prop, `minDateTime` — the earliest moment it may express — applied
+  only on the floor's own date, since a later day has no earlier moment to be before. Past slots
+  are DISABLED rather than hidden, matching how the calendar treats past dates: a greyed row says
+  "not that one", a missing row says nothing and quietly renumbers the list. The value the picker
+  was HANDED is always allowed even when below the floor — an already-running window legitimately
+  started in the past, and a picker that cannot re-express what it was opened on would make
+  editing that window's end impossible.
+
+  Two details that came out of actually looking at it: the list now scrolls to the first
+  selectable slot on open (without that, the floor made the picker *worse* — at 3pm it opened on
+  12:00 AM and you scrolled past thirty dead rows), and the END picker's floor is the START plus
+  one minute rather than the clock, so the start's own slot is blocked too — a window that ends
+  when it begins is zero-length, which the server already refuses.
+
+### 2026-08-17 (later) — "active sessions" was a sign-in log wearing a device list's clothes
+
+- [x] **7,486 live sessions for one user.** Reported as "why does one machine show so many
+  devices?" — and the number was worse than the report suggested: measured on the development
+  workspace, a single account held 7,486 unrevoked, unexpired sessions, 6,952 of them carrying the
+  identical Chrome-on-Windows user-agent string.
+
+  The mechanism was one line: `establishSession` called `session.create` unconditionally, and
+  nothing anywhere ever collapsed, capped or reaped the result. Refresh was innocent — it rotates
+  in place — so every row was a genuine sign-in, accumulated over the life of the workspace and
+  kept for up to thirty days each. Both surfaces that read the table (Profile's session list, the
+  admin who's-online panel) exist to answer "is there a session here that shouldn't be?", which is
+  unanswerable in a list of seven thousand identical rows. "Sign out this device" was, in
+  practice, a button nobody could aim.
+
+  Two mechanisms, doing deliberately different jobs. `Session.deviceId` — an opaque id in a
+  long-lived httpOnly cookie — lets a repeat sign-in REPLACE its own row, which handles the
+  browser case, i.e. the actual complaint. `MAX_ACTIVE_SESSIONS_PER_USER` bounds everything a
+  cookie cannot: cookie-less clients, rows predating the column, and anyone genuinely on a dozen
+  machines. Eviction is least-recently-used and explicitly pins the session just issued, because a
+  brand-new row has no `lastSeenAt` and a naive sweep would have signed the caller out at the exact
+  moment they signed in.
+
+  **The cookie is not an authenticator**, and the design leans on that rather than apologising for
+  it: it carries no claim about identity, the lookup pairs it with the user-agent string, and it
+  only ever runs after credentials are verified — so forging, copying or clearing it buys nothing.
+  A bad value simply misses and falls back to the old behaviour. That is also why it is unsigned; a
+  signature would imply a trust that does not exist.
+
+  Reuse clears `previousRefreshHash`/`refreshRotatedAt`. Signing in is a fresh credential, not a
+  rotation, and a pre-login secret still valid inside the grace window is exactly what `refresh`'s
+  reuse detection exists to catch.
+
+- [x] **The migration cleans up what is already there** — every live session beyond each user's ten
+  most recently active. Without it the fix only stops the bleeding: existing installations would
+  render thousands of stale rows forever, since nothing else deletes them. Ordered by `lastSeenAt`
+  with a `createdAt` fallback, so the session the person is holding right now is the one kept and
+  an upgrade does not sign a workspace out mid-shift.
+
+- [x] **The list says what it means.** `GET /auth/sessions` returned the verbatim user-agent string
+  for the page to parse; the answer to "which session is this?" was a wall of `Mozilla/5.0 (Windows
+  NT 10.0; Win64; x64) AppleWebKit/537.36…`. `parseUserAgent` already existed — the admin panel had
+  the same problem and solved it — so this route stopped being the exception. Rows now carry a
+  decoded label, form factor, a private-network hint and `lastSeenAt`, are ordered by last activity
+  ("which is stale?" is the question; creation time answers a different one), and the raw string is
+  no longer sent at all: it is a fingerprinting surface with no remaining purpose. The web's
+  duplicate copy of the parser was deleted with it.
+
+- [x] **The cap learned not to evict sessions people are using.** First cut revoked purely by rank,
+  and the e2e suite failed it within one run: `withAdminRequest` caches a superadmin token for five
+  minutes, the suite signs in as superadmin far more than ten times in that window, and the cached
+  session was evicted as "least recently used" — surfacing as a 401 on a token minted minutes
+  earlier. That is not a test artifact; it is the same shape as a script polling `/auth/login` and
+  quietly signing a person out of the browser they are sitting in front of.
+
+  Eviction is now conditioned on IDLENESS, not rank: nothing used in the last fifteen minutes is
+  ever revoked, whatever the count. The cap became a target rather than a ceiling, which is the
+  honest reading — "you have too many devices" is only ever a reason to drop the ones nobody is
+  using. Fifteen minutes is `maintenance.service.ts`'s existing ONLINE_WINDOW_MS, so the app has
+  one definition of "in use" rather than two.

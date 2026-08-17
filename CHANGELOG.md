@@ -17,6 +17,34 @@ case-insensitive Windows dialect died on case-sensitive Linux servers mid-migrat
 rewriting them to the canonical casing, which is correct on both. Existing installations are
 unaffected; their migration checksums were reconciled in place.
 
+### 💻 "Active sessions" is a list of devices again
+
+- **Signing in from the same browser no longer adds a new "device" every time.** Each sign-in
+  created a fresh session record and nothing ever cleared them, so one person on one machine
+  piled up thousands of entries — 7,486 live sessions for a single account on our own development
+  workspace, almost all of them the same browser. The list whose entire job is "spot the session
+  that shouldn't be here" was buried under its own noise, and "sign out this device" was unusable.
+- A browser is now recognised across sign-ins and keeps **one** entry, which is refreshed rather
+  than duplicated. A genuinely different browser or machine still gets its own, which is the point
+  of the list.
+- **Upgrading tidies up what's already there**, keeping each person's ten most recently used
+  sessions and ending the rest. The one you're reading this on is kept — nobody gets signed out
+  mid-shift, and from now on a session you're actively using is never ended to make room.
+- The list now reads as **"Chrome on Windows 10/11"** with **when it was last used**, instead of a
+  wall of `Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36…`, and says which addresses
+  are on your own network.
+
+### 🕒 The maintenance window can't be scheduled in the past
+
+- **The time list now stops at "now", the way the calendar already stops at today.** Half of the
+  rule was there — you couldn't pick an earlier *day* — while the times offered all forty-eight
+  half-hour slots regardless. So on an afternoon you could pick 9 AM, read a form that looked
+  entirely valid, press Save, and only then be told the window can't start in the past.
+- Times that have passed are greyed rather than removed, with one line saying why, and **the list
+  opens on the first time you can actually pick** instead of at midnight.
+- The window's **end** is held to the start the same way: everything up to and including the start
+  time is unavailable, because a window that ends when it begins is zero-length.
+
 ### 📊 Project utilization you can actually read
 
 - **The axis labels stopped colliding.** Eight project codes were competing for a third of the

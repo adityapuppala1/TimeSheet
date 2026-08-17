@@ -21,6 +21,52 @@ authenticated route and every login method answers `503 { code: "MAINTENANCE" }`
 non-SUPER_ADMIN users — clients must treat that code as "show the maintenance page", not as an
 outage or an auth failure.
 
+## Sessions and device identity
+
+`GET /auth/sessions` lists the caller's own live sessions; `DELETE /auth/sessions/:id` ends one.
+
+**One browser is one row.** `establishSession` used to INSERT on every sign-in, and nothing ever
+collapsed or reaped the result — so a person signing in from one machine accumulated one "active
+device" per sign-in. Measured on a development workspace before the fix: **7,486 live sessions for
+a single user**, 6,952 carrying the identical Chrome-on-Windows user-agent string. Both surfaces
+that read this table exist to answer *"is there a session here that shouldn't be?"*, and that
+question is unanswerable in a list of seven thousand identical rows.
+
+Two mechanisms, doing different jobs:
+
+| Mechanism | Covers | Behaviour |
+|---|---|---|
+| `Session.deviceId` | Browsers | An opaque id in a long-lived httpOnly cookie. A repeat sign-in **replaces** that device's row — new secret, new expiry, same row. |
+| `MAX_ACTIVE_SESSIONS_PER_USER` (10) | Everything else | Cookie-less clients (curl, MCP, native apps), rows predating the column, and genuinely-many-devices users. Evicts **least recently used** — and **only sessions idle for 15+ minutes**. |
+
+> **`deviceId` is not an authenticator and must never be treated as one.** It carries no claim
+> about who the holder is — it only groups rows. The lookup is `(userId, deviceId)` **and** a
+> matching `userAgent`, and it only ever runs *after* credentials have been verified, so forging,
+> copying or clearing the cookie buys an attacker nothing they did not already have. A bad value
+> simply fails to match, which degrades to the old behaviour (a new row) rather than to a shared
+> one. That is also why it is unsigned: a signature would imply the value is trusted for
+> something, and it is not.
+>
+> Reuse **clears the rotation grace window** (`previousRefreshHash`, `refreshRotatedAt`). Signing
+> in is a fresh credential, not a rotation, so the pre-login secret must die immediately — a token
+> that survives a re-authentication is exactly what `refresh`'s reuse detection exists to catch.
+
+> **An active session is never evicted, however far over the cap.** The cap is a *target*, not a
+> hard ceiling. A blunt cap is not merely imprecise here — it is a way for one client to sign
+> another out: a script or integration polling `/auth/login` would push a person's real browser
+> session past the rank cutoff and revoke it, and the victim would see a 401 on a token minted
+> minutes earlier. (This is not hypothetical; the e2e suite reproduced it before the rule changed.)
+> Idleness is therefore the eviction condition, and 15 minutes is the same window
+> `maintenance.service.ts` already uses for "using the app right now" — one idea, one number. Ten
+> genuinely-active sessions all survive; they are swept as they go quiet.
+
+**The response is decoded, not raw.** Each row carries `device` ("Chrome on Windows 10/11"),
+`browser`, `os`, `formFactor`, `lastSeenAt`, and `privateNetwork` — and deliberately **not** the
+raw `userAgent`, which is a fingerprinting surface with no remaining purpose once the label exists.
+Rows are ordered by **last activity**, because "which of these is stale?" is the question being
+asked and creation time answers a different one. The same `parseUserAgent` already backed the
+admin who's-online panel; this route simply stopped being the exception.
+
 ## Workspace branding
 
 The workspace's own logo and display name — what makes the product read as the customer's.

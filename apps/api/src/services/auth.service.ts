@@ -173,10 +173,73 @@ export function __loginLockoutEntryCountForTests() {
  * future SSO callback per Phase B4/B5) terminates here, so they all get the exact same
  * rotation/grace-window session model automatically rather than each having to replicate it.
  */
+/**
+ * How many live sessions one person may hold at once.
+ *
+ * THE SAFETY NET, not the mechanism. `deviceId` is what stops the list growing in normal use —
+ * one browser, one row. This bounds everything it cannot cover: clients with no cookie jar (curl,
+ * the MCP server, a mobile app), rows created before `deviceId` existed, and anyone who really
+ * does sign in from a dozen machines. Without it the table has no ceiling at all, which is how a
+ * single user reached 7,486 live sessions.
+ *
+ * Ten is deliberately generous — a laptop, a desktop, a phone, a tablet and a few browsers each
+ * still fit — and it is a TARGET rather than a hard ceiling: `enforceSessionCap` only ever evicts
+ * sessions that have gone IDLE, so someone genuinely using twelve keeps all twelve until some go
+ * quiet. A cap willing to revoke an in-use session is worse than the problem it solves.
+ */
+export const MAX_ACTIVE_SESSIONS_PER_USER = 10;
+
+/**
+ * AN ACTIVE SESSION IS NEVER EVICTED, whatever the count.
+ *
+ * The cap alone was too blunt, and the e2e suite proved it by failing: a workload that signs in
+ * many times in a short window pushed working sessions past the cap and revoked them, which
+ * surfaced as a 401 on a token that had been minted minutes earlier. That is not a test artifact —
+ * it is the same shape as a script or an integration polling `/auth/login` and quietly signing a
+ * person out of the browser they are sitting in front of. A cap that can do that is worse than the
+ * problem it solves.
+ *
+ * So idleness, not merely rank, is the eviction condition. Fifteen minutes matches
+ * `maintenance.service.ts`'s ONLINE_WINDOW_MS, which is already this codebase's definition of
+ * "using the app right now" — one idea, one number.
+ *
+ * The cap is therefore a TARGET, not a hard ceiling: someone genuinely holding twelve active
+ * sessions keeps all twelve, and they are swept as they go quiet. That is the honest behaviour —
+ * "you have too many devices" is only ever a reason to drop the ones nobody is using.
+ */
+const SESSION_IDLE_BEFORE_EVICTION_MS = 15 * 60 * 1000;
+
+async function enforceSessionCap(userId: string, keepId: string): Promise<number> {
+  const live = await prisma.session.findMany({
+    where: { userId, revokedAt: null, expiresAt: { gt: new Date() } },
+    select: { id: true, lastSeenAt: true, createdAt: true }
+  });
+  if (live.length <= MAX_ACTIVE_SESSIONS_PER_USER) return 0;
+
+  /** Creation counts as activity: a row written seconds ago has been used — to sign in. Sorting
+   *  on this rather than on `lastSeenAt` alone also removes NULL-ordering from the question. */
+  const activeAt = (session: { lastSeenAt: Date | null; createdAt: Date }) =>
+    (session.lastSeenAt ?? session.createdAt).getTime();
+  const idleBefore = Date.now() - SESSION_IDLE_BEFORE_EVICTION_MS;
+
+  const doomed = live
+    // `keepId` is the session this very login issued. It is pinned rather than trusted to sort
+    // safely: without it a brand-new row could be evicted at the instant it was created.
+    .filter((session) => session.id !== keepId)
+    .sort((a, b) => activeAt(b) - activeAt(a))
+    .slice(MAX_ACTIVE_SESSIONS_PER_USER - 1)
+    .filter((session) => activeAt(session) < idleBefore)
+    .map((session) => session.id);
+  if (doomed.length === 0) return 0;
+
+  await prisma.session.updateMany({ where: { id: { in: doomed } }, data: { revokedAt: new Date() } });
+  return doomed.length;
+}
+
 async function establishSession(
   user: { id: string },
   orgId: string,
-  opts: { rememberMe?: boolean; userAgent?: string; ipAddress?: string }
+  opts: { rememberMe?: boolean; userAgent?: string; ipAddress?: string; deviceId?: string }
 ) {
   // MAINTENANCE GATE, at the one place every login method funnels through — password, Google,
   // Microsoft, SAML and LDAP all terminate here, so none of them can become the forgotten side
@@ -197,9 +260,70 @@ async function establishSession(
   const days = opts.rememberMe ? 30 : env.REFRESH_TOKEN_TTL_DAYS;
   const refreshSecret = opaqueToken();
   const expiresAt = new Date(Date.now() + days * 24 * 60 * 60 * 1000);
-  const session = await prisma.session.create({
-    data: { userId: user.id, refreshHash: await hashToken(refreshSecret), userAgent: opts.userAgent, ipAddress: opts.ipAddress, expiresAt }
-  });
+  const refreshHash = await hashToken(refreshSecret);
+
+  /**
+   * ONE BROWSER, ONE ROW.
+   *
+   * Signing in again from a device that already has a live session REPLACES that session rather
+   * than adding a second one — new secret, new expiry, same row. This is the whole fix: without
+   * it every sign-in INSERTed, and since nothing ever reaped them, one person on one machine
+   * accumulated one "active device" per sign-in.
+   *
+   * MATCHED ON USER AGENT TOO, not on `deviceId` alone. The cookie is not an authenticator and is
+   * never treated as one — pairing it with the browser string means a copied or stale cookie
+   * cannot silently take over a different browser's row, and the failure mode when they disagree
+   * is the harmless old behaviour (a new row) rather than a hijacked one.
+   *
+   * The grace-window fields are cleared: this is a fresh credential, not a rotation, so the
+   * previous secret must stop working immediately.
+   */
+  const reusable = opts.deviceId
+    ? await prisma.session.findFirst({
+        where: {
+          userId: user.id,
+          deviceId: opts.deviceId,
+          revokedAt: null,
+          expiresAt: { gt: new Date() },
+          userAgent: opts.userAgent ?? null
+        },
+        orderBy: { createdAt: "desc" },
+        select: { id: true }
+      })
+    : null;
+
+  const session = reusable
+    ? await prisma.session.update({
+        where: { id: reusable.id },
+        data: {
+          refreshHash,
+          previousRefreshHash: null,
+          refreshRotatedAt: null,
+          ipAddress: opts.ipAddress,
+          expiresAt,
+          lastSeenAt: new Date()
+        }
+      })
+    : await prisma.session.create({
+        data: {
+          userId: user.id,
+          refreshHash,
+          userAgent: opts.userAgent,
+          ipAddress: opts.ipAddress,
+          deviceId: opts.deviceId,
+          expiresAt,
+          // Signing in IS activity. Without this a brand-new row reads as "never used" to every
+          // idle-based sweep and to the Profile page's "Last used" column alike.
+          lastSeenAt: new Date()
+        }
+      });
+
+  // The ceiling for everything `deviceId` cannot cover — cookie-less clients, rows predating the
+  // column, and genuinely many devices. Best-effort: a failure here must never turn a successful
+  // sign-in into an error, since the session itself is already valid.
+  await enforceSessionCap(user.id, session.id).catch((error) =>
+    console.warn(`[auth] session cap sweep failed for ${user.id}: ${(error as Error).message}`)
+  );
   // firstLoginAt is written exactly once, then never touched again — pre-existing accounts keep
   // null (unknown) rather than a backfilled guess. Same write as lastLoginAt, so no extra query.
   await prisma.user.update({
@@ -214,7 +338,15 @@ async function establishSession(
   };
 }
 
-export async function login(email: string, password: string, rememberMe = false, userAgent?: string, ipAddress?: string) {
+export async function login(
+  email: string,
+  password: string,
+  rememberMe = false,
+  userAgent?: string,
+  ipAddress?: string,
+  /** See utils/device-cookie.ts — groups a browser's sessions into one row. Never an authenticator. */
+  deviceId?: string
+) {
   const { orgId } = requireTenantContext();
   checkAccountLockout(orgId, email);
 
@@ -237,7 +369,7 @@ export async function login(email: string, password: string, rememberMe = false,
   if (user.status !== "ACTIVE") throw new AppError(403, "Account is not active");
   clearFailedLogins(orgId, email);
 
-  const session = await establishSession(user, orgId, { rememberMe, userAgent, ipAddress });
+  const session = await establishSession(user, orgId, { rememberMe, userAgent, ipAddress, deviceId });
 
   return {
     ...session,
@@ -275,7 +407,10 @@ export async function completeSsoLogin(
   orgId: string,
   identity: { email: string; name: string | null },
   userAgent?: string,
-  ipAddress?: string
+  ipAddress?: string,
+  /** See utils/device-cookie.ts. Threaded here too so SSO users are not the one login path that
+   *  keeps accumulating a session row per sign-in. */
+  deviceId?: string
 ) {
   let user = await prisma.user.findUnique({ where: { email: identity.email }, include: PROFILE_INCLUDE });
 
@@ -308,7 +443,7 @@ export async function completeSsoLogin(
 
   if (user.deletedAt || user.status !== "ACTIVE") throw new AppError(403, "Account is not active");
 
-  const session = await establishSession(user, orgId, { userAgent, ipAddress });
+  const session = await establishSession(user, orgId, { userAgent, ipAddress, deviceId });
 
   return {
     ...session,

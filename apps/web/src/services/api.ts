@@ -239,11 +239,27 @@ export interface LoginResponse {
 
 export interface SessionRow {
   id: string;
-  userAgent: string | null;
   ipAddress: string | null;
   createdAt: string;
   expiresAt: string;
+  /** Last authenticated request on this session — what makes "which of these is stale?" a
+   *  question the list can answer. Null on a session that has not been used since the column
+   *  existed. */
+  lastSeenAt: string | null;
   current: boolean;
+  /**
+   * Decoded server-side (`utils/user-agent.ts`) rather than shipped as a raw UA string for the
+   * page to parse. The raw string was a wall of "Mozilla/5.0 (Windows NT 10.0; Win64; x64)
+   * AppleWebKit/537.36…" — complete and unreadable — and it is a fingerprinting surface with no
+   * remaining purpose once the label exists.
+   */
+  device: string;
+  browser: string;
+  os: string;
+  formFactor: "desktop" | "mobile" | "tablet" | "unknown";
+  /** True for loopback/RFC1918/CGNAT addresses. On a LAN deployment every address is a 192.168.x
+   *  and a column of them tells the reader nothing; this is what makes "on your network" sayable. */
+  privateNetwork: boolean;
 }
 
 export interface SsoMethods {

@@ -273,6 +273,21 @@ model Session {
   refreshRotatedAt    DateTime?
   userAgent           String?
   ipAddress           String?
+  /// WHICH BROWSER this session belongs to — an opaque id in a long-lived httpOnly cookie, set
+  /// on first sign-in and returned on every later one.
+  ///
+  /// WHY IT EXISTS: `login()` used to INSERT a row every time, and nothing ever collapsed or
+  /// reaped them, so one person signing in from one machine accumulated one "active device" per
+  /// sign-in — measured at 7,486 live rows for a single user, 6,952 of them the same
+  /// Chrome-on-Windows string. "Sign out this device" was then unusable for the thing it exists
+  /// for, because the list it presents was noise.
+  ///
+  /// It is NOT an authenticator and must never be treated as one: it only groups rows. Sessions
+  /// are keyed by (userId, deviceId) AND a matching user agent, so a copied or stale cookie
+  /// cannot take over a different browser's row, and forging one buys nothing without the
+  /// password. NULL on every row predating this column, and on non-browser clients that keep no
+  /// cookie jar — both fall back to the old insert-a-row behaviour, bounded by the per-user cap.
+  deviceId            String?   @db.VarChar(64)
   expiresAt           DateTime
   revokedAt           DateTime?
   createdAt           DateTime  @default(now())
@@ -284,6 +299,9 @@ model Session {
 
   @@index([userId, expiresAt])
   @@index([lastSeenAt])
+  /// The lookup `establishSession` does on every sign-in: "does this user already have a live
+  /// session on this device?"
+  @@index([userId, deviceId, revokedAt])
 }
 
 /// Workspace maintenance mode — the "everyone out while we work" switch, SUPER_ADMIN only.
