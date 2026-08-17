@@ -41,6 +41,7 @@ import fs from "node:fs";
 import net from "node:net";
 import os from "node:os";
 import path from "node:path";
+import { p3009Recovery } from "./lib/migration-recovery.js";
 
 const HEAL = process.argv.includes("--heal");
 const FIX_ENV = process.argv.includes("--fix-env");
@@ -309,10 +310,12 @@ function runMigrations(label: string, schema: string): void {
     execSync(`npx prisma migrate deploy --schema=${schema}`, { stdio: ["pipe", "pipe", "pipe"], cwd: apiCwd });
     ok(`${label} — migrations applied (prisma migrate deploy)`);
   } catch (error) {
+    const said = childOutput(error);
     fail(
-      `${label} — migration failed. Prisma said:\n\n${childOutput(error)}\n\n` +
-        `To reproduce: cd apps/api && npx prisma migrate deploy --schema=${schema}\n` +
-        `If a migration is recorded as FAILED, see docs/DATABASE.md — never answer "reset" on a database holding real data.`
+      `${label} — migration failed. Prisma said:\n\n${said}\n` +
+        (p3009Recovery(said, schema) ??
+          `\n  To reproduce: cd apps/api && npx prisma migrate deploy --schema=${schema}\n` +
+            `  If a migration is recorded as FAILED, see docs/DATABASE.md — never answer "reset" on a database holding real data.`)
     );
   }
 }

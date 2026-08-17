@@ -17,6 +17,32 @@ case-insensitive Windows dialect died on case-sensitive Linux servers mid-migrat
 rewriting them to the canonical casing, which is correct on both. Existing installations are
 unaffected; their migration checksums were reconciled in place.
 
+### 🛠️ Setup no longer strands a database it half-upgraded
+
+- **`npm run setup` failed on MySQL 8 with a migration error it then refused to move past.** The
+  session cleanup above ranked rows in a table while updating that same table — a pattern MySQL
+  rejects, which MariaDB happens to allow. Development ran MariaDB, so it passed every local test
+  and broke on the first MySQL 8.0 machine it met.
+- Worse than failing was **how** it failed: the schema change went through and the data step
+  didn't, leaving the database recorded as mid-upgrade. Every later migration then refused to run,
+  including the corrected version of the one that broke.
+- The migration now **checks before it changes anything**, so re-running it over a partly-upgraded
+  database completes instead of colliding with its own earlier attempt. **No data is dropped or
+  rewritten** — the recovery is two commands, and setup now prints them the moment it hits this:
+
+  ```bash
+  cd apps/api
+  npx prisma migrate resolve --rolled-back <migration_name> --schema=prisma/schema.prisma
+  npx prisma migrate deploy --schema=prisma/schema.prisma
+  ```
+
+- Setup used to report only `Command failed: npx prisma migrate deploy`, throwing away the part
+  that said which migration and why. It now prints what the database actually said.
+- Verified end to end against three databases: a clean install, one left stranded exactly as
+  reported, and one using a different text collation — all three complete with every row intact.
+  Thirteen new tests check the migration history for the three portability traps behind this
+  (documented in `docs/DATABASE.md`), so the next one is caught in review.
+
 ### 💻 "Active sessions" is a list of devices again
 
 - **Signing in from the same browser no longer adds a new "device" every time.** Each sign-in

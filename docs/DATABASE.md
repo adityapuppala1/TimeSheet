@@ -33,10 +33,14 @@ Rules that follow from it:
   update the recorded `checksum` in `_prisma_migrations`. Verify constraint counts and row counts
   before and after.
 
-### Two traps when a migration has to READ the table it writes
+### Three traps when a migration has to READ the table it writes
 
-Both were hit writing `20260817100000_session_device_identity`, whose cleanup revokes each user's
-oldest sessions — inherently "rank rows in a table, then update that same table".
+All three were hit writing `20260817100000_session_device_identity`, whose cleanup revokes each
+user's oldest sessions — inherently "rank rows in a table, then update that same table". They are
+worth reading in order, because each one was the *fix* for the previous one.
+
+`apps/api/tests/unit/migration-portability.test.ts` enforces all three statically, so the next
+occurrence is caught in review rather than on an operator's machine.
 
 **1. A derived table is not a portable escape from error 1093.** MySQL refuses `UPDATE t … WHERE
 … (SELECT … FROM t)` with *"You can't specify target table for update in FROM clause"*. Wrapping
@@ -44,21 +48,90 @@ the read in a derived table (`UPDATE t JOIN (SELECT … FROM t) d`) is the class
 because it forces materialisation — and it works on MariaDB. **MySQL 8.0.14+ can MERGE that
 derived table back into the outer query**, which puts 1093 straight back. If your dev machine runs
 one engine and production the other, this passes every local test and breaks provisioning for
-every new organization.
+every new organization. This one shipped.
 
-**2. `CREATE TEMPORARY TABLE` does not survive inside a migration.** It looks like the clean fix.
-Temporary tables are **connection-scoped**, and Prisma's migration engine does not guarantee one
-connection for the whole file — the `CREATE` succeeds and the statement that joins it fails with
-a bare *"Please check the query number 5 from the migration file"*, which names nothing.
+**2. A scratch table with a DECLARED collation will not join.** The fix for (1) is a scratch table
+holding the ids to update. Writing it the obvious way —
 
-**What works:** an ordinary table, `DROP TABLE IF EXISTS` before and `DROP TABLE` after. Visible
-from any connection, identical on every engine, and the leading drop makes a resumed or
-previously-failed migration start clean instead of joining stale ids.
+```sql
+CREATE TABLE `_scratch` (`id` VARCHAR(191) NOT NULL, PRIMARY KEY (`id`))
+  ENGINE=InnoDB DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;   -- WRONG
+```
 
-> This is exactly what the "replay into an EMPTY database" rule above is for — and it is not
-> sufficient on its own. A replay proves the schema applies; it does **not** exercise a data
-> migration, because every table is empty. Seed representative rows into the probe and re-apply
-> when the migration's whole purpose is to change data.
+— fails with **error 1267, *"Illegal mix of collations"***, on any database whose real table
+carries a different one. And the default is exactly what differs between engines: **MySQL 8.0 ships
+`utf8mb4_0900_ai_ci`; MySQL 5.7 and MariaDB ship `utf8mb4_general_ci`**; an operator who created
+the database with an explicit `COLLATE` has a third answer. The failure is *late* — the `CREATE`
+succeeds, the `INSERT` succeeds, and the `JOIN` two statements later dies with
+*"Please check the query number 5 from the migration file"*, which names nothing.
+
+Use `CREATE TABLE … AS SELECT` instead. It **inherits** the source column's character set and
+collation, so the join cannot mismatch:
+
+```sql
+DROP TABLE IF EXISTS `_scratch`;
+CREATE TABLE `_scratch` AS SELECT `t`.`id` AS `id` FROM `t` WHERE …;
+CREATE INDEX `_scratch_id_idx` ON `_scratch` (`id`);   -- CTAS has no keys; the join needs one
+UPDATE `t` JOIN `_scratch` `s` ON `s`.`id` = `t`.`id` SET …;
+DROP TABLE `_scratch`;
+```
+
+`CREATE TEMPORARY TABLE` is fine here and was wrongly blamed for this failure at the time —
+`20260804013530_service_incident_single_open` uses two of them across five statements and is
+applied on production MySQL 8.0.46. The migration engine does hold one connection. An ordinary
+table is used above only because it is the weaker assumption.
+
+**3. A migration that mixes DDL with data changes must survive re-running itself.** MySQL DDL is
+**not transactional** and Prisma does not roll a migration back. So when trap (1) killed the
+cleanup, the `ALTER TABLE … ADD COLUMN` and `CREATE INDEX` before it had already landed — and
+`_prisma_migrations` recorded the migration as **failed**, which blocks every later migration with
+**P3009**. Recovery re-runs the file, so a bare `ADD COLUMN` then dies as a duplicate and the
+database is stuck for a second reason.
+
+MySQL has no `ADD COLUMN IF NOT EXISTS` (MariaDB does — relying on it reintroduces the engine split
+that caused all of this). The portable guard is `information_schema` plus a prepared statement,
+with `DO 0` as the no-op branch:
+
+```sql
+SET @stmt := (
+  SELECT IF(COUNT(*) = 0, 'ALTER TABLE `Session` ADD COLUMN `deviceId` VARCHAR(64) NULL', 'DO 0')
+  FROM `information_schema`.`COLUMNS`
+  WHERE `TABLE_SCHEMA` = DATABASE() AND `TABLE_NAME` = 'Session' AND `COLUMN_NAME` = 'deviceId'
+);
+PREPARE `guarded_stmt` FROM @stmt; EXECUTE `guarded_stmt`; DEALLOCATE PREPARE `guarded_stmt`;
+```
+
+The same shape against `information_schema.STATISTICS` (`INDEX_NAME = …`) guards a `CREATE INDEX`.
+
+> The "replay into an EMPTY database" rule above is necessary and **not sufficient**. A replay
+> proves the schema applies; it does **not** exercise a data migration, because every table is
+> empty — and it runs on *your* engine, which is how traps (1) and (2) both survived local
+> testing. Seed representative rows into the probe, and when the migration touches data, also
+> replay it against a database created with a different default collation.
+
+### Recovering from P3009 — "failed migrations in the target database"
+
+This is what an operator sees after a migration dies part-way. `npm run setup` surfaces it with
+the recovery commands attached (`apps/api/scripts/doctor.ts`), but in full:
+
+```bash
+cd apps/api
+npx prisma migrate resolve --rolled-back <migration_name> --schema=prisma/schema.prisma
+npx prisma migrate deploy --schema=prisma/schema.prisma
+```
+
+The first command clears the failed record so the migration is retried; the second re-runs it.
+**No data is dropped by either.**
+
+- `--rolled-back` means *"re-run it"*, and is correct when the migration is guarded per trap (3).
+- `--applied` means *"treat it as done"*, and is correct only when you have verified by hand that
+  every statement's effect is already present.
+- **Never `prisma migrate reset`.** It DROPS the database. Prisma's own error links to a page that
+  mentions it; that page is not written for a workspace holding real data.
+
+If `deploy` then fails on a duplicate column or index, the migration is not re-runnable over its
+own partial effects. Guard its DDL as in trap (3) and try again — reconciling the `checksum` in
+`_prisma_migrations` for any database that already applied the old version.
 
 ## After merging a migration: fan it out to every tenant
 
