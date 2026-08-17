@@ -50,6 +50,11 @@ vi.mock("../../src/services/plan-limits.service.js", () => ({
   isPlanningCapabilityAllowed: (...a: unknown[]) => isPlanningCapabilityAllowed(...a)
 }));
 vi.mock("../../src/services/ai-autonomy.service.js", () => ({ resolveAutonomy: (...a: unknown[]) => resolveAutonomy(...a) }));
+// `decorateProfile` asks whether each capability's AI feature is on — the same AND the settings
+// screen computes — so the roster cannot claim readiness the runtime would refuse.
+vi.mock("../../src/services/ai.service.js", () => ({
+  getGlobalAISettings: vi.fn().mockResolvedValue({ aiEnabled: true, aiTriageEnabled: true, aiDigestEnabled: true })
+}));
 vi.mock("../../src/services/audit.service.js", () => ({ audit: vi.fn().mockResolvedValue(undefined) }));
 
 const { agentRouter } = await import("../../src/controllers/agent.controller.js");

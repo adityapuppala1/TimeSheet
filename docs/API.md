@@ -599,6 +599,27 @@ resolved autonomy of the bundle first — the same reasoning as the MCP server's
 defaults, where a write tool added by a future release arrives disabled rather than turning itself on
 during an upgrade.
 
+### One capability, one owner
+
+A defect the roster introduced, fixed in the same release. There is exactly one
+`AiCapabilityPolicy` per capability, so two ENABLED profiles containing `triage` would both describe
+the same behaviour: neither would be the reason it happened, and switching one off would change
+nothing. The roster would be a list of names with no relationship to what the workspace does.
+
+- A capability may be claimed by **at most one enabled profile**. Drafts may overlap freely — that is
+  what makes it possible to build a replacement teammate before retiring the one it replaces.
+- **Enabling is where the claim is staked**, so that is where a conflict is refused: 409, naming the
+  owner and the overlapping capabilities ("📰 Reporter already covers weekly_digest, status_report").
+  The same check catches the other route to the same collision — widening an already-enabled bundle.
+- A profile can always be switched **off**, even while it overlaps. Without that exception two
+  profiles that overlapped by any other route could each refuse to be disabled — a deadlock.
+- `GET /agents` reports `claimedByOther` per capability on a draft, so somebody can see *why* enabling
+  would be refused before trying, and `readiness.enabledButInert` when a profile is on but every
+  capability in it has its AI feature switched off — the state a green "On" badge would lie about.
+- `GET /settings/ai/autonomy` carries `claimedBy` per capability, so the settings screen names the
+  teammate that depends on a level before somebody lowers it. **Display only** — `AiCapabilityPolicy`
+  remains the single lever, and the roster deliberately does not duplicate the control.
+
 ### The identity, and its three fences
 
 An `AgentProfile` acts as a real `User` row with `isAgent = true`. That is what lets assignment,

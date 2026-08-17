@@ -1416,6 +1416,10 @@ export interface AutonomyEntry {
   ceilingReason: string | null;
   actsOnUntrustedInput: boolean;
   featureEnabled: boolean;
+  /** Which agent on the roster owns this capability, when one does. Display-only — the lever is
+   *  still this screen — but it turns "some capability" into "🗂️ Triage's ticket triage", so the
+   *  consequence of lowering a level here is visible before it is made. */
+  claimedBy: { profileId: string; name: string; emoji: string } | null;
   /** The GlobalAISettings switch behind this capability, so one row can carry both controls.
    *  Null for a capability that reaches no model. */
   featureToggle: string | null;
@@ -4029,7 +4033,14 @@ export interface AgentRosterEntry {
     description: string;
     actsOnUntrustedInput: boolean;
     autonomy: AgentAutonomy;
+    /** Whether it can act right now: AI on for the workspace AND its own feature switch on. */
+    runnable: boolean;
+    /** Set when another ENABLED profile owns this capability — only possible on a draft, since
+     *  enabling with an overlap is refused. */
+    claimedByOther: { profileId: string; name: string; emoji: string } | null;
   }>;
+  /** What the workspace can actually deliver, as opposed to what the switch says. */
+  readiness: { runnableCount: number; enabledButInert: boolean };
   runs: {
     total: number;
     recent: Array<{

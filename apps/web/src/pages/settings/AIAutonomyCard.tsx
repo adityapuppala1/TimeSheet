@@ -30,6 +30,7 @@ import { Switch } from "../../components/ui/switch";
 import { Badge } from "../../components/ui/badge";
 import { Skeleton } from "../../components/ui/skeleton";
 import { toast } from "../../components/ui/toaster";
+import { Link } from "react-router";
 import { cn } from "../../lib/utils";
 
 const LADDER: Array<{ level: AutonomyLevel; label: string; blurb: string }> = [
@@ -268,6 +269,18 @@ function CapabilityRow({
             )}
           </p>
           <p className="text-xs text-muted-foreground">{row.description}</p>
+          {/* The cross-reference that stops this screen and Plan → Agents looking like two copies of
+              one list. A capability owned by a named teammate says so here, because the person
+              lowering a level needs to know whose teammate they are about to change. */}
+          {row.claimedBy && (
+            <Link
+              to="/app/agents"
+              className="mt-1 inline-flex items-center gap-1 rounded-full bg-primary/10 px-2 py-0.5 text-[11px] text-primary transition-colors hover:bg-primary/20"
+            >
+              <Bot className="h-2.5 w-2.5" aria-hidden />
+              {row.claimedBy.emoji} {row.claimedBy.name} uses this
+            </Link>
+          )}
         </div>
         {/* "Does it run at all". Absent for a capability with no model behind it — there is no AI
             switch that could be off. */}

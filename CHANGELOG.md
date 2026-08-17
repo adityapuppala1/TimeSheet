@@ -83,6 +83,16 @@ its old schema without the update saying so. After upgrading, run the fan-out on
   status, the trigger, the step count, and whether it was clamped.
 - **Retiring one keeps its history.** The identity is deactivated, never deleted, because past runs
   and audit rows point at it and a retired teammate should read as retired rather than as a gap.
+- **Two teammates can never own the same capability.** Switching one on is refused if another already
+  covers something in its bundle, and the refusal names it — so "which teammate does this?" always has
+  exactly one answer. Drafts may overlap as much as you like, which is how you build a replacement
+  before retiring the one it replaces.
+- **The two screens now point at each other.** Workspace Settings → AI features shows which teammate
+  uses each capability, and the roster links back to the one place authority is set. There is still
+  only one lever; what changed is that both screens say so.
+- **An agent that cannot actually do anything says so.** If everything in its bundle has its AI
+  feature switched off, the badge reads "On, but idle" and explains where to fix it, rather than
+  showing a confident green "On" over work it cannot perform.
 
 ### 🐳 The API image never contained the scripts two runbooks tell you to run
 

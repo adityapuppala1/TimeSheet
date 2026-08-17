@@ -3582,3 +3582,52 @@ page checked at 390 / 1366 with the gallery open, both themes, zero horizontal o
 **Not done in this phase:** nothing schedules an agent yet — a profile is a roster entry, and its
 capabilities still run from their existing triggers, so "enabled" means "may run" rather than "runs on
 a cadence". That is phase 4's job: the Studio is where a trigger meets a bundle.
+
+## V8 phase 3 follow-up — one capability, one owner (2026-08-17)
+
+Prompted by the right question from the product owner: *how do Agents and the AI capabilities in
+Workspace Settings conflict?* They did, in three ways, and only the first was cosmetic.
+
+1. **The same twenty-two capabilities on two screens with no cross-reference.** The product looked
+   like it held two copies of its own capability list.
+2. **Ambiguous ownership.** There is exactly one `AiCapabilityPolicy` per capability. Two enabled
+   profiles containing `triage` would both describe the same behaviour — neither would be the reason
+   it happened, and switching one off would change nothing. The roster would be names with no
+   relationship to what the workspace does.
+3. **A control that isn't.** The roster reads like where a teammate is configured while the lever
+   lives in settings, so an agent could sit there saying "On" over a bundle where every capability had
+   its AI feature switched off.
+
+Fixed as ownership, not as a second store:
+
+- [x] **`capability-claims.service.ts`** — capability → the enabled profile that owns it. Its own
+  module because `agent-profile.service` imports `ai-autonomy.service`, and the catalogue needs
+  claims; importing the profile service there would close a cycle. It imports nothing but Prisma.
+- [x] **At most one ENABLED profile per capability, refused at the moment of enabling** with a 409
+  naming the owner and the overlap. Drafts overlap freely — that is what makes building a replacement
+  teammate before retiring the original possible — and the same check catches the other route to the
+  collision, widening an already-live bundle. A profile can always be switched **off** even while it
+  overlaps: without that exception, two profiles that overlapped by any other route could each refuse
+  to be disabled, which is a deadlock.
+- [x] **Both screens name each other.** `GET /settings/ai/autonomy` carries `claimedBy`, so the row an
+  administrator is about to lower says "📰 Reporter uses this" and links to the roster; each agent card
+  links back to the one place authority is set. `AiCapabilityPolicy` is still the only lever — what
+  changed is that neither screen pretends to be alone.
+- [x] **`readiness.enabledButInert`**, so "On" cannot over-promise. An agent whose every capability has
+  its AI feature off now reads "On, but idle" and names the screen that fixes it, and each unrunnable
+  capability chip is struck through.
+- [x] **An N+1 removed while in there**: claims and the AI settings were being fetched per profile.
+  Both are workspace-wide, so `listRoster` resolves them once and threads them down.
+
+**What the failing tests taught, and it is worth recording.** Adding a dependency to
+`decorateProfile` and `describeAutonomyCatalogue` broke two existing suites — not because the product
+was wrong but because their mocks did not know about the new tables. The fix for the second one was to
+teach the SHARED `createFakeTenantClient` about `agentProfile` rather than patching one suite, since
+the next thing to read that table would have hit the same wall.
+
+Verified: 1093 unit tests (+8, covering the claim map, conflict grouping, the enable refusal, the
+draft-overlap allowance, the widening route, and the disable-escape); lint clean; and driven end to end
+against the live workspace — a rival agent created as a draft (201), refused on enable with
+*"📰 Reporter already covers weekly_digest, status_report"*, its per-capability claims visible on the
+draft, all sixteen claimed capabilities named in the settings catalogue, the claim released when the
+owner was switched off, then everything restored.

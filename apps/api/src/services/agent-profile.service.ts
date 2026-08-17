@@ -21,7 +21,9 @@ import { prisma } from "../config/prisma.js";
 import { AppError } from "../middleware/error.js";
 import { createAgentIdentity } from "./agent-identity.js";
 import { AI_CAPABILITIES, findCapability } from "./ai-capability.registry.js";
+import { findClaimConflicts, getCapabilityClaims } from "./capability-claims.service.js";
 import { resolveAutonomy, type ResolvedAutonomy } from "./ai-autonomy.service.js";
+import { getGlobalAISettings } from "./ai.service.js";
 
 /**
  * The built-in gallery. Each template is a bundle of capabilities that genuinely belong to one job,
@@ -92,7 +94,7 @@ export const AGENT_TEMPLATES: AgentTemplate[] = [
  *  that would appear to do something and do nothing. */
 export function validateCapabilities(ids: unknown): string[] {
   if (!Array.isArray(ids)) throw new AppError(422, "Capabilities must be a list.");
-  const unique = [...new Set(ids.map((id) => String(id)))];
+  const unique = [...new Set(ids.map(String))];
   const unknown = unique.filter((id) => !findCapability(id));
   if (unknown.length > 0) {
     throw new AppError(422, `Unknown capabilit${unknown.length === 1 ? "y" : "ies"}: ${unknown.join(", ")}.`);
@@ -102,7 +104,7 @@ export function validateCapabilities(ids: unknown): string[] {
 }
 
 const asStringArray = (value: Prisma.JsonValue | null): string[] =>
-  Array.isArray(value) ? value.map((v) => String(v)) : [];
+  Array.isArray(value) ? value.map(String) : [];
 
 export interface RosterEntry {
   id: string;
@@ -124,7 +126,22 @@ export interface RosterEntry {
     description: string;
     actsOnUntrustedInput: boolean;
     autonomy: ResolvedAutonomy;
+    /** Whether this capability can actually do anything right now: its feature switch is on AND its
+     *  effective level is above OFF. Without it, a card could read "On" over a bundle where every
+     *  entry was inert — an agent promising work it cannot perform. */
+    runnable: boolean;
+    /** Set when ANOTHER enabled profile owns this capability. Only possible for a draft, since
+     *  enabling with an overlap is refused — a draft showing it is how somebody sees why. */
+    claimedByOther: { profileId: string; name: string; emoji: string } | null;
   }>;
+  /** Honest summary of the switch. `enabled` says what an administrator asked for; this says what
+   *  the workspace can currently deliver. */
+  readiness: {
+    runnableCount: number;
+    /** True when the profile is on but nothing in it can act — the state a green badge would lie
+     *  about. The UI says so in words rather than showing a confident "On". */
+    enabledButInert: boolean;
+  };
   runs: {
     total: number;
     /** The last few, newest first — enough to answer "what has this thing been doing". */
@@ -158,26 +175,54 @@ export async function listRoster(): Promise<RosterEntry[]> {
     orderBy: [{ enabled: "desc" }, { name: "asc" }]
   });
 
+  // Claims and the AI settings are workspace-wide, so they are fetched ONCE and threaded down.
+  // Resolving them inside decorateProfile made the roster N+1 in two dimensions at the same time.
+  const shared: DecorateContext = { claims: await getCapabilityClaims(), aiSettings: await getGlobalAISettings() };
+
   const entries: RosterEntry[] = [];
-  for (const profile of profiles) entries.push(await decorateProfile(profile));
+  for (const profile of profiles) entries.push(await decorateProfile(profile, shared));
   return entries;
+}
+
+/** Workspace-wide facts every entry needs. Optional on `decorateProfile` so the single-entry paths
+ *  (create, update) stay one call, while the list path fetches them once. */
+interface DecorateContext {
+  claims: Awaited<ReturnType<typeof getCapabilityClaims>>;
+  aiSettings: Awaited<ReturnType<typeof getGlobalAISettings>>;
 }
 
 type ProfileRow = Prisma.AgentProfileGetPayload<{ include: { identityUser: { select: { id: true; name: true; email: true } } } }>;
 
-export async function decorateProfile(profile: ProfileRow): Promise<RosterEntry> {
+export async function decorateProfile(profile: ProfileRow, ctx?: DecorateContext): Promise<RosterEntry> {
   const capabilityIds = asStringArray(profile.capabilities);
+  // Who else owns what, so a draft can explain why enabling it would be refused. The shared map
+  // covers every profile, so this one's own claims are filtered out below rather than re-queried.
+  const claims = ctx?.claims ?? (await getCapabilityClaims(profile.id));
+  // The same AND `describeAutonomyCatalogue` computes for the settings screen: a capability can act
+  // only if AI is on for the workspace and its own feature switch is on.
+  const aiSettings = ctx?.aiSettings ?? (await getGlobalAISettings());
 
   const capabilities = [];
   for (const id of capabilityIds) {
     const spec = findCapability(id);
     if (!spec) continue; // Defensive: a capability removed from the registry by a later release.
+    const autonomy = await resolveAutonomy(spec.id);
+    const owner = claims.get(spec.id) ?? null;
+    // A profile never conflicts with itself: when the shared map is used it includes this profile's
+    // own claims, so they are discarded here.
+    const claim = owner && owner.profileId !== profile.id ? owner : null;
     capabilities.push({
       id: spec.id,
       title: spec.title,
       description: spec.description,
       actsOnUntrustedInput: spec.actsOnUntrustedInput,
-      autonomy: await resolveAutonomy(spec.id)
+      autonomy,
+      // A capability with no feature toggle reaches no model (the rebalance producer is arithmetic),
+      // so nothing about the AI switches decides whether it can act.
+      runnable: spec.featureToggle
+        ? Boolean(aiSettings.aiEnabled && (aiSettings as Record<string, unknown>)[spec.featureToggle])
+        : true,
+      claimedByOther: claim
     });
   }
 
@@ -213,6 +258,10 @@ export async function decorateProfile(profile: ProfileRow): Promise<RosterEntry>
     maxCostUsdPerDay: profile.maxCostUsdPerDay == null ? null : Number(profile.maxCostUsdPerDay),
     spentTodayUsd: Number(spendToday._sum.costUsd ?? 0),
     capabilities,
+    readiness: {
+      runnableCount: capabilities.filter((c) => c.runnable).length,
+      enabledButInert: profile.enabled && capabilities.length > 0 && capabilities.every((c) => !c.runnable)
+    },
     runs: {
       total: runTotal,
       recent: recentRuns.map((r) => ({
@@ -290,6 +339,33 @@ export async function updateProfile(
   if (patch.scopeProjectIds !== undefined) data.scopeProjectIds = patch.scopeProjectIds;
   if (patch.maxCostUsdPerDay !== undefined) data.maxCostUsdPerDay = patch.maxCostUsdPerDay;
   if (patch.enabled !== undefined) data.enabled = patch.enabled;
+
+  /**
+   * ONE CAPABILITY, ONE OWNER — checked here because ENABLING is where a claim is staked.
+   *
+   * Two enabled profiles containing the same capability would both describe one
+   * `AiCapabilityPolicy`: neither would be the reason it behaved as it did, and switching one off
+   * would change nothing. Drafts may overlap as much as they like, which is what makes it possible
+   * to build a replacement teammate before retiring the one it replaces.
+   *
+   * The check runs when the profile will be enabled AFTER this patch — so it catches both "enable
+   * me" and "add a capability to an already-enabled me", which is the same conflict arriving by a
+   * different route.
+   */
+  const willBeEnabled = patch.enabled ?? existing.enabled;
+  const nextCapabilities = (data.capabilities as string[] | undefined) ?? asStringArray(existing.capabilities);
+  if (willBeEnabled && nextCapabilities.length > 0) {
+    const conflicts = await findClaimConflicts(nextCapabilities, existing.id);
+    if (conflicts.length > 0) {
+      const described = conflicts
+        .map((c) => `${c.owner.emoji} ${c.owner.name} already covers ${c.capabilities.join(", ")}`)
+        .join("; ");
+      throw new AppError(
+        409,
+        `${described}. Two teammates cannot own the same capability — switch that one off first, or remove the overlap here.`
+      );
+    }
+  }
 
   const profile = await prisma.agentProfile.update({
     where: { id: existing.id },

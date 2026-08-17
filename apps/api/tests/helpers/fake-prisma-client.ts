@@ -74,6 +74,9 @@ export function createFakeTenantClient(): PrismaClient {
     auditLog: { create: vi.fn(), findMany: vi.fn(), count: vi.fn() },
     aiCapabilityPolicy: { findUnique: vi.fn(), findMany: vi.fn(), upsert: vi.fn() },
     agentRun: { findUnique: vi.fn(), findFirst: vi.fn(), create: vi.fn(), update: vi.fn(), updateMany: vi.fn(), count: vi.fn() },
+    // V8 phase 3: the autonomy catalogue reports which agent owns each capability, so anything
+    // touching it reads this table. Defaults to no claims — a suite that cares sets its own rows.
+    agentProfile: { findMany: vi.fn().mockResolvedValue([]), findFirst: vi.fn(), create: vi.fn(), update: vi.fn() },
     agentRunStep: { create: vi.fn() },
     mcpToolInvocation: { create: vi.fn(), findUnique: vi.fn(), update: vi.fn() },
     aiProposal: { findUnique: vi.fn(), findMany: vi.fn().mockResolvedValue([]), update: vi.fn(), create: vi.fn() },

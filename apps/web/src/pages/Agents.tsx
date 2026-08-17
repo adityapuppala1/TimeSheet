@@ -21,6 +21,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   Activity,
+  AlertTriangle,
   Ban,
   Bot,
   CheckCircle2,
@@ -31,9 +32,11 @@ import {
   ShieldAlert,
   Sparkles,
   Trash2,
+  Users,
   Zap
 } from "lucide-react";
 import { useState } from "react";
+import { Link } from "react-router";
 import { Badge } from "../components/ui/badge";
 import { Button } from "../components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../components/ui/card";
@@ -323,8 +326,14 @@ function AgentCard({
             <div className="min-w-0">
               <CardTitle className="flex flex-wrap items-center gap-1.5 text-base">
                 {entry.name}
-                <Badge variant={entry.enabled ? "success" : "secondary"} className="text-[10px]">
-                  {entry.enabled ? "On" : "Off"}
+                {/* "On" is only allowed to look like On when something in the bundle can act. An
+                    enabled agent whose every capability has its AI feature switched off would
+                    otherwise wear a green badge over work it cannot perform. */}
+                <Badge
+                  variant={entry.enabled ? (entry.readiness.enabledButInert ? "warning" : "success") : "secondary"}
+                  className="text-[10px]"
+                >
+                  {entry.enabled ? (entry.readiness.enabledButInert ? "On, but idle" : "On") : "Off"}
                 </Badge>
               </CardTitle>
               <CardDescription className="mt-0.5 text-xs">
@@ -352,6 +361,35 @@ function AgentCard({
       <CardContent className="space-y-3 pt-0">
         {entry.description && <p className="text-sm text-muted-foreground">{entry.description}</p>}
 
+        {/* The two states where the card would otherwise mislead. Both name the screen that fixes
+            them, because the lever for authority is deliberately NOT duplicated here — one policy,
+            one place to set it. */}
+        {entry.readiness.enabledButInert && (
+          <p className="flex items-start gap-1.5 rounded-md border border-warning/40 bg-warning/5 px-3 py-2 text-xs">
+            <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-warning-foreground" aria-hidden />
+            <span>
+              Switched on, but nothing in it can act yet — every capability below has its AI feature turned off in{" "}
+              <Link to="/app/settings" className="underline">
+                Workspace settings → AI features
+              </Link>
+              .
+            </span>
+          </p>
+        )}
+        {!entry.enabled && entry.capabilities.some((c) => c.claimedByOther) && (
+          <p className="flex items-start gap-1.5 rounded-md border border-dashed px-3 py-2 text-xs text-muted-foreground">
+            <Users className="mt-0.5 h-3.5 w-3.5 shrink-0" aria-hidden />
+            <span>
+              Cannot be switched on yet:{" "}
+              {entry.capabilities
+                .filter((c) => c.claimedByOther)
+                .map((c) => `${c.claimedByOther!.emoji} ${c.claimedByOther!.name} already covers ${c.title}`)
+                .join("; ")}
+              . Two teammates cannot own the same capability.
+            </span>
+          </p>
+        )}
+
         {/* What it may actually do. One chip per capability, each carrying its RESOLVED level. */}
         <div className="space-y-1.5">
           <p className="text-xs font-medium text-muted-foreground">What it may do</p>
@@ -361,9 +399,15 @@ function AgentCard({
               return (
                 <Tooltip key={c.id}>
                   <TooltipTrigger asChild>
-                    <span className="inline-flex cursor-help items-center gap-1 rounded-full border px-2 py-0.5 text-[11px]">
+                    <span
+                      className={cn(
+                        "inline-flex cursor-help items-center gap-1 rounded-full border px-2 py-0.5 text-[11px]",
+                        !c.runnable && "opacity-60",
+                        c.claimedByOther && "border-dashed"
+                      )}
+                    >
                       {c.actsOnUntrustedInput && <ShieldAlert className="h-3 w-3 text-warning-foreground" />}
-                      <span className="font-medium">{c.title}</span>
+                      <span className={cn("font-medium", !c.runnable && "line-through decoration-1")}>{c.title}</span>
                       <Badge variant={copy.tone} className="ml-0.5 px-1 py-0 text-[9px]">
                         {copy.label}
                       </Badge>
@@ -372,6 +416,16 @@ function AgentCard({
                   <TooltipContent className="max-w-xs space-y-1">
                     <p>{c.description}</p>
                     <p className="text-muted-foreground">{copy.blurb}</p>
+                    {!c.runnable && (
+                      <p className="text-warning-foreground">
+                        Its AI feature is switched off for this workspace, so it cannot act at all yet.
+                      </p>
+                    )}
+                    {c.claimedByOther && (
+                      <p className="text-warning-foreground">
+                        {c.claimedByOther.emoji} {c.claimedByOther.name} owns this capability. Only one teammate may.
+                      </p>
+                    )}
                     {c.autonomy.clampedReason && <p className="text-warning-foreground">Clamped: {c.autonomy.clampedReason}</p>}
                     {c.actsOnUntrustedInput && (
                       <p className="text-muted-foreground">
@@ -456,6 +510,9 @@ function AgentCard({
                 Applies its own changes, within guardrails
               </span>
             )}
+            <Link to="/app/settings" className="text-[11px] text-muted-foreground underline decoration-dotted">
+              Set how much authority each capability has
+            </Link>
             <Button variant="ghost" size="sm" className="ml-auto h-7 px-2 text-xs" onClick={onRetire} disabled={busy}>
               <Trash2 className="mr-1 h-3 w-3" />
               Retire
