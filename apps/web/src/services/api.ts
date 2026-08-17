@@ -4523,7 +4523,16 @@ export interface FlowRow {
   triggerConfig: Record<string, unknown>;
   enabled: boolean;
   agentProfile: { id: string; name: string; emoji: string; enabled: boolean } | null;
-  steps: Array<{ id: string; order: number; kind: FlowStepKind; capability: string | null; title: string | null; config: Record<string, unknown> }>;
+  steps: Array<{
+    id: string;
+    order: number;
+    kind: FlowStepKind;
+    capability: string | null;
+    title: string | null;
+    /** What the step is configured to do, in words, with ids already resolved to names. */
+    summary: string | null;
+    config: Record<string, unknown>;
+  }>;
   authority: FlowAuthority;
   issues: FlowIssue[];
   /** Errors block activation; the badge and the activate route read the same value. */
@@ -4564,15 +4573,27 @@ export interface FlowPayload {
   steps: Array<{ kind: FlowStepKind; capability?: string | null; config?: Record<string, unknown> }>;
 }
 
+/**
+ * Everything the builder's pickers need, in one response.
+ *
+ * `options` on an action or branch field names WHICH list below it draws from, so the builder renders
+ * a picker from data rather than from a switch statement that has to be edited every time the server
+ * grows a new action.
+ */
+export interface FlowCatalogue {
+  capabilities: AgentCapabilityRow[];
+  events: string[];
+  actions: Array<{ key: string; label: string; target: string; options: "people" | "labels" }>;
+  branchFields: Array<{ key: string; label: string; values?: string[]; options?: "projects"; freeText?: boolean }>;
+  people: Array<{ id: string; name: string; email: string }>;
+  labels: Array<{ id: string; name: string; color: string | null }>;
+  projects: Array<{ id: string; code: string; name: string }>;
+}
+
 export const flowApi = {
   list: async () => (await api.get<FlowRow[]>("/flows")).data,
   get: async (id: string) => (await api.get<FlowRow>(`/flows/${id}`)).data,
-  catalogue: async () =>
-    (await api.get<{
-      capabilities: AgentCapabilityRow[];
-      events: string[];
-      actions: Array<{ key: string; label: string; config: string[] }>;
-    }>("/flows/catalogue")).data,
+  catalogue: async () => (await api.get<FlowCatalogue>("/flows/catalogue")).data,
   /** A GET because it writes nothing — safe to re-run and refresh. */
   simulate: async (id: string, limit = 5) => (await api.get<FlowSimulation>(`/flows/${id}/simulate`, { params: { limit } })).data,
   create: async (payload: FlowPayload) => (await api.post<FlowRow>("/flows", payload)).data,

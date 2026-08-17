@@ -18,6 +18,7 @@
 import { Router } from "express";
 import { z } from "zod";
 import { permissions } from "@timesheet/shared";
+import { prisma } from "../config/prisma.js";
 import { requireTenantContext } from "../config/tenant-context.js";
 import { requireAuth, requirePermission, requireSuperAdmin } from "../middleware/auth.js";
 import { AppError } from "../middleware/error.js";
@@ -77,14 +78,50 @@ automationFlowRouter.get("/", requirePermission(permissions.TICKETS_VIEW), async
  *  two chances to render half of it. */
 automationFlowRouter.get("/catalogue", requirePermission(permissions.TICKETS_VIEW), async (_req, res) => {
   await assertStudioAllowed();
+  /**
+   * Everything the builder's pickers need, resolved server-side.
+   *
+   * People, labels and projects come from here rather than from three separate calls the builder
+   * would have to orchestrate: a dialog that renders before its options arrive is a dialog where
+   * somebody picks nothing and wonders why the step will not validate.
+   *
+   * Agent identities are excluded from the people lists — assigning work to a teammate is a real
+   * idea, but "who should approve this gate" and "who should be notified" are questions about a
+   * person, and an identity with no mailbox cannot answer either.
+   */
+  const [people, labels, projects] = await Promise.all([
+    prisma.user.findMany({
+      where: { status: "ACTIVE", deletedAt: null, isAgent: false },
+      select: { id: true, name: true, email: true },
+      orderBy: { name: "asc" },
+      take: 500
+    }),
+    prisma.label.findMany({ select: { id: true, name: true, color: true }, orderBy: { name: "asc" }, take: 200 }),
+    prisma.project.findMany({
+      where: { deletedAt: null },
+      select: { id: true, code: true, name: true },
+      orderBy: { name: "asc" },
+      take: 200
+    })
+  ]);
+
   res.json({
     capabilities: listCapabilityCatalogue(),
     events: DOMAIN_EVENTS,
     actions: [
-      { key: "assign", label: "Assign it to somebody", config: ["assigneeId"] },
-      { key: "label", label: "Add a label", config: ["labelId"] },
-      { key: "notify", label: "Notify somebody", config: ["notifyUserId"] }
-    ]
+      { key: "assign", label: "Assign it to somebody", target: "assigneeId", options: "people" },
+      { key: "label", label: "Add a label", target: "labelId", options: "labels" },
+      { key: "notify", label: "Notify somebody", target: "notifyUserId", options: "people" }
+    ],
+    branchFields: [
+      { key: "priority", label: "Priority", values: ["LOW", "MEDIUM", "HIGH", "CRITICAL"] },
+      { key: "source", label: "Where it came from", values: ["MANUAL", "EMAIL", "API", "CHAT"] },
+      { key: "projectId", label: "Project", options: "projects" },
+      { key: "senderDomain", label: "Sender domain", freeText: true }
+    ],
+    people,
+    labels,
+    projects
   });
 });
 

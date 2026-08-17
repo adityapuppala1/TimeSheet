@@ -57,6 +57,80 @@ export interface FlowStepInput {
   /** Whether this step WRITES anything (an ACTION always does; a capability does when its level is
    *  above SUGGEST; a BRANCH and a HUMAN_GATE never do). */
   writes?: boolean;
+  /** Kind-specific settings — what the step actually DOES, as opposed to what kind it is. Validated
+   *  by `validateStepConfig` below; ignored by the authority arithmetic, which depends only on the
+   *  four facts above. */
+  config?: Record<string, unknown>;
+}
+
+/**
+ * The condition vocabulary a BRANCH may use.
+ *
+ * DELIBERATELY THE RULES ENGINE'S OWN (`TicketRule`'s condition columns) rather than a new expression
+ * language. A second grammar is a second thing to secure, a second thing to explain, and a second
+ * place for "what does this actually match" to be answered differently.
+ */
+export const BRANCH_FIELDS = ["priority", "source", "projectId", "senderDomain"] as const;
+export const BRANCH_OPERATORS = ["is", "is_not"] as const;
+export const ACTION_KINDS = ["assign", "label", "notify"] as const;
+
+/** Which config key each action kind requires. An action with no target is a step that runs and does
+ *  nothing, which is worse than an error because it looks like it worked. */
+const ACTION_TARGET: Record<(typeof ACTION_KINDS)[number], string> = {
+  assign: "assigneeId",
+  label: "labelId",
+  notify: "notifyUserId"
+};
+
+/** Safe for a value that arrived as JSON: `String({})` is "[object Object]", which then fails a
+ *  membership check with a confusing message instead of a clear one. */
+const asText = (value: unknown): string => (typeof value === "string" || typeof value === "number" ? String(value) : "");
+
+function validateActionConfig(step: FlowStepInput, config: Record<string, unknown>): FlowValidationIssue[] {
+  const action = asText(config.action);
+  if (!ACTION_KINDS.includes(action as (typeof ACTION_KINDS)[number])) {
+    return [{ severity: "error", order: step.order, message: "Choose what this action should do." }];
+  }
+  const targetKey = ACTION_TARGET[action as (typeof ACTION_KINDS)[number]];
+  if (config[targetKey]) return [];
+
+  const missing: Record<string, string> = {
+    assign: "Choose who this step assigns to.",
+    label: "Choose which label this step adds.",
+    notify: "Choose who this step notifies."
+  };
+  return [{ severity: "error", order: step.order, message: missing[action] }];
+}
+
+function validateBranchConfig(step: FlowStepInput, config: Record<string, unknown>): FlowValidationIssue[] {
+  const issues: FlowValidationIssue[] = [];
+  if (!BRANCH_FIELDS.includes(asText(config.field) as (typeof BRANCH_FIELDS)[number])) {
+    issues.push({ severity: "error", order: step.order, message: "Choose what this condition looks at." });
+  }
+  if (!BRANCH_OPERATORS.includes(asText(config.op) as (typeof BRANCH_OPERATORS)[number])) {
+    issues.push({ severity: "error", order: step.order, message: "Choose whether the condition matches or excludes." });
+  }
+  if (asText(config.value).length === 0) {
+    issues.push({ severity: "error", order: step.order, message: "Give the condition a value to compare against." });
+  }
+  return issues;
+}
+
+/**
+ * Per-step settings, checked separately from the authority rules because they fail differently: an
+ * unconfigured step is not dangerous, it is inert — and an inert step inside a flow somebody activated
+ * is a silent no-op, which is the failure mode that wastes an afternoon.
+ */
+export function validateStepConfig(step: FlowStepInput): FlowValidationIssue[] {
+  const config = step.config ?? {};
+  if (step.kind === "ACTION") return validateActionConfig(step, config);
+  if (step.kind === "BRANCH") return validateBranchConfig(step, config);
+  if (step.kind === "HUMAN_GATE" && !config.approverId) {
+    // A gate with nobody named is a gate nobody is asked, and a flow that waits forever reads as
+    // broken rather than as blocked.
+    return [{ severity: "error", order: step.order, message: "Choose who is asked to approve at this gate." }];
+  }
+  return [];
 }
 
 export interface StepAuthority {
@@ -246,6 +320,9 @@ export function validateFlow(params: {
     if (step.kind === "CAPABILITY" && !step.capability) {
       issues.push({ severity: "error", order: step.order, message: "A capability step needs a capability." });
     }
+    // What the step DOES, as opposed to what kind it is. Checked here so the builder's badge, the
+    // activate route and this list cannot disagree about whether a flow is finished.
+    issues.push(...validateStepConfig(step));
     if (step.kind === "BRANCH" && index === lastIndex) {
       issues.push({
         severity: "error",

@@ -23,6 +23,7 @@ const flowUpdate = vi.fn().mockResolvedValue({});
 const stepDeleteMany = vi.fn().mockResolvedValue({ count: 0 });
 const stepCreateMany = vi.fn().mockResolvedValue({ count: 0 });
 const ticketFindMany = vi.fn().mockResolvedValue([]);
+const userFindMany = vi.fn().mockResolvedValue([{ id: "u-1", name: "Avery", email: "a@x.io" }]);
 const isPlanningCapabilityAllowed = vi.fn().mockResolvedValue(true);
 const resolveAutonomy = vi.fn();
 const auditFn = vi.fn().mockResolvedValue(undefined);
@@ -48,6 +49,9 @@ vi.mock("../../src/config/prisma.js", () => ({
     automationFlow: { create: flowCreate, findMany: flowFindMany, findFirst: flowFindFirst, update: flowUpdate },
     automationStep: { deleteMany: stepDeleteMany, createMany: stepCreateMany },
     ticket: { findMany: ticketFindMany },
+    user: { findMany: userFindMany },
+    label: { findMany: vi.fn().mockResolvedValue([{ id: "l-1", name: "Urgent", color: "#f00" }]) },
+    project: { findMany: vi.fn().mockResolvedValue([{ id: "p-1", code: "ACME", name: "Acme" }]) },
     requestFormSubmission: { findMany: vi.fn().mockResolvedValue([]) },
     $transaction: (fn: (client: typeof tx) => unknown) => (typeof fn === "function" ? fn(tx) : Promise.resolve([]))
   }
@@ -140,7 +144,9 @@ describe("activation reads the validation first", () => {
       flowRow({
         steps: [
           { id: "s1", order: 1, kind: "CAPABILITY", capability: "triage", config: {} },
-          { id: "s2", order: 2, kind: "HUMAN_GATE", capability: null, config: {} }
+          // Configured, so the only thing wrong with this flow is WHERE the gate is — an unconfigured
+          // gate is its own error, and would have this test passing for the wrong reason.
+          { id: "s2", order: 2, kind: "HUMAN_GATE", capability: null, config: { approverId: "u-1" } }
         ]
       })
     );
@@ -269,5 +275,29 @@ describe("the gates", () => {
     expect((await request(app()).post("/flows").send({ name: "X", steps: [] })).status).toBe(403);
     expect((await request(app()).post("/flows/f-1/enabled").send({ enabled: true })).status).toBe(403);
     expect((await request(app()).delete("/flows/f-1")).status).toBe(403);
+  });
+});
+
+/**
+ * The catalogue is what every picker in the builder renders from, so its SHAPE is a contract: an
+ * action that names a target the response has no list for is a dropdown with nothing in it.
+ */
+describe("the catalogue carries what the pickers need", () => {
+  it("returns each action with the config key it fills and the list it draws from", async () => {
+    const res = await request(app()).get("/flows/catalogue");
+    expect(res.status).toBe(200);
+    for (const action of res.body.actions) {
+      expect(typeof action.target).toBe("string");
+      expect(res.body[action.options]).toBeInstanceOf(Array);
+    }
+    for (const field of res.body.branchFields) {
+      // Every branch field must offer SOME way to state a value, or the condition cannot be written.
+      expect(Boolean(field.values || field.options || field.freeText)).toBe(true);
+    }
+  });
+
+  it("never offers an agent identity as a person to notify or ask for approval", async () => {
+    await request(app()).get("/flows/catalogue");
+    expect(userFindMany.mock.calls[0][0].where).toMatchObject({ isAgent: false, status: "ACTIVE" });
   });
 });

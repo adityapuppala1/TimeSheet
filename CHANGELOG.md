@@ -113,6 +113,20 @@ its old schema without the update saying so. After upgrading, run the fan-out on
   approves nothing, a condition at the end guards nothing, and a flow bound to a teammate cannot use a
   capability that teammate does not have. Switching a flow **off** is always allowed, so nothing can
   ever get stuck on.
+- **Steps say what they will actually do, not just what kind of thing they are.** An action chooses
+  its assignee, its label or the person it notifies; a condition states its field, its operator and
+  its value in the same vocabulary the ticket rules already use; a gate names its approver. A step
+  left blank is an error that blocks activation, not a step that quietly does nothing — and the
+  pickers never offer an AI teammate as the person to notify or ask, because an identity with no
+  mailbox cannot answer either question.
+- **The flow list reads as sentences.** "Waits for Priya to approve", "Assigns it to Sam" — the names
+  are resolved for you, so reviewing a flow does not mean reading identifiers. A step pointing at
+  somebody who has since been removed says so rather than showing a blank.
+- **A drag-and-drop canvas, beside the list rather than instead of it.** Pan, zoom, drag the cards,
+  and see the flow as a graph with the authority banner still pinned above it. **Dropping a card above
+  or below another reorders the flow** — because the steps are a sequence and order changes what a flow
+  is allowed to do, the picture and the rule can never disagree. The list stays the review view, and
+  on a phone the list is all there is: a squashed canvas would be worse than none.
 - Everything a flow does still goes through the same review, undo and audit path as every other AI
   change here. The Studio composes what already existed; it adds no new way to write to your workspace.
 

@@ -30,8 +30,10 @@ import {
   CircleSlash,
   GitBranch,
   Hand,
+  LayoutList,
   Loader2,
   Lock,
+  Network,
   PlayCircle,
   Plus,
   Settings2,
@@ -43,6 +45,7 @@ import {
 } from "lucide-react";
 import { useState } from "react";
 import { Link } from "react-router";
+import { FlowCanvas, type CanvasStep } from "../components/FlowCanvas";
 import { Badge } from "../components/ui/badge";
 import { Button } from "../components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../components/ui/card";
@@ -60,6 +63,7 @@ import { useAuthStore } from "../store/auth";
 import {
   agentRosterApi,
   flowApi,
+  type FlowCatalogue,
   type FlowPayload,
   type FlowRow,
   type FlowSimulation,
@@ -431,6 +435,9 @@ function FlowCard({
                         </Tooltip>
                       )}
                     </span>
+                    {/* What the step is configured to DO. Without it the list reads "Action" and a
+                        reviewer cannot answer the only question they came with. */}
+                    {step.summary && <span className="mt-0.5 block text-[11px] text-muted-foreground">{step.summary}</span>}
                     {authority?.clampedReason && (
                       <span className="mt-0.5 block text-[11px] text-warning-foreground">{authority.clampedReason}</span>
                     )}
@@ -469,6 +476,150 @@ function FlowCard({
   );
 }
 
+/**
+ * The controls that turn a step's SHAPE into a RULE.
+ *
+ * WHY THE CONDITION VOCABULARY IS THE RULES ENGINE'S: `TicketRule` already states conditions in these
+ * exact terms, and a second grammar would be a second thing to secure, explain and keep in step with
+ * the data model. The server validates the same list (`flow-authority.service.ts`), so an unconfigured
+ * step is an activation error rather than a flow that silently does nothing.
+ *
+ * WHY EVERY WRITE MERGES RATHER THAN REPLACES: `config` also carries the canvas position. A picker that
+ * replaced the object would move the node back to the origin the moment somebody chose an assignee.
+ */
+function StepConfigFields({
+  step,
+  catalogue,
+  onChange
+}: Readonly<{
+  step: FlowPayload["steps"][number];
+  catalogue: FlowCatalogue | undefined;
+  onChange: (config: Record<string, unknown>) => void;
+}>) {
+  const config = step.config ?? {};
+  const patch = (next: Record<string, unknown>) => onChange({ ...config, ...next });
+  const text = (key: string) => (typeof config[key] === "string" ? (config[key] as string) : "");
+
+  if (step.kind === "ACTION") {
+    const chosen = catalogue?.actions.find((a) => a.key === text("action"));
+    const options = chosen?.options === "labels" ? (catalogue?.labels ?? []) : (catalogue?.people ?? []);
+    return (
+      <div className="grid gap-1.5 sm:grid-cols-2">
+        <Select
+          value={text("action")}
+          onValueChange={(v) => {
+            // Changing the action clears the old target: an assignee id left behind on a "add a label"
+            // step is a value nothing reads and everybody misreads.
+            const previous = catalogue?.actions.find((a) => a.key === text("action"));
+            const cleared = previous ? { [previous.target]: undefined } : {};
+            patch({ ...cleared, action: v });
+          }}
+        >
+          <SelectTrigger className="h-8 text-xs">
+            <SelectValue placeholder="What should it do?" />
+          </SelectTrigger>
+          <SelectContent>
+            {(catalogue?.actions ?? []).map((a) => (
+              <SelectItem key={a.key} value={a.key}>
+                {a.label}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+        {chosen && (
+          <Select value={text(chosen.target)} onValueChange={(v) => patch({ [chosen.target]: v })}>
+            <SelectTrigger className="h-8 text-xs">
+              <SelectValue placeholder={chosen.options === "labels" ? "Which label?" : "Which person?"} />
+            </SelectTrigger>
+            <SelectContent>
+              {options.map((o) => (
+                <SelectItem key={o.id} value={o.id}>
+                  {o.name}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        )}
+      </div>
+    );
+  }
+
+  if (step.kind === "BRANCH") {
+    const field = catalogue?.branchFields.find((f) => f.key === text("field"));
+    return (
+      <div className="grid gap-1.5 sm:grid-cols-3">
+        <Select value={text("field")} onValueChange={(v) => patch({ field: v, value: undefined })}>
+          <SelectTrigger className="h-8 text-xs">
+            <SelectValue placeholder="Only if…" />
+          </SelectTrigger>
+          <SelectContent>
+            {(catalogue?.branchFields ?? []).map((f) => (
+              <SelectItem key={f.key} value={f.key}>
+                {f.label}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+        <Select value={text("op") || "is"} onValueChange={(v) => patch({ op: v })}>
+          <SelectTrigger className="h-8 text-xs">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="is">is</SelectItem>
+            <SelectItem value="is_not">is not</SelectItem>
+          </SelectContent>
+        </Select>
+        {field?.freeText ? (
+          <Input
+            className="h-8 text-xs"
+            value={text("value")}
+            onChange={(e) => patch({ value: e.target.value })}
+            placeholder="example.com"
+          />
+        ) : (
+          <Select value={text("value")} onValueChange={(v) => patch({ value: v })} disabled={!field}>
+            <SelectTrigger className="h-8 text-xs">
+              <SelectValue placeholder="Which one?" />
+            </SelectTrigger>
+            <SelectContent>
+              {field?.options === "projects"
+                ? (catalogue?.projects ?? []).map((p) => (
+                    <SelectItem key={p.id} value={p.id}>
+                      {p.code} — {p.name}
+                    </SelectItem>
+                  ))
+                : (field?.values ?? []).map((v) => (
+                    <SelectItem key={v} value={v}>
+                      {v}
+                    </SelectItem>
+                  ))}
+            </SelectContent>
+          </Select>
+        )}
+      </div>
+    );
+  }
+
+  if (step.kind === "HUMAN_GATE") {
+    return (
+      <Select value={text("approverId")} onValueChange={(v) => patch({ approverId: v })}>
+        <SelectTrigger className="h-8 text-xs">
+          <SelectValue placeholder="Who is asked to approve?" />
+        </SelectTrigger>
+        <SelectContent>
+          {(catalogue?.people ?? []).map((p) => (
+            <SelectItem key={p.id} value={p.id}>
+              {p.name}
+            </SelectItem>
+          ))}
+        </SelectContent>
+      </Select>
+    );
+  }
+
+  return null;
+}
+
 function FlowDialog({ flow, onClose, onSaved }: Readonly<{ flow: FlowRow | null; onClose: () => void; onSaved: () => void }>) {
   const [name, setName] = useState(flow?.name ?? "");
   const [description, setDescription] = useState(flow?.description ?? "");
@@ -480,6 +631,8 @@ function FlowDialog({ flow, onClose, onSaved }: Readonly<{ flow: FlowRow | null;
   const [steps, setSteps] = useState<FlowPayload["steps"]>(
     flow?.steps.map((s) => ({ kind: s.kind, capability: s.capability, config: s.config })) ?? []
   );
+  const [view, setView] = useState<"list" | "canvas">("list");
+  const [selectedId, setSelectedId] = useState<string | null>(null);
 
   const catalogue = useQuery({ queryKey: ["flows", "catalogue"], queryFn: flowApi.catalogue });
   const roster = useQuery({ queryKey: ["agents"], queryFn: agentRosterApi.list, retry: false });
@@ -510,7 +663,10 @@ function FlowDialog({ flow, onClose, onSaved }: Readonly<{ flow: FlowRow | null;
   });
 
   const addStep = (kind: FlowStepKind) => setSteps((prev) => [...prev, { kind, capability: kind === "CAPABILITY" ? "" : null, config: {} }]);
-  const removeStep = (index: number) => setSteps((prev) => prev.filter((_, i) => i !== index));
+  const removeStep = (index: number) => {
+    setSteps((prev) => prev.filter((_, i) => i !== index));
+    setSelectedId(null);
+  };
   const move = (index: number, delta: number) =>
     setSteps((prev) => {
       const next = [...prev];
@@ -520,9 +676,40 @@ function FlowDialog({ flow, onClose, onSaved }: Readonly<{ flow: FlowRow | null;
       return next;
     });
 
+  /* --- the canvas view, which is the same `steps` array seen as a graph ------------------------ */
+
+  /** Node ids are positional because the sequence IS the identity: a step has no id until it is saved,
+   *  and inventing one would mean reconciling two notions of "which step" on every reorder. */
+  const indexOfNode = (id: string) => Number(id.replace("step-", ""));
+
+  const canvasSteps: CanvasStep[] = steps.map((s, i) => ({
+    id: `step-${i}`,
+    order: i + 1,
+    kind: s.kind,
+    title: s.kind === "CAPABILITY" ? (catalogue.data?.capabilities.find((c) => c.id === s.capability)?.title ?? null) : null,
+    config: s.config ?? {}
+  }));
+
+  const patchStepConfig = (index: number, patch: Record<string, unknown>) =>
+    setSteps((prev) => prev.map((s, i) => (i === index ? { ...s, config: { ...(s.config ?? {}), ...patch } } : s)));
+
+  /** Dropping a node past another reorders the flow — and the selection follows the step, not the slot,
+   *  or the panel below would suddenly be configuring somebody else's step. */
+  const moveTo = (from: number, to: number) => {
+    setSteps((prev) => {
+      const next = [...prev];
+      const [taken] = next.splice(from, 1);
+      next.splice(to, 0, taken);
+      return next;
+    });
+    setSelectedId(`step-${to}`);
+  };
+
+  const selectedIndex = selectedId ? indexOfNode(selectedId) : -1;
+
   return (
     <Dialog open onOpenChange={(open) => !open && onClose()}>
-      <DialogContent className="max-h-[90vh] overflow-y-auto sm:max-w-2xl">
+      <DialogContent className={cn("max-h-[90vh] overflow-y-auto sm:max-w-2xl", view === "canvas" && "lg:max-w-[72rem]")}>
         <DialogHeader>
           <DialogTitle>{flow ? "Edit flow" : "New flow"}</DialogTitle>
           <DialogDescription>
@@ -612,9 +799,92 @@ function FlowDialog({ flow, onClose, onSaved }: Readonly<{ flow: FlowRow | null;
             </p>
           </div>
 
-          {/* The steps, as a list you reorder. */}
+          {/* The steps. Two views of one sequence — see `FlowCanvas` for why the canvas stores no edges. */}
           <div className="space-y-2">
-            <Label>Steps</Label>
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <Label>Steps</Label>
+              {/* The toggle is offered only where a canvas fits. Below `lg` it is not a squashed
+                  canvas, it is no canvas — the same call the Gantt made. */}
+              <div className="hidden rounded-md border p-0.5 lg:flex">
+                {(["list", "canvas"] as const).map((v) => (
+                  <button
+                    key={v}
+                    type="button"
+                    onClick={() => setView(v)}
+                    className={cn(
+                      "flex items-center gap-1.5 rounded px-2.5 py-1 text-xs capitalize transition-colors",
+                      view === v ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:bg-muted"
+                    )}
+                  >
+                    {v === "list" ? <LayoutList className="h-3 w-3" /> : <Network className="h-3 w-3" />}
+                    {v}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            {view === "canvas" && steps.length > 0 && (
+              <div className="hidden space-y-2 lg:block">
+                <FlowCanvas
+                  authoritySteps={flow?.authority.steps ?? []}
+                  steps={canvasSteps}
+                  readOnly={false}
+                  selectedId={selectedId}
+                  onSelect={setSelectedId}
+                  onMove={(id, at) => patchStepConfig(indexOfNode(id), { x: at.x, y: at.y })}
+                  onReorder={(id, newIndex) => moveTo(indexOfNode(id), newIndex)}
+                />
+                {selectedIndex >= 0 ? (
+                  <div className="space-y-2 rounded-lg border p-3">
+                    <p className="flex items-center gap-1.5 text-xs font-medium">
+                      <Settings2 className="h-3.5 w-3.5" />
+                      Step {selectedIndex + 1} — {STEP_META[steps[selectedIndex].kind].label}
+                    </p>
+                    {steps[selectedIndex].kind === "CAPABILITY" ? (
+                      <Select
+                        value={steps[selectedIndex].capability ?? ""}
+                        onValueChange={(v) => setSteps((prev) => prev.map((s, i) => (i === selectedIndex ? { ...s, capability: v } : s)))}
+                      >
+                        <SelectTrigger className="h-8 text-xs">
+                          <SelectValue placeholder="Pick a capability" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {(catalogue.data?.capabilities ?? []).map((c) => (
+                            <SelectItem key={c.id} value={c.id}>
+                              {c.title}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    ) : (
+                      <StepConfigFields
+                        step={steps[selectedIndex]}
+                        catalogue={catalogue.data}
+                        onChange={(config) => setSteps((prev) => prev.map((s, i) => (i === selectedIndex ? { ...s, config } : s)))}
+                      />
+                    )}
+                    <Button variant="ghost" size="sm" className="h-7 px-2 text-xs" onClick={() => removeStep(selectedIndex)}>
+                      <Trash2 className="mr-1 h-3 w-3" />
+                      Remove this step
+                    </Button>
+                  </div>
+                ) : (
+                  <p className="rounded-md border border-dashed px-3 py-2 text-center text-xs text-muted-foreground">
+                    Drag a card to move it — dropping it above or below another changes what runs when. Click one to configure it.
+                  </p>
+                )}
+                <div className="flex flex-wrap gap-1.5">
+                  {(Object.keys(STEP_META) as FlowStepKind[]).map((kind) => (
+                    <Button key={kind} variant="outline" size="sm" onClick={() => addStep(kind)} className="h-7 text-xs">
+                      <Plus className="mr-1 h-3 w-3" />
+                      {STEP_META[kind].label}
+                    </Button>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            <div className={cn(view === "canvas" && steps.length > 0 && "lg:hidden", "space-y-2")}>
             {steps.length === 0 && (
               <p className="rounded-md border border-dashed px-3 py-4 text-center text-xs text-muted-foreground">
                 No steps yet. Add one below.
@@ -652,6 +922,11 @@ function FlowDialog({ flow, onClose, onSaved }: Readonly<{ flow: FlowRow | null;
                       </Select>
                     )}
                     {step.kind !== "CAPABILITY" && <p className="text-xs text-muted-foreground">{meta.blurb}</p>}
+                    <StepConfigFields
+                      step={step}
+                      catalogue={catalogue.data}
+                      onChange={(config) => setSteps((prev) => prev.map((s, i) => (i === index ? { ...s, config } : s)))}
+                    />
                   </div>
                   <div className="flex shrink-0 flex-col gap-0.5">
                     <Button variant="ghost" size="icon" className="h-6 w-6" onClick={() => move(index, -1)} aria-label="Move up">
@@ -674,6 +949,7 @@ function FlowDialog({ flow, onClose, onSaved }: Readonly<{ flow: FlowRow | null;
                   {STEP_META[kind].label}
                 </Button>
               ))}
+            </div>
             </div>
           </div>
         </div>

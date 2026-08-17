@@ -58,7 +58,12 @@ async function toAuthorityInput(steps: FlowRow["steps"]): Promise<FlowStepInput[
   const out: FlowStepInput[] = [];
   for (const step of steps) {
     if (step.kind !== "CAPABILITY" || !step.capability) {
-      out.push({ order: step.order, kind: step.kind, capability: step.capability });
+      out.push({
+        order: step.order,
+        kind: step.kind,
+        capability: step.capability,
+        config: (step.config as Record<string, unknown>) ?? {}
+      });
       continue;
     }
     const spec = findCapability(step.capability);
@@ -68,7 +73,8 @@ async function toAuthorityInput(steps: FlowRow["steps"]): Promise<FlowStepInput[
       kind: "CAPABILITY",
       capability: step.capability,
       effectiveLevel: resolved.effectiveLevel,
-      actsOnUntrustedInput: Boolean(spec?.actsOnUntrustedInput)
+      actsOnUntrustedInput: Boolean(spec?.actsOnUntrustedInput),
+      config: (step.config as Record<string, unknown>) ?? {}
     });
   }
   return out;
@@ -90,6 +96,8 @@ export interface DecoratedFlow {
     capability: string | null;
     /** The registry's own words, so a step reads as what it does rather than as an id. */
     title: string | null;
+    /** What the step is CONFIGURED to do, with ids resolved to names — see `summariseSteps`. */
+    summary: string | null;
     config: Record<string, unknown>;
   }>;
   authority: FlowAuthority;
@@ -101,8 +109,68 @@ export interface DecoratedFlow {
   updatedAt: Date;
 }
 
+/**
+ * A step's configuration in the reader's words: "Assigns it to Priya", not `{assigneeId: "u-3"}`.
+ *
+ * WHY THE SERVER RESOLVES THE NAMES: the flow list is the review surface, and it is readable by
+ * anybody with `tickets:view` — while the catalogue that maps ids to names sits behind the Studio's
+ * entitlement. Resolving here means a reviewer sees a sentence rather than a uuid, and the read
+ * surface never has to fetch the builder's catalogue to be legible.
+ *
+ * One batched query per kind of id, for the whole flow, so this stays two round trips however many
+ * steps a flow has.
+ */
+async function summariseSteps(steps: FlowRow["steps"]): Promise<Map<string, string>> {
+  const configs = steps.map((s) => (s.config as Record<string, unknown>) ?? {});
+  const asId = (v: unknown) => (typeof v === "string" && v.length > 0 ? v : null);
+
+  const userIds = new Set<string>();
+  const labelIds = new Set<string>();
+  const projectIds = new Set<string>();
+  for (const c of configs) {
+    for (const key of ["assigneeId", "notifyUserId", "approverId"]) {
+      const id = asId(c[key]);
+      if (id) userIds.add(id);
+    }
+    const labelId = asId(c.labelId);
+    if (labelId) labelIds.add(labelId);
+    if (c.field === "projectId") {
+      const id = asId(c.value);
+      if (id) projectIds.add(id);
+    }
+  }
+
+  const [users, labels, projects] = await Promise.all([
+    userIds.size ? prisma.user.findMany({ where: { id: { in: [...userIds] } }, select: { id: true, name: true } }) : [],
+    labelIds.size ? prisma.label.findMany({ where: { id: { in: [...labelIds] } }, select: { id: true, name: true } }) : [],
+    projectIds.size ? prisma.project.findMany({ where: { id: { in: [...projectIds] } }, select: { id: true, name: true } }) : []
+  ]);
+  const names = new Map<string, string>();
+  for (const row of [...users, ...labels, ...projects]) names.set(row.id, row.name);
+  // A name that cannot be resolved is stated as missing rather than silently dropped: a step pointing
+  // at a deleted person is exactly the thing a reviewer needs to notice.
+  const nameOf = (id: unknown) => (typeof id === "string" ? (names.get(id) ?? "somebody who no longer exists") : "nobody");
+
+  const out = new Map<string, string>();
+  for (const [i, step] of steps.entries()) {
+    const c = configs[i];
+    if (step.kind === "ACTION") {
+      if (c.action === "assign") out.set(step.id, `Assigns it to ${nameOf(c.assigneeId)}`);
+      else if (c.action === "label") out.set(step.id, `Adds the label ${nameOf(c.labelId)}`);
+      else if (c.action === "notify") out.set(step.id, `Notifies ${nameOf(c.notifyUserId)}`);
+    } else if (step.kind === "HUMAN_GATE" && c.approverId) {
+      out.set(step.id, `Waits for ${nameOf(c.approverId)} to approve`);
+    } else if (step.kind === "BRANCH" && c.field) {
+      const value = c.field === "projectId" ? nameOf(c.value) : String(c.value ?? "");
+      out.set(step.id, `Only if ${String(c.field)} ${c.op === "is_not" ? "is not" : "is"} ${value}`);
+    }
+  }
+  return out;
+}
+
 export async function decorateFlow(flow: FlowRow): Promise<DecoratedFlow> {
   const input = await toAuthorityInput(flow.steps);
+  const summaries = await summariseSteps(flow.steps);
   const authority = computeFlowAuthority(input);
   const issues = validateFlow({
     steps: input,
@@ -130,6 +198,7 @@ export async function decorateFlow(flow: FlowRow): Promise<DecoratedFlow> {
       kind: s.kind,
       capability: s.capability,
       title: s.capability ? (findCapability(s.capability)?.title ?? s.capability) : null,
+      summary: summaries.get(s.id) ?? null,
       config: (s.config as Record<string, unknown>) ?? {}
     })),
     authority,

@@ -30,7 +30,7 @@ screens and the work still outstanding.
 
 Each item states the decision that shapes it, so the next session does not re-litigate.
 
-### 3.1 The n8n-style canvas (the big one)
+### 3.1 The n8n-style canvas — **shipped**
 
 **Decision: canvas and list are two views of one flow, and the list is not retired.** A canvas is how
 somebody builds; a list is how somebody reviews, and the authority rules are text. The toggle lives in
@@ -43,9 +43,13 @@ a left rail, matching the reference.
   edges as well would give two sources of truth for the same fact, and the first disagreement between
   them is an unreadable flow. Dragging a connection therefore REORDERS — the canvas is a view of the
   sequence, and that is what keeps the authority calculation (which depends on order) honest.
-- **What must be built:** an SVG canvas with pan/zoom, draggable node cards, elbow connectors (bezier
-  curves become a tangle past a handful of edges — the timeline made this call already), a drop target
-  per node for "insert step here", and a branch node that renders two lanes.
+- **What was built:** `components/FlowCanvas.tsx` — hand-built SVG with pan/zoom, draggable node cards,
+  elbow connectors with arrowheads (bezier curves become a tangle past a handful of edges — the timeline
+  made this call already), a per-kind card treatment, and a config panel below the surface for whichever
+  node is selected. Dropping a card past another reorders the sequence, exactly as decided above.
+  **Still open:** a branch node that renders two visible lanes — today a `BRANCH` reads as a condition in
+  the sequence rather than as a fork, which is honest about what the runtime does but less legible than
+  the reference.
 - **The authority banner stays pinned above the canvas.** On a canvas it is easy to lose the one fact
   that matters most; the banner is not a panel somebody has to open.
 - **Below `lg` the canvas is not offered at all** — it degrades to the list, the same decision the Gantt
@@ -67,14 +71,21 @@ a left rail, matching the reference.
 - **A first-run summary.** The first time a flow fires, its result goes to the Inbox of whoever
   activated it. An automation nobody notices working is an automation nobody trusts.
 
-### 3.3 Per-step configuration in the builder
+### 3.3 Per-step configuration in the builder — **shipped**
 
-The schema holds `config` per step; the UI does not fill it yet. An `ACTION` step cannot choose its
-assignee, and a `BRANCH` cannot state its condition — so today's flows are shapes, not rules.
+`GET /flows/catalogue` now returns the people, labels and projects the pickers need alongside the
+capability catalogue, and `validateStepConfig` in `flow-authority.service.ts` refuses an unconfigured
+step as an activation error. The flow list shows a server-resolved summary per step ("Assigns it to
+Sam"), so the review surface never renders a uuid — and never has to fetch the entitlement-gated
+catalogue to be legible.
 
-**Decision: the condition vocabulary is the rules engine's existing one** (`TicketRule`'s fields), not a
-new expression language. A second condition grammar is a second thing to secure and a second thing to
-explain.
+**Decision taken: the condition vocabulary is the rules engine's existing one** (`TicketRule`'s fields),
+not a new expression language. A second condition grammar is a second thing to secure and a second thing
+to explain. Shipped as `priority`, `source`, `projectId` and `senderDomain`, each with `is` / `is not`.
+
+**Agent identities are excluded from every people picker.** Assigning work to a teammate is a real idea,
+but "who approves this gate" and "who is notified" are questions about a person, and an identity with no
+mailbox can answer neither.
 
 ### 3.4 Run visibility, and the missing links between surfaces
 
@@ -124,10 +135,10 @@ list plus a seed change — say so and it is done.
 
 ## 5. Sequence
 
-1. **Per-step configuration** (§3.3) — without it flows cannot express a real rule, and the canvas would
-   be a prettier way to build the same incomplete thing.
-2. **The canvas** (§3.1).
-3. **Dispatch and per-flow attribution** (§3.2) — after the builder can express what should fire.
+1. ~~**Per-step configuration** (§3.3)~~ — shipped.
+2. ~~**The canvas** (§3.1)~~ — shipped, less the two-lane branch node.
+3. **Dispatch and per-flow attribution** (§3.2) — next, and now unblocked: the builder can express what
+   should fire.
 4. **Run visibility and the cross-surface links** (§3.4).
 5. **Workload/budget merge** (§3.5) and **mobile ergonomics** (§3.6).
 

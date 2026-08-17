@@ -23,9 +23,24 @@ const cap = (order: number, capability: string, level: "SUGGEST" | "AUTO_APPLY" 
   effectiveLevel: level,
   actsOnUntrustedInput: untrusted
 });
-const action = (order: number): FlowStepInput => ({ order, kind: "ACTION" });
-const gate = (order: number): FlowStepInput => ({ order, kind: "HUMAN_GATE" });
-const branch = (order: number): FlowStepInput => ({ order, kind: "BRANCH" });
+/** Configured by default: an unconfigured step is now an error in its own right (see the
+ *  "a step that does nothing" block below), and threading that through every authority case would
+ *  test the wrong thing twice. */
+const action = (order: number, config: Record<string, unknown> = { action: "assign", assigneeId: "u-1" }): FlowStepInput => ({
+  order,
+  kind: "ACTION",
+  config
+});
+const gate = (order: number, config: Record<string, unknown> = { approverId: "u-1" }): FlowStepInput => ({
+  order,
+  kind: "HUMAN_GATE",
+  config
+});
+const branch = (order: number, config: Record<string, unknown> = { field: "priority", op: "is", value: "HIGH" }): FlowStepInput => ({
+  order,
+  kind: "BRANCH",
+  config
+});
 
 describe("rule 1 — authority is the MINIMUM of the capability steps", () => {
   it("takes the lowest of two capability levels, not the highest", () => {
@@ -219,5 +234,62 @@ describe("validation refuses flows that would not do what they read as doing", (
     const issues = validateFlow({ ...base, steps: [cap(1, "triage", "AUTO_APPLY", true), action(2)] });
     expect(errors(issues)).toEqual([]);
     expect(issues.some((i) => /outside the workspace/.test(i.message))).toBe(true);
+  });
+});
+
+describe("a step that does nothing is an error, not a shrug", () => {
+  const base = { trigger: "MANUAL", triggerConfig: {} as Record<string, unknown> };
+  const errors = (issues: ReturnType<typeof validateFlow>) => issues.filter((i) => i.severity === "error").map((i) => i.message);
+
+  it("refuses an action with no action chosen", () => {
+    // An inert step inside a flow somebody activated is a silent no-op — worse than an error,
+    // because it looks like it worked.
+    expect(errors(validateFlow({ ...base, steps: [action(1, {})] }))).toContainEqual(
+      expect.stringMatching(/what this action should do/i)
+    );
+  });
+
+  it("refuses an action with no target, naming the missing one", () => {
+    expect(errors(validateFlow({ ...base, steps: [action(1, { action: "assign" })] }))).toContainEqual(
+      expect.stringMatching(/who this step assigns to/i)
+    );
+    expect(errors(validateFlow({ ...base, steps: [action(1, { action: "label" })] }))).toContainEqual(
+      expect.stringMatching(/which label/i)
+    );
+    expect(errors(validateFlow({ ...base, steps: [action(1, { action: "notify" })] }))).toContainEqual(
+      expect.stringMatching(/who this step notifies/i)
+    );
+  });
+
+  it("refuses a branch missing any of field, operator or value", () => {
+    const issues = validateFlow({ ...base, steps: [branch(1, {}), cap(2, "triage", "SUGGEST")] });
+    expect(errors(issues)).toHaveLength(3);
+  });
+
+  it("refuses a condition field outside the rules engine's own vocabulary", () => {
+    // A second grammar is a second thing to secure and a second thing to explain.
+    const issues = validateFlow({
+      ...base,
+      steps: [branch(1, { field: "moon_phase", op: "is", value: "full" }), cap(2, "triage", "SUGGEST")]
+    });
+    expect(errors(issues)).toContainEqual(expect.stringMatching(/what this condition looks at/i));
+  });
+
+  it("refuses a gate with nobody named", () => {
+    // A gate nobody is asked waits forever, and a flow that waits forever reads as broken.
+    expect(errors(validateFlow({ ...base, steps: [gate(1, {}), action(2)] }))).toContainEqual(
+      expect.stringMatching(/who is asked to approve/i)
+    );
+  });
+
+  it("does not choke on a config value that arrived as an object rather than a string", () => {
+    // String({}) is "[object Object]", which would fail the membership check with a baffling message.
+    const issues = validateFlow({ ...base, steps: [branch(1, { field: {}, op: {}, value: {} }), action(2)] });
+    expect(errors(issues).some((m) => m.includes("[object Object]"))).toBe(false);
+  });
+
+  it("accepts a fully configured flow", () => {
+    const issues = validateFlow({ ...base, steps: [branch(1), gate(2), cap(3, "triage", "SUGGEST"), action(4)] });
+    expect(errors(issues)).toEqual([]);
   });
 });
