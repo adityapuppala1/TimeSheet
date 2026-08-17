@@ -2953,3 +2953,58 @@ several of them shared a root cause.
   query. Not backfilled, deliberately: NULL means "nobody has edited this since the column
   existed", which is the honest answer — inventing an editor from the audit log would attribute
   edits made before anyone was told they were recorded.
+
+### 2026-08-14 (follow-up 2) — deciding where you are reading, and the draft that could not be sent
+
+- [x] **"Save draft" was a one-way door.** Found while narrowing the edit window: `saveTimesheet`
+  only ever CREATES a row, so nothing in the product could promote an existing DRAFT to SUBMITTED.
+  A saved draft could be edited forever and never actually sent — the only escapes were to delete
+  it and re-type the whole entry into the logging form, or to leave it in History as permanently
+  unsubmitted work. That also made the edit feature half of something: correcting a draft is
+  pointless if the corrected draft cannot go anywhere. New `POST /timesheets/:id/submit` runs
+  *everything* a fresh submit runs — identity gate, `submittedAt`, the SLA deadline from the
+  project's own setting, both notifications, the domain event — because it is the same event, and a
+  second half-copy of it is how one of them drifts.
+
+- [x] **The entry dialog can decide, wherever it was opened.** Approve/Reject were props only the
+  approvals page passed, so opening the same entry from the dashboard's day timeline gave you the
+  full record and nothing to do about it: you read it, agreed with it, and navigated to a different
+  screen to find the same row and click Approve there. Extracted into `useTimesheetDecision` — the
+  mutations, the identity gate, the reject-reason prompt and the cache invalidation — rather than
+  copied into the second caller, because approving is face-gated on some workspaces, freezes a
+  billing rate and notifies the submitter, and two copies of that is two things to keep in step.
+  The approvals page's BULK path deliberately stays where it is: it has its own per-row-independence
+  and one-verification-covers-the-batch semantics, and folding it in would make the hook the union
+  of two problems instead of one shared answer to the smaller one.
+
+- [x] **The edit form had a scrollbar inside a scrollbar.** The dialog body scrolled AND each
+  rich-text editor scrolled within it, so there was no way to tell which one a wheel gesture was
+  about to move. Worse, Save and Discard sat INSIDE the scrolling body while a separate "Cancel
+  edit" sat in the pinned footer — two places to look for the control that finishes the job, one of
+  which could scroll out of sight. The editors are now unbounded inside the dialog
+  (`maxHeight="max-h-none"`), the body is the single scroll region, and the form submits by `form`
+  id from the footer so there is exactly one set of actions and it is always visible. Pinned by an
+  e2e test that counts the elements in the dialog which actually overflow.
+
+- [x] **The author's edit window narrowed to UNDECIDED.** Previously DRAFT, SUBMITTED and REJECTED;
+  now DRAFT and SUBMITTED. Both decided states are out for the same reason: a reviewer has recorded
+  something against the entry. Approved hours carry a frozen rate and feed cost reports and
+  attestations; a rejected entry carries the reviewer's stated reason, and rewriting the text that
+  reason refers to leaves it attached to something it was never about. `TIMESHEETS_APPROVE` still
+  reaches any status — that was an explicit earlier request, and it is the reviewer's own record.
+
+- [x] **History filters by activity and by person.** Both derived from the ROWS IN HAND rather than
+  a second query: the list is one capped page, so an option built from the full catalog could match
+  nothing on screen — a filter that looks broken the moment you pick it. The Person filter appears
+  only when the page actually spans more than one person, which also means it needs no separate
+  permission check: the list route already scopes what a viewer can see, so the options can only
+  ever contain people they are allowed to know about.
+
+- [x] **A rejected entry is neither editable nor deletable by its author** — it is the record of a
+  decision with the reviewer's reason attached, and erasing it erases that. The interesting part is
+  what had to change with it: `REJECTED` rows used to hold their time slot in the overlap check, so
+  "can't edit, can't delete, can't re-log" would have stranded the author with hours they actually
+  worked and no way to record them. Refused entries are now excluded from that check in both the
+  create and the edit paths — a refusal is the reviewer saying "this should not stand", not a
+  reservation on the clock. Every other status still counts, so real double-booking is still caught.
+  Approvers keep delete on `REJECTED` for the tidy-up case.

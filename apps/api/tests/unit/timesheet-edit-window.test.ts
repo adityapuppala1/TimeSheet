@@ -1,19 +1,22 @@
 /**
  * WHO may correct a timesheet entry, and until when.
  *
- * THE RULE THAT CHANGED, AND WHY: the author could originally only edit a DRAFT or REJECTED entry
- * — the same window `DELETE` allows. That conflated two different acts. Deleting a SUBMITTED entry
- * erases a request somebody is being asked to decide on; fixing a typo in it does not. The old
- * rule sent the author to their approver to change one word, and the approver's only tool for
- * "send it back" is a REJECTION — so a spelling mistake cost a rejection, a notification and a
- * re-submission.
+ * THE LINE IS "UNDECIDED": the author may correct their own DRAFT or SUBMITTED entry, and neither
+ * of the two decided states.
  *
- * The author's window now runs to APPROVED, and stops there: approved hours carry a frozen rate
- * and feed cost reports and Verified Work Attestations, which is a record a client may already
- * have been shown.
+ * SUBMITTED is IN because the window originally copied `DELETE`'s, which conflated two different
+ * acts — deleting a submitted entry erases a request somebody is being asked to decide on, but
+ * fixing a typo in it does not. Excluding it sent the author to their approver to change one word,
+ * and an approver's only "send it back" tool is a REJECTION, so a spelling mistake cost a
+ * rejection, a notification and a re-submission.
  *
- * The pair of rules is easy to get subtly wrong in either direction — too narrow and people cannot
- * fix their own work, too wide and approved billing rewrites itself — so both edges are pinned.
+ * APPROVED and REJECTED are both OUT because a reviewer has recorded a decision against them.
+ * Approved hours carry a frozen rate and feed cost reports and Verified Work Attestations; a
+ * rejected entry carries the reviewer's stated reason, and rewriting the text that reason refers
+ * to leaves it attached to something it was never about.
+ *
+ * The rule is easy to get subtly wrong in either direction — too narrow and people cannot fix
+ * their own work, too wide and decided records rewrite themselves — so every edge is pinned.
  */
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import express from "express";
@@ -100,7 +103,14 @@ function mockClient(status: string) {
   const entry = entryIn(status);
   return {
     timesheet: {
-      findFirst: vi.fn().mockResolvedValue(entry),
+      // Carries the relations the SUBMIT route asks for (`project` for the SLA hours, `user` +
+      // `manager` for the notifications). The PATCH route reads the same row without includes, so
+      // the extra fields are harmless there.
+      findFirst: vi.fn().mockResolvedValue({
+        ...entry,
+        project: { id: entry.projectId, name: "Apollo", slaApprovalHours: 48 },
+        user: { id: AUTHOR.id, name: AUTHOR.name, email: AUTHOR.email, managerId: MANAGER.id, manager: { id: MANAGER.id, name: MANAGER.name } }
+      }),
       findMany: vi.fn().mockResolvedValue([]),
       update: vi.fn().mockImplementation(({ data }: any) => ({
         ...entry,
@@ -132,7 +142,9 @@ const patch = (body: Record<string, unknown>) =>
   request(buildApp()).patch("/api/timesheets/11111111-1111-4111-8111-111111111111").send(body);
 
 describe("the author's edit window", () => {
-  for (const status of ["DRAFT", "SUBMITTED", "REJECTED"]) {
+  // UNDECIDED is the line. SUBMITTED is in because fixing a typo is not the same as withdrawing
+  // the request — excluding it meant a one-word correction cost a rejection and a re-submission.
+  for (const status of ["DRAFT", "SUBMITTED"]) {
     it(`lets them correct their own ${status} entry`, async () => {
       client = mockClient(status);
       clientRef = client;
@@ -142,6 +154,8 @@ describe("the author's edit window", () => {
     });
   }
 
+  // …and both DECIDED states are out, for the same underlying reason: a reviewer has recorded
+  // something against the entry, and rewriting it afterwards changes what that decision was about.
   it("stops at APPROVED, and says why rather than just refusing", async () => {
     client = mockClient("APPROVED");
     clientRef = client;
@@ -150,6 +164,18 @@ describe("the author's edit window", () => {
     // The message has to name the reason and the way forward — "forbidden" teaches nothing.
     expect(response.body.message).toMatch(/approved/i);
     expect(response.body.message).toMatch(/billing record|correcting entry/i);
+    expect(client.timesheet.update).not.toHaveBeenCalled();
+  });
+
+  it("stops at REJECTED, pointing at a fresh entry rather than a rewrite", async () => {
+    // Rewriting the text a rejection reason refers to leaves that reason attached to something it
+    // was never about. The rejected row stays deletable, so the path forward is a new entry.
+    client = mockClient("REJECTED");
+    clientRef = client;
+    const response = await patch({ taskDescription: "<p>A corrected description of the work</p>" });
+    expect(response.status).toBe(422);
+    expect(response.body.message).toMatch(/rejected/i);
+    expect(response.body.message).toMatch(/fresh entry/i);
     expect(client.timesheet.update).not.toHaveBeenCalled();
   });
 
@@ -205,5 +231,136 @@ describe("who changed it is recorded and announced", () => {
     // to ignore the notification that matters.
     await patch({ startTime: "09:00", endTime: "12:00" });
     expect(dispatchNotification).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * POST /timesheets/:id/submit — the transition that did not exist.
+ *
+ * `saveTimesheet` only ever CREATES a row, so "Save draft" was a one-way door: a draft could be
+ * edited forever and never actually submitted. The only escapes were to delete it and re-type the
+ * whole entry, or to leave it in History as permanently unsubmitted work. That also made the
+ * widened edit window half a feature — correcting a draft is pointless if the corrected draft
+ * cannot go anywhere.
+ */
+describe("submitting an existing draft", () => {
+  const submit = () => request(buildApp()).post("/api/timesheets/11111111-1111-4111-8111-111111111111/submit").send({});
+
+  it("moves a DRAFT into the queue, stamping the submit time and the SLA deadline", async () => {
+    const response = await submit();
+    expect(response.status, JSON.stringify(response.body)).toBe(200);
+    const data = vi.mocked(client.timesheet.update).mock.calls[0][0].data as Record<string, unknown>;
+    expect(data.status).toBe("SUBMITTED");
+    // Both are what make the entry visible to the SLA sweeps and the approval-latency metric —
+    // a status flip on its own would be a row nothing downstream can reason about.
+    expect(data.submittedAt).toBeInstanceOf(Date);
+    expect(data).toHaveProperty("approvalDeadline");
+  });
+
+  it("notifies the submitter and their manager, exactly as a fresh submit does", async () => {
+    await submit();
+    const recipients = vi.mocked(dispatchNotification).mock.calls.map((call) => call[0].userId);
+    expect(recipients).toContain(AUTHOR.id);
+    expect(recipients).toContain(MANAGER.id);
+  });
+
+  for (const status of ["SUBMITTED", "APPROVED", "REJECTED"]) {
+    it(`refuses a ${status} entry`, async () => {
+      client = mockClient(status);
+      clientRef = client;
+      const response = await submit();
+      expect(response.status).toBe(422);
+      expect(client.timesheet.update).not.toHaveBeenCalled();
+    });
+  }
+
+  it("refuses somebody else's draft when the caller cannot act for others", async () => {
+    actor = { ...AUTHOR, id: "someone-else" };
+    const response = await submit();
+    expect(response.status).toBe(403);
+    expect(client.timesheet.update).not.toHaveBeenCalled();
+  });
+
+  it("lets an approver submit on the author's behalf", async () => {
+    actor = MANAGER;
+    const response = await submit();
+    expect(response.status, JSON.stringify(response.body)).toBe(200);
+  });
+});
+
+
+/**
+ * DELETE — and the overlap exclusion that keeps the narrowed rule from becoming a trap.
+ *
+ * The author's window is DRAFT alone. REJECTED came out of it for the same reason it came out of
+ * the edit window: a rejection is a decision with the reviewer's reason attached, and erasing the
+ * entry erases the record of that decision.
+ *
+ * That change is only safe because of one line in the overlap check. A REJECTED entry used to hold
+ * its time slot, so an author who could no longer edit it, no longer delete it, AND could not
+ * re-log those hours would have been stranded with no way to record work they actually did. The
+ * overlap check now ignores refused entries — a refusal is the reviewer saying "this should not
+ * stand", not a reservation on the clock.
+ */
+describe("deleting an entry", () => {
+  const remove = () => request(buildApp()).delete("/api/timesheets/11111111-1111-4111-8111-111111111111");
+
+  it("lets the author delete their own DRAFT", async () => {
+    const response = await remove();
+    expect(response.status, JSON.stringify(response.body)).toBe(204);
+    expect(client.timesheet.update).toHaveBeenCalled();
+  });
+
+  it("refuses the author's REJECTED entry, and points at logging a fresh one", async () => {
+    client = mockClient("REJECTED");
+    clientRef = client;
+    const response = await remove();
+    expect(response.status).toBe(422);
+    expect(response.body.message).toMatch(/rejected entry is the record of a decision/i);
+    // The message must also say the way forward is not blocked — that is the half a user acts on.
+    expect(response.body.message).toMatch(/fresh entry/i);
+    expect(client.timesheet.update).not.toHaveBeenCalled();
+  });
+
+  for (const status of ["SUBMITTED", "APPROVED"]) {
+    it(`refuses a ${status} entry`, async () => {
+      client = mockClient(status);
+      clientRef = client;
+      const response = await remove();
+      expect(response.status).toBe(422);
+      expect(client.timesheet.update).not.toHaveBeenCalled();
+    });
+  }
+
+  it("still lets an approver clear a REJECTED entry — the tidy-up case", async () => {
+    actor = MANAGER;
+    client = mockClient("REJECTED");
+    clientRef = client;
+    const response = await remove();
+    expect(response.status, JSON.stringify(response.body)).toBe(204);
+  });
+});
+
+describe("a refused entry does not hold its time slot", () => {
+  /** The overlap query the create and edit paths run. */
+  function overlapWhere(): Record<string, unknown> | undefined {
+    const call = vi.mocked(client.timesheet.findMany).mock.calls.at(-1);
+    return call?.[0]?.where as Record<string, unknown> | undefined;
+  }
+
+  it("excludes REJECTED when an edit re-checks overlap", async () => {
+    // Without this, the correcting entry an author is told to log would be refused for clashing
+    // with the very entry that was refused — the exact dead end the delete rule would create.
+    await patch({ startTime: "10:00", endTime: "11:00" });
+    expect(overlapWhere()?.status).toEqual({ not: "REJECTED" });
+  });
+
+  it("still counts every other status, so real double-booking is still caught", async () => {
+    await patch({ startTime: "10:00", endTime: "11:00" });
+    const where = overlapWhere();
+    expect(where?.deletedAt).toBeNull();
+    // Scoped to the ENTRY'S author, not the editor — a manager fixing someone else's row must not
+    // be allowed to push it on top of another of that person's entries.
+    expect(where?.userId).toBe(AUTHOR.id);
   });
 });

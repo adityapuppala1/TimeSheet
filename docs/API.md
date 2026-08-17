@@ -142,6 +142,15 @@ the same `projects:manage` right.
   decisions with their own routes, notifications and rate-freezing behaviour, not descriptions of
   work. The supplied fields are merged onto the stored row and the **result** is validated, so
   changing the project cannot leave a module belonging to the old one.
+- `POST /timesheets/:id/submit` — **move an existing `DRAFT` into the approval queue.** Until this
+  existed, "Save draft" was a one-way door: `saveTimesheet` only ever CREATES a row, so a draft
+  could be edited forever and never actually submitted, and the only ways out were to delete it and
+  re-type the whole entry or to leave it in History as permanently unsubmitted work. It runs
+  *everything* a fresh submit runs, because it is the same event — the identity gate, `submittedAt`,
+  the SLA `approvalDeadline` from the project's own setting, both notifications, and the
+  `timesheet.submitted` domain event the SLA sweeps and digests read. `DRAFT` only: a `SUBMITTED`
+  entry is already queued, and re-submitting a decided one would quietly reopen something a reviewer
+  already closed. The author, or `TIMESHEETS_APPROVE` on their behalf.
 - `POST /timesheets/:id/attachments` (multipart, field `attachments`) and
   `DELETE /timesheets/:id/attachments/:attachmentId` — add or remove evidence on an existing
   entry, through the same processing pipeline (WebP re-encode, gzip, structured filename) the
@@ -159,18 +168,28 @@ the same `projects:manage` right.
   people to avoid bulk. One audit entry records the batch; each row keeps its own provenance.
 - `DELETE /timesheets/:id`
 
-**`DELETE /timesheets/:id` accepts only `DRAFT` and `REJECTED`.** Anything else returns **422**,
-and the distinction is load-bearing rather than conservative:
+**The author may delete a `DRAFT`, and nothing else.** Anything else returns **422**, and the
+distinction is load-bearing rather than conservative:
 
-| Status | Deletable | Why |
+| Status | Author may delete | Why |
 |---|---|---|
 | `DRAFT` | yes | Logged by mistake; nothing downstream depends on it yet. |
-| `REJECTED` | yes | Already refused; the rejection reason is preserved in the audit log. |
 | `SUBMITTED` | **no** | Someone is being asked to decide on it. Removing it mid-review erases the request. |
-| `APPROVED` | **no** | It carries a frozen rate snapshot and feeds cost reports and Verified Work Attestations. Deleting it would let history be rewritten *after* a client had been shown it. Correct approved hours with a new entry. |
+| `APPROVED` | **no** | It carries a frozen rate snapshot and feeds cost reports and Verified Work Attestations. Deleting it would let history be rewritten *after* a client had been shown it. |
+| `REJECTED` | **no** | It is the record of a decision, with the reviewer's stated reason attached. Erasing it erases that. |
 
-Authorship rules: an author may delete their own entries; `TIMESHEETS_APPROVE` (managers and up)
-may delete anyone's, so an admin can tidy up after someone who has left. It is a **soft** delete —
+`TIMESHEETS_APPROVE` (managers and up) additionally reaches `REJECTED` — the tidy-up case, so an
+admin can clear up after someone who has left.
+
+> **The exclusion that keeps this from being a trap.** `REJECTED` entries are omitted from the
+> overlap check in both the create and the edit paths. They used not to be — and since the author
+> can no longer edit *or* delete a rejected entry, a rejected row that still held its time slot
+> would refuse the correcting entry they are told to log, leaving them with hours they actually
+> worked and no way to record them. A refusal is the reviewer saying "this should not stand"; it
+> does not reserve the clock. Every other status still counts, so genuine double-booking is still
+> caught.
+
+It is a **soft** delete —
 the row keeps its audit trail, and because every read path (including the overlap check in
 `POST /timesheets/draft`) filters `deletedAt: null`, the freed time slot is immediately reusable.
 
@@ -184,7 +203,7 @@ the row keeps its audit trail, and because every read path (including the overla
 
 | Caller | May edit | Why |
 |---|---|---|
-| the **author** | their own entries until `APPROVED` — so `DRAFT`, `SUBMITTED` and `REJECTED` | It is their account of their own work, and it is not yet a billing record. |
+| the **author** | their own **undecided** entries — `DRAFT` and `SUBMITTED` | It is their account of their own work, and nobody has ruled on it yet. |
 | `TIMESHEETS_APPROVE` | **any** entry, in **any** status | They already decide whether these hours are payable. Withholding "fix the module name" from someone trusted to approve the hours is a distinction without a difference, and the alternative in practice is a rejection round-trip for a typo. |
 
 **The author's window deliberately extends past `SUBMITTED`, unlike `DELETE`'s.** Deleting a
@@ -195,11 +214,16 @@ notification and a re-submission. Editing a `SUBMITTED` entry **notifies the app
 because they may have read it already, so they re-read rather than deciding on what they saw
 before.
 
-`APPROVED` is where the author stops: those hours carry a frozen rate and feed cost reports and
-Verified Work Attestations — a record a client may already have been shown, so changing it is a
-reviewer's call. The reason the edit and delete rules differ at all is that **erasure and
-correction are different acts**. Deleting an approved entry would remove that record; correcting
-one leaves it in place and says what changed:
+**Both decided states are closed to the author, for the same underlying reason: a reviewer has
+recorded something against the entry.** `APPROVED` hours carry a frozen rate and feed cost reports
+and Verified Work Attestations — a record a client may already have been shown. A `REJECTED` entry
+carries the reviewer's stated reason, and rewriting the text that reason refers to leaves it
+attached to something it was never about; the path forward from a rejection is a **fresh entry**
+(the rejected one stays deletable), not a rewrite of the refused one.
+
+The reason the edit and delete rules differ at all is that **erasure and correction are different
+acts**. Deleting an approved entry would remove that record; correcting one leaves it in place and
+says what changed:
 
 - **Every edit is audited field-by-field** (`timesheet.updated`, with `{ from, to }` per changed
   field and `onBehalfOf` when a reviewer edited somebody else's row). That audit trail is what

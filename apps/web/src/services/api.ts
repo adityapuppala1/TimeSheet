@@ -601,6 +601,13 @@ export const timesheetApi = {
    *  rather than a lookup in the list cache: the list is capped at 100 rows, so an older entry
    *  reached by deep link simply is not in it. */
   get: async (id: string) => (await api.get<TimesheetEntryDetail>(`/timesheets/${id}`)).data,
+  /** Move an existing DRAFT into the approval queue.
+   *
+   *  Without this, "Save draft" was a one-way door: `saveTimesheet` only ever CREATES rows, so a
+   *  draft could be edited forever and never submitted. Runs the same identity gate, SLA deadline
+   *  and notifications a fresh submit runs, because it is the same event. */
+  submitDraft: async (id: string, faceVerificationId?: string) =>
+    (await api.post<TimesheetEntryDetail>(`/timesheets/${id}/submit`, faceVerificationId ? { faceVerificationId } : {})).data,
   /** Correct an entry after the fact. The author may edit their own DRAFT/REJECTED entries;
    *  anyone with timesheets:approve may edit any entry in any status, and every change is
    *  audited field-by-field with the submitter notified. */

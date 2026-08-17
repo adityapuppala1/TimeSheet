@@ -36,6 +36,7 @@ import {
   Loader2,
   Paperclip,
   Pencil,
+  Send,
   ShieldCheck,
   StickyNote,
   Trash2,
@@ -44,6 +45,7 @@ import {
 } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { activityTypeApi, fileUrl, projectApi, timesheetApi, type TimesheetEntryDetail } from "../services/api";
+import { useTimesheetDecision } from "./useTimesheetDecision";
 import { useAuthStore } from "../store/auth";
 import { safeHtml } from "../lib/safe-html";
 import { Badge } from "./ui/badge";
@@ -134,20 +136,31 @@ export function TimesheetEntryDialog({
   useEffect(() => setEditing(false), [entryId]);
 
   /**
-   * The same two rules the server enforces in PATCH /timesheets/:id. Quoted, not invented: the
-   * author may correct their own entry until it is APPROVED, and anyone trusted to approve the
-   * hours may correct them in any status.
+   * The same two rules the server enforces in PATCH /timesheets/:id. Quoted, not invented.
    *
-   * The author's window deliberately extends past SUBMITTED — an entry awaiting a decision is
-   * still the author's account of their own work, and the old rule made a one-word typo cost a
-   * rejection and a re-submission. APPROVED stops there: those hours carry a frozen rate and feed
-   * cost reports and attestations, so changing them is a reviewer's call.
+   * The author may correct their own entry while it is still UNDECIDED — DRAFT or SUBMITTED.
+   * SUBMITTED is in because fixing a typo is not the same as withdrawing a request, and excluding
+   * it meant a one-word correction cost a rejection and a re-submission. APPROVED and REJECTED are
+   * both out: a decision has been recorded against them, and rewriting the text a rejection reason
+   * refers to leaves that reason attached to something it was never about.
+   *
+   * Anyone holding `timesheets:approve` may correct any entry in any status — they already decide
+   * whether the hours are payable.
    */
   const canEdit = useMemo(() => {
     if (!entry || !currentUser) return false;
     if (currentUser.permissions.includes("timesheets:approve" as any)) return true;
-    return entry.userId === currentUser.id && entry.status !== "APPROVED";
+    return entry.userId === currentUser.id && (entry.status === "DRAFT" || entry.status === "SUBMITTED");
   }, [entry, currentUser]);
+
+  /** A draft is only the author's to send (or an approver's, on their behalf) — and until this
+   *  existed "Save draft" was a one-way door, because nothing could promote an existing row. */
+  const canSubmit = Boolean(
+    entry &&
+      currentUser &&
+      entry.status === "DRAFT" &&
+      (entry.userId === currentUser.id || currentUser.permissions.includes("timesheets:approve" as any))
+  );
 
   const invalidate = () => {
     queryClient.invalidateQueries({ queryKey: ["timesheet", entryId] });
@@ -156,6 +169,18 @@ export function TimesheetEntryDialog({
     queryClient.invalidateQueries({ queryKey: ["timesheets"] });
     queryClient.invalidateQueries({ queryKey: ["dashboard"] });
   };
+
+  /**
+   * Deciding, from wherever this dialog was opened.
+   *
+   * Approve/Reject used to be props only the approvals page passed, so opening the same entry from
+   * the dashboard's day timeline gave you the full record and no way to act on it — you read it,
+   * agreed with it, and went to a different screen to find the row again. The hook carries the
+   * identity gate and the reject-reason prompt with it, so no caller has to re-implement either.
+   */
+  const decision = useTimesheetDecision({ onSettled: onClose });
+  const approveHandler = onApprove ?? (decision.canDecide ? decision.requestApprove : undefined);
+  const rejectHandler = onReject ?? (decision.canDecide ? decision.requestReject : undefined);
 
   return (
     <Dialog open={Boolean(entryId)} onOpenChange={(open) => !open && onClose()}>
@@ -182,7 +207,18 @@ export function TimesheetEntryDialog({
           </DialogDescription>
         </DialogHeader>
 
-        <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain pr-1">
+        {/*
+          THE ONLY SCROLL REGION IN THE DIALOG.
+
+          It was not: the body scrolled AND each rich-text editor scrolled inside it, so the edit
+          form had a scrollbar within a scrollbar and no way to tell which one a wheel gesture was
+          about to move. The editors are now unbounded here (`maxHeight="max-h-none"`) and this one
+          container takes all of it — one scrollbar, one thing it does.
+
+          `-mr-2 pr-2` puts the scrollbar in the dialog's own padding instead of inset from the
+          content edge, which is what made it read as a stray bar floating over the form.
+        */}
+        <div className="-mr-2 min-h-0 flex-1 overflow-y-auto overscroll-contain pr-2">
           {query.isLoading && !entry ? (
             <div className="flex items-center gap-2 py-8 text-sm text-muted-foreground">
               <Loader2 className="h-4 w-4 animate-spin" />
@@ -193,39 +229,68 @@ export function TimesheetEntryDialog({
               {serverMessage(query.error, "This entry could not be loaded. It may have been deleted.")}
             </p>
           ) : entry && editing ? (
-            <EntryEditForm entry={entry} onDone={() => setEditing(false)} onSaved={invalidate} />
+            <EntryEditForm entry={entry} formId={EDIT_FORM_ID} onSaved={invalidate} onDone={() => setEditing(false)} />
           ) : entry ? (
             <EntryReadView entry={entry} canEdit={canEdit} onChanged={invalidate} />
           ) : null}
         </div>
 
-        <DialogFooter className="shrink-0 border-t border-border pt-3">
-          {entry && !editing && canEdit && (
-            <Button variant="outline" onClick={() => setEditing(true)}>
-              <Pencil className="h-4 w-4" />Edit entry
-            </Button>
-          )}
-          {entry && !editing && footerExtras?.(entry)}
-          {entry && !editing && entry.status === "SUBMITTED" && onReject && (
-            <Button variant="outline" onClick={() => onReject(entry)}>
-              <X className="h-4 w-4" />Reject
-            </Button>
-          )}
-          {entry && !editing && entry.status === "SUBMITTED" && onApprove && (
-            <Button variant="success" onClick={() => onApprove(entry)}>
-              <Check className="h-4 w-4" />Approve
-            </Button>
-          )}
-          {(!entry || editing) && (
-            <Button variant="ghost" onClick={editing ? () => setEditing(false) : onClose}>
-              {editing ? "Cancel edit" : "Close"}
-            </Button>
+        {/*
+          ONE set of actions, always in the pinned footer.
+
+          Edit mode used to put Save/Discard inside the scrolling body AND a separate "Cancel edit"
+          in the footer — two places to look for the button that finishes the job, one of which
+          could be scrolled off. The form now submits by id from here, so the footer is the answer
+          to "what can I do with this?" in both modes.
+        */}
+        <DialogFooter className="shrink-0 flex-wrap gap-2 border-t border-border pt-3">
+          {entry && editing ? (
+            <>
+              <Button variant="ghost" onClick={() => setEditing(false)}>Cancel</Button>
+              <Button type="submit" form={EDIT_FORM_ID}>
+                <Check className="h-4 w-4" />Save changes
+              </Button>
+            </>
+          ) : entry ? (
+            <>
+              {canEdit && (
+                <Button variant="outline" onClick={() => setEditing(true)}>
+                  <Pencil className="h-4 w-4" />Edit entry
+                </Button>
+              )}
+              {footerExtras?.(entry)}
+              {/* A draft has to be sendable from where it is read — see `canSubmit`. */}
+              {canSubmit && (
+                <Button variant="default" disabled={decision.isSubmitting} onClick={() => decision.requestSubmit(entry)}>
+                  {decision.isSubmitting ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
+                  Submit for approval
+                </Button>
+              )}
+              {/* Deciding, from ANY screen that opens this dialog — the dashboard timeline could
+                  previously show the entry and offer nothing to do about it. */}
+              {entry.status === "SUBMITTED" && rejectHandler && (
+                <Button variant="outline" disabled={decision.isDeciding} onClick={() => rejectHandler(entry)}>
+                  <X className="h-4 w-4" />Reject
+                </Button>
+              )}
+              {entry.status === "SUBMITTED" && approveHandler && (
+                <Button variant="success" disabled={decision.isDeciding} onClick={() => approveHandler(entry)}>
+                  <Check className="h-4 w-4" />Approve
+                </Button>
+              )}
+            </>
+          ) : (
+            <Button variant="ghost" onClick={onClose}>Close</Button>
           )}
         </DialogFooter>
       </DialogContent>
+      {decision.dialogs}
     </Dialog>
   );
 }
+
+/** One stable id linking the pinned footer's submit button to the form in the scrolling body. */
+const EDIT_FORM_ID = "timesheet-entry-edit-form";
 
 /* ================================ Read view ================================ */
 
@@ -454,10 +519,14 @@ function AttachmentList({
  */
 function EntryEditForm({
   entry,
+  formId,
   onDone,
   onSaved
 }: {
   entry: TimesheetEntryDetail;
+  /** Ties this form to the Save button in the dialog's pinned footer, so the action that finishes
+   *  the job cannot scroll out of reach. */
+  formId: string;
   onDone: () => void;
   onSaved: () => void;
 }) {
@@ -507,7 +576,14 @@ function EntryEditForm({
   const blocked = descriptionLength < 10 || !form.projectId || !form.moduleId || form.startTime >= form.endTime;
 
   return (
-    <div className="grid gap-4 text-sm">
+    <form
+      id={formId}
+      className="grid gap-4 py-1 text-sm"
+      onSubmit={(event) => {
+        event.preventDefault();
+        if (!blocked && !save.isPending) save.mutate();
+      }}
+    >
       {entry.status === "APPROVED" && (
         <p className="rounded-md border border-warning/40 bg-warning/10 px-3 py-2 text-xs">
           These hours are already approved and may sit behind a billing record. The change is
@@ -602,12 +678,15 @@ function EntryEditForm({
             {descriptionLength} / min 10
           </span>
         </div>
+        {/* `max-h-none`: the dialog body already scrolls, and an editor that scrolls INSIDE it
+            gave the edit form a scrollbar within a scrollbar with no way to tell which one a wheel
+            gesture would move. One scroll region, and it is the one wrapping this whole form. */}
         <RichTextEditor
           value={form.taskDescription}
           onChange={(html) => setForm((f) => ({ ...f, taskDescription: html }))}
           placeholder="What was built, fixed, documented or reviewed?"
           minHeight="min-h-24"
-          maxHeight="max-h-56"
+          maxHeight="max-h-none"
           ariaLabel="Task description"
         />
       </div>
@@ -619,19 +698,27 @@ function EntryEditForm({
           onChange={(html) => setForm((f) => ({ ...f, notes: html }))}
           placeholder="Blockers, dependencies, follow-ups…"
           minHeight="min-h-20"
-          maxHeight="max-h-44"
+          maxHeight="max-h-none"
           ariaLabel="Additional notes"
         />
       </div>
 
-      <div className="flex flex-wrap items-center gap-2">
-        <Button disabled={blocked || save.isPending} onClick={() => save.mutate()}>
-          {save.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Check className="h-4 w-4" />}
-          Save changes
-        </Button>
-        <Button variant="ghost" onClick={onDone}>Discard</Button>
-        {form.startTime >= form.endTime && <span className="text-xs text-destructive">End time must be after start.</span>}
-      </div>
-    </div>
+      {/* Why Save is unavailable, next to the fields that cause it — the button itself lives in the
+          pinned footer, and a disabled button with its explanation somewhere else is a dead end. */}
+      {blocked && (
+        <p className="text-xs text-destructive">
+          {form.startTime >= form.endTime
+            ? "End time must be after start."
+            : descriptionLength < 10
+              ? "The task description needs at least 10 characters."
+              : "Pick a project and a module."}
+        </p>
+      )}
+      {save.isPending && (
+        <p className="flex items-center gap-1.5 text-xs text-muted-foreground">
+          <Loader2 className="h-3 w-3 animate-spin" />Saving…
+        </p>
+      )}
+    </form>
   );
 }

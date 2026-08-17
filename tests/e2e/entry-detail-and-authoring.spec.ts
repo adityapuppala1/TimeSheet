@@ -571,7 +571,7 @@ test.describe("an employee's own history", () => {
     });
   }
 
-  async function openOwnEntry(page: Page, status: "DRAFT" | "SUBMITTED" | "APPROVED") {
+  async function openOwnEntry(page: Page, status: "DRAFT" | "SUBMITTED" | "APPROVED" | "REJECTED") {
     const entryId = await findEmployeeEntry(status);
     test.skip(!entryId, `the employee has no ${status} entry in the demo data`);
 
@@ -597,8 +597,41 @@ test.describe("an employee's own history", () => {
     });
   }
 
-  test("cannot edit their own APPROVED entry — that one is the reviewer's call", async ({ page }) => {
-    const dialog = await openOwnEntry(page, "APPROVED");
+  // Both DECIDED states are closed to the author: a reviewer has recorded something against the
+  // entry, and rewriting the text a rejection reason refers to leaves that reason pointing at
+  // something it was never about.
+  for (const status of ["APPROVED", "REJECTED"] as const) {
+    test(`cannot edit their own ${status} entry — a decision is recorded against it`, async ({ page }) => {
+      const dialog = await openOwnEntry(page, status);
+      await expect(dialog.getByRole("button", { name: /edit entry/i })).toHaveCount(0);
+    });
+  }
+
+  /**
+   * Nor delete it. A rejection is a decision with the reviewer's reason attached, and erasing the
+   * entry erases the record of that — so the row is offered neither control.
+   *
+   * The reason this is not a dead end lives on the server: a REJECTED entry is excluded from the
+   * overlap check, so the fresh entry the author is told to log is not refused for clashing with
+   * the refused one. Without that, "can't edit, can't delete, can't re-log" would have stranded
+   * them with hours they worked and no way to record them.
+   */
+  test("is offered neither edit nor delete on a rejected row", async ({ page }) => {
+    const rejected = await findEmployeeEntry("REJECTED");
+    test.skip(!rejected, "the employee has no rejected entry in the demo data");
+
+    await signIn(page, "employee");
+    await page.goto("/app/history");
+    await page.locator("#history-status").click();
+    await page.getByRole("option", { name: "Rejected" }).click();
+    await expect(page.getByText(/^Showing \d+-\d+ of \d+$/)).toBeVisible({ timeout: 15_000 });
+
+    // Every visible row is REJECTED now, so neither control may appear on any of them.
+    await expect(page.getByRole("button", { name: /^Delete entry for/ })).toHaveCount(0);
+
+    await page.getByRole("button", { name: /^View the entry for/ }).filter({ visible: true }).first().click();
+    const dialog = page.getByRole("dialog");
+    await expect(dialog).toBeVisible({ timeout: 15_000 });
     await expect(dialog.getByRole("button", { name: /edit entry/i })).toHaveCount(0);
   });
 
@@ -655,5 +688,188 @@ test.describe("history names the people involved", () => {
     for (const key of ["reviewedBy", "lastEditedBy", "lastEditedAt"]) {
       expect(rows[0], `every row must carry ${key}`).toHaveProperty(key);
     }
+  });
+});
+
+/* ========== 11. Deciding and submitting from wherever the entry was opened ========== */
+
+test.describe("acting on an entry from any screen", () => {
+  /**
+   * THE GAP: Approve/Reject were props only the approvals page passed, so opening the same entry
+   * from the dashboard's day timeline gave you the full record and nothing to do about it — you
+   * read it, agreed with it, and then navigated to a different screen to find the same row.
+   *
+   * Nothing here actually approves: the demo workspace is shared and a decision is one-way. What
+   * is pinned is that the controls are PRESENT and enabled where they were previously absent.
+   */
+  test("the day timeline's entry dialog offers Approve and Reject to an approver", async ({ page }) => {
+    const submitted = await withAdminRequest(async (ctx, headers) => {
+      const rows: Array<{ id: string; status: string; workDate: string }> = await (
+        await ctx.get("/api/timesheets", { headers })
+      ).json();
+      return rows.find((row) => row.status === "SUBMITTED") ?? null;
+    });
+    test.skip(!submitted, "no submitted entry in the demo data");
+
+    await signIn(page, "superadmin");
+    await page.goto("/app");
+    const day = String(submitted!.workDate).slice(0, 10);
+    const [year, month, dayOfMonth] = day.split("-").map(Number);
+    await pickDate(page, "dashboard-date", new Date(year, month - 1, dayOfMonth));
+
+    const block = page.getByTestId("timeline-entry").filter({ visible: true }).first();
+    await expect(block).toBeVisible({ timeout: 15_000 });
+    await block.click();
+
+    const dialog = page.getByRole("dialog");
+    await expect(dialog).toBeVisible({ timeout: 15_000 });
+    // The dialog opens on whichever block was first; only a SUBMITTED one carries the decision
+    // controls, which is itself the rule worth asserting.
+    const status = await dialog.getByText(/^(DRAFT|SUBMITTED|APPROVED|REJECTED)$/).first().textContent();
+    if (status?.trim() === "SUBMITTED") {
+      await expect(dialog.getByRole("button", { name: /^approve$/i })).toBeEnabled();
+      await expect(dialog.getByRole("button", { name: /^reject$/i })).toBeEnabled();
+    } else {
+      await expect(dialog.getByRole("button", { name: /^approve$/i })).toHaveCount(0);
+    }
+  });
+
+  /** An employee must never see the decision controls, wherever the entry is opened from. */
+  test("an employee is never offered Approve or Reject on their own entry", async ({ page }) => {
+    const entryId = await withAdminRequest(async (ctx, headers) => {
+      const users: Array<{ id: string; email: string }> = await (await ctx.get("/api/users", { headers })).json();
+      const employee = users.find((user) => user.email === "employee@timesheet.local");
+      if (!employee) return null;
+      const rows: Array<{ id: string; status: string }> = await (
+        await ctx.get(`/api/timesheets?userId=${employee.id}`, { headers })
+      ).json();
+      return rows.find((row) => row.status === "SUBMITTED")?.id ?? null;
+    });
+    test.skip(!entryId, "the employee has no submitted entry");
+
+    await signIn(page, "employee");
+    await page.goto(`/app/history?entry=${entryId}`);
+    const dialog = page.getByRole("dialog");
+    await expect(dialog).toBeVisible({ timeout: 15_000 });
+    await expect(dialog.getByRole("button", { name: /^approve$/i })).toHaveCount(0);
+    await expect(dialog.getByRole("button", { name: /^reject$/i })).toHaveCount(0);
+  });
+
+  /**
+   * A draft used to be a one-way door: `saveTimesheet` only ever CREATES rows, so nothing could
+   * promote an existing DRAFT to SUBMITTED. "Save draft" wrote a row you could edit forever and
+   * never send.
+   */
+  test("a draft can be sent for approval from the entry it is read in", async ({ page }) => {
+    const entryId = await withAdminRequest(async (ctx, headers) => {
+      const users: Array<{ id: string; email: string }> = await (await ctx.get("/api/users", { headers })).json();
+      const employee = users.find((user) => user.email === "employee@timesheet.local");
+      if (!employee) return null;
+      const rows: Array<{ id: string; status: string }> = await (
+        await ctx.get(`/api/timesheets?userId=${employee.id}`, { headers })
+      ).json();
+      return rows.find((row) => row.status === "DRAFT")?.id ?? null;
+    });
+    test.skip(!entryId, "the employee has no draft entry");
+
+    await signIn(page, "employee");
+    await page.goto(`/app/history?entry=${entryId}`);
+    const dialog = page.getByRole("dialog");
+    await expect(dialog).toBeVisible({ timeout: 15_000 });
+    await expect(dialog.getByRole("button", { name: /submit for approval/i })).toBeEnabled({ timeout: 10_000 });
+  });
+});
+
+/* ================== 12. The edit form has one scroll region ================== */
+
+test.describe("the entry edit form", () => {
+  /**
+   * THE COMPLAINT: "the scroll feature is not intuitive for this". It was not — the dialog body
+   * scrolled AND each rich-text editor scrolled inside it, so the form had a scrollbar within a
+   * scrollbar and no way to tell which one a wheel gesture would move. On top of that, Save and
+   * Discard sat INSIDE the scrolling body while a separate "Cancel edit" sat in the pinned footer:
+   * two places to look for the control that finishes the job, one of which could scroll away.
+   */
+  test("has exactly one scrollable region, and its actions are pinned", async ({ page }) => {
+    const entryId = await withAdminRequest(async (ctx, headers) => {
+      const rows: Array<{ id: string; status: string }> = await (await ctx.get("/api/timesheets", { headers })).json();
+      return rows.find((row) => row.status === "SUBMITTED")?.id ?? rows[0]?.id ?? null;
+    });
+    test.skip(!entryId, "no timesheet entries in the demo data");
+
+    await signIn(page, "superadmin");
+    await page.goto(`/app/history?entry=${entryId}`);
+    const dialog = page.getByRole("dialog");
+    await expect(dialog).toBeVisible({ timeout: 15_000 });
+    await dialog.getByRole("button", { name: /edit entry/i }).click();
+    await expect(dialog.getByRole("button", { name: /save changes/i })).toBeVisible({ timeout: 10_000 });
+
+    // At most one element inside the dialog actually overflows and can scroll.
+    const scrollables = await dialog.evaluate((root) =>
+      Array.from(root.querySelectorAll("*")).filter((el) => {
+        const style = getComputedStyle(el);
+        const scrolls = style.overflowY === "auto" || style.overflowY === "scroll";
+        return scrolls && el.scrollHeight > el.clientHeight + 1;
+      }).length
+    );
+    expect(scrollables, "a scrollbar inside a scrollbar is the thing being fixed").toBeLessThanOrEqual(1);
+
+    // One set of actions, and no leftover duplicate from the old in-body row.
+    await expect(dialog.getByRole("button", { name: /save changes/i })).toHaveCount(1);
+    await expect(dialog.getByRole("button", { name: /^discard$/i })).toHaveCount(0);
+    await expect(dialog.getByRole("button", { name: /cancel edit/i })).toHaveCount(0);
+    await expect(dialog.getByRole("button", { name: /save changes/i })).toBeInViewport();
+  });
+});
+
+/* ==================== 13. History filters ==================== */
+
+/** The DataTable footer is the only place the FILTERED total is stated out loud — asserting on it
+ *  keeps these independent of the 20-row page size. */
+async function shownTotal(page: Page): Promise<number> {
+  const footer = page.getByText(/^Showing \d+-\d+ of \d+$/);
+  await expect(footer).toBeVisible({ timeout: 15_000 });
+  return Number(/of (\d+)$/.exec((await footer.textContent()) ?? "")?.[1]);
+}
+
+test.describe("history filters", () => {
+  test("filters by activity, and only offers activities that are actually present", async ({ page }) => {
+    await signIn(page, "superadmin");
+    await page.goto("/app/history");
+    await expect(page.getByRole("heading", { name: /timesheet history/i })).toBeVisible({ timeout: 15_000 });
+    const before = await shownTotal(page);
+
+    await page.locator("#history-activity").click();
+    // Skip "All activities" and take a real one.
+    await page.getByRole("option").nth(1).click();
+
+    await expect.poll(() => shownTotal(page)).toBeLessThan(before);
+  });
+
+  test("filters by person for someone who can see more than their own work", async ({ page }) => {
+    const distinctAuthors = await withAdminRequest(async (ctx, headers) => {
+      const rows: Array<{ userId: string }> = await (await ctx.get("/api/timesheets", { headers })).json();
+      return new Set(rows.map((row) => row.userId)).size;
+    });
+    test.skip(distinctAuthors < 2, "the demo data has entries from only one person");
+
+    await signIn(page, "superadmin");
+    await page.goto("/app/history");
+    const before = await shownTotal(page);
+
+    await page.locator("#history-user").click();
+    await page.getByRole("option").nth(1).click();
+
+    await expect.poll(() => shownTotal(page)).toBeLessThan(before);
+  });
+
+  /** An employee's list is their own work, so a Person filter could only ever filter to "me" — a
+   *  control that teaches you it does nothing. */
+  test("hides the person filter from someone looking at only their own work", async ({ page }) => {
+    await signIn(page, "employee");
+    await page.goto("/app/history");
+    await expect(page.getByRole("heading", { name: /timesheet history/i })).toBeVisible({ timeout: 15_000 });
+    await expect(page.locator("#history-activity")).toBeVisible();
+    await expect(page.locator("#history-user")).toHaveCount(0);
   });
 });

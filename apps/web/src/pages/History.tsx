@@ -49,6 +49,7 @@ import { safeHtml } from "../lib/safe-html";
 import { toast } from "../components/ui/toaster";
 import { DateRangePicker } from "../components/ui/date-range-picker";
 import { TimesheetEntryDialog } from "../components/TimesheetEntryDialog";
+import { useAuthStore } from "../store/auth";
 
 function startOfWeek(date: Date) {
   const d = new Date(date);
@@ -68,10 +69,13 @@ const statusVariant: Record<string, "success" | "warning" | "destructive" | "mut
 };
 
 export function History() {
+  const currentUser = useAuthStore((s) => s.user);
   const timesheets = useQuery({ queryKey: ["timesheets"], queryFn: timesheetApi.list, refetchInterval: 30_000 });
   const projects = useQuery({ queryKey: ["projects"], queryFn: () => projectApi.list() });
   const [status, setStatus] = useState<StatusFilter>("ALL");
   const [projectId, setProjectId] = useState("all");
+  const [activity, setActivity] = useState("all");
+  const [userId, setUserId] = useState("all");
   const [from, setFrom] = useState("");
   const [to, setTo] = useState("");
   /** The entry awaiting confirmation. Deleting is irreversible from the user's side, so it never
@@ -132,6 +136,20 @@ export function History() {
   const rows: any[] = Array.isArray(timesheets.data) ? timesheets.data : [];
 
   /**
+   * Mirrors the server's delete rule so the button never offers something the API refuses.
+   *
+   * The author's window is DRAFT alone. REJECTED came out of it deliberately: a rejection is a
+   * decision with the reviewer's reason attached, and erasing it erases the record of that. An
+   * approver keeps REJECTED for the tidy-up case (clearing up after someone who has left).
+   *
+   * What makes this liveable rather than a dead end is on the server: a REJECTED entry is excluded
+   * from the overlap check, so the fresh entry the author is told to log is not refused for
+   * clashing with the refused one.
+   */
+  const canManageOthers = Boolean(currentUser?.permissions.includes("timesheets:approve" as never));
+  const canDelete = (row: any) => row.status === "DRAFT" || (canManageOthers && row.status === "REJECTED");
+
+  /**
    * Does this page show more than one person's work?
    *
    * The list route returns only your own entries unless you hold `reports:view`, in which case it
@@ -145,15 +163,39 @@ export function History() {
     [rows]
   );
 
+  /**
+   * Filter options come from the ROWS IN HAND, not from a second query.
+   *
+   * The list is one capped page, so an option built from the full catalog could match nothing on
+   * screen — a filter that looks broken the moment you pick it. Deriving from the rows means every
+   * option narrows to something, and the People filter automatically carries exactly the people
+   * this viewer is allowed to see (the route already scopes that: your own rows unless you hold
+   * `reports:view`), so no separate permission check is needed here to avoid leaking a roster.
+   */
+  const activityOptions = useMemo(
+    () => [...new Set(rows.map((row) => row.activityType).filter(Boolean))].sort((a, b) => String(a).localeCompare(String(b))),
+    [rows]
+  );
+  const peopleOptions = useMemo(() => {
+    const byId = new Map<string, string>();
+    for (const row of rows) {
+      const id = row.userId ?? row.user?.id;
+      if (id) byId.set(id, row.user?.name ?? row.user?.email ?? id);
+    }
+    return [...byId].map(([id, name]) => ({ id, name })).sort((a, b) => a.name.localeCompare(b.name));
+  }, [rows]);
+
   const filtered = useMemo(() => {
     return rows.filter((row) => {
       if (status !== "ALL" && row.status !== status) return false;
       if (projectId !== "all" && row.projectId !== projectId) return false;
+      if (activity !== "all" && row.activityType !== activity) return false;
+      if (userId !== "all" && (row.userId ?? row.user?.id) !== userId) return false;
       if (from && String(row.workDate).slice(0, 10) < from) return false;
       if (to && String(row.workDate).slice(0, 10) > to) return false;
       return true;
     });
-  }, [rows, status, projectId, from, to]);
+  }, [rows, status, projectId, activity, userId, from, to]);
 
   const summary = useMemo(() => {
     return filtered.reduce(
@@ -202,9 +244,16 @@ export function History() {
   function resetFilters() {
     setStatus("ALL");
     setProjectId("all");
+    setActivity("all");
+    setUserId("all");
     setFrom("");
     setTo("");
   }
+
+  /** Drives the Reset button's disabled state — a control that is always enabled says nothing
+   *  about whether there is anything to reset. */
+  const filtersActive =
+    status !== "ALL" || projectId !== "all" || activity !== "all" || userId !== "all" || Boolean(from || to);
 
   const historyColumns = useMemo<ColumnDef<any, any>[]>(
     () => [
@@ -360,11 +409,12 @@ export function History() {
             >
               <Eye className="h-3.5 w-3.5" />
             </Button>
-            {/* Only DRAFT and REJECTED can go — the API enforces the same rule for the same
-                reason: a SUBMITTED entry is awaiting someone's decision, and an APPROVED one
-                underpins the billing record. Hiding the control on the others means the button
-                never lies about what it can do. */}
-            {row.original.status === "DRAFT" || row.original.status === "REJECTED" ? (
+            {/* The author may delete a DRAFT and nothing else; an approver additionally reaches a
+                REJECTED one, which is the tidy-up case. The API enforces exactly this, and hiding
+                the control everywhere else means the button never lies about what it can do —
+                a SUBMITTED entry is awaiting a decision, an APPROVED one underpins the billing
+                record, and a REJECTED one IS a decision, with the reviewer's reason attached. */}
+            {canDelete(row.original) ? (
               <Button
                 size="sm"
                 variant="ghost"
@@ -381,7 +431,7 @@ export function History() {
       }
     ],
     // eslint-disable-next-line react-hooks/exhaustive-deps -- openEntry closes over stable setters
-    [removeEntry.isPending, spansMultiplePeople]
+    [removeEntry.isPending, spansMultiplePeople, canManageOthers]
   );
 
   return (
@@ -411,16 +461,19 @@ export function History() {
           <CardTitle className="flex items-center gap-2 text-base">
             <Filter className="h-4 w-4" /> Filters
           </CardTitle>
-          <Button variant="ghost" size="sm" onClick={resetFilters}>
+          <Button variant="ghost" size="sm" disabled={!filtersActive} onClick={resetFilters}>
             <RotateCcw className="h-3.5 w-3.5" />Reset
           </Button>
         </CardHeader>
         <CardContent>
-          <div className="grid gap-4 md:grid-cols-4">
+          {/* Five filters at the widest, two on a tablet, one on a phone — the People column
+              disappears entirely when the page shows one person's work, so the grid has to reflow
+              rather than leave a hole. */}
+          <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-5">
             <div className="grid gap-1.5">
-              <Label>Status</Label>
+              <Label htmlFor="history-status">Status</Label>
               <Select value={status} onValueChange={(value) => setStatus(value as StatusFilter)}>
-                <SelectTrigger><SelectValue /></SelectTrigger>
+                <SelectTrigger id="history-status"><SelectValue /></SelectTrigger>
                 <SelectContent>
                   <SelectItem value="ALL">All statuses</SelectItem>
                   <SelectItem value="DRAFT">Draft</SelectItem>
@@ -431,9 +484,9 @@ export function History() {
               </Select>
             </div>
             <div className="grid gap-1.5">
-              <Label>Project</Label>
+              <Label htmlFor="history-project">Project</Label>
               <Select value={projectId} onValueChange={setProjectId}>
-                <SelectTrigger><SelectValue /></SelectTrigger>
+                <SelectTrigger id="history-project"><SelectValue /></SelectTrigger>
                 <SelectContent>
                   <SelectItem value="all">All projects</SelectItem>
                   {(projects.data ?? []).map((project: any) => (
@@ -442,6 +495,37 @@ export function History() {
                 </SelectContent>
               </Select>
             </div>
+            <div className="grid gap-1.5">
+              <Label htmlFor="history-activity">Activity</Label>
+              <Select value={activity} onValueChange={setActivity}>
+                <SelectTrigger id="history-activity"><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">All activities</SelectItem>
+                  {activityOptions.map((name) => (
+                    <SelectItem key={name} value={name}>{name}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+
+            {/* People, only when there are people to choose between. For an employee the list is
+                their own work, so the control could only ever filter to "me" — and a dropdown with
+                one option is a control that teaches you it does nothing. */}
+            {spansMultiplePeople && (
+              <div className="grid gap-1.5">
+                <Label htmlFor="history-user">Person</Label>
+                <Select value={userId} onValueChange={setUserId}>
+                  <SelectTrigger id="history-user"><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="all">Everyone</SelectItem>
+                    {peopleOptions.map((person) => (
+                      <SelectItem key={person.id} value={person.id}>{person.name}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+            )}
+
             <div className="grid gap-1.5">
 
               {/* One range instead of two unrelated inputs — nothing previously stopped `to` preceding

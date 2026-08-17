@@ -276,8 +276,13 @@ export async function saveTimesheet(req: any, status: "DRAFT" | "SUBMITTED") {
   // Without this, concurrent requests can each "see no overlap" and both insert.
   const timesheet = await prisma.$transaction(
     async (tx) => {
+      // REJECTED entries are excluded, and that exclusion is load-bearing: a rejected entry can no
+      // longer be edited or deleted by its author, so if it still held its time slot the correcting
+      // entry they are told to log would be refused with an overlap — leaving them unable to
+      // record hours they actually worked. A refusal is the reviewer saying "this should not
+      // stand"; it does not reserve the clock.
       const existing = await tx.timesheet.findMany({
-        where: { userId: req.user.id, workDate, deletedAt: null }
+        where: { userId: req.user.id, workDate, deletedAt: null, status: { not: "REJECTED" } }
       });
       const overlaps = existing.some((entry) => {
         const [eh, em] = entry.startTime.split(":").map(Number);
@@ -580,10 +585,19 @@ timesheetRouter.patch("/:id/reject", requirePermission(permissions.TIMESHEETS_AP
  * else or left sitting in the list forever. It also silently broke the e2e suite's cleanup, which
  * had been calling a route that never existed and treating the 404 as success.
  *
- * ONLY DRAFT AND REJECTED, deliberately. A SUBMITTED entry is awaiting someone's decision, and an
- * APPROVED one is the basis of billing rates, cost reports and Verified Work Attestations — those
- * are records of something that happened, and deleting them would let history be rewritten after
- * a client had already been shown it. Approved hours are corrected by a new entry, not by erasure.
+ * THE AUTHOR MAY DELETE A DRAFT, AND NOTHING ELSE. A SUBMITTED entry is awaiting someone's
+ * decision. An APPROVED one is the basis of billing rates, cost reports and Verified Work
+ * Attestations. A REJECTED one is the record of a decision with the reviewer's reason attached —
+ * all three are accounts of something that happened, and letting the author erase them would let
+ * history be rewritten after somebody had already acted on it.
+ *
+ * TIMESHEETS_APPROVE additionally reaches REJECTED, which is the tidy-up case: an admin clearing
+ * up after someone who has left.
+ *
+ * THE REASON THIS IS SAFE for the author is one line in the overlap check: a REJECTED entry is
+ * excluded from it, so the correcting entry they are told to log is not refused for overlapping
+ * the refused one. Without that exclusion this rule would strand them — unable to edit it, delete
+ * it, or re-log the hours they actually worked.
  *
  * Soft delete, matching every other deletion in this schema: the row stays for audit, and every
  * read path already filters `deletedAt: null` — including the overlap check, so the freed time
@@ -599,10 +613,17 @@ timesheetRouter.delete("/:id", requirePermission(permissions.TIMESHEETS_WRITE), 
   const canManageOthers = req.user!.permissions.includes(permissions.TIMESHEETS_APPROVE);
   if (!isOwner && !canManageOthers) throw new AppError(403, "You can only delete your own entries.");
 
-  if (existing.status !== "DRAFT" && existing.status !== "REJECTED") {
+  // The AUTHOR's window is DRAFT alone. REJECTED used to be in it, and taking it out is the same
+  // rule the edit path applies: a reviewer has recorded a decision, and the record of a refused
+  // submission — with the reason attached — is not the author's to erase. An admin keeps it, which
+  // is what the tidy-up case above is for.
+  const deletable = canManageOthers ? ["DRAFT", "REJECTED"] : ["DRAFT"];
+  if (!deletable.includes(existing.status)) {
     throw new AppError(
       422,
-      `Cannot delete a ${existing.status} entry — submitted hours are awaiting review, and approved hours are part of the billing record. Log a correcting entry instead.`
+      existing.status === "REJECTED"
+        ? "A rejected entry is the record of a decision, with the reviewer's reason attached — it stays. Log a fresh entry with the correction; the refused one no longer holds its time slot."
+        : `Cannot delete a ${existing.status} entry — submitted hours are awaiting review, and approved hours are part of the billing record. Log a correcting entry instead.`
     );
   }
 
@@ -612,6 +633,122 @@ timesheetRouter.delete("/:id", requirePermission(permissions.TIMESHEETS_WRITE), 
     workDate: existing.workDate.toISOString().slice(0, 10)
   });
   res.status(204).send();
+});
+
+/* ==================== Submitting a draft that already exists ==================== */
+
+/**
+ * POST /timesheets/:id/submit — move a DRAFT into the approval queue.
+ *
+ * WHY THIS EXISTS: it did not, and its absence made "Save draft" a one-way door. `saveTimesheet`
+ * only ever CREATES a row, so a draft could be edited forever and never actually submitted — the
+ * only ways out were to delete it and re-type the whole entry into the logging form, or to leave
+ * it sitting in History as permanently unsubmitted work. That is also what made the widened edit
+ * window half a feature: correcting a draft is pointless if the corrected draft cannot then go
+ * anywhere.
+ *
+ * Everything a fresh submit does, this does, because they are the same event and a second half-copy
+ * of it is how one of them drifts:
+ *   • the identity gate, if the workspace's face policy covers this user + TIMESHEET;
+ *   • `submittedAt` and the SLA `approvalDeadline` computed from the project's own setting;
+ *   • the submitter's confirmation and the manager's "awaiting your review" notification;
+ *   • the `timesheet.submitted` domain event, which the SLA sweeps and digests read.
+ *
+ * DRAFT ONLY. A SUBMITTED entry is already in the queue; an APPROVED or REJECTED one has a decision
+ * recorded against it, and re-submitting would quietly reopen something a reviewer already closed —
+ * the path from a rejection is a fresh entry, which is why a rejected entry stays deletable.
+ */
+timesheetRouter.post("/:id/submit", requirePermission(permissions.TIMESHEETS_WRITE), async (req, res) => {
+  const existing = await prisma.timesheet.findFirst({
+    where: { id: String(req.params.id), deletedAt: null },
+    include: { project: true, user: { include: { manager: true } } }
+  });
+  if (!existing) throw new AppError(404, "Timesheet not found");
+
+  const isOwner = existing.userId === req.user!.id;
+  const canActForOthers = req.user!.permissions.includes(permissions.TIMESHEETS_APPROVE);
+  if (!isOwner && !canActForOthers) throw new AppError(403, "You can only submit your own entries.");
+  if (existing.status !== "DRAFT") {
+    throw new AppError(
+      422,
+      existing.status === "SUBMITTED"
+        ? "This entry is already awaiting a decision."
+        : `This entry is ${existing.status} — a decision has been recorded against it. Log a fresh entry instead.`
+    );
+  }
+
+  // The identity gate, on the SUBMITTER, exactly as the create path applies it — a draft is
+  // private working state, and this is the moment it becomes something an approver signs off.
+  // Checked before any write, so a failed check leaves the draft untouched.
+  let consumedVerificationId: string | null = null;
+  if (await isFaceVerificationRequired(existing.userId, "TIMESHEET")) {
+    consumedVerificationId = await consumeVerification({
+      verificationId: typeof req.body?.faceVerificationId === "string" ? req.body.faceVerificationId : undefined,
+      userId: req.user!.id,
+      context: "TIMESHEET"
+    });
+  }
+
+  const submittedAt = new Date();
+  const updated = await prisma.timesheet.update({
+    where: { id: existing.id },
+    data: {
+      status: "SUBMITTED",
+      submittedAt,
+      approvalDeadline: computeApprovalDeadline(submittedAt, existing.project.slaApprovalHours)
+    },
+    include: ENTRY_DETAIL_INCLUDE
+  });
+
+  if (consumedVerificationId) await bindVerificationToRecord(consumedVerificationId, { timesheetId: updated.id });
+
+  emitDomainEvent("timesheet.submitted", { timesheet: updated });
+  await audit(req.user!.id, "timesheet.submitted", "Timesheet", updated.id, {
+    from: "DRAFT",
+    ...(isOwner ? {} : { onBehalfOf: updated.userId })
+  });
+
+  const dateLabel = updated.workDate.toISOString().slice(0, 10);
+  const hours = Number(updated.totalHours);
+  await dispatchNotification({
+    userId: updated.userId,
+    category: "timesheet.submitted",
+    title: "Timesheet submitted",
+    body: `${hours.toFixed(2)}h on ${updated.project!.name} for ${dateLabel} sent for approval.`,
+    link: "/app/history",
+    email: {
+      templateKey: "timesheet.submitted",
+      vars: {
+        name: existing.user.name,
+        hours: hours.toFixed(2),
+        date: dateLabel,
+        project: updated.project!.name,
+        managerName: existing.user.manager?.name ?? ""
+      },
+      fallback: {
+        subject: "Timesheet submitted",
+        html: templates.timesheetSubmitted({
+          name: existing.user.name,
+          hours,
+          date: dateLabel,
+          project: updated.project!.name,
+          managerName: existing.user.manager?.name ?? null
+        })
+      }
+    }
+  });
+
+  if (existing.user.manager) {
+    await dispatchNotification({
+      userId: existing.user.manager.id,
+      category: "timesheet.submitted",
+      title: `${existing.user.name} submitted a timesheet`,
+      body: `${hours.toFixed(2)}h on ${updated.project!.name} for ${dateLabel} is awaiting your review.`,
+      link: "/app/approvals"
+    });
+  }
+
+  await respondWithEntry(res, updated);
 });
 
 /* ==================== Editing an entry after it was logged ==================== */
@@ -644,19 +781,21 @@ const patchSchema = z.object({
  * fix it is half a feature.
  *
  * WHO MAY EDIT WHAT — two rules, matching who bears the consequence:
- *   • the AUTHOR, until the entry is APPROVED. DRAFT, SUBMITTED and REJECTED are all still the
- *     author's to correct.
+ *   • the AUTHOR, while the entry is still UNDECIDED — DRAFT or SUBMITTED.
  *
- *     This is deliberately WIDER than the delete rule, which stops at REJECTED. Deleting a
- *     SUBMITTED entry erases a request somebody is being asked to decide on; fixing a typo in it
- *     does not. The old rule sent the author to their approver to change one word, and the
- *     approver's only tool was to reject the entry — so a spelling mistake cost a rejection, a
- *     notification, and a re-submission. Editing while SUBMITTED does notify the approver (below)
- *     precisely because they may have already read it.
+ *     SUBMITTED is in, and that is the part worth explaining: deleting a submitted entry erases a
+ *     request somebody is being asked to decide on, but fixing a typo in it does not. Excluding it
+ *     sent the author to their approver to change one word, and an approver's only "send it back"
+ *     tool is a REJECTION — so a spelling mistake cost a rejection, a notification and a
+ *     re-submission. Editing while SUBMITTED notifies the approver (below) precisely because they
+ *     may have already read it.
  *
- *     APPROVED stops there for the author: those hours carry a frozen rate and feed cost reports
- *     and Verified Work Attestations. That is a record somebody may already have been shown, and
- *     changing it is a reviewer's call.
+ *     APPROVED and REJECTED are both out, for the same underlying reason: a DECISION has been
+ *     recorded against them. Approved hours carry a frozen rate and feed cost reports and Verified
+ *     Work Attestations — a record somebody may already have been shown. A rejected entry carries
+ *     the reviewer's stated reason, and rewriting the thing that reason refers to leaves the
+ *     reason attached to text it was never about. The path from a rejection is a fresh entry (the
+ *     rejected one is deletable), not a rewrite of the refused one.
  *   • TIMESHEETS_APPROVE (manager / admin / super admin), in ANY status. They already decide
  *     whether these hours are payable; withholding "fix the module name" from someone trusted to
  *     approve the hours is a distinction without a difference, and the alternative in practice is
@@ -676,10 +815,12 @@ timesheetRouter.patch("/:id", requirePermission(permissions.TIMESHEETS_WRITE), v
   const isOwner = existing.userId === req.user!.id;
   const canEditOthers = req.user!.permissions.includes(permissions.TIMESHEETS_APPROVE);
   if (!isOwner && !canEditOthers) throw new AppError(403, "You can only edit your own entries.");
-  if (isOwner && !canEditOthers && existing.status === "APPROVED") {
+  if (isOwner && !canEditOthers && existing.status !== "DRAFT" && existing.status !== "SUBMITTED") {
     throw new AppError(
       422,
-      "This entry has been approved — the hours are part of the billing record now. Ask your approver to make the correction, or log a correcting entry."
+      existing.status === "APPROVED"
+        ? "This entry has been approved — the hours are part of the billing record now. Ask your approver to make the correction, or log a correcting entry."
+        : "This entry was rejected, and a decision has been recorded against it. Log a fresh entry with the correction rather than rewriting the one that was refused."
     );
   }
 
@@ -766,7 +907,7 @@ timesheetRouter.patch("/:id", requirePermission(permissions.TIMESHEETS_WRITE), v
       // entries. `id: { not: … }` so an edit that leaves the times alone doesn't collide with
       // itself.
       const sameDay = await tx.timesheet.findMany({
-        where: { userId: existing.userId, workDate, deletedAt: null, id: { not: existing.id } }
+        where: { userId: existing.userId, workDate, deletedAt: null, id: { not: existing.id }, status: { not: "REJECTED" } }
       });
       const overlaps = sameDay.some((entry) => {
         const [eh, em] = entry.startTime.split(":").map(Number);
@@ -848,8 +989,8 @@ async function assertCanAttach(req: any, entry: { userId: string; status: string
   const isOwner = entry.userId === req.user.id;
   const canEditOthers = req.user.permissions.includes(permissions.TIMESHEETS_APPROVE);
   if (!isOwner && !canEditOthers) throw new AppError(403, "You can only change your own entries.");
-  if (isOwner && !canEditOthers && entry.status === "APPROVED") {
-    throw new AppError(422, "This entry has been approved — ask your approver to attach the file for you.");
+  if (isOwner && !canEditOthers && entry.status !== "DRAFT" && entry.status !== "SUBMITTED") {
+    throw new AppError(422, `This entry is ${entry.status} — a decision has been recorded against it, so its files are fixed too.`);
   }
 }
 

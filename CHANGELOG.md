@@ -27,6 +27,8 @@ unaffected; their migration checksums were reconciled in place.
   nothing to click — an approver was being asked to sign off hours on the strength of evidence the
   screen could see and they could not. They are links now, and files can be added to or removed
   from an entry after the fact.
+- **History filters by activity and by person** as well as status, project and date. The person
+  filter appears only when you can see more than your own work.
 - **History says who logged each entry and who last changed it.** A "Logged by" column appears
   whenever the page shows more than one person's work (an admin's History returns everybody's and
   used to name nobody), and any entry somebody corrected now carries an **Edited** badge naming
@@ -36,10 +38,20 @@ unaffected; their migration checksums were reconciled in place.
   everything. It opens that entry in place now, with the day and the lane still on screen behind
   it. History rows open the same panel, and the URL carries the entry, so a link points at one
   entry rather than at "the list".
-- **You can fix your own entry until it's approved.** Draft, submitted and rejected are all still
-  yours to correct — previously editing stopped at submission, so changing one word meant asking
-  your approver, whose only way to hand it back is a rejection. Your approver is told when a
-  submitted entry changes, so they re-read it rather than deciding on what they saw before.
+- **You can fix your own entry while it's still undecided** — draft or submitted. Editing used to
+  stop at submission, so changing one word meant asking your approver, whose only way to hand it
+  back is a rejection. Your approver is told when a submitted entry changes, so they re-read it
+  rather than deciding on what they saw before. Once a decision is recorded — approved or rejected
+  — the entry is fixed: log a fresh one instead of rewriting the one that was ruled on. A rejected
+  entry can no longer be deleted either; it is the record of a decision, with the reason attached.
+  It also **no longer blocks its time slot**, so the corrected entry you log in its place is
+  accepted rather than refused for overlapping the one that was refused.
+- **A saved draft can finally be sent.** "Save draft" wrote a row nothing could ever submit, so a
+  draft could be edited forever and never actually reach an approver. There's a **Submit for
+  approval** button on the entry now, and it does everything submitting from the logging form does.
+- **Approve and reject from wherever you opened the entry** — the dashboard's day timeline included.
+  It used to show you the whole entry and offer nothing to do about it, so you'd read it, agree,
+  and then go to another screen to find the same row.
 - **Managers and super admins can correct an entry** — project, module, activity, times, date,
   description, notes — in any status, including approved.
   Every change is recorded field by field with the before and after, and the person who logged it
