@@ -28,6 +28,7 @@ import { AppError } from "../middleware/error.js";
 import { audit } from "./audit.service.js";
 import { findCapability, levelRank } from "./ai-capability.registry.js";
 import { resolveAutonomy } from "./ai-autonomy.service.js";
+import { recordAgentWork } from "./agent-ledger.service.js";
 import { loadRequestUser } from "./principal.service.js";
 import { getGlobalAISettings, planAgentStep, redactSecrets } from "./ai.service.js";
 import { invokeMcpTool, MCP_TOOLS, type McpEnablementSettings, type McpToolContext } from "./mcp-tools.js";
@@ -548,6 +549,15 @@ async function finish(runId: string, status: string, error: string | null): Prom
     capability: run.capability,
     status,
     proposalId: run.proposalId
+  });
+
+  /**
+   * The agent ledger (V8 phase 5). Deliberately not awaited-into-failure: accounting is DOWNSTREAM of
+   * the work, so a ledger row that cannot be written must never turn a completed run into a failed
+   * one. It is a no-op unless the actor is an agent identity.
+   */
+  await recordAgentWork(runId).catch((error: unknown) => {
+    console.error(`[agent-ledger] could not record work for run ${runId}:`, error);
   });
 }
 

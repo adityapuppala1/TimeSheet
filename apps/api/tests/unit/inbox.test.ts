@@ -161,3 +161,24 @@ describe("handled and read are different statements", () => {
     expect(updateMany).not.toHaveBeenCalled();
   });
 });
+
+describe("the bell and the inbox agree about one table", () => {
+  it("hides handled and still-snoozed rows from the bell, using the inbox's own predicate", async () => {
+    // The bug this pins: before it, snoozing an item in the Inbox left it sitting in the bell, which
+    // defeats the snooze — two surfaces disagreeing about one table. Nothing is lost; a hidden row is
+    // still under Snoozed or Done in the Inbox.
+    const { notificationRouter } = await import("../../src/controllers/notification.controller.js");
+    const bell = express();
+    bell.use(express.json());
+    bell.use("/notifications", notificationRouter);
+    bell.use(errorHandler);
+
+    findMany.mockResolvedValue([]);
+    await request(bell).get("/notifications");
+
+    const where = findMany.mock.calls.at(-1)![0].where;
+    expect(where.userId).toBe("u-1");
+    expect(where.handledAt).toBeNull();
+    expect(where.OR).toEqual([{ snoozedUntil: null }, { snoozedUntil: { lte: expect.any(Date) } }]);
+  });
+});

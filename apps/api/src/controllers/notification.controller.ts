@@ -16,9 +16,27 @@ import { validate } from "../middleware/validate.js";
 export const notificationRouter = Router();
 notificationRouter.use(requireAuth);
 
+/**
+ * The bell.
+ *
+ * IT RESPECTS THE INBOX'S TRIAGE STATE (fixed in V8 phase 2's follow-up). Before this, the bell
+ * listed every row regardless, which made the two surfaces disagree about one table: snoozing an item
+ * in the Inbox left it sitting in the bell — defeating the snooze — and an item marked done stayed
+ * there too. The bell is the glance and the Inbox is the queue, but "what is still outstanding" has to
+ * mean one thing in both.
+ *
+ * `handledAt: null` and a snooze that has not yet come round are the same predicate the Inbox's
+ * "to do" filter uses. Anything hidden here is still reachable at /app/inbox under Snoozed or Done —
+ * nothing is lost, it is just not shouting.
+ */
 notificationRouter.get("/", async (req, res) => {
+  const now = new Date();
   const notifications = await prisma.notification.findMany({
-    where: { userId: req.user!.id },
+    where: {
+      userId: req.user!.id,
+      handledAt: null,
+      OR: [{ snoozedUntil: null }, { snoozedUntil: { lte: now } }]
+    },
     orderBy: { createdAt: "desc" },
     take: 50
   });

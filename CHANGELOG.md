@@ -116,6 +116,25 @@ its old schema without the update saying so. After upgrading, run the fan-out on
 - Everything a flow does still goes through the same review, undo and audit path as every other AI
   change here. The Studio composes what already existed; it adds no new way to write to your workspace.
 
+### ⚖️ Agent work on the same ledger as human work
+
+- **When a teammate runs, it is recorded the way a person's work is** — attributed to a project,
+  timed by its own clock, and priced from real usage rather than estimated. Visible on the Agents page.
+- **Where your own approved hours give a baseline for the same kind of work, the human time it
+  displaced is measured too** — from the median of comparable entries in *this* workspace, never a
+  vendor's benchmark, with the basis recorded beside the figure so it can be checked.
+- **Where there is no baseline, it says so.** The page shows how many runs the saving was measured on
+  and how many could not be measured, side by side. A true number over partial data reads as a false
+  one, and this is the figure somebody will quote at a renewal.
+- **None of it is billed to a client by default.** Agent cost is real cost, but invoicing machine
+  minutes is a commercial decision, so nothing here touches the money on an invoice or an attestation.
+
+### 🔔 The bell and the Inbox now agree
+
+- Snoozing something in the Inbox used to leave it sitting in the bell, which defeats the snooze, and
+  items marked done lingered there too. The bell now reads the same "still outstanding" rule the Inbox
+  does. Nothing is lost — anything hidden is still under Snoozed or Done.
+
 ### 🐳 The API image never contained the scripts two runbooks tell you to run
 
 - The runtime stage cherry-picks directories into the image and `apps/api/scripts/` was not among

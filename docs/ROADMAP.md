@@ -3703,3 +3703,51 @@ directly.
 and execution deliberately reuses `queueAgentRun`, but wiring the domain-event bus, the cron sweep and
 the form-submission hook to actually fire flows is the next step — the builder, the rules and the replay
 had to be trustworthy first.
+
+## V8 phase 5 — the agent ledger, and a cross-surface disagreement fixed (2026-08-17)
+
+Plan: [AGENTIC_WORK_MANAGEMENT.md](AGENTIC_WORK_MANAGEMENT.md) §4 — the differentiator. Chosen over
+flow dispatch deliberately: the ledger is purely additive (one table, one fire-and-forget write, one
+read route) and cannot disturb a core feature, whereas firing automation against live data deserves its
+own careful pass.
+
+- [x] **`AgentWorkEntry`, shaped like `Timesheet` rather than a parallel reporting path.** Attributed to
+  a project and a capability, with the agent identity AND the human it acted for, because "which
+  teammate" and "on whose behalf" are different questions an audit answers separately.
+- [x] **Measured, not estimated.** Duration is the run's own wall clock; cost is the run's recorded
+  spend. Written from `finish`, fire-and-forget with a caught error: accounting is downstream of the
+  work, so a ledger row that cannot be written must never turn a completed run into a failed one.
+  Idempotent on `agentRunId`, the same reasoning as `AgentRun.triggerKey` one level down.
+- [x] **Displacement is measured or absent, never guessed.** Populated only where this workspace's own
+  approved timesheets give a baseline for comparable work — a MEDIAN, because one nine-hour day of
+  triage would drag a mean far enough to make every later saving look heroic — and only above five
+  samples, since a median of two rows is an anecdote sitting next to a currency amount. The basis is
+  stored beside the number so it can be checked rather than trusted, and the capability-to-activity map
+  is deliberately six entries: three honest ones beat twenty invented.
+- [x] **The summary never treats unknown as zero.** `measuredEntries` and `unmeasurableEntries` are
+  reported alongside the saving and the UI prints both — "12 hours displaced" over a ledger where two
+  thirds of the rows had no baseline is a true number that reads as a false one.
+- [x] **Never billable by default** (decision 3). Nothing is priced into `Timesheet.billedAmount`, so
+  `budget.service.ts` keeps its single definition of money, and there is deliberately no route that
+  flips the flag yet — the commercial decision comes before the switch for it.
+- [x] 15 tests, aimed at the FLATTERING failures specifically, because every mistake available here
+  makes the product look better than it is: inventing a displacement, using a mean, summing NULL as
+  zero, double-counting a retried finish, or recording a human's own run as agent work.
+
+**The duplicate the audit found, and it was real.** A sweep for duplicated concepts across the four new
+surfaces came back clean on nav, routes, API client names and service exports (the two repeated
+`app.use` prefixes are the documented pre-tenant webhook mounts) — but it surfaced a genuine
+cross-surface disagreement: **the bell listed notifications regardless of the Inbox's triage state.**
+Snoozing an item left it sitting in the bell, defeating the snooze, and a handled item lingered. The
+bell now reads the same predicate the Inbox's "to do" filter uses. The bell is the glance and the Inbox
+is the queue, but "what is still outstanding" has to mean one thing in both — and nothing is lost, since
+anything hidden is still reachable under Snoozed or Done.
+
+Verified: 1151 unit tests (+16); lint clean; the ledger route and its honest empty state confirmed in the
+running app, and the bell re-driven to confirm it still lists what it should.
+
+**Not done, and deliberately:** flow dispatch. Trigger kinds are stored and validated and execution
+reuses `queueAgentRun`; wiring the domain-event bus, the cron sweep and the form hook so flows fire on
+their own is the one remaining piece of the V8 plan. Also outstanding by design: merging the agent series
+into the workload board and the budget panel (§4 items 1 and 2). Both touch core surfaces people rely on
+daily, and neither should be done in the tail of a session.

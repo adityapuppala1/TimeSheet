@@ -4079,8 +4079,21 @@ export interface AgentCapabilityRow {
   actsOnUntrustedInput: boolean;
 }
 
+export interface AgentLedgerSummary {
+  entries: number;
+  totalCostUsd: number;
+  totalDurationHours: number;
+  /** Only the displacements that ARE measurable. Read it with the two counts below or not at all. */
+  displacedHours: number;
+  measuredEntries: number;
+  unmeasurableEntries: number;
+  billableCostUsd: number;
+  byCapability: Array<{ capability: string; entries: number; costUsd: number; displacedMinutes: number | null }>;
+}
+
 export const agentRosterApi = {
   list: async () => (await api.get<AgentRosterEntry[]>("/agents")).data,
+  ledger: async () => (await api.get<AgentLedgerSummary>("/agents/ledger")).data,
   catalogue: async () =>
     (await api.get<{ templates: AgentTemplateRow[]; capabilities: AgentCapabilityRow[] }>("/agents/catalogue")).data,
   install: async (templateKey: string) => (await api.post<AgentRosterEntry>("/agents/install", { templateKey })).data,

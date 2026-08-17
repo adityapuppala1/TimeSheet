@@ -252,6 +252,7 @@ model User {
   goalsCreated         Goal[]               @relation("GoalCreatedBy")
   goalOverrides        GoalProgressOverride[] @relation("GoalOverrideBy")
   agentProfile         AgentProfile?        @relation("AgentIdentity")
+  agentWorkEntries     AgentWorkEntry[]     @relation("AgentWorkAgent")
   agentProfilesCreated AgentProfile[]       @relation("AgentProfileCreatedBy")
   automationFlowsCreated AutomationFlow[]   @relation("AutomationFlowCreatedBy")
   savedViews           SavedView[]
@@ -432,6 +433,7 @@ model Project {
   deletedAt                 DateTime?
 
   @@index([portfolioId])
+  agentWorkEntries AgentWorkEntry[]
 }
 
 model ProjectModule {
@@ -3822,6 +3824,56 @@ model AgentProfile {
   deletedAt   DateTime?
 
   @@index([enabled, deletedAt])
+}
+
+/// --- The agent ledger (V8 phase 5) -----------------------------------------------------------
+/// See docs/AGENTIC_WORK_MANAGEMENT.md §4. THE DIFFERENTIATOR, and the reason it is possible here and
+/// nowhere else: every competitor's agent story ends at "it ran". This product already holds approved
+/// hours per person per project per day with a rate snapshot, so agent work can be put on the SAME
+/// ledger as human work and be counted rather than claimed.
+///
+/// Deliberately shaped like `Timesheet` rather than inventing a parallel reporting path: attributed to
+/// a project and an activity, measured rather than estimated, and never priced into `billedAmount`.
+model AgentWorkEntry {
+  id String @id @default(uuid())
+
+  /// The run that produced it. Not a relation on purpose, matching `ProjectRiskSnapshot.aiProposalId`:
+  /// a run's history may be pruned while the accounting for it should survive.
+  agentRunId String @unique @db.VarChar(64)
+  capability String @db.VarChar(60)
+
+  /// The agent identity that acted, and the human it acted for. Both, because "which teammate" and
+  /// "on whose behalf" are different questions and an audit answers them separately.
+  agentUserId String
+  agentUser   User   @relation("AgentWorkAgent", fields: [agentUserId], references: [id], onDelete: Cascade)
+
+  projectId String?
+  project   Project? @relation(fields: [projectId], references: [id], onDelete: SetNull)
+
+  /// Wall-clock seconds the run took. A recorded fact, not an estimate.
+  durationSeconds Int
+  /// Summed from `AIUsageLog` for this run. Zero is real (a deterministic capability spends nothing);
+  /// NULL would mean "not known", which never happens once a run has finished.
+  costUsd Decimal @default(0) @db.Decimal(10, 4)
+
+  /// Human minutes this displaced — populated ONLY where this workspace's own timesheets give a
+  /// baseline for the same kind of work, and left NULL otherwise. The UI renders NULL as
+  /// "not measurable", never as zero: inventing a saving is how a metric stops being believed, and
+  /// this is the number a customer would quote back at a renewal.
+  displacedMinutes Int?
+  /// Where the baseline came from, so the figure above can be checked rather than trusted.
+  displacedBasis String? @db.VarChar(200)
+
+  /// Never priced into `Timesheet.billedAmount` (decision 3, §7): agent cost is real cost, but
+  /// invoicing machine minutes is a commercial decision no default should make for an operator. This
+  /// flag records a per-project opt-in, and nothing reads it as billable while it is false.
+  billable Boolean @default(false)
+
+  occurredAt DateTime @default(now())
+
+  @@index([occurredAt])
+  @@index([agentUserId, occurredAt])
+  @@index([projectId, occurredAt])
 }
 
 /// --- Workflow Studio (V8 phase 4) -------------------------------------------------------------

@@ -33,6 +33,7 @@ import {
   retireProfile,
   updateProfile
 } from "../services/agent-profile.service.js";
+import { summariseLedger } from "../services/agent-ledger.service.js";
 import { audit } from "../services/audit.service.js";
 import { isPlanningCapabilityAllowed } from "../services/plan-limits.service.js";
 
@@ -53,6 +54,18 @@ async function assertRosterAllowed() {
 agentRouter.get("/", requirePermission(permissions.TICKETS_VIEW), async (_req, res) => {
   await assertRosterAllowed();
   res.json(await listRoster());
+});
+
+/**
+ * The ledger summary — what the roster has cost and displaced.
+ *
+ * `tickets:view` rather than a finance right: the point of putting agent work on the same books is
+ * that a team can see it, and the figures here are workspace aggregates with no individual's rate in
+ * them.
+ */
+agentRouter.get("/ledger", requirePermission(permissions.TICKETS_VIEW), async (_req, res) => {
+  await assertRosterAllowed();
+  res.json(await summariseLedger());
 });
 
 /** The gallery and the capability catalogue in one call: the "add a teammate" dialog needs both,

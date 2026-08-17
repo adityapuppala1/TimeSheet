@@ -29,6 +29,7 @@ import {
   Loader2,
   Lock,
   Plus,
+  Scale,
   ShieldAlert,
   Sparkles,
   Trash2,
@@ -92,6 +93,7 @@ export function AgentsPage() {
   const [galleryOpen, setGalleryOpen] = useState(false);
 
   const roster = useQuery({ queryKey: ["agents"], queryFn: agentRosterApi.list, retry: false });
+  const ledger = useQuery({ queryKey: ["agents", "ledger"], queryFn: agentRosterApi.ledger, retry: false });
   const catalogue = useQuery({ queryKey: ["agents", "catalogue"], queryFn: agentRosterApi.catalogue, enabled: galleryOpen });
 
   const invalidate = () => queryClient.invalidateQueries({ queryKey: ["agents"] });
@@ -191,6 +193,8 @@ export function AgentsPage() {
             <StatCard label="Spent today" value={usd(spentToday)} icon={<Coins className="h-4 w-4" />} />
           </div>
 
+          <LedgerStrip data={ledger.data} loading={ledger.isLoading} />
+
           {entries.length === 0 ? (
             <Card className="animate-fade-in">
               <CardContent className="flex flex-col items-center gap-3 py-12 text-center">
@@ -251,6 +255,80 @@ export function AgentsPage() {
         </DialogContent>
       </Dialog>
     </div>
+  );
+}
+
+/**
+ * The agent ledger (V8 phase 5) — what the roster cost, and what it displaced where that is
+ * measurable.
+ *
+ * WHY THE UNMEASURABLE COUNT IS SHOWN NEXT TO THE SAVING AND NOT HIDDEN: "12 hours displaced" over a
+ * ledger where two thirds of the rows had no baseline is a true number that reads as a false one. The
+ * split is the honest form, and it is the difference between a figure a customer can check and one they
+ * will eventually stop believing.
+ */
+function LedgerStrip({ data, loading }: Readonly<{ data?: import("../services/api").AgentLedgerSummary; loading: boolean }>) {
+  if (loading) return <Skeleton className="h-24" />;
+  if (!data || data.entries === 0) {
+    return (
+      <Card className="animate-fade-in">
+        <CardContent className="flex items-start gap-2.5 py-4 text-xs text-muted-foreground">
+          <Scale className="mt-0.5 h-4 w-4 shrink-0" aria-hidden />
+          <span>
+            <strong className="font-medium text-foreground">Nothing on the ledger yet.</strong> When a teammate runs, its
+            work is recorded here the way a person's is — attributed to a project, timed, and priced from real usage. Where
+            this workspace's own approved hours give a baseline for the same kind of work, the time it displaced is measured
+            too; where they do not, it says so rather than guessing.
+          </span>
+        </CardContent>
+      </Card>
+    );
+  }
+
+  return (
+    <Card className="animate-fade-in">
+      <CardHeader className="pb-3">
+        <CardTitle className="flex items-center gap-2 text-base">
+          <Scale className="h-4 w-4 text-primary" />
+          On the same ledger as human work
+        </CardTitle>
+        <CardDescription>
+          {data.entries} recorded run{data.entries === 1 ? "" : "s"}. Counted and priced from real usage — never estimated.
+        </CardDescription>
+      </CardHeader>
+      <CardContent className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+        <div className="rounded-lg border bg-muted/30 p-3">
+          <p className="text-[11px] uppercase tracking-wide text-muted-foreground">Agent cost</p>
+          <p className="text-xl font-semibold tabular-nums">{usd(data.totalCostUsd)}</p>
+          <p className="text-[11px] text-muted-foreground">
+            {data.billableCostUsd === 0 ? "None of it billable to a client" : `${usd(data.billableCostUsd)} marked billable`}
+          </p>
+        </div>
+        <div className="rounded-lg border bg-muted/30 p-3">
+          <p className="text-[11px] uppercase tracking-wide text-muted-foreground">Time spent working</p>
+          <p className="text-xl font-semibold tabular-nums">{data.totalDurationHours}h</p>
+          <p className="text-[11px] text-muted-foreground">Wall clock across every run</p>
+        </div>
+        <div className="rounded-lg border bg-muted/30 p-3">
+          <p className="text-[11px] uppercase tracking-wide text-muted-foreground">Human time displaced</p>
+          <p className="text-xl font-semibold tabular-nums">{data.measuredEntries > 0 ? `${data.displacedHours}h` : "—"}</p>
+          {/* The count that keeps the figure honest. */}
+          <p className="text-[11px] text-muted-foreground">
+            {data.measuredEntries > 0
+              ? `measured on ${data.measuredEntries} of ${data.entries} runs`
+              : "no comparable approved hours to measure against"}
+            {data.unmeasurableEntries > 0 && data.measuredEntries > 0 ? `; ${data.unmeasurableEntries} not measurable` : ""}
+          </p>
+        </div>
+        <div className="rounded-lg border bg-muted/30 p-3">
+          <p className="text-[11px] uppercase tracking-wide text-muted-foreground">Busiest capability</p>
+          <p className="truncate text-xl font-semibold">{data.byCapability[0]?.capability ?? "—"}</p>
+          <p className="text-[11px] text-muted-foreground">
+            {data.byCapability[0] ? `${data.byCapability[0].entries} run(s), ${usd(data.byCapability[0].costUsd)}` : ""}
+          </p>
+        </div>
+      </CardContent>
+    </Card>
   );
 }
 
