@@ -60,6 +60,11 @@ export interface RequestUser {
   email: string;
   role: string;
   permissions: string[];
+  /** True for an `AgentProfile`'s service identity (V8 phase 3). Present so the agent runtime can
+   *  apply the per-agent daily spend ceiling without a second lookup. It is NOT an authorisation
+   *  input anywhere: an agent identity can never hold a session at all — `establishSession` refuses
+   *  it — so nothing that reads `req.user` will ever see this true. */
+  isAgent?: boolean;
 }
 
 declare global {

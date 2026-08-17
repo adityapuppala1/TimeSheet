@@ -4001,6 +4001,87 @@ export const agentRunApi = {
   abort: async (id: string) => (await api.post<{ ok: true }>(`/agent-runs/${id}/abort`)).data
 };
 
+/* ---- The agent roster (V8 phase 3) --------------------------------------------------------- */
+
+export interface AgentAutonomy {
+  capability: string;
+  requestedLevel: string;
+  /** The only value to act on — every clamp already applied server-side. */
+  effectiveLevel: string;
+  maxLevel: string;
+  clampedReason: string | null;
+}
+
+export interface AgentRosterEntry {
+  id: string;
+  name: string;
+  emoji: string;
+  description: string | null;
+  enabled: boolean;
+  templateKey: string | null;
+  identity: { id: string; name: string; email: string };
+  scopeProjectIds: string[];
+  maxCostUsdPerDay: number | null;
+  spentTodayUsd: number;
+  capabilities: Array<{
+    id: string;
+    title: string;
+    description: string;
+    actsOnUntrustedInput: boolean;
+    autonomy: AgentAutonomy;
+  }>;
+  runs: {
+    total: number;
+    recent: Array<{
+      id: string;
+      capability: string;
+      status: string;
+      trigger: string;
+      level: string;
+      stepCount: number;
+      costUsd: number | null;
+      /** The run read externally-authored text, so its authority dropped to SUGGEST for the rest
+       *  of its life. Surfaced because it explains an otherwise baffling "why did it only propose?" */
+      tainted: boolean;
+      createdAt: string;
+      finishedAt: string | null;
+      error: string | null;
+    }>;
+  };
+}
+
+export interface AgentTemplateRow {
+  key: string;
+  name: string;
+  emoji: string;
+  description: string;
+  capabilities: string[];
+  installed: boolean;
+}
+
+export interface AgentCapabilityRow {
+  id: string;
+  title: string;
+  description: string;
+  maxLevel: string;
+  ceilingReason: string | null;
+  actsOnUntrustedInput: boolean;
+}
+
+export const agentRosterApi = {
+  list: async () => (await api.get<AgentRosterEntry[]>("/agents")).data,
+  catalogue: async () =>
+    (await api.get<{ templates: AgentTemplateRow[]; capabilities: AgentCapabilityRow[] }>("/agents/catalogue")).data,
+  install: async (templateKey: string) => (await api.post<AgentRosterEntry>("/agents/install", { templateKey })).data,
+  create: async (payload: { name: string; emoji?: string; description?: string | null; capabilities: string[]; maxCostUsdPerDay?: number | null }) =>
+    (await api.post<AgentRosterEntry>("/agents", payload)).data,
+  update: async (id: string, patch: { enabled?: boolean; name?: string; emoji?: string; description?: string | null; capabilities?: string[]; maxCostUsdPerDay?: number | null }) =>
+    (await api.patch<AgentRosterEntry>(`/agents/${id}`, patch)).data,
+  retire: async (id: string) => {
+    await api.delete(`/agents/${id}`);
+  }
+};
+
 export interface ApprovalStepRow {
   id: string;
   order: number;

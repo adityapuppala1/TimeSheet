@@ -25,6 +25,7 @@ import { requireTenantContext } from "../config/tenant-context.js";
 import { resolveActiveOrgBySlug } from "../middleware/tenant.js";
 import { AppError } from "../middleware/error.js";
 import { getEffectiveSeatLimit } from "../services/plan-limits.service.js";
+import { countActiveSeats } from "../services/seat-count.service.js";
 import { decryptSecret } from "../utils/encryption.js";
 import { constantTimeEqual, hashPassword, opaqueToken } from "../utils/security.js";
 
@@ -149,7 +150,7 @@ scimRouter.post("/:orgSlug/v2/Users", async (req, res, next) => {
 
       const [seatLimit, activeSeats] = await Promise.all([
         getEffectiveSeatLimit(orgId),
-        prisma.user.count({ where: { status: "ACTIVE", deletedAt: null } })
+        countActiveSeats()
       ]);
       if (activeSeats >= seatLimit) return res.status(403).json(scimError(403, `Seat limit reached (${seatLimit} seats on the current plan).`));
 

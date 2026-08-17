@@ -55,6 +55,7 @@ import { agentRunRouter } from "./controllers/agent-run.controller.js";
 import { approvalPublicRouter, approvalRouter } from "./controllers/approval.controller.js";
 import { blueprintRouter } from "./controllers/blueprint.controller.js";
 import { dashboardRouter } from "./controllers/dashboard.controller.js";
+import { agentRouter } from "./controllers/agent.controller.js";
 import { goalRouter } from "./controllers/goal.controller.js";
 import { inboxRouter } from "./controllers/inbox.controller.js";
 import { portfolioRouter } from "./controllers/portfolio.controller.js";
@@ -469,6 +470,10 @@ app.use("/api/goals", goalRouter);
 // caller's own rows. It sits beside /notifications rather than inside it because the bell is a
 // glance and the inbox is a queue with triage state — see controllers/inbox.controller.ts.
 app.use("/api/inbox", inboxRouter);
+// The agent roster. Reading needs tickets:view (anybody working alongside a teammate may ask what
+// it is); creating one mints a service identity and is SUPER_ADMIN, like every other
+// workspace-wide switch. See controllers/agent.controller.ts.
+app.use("/api/agents", agentRouter);
 app.use("/api/resources", resourceRouter);
 app.use("/api/request-forms", requestFormRouter);
 app.use("/api/blueprints", blueprintRouter);

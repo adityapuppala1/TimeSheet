@@ -16,6 +16,7 @@ import { requireTenantContext } from "../config/tenant-context.js";
 import { env } from "../config/env.js";
 import { AppError } from "../middleware/error.js";
 import { getEffectiveSeatLimit } from "./plan-limits.service.js";
+import { countActiveSeats } from "./seat-count.service.js";
 import { isMaintenanceActive } from "./maintenance.service.js";
 import {
   DUMMY_PASSWORD_HASH,
@@ -249,8 +250,27 @@ async function establishSession(
   // per request.
   const roleRow = await prisma.user.findUnique({
     where: { id: user.id },
-    select: { firstLoginAt: true, role: { select: { name: true } } }
+    select: { firstLoginAt: true, isAgent: true, role: { select: { name: true } } }
   });
+
+  /**
+   * AGENT IDENTITIES CAN NEVER AUTHENTICATE (decision 2, docs/AGENTIC_WORK_MANAGEMENT.md §7).
+   *
+   * Enforced HERE for the same reason the maintenance gate above is: this function is the single
+   * point every login method funnels through — password, Google, Microsoft, SAML and LDAP — so a
+   * guard placed here cannot be bypassed by the next auth path somebody adds. Checking it in
+   * `login()` alone would leave SSO open, which is exactly the class of bug the comment above this
+   * one was written about.
+   *
+   * An agent's `User` row exists so that assignment, workload, audit and attestation work
+   * unchanged; it is not a person, its password hash is unusable random bytes, and there is no
+   * flow in which signing in as one is correct. 403 rather than 401 because the credential is not
+   * the problem and retrying will never help.
+   */
+  if (roleRow?.isAgent) {
+    throw new AppError(403, "This is an automation identity and cannot be signed in to.");
+  }
+
   if (roleRow?.role.name !== "SUPER_ADMIN" && (await isMaintenanceActive())) {
     throw new AppError(503, "This workspace is undergoing scheduled maintenance. Please try again after the window ends.", {
       code: "MAINTENANCE"
@@ -420,7 +440,7 @@ export async function completeSsoLogin(
     // self-provision on first login instead of an admin creating them by hand.
     const [seatLimit, activeSeats] = await Promise.all([
       getEffectiveSeatLimit(orgId),
-      prisma.user.count({ where: { status: "ACTIVE", deletedAt: null } })
+      countActiveSeats()
     ]);
     if (activeSeats >= seatLimit) {
       throw new AppError(402, `This workspace has reached its seat limit (${seatLimit} seats). Contact your workspace admin to request more seats.`);

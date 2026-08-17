@@ -44,6 +44,7 @@ const MyWorkPage = lazy(() => import("./pages/MyWork").then((m) => ({ default: m
 const PortfolioPage = lazy(() => import("./pages/Portfolio").then((m) => ({ default: m.PortfolioPage })));
 const GoalsPage = lazy(() => import("./pages/Goals").then((m) => ({ default: m.GoalsPage })));
 const InboxPage = lazy(() => import("./pages/Inbox").then((m) => ({ default: m.InboxPage })));
+const AgentsPage = lazy(() => import("./pages/Agents").then((m) => ({ default: m.AgentsPage })));
 const BlueprintsPage = lazy(() => import("./pages/Blueprints").then((m) => ({ default: m.BlueprintsPage })));
 const WorkloadPage = lazy(() => import("./pages/Workload").then((m) => ({ default: m.WorkloadPage })));
 const RequestsPage = lazy(() => import("./pages/Requests").then((m) => ({ default: m.RequestsPage })));
@@ -124,6 +125,10 @@ const router = createBrowserRouter([
       // The inbox is personal: no permission, no entitlement, no feature flag. Everyone has
       // notifications, so everyone has an inbox — the same reasoning as "my-work" above.
       { path: "inbox", element: <PageShell><InboxPage /></PageShell> },
+      // Reading the roster needs tickets:view — anybody working alongside a teammate may ask what
+      // it is and what it has been doing. Creating one is SUPER_ADMIN, checked in the page and
+      // enforced by the API; the page renders its own "not in this plan" state on a 403.
+      { path: "agents", element: <RequirePermission permission={permissions.TICKETS_VIEW}><PageShell><AgentsPage /></PageShell></RequirePermission> },
       // Readable with tickets:view (the API lists blueprints at that level); using one needs
       // plan:write, checked inside the page so a viewer sees the shapes without dead buttons.
       { path: "blueprints", element: <RequirePermission permission={permissions.TICKETS_VIEW}><PageShell><BlueprintsPage /></PageShell></RequirePermission> },

@@ -93,6 +93,45 @@ export async function queueAgentRun(params: QueueRunParams): Promise<{ runId: st
     }
   }
 
+  /**
+   * THE PER-AGENT DAILY SPEND CEILING (V8 phase 3).
+   *
+   * `AgentProfile.maxCostUsdPerDay` is a ceiling shared by every run of one teammate, sitting under
+   * the per-run cap above, the org's monthly budget, and the tier's hard platform cap. Enforced
+   * here, beside the run-count check, for the same reason that one is: refusing to queue is the only
+   * refusal that costs nothing.
+   *
+   * Checked only when the actor IS an agent identity, so an ordinary person's runs are untouched —
+   * and by summing `AgentRun.costUsd` for that identity since local midnight, which is the same
+   * figure the roster page displays. A ceiling the product shows and does not apply is worse than no
+   * ceiling, because it is read as a guarantee.
+   */
+  if (actor.isAgent) {
+    const profile = await prisma.agentProfile.findFirst({
+      where: { identityUserId: params.onBehalfOfId, deletedAt: null },
+      select: { name: true, enabled: true, maxCostUsdPerDay: true }
+    });
+    if (profile && !profile.enabled) {
+      throw new AppError(403, `"${profile.name}" is switched off.`);
+    }
+    if (profile?.maxCostUsdPerDay != null) {
+      const midnight = new Date();
+      midnight.setHours(0, 0, 0, 0);
+      const spent = await prisma.agentRun.aggregate({
+        _sum: { costUsd: true },
+        where: { onBehalfOfId: params.onBehalfOfId, createdAt: { gte: midnight } }
+      });
+      const used = Number(spent._sum.costUsd ?? 0);
+      const ceiling = Number(profile.maxCostUsdPerDay);
+      if (used >= ceiling) {
+        throw new AppError(
+          429,
+          `"${profile.name}" has spent $${used.toFixed(4)} today, which is its daily ceiling of $${ceiling.toFixed(2)}.`
+        );
+      }
+    }
+  }
+
   try {
     const run = await prisma.agentRun.create({
       data: {

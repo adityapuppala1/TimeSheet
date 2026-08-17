@@ -27,6 +27,7 @@ import { env } from "../config/env.js";
 import { prisma } from "../config/prisma.js";
 import { requireTenantContext } from "../config/tenant-context.js";
 import { decryptSecret } from "../utils/encryption.js";
+import { AGENT_MAIL_DOMAIN } from "./agent-identity.js";
 
 export { templates } from "./mail-templates.js";
 
@@ -595,6 +596,29 @@ export async function sendMail(
       : toOrArgs;
 
   if (!args.to) return { ok: false, status: "SKIPPED", errorMessage: "Recipient is empty" };
+
+  /**
+   * AGENT IDENTITIES HAVE NO MAILBOX (V8 phase 3).
+   *
+   * An `AgentProfile`'s identity is a real `User` row — that is what makes assignment, workload and
+   * audit work unchanged — and it is therefore picked up by every "all active users" recipient
+   * query in the codebase (the weekly digest, release announcements, deadline reminders). Without
+   * this, each of those posts mail to a synthesised address and books a permanent bounce.
+   *
+   * Enforced HERE, at the choke point every outbound email already funnels through, rather than by
+   * adding `isAgent: false` to a dozen recipient queries — the same argument the file header makes
+   * for admin toggles and budget caps being enforceable only because every caller passes here.
+   *
+   * A string check rather than a lookup, deliberately: agent addresses live on `.invalid`, the
+   * domain RFC 2606 reserves precisely so it can never resolve. That makes the address itself the
+   * declaration, costs no query on the hot path, and is impossible to get wrong by forgetting to
+   * join a table. `SKIPPED` (not an error) because nothing is wrong — there was simply nobody to
+   * write to.
+   */
+  const primaries = args.to.split(",").map((a) => a.trim().toLowerCase()).filter(Boolean);
+  if (primaries.length > 0 && primaries.every((address) => address.endsWith(AGENT_MAIL_DOMAIN))) {
+    return { ok: false, status: "SKIPPED", errorMessage: "Recipient is an automation identity with no mailbox" };
+  }
 
   const bcc = args.skipBcc ? [] : await getBccList(args.to, args.preferenceKey);
 

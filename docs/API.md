@@ -563,6 +563,55 @@ makes the same stored value render as two different days across a boundary.
   with zero spend — the arithmetic there produces a confident number that is noise, and
   "forecast: 0" reads as "this will cost nothing".
 
+## The agent roster (V8 phase 3)
+
+Gated on the tier's `aiPmCopilotEnabled` — the roster is a bundle of the AI capability family, which
+already has an entitlement, and a second switch for one commercial decision is one switch somebody
+forgets. Reading needs `tickets:view`; every write is SUPER_ADMIN, because creating an agent mints a
+service identity whose actions appear in the audit trail under its own name.
+
+**A profile grants nothing.** `AiCapabilitySpec.maxLevel` is the product ceiling, an administrator
+may only lower it through `AiCapabilityPolicy`, and `AgentRun.level` stays the record of what a run
+was actually permitted. A profile adds a name, a scope that can only NARROW, and a daily spend
+ceiling that sits under every existing one. If it could raise a level it would be a second
+permission system, and the first thing a second permission system does is disagree with the first.
+
+- `GET /agents` — the roster, each entry carrying its capabilities with **resolved** autonomy
+  (clamps applied), today's spend, and its five most recent runs.
+- `GET /agents/catalogue` — the built-in gallery plus the full capability catalogue with ceilings, in
+  one call because the "add a teammate" dialog needs both and two round trips is two chances to
+  render half a dialog.
+- `POST /agents/install` `{ templateKey }` — instantiates a gallery template. Separate from the
+  generic create so the bundle comes from the catalogue rather than the request body; otherwise
+  "this is the stock triage teammate, unmodified" is a claim a client can assert about anything.
+  409 on a second copy of the same template.
+- `POST /agents` — a custom profile. An unknown capability id is **refused**, not dropped: a bundle
+  naming one would appear to do something and do nothing.
+- `PATCH /agents/:id` — including `enabled`. Enabling is audited as its own action (`agent.enabled`)
+  rather than as a field list, because "who switched this on, and when" is what an incident review
+  asks.
+- `DELETE /agents/:id` — retires it. Soft delete, and the identity is **deactivated rather than
+  removed**: audit rows, comments and past runs point at it, and hard-deleting would either cascade
+  them away or leave them naming nobody.
+
+**Every profile is created switched off**, whatever the caller asks. An administrator reads the
+resolved autonomy of the bundle first — the same reasoning as the MCP server's three closed
+defaults, where a write tool added by a future release arrives disabled rather than turning itself on
+during an upgrade.
+
+### The identity, and its three fences
+
+An `AgentProfile` acts as a real `User` row with `isAgent = true`. That is what lets assignment,
+workload, comments, `AuditLog.actorId` and attestations work unchanged instead of threading a second
+actor type through dozens of queries. Three invariants fence it, each at a choke point rather than at
+call sites, and each with its own test because each fails in a different direction:
+
+| Fence | Where | Why it is enforced there |
+|---|---|---|
+| **No seat** | `seat-count.service.ts#countActiveSeats` | The predicate was copied into five call sites; a sixth copy is how the next exclusion gets missed, and the miss is a customer charged for robots. A test asserts no bare copy remains anywhere in `src`. |
+| **No login** | `auth.service.ts#establishSession` | The documented funnel every login method terminates in — password, Google, Microsoft, SAML, LDAP. A guard in `login()` alone would leave SSO open, which is the exact class of bug that comment was written about. 403, not 401: the credential is not the problem. |
+| **No mailbox** | `mail.service.ts#sendMail` | Agents are picked up by every "all active users" recipient query. Addresses live on `@agents.invalid` — the domain RFC 2606 reserves so it can never resolve — so the choke point recognises one with a string comparison and no join. `SKIPPED`, not an error: nothing was wrong, there was simply nobody to write to. |
+
 ## Inbox and the daily brief (V8 phase 2)
 
 No permission and no entitlement: this is the caller's own queue over notifications they already

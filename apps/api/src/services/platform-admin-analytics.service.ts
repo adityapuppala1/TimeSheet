@@ -35,7 +35,12 @@ async function summarizeOrg(org: { id: string; slug: string; name: string; statu
   const client = await getTenantClient(org.id, dsn);
   return tenantContext.run({ orgId: org.id, orgSlug: org.slug, client }, async () => {
     const [seatCount, ticketGroups, aiSpend, lastLogin] = await Promise.all([
-      client.user.count({ where: { status: "ACTIVE", deletedAt: null } }),
+      // `isAgent: false` for the same reason seat-count.service.ts excludes them: this figure is
+      // what a platform admin reads as the org's seat usage, and counting automation identities
+      // would inflate every roster-using org's apparent headcount. Written inline rather than
+      // calling countActiveSeats() because this runs against an INJECTED tenant client (it walks
+      // every org), not the ambient request-scoped one.
+      client.user.count({ where: { status: "ACTIVE", deletedAt: null, isAgent: false } }),
       client.ticket.groupBy({ by: ["status"], _count: { _all: true } }),
       client.aIUsageLog.aggregate({ _sum: { costUsdEstimate: true }, where: { createdAt: { gte: startOfMonth() } } }),
       client.user.aggregate({ _max: { lastLoginAt: true } })

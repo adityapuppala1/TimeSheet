@@ -22,6 +22,7 @@ import { requireAuth, requireSuperAdmin } from "../middleware/auth.js";
 import { AppError } from "../middleware/error.js";
 import { validate } from "../middleware/validate.js";
 import { getEffectiveSeatLimit } from "../services/plan-limits.service.js";
+import { countActiveSeats } from "../services/seat-count.service.js";
 import { decryptSecret } from "../utils/encryption.js";
 
 async function getStripeClient(): Promise<{ stripe: Stripe; settings: NonNullable<Awaited<ReturnType<typeof controlPrisma.platformBillingSettings.findUnique>>> }> {
@@ -44,7 +45,7 @@ billingRouter.get("/status", async (req, res) => {
   const [org, seatLimit, activeSeats, settings] = await Promise.all([
     controlPrisma.organization.findUniqueOrThrow({ where: { id: orgId }, select: { planTier: true, stripeCustomerId: true } }),
     getEffectiveSeatLimit(orgId),
-    prisma.user.count({ where: { status: "ACTIVE", deletedAt: null } }),
+    countActiveSeats(),
     controlPrisma.platformBillingSettings.findUnique({ where: { id: "global" }, select: { priceIdTeam: true, priceIdEnterprise: true } })
   ]);
   res.json({

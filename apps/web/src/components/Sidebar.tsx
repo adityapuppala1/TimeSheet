@@ -10,6 +10,7 @@
  */
 import {
   BarChart3,
+  Bot,
   Briefcase,
   CalendarDays,
   FileClock,
@@ -111,6 +112,10 @@ export const nav: NavItem[] = [
   { to: "/app/workload", label: "Workload", icon: Gauge, permission: permissions.RESOURCES_MANAGE, section: "Plan", feature: "resourceManagement" },
   { to: "/app/blueprints", label: "Blueprints", icon: FileStack, permission: permissions.TICKETS_VIEW, section: "Plan", feature: "planning" },
   { to: "/app/proposals", label: "AI suggestions", icon: Sparkles, permission: permissions.TICKETS_VIEW, section: "Plan", feature: "planning" },
+  // The roster carries no `feature`: its gate is the AI copilot ENTITLEMENT, which the planning
+  // `effective` object does not model, and the page renders its own upgrade state on a 403. Hiding
+  // the nav item instead would leave no surface on which to explain what agents are.
+  { to: "/app/agents", label: "Agents", icon: Bot, permission: permissions.TICKETS_VIEW, section: "Plan" },
 
   { to: "/app/approvals", label: "Approvals", icon: Shield, permission: permissions.TIMESHEETS_APPROVE, section: "Team" },
   { to: "/app/team", label: "My team", icon: Users2, permission: permissions.TIMESHEETS_APPROVE, section: "Team" },

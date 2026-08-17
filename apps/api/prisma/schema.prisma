@@ -125,6 +125,18 @@ model User {
   /// reset flow). Drives a prompt, never a lockout: forcing a change at a modal is how people end
   /// up typing their old password with a "1" appended.
   mustChangePassword       Boolean    @default(false)
+  /// --- Agent identity (V8 phase 3, decision 2 in docs/AGENTIC_WORK_MANAGEMENT.md §7) ----------
+  /// True for the non-login service identity an `AgentProfile` acts as. Making an agent a real
+  /// `User` row is what lets every existing surface work unchanged — an agent can be an assignee,
+  /// appear in workload, own a comment, and be named in an audit row — without a second actor type
+  /// threaded through forty queries.
+  ///
+  /// It carries TWO invariants, each with its own test because they fail in different directions:
+  ///   1. It never consumes a paid seat (`countActiveSeats` excludes it) — a billing rule.
+  ///   2. It can never authenticate (`establishSession` refuses it) — a security rule.
+  /// A third consequence: it has no mailbox, so the mail choke point skips it rather than posting
+  /// digests to a synthesised address.
+  isAgent                  Boolean    @default(false)
   status                   UserStatus @default(PENDING_VERIFICATION)
   roleId                   String
   role                     Role       @relation(fields: [roleId], references: [id])
@@ -239,6 +251,8 @@ model User {
   goalsOwned           Goal[]               @relation("GoalOwner")
   goalsCreated         Goal[]               @relation("GoalCreatedBy")
   goalOverrides        GoalProgressOverride[] @relation("GoalOverrideBy")
+  agentProfile         AgentProfile?        @relation("AgentIdentity")
+  agentProfilesCreated AgentProfile[]       @relation("AgentProfileCreatedBy")
   savedViews           SavedView[]
   resourceBookings     ResourceBooking[]    @relation("BookingSubject")
   resourceBookingsMade ResourceBooking[]    @relation("BookingCreator")
@@ -3740,6 +3754,62 @@ model GoalProgressOverride {
   createdAt   DateTime @default(now())
 
   @@index([goalId, createdAt])
+}
+
+/// --- The agent roster (V8 phase 3) -----------------------------------------------------------
+/// See docs/AGENTIC_WORK_MANAGEMENT.md §5 phase 3. This model is PACKAGING, not authority: a name,
+/// a scope, a budget and an identity wrapped around capabilities that already run under
+/// `AiCapabilityPolicy`. It cannot grant anything the registry's `maxLevel` does not already allow,
+/// and `AgentRun.level` remains the authority record for what a run was actually permitted.
+///
+/// WHY RUNS ARE NOT LINKED HERE BY A FOREIGN KEY: `AgentRun.onBehalfOfId` already points at the
+/// identity a run acted as, and each profile has its own identity user — so "this profile's runs"
+/// is a query that needs no new column, and a run keeps its attribution even if the profile is
+/// later deleted. The alternative (a nullable profileId on AgentRun) would have two sources of
+/// truth for the same fact.
+model AgentProfile {
+  id          String  @id @default(uuid())
+  name        String  @db.VarChar(80)
+  /// One or two emoji. Deliberately not an uploaded image: a roster of teammates needs to be
+  /// visually distinguishable at a glance, and an avatar pipeline is a storage surface this does
+  /// not need.
+  emoji       String  @default("🤖") @db.VarChar(16)
+  description String? @db.Text
+
+  /// The service identity this profile acts as — a `User` row with `isAgent = true`. Required:
+  /// an agent with no identity could not be an assignee, appear in an audit row, or be attributed
+  /// a run, which is the whole reason for the design.
+  identityUserId String @unique
+  identityUser   User   @relation("AgentIdentity", fields: [identityUserId], references: [id], onDelete: Cascade)
+
+  /// JSON array of `AiCapabilitySpec.id` strings from services/ai-capability.registry.ts. Stored
+  /// as JSON rather than a join table because it is a small set read whole, always, and never
+  /// filtered on — the same reasoning `Blueprint` uses for its payload.
+  capabilities Json @default("[]")
+  /// JSON array of project ids, empty meaning workspace-wide. Narrowing only: it intersects with
+  /// whatever `AiCapabilityPolicy.scopeProjectIds` already allows, and can never widen it.
+  scopeProjectIds Json @default("[]")
+
+  /// A ceiling this profile's runs share per day, on top of every existing limit
+  /// (`AiCapabilityPolicy.maxCostUsdPerRun`, the org's monthly budget, and the tier's hard
+  /// platform ceiling). Null means "no profile-specific cap", never "unlimited".
+  maxCostUsdPerDay Decimal? @db.Decimal(10, 4)
+
+  /// Off is the default and the shipped state of every prebuilt template. A profile that arrives
+  /// switched on during an upgrade is the exact failure the MCP write latches were designed against.
+  enabled Boolean @default(false)
+
+  /// The template it was created from, when it came from the built-in gallery. Kept so the roster
+  /// can say "this is the stock triage teammate, unmodified" versus "somebody built this".
+  templateKey String? @db.VarChar(60)
+
+  createdById String?
+  createdBy   User?     @relation("AgentProfileCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+  deletedAt   DateTime?
+
+  @@index([enabled, deletedAt])
 }
 
 /// Status of one monitored service at one moment. Three levels, not two, because "slow but

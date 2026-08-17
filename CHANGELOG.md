@@ -64,6 +64,26 @@ run inside a container (see below), so every organization beyond the default one
 its old schema without the update saying so. After upgrading, run the fan-out once:
 `docker compose exec api npm run migrate:tenants -w apps/api`.
 
+### 🤖 AI teammates you can name, scope, and switch off
+
+- **A roster at Plan → Agents**, built from the capabilities this workspace already runs. Six ready
+  ones in the gallery — Triage, Planner, Risk watch, Security desk, Reporter, Load balancer — each
+  assembled only from things that already existed here, so adding one grants no new power.
+- **Every teammate shows exactly what it may do**, per capability, at the autonomy it *actually*
+  resolves to rather than the ceiling it could theoretically reach. A capability that reads text from
+  outside the workspace is marked, and a run that touches any such text drops to proposing for the
+  rest of its life however it was configured.
+- **They arrive switched off.** Always, whoever creates them. You read what a teammate may do, then
+  turn it on — the same rule that makes an upgrade unable to enable anything by itself.
+- **Each one has its own identity**, so its work appears in the audit trail under its own name and it
+  can be assigned work like anyone else. It holds **no paid seat**, **cannot sign in**, and **has no
+  mailbox** — its address sits on a domain reserved never to resolve, so no digest can be posted to it.
+- **What it cost is on the card**: today's spend, against an optional per-agent daily ceiling that
+  sits under your existing monthly budget and the platform cap. Plus its recent runs, with the
+  status, the trigger, the step count, and whether it was clamped.
+- **Retiring one keeps its history.** The identity is deactivated, never deleted, because past runs
+  and audit rows point at it and a retired teammate should read as retired rather than as a gap.
+
 ### 🐳 The API image never contained the scripts two runbooks tell you to run
 
 - The runtime stage cherry-picks directories into the image and `apps/api/scripts/` was not among

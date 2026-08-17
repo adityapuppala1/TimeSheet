@@ -22,6 +22,7 @@ import { templates } from "../services/mail-templates.js";
 import { findCoveredUnenrolledUserIds, notifyEnrollmentRequired } from "../services/face.service.js";
 import { getOnlineSeenByUser } from "../services/maintenance.service.js";
 import { getEffectiveSeatLimit } from "../services/plan-limits.service.js";
+import { countActiveSeats } from "../services/seat-count.service.js";
 import { generateTempPassword, hashPassword } from "../utils/security.js";
 
 export const userRouter = Router();
@@ -398,7 +399,7 @@ userRouter.post(
     const { orgId } = requireTenantContext();
     const [seatLimit, activeSeats] = await Promise.all([
       getEffectiveSeatLimit(orgId),
-      prisma.user.count({ where: { status: "ACTIVE", deletedAt: null } })
+      countActiveSeats()
     ]);
     if (activeSeats >= seatLimit) {
       throw new AppError(402, `Seat limit reached (${seatLimit} seats on the current plan). Contact your platform administrator to add more seats.`);
@@ -500,7 +501,7 @@ userRouter.post("/bulk", validate(bulkUsersSchema), async (req, res) => {
   const { orgId } = requireTenantContext();
   const [seatLimit, activeSeats, roles] = await Promise.all([
     getEffectiveSeatLimit(orgId),
-    prisma.user.count({ where: { status: "ACTIVE", deletedAt: null } }),
+    countActiveSeats(),
     prisma.role.findMany()
   ]);
   const roleByName = new Map<string, (typeof roles)[number]>(roles.map((r) => [r.name, r]));

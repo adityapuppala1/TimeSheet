@@ -3514,3 +3514,71 @@ both themes with zero horizontal overflow.
 **Not done in this phase:** the optional AI narration of the brief, and there is still no e2e spec
 (unchanged from phase 1). The bell itself is untouched — it remains the glance, and the inbox is the
 queue.
+
+## V8 phase 3 — a roster of teammates, and three fences around each one (2026-08-17)
+
+Plan: [AGENTIC_WORK_MANAGEMENT.md](AGENTIC_WORK_MANAGEMENT.md) §5 phase 3, to decision 2 in §7.
+Additive: one defaulted column on `User`, one new table. The phase was cheap exactly as the plan
+predicted, because the dangerous machinery already existed — this is packaging over it.
+
+- [x] **`AgentProfile` grants nothing.** A name, an emoji, a capability bundle, a scope that can only
+  NARROW, and a daily spend ceiling that sits under every existing limit. `AiCapabilitySpec.maxLevel`
+  remains the product ceiling, `AiCapabilityPolicy` the administrator's lowering of it, and
+  `AgentRun.level` the record of what a run was permitted. Had a profile been able to raise a level
+  it would have become a second permission system, and the first thing those do is disagree with the
+  first one.
+- [x] **Runs attribute through the identity, with no new column.** `AgentRun.onBehalfOfId` already
+  names who a run acted as, and each profile has its own identity — so "this profile's runs" is a
+  query, a run keeps its attribution after the profile is deleted, and there is exactly one source of
+  truth for the fact. A nullable `profileId` on `AgentRun` would have been two.
+- [x] **The gallery is a code catalogue, not seeded rows.** Rows created by a migration are rows an
+  upgrade switched on, and every profile is created disabled whatever the caller asks. Six templates,
+  and a test asserts every capability id in every one of them exists in the registry — a template
+  naming a phantom capability would install a teammate that appears to work and never does.
+- [x] **Three fences, three tests, because they fail in three directions.** NO SEAT is a billing rule
+  (`countActiveSeats`); NO LOGIN is a security rule (`establishSession`, the documented funnel every
+  login method terminates in — a guard in `login()` alone would have left SSO open, which is the exact
+  bug the comment above it was written about); NO MAILBOX is an operational rule (`sendMail`, via
+  `@agents.invalid`, the domain RFC 2606 reserves so it can never resolve).
+- [x] **The seat predicate is now one definition.** `{ status: "ACTIVE", deletedAt: null }` had been
+  copied into five call sites — billing, SCIM, manual user creation, bulk creation, SSO
+  self-provisioning. A sixth copy is how the next exclusion gets missed, so a test walks `src` and
+  fails on any bare copy that returns.
+- [x] **UI**: a gallery of templates rather than a blank create form (the question on arrival is
+  "what could one of these do for me", and a blank form answers it with homework), per-capability
+  chips carrying the RESOLVED level rather than one rounded-off badge per agent, spend against
+  ceiling, recent runs with clamped runs marked, and honest empty states that distinguish "nothing yet
+  — it runs when its trigger fires" from "nothing yet, it is switched off".
+
+**What the invariant test found that review would not have.** The codebase-wide scan for bare seat
+predicates flagged `platform-admin-analytics.service.ts`, which counts active users per org for the
+platform console — the number a platform admin reads as seat usage. It would have counted every
+agent identity, inflating the apparent headcount of exactly the orgs that adopted the roster. Fixed
+inline (it runs against an injected tenant client, not the ambient one, so it cannot call the shared
+helper) with the reasoning written next to it.
+
+**One thing worth recording about the login fence.** Driving it against the live API, an attempt to
+sign in as an agent returns 401 "Invalid email or password" rather than the guard's 403 — the random
+unknowable password fails first. Both layers are correct and the outer one simply bites earlier; the
+guard's value is the SSO path, where no password exists at all, and the test asserts it with the
+password check mocked out so it cannot pass for the wrong reason.
+
+Verified: 1077 unit tests (+24); lint clean; three teammates installed through the real API (all
+arriving disabled, a duplicate refused with 409, one enabled, resolved autonomy read back per
+capability); the database confirming 10 active rows, **7 billable seats, 3 agent identities**; and the
+page checked at 390 / 1366 with the gallery open, both themes, zero horizontal overflow.
+
+- [x] **The daily ceiling is enforced, not merely displayed.** It was stored and rendered next to a
+  progress bar before it was applied, which is the worst version of a limit: shown, and therefore read
+  as a guarantee. `queueAgentRun` now sums the identity's spend since local midnight and refuses at the
+  ceiling — in the preflight beside the existing run-count check, because refusing to queue is the only
+  refusal that costs nothing. The same preflight refuses a run for a **switched-off** profile, since
+  "off" has to mean off where work is created rather than being a badge on a card. Eight tests pin it,
+  including that yesterday's spend cannot exhaust today, that a re-queued idempotent run neither trips
+  the ceiling nor consumes it, and that an agent identity whose profile was retired still runs — a
+  retired profile deliberately leaves its identity behind for the audit rows that point at it, and
+  refusing there would turn tidying the roster into a way to break a scheduled capability.
+
+**Not done in this phase:** nothing schedules an agent yet — a profile is a roster entry, and its
+capabilities still run from their existing triggers, so "enabled" means "may run" rather than "runs on
+a cadence". That is phase 4's job: the Studio is where a trigger meets a bundle.
