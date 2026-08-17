@@ -188,6 +188,12 @@ admin can clear up after someone who has left.
 > worked and no way to record them. A refusal is the reviewer saying "this should not stand"; it
 > does not reserve the clock. Every other status still counts, so genuine double-booking is still
 > caught.
+>
+> The same principle holds wherever refused hours would otherwise cost the author something: the
+> logging form's 12-hour daily cap already ignores them, and History's **Logged hours** total
+> excludes them too — work 8h, get refused, re-log the same 8h, and a total that counted both would
+> read 16h. The refused hours stay visible as their own figure; they are simply not counted as work
+> that stands.
 
 It is a **soft** delete —
 the row keeps its audit trail, and because every read path (including the overlap check in
@@ -204,7 +210,16 @@ the row keeps its audit trail, and because every read path (including the overla
 | Caller | May edit | Why |
 |---|---|---|
 | the **author** | their own **undecided** entries — `DRAFT` and `SUBMITTED` | It is their account of their own work, and nobody has ruled on it yet. |
-| `TIMESHEETS_APPROVE` | **any** entry, in **any** status | They already decide whether these hours are payable. Withholding "fix the module name" from someone trusted to approve the hours is a distinction without a difference, and the alternative in practice is a rejection round-trip for a typo. |
+| `TIMESHEETS_APPROVE` | **anyone's** undecided entries | They correct the module name on something they are about to decide on, without a rejection round-trip for a typo. |
+
+**A decided entry is immutable for everyone, the reviewer included.** `TIMESHEETS_APPROVE`
+originally reached any status, on the argument that whoever decides whether hours are payable can
+also correct them. That exemption is gone: it undoes precisely what the decision is *for* — an
+`APPROVED` entry carries a frozen rate and may already sit behind a client-facing attestation, and
+it would change under the same audit entry a routine typo fix produces. A correction to a decided
+entry is a **new entry**, which is the answer the delete rule has always given, and which leaves
+the original record intact instead of quietly replacing it. One helper, `assertUndecided`, is
+called by `PATCH` and by both attachment routes, so no route can grow its own idea of "decided".
 
 **The author's window deliberately extends past `SUBMITTED`, unlike `DELETE`'s.** Deleting a
 submitted entry erases a request somebody is being asked to decide on; fixing a typo in it does
@@ -214,12 +229,10 @@ notification and a re-submission. Editing a `SUBMITTED` entry **notifies the app
 because they may have read it already, so they re-read rather than deciding on what they saw
 before.
 
-**Both decided states are closed to the author, for the same underlying reason: a reviewer has
-recorded something against the entry.** `APPROVED` hours carry a frozen rate and feed cost reports
-and Verified Work Attestations — a record a client may already have been shown. A `REJECTED` entry
-carries the reviewer's stated reason, and rewriting the text that reason refers to leaves it
-attached to something it was never about; the path forward from a rejection is a **fresh entry**
-(the rejected one stays deletable), not a rewrite of the refused one.
+`APPROVED` hours carry a frozen rate and feed cost reports and Verified Work Attestations — a
+record a client may already have been shown. A `REJECTED` entry carries the reviewer's stated
+reason, and rewriting the text that reason refers to leaves it attached to something it was never
+about; the path forward from a rejection is a **fresh entry**, not a rewrite of the refused one.
 
 The reason the edit and delete rules differ at all is that **erasure and correction are different
 acts**. Deleting an approved entry would remove that record; correcting one leaves it in place and

@@ -734,6 +734,50 @@ test.describe("acting on an entry from any screen", () => {
     }
   });
 
+  /**
+   * A DECIDED ENTRY IS IMMUTABLE FOR EVERYONE, the reviewer included.
+   *
+   * `TIMESHEETS_APPROVE` originally reached any status — whoever decides whether hours are payable
+   * could also correct them. That exemption undoes what the decision is for: an approved entry
+   * carries a frozen rate a client may already have been shown, and it would change under the same
+   * audit entry a routine typo fix produces.
+   */
+  for (const status of ["APPROVED", "REJECTED"] as const) {
+    test(`even a super admin cannot edit a ${status} entry`, async ({ page }) => {
+      const entryId = await withAdminRequest(async (ctx, headers) => {
+        const rows: Array<{ id: string; status: string }> = await (await ctx.get("/api/timesheets", { headers })).json();
+        return rows.find((row) => row.status === status)?.id ?? null;
+      });
+      test.skip(!entryId, `no ${status} entry in the demo data`);
+
+      await signIn(page, "superadmin");
+      await page.goto(`/app/history?entry=${entryId}`);
+      const dialog = page.getByRole("dialog");
+      await expect(dialog).toBeVisible({ timeout: 15_000 });
+      await expect(dialog.getByText("Logged by", { exact: true })).toBeVisible({ timeout: 15_000 });
+      await expect(dialog.getByRole("button", { name: /edit entry/i })).toHaveCount(0);
+    });
+  }
+
+  /** …and the API refuses it independently of whether the button is drawn. */
+  test("the API refuses an approver's edit of a decided entry", async () => {
+    const entryId = await withAdminRequest(async (ctx, headers) => {
+      const rows: Array<{ id: string; status: string }> = await (await ctx.get("/api/timesheets", { headers })).json();
+      return rows.find((row) => row.status === "APPROVED")?.id ?? null;
+    });
+    test.skip(!entryId, "no approved entry in the demo data");
+
+    const { status, body } = await withAdminRequest(async (ctx, headers) => {
+      const res = await ctx.patch(`/api/timesheets/${entryId}`, {
+        headers,
+        data: { taskDescription: "<p>An edit that must not be accepted</p>" }
+      });
+      return { status: res.status(), body: await res.text() };
+    });
+    expect(status).toBe(422);
+    expect(body).toMatch(/correcting entry/i);
+  });
+
   /** An employee must never see the decision controls, wherever the entry is opened from. */
   test("an employee is never offered Approve or Reject on their own entry", async ({ page }) => {
     const entryId = await withAdminRequest(async (ctx, headers) => {

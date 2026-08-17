@@ -635,6 +635,34 @@ timesheetRouter.delete("/:id", requirePermission(permissions.TIMESHEETS_WRITE), 
   res.status(204).send();
 });
 
+/**
+ * A DECIDED ENTRY IS IMMUTABLE — for everyone, including the reviewer who decided it.
+ *
+ * This started as a rule that bound the author and exempted `TIMESHEETS_APPROVE`, on the argument
+ * that whoever decides whether hours are payable can also correct them. The exemption is gone
+ * because it undoes the thing the decision is FOR: an APPROVED entry carries a frozen rate and
+ * feeds cost reports and Verified Work Attestations, so an approver editing it after the fact
+ * changes a figure a client may already have been shown — and does so with the same audit entry a
+ * routine typo fix produces. A REJECTED entry carries the reviewer's stated reason; rewriting the
+ * text that reason refers to leaves the reason attached to something it was never about.
+ *
+ * The window for BOTH roles is now the undecided one: DRAFT and SUBMITTED. Correcting an approved
+ * entry means a new entry, which is the same answer the delete rule has always given, and which
+ * leaves the original record intact rather than quietly replacing it.
+ *
+ * Called by PATCH and by both attachment routes, so there is exactly one definition of "decided"
+ * and no route can grow its own.
+ */
+function assertUndecided(status: string): void {
+  if (status !== "APPROVED" && status !== "REJECTED") return;
+  throw new AppError(
+    422,
+    status === "APPROVED"
+      ? "This entry has been approved — the hours carry a frozen rate and may already sit behind a client-facing record. Log a correcting entry rather than changing this one."
+      : "This entry was rejected, and the reviewer's reason is recorded against it. Log a fresh entry with the correction — the refused one no longer holds its time slot."
+  );
+}
+
 /* ==================== Submitting a draft that already exists ==================== */
 
 /**
@@ -781,25 +809,15 @@ const patchSchema = z.object({
  * fix it is half a feature.
  *
  * WHO MAY EDIT WHAT — two rules, matching who bears the consequence:
- *   • the AUTHOR, while the entry is still UNDECIDED — DRAFT or SUBMITTED.
+ * WHO MAY EDIT: the AUTHOR, or anyone holding TIMESHEETS_APPROVE — and BOTH only while the entry
+ * is UNDECIDED (DRAFT or SUBMITTED). See `assertUndecided` for why the reviewer has no exemption.
  *
- *     SUBMITTED is in, and that is the part worth explaining: deleting a submitted entry erases a
- *     request somebody is being asked to decide on, but fixing a typo in it does not. Excluding it
- *     sent the author to their approver to change one word, and an approver's only "send it back"
- *     tool is a REJECTION — so a spelling mistake cost a rejection, a notification and a
- *     re-submission. Editing while SUBMITTED notifies the approver (below) precisely because they
- *     may have already read it.
- *
- *     APPROVED and REJECTED are both out, for the same underlying reason: a DECISION has been
- *     recorded against them. Approved hours carry a frozen rate and feed cost reports and Verified
- *     Work Attestations — a record somebody may already have been shown. A rejected entry carries
- *     the reviewer's stated reason, and rewriting the thing that reason refers to leaves the
- *     reason attached to text it was never about. The path from a rejection is a fresh entry (the
- *     rejected one is deletable), not a rewrite of the refused one.
- *   • TIMESHEETS_APPROVE (manager / admin / super admin), in ANY status. They already decide
- *     whether these hours are payable; withholding "fix the module name" from someone trusted to
- *     approve the hours is a distinction without a difference, and the alternative in practice is
- *     a rejection round-trip for a typo.
+ * SUBMITTED is in, and that is the part worth explaining: deleting a submitted entry erases a
+ * request somebody is being asked to decide on, but fixing a typo in it does not. Excluding it
+ * sent the author to their approver to change one word, and an approver's only "send it back" tool
+ * is a REJECTION — so a spelling mistake cost a rejection, a notification and a re-submission.
+ * Editing while SUBMITTED notifies the other party (below) precisely because they may have already
+ * read it.
  *
  * EVERY EDIT IS FULLY AUDITED with a field-by-field before/after — that is the part that makes
  * editing an APPROVED entry defensible rather than alarming. The record still says what happened;
@@ -815,14 +833,7 @@ timesheetRouter.patch("/:id", requirePermission(permissions.TIMESHEETS_WRITE), v
   const isOwner = existing.userId === req.user!.id;
   const canEditOthers = req.user!.permissions.includes(permissions.TIMESHEETS_APPROVE);
   if (!isOwner && !canEditOthers) throw new AppError(403, "You can only edit your own entries.");
-  if (isOwner && !canEditOthers && existing.status !== "DRAFT" && existing.status !== "SUBMITTED") {
-    throw new AppError(
-      422,
-      existing.status === "APPROVED"
-        ? "This entry has been approved — the hours are part of the billing record now. Ask your approver to make the correction, or log a correcting entry."
-        : "This entry was rejected, and a decision has been recorded against it. Log a fresh entry with the correction rather than rewriting the one that was refused."
-    );
-  }
+  assertUndecided(existing.status);
 
   // Merge first, validate the MERGED entry second: times, dates and the project/module/ticket
   // triangle are only consistent as a set, and validating just the supplied fields would let
@@ -989,9 +1000,9 @@ async function assertCanAttach(req: any, entry: { userId: string; status: string
   const isOwner = entry.userId === req.user.id;
   const canEditOthers = req.user.permissions.includes(permissions.TIMESHEETS_APPROVE);
   if (!isOwner && !canEditOthers) throw new AppError(403, "You can only change your own entries.");
-  if (isOwner && !canEditOthers && entry.status !== "DRAFT" && entry.status !== "SUBMITTED") {
-    throw new AppError(422, `This entry is ${entry.status} — a decision has been recorded against it, so its files are fixed too.`);
-  }
+  // The same immutability rule the text fields get — evidence attached to a decided entry is part
+  // of what was decided on.
+  assertUndecided(entry.status);
 }
 
 timesheetRouter.post(

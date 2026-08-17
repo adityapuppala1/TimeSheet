@@ -18,10 +18,10 @@
  * the row is already a capability. No blob dance, no bearer header, and a link that has gone
  * stale fails closed with a message that says to reopen the entry.
  *
- * WHO MAY EDIT is decided by the server (timesheet.controller.ts's PATCH) and mirrored here only
- * to decide whether to render the button: the author until the entry is APPROVED, or anyone
- * holding timesheets:approve, in any status. Mirroring a rule is a risk — the copy can drift — so
- * this one is written as a single predicate with the server's reasoning quoted next to it, and the
+ * WHO MAY EDIT is decided by the server (timesheet.controller.ts's `assertUndecided`) and mirrored
+ * here only to decide whether to render the button: the author or a `timesheets:approve` holder,
+ * and only while the entry is UNDECIDED. Mirroring a rule is a risk — the copy can drift — so this
+ * one is written as a single predicate with the server's reasoning quoted next to it, and the
  * server refuses regardless of what this file believes.
  *
  * WHO RENDERS THIS: pages/AdminPages.tsx (ApprovalsPage), pages/History.tsx, pages/Dashboard.tsx.
@@ -136,21 +136,21 @@ export function TimesheetEntryDialog({
   useEffect(() => setEditing(false), [entryId]);
 
   /**
-   * The same two rules the server enforces in PATCH /timesheets/:id. Quoted, not invented.
+   * The rule the server enforces in PATCH /timesheets/:id. Quoted, not invented.
    *
-   * The author may correct their own entry while it is still UNDECIDED — DRAFT or SUBMITTED.
-   * SUBMITTED is in because fixing a typo is not the same as withdrawing a request, and excluding
-   * it meant a one-word correction cost a rejection and a re-submission. APPROVED and REJECTED are
-   * both out: a decision has been recorded against them, and rewriting the text a rejection reason
-   * refers to leaves that reason attached to something it was never about.
-   *
-   * Anyone holding `timesheets:approve` may correct any entry in any status — they already decide
-   * whether the hours are payable.
+   * A DECIDED ENTRY IS IMMUTABLE — for everyone, the reviewer included. The window is the
+   * undecided one (DRAFT or SUBMITTED) for both the author and anyone holding
+   * `timesheets:approve`. SUBMITTED is in because fixing a typo is not the same as withdrawing a
+   * request; excluding it meant a one-word correction cost a rejection and a re-submission.
+   * APPROVED and REJECTED are out because changing them undoes what the decision was for — an
+   * approved entry carries a frozen rate a client may already have been shown, and a rejected one
+   * carries the reviewer's stated reason. A correction is a NEW entry.
    */
   const canEdit = useMemo(() => {
     if (!entry || !currentUser) return false;
-    if (currentUser.permissions.includes("timesheets:approve" as any)) return true;
-    return entry.userId === currentUser.id && (entry.status === "DRAFT" || entry.status === "SUBMITTED");
+    const undecided = entry.status === "DRAFT" || entry.status === "SUBMITTED";
+    const mineOrManaged = entry.userId === currentUser.id || currentUser.permissions.includes("timesheets:approve" as any);
+    return undecided && mineOrManaged;
   }, [entry, currentUser]);
 
   /** A draft is only the author's to send (or an approver's, on their behalf) — and until this
@@ -584,12 +584,9 @@ function EntryEditForm({
         if (!blocked && !save.isPending) save.mutate();
       }}
     >
-      {entry.status === "APPROVED" && (
-        <p className="rounded-md border border-warning/40 bg-warning/10 px-3 py-2 text-xs">
-          These hours are already approved and may sit behind a billing record. The change is
-          audited field by field and {entry.user?.name ?? "the submitter"} is notified.
-        </p>
-      )}
+      {/* No APPROVED/REJECTED banner: the edit form is unreachable on a decided entry now, for
+          every role. The only state that needs a word of warning is the one where somebody else is
+          mid-decision. */}
       {entry.status === "SUBMITTED" && (
         <p className="rounded-md border border-border bg-muted/40 px-3 py-2 text-xs text-muted-foreground">
           This entry is waiting for a decision. You can still correct it — your approver is told

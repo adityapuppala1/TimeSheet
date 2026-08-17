@@ -31,7 +31,8 @@ export function StatCard({
   icon,
   tone = "default",
   trend,
-  trendLabel
+  trendLabel,
+  hint
 }: {
   label: string;
   value: ReactNode;
@@ -40,11 +41,19 @@ export function StatCard({
   trend?: Trend | null;
   /** e.g. "vs yesterday" — shown as a tooltip on the badge and, space permitting, inline. */
   trendLabel?: string;
+  /**
+   * One sentence explaining what the number does or does not include, when that is not obvious
+   * from the label. A tile that quietly excludes something has to be able to say so — otherwise
+   * the only way to discover the rule is to notice the arithmetic not adding up.
+   *
+   * Rendered as small print under the value AND as the tile's `title`, so it survives truncation.
+   */
+  hint?: string;
 }) {
   const toneClass =
     tone === "success" ? "text-success" : tone === "warning" ? "text-warning" : tone === "destructive" ? "text-destructive" : "";
   return (
-    <div className="rounded-lg border border-border bg-card p-2.5 sm:p-3.5">
+    <div className="rounded-lg border border-border bg-card p-2.5 sm:p-3.5" title={hint}>
       <div className="flex items-center justify-between gap-1.5 text-muted-foreground">
         <p className="truncate text-[10px] font-semibold uppercase tracking-wide sm:text-xs">{label}</p>
         {icon && <span className={cn("shrink-0 opacity-80", toneClass)}>{icon}</span>}
@@ -53,6 +62,7 @@ export function StatCard({
         <p className={cn("text-lg font-black tracking-tight sm:text-2xl", toneClass)}>{value}</p>
         {trend && <TrendBadge trend={trend} label={trendLabel} />}
       </div>
+      {hint && <p className="mt-1 text-[10px] leading-snug text-muted-foreground sm:text-[11px]">{hint}</p>}
     </div>
   );
 }

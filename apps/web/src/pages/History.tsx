@@ -197,15 +197,30 @@ export function History() {
     });
   }, [rows, status, projectId, activity, userId, from, to]);
 
+  /**
+   * "Logged hours" EXCLUDES rejected work, and that matters more than it looks.
+   *
+   * A refused entry is meant to be replaced by a fresh one for the same hours — that is the whole
+   * flow now that a rejection neither blocks its time slot nor can be edited away. Counting both
+   * copies made a rejection silently double the day: work 8h, get refused, re-log the same 8h, and
+   * the total read 16h. The refused hours are still visible as their own figure; they are simply
+   * not counted as work that stands.
+   *
+   * `count` deliberately still counts every filtered ROW, because it labels the table underneath
+   * it — a number that disagreed with the rows on screen would be the worse lie.
+   */
   const summary = useMemo(() => {
     return filtered.reduce(
       (acc, row) => {
         const hours = Number(row.totalHours ?? 0);
-        acc.hours += hours;
         acc.count += 1;
+        if (row.status === "REJECTED") {
+          acc.rejected += hours;
+          return acc;
+        }
+        acc.hours += hours;
         if (row.status === "APPROVED") acc.approved += hours;
         if (row.status === "SUBMITTED") acc.pending += hours;
-        if (row.status === "REJECTED") acc.rejected += hours;
         return acc;
       },
       { hours: 0, count: 0, approved: 0, pending: 0, rejected: 0 }
@@ -229,7 +244,9 @@ export function History() {
       else if (work >= lastWeekStart && work < thisWeekStart) bucket = lastWeek;
       if (!bucket) continue;
       bucket.count += 1;
-      bucket.hours += hours;
+      // Same exclusion as `summary.hours` above — a trend arrow that counted refused work would
+      // contradict the number it sits under.
+      if (row.status !== "REJECTED") bucket.hours += hours;
       if (row.status === "APPROVED") bucket.approved += hours;
       if (row.status === "SUBMITTED") bucket.pending += hours;
     }
@@ -451,7 +468,17 @@ export function History() {
 
       <div className="grid grid-cols-2 gap-2.5 sm:gap-3 md:grid-cols-4">
         <StatCard label="Entries" value={summary.count} trend={weekTrends.count} trendLabel="this week vs last week" />
-        <StatCard label="Logged hours" value={summary.hours.toFixed(2)} trend={weekTrends.hours} trendLabel="this week vs last week" />
+        <StatCard
+          label="Logged hours"
+          value={summary.hours.toFixed(2)}
+          trend={weekTrends.hours}
+          trendLabel="this week vs last week"
+          hint={
+            summary.rejected > 0
+              ? `Excludes ${summary.rejected.toFixed(2)}h of rejected work, which is meant to be re-logged rather than counted twice.`
+              : undefined
+          }
+        />
         <StatCard label="Approved hours" value={summary.approved.toFixed(2)} tone="success" trend={weekTrends.approved} trendLabel="this week vs last week" />
         <StatCard label="Pending hours" value={summary.pending.toFixed(2)} tone="warning" trend={weekTrends.pending} trendLabel="this week vs last week" />
       </div>

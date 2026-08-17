@@ -42,7 +42,7 @@ import {
 } from "lucide-react";
 import { useMemo, useState } from "react";
 import { Link } from "react-router";
-import { Area, AreaChart, Bar, BarChart, CartesianGrid, LabelList, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
+import { Area, AreaChart, Bar, BarChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 import { Alert, AlertDescription, AlertTitle } from "../components/ui/alert";
 import { SetupChecklistCard } from "../components/SetupChecklistCard";
 import { Badge } from "../components/ui/badge";
@@ -54,6 +54,7 @@ import { Progress } from "../components/ui/progress";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../components/ui/select";
 import { Skeleton } from "../components/ui/skeleton";
 import { StatCard, TrendBadge } from "../components/ui/stat-card";
+import { ProjectUtilizationChart } from "../components/ProjectUtilizationChart";
 import { TimesheetEntryDialog } from "../components/TimesheetEntryDialog";
 import { computeTrend, type Trend } from "../lib/trend";
 import { reportApi, ticketApi, timesheetApi, type TicketRow } from "../services/api";
@@ -348,7 +349,14 @@ export function Dashboard() {
         </div>
       )}
 
-      <div className="grid gap-5 lg:grid-cols-[1.3fr_0.7fr]">
+      {/*
+        STACKED, NOT SIDE BY SIDE. These were a 1.3fr/0.7fr split, which gave project utilization
+        about a third of the page — and a categorical axis in a third of a page is where the label
+        collision came from: eight project codes drawn on top of each other. Both charts read
+        left-to-right across their full range, so neither gains anything from sharing a row, and
+        the narrower one lost the thing that made it readable.
+      */}
+      <div className="grid gap-5">
         <Card>
           <CardHeader>
             <CardTitle className="flex items-center gap-2 text-base">
@@ -380,33 +388,17 @@ export function Dashboard() {
         <Card>
           <CardHeader>
             <CardTitle className="text-base">Project utilization</CardTitle>
-            <CardDescription>{isAdmin ? "Across the workspace." : "Sign in as an admin for full breakdown."}</CardDescription>
+            <CardDescription>
+              {isAdmin
+                ? "Hours logged per project across the workspace, largest first."
+                : "Sign in as an admin for the full breakdown."}
+            </CardDescription>
           </CardHeader>
           <CardContent>
-            <div className="h-64">
-              <ResponsiveContainer width="100%" height="100%">
-                <BarChart data={projectTrend} margin={{ top: 18 }}>
-                  <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" />
-                  <XAxis dataKey="code" stroke="hsl(var(--muted-foreground))" fontSize={11} interval={0} />
-                  <YAxis stroke="hsl(var(--muted-foreground))" fontSize={12} />
-                  <Tooltip
-                    contentStyle={{ background: "hsl(var(--popover))", border: "1px solid hsl(var(--border))", borderRadius: 8, color: "hsl(var(--popover-foreground))" }}
-                    labelFormatter={(_, payload) => payload?.[0]?.payload?.name ?? ""}
-                    formatter={(value: number) => [`${Number(value).toFixed(2)}h`, "Hours"]}
-                  />
-                  <Bar dataKey="value" fill="hsl(var(--accent))" radius={[6, 6, 0, 0]}>
-                    {/* Values on the bars — the number is the answer, and it shouldn't cost a hover. */}
-                    <LabelList
-                      dataKey="value"
-                      position="top"
-                      fill="hsl(var(--muted-foreground))"
-                      fontSize={11}
-                      formatter={(value: number) => (value > 0 ? Number(value).toFixed(value >= 100 ? 0 : 1) : "")}
-                    />
-                  </Bar>
-                </BarChart>
-              </ResponsiveContainer>
-            </div>
+            {/* Changes FORM with the viewport rather than shrinking — horizontal bars where names
+                fit in a gutter, a donut plus a numbered legend where they don't. See the
+                component's header for why an axis was the wrong instrument here. */}
+            <ProjectUtilizationChart rows={projectTrend} />
           </CardContent>
         </Card>
       </div>

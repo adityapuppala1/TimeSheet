@@ -3008,3 +3008,48 @@ several of them shared a root cause.
   create and the edit paths — a refusal is the reviewer saying "this should not stand", not a
   reservation on the clock. Every other status still counts, so real double-booking is still caught.
   Approvers keep delete on `REJECTED` for the tidy-up case.
+
+- [x] **The reviewer's edit exemption is gone.** `TIMESHEETS_APPROVE` reached any status, on the
+  argument that whoever decides whether hours are payable can also correct them. Withdrawn on
+  request, and it is the better rule: the exemption undoes precisely what the decision is FOR, and
+  it did so under the same audit entry a routine typo fix produces. Both roles now share one
+  window — `assertUndecided`, called by PATCH and by both attachment routes, so no route can grow
+  its own definition of "decided".
+- [x] **Refused hours stop costing the author anything.** The overlap check already ignored them;
+  History's "Logged hours" total (and its week-over-week trend) now does too. The flow is
+  deliberately "a rejection is replaced by a fresh entry for the same hours", and counting both
+  copies made a rejection silently double the day — work 8h, get refused, re-log 8h, read 16h. The
+  refused figure stays visible on its own; `StatCard` gained a `hint` so a tile that excludes
+  something can say so, rather than leaving the rule discoverable only by noticing the arithmetic.
+
+### 2026-08-17 — the project-utilization chart
+
+- [x] **Both dashboard charts are full width, stacked.** They were a 1.3fr/0.7fr split, and the
+  narrow half is where the label collision came from: a categorical x-axis gives each project
+  `width / n` pixels, so eight project codes in a third of the page drew on top of each other.
+  Neither chart gains anything from sharing a row — both read left-to-right across their full
+  range — so the split was cost without benefit.
+- [x] **Utilization turned on its side.** Widening the card buys headroom without fixing the
+  mechanism: the same collision returns at fifteen projects. A horizontal bar chart inverts it —
+  names in a fixed gutter, one per row, at full length, unable to collide however many there are,
+  and the chart grows downward. The gutter is sized from the longest name (a fixed 168px silently
+  ate the first character of "HICS Learnings & Certifications"; a clipped label is the same
+  failure as an overlapping one, just quieter) and anything past the ceiling truncates with an
+  ellipsis rather than a hard crop.
+- [x] **A doughnut below `md`,** where even a gutter is too expensive. Legitimate because this
+  genuinely is part-to-whole, and shipped with the mitigation the form needs: a legend printing
+  hours and share per slice, so no comparison depends on eyeballing an arc. The tail folds into a
+  gray "Other" past eight rather than inventing a ninth hue.
+- [x] **The palette moved into theme tokens** (`--chart-1..8`, `--chart-other`, both modes), so a
+  chart never detects the theme in JS — an SVG `fill="var(--chart-3)"` re-resolves itself when the
+  `dark` class flips. Validated against both chart surfaces before use: every slot inside the
+  lightness band and over the chroma floor, worst adjacent CVD ΔE 9.1 light / 8.4 dark, worst
+  adjacent normal-vision ΔE 19.6 / 19.3. Hue follows the PROJECT (position in a code-sorted list),
+  never its rank by hours, so a busier month does not repaint the chart.
+- [x] **A bug that only a screenshot could catch.** Recharts spreads a `<Cell>`'s presentation
+  props onto the same `<Bar>`'s `<LabelList>` text — so the 2px surface-coloured ring added as a
+  mark separator became a 2px white outline around 11px digits and erased every value to a single
+  faint dot. The DOM reported the right string, at the right size, with a readable fill the whole
+  time; `getBBox()` reported a sane width. Only rendering the chart and looking at it showed it.
+  The e2e test now asserts on the painted result (stroke width and rendered width), not on
+  `textContent`.

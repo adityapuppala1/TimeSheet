@@ -15,6 +15,11 @@
  * rejected entry carries the reviewer's stated reason, and rewriting the text that reason refers
  * to leaves it attached to something it was never about.
  *
+ * AND THE REVIEWER HAS NO EXEMPTION. `TIMESHEETS_APPROVE` originally reached any status, on the
+ * argument that whoever decides whether hours are payable can also correct them. That exemption is
+ * gone: it undoes precisely what the decision is for, and it would do so under the same audit
+ * entry a routine typo fix produces. A correction to a decided entry is a NEW entry.
+ *
  * The rule is easy to get subtly wrong in either direction — too narrow and people cannot fix
  * their own work, too wide and decided records rewrite themselves — so every edge is pinned.
  */
@@ -188,13 +193,29 @@ describe("the author's edit window", () => {
 });
 
 describe("an approver's edit window", () => {
-  it("reaches an APPROVED entry, which the author's does not", async () => {
+  it("reaches somebody else's UNDECIDED entry, which is the point of the role", async () => {
     actor = MANAGER;
-    client = mockClient("APPROVED");
+    client = mockClient("SUBMITTED");
     clientRef = client;
     const response = await patch({ taskDescription: "<p>A corrected description of the work</p>" });
     expect(response.status, JSON.stringify(response.body)).toBe(200);
   });
+
+  // The reviewer has NO exemption from immutability, and this is the test that says so. It began
+  // life asserting the opposite: the original rule let TIMESHEETS_APPROVE edit any status, on the
+  // argument that whoever decides whether hours are payable can also correct them. That undoes
+  // what the decision is for — an approved entry carries a frozen rate a client may already have
+  // been shown, and it would change under the same audit entry a routine typo fix produces.
+  for (const status of ["APPROVED", "REJECTED"]) {
+    it(`cannot edit a ${status} entry either — a decision is a decision`, async () => {
+      actor = MANAGER;
+      client = mockClient(status);
+      clientRef = client;
+      const response = await patch({ taskDescription: "<p>A corrected description of the work</p>" });
+      expect(response.status, JSON.stringify(response.body)).toBe(422);
+      expect(client.timesheet.update).not.toHaveBeenCalled();
+    });
+  }
 });
 
 describe("who changed it is recorded and announced", () => {

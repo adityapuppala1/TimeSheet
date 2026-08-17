@@ -17,6 +17,19 @@ case-insensitive Windows dialect died on case-sensitive Linux servers mid-migrat
 rewriting them to the canonical casing, which is correct on both. Existing installations are
 unaffected; their migration checksums were reconciled in place.
 
+### 📊 Project utilization you can actually read
+
+- **The axis labels stopped colliding.** Eight project codes were competing for a third of the
+  page and drew on top of each other. The two dashboard charts are now stacked at full width, and
+  utilization turned on its side: project names sit in a gutter, one per row, at full length —
+  so they cannot collide however many projects a workspace has, and the chart grows downward
+  instead of squeezing sideways. Each bar prints its hours, no hover needed.
+- **On a phone it becomes a doughnut**, with a colour per project and a legend that names each one
+  with its hours and its share of the total. The chart carries the shape of the answer; the legend
+  carries the answer — arc lengths are a poor way to compare close numbers.
+- Colours are one validated, colourblind-safe set shared with the day timeline, and they follow the
+  **project**, not its rank — a quiet month reorders the chart without repainting it.
+
 ### 🧾 One timesheet entry, readable and correctable
 
 - **Every logged entry now opens in full** — from the approvals queue, from History, and from the
@@ -45,15 +58,21 @@ unaffected; their migration checksums were reconciled in place.
   — the entry is fixed: log a fresh one instead of rewriting the one that was ruled on. A rejected
   entry can no longer be deleted either; it is the record of a decision, with the reason attached.
   It also **no longer blocks its time slot**, so the corrected entry you log in its place is
-  accepted rather than refused for overlapping the one that was refused.
+  accepted rather than refused for overlapping the one that was refused. Rejected hours are left
+  out of your "Logged hours" total for the same reason — re-logging refused work should not read as
+  having worked it twice.
 - **A saved draft can finally be sent.** "Save draft" wrote a row nothing could ever submit, so a
   draft could be edited forever and never actually reach an approver. There's a **Submit for
   approval** button on the entry now, and it does everything submitting from the logging form does.
 - **Approve and reject from wherever you opened the entry** — the dashboard's day timeline included.
   It used to show you the whole entry and offer nothing to do about it, so you'd read it, agree,
   and then go to another screen to find the same row.
-- **Managers and super admins can correct an entry** — project, module, activity, times, date,
-  description, notes — in any status, including approved.
+- **Managers and super admins can correct anyone's entry** — project, module, activity, times,
+  date, description, notes — while it is still undecided, and every change is recorded field by
+  field with the person who logged it notified.
+- **Once a decision is recorded, the entry is fixed for everyone — reviewers included.** Approved
+  hours carry a frozen rate and may already sit behind something a client has seen; a rejection
+  carries the reviewer's reason. Corrections are a new entry, not a rewrite of the old one.
   Every change is recorded field by field with the before and after, and the person who logged it
   is told when somebody else edits it. An approved entry's frozen billing rate is never
   re-resolved: if the hours change, the amount is recomputed from the rate that was already
