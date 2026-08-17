@@ -45,6 +45,8 @@ import { setInteractionFeedback } from "../services/ai-quality.service.js";
 import { computeTimesheetCost } from "../services/billing-rate.service.js";
 import { assertTicketVisible, ticketProjectScope } from "../services/ticket.service.js";
 
+import { getAiOverview } from "../services/ai-overview.service.js";
+
 export const aiRouter = Router();
 aiRouter.use(requireAuth);
 
@@ -335,6 +337,17 @@ const createDatasetSchema = z.object({
     feature: z.string().min(1).max(60),
     description: z.string().max(500).optional()
   })
+});
+
+/**
+ * The map. One request that answers "what is the AI in this workspace doing", across the four surfaces
+ * that each hold a quarter of it.
+ *
+ * SUPER_ADMIN because it is the orientation surface for the person who configures all four, and because
+ * it reports spend. The four surfaces themselves keep their own, looser, read permissions.
+ */
+aiRouter.get("/overview", requireSuperAdmin, async (_req, res) => {
+  res.json(await getAiOverview());
 });
 
 aiRouter.get("/datasets", requireSuperAdmin, async (_req, res) => {

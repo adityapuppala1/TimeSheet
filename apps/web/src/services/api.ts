@@ -4001,12 +4001,26 @@ export interface AgentRunRow {
   createdAt: string;
   onBehalfOf?: { id: string; name: string } | null;
   steps?: AgentRunStepRow[];
+  /** The workflow that queued this run, when one did — so a run from a flow is never mistaken for one
+   *  somebody started by hand. */
+  flow?: { id: string; name: string; emoji: string } | null;
+  /** The rest of the chain, on the detail route only: what it proposed, whether that was applied, and
+   *  what changed. Absent on the list. */
+  proposal?: {
+    id: string;
+    title: string;
+    status: string;
+    changes: Array<{ id: string; summary: string; appliedAt: string | null; targetType: string; targetId: string | null }>;
+  } | null;
+  /** What this run put on the same books as human work. Null is normal. */
+  ledger?: { costUsd: string | number; durationSeconds: number; displacedMinutes: number | null; displacedBasis: string | null; billable: boolean } | null;
 }
 
 export const agentRunApi = {
   capabilities: async () =>
     (await api.get<Array<{ id: string; title: string; description: string; needsProject: boolean }>>("/agent-runs/capabilities")).data,
-  list: async (limit = 25) => (await api.get<AgentRunRow[]>("/agent-runs", { params: { limit } })).data,
+  list: async (limit = 25, params: { capability?: string; flowId?: string } = {}) =>
+    (await api.get<AgentRunRow[]>("/agent-runs", { params: { limit, ...params } })).data,
   get: async (id: string) => (await api.get<AgentRunRow>(`/agent-runs/${id}`)).data,
   queue: async (payload: { capability: string; goal?: string; projectId?: string }) =>
     (await api.post<{ runId: string; created: boolean }>("/agent-runs", payload)).data,
@@ -4104,9 +4118,28 @@ export interface AgentLedgerSummary {
   byCapability: Array<{ capability: string; entries: number; costUsd: number; displacedMinutes: number | null }>;
 }
 
+export interface AgentLedgerHistory {
+  entries: Array<{
+    agentRunId: string;
+    capability: string;
+    title: string;
+    costUsd: number;
+    durationSeconds: number;
+    displacedMinutes: number | null;
+    displacedBasis: string | null;
+    occurredAt: string;
+  }>;
+  /** Zero-filled: a day with no agent work is a 0, not a gap. */
+  daily: Array<{ day: string; costUsd: number; displacedMinutes: number; entries: number }>;
+  /** How many days in the window have a MEASURED displacement — the trend is otherwise read as
+   *  covering all of them. */
+  measuredDays: number;
+}
+
 export const agentRosterApi = {
   list: async () => (await api.get<AgentRosterEntry[]>("/agents")).data,
   ledger: async () => (await api.get<AgentLedgerSummary>("/agents/ledger")).data,
+  ledgerHistory: async (days = 30) => (await api.get<AgentLedgerHistory>("/agents/ledger/history", { params: { days } })).data,
   catalogue: async () =>
     (await api.get<{ templates: AgentTemplateRow[]; categories: string[]; capabilities: AgentCapabilityRow[] }>("/agents/catalogue")).data,
   install: async (templateKey: string) => (await api.post<AgentRosterEntry>("/agents/install", { templateKey })).data,
@@ -4117,6 +4150,25 @@ export const agentRosterApi = {
   retire: async (id: string) => {
     await api.delete(`/agents/${id}`);
   }
+};
+
+/** The map of AI in this workspace: every number a count, so each can be checked against the screen it
+ *  came from. */
+export interface AiOverview {
+  aiEnabled: boolean;
+  captureEnabled: boolean;
+  capabilities: { total: number; aboveSuggest: number; unowned: number };
+  agents: { total: number; enabled: number };
+  flows: { total: number; live: number; proposalOnly: number; runsLastWeek: number; waiting: number };
+  proposals: { pending: number; appliedLastWeek: number };
+  spend: { monthToDateUsd: number; agentDrivenUsd: number; byFlowUsd: number };
+  ledger: { entries: number; displacedHours: number; unmeasurableEntries: number };
+  /** At most one suggestion. A list of five is a list nobody acts on. */
+  nextStep: string | null;
+}
+
+export const aiOverviewApi = {
+  get: async () => (await api.get<AiOverview>("/ai/overview")).data
 };
 
 export interface ApprovalStepRow {
@@ -4619,6 +4671,9 @@ export interface FlowRunRow {
     outcome: string;
     detail: string;
     agentRunId: string | null;
+    /** Set when a proposal-only flow routed this step into the review queue — the link that makes
+     *  flow → proposal → applied change one navigable chain. */
+    proposalId: string | null;
   }>;
 }
 

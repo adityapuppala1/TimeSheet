@@ -35,6 +35,7 @@ import {
   updateProfile
 } from "../services/agent-profile.service.js";
 import { summariseLedger } from "../services/agent-ledger.service.js";
+import { getLedgerHistory } from "../services/agent-ledger-history.service.js";
 import { audit } from "../services/audit.service.js";
 import { isPlanningCapabilityAllowed } from "../services/plan-limits.service.js";
 
@@ -71,6 +72,13 @@ agentRouter.get("/ledger", requirePermission(permissions.TICKETS_VIEW), async (_
 
 /** The gallery and the capability catalogue in one call: the "add a teammate" dialog needs both,
  *  and two round trips for one dialog is two chances to render half of it. */
+/** The ledger over time, per entry and per day. Same permission as the ledger summary beside it. */
+agentRouter.get("/ledger/history", requirePermission(permissions.TICKETS_VIEW), async (req, res) => {
+  await assertRosterAllowed();
+  const days = Math.min(90, Math.max(7, Number(req.query.days ?? 30)));
+  res.json(await getLedgerHistory(days));
+});
+
 agentRouter.get("/catalogue", requirePermission(permissions.TICKETS_VIEW), async (_req, res) => {
   await assertRosterAllowed();
   res.json({ templates: await listTemplates(), categories: AGENT_CATEGORIES, capabilities: listCapabilityCatalogue() });

@@ -95,18 +95,33 @@ to explain. Shipped as `priority`, `source`, `projectId` and `senderDomain`, eac
 but "who approves this gate" and "who is notified" are questions about a person, and an identity with no
 mailbox can answer neither.
 
-### 3.4 Run visibility, and the missing links between surfaces — **partly shipped**
+### 3.4 Run visibility, and the missing links between surfaces — **shipped**
 
-- ~~**A run drill-down**~~ — shipped for FLOW runs: *What they have done* on the Studio page lists every
-  run with its subject, status and one-line summary, and expands to each step's outcome and reason. The
-  **agent run's** own transcript and cost (`AgentRunStep`) still render nowhere.
-- **Flow → proposal → applied change** as one navigable chain. A flow proposes, the proposal appears
-  under AI suggestions, and nothing links them today — so the question "what did this flow actually do
-  to my workspace" has no answer on screen.
-- **Ledger history**: a per-run list and a trend, not only the aggregate strip.
-- **One "AI in this workspace" landing** that explains the relationship between AI suggestions, Agents,
-  Workflows and the AI settings. Four sibling surfaces with no map is the single biggest orientation
-  problem a new admin meets.
+**A correction to this plan, found while building it:** the item read "`AgentRunStep` already stores it;
+nothing renders it". That was wrong — a full run trace with steps, cost, level and the taint warning has
+existed all along in **Workspace Settings → AI → Agent runs**. What was actually missing was the rest of
+the chain, so the work became extending that panel rather than building a second one. No new
+`/agents/runs` endpoint: the existing `/agent-runs` routes gained the filters and the chain.
+
+- **The chain is navigable end to end.** A run's trace now shows the proposal it produced, that
+  proposal's status, and each change with whether it was applied — plus a link that opens it in the
+  review queue. `/app/proposals?focus=<id>` highlights and scrolls to one, and widens the status filter
+  to *All*, because somebody following such a link is usually asking what became of a suggestion that is
+  no longer pending. A flow run's step links the same way: `see the suggestion`, `see the run`.
+- **`AutomationFlowRunStep.proposalId`** (one nullable column) is what made the first arrow followable.
+  The capability steps never needed it — `AgentRun.proposalId` already carried it — but a deterministic
+  action that the flow itself routed into the review queue has no agent run to carry anything.
+- **A run also shows its ledger row**: what it cost, and how much human work it stands in for, or that
+  the displacement is not measurable. Absent is normal and says so rather than showing a zero.
+- **Ledger history**: 30 days of cost and displaced minutes on the roster page, zero-filled server-side
+  with `measuredDays` reported beside it, over a list of the recent entries and each one's basis. The
+  card hides itself when the ledger is empty. Verified by unit test and by the endpoint's own response;
+  **not yet seen rendered with data**, because this workspace has no completed agent runs to draw (no AI
+  provider key is configured in development).
+- **One "AI in this workspace" landing** at `/app/ai`, super-admin: the four surfaces as a numbered
+  sequence — what the AI may do, who does it, when it happens, what you accept — each with real counts
+  and a link, over one honest next step. Every figure is a COUNT rather than a score: a score needs a
+  rule for what healthy is, and the honest answer depends on what the workspace wants.
 
 ### 3.5 The workload and budget merge (§4 of the mechanism doc)
 
@@ -147,9 +162,11 @@ list plus a seed change — say so and it is done.
 1. ~~**Per-step configuration** (§3.3)~~ — shipped.
 2. ~~**The canvas** (§3.1)~~ — shipped, less the two-lane branch node.
 3. ~~**Dispatch and per-flow attribution** (§3.2)~~ — shipped, less the `FORM_SUBMISSION` trigger.
-4. **The rest of run visibility** (§3.4): the agent-run transcript, flow → proposal → applied change as
-   one navigable chain, ledger history, and the "AI in this workspace" landing.
-5. **Workload/budget merge** (§3.5) and **mobile ergonomics** (§3.6).
+4. ~~**Run visibility and the cross-surface links** (§3.4)~~ — shipped.
+5. **Workload/budget merge** (§3.5) and **mobile ergonomics** (§3.6) — all that is left of this plan,
+   plus three named gaps carried forward: the `FORM_SUBMISSION` trigger has no dispatcher (§3.2), a
+   `BRANCH` renders in-sequence rather than as two lanes (§3.1), and the review queue has no LABEL
+   change target so a proposal-only flow can only hold a label rather than propose it (§3.2).
 
 Written in this order because each step makes the next honest: a canvas over unconfigurable steps, or
 dispatch of flows nobody can inspect afterwards, would both be features that demo well and disappoint.

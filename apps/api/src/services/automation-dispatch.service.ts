@@ -49,6 +49,8 @@ interface StepRecord {
   outcome: "ran" | "proposed" | "queued" | "waiting" | "skipped" | "not-reached" | "held" | "failed";
   detail: string;
   agentRunId?: string | null;
+  /** Recorded so the run report can LINK to what it proposed, not merely say that it did. */
+  proposalId?: string | null;
 }
 
 /* ------------------------------------------------------------------ *
@@ -163,7 +165,7 @@ async function performAction(params: {
           }
         ]
       });
-      return { ...base, outcome: "proposed", detail: `Proposed the assignment for review (${proposal.id.slice(0, 8)}).` };
+      return { ...base, outcome: "proposed", detail: "Proposed the assignment for review.", proposalId: proposal.id };
     }
 
     await prisma.ticket.update({ where: { id: subject.id }, data: { assigneeId } });
@@ -211,7 +213,8 @@ async function recordStep(runId: string, step: StepRecord): Promise<void> {
       kind: step.kind,
       outcome: step.outcome,
       detail: step.detail.slice(0, 500),
-      agentRunId: step.agentRunId ?? null
+      agentRunId: step.agentRunId ?? null,
+      proposalId: step.proposalId ?? null
     }
   });
 }

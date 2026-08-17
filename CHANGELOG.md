@@ -154,6 +154,31 @@ its old schema without the update saying so. After upgrading, run the fan-out on
 - **A flow tells its author the first time it runs**, and only the first. An automation nobody notices
   working is an automation nobody trusts; a message on every run is a message people mute.
 
+### 🧭 One page that says how the AI fits together
+
+- **AI in this workspace**, a new super-admin page, lays the four AI screens out as the sequence they
+  actually are: **what the AI may do** (capabilities and their authority) → **who does it** (teammates
+  that own them) → **when it happens** (workflows) → **what you accept** (the review queue). Each with
+  real counts and a link, over one suggested next step — the single most blocking thing, not a checklist.
+- Every number on it is a **count you can check** against the screen it came from. No health score: a
+  score needs a rule for what healthy is, and that depends on what your workspace wants.
+- **"Human time displaced" says "—" when it cannot be measured**, never 0. "No comparable history" and
+  "displaced nothing" are opposite claims that look identical as a zero.
+
+### 🔗 What the AI did, followable from end to end
+
+- **A run's trace now shows the whole chain**: the steps it took, the suggestion it produced, that
+  suggestion's status, and each change with whether it was actually applied — with a link that opens it
+  in the review queue and highlights it. Following such a link also widens the queue's filter, because
+  the usual reason for following one is to see what became of something no longer pending.
+- **A workflow run's step links the same way** — *see the suggestion*, *see the run* — so "what did this
+  automation do to my work" is answerable by clicking rather than by cross-referencing.
+- **A run also reports its ledger row**: what it cost, and roughly how much human work it stands in for,
+  or that the displacement is not measurable yet.
+- **The agent ledger now has a history**, not just a total: 30 days of cost and displaced time on the
+  Agents page, with the recent entries and the basis for each measurement. Days with no measurement are
+  named as unmeasured rather than drawn as zero.
+
 ### ⚖️ Agent work on the same ledger as human work
 
 - **When a teammate runs, it is recorded the way a person's work is** — attributed to a project,

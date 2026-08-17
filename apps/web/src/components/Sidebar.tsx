@@ -118,6 +118,10 @@ export const nav: NavItem[] = [
   // the nav item instead would leave no surface on which to explain what agents are.
   { to: "/app/agents", label: "Agents", icon: Bot, permission: permissions.TICKETS_VIEW, section: "Plan" },
   { to: "/app/studio", label: "Workflows", icon: Workflow, permission: permissions.TICKETS_VIEW, section: "Plan" },
+  // Last of the AI group and SUPER_ADMIN, because it is the map of the four above rather than a fifth
+  // surface — and because it reports spend. Sits beside them rather than in Configuration so the person
+  // who has just met Agents and Workflows can find the thing that explains how they relate.
+  { to: "/app/ai", label: "AI overview", icon: Sparkles, role: "SUPER_ADMIN", section: "Plan" },
 
   { to: "/app/approvals", label: "Approvals", icon: Shield, permission: permissions.TIMESHEETS_APPROVE, section: "Team" },
   { to: "/app/team", label: "My team", icon: Users2, permission: permissions.TIMESHEETS_APPROVE, section: "Team" },

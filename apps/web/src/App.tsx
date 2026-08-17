@@ -50,6 +50,7 @@ const BlueprintsPage = lazy(() => import("./pages/Blueprints").then((m) => ({ de
 const WorkloadPage = lazy(() => import("./pages/Workload").then((m) => ({ default: m.WorkloadPage })));
 const RequestsPage = lazy(() => import("./pages/Requests").then((m) => ({ default: m.RequestsPage })));
 const ProposalsPage = lazy(() => import("./pages/Proposals").then((m) => ({ default: m.ProposalsPage })));
+const AiOverviewPage = lazy(() => import("./pages/AiOverview").then((m) => ({ default: m.AiOverviewPage })));
 const DashboardsPage = lazy(() => import("./pages/Dashboards").then((m) => ({ default: m.DashboardsPage })));
 const PublicRequestFormPage = lazy(() => import("./pages/PublicRequestForm").then((m) => ({ default: m.PublicRequestFormPage })));
 const GuestApprovalPage = lazy(() => import("./pages/GuestApproval").then((m) => ({ default: m.GuestApprovalPage })));
@@ -133,6 +134,9 @@ const router = createBrowserRouter([
       // Same gate as the roster: reading is tickets:view, because what automation touches your work is
       // your business; every write is SUPER_ADMIN, checked by the API and reflected in the page.
       { path: "studio", element: <RequirePermission permission={permissions.TICKETS_VIEW}><PageShell><StudioPage /></PageShell></RequirePermission> },
+      // The map of the other four AI surfaces. SUPER_ADMIN, unlike the surfaces it links to: it is the
+      // orientation screen for the person who configures all of them, and it reports spend.
+      { path: "ai", element: <RequireRole role="SUPER_ADMIN"><PageShell><AiOverviewPage /></PageShell></RequireRole> },
       // Readable with tickets:view (the API lists blueprints at that level); using one needs
       // plan:write, checked inside the page so a viewer sees the shapes without dead buttons.
       { path: "blueprints", element: <RequirePermission permission={permissions.TICKETS_VIEW}><PageShell><BlueprintsPage /></PageShell></RequirePermission> },

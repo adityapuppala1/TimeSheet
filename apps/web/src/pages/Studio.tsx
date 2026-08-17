@@ -419,6 +419,19 @@ function RunRow({
               <span className="tabular-nums text-muted-foreground">{step.order}.</span>
               <span className="font-medium">{STEP_META[step.kind]?.label ?? step.kind}</span>
               <span className={cn("font-medium", OUTCOME_TONE[step.outcome] ?? "text-muted-foreground")}>{step.outcome}</span>
+              {/* The chain, one click at a time: a proposed change opens in the review queue, a queued
+                  AI step opens its own trace. Saying "proposed" without saying WHICH is where this
+                  stopped being followable. */}
+              {step.proposalId && (
+                <Link className="underline" to={`/app/proposals?focus=${step.proposalId}`}>
+                  see the suggestion
+                </Link>
+              )}
+              {step.agentRunId && (
+                <Link className="underline" to="/app/settings?tab=ai">
+                  see the run
+                </Link>
+              )}
               <span className="w-full text-muted-foreground">{step.detail}</span>
             </li>
           ))}

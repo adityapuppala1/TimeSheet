@@ -4025,6 +4025,12 @@ model AutomationFlowRunStep {
   /// The AI run this step queued, for a capability step.
   agentRunId String? @db.VarChar(64)
 
+  /// The proposal this step produced, for a deterministic action a proposal-only flow could not apply
+  /// directly. Not a relation, for the reason `AgentRun.proposalId` is not one: a proposal can be
+  /// deleted while the record of what proposed it should survive. Without this column the run report
+  /// can say "proposed" and cannot say WHICH — which is the click a reviewer actually wants.
+  proposalId String? @db.VarChar(64)
+
   createdAt DateTime @default(now())
 
   @@index([runId, order])

@@ -97,6 +97,7 @@ const navRoutes: NavRoute[] = [
   { label: "Workload", to: "/app/workload", icon: Gauge, permission: permissions.RESOURCES_MANAGE, feature: "resourceManagement", hint: "Capacity & bookings" },
   { label: "Agents", to: "/app/agents", icon: Bot, permission: permissions.TICKETS_VIEW, hint: "Your AI teammates" },
   { label: "Workflows", to: "/app/studio", icon: Workflow, permission: permissions.TICKETS_VIEW, hint: "Triggers, steps, and what they may do" },
+  { label: "AI overview", to: "/app/ai", icon: Sparkles, hint: "How the AI surfaces relate, and what they cost" },
   { label: "AI suggestions", to: "/app/proposals", icon: Sparkles, permission: permissions.TICKETS_VIEW, feature: "planning", hint: "Review before anything applies" },
   { label: "Approvals", to: "/app/approvals", icon: Shield, permission: permissions.TIMESHEETS_APPROVE },
   { label: "My team", to: "/app/team", icon: Users2, permission: permissions.TIMESHEETS_APPROVE, hint: "SLA & reports" },

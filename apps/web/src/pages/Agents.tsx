@@ -26,6 +26,7 @@ import {
   Bot,
   CheckCircle2,
   Coins,
+  History,
   Loader2,
   Lock,
   Plus,
@@ -199,6 +200,7 @@ export function AgentsPage() {
           </div>
 
           <LedgerStrip data={ledger.data} loading={ledger.isLoading} />
+          <LedgerHistoryCard />
 
           {entries.length === 0 ? (
             <Card className="animate-fade-in">
@@ -387,6 +389,95 @@ function LedgerStrip({ data, loading }: Readonly<{ data?: import("../services/ap
             {data.byCapability[0] ? `${data.byCapability[0].entries} run(s), ${usd(data.byCapability[0].costUsd)}` : ""}
           </p>
         </div>
+      </CardContent>
+    </Card>
+  );
+}
+
+/**
+ * The ledger over time, and the run behind each row.
+ *
+ * WHY A TREND BESIDE THE TOTALS: the strip above answers "what has this cost", which is the question
+ * asked once. "Is it going up, and is it displacing more than it costs" is the question asked every
+ * month, and a total cannot answer it.
+ *
+ * WHY THE BARS ARE DRAWN BY HAND: two series over thirty days, already zero-filled server-side. A chart
+ * library for this would be more code than the arithmetic and one more thing whose theme has to be
+ * taught about dark mode.
+ */
+function LedgerHistoryCard() {
+  const history = useQuery({ queryKey: ["agents", "ledger", "history"], queryFn: () => agentRosterApi.ledgerHistory(30), retry: false });
+  const data = history.data;
+
+  if (history.isLoading) return <Skeleton className="h-40" />;
+  if (!data || data.entries.length === 0) return null;
+
+  const peakCost = Math.max(...data.daily.map((d) => d.costUsd), 0.0001);
+  const peakMinutes = Math.max(...data.daily.map((d) => d.displacedMinutes), 1);
+
+  return (
+    <Card className="animate-fade-in">
+      <CardHeader className="pb-3">
+        <CardTitle className="flex items-center gap-2 text-base">
+          <History className="h-4 w-4 text-muted-foreground" />
+          The last 30 days
+        </CardTitle>
+        <CardDescription className="text-xs">
+          Cost above, human time displaced below.{" "}
+          {data.measuredDays === 0
+            ? "No day in this window has a measurable displacement yet, so the lower row is empty rather than zero."
+            : `Displacement is measured on ${data.measuredDays} of these 30 days; the rest are unmeasured, not zero.`}
+        </CardDescription>
+      </CardHeader>
+      <CardContent className="space-y-3 pt-0">
+        {/* One column per day, so a gap in the data is visible as a short bar and never as a missing
+            column — the spacing has to mean the same thing all the way across. */}
+        <div className="flex items-end gap-[3px]" style={{ height: 72 }}>
+          {data.daily.map((day) => (
+            <Tooltip key={day.day}>
+              <TooltipTrigger asChild>
+                <div className="flex h-full flex-1 flex-col justify-end">
+                  <div
+                    className="rounded-t bg-primary/70"
+                    style={{ height: `${Math.max(day.costUsd > 0 ? 3 : 0, (day.costUsd / peakCost) * 100)}%` }}
+                  />
+                </div>
+              </TooltipTrigger>
+              <TooltipContent>
+                {day.day}: {usd(day.costUsd)}, {day.entries} run{day.entries === 1 ? "" : "s"}
+                {day.displacedMinutes > 0 ? `, ~${day.displacedMinutes} min displaced` : ", displacement unmeasured"}
+              </TooltipContent>
+            </Tooltip>
+          ))}
+        </div>
+        <div className="flex items-start gap-[3px]" style={{ height: 40 }}>
+          {data.daily.map((day) => (
+            <div key={day.day} className="flex h-full flex-1 flex-col">
+              <div
+                className="rounded-b bg-success/60"
+                style={{ height: `${Math.max(day.displacedMinutes > 0 ? 3 : 0, (day.displacedMinutes / peakMinutes) * 100)}%` }}
+              />
+            </div>
+          ))}
+        </div>
+
+        <ul className="divide-y rounded-md border">
+          {data.entries.slice(0, 8).map((entry) => (
+            <li key={entry.agentRunId} className="flex flex-wrap items-baseline gap-x-2 px-3 py-1.5 text-xs">
+              <span className="font-medium">{entry.title}</span>
+              <span className="tabular-nums">{usd(entry.costUsd)}</span>
+              <span className="text-muted-foreground">
+                {entry.displacedMinutes != null ? `~${entry.displacedMinutes} min displaced — ${entry.displacedBasis}` : "displacement not measurable"}
+              </span>
+              <span className="ml-auto text-muted-foreground">{new Date(entry.occurredAt).toLocaleDateString()}</span>
+            </li>
+          ))}
+        </ul>
+        {data.entries.length > 8 && (
+          <p className="text-[11px] text-muted-foreground">
+            Showing the 8 most recent of {data.entries.length} in this window.
+          </p>
+        )}
       </CardContent>
     </Card>
   );

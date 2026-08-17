@@ -25,6 +25,7 @@ import {
   Clock,
   Loader2,
   Play,
+  Scale,
   ShieldAlert,
   Wrench,
   XCircle
@@ -383,6 +384,11 @@ function RunTraceDialog({ runId, onClose }: { runId: string | null; onClose: () 
             <Bot className="h-4 w-4 text-primary" />
             {run.data?.capability.replaceAll("_", " ") ?? "Run"}
             {run.data && statusBadge(run.data.status)}
+            {run.data?.flow && (
+              <Badge variant="outline" className="gap-1 text-[10px]">
+                {run.data.flow.emoji} {run.data.flow.name}
+              </Badge>
+            )}
           </DialogTitle>
           <DialogDescription>
             {run.data?.goal ?? "Every step this run took, in order — what it called, with what, and what came back."}
@@ -417,10 +423,51 @@ function RunTraceDialog({ runId, onClose }: { runId: string | null; onClose: () 
               </p>
             )}
 
-            {run.data.proposalId && (
-              <p className="flex items-center gap-2 rounded-lg border border-primary/30 bg-primary/5 p-2.5 text-xs">
-                <CheckCircle2 className="h-3.5 w-3.5 shrink-0 text-primary" />
-                This run produced a proposal — review it on the AI suggestions page.
+{/* The rest of the chain: what it proposed, whether that landed, and what changed. Before
+                this the trace said "it produced a proposal" and stopped, which left the only question
+                that matters — what actually happened to somebody's work — unanswered on screen. */}
+            {run.data.proposal && (
+              <div className="rounded-lg border border-primary/30 bg-primary/5 p-2.5 text-xs">
+                <p className="flex flex-wrap items-center gap-2">
+                  <CheckCircle2 className="h-3.5 w-3.5 shrink-0 text-primary" />
+                  <span className="font-medium">{run.data.proposal.title}</span>
+                  <Badge variant={run.data.proposal.status === "APPLIED" ? "success" : "secondary"} className="text-[10px]">
+                    {run.data.proposal.status.replaceAll("_", " ").toLowerCase()}
+                  </Badge>
+                  <a className="ml-auto underline" href={`/app/proposals?focus=${run.data.proposal.id}`}>
+                    Open it
+                  </a>
+                </p>
+                <ul className="mt-1.5 space-y-0.5">
+                  {run.data.proposal.changes.map((change) => (
+                    <li key={change.id} className="flex flex-wrap items-baseline gap-1.5">
+                      <span className={change.appliedAt ? "text-success" : "text-muted-foreground"}>
+                        {change.appliedAt ? "applied" : "not applied"}
+                      </span>
+                      <span>{change.summary}</span>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
+            {run.data.proposalId && !run.data.proposal && (
+              <p className="flex items-start gap-2 rounded-lg border border-border bg-muted/30 p-2.5 text-xs text-muted-foreground">
+                <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+                This run produced a proposal that has since been deleted. The run's own record survives it on purpose.
+              </p>
+            )}
+
+            {/* What it put on the same books as human work. Absent is normal, and says so rather than
+                showing a zero — an unmeasured displacement is not a displacement of nothing. */}
+            {run.data.ledger && (
+              <p className="flex flex-wrap items-center gap-x-2 rounded-lg border border-border bg-muted/30 p-2.5 text-xs">
+                <Scale className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+                <span>On the ledger: {money(run.data.ledger.costUsd)} over {run.data.ledger.durationSeconds}s.</span>
+                <span className="text-muted-foreground">
+                  {run.data.ledger.displacedMinutes != null
+                    ? `Stands in for about ${run.data.ledger.displacedMinutes} minutes of human work — ${run.data.ledger.displacedBasis}.`
+                    : "How much human work it stands in for is not measurable yet."}
+                </span>
               </p>
             )}
 
