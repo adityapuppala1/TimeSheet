@@ -42,7 +42,11 @@ jobs:
       JWT_ACCESS_SECRET: "ci-only-access-secret-not-for-real-use-0123456789"
       JWT_REFRESH_SECRET: "ci-only-refresh-secret-not-for-real-use-0123456789"
       PLATFORM_ADMIN_JWT_SECRET: "ci-only-platform-admin-secret-not-for-real-use-0123456789"
-      ENCRYPTION_KEY: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcd"
+      # Exactly 64 hex characters — `env.ts` requires /^[0-9a-f]{64}$/i (32 bytes for AES-256-GCM).
+      # This was 62 for as long as it has existed: two characters short, and never caught, because
+      # every step that loads the app config sat behind an earlier failing gate in this same job and
+      # had therefore never run. Count it if you edit it; the failure is a Zod error deep in a seed.
+      ENCRYPTION_KEY: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
       WEB_ORIGIN: "http://localhost:5173"
       APP_BASE_URL: "http://localhost:5173"
       DEFAULT_ORG_SLUG: "default"
