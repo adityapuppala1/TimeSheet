@@ -30,7 +30,7 @@ import { findCapability, levelRank } from "./ai-capability.registry.js";
 import { resolveAutonomy } from "./ai-autonomy.service.js";
 import { recordAgentWork } from "./agent-ledger.service.js";
 import { loadRequestUser } from "./principal.service.js";
-import { getGlobalAISettings, planAgentStep, redactSecrets } from "./ai.service.js";
+import { describeDecisionFailure, getGlobalAISettings, planAgentStep, redactSecrets } from "./ai.service.js";
 import { invokeMcpTool, MCP_TOOLS, type McpEnablementSettings, type McpToolContext } from "./mcp-tools.js";
 import { proposeAssignmentRebalance } from "./ai-rebalance.service.js";
 import { emitDomainEvent } from "./domain-events.js";
@@ -456,8 +456,11 @@ async function runModelDrivenLoop(
     await prisma.agentRun.update({ where: { id: run.id }, data: { stepCount: step, costUsd } });
 
     if (!decision) {
-      await recordStep(run.id, step, { kind: "error", error: "The model's reply was not a valid decision.", result: raw.slice(0, 500) });
-      await finish(run.id, "FAILED", "The model's reply could not be parsed as a decision.");
+      // Named cause, not a shrug: on a BYOK deployment the model is the operator's choice, and the
+      // old message sent them to check an API key that was never the problem.
+      const why = describeDecisionFailure(raw, (await getGlobalAISettings()).model ?? "the configured model");
+      await recordStep(run.id, step, { kind: "error", error: why, result: raw.slice(0, 500) });
+      await finish(run.id, "FAILED", why);
       return;
     }
 

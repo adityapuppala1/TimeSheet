@@ -20,7 +20,7 @@ import { Prisma } from "@prisma/client";
 import { prisma } from "../config/prisma.js";
 import { AppError } from "../middleware/error.js";
 import { createAgentIdentity } from "./agent-identity.js";
-import { AI_CAPABILITIES, findCapability } from "./ai-capability.registry.js";
+import { AI_CAPABILITIES, isAgentRunnable, findCapability } from "./ai-capability.registry.js";
 import { findClaimConflicts, getCapabilityClaims } from "./capability-claims.service.js";
 import { resolveAutonomy, type ResolvedAutonomy } from "./ai-autonomy.service.js";
 import { getGlobalAISettings } from "./ai.service.js";
@@ -448,6 +448,11 @@ export function listCapabilityCatalogue() {
     description: c.description,
     maxLevel: c.maxLevel,
     ceilingReason: c.ceilingReason,
-    actsOnUntrustedInput: c.actsOnUntrustedInput
+    actsOnUntrustedInput: c.actsOnUntrustedInput,
+    /** Whether an agent RUN can execute it unattended, as opposed to the feature that owns it calling
+     *  a model inline. The Studio needs this to stop offering steps that fail at dispatch — see
+     *  `isAgentRunnable`. A teammate may still OWN a capability that is not runnable: ownership is
+     *  about who is accountable for it, which is a different question. */
+    agentRunnable: isAgentRunnable(c.id)
   }));
 }

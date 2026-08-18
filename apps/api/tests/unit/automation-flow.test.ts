@@ -90,7 +90,7 @@ const flowRow = (over: Record<string, unknown> = {}) => ({
   createdAt: new Date(),
   updatedAt: new Date(),
   deletedAt: null,
-  steps: [{ id: "s-1", flowId: "f-1", order: 1, kind: "CAPABILITY", capability: "triage", config: {}, createdAt: new Date() }],
+  steps: [{ id: "s-1", flowId: "f-1", order: 1, kind: "CAPABILITY", capability: "status_report", config: {}, createdAt: new Date() }],
   ...over
 });
 
@@ -104,7 +104,7 @@ beforeEach(() => {
   flowUpdate.mockResolvedValue({});
   ticketFindMany.mockResolvedValue([]);
   resolveAutonomy.mockResolvedValue({
-    capability: "triage",
+    capability: "status_report",
     requestedLevel: "AUTO_APPLY",
     effectiveLevel: "AUTO_APPLY",
     maxLevel: "AUTO_APPLY",
@@ -128,12 +128,12 @@ describe("a flow is created switched off", () => {
   it("assigns step order from array position, so a reordered builder cannot create gaps", async () => {
     await request(app())
       .post("/flows")
-      .send({ name: "X", steps: [{ kind: "BRANCH" }, { kind: "CAPABILITY", capability: "triage" }, { kind: "ACTION" }] });
+      .send({ name: "X", steps: [{ kind: "BRANCH" }, { kind: "CAPABILITY", capability: "status_report" }, { kind: "ACTION" }] });
     expect(stepCreateMany.mock.calls[0][0].data.map((s: any) => s.order)).toEqual([1, 2, 3]);
   });
 
   it("drops a capability id from a non-capability step rather than storing a lie", async () => {
-    await request(app()).post("/flows").send({ name: "X", steps: [{ kind: "ACTION", capability: "triage" }] });
+    await request(app()).post("/flows").send({ name: "X", steps: [{ kind: "ACTION", capability: "status_report" }] });
     expect(stepCreateMany.mock.calls[0][0].data[0].capability).toBeNull();
   });
 });
@@ -143,7 +143,7 @@ describe("activation reads the validation first", () => {
     flowFindFirst.mockResolvedValue(
       flowRow({
         steps: [
-          { id: "s1", order: 1, kind: "CAPABILITY", capability: "triage", config: {} },
+          { id: "s1", order: 1, kind: "CAPABILITY", capability: "status_report", config: {} },
           // Configured, so the only thing wrong with this flow is WHERE the gate is — an unconfigured
           // gate is its own error, and would have this test passing for the wrong reason.
           { id: "s2", order: 2, kind: "HUMAN_GATE", capability: null, config: { approverId: "u-1" } }
@@ -186,7 +186,7 @@ describe("activation reads the validation first", () => {
 describe("the authority the API reports is the one the rules compute", () => {
   it("reports SUGGEST and proposalOnly when a step resolves low", async () => {
     resolveAutonomy.mockResolvedValue({
-      capability: "triage",
+      capability: "status_report",
       requestedLevel: "AUTO_APPLY",
       effectiveLevel: "SUGGEST",
       maxLevel: "AUTO_APPLY",
@@ -200,7 +200,7 @@ describe("the authority the API reports is the one the rules compute", () => {
 
   it("resolves each capability rather than trusting the registry ceiling", async () => {
     await request(app()).get("/flows/f-1");
-    expect(resolveAutonomy).toHaveBeenCalledWith("triage");
+    expect(resolveAutonomy).toHaveBeenCalledWith("status_report");
   });
 });
 
@@ -233,7 +233,7 @@ describe("simulation is a replay, and says so", () => {
       flowRow({
         steps: [
           { id: "s1", order: 1, kind: "HUMAN_GATE", capability: null, config: {} },
-          { id: "s2", order: 2, kind: "CAPABILITY", capability: "triage", config: {} }
+          { id: "s2", order: 2, kind: "CAPABILITY", capability: "status_report", config: {} }
         ]
       })
     );
@@ -245,7 +245,7 @@ describe("simulation is a replay, and says so", () => {
 
   it("says 'would propose' rather than 'would run' for a proposal-only flow", async () => {
     resolveAutonomy.mockResolvedValue({
-      capability: "triage",
+      capability: "status_report",
       requestedLevel: "SUGGEST",
       effectiveLevel: "SUGGEST",
       maxLevel: "AUTO_APPLY",

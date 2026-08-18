@@ -2864,6 +2864,101 @@ const AgentDecisionSchema: z.ZodType<AgentDecision> = z.union([
   z.object({ action: z.literal("finish"), summary: z.string().min(1) })
 ]) as never;
 
+/**
+ * One narrow repair of a near-miss decision, and why it is worth having.
+ *
+ * SMALL MODELS COLLAPSE THE TWO LEVELS. Asked for `{"action":"tool","tool":"list_projects",...}` a 7B
+ * model very commonly replies `{"action":"list_projects","why":"..."}` — the right intent, one level
+ * flat. Observed on a live BYOK workspace running `allam-2-7b`: the run reached the model, spent real
+ * tokens, and died on the shape rather than on the substance. This file's own header argues the loop
+ * must work identically on every provider including local Ollama, and a parser that accepts exactly one
+ * spelling quietly makes that false for every model below the top tier.
+ *
+ * WHY THIS CANNOT WIDEN WHAT A RUN MAY DO: the coerced tool name must be one of the tools OFFERED for
+ * this step, which is the same allowlist `callToolForRun` enforces afterwards. A reply naming anything
+ * else is still rejected, so the repair can change the SHAPE of a decision and never its authority.
+ *
+ * WHY NOT PROMPT HARDER INSTEAD: the prompt already states the shape twice and the request already
+ * carries a JSON schema. A model that ignores both will ignore a third instruction, and the run has
+ * already been paid for by the time we find out.
+ */
+export function repairAgentDecision(raw: string, tools: Array<{ name: string }>): AgentDecision | null {
+  let parsed: unknown;
+  try {
+    // The same fence-stripping `parseJsonResponse` does, kept local so this stays a pure function.
+    const body = raw.trim().replace(/^```(?:json)?/i, "").replace(/```$/, "").trim();
+    const first = body.indexOf("{");
+    const last = body.lastIndexOf("}");
+    if (first < 0 || last <= first) return null;
+    parsed = JSON.parse(body.slice(first, last + 1));
+  } catch {
+    return null;
+  }
+  if (typeof parsed !== "object" || parsed === null) return null;
+  const obj = parsed as Record<string, unknown>;
+
+  const action = typeof obj.action === "string" ? obj.action : "";
+  const offered = new Set(tools.map((t) => t.name));
+
+  // `{"action":"<tool name>"}` — the flattened form.
+  if (offered.has(action)) {
+    return {
+      action: "tool",
+      tool: action,
+      args: typeof obj.args === "object" && obj.args !== null ? (obj.args as Record<string, unknown>) : {},
+      why: typeof obj.why === "string" ? obj.why.slice(0, 300) : undefined
+    };
+  }
+
+  // `{"action":"tool","tool":"x"}` with the args omitted, which the schema requires and a model that
+  // has nothing to pass will leave out. An empty object is exactly what it meant.
+  if (action === "tool" && typeof obj.tool === "string" && offered.has(obj.tool)) {
+    return {
+      action: "tool",
+      tool: obj.tool,
+      args: typeof obj.args === "object" && obj.args !== null ? (obj.args as Record<string, unknown>) : {},
+      why: typeof obj.why === "string" ? obj.why.slice(0, 300) : undefined
+    };
+  }
+
+  // `{"action":"finish"}` with the answer under a different key, or a bare summary. Accepted only
+  // when there IS prose to keep — a finish with nothing to say is not a repairable decision.
+  if (action === "finish") {
+    const summary = [obj.summary, obj.answer, obj.text, obj.result].find((v) => typeof v === "string" && v.trim().length > 0);
+    if (typeof summary === "string") return { action: "finish", summary: summary.trim() };
+  }
+
+  return null;
+}
+
+/**
+ * WHY a decision could not be read, in words an administrator can act on.
+ *
+ * "The model's reply could not be parsed as a decision" was the whole message, and it sent the reader
+ * looking at their API key — which was fine. The actual cause, on a live workspace, was the MODEL: a
+ * 7B chat model asked for structured output replied once with the two levels collapsed, and once by
+ * echoing the JSON schema back verbatim instead of an instance of it. Both are ordinary behaviour for a
+ * small model on an OpenAI-compatible endpoint that does not really implement `response_format`, and
+ * neither is anything the operator can fix by checking their credentials.
+ *
+ * So the run's error now names the likely cause and the model it used. Diagnosis is not a nicety here:
+ * this is a BYOK product where choosing the model is the operator's job, and an error that misdirects
+ * costs them the one decision that would fix it.
+ */
+export function describeDecisionFailure(raw: string, model: string): string {
+  const body = raw.trim();
+  if (body.length === 0) return `The model (${model}) returned nothing. It may not support the response format this step asks for.`;
+
+  const looksLikeSchema = /"type"\s*:\s*"object"/.test(body) && /"properties"\s*:/.test(body);
+  if (looksLikeSchema) {
+    return `The model (${model}) replied with the JSON SCHEMA instead of an answer in that shape — what a model does when it does not really support structured output. Choose a larger or instruct-tuned model for agent runs; every other AI feature here will keep working on this one.`;
+  }
+  if (!body.includes("{")) {
+    return `The model (${model}) replied in prose rather than the JSON this step requires. Agent runs need a model that reliably follows a response format; the one-shot AI features do not.`;
+  }
+  return `The model (${model}) replied with JSON that was not a valid decision. If this repeats, the model is likely too small to drive agent runs — the one-shot AI features are unaffected.`;
+}
+
 export interface AgentTranscriptEntry {
   tool: string;
   args: unknown;
@@ -2960,7 +3055,8 @@ export async function planAgentStep(input: {
     }
   });
 
-  const decision = parseJsonResponse(chat.text, AgentDecisionSchema);
+  const strict = parseJsonResponse(chat.text, AgentDecisionSchema);
+  const decision = strict ?? repairAgentDecision(chat.text, input.tools);
 
   await logAIUsage({
     // Logged as its own feature rather than under the capability, for two reasons that both bit
@@ -2988,7 +3084,10 @@ export async function planAgentStep(input: {
       stepsRemaining: input.stepsRemaining,
       mustFinish: Boolean(input.mustFinish)
     },
-    parseOk: decision !== null,
+    // Recorded against the STRICT parse, not the repaired one: the quality loop needs to know how
+    // often this model answers in the shape it was asked for, and a repair that hid that would make
+    // the model look better than it is exactly where the data is used to choose one.
+    parseOk: strict !== null,
     userId: input.userId
   });
 

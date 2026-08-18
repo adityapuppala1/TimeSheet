@@ -4127,6 +4127,11 @@ export interface AgentCapabilityRow {
   maxLevel: string;
   ceilingReason: string | null;
   actsOnUntrustedInput: boolean;
+  /** Whether an agent RUN can execute it unattended. Most capabilities are invoked inline by the
+   *  feature that owns them and have nothing for a run loop to do — a workflow step naming one would
+   *  activate and then fail, so the builder does not offer them. Ownership is a separate question: a
+   *  teammate may still be accountable for a capability it cannot be sent off to run. */
+  agentRunnable: boolean;
 }
 
 export interface AgentLedgerSummary {

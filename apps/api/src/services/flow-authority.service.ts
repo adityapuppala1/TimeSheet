@@ -54,6 +54,11 @@ export interface FlowStepInput {
   effectiveLevel?: AiAutonomyLevel | null;
   /** Whether this capability reads text authored outside the workspace. */
   actsOnUntrustedInput?: boolean;
+  /** Whether an agent RUN can execute it at all. Most capabilities in the registry are invoked inline
+   *  by the feature that owns them and have no tools for a run loop to use — a flow step naming one
+   *  validates, activates, dispatches, and then fails with "no runner is implemented". Passed in
+   *  rather than looked up, because this module stays pure. */
+  agentRunnable?: boolean;
   /** Whether this step WRITES anything (an ACTION always does; a capability does when its level is
    *  above SUGGEST; a BRANCH and a HUMAN_GATE never do). */
   writes?: boolean;
@@ -319,6 +324,16 @@ export function validateFlow(params: {
   steps.forEach((step, index) => {
     if (step.kind === "CAPABILITY" && !step.capability) {
       issues.push({ severity: "error", order: step.order, message: "A capability step needs a capability." });
+    }
+    // An error, not a warning: the flow would activate, fire, and fail — which reads as the product
+    // being broken rather than as the step being impossible. Refusing at build time is the only place
+    // the author is still holding the thing they need to change.
+    if (step.kind === "CAPABILITY" && step.capability && step.agentRunnable === false) {
+      issues.push({
+        severity: "error",
+        order: step.order,
+        message: `"${step.capability}" is used by the feature that owns it and cannot be run on its own by a workflow. Pick one of the capabilities marked as runnable.`
+      });
     }
     // What the step DOES, as opposed to what kind it is. Checked here so the builder's badge, the
     // activate route and this list cannot disagree about whether a flow is finished.

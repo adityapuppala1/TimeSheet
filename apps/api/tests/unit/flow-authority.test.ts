@@ -293,3 +293,48 @@ describe("a step that does nothing is an error, not a shrug", () => {
     expect(errors(issues)).toEqual([]);
   });
 });
+
+/**
+ * The gap a real dispatch found: the builder offered all twenty-eight capabilities as flow steps, and
+ * twenty-six of them are invoked inline by the feature that owns them and have no tools for a run loop
+ * to use. Those flows validated, activated, fired, and failed with "no runner is implemented" — which
+ * reads as the product being broken rather than as the step being impossible.
+ */
+describe("a capability no agent run can execute is refused at build time", () => {
+  it("blocks activation and names the step", () => {
+    const issues = validateFlow({
+      steps: [
+        { order: 1, kind: "CAPABILITY", capability: "triage", effectiveLevel: "SUGGEST", agentRunnable: false },
+        action(2)
+      ],
+      trigger: "MANUAL",
+      triggerConfig: {}
+    });
+    const error = issues.find((i) => i.severity === "error" && /cannot be run on its own/i.test(i.message));
+    expect(error).toBeDefined();
+    expect(error?.order).toBe(1);
+  });
+
+  it("says nothing about a runnable one", () => {
+    const issues = validateFlow({
+      steps: [
+        { order: 1, kind: "CAPABILITY", capability: "status_report", effectiveLevel: "SUGGEST", agentRunnable: true },
+        action(2)
+      ],
+      trigger: "MANUAL",
+      triggerConfig: {}
+    });
+    expect(issues.some((i) => /cannot be run on its own/i.test(i.message))).toBe(false);
+  });
+
+  it("stays quiet when the caller did not say either way, rather than inventing a refusal", () => {
+    // `agentRunnable` is optional: a caller that has not been taught about it must not have every
+    // capability step rejected. Only an explicit `false` is a refusal.
+    const issues = validateFlow({
+      steps: [{ order: 1, kind: "CAPABILITY", capability: "triage", effectiveLevel: "SUGGEST" }, action(2)],
+      trigger: "MANUAL",
+      triggerConfig: {}
+    });
+    expect(issues.some((i) => /cannot be run on its own/i.test(i.message))).toBe(false);
+  });
+});

@@ -19,7 +19,7 @@ import { prisma } from "../config/prisma.js";
 import { requireAuth, requireSuperAdmin } from "../middleware/auth.js";
 import { validate } from "../middleware/validate.js";
 import { queueAgentRun, requestAbort } from "../services/agent-run.service.js";
-import { AI_CAPABILITIES, findCapability } from "../services/ai-capability.registry.js";
+import { AI_CAPABILITIES, findCapability, isAgentRunnable } from "../services/ai-capability.registry.js";
 
 export const agentRunRouter = Router();
 agentRunRouter.use(requireAuth, requireSuperAdmin);
@@ -27,7 +27,7 @@ agentRunRouter.use(requireAuth, requireSuperAdmin);
 /** The capabilities a run can currently be queued for — the ones with a runner behind them. */
 agentRunRouter.get("/capabilities", async (_req, res) => {
   res.json(
-    AI_CAPABILITIES.filter((c) => c.id === "assignment_rebalance" || (c.tools.length > 0 && c.featureToggle)).map((c) => ({
+    AI_CAPABILITIES.filter((c) => isAgentRunnable(c.id)).map((c) => ({
       id: c.id,
       title: c.title,
       description: c.description,

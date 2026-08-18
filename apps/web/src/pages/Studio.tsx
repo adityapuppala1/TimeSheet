@@ -1064,11 +1064,13 @@ function FlowDialog({ flow, onClose, onSaved }: Readonly<{ flow: FlowRow | null;
                           <SelectValue placeholder="Pick a capability" />
                         </SelectTrigger>
                         <SelectContent>
-                          {(catalogue.data?.capabilities ?? []).map((c) => (
-                            <SelectItem key={c.id} value={c.id}>
-                              {c.title}
-                            </SelectItem>
-                          ))}
+                          {(catalogue.data?.capabilities ?? [])
+                            .filter((c) => c.agentRunnable)
+                            .map((c) => (
+                              <SelectItem key={c.id} value={c.id}>
+                                {c.title}
+                              </SelectItem>
+                            ))}
                         </SelectContent>
                       </Select>
                     ) : (
@@ -1127,12 +1129,17 @@ function FlowDialog({ flow, onClose, onSaved }: Readonly<{ flow: FlowRow | null;
                           <SelectValue placeholder="Pick a capability" />
                         </SelectTrigger>
                         <SelectContent>
-                          {(catalogue.data?.capabilities ?? []).map((c) => (
-                            <SelectItem key={c.id} value={c.id}>
-                              {c.title}
-                              {c.actsOnUntrustedInput ? " — reads outside text" : ""}
-                            </SelectItem>
-                          ))}
+                          {/* Only what a run can actually execute. The rest of the registry is real —
+                              triage, refine, the digests — but each is called inline by the feature
+                              that owns it, so a step naming one would activate and then fail. */}
+                          {(catalogue.data?.capabilities ?? [])
+                            .filter((c) => c.agentRunnable)
+                            .map((c) => (
+                              <SelectItem key={c.id} value={c.id}>
+                                {c.title}
+                                {c.actsOnUntrustedInput ? " — reads outside text" : ""}
+                              </SelectItem>
+                            ))}
                         </SelectContent>
                       </Select>
                     )}

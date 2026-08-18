@@ -199,6 +199,30 @@ its old schema without the update saying so. After upgrading, run the fan-out on
 - The **close control on every dialog** in the product gained a real hit area too. It was a 14-pixel
   glyph, which is a target you miss twice before hitting.
 
+### 🩹 The workflow builder offered steps that could never run
+
+- **The capability picker listed all 28 capabilities; only 2 can be run by a workflow.** The rest —
+  triage, refine, the digests — are real, but each is called *inline* by the feature that owns it and
+  has no tools for an agent run to use. A flow built from one validated, activated, fired, and failed
+  with "no runner is implemented". The picker now offers only what a run can execute, and a flow naming
+  anything else is refused when you switch it on, while you are still holding the thing to change.
+- One definition of "runnable", in the capability registry that both the workflow builder and the
+  manual-run picker read. The rule was previously written out in one of them and missing from the other,
+  which is exactly how the two disagreed.
+
+### 🔎 "The model's reply could not be parsed" now says which model, and why
+
+- That message sent operators to check an API key that was working perfectly. On a bring-your-own-key
+  deployment the model is *your* choice, and a small chat model asked for structured output will often
+  reply with the JSON schema instead of an answer in that shape, or in prose. The run now says so, names
+  the model, and adds that every other AI feature keeps working on it — so nobody switches AI off over a
+  model that is merely too small for agent runs.
+- **Near-miss replies are now accepted.** A model that answers `{"action":"list_projects"}` instead of
+  `{"action":"tool","tool":"list_projects"}` meant the right thing, and the run used to die on the shape
+  after paying for the tokens. The repair can only name a tool that was already offered for that step,
+  so it changes the shape of a decision and never its authority — and the quality metrics still record
+  whether the model answered in the shape it was asked for, so a repaired reply never flatters it.
+
 ### ⚖️ Agent work on the same ledger as human work
 
 - **When a teammate runs, it is recorded the way a person's work is** — attributed to a project,
