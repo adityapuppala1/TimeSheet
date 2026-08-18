@@ -141,7 +141,12 @@ jobs:
         run: npm run test:integration -w apps/api
 
       - name: Install Playwright browsers
-        run: npx playwright install --with-deps chromium
+        # ALL browsers, not just chromium: `npm run test:e2e` below runs every project in
+        # playwright.config.ts, which includes firefox and webkit. Installing only chromium meant 56
+        # tests failed with "Executable doesn't exist at …/webkit-XXXX/pw_run.sh" — not a product
+        # failure at all, just the suite being asked to drive browsers that were never fetched.
+        # Nobody had seen it because this step had never been reached before.
+        run: npx playwright install --with-deps
 
       - name: Run e2e suite
         run: npm run test:e2e
