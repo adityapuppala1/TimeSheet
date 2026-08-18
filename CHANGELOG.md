@@ -420,7 +420,7 @@ automatically (see below).
 - **None of it is billed to a client by default.** Agent cost is real cost, but invoicing machine
   minutes is a commercial decision, so nothing here touches the money on an invoice or an attestation.
 
-### 🔔 The bell and the Inbox now agree
+### 🩹 The bell and the Inbox now agree
 
 - Snoozing something in the Inbox used to leave it sitting in the bell, which defeats the snooze, and
   items marked done lingered there too. The bell now reads the same "still outstanding" rule the Inbox

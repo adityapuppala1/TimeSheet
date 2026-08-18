@@ -142,8 +142,10 @@ const NOTE_CATEGORIES: NoteCategory[] = [
     emoji: ["🐛", "🐞", "🧯", "🩹", "🛠"],
     match: [
       /\bfix(ed|es)?\b|\bbugs?\b|regression|\berrors?\b/i,
-      // How this changelog phrases "this used to be broken" without saying "fix".
-      /no longer|stopped|can't|cannot|\bbroke\b|\bagain\b|never worked/i
+      // How this changelog phrases "this used to be broken" without saying "fix". `could not` is
+      // the same construction as `cannot` and is used just as often ("could not be parsed", "could
+      // not accept the frame count"); leaving it out sent those sections to the generic chip.
+      /no longer|stopped|can't|cannot|could not|\bbroke\b|\bagain\b|never worked/i
     ]
   },
   {
@@ -161,7 +163,10 @@ const NOTE_CATEGORIES: NoteCategory[] = [
     label: "Interface",
     tone: "bg-primary/10 text-primary",
     icon: Palette,
-    emoji: ["🎨", "🪟", "🗞", "✍", "📊"],
+    // 🧭 a landing/orientation screen, 🔗 following one thing across screens, 👍 touch targets,
+    // 🧑 the workload board (from the 🧑‍🤝‍🧑 sequence, which reduces to 🧑 once the joiners are
+    // stripped below). All four described a screen and were reading as a generic "Changes" chip.
+    emoji: ["🎨", "🪟", "🗞", "✍", "📊", "🧭", "🔗", "👍", "🧑"],
     match: [
       /\bui\b|\bux\b|\bcharts?\b|\blabels?\b|layout/i,
       /dialog|popup|\bmodal\b|panel|window|sidebar/i,
@@ -186,7 +191,10 @@ const NOTE_CATEGORIES: NoteCategory[] = [
     label: "Features",
     tone: "bg-success/10 text-success",
     icon: Sparkles,
-    emoji: ["✨", "🆕", "🎉", "🔌", "🤖", "🪪", "⚙"],
+    // 🎯 a goal/target feature, ▶ something that now runs on its own, ⚖ measurement and
+    // accounting, ✉ an outbound message that did not exist before. Last category in the list, so
+    // a more specific one above still wins — "✉ Email templates: the editor…" stays Interface.
+    emoji: ["✨", "🆕", "🎉", "🔌", "🤖", "🪪", "⚙", "🎯", "▶", "⚖", "✉"],
     match: [
       /feature|\bnew\b|integrations?\b|\bmcp\b|\banalytics\b/i,
       /planning layer|release history|everything else|user management|status page/i,
@@ -238,7 +246,16 @@ function parseReleaseSections(notes: string): { intro: string; sections: NoteSec
 
   const push = () => {
     if (!current) return;
-    const cleanTitle = current.title.replace(/[\p{Extended_Pictographic}️]/gu, "").trim();
+    // Also U+200D (ZERO WIDTH JOINER) and U+FE0F (VARIATION SELECTOR-16), because a multi-person
+    // emoji is several pictographs JOINED by ZWJs — stripping only the pictographs left the joiners
+    // behind, and the heading rendered with two invisible characters and a stray leading space.
+    //
+    // Written as escapes in an ALTERNATION rather than as literals in a character class, for two
+    // separate reasons: an invisible character in source is unreviewable (the same lesson the NBSP
+    // in api/src/utils/sanitize.ts records), and `[…‍️]` puts two combining codepoints
+    // side by side inside a class, which `no-misleading-character-class` rejects — correctly, since
+    // a reader cannot tell whether that is two members or one combined grapheme.
+    const cleanTitle = current.title.replace(/\p{Extended_Pictographic}|\u200D|\uFE0F/gu, "").trim();
     // The RAW heading is classified (its emoji is the author's own category tag); the CLEAN one is
     // displayed, because the chip beside it already carries an icon.
     const category = classifySection(current.title, cleanTitle);
