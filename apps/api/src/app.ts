@@ -118,18 +118,44 @@ const PRIVATE_LAN_RE =
 
 const isDev = env.NODE_ENV !== "production";
 
+/**
+ * Whether one Origin header is allowed, as a pure decision.
+ *
+ * Extracted so it can be tested exhaustively without standing up the app. The interesting cases are
+ * all boundary conditions on a security control — 172.16 is private and 172.32 is not, a public IP is
+ * refused even in development, and an allow-listed entry must match scheme, host AND port, because a
+ * browser treats http and https on the same host as different origins and so must this.
+ */
+export function isOriginAllowed(origin: string | undefined, allowList: string[], devMode: boolean): boolean {
+  // No Origin header at all (curl, server-to-server, same-origin form posts) is not a cross-origin
+  // request, so there is nothing for CORS to decide.
+  if (!origin) return true;
+  if (allowList.includes(origin)) return true;
+  // The development shortcut, and the reason it is safe: these ranges are not routable from the
+  // internet, so "any private LAN address" cannot match a stranger. A public address never gets this
+  // treatment — it must be listed explicitly, in any environment.
+  return devMode && PRIVATE_LAN_RE.test(origin);
+}
+
 app.use(
   cors({
     origin(origin, callback) {
-      // No Origin header (curl, server-to-server, same-origin POSTs without fetch)
-      if (!origin) return callback(null, true);
-      if (allowedOrigins.includes(origin)) return callback(null, true);
-      if (isDev && PRIVATE_LAN_RE.test(origin)) return callback(null, true);
+      if (isOriginAllowed(origin, allowedOrigins, isDev)) return callback(null, true);
       // A plain Error here falls through errorHandler.ts's generic 500 branch (logged as a
       // server error) even though this is an expected, correctly-enforced rejection, not a
       // bug — AppError gives disallowed-origin attempts their own clean 403 instead of noise
       // in the error log that could mask real 500s.
-      callback(new AppError(403, `Origin ${origin} not allowed by CORS`));
+      //
+      // The message names the FIX, not just the refusal. Reaching this product over a public IP or a
+      // new domain is an ordinary thing to do, and "not allowed by CORS" sent the last person who hit
+      // it looking at their network rather than at one environment variable. An attacker learns
+      // nothing from it that the 403 did not already tell them.
+      callback(
+        new AppError(
+          403,
+          `Origin ${origin} is not in this server's allow-list. Add it to WEB_ORIGIN (comma-separated, exact scheme/host/port) and restart the API. Private LAN addresses are accepted automatically in development; public addresses and domains never are, and must be listed.`
+        )
+      );
     },
     credentials: true
   })

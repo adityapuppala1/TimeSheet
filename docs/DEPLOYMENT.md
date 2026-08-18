@@ -460,6 +460,25 @@ In every mode, set `APP_BASE_URL` (and add the https origin to `WEB_ORIGIN` for 
 address people actually open. On an internet-exposed host, also restrict the base compose file's
 plain-http ports (`5173`, `4000`) to localhost in an override so TLS is the only way in.
 
+#### Reaching a development or self-hosted box over a public IP
+
+Two settings, and missing either produces a failure that looks like something else:
+
+- **`WEB_ORIGIN` must list the public origin explicitly** — exact scheme, host and port, no trailing
+  slash. Development auto-allows private LAN ranges (`localhost`, `10.x`, `192.168.x`,
+  `172.16–31.x`) because those are unroutable from the internet; a public address is never
+  auto-allowed in any environment, because a pattern loose enough to match one is loose enough to
+  match an attacker's. The symptom is a sign-in that fails with **"Origin … is not in this server's
+  allow-list"** — and that message now carries the fix, with the exact string to paste.
+  List `http://` and `https://` separately if you switch between them: to a browser they are
+  different origins, and the dev server serves HTTPS only when `apps/web/certs` exists.
+- **`APP_BASE_URL` decides what every EMAILED link points at.** Left on `"auto"` it resolves to the
+  machine's own LAN IPv4, so the app works over the public address while every password reset,
+  invitation and digest link it sends points somewhere the recipient cannot open. There is one base
+  and it is baked into each message at send time, so choose the address the people who receive mail
+  can actually reach. On a network without NAT hairpinning, a public base may not open from inside —
+  send yourself one reset link from each side before settling on it.
+
 ### Production, with a public domain — use a reverse proxy
 
 The Compose stack does not terminate TLS itself, on purpose: certificate management belongs to

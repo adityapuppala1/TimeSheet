@@ -222,6 +222,21 @@ its old schema without the update saying so. After upgrading, run the fan-out on
   everything after it, sometimes for days, and until now it only raised an in-app notification — which
   made a blocked workflow look like a broken one. On by default.
 
+### 🩹 Two toggles that could not be saved, and a public IP that could not sign in
+
+- **"Weekly goal digest" and "A workflow is waiting for a decision" failed to save** with a wall of
+  Prisma text. The two columns had been added to the database but the generated database client was
+  never rebuilt, so the server did not know the fields existed. Rebuilt; both toggle cleanly.
+- **Reaching the app over a public IP was refused at sign-in** with "Origin … not allowed by CORS".
+  Development auto-allows private addresses (`localhost`, `10.x`, `192.168.x`, `172.16–31.x`) because
+  those cannot be reached from the internet; a public address must be listed in `WEB_ORIGIN`, and
+  always will be — a rule loose enough to match one public address matches an attacker's too. **The
+  refusal now names the fix** and the exact string to add, instead of only stating the refusal.
+- Worth checking after opening a deployment up: **`APP_BASE_URL` decides what every emailed link
+  points at.** Left on `"auto"` it resolves to the machine's own LAN address, so the app works over
+  the public address while its password-reset and digest links point somewhere the recipient cannot
+  open. Documented in `.env.example` and `DEPLOYMENT.md`.
+
 ### ✉️ Email templates: the editor now shows the real email
 
 - **An un-customised template used to preview as a three-line placeholder**, and pressing Save on that
