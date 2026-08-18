@@ -41,6 +41,7 @@ import { startAIRetentionWorker } from "./workers/ai-retention.worker.js";
 import { runForEveryOrg } from "./workers/run-for-every-org.js";
 import { registerFlowDispatch } from "./services/automation-dispatch.service.js";
 import { reportTenantSchemaDrift } from "./services/tenant-schema-check.service.js";
+import { reportDeploymentConfig } from "./config/deployment-check.js";
 import { warmFaceModelsIfEnabled } from "./services/face.service.js";
 import { announceRunningRelease } from "./services/release-announce.service.js";
 import { startIdentityWeeklyDigestWorker } from "./workers/identity-weekly-digest.worker.js";
@@ -244,6 +245,11 @@ server.on("listening", async () => {
   // Detached: loads the face models at boot IF any org has the feature enabled, so the first
   // verification after a restart doesn't pay the multi-second cold model load. Deployments
   // with the feature off pay nothing (see warmFaceModelsIfEnabled's header).
+  // How this deployment is ADDRESSED, checked before anything else is reported: an app whose
+  // APP_BASE_URL is missing from WEB_ORIGIN works perfectly on localhost and refuses every sign-in
+  // from the only address its users were given. Synchronous and cheap — three string comparisons.
+  reportDeploymentConfig({ appBaseUrl: env.APP_BASE_URL, webOrigin: env.WEB_ORIGIN, nodeEnv: process.env.NODE_ENV });
+
   // Detached, and the first thing worth knowing at boot: a tenant left behind by a missed
   // `migrate:tenants` looks exactly like healthy code until a worker touches a table that is not
   // there. Warns rather than refusing to start — one org being behind must not take down the ones

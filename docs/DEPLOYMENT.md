@@ -460,6 +460,29 @@ In every mode, set `APP_BASE_URL` (and add the https origin to `WEB_ORIGIN` for 
 address people actually open. On an internet-exposed host, also restrict the base compose file's
 plain-http ports (`5173`, `4000`) to localhost in an override so TLS is the only way in.
 
+### How this product should be addressed — the decision
+
+Four settings decide whether people can use a deployment, and they only fail as a combination. This
+is the shape to aim for, and `reportDeploymentConfig` checks it at every boot — silent when it holds,
+specific when it does not.
+
+| | Decision | Why |
+|---|---|---|
+| **Public surface** | The production build behind a reverse proxy on 443. **Never `npm run dev` on 5173.** | Vite's dev server carries hot reload, source maps and none of the production hardening. It is a development tool that happens to answer HTTP. |
+| **Address** | One **DNS name**, used by everyone, inside and outside. | Emails carry exactly one base URL. A name can resolve differently inside and out (split-horizon) or hairpin through the router; an IP cannot be moved, cannot be secured, and changes with the lease. |
+| **`APP_BASE_URL`** | That same canonical `https://` origin. | Every password reset, invitation and digest link is built on it, and read by people who may be anywhere. Whatever address the *recipients* type is the right value. |
+| **`WEB_ORIGIN`** | Must contain `APP_BASE_URL`'s origin. | A browser opening the base URL sends exactly that origin. Omit it and every sign-in from the only address users were given fails on CORS, while localhost keeps working perfectly for whoever is testing. |
+| **Certificate** | Publicly issued, for the DNS name. | **No public CA issues certificates for bare IP addresses** — Let's Encrypt included. On an IP, every emailed link opens through a browser warning, which teaches people to click past the one thing protecting them. |
+
+**One canonical URL is the whole trick.** Given a name (or a public address the router hairpins — test
+it, many do), the same link works from the office and from a phone on mobile data, so there is nothing
+to switch between and nothing to get wrong per audience. Two base URLs cannot be made to work: an
+email carries one.
+
+**Until a DNS name exists**, a LAN-only deployment is a coherent, honest position: keep `APP_BASE_URL`
+on the LAN address, accept that emailed links only open inside the network, and do not expose the dev
+server. That is a smaller promise, kept — better than a public address whose links land on warnings.
+
 #### First: prove the address reaches THIS deployment
 
 ```bash

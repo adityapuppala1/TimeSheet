@@ -4031,3 +4031,41 @@ This workspace has 20 overrides, all written within 0.2 seconds of each other on
 override wins outright**, so those templates keep sending their old bodies and will not show the new
 fields. Merging into somebody's customised wording would be worse than pointing at it, so the editor
 now names the exact variables an override is missing next to a Revert button.
+
+## Addressing a deployment: a decision, and a guard (2026-08-18)
+
+Handed the call on private vs public IP and `APP_BASE_URL`. Taking it properly meant naming the
+target shape, then making the app enforce it rather than trusting anybody to remember.
+
+**The decision** (now a table at the top of [DEPLOYMENT.md](DEPLOYMENT.md)):
+
+- **The public surface is the production build behind a reverse proxy on 443 — never `npm run dev` on
+  5173.** This is the security call, and it is bigger than the CORS report that started it: Vite's dev
+  server carries hot reload, source maps and none of the production hardening. It is a development
+  tool that happens to answer HTTP.
+- **One DNS name, used by everyone inside and outside.** An email carries exactly one base URL, so two
+  addresses cannot both be served; a name can resolve differently inside and out, or hairpin through
+  the router. An IP cannot be moved, cannot be secured, and changes with the lease.
+- **`APP_BASE_URL` is that canonical origin, and `WEB_ORIGIN` must contain it.** Every emailed link is
+  built on the first; a browser opening it sends exactly that origin to the second.
+- **Certificates: a publicly issued one, for a name.** No public CA issues for bare IPs, Let's Encrypt
+  included — so on an IP, every emailed link opens through a warning, which trains people to click
+  past the one thing protecting them.
+- **Until a name exists, LAN-only is a coherent position**: keep the base on the LAN address, accept
+  that links only open inside the network, and do not expose the dev server. A smaller promise, kept.
+
+**The guard**: `config/deployment-check.ts`, run at every boot. Pure, so its boundaries are a table of
+14 tests rather than a careful read. It reports the two failures that actually happened —
+`APP_BASE_URL` absent from `WEB_ORIGIN`, and a LAN base in production — plus plain HTTP on a public
+address, a bare IP as the link base, and real users on a development build. It **warns and starts**,
+following `resolveAppBaseUrl`'s existing precedent that an on-prem LAN pilot is production to the
+people using it; what it must never do is stay silent, which is precisely what the old configuration
+did while a user sat looking at a sign-in failure.
+
+Deliberately quiet on healthy setups: a private base in development with a matching allow-list entry
+gets nothing at all. A check that fires on correct deployments is one people learn to scroll past —
+which is the failure mode that makes a guard worse than none.
+
+**This machine's settings, decided accordingly**: `APP_BASE_URL=https://192.168.88.5:5173` with the
+matching allow-list entry — it is a development box on the LAN, and the public IP forwards elsewhere.
+The `.env` carries the exact one-line change for when that forward is repointed here. Boot is clean.

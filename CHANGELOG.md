@@ -222,6 +222,24 @@ its old schema without the update saying so. After upgrading, run the fan-out on
   everything after it, sometimes for days, and until now it only raised an in-app notification — which
   made a blocked workflow look like a broken one. On by default.
 
+### 🛡️ The server checks how it is addressed, at every boot
+
+- Four settings decide whether people outside your machine can use the app — `APP_BASE_URL`,
+  `WEB_ORIGIN`, `NODE_ENV` and the certificate — and they only fail as a **combination**, which is why
+  nothing caught them. The server now inspects them at startup and says exactly what is wrong and what
+  to change. Silent when everything is consistent.
+- It catches the two that caused real failures: **the address people are told to use missing from the
+  CORS allow-list** (every sign-in refused, while localhost keeps working for whoever is testing), and
+  **emailed links built on a LAN address** that no outside recipient can open.
+- It also flags plain HTTP over a public address, a bare IP as the link base (no public certificate
+  authority issues certificates for IPs, so every emailed link opens through a browser warning), and
+  real users being pointed at a development server.
+- It **warns and starts** rather than refusing — an on-prem LAN pilot is production to the people
+  using it. What it never does is stay silent.
+- `docs/DEPLOYMENT.md` now states the target shape as a decision table: one DNS name used by everyone
+  inside and out, that same origin in both settings, a publicly issued certificate, and the production
+  build — never the dev server — as the public surface.
+
 ### 🔎 Check that a public address actually reaches your deployment
 
 - `npm run check:public -- https://your.address:5173` compares the **version and git sha** behind an
