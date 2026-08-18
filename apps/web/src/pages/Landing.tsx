@@ -78,6 +78,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../co
 import { PricingDialog } from "../components/marketing/PricingDialog";
 import { Reveal, useScrollProgress, useSectionSpy } from "../components/marketing/Reveal";
 import { ScreenshotFrame } from "../components/marketing/ScreenshotFrame";
+import { AuthorityLadder } from "../components/marketing/AuthorityLadder";
 
 /** Any lucide glyph. Typed off a concrete one so the icon fields stay checked without importing
  *  lucide's internal component type. */
@@ -148,10 +149,34 @@ const TOUR = [
   {
     id: "settings-ai",
     label: "AI controls",
-    icon: Bot,
+    icon: SlidersHorizontal,
     title: "One screen that governs every model call",
     body: "Your key, your provider, your budget ceiling, and a separate switch for each AI capability. Plus the quality loop: what the AI actually said, what a human said it should have said, and whether the last prompt change helped.",
     image: "/product/settings-ai.png"
+  },
+  {
+    id: "goals",
+    label: "Goals",
+    icon: Target,
+    title: "Progress that measures itself",
+    body: "Wire an objective to something the workspace already records — approved hours, billed spend, tickets closed, on-time rate, SLA escalations, project risk — and it reports its own progress. An override keeps the receipt: who, when, why, and what the measurement said at that moment.",
+    image: "/product/goals.png"
+  },
+  {
+    id: "agents",
+    label: "AI teammates",
+    icon: Bot,
+    title: "A roster, not a black box",
+    body: "Six ready teammates — Triage, Planner, Risk watch, Security desk, Reporter, Load balancer — each named, scoped to capabilities this workspace already runs, and off until you switch it on. Its work lands on the same ledger as everyone else's: what it did, what it cost, what human time it displaced.",
+    image: "/product/agents.png"
+  },
+  {
+    id: "studio",
+    label: "Workflow Studio",
+    icon: Workflow,
+    title: "Automation you can read",
+    body: "A trigger, then steps, written as a list you can review — with a canvas beside it that can never disagree. Every flow states the authority it actually resolves to, you can replay it against your own recent triggers before it goes live, and a flow with a problem cannot be switched on: the reason is quoted on the card.",
+    image: "/product/studio.png"
   }
 ];
 
@@ -231,6 +256,13 @@ const FEATURES: Feature[] = [
     body: "Every agent run is recorded the way a timesheet is: attributed to a project, timed, and priced from real usage rather than estimated. Where your own approved hours give a baseline for comparable work, the human time it stood in for is measured too — and where they do not, it says so instead of guessing. Spend is broken out per teammate and per workflow, beside the total."
   },
   {
+    icon: Target,
+    group: "Plan & forecast",
+    gate: "goalsEnabled",
+    title: "Goals that measure themselves",
+    body: "Objectives and key results wired to numbers the workspace already records — approved hours, billed spend from rate snapshots, tickets closed, on-time rate, SLA escalations, average project risk. \u201cNo data yet\u201d reads as words, never as 0%, and an override keeps the receipt: who, when, why, and what the measurement said at that moment."
+  },
+  {
     icon: LayoutDashboard,
     group: "Plan & forecast",
     title: "Dashboards you assemble, delivered by email",
@@ -266,6 +298,12 @@ const FEATURES: Feature[] = [
     group: "Track the work",
     title: "SLA + escalations",
     body: "Configurable approval and resolution SLAs for both timesheets and tickets. Breaches escalate up the reporting line automatically — nobody has to notice one manually."
+  },
+  {
+    icon: Inbox,
+    group: "Track the work",
+    title: "An inbox, not just a bell",
+    body: "Notifications become a queue you work through: mark done, snooze until later today, tomorrow or next week — a snoozed item comes back on its own. Today's brief counts what actually needs you — due, blocked, awaiting sign-off — from the same definitions the pages behind them use. Nothing in it is generated."
   },
   {
     icon: WifiOff,
@@ -323,6 +361,18 @@ const FEATURES: Feature[] = [
     group: "AI, governed",
     title: "An AI you can actually improve",
     body: "Capture what the model was asked and what it answered, correct real failures into a golden set, edit prompts without a deploy, then replay the set and score the change. \"Is the new prompt better?\" becomes a number."
+  },
+  {
+    icon: Bot,
+    group: "AI, governed",
+    title: "AI teammates with names, budgets and no seat",
+    body: "Assemble a teammate from capabilities this workspace already runs — or take one of six ready ones. It has its own identity in the audit trail, holds no paid seat, cannot sign in, has no mailbox, and arrives switched off. Its card shows exactly what it may do, what it has run, and what today cost."
+  },
+  {
+    icon: Workflow,
+    group: "AI, governed",
+    title: "A Workflow Studio you can review",
+    body: "A trigger, then steps, as a list you read top to bottom — with a drag-and-drop canvas beside it that can never disagree with the rule. A flow states the authority it really resolves to, replay shows what would have happened against your own recent triggers, and a flow with a problem cannot be switched on — the reason is quoted."
   },
   {
     icon: Sparkles,
@@ -395,6 +445,21 @@ const AI_GUARDRAILS = [
     icon: FlaskConical,
     title: "Prompt changes are measured, not guessed",
     body: "Correct real failures into a golden set, change a prompt without shipping a release, then replay the set and score it. A broken prompt can't break a feature: the runtime falls back to the built-in one and records that it did."
+  },
+  {
+    icon: Scale,
+    title: "An authority ladder, not a free hand",
+    body: "Every capability resolves to observe, propose or apply — and a run that reads text from outside the workspace drops to proposing for the rest of its life, however it was configured. A flow can never do more than its most restricted step, and the card names that step."
+  },
+  {
+    icon: ShieldAlert,
+    title: "One capability, one owner",
+    body: "Switching a teammate on is refused if another already covers something in its bundle — and the refusal names it, so \u201cwhich teammate does this?\u201d always has exactly one answer. The roster and the settings screen point at the same single place authority is set."
+  },
+  {
+    icon: Activity,
+    title: "On the record, end to end",
+    body: "Every run is followable: the trigger, each step, what the model was asked, what changed, and what it cost — on the same audit ledger as human work, under the teammate's own name. Retiring one keeps its history, because past runs point at it."
   }
 ];
 
@@ -452,6 +517,8 @@ const PRICING = [
       "Google + Microsoft sign-in",
       "Timeline, intake, approvals and proofing",
       "AI features, bring your own key",
+      "Named AI teammates + the Workflow Studio",
+      "Goals with measured progress (25 active)",
       "AI quality loop: golden sets, prompt versions, evals",
       "Email, Slack and Telegram intake + Kanban board",
       "Insights, attestations, PDF/CSV/Excel exports + report analytics",
@@ -488,6 +555,10 @@ const FAQ = [
   {
     q: "Can we turn AI off entirely?",
     a: "Yes, and it ships that way. There's a master switch plus a toggle per capability, all off by default. With them off, the app never contacts a model."
+  },
+  {
+    q: "What can the AI actually change on its own?",
+    a: "Only what you grant per capability, on a ladder — observe, propose, or apply — and a run that reads text from outside the workspace (an email, a chat message, a scanner finding) drops to proposing for the rest of that run. Every change lands as a reviewable row with undo, on the same audit ledger as human work, under the teammate's own name."
   },
   {
     q: "How is this different from Jira plus a timesheet tool?",
@@ -646,7 +717,8 @@ export function Landing() {
             <p className="mx-auto mt-5 max-w-2xl text-base leading-7 text-muted-foreground motion-safe:animate-in motion-safe:fade-in motion-safe:duration-700 motion-safe:delay-150 motion-safe:fill-mode-backwards sm:text-lg sm:leading-8">
               Gantt timelines, portfolios, capacity and budgets — sitting on top of the tickets your team works and the
               hours they actually log. A project tool has to estimate effort. This one measures it, because the plan and
-              the timesheet are the same system.
+              the timesheet are the same system. And when routine work is ready to hand off, named AI teammates take it —
+              scoped, budgeted, and off by default.
             </p>
             <div className="mt-8 flex flex-col items-center justify-center gap-3 motion-safe:animate-in motion-safe:fade-in motion-safe:duration-700 motion-safe:delay-300 motion-safe:fill-mode-backwards sm:flex-row">
               <Button asChild size="lg" className="w-full sm:w-auto">
@@ -684,12 +756,24 @@ export function Landing() {
         {/* ----------------------------------------------------------- Problem */}
         <Section className="border-y border-border bg-muted/30">
           <Reveal>
-            <SectionHeading
-              center
-              eyebrow="The problem"
-              title="Two systems that never agree"
-              subtitle="Most teams run tickets in one tool and hours in another. The moment a client asks what they're paying for, somebody exports both and reconciles them by hand — and the numbers don't match, because a ticket was closed in one place and the time was logged against something else in the other."
-            />
+            <div className="grid items-center gap-8 lg:grid-cols-[1.5fr_1fr]">
+              <SectionHeading
+                eyebrow="The problem"
+                title="Two systems that never agree"
+                subtitle="Most teams run tickets in one tool and hours in another. The moment a client asks what they're paying for, somebody exports both and reconciles them by hand — and the numbers don't match, because a ticket was closed in one place and the time was logged against something else in the other."
+              />
+              {/* Decorative, so empty alt + hidden from AT: the paragraph beside it says everything. */}
+              <img
+                src="/marketing/time-management.png"
+                alt=""
+                aria-hidden
+                loading="lazy"
+                decoding="async"
+                width={600}
+                height={600}
+                className="mx-auto hidden w-full max-w-xs lg:block"
+              />
+            </div>
           </Reveal>
 
           <Reveal delay={80} className="mt-10">
@@ -715,7 +799,7 @@ export function Landing() {
             <SectionHeading
               center
               eyebrow="Product tour"
-              title="Six screens, and what each one is for"
+              title={`${TOUR.length} screens, and what each one is for`}
               subtitle="Captured from the running application, not mocked up."
             />
           </Reveal>
@@ -893,6 +977,24 @@ export function Landing() {
               </div>
             </div>
           </Reveal>
+          <Reveal delay={80} className="mt-10">
+            <div className="grid gap-8 lg:grid-cols-[1fr_1.35fr] lg:items-center">
+              <div>
+                <h3 className="text-xl font-black tracking-tight">And when you hand work over, you hand it to a name</h3>
+                <p className="mt-3 text-sm leading-7 text-muted-foreground">
+                  A teammate is a named identity on the audit ledger — no seat, no sign-in, no mailbox — assembled from
+                  capabilities you already govern above. What it may do resolves down a ladder, and reading anything from
+                  outside the workspace drops the rest of its run to proposing:
+                </p>
+                <AuthorityLadder className="mt-5 w-full max-w-md" />
+              </div>
+              <ScreenshotFrame
+                src="/product/agents.png"
+                alt="The AI teammates roster: six named teammates, each showing what it may do, its recent runs, and what today cost."
+                caption="The roster — each card is the whole truth about one teammate."
+              />
+            </div>
+          </Reveal>
         </Section>
 
         {/* ----------------------------------------------------------- Platform */}
@@ -1002,6 +1104,16 @@ export function Landing() {
         {/* ----------------------------------------------------------- CTA */}
         <section className="border-t border-border bg-gradient-to-br from-primary via-info to-accent">
           <div className="mx-auto max-w-4xl px-4 py-16 text-center text-primary-foreground sm:px-5">
+            <img
+              src="/marketing/team-spirit.png"
+              alt=""
+              aria-hidden
+              loading="lazy"
+              decoding="async"
+              width={600}
+              height={600}
+              className="mx-auto mb-6 hidden w-44 sm:block"
+            />
             <h2 className="text-2xl font-black tracking-tight sm:text-4xl">Stop reconciling two systems.</h2>
             <p className="mx-auto mt-4 max-w-2xl text-sm leading-7 opacity-90 sm:text-base">
               Log the hours, run the tickets, prove the work — and turn AI on only where you decide it earns its place.
@@ -1037,7 +1149,13 @@ export function Landing() {
             <Link to="/pitch" className="focus-ring rounded hover:text-foreground">Why we built it</Link>
             <Link to="/login" className="focus-ring rounded hover:text-foreground">Sign in</Link>
           </nav>
-          <p className="text-xs">Enterprise timesheets &amp; ticketing.</p>
+          <p className="text-xs">
+            Enterprise timesheets &amp; ticketing. Illustrations by{" "}
+            <a href="https://storyset.com" target="_blank" rel="noreferrer" className="focus-ring rounded underline hover:text-foreground">
+              Storyset
+            </a>
+            .
+          </p>
         </div>
       </footer>
 
