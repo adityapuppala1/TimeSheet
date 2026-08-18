@@ -25,7 +25,7 @@ the seeded three as fixtures.
 ## Before you open a PR
 
 ```bash
-npm run lint                        # typecheck api + web
+npm run lint                        # typecheck api + web, then the SonarQube rules
 npm run build
 npm run test -w apps/api            # unit (mocked, no DB, ~1s)
 npm run test:integration -w apps/api # integration (real throwaway MySQL, ~13s)
@@ -34,6 +34,30 @@ npm run test:e2e                    # Playwright (needs the dev servers, or it s
 
 CI runs all of these. Run at least `lint`, `build`, and the unit tier locally — they're fast, and
 they catch most of what CI would.
+
+### Reading `npm run lint`
+
+It runs `tsc --noEmit` over both apps and then `eslint` (`npm run lint:sonar`) with the SonarJS rule
+set — the same analyzer SonarQube uses for JS/TS, so you see locally what the dashboard would say,
+with no server or token involved.
+
+**~400 warnings and 0 errors is the healthy state, and the command exits 0.** Warnings are not a
+broken build; they are tracked debt. Most are three structural style rules (nested ternaries,
+cognitive complexity, nested template literals) across code that predates the config, and the policy
+— written down in `sonar-project.properties` — is to gate *new* code and burn the rest down as files
+get touched. Rewriting ~100k lines for style would be a large unreviewable diff with no behavioural
+benefit, and a permanently-red lint is one everybody learns to scroll past.
+
+So: **keep errors at zero; don't chase the warning count, and don't switch rules off to lower it.**
+If your change adds an error, fix the code rather than the config. The security-hotspot rules
+(`sonarjs/pseudo-random`, `sonarjs/no-hardcoded-passwords`) are errors deliberately — a new
+`Math.random()` should fail until somebody confirms it isn't generating a token. When it genuinely
+isn't, mark it inline with the verdict rather than disabling the rule globally; `utils/security.ts`
+and `middleware/request-telemetry.ts` show the comment style.
+
+`tsconfig.base.json` sets `noUnusedLocals`, so dead imports and unused locals are build errors.
+Unused *parameters* are deliberately still allowed — Express handlers and React callbacks
+legitimately name arguments they don't use.
 
 **The long-standing "hamburger drawer" flake is fixed** (2026-07-30) — it was never flaky logic.
 `/api/auth/login`'s rate limiter counted *successful* logins, and `responsive.spec.ts` signs in

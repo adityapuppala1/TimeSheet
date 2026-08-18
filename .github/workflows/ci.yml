@@ -77,7 +77,14 @@ jobs:
           npx prisma generate --schema=prisma/schema.prisma
           npx prisma generate --schema=prisma/control/schema.prisma
 
-      - name: Typecheck (api + web)
+      # Three things, in one script: `tsc --noEmit` for apps/api, `tsc -b --noEmit` for apps/web,
+      # then eslint over both plus packages/shared with the SonarJS rule set (eslint.config.mjs).
+      # SonarJS is the same analyzer SonarQube runs for JS/TS, so this gate reports what the Sonar
+      # dashboard would without needing a server URL or token in CI. It fails on ERRORS only —
+      # the structural style rules are warnings by design, for the reasons in eslint.config.mjs and
+      # sonar-project.properties. `npm ci` above installs devDependencies, which is where eslint
+      # and its plugins live.
+      - name: Lint (typecheck + SonarQube rules)
         run: npm run lint
 
       # A GATE, unlike the `npm audit` in security-scan-dogfood below — that one runs with
@@ -316,7 +323,7 @@ jobs:
           npx prisma generate --schema=prisma/schema.prisma
           npx prisma generate --schema=prisma/control/schema.prisma
 
-      - name: Typecheck (api + web)
+      - name: Lint (typecheck + SonarQube rules)
         run: npm run lint
 
       - name: Build (shared + api + web)

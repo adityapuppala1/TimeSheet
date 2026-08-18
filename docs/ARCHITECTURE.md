@@ -85,6 +85,8 @@ database is my company" needed almost no changes to become multi-tenant — see 
 | `install.sh` / `install.ps1` | One-click Docker Compose installers (Shape 1 — see §8). |
 | `tests/e2e` | Playwright end-to-end suite (repo root — exercises both `apps/api` and `apps/web` together). |
 | `apps/api/tests` | Vitest unit (`tests/unit`, mocked, no real DB) + integration (`tests/integration`, real throwaway MySQL) tests, scoped to `apps/api` alone — AI service, Stripe billing, SCIM, face verification. |
+| `tsconfig.base.json` | The compiler options every workspace extends — `strict`, and `noUnusedLocals` so dead imports and locals are build errors rather than silent accumulation. |
+| `eslint.config.mjs` | The SonarJS rule set (`eslint-plugin-sonarjs` is the analyzer SonarQube runs for JS/TS) plus the React Rules of Hooks, so the same findings a Sonar dashboard would report are reproducible offline and in CI without a server URL or token. Run by `npm run lint` after the typechecks; **errors gate at zero, warnings are tracked debt** — the rationale, and which rules are deliberately demoted, are written in the config itself and in `sonar-project.properties`. |
 
 ---
 

@@ -11,7 +11,7 @@ exists without re-deriving it from the diff.
 
 <!-- Tick what you actually ran, not what you intend to. "It typechecks" is not verification. -->
 
-- [ ] `npm run lint` (typecheck, api + web)
+- [ ] `npm run lint` (typecheck api + web, then the SonarQube rules — 0 errors; warnings are tracked debt)
 - [ ] `npm run build`
 - [ ] `npm run test -w apps/api` (unit)
 - [ ] `npm run test:integration -w apps/api` (real MySQL — only if you touched DB behaviour)

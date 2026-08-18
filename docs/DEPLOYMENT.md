@@ -1359,7 +1359,7 @@ product of a measured ceiling, with the measurement recorded in
 ## Testing before you ship a change
 
 ```bash
-npm run lint                          # typecheck both packages
+npm run lint                          # typecheck both packages, then the SonarQube rules
 npm run build                         # build both packages
 npm run test -w apps/api              # unit tier — fully mocked, no DB/network, fastest signal
 npm run test:integration -w apps/api  # integration tier — needs a real MySQL (see below)
