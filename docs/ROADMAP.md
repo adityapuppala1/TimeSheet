@@ -4307,3 +4307,61 @@ twelve random characters, so completing the tail costs nothing.
 **On reading CI from here:** the job logs of a public repository are fetchable, which is how the
 storage-paths failure was identified rather than guessed — the first hypothesis (the slow bcrypt
 test) was wrong, and the log said so.
+
+### Where the 75 minutes actually went (2026-08-18)
+
+Asked to make CI faster. Measured before changing anything, by computing step durations from the
+job log's own timestamps:
+
+| step | seconds | share |
+|---|---|---|
+| **Run e2e suite** | **4271** | **94.0%** |
+| Lint (typecheck + SonarQube) | 59 | 1.3% |
+| Build (shared + api + web) | 41 | 0.9% |
+| Unit tests | 38 | 0.8% |
+| Install Playwright browsers | 38 | 0.8% |
+| everything else combined | ~96 | 2.2% |
+
+There is only one thing to optimise. Install, lint, audit, build, unit, migrate, seed and the
+integration tier add up to four and a half minutes between them.
+
+Splitting the e2e minutes by outcome is the part worth knowing:
+
+| | tests | time |
+|---|---|---|
+| passing | 256 | **16.1 min** |
+| failing | 132 results | **48.8 min (75%)** |
+
+**Three quarters of the suite's runtime is tests that fail.** Each one burns the full 30-second
+timeout, and `retries: 1` under CI runs every failure a second time. So the correctness work and
+the performance work are the same work: fixing the failures returns roughly 49 minutes on its own,
+before any infrastructure changes.
+
+### Sharding, and why it is not the same as raising `workers`
+
+The remaining ~16 minutes were serial because `playwright.config.ts` pins `workers: 1` and
+`fullyParallel: false`. That comment is right and stays: the specs share one seeded database and
+have no per-test isolation, so concurrent workers would have them racing each other's cleanup.
+
+A SHARD is a different thing from a worker. `e2e` is now its own job with a four-way matrix, and
+each shard is a separate runner with its own MySQL service, its own migrate-and-seed, and its own
+`webServer` pair. The no-concurrency guarantee still holds inside a shard; only the shards run side
+by side. Raising `workers` would have broken precisely what that comment protects.
+
+`fail-fast: false`, because a failure in shard 2 says nothing about shard 3 and cancelling the rest
+hides two thirds of the picture on the run you most need it. Reports upload under per-shard artifact
+names — four jobs uploading one name is a 409 on the second.
+
+Playwright's split across this suite: 105 / 121 / 104 / 71. Not perfectly even (it shards by file),
+but the worst shard is a quarter of the work rather than all of it.
+
+Browsers are cached on `~/.cache/ms-playwright`, keyed on the resolved `@playwright/test` version so
+a dependency bump invalidates it without anyone remembering to. The OS libraries are installed on a
+cache HIT as well, because they live in `/usr/lib` rather than in the cached directory — restoring
+the cache alone leaves browser binaries that cannot start for want of a shared object.
+
+The old job keeps everything else and was renamed: it no longer runs e2e, and a job name that
+claims otherwise is how you end up looking in the wrong log.
+
+**Expected wall clock**: ~2 minutes of setup per shard plus a quarter of the test time. Around 18
+minutes with today's failures still present, and roughly 6 once they are fixed — against 75.
