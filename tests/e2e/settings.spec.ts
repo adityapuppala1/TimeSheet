@@ -1,5 +1,5 @@
 import { test, expect } from "@playwright/test";
-import { signIn } from "./helpers/sign-in";
+import { accessToken, signIn } from "./helpers/sign-in";
 
 /**
  * Signs in per test rather than replaying a stored snapshot. A snapshot holds one rotating refresh
@@ -120,58 +120,91 @@ test.describe("settings forms keep what you typed", () => {
     await signIn(page, "superadmin");
 
     await page.goto("/app/settings");
-    await page.getByRole("tab", { name: /face verification/i }).click();
 
-    const field = page.locator("#face-matchThreshold");
-    await expect(field).toBeVisible({ timeout: 15_000 });
+    /**
+     * Face verification is switched ON for the duration of this test, and put back in the `finally`
+     * at the end.
+     *
+     * The calibration inputs render `disabled={readOnly || !enabled}`, so on a workspace where the
+     * feature has never been turned on this test hangs on `fill` against a field that is visible and
+     * permanently uneditable. That is exactly what it did the first time CI ever reached it — the CI
+     * database is freshly seeded — while passing on every developer machine, because those had all
+     * enabled face verification at some point months earlier and never turned it back off.
+     *
+     * Enabled HERE rather than in the seed on purpose: face verification is biometric, `enabled`
+     * defaults to false for good reason, and switching it on for every seeded workspace would be a
+     * product decision taken to make one test pass. Mutating a workspace-wide row from a test is
+     * safe under this suite's own rules — `playwright.config.ts` pins `workers: 1` and each CI shard
+     * owns its own database, so nothing else is reading this row while the test holds it.
+     *
+     * Bearer headers rather than the page's cookies: this API authenticates on the access token, so
+     * a cookie-only request never completes and the test times out inside the setup it needs.
+     */
+    const settingsUrl = "/api/settings/face-verification";
+    const authHeaders = await accessToken(page);
+    const beforeSettings = await (await page.request.get(settingsUrl, { headers: authHeaders })).json();
+    const hadToEnable = !beforeSettings?.enabled;
+    if (hadToEnable) await page.request.patch(settingsUrl, { headers: authHeaders, data: { enabled: true } });
 
-    const original = (await field.inputValue()) || "0.75";
-    // A different value from whatever is stored, and inside the server's 0.3-0.99 bounds.
-    const typed = original.trim() === "0.71" ? "0.73" : "0.71";
+    try {
+      await page.reload();
+      await page.getByRole("tab", { name: /face verification/i }).click();
 
-    await field.fill(typed);
-    expect(await field.inputValue()).toBe(typed);
+      const field = page.locator("#face-matchThreshold");
+      await expect(field).toBeVisible({ timeout: 15_000 });
 
-    // The trigger: a switch on the same card saves immediately and invalidates the query the form
-    // was seeded from. This is the exact sequence that used to wipe the box.
-    const challenge = page.getByRole("switch").nth(3);
-    if (await challenge.count()) {
-      const before = await challenge.getAttribute("data-state");
-      await challenge.click();
-      await expect(challenge).not.toHaveAttribute("data-state", before ?? "", { timeout: 10_000 });
-      // Put it back, which fires a second save/invalidate for good measure.
-      await challenge.click();
-      await expect(challenge).toHaveAttribute("data-state", before ?? "", { timeout: 10_000 });
+      const original = (await field.inputValue()) || "0.75";
+      // A different value from whatever is stored, and inside the server's 0.3-0.99 bounds.
+      const typed = original.trim() === "0.71" ? "0.73" : "0.71";
+
+      await field.fill(typed);
+      expect(await field.inputValue()).toBe(typed);
+
+      // The trigger: a switch on the same card saves immediately and invalidates the query the form
+      // was seeded from. This is the exact sequence that used to wipe the box.
+      const challenge = page.getByRole("switch").nth(3);
+      if (await challenge.count()) {
+        const before = await challenge.getAttribute("data-state");
+        await challenge.click();
+        await expect(challenge).not.toHaveAttribute("data-state", before ?? "", { timeout: 10_000 });
+        // Put it back, which fires a second save/invalidate for good measure.
+        await challenge.click();
+        await expect(challenge).toHaveAttribute("data-state", before ?? "", { timeout: 10_000 });
+      }
+
+      // THE ASSERTION: still what was typed, not what the server holds.
+      await expect(field).toHaveValue(typed);
+
+      // Wait for the actual PATCH, not for a "Saved" toast.
+      //
+      // The toggles above each raise their own "Saved" toast, and those are still on screen here —
+      // so a toast assertion passes instantly without the calibration save having happened, and the
+      // reload below then races the in-flight request. It passed on Chromium and Firefox and failed
+      // on WebKit purely because WebKit is slower, which is exactly the shape of a "browser
+      // incompatibility" that turns out to be a test asserting the wrong thing.
+      const saved = page.waitForResponse(
+        (res) => res.url().includes("/api/settings/face-verification") && res.request().method() === "PATCH"
+      );
+      await page.getByRole("button", { name: /save calibration/i }).click();
+      expect((await saved).ok(), "the calibration save was rejected").toBe(true);
+
+      // And it really reached the database, rather than the old value being re-sent.
+      await page.reload();
+      await page.getByRole("tab", { name: /face verification/i }).click();
+      await expect(page.locator("#face-matchThreshold")).toHaveValue(typed, { timeout: 15_000 });
+
+      // Restore, waiting on the request for the same reason.
+      const restored = page.waitForResponse(
+        (res) => res.url().includes("/api/settings/face-verification") && res.request().method() === "PATCH"
+      );
+      await page.locator("#face-matchThreshold").fill(original);
+      await page.getByRole("button", { name: /save calibration/i }).click();
+      expect((await restored).ok(), "the restore save was rejected").toBe(true);
+    } finally {
+      // Only if this test turned it on. Leaving a biometric feature enabled behind us would
+      // change what every later spec in this shard is looking at.
+      if (hadToEnable) await page.request.patch(settingsUrl, { headers: authHeaders, data: { enabled: false } });
     }
-
-    // THE ASSERTION: still what was typed, not what the server holds.
-    await expect(field).toHaveValue(typed);
-
-    // Wait for the actual PATCH, not for a "Saved" toast.
-    //
-    // The toggles above each raise their own "Saved" toast, and those are still on screen here —
-    // so a toast assertion passes instantly without the calibration save having happened, and the
-    // reload below then races the in-flight request. It passed on Chromium and Firefox and failed
-    // on WebKit purely because WebKit is slower, which is exactly the shape of a "browser
-    // incompatibility" that turns out to be a test asserting the wrong thing.
-    const saved = page.waitForResponse(
-      (res) => res.url().includes("/api/settings/face-verification") && res.request().method() === "PATCH"
-    );
-    await page.getByRole("button", { name: /save calibration/i }).click();
-    expect((await saved).ok(), "the calibration save was rejected").toBe(true);
-
-    // And it really reached the database, rather than the old value being re-sent.
-    await page.reload();
-    await page.getByRole("tab", { name: /face verification/i }).click();
-    await expect(page.locator("#face-matchThreshold")).toHaveValue(typed, { timeout: 15_000 });
-
-    // Restore, waiting on the request for the same reason.
-    const restored = page.waitForResponse(
-      (res) => res.url().includes("/api/settings/face-verification") && res.request().method() === "PATCH"
-    );
-    await page.locator("#face-matchThreshold").fill(original);
-    await page.getByRole("button", { name: /save calibration/i }).click();
-    expect((await restored).ok(), "the restore save was rejected").toBe(true);
   });
 });
 
