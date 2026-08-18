@@ -439,7 +439,10 @@ function LedgerHistoryCard() {
                 <div className="flex h-full flex-1 flex-col justify-end">
                   <div
                     className="rounded-t bg-primary/70"
-                    style={{ height: `${Math.max(day.costUsd > 0 ? 3 : 0, (day.costUsd / peakCost) * 100)}%` }}
+                    /* The floor keys off ENTRIES, not cost. A day with a real run that cost nothing —
+                       a deterministic capability, or a cached one — is not a day with no run, and
+                       drawing it as an empty column says the opposite of what happened. */
+                    style={{ height: `${Math.max(day.entries > 0 ? 4 : 0, (day.costUsd / peakCost) * 100)}%` }}
                   />
                 </div>
               </TooltipTrigger>

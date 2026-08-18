@@ -430,6 +430,18 @@ export function findCapability(id: string): AiCapabilitySpec | undefined {
  * `assignment_rebalance` is named explicitly because it is deterministic: it has no tools and calls no
  * model, and `executeAgentRun` runs it through its own branch.
  */
+/**
+ * Whether a run of this capability is meaningless without a project to scope it to.
+ *
+ * The same story as `isAgentRunnable`, found the same way: the rule was written out in the manual-run
+ * picker (`needsProject: c.id === "assignment_rebalance"`) and nowhere else, so the flow dispatcher
+ * queued rebalance runs with no scope and every one of them failed with "a rebalance run needs a
+ * project". One definition, in the registry both read.
+ */
+export function needsProjectScope(id: string): boolean {
+  return id === "assignment_rebalance";
+}
+
 export function isAgentRunnable(id: string): boolean {
   if (id === "assignment_rebalance") return true;
   const spec = BY_ID.get(id);

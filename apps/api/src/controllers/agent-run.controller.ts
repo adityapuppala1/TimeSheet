@@ -19,7 +19,7 @@ import { prisma } from "../config/prisma.js";
 import { requireAuth, requireSuperAdmin } from "../middleware/auth.js";
 import { validate } from "../middleware/validate.js";
 import { queueAgentRun, requestAbort } from "../services/agent-run.service.js";
-import { AI_CAPABILITIES, findCapability, isAgentRunnable } from "../services/ai-capability.registry.js";
+import { AI_CAPABILITIES, findCapability, isAgentRunnable, needsProjectScope } from "../services/ai-capability.registry.js";
 
 export const agentRunRouter = Router();
 agentRunRouter.use(requireAuth, requireSuperAdmin);
@@ -31,7 +31,7 @@ agentRunRouter.get("/capabilities", async (_req, res) => {
       id: c.id,
       title: c.title,
       description: c.description,
-      needsProject: c.id === "assignment_rebalance"
+      needsProject: needsProjectScope(c.id)
     }))
   );
 });

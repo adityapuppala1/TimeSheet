@@ -178,6 +178,8 @@ its old schema without the update saying so. After upgrading, run the fan-out on
 - **The agent ledger now has a history**, not just a total: 30 days of cost and displaced time on the
   Agents page, with the recent entries and the basis for each measurement. Days with no measurement are
   named as unmeasured rather than drawn as zero.
+- A day on that chart with a real run that **cost nothing** — a deterministic capability, say — now
+  draws a bar rather than an empty column. Free is not the same as never happened.
 
 ### 🧑‍🤝‍🧑 AI teammates on the workload board and the budget, honestly
 
@@ -209,6 +211,10 @@ its old schema without the update saying so. After upgrading, run the fan-out on
 - One definition of "runnable", in the capability registry that both the workflow builder and the
   manual-run picker read. The rule was previously written out in one of them and missing from the other,
   which is exactly how the two disagreed.
+- **A workflow now passes the project along.** "Rebalance workload" needs a project to work on, and the
+  dispatcher was queueing it with none — so it failed every time. A workflow triggered by something that
+  belongs to a project now scopes the run to it, and a workflow whose trigger can never supply one (by
+  hand, or on a clock) refuses that step when you switch it on rather than at three in the morning.
 
 ### 🔎 "The model's reply could not be parsed" now says which model, and why
 

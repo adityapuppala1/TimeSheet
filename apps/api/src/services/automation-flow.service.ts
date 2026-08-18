@@ -21,7 +21,7 @@ import { Prisma, type AutomationStepKind, type AutomationTriggerKind } from "@pr
 import { prisma } from "../config/prisma.js";
 import { AppError } from "../middleware/error.js";
 import { resolveAutonomy } from "./ai-autonomy.service.js";
-import { findCapability, isAgentRunnable } from "./ai-capability.registry.js";
+import { findCapability, isAgentRunnable, needsProjectScope } from "./ai-capability.registry.js";
 import {
   computeFlowAuthority,
   validateFlow,
@@ -75,6 +75,7 @@ async function toAuthorityInput(steps: FlowRow["steps"]): Promise<FlowStepInput[
       effectiveLevel: resolved.effectiveLevel,
       actsOnUntrustedInput: Boolean(spec?.actsOnUntrustedInput),
       agentRunnable: isAgentRunnable(step.capability),
+      needsProjectScope: needsProjectScope(step.capability),
       config: (step.config as Record<string, unknown>) ?? {}
     });
   }

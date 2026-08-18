@@ -41,6 +41,10 @@ export interface FlowSubject {
   type: "ticket" | "submission" | "workspace";
   id: string | null;
   label: string;
+  /** The project the subject belongs to, when it has one. Some capabilities are meaningless without a
+   *  scope — a rebalance across "everything" is not a thing anybody asked for — and before this the
+   *  dispatcher queued them unscoped and every one failed. */
+  projectId?: string | null;
 }
 
 interface StepRecord {
@@ -287,6 +291,7 @@ async function advance(runId: string, flow: DecoratedFlow, subject: FlowSubject,
       try {
         const queued = await queueAgentRun({
           capability: step.capability,
+          scopeProjectId: subject.projectId ?? null,
           trigger: `flow:${flow.id}`,
           // Per RUN and per STEP: two capability steps in one flow are two runs, and re-dispatching
           // the same subject must find them rather than make more.
@@ -452,8 +457,15 @@ export async function resumeFlowRun(runId: string, approverId: string, approved:
 
 /** The subject a domain event is about, in the words a person would use for it. */
 function subjectOf(payload: Record<string, unknown>): FlowSubject {
-  const ticket = payload.ticket as { id?: string; key?: string; title?: string } | undefined;
-  if (ticket?.id) return { type: "ticket", id: ticket.id, label: `${ticket.key ?? "a ticket"} — ${ticket.title ?? ""}`.trim() };
+  const ticket = payload.ticket as { id?: string; key?: string; title?: string; projectId?: string } | undefined;
+  if (ticket?.id) {
+    return {
+      type: "ticket",
+      id: ticket.id,
+      label: `${ticket.key ?? "a ticket"} — ${ticket.title ?? ""}`.trim(),
+      projectId: ticket.projectId ?? null
+    };
+  }
   return { type: "workspace", id: null, label: "this workspace" };
 }
 

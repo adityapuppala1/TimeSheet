@@ -54,6 +54,9 @@ export interface FlowStepInput {
   effectiveLevel?: AiAutonomyLevel | null;
   /** Whether this capability reads text authored outside the workspace. */
   actsOnUntrustedInput?: boolean;
+  /** Whether a run of this capability needs a project to scope it to. A flow whose trigger can never
+   *  supply one — by hand, or on a clock — would queue it unscoped and watch it fail. */
+  needsProjectScope?: boolean;
   /** Whether an agent RUN can execute it at all. Most capabilities in the registry are invoked inline
    *  by the feature that owns them and have no tools for a run loop to use — a flow step naming one
    *  validates, activates, dispatches, and then fails with "no runner is implemented". Passed in
@@ -320,6 +323,10 @@ export function validateFlow(params: {
     issues.push({ severity: "error", message: "A form trigger needs a form to listen to." });
   }
 
+  /** A MANUAL or SCHEDULE flow fires on a person or a clock, so nothing it runs against is a ticket —
+   *  which decides both the ticket-action warning below and the project-scope error inside the loop. */
+  const subjectless = params.trigger === "MANUAL" || params.trigger === "SCHEDULE";
+
   const lastIndex = steps.length - 1;
   steps.forEach((step, index) => {
     if (step.kind === "CAPABILITY" && !step.capability) {
@@ -328,6 +335,13 @@ export function validateFlow(params: {
     // An error, not a warning: the flow would activate, fire, and fail — which reads as the product
     // being broken rather than as the step being impossible. Refusing at build time is the only place
     // the author is still holding the thing they need to change.
+    if (step.kind === "CAPABILITY" && step.capability && step.needsProjectScope && subjectless) {
+      issues.push({
+        severity: "error",
+        order: step.order,
+        message: `"${step.capability}" needs a project to work on, and this flow's trigger never provides one. Trigger it from something that belongs to a project.`
+      });
+    }
     if (step.kind === "CAPABILITY" && step.capability && step.agentRunnable === false) {
       issues.push({
         severity: "error",
@@ -384,7 +398,6 @@ export function validateFlow(params: {
    * otherwise coherent and its other steps still do their work; it is here at all because the failure
    * is invisible until the run report says the step could not be done.
    */
-  const subjectless = params.trigger === "MANUAL" || params.trigger === "SCHEDULE";
   const ticketActions = steps.filter((s) => s.kind === "ACTION" && ["assign", "label"].includes(asText(s.config?.action)));
   if (subjectless && ticketActions.length > 0) {
     issues.push({
