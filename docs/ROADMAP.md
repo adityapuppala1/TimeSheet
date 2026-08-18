@@ -4190,3 +4190,65 @@ facts, and only one of them is a number.
 
 1275 unit tests pass (+28: the counts route, the From-address parsing, and the invite-password
 behaviour, each pinned because each changed real logic).
+
+## Two CI gates, and the difference between "no fix" and "not a problem" (2026-08-18)
+
+The first push of V8 to origin ran the full workflow for the first time, and two jobs failed. Both
+were real; neither was caused by the work in this branch.
+
+### `./install.sh: Permission denied`
+
+`install-e2e` runs the installer the way a customer does — `TS_AUTO=1 ./install.sh` — and got exit
+126 in under a second. `install.sh` was mode **100644** in git. It had never had the executable bit.
+
+This was never only a CI problem. `README.md` says `./install.sh`. `docs/DEPLOYMENT.md` said
+"chmod +x install.sh first if needed". `docs/INSTALLATION.md` carried a troubleshooting row for it —
+*"The file isn't marked executable — normal for a fresh checkout on some setups"* — which is the
+shape of a workaround that has been repeated often enough to become documentation. It was not normal
+and it was not the setup: the mode bit is a property of the repository, and it was simply never set.
+
+`git update-index --chmod=+x` on `install.sh` and `update.sh` (both are invoked as `./…` in the
+runbooks). `.ps1` and `.cmd` stay 100644 — Windows does not use the bit.
+
+The troubleshooting row stays, corrected rather than deleted: a **ZIP download** from GitHub still
+arrives without permissions, because the zip format GitHub serves does not carry them. A clone is now
+fine; a zip is not, and that is worth saying rather than implying the problem is gone.
+
+### An advisory with no fix, and a gate that could only say "block"
+
+`npm audit --omit=dev --audit-level=high` failed on 6 findings. Two advisories, neither introduced
+here — `deepmerge-ts 7.1.5` and `postcss`'s bundled `nanoid 3.3.17` are byte-identical in the lockfile
+at `1d7aaf0`, before any of this branch's work. They are newly *published* advisories landing on
+dependencies that were already present, which is the audit gate doing precisely its job.
+
+`nanoid` took the fix: 3.3.17 → 3.3.18, one line of lockfile, nothing else moved.
+
+**`deepmerge-ts` has no fix to take**, and that is the interesting half. The advisory wants >= 8.0.0.
+As of today the LATEST published `html-to-text` (10.0.0) still requires `^7.1.5`, and the LATEST
+`@prisma/config` (7.9.1) pins `7.1.5` **exactly**. An `overrides` to 8.x would force Prisma's config
+loader off a version it pins — and that loader runs for every `prisma generate` and every
+`migrate deploy`, i.e. every deployment path this project has.
+
+So: is it reachable? Both call sites were read rather than guessed.
+
+- `@prisma/config` passes `deepmerge` as the merger for `prisma.config.ts` (`dist/index.js`,
+  `merger: deepmerge`). First-party config, read at CLI time, never a request.
+- `html-to-text` merges **caller options** with defaults —
+  `deepMergeWithOptionsComposeRules(defaultOptions, userOptions)` at `html-to-text.cjs:1470`. The
+  email body is parsed by `htmlparser2` and never passes through deepmerge. That matters because
+  `mailparser` → `html-to-text` is the one path here carrying attacker input (inbound email, via
+  `workers/inbound-email.worker.ts`), and it does not reach the vulnerable code.
+
+An unreachable advisory with no available fix is the case a bare `npm audit` cannot express. It has
+two settings, pass and block, so this would have held the pipeline red indefinitely — and a
+permanently-red gate is one people learn to skip, which is the argument `sonar-project.properties`
+and `eslint.config.mjs` already make in their own domains.
+
+**`scripts/audit-gate.mjs`** takes the same shape as those: everything high or critical blocks by
+default; an advisory can be accepted only with the call site that was read and why it is safe written
+down beside it. The part that keeps it honest is the reverse check — **an accepted entry that no
+longer matches anything fails the build**, with a message saying to delete it. Without that, an
+allowlist only ever grows, entries outlive the problem, and the list becomes a way of not looking.
+
+Both directions were verified rather than assumed: emptying the allowlist blocks on the real
+advisory, and adding a phantom entry fails as stale.

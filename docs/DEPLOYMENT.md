@@ -35,7 +35,7 @@ overwriting one that already exists), run `docker compose up -d --build`, wait f
 health check, then run the one-time seed.
 
 ```bash
-./install.sh          # Linux/macOS — chmod +x install.sh first if needed
+./install.sh          # Linux/macOS (a ZIP download loses the +x bit; a clone keeps it)
 ```
 
 ```powershell
