@@ -31,7 +31,13 @@ test.describe("admin password resets", () => {
         expect(reset.ok(), `reset failed (${reset.status()})`).toBe(true);
         const { generatedPassword } = await reset.json();
         // The generator's contract: 12 unambiguous alphanumerics + the fixed complexity tail.
-        expect(generatedPassword).toMatch(/^[a-zA-Z0-9]{12}!7a$/);
+        //
+        // The tail gained its capital on 2026-08-18. It was "!7a" — a symbol, a digit and a
+        // lowercase letter — which left the uppercase class to the random draw, and a 12-character
+        // draw from that alphabet omits one about once in every 800 passwords. Rare enough never to
+        // be seen in testing and certain to happen in production, where the failure is an admin
+        // reading out a password some external policy then refuses. See utils/security.ts.
+        expect(generatedPassword).toMatch(/^[a-zA-Z0-9]{12}!7aQ$/);
 
         // The generated password actually signs in, and the profile carries the prompt flag.
         const userCtx = await playwrightRequest.newContext({ baseURL: BASE_URL, ignoreHTTPSErrors: true });
