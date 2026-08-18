@@ -40,6 +40,7 @@ import { startGoalDigestWorker } from "./workers/goal-digest.worker.js";
 import { startAIRetentionWorker } from "./workers/ai-retention.worker.js";
 import { runForEveryOrg } from "./workers/run-for-every-org.js";
 import { registerFlowDispatch } from "./services/automation-dispatch.service.js";
+import { reportTenantSchemaDrift } from "./services/tenant-schema-check.service.js";
 import { warmFaceModelsIfEnabled } from "./services/face.service.js";
 import { announceRunningRelease } from "./services/release-announce.service.js";
 import { startIdentityWeeklyDigestWorker } from "./workers/identity-weekly-digest.worker.js";
@@ -243,6 +244,14 @@ server.on("listening", async () => {
   // Detached: loads the face models at boot IF any org has the feature enabled, so the first
   // verification after a restart doesn't pay the multi-second cold model load. Deployments
   // with the feature off pay nothing (see warmFaceModelsIfEnabled's header).
+  // Detached, and the first thing worth knowing at boot: a tenant left behind by a missed
+  // `migrate:tenants` looks exactly like healthy code until a worker touches a table that is not
+  // there. Warns rather than refusing to start — one org being behind must not take down the ones
+  // that are fine.
+  void reportTenantSchemaDrift().catch((error) =>
+    console.warn(`[tenant-schema] could not check tenant schema versions: ${(error as Error).message}`)
+  );
+
   void warmFaceModelsIfEnabled(runForEveryOrg).catch((error) =>
     console.warn(`[face] boot warm-up skipped: ${(error as Error).message}`)
   );

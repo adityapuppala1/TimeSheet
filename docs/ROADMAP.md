@@ -3931,3 +3931,36 @@ close button, in every dialog in the product), Proposals, Workload and the budge
   are new product scope with their own security surface, and the agentic plan says in as many words
   that the MCP client is "scoped, not committed" so it would not be smuggled into a later phase. They
   need a decision, not a sprint.
+
+## V8 phase 10 follow-up — the tenant that was never migrated (2026-08-18)
+
+Reported from a running server: `The table 'automationflow' does not exist`, once a minute, for org
+`acme`.
+
+**The cause was mine and entirely procedural.** Every V8 migration was applied with
+`prisma migrate deploy` against one `DATABASE_URL` and the documented fan-out —
+`npm run migrate:tenants -w apps/api`, described at the top of [DATABASE.md](DATABASE.md) — was never
+run, across ten phases. This deployment has two ACTIVE organizations with a database each; the second
+was left on `20260817100000_session_device_identity`, missing goals, the inbox, the roster, the
+Studio, the ledger, dispatch, run visibility and the two notification columns. Every one of the
+migration replays I ran into an empty database passed, and proved nothing about this, because
+replaying is a different question from fanning out.
+
+- [x] Ran the fan-out. Both orgs now on `20260818120000_v8_phase10_goal_and_workflow_email`, both with
+  all nine V8 tables, and the control plane's `schemaVersion` finally records it — direct
+  `migrate deploy` never updates that field, which is why both orgs read as behind even though one
+  was not.
+- [x] **The upgrade path held up where it mattered**: `acme` came out of the fan-out with 4
+  `goals:manage` grants from the migration's idempotent SQL. That is phase 1's "the migration AND the
+  seed are both needed" lesson working on a real upgrade rather than in a replay.
+- [x] Verified by running one real tick of both new workers through `runForEveryOrg` — the exact code
+  path that was failing — clean for both orgs.
+
+**The hardening: nothing said so at boot.** A tenant left behind is invisible until a worker touches a
+table that is not there, and the error then names a missing table rather than the missed step.
+`tenant-schema-check.service.ts` now compares every ACTIVE/SUSPENDED org's recorded version against
+the build's latest at startup and prints which orgs are behind, what they are on, and the command that
+fixes it. It **warns rather than refusing to start** — one org being behind must not take down the
+others, the same isolation the fan-out script already applies — and is silent when everything is
+current. Verified both ways: silent on a current deployment, and correct when a version is temporarily
+set back.

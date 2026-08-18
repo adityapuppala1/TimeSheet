@@ -180,6 +180,19 @@ misses it does not merely lack the feature — `getGlobalMcpSettings` upserts th
 on first read, so the *settings page* itself fails against a database where the table does not
 exist. Nothing else in 2.3.0 touches the schema.
 
+**The server now tells you at boot when a tenant is behind**, because until it did, a missed fan-out
+looked exactly like healthy code. `services/tenant-schema-check.service.ts` compares every
+`ACTIVE`/`SUSPENDED` org's recorded `schemaVersion` against `getLatestMigrationName()` and, if any is
+behind, prints which orgs, what they are on, what this build expects, and the command that fixes it.
+It **warns rather than refusing to start**: one org being behind must not take down the ones that are
+fine, the same isolation `migrate-all-tenants.ts` already applies. It is silent when everything is
+current, so it stays worth reading.
+
+This was added after the V8 batch was applied to one developer's `DATABASE_URL` and never fanned out.
+The second organization threw `The table 'automationflow' does not exist` once a minute from the
+schedule sweep, and nothing at boot said so — the error named a missing table rather than the missed
+step, which is a long way to travel to reach `npm run migrate:tenants`.
+
 `update.sh`/`update.ps1` already run this fan-out for you on the Compose shape (unconditionally,
 before verification — it is a fast no-op when the default org is the only one), and `npm run setup`
 runs it as its last step on a local checkout. Neither needs a per-release edit: the target is

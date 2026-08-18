@@ -222,6 +222,17 @@ its old schema without the update saying so. After upgrading, run the fan-out on
   everything after it, sometimes for days, and until now it only raised an in-app notification — which
   made a blocked workflow look like a broken one. On by default.
 
+### 🩹 A workspace left behind by an upgrade now says so at startup
+
+- Every organization has its own database, and a release only reaches the rest of them when the
+  migration fan-out runs. Miss it and the code is fine, your own workspace is fine, and another one is
+  quietly broken — with a background worker logging "table … does not exist" once a minute and nothing
+  anywhere naming the actual problem.
+- **The server now checks at boot** and, if any workspace is behind, prints which ones, what version
+  they are on, what this build expects, and the one command that fixes it. It warns rather than
+  refusing to start: one workspace being behind must not take down the ones that are fine. Silent when
+  everything is current.
+
 ### 🔧 Three workflow limits lifted
 
 - **A workflow can be triggered by a request form.** The trigger validated and replayed before; now it
