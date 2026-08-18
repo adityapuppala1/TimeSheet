@@ -369,6 +369,122 @@ export async function seedTenant(client: PrismaClient, options: SeedTenantOption
         create: { userId: user.id, projectId: project.id }
       });
     }
+
+    /**
+     * WORK ITEMS, because a demo workspace with a project and no work in it is not a demo.
+     *
+     * Until this existed, `npm run seed` produced a workspace whose Tickets page, Timesheet
+     * history, Reports and budget panels were all empty — the first thing anyone following the
+     * README saw. The e2e suite noticed before any human did: it had never run against a freshly
+     * seeded database, and when CI finally reached it, specs asking questions like "do the report
+     * numbers move when I filter" and "does the budget panel refuse a forecast it cannot support"
+     * failed because there was nothing to filter and nothing to forecast from.
+     *
+     * DETERMINISTIC IDS AND `upsert`, so re-seeding an existing workspace is a no-op rather than a
+     * second pile of fake work. `npm run setup` runs the seed, and people run it more than once.
+     *
+     * Dates are relative to the seed run, not fixed: a report filtered to "this month" has to find
+     * something whenever the workspace was created, and a hardcoded 2026 date stops being this
+     * month almost immediately.
+     */
+    const day = (daysAgo: number) => new Date(Date.now() - daysAgo * 24 * 60 * 60 * 1000);
+    /** Midnight local, matching how the app stores a work DATE rather than an instant. */
+    const workDay = (daysAgo: number) => {
+      const d = day(daysAgo);
+      d.setHours(0, 0, 0, 0);
+      return d;
+    };
+
+    const demoTickets = [
+      { n: 1, title: "Approval reminders fire an hour early for IST managers", status: "OPEN", priority: "HIGH", reporter: manager, assignee: employee },
+      { n: 2, title: "Timesheet export drops the notes column in Excel", status: "IN_PROGRESS", priority: "MEDIUM", reporter: employee, assignee: employee },
+      { n: 3, title: "Add a monthly utilisation view to Reports", status: "IN_REVIEW", priority: "LOW", reporter: manager, assignee: employee },
+      { n: 4, title: "Project budget shows a forecast with two weeks of data", status: "RESOLVED", priority: "MEDIUM", reporter: admin, assignee: manager },
+      { n: 5, title: "Sign-in page overflows on a 320px phone", status: "CLOSED", priority: "LOW", reporter: employee, assignee: employee },
+      { n: 6, title: "SLA escalation email names the wrong approver", status: "OPEN", priority: "CRITICAL", reporter: manager, assignee: manager }
+    ] as const;
+
+    for (const t of demoTickets) {
+      await client.ticket.upsert({
+        where: { key: `HICS-OPS-${t.n}` },
+        update: {},
+        create: {
+          key: `HICS-OPS-${t.n}`,
+          projectId: project.id,
+          moduleId: core.id,
+          title: t.title,
+          description: `<p>${t.title}. Seeded sample ticket — safe to close or delete.</p>`,
+          status: t.status,
+          priority: t.priority,
+          reporterId: t.reporter.id,
+          assigneeId: t.assignee.id,
+          createdAt: day(20 - t.n),
+          resolvedAt: t.status === "RESOLVED" || t.status === "CLOSED" ? day(3) : null,
+          closedAt: t.status === "CLOSED" ? day(2) : null
+        }
+      });
+    }
+
+    /**
+     * ADVANCE THE PROJECT'S TICKET COUNTER PAST WHAT WAS JUST SEEDED.
+     *
+     * Keys are issued from `Project.ticketSeq` (see `issueTicketKey`), which increments per create.
+     * Inserting HICS-OPS-1..6 directly leaves that counter at 0, so the very first ticket anyone
+     * creates is handed HICS-OPS-1 — a key that already exists — and the create dies on the unique
+     * index. The symptom is a "create a ticket" test failing on a workspace that has tickets, which
+     * reads like anything except a seed problem.
+     *
+     * Raised, never lowered: on a workspace where people have since created their own tickets the
+     * counter is already past this, and forcing it back down would reintroduce exactly the
+     * collision this line exists to prevent.
+     */
+    const seededProject = await client.project.findUniqueOrThrow({
+      where: { id: project.id },
+      select: { ticketSeq: true }
+    });
+    if (seededProject.ticketSeq < demoTickets.length) {
+      await client.project.update({ where: { id: project.id }, data: { ticketSeq: demoTickets.length } });
+    }
+
+    /**
+     * A spread of statuses on purpose. APPROVED gives Reports and the budget panel something to
+     * add up, SUBMITTED gives the approvals queue a row to act on, and DRAFT gives the employee's
+     * own history something editable — the three states the specs each need one of, and the three
+     * a person actually has on any ordinary week.
+     */
+    const demoEntries = [
+      { daysAgo: 9, activity: "Development", task: "Wire the approval reminder to the project's own deadline day", start: "09:30", end: "13:00", hours: 3.5, status: "APPROVED", reviewer: manager },
+      { daysAgo: 8, activity: "Development", task: "Excel export: keep the notes column and widen it to fit", start: "10:00", end: "16:30", hours: 6.5, status: "APPROVED", reviewer: manager },
+      { daysAgo: 7, activity: "Code Review", task: "Review the utilisation view PR and leave notes on the query", start: "14:00", end: "16:00", hours: 2, status: "APPROVED", reviewer: manager },
+      { daysAgo: 4, activity: "Bug Fixing", task: "Reproduce the 320px sign-in overflow and fix the grid gap", start: "09:00", end: "12:15", hours: 3.25, status: "SUBMITTED", reviewer: null },
+      { daysAgo: 3, activity: "Testing", task: "Cross-browser pass on the reports filters", start: "11:00", end: "15:00", hours: 4, status: "SUBMITTED", reviewer: null },
+      { daysAgo: 1, activity: "Documentation", task: "Write up the escalation matrix for the runbook", start: "09:45", end: "11:45", hours: 2, status: "DRAFT", reviewer: null }
+    ] as const;
+
+    for (const [index, e] of demoEntries.entries()) {
+      const id = `seed-entry-${index + 1}`;
+      await client.timesheet.upsert({
+        where: { id },
+        update: {},
+        create: {
+          id,
+          userId: employee.id,
+          projectId: project.id,
+          moduleId: core.id,
+          activityType: e.activity,
+          taskDescription: e.task,
+          workDate: workDay(e.daysAgo),
+          startTime: e.start,
+          endTime: e.end,
+          totalHours: e.hours,
+          status: e.status,
+          submittedAt: e.status === "DRAFT" ? null : day(e.daysAgo),
+          reviewedAt: e.status === "APPROVED" ? day(e.daysAgo - 1) : null,
+          reviewedById: e.reviewer ? e.reviewer.id : null,
+          createdAt: day(e.daysAgo)
+        }
+      });
+    }
   }
 
   // System account that satisfies Ticket.reporterId's required FK for email-sourced tickets.
