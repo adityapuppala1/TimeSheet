@@ -12,7 +12,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Check, Copy, FileUp, GitBranch, KeyRound, ShieldAlert, ShieldOff, ShieldQuestion, Sparkles, Ticket, Unlink } from "lucide-react";
 import { useState } from "react";
-import { notificationPreferenceKeys, type NotificationPreferences } from "@timesheet/shared";
+import { notificationPreferenceKeys } from "@timesheet/shared";
 import { Alert, AlertDescription, AlertTitle } from "../../components/ui/alert";
 import { Badge } from "../../components/ui/badge";
 import { Button } from "../../components/ui/button";

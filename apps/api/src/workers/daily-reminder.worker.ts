@@ -30,10 +30,6 @@ let started = false;
 // suspenders.
 let running = false;
 
-function isSameLocalDay(a: Date, b: Date): boolean {
-  return a.getFullYear() === b.getFullYear() && a.getMonth() === b.getMonth() && a.getDate() === b.getDate();
-}
-
 function startOfLocalDay(date: Date): Date {
   const result = new Date(date);
   result.setHours(0, 0, 0, 0);

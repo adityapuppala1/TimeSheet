@@ -307,11 +307,16 @@ function placeCard(spot: Rect | null, placement: TourStep["placement"] = "bottom
     top = spot.top;
     left = leftOf;
   } else if (placement === "top" && above > 0) {
+    // Same assignment as the "above > 0" fallback below, and NOT collapsible into it: this branch
+    // must outrank the "below fits" check that follows, or a step explicitly authored with
+    // placement="top" would render below the target whenever there also happened to be room below
+    // — silently ignoring the author's placement choice.
     top = above;
     left = spot.left;
   } else if (below + estimatedHeight < viewportHeight) {
     top = below;
     left = spot.left;
+    // eslint-disable-next-line sonarjs/no-duplicated-branches -- duplicates the placement="top" branch by design; see its comment
   } else if (above > 0) {
     // No room below — flip above rather than letting the card run off the bottom.
     top = above;

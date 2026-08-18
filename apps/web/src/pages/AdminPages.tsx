@@ -105,10 +105,8 @@ import { ScrollArea } from "../components/ui/scroll-area";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../components/ui/select";
 import { Skeleton } from "../components/ui/skeleton";
 import { StatCard } from "../components/ui/stat-card";
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "../components/ui/table";
 import { Textarea } from "../components/ui/textarea";
 import { toast } from "../components/ui/toaster";
-import { Tooltip, TooltipContent, TooltipTrigger } from "../components/ui/tooltip";
 import { safeHtml } from "../lib/safe-html";
 import { computeTrend } from "../lib/trend";
 import {
@@ -317,7 +315,14 @@ export function UsersPage() {
     name: "",
     email: "",
     role: "EMPLOYEE",
-    password: "Admin@12345",
+    /**
+     * BLANK ON PURPOSE. This used to default to the fixed "Admin@12345", which is written in this
+     * repo's README — so every teammate invited through this form without the admin editing the
+     * field shared one password the whole internet can read. The server now generates a random
+     * one-time password when this is empty and returns it once, the same way the reset flows below
+     * already worked; leaving it blank is the recommended path.
+     */
+    password: "",
     managerId: "none",
     designation: "",
     githubUsername: "",
@@ -346,6 +351,12 @@ export function UsersPage() {
   const create = useMutation({
     mutationFn: userApi.create,
     onSuccess: (created: any) => {
+      // Present only when the admin left the field blank. This is the single moment it exists in
+      // plaintext anywhere — the server stored a hash — so it goes straight to the same
+      // show-once dialog the reset flows use rather than a toast that can be missed.
+      if (created?.generatedPassword) {
+        setGeneratedReset({ name: created.name, email: created.email, password: created.generatedPassword });
+      }
       const welcome = created?.welcomeEmail;
       if (welcome?.sent) {
         toast.success("User created", { description: `Welcome email delivered to ${created.email}.` });
@@ -355,7 +366,7 @@ export function UsersPage() {
           duration: 10_000
         });
       }
-      setDraft({ name: "", email: "", role: "EMPLOYEE", password: "Admin@12345", managerId: "none", designation: "", githubUsername: "", faceVerificationRequired: false });
+      setDraft({ name: "", email: "", role: "EMPLOYEE", password: "", managerId: "none", designation: "", githubUsername: "", faceVerificationRequired: false });
       queryClient.invalidateQueries({ queryKey: ["users"] });
     },
     onError: (err: any) => toast.error("Unable to create user", { description: serverMessage(err, "Try again.") })
@@ -429,7 +440,9 @@ export function UsersPage() {
       name: draft.name,
       email: draft.email,
       role: draft.role,
-      password: draft.password,
+      // Omitted when blank — the server then generates a one-time password. Sending "" would fail
+      // the min(8) check instead.
+      password: draft.password.trim() || undefined,
       managerId: draft.managerId === "none" ? null : draft.managerId,
       designation: draft.designation.trim() || null,
       faceVerificationRequired: draft.faceVerificationRequired,
@@ -618,7 +631,10 @@ export function UsersPage() {
         <CardHeader className="flex-row items-start justify-between gap-3 space-y-0">
           <div className="min-w-0">
             <CardTitle>Invite a teammate</CardTitle>
-            <CardDescription>New users get the default password and must change it on first login.</CardDescription>
+            <CardDescription>
+              Leave the password blank and a random one-time password is generated and shown to you once. Either way the
+              person is prompted to choose their own at first sign-in.
+            </CardDescription>
           </div>
           <Button type="button" variant="outline" size="sm" onClick={() => setBulkUploadOpen(true)}>
             <UploadCloud className="h-3.5 w-3.5" />Bulk upload
@@ -677,7 +693,13 @@ export function UsersPage() {
               </div>
             </FieldShell>
             <FieldShell label="Temporary password">
-              <Input value={draft.password} onChange={(e) => setDraft({ ...draft, password: e.target.value })} />
+              <Input
+                type="password"
+                autoComplete="new-password"
+                value={draft.password}
+                onChange={(e) => setDraft({ ...draft, password: e.target.value })}
+                placeholder="Leave blank to generate"
+              />
             </FieldShell>
             <div className="flex items-end">
               <Button className="w-full" onClick={handleCreate} disabled={!draft.name || !draft.email || create.isPending}>
@@ -1836,6 +1858,9 @@ function ProjectBillingDialog({ project, onClose }: { project: any | null; onClo
     onError: (err: any) => toast.error("Could not save", { description: serverMessage(err, "Try again.") })
   });
 
+  // Deliberately !(x >= 0) rather than x < 0: Number("abc") is NaN, which fails BOTH comparisons,
+  // so the negated form rejects non-numeric input while `< 0` would let it through.
+  // eslint-disable-next-line sonarjs/no-inverted-boolean-check -- NaN-safe on purpose
   const rateInvalid = draft.defaultHourlyRate.trim() !== "" && !(Number(draft.defaultHourlyRate) >= 0);
   const currencyInvalid =
     (draft.billingCurrency.trim() !== "" && draft.billingCurrency.trim().length !== 3) ||
@@ -2136,7 +2161,7 @@ function UserChip({
       <Button
         type="button"
         size="icon"
-        variant={variant === "destructive" ? "ghost" : "ghost"}
+        variant="ghost"
         className={`h-9 w-9 ${variant === "destructive" ? "text-destructive hover:bg-destructive/10 hover:text-destructive" : "text-primary hover:bg-primary/10 hover:text-primary"}`}
         aria-label={actionLabel}
         title={actionLabel}
@@ -2149,15 +2174,6 @@ function UserChip({
 }
 
 /* ============================== APPROVALS ============================== */
-
-/** Date AND time. "Has this been touched since I last looked at it" is the question `updatedAt`
- *  answers, and a bare date cannot answer it for an entry edited the same day it was logged. */
-function formatTimestamp(value?: string | null): string {
-  if (!value) return "—";
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return "—";
-  return date.toLocaleString(undefined, { month: "short", day: "numeric", year: "numeric", hour: "2-digit", minute: "2-digit" });
-}
 
 /**
  * Tiptap HTML in, one line of plain text out — for SEARCHING only, never for rendering (the

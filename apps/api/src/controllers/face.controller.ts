@@ -74,11 +74,6 @@ const requireAdmin = requireRole(["SUPER_ADMIN", "ADMIN"]);
  *  on it would only stop honest streamers while teaching attackers to blank the label. */
 const VIRTUAL_CAMERA_PATTERN = /obs|virtual|manycam|snap\s*camera|xsplit|droidcam|iriun|epoccam|camtwist|splitcam/i;
 
-function requireCapture(req: { file?: Express.Multer.File }): Buffer {
-  if (!req.file?.buffer?.length) throw new AppError(422, "No face capture was received.");
-  return req.file.buffer;
-}
-
 /** Multi-frame uploads arrive as `capture` array (challenge on: [neutral, gesture]; off: one). */
 function requireFrames(req: { files?: unknown }): Buffer[] {
   const files = (Array.isArray(req.files) ? req.files : []) as Express.Multer.File[];

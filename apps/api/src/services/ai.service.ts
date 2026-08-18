@@ -488,7 +488,8 @@ export function redactSecrets(text: string): string {
       .replace(/\bxox[baprs]-[A-Za-z0-9-]{10,}\b/g, "[REDACTED:slack-token]")
       .replace(/\bsk-[A-Za-z0-9_-]{20,}\b/g, "[REDACTED:api-key]")
       // Bearer headers, whatever the token shape.
-      .replace(/\b(Bearer|Basic)\s+[A-Za-z0-9+/._~=-]{16,}/gi, "[REDACTED:bearer]")
+      // /i makes A-Z redundant with a-z, hence the lowercase-only range.
+      .replace(/\b(Bearer|Basic)\s+[a-z0-9+/._~=-]{16,}/gi, "[REDACTED:bearer]")
       // key=value / key: value assignments for secret-looking names. The lookahead keeps this
       // rule from re-eating an earlier rule's replacement — "Authorization: [REDACTED:bearer]"
       // must stay as the more specific label, not collapse into a generic one.
@@ -1727,6 +1728,7 @@ export async function improveText(params: { text: string; context: "ticket_descr
     model: settings.model,
     inputTokens: result.usage.inputTokens,
     outputTokens: result.usage.outputTokens,
+    latencyMs: Date.now() - startedAt,
     userId: params.userId,
     promptVersionId: p.promptVersionId,
     promptFallbackReason: p.fallbackReason
@@ -1941,6 +1943,7 @@ export async function summarizeComments(params: {
     model: settings.model,
     inputTokens: result.usage.inputTokens,
     outputTokens: result.usage.outputTokens,
+    latencyMs: Date.now() - startedAt,
     userId: params.userId,
     promptVersionId: p.promptVersionId,
     promptFallbackReason: p.fallbackReason
@@ -1989,6 +1992,7 @@ export async function answerWorkspaceQuestion(params: {
     model: settings.model,
     inputTokens: result.usage.inputTokens,
     outputTokens: result.usage.outputTokens,
+    latencyMs: Date.now() - startedAt,
     userId: params.userId,
     promptVersionId: p.promptVersionId,
     promptFallbackReason: p.fallbackReason
@@ -2030,6 +2034,7 @@ export async function generateWeeklyDigest(params: {
     model: settings.model,
     inputTokens: result.usage.inputTokens,
     outputTokens: result.usage.outputTokens,
+    latencyMs: Date.now() - startedAt,
     userId: params.userId,
     promptVersionId: p.promptVersionId,
     promptFallbackReason: p.fallbackReason
@@ -2079,6 +2084,7 @@ export async function generateSecurityWeeklyDigest(params: {
     model: settings.model,
     inputTokens: result.usage.inputTokens,
     outputTokens: result.usage.outputTokens,
+    latencyMs: Date.now() - startedAt,
     userId: params.userId,
     promptVersionId: p.promptVersionId,
     promptFallbackReason: p.fallbackReason
@@ -2126,6 +2132,7 @@ export async function generateBugPatternDigest(params: {
     model: settings.model,
     inputTokens: result.usage.inputTokens,
     outputTokens: result.usage.outputTokens,
+    latencyMs: Date.now() - startedAt,
     userId: params.userId,
     promptVersionId: p.promptVersionId,
     promptFallbackReason: p.fallbackReason
@@ -2173,6 +2180,7 @@ export async function generateStatusReport(params: {
     model: settings.model,
     inputTokens: result.usage.inputTokens,
     outputTokens: result.usage.outputTokens,
+    latencyMs: Date.now() - startedAt,
     userId: params.userId,
     promptVersionId: p.promptVersionId,
     promptFallbackReason: p.fallbackReason
@@ -2234,7 +2242,8 @@ export async function explainThresholdRecommendation(rec: {
     feature: "face_policy_copilot",
     model: settings.model,
     inputTokens: result.usage.inputTokens,
-    outputTokens: result.usage.outputTokens
+    outputTokens: result.usage.outputTokens,
+    latencyMs: Date.now() - startedAt,
   });
   return result.text?.trim() || null;
 }
@@ -2308,6 +2317,7 @@ export async function analyzeEmailFailure(params: {
     model: settings.model,
     inputTokens: result.usage.inputTokens,
     outputTokens: result.usage.outputTokens,
+    latencyMs: Date.now() - startedAt,
     userId: params.userId
   });
   return parseJsonResponse(result.text, EmailFailureAnalysisSchema);
@@ -2342,6 +2352,7 @@ export async function explainAssigneeSuggestion(params: {
     model,
     inputTokens: result.usage.inputTokens,
     outputTokens: result.usage.outputTokens,
+    latencyMs: Date.now() - startedAt,
     promptVersionId: p.promptVersionId,
     promptFallbackReason: p.fallbackReason
   });
@@ -2385,6 +2396,7 @@ export async function suggestStaleTicketNextAction(params: {
     model,
     inputTokens: result.usage.inputTokens,
     outputTokens: result.usage.outputTokens,
+    latencyMs: Date.now() - startedAt,
     userId: params.userId,
     promptVersionId: p.promptVersionId,
     promptFallbackReason: p.fallbackReason
@@ -2570,6 +2582,7 @@ export async function summarizeFaceReviewAttempt(params: {
     model: settings.model,
     inputTokens: result.usage.inputTokens,
     outputTokens: result.usage.outputTokens,
+    latencyMs: Date.now() - startedAt,
     userId: attempt.userId
   });
 

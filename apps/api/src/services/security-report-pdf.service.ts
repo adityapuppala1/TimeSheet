@@ -21,7 +21,6 @@
  * margins, #0F9AA8 brand, #0F172A ink, #64748B muted, #E2E8F0 rules, #94A3B8 footer,
  * Helvetica-Bold headings, page-break guards with re-drawn table headers, Page N of M.
  */
-import type PDFKit from "pdfkit";
 import type { TicketSecurityReport } from "./security-report.service.js";
 
 const BRAND = "#0F9AA8";

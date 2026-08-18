@@ -97,12 +97,11 @@ import {
   useSheetResize
 } from "../components/ui/sheet";
 import { Skeleton } from "../components/ui/skeleton";
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "../components/ui/table";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "../components/ui/tabs";
 import { toast } from "../components/ui/toaster";
 import { Tooltip, TooltipContent, TooltipTrigger } from "../components/ui/tooltip";
-import { safeHtml } from "../lib/safe-html";
-import { aiApi, faceApi, fileUrl, labelApi, planApi, projectApi, settingsApi, ticketApi, ticketTypeApi, type AIDuplicateMatch, type AITriageSuggestion, type SecurityFindingRow, type TicketAttachmentRow, type TicketBranchRow, type TicketChecklistItemRow, type TicketComment, type TicketDetail, type TicketLineageEvent, type TicketLinkRow, type TicketLinkType, type TicketRow, type TicketTimesheetRow } from "../services/api";
+import { plainTextLength, safeHtml } from "../lib/safe-html";
+import { aiApi, fileUrl, labelApi, planApi, projectApi, settingsApi, ticketApi, ticketTypeApi, type AIDuplicateMatch, type AITriageSuggestion, type SecurityFindingRow, type TicketAttachmentRow, type TicketBranchRow, type TicketChecklistItemRow, type TicketComment, type TicketDetail, type TicketLineageEvent, type TicketLinkRow, type TicketLinkType, type TicketRow, type TicketTimesheetRow } from "../services/api";
 import { FaceVerificationDialog } from "../components/FaceVerificationDialog";
 import { useFaceStatus } from "../lib/use-face-status";
 import { usePlanningFeatures } from "../lib/use-planning";
@@ -1399,7 +1398,7 @@ function CommentsPanel({
     onError: (err: any) => toast.error("Could not summarize", { description: serverMessage(err, "AI may be disabled for this workspace.") })
   });
   const refineComment = useAiRefine({ field: "ticket_comment", label: "comment", value: body, onChange: setBody });
-  const plainLength = body.replace(/<[^>]+>/g, "").trim().length;
+  const plainLength = plainTextLength(body);
 
   return (
     <div className="grid gap-3">

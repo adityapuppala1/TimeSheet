@@ -371,6 +371,9 @@ function callSignature(tool: string, args: unknown): string {
     return `${tool}:${JSON.stringify(stable(args))}`;
   } catch {
     // Unserialisable args cannot be compared, so they are never treated as repeats.
+    // Reviewed: this value is a cache key deliberately made non-repeating, never a token. Being
+    // guessable is harmless — the whole point is that it matches nothing else.
+    // eslint-disable-next-line sonarjs/pseudo-random -- non-cryptographic by design
     return `${tool}:${Math.random()}`;
   }
 }

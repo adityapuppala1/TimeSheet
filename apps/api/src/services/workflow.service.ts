@@ -21,13 +21,7 @@
  * WHO CALLS THIS: `controllers/planning.controller.ts` (admin CRUD) and, from Phase 2 on,
  * `controllers/ticket.controller.ts`'s status route.
  */
-import {
-  DEFAULT_STATUS_CATEGORY,
-  ticketStatusTransitions,
-  workStatusCategories,
-  type TicketStatus,
-  type WorkStatusCategory
-} from "@timesheet/shared";
+import { DEFAULT_STATUS_CATEGORY, workStatusCategories, type TicketStatus, type WorkStatusCategory } from "@timesheet/shared";
 import { prisma } from "../config/prisma.js";
 import { requireTenantContext } from "../config/tenant-context.js";
 import { AppError } from "../middleware/error.js";

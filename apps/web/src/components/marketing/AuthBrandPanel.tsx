@@ -75,6 +75,9 @@ function ConstellationCanvas() {
       ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
 
       if (nodes.length === 0) {
+        // Reviewed: starting positions and drift for a decorative canvas animation, in the browser,
+        // seeding nothing and protecting nothing.
+        /* eslint-disable sonarjs/pseudo-random -- decorative animation, non-cryptographic by design */
         nodes = Array.from({ length: NODE_COUNT }, () => ({
           x: Math.random() * width,
           y: Math.random() * height,
@@ -82,6 +85,7 @@ function ConstellationCanvas() {
           vx: (Math.random() - 0.5) * 0.28,
           vy: (Math.random() - 0.5) * 0.28
         }));
+        /* eslint-enable sonarjs/pseudo-random */
         return;
       }
 

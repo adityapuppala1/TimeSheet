@@ -35,6 +35,10 @@ export const opaqueToken = () => nanoid(48);
  * `hashSync`) so importing this module — which every request path and most tests do — costs
  * nothing. The exact hash is irrelevant; only that comparing to it does a full cost-12 round.
  */
+// Reviewed: this is a bcrypt DIGEST of an arbitrary, unrecorded value, not a credential — nobody's
+// password hashes to it, and nothing is compromised by it being public. Its only job is to make
+// bcrypt do the same amount of work it would for a real account.
+// eslint-disable-next-line sonarjs/no-hardcoded-passwords -- timing-safety sentinel, not a secret
 export const DUMMY_PASSWORD_HASH = "$2b$12$bCeTa7tNbMS12WtSV0Kb/.szOuSeRd4V6SHhkUr6yxEx3QgLjRQtG";
 
 /**
@@ -44,6 +48,8 @@ export const DUMMY_PASSWORD_HASH = "$2b$12$bCeTa7tNbMS12WtSV0Kb/.szOuSeRd4V6SHhk
  * repo — a default anyone who has read the README can type is not a password. `randomInt` is
  * the CSPRNG (and rejection-samples, so the alphabet is drawn uniformly).
  */
+// Reviewed: a character SET the generator below draws from via a CSPRNG, not a password itself.
+// eslint-disable-next-line sonarjs/no-hardcoded-passwords -- alphabet, not a credential
 const TEMP_PASSWORD_ALPHABET = "abcdefghjkmnpqrstuvwxyzABCDEFGHJKMNPQRSTUVWXYZ23456789";
 export const generateTempPassword = () =>
   `${Array.from({ length: 12 }, () => TEMP_PASSWORD_ALPHABET[randomInt(TEMP_PASSWORD_ALPHABET.length)]).join("")}!7a`;

@@ -21,14 +21,7 @@ import { getTenantClient, prisma } from "../config/prisma.js";
 import { tenantContext } from "../config/tenant-context.js";
 import { resolveActiveOrgBySlug } from "../middleware/tenant.js";
 import { AppError } from "../middleware/error.js";
-import {
-  maybeAssignFindingViaCodeowners,
-  maybeAutoCreateTicketForCiFailure,
-  maybeAutoCreateTicketForFinding,
-  maybePostCiFailureTriageComment,
-  maybeReopenTicketOnRegression,
-  maybeTriageFindingWithAI
-} from "../services/security-report.service.js";
+import { maybeAutoCreateTicketForCiFailure, maybeAutoCreateTicketForFinding, maybePostCiFailureTriageComment, maybeReopenTicketOnRegression, maybeTriageFindingWithAI } from "../services/security-report.service.js";
 import { decryptSecret } from "../utils/encryption.js";
 import { constantTimeEqual } from "../utils/security.js";
 

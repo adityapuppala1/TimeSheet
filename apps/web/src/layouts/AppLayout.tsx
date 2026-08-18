@@ -38,7 +38,7 @@ export function AppLayout() {
       .catch(() => {
         /* next load retries; a missing timezone is not worth an error in anyone's way */
       });
-    // eslint-disable-next-line react-hooks/exhaustive-deps — run once per signed-in user
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- run once per signed-in user
   }, [user?.id]);
   if (!hydrated) return <div className="grid min-h-screen place-items-center bg-background text-sm text-foreground/60">Loading secure workspace...</div>;
   if (!user) return <Navigate to="/login" replace />;

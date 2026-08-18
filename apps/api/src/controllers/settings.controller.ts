@@ -399,6 +399,10 @@ settingsRouter.patch("/ai", requireSuperAdmin, validate(aiSettingsSchema), async
     create: { id: "global", ...data }
   });
   await audit(req.user!.id, "settings.ai_updated", "GlobalAISettings", "global", { ...req.body, apiKey: undefined });
+  // Deliberately destructured-and-discarded: the idiomatic way to strip one field from an object
+  // without hand-listing every other one. sonarjs doesn't recognize the underscore convention this
+  // codebase uses for it elsewhere.
+  // eslint-disable-next-line sonarjs/no-unused-vars -- rest-sibling omit pattern
   const { apiKey: _omit, ...safeUpdated } = updated;
   res.json({ ...safeUpdated, apiKeySet: Boolean(updated.apiKey) });
 });

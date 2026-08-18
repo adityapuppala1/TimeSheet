@@ -143,8 +143,6 @@ export function PlanTimeline({
     return rows;
   }, [data.items, collapsed, showCriticalOnly, showUnscheduled, scheduledIds]);
 
-  const unscheduledCount = data.items.length - scheduledIds.size;
-
   const hasChildren = useMemo(() => {
     const set = new Set<string>();
     for (const item of data.items) if (item.parentId) set.add(item.parentId);

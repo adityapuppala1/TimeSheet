@@ -16,7 +16,6 @@ import express, { Router } from "express";
 import Stripe from "stripe";
 import { z } from "zod";
 import { controlPrisma } from "../config/control-prisma.js";
-import { prisma } from "../config/prisma.js";
 import { requireTenantContext } from "../config/tenant-context.js";
 import { requireAuth, requireSuperAdmin } from "../middleware/auth.js";
 import { AppError } from "../middleware/error.js";

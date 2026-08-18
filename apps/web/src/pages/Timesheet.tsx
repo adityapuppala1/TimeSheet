@@ -18,7 +18,6 @@ import { Button } from "../components/ui/button";
 import { Card, CardContent } from "../components/ui/card";
 import { FileDropzone } from "../components/ui/file-dropzone";
 import { Form, FormControl, FormDescription, FormField, FormItem, FormLabel, FormMessage } from "../components/ui/form";
-import { Input } from "../components/ui/input";
 import { Progress } from "../components/ui/progress";
 import { RichTextEditor } from "../components/ui/rich-text-editor";
 import { Command, CommandEmpty, CommandGroup, CommandInput, CommandItem, CommandList } from "../components/ui/command";
@@ -27,10 +26,11 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from ".
 import { Separator } from "../components/ui/separator";
 import { toast } from "../components/ui/toaster";
 import { DatePicker, TimeField } from "../components/ui/date-picker";
-import { activityTypeApi, faceApi, projectApi, ticketApi, timesheetApi, type AIRefineField } from "../services/api";
+import { activityTypeApi, projectApi, ticketApi, timesheetApi, type AIRefineField } from "../services/api";
 import { AiRefinePanel, AiRefineTrigger, useAiRefine } from "../components/AiRefine";
 import { FaceVerificationDialog } from "../components/FaceVerificationDialog";
 import { useFaceStatus } from "../lib/use-face-status";
+import { plainTextLength } from "../lib/safe-html";
 
 const MAX_DAILY_HOURS = 12;
 const OPEN_TICKET_STATUSES = "OPEN,IN_PROGRESS,IN_REVIEW,REOPENED";
@@ -49,10 +49,6 @@ const schema = z.object({
 });
 
 type FormData = z.infer<typeof schema>;
-
-function stripHtml(html: string) {
-  return html.replace(/<[^>]+>/g, "").trim();
-}
 
 /**
  * Searchable ticket picker — a plain dropdown is fine at 10 tickets and useless at 200, and a
@@ -544,7 +540,7 @@ export function Timesheet() {
                 control={form.control}
                 name="taskDescription"
                 render={({ field }) => {
-                  const length = stripHtml(field.value || "").length;
+                  const length = plainTextLength(field.value);
                   return (
                     <FormItem>
                       <RefinableRichText

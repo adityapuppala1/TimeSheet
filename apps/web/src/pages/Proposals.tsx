@@ -31,7 +31,7 @@ import {
   X,
   XCircle
 } from "lucide-react";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router";
 import { permissions } from "@timesheet/shared";
 import { Badge } from "../components/ui/badge";

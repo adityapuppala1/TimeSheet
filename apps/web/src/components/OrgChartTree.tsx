@@ -73,7 +73,7 @@ export function OrgChartTree({ roots }: { roots: OrgChartNode[] }) {
     [roots]
   );
 
-  const { nodes, links, width, height } = useMemo(() => {
+  const { nodes, links } = useMemo(() => {
     const pruned = pruneForCollapse(virtualRoot, collapsedIds);
     const root = hierarchy(pruned, (d) => d.reports);
     const layout = tree<OrgChartNode>().nodeSize([NODE_WIDTH + 24, LEVEL_HEIGHT]);
@@ -101,18 +101,10 @@ export function OrgChartTree({ roots }: { roots: OrgChartNode[] }) {
       hasHiddenChildren: collapsedIds.has(d.data.id) && d.data.reports.length === 0 && roots.some((r) => findNode(r, d.data.id)?.reports.length)
     }));
 
-    const xs = laidOut.map((n) => n.x);
-    const ys = laidOut.map((n) => n.y);
-    const minX = xs.length ? Math.min(...xs) : 0;
-    const maxX = xs.length ? Math.max(...xs) : 0;
-    const maxY = ys.length ? Math.max(...ys) : 0;
-
-    return {
-      nodes: laidOut,
-      links: [...rootLevelLinks, ...allLinks],
-      width: maxX - minX + NODE_WIDTH + 80,
-      height: maxY + NODE_HEIGHT + 80
-    };
+    // No width/height returned: the <svg> is h-full w-full and the tree is reached by panning and
+    // zooming (see resetView), so an extent computed here was measured on every layout and read by
+    // nobody. Bring it back if a "fit to view" control ever needs it.
+    return { nodes: laidOut, links: [...rootLevelLinks, ...allLinks] };
   }, [virtualRoot, collapsedIds, roots]);
 
   function findNode(node: OrgChartNode, id: string): OrgChartNode | null {

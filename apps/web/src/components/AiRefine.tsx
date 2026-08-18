@@ -28,7 +28,7 @@ import { Check, Sparkles, Undo2, X } from "lucide-react";
 import { useCallback, useEffect, useId, useRef, useState } from "react";
 import { BorderGlow } from "./ui/border-glow";
 import { Button } from "./ui/button";
-import { safeHtml } from "../lib/safe-html";
+import { plainTextLength, safeHtml } from "../lib/safe-html";
 import { cn } from "../lib/utils";
 import { aiApi, type AIRefineAvailability, type AIRefineField, type AIRefineResult } from "../services/api";
 
@@ -48,10 +48,6 @@ function useReducedMotion(): boolean {
     return () => query.removeEventListener("change", onChange);
   }, []);
   return reduced;
-}
-
-function plainLengthOf(value: string): number {
-  return value.replace(/<[^>]+>/g, " ").replace(/&nbsp;/g, " ").trim().length;
 }
 
 /** Honest failure text. A timeout, a dead provider and an exhausted budget are three different
@@ -123,7 +119,7 @@ export function useAiRefine({ field, value, onChange, label, disabled }: UseAiRe
     }
   });
 
-  const isEmpty = plainLengthOf(value) === 0;
+  const isEmpty = plainTextLength(value) === 0;
   const blockedReason =
     disabled ? `The ${label} can't be edited right now.`
     : isEmpty ? `Write your ${label} first — AI tidies up what's there, it doesn't write it for you.`

@@ -162,13 +162,13 @@ export function inspectDeploymentConfig(input: DeploymentInputs): ConfigFinding[
 /** Boot-time report. Silent when everything is consistent, so it stays worth reading. */
 export function reportDeploymentConfig(input: DeploymentInputs): ConfigFinding[] {
   const findings = inspectDeploymentConfig(input);
-  if (findings.length === 0) return findings;
-
-  console.warn("\n[config] Problems with how this deployment is addressed:");
-  for (const finding of findings) {
-    console.warn(`[config]   ${finding.severity === "error" ? "ERROR  " : "warning"}  ${finding.problem}`);
-    console.warn(`[config]            fix: ${finding.fix}`);
+  if (findings.length > 0) {
+    console.warn("\n[config] Problems with how this deployment is addressed:");
+    for (const finding of findings) {
+      console.warn(`[config]   ${finding.severity === "error" ? "ERROR  " : "warning"}  ${finding.problem}`);
+      console.warn(`[config]            fix: ${finding.fix}`);
+    }
+    console.warn("[config] The app still starts — see docs/DEPLOYMENT.md.\n");
   }
-  console.warn("[config] The app still starts — see docs/DEPLOYMENT.md.\n");
   return findings;
 }

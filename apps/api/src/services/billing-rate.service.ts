@@ -22,6 +22,10 @@ import { Prisma } from "@prisma/client";
 import { prisma } from "../config/prisma.js";
 import { getGlobalTicketSettings } from "./ticket.service.js";
 
+/** A money/hours-shaped column as Prisma can hand it back: a Decimal from a fresh query, or a
+ *  plain number once something upstream (JSON round-trip, a test fixture) has already coerced it. */
+type DecimalLike = Prisma.Decimal | number;
+
 /** Where the applied rate came from. Stored on the timesheet so an attestation can explain
  *  itself ("billed at the project rate" vs "billed at the individual's rate"). */
 export type BilledRateSource = "PROJECT" | "USER" | "NONE";
@@ -87,7 +91,7 @@ export interface RateSnapshotPatch {
 export async function buildRateSnapshotPatch(timesheet: {
   userId: string;
   projectId: string;
-  totalHours: Prisma.Decimal | number;
+  totalHours: DecimalLike;
   billable: boolean;
 }): Promise<RateSnapshotPatch> {
   const resolved = await resolveBillingRate({ userId: timesheet.userId, projectId: timesheet.projectId });
@@ -147,11 +151,11 @@ export function clearRateSnapshotPatch(): {
  */
 export function computeTimesheetCost(
   rows: Array<{
-    totalHours: Prisma.Decimal | number;
+    totalHours: DecimalLike;
     billable?: boolean;
-    billedAmount?: Prisma.Decimal | number | null;
-    billedRate?: Prisma.Decimal | number | null;
-    liveFallbackRate?: Prisma.Decimal | number | null;
+    billedAmount?: DecimalLike | null;
+    billedRate?: DecimalLike | null;
+    liveFallbackRate?: DecimalLike | null;
   }>
 ): { amount: number; unratedHours: number } {
   let amount = new Prisma.Decimal(0);

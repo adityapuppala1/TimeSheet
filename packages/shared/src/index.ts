@@ -101,6 +101,7 @@ export interface TimesheetInput {
 }
 
 /** Admin-editable — the actual list of active types lives in the TicketType table (`ticketTypeApi.list()`). */
+// eslint-disable-next-line sonarjs/redundant-type-aliases -- names the concept at every call site
 export type TicketType = string;
 
 export const ticketPriorities = ["LOW", "MEDIUM", "HIGH", "CRITICAL"] as const;

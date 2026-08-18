@@ -225,13 +225,27 @@ async function getTransport(): Promise<MailTransportEntry> {
 const NON_DELIVERABLE_TLDS = [".local", ".test", ".example", ".localhost", ".invalid", ".internal", ".localdomain"];
 
 function extractEmail(from: string): { address: string | null; domain: string | null } {
-  // Matches "Name <user@domain>" or bare "user@domain"
-  const match = from.match(/<?([A-Za-z0-9._%+-]+)@([A-Za-z0-9.-]+)>?/);
-  if (!match) return { address: null, domain: null };
-  return { address: `${match[1]}@${match[2]}`, domain: match[2].toLowerCase() };
+  // Accepts "Name <user@domain>" or bare "user@domain".
+  //
+  // Split on the "@" rather than matching the whole shape in one unanchored pattern. The previous
+  // /<?([A-Za-z0-9._%+-]+)@([A-Za-z0-9.-]+)>?/ had to retry from every character of a string with
+  // no "@" in it, each retry scanning forward — quadratic, and ~400ms on a 20k-character value.
+  // Locating the delimiter first costs one linear pass, and the two anchored tests below cannot
+  // backtrack at all.
+  const angled = /^[^<>]*<([^<>]*)>/.exec(from);
+  const candidate = (angled ? angled[1] : from).trim();
+  const at = candidate.lastIndexOf("@");
+  if (at <= 0 || at === candidate.length - 1) return { address: null, domain: null };
+
+  const local = candidate.slice(0, at);
+  const domain = candidate.slice(at + 1);
+  if (!/^[A-Za-z0-9._%+-]+$/.test(local) || !/^[A-Za-z0-9.-]+$/.test(domain)) return { address: null, domain: null };
+  return { address: `${local}@${domain}`, domain: domain.toLowerCase() };
 }
 
-function classifyFromAddress(from: string, smtpUser: string): {
+/** Exported for tests: a pure function whose accepted/rejected forms are worth pinning directly,
+ *  rather than only through `getTransportStatus()` which needs a database and a live config. */
+export function classifyFromAddress(from: string, smtpUser: string): {
   fromAddress: string | null;
   fromDomain: string | null;
   userDomain: string | null;
@@ -381,6 +395,9 @@ const BACKOFF_MS = [60_000, 300_000, 900_000, 1_800_000];
 
 export function nextSendAttemptAt(attempt: number, now = Date.now()): Date {
   const base = BACKOFF_MS[Math.min(attempt - 1, BACKOFF_MS.length - 1)];
+  // Reviewed: retry jitter. Its job is to break lockstep between senders, which any spread does;
+  // an attacker predicting the next attempt time learns nothing they could act on.
+  // eslint-disable-next-line sonarjs/pseudo-random -- non-cryptographic by design
   return new Date(now + base + Math.floor(base * 0.2 * Math.random()));
 }
 
@@ -581,7 +598,8 @@ export async function attemptEmailDelivery(row: {
  * False positives are cheap: the only cost is that this one message is not retried.
  */
 export function looksSensitive(html: string): boolean {
-  return /reset-password\?token=|[?&]token=[A-Za-z0-9_-]{16,}|one-time password|temporary password/i.test(html);
+  // /i makes A-Z redundant with a-z, hence the lowercase-only range.
+  return /reset-password\?token=|[?&]token=[a-z0-9_-]{16,}|one-time password|temporary password/i.test(html);
 }
 
 export async function sendMail(

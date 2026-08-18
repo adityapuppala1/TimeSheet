@@ -299,16 +299,29 @@ export interface Score {
   detail: string;
 }
 
+/** The span from the first `open` to the last `close`, or null if either is missing. */
+function sliceBetween(text: string, open: string, close: string): string | null {
+  const start = text.indexOf(open);
+  if (start === -1) return null;
+  const end = text.lastIndexOf(close);
+  return end > start ? text.slice(start, end + 1) : null;
+}
+
 function parseJsonLoosely(text: string): any {
   try {
     return JSON.parse(text);
   } catch {
     // Models wrap JSON in prose or fences often enough that giving up here would report a scoring
     // failure for an answer that's actually correct.
-    const match = text.match(/\{[\s\S]*\}|\[[\s\S]*\]/);
-    if (!match) return undefined;
+    //
+    // Located by index rather than by /\{[\s\S]*\}|\[[\s\S]*\]/. That pattern expressed the same
+    // intent — first opening brace to last closing one — but got there by matching greedily and
+    // backtracking, so text containing an opening brace and no closing one was rescanned from
+    // every position. indexOf/lastIndexOf is two linear passes and cannot backtrack.
+    const candidate = sliceBetween(text, "{", "}") ?? sliceBetween(text, "[", "]");
+    if (candidate === null) return undefined;
     try {
-      return JSON.parse(match[0]);
+      return JSON.parse(candidate);
     } catch {
       return undefined;
     }

@@ -1413,6 +1413,7 @@ function AISettingsCard({ readOnly }: { readOnly: boolean }) {
       const previous = queryClient.getQueryData<GlobalAISettings>(["settings", "ai"]);
       // apiKey is write-only and not part of the cached settings shape — don't spread it into
       // the optimistic cache update, or GlobalAISettings would gain a field it never actually has.
+      // eslint-disable-next-line sonarjs/no-unused-vars -- rest-sibling omit pattern
       const { apiKey: _apiKey, ...optimistic } = payload;
       if (previous) queryClient.setQueryData(["settings", "ai"], { ...previous, ...optimistic });
       return { previous };

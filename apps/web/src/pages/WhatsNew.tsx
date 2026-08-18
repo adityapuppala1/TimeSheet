@@ -233,7 +233,7 @@ interface NoteSection {
 function parseReleaseSections(notes: string): { intro: string; sections: NoteSection[] } {
   const lines = notes.split(/\r?\n/);
   const sections: NoteSection[] = [];
-  let intro: string[] = [];
+  const intro: string[] = [];
   let current: { title: string; body: string[] } | null = null;
 
   const push = () => {

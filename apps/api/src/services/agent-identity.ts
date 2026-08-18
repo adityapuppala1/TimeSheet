@@ -62,7 +62,8 @@ export async function createAgentIdentity(params: { name: string; emoji: string 
     ).map((u) => u.email)
   );
   let email = `${base}${AGENT_MAIL_DOMAIN}`;
-  for (let n = 2; taken.has(email); n += 1) email = `${base}-${n}${AGENT_MAIL_DOMAIN}`;
+  let n = 2;
+  while (taken.has(email)) email = `${base}-${n++}${AGENT_MAIL_DOMAIN}`;
 
   const identity = await prisma.user.create({
     data: {

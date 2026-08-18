@@ -4069,3 +4069,124 @@ which is the failure mode that makes a guard worse than none.
 **This machine's settings, decided accordingly**: `APP_BASE_URL=https://192.168.88.5:5173` with the
 matching allow-list entry — it is a development box on the LAN, and the public IP forwards elsewhere.
 The `.env` carries the exact one-line change for when that forward is repointed here. Boot is clean.
+
+## Static analysis, and the four bugs hiding behind the style complaints (2026-08-18)
+
+The ask was "check the SonarQube problems reported and fix them across the application." The first
+finding was that **nothing in this repo had ever run one**. `sonar-project.properties` had been here
+for a while describing how to scan — sources, exclusions, coverage paths — but no scanner ran in CI,
+`npm run lint` was `tsc --noEmit` in both workspaces, and there was no ESLint at all. So "the reported
+problems" were unknowable from inside the repo: seeing them needed a server URL and a token that live
+outside it.
+
+`eslint-plugin-sonarjs` **is** the analyzer SonarQube uses for JS/TS — the same S-numbered rules, the
+same implementations. Running it locally reports the same findings, offline, on every machine and in
+CI, with no server to own. `eslint.config.mjs` is now that, wired into `npm run lint`, which CI
+already calls. The Sonar dashboard stays the source of truth for the quality *gate*; this is the
+source of truth for the issues.
+
+**First run: 496 findings.** Not a backlog to grind through — a haystack to sort. Sorting it found
+four defects and two security problems that no test and no type-check would ever have reported.
+
+### The invite form shipped the README's password
+
+`POST /users` was the only password path in `user.controller.ts` that still *required* a caller-supplied
+password — bulk reset, CSV import and `/:id/reset-password` all generated a random one-time value, for
+the reason written on `generateTempPassword`: a default anyone who has read the README can type is not
+a password. The admin "Invite a teammate" form satisfied that requirement by pre-filling the field with
+the literal `Admin@12345`. Every teammate invited without an admin editing that box shared one password
+the whole internet can read.
+
+The rule existed. It lived in three call sites and was missing from the fourth — the fourth being the
+one an admin actually uses. **This is the fourth time this pattern has appeared in this project**
+(Studio capability filter, dispatcher project scope, the flow-authority check, now this), and it is the
+argument for a linter that reads every path rather than the one you are looking at.
+
+Fixed on both sides: `password` is optional, blank generates a one-time password returned exactly once
+through the same show-once dialog the reset flows already had, and the field defaults to empty with
+"Leave blank to generate". Verified against the live API — random password each time, it signs in,
+`Admin@12345` is rejected, `mustChangePassword` set.
+
+### ...and returned the new account's bcrypt hash
+
+Found while fixing the above. `prisma.user.create` returns every scalar, and the response spread the
+whole record — so the hash went to the admin's browser and any proxy log in between. Every list route
+in the same file already strips it. Now this one does too.
+
+### Two "line" heuristics that were not per-line
+
+`rich-text-editor.tsx` decides whether a paste is code using `/m`-anchored line patterns. Two of them
+used `[^.!?]*`, and a negated class that does not exclude the newline matches straight through it — so
+a "line" ran to the end of the paste. A paragraph of prose was classified as code whenever one of the
+keywords appeared anywhere above a line ending in an opening brace. The same crossing made the match
+quadratic: ~350ms on a 20k paste, a visible freeze while someone is typing. One fix, both problems.
+
+### A filter that skipped its own page reset
+
+`FaceVerificationSettingsCard` has a `changeFilter` helper whose comment explains it resets to page 1
+because "landing on a page that no longer exists shows a truthful-but-useless empty table." Its sibling
+`changePageSize` was wired up. `changeFilter` was written and never used — the switch called
+`setFlaggedOnly` directly. Sonar found it as a dead store.
+
+### Latency measured 12 times and thrown away
+
+Twelve `logAIUsage` call sites in `ai.service.ts` computed `const startedAt = Date.now()` and never
+passed `latencyMs`. `AIInteraction.latencyMs` exists, and `ai-quality.service.ts` *reads* it — so the
+AI quality dashboard was reporting latency over 9 of 21 features and looked complete. All 21 record it
+now.
+
+### ReDoS: measured, not assumed
+
+34 `slow-regex` findings. A rule saying "may be super-linear" is a hypothesis, so each was pumped with
+adversarial inputs up to 20k characters and timed. **14 of 20 distinct patterns were false positives** —
+anchoring saves them, which the rule cannot see. Six were real and are now linear:
+
+| where | was | why it was slow |
+|---|---|---|
+| `mail.service.ts` From parsing | 409ms | unanchored, retried from every character |
+| `rich-text-editor.tsx` x2 | ~320ms | the newline-crossing above |
+| `email-analytics.ts` address redaction | 183ms | unbounded `+` before the `@` |
+| tag strip, 5 sites | 102ms | rescanned from every `<` |
+| `ai-eval.ts` JSON extraction | 82ms | greedy `[\s\S]*` with no closing brace |
+
+None sat on an unauthenticated unbounded path, so none was a live outage — but each is now linear, and
+the five copies of the tag-strip regex became one shared `htmlToPlainText`/`plainTextLength` in
+`lib/safe-html.ts`. They had *disagreed*: some joined tags with the empty string, some with a space, so
+the same content measured a different length on different screens.
+
+### What was deliberately not done
+
+**325 of the remaining findings are three structural rules** — nested ternaries (191), cognitive
+complexity (84), nested template literals (50). Rewriting ~100k lines of working code for style is a
+large unreviewable diff with no behavioural benefit, and a permanently-red lint is one people learn to
+ignore — the same reasoning `sonar-project.properties` already records for gating new code only. Those
+rules are **warnings**: visible as debt, burnt down as files get touched, not blocking. Errors gate at
+zero, and `npm run lint` passes.
+
+`slow-regex` and `void-use` are warnings for a better reason than volume: their remaining findings were
+each checked and are demonstrably not defects here.
+
+Security hotspots (`pseudo-random`, `no-hardcoded-passwords`) were reviewed one at a time and marked
+inline with the verdict rather than switched off — telemetry sampling, retry jitter, a cache key, a
+decorative animation, a bcrypt timing sentinel, a character alphabet, a button label. A *new*
+`Math.random()` still fails the build until somebody reviews it.
+
+### Two gaps closed so this cannot silently reaccumulate
+
+- **`noUnusedLocals` is on** in `tsconfig.base.json`. It was off, which is why 30 unused imports and 5
+  dead functions had accumulated invisibly to `npm run lint`. Unused *parameters* stay unchecked —
+  Express handlers and React callbacks legitimately name arguments they do not use.
+- **The React hooks plugin is installed.** Ten `eslint-disable-next-line react-hooks/exhaustive-deps`
+  comments were scattered through `apps/web`, written by people who expected the rule to be running.
+  It was not — they suppressed nothing, and every other hook went unchecked. `rules-of-hooks` is an
+  error and reports **zero** violations; `exhaustive-deps` is a warning. One of those ten comments used
+  an em dash instead of ESLint's `--` separator, so it had never parsed as a directive at all.
+
+**Also in this pass**: the home dashboard's "My projects this month" gained Open / Closed / Done
+columns, counted server-side by one grouped query (`GET /tickets/counts-by-project`) rather than by
+fetching every closed ticket. The completion share renders an em dash, never `0%`, when there is
+nothing to divide — "none of your tickets here are done" and "you have no tickets here" are different
+facts, and only one of them is a number.
+
+1275 unit tests pass (+28: the counts route, the From-address parsing, and the invite-password
+behaviour, each pinned because each changed real logic).

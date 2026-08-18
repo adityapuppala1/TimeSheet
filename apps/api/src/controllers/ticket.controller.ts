@@ -161,6 +161,52 @@ ticketRouter.get("/", requirePermission(permissions.TICKETS_VIEW), async (req, r
  * registration order, so `/:id` would otherwise swallow `/suggest-assignee` as if "id" were the
  * literal string "suggest-assignee".
  */
+/**
+ * Per-project open/closed counts for ONE person's tickets.
+ *
+ * WHY A COUNTING ROUTE RATHER THAN A LIST THE BROWSER TALLIES: the dashboard already counts open
+ * tickets per project by fetching every open ticket and grouping them in the browser. That is
+ * affordable for open work and would not be for closed work — a long-serving assignee has hundreds of
+ * closed tickets, and the list route carries the project, module, reporter, assignee, comment and
+ * attachment counts and the latest CI run for each. Shipping all of that to render two numbers is the
+ * kind of thing that is fine on a demo workspace and falls over on a real one.
+ *
+ * WHY IT IS SCOPED TO ONE ASSIGNEE AND DEFAULTS TO THE CALLER: this feeds "My projects this month". A
+ * caller may ask about somebody else only with the permission that already grants a cross-user view
+ * of tickets — the same rule the list route applies — so this cannot become a way to profile a
+ * colleague's throughput.
+ *
+ * NOT month-scoped, deliberately. Both numbers are a snapshot of where the work stands now, so the
+ * percentage divides two things measured the same way. Counting "closed this month" against "open
+ * right now" would put a period over a snapshot and produce a ratio that means nothing.
+ */
+ticketRouter.get("/counts-by-project", requirePermission(permissions.TICKETS_VIEW), async (req, res) => {
+  const requested = typeof req.query.assigneeId === "string" && req.query.assigneeId ? req.query.assigneeId : req.user!.id;
+  if (requested !== req.user!.id && !req.user!.permissions.includes(permissions.REPORTS_VIEW)) {
+    throw new AppError(403, "You can only see your own ticket counts.");
+  }
+
+  const grouped = await prisma.ticket.groupBy({
+    by: ["projectId", "status"],
+    where: { assigneeId: requested, deletedAt: null },
+    _count: true
+  });
+
+  // Shaped per project here rather than in the browser, so every consumer gets the same definition of
+  // "closed" — RESOLVED and CLOSED both count as done, exactly as the status filters elsewhere treat
+  // them.
+  const byProject = new Map<string, { projectId: string; open: number; closed: number }>();
+  for (const row of grouped) {
+    if (!row.projectId) continue;
+    const entry = byProject.get(row.projectId) ?? { projectId: row.projectId, open: 0, closed: 0 };
+    if (row.status === "RESOLVED" || row.status === "CLOSED") entry.closed += row._count;
+    else entry.open += row._count;
+    byProject.set(row.projectId, entry);
+  }
+
+  res.json([...byProject.values()]);
+});
+
 ticketRouter.get("/suggest-assignee", requirePermission(permissions.TICKETS_WRITE), async (req, res) => {
   const projectId = String(req.query.projectId ?? "");
   const moduleId = req.query.moduleId ? String(req.query.moduleId) : undefined;

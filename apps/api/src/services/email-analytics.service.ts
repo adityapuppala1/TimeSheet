@@ -303,7 +303,10 @@ function buildSeries(
 export function normalizeErrorMessage(raw: string): string {
   return raw
     .replace(/<[^<>\s]+@[^<>\s]+>/g, "<message-id>")
-    .replace(/[\w.+-]+@[\w-]+(?:\.[\w-]+)+/g, "<address>")
+    // Bounded rather than open `+` quantifiers: RFC 5321 caps a local part at 64 characters and
+    // each domain label at 63, so nothing real is lost, and the bound is what keeps a long run of
+    // word characters containing no "@" from being rescanned from every position (~180ms on 20k).
+    .replace(/[\w.+-]{1,64}@[\w-]{1,63}(?:\.[\w-]{1,63}){1,8}/g, "<address>")
     .replace(/\b\d{1,3}(?:\.\d{1,3}){3}\b/g, "<ip>")
     .replace(/\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b/gi, "<uuid>")
     .replace(/\b\d{4}-\d{2}-\d{2}(?:[T ]\d{2}:\d{2}(?::\d{2})?(?:\.\d+)?Z?)?\b/g, "<timestamp>")

@@ -382,7 +382,13 @@ userRouter.post(
         name: z.string().min(2),
         email: z.string().email(),
         role: z.string(),
-        password: z.string().min(8),
+        // OPTIONAL, and normally omitted. Every other password path in this file — bulk reset, CSV
+        // import, /:id/reset-password — generates a random one-time password rather than accepting
+        // a default, for the reason written on `generateTempPassword`: the fixed "Admin@12345" this
+        // repo's own README documents is not a password. This route was the last one still
+        // demanding a caller-supplied value, and the admin UI satisfied it by pre-filling exactly
+        // that string, so every user created through the form shared one publicly-known password.
+        password: z.string().min(8).optional(),
         managerId: z.string().uuid().optional().nullable(),
         designation: z.string().max(120).optional().nullable(),
         faceVerificationRequired: z.boolean().optional(),
@@ -423,13 +429,16 @@ userRouter.post(
       const manager = await prisma.user.findUnique({ where: { id: req.body.managerId } });
       if (!manager) throw new AppError(422, "Manager not found");
     }
+    // Returned ONCE in the response below and stored nowhere in plaintext, exactly as
+    // /:id/reset-password does it. Null when the admin supplied their own — they already know it.
+    const generatedPassword = req.body.password ? null : generateTempPassword();
     const user = await prisma.user.create({
       data: {
         name: req.body.name,
         email: req.body.email,
         roleId: role.id,
         status: "ACTIVE",
-        passwordHash: await hashPassword(req.body.password),
+        passwordHash: await hashPassword(req.body.password ?? generatedPassword!),
         // The admin knows this password; the person it belongs to should not keep it. Prompts
         // (never forces) a change at first sign-in.
         mustChangePassword: true,
@@ -451,8 +460,15 @@ userRouter.post(
       welcomeResult.errorMessage ? { error: welcomeResult.errorMessage } : undefined
     );
 
+    // `passwordHash` stripped, matching every list route in this file. Prisma's create returns all
+    // scalars, so spreading the record put the new account's bcrypt hash in the admin's browser and
+    // in whatever proxy logs sit between — a leak with no purpose, since the admin either chose the
+    // password or gets it back below in plaintext.
+    // eslint-disable-next-line sonarjs/no-unused-vars -- rest-sibling omit pattern
+    const { passwordHash: _passwordHash, ...created } = user;
     res.status(201).json({
-      ...user,
+      ...created,
+      generatedPassword,
       welcomeEmail: {
         sent: welcomeResult.ok,
         status: welcomeResult.status,

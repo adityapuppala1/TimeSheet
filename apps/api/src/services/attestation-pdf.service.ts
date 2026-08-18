@@ -19,7 +19,6 @@
  * House style is shared with the ticket security report and the timesheet export: A4, 36pt
  * margins, `#0F9AA8` brand, `#0F172A` headings, `#64748B` meta, `#E2E8F0` rules, `#94A3B8` footer.
  */
-import type PDFKit from "pdfkit";
 import type { AttestationPayload } from "./attestation.service.js";
 
 const BRAND = "#0F9AA8";

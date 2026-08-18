@@ -9,7 +9,8 @@
     "postinstall": "node -e \"const{existsSync}=require('fs');if(existsSync('packages/shared/tsconfig.json')){require('child_process').execSync('npm run build -w packages/shared',{stdio:'inherit'})}else{console.log('postinstall: packages/shared sources absent (manifest-only install layer) - skipping build')}\"",
     "dev": "concurrently \"npm run dev -w apps/api\" \"npm run dev -w apps/web\"",
     "build": "npm run build -w packages/shared && npm run build -w apps/api && npm run build -w apps/web",
-    "lint": "npm run lint -w apps/api && npm run lint -w apps/web",
+    "lint": "npm run lint -w apps/api && npm run lint -w apps/web && npm run lint:sonar",
+    "lint:sonar": "eslint apps/api/src apps/web/src packages/shared/src",
     "doctor": "npm run doctor -w apps/api",
     "doctor:heal": "npm run doctor:heal -w apps/api",
     "db:generate": "npm run prisma:generate -w apps/api && npm run control:generate -w apps/api",
@@ -28,9 +29,15 @@
     "check:public": "npm run check:public -w apps/api"
   },
   "devDependencies": {
+    "@eslint/js": "^9.39.5",
     "@playwright/test": "^1.61.1",
     "concurrently": "^10.0.4",
-    "typescript": "^5.8.3"
+    "eslint": "^9.39.5",
+    "eslint-plugin-react-hooks": "^5.2.0",
+    "eslint-plugin-sonarjs": "^3.0.7",
+    "globals": "^17.11.0",
+    "typescript": "^5.8.3",
+    "typescript-eslint": "^8.67.0"
   },
   "overrides": {
     "form-data": "^4.0.6",

@@ -84,6 +84,11 @@ export function setAccessToken(token: string | null) {
  *  "expired" = the refresh simply failed (idle past the refresh window, cookie gone). */
 export type SessionEndedReason = "revoked" | "expired";
 
+/** A value the API may hand back as either a JS number or a string (Prisma Decimal serialized
+ *  over JSON), or omit — shared by the several "amount" fields below rather than repeating the
+ *  union at each one. */
+export type NumericOrString = number | string | null;
+
 type SessionEndedListener = (reason: SessionEndedReason) => void;
 const sessionEndedListeners = new Set<SessionEndedListener>();
 /** Fires at most once per established session — a burst of parallel 401s must produce ONE
@@ -2520,7 +2525,7 @@ export interface TicketDetail extends TicketRow {
   endDate?: string | null;
   isMilestone?: boolean;
   progressPct?: number | null;
-  estimatedHours?: number | string | null;
+  estimatedHours?: NumericOrString;
   baselineStartDate?: string | null;
   baselineEndDate?: string | null;
   baselineSetAt?: string | null;
@@ -2535,7 +2540,19 @@ export interface AssigneeSuggestion {
   score: number;
 }
 
+/** Per-project open/closed counts for one person's tickets — counted server-side, because a long
+ *  serving assignee has hundreds of closed tickets and the list route carries a heavy include. */
+export interface TicketCountsByProject {
+  projectId: string;
+  open: number;
+  closed: number;
+}
+
 export const ticketApi = {
+  /** Per-project open/closed counts for one person's tickets, counted server-side. Defaults to the
+   *  caller; another assignee needs the same permission the list route requires. */
+  countsByProject: async (assigneeId?: string) =>
+    (await api.get<TicketCountsByProject[]>("/tickets/counts-by-project", { params: { assigneeId } })).data,
   /** `title` is optional context for the AI narration only (assigneeSuggestionAiEnabled) — the
    *  ranking itself never depends on it. */
   suggestAssignee: async (projectId: string, moduleId?: string, title?: string) =>
@@ -2989,10 +3006,14 @@ export interface FaceVerifyResult {
   message?: string;
 }
 
+/** Mirrors `FaceContext` in apps/api/src/services/face.service.ts — not imported from there since
+ *  the web app doesn't depend on API source, but named the same to keep the two in sync by eye. */
+export type FaceContext = "TIMESHEET" | "TICKET" | "APPROVAL";
+
 export interface FaceAttemptRow {
   id: string;
   userId: string;
-  context: "TIMESHEET" | "TICKET" | "APPROVAL";
+  context: FaceContext;
   outcome: FaceOutcome;
   similarity: number | null;
   antispoofReal: number | null;
@@ -3047,14 +3068,14 @@ export const faceApi = {
     ).data;
   },
   /** Issues the liveness challenge a verification must satisfy while challenge–response is on. */
-  challenge: async (context: "TIMESHEET" | "TICKET" | "APPROVAL") =>
+  challenge: async (context: FaceContext) =>
     (await api.post<FaceChallenge>("/face/challenge", { context })).data,
   /** Resolves with the outcome either way — a failed check is a 422 carrying a structured
    *  body, not an exception the caller should have to unwrap. `frames` is [neutral] when the
    *  challenge feature is off, [neutral, gesture] when on. */
   verify: async (params: {
     frames: Blob[];
-    context: "TIMESHEET" | "TICKET" | "APPROVAL";
+    context: FaceContext;
     challengeId?: string;
     deviceLabel?: string | null;
     /** Client-perceived ms from camera-ready to submit — the only place the human's actual wait
@@ -3083,7 +3104,7 @@ export const faceApi = {
   },
   /** The insecure-context pass-through: mints a consumable "skipped" verification, only while
    *  the super-admin bypass toggle is on. Recorded in the review log — never silent. */
-  skipVerification: async (context: "TIMESHEET" | "TICKET" | "APPROVAL") =>
+  skipVerification: async (context: FaceContext) =>
     (await api.post<{ verificationId: string }>("/face/skip", { context })).data,
   deleteMyEnrollment: async () => (await api.delete<{ deleted: boolean }>("/face/enrollment")).data,
   deleteEnrollmentFor: async (userId: string) => (await api.delete<{ deleted: boolean }>(`/face/enrollment/${userId}`)).data,
@@ -4025,8 +4046,8 @@ export interface AgentRunRow {
   taintedAt: string | null;
   stepCount: number;
   maxSteps: number;
-  costUsd: string | number | null;
-  maxCostUsd: string | number | null;
+  costUsd: NumericOrString;
+  maxCostUsd: NumericOrString;
   proposalId: string | null;
   error: string | null;
   startedAt: string | null;
@@ -4340,7 +4361,7 @@ export interface RiskSignalRow {
   severity: number;
   /** severity × weight — what this signal contributed to the total. */
   points: number;
-  detail: Record<string, number | string | null>;
+  detail: Record<string, NumericOrString>;
   /** One actionable sentence, or "" when the signal is clean. */
   note: string;
 }
@@ -4354,7 +4375,7 @@ export interface ProjectRisk {
   signals: RiskSignalRow[];
   /** Worst-first — reads as what to fix, in order. */
   topConcerns: string[];
-  facts: Record<string, number | string | null>;
+  facts: Record<string, NumericOrString>;
   /** Null whenever AI is off, unavailable, or over budget. The score is never lost with it. */
   narrative: string | null;
   snapshotId?: string;
@@ -4523,11 +4544,11 @@ export interface ResolvedWidget {
   title: string;
   type: WidgetTypeValue;
   shape: WidgetShapeValue;
-  value?: number | string | null;
+  value?: NumericOrString;
   unit?: string | null;
   hint?: string | null;
   points?: Array<{ label: string; value: number; secondary?: number }>;
-  rows?: Array<Record<string, string | number | null>>;
+  rows?: Array<Record<string, NumericOrString>>;
   /** Set when the tile could not be computed. Shown instead of a zero — a zero is a claim. */
   unavailable?: string;
 }
