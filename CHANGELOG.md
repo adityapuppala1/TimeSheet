@@ -7,9 +7,24 @@ user of a running installation.
 
 ## Unreleased
 
-Everything below ships in the next tag. The parser that feeds the in-app What's-new page ignores
-this section until it gains a version number, on purpose — an installation must never render
-history for a version that does not exist yet.
+Empty right now: everything currently unshipped is gathered under 2.5.0 below, which is written
+but not yet tagged. Anything landing after that tag is cut goes here. The parser that feeds the
+in-app What's-new page ignores this section until it gains a version number, on purpose — an
+installation must never render history for a version that does not exist yet.
+
+## 2.5.0 — goals that measure themselves, teammates that hold no seat, and the releases you could not see — 2026-08-18
+
+**One upgrade note for multi-org installations.** The tenant schema fan-out has never been able to
+run inside a container (see below), so every organization beyond the default one has been left on
+its old schema without the update saying so. After upgrading, run the fan-out once:
+`docker compose exec api npm run migrate:tenants -w apps/api`.
+
+**One security note, for anyone who invited teammates on an earlier build.** The "Invite a
+teammate" form used to pre-fill the password box with the demo credential printed in this
+project's README, so any account created without an admin editing that field shares a password
+anybody can look up. Treat those accounts as compromised and reset them — Users → select →
+**Reset password** issues a fresh one-time password per person. New invites now generate one
+automatically (see below).
 
 ### 🎯 Goals, and progress that measures itself
 
@@ -34,7 +49,6 @@ history for a version that does not exist yet.
 - Managers and team leads can write goals, not just admins: a manager who cannot write the goals
   their team is measured against has nothing to manage. Everyone can read them.
 
-
 ### 🗞️ An Inbox, and a brief that counts rather than guesses
 
 - **A real inbox at Work → Inbox**, not just a bell. Notifications become a queue you can work
@@ -56,49 +70,6 @@ history for a version that does not exist yet.
 - Two panes on a desktop (list beside detail, so triage is read-decide-next rather than
   navigate-and-back), a single list on a phone, and 25 items at a time with a "show more" — a busy
   workspace's first render was otherwise 24,000 pixels tall.
-
-
-### 🔐 Inviting a teammate no longer hands out a password the internet knows
-
-- **New users get a random one-time password, shown to you exactly once.** The invite form used to
-  pre-fill the password box with the demo credential printed in this project's own README, so every
-  teammate created without an admin editing that field shared one password anybody could look up.
-  Leave the box blank and the server generates a strong one-off, returned in the same show-once
-  dialog the "Reset password" flows already used; type your own and it is used unchanged. Either
-  way the person is prompted to choose their own at first sign-in.
-- **If you have been running an earlier build, treat any account invited through that form as
-  compromised** and reset it — the old default is public, and it was the path of least resistance.
-- The create-user response no longer includes the new account's password hash. It never needed to
-  leave the server, and it was reaching the browser and any proxy log in between.
-
-### 📊 "My projects this month" now says how much you actually finished
-
-- The home dashboard's project table gains **Open**, **Closed** and **Done** columns, so a project
-  where you have three tickets left out of twelve reads differently from one where you have three
-  out of three. Counted server-side in a single query, so the figure stays honest on a workspace
-  with years of closed tickets behind it.
-- **The completion share shows a dash, never 0%, when there is nothing to divide.** "None of your
-  tickets here are finished" and "you have no tickets here" are different facts, and a dashboard
-  that renders both as zero gets one of them quoted in a review.
-
-### 🩹 Fixes
-
-- **The face-verification review log's "flagged only" switch** left you on whatever page you were
-  on. Filtering from page 7 down to two pages of results showed an empty table that read as "no
-  flagged checks". It now returns to the first page, like the page-size control beside it always did.
-- **Pasting into a rich-text box** no longer mistakes prose for code — a paragraph was being turned
-  into a code block whenever a word like `for` or `return` appeared above a line ending in a brace.
-  Large pastes also no longer freeze the editor for a moment while that check runs.
-- **AI response times are recorded for every AI feature**, not the nine of twenty-one that happened
-  to be wired up, so the latency figures on the AI quality page describe the whole picture rather
-  than a subset that looked complete.
-
-## 2.5.0 — the releases you could not see, and the updates that quietly did not finish — 2026-08-17
-
-**One upgrade note for multi-org installations.** The tenant schema fan-out has never been able to
-run inside a container (see below), so every organization beyond the default one has been left on
-its old schema without the update saying so. After upgrading, run the fan-out once:
-`docker compose exec api npm run migrate:tenants -w apps/api`.
 
 ### 🤖 AI teammates you can name, scope, and switch off
 
@@ -349,6 +320,41 @@ its old schema without the update saying so. After upgrading, run the fan-out on
   digest was silently not sent.
 - Hours count **approved** timesheets only — the same basis as the portfolio and budget figures, so
   the digest can never disagree with them. A share with nothing to divide by shows a dash, not 0%.
+
+### 🔐 Inviting a teammate no longer hands out a password the internet knows
+
+- **New users get a random one-time password, shown to you exactly once.** The invite form used to
+  pre-fill the password box with the demo credential printed in this project's own README, so every
+  teammate created without an admin editing that field shared one password anybody could look up.
+  Leave the box blank and the server generates a strong one-off, returned in the same show-once
+  dialog the "Reset password" flows already used; type your own and it is used unchanged. Either
+  way the person is prompted to choose their own at first sign-in.
+- **If you have been running an earlier build, treat any account invited through that form as
+  compromised** and reset it — the old default is public, and it was the path of least resistance.
+- The create-user response no longer includes the new account's password hash. It never needed to
+  leave the server, and it was reaching the browser and any proxy log in between.
+
+### 📊 "My projects this month" now says how much you actually finished
+
+- The home dashboard's project table gains **Open**, **Closed** and **Done** columns, so a project
+  where you have three tickets left out of twelve reads differently from one where you have three
+  out of three. Counted server-side in a single query, so the figure stays honest on a workspace
+  with years of closed tickets behind it.
+- **The completion share shows a dash, never 0%, when there is nothing to divide.** "None of your
+  tickets here are finished" and "you have no tickets here" are different facts, and a dashboard
+  that renders both as zero gets one of them quoted in a review.
+
+### 🩹 Fixes
+
+- **The face-verification review log's "flagged only" switch** left you on whatever page you were
+  on. Filtering from page 7 down to two pages of results showed an empty table that read as "no
+  flagged checks". It now returns to the first page, like the page-size control beside it always did.
+- **Pasting into a rich-text box** no longer mistakes prose for code — a paragraph was being turned
+  into a code block whenever a word like `for` or `return` appeared above a line ending in a brace.
+  Large pastes also no longer freeze the editor for a moment while that check runs.
+- **AI response times are recorded for every AI feature**, not the nine of twenty-one that happened
+  to be wired up, so the latency figures on the AI quality page describe the whole picture rather
+  than a subset that looked complete.
 
 ### 🩹 A workspace left behind by an upgrade now says so at startup
 
