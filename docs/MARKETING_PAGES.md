@@ -47,6 +47,28 @@ When editing any of these files, or `PricingDialog.tsx`:
 `PricingDialog.tsx` is the highest-risk file here: a comparison table makes ~25 discrete promises at
 once, and a single wrong row is a support ticket at best and a refund at worst.
 
+### The V8 claims, and what each one is careful about
+
+The agentic features are the easiest thing in this product to overpromise, because the industry's
+vocabulary for them ("autonomous", "self-driving", "AI employee") describes something nobody has
+shipped. Four entries were added to `Landing.tsx`, and the wording of each is load-bearing:
+
+- **Goals** — "progress reports itself" is true of the six wired sources and nothing else, so the
+  entry names them. It also states the failure mode out loud ("not measurable yet" rather than 0%),
+  because that honesty is the differentiator against a tool that shows a confident zero.
+- **AI teammates** — the three fences (no seat, no login, no mailbox) are in the copy because they are
+  what makes "teammate" a safe word. A reader who assumes an AI teammate consumes a licence, or can be
+  phished, has been misled by the noun.
+- **Workflows** — "can never do more than its most restricted step" and the taint clamp are stated as
+  limits, not as features. They are the reason to trust the thing, and a page that led with capability
+  and hid the constraint would sell the wrong product.
+- **The ledger** — "measured … and where they do not, it says so" rather than a savings claim. Every
+  competitor in this space quotes hours saved; this one can only quote them where its own approved
+  timesheets support the comparison, and says which.
+
+None of the four claims a benchmark, a percentage saved, or an outcome. Where a number would be
+persuasive is exactly where this product cannot produce one honestly.
+
 ---
 
 ## Screenshots are generated, never pasted

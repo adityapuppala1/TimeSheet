@@ -45,7 +45,10 @@ vi.mock("../../src/config/prisma.js", () => ({
     automationFlowRunStep: { create: (...a: unknown[]) => stepCreate(...a), deleteMany: (...a: unknown[]) => stepDeleteMany(...a) },
     ticket: { findUnique: (...a: unknown[]) => ticketFindUnique(...a), update: (...a: unknown[]) => ticketUpdate(...a) },
     ticketLabel: { findFirst: (...a: unknown[]) => ticketLabelFindFirst(...a), create: (...a: unknown[]) => ticketLabelCreate(...a) },
+    label: { findUnique: vi.fn().mockResolvedValue({ name: "Urgent" }) },
     agentProfile: { findUnique: vi.fn().mockResolvedValue(null) },
+    // The gate reads the approver to address the email to them by name.
+    user: { findUnique: vi.fn().mockResolvedValue({ name: "Boss Person" }) },
     automationFlow: { findMany: vi.fn().mockResolvedValue([]) }
   }
 }));
@@ -202,7 +205,12 @@ describe("a gate stops the run and asks the person it named", () => {
     expect(ticketUpdate).not.toHaveBeenCalled();
     const update = flowRunUpdate.mock.calls.at(-1)?.[0].data;
     expect(update).toMatchObject({ status: "WAITING", awaitingOrder: 1, awaitingUserId: "boss-1" });
-    expect(dispatchNotification).toHaveBeenCalledWith(expect.objectContaining({ userId: "boss-1" }));
+    // In-app AND email: a gate blocks everything after it, so an in-app-only request is a workflow
+    // that reads as broken rather than as blocked.
+    const call = dispatchNotification.mock.calls.find((c) => c[0].userId === "boss-1")?.[0];
+    expect(call).toBeDefined();
+    expect(call.category).toBe("workflow.approval");
+    expect(call.email?.templateKey).toBe("workflow.approval");
   });
 });
 
@@ -218,15 +226,24 @@ describe("a proposal-only flow proposes, and never applies", () => {
     expect(createProposal.mock.calls[0][0].changes[0]).toMatchObject({ before: { assigneeId: "old-1" }, after: { assigneeId: "u-9" } });
   });
 
-  it("HOLDS a label rather than applying one the review queue cannot express", async () => {
+  it("proposes a label rather than applying it — the review queue can hold one now", async () => {
+    // This was `held` until the proposal engine gained a TICKET_LABEL target. A triage flow that reads
+    // inbound email is proposal-only by construction, and "read this and label it" is the single most
+    // obvious thing such a flow is for, so refusing to even propose made the commonest flow useless.
     getFlow.mockResolvedValue(flow([{ kind: "ACTION", config: { action: "label", labelId: "l-1" } }], { proposalOnly: true }));
 
     await startFlowRun({ flowId: "flow-1", trigger: "manual", subject, triggerKey: "k7" });
 
     expect(ticketLabelCreate).not.toHaveBeenCalled();
-    expect(createProposal).not.toHaveBeenCalled();
-    expect(outcomes()[0]).toEqual([1, "held"]);
-    expect(stepCreate.mock.calls[0][0].data.detail).toMatch(/may only propose/i);
+    expect(outcomes()[0]).toEqual([1, "proposed"]);
+    expect(createProposal.mock.calls[0][0].changes[0]).toMatchObject({
+      targetType: "TICKET_LABEL",
+      op: "CREATE",
+      after: { ticketId: "t-1", labelId: "l-1" }
+    });
+    // The proposal id rides on the step, so the run report can LINK to it rather than merely say it
+    // proposed something.
+    expect(stepCreate.mock.calls[0][0].data.proposalId).toBe("prop-1234abcd");
   });
 
   it("still notifies, because telling somebody something changes nothing", async () => {

@@ -223,7 +223,7 @@ export function AgentsPage() {
               </CardContent>
             </Card>
           ) : (
-            <div className="grid gap-3 xl:grid-cols-2">
+            <div className="grid gap-3 xl:grid-cols-2" data-tour="agent-roster">
               {entries.map((entry) => (
                 <AgentCard
                   key={entry.id}

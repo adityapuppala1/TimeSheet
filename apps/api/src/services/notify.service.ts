@@ -60,11 +60,15 @@ export type NotificationCategory =
    *  matrix covers product announcements. Raised once per version per workspace by
    *  services/release-announce.service.ts. */
   | "release.published"
-  /** In-app ONLY, deliberately — see the `null` in SETTINGS_FIELD. Raised by the Workflow Studio when
-   *  a flow needs an approval or has run for the first time. No email leg because no category in the
-   *  email role matrix covers workflow administration, and inventing one would put a send in front of
-   *  every super admin on every automation they build. */
-  | "workflow.attention";
+  /** In-app ONLY, deliberately. Raised by the Workflow Studio for news: a flow ran for the first
+   *  time, or a step notified somebody. News does not need an email; a thing WAITING on somebody
+   *  does, and that is `workflow.approval` below. */
+  | "workflow.attention"
+  /** A workflow has stopped at a gate and is waiting for this person to decide. The one workflow
+   *  message with an email leg, because it is the only one that BLOCKS. */
+  | "workflow.approval"
+  /** Weekly, to a goal's owner: which of their goals are off track and which periods are closing. */
+  | "goal.digest";
 
 interface EmailPayload {
   templateKey: string;
@@ -120,7 +124,9 @@ const SETTINGS_FIELD: Record<NotificationCategory, string | null> = {
   "ai.autonomy_applied": "emailAiAutonomyApplied",
   "timesheet.updated": null,
   "release.published": null,
-  "workflow.attention": null
+  "workflow.attention": null,
+  "workflow.approval": "emailWorkflowApproval",
+  "goal.digest": "emailGoalDigest"
 };
 
 const GLOBAL_ID = "global";

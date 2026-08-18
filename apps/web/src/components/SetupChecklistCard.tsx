@@ -11,11 +11,20 @@
  * blocks a real workflow (submissions return 428 until enrolled), so hiding it would just
  * convert the reminder into a support ticket later.
  * WHO renders this: pages/Dashboard.tsx, right under the page header.
+ *
+ * THE SUPER-ADMIN ITEMS ARE A SEPARATE QUESTION FROM THE PERSONAL ONES. "Add a photo" is about the
+ * person; "write a goal", "install a teammate", "build a workflow" are about the WORKSPACE, and they
+ * appear only for the one person who can do them. They were added because V8 shipped five surfaces
+ * that a new administrator has no reason to visit — everything is switched off by default, so nothing
+ * ever prompts them, and a capability nobody discovers may as well not exist. Each item disappears the
+ * moment the thing exists, so the card empties itself rather than nagging.
  */
+import { useQuery } from "@tanstack/react-query";
 import { useState } from "react";
-import { Camera, CheckCircle2, ChevronRight, Circle, ClipboardList, Phone, ScanFace, X } from "lucide-react";
+import { Bot, Camera, CheckCircle2, ChevronRight, Circle, ClipboardList, Phone, ScanFace, Target, Workflow, X } from "lucide-react";
 import { Link } from "react-router";
 import { useFaceStatus } from "../lib/use-face-status";
+import { aiOverviewApi, goalApi } from "../services/api";
 import { useAuthStore } from "../store/auth";
 import { Button } from "./ui/button";
 import { Card, CardContent } from "./ui/card";
@@ -38,11 +47,80 @@ export function SetupChecklistCard() {
 
   const faceStatus = useFaceStatus();
 
+  /**
+   * The workspace's own state, fetched only for a super admin — the one person whose checklist this
+   * belongs on. `retry: false` because the AI family is entitlement-gated: on a plan without it the
+   * call 403s, and the right response is to drop the items silently rather than to nag somebody about
+   * a feature they cannot buy from this screen.
+   */
+  const isSuperAdmin = user?.role === "SUPER_ADMIN";
+  const workspace = useQuery({
+    queryKey: ["ai", "overview"],
+    queryFn: aiOverviewApi.get,
+    enabled: isSuperAdmin,
+    retry: false,
+    staleTime: 5 * 60_000
+  });
+  const goals = useQuery({
+    queryKey: ["goals", "list"],
+    queryFn: () => goalApi.list(),
+    enabled: isSuperAdmin,
+    retry: false,
+    staleTime: 5 * 60_000
+  });
+
   if (!user) return null;
 
   const faceRequired =
     Boolean(faceStatus.data && (faceStatus.data.requiredForTimesheet || faceStatus.data.requiredForTicket || faceStatus.data.requiredForApproval));
   const faceMissing = faceRequired && (!faceStatus.data?.enrolled || faceStatus.data?.needsReEnrollment);
+
+  const w = workspace.data;
+  const setupItems: ChecklistItem[] = !isSuperAdmin
+    ? []
+    : [
+        ...(goals.data && goals.data.length === 0
+          ? [
+              {
+                key: "first-goal",
+                label: "Write your first goal",
+                description:
+                  "Wire it to something this workspace already records — approved hours, billed spend, tickets closed — and its progress reports itself.",
+                done: false,
+                to: "/app/goals",
+                icon: <Target className="h-4 w-4 text-primary" />
+              }
+            ]
+          : []),
+        ...(w && w.agents.enabled === 0
+          ? [
+              {
+                key: "first-agent",
+                label: w.agents.total === 0 ? "Meet the AI teammates" : "Switch on an AI teammate",
+                description:
+                  w.agents.total === 0
+                    ? "Six are ready to install, each built from AI this workspace already runs. They arrive switched off."
+                    : "Every teammate on the roster is off, so nothing they own can run.",
+                done: false,
+                to: "/app/agents",
+                icon: <Bot className="h-4 w-4 text-primary" />
+              }
+            ]
+          : []),
+        ...(w && w.flows.live === 0
+          ? [
+              {
+                key: "first-flow",
+                label: w.flows.total === 0 ? "Build a workflow" : "Switch on a workflow",
+                description:
+                  "A trigger, then steps. Replay it against your own recent history first — it calls no model and writes nothing.",
+                done: false,
+                to: "/app/studio",
+                icon: <Workflow className="h-4 w-4 text-primary" />
+              }
+            ]
+          : [])
+      ];
 
   const items: ChecklistItem[] = [
     {
@@ -77,14 +155,14 @@ export function SetupChecklistCard() {
     });
   }
 
-  const open = items.filter((i) => !i.done);
+  const open = [...items, ...setupItems].filter((i) => !i.done);
   const hasBlockingOpen = open.some((i) => i.blocking);
 
   // Nothing left to do — or dismissed and nothing workflow-blocking remains.
   if (open.length === 0) return null;
   if (dismissed && !hasBlockingOpen) return null;
 
-  const doneCount = items.length - open.length;
+  const doneCount = items.length + setupItems.length - open.length;
 
   return (
     <Card className="border-primary/30 bg-primary/[0.03]">

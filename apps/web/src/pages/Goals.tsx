@@ -443,7 +443,7 @@ export function GoalsPage() {
         </Card>
       )}
 
-      <div className="space-y-3">
+      <div className="space-y-3" data-tour="goals-list">
         {tree.objectives.map((objective) => (
           <GoalCard
             key={objective.id}

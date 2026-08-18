@@ -215,6 +215,13 @@ export interface NotificationPreferences {
   /** "Maintenance window scheduled — wrap up" warning a SUPER_ADMIN sends from the Maintenance
    *  settings card. Gates only the EMAIL leg; the in-app notification always fires. */
   emailMaintenanceScheduled: boolean;
+  /** "A workflow is waiting for you to approve a step." The one Workflow Studio message with an email
+   *  leg, and on by default: a gate blocks everything after it, so a request nobody sees is a workflow
+   *  that reads as broken rather than as blocked. */
+  emailWorkflowApproval: boolean;
+  /** Monday morning, to a goal's OWNER: which of their goals are off track and which periods close
+   *  this week. Off by default like every other digest, and silent in a week with nothing to say. */
+  emailGoalDigest: boolean;
 }
 
 export const notificationPreferenceKeys: ReadonlyArray<keyof NotificationPreferences> = [
@@ -245,7 +252,9 @@ export const notificationPreferenceKeys: ReadonlyArray<keyof NotificationPrefere
   "emailBugPatternDigest",
   "emailTicketStaleNudge",
   "emailAiAutonomyApplied",
-  "emailMaintenanceScheduled"
+  "emailMaintenanceScheduled",
+  "emailWorkflowApproval",
+  "emailGoalDigest"
 ];
 
 /**

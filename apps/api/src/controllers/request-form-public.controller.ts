@@ -47,6 +47,7 @@ import {
 } from "../services/request-form.service.js";
 import { EMAIL_INTAKE_SYSTEM_EMAIL } from "../services/email-intake.service.js";
 import { computeTicketDueDate, getGlobalTicketSettings, issueTicketKey } from "../services/ticket.service.js";
+import { dispatchFormSubmission } from "../services/automation-dispatch.service.js";
 import { dispatchNotification } from "../services/notify.service.js";
 
 export const requestFormPublicRouter = Router();
@@ -225,6 +226,22 @@ requestFormPublicRouter.post("/:token", validate(submitSchema), async (req, res)
   } catch {
     /* ignore */
   }
+
+  /**
+   * The FORM_SUBMISSION trigger, wired here rather than through the domain-event bus.
+   *
+   * WHY NOT AN EVENT: a flow on this trigger names a SPECIFIC form (`triggerConfig.formId`), so the
+   * dispatcher needs the form id and the submission, and a generic `ticket.created` subscriber has
+   * neither. Every other trigger kind matches on something the payload already carries; this one
+   * matches on which door the work came through.
+   *
+   * Detached and swallowed, like the notification above: an intake that fails because an automation
+   * misbehaved would be a worse outcome than an automation that did not fire. The submission and the
+   * ticket are already committed by this point.
+   */
+  void dispatchFormSubmission({ formId: form.id, submissionId: submission.id, ticket }).catch((error) =>
+    console.warn(`[request-form] flow dispatch failed for ${form.slug}: ${(error as Error).message}`)
+  );
 
   res.setHeader("Cache-Control", "no-store");
   res.status(201).json({

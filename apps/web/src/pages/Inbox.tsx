@@ -200,7 +200,9 @@ export function InboxPage() {
         )}
       </div>
 
-      <DailyBriefCard loading={brief.isLoading} data={brief.data} />
+      <div data-tour="inbox-brief">
+        <DailyBriefCard loading={brief.isLoading} data={brief.data} />
+      </div>
 
       {/* Filter tabs. The counts live on the tabs rather than in a sidebar so the shape of the
           queue is visible before anything is clicked. */}

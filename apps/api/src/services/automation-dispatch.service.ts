@@ -18,9 +18,10 @@
  * run is resumed from its own record by `resumeFlowRun`, not from anything held in memory.
  *
  * WHAT IT DELIBERATELY DOES NOT DO: apply a change the flow's authority does not permit. A
- * proposal-only flow routes what it can into `AiProposal` — the existing reviewable, stale-checked,
- * undoable path — and records anything the review queue cannot express as `held`, in words, rather
- * than doing it anyway or silently skipping it.
+ * proposal-only flow routes its writes into `AiProposal` — the existing reviewable, stale-checked,
+ * undoable path — rather than doing them anyway or skipping them quietly. Assignments and labels both
+ * go that way now; `held` remains as an outcome for anything a future action cannot express, so the
+ * report can say so in words rather than showing a step that did nothing.
  *
  * WHO CALLS THIS: `registerFlowDispatch()` from `server.ts` (domain events), the schedule worker, and
  * the controller for a manual run or an approval.
@@ -33,6 +34,7 @@ import { getFlow, type DecoratedFlow } from "./automation-flow.service.js";
 import { createProposal } from "./ai-proposal.service.js";
 import { queueAgentRun } from "./agent-run.service.js";
 import { DOMAIN_EVENTS, registerDomainSubscriber, type DomainEvent } from "./domain-events.js";
+import { templates } from "./mail-templates.js";
 import { dispatchNotification } from "./notify.service.js";
 
 /** What a flow ran against. A flow with no subject (a schedule) is legitimate — it simply cannot
@@ -109,9 +111,7 @@ async function evaluateBranch(config: Record<string, unknown>, subject: FlowSubj
  *
  * `notify` always applies, whatever the authority says, because telling a person something is not a
  * change to the workspace — refusing it would mean a proposal-only flow could not even say it had an
- * opinion. `assign` becomes an `AiProposal` when the flow may only propose. `label` cannot: the review
- * queue's change vocabulary has no LABEL target, so rather than apply it anyway or drop it quietly, the
- * step is recorded as `held` and the reason is on the run.
+ * opinion. `assign` and `label` both become an `AiProposal` when the flow may only propose.
  */
 async function performAction(params: {
   config: Record<string, unknown>;
@@ -179,12 +179,30 @@ async function performAction(params: {
   if (action === "label") {
     const labelId = String(config.labelId ?? "");
     if (proposalOnly) {
-      return {
-        ...base,
-        outcome: "held",
-        detail:
-          "This flow may only propose, and the review queue cannot hold a label change — so nothing was done. Move the step that reads outside text after this one, or raise the flow's authority."
-      };
+      // Was `held` until the review queue gained a LABEL change target. A triage flow that reads
+      // inbound email is proposal-only by construction — the taint clamp guarantees it — and "read
+      // this and label it" is the single most obvious thing such a flow is for, so refusing to even
+      // propose it made the commonest useful flow useless.
+      const ticket = await prisma.ticket.findUnique({ where: { id: subject.id }, select: { key: true, projectId: true } });
+      const label = await prisma.label.findUnique({ where: { id: labelId }, select: { name: true } });
+      if (!ticket) return { ...base, outcome: "failed", detail: "That ticket no longer exists." };
+      const proposal = await createProposal({
+        kind: "RISK_MITIGATION",
+        title: `${flow.name}: label ${ticket.key}`,
+        rationale: `Proposed by the workflow "${flow.name}", which may only propose.`,
+        scopeTicketId: subject.id,
+        scopeProjectId: ticket.projectId,
+        requestedById: params.actorId,
+        changes: [
+          {
+            targetType: "TICKET_LABEL",
+            op: "CREATE",
+            after: { ticketId: subject.id, labelId },
+            summary: `Add the label "${label?.name ?? labelId}" to ${ticket.key}`
+          }
+        ]
+      });
+      return { ...base, outcome: "proposed", detail: "Proposed the label for review.", proposalId: proposal.id };
     }
     const already = await prisma.ticketLabel.findFirst({ where: { ticketId: subject.id, labelId }, select: { id: true } });
     if (already) return { ...base, outcome: "skipped", detail: "It already had that label." };
@@ -252,12 +270,34 @@ async function advance(runId: string, flow: DecoratedFlow, subject: FlowSubject,
         data: { status: "WAITING", awaitingOrder: step.order, awaitingUserId: approverId || null }
       });
       if (approverId) {
+        // The one workflow message that also emails. A gate blocks everything after it, possibly for
+        // days, so an in-app-only request is a workflow that looks broken rather than blocked. The
+        // approver's own preference still gates the send; the in-app row is raised either way.
+        const approver = await prisma.user.findUnique({ where: { id: approverId }, select: { name: true } });
         await dispatchNotification({
           userId: approverId,
-          category: "workflow.attention",
+          category: "workflow.approval",
           title: `${flow.emoji} ${flow.name} needs your approval`,
           body: `${subject.label} is waiting at step ${step.order}. Nothing after it happens until you decide.`,
-          link: "/app/studio"
+          link: "/app/studio",
+          email: {
+            templateKey: "workflow.approval",
+            vars: {
+              name: approver?.name ?? "there",
+              flowName: flow.name,
+              subject: subject.label,
+              stepOrder: step.order
+            },
+            fallback: {
+              subject: `${flow.name} needs your approval`,
+              html: templates.workflowApproval({
+                name: approver?.name ?? "there",
+                flowName: flow.name,
+                subject: subject.label,
+                stepOrder: step.order
+              })
+            }
+          }
         });
       }
       return;
@@ -467,6 +507,51 @@ function subjectOf(payload: Record<string, unknown>): FlowSubject {
     };
   }
   return { type: "workspace", id: null, label: "this workspace" };
+}
+
+/**
+ * The FORM_SUBMISSION trigger.
+ *
+ * Its own entry point rather than a domain-event subscriber, because a flow on this trigger names a
+ * SPECIFIC form and matching that needs the form id — which a `ticket.created` payload does not carry.
+ * Every other trigger matches on something in the event; this one matches on which door the work came
+ * through.
+ *
+ * The SUBJECT is the ticket the form created, not the submission row: every condition and every action
+ * a flow can express is about a ticket, and handing it the submission would make all of them
+ * unevaluable. The submission id rides in the trigger key so a resubmission is its own run.
+ */
+export async function dispatchFormSubmission(params: {
+  formId: string;
+  submissionId: string;
+  ticket: { id: string; key: string; title: string; projectId: string | null };
+}): Promise<void> {
+  const flows = await prisma.automationFlow.findMany({
+    where: { enabled: true, deletedAt: null, trigger: "FORM_SUBMISSION" },
+    select: { id: true, triggerConfig: true }
+  });
+  const matching = flows.filter((f) => (f.triggerConfig as Prisma.JsonObject)?.formId === params.formId);
+  if (matching.length === 0) return;
+
+  const subject: FlowSubject = {
+    type: "ticket",
+    id: params.ticket.id,
+    label: `${params.ticket.key} — ${params.ticket.title}`.trim(),
+    projectId: params.ticket.projectId
+  };
+
+  for (const flow of matching) {
+    try {
+      await startFlowRun({
+        flowId: flow.id,
+        trigger: "form",
+        subject,
+        triggerKey: `flow:${flow.id}:submission:${params.submissionId}`
+      });
+    } catch (error) {
+      console.warn(`[flow-dispatch] flow ${flow.id} failed on form ${params.formId}:`, (error as Error).message);
+    }
+  }
 }
 
 /**

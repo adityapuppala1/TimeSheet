@@ -1781,6 +1781,22 @@ model GlobalNotificationSettings {
   /// change the plan silently.
   emailAiAutonomyApplied    Boolean @default(true)
 
+  /// "Two of your goals are off track, and one period ends on Friday." Weekly, to the goal's OWNER
+  /// only — the person who agreed to the number.
+  ///
+  /// Default OFF, like every other digest here. A goal nobody looks at is the ordinary failure of
+  /// OKRs and the reason this exists, but the fix for that is an opt-in an admin makes deliberately,
+  /// not a send every workspace inherits.
+  emailGoalDigest Boolean @default(false)
+
+  /// "A workflow is waiting for you to approve a step."
+  ///
+  /// Default ON, and for the same reason `emailAiAutonomyApplied` is: a gate BLOCKS everything after
+  /// it, potentially for days, and an approval request nobody sees is a workflow that looks broken.
+  /// This is the one workflow message with an email leg — the first-run summary and the per-step
+  /// notifications stay in-app, because those are news rather than a thing waiting on somebody.
+  emailWorkflowApproval Boolean @default(true)
+
   /// Hour (0–23, server local time) for the "log today's time" reminder.
   dailyReminderHour        Int     @default(16)
   /// Hour for the next-morning escalation (employee + manager).

@@ -530,6 +530,52 @@ Endpoints: [API.md](API.md#mcp-server). Operating it: [DEPLOYMENT.md](DEPLOYMENT
 
 ---
 
+### 3.12 The agentic layer (V8) — composition over a runtime that already existed
+
+V8 adds no new way to write to the workspace. Everything dangerous — a model call, an autonomy level,
+a proposal, an audit row — shipped before it. What was missing was **packaging and composition**: a
+name for the thing acting, a way to join a trigger to a bundle of capabilities, and an honest account
+of what it cost. Read `docs/AGENTIC_WORK_MANAGEMENT.md` for the reasoning; this is the shape.
+
+Four surfaces, in the order work actually flows through them:
+
+1. **Capabilities and their authority** (`ai-capability.registry.ts`, `ai-autonomy.service.ts`) —
+   pre-existing. Each capability has a code-level `maxLevel` an administrator may only lower.
+2. **Teammates** (`agent-profile.service.ts`) — an `AgentProfile` owning a set of capability ids,
+   bound to a **non-login `User` with `isAgent = true`**. That identity choice is why assignment,
+   workload, comments, audit and attestation all work unchanged; three fences keep it honest — it
+   holds no seat (`seat-count.service.ts`), cannot establish a session, and has an `@agents.invalid`
+   mailbox (RFC 2606). One capability has one owner, refused with a 409 at enable time.
+3. **Flows** (`automation-flow.service.ts`, `flow-authority.service.ts`, `automation-dispatch.service.ts`)
+   — a trigger plus ordered steps. `flow-authority.service.ts` is **pure and touches no database**,
+   because it holds the entire security argument for a no-code composition surface and every
+   interesting failure in it is arithmetic over levels that renders plausibly and is wrong.
+4. **Review** (`ai-proposal.service.ts`) — pre-existing. Anything a flow may not apply lands here as a
+   per-change, stale-checked, undoable suggestion.
+
+**The three rules that make composition safe**, all computed in that one pure file: a flow's authority
+is the MINIMUM of its capability steps'; taint propagates FORWARD, so any step reading externally
+authored text clamps every later *writing* step to SUGGEST; and anything above SUGGEST writes through
+`AiProposal`. The second is why the ORDER of steps changes what a flow may do.
+
+**Execution reuses `queueAgentRun` and nothing else.** A capability step queues an ordinary
+`AgentRun`, so idempotency (`triggerKey` unique), the abort flag, the step cap, the per-run and
+per-day cost ceilings, the taint clamp and the audit trail are the existing ones. Dispatch adds only
+ORDER and AUTHORITY. The dispatcher's own idempotency key carries the **subject** id, or the first
+ticket through a flow would be the only one it ever touched.
+
+**A flow run is a row, not a log line** (`AutomationFlowRun`), because a human gate can wait days and
+the run's position has to survive a restart. `resumeFlowRun` continues from that record.
+
+**Cost is attributed twice, from two tables, deliberately.** `AIUsageLog` records what was asked of a
+model; `AgentRun.flowId` records who composed the question. Per-workflow spend can only come from the
+second, and the panel that shows it says so rather than implying the two reconcile to the penny.
+`AgentWorkEntry` is a third thing again — the ledger, shaped like a timesheet, where a run's duration
+and cost sit beside a **measured or absent** estimate of the human time it displaced.
+
+Everything is inert until switched on: `aiPmCopilotEnabled` gates the whole family at the tier,
+profiles and flows are created off, and activation is refused while a flow has any validation error.
+
 ## 4. Request lifecycle (a normal, tenant-resolved API call)
 
 ```mermaid
@@ -693,6 +739,21 @@ TimeSphere calling a model. Nothing here imports `ai.service.ts` and nothing her
 | `services/mcp-tools.ts` | The tool catalogue **and** `invokeMcpTool`, the one function allowed to run one. Handlers are deliberately **not exported**: `MCP_TOOLS` is typed as `McpToolSpec[]`, which has no handler field, so the compiler — not a convention — guarantees enablement, the write latch, the permission and the audit entry cannot be bypassed. Reuses the app's own helpers rather than reimplementing them (`requirePermission`, `assertTicketVisible`, `ticketProjectScope`, `saveTimesheet`, `buildTimesheetReport`), so an access rule can never have two copies that drift. `unavailableReason` + `recordUnavailableToolCalls` make a denial auditable even when the SDK answers it first. | `@timesheet/shared` permissions, `middleware/auth.ts#requirePermission`, `services/ticket.service.ts`, `services/timesheet-report.service.ts`, `services/audit.service.ts`, `services/webhook-dispatch.service.ts` | `controllers/mcp.controller.ts`, `services/mcp.service.ts`, `controllers/settings.controller.ts` |
 | `controllers/settings.controller.ts#/mcp*` | The admin surface: `GET /settings/mcp` (settings + tool catalogue + live credentials), `PATCH /settings/mcp` (rejects an override naming a tool the server does not publish), `POST /settings/mcp/credentials` (one-time plaintext reveal, bound user must be an active account in this workspace), `DELETE /settings/mcp/credentials/:id` (revoke — a `revokedAt` stamp, so audit rows still resolve). Super-admin only, and every action audited. | `services/mcp.service.ts`, `services/mcp-tools.ts` | `pages/settings/McpServerSettingsCard.tsx` |
 | `pages/settings/McpServerSettingsCard.tsx` (web) | Workspace Settings → MCP server: master switch, the write latch, the per-tool matrix (showing each tool's permission, whether it mutates, and whether it is live *right now*), and credential issue/revoke with the one-time token reveal. Rendered read-only for a non-super-admin rather than hidden. | `services/api.ts` | `pages/WorkspaceSettings.tsx` |
+
+### Agentic layer (V8, §3.12)
+
+| File | Purpose | Depends on | Depended on by |
+|---|---|---|---|
+| `services/ai-capability.registry.ts` | The catalogue: every capability's ceiling, tools and feature toggle, plus `isAgentRunnable` / `needsProjectScope` — the two predicates that decide what a workflow may compose. | — | `ai-autonomy.service.ts`, `agent-profile.service.ts`, `automation-flow.service.ts`, `agent-run.controller.ts` |
+| `services/agent-profile.service.ts` | The roster: templates, install, capability ownership (one owner, enforced at enable time), readiness. | `ai-capability.registry.ts`, `capability-claims.service.ts`, `agent-identity.ts` | `agent.controller.ts`, `automation-flow.service.ts`, `ai-overview.service.ts` |
+| `services/agent-identity.ts` + `seat-count.service.ts` | The three fences around a teammate: no seat, no login, no mailbox. | — | `agent-profile.service.ts`, `auth.service.ts`, billing |
+| `services/flow-authority.service.ts` | **Pure.** The three rules, plus per-step config validation. Touches no database so the whole guarantee reads — and tests exhaustively — in one place. | — | `automation-flow.service.ts` |
+| `services/automation-flow.service.ts` | Flow CRUD, decoration with computed authority and issues, and the structural replay. | `flow-authority.service.ts`, `ai-autonomy.service.ts` | `automation-flow.controller.ts`, `automation-dispatch.service.ts`, `ai-overview.service.ts` |
+| `services/automation-dispatch.service.ts` | Makes a flow fire: branch evaluation, gates, deterministic actions, capability steps. Registers the domain-event subscriber and exports the form-intake entry point. | `agent-run.service.ts`, `ai-proposal.service.ts`, `notify.service.ts` | `server.ts`, `workers/flow-schedule.worker.ts`, `request-form-public.controller.ts`, `automation-flow.controller.ts` |
+| `workers/flow-schedule.worker.ts` | The per-minute sweep for `SCHEDULE` flows, with its own five-field cron matcher. A sweep rather than a handle per flow, so a flow switched off stops firing immediately. | `automation-dispatch.service.ts`, `run-for-every-org.ts` | `server.ts` |
+| `services/agent-ledger.service.ts` + `agent-ledger-history.service.ts` | The write side (idempotent, agent-identities only, median baseline) and the read side (per entry and per zero-filled day). | `ai-capability.registry.ts` | `agent-run.service.ts#finish`, `agent.controller.ts` |
+| `services/ai-overview.service.ts` | One response describing all four surfaces, and the single next step ordered by what blocks what. | Every service above, `ai.service.ts` | `ai.controller.ts` |
+| `services/goal-progress.service.ts` + `workers/goal-digest.worker.ts` | Goal measurement derived on read, and the weekly nudge to the goal's owner that stays silent when nothing needs a look. | `plan-schedule.service.ts`, `notify.service.ts` | `goal.controller.ts`, `server.ts` |
 
 ### Planning layer (V6)
 

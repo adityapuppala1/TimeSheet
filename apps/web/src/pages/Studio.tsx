@@ -271,7 +271,7 @@ export function StudioPage() {
               </CardContent>
             </Card>
           ) : (
-            <div className="space-y-3">
+            <div className="space-y-3" data-tour="flow-list">
               {rows.map((flow) => (
                 <FlowCard
                   key={flow.id}

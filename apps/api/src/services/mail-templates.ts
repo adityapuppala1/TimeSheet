@@ -294,6 +294,34 @@ export const templates = {
         paragraph(`<span style="color:${MUTED};">This recap is AI-generated from your ticket and timesheet activity — turn it off anytime in your notification preferences.</span>`)
     ),
 
+  /** One email per PERSON listing their goals, never one per goal — a send per goal is the send
+   *  people filter, and filtering it costs them the one that mattered. */
+  goalDigest: (params: { name: string; weekLabel: string; summary: string; lines: string[] }) =>
+    shell(
+      { title: `Your goals — ${params.weekLabel}`, preheader: params.summary },
+      heading(`Hi ${escape(params.name.split(" ")[0])}, where your goals stand`) +
+        paragraph(escape(params.summary)) +
+        infoCard(params.lines.map((line) => [escape(line.split(" — ")[0] ?? line), escape(line.split(" — ")[1] ?? "")])) +
+        paragraph(button("Open Goals", appUrl("/app/goals"))) +
+        paragraph(`<span style="color:${MUTED};">Progress is measured from what this workspace already records. Where nothing comparable exists, a goal says so rather than showing a zero.</span>`)
+    ),
+
+  /** The only workflow email. It exists because a gate BLOCKS — everything after it waits until this
+   *  person decides, potentially for days. */
+  workflowApproval: (params: { name: string; flowName: string; subject: string; stepOrder: number }) =>
+    shell(
+      { title: `${params.flowName} needs your approval`, preheader: `Step ${params.stepOrder} is waiting on you.`, accentColor: ACCENT },
+      heading("A workflow is waiting for you") +
+        paragraph(`Hi ${escape(params.name.split(" ")[0])}, "${escape(params.flowName)}" stopped at step ${params.stepOrder} and cannot continue until you approve or decline it.`) +
+        infoCard([
+          ["Workflow", escape(params.flowName)],
+          ["Waiting on", `step ${params.stepOrder}`],
+          ["Working on", escape(params.subject)]
+        ]) +
+        paragraph(button("Review it", appUrl("/app/studio"), ACCENT)) +
+        paragraph(`<span style="color:${MUTED};">Nothing after that step happens until you decide. Declining stops the run; it changes nothing that already happened.</span>`)
+    ),
+
   securityWeeklyDigest: (params: { weekLabel: string; summary: string; riskScore: number }) =>
     shell(
       { title: `Security digest — week of ${params.weekLabel}`, preheader: "AI-authored recap of this week's security findings and risk trend." },

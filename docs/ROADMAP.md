@@ -3843,3 +3843,91 @@ Their arithmetic is pinned by test and their endpoints checked end to end.
 **Carried forward, none of it blocking:** the `FORM_SUBMISSION` trigger has no dispatcher; a `BRANCH`
 renders in-sequence rather than as two visible lanes; and the review queue has no LABEL change target,
 which is what forces the `held` outcome above.
+
+## V8 phase 10 — the audit, and the gaps it found (2026-08-18)
+
+Asked to verify what was still pending across [ROADMAP.md](ROADMAP.md),
+[AGENTIC_WORK_MANAGEMENT.md](AGENTIC_WORK_MANAGEMENT.md) and [AGENTIC_UX_PLAN.md](AGENTIC_UX_PLAN.md),
+and then to close everything found. All three plans' phases were genuinely complete; what was pending
+sat in the places nobody had been looking — **verification, adoption, and documentation** — plus the
+three gaps the previous phase carried forward.
+
+### The e2e suite had never been run against V8
+
+29 Playwright specs and a runner existed; the roadmap flagged in phase 1 that the suite had not been
+run, and it still had not been — across nine phases that touched **shared components** (the dialog
+close button, in every dialog in the product), Proposals, Workload and the budget panel.
+
+- [x] Run it. **185 passed, 10 failed** — and every one of the ten was an artefact of editing source
+  while the run was in flight: Vite HMR reloaded the app under the tests, and one failure screenshot is
+  simply the Vite error overlay showing a broken import of mine from sixty seconds earlier. Re-run
+  clean in three batches, all pass. **The lesson is procedural and worth keeping: do not edit during a
+  run** — the confound costs more time than the run does.
+- [x] **No V8 surface was in the suite at all.** The five new routes are now in `responsive.spec.ts`'s
+  sweep, which is the file that catches the widest constructions — and V8 added a drag-and-drop canvas,
+  a 30-day bar chart and two week-column tables.
+
+### Adoption: the product tour said nothing about any of it
+
+- [x] The tour is **derived from the sidebar**, so all five V8 destinations were correctly IN it from
+  the day their nav items landed — and had no `DESTINATION_COPY` entry, so each fell back to its nav
+  label and spotlighted an `<h1>`. That is the right failure mode (a dull step, not a broken tour) and
+  precisely why nobody noticed for weeks. Copy and a `data-tour` target written for all five.
+- [x] **The setup checklist now has workspace items**, super-admin only: write a goal, switch on a
+  teammate, build a workflow. V8's surfaces are all off by default — the correct security posture, and
+  the reason nothing ever prompts an administrator to discover them.
+- [x] **Goals surfaced where the work is already being read**: a glance card on the dashboard (only for
+  goals this person OWNS, only when one needs a look) and a "Goals measuring this work" card on
+  Portfolio. Both close the phase-1 deferral.
+
+### Emails: two holes, one of them self-inflicted
+
+- [x] **Goals emitted no notification of any kind.** A weekly digest now goes to the goal's OWNER —
+  one message per person, never one per goal — listing what is off track, what closes this week, and
+  what cannot be measured yet. It **stays silent in a week with nothing to say**, because a digest that
+  arrives regardless teaches people it contains nothing. Off by default like every other digest.
+- [x] **A workflow approval request was in-app only** — including the one message that BLOCKS. It now
+  emails, on by default, for the same reason `emailAiAutonomyApplied` is: a gate stops everything after
+  it, sometimes for days, and a request nobody sees is a workflow that reads as broken rather than as
+  blocked. The first-run summary and per-step notifications stay in-app; those are news, not a thing
+  waiting on somebody.
+
+### The three carried-forward gaps, all closed
+
+- [x] **`FORM_SUBMISSION` has a dispatcher.** Its own entry point rather than a domain-event
+  subscriber, because a flow on this trigger names a specific FORM and a `ticket.created` payload does
+  not carry that. The subject is the ticket the form created — every condition and action a flow can
+  express is about a ticket — and the submission id rides in the trigger key so a resubmission is its
+  own run.
+- [x] **A `BRANCH` draws its second lane** as a dashed arm to a "does not match — flow stops" terminus.
+  Not two columns of steps: the runtime stops the run, and drawing a path this engine cannot take would
+  be a prettier picture of a flow that does not exist.
+- [x] **The review queue has a `TICKET_LABEL` change target**, so a proposal-only flow proposes a label
+  instead of reporting it `held`. `targetType` is a `VarChar`, so this needed no migration. It matters
+  more than it sounds: a triage flow that reads inbound email is proposal-only *by construction* (the
+  taint clamp guarantees it), and "read this and label it" is the single most obvious thing such a flow
+  is for — so the commonest useful flow was the one that could do nothing.
+
+### Documentation currency
+
+- [x] `API.md` — dispatch, runs, the decision route, the manual run, the ledger history and
+  `/ai/overview`, plus what the catalogue now returns and why an unrunnable capability is refused.
+- [x] `DATABASE.md` — a section for the eight agent and automation tables, which the file's own
+  by-domain convention wanted and which had only the Goals block.
+- [x] `ARCHITECTURE.md` — §3.12 for the agentic layer and a module-reference block for its files.
+- [x] `ONBOARDING_AND_TOUR.md` — that a nav item adds a STOP automatically but its copy is a separate
+  act somebody has to remember, which is exactly how V8's five went quiet.
+- [x] `MARKETING_PAGES.md` + `Landing.tsx` — four V8 claims, each written against shipped code, and a
+  note on what each one is careful about. None of them claims a benchmark or an outcome: where a number
+  would be persuasive is exactly where this product cannot produce one honestly.
+
+**Not built, and stated rather than skipped quietly:**
+
+- **AI narration of the daily brief** (phase 2's optional deferral). Deliberately still not built. The
+  brief's entire selling point is that it COUNTS rather than guesses; putting a model between the
+  reader and the arithmetic would spend money to make a checkable number unverifiable. It stays on the
+  list as a preference, not as an omission.
+- **Calendar sync** and **TimeSphere as an MCP client** (§6 phase 6). Neither is pending work — both
+  are new product scope with their own security surface, and the agentic plan says in as many words
+  that the MCP client is "scoped, not committed" so it would not be smuggled into a later phase. They
+  need a decision, not a sprint.

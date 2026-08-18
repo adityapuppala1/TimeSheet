@@ -563,6 +563,22 @@ makes the same stored value render as two different days across a boundary.
   with zero spend — the arithmetic there produces a confident number that is noise, and
   "forecast: 0" reads as "this will cost nothing".
 
+### Agent runs and the ledger
+
+- `GET /agent-runs?limit=&capability=&flowId=` · `GET /agent-runs/:id` — SUPER_ADMIN. The detail route
+  returns the run's full step trace **and the rest of the chain**: the proposal it produced, that
+  proposal's status, each change with whether it was applied, and the ledger row the run wrote. Three
+  tables, one question — answering it in the browser would mean three round trips and a reader who
+  gives up.
+- `GET /agents/ledger/history?days=` — the ledger over time: every entry in the window and the same
+  data bucketed per day, zero-filled, with `measuredDays` beside it. A day with no MEASUREMENT is not a
+  day of zero displacement, and a chart whose spacing changes meaning halfway across is worse than none.
+- `GET /ai/overview` — SUPER_ADMIN. One response describing all four AI surfaces: capability counts and
+  how many resolve above SUGGEST, teammates on and off, flows live and waiting, proposals pending, spend
+  split three ways, the ledger, and one suggested next step. Every figure is a COUNT that can be checked
+  against the screen it came from — deliberately no health score, because a score needs a rule for what
+  healthy is and that depends on what the workspace wants.
+
 ## Workflow Studio (V8 phase 4)
 
 Same entitlement as the roster (`aiPmCopilotEnabled`) — a flow composes that capability family, and a
@@ -583,6 +599,39 @@ because what automation touches your work is your business; every write is SUPER
 
 Steps are replaced wholesale and `order` is assigned from array position, so a reordered builder
 cannot produce gaps or collisions. A flow is **created off**, whatever the request says.
+
+`GET /flows/catalogue` also returns the **people, labels and projects** the builder's per-step pickers
+render from, plus which config key each action fills. One call rather than four: a dialog that paints
+before its options arrive is a dialog where somebody picks nothing and wonders why the step will not
+validate. Agent identities are excluded from every people list — assigning work to a teammate is a real
+idea, but "who approves this gate" is a question about a person, and an identity with no mailbox cannot
+answer it.
+
+### Dispatch and runs (V8 phases 6–7)
+
+A flow fires from one of three places: `EVENT` off the internal domain bus, `SCHEDULE` off a per-minute
+sweep, `FORM_SUBMISSION` off the public intake, and `MANUAL` off the route below. Execution always goes
+through `queueAgentRun`, so idempotency, the abort flag, the step cap, both cost ceilings, the taint
+clamp and the audit trail are the existing ones — the Studio adds no new write path.
+
+- `GET /flows/runs?flowId=&limit=` — what the flows have actually DONE: each run with its subject,
+  status, one-line summary and every step's outcome. `tickets:view`, like the flow list.
+- `POST /flows/runs/:runId/decision` `{ approved }` — clear a gate. **Not SUPER_ADMIN**: the step named
+  a person, and that person is who may clear it. Enforced server-side, so the route is the door and not
+  the lock. `409` if the run is not waiting, `403` if somebody else was asked.
+- `POST /flows/:id/run` — a manual run. SUPER_ADMIN. `202` with the run id; the trigger key carries the
+  actor and the minute, so a double-clicked button is one run.
+
+**The idempotency key carries the SUBJECT** (`flow:<id>:ticket:<id>`). A doubled event, a retried
+delivery and a restart mid-dispatch all collapse to one run — while a *second ticket* through the same
+flow is properly a second run. Getting that half wrong makes the first ticket the only ticket a flow
+ever touches.
+
+**A capability step is refused at activation if no agent run can execute it.** Most of the registry is
+invoked inline by the feature that owns it and has no tools for a run loop to use; the builder offers
+only the runnable ones, and `validateFlow` refuses the rest — a flow that activates and then fails
+reads as the product being broken rather than as the step being impossible. The same applies to a
+capability that needs a project scope in a flow whose trigger can never supply one.
 
 ### The three rules, and where they live
 

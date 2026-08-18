@@ -71,6 +71,32 @@ that has none of them on and wrong for one that does. The failure it prevents is
 that confidently walks somebody to a Gantt chart their workspace has never enabled, then strands
 them on a page telling them the feature is off.
 
+### What each stop SAYS is written; that a stop exists is not
+
+`DESTINATION_COPY` in `lib/tour-steps.ts` holds the words and the spotlight selector per route. A
+destination with no entry still gets a stop — it falls back to the nav label and `main h1` — which is
+the right failure (a dull step, not a broken tour) and also the one that hides a gap. V8 shipped five
+surfaces (Goals, Inbox, Agents, Workflows, AI overview) that were correctly IN the tour from the day
+their nav items landed, and said nothing useful for weeks because nobody wrote their copy.
+
+So: **adding a nav item adds a tour stop automatically, and that is the bug-resistant half. Writing
+its copy is a separate act somebody has to remember.** If you add a destination, add a
+`DESTINATION_COPY` entry and a `data-tour` target on the page's own feature — not its heading.
+Spotlighting the `<h1>` tells people where they are and never what to look at, which is why every
+entry names the form, the board, the roster or the list instead.
+
+### The setup checklist has two audiences in one card
+
+`SetupChecklistCard.tsx` mixes personal items (photo, phone, face enrollment) with **super-admin-only
+workspace items** (write a goal, switch on a teammate, build a workflow). The split matters: an
+EMPLOYEE must never be nagged about configuration they cannot perform, so the workspace items are
+gated on role AND fetched only for that role. They disappear as soon as the thing exists, so the card
+empties itself rather than becoming furniture.
+
+They exist because V8's surfaces are all **off by default** — which is the right security posture and
+means nothing ever prompts an administrator to discover them. A capability nobody finds may as well
+not have shipped.
+
 ### Why it's hand-built rather than driver.js/shepherd/joyride
 
 The tooltip is the easy part. Every step has to drive the router, wait for a page that fetches

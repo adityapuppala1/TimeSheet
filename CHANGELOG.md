@@ -201,6 +201,39 @@ its old schema without the update saying so. After upgrading, run the fan-out on
 - The **close control on every dialog** in the product gained a real hit area too. It was a 14-pixel
   glyph, which is a target you miss twice before hitting.
 
+### 🧭 The new screens now introduce themselves
+
+- **The product tour covers Goals, Inbox, Agents, Workflows and AI overview.** They were always in the
+  itinerary — it is built from your own sidebar — but each fell back to a bare page title, so the tour
+  walked you past the new half of the product without saying what any of it was for.
+- **The setup checklist has workspace steps for an administrator**: write a goal, switch on an AI
+  teammate, build a workflow. Everything in that half of the product ships switched off, which is the
+  right default and means nothing ever prompts you to find it. Each step disappears once it is done.
+- **Goals appear where you already look**: a line on your dashboard when one of *your* goals needs a
+  look, and a "Goals measuring this work" card on Portfolio. Neither appears when there is nothing to
+  say.
+
+### ✉️ Two messages that were missing
+
+- **A weekly goal digest**, to whoever owns the goal — what is off track, what closes this week, and
+  what cannot be measured yet. One email per person, never one per goal, and **nothing at all in a week
+  where nothing needs a look**. Off by default; turn it on in Workspace Settings → Notifications.
+- **An approval request now emails the person it names.** A workflow that stops at an approval blocks
+  everything after it, sometimes for days, and until now it only raised an in-app notification — which
+  made a blocked workflow look like a broken one. On by default.
+
+### 🔧 Three workflow limits lifted
+
+- **A workflow can be triggered by a request form.** The trigger validated and replayed before; now it
+  fires, scoped to the ticket the submission created.
+- **A condition now draws where the flow stops.** On the canvas a condition shows a second, dashed arm
+  labelled "does not match — flow stops" — which is what actually happens, rather than a second column
+  of steps the engine would never take.
+- **A workflow that may only propose can now propose a label**, not just report that it held one back.
+  This was the awkward one: a flow that reads inbound email is propose-only by design, and "read this
+  and label it" is the most obvious thing such a flow is for — so the commonest useful workflow was the
+  one that could not do its job.
+
 ### 🩹 The workflow builder offered steps that could never run
 
 - **The capability picker listed all 28 capabilities; only 2 can be run by a workflow.** The rest —

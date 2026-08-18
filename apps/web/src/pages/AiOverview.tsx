@@ -165,7 +165,7 @@ export function AiOverviewPage() {
             />
           </div>
 
-          <div className="grid gap-3 lg:grid-cols-2">
+          <div className="grid gap-3 lg:grid-cols-2" data-tour="ai-surfaces">
             {surfaces(data).map((surface) => {
               const Icon = surface.icon;
               return (

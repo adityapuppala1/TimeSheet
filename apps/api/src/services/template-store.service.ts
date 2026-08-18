@@ -36,6 +36,8 @@ export const TEMPLATE_VARIABLES: Record<string, string[]> = {
   "digest.weekly": ["name", "weekLabel", "summary", "appUrl"],
   "ticket.closed_digest": ["ticketKey", "title", "closedBy", "riskVerdict", "findingsText", "testStatus", "appUrl"],
   "digest.security_weekly": ["weekLabel", "summary", "riskScore", "appUrl"],
+  "goal.digest": ["name", "weekLabel", "summary", "linesText", "appUrl"],
+  "workflow.approval": ["name", "flowName", "subject", "stepOrder", "appUrl"],
 
   // Maintenance mode — the "wrap up" warning a SUPER_ADMIN sends to online users.
   "maintenance.scheduled": ["name", "window", "message", "appUrl"],
@@ -71,6 +73,8 @@ export const TEMPLATE_DESCRIPTIONS: Record<string, string> = {
   "ticket.received_via_email": "Confirmation sent to an external sender whose email was auto-converted into a ticket.",
   "ticket.needs_review": "Sent to project admins/managers when an email-sourced ticket's AI confidence is below the threshold.",
   "digest.weekly": "Monday-morning AI-authored recap of a person's ticket + timesheet activity for the past week.",
+  "goal.digest": "Weekly, to a goal's OWNER: which of their goals are off track and which periods close soon. Off by default.",
+  "workflow.approval": "A workflow stopped at a gate and is waiting for this person to approve or decline. On by default — it blocks.",
   "ticket.closed_digest": "Security/test-status digest sent when a ticket with ingested findings closes — to the closer + their manager, cc this workspace's admins.",
   "digest.security_weekly": "Monday-morning AI-authored org-wide security recap (open findings, risk score, tickets past SLA) sent to every ADMIN/SUPER_ADMIN.",
   "maintenance.scheduled": "\"Save your work\" warning a super admin sends to online users before a maintenance window — quotes the window and the admin's message.",
@@ -185,6 +189,16 @@ export function sampleVariables(key: string): Record<string, string> {
     "ticket.needs_review": {
       targetName: "Avery Stone", ticketKey: "HICS-OPS-1", title: "Checkout page throws a 500 error",
       senderEmail: "priya@example.com", confidence: "0.42", appUrl: "https://timesphere.local"
+    },
+    "goal.digest": {
+      name: "Priya Raman", weekLabel: "Aug 17 - Aug 23",
+      summary: "One of your three goals is off track and one period closes this week.",
+      linesText: "Cut SLA breaches by half — off track, 68% of the way with 20% of the period left<br />Ship the billing rewrite — on track<br />Keep spend under 40k — period ends Friday",
+      appUrl: "https://timesphere.local"
+    },
+    "workflow.approval": {
+      name: "Avery Stone", flowName: "Ask before it acts", subject: "HICS-OPS-1340 — checkout timeout",
+      stepOrder: "1", appUrl: "https://timesphere.local"
     },
     "digest.weekly": {
       name: "Dev Patel", weekLabel: "Jun 29 - Jul 5",

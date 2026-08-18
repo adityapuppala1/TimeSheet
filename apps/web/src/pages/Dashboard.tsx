@@ -44,6 +44,7 @@ import { useMemo, useState } from "react";
 import { Link } from "react-router";
 import { Area, AreaChart, Bar, BarChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 import { Alert, AlertDescription, AlertTitle } from "../components/ui/alert";
+import { GoalsGlanceCard } from "../components/GoalsGlanceCard";
 import { SetupChecklistCard } from "../components/SetupChecklistCard";
 import { Badge } from "../components/ui/badge";
 import { Button } from "../components/ui/button";
@@ -298,6 +299,7 @@ export function Dashboard() {
       {/* First-run checklist — self-hides once complete (or dismissed, unless a REQUIRED face
           enrollment is pending, which blocks real submissions and so stays visible). */}
       <SetupChecklistCard />
+      <GoalsGlanceCard />
 
       {/* Personal daily status hero */}
       <DailyStatusBanner status={daily.data} loading={daily.isLoading} />

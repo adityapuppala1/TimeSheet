@@ -287,6 +287,33 @@ replay check proved why: on a fresh database the migration's `RolePermission` in
 because roles do not exist yet, so a migration-only change would have shipped the permission with no
 grants to any role on every new install.
 
+## Agent and automation tables (V8 phases 3–7)
+
+Plan and rationale: [AGENTIC_WORK_MANAGEMENT.md](AGENTIC_WORK_MANAGEMENT.md) and
+[AGENTIC_UX_PLAN.md](AGENTIC_UX_PLAN.md). Additive throughout: eight new tables and two nullable
+columns, nothing that rewrites an existing row.
+
+| Table | Note |
+|---|---|
+| `AgentProfile` | A named teammate: an emoji, a description, an owned set of capability ids, and a daily spend ceiling. `identityUserId` points at a **non-login `User` with `isAgent = true`** — the decision that lets assignment, workload, comments, audit and attestation all work unchanged. One capability has one owner, enforced at enable time with a 409 rather than in the schema, because ownership is a claim over a JSON array. |
+| `AgentRun` | THE QUEUE ENTRY — there is no separate queue table. `triggerKey` is unique, which is what makes a doubled tick, a retried webhook and a restart mid-tick collapse to one row, and unlike an in-memory guard it survives the restart. `level` is COPIED at queue time so a policy edit cannot escalate a run already in flight. `taintedAt` clamps authority to SUGGEST from the moment externally-authored text enters. `flowId` (nullable, `SET NULL`) is the join behind per-workflow spend — retiring a flow must not erase the record of what it spent. |
+| `AgentRunStep` | What it thought, called and got back. `resultText`/`argsJson` are governed by `aiCaptureContentEnabled` exactly like `AIInteraction.promptText`: an agent trace is prompt content by another name, and a second content store outside the retention sweep would be a compliance regression. |
+| `AgentWorkEntry` | The ledger, shaped like `Timesheet` rather than a parallel reporting path. Idempotent on `agentRunId`. `displacedMinutes` is a **median** over this workspace's own approved hours and is `NULL` — never 0 — where fewer than five comparable entries exist. `billable` is false and there is deliberately no route that flips it: the commercial decision comes before the switch for it. |
+| `AutomationFlow` | A trigger plus ordered steps, off until somebody activates it. `triggerConfig` is JSON because the four trigger kinds share no columns and four nullable columns would be three-quarters empty. |
+| `AutomationStep` | Explicit `order` rather than a linked list — the builder renders a list and reorders by rewriting these, and a broken `nextStepId` chain is unreadable in a database row. `config` carries what the step DOES *and* its canvas position as `{x, y}`, which is why the canvas needed no migration. |
+| `AutomationFlowRun` | One execution against one subject. A row rather than a log line because a gate can wait days, so the run's position has to survive a restart. `triggerKey` is unique and **carries the subject id** — without that, the first ticket through a flow would be the only one it ever touched. |
+| `AutomationFlowRunStep` | Every step's outcome, including the ones where nothing happened: a step absent from a report reads as "there was nothing there", which is a different claim from "it was not reached". `agentRunId` and `proposalId` are plain columns, not relations, for the reason `AgentRun.proposalId` is not one — the record of what produced something should outlive the thing. |
+| *(columns on `GlobalNotificationSettings`)* | `emailWorkflowApproval` (default **true** — a gate blocks everything after it) and `emailGoalDigest` (default **false**, like every other digest). |
+
+**`AiProposalChange.targetType` is a `VarChar`, not an enum**, which is why adding the `TICKET_LABEL`
+target needed no migration at all. That target exists because a proposal-only flow — which a triage
+flow is *by construction*, since the taint clamp guarantees it — previously could not even propose a
+label, only report that it had been held back.
+
+Every one of these migrations was replayed into an empty database before commit, per the rule at the
+top of this file. Two of them needed the lower-case table name the diff emitted (`agentrun`,
+`automationflowrunstep`) corrected to canonical casing first — the 2.4.0 lesson, checked every time.
+
 ## Face (identity) verification tables
 
 Only populated when the feature is switched on (it is off by default). These hold **biometric

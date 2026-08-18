@@ -61,7 +61,16 @@ const PAGES = [
   "/app/portfolio",
   "/app/workload",
   "/app/requests",
-  "/app/proposals"
+  "/app/proposals",
+  // The agentic layer (V8). Swept for the same reason the planning layer is: these carry the widest
+  // constructions added since — a drag-and-drop canvas, a 30-day bar chart, and two week-column
+  // tables — and none of them was covered here when it shipped. A page whose feature is off for this
+  // workspace still renders its own empty or upgrade state, which must not overflow either.
+  "/app/goals",
+  "/app/inbox",
+  "/app/agents",
+  "/app/studio",
+  "/app/ai"
 ];
 const OVERFLOW_TOLERANCE_PX = 4;
 

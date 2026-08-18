@@ -11,6 +11,11 @@
  * one fact, and the first disagreement between them is a flow nobody can read. So the canvas is a VIEW
  * of the sequence: moving a node up past another swaps their order, and the connector redraws.
  *
+ * WHY A BRANCH SHOWS AN ARM TO A TERMINUS RATHER THAN TWO COLUMNS OF STEPS: a condition that does not
+ * match STOPS the run — that is what the dispatcher does, and the simulation says the same. Drawing a
+ * second column of steps would show a path this engine cannot take, which is a prettier picture of a
+ * flow that does not exist. The dashed arm says exactly what happens instead.
+ *
  * WHY ORTHOGONAL ELBOWS AND NOT BEZIER CURVES: the timeline made this call already — curves become an
  * unreadable tangle once there are more than a handful, and a workflow is read to answer "what happens
  * after what", which a right angle answers better than a swoop.
@@ -195,12 +200,42 @@ export function FlowCanvas({
                 markerEnd="url(#flow-arrow)"
               />
             ))}
+            {/* A branch's SECOND lane. The runtime stops the whole flow when a condition does not
+                match, so the honest second lane is a short arm to a terminus — not a parallel column
+                of steps, which would draw a path this engine cannot take. Drawing what the runtime
+                actually does is the same rule the connectors follow: the picture may not claim more
+                than the sequence can do. */}
+            {positions
+              .filter(({ step }) => step.kind === "BRANCH")
+              .map(({ step, at }) => (
+                <path
+                  key={`no-${step.id}`}
+                  d={`M ${at.x + NODE_W} ${at.y + NODE_H / 2} L ${at.x + NODE_W + 46} ${at.y + NODE_H / 2}`}
+                  fill="none"
+                  className="stroke-muted-foreground/30"
+                  strokeWidth={2}
+                  strokeDasharray="4 3"
+                  markerEnd="url(#flow-arrow)"
+                />
+              ))}
             <defs>
               <marker id="flow-arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="5" markerHeight="5" orient="auto">
                 <path d="M 0 0 L 10 5 L 0 10 z" className="fill-muted-foreground/60" />
               </marker>
             </defs>
           </svg>
+
+          {positions
+            .filter(({ step }) => step.kind === "BRANCH")
+            .map(({ step, at }) => (
+              <span
+                key={`stop-${step.id}`}
+                style={{ left: at.x + NODE_W + 52, top: at.y + NODE_H / 2 - 11 }}
+                className="absolute whitespace-nowrap rounded-full border border-dashed bg-muted/60 px-2 py-0.5 text-[10px] text-muted-foreground"
+              >
+                does not match — flow stops
+              </span>
+            ))}
 
           {positions.map(({ step, at }) => {
             const meta = KIND_META[step.kind];

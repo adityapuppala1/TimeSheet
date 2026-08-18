@@ -196,10 +196,22 @@ list plus a seed change — say so and it is done.
 4. ~~**Run visibility and the cross-surface links** (§3.4)~~ — shipped.
 5. ~~**Workload/budget merge** (§3.5) and **mobile ergonomics** (§3.6)~~ — shipped.
 
-**This plan is complete.** Three named gaps are carried forward as their own work, each stated where it
-belongs: the `FORM_SUBMISSION` trigger has no dispatcher (§3.2), a `BRANCH` renders in-sequence rather
-than as two lanes (§3.1), and the review queue has no LABEL change target, so a proposal-only flow can
-only hold a label rather than propose it (§3.2). None of the three blocks anything shipped here.
+**This plan is complete, and so are the three gaps it carried forward** — all closed in phase 10
+(2026-08-18), recorded in [ROADMAP.md](ROADMAP.md):
+
+- The `FORM_SUBMISSION` trigger has its own dispatcher, hooked into the public intake rather than the
+  event bus, because a flow on this trigger matches on a FORM and a `ticket.created` payload has no
+  form in it.
+- A `BRANCH` draws a dashed second arm to a "does not match — flow stops" terminus. Not two columns of
+  steps: the runtime stops the run, and a second column would draw a path this engine cannot take.
+- The review queue has a `TICKET_LABEL` change target, so a proposal-only flow proposes a label rather
+  than reporting it held. This one mattered most: a triage flow that reads inbound email is
+  proposal-only *by construction*, so the commonest useful flow was the one that could do nothing.
+
+What remains against this product's agentic ambition is **not** in this plan and is not pending work:
+TimeSphere as an MCP *client* (phase 6 of the mechanism doc, "scoped, not committed") and calendar
+sync. Both are new scope with their own security surface, and both need a decision rather than a
+sprint.
 
 Written in this order because each step makes the next honest: a canvas over unconfigurable steps, or
 dispatch of flows nobody can inspect afterwards, would both be features that demo well and disappoint.
