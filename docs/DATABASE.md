@@ -180,6 +180,19 @@ misses it does not merely lack the feature — `getGlobalMcpSettings` upserts th
 on first read, so the *settings page* itself fails against a database where the table does not
 exist. Nothing else in 2.3.0 touches the schema.
 
+**The server now tells you at boot when a tenant is behind**, because until it did, a missed fan-out
+looked exactly like healthy code. `services/tenant-schema-check.service.ts` compares every
+`ACTIVE`/`SUSPENDED` org's recorded `schemaVersion` against `getLatestMigrationName()` and, if any is
+behind, prints which orgs, what they are on, what this build expects, and the command that fixes it.
+It **warns rather than refusing to start**: one org being behind must not take down the ones that are
+fine, the same isolation `migrate-all-tenants.ts` already applies. It is silent when everything is
+current, so it stays worth reading.
+
+This was added after the V8 batch was applied to one developer's `DATABASE_URL` and never fanned out.
+The second organization threw `The table 'automationflow' does not exist` once a minute from the
+schedule sweep, and nothing at boot said so — the error named a missing table rather than the missed
+step, which is a long way to travel to reach `npm run migrate:tenants`.
+
 `update.sh`/`update.ps1` already run this fan-out for you on the Compose shape (unconditionally,
 before verification — it is a fast no-op when the default org is the only one), and `npm run setup`
 runs it as its last step on a local checkout. Neither needs a per-release edit: the target is
@@ -257,6 +270,62 @@ defaulting to the **restrictive** value so a tier row that missed initialisation
 under-entitles rather than over-entitles. The values come from `PLAN_TIER_LIMITS` in
 `@timesheet/shared` — the same constant the pricing table renders from — and are pinned by
 `apps/api/tests/unit/plan-tier-claims.test.ts`.
+
+## Goals / OKRs tables (V8 phase 1)
+
+Plan and rationale: [AGENTIC_WORK_MANAGEMENT.md](AGENTIC_WORK_MANAGEMENT.md). Additive in the same
+way the V6 layer is: three new tables, one defaulted column, and nothing that reads or rewrites an
+existing row.
+
+| Table | Note |
+|---|---|
+| `Goal` | Objective → key result via `parentId` (the `Ticket.parentId` shape). Two levels is enforced in the service, not the schema — a database cannot express "no grandchildren" without a maintained depth column. Soft-deleted like `Portfolio`, because a goal that shaped a quarter's decisions is audit trail. |
+| `GoalLink` | What the goal is measured OVER: `PROJECT`, `PORTFOLIO` or `TICKET`. Deliberately **not** a foreign key — three target tables, one column — so a dangling id (a soft-deleted project) is skipped at read time rather than erroring. A `PORTFOLIO` link is expanded to its projects **on read**, never stored expanded, so a portfolio that gains a project widens every goal linked to it. |
+| `GoalProgressOverride` | Append-only. Records the stated percentage, the note (required), and **`measuredValue`/`measuredPct` as they stood at that moment** — the receipt. There is no update or delete path: a correction is another row. |
+| *(column on `GlobalPlanningSettings`)* | `enableGoals`, default false. Guarded with the `information_schema` + `PREPARE` pattern because the same migration ends in DML and so can die half-applied. |
+
+**Progress is not a column anywhere**, by design. `goal-progress.service.ts` derives every number on
+read from `Timesheet`, `Ticket`, `TicketEscalation` and `ProjectRiskSnapshot` — the same tables the
+portfolio roll-up and the attestation read. A stored progress figure would need a recompute worker,
+and a stale one on a goals page is the "talked up in a status meeting" failure the whole design
+exists to prevent.
+
+Control plane: `PlanTierLimit` gains `goalsEnabled` and `maxGoals`, restrictive-defaulted and
+initialised by a guarded one-time `UPDATE` in
+`prisma/control/migrations/20260817150100_v8_goals_entitlements`, exactly as the V6 block was.
+
+The permission `goals:manage` is backfilled by idempotent SQL inside
+`20260817150000_v8_phase1_goals` **and** granted in `prisma/seed.ts` — both are needed, and the
+replay check proved why: on a fresh database the migration's `RolePermission` insert matches nothing
+because roles do not exist yet, so a migration-only change would have shipped the permission with no
+grants to any role on every new install.
+
+## Agent and automation tables (V8 phases 3–7)
+
+Plan and rationale: [AGENTIC_WORK_MANAGEMENT.md](AGENTIC_WORK_MANAGEMENT.md) and
+[AGENTIC_UX_PLAN.md](AGENTIC_UX_PLAN.md). Additive throughout: eight new tables and two nullable
+columns, nothing that rewrites an existing row.
+
+| Table | Note |
+|---|---|
+| `AgentProfile` | A named teammate: an emoji, a description, an owned set of capability ids, and a daily spend ceiling. `identityUserId` points at a **non-login `User` with `isAgent = true`** — the decision that lets assignment, workload, comments, audit and attestation all work unchanged. One capability has one owner, enforced at enable time with a 409 rather than in the schema, because ownership is a claim over a JSON array. |
+| `AgentRun` | THE QUEUE ENTRY — there is no separate queue table. `triggerKey` is unique, which is what makes a doubled tick, a retried webhook and a restart mid-tick collapse to one row, and unlike an in-memory guard it survives the restart. `level` is COPIED at queue time so a policy edit cannot escalate a run already in flight. `taintedAt` clamps authority to SUGGEST from the moment externally-authored text enters. `flowId` (nullable, `SET NULL`) is the join behind per-workflow spend — retiring a flow must not erase the record of what it spent. |
+| `AgentRunStep` | What it thought, called and got back. `resultText`/`argsJson` are governed by `aiCaptureContentEnabled` exactly like `AIInteraction.promptText`: an agent trace is prompt content by another name, and a second content store outside the retention sweep would be a compliance regression. |
+| `AgentWorkEntry` | The ledger, shaped like `Timesheet` rather than a parallel reporting path. Idempotent on `agentRunId`. `displacedMinutes` is a **median** over this workspace's own approved hours and is `NULL` — never 0 — where fewer than five comparable entries exist. `billable` is false and there is deliberately no route that flips it: the commercial decision comes before the switch for it. |
+| `AutomationFlow` | A trigger plus ordered steps, off until somebody activates it. `triggerConfig` is JSON because the four trigger kinds share no columns and four nullable columns would be three-quarters empty. |
+| `AutomationStep` | Explicit `order` rather than a linked list — the builder renders a list and reorders by rewriting these, and a broken `nextStepId` chain is unreadable in a database row. `config` carries what the step DOES *and* its canvas position as `{x, y}`, which is why the canvas needed no migration. |
+| `AutomationFlowRun` | One execution against one subject. A row rather than a log line because a gate can wait days, so the run's position has to survive a restart. `triggerKey` is unique and **carries the subject id** — without that, the first ticket through a flow would be the only one it ever touched. |
+| `AutomationFlowRunStep` | Every step's outcome, including the ones where nothing happened: a step absent from a report reads as "there was nothing there", which is a different claim from "it was not reached". `agentRunId` and `proposalId` are plain columns, not relations, for the reason `AgentRun.proposalId` is not one — the record of what produced something should outlive the thing. |
+| *(columns on `GlobalNotificationSettings`)* | `emailWorkflowApproval` (default **true** — a gate blocks everything after it) and `emailGoalDigest` (default **false**, like every other digest). |
+
+**`AiProposalChange.targetType` is a `VarChar`, not an enum**, which is why adding the `TICKET_LABEL`
+target needed no migration at all. That target exists because a proposal-only flow — which a triage
+flow is *by construction*, since the taint clamp guarantees it — previously could not even propose a
+label, only report that it had been held back.
+
+Every one of these migrations was replayed into an empty database before commit, per the rule at the
+top of this file. Two of them needed the lower-case table name the diff emitted (`agentrun`,
+`automationflowrunstep`) corrected to canonical casing first — the 2.4.0 lesson, checked every time.
 
 ## Face (identity) verification tables
 

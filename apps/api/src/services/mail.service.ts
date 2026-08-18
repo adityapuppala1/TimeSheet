@@ -27,6 +27,7 @@ import { env } from "../config/env.js";
 import { prisma } from "../config/prisma.js";
 import { requireTenantContext } from "../config/tenant-context.js";
 import { decryptSecret } from "../utils/encryption.js";
+import { AGENT_MAIL_DOMAIN } from "./agent-identity.js";
 
 export { templates } from "./mail-templates.js";
 
@@ -224,13 +225,27 @@ async function getTransport(): Promise<MailTransportEntry> {
 const NON_DELIVERABLE_TLDS = [".local", ".test", ".example", ".localhost", ".invalid", ".internal", ".localdomain"];
 
 function extractEmail(from: string): { address: string | null; domain: string | null } {
-  // Matches "Name <user@domain>" or bare "user@domain"
-  const match = from.match(/<?([A-Za-z0-9._%+-]+)@([A-Za-z0-9.-]+)>?/);
-  if (!match) return { address: null, domain: null };
-  return { address: `${match[1]}@${match[2]}`, domain: match[2].toLowerCase() };
+  // Accepts "Name <user@domain>" or bare "user@domain".
+  //
+  // Split on the "@" rather than matching the whole shape in one unanchored pattern. The previous
+  // /<?([A-Za-z0-9._%+-]+)@([A-Za-z0-9.-]+)>?/ had to retry from every character of a string with
+  // no "@" in it, each retry scanning forward — quadratic, and ~400ms on a 20k-character value.
+  // Locating the delimiter first costs one linear pass, and the two anchored tests below cannot
+  // backtrack at all.
+  const angled = /^[^<>]*<([^<>]*)>/.exec(from);
+  const candidate = (angled ? angled[1] : from).trim();
+  const at = candidate.lastIndexOf("@");
+  if (at <= 0 || at === candidate.length - 1) return { address: null, domain: null };
+
+  const local = candidate.slice(0, at);
+  const domain = candidate.slice(at + 1);
+  if (!/^[A-Za-z0-9._%+-]+$/.test(local) || !/^[A-Za-z0-9.-]+$/.test(domain)) return { address: null, domain: null };
+  return { address: `${local}@${domain}`, domain: domain.toLowerCase() };
 }
 
-function classifyFromAddress(from: string, smtpUser: string): {
+/** Exported for tests: a pure function whose accepted/rejected forms are worth pinning directly,
+ *  rather than only through `getTransportStatus()` which needs a database and a live config. */
+export function classifyFromAddress(from: string, smtpUser: string): {
   fromAddress: string | null;
   fromDomain: string | null;
   userDomain: string | null;
@@ -380,6 +395,9 @@ const BACKOFF_MS = [60_000, 300_000, 900_000, 1_800_000];
 
 export function nextSendAttemptAt(attempt: number, now = Date.now()): Date {
   const base = BACKOFF_MS[Math.min(attempt - 1, BACKOFF_MS.length - 1)];
+  // Reviewed: retry jitter. Its job is to break lockstep between senders, which any spread does;
+  // an attacker predicting the next attempt time learns nothing they could act on.
+  // eslint-disable-next-line sonarjs/pseudo-random -- non-cryptographic by design
   return new Date(now + base + Math.floor(base * 0.2 * Math.random()));
 }
 
@@ -580,7 +598,8 @@ export async function attemptEmailDelivery(row: {
  * False positives are cheap: the only cost is that this one message is not retried.
  */
 export function looksSensitive(html: string): boolean {
-  return /reset-password\?token=|[?&]token=[A-Za-z0-9_-]{16,}|one-time password|temporary password/i.test(html);
+  // /i makes A-Z redundant with a-z, hence the lowercase-only range.
+  return /reset-password\?token=|[?&]token=[a-z0-9_-]{16,}|one-time password|temporary password/i.test(html);
 }
 
 export async function sendMail(
@@ -595,6 +614,29 @@ export async function sendMail(
       : toOrArgs;
 
   if (!args.to) return { ok: false, status: "SKIPPED", errorMessage: "Recipient is empty" };
+
+  /**
+   * AGENT IDENTITIES HAVE NO MAILBOX (V8 phase 3).
+   *
+   * An `AgentProfile`'s identity is a real `User` row — that is what makes assignment, workload and
+   * audit work unchanged — and it is therefore picked up by every "all active users" recipient
+   * query in the codebase (the weekly digest, release announcements, deadline reminders). Without
+   * this, each of those posts mail to a synthesised address and books a permanent bounce.
+   *
+   * Enforced HERE, at the choke point every outbound email already funnels through, rather than by
+   * adding `isAgent: false` to a dozen recipient queries — the same argument the file header makes
+   * for admin toggles and budget caps being enforceable only because every caller passes here.
+   *
+   * A string check rather than a lookup, deliberately: agent addresses live on `.invalid`, the
+   * domain RFC 2606 reserves precisely so it can never resolve. That makes the address itself the
+   * declaration, costs no query on the hot path, and is impossible to get wrong by forgetting to
+   * join a table. `SKIPPED` (not an error) because nothing is wrong — there was simply nobody to
+   * write to.
+   */
+  const primaries = args.to.split(",").map((a) => a.trim().toLowerCase()).filter(Boolean);
+  if (primaries.length > 0 && primaries.every((address) => address.endsWith(AGENT_MAIL_DOMAIN))) {
+    return { ok: false, status: "SKIPPED", errorMessage: "Recipient is an automation identity with no mailbox" };
+  }
 
   const bcc = args.skipBcc ? [] : await getBccList(args.to, args.preferenceKey);
 

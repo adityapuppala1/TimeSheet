@@ -21,6 +21,7 @@ import express from "express";
 import rateLimit from "express-rate-limit";
 import helmet from "helmet";
 import morgan from "morgan";
+import { isOriginAllowed } from "./config/origins.js";
 import { env } from "./config/env.js";
 import { avatarsDir, documentReadDirs, isInsideNonPublicSubtree, isOrgSegment, resolveWithin, storageRoot } from "./config/storage-paths.js";
 import { tenantContext } from "./config/tenant-context.js";
@@ -55,6 +56,10 @@ import { agentRunRouter } from "./controllers/agent-run.controller.js";
 import { approvalPublicRouter, approvalRouter } from "./controllers/approval.controller.js";
 import { blueprintRouter } from "./controllers/blueprint.controller.js";
 import { dashboardRouter } from "./controllers/dashboard.controller.js";
+import { agentRouter } from "./controllers/agent.controller.js";
+import { automationFlowRouter } from "./controllers/automation-flow.controller.js";
+import { goalRouter } from "./controllers/goal.controller.js";
+import { inboxRouter } from "./controllers/inbox.controller.js";
 import { portfolioRouter } from "./controllers/portfolio.controller.js";
 import { proofRouter } from "./controllers/proof.controller.js";
 import { requestFormPublicRouter } from "./controllers/request-form-public.controller.js";
@@ -108,24 +113,27 @@ app.use(helmet({ crossOriginResourcePolicy: { policy: "cross-origin" } }));
  * In production set `NODE_ENV=production` and pin `WEB_ORIGIN` to your real domain(s) only.
  */
 const allowedOrigins = env.WEB_ORIGIN.split(",").map((value) => value.trim()).filter(Boolean);
-
-const PRIVATE_LAN_RE =
-  /^https?:\/\/(localhost|127\.0\.0\.1|10\.\d{1,3}\.\d{1,3}\.\d{1,3}|192\.168\.\d{1,3}\.\d{1,3}|172\.(1[6-9]|2\d|3[01])\.\d{1,3}\.\d{1,3})(:\d+)?$/i;
-
 const isDev = env.NODE_ENV !== "production";
 
 app.use(
   cors({
     origin(origin, callback) {
-      // No Origin header (curl, server-to-server, same-origin POSTs without fetch)
-      if (!origin) return callback(null, true);
-      if (allowedOrigins.includes(origin)) return callback(null, true);
-      if (isDev && PRIVATE_LAN_RE.test(origin)) return callback(null, true);
+      if (isOriginAllowed(origin, allowedOrigins, isDev)) return callback(null, true);
       // A plain Error here falls through errorHandler.ts's generic 500 branch (logged as a
       // server error) even though this is an expected, correctly-enforced rejection, not a
       // bug — AppError gives disallowed-origin attempts their own clean 403 instead of noise
       // in the error log that could mask real 500s.
-      callback(new AppError(403, `Origin ${origin} not allowed by CORS`));
+      //
+      // The message names the FIX, not just the refusal. Reaching this product over a public IP or a
+      // new domain is an ordinary thing to do, and "not allowed by CORS" sent the last person who hit
+      // it looking at their network rather than at one environment variable. An attacker learns
+      // nothing from it that the 403 did not already tell them.
+      callback(
+        new AppError(
+          403,
+          `Origin ${origin} is not in this server's allow-list. Add it to WEB_ORIGIN (comma-separated, exact scheme/host/port) and restart the API. Private LAN addresses are accepted automatically in development; public addresses and domains never are, and must be listed.`
+        )
+      );
     },
     credentials: true
   })
@@ -459,6 +467,22 @@ app.use("/api/planning", planningRouter);
 // permissions (plan:write vs SUPER_ADMIN), different read volumes, different gates.
 app.use("/api/plan", planRouter);
 app.use("/api/portfolios", portfolioRouter);
+// Goals sit beside the portfolio rather than under /plan: they are gated on their own toggle and
+// entitlement (goals align work whether or not the Gantt is in use — see
+// planning.service.ts#assertGoalsEnabled), and reading them needs no permission at all.
+app.use("/api/goals", goalRouter);
+// The inbox is a personal surface: no permission, no entitlement, every route scoped to the
+// caller's own rows. It sits beside /notifications rather than inside it because the bell is a
+// glance and the inbox is a queue with triage state — see controllers/inbox.controller.ts.
+app.use("/api/inbox", inboxRouter);
+// The agent roster. Reading needs tickets:view (anybody working alongside a teammate may ask what
+// it is); creating one mints a service identity and is SUPER_ADMIN, like every other
+// workspace-wide switch. See controllers/agent.controller.ts.
+app.use("/api/agents", agentRouter);
+// The Workflow Studio. Same gate as the roster (it composes the same capability family), reading at
+// tickets:view because "what automation touches my work" is a fair question for the person whose
+// work it touches. See controllers/automation-flow.controller.ts.
+app.use("/api/flows", automationFlowRouter);
 app.use("/api/resources", resourceRouter);
 app.use("/api/request-forms", requestFormRouter);
 app.use("/api/blueprints", blueprintRouter);

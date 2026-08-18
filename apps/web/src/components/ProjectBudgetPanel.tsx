@@ -15,7 +15,7 @@
  * WHO renders this: the Budget tab on the Projects admin page.
  */
 import { useQuery } from "@tanstack/react-query";
-import { AlertTriangle, Clock, TrendingDown, TrendingUp, Wallet } from "lucide-react";
+import { AlertTriangle, Bot, Clock, TrendingDown, TrendingUp, Wallet } from "lucide-react";
 import { Badge } from "./ui/badge";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "./ui/card";
 import { Progress } from "./ui/progress";
@@ -134,6 +134,32 @@ export function ProjectBudgetPanel({ projectId }: { projectId: string }) {
                 </p>
               </div>
             </div>
+
+            {/* Agent spend, beside the burn and never inside it — not billable, in dollars while the
+                budget may be in anything, and an operating cost rather than an agreement with a
+                client. Hidden entirely when no teammate has worked here, because a $0.00 row invites
+                the reader to add it to something. */}
+            {budget.agentRuns > 0 && (
+              <p className="flex flex-wrap items-center gap-x-1.5 rounded border border-border bg-muted/30 p-2 text-xs">
+                <Bot className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+                <span className="font-medium tabular-nums">${budget.agentCostUsd.toFixed(2)}</span>
+                <span className="text-muted-foreground">
+                  spent by AI teammates across {budget.agentRuns} run{budget.agentRuns === 1 ? "" : "s"} on this project.
+                </span>
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <span className="cursor-help underline decoration-dotted">Not part of the burn above.</span>
+                  </TooltipTrigger>
+                  <TooltipContent className="max-w-xs">
+                    <span className="text-xs">
+                      Three reasons, each enough on its own: none of it is billable, so adding it would invoice a client
+                      for a model call; it is always in US dollars while this budget is in {currency}; and a budget is an
+                      agreement about labour, while model spend is a cost of running the workspace.
+                    </span>
+                  </TooltipContent>
+                </Tooltip>
+              </p>
+            )}
 
             {schedule.overrunsPlannedEnd && (
               <p className="flex items-center gap-1.5 text-xs text-destructive">

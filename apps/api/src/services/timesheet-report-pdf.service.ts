@@ -26,7 +26,6 @@
  * The document is created with `bufferPages: true` by the caller — the footer pass needs the final
  * page count, which does not exist until the last row is drawn.
  */
-import type PDFKit from "pdfkit";
 import { htmlToText } from "../utils/sanitize.js";
 import {
   entryHours,

@@ -411,3 +411,39 @@ const BY_ID = new Map(CAPABILITIES.map((c) => [c.id, c]));
 export function findCapability(id: string): AiCapabilitySpec | undefined {
   return BY_ID.get(id);
 }
+
+/**
+ * Whether an AGENT RUN can execute this capability unattended.
+ *
+ * MOST CAPABILITIES IN THIS REGISTRY CANNOT, and that is by design rather than an omission. The
+ * registry describes every place a model is used in the product — triage on ticket creation, refine in
+ * the editor, the weekly digest — and nearly all of those are invoked INLINE by the feature that owns
+ * them, with the request's own context. An agent run is a different thing: a loop with a tool
+ * allowlist, a step cap and a cost ceiling, which needs `tools` to work with. A capability with none
+ * has nothing for that loop to do.
+ *
+ * WHY THIS PREDICATE EXISTS RATHER THAN THE RULE BEING WRITTEN OUT WHERE IT IS NEEDED: it was written
+ * out, in `agent-run.controller.ts`'s manual-run picker — and NOT in the Workflow Studio's, so the
+ * Studio offered all twenty-eight as flow steps and twenty-six of them failed at dispatch with "no
+ * runner is implemented". One definition, in the registry that both read.
+ *
+ * `assignment_rebalance` is named explicitly because it is deterministic: it has no tools and calls no
+ * model, and `executeAgentRun` runs it through its own branch.
+ */
+/**
+ * Whether a run of this capability is meaningless without a project to scope it to.
+ *
+ * The same story as `isAgentRunnable`, found the same way: the rule was written out in the manual-run
+ * picker (`needsProject: c.id === "assignment_rebalance"`) and nowhere else, so the flow dispatcher
+ * queued rebalance runs with no scope and every one of them failed with "a rebalance run needs a
+ * project". One definition, in the registry both read.
+ */
+export function needsProjectScope(id: string): boolean {
+  return id === "assignment_rebalance";
+}
+
+export function isAgentRunnable(id: string): boolean {
+  if (id === "assignment_rebalance") return true;
+  const spec = BY_ID.get(id);
+  return Boolean(spec && spec.tools.length > 0 && spec.featureToggle);
+}

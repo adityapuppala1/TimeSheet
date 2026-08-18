@@ -92,7 +92,10 @@ Same servers the driver talks to.
 ```powershell
 npm run lint
 ```
-Runs `tsc --noEmit` for `apps/api` then `tsc -b --noEmit` for `apps/web`. Silence is success.
+Runs `tsc --noEmit` for `apps/api`, `tsc -b --noEmit` for `apps/web`, then `eslint` with the
+SonarJS rule set over both plus `packages/shared`. **Exit 0 with ~400 warnings is success** — the
+structural style rules are warnings on purpose (see `eslint.config.mjs`); only errors fail. Do not
+"fix" the warning count.
 
 ```powershell
 cd apps\api; npx vitest run

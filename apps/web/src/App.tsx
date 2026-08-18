@@ -42,10 +42,15 @@ const History = lazy(() => import("./pages/History").then((m) => ({ default: m.H
 const TimelinePage = lazy(() => import("./pages/Timeline").then((m) => ({ default: m.TimelinePage })));
 const MyWorkPage = lazy(() => import("./pages/MyWork").then((m) => ({ default: m.MyWorkPage })));
 const PortfolioPage = lazy(() => import("./pages/Portfolio").then((m) => ({ default: m.PortfolioPage })));
+const GoalsPage = lazy(() => import("./pages/Goals").then((m) => ({ default: m.GoalsPage })));
+const InboxPage = lazy(() => import("./pages/Inbox").then((m) => ({ default: m.InboxPage })));
+const AgentsPage = lazy(() => import("./pages/Agents").then((m) => ({ default: m.AgentsPage })));
+const StudioPage = lazy(() => import("./pages/Studio").then((m) => ({ default: m.StudioPage })));
 const BlueprintsPage = lazy(() => import("./pages/Blueprints").then((m) => ({ default: m.BlueprintsPage })));
 const WorkloadPage = lazy(() => import("./pages/Workload").then((m) => ({ default: m.WorkloadPage })));
 const RequestsPage = lazy(() => import("./pages/Requests").then((m) => ({ default: m.RequestsPage })));
 const ProposalsPage = lazy(() => import("./pages/Proposals").then((m) => ({ default: m.ProposalsPage })));
+const AiOverviewPage = lazy(() => import("./pages/AiOverview").then((m) => ({ default: m.AiOverviewPage })));
 const DashboardsPage = lazy(() => import("./pages/Dashboards").then((m) => ({ default: m.DashboardsPage })));
 const PublicRequestFormPage = lazy(() => import("./pages/PublicRequestForm").then((m) => ({ default: m.PublicRequestFormPage })));
 const GuestApprovalPage = lazy(() => import("./pages/GuestApproval").then((m) => ({ default: m.GuestApprovalPage })));
@@ -114,6 +119,24 @@ const router = createBrowserRouter([
       // experiences, and the second is the one that sells the feature.
       { path: "timeline", element: <RequirePermission permission={permissions.TICKETS_VIEW}><PageShell><TimelinePage /></PageShell></RequirePermission> },
       { path: "portfolio", element: <RequirePermission permission={permissions.REPORTS_VIEW}><PageShell><PortfolioPage /></PageShell></RequirePermission> },
+      // Goals (V8 phase 1) carry NO permission gate: reading the objectives the workspace is
+      // measured against needs no right — a goal nobody can see aligns nobody. goals:manage is
+      // checked inside the page for the write affordances, and the page renders its own
+      // "goals are off" state for the same reason the planning pages do.
+      { path: "goals", element: <PageShell><GoalsPage /></PageShell> },
+      // The inbox is personal: no permission, no entitlement, no feature flag. Everyone has
+      // notifications, so everyone has an inbox — the same reasoning as "my-work" above.
+      { path: "inbox", element: <PageShell><InboxPage /></PageShell> },
+      // Reading the roster needs tickets:view — anybody working alongside a teammate may ask what
+      // it is and what it has been doing. Creating one is SUPER_ADMIN, checked in the page and
+      // enforced by the API; the page renders its own "not in this plan" state on a 403.
+      { path: "agents", element: <RequirePermission permission={permissions.TICKETS_VIEW}><PageShell><AgentsPage /></PageShell></RequirePermission> },
+      // Same gate as the roster: reading is tickets:view, because what automation touches your work is
+      // your business; every write is SUPER_ADMIN, checked by the API and reflected in the page.
+      { path: "studio", element: <RequirePermission permission={permissions.TICKETS_VIEW}><PageShell><StudioPage /></PageShell></RequirePermission> },
+      // The map of the other four AI surfaces. SUPER_ADMIN, unlike the surfaces it links to: it is the
+      // orientation screen for the person who configures all of them, and it reports spend.
+      { path: "ai", element: <RequireRole role="SUPER_ADMIN"><PageShell><AiOverviewPage /></PageShell></RequireRole> },
       // Readable with tickets:view (the API lists blueprints at that level); using one needs
       // plan:write, checked inside the page so a viewer sees the shapes without dead buttons.
       { path: "blueprints", element: <RequirePermission permission={permissions.TICKETS_VIEW}><PageShell><BlueprintsPage /></PageShell></RequirePermission> },

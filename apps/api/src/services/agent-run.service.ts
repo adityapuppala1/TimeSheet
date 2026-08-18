@@ -28,8 +28,9 @@ import { AppError } from "../middleware/error.js";
 import { audit } from "./audit.service.js";
 import { findCapability, levelRank } from "./ai-capability.registry.js";
 import { resolveAutonomy } from "./ai-autonomy.service.js";
+import { recordAgentWork } from "./agent-ledger.service.js";
 import { loadRequestUser } from "./principal.service.js";
-import { getGlobalAISettings, planAgentStep, redactSecrets } from "./ai.service.js";
+import { describeDecisionFailure, getGlobalAISettings, planAgentStep, redactSecrets } from "./ai.service.js";
 import { invokeMcpTool, MCP_TOOLS, type McpEnablementSettings, type McpToolContext } from "./mcp-tools.js";
 import { proposeAssignmentRebalance } from "./ai-rebalance.service.js";
 import { emitDomainEvent } from "./domain-events.js";
@@ -53,6 +54,10 @@ export interface QueueRunParams {
   onBehalfOfId: string;
   scopeProjectId?: string | null;
   goal?: string | null;
+  /** The flow that queued this, when one did. Carried onto the row so a flow's AI spend can be told
+   *  apart from the same capability invoked by hand — which is the last piece of "every AI feature is
+   *  tracked". */
+  flowId?: string | null;
 }
 
 /**
@@ -93,6 +98,45 @@ export async function queueAgentRun(params: QueueRunParams): Promise<{ runId: st
     }
   }
 
+  /**
+   * THE PER-AGENT DAILY SPEND CEILING (V8 phase 3).
+   *
+   * `AgentProfile.maxCostUsdPerDay` is a ceiling shared by every run of one teammate, sitting under
+   * the per-run cap above, the org's monthly budget, and the tier's hard platform cap. Enforced
+   * here, beside the run-count check, for the same reason that one is: refusing to queue is the only
+   * refusal that costs nothing.
+   *
+   * Checked only when the actor IS an agent identity, so an ordinary person's runs are untouched —
+   * and by summing `AgentRun.costUsd` for that identity since local midnight, which is the same
+   * figure the roster page displays. A ceiling the product shows and does not apply is worse than no
+   * ceiling, because it is read as a guarantee.
+   */
+  if (actor.isAgent) {
+    const profile = await prisma.agentProfile.findFirst({
+      where: { identityUserId: params.onBehalfOfId, deletedAt: null },
+      select: { name: true, enabled: true, maxCostUsdPerDay: true }
+    });
+    if (profile && !profile.enabled) {
+      throw new AppError(403, `"${profile.name}" is switched off.`);
+    }
+    if (profile?.maxCostUsdPerDay != null) {
+      const midnight = new Date();
+      midnight.setHours(0, 0, 0, 0);
+      const spent = await prisma.agentRun.aggregate({
+        _sum: { costUsd: true },
+        where: { onBehalfOfId: params.onBehalfOfId, createdAt: { gte: midnight } }
+      });
+      const used = Number(spent._sum.costUsd ?? 0);
+      const ceiling = Number(profile.maxCostUsdPerDay);
+      if (used >= ceiling) {
+        throw new AppError(
+          429,
+          `"${profile.name}" has spent $${used.toFixed(4)} today, which is its daily ceiling of $${ceiling.toFixed(2)}.`
+        );
+      }
+    }
+  }
+
   try {
     const run = await prisma.agentRun.create({
       data: {
@@ -105,7 +149,8 @@ export async function queueAgentRun(params: QueueRunParams): Promise<{ runId: st
         maxSteps: DEFAULT_MAX_STEPS,
         maxCostUsd: autonomy.guardrails.maxCostUsdPerRun,
         scopeProjectId: params.scopeProjectId ?? null,
-        goal: params.goal ?? null
+        goal: params.goal ?? null,
+        flowId: params.flowId ?? null
       }
     });
     return { runId: run.id, created: true };
@@ -326,6 +371,9 @@ function callSignature(tool: string, args: unknown): string {
     return `${tool}:${JSON.stringify(stable(args))}`;
   } catch {
     // Unserialisable args cannot be compared, so they are never treated as repeats.
+    // Reviewed: this value is a cache key deliberately made non-repeating, never a token. Being
+    // guessable is harmless — the whole point is that it matches nothing else.
+    // eslint-disable-next-line sonarjs/pseudo-random -- non-cryptographic by design
     return `${tool}:${Math.random()}`;
   }
 }
@@ -411,8 +459,11 @@ async function runModelDrivenLoop(
     await prisma.agentRun.update({ where: { id: run.id }, data: { stepCount: step, costUsd } });
 
     if (!decision) {
-      await recordStep(run.id, step, { kind: "error", error: "The model's reply was not a valid decision.", result: raw.slice(0, 500) });
-      await finish(run.id, "FAILED", "The model's reply could not be parsed as a decision.");
+      // Named cause, not a shrug: on a BYOK deployment the model is the operator's choice, and the
+      // old message sent them to check an API key that was never the problem.
+      const why = describeDecisionFailure(raw, (await getGlobalAISettings()).model ?? "the configured model");
+      await recordStep(run.id, step, { kind: "error", error: why, result: raw.slice(0, 500) });
+      await finish(run.id, "FAILED", why);
       return;
     }
 
@@ -509,6 +560,15 @@ async function finish(runId: string, status: string, error: string | null): Prom
     capability: run.capability,
     status,
     proposalId: run.proposalId
+  });
+
+  /**
+   * The agent ledger (V8 phase 5). Deliberately not awaited-into-failure: accounting is DOWNSTREAM of
+   * the work, so a ledger row that cannot be written must never turn a completed run into a failed
+   * one. It is a no-op unless the actor is an agent identity.
+   */
+  await recordAgentWork(runId).catch((error: unknown) => {
+    console.error(`[agent-ledger] could not record work for run ${runId}:`, error);
   });
 }
 

@@ -189,7 +189,11 @@ export async function seedTenant(client: PrismaClient, options: SeedTenantOption
       permissions.TICKETS_WRITE,
       permissions.TICKETS_ASSIGN,
       permissions.PLAN_WRITE,
-      permissions.APPROVALS_MANAGE
+      permissions.APPROVALS_MANAGE,
+      // V8 phase 1: managers own the alignment surface — a manager who cannot write the goals
+      // their team is measured against has nothing to manage. Mirrored in
+      // migrations/20260817150000_v8_phase1_goals/migration.sql for existing installs.
+      permissions.GOALS_MANAGE
     ],
     TEAM_LEAD: [
       permissions.TIMESHEETS_WRITE,
@@ -199,7 +203,11 @@ export async function seedTenant(client: PrismaClient, options: SeedTenantOption
       permissions.TICKETS_WRITE,
       permissions.TICKETS_ASSIGN,
       permissions.PLAN_WRITE,
-      permissions.APPROVALS_MANAGE
+      permissions.APPROVALS_MANAGE,
+      // V8 phase 1: managers own the alignment surface — a manager who cannot write the goals
+      // their team is measured against has nothing to manage. Mirrored in
+      // migrations/20260817150000_v8_phase1_goals/migration.sql for existing installs.
+      permissions.GOALS_MANAGE
     ],
     EMPLOYEE: [permissions.TIMESHEETS_WRITE, permissions.TICKETS_VIEW, permissions.TICKETS_WRITE]
   };
@@ -247,6 +255,22 @@ export async function seedTenant(client: PrismaClient, options: SeedTenantOption
       status: "ACTIVE",
       bio: "Workspace administrator — owns billing, compliance, and platform configuration.",
       timezone: "America/New_York",
+      /**
+       * REQUIRED FOR THE SEEDED WORKSPACE TO BE USABLE, not decoration. `onboarding.service.ts`
+       * blocks a user behind a full-screen gate until BOTH `phoneNumber` and `timezone` are set;
+       * the seed set the timezone and not the phone, so every seeded account — including the demo
+       * super-admin the README tells you to sign in as — met a blocking overlay on first load.
+       *
+       * It stayed invisible for a long time because the gate is self-closing: it writes
+       * `onboardingCompletedAt` the moment the fields are filled, so any developer who dismissed it
+       * once never saw it again, while every FRESH database still had it. What finally caught it was
+       * CI's e2e suite reaching the browser for the first time and failing ~92 clicks against the
+       * overlay's `fixed inset-0` backdrop.
+       *
+       * 555-01xx (NANP) and the 98765 43210 example are the reserved fictional ranges, so nothing
+       * here can dial a real person.
+       */
+      phoneNumber: "+12125550100",
       emailVerifiedAt: new Date()
     }
   });
@@ -264,6 +288,8 @@ export async function seedTenant(client: PrismaClient, options: SeedTenantOption
         managerId: admin.id,
         bio: "Engineering manager. Reviews approvals daily and runs weekly utilization syncs.",
         timezone: "Asia/Kolkata",
+        // See the admin above: without a phone number the onboarding gate blocks this account.
+        phoneNumber: "+919876543211",
         emailVerifiedAt: new Date()
       }
     });
@@ -280,6 +306,8 @@ export async function seedTenant(client: PrismaClient, options: SeedTenantOption
         managerId: manager.id,
         bio: "Full-stack engineer working on the operations platform.",
         timezone: "Asia/Kolkata",
+        // See the admin above: without a phone number the onboarding gate blocks this account.
+        phoneNumber: "+919876543210",
         emailVerifiedAt: new Date()
       }
     });

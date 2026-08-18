@@ -47,7 +47,7 @@ import { useEffect, useMemo, useState } from "react";
 import { activityTypeApi, fileUrl, projectApi, timesheetApi, type TimesheetEntryDetail } from "../services/api";
 import { useTimesheetDecision } from "./useTimesheetDecision";
 import { useAuthStore } from "../store/auth";
-import { safeHtml } from "../lib/safe-html";
+import { plainTextLength, safeHtml } from "../lib/safe-html";
 import { Badge } from "./ui/badge";
 import { Button } from "./ui/button";
 import {
@@ -352,7 +352,7 @@ function EntryReadView({
             `dangerouslySetInnerHTML`, so it never rests on one check. */}
         <div className="prose-sm" dangerouslySetInnerHTML={safeHtml(entry.taskDescription)} />
       </Row>
-      {entry.notes && entry.notes.replace(/<[^>]+>/g, "").trim() ? (
+      {entry.notes && plainTextLength(entry.notes) > 0 ? (
         <Row label="Notes">
           <div className="prose-sm flex items-start gap-1">
             <StickyNote className="mt-1 h-3 w-3 shrink-0 text-muted-foreground" />
@@ -571,7 +571,7 @@ function EntryEditForm({
     onError: (err: any) => toast.error("Could not save the change", { description: serverMessage(err, "Try again.") })
   });
 
-  const descriptionLength = form.taskDescription.replace(/<[^>]+>/g, "").trim().length;
+  const descriptionLength = plainTextLength(form.taskDescription);
   // Mirrors the server's own floors so the button never promises a save the API will refuse.
   const blocked = descriptionLength < 10 || !form.projectId || !form.moduleId || form.startTime >= form.endTime;
 

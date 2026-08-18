@@ -10,6 +10,7 @@
  */
 import {
   BarChart3,
+  Bot,
   Briefcase,
   CalendarDays,
   FileClock,
@@ -21,6 +22,7 @@ import {
   LayoutDashboard,
   ListTodo,
   Mail,
+  Mailbox,
   PanelLeftClose,
   PanelLeftOpen,
   ScrollText,
@@ -28,10 +30,12 @@ import {
   Shield,
   ShieldAlert,
   Sparkles,
+  Target,
   Ticket,
   TrendingUp,
   Users,
-  Users2
+  Users2,
+  Workflow
 } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
 import { useState } from "react";
@@ -90,6 +94,9 @@ export const nav: NavItem[] = [
   { to: "/app/timesheet", label: "Log timesheet", icon: CalendarDays, permission: permissions.TIMESHEETS_WRITE, section: "Work" },
   { to: "/app/tickets", label: "Tickets", icon: Ticket, permission: permissions.TICKETS_VIEW, section: "Work" },
   { to: "/app/history", label: "History", icon: FileClock, section: "Work" },
+  // First in Work and deliberately ungated: it is where the day starts, and its brief reads
+  // definitions that exist whether or not any optional feature is on.
+  { to: "/app/inbox", label: "Inbox", icon: Mailbox, section: "Work" },
   { to: "/app/requests", label: "Requests", icon: Inbox, permission: permissions.TICKETS_VIEW, section: "Work", feature: "requestForms" },
 
   // Planning layer (V6). "My work" is deliberately FIRST and deliberately ungated: it is a
@@ -98,11 +105,23 @@ export const nav: NavItem[] = [
   // bottom bar with an everyday destination rather than leaving a gap. The other three carry a
   // `feature`, so they simply do not exist until planning is on.
   { to: "/app/my-work", label: "My work", icon: ListTodo, section: "Plan" },
+  // Goals carry their own `goals` feature rather than "planning": they are gated on their own
+  // toggle and entitlement, so a workspace can align on outcomes without turning the Gantt on.
+  { to: "/app/goals", label: "Goals", icon: Target, section: "Plan", feature: "goals" },
   { to: "/app/timeline", label: "Timeline", icon: GanttChartSquare, permission: permissions.TICKETS_VIEW, section: "Plan", feature: "timeline" },
   { to: "/app/portfolio", label: "Portfolio", icon: Briefcase, permission: permissions.REPORTS_VIEW, section: "Plan", feature: "planning" },
   { to: "/app/workload", label: "Workload", icon: Gauge, permission: permissions.RESOURCES_MANAGE, section: "Plan", feature: "resourceManagement" },
   { to: "/app/blueprints", label: "Blueprints", icon: FileStack, permission: permissions.TICKETS_VIEW, section: "Plan", feature: "planning" },
   { to: "/app/proposals", label: "AI suggestions", icon: Sparkles, permission: permissions.TICKETS_VIEW, section: "Plan", feature: "planning" },
+  // The roster carries no `feature`: its gate is the AI copilot ENTITLEMENT, which the planning
+  // `effective` object does not model, and the page renders its own upgrade state on a 403. Hiding
+  // the nav item instead would leave no surface on which to explain what agents are.
+  { to: "/app/agents", label: "Agents", icon: Bot, permission: permissions.TICKETS_VIEW, section: "Plan" },
+  { to: "/app/studio", label: "Workflows", icon: Workflow, permission: permissions.TICKETS_VIEW, section: "Plan" },
+  // Last of the AI group and SUPER_ADMIN, because it is the map of the four above rather than a fifth
+  // surface — and because it reports spend. Sits beside them rather than in Configuration so the person
+  // who has just met Agents and Workflows can find the thing that explains how they relate.
+  { to: "/app/ai", label: "AI overview", icon: Sparkles, role: "SUPER_ADMIN", section: "Plan" },
 
   { to: "/app/approvals", label: "Approvals", icon: Shield, permission: permissions.TIMESHEETS_APPROVE, section: "Team" },
   { to: "/app/team", label: "My team", icon: Users2, permission: permissions.TIMESHEETS_APPROVE, section: "Team" },

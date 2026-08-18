@@ -98,6 +98,31 @@ const DESTINATION_COPY: Record<string, { title: string; body: string; selector?:
     body: "Intake forms and what people sent through them. Publish a form to a link anyone can use without an account; every submission becomes a ticket straight away and lands here for a second look.",
     selector: "main h1"
   },
+  "/app/goals": {
+    title: "Goals",
+    body: "What the work is FOR, with the number computed rather than typed. Wire a goal to something this workspace already records — approved hours, billed spend, tickets closed, on-time delivery — and its progress reports itself. Where nothing comparable exists it says so instead of showing 0%.",
+    selector: '[data-tour="goals-list"]'
+  },
+  "/app/inbox": {
+    title: "Your inbox",
+    body: "Notifications you can actually work: snooze one until it matters, mark it handled, and it leaves the bell too. The brief at the top counts what is waiting rather than guessing at it.",
+    selector: '[data-tour="inbox-brief"]'
+  },
+  "/app/agents": {
+    title: "AI teammates",
+    body: "Named agents built from the AI this workspace already has. Each owns its capabilities — one capability, one owner — and shows what it may do, what it has done, and what it cost. None of them holds a seat, can sign in, or has a mailbox.",
+    selector: '[data-tour="agent-roster"]'
+  },
+  "/app/studio": {
+    title: "Workflows",
+    body: "A trigger, then steps: an AI capability, a deterministic action, a point where a person is asked. Every flow states the authority it really has, and can be replayed against your own recent history before you switch it on.",
+    selector: '[data-tour="flow-list"]'
+  },
+  "/app/ai": {
+    title: "AI, end to end",
+    body: "The map of the four AI screens and how they relate: what the AI may do, who does it, when it happens, and what you accept. Start here if you are deciding how much rope to give it.",
+    selector: '[data-tour="ai-surfaces"]'
+  },
   "/app/proposals": {
     title: "AI suggestions",
     body: "When the assistant proposes work, nothing is written. Every change lands here, you tick the ones you want and see exactly what each would alter. There is no apply-everything button, on purpose.",

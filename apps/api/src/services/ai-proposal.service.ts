@@ -34,7 +34,7 @@ import { assertNoParentCycle, toDay } from "./plan-schedule.service.js";
 
 export type ProposalKind = "PLAN_BREAKDOWN" | "SCHEDULE_ADJUSTMENT" | "ASSIGNMENT_REBALANCE" | "RISK_MITIGATION" | "BLUEPRINT_SUGGESTION";
 export type ChangeOp = "CREATE" | "UPDATE" | "LINK";
-export type ChangeTarget = "TICKET" | "PROJECT" | "BOOKING" | "LINK";
+export type ChangeTarget = "TICKET" | "PROJECT" | "BOOKING" | "LINK" | "TICKET_LABEL";
 
 export interface DraftChange {
   targetType: ChangeTarget;
@@ -441,6 +441,31 @@ export async function applyProposal(params: {
         });
         createdByOrder.set(change.order, created.id);
         await prisma.aiProposalChange.update({ where: { id: change.id }, data: { targetId: created.id } });
+      } else if (change.op === "CREATE" && change.targetType === "TICKET_LABEL") {
+        /**
+         * Adding a label to a ticket, as a reviewable change.
+         *
+         * WHY IT EXISTS: without it a proposal-only workflow could not propose a label at all — the
+         * dispatcher had to record the step as `held` and do nothing, which is honest and useless. A
+         * triage flow that reads inbound email is proposal-only BY CONSTRUCTION (the taint clamp), and
+         * "read this and label it" is the single most obvious thing such a flow is for.
+         *
+         * WHY IT IS `CREATE` RATHER THAN `UPDATE`: a label is a row in a join table, not a field on
+         * the ticket. There is no before-state to check for staleness because there is no prior value
+         * — the row either exists or does not, and the `findFirst` below is the whole check.
+         */
+        const ticketId = String(after.ticketId ?? "");
+        const labelId = String(after.labelId ?? "");
+        if (!ticketId || !labelId) throw new Error("a label change needs a ticket and a label");
+        const ticketExists = await prisma.ticket.findFirst({ where: { id: ticketId, deletedAt: null }, select: { id: true } });
+        if (!ticketExists) throw new Error("that ticket no longer exists");
+        const labelExists = await prisma.label.findUnique({ where: { id: labelId }, select: { id: true } });
+        if (!labelExists) throw new Error("that label no longer exists");
+        // Already there is the outcome this change wanted, so it is a success rather than a refusal —
+        // the same rule the undo path applies to an already-deleted row.
+        const already = await prisma.ticketLabel.findFirst({ where: { ticketId, labelId }, select: { id: true } });
+        const row = already ?? (await prisma.ticketLabel.create({ data: { ticketId, labelId } }));
+        await prisma.aiProposalChange.update({ where: { id: change.id }, data: { targetId: row.id } });
       } else if (change.op === "LINK") {
         const fromId = typeof after.fromIndex === "number" ? createdByOrder.get(after.fromIndex) : String(after.fromId ?? "");
         const toId = typeof after.toIndex === "number" ? createdByOrder.get(after.toIndex) : String(after.toId ?? "");
@@ -687,6 +712,11 @@ export async function undoProposal(params: { proposalId: string; actorId: string
         // booking is a scheduling row with nothing hanging off it, and this is how the rest of the
         // app removes one. A ticket is the opposite case, which is why it is soft-deleted below.
         await prisma.resourceBooking.deleteMany({ where: { id: change.targetId } });
+      } else if (change.op === "CREATE" && change.targetType === "TICKET_LABEL" && change.targetId) {
+        // Hard delete, like a booking and for the same reason: a `TicketLabel` is a join row with
+        // nothing hanging off it. Already gone is the outcome undo wanted, so `deleteMany` rather than
+        // a delete that would throw on a missing row.
+        await prisma.ticketLabel.deleteMany({ where: { id: change.targetId } });
       } else if (change.op === "CREATE" && change.targetType === "TICKET" && change.targetId) {
         const current = await prisma.ticket.findFirst({ where: { id: change.targetId, deletedAt: null } });
         // Already gone is the outcome undo wanted, so it is a success and not a refusal.

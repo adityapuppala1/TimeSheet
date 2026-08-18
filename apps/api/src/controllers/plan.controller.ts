@@ -26,6 +26,7 @@ import { requireAuth, requirePermission } from "../middleware/auth.js";
 import { AppError } from "../middleware/error.js";
 import { validate } from "../middleware/validate.js";
 import { audit } from "../services/audit.service.js";
+import { computeMyWork } from "../services/my-work.service.js";
 import { assertPlanningEnabled } from "../services/planning.service.js";
 import {
   assertNoCycle,
@@ -549,76 +550,9 @@ planRouter.get("/calendar", requirePermission(permissions.TICKETS_VIEW), async (
  * feature worth selling separately.
  */
 planRouter.get("/my-work", async (req, res) => {
-  const userId = req.user!.id;
-  const now = toDay(new Date());
-  const weekEnd = new Date(now.getTime() + 7 * 86_400_000);
-
-  const items = await prisma.ticket.findMany({
-    where: {
-      deletedAt: null,
-      assigneeId: userId,
-      status: { notIn: ["CLOSED", "RESOLVED"] }
-    },
-    select: {
-      id: true, key: true, title: true, startDate: true, endDate: true, dueAt: true, priority: true,
-      status: true, type: true, isMilestone: true, progressPct: true, estimatedHours: true,
-      workflowStatus: { select: { name: true, category: true, color: true } },
-      project: { select: { id: true, code: true, name: true } },
-      linksTo: {
-        // Incoming BLOCKS/FS edges whose SOURCE is not finished — i.e. what is holding this up.
-        where: { type: { in: ["BLOCKS", "FINISH_TO_START"] } },
-        select: { id: true, sourceTicket: { select: { id: true, key: true, title: true, status: true } } }
-      }
-    },
-    orderBy: [{ dueAt: "asc" }, { priority: "desc" }],
-    take: 300
-  });
-
-  const enriched = items.map((t) => {
-    const blockers = t.linksTo
-      .map((l) => l.sourceTicket)
-      .filter((s) => s && !["RESOLVED", "CLOSED"].includes(s.status));
-    const deadline = t.endDate ?? t.dueAt ?? null;
-    return {
-      id: t.id,
-      key: t.key,
-      title: t.title,
-      startDate: t.startDate ? dayKey(t.startDate) : null,
-      endDate: t.endDate ? dayKey(t.endDate) : null,
-      dueAt: t.dueAt ? dayKey(t.dueAt) : null,
-      deadline: deadline ? dayKey(deadline) : null,
-      priority: t.priority,
-      status: t.status,
-      statusCategory: t.workflowStatus?.category ?? legacyCategory(t.status),
-      statusLabel: t.workflowStatus?.name ?? null,
-      type: t.type,
-      isMilestone: t.isMilestone,
-      progressPct: t.progressPct,
-      estimatedHours: t.estimatedHours ? Number(t.estimatedHours) : null,
-      project: t.project,
-      blockers
-    };
-  });
-
-  // A blocked item goes in ONE bucket only — the blocked one. Showing it under "today" as well
-  // would put work at the top of someone's list that they cannot actually start, which is the
-  // fastest way to make a to-do list untrustworthy.
-  const blocked = enriched.filter((t) => t.blockers.length > 0);
-  const actionable = enriched.filter((t) => t.blockers.length === 0);
-  const bucket = (predicate: (deadline: Date | null) => boolean) =>
-    actionable.filter((t) => predicate(t.deadline ? toDay(t.deadline) : null));
-
-  res.json({
-    overdue: bucket((d) => Boolean(d && d < now)),
-    today: bucket((d) => Boolean(d && dayKey(d) === dayKey(now))),
-    thisWeek: bucket((d) => Boolean(d && d > now && d <= weekEnd)),
-    later: bucket((d) => !d || d > weekEnd),
-    blocked,
-    counts: {
-      total: enriched.length,
-      blocked: blocked.length
-    }
-  });
+  // The bucketing lives in services/my-work.service.ts because the Inbox brief counts the same
+  // four buckets. Two callers, one definition of "overdue".
+  res.json(await computeMyWork(req.user!.id));
 });
 
 /* ---------- Saved views ---------- */

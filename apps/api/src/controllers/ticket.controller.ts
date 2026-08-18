@@ -52,7 +52,7 @@ import {
   issueTicketKey,
   ticketProjectScope
 } from "../services/ticket.service.js";
-import { sanitizeRichText } from "../utils/sanitize.js";
+import { htmlToPlainText, sanitizeRichText } from "../utils/sanitize.js";
 import { bindVerificationToRecord, consumeVerification, isFaceVerificationRequired } from "../services/face.service.js";
 
 const USER_SUMMARY = { id: true, name: true, email: true, avatarUrl: true } as const;
@@ -73,6 +73,18 @@ function serializeTicketLinks<T extends { linksFrom: any[]; linksTo: any[] }>(ti
     ...linksTo.map((l) => ({ id: l.id, type: l.type, label: linkLabel(l.type, "incoming"), ticket: l.sourceTicket }))
   ];
   return { ...rest, links };
+}
+
+/**
+ * A ticket's description or a comment, as plain text an email can quote.
+ *
+ * Both are stored as sanitised rich text. Dropping that markup into an email body would inherit the
+ * app's own styling assumptions inside a client that does not share them, so the mail quotes the text
+ * and links to the ticket for the formatted version — `quoted()` in the templates turns the newlines
+ * back into line breaks.
+ */
+function plainDescription(html: string | null | undefined): string {
+  return html ? htmlToPlainText(html).trim() : "";
 }
 
 export const ticketRouter = Router();
@@ -149,6 +161,52 @@ ticketRouter.get("/", requirePermission(permissions.TICKETS_VIEW), async (req, r
  * registration order, so `/:id` would otherwise swallow `/suggest-assignee` as if "id" were the
  * literal string "suggest-assignee".
  */
+/**
+ * Per-project open/closed counts for ONE person's tickets.
+ *
+ * WHY A COUNTING ROUTE RATHER THAN A LIST THE BROWSER TALLIES: the dashboard already counts open
+ * tickets per project by fetching every open ticket and grouping them in the browser. That is
+ * affordable for open work and would not be for closed work — a long-serving assignee has hundreds of
+ * closed tickets, and the list route carries the project, module, reporter, assignee, comment and
+ * attachment counts and the latest CI run for each. Shipping all of that to render two numbers is the
+ * kind of thing that is fine on a demo workspace and falls over on a real one.
+ *
+ * WHY IT IS SCOPED TO ONE ASSIGNEE AND DEFAULTS TO THE CALLER: this feeds "My projects this month". A
+ * caller may ask about somebody else only with the permission that already grants a cross-user view
+ * of tickets — the same rule the list route applies — so this cannot become a way to profile a
+ * colleague's throughput.
+ *
+ * NOT month-scoped, deliberately. Both numbers are a snapshot of where the work stands now, so the
+ * percentage divides two things measured the same way. Counting "closed this month" against "open
+ * right now" would put a period over a snapshot and produce a ratio that means nothing.
+ */
+ticketRouter.get("/counts-by-project", requirePermission(permissions.TICKETS_VIEW), async (req, res) => {
+  const requested = typeof req.query.assigneeId === "string" && req.query.assigneeId ? req.query.assigneeId : req.user!.id;
+  if (requested !== req.user!.id && !req.user!.permissions.includes(permissions.REPORTS_VIEW)) {
+    throw new AppError(403, "You can only see your own ticket counts.");
+  }
+
+  const grouped = await prisma.ticket.groupBy({
+    by: ["projectId", "status"],
+    where: { assigneeId: requested, deletedAt: null },
+    _count: true
+  });
+
+  // Shaped per project here rather than in the browser, so every consumer gets the same definition of
+  // "closed" — RESOLVED and CLOSED both count as done, exactly as the status filters elsewhere treat
+  // them.
+  const byProject = new Map<string, { projectId: string; open: number; closed: number }>();
+  for (const row of grouped) {
+    if (!row.projectId) continue;
+    const entry = byProject.get(row.projectId) ?? { projectId: row.projectId, open: 0, closed: 0 };
+    if (row.status === "RESOLVED" || row.status === "CLOSED") entry.closed += row._count;
+    else entry.open += row._count;
+    byProject.set(row.projectId, entry);
+  }
+
+  res.json([...byProject.values()]);
+});
+
 ticketRouter.get("/suggest-assignee", requirePermission(permissions.TICKETS_WRITE), async (req, res) => {
   const projectId = String(req.query.projectId ?? "");
   const moduleId = req.query.moduleId ? String(req.query.moduleId) : undefined;
@@ -408,7 +466,10 @@ ticketRouter.post("/", requirePermission(permissions.TICKETS_WRITE), validate(cr
           ticketKey: finalTicket.key,
           title: finalTicket.title,
           priority: finalTicket.priority,
-          assignedBy: req.user!.name
+          assignedBy: req.user!.name,
+          type: finalTicket.type ?? "",
+          module: finalTicket.module?.name ?? "",
+          description: plainDescription(finalTicket.description)
         },
         fallback: {
           subject: `Ticket ${finalTicket.key} assigned to you`,
@@ -417,7 +478,12 @@ ticketRouter.post("/", requirePermission(permissions.TICKETS_WRITE), validate(cr
             ticketKey: finalTicket.key,
             title: finalTicket.title,
             priority: finalTicket.priority,
-            assignedBy: req.user!.name
+            assignedBy: req.user!.name,
+            // Type first: it is what decides how somebody triages what just landed on them.
+            type: finalTicket.type ?? null,
+            module: finalTicket.module?.name ?? null,
+            description: plainDescription(finalTicket.description) || null,
+            ticketId: finalTicket.id
           })
         }
       }
@@ -605,6 +671,23 @@ ticketRouter.patch("/:id/status", requirePermission(permissions.TICKETS_WRITE), 
   if (existing.assigneeId && existing.assigneeId !== req.user!.id) recipients.add(existing.assigneeId);
   for (const watcher of existing.watchers) if (watcher.userId !== req.user!.id) recipients.add(watcher.userId);
 
+  /**
+   * The last thing anybody said on the ticket, carried into the status email as CONTEXT.
+   *
+   * This route takes no note of its own — a status change is a status change — so there is no
+   * "reason" to quote and the template labels this as the latest comment rather than implying it
+   * explains the move. It is here because "moved to RESOLVED" with no idea what was discussed is the
+   * email people open the app to understand.
+   */
+  const latestComment = await prisma.ticketComment.findFirst({
+    where: { ticketId: ticket.id },
+    orderBy: { createdAt: "desc" },
+    select: { body: true, author: { select: { name: true } } }
+  });
+  const latestCommentText = latestComment
+    ? `${latestComment.author?.name ?? "Somebody"}: ${plainDescription(latestComment.body)}`
+    : "";
+
   for (const userId of recipients) {
     await dispatchNotification({
       userId,
@@ -614,7 +697,15 @@ ticketRouter.patch("/:id/status", requirePermission(permissions.TICKETS_WRITE), 
       link: `/app/tickets?open=${ticket.id}`,
       email: {
         templateKey: "ticket.status_changed",
-        vars: { ticketKey: ticket.key, title: ticket.title, from: currentStatus, to: nextStatus, changedBy: req.user!.name },
+        vars: {
+          ticketKey: ticket.key,
+          title: ticket.title,
+          from: currentStatus,
+          to: nextStatus,
+          changedBy: req.user!.name,
+          type: ticket.type ?? "",
+          comment: latestCommentText
+        },
         fallback: {
           subject: `${ticket.key} moved to ${nextStatus}`,
           html: templates.ticketStatusChanged({
@@ -622,7 +713,10 @@ ticketRouter.patch("/:id/status", requirePermission(permissions.TICKETS_WRITE), 
             title: ticket.title,
             from: currentStatus,
             to: nextStatus,
-            changedBy: req.user!.name
+            changedBy: req.user!.name,
+            type: ticket.type ?? null,
+            comment: latestCommentText || null,
+            ticketId: ticket.id
           })
         }
       }
@@ -689,7 +783,10 @@ ticketRouter.patch("/:id/assign", requirePermission(permissions.TICKETS_ASSIGN),
           ticketKey: ticket.key,
           title: ticket.title,
           priority: ticket.priority,
-          assignedBy: req.user!.name
+          assignedBy: req.user!.name,
+          type: ticket.type ?? "",
+          module: ticket.module?.name ?? "",
+          description: plainDescription(ticket.description)
         },
         fallback: {
           subject: `Ticket ${ticket.key} assigned to you`,
@@ -698,7 +795,11 @@ ticketRouter.patch("/:id/assign", requirePermission(permissions.TICKETS_ASSIGN),
             ticketKey: ticket.key,
             title: ticket.title,
             priority: ticket.priority,
-            assignedBy: req.user!.name
+            assignedBy: req.user!.name,
+            type: ticket.type ?? null,
+            module: ticket.module?.name ?? null,
+            description: plainDescription(ticket.description) || null,
+            ticketId: ticket.id
           })
         }
       }
@@ -1194,10 +1295,26 @@ ticketRouter.post("/:id/comments", requirePermission(permissions.TICKETS_WRITE),
       link: `/app/tickets?open=${ticket.id}`,
       email: {
         templateKey: "ticket.commented",
-        vars: { ticketKey: ticket.key, title: ticket.title, author: req.user!.name },
+        // The comment itself travels with the mail. Without it this was a notification that a
+        // notification existed, and every recipient had to open the app to learn whether it concerned
+        // them.
+        vars: {
+          ticketKey: ticket.key,
+          title: ticket.title,
+          author: req.user!.name,
+          type: ticket.type ?? "",
+          comment: plainDescription(cleanBody)
+        },
         fallback: {
           subject: `New comment on ${ticket.key}`,
-          html: templates.ticketCommented({ ticketKey: ticket.key, title: ticket.title, author: req.user!.name })
+          html: templates.ticketCommented({
+            ticketKey: ticket.key,
+            title: ticket.title,
+            author: req.user!.name,
+            type: ticket.type ?? null,
+            comment: plainDescription(cleanBody) || null,
+            ticketId: ticket.id
+          })
         }
       }
     });

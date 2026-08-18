@@ -16,7 +16,7 @@ import { AppError } from "../middleware/error.js";
 import { validate } from "../middleware/validate.js";
 import { audit } from "../services/audit.service.js";
 import { getAllowedChatPlatforms } from "../services/plan-limits.service.js";
-import { decryptSecret, encryptSecret } from "../utils/encryption.js";
+import { encryptSecret } from "../utils/encryption.js";
 
 export const chatIntegrationsRouter = Router();
 chatIntegrationsRouter.use(requireAuth, requireSuperAdmin);

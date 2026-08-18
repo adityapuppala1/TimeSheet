@@ -33,6 +33,9 @@ import {
   BarChart3,
   Bell,
   Bot,
+  Scale,
+  Workflow,
+  Target,
   Building2,
   CalendarCheck,
   CheckCircle2,
@@ -198,6 +201,34 @@ const FEATURES: Feature[] = [
     gate: "approvalsEnabled",
     title: "Intake, blueprints and approvals",
     body: "Publish a request form to a link that needs no account; every submission becomes a ticket immediately. Save a project's shape as a blueprint and stamp it out against any start date. Route work items through sequential or parallel approvals, including external reviewers who get a single-use link rather than a half-real account."
+  },
+  {
+    icon: Target,
+    group: "Plan & forecast",
+    gate: "goalsEnabled",
+    title: "Goals whose progress reports itself",
+    body: "Objectives and key results wired to something this workspace already records — approved hours, billed spend from rate snapshots, tickets closed, on-time delivery, SLA escalations. The number is computed, not typed into a status meeting. Where nothing comparable exists it says “not measurable yet” rather than showing 0%, and an override keeps the receipt: who set it, when, why, and what the measurement said at that moment."
+  },
+  {
+    icon: Bot,
+    group: "Plan & forecast",
+    gate: "aiPmCopilotEnabled",
+    title: "AI teammates you can name, scope and switch off",
+    body: "Named agents assembled from the AI capabilities already running here, each owning its own — one capability, one owner, so two of them can never quietly do the same job. A teammate holds no licensed seat, cannot sign in, and has no mailbox. Every run shows what it was allowed to do, what it did, and what it cost, against a daily spend ceiling you set."
+  },
+  {
+    icon: Workflow,
+    group: "Plan & forecast",
+    gate: "aiPmCopilotEnabled",
+    title: "Workflows that state what they are allowed to do",
+    body: "A trigger, then steps: an AI capability, a deterministic action, a condition, or a point where a named person must approve. A flow can never do more than its most restricted step, and the moment one step reads text from outside your workspace every later change becomes a suggestion instead of an action. Replay it against your own recent history before switching it on — the replay calls no model and writes nothing."
+  },
+  {
+    icon: Scale,
+    group: "Plan & forecast",
+    gate: "aiPmCopilotEnabled",
+    title: "What the AI cost, on the same books as human work",
+    body: "Every agent run is recorded the way a timesheet is: attributed to a project, timed, and priced from real usage rather than estimated. Where your own approved hours give a baseline for comparable work, the human time it stood in for is measured too — and where they do not, it says so instead of guessing. Spend is broken out per teammate and per workflow, beside the total."
   },
   {
     icon: LayoutDashboard,

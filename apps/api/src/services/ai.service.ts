@@ -488,7 +488,8 @@ export function redactSecrets(text: string): string {
       .replace(/\bxox[baprs]-[A-Za-z0-9-]{10,}\b/g, "[REDACTED:slack-token]")
       .replace(/\bsk-[A-Za-z0-9_-]{20,}\b/g, "[REDACTED:api-key]")
       // Bearer headers, whatever the token shape.
-      .replace(/\b(Bearer|Basic)\s+[A-Za-z0-9+/._~=-]{16,}/gi, "[REDACTED:bearer]")
+      // /i makes A-Z redundant with a-z, hence the lowercase-only range.
+      .replace(/\b(Bearer|Basic)\s+[a-z0-9+/._~=-]{16,}/gi, "[REDACTED:bearer]")
       // key=value / key: value assignments for secret-looking names. The lookahead keeps this
       // rule from re-eating an earlier rule's replacement — "Authorization: [REDACTED:bearer]"
       // must stay as the more specific label, not collapse into a generic one.
@@ -655,7 +656,7 @@ function localIsoDate(date: Date): string {
 export async function getMonthlyAIUsageSummary() {
   const now = new Date();
   const monthStart = new Date(now.getFullYear(), now.getMonth(), 1);
-  const [total, byFeature, byModel] = await Promise.all([
+  const [total, byFeature, byModel, agentDriven, byFlowRaw] = await Promise.all([
     prisma.aIUsageLog.aggregate({
       where: { createdAt: { gte: monthStart } },
       _sum: { costUsdEstimate: true, inputTokens: true, outputTokens: true },
@@ -675,14 +676,66 @@ export async function getMonthlyAIUsageSummary() {
       where: { createdAt: { gte: monthStart } },
       _sum: { costUsdEstimate: true, inputTokens: true, outputTokens: true },
       _count: true
+    }),
+    /**
+     * HOW MUCH OF THIS MONTH'S SPEND WAS AN AGENT RATHER THAN A PERSON (V8).
+     *
+     * Every model call already lands here through `callChat`, agent runs included — `AIUsageLog.userId`
+     * carries the identity the run acted as. What was missing was the SPLIT: without it, the panel says
+     * a workspace spent $40 and cannot say whether that was forty people using refine or one teammate
+     * running unattended all month, which are entirely different things to decide about.
+     *
+     * Derived from `User.isAgent` rather than from a flag on the usage row, so it stays correct for the
+     * rows written before the roster existed and needs no backfill.
+     */
+    prisma.aIUsageLog.aggregate({
+      where: { createdAt: { gte: monthStart }, user: { isAgent: true } },
+      _sum: { costUsdEstimate: true, inputTokens: true, outputTokens: true },
+      _count: true
+    }),
+    /**
+     * WHAT EACH WORKFLOW COST (V8 phase 6).
+     *
+     * Read from `AgentRun` rather than from `AIUsageLog`, because the usage log records WHAT was asked
+     * of a model and not WHO composed the question - a `triage` call is the same row whether a person
+     * pressed the button or a flow queued it. `AgentRun.flowId` is the only place that fact exists, so
+     * it is the only honest source for "what is this automation costing me".
+     *
+     * That makes this figure a view from a different table, not a slice of the numbers above: it is
+     * stated as such wherever it is shown, and it is a subset of `agentDriven` rather than an addition
+     * to the total.
+     */
+    prisma.agentRun.groupBy({
+      by: ["flowId"],
+      where: { createdAt: { gte: monthStart }, flowId: { not: null } },
+      _sum: { costUsd: true },
+      _count: true
     })
   ]);
+
+  // Names for the flows that spent something. One query, and only when there is something to name.
+  const flowNames = new Map<string, { name: string; emoji: string }>();
+  const spendingFlowIds = byFlowRaw.map((row) => row.flowId).filter((id): id is string => Boolean(id));
+  if (spendingFlowIds.length > 0) {
+    const rows = await prisma.automationFlow.findMany({
+      where: { id: { in: spendingFlowIds } },
+      select: { id: true, name: true, emoji: true }
+    });
+    for (const row of rows) flowNames.set(row.id, { name: row.name, emoji: row.emoji });
+  }
   return {
     monthStart: localIsoDate(monthStart),
     totalCostUsd: Number(total._sum.costUsdEstimate ?? 0),
     totalCalls: total._count,
     totalInputTokens: total._sum.inputTokens ?? 0,
     totalOutputTokens: total._sum.outputTokens ?? 0,
+    /** The agent-driven share of the totals above — a subset, never an addition to them. */
+    agentDriven: {
+      costUsd: Number(agentDriven._sum.costUsdEstimate ?? 0),
+      calls: agentDriven._count,
+      inputTokens: agentDriven._sum.inputTokens ?? 0,
+      outputTokens: agentDriven._sum.outputTokens ?? 0
+    },
     byFeature: byFeature.map((row) => ({
       feature: row.feature,
       costUsd: Number(row._sum.costUsdEstimate ?? 0),
@@ -696,7 +749,19 @@ export async function getMonthlyAIUsageSummary() {
       inputTokens: row._sum.inputTokens ?? 0,
       outputTokens: row._sum.outputTokens ?? 0,
       calls: row._count
-    }))
+    })),
+    /** Per-workflow spend, attributed through the agent runs each flow queued. A subset of
+     *  `agentDriven`, read from `AgentRun` - see the query's comment for why it cannot come from the
+     *  usage log. A retired flow keeps its row: the money was still spent. */
+    byFlow: byFlowRaw
+      .map((row) => ({
+        flowId: row.flowId as string,
+        name: flowNames.get(row.flowId as string)?.name ?? "a retired workflow",
+        emoji: flowNames.get(row.flowId as string)?.emoji ?? "⚙️",
+        costUsd: Number(row._sum.costUsd ?? 0),
+        runs: row._count
+      }))
+      .sort((a, b) => b.costUsd - a.costUsd)
   };
 }
 
@@ -1663,6 +1728,7 @@ export async function improveText(params: { text: string; context: "ticket_descr
     model: settings.model,
     inputTokens: result.usage.inputTokens,
     outputTokens: result.usage.outputTokens,
+    latencyMs: Date.now() - startedAt,
     userId: params.userId,
     promptVersionId: p.promptVersionId,
     promptFallbackReason: p.fallbackReason
@@ -1877,6 +1943,7 @@ export async function summarizeComments(params: {
     model: settings.model,
     inputTokens: result.usage.inputTokens,
     outputTokens: result.usage.outputTokens,
+    latencyMs: Date.now() - startedAt,
     userId: params.userId,
     promptVersionId: p.promptVersionId,
     promptFallbackReason: p.fallbackReason
@@ -1925,6 +1992,7 @@ export async function answerWorkspaceQuestion(params: {
     model: settings.model,
     inputTokens: result.usage.inputTokens,
     outputTokens: result.usage.outputTokens,
+    latencyMs: Date.now() - startedAt,
     userId: params.userId,
     promptVersionId: p.promptVersionId,
     promptFallbackReason: p.fallbackReason
@@ -1966,6 +2034,7 @@ export async function generateWeeklyDigest(params: {
     model: settings.model,
     inputTokens: result.usage.inputTokens,
     outputTokens: result.usage.outputTokens,
+    latencyMs: Date.now() - startedAt,
     userId: params.userId,
     promptVersionId: p.promptVersionId,
     promptFallbackReason: p.fallbackReason
@@ -2015,6 +2084,7 @@ export async function generateSecurityWeeklyDigest(params: {
     model: settings.model,
     inputTokens: result.usage.inputTokens,
     outputTokens: result.usage.outputTokens,
+    latencyMs: Date.now() - startedAt,
     userId: params.userId,
     promptVersionId: p.promptVersionId,
     promptFallbackReason: p.fallbackReason
@@ -2062,6 +2132,7 @@ export async function generateBugPatternDigest(params: {
     model: settings.model,
     inputTokens: result.usage.inputTokens,
     outputTokens: result.usage.outputTokens,
+    latencyMs: Date.now() - startedAt,
     userId: params.userId,
     promptVersionId: p.promptVersionId,
     promptFallbackReason: p.fallbackReason
@@ -2109,6 +2180,7 @@ export async function generateStatusReport(params: {
     model: settings.model,
     inputTokens: result.usage.inputTokens,
     outputTokens: result.usage.outputTokens,
+    latencyMs: Date.now() - startedAt,
     userId: params.userId,
     promptVersionId: p.promptVersionId,
     promptFallbackReason: p.fallbackReason
@@ -2170,7 +2242,8 @@ export async function explainThresholdRecommendation(rec: {
     feature: "face_policy_copilot",
     model: settings.model,
     inputTokens: result.usage.inputTokens,
-    outputTokens: result.usage.outputTokens
+    outputTokens: result.usage.outputTokens,
+    latencyMs: Date.now() - startedAt,
   });
   return result.text?.trim() || null;
 }
@@ -2244,6 +2317,7 @@ export async function analyzeEmailFailure(params: {
     model: settings.model,
     inputTokens: result.usage.inputTokens,
     outputTokens: result.usage.outputTokens,
+    latencyMs: Date.now() - startedAt,
     userId: params.userId
   });
   return parseJsonResponse(result.text, EmailFailureAnalysisSchema);
@@ -2278,6 +2352,7 @@ export async function explainAssigneeSuggestion(params: {
     model,
     inputTokens: result.usage.inputTokens,
     outputTokens: result.usage.outputTokens,
+    latencyMs: Date.now() - startedAt,
     promptVersionId: p.promptVersionId,
     promptFallbackReason: p.fallbackReason
   });
@@ -2321,6 +2396,7 @@ export async function suggestStaleTicketNextAction(params: {
     model,
     inputTokens: result.usage.inputTokens,
     outputTokens: result.usage.outputTokens,
+    latencyMs: Date.now() - startedAt,
     userId: params.userId,
     promptVersionId: p.promptVersionId,
     promptFallbackReason: p.fallbackReason
@@ -2506,6 +2582,7 @@ export async function summarizeFaceReviewAttempt(params: {
     model: settings.model,
     inputTokens: result.usage.inputTokens,
     outputTokens: result.usage.outputTokens,
+    latencyMs: Date.now() - startedAt,
     userId: attempt.userId
   });
 
@@ -2800,6 +2877,101 @@ const AgentDecisionSchema: z.ZodType<AgentDecision> = z.union([
   z.object({ action: z.literal("finish"), summary: z.string().min(1) })
 ]) as never;
 
+/**
+ * One narrow repair of a near-miss decision, and why it is worth having.
+ *
+ * SMALL MODELS COLLAPSE THE TWO LEVELS. Asked for `{"action":"tool","tool":"list_projects",...}` a 7B
+ * model very commonly replies `{"action":"list_projects","why":"..."}` — the right intent, one level
+ * flat. Observed on a live BYOK workspace running `allam-2-7b`: the run reached the model, spent real
+ * tokens, and died on the shape rather than on the substance. This file's own header argues the loop
+ * must work identically on every provider including local Ollama, and a parser that accepts exactly one
+ * spelling quietly makes that false for every model below the top tier.
+ *
+ * WHY THIS CANNOT WIDEN WHAT A RUN MAY DO: the coerced tool name must be one of the tools OFFERED for
+ * this step, which is the same allowlist `callToolForRun` enforces afterwards. A reply naming anything
+ * else is still rejected, so the repair can change the SHAPE of a decision and never its authority.
+ *
+ * WHY NOT PROMPT HARDER INSTEAD: the prompt already states the shape twice and the request already
+ * carries a JSON schema. A model that ignores both will ignore a third instruction, and the run has
+ * already been paid for by the time we find out.
+ */
+export function repairAgentDecision(raw: string, tools: Array<{ name: string }>): AgentDecision | null {
+  let parsed: unknown;
+  try {
+    // The same fence-stripping `parseJsonResponse` does, kept local so this stays a pure function.
+    const body = raw.trim().replace(/^```(?:json)?/i, "").replace(/```$/, "").trim();
+    const first = body.indexOf("{");
+    const last = body.lastIndexOf("}");
+    if (first < 0 || last <= first) return null;
+    parsed = JSON.parse(body.slice(first, last + 1));
+  } catch {
+    return null;
+  }
+  if (typeof parsed !== "object" || parsed === null) return null;
+  const obj = parsed as Record<string, unknown>;
+
+  const action = typeof obj.action === "string" ? obj.action : "";
+  const offered = new Set(tools.map((t) => t.name));
+
+  // `{"action":"<tool name>"}` — the flattened form.
+  if (offered.has(action)) {
+    return {
+      action: "tool",
+      tool: action,
+      args: typeof obj.args === "object" && obj.args !== null ? (obj.args as Record<string, unknown>) : {},
+      why: typeof obj.why === "string" ? obj.why.slice(0, 300) : undefined
+    };
+  }
+
+  // `{"action":"tool","tool":"x"}` with the args omitted, which the schema requires and a model that
+  // has nothing to pass will leave out. An empty object is exactly what it meant.
+  if (action === "tool" && typeof obj.tool === "string" && offered.has(obj.tool)) {
+    return {
+      action: "tool",
+      tool: obj.tool,
+      args: typeof obj.args === "object" && obj.args !== null ? (obj.args as Record<string, unknown>) : {},
+      why: typeof obj.why === "string" ? obj.why.slice(0, 300) : undefined
+    };
+  }
+
+  // `{"action":"finish"}` with the answer under a different key, or a bare summary. Accepted only
+  // when there IS prose to keep — a finish with nothing to say is not a repairable decision.
+  if (action === "finish") {
+    const summary = [obj.summary, obj.answer, obj.text, obj.result].find((v) => typeof v === "string" && v.trim().length > 0);
+    if (typeof summary === "string") return { action: "finish", summary: summary.trim() };
+  }
+
+  return null;
+}
+
+/**
+ * WHY a decision could not be read, in words an administrator can act on.
+ *
+ * "The model's reply could not be parsed as a decision" was the whole message, and it sent the reader
+ * looking at their API key — which was fine. The actual cause, on a live workspace, was the MODEL: a
+ * 7B chat model asked for structured output replied once with the two levels collapsed, and once by
+ * echoing the JSON schema back verbatim instead of an instance of it. Both are ordinary behaviour for a
+ * small model on an OpenAI-compatible endpoint that does not really implement `response_format`, and
+ * neither is anything the operator can fix by checking their credentials.
+ *
+ * So the run's error now names the likely cause and the model it used. Diagnosis is not a nicety here:
+ * this is a BYOK product where choosing the model is the operator's job, and an error that misdirects
+ * costs them the one decision that would fix it.
+ */
+export function describeDecisionFailure(raw: string, model: string): string {
+  const body = raw.trim();
+  if (body.length === 0) return `The model (${model}) returned nothing. It may not support the response format this step asks for.`;
+
+  const looksLikeSchema = /"type"\s*:\s*"object"/.test(body) && /"properties"\s*:/.test(body);
+  if (looksLikeSchema) {
+    return `The model (${model}) replied with the JSON SCHEMA instead of an answer in that shape — what a model does when it does not really support structured output. Choose a larger or instruct-tuned model for agent runs; every other AI feature here will keep working on this one.`;
+  }
+  if (!body.includes("{")) {
+    return `The model (${model}) replied in prose rather than the JSON this step requires. Agent runs need a model that reliably follows a response format; the one-shot AI features do not.`;
+  }
+  return `The model (${model}) replied with JSON that was not a valid decision. If this repeats, the model is likely too small to drive agent runs — the one-shot AI features are unaffected.`;
+}
+
 export interface AgentTranscriptEntry {
   tool: string;
   args: unknown;
@@ -2896,7 +3068,8 @@ export async function planAgentStep(input: {
     }
   });
 
-  const decision = parseJsonResponse(chat.text, AgentDecisionSchema);
+  const strict = parseJsonResponse(chat.text, AgentDecisionSchema);
+  const decision = strict ?? repairAgentDecision(chat.text, input.tools);
 
   await logAIUsage({
     // Logged as its own feature rather than under the capability, for two reasons that both bit
@@ -2924,7 +3097,10 @@ export async function planAgentStep(input: {
       stepsRemaining: input.stepsRemaining,
       mustFinish: Boolean(input.mustFinish)
     },
-    parseOk: decision !== null,
+    // Recorded against the STRICT parse, not the repaired one: the quality loop needs to know how
+    // often this model answers in the shape it was asked for, and a repair that hid that would make
+    // the model look better than it is exactly where the data is used to choose one.
+    parseOk: strict !== null,
     userId: input.userId
   });
 

@@ -125,6 +125,18 @@ model User {
   /// reset flow). Drives a prompt, never a lockout: forcing a change at a modal is how people end
   /// up typing their old password with a "1" appended.
   mustChangePassword       Boolean    @default(false)
+  /// --- Agent identity (V8 phase 3, decision 2 in docs/AGENTIC_WORK_MANAGEMENT.md §7) ----------
+  /// True for the non-login service identity an `AgentProfile` acts as. Making an agent a real
+  /// `User` row is what lets every existing surface work unchanged — an agent can be an assignee,
+  /// appear in workload, own a comment, and be named in an audit row — without a second actor type
+  /// threaded through forty queries.
+  ///
+  /// It carries TWO invariants, each with its own test because they fail in different directions:
+  ///   1. It never consumes a paid seat (`countActiveSeats` excludes it) — a billing rule.
+  ///   2. It can never authenticate (`establishSession` refuses it) — a security rule.
+  /// A third consequence: it has no mailbox, so the mail choke point skips it rather than posting
+  /// digests to a synthesised address.
+  isAgent                  Boolean    @default(false)
   status                   UserStatus @default(PENDING_VERIFICATION)
   roleId                   String
   role                     Role       @relation(fields: [roleId], references: [id])
@@ -235,22 +247,30 @@ model User {
   faceChallenges            FaceChallenge[]
 
   /// --- Planning layer (V6) back-relations ---------------------------------------------------
-  portfoliosOwned      Portfolio[]          @relation("PortfolioOwner")
-  savedViews           SavedView[]
-  resourceBookings     ResourceBooking[]    @relation("BookingSubject")
-  resourceBookingsMade ResourceBooking[]    @relation("BookingCreator")
-  requestFormsCreated  RequestForm[]
-  blueprintsCreated    Blueprint[]
-  approvalRequestsMade ApprovalRequest[]    @relation("ApprovalRequester")
-  approvalSteps        ApprovalStep[]       @relation("ApprovalStepApprover")
-  proofAnnotations     ProofAnnotation[]
-  dashboards           Dashboard[]
-  reportSubscriptions  ReportSubscription[]
-  aiProposalsRequested AiProposal[]         @relation("AiProposalRequester")
-  aiProposalsReviewed  AiProposal[]         @relation("AiProposalReviewer")
-  aiCapabilityPolicies AiCapabilityPolicy[] @relation("AiCapabilityPolicyEditor")
-  aiProposalsUndone    AiProposal[]         @relation("AiProposalUndoer")
-  agentRuns            AgentRun[]           @relation("AgentRunActor")
+  portfoliosOwned        Portfolio[]            @relation("PortfolioOwner")
+  goalsOwned             Goal[]                 @relation("GoalOwner")
+  goalsCreated           Goal[]                 @relation("GoalCreatedBy")
+  goalOverrides          GoalProgressOverride[] @relation("GoalOverrideBy")
+  agentProfile           AgentProfile?          @relation("AgentIdentity")
+  agentWorkEntries       AgentWorkEntry[]       @relation("AgentWorkAgent")
+  agentProfilesCreated   AgentProfile[]         @relation("AgentProfileCreatedBy")
+  automationFlowsCreated AutomationFlow[]       @relation("AutomationFlowCreatedBy")
+  flowRunsAwaiting       AutomationFlowRun[]    @relation("FlowRunApprover")
+  savedViews             SavedView[]
+  resourceBookings       ResourceBooking[]      @relation("BookingSubject")
+  resourceBookingsMade   ResourceBooking[]      @relation("BookingCreator")
+  requestFormsCreated    RequestForm[]
+  blueprintsCreated      Blueprint[]
+  approvalRequestsMade   ApprovalRequest[]      @relation("ApprovalRequester")
+  approvalSteps          ApprovalStep[]         @relation("ApprovalStepApprover")
+  proofAnnotations       ProofAnnotation[]
+  dashboards             Dashboard[]
+  reportSubscriptions    ReportSubscription[]
+  aiProposalsRequested   AiProposal[]           @relation("AiProposalRequester")
+  aiProposalsReviewed    AiProposal[]           @relation("AiProposalReviewer")
+  aiCapabilityPolicies   AiCapabilityPolicy[]   @relation("AiCapabilityPolicyEditor")
+  aiProposalsUndone      AiProposal[]           @relation("AiProposalUndoer")
+  agentRuns              AgentRun[]             @relation("AgentRunActor")
 
   createdAt DateTime  @default(now())
   updatedAt DateTime  @updatedAt
@@ -412,6 +432,7 @@ model Project {
   createdAt                 DateTime                @default(now())
   updatedAt                 DateTime                @updatedAt
   deletedAt                 DateTime?
+  agentWorkEntries          AgentWorkEntry[]
 
   @@index([portfolioId])
 }
@@ -502,8 +523,8 @@ model Timesheet {
   /// already relates to `User` through `userId`, and a second relation would force both to be
   /// named. Both names are resolved with one batched lookup at the read boundary instead —
   /// see `decorateEditors()` in timesheet.controller.ts.
-  lastEditedById  String?
-  lastEditedAt    DateTime?
+  lastEditedById String?
+  lastEditedAt   DateTime?
 
   /// When this entry was submitted for approval.
   ///
@@ -616,8 +637,19 @@ model Notification {
   readAt    DateTime?
   createdAt DateTime  @default(now())
 
+  /// --- Inbox triage (V8 phase 2) ------------------------------------------------------------
+  /// WHY "handled" IS SEPARATE FROM "read": opening the bell marks a row read, which is a
+  /// statement about attention, not about work. An inbox needs "I have dealt with this", and
+  /// collapsing the two means every glance at the bell empties the queue.
+  handledAt    DateTime?
+  /// "Not now, ask me later." Deliberately a timestamp rather than a boolean: a snooze with no
+  /// wake-up is a delete that pretends otherwise, and the row must come back on its own.
+  snoozedUntil DateTime?
+
   @@index([userId, readAt])
   @@index([userId, createdAt])
+  /// The inbox's own query: this person's unhandled rows, newest first.
+  @@index([userId, handledAt, createdAt])
 }
 
 /// WHO acted, when `actorId` alone cannot say.
@@ -1240,6 +1272,12 @@ model AgentRun {
   onBehalfOfId String
   onBehalfOf   User   @relation("AgentRunActor", fields: [onBehalfOfId], references: [id], onDelete: Cascade)
 
+  /// The flow that queued this run, when one did. Nullable because most runs are not from a flow —
+  /// and SetNull rather than Cascade because a retired flow must not erase the record of what it
+  /// spent.
+  flowId String?
+  flow   AutomationFlow? @relation("AgentRunFlow", fields: [flowId], references: [id], onDelete: SetNull)
+
   /// The level this run was AUTHORISED at, copied when it was queued. A run must be judged by what
   /// it was allowed when it started — and, more importantly, a run already in flight must not be
   /// ESCALATED by somebody editing the policy underneath it.
@@ -1293,7 +1331,7 @@ model AgentRunStep {
   runId String
   run   AgentRun @relation(fields: [runId], references: [id], onDelete: Cascade)
 
-  index Int
+  index    Int
   /// "tool_call" | "tool_result" | "refusal" | "proposal" | "note"
   kind     String  @db.VarChar(20)
   toolName String? @db.VarChar(60)
@@ -1743,6 +1781,22 @@ model GlobalNotificationSettings {
   /// change the plan silently.
   emailAiAutonomyApplied    Boolean @default(true)
 
+  /// "Two of your goals are off track, and one period ends on Friday." Weekly, to the goal's OWNER
+  /// only — the person who agreed to the number.
+  ///
+  /// Default OFF, like every other digest here. A goal nobody looks at is the ordinary failure of
+  /// OKRs and the reason this exists, but the fix for that is an opt-in an admin makes deliberately,
+  /// not a send every workspace inherits.
+  emailGoalDigest Boolean @default(false)
+
+  /// "A workflow is waiting for you to approve a step."
+  ///
+  /// Default ON, and for the same reason `emailAiAutonomyApplied` is: a gate BLOCKS everything after
+  /// it, potentially for days, and an approval request nobody sees is a workflow that looks broken.
+  /// This is the one workflow message with an email leg — the first-run summary and the per-step
+  /// notifications stay in-app, because those are news rather than a thing waiting on somebody.
+  emailWorkflowApproval Boolean @default(true)
+
   /// Hour (0–23, server local time) for the "log today's time" reminder.
   dailyReminderHour        Int     @default(16)
   /// Hour for the next-morning escalation (employee + manager).
@@ -1779,13 +1833,13 @@ model GlobalNotificationSettings {
 /// bytes live outside the granted trees and are streamed by `GET /api/branding/logo`, which
 /// resolves the tenant from the request host exactly like `/api/auth/sso-methods` does.
 model WorkspaceBranding {
-  id String @id
+  id          String   @id
   /// Filename inside the branding storage subtree — never a path, never client-supplied.
   /// Null means "no custom logo", and the product's own mark is rendered instead.
-  logoFile    String? @db.VarChar(200)
-  logoMime    String? @db.VarChar(80)
+  logoFile    String?  @db.VarChar(200)
+  logoMime    String?  @db.VarChar(80)
   /// Optional replacement for the product name shown beside the logo. Null keeps "TimeSphere".
-  displayName String? @db.VarChar(60)
+  displayName String?  @db.VarChar(60)
   updatedAt   DateTime @updatedAt
   updatedById String?
 }
@@ -1818,12 +1872,12 @@ model GlobalMailSettings {
   /// what this exists to prevent.
   ///
   /// Simultaneous SMTP connections in the nodemailer pool.
-  maxConnections    Int @default(3)
+  maxConnections       Int @default(3)
   /// Messages per `rateWindowMs` across the whole pool.
   maxMessagesPerWindow Int @default(25)
   /// The window those messages are counted in. 60s by default, so the default reads as
   /// "25 per minute" — under Office 365's 30 with room for the audit BCC.
-  rateWindowMs      Int @default(60000)
+  rateWindowMs         Int @default(60000)
 
   updatedAt   DateTime @updatedAt
   updatedById String?
@@ -3234,17 +3288,17 @@ model ApprovalStep {
   request   ApprovalRequest @relation(fields: [requestId], references: [id], onDelete: Cascade)
   order     Int             @default(0)
 
-  approverId String?
-  approver   User?   @relation("ApprovalStepApprover", fields: [approverId], references: [id], onDelete: SetNull)
-  guestEmail String? @db.VarChar(255)
+  approverId          String?
+  approver            User?     @relation("ApprovalStepApprover", fields: [approverId], references: [id], onDelete: SetNull)
+  guestEmail          String?   @db.VarChar(255)
   /// LEGACY plaintext token. No longer written; read only as a fallback so links minted before
   /// the hashing change keep working. Dropped by the follow-up migration once no row has one.
-  guestToken String? @unique @db.VarChar(64)
+  guestToken          String?   @unique @db.VarChar(64)
   /// SHA-256 of the token, exactly as AttestationShareLink.tokenHash does it — a database read
   /// (a backup, a dump, an injected SELECT) then discloses no live capability. Unsalted SHA-256
   /// is correct here and would be wrong for a password: the input is 256 random bits, so there is
   /// no dictionary to stretch against, and the lookup has to be an equality query on an index.
-  guestTokenHash String? @unique @db.VarChar(64)
+  guestTokenHash      String?   @unique @db.VarChar(64)
   /// A guest link that never expires is a permanent unauthenticated capability, so new ones get
   /// one. NULL means "minted before this column existed" and keeps its old open-ended behaviour —
   /// backfilling an expiry onto live links would have killed every outstanding approval.
@@ -3455,7 +3509,7 @@ model AiProposal {
 
   /// Unreviewed proposals go stale — a schedule proposal computed against last week's plan is
   /// worse than no proposal. The sweep marks these EXPIRED rather than letting someone apply one.
-  expiresAt     DateTime?
+  expiresAt DateTime?
 
   changes       AiProposalChange[]
   riskSnapshots ProjectRiskSnapshot[]
@@ -3576,6 +3630,9 @@ model GlobalPlanningSettings {
   enableProofing           Boolean @default(false)
   enableRequestForms       Boolean @default(false)
   enableCustomWorkflows    Boolean @default(false)
+  /// Goals/OKRs (V8 phase 1). Same two-condition gate as every toggle above: this workspace
+  /// switch AND the tier's `goalsEnabled` entitlement, ANDed server-side in planning.service.ts.
+  enableGoals              Boolean @default(false)
 
   /// JSON array of weekday numbers, 0 = Sunday. The timeline solver and the workload denominator
   /// both read this — a 5-day week and a 6-day week produce genuinely different schedules, and
@@ -3586,6 +3643,436 @@ model GlobalPlanningSettings {
 
   updatedAt   DateTime @updatedAt
   updatedById String?
+}
+
+/// --- Goals / OKRs (V8 phase 1) ---------------------------------------------------------------
+/// See docs/AGENTIC_WORK_MANAGEMENT.md §5 phase 1. The design decision that shapes every column:
+/// progress is MEASURED wherever the product already computes the number, and a goal wired to a
+/// measured source cannot be talked up in a status meeting. MANUAL exists because not everything
+/// worth pursuing is instrumented, not as the default posture.
+
+/// Lifecycle, not health. Health (on track / at risk / off track) is DERIVED on read from the
+/// measurement, the period and the target — storing it would let it drift from the numbers it
+/// claims to summarise, the exact failure the measured design exists to prevent.
+enum GoalStatus {
+  ACTIVE
+  ACHIEVED
+  CLOSED
+}
+
+/// The discriminator. MANUAL behaves like every competitor's OKR. The measured sources each name
+/// a number this product already computes for another surface — the catalogue is CLOSED for the
+/// same two reasons the dashboard widget catalogue is (see Dashboard): two goals wearing the same
+/// label must not quietly disagree, and a user-defined metric is a query surface.
+enum GoalProgressSource {
+  MANUAL
+  /// Sum of APPROVED Timesheet.totalHours in the goal period, scoped by links. Target = hours.
+  APPROVED_HOURS
+  /// Sum of Timesheet.billedAmount (the attestation's own rate snapshots). Target = spend
+  /// ceiling — an AT_MOST metric, "progress" means staying under.
+  BUDGET_SPEND
+  /// Count of tickets closed in the period, scoped by links. Target = count.
+  TICKETS_CLOSED
+  /// Share of tickets closed in the period that closed on or before their planned endDate
+  /// (falling back to the SLA-derived dueAt when no plan date exists). Target = a percentage.
+  ON_TIME_RATE
+  /// Count of ticket SLA escalations recorded in the period. AT_MOST — fewer is better.
+  SLA_BREACHES
+  /// Latest ProjectRiskSnapshot score averaged over linked projects. AT_MOST.
+  RISK_SCORE
+}
+
+enum GoalLinkTarget {
+  PROJECT
+  PORTFOLIO
+  TICKET
+}
+
+model Goal {
+  id          String  @id @default(uuid())
+  title       String  @db.VarChar(200)
+  description String? @db.Text
+
+  /// Objective → key-result nesting, same self-relation shape as Ticket.parentId. Depth is
+  /// enforced in the service (max 2 levels) rather than the schema — a database cannot express
+  /// "no grandchildren" and a CHECK on depth would need a maintained depth column.
+  parentId String?
+  parent   Goal?   @relation("GoalHierarchy", fields: [parentId], references: [id], onDelete: SetNull)
+  children Goal[]  @relation("GoalHierarchy")
+
+  ownerId String?
+  owner   User?   @relation("GoalOwner", fields: [ownerId], references: [id], onDelete: SetNull)
+
+  /// The period progress is measured over. Nullable so a draft can exist before dates are set,
+  /// but a MEASURED goal without dates reports `unavailable` rather than a number — a
+  /// measurement with no window is not a measurement.
+  startDate DateTime? @db.Date
+  endDate   DateTime? @db.Date
+
+  status         GoalStatus         @default(ACTIVE)
+  progressSource GoalProgressSource @default(MANUAL)
+
+  /// What "done" means, in the source's unit (hours, currency, count, percent, score). NULL is
+  /// only meaningful for MANUAL goals, where progress is stated rather than computed.
+  targetValue Decimal? @db.Decimal(14, 2)
+  /// Display unit, e.g. "h", "₹", "%", "tickets". Presentation only — never used in arithmetic.
+  unit        String?  @db.VarChar(20)
+
+  /// MANUAL goals only: the stated progress. Measured goals ignore this column entirely; their
+  /// number comes from the source and their overrides live in GoalProgressOverride rows.
+  manualProgressPct Int?
+
+  links     GoalLink[]
+  overrides GoalProgressOverride[]
+
+  createdById String?
+  createdBy   User?     @relation("GoalCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+  /// Soft delete, same as Portfolio — a goal that shaped a quarter's decisions is audit trail.
+  deletedAt   DateTime?
+
+  @@index([status, deletedAt])
+  @@index([parentId])
+  @@index([ownerId])
+}
+
+/// What a goal is measured OVER. A goal with no links measures the whole workspace; links narrow
+/// the scope to named projects/portfolios (a PORTFOLIO link expands to its projects at read
+/// time — stored expanded it would go stale when the portfolio gains a project). TICKET links
+/// exist for the "this one delivery" goal shape and only affect TICKETS_CLOSED / ON_TIME_RATE.
+model GoalLink {
+  id         String         @id @default(uuid())
+  goalId     String
+  goal       Goal           @relation(fields: [goalId], references: [id], onDelete: Cascade)
+  targetType GoalLinkTarget
+  /// Not a foreign key on purpose: three target tables, one column. Dangling ids are tolerated
+  /// and skipped at read time (the linked project may be soft-deleted), never errors.
+  targetId   String
+
+  createdAt DateTime @default(now())
+
+  @@unique([goalId, targetType, targetId])
+  @@index([targetType, targetId])
+}
+
+/// Decision 4 (docs/AGENTIC_WORK_MANAGEMENT.md §7): a measured goal MAY be overridden, and the
+/// override records who, when, what they claimed, and WHAT THE MEASUREMENT SAID AT THAT MOMENT.
+/// Append-only — an override of an override is a new row, and the display value is the newest
+/// row. Deleting or editing one would be exactly the unrecorded adjustment the feature exists
+/// to make impossible.
+model GoalProgressOverride {
+  id     String @id @default(uuid())
+  goalId String
+  goal   Goal   @relation(fields: [goalId], references: [id], onDelete: Cascade)
+
+  /// The stated progress, 0–100.
+  progressPct   Int
+  /// The measured value at the moment of the override — the receipt. NULL only when the
+  /// measurement itself was unavailable (no dates, no data), which is itself worth recording.
+  measuredValue Decimal? @db.Decimal(14, 2)
+  measuredPct   Int?
+  /// Required. "Why does the stated number differ from the measured one" is the entire point.
+  note          String   @db.VarChar(500)
+
+  createdById String?
+  createdBy   User?    @relation("GoalOverrideBy", fields: [createdById], references: [id], onDelete: SetNull)
+  createdAt   DateTime @default(now())
+
+  @@index([goalId, createdAt])
+}
+
+/// --- The agent roster (V8 phase 3) -----------------------------------------------------------
+/// See docs/AGENTIC_WORK_MANAGEMENT.md §5 phase 3. This model is PACKAGING, not authority: a name,
+/// a scope, a budget and an identity wrapped around capabilities that already run under
+/// `AiCapabilityPolicy`. It cannot grant anything the registry's `maxLevel` does not already allow,
+/// and `AgentRun.level` remains the authority record for what a run was actually permitted.
+///
+/// WHY RUNS ARE NOT LINKED HERE BY A FOREIGN KEY: `AgentRun.onBehalfOfId` already points at the
+/// identity a run acted as, and each profile has its own identity user — so "this profile's runs"
+/// is a query that needs no new column, and a run keeps its attribution even if the profile is
+/// later deleted. The alternative (a nullable profileId on AgentRun) would have two sources of
+/// truth for the same fact.
+model AgentProfile {
+  id          String  @id @default(uuid())
+  name        String  @db.VarChar(80)
+  /// One or two emoji. Deliberately not an uploaded image: a roster of teammates needs to be
+  /// visually distinguishable at a glance, and an avatar pipeline is a storage surface this does
+  /// not need.
+  ///
+  /// NO DATABASE DEFAULT, on purpose (fixed in the phase-4 migration). A `DEFAULT '🤖'` in DDL is a
+  /// multibyte literal travelling through a migration file, a client connection charset and a server
+  /// charset — and on this project's own Windows MariaDB it arrived as `'?'`, which left
+  /// `prisma migrate diff` permanently reporting drift that could not be resolved. Rows were never
+  /// affected (Prisma sends the value), but a diff nobody can make clean is a diff nobody reads.
+  /// The default lives in `agent-profile.service.ts` instead, where it is ordinary UTF-8 source.
+  emoji       String  @db.VarChar(16)
+  description String? @db.Text
+
+  /// The service identity this profile acts as — a `User` row with `isAgent = true`. Required:
+  /// an agent with no identity could not be an assignee, appear in an audit row, or be attributed
+  /// a run, which is the whole reason for the design.
+  identityUserId String @unique
+  identityUser   User   @relation("AgentIdentity", fields: [identityUserId], references: [id], onDelete: Cascade)
+
+  /// JSON array of `AiCapabilitySpec.id` strings from services/ai-capability.registry.ts. Stored
+  /// as JSON rather than a join table because it is a small set read whole, always, and never
+  /// filtered on — the same reasoning `Blueprint` uses for its payload.
+  capabilities    Json @default("[]")
+  /// JSON array of project ids, empty meaning workspace-wide. Narrowing only: it intersects with
+  /// whatever `AiCapabilityPolicy.scopeProjectIds` already allows, and can never widen it.
+  scopeProjectIds Json @default("[]")
+
+  /// A ceiling this profile's runs share per day, on top of every existing limit
+  /// (`AiCapabilityPolicy.maxCostUsdPerRun`, the org's monthly budget, and the tier's hard
+  /// platform ceiling). Null means "no profile-specific cap", never "unlimited".
+  maxCostUsdPerDay Decimal? @db.Decimal(10, 4)
+
+  /// Off is the default and the shipped state of every prebuilt template. A profile that arrives
+  /// switched on during an upgrade is the exact failure the MCP write latches were designed against.
+  enabled Boolean @default(false)
+
+  /// The template it was created from, when it came from the built-in gallery. Kept so the roster
+  /// can say "this is the stock triage teammate, unmodified" versus "somebody built this".
+  templateKey String? @db.VarChar(60)
+
+  /// Flows that run as this teammate. A flow keeps working if the profile is retired (the relation
+  /// is SetNull there) — it simply stops having an agent, and validation catches it on next activate.
+  flows AutomationFlow[]
+
+  createdById String?
+  createdBy   User?     @relation("AgentProfileCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+  deletedAt   DateTime?
+
+  @@index([enabled, deletedAt])
+}
+
+/// --- The agent ledger (V8 phase 5) -----------------------------------------------------------
+/// See docs/AGENTIC_WORK_MANAGEMENT.md §4. THE DIFFERENTIATOR, and the reason it is possible here and
+/// nowhere else: every competitor's agent story ends at "it ran". This product already holds approved
+/// hours per person per project per day with a rate snapshot, so agent work can be put on the SAME
+/// ledger as human work and be counted rather than claimed.
+///
+/// Deliberately shaped like `Timesheet` rather than inventing a parallel reporting path: attributed to
+/// a project and an activity, measured rather than estimated, and never priced into `billedAmount`.
+model AgentWorkEntry {
+  id String @id @default(uuid())
+
+  /// The run that produced it. Not a relation on purpose, matching `ProjectRiskSnapshot.aiProposalId`:
+  /// a run's history may be pruned while the accounting for it should survive.
+  agentRunId String @unique @db.VarChar(64)
+  capability String @db.VarChar(60)
+
+  /// The agent identity that acted, and the human it acted for. Both, because "which teammate" and
+  /// "on whose behalf" are different questions and an audit answers them separately.
+  agentUserId String
+  agentUser   User   @relation("AgentWorkAgent", fields: [agentUserId], references: [id], onDelete: Cascade)
+
+  projectId String?
+  project   Project? @relation(fields: [projectId], references: [id], onDelete: SetNull)
+
+  /// Wall-clock seconds the run took. A recorded fact, not an estimate.
+  durationSeconds Int
+  /// Summed from `AIUsageLog` for this run. Zero is real (a deterministic capability spends nothing);
+  /// NULL would mean "not known", which never happens once a run has finished.
+  costUsd         Decimal @default(0) @db.Decimal(10, 4)
+
+  /// Human minutes this displaced — populated ONLY where this workspace's own timesheets give a
+  /// baseline for the same kind of work, and left NULL otherwise. The UI renders NULL as
+  /// "not measurable", never as zero: inventing a saving is how a metric stops being believed, and
+  /// this is the number a customer would quote back at a renewal.
+  displacedMinutes Int?
+  /// Where the baseline came from, so the figure above can be checked rather than trusted.
+  displacedBasis   String? @db.VarChar(200)
+
+  /// Never priced into `Timesheet.billedAmount` (decision 3, §7): agent cost is real cost, but
+  /// invoicing machine minutes is a commercial decision no default should make for an operator. This
+  /// flag records a per-project opt-in, and nothing reads it as billable while it is false.
+  billable Boolean @default(false)
+
+  occurredAt DateTime @default(now())
+
+  @@index([occurredAt])
+  @@index([agentUserId, occurredAt])
+  @@index([projectId, occurredAt])
+}
+
+/// --- Workflow Studio (V8 phase 4) -------------------------------------------------------------
+/// See docs/AGENTIC_WORK_MANAGEMENT.md §5 phase 4. A flow composes things that already exist —
+/// deterministic rule actions, registered AI capabilities, and a human gate — behind one trigger.
+///
+/// THE THREE RULES THIS SCHEMA EXISTS TO SERVE, restated here because a no-code surface is exactly
+/// where they would otherwise be lost (they are computed in services/flow-authority.service.ts):
+///   1. A flow's authority is the MINIMUM of its capability steps'. Composing two AUTO_APPLY steps
+///      must never produce authority neither had.
+///   2. Taint propagates FORWARD. If any step reads externally-authored text, every later writing
+///      step is clamped to SUGGEST — the same authority downgrade `AgentRun.taintedAt` applies to a
+///      single run, generalised to a composition.
+///   3. Anything above SUGGEST writes through `AiProposal`. The Studio adds no new write path.
+enum AutomationTriggerKind {
+  /// A domain event from services/domain-events.ts.
+  EVENT
+  /// A cron expression, swept by the same worker pattern every other schedule uses.
+  SCHEDULE
+  /// A public request form submission.
+  FORM_SUBMISSION
+  /// Only ever run by hand from the Studio. The default, because a flow nobody has watched run
+  /// should not be wired to a firehose.
+  MANUAL
+}
+
+enum AutomationStepKind {
+  /// Deterministic. The actions `TicketRule` already performs — assign, label, notify. No model.
+  ACTION
+  /// A registered AI capability, at whatever level it resolves to. The only step kind that can
+  /// lower a flow's authority, and the only one that can taint it.
+  CAPABILITY
+  /// Blocks. Everything after it waits for a named approver, so a flow whose writes sit behind one
+  /// is safe by construction whatever its steps could otherwise do.
+  HUMAN_GATE
+  /// A condition on fields the rules engine already evaluates. Skips the remaining steps when false.
+  BRANCH
+}
+
+model AutomationFlow {
+  id          String  @id @default(uuid())
+  name        String  @db.VarChar(120)
+  description String? @db.Text
+  emoji       String  @default("⚙️") @db.VarChar(16)
+
+  trigger       AutomationTriggerKind @default(MANUAL)
+  /// Shape depends on `trigger`: `{ event }` for EVENT, `{ cron }` for SCHEDULE, `{ formId }` for
+  /// FORM_SUBMISSION, `{}` for MANUAL. JSON because the three shapes share no columns and a
+  /// nullable column per trigger kind would be four columns that are always three-quarters empty.
+  triggerConfig Json                  @default("{}")
+
+  /// The teammate this flow runs as, when it runs one. Optional: a flow of nothing but deterministic
+  /// ACTION steps needs no agent. When set, the flow's capability steps must be ones that profile
+  /// owns — which is what stops the Studio becoming a way around "one capability, one owner".
+  agentProfileId String?
+  agentProfile   AgentProfile? @relation(fields: [agentProfileId], references: [id], onDelete: SetNull)
+
+  /// Off until somebody activates it, and activation is refused unless the flow validates. Same
+  /// rule as the roster and the MCP write latches: nothing switches itself on.
+  enabled Boolean @default(false)
+
+  steps     AutomationStep[]
+  runs      AutomationFlowRun[]
+  /// The AI runs this flow queued. The join behind per-flow spend in AI usage analytics: without it a
+  /// flow's cost is indistinguishable from the same capability invoked by hand.
+  agentRuns AgentRun[]          @relation("AgentRunFlow")
+
+  createdById String?
+  createdBy   User?     @relation("AutomationFlowCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+  deletedAt   DateTime?
+
+  @@index([enabled, deletedAt])
+  @@index([trigger, enabled])
+}
+
+/// One execution of one flow against one subject.
+///
+/// WHY IT IS A ROW AND NOT A LOG LINE: a flow stops at a gate and resumes days later, so its progress
+/// has to survive a restart — and "what did this automation actually do to my workspace" is the
+/// question the whole Studio exists to answer. AgentRun made the same call for the same reason.
+///
+/// WHY `triggerKey` IS UNIQUE HERE TOO: a doubled domain event, a retried webhook and a restart
+/// mid-dispatch all collapse to one row, which is the guarantee the runtime already provides for
+/// agent runs. The key carries the SUBJECT id, not just the flow id — without that, the first ticket
+/// through a flow would be the only ticket ever through it.
+model AutomationFlowRun {
+  id     String         @id @default(uuid())
+  flowId String
+  flow   AutomationFlow @relation(fields: [flowId], references: [id], onDelete: Cascade)
+
+  triggerKey String @unique @db.VarChar(190)
+  /// "event:<name>" | "cron" | "manual" | "form"
+  trigger    String @db.VarChar(80)
+
+  /// What it ran against, denormalised so a finished run still reads as itself after the subject is
+  /// renamed or deleted.
+  subjectType  String? @db.VarChar(30)
+  subjectId    String? @db.VarChar(64)
+  subjectLabel String? @db.VarChar(200)
+
+  /// RUNNING | WAITING | COMPLETED | STOPPED | FAILED
+  ///
+  /// STOPPED means a branch condition said no, which is a correct outcome and not a failure — the
+  /// same distinction AgentRun draws with PARTIAL and BLOCKED.
+  status String @default("RUNNING") @db.VarChar(20)
+
+  /// Where a gate stopped it, and who was asked. Both null unless the status is WAITING.
+  awaitingOrder  Int?
+  awaitingUserId String?
+  awaitingUser   User?   @relation("FlowRunApprover", fields: [awaitingUserId], references: [id], onDelete: SetNull)
+
+  /// One line, written when the run settles: what it did, in the words the Inbox will use.
+  summary String? @db.VarChar(500)
+
+  startedAt  DateTime  @default(now())
+  finishedAt DateTime?
+
+  steps AutomationFlowRunStep[]
+
+  @@index([flowId, startedAt])
+  @@index([status])
+}
+
+/// What one step of one flow run actually did.
+model AutomationFlowRunStep {
+  id    String            @id @default(uuid())
+  runId String
+  run   AutomationFlowRun @relation(fields: [runId], references: [id], onDelete: Cascade)
+
+  order Int
+  kind  AutomationStepKind
+
+  /// ran | proposed | queued | waiting | skipped | not-reached | held | failed
+  ///
+  /// `held` is its own outcome: a change this flow's authority does not let it apply AND the review
+  /// queue cannot express. Silently skipping it would read as "nothing to do".
+  outcome String @db.VarChar(20)
+  detail  String @db.VarChar(500)
+
+  /// The AI run this step queued, for a capability step.
+  agentRunId String? @db.VarChar(64)
+
+  /// The proposal this step produced, for a deterministic action a proposal-only flow could not apply
+  /// directly. Not a relation, for the reason `AgentRun.proposalId` is not one: a proposal can be
+  /// deleted while the record of what proposed it should survive. Without this column the run report
+  /// can say "proposed" and cannot say WHICH — which is the click a reviewer actually wants.
+  proposalId String? @db.VarChar(64)
+
+  createdAt DateTime @default(now())
+
+  @@index([runId, order])
+}
+
+model AutomationStep {
+  id     String         @id @default(uuid())
+  flowId String
+  flow   AutomationFlow @relation(fields: [flowId], references: [id], onDelete: Cascade)
+
+  /// Explicit ordering rather than a linked list: the builder renders a list and reorders by
+  /// rewriting these, and a broken `nextStepId` chain is unreadable in a database row.
+  order Int
+  kind  AutomationStepKind
+
+  /// For CAPABILITY: the registry id. For ACTION: which action. For BRANCH/HUMAN_GATE: null.
+  capability String? @db.VarChar(60)
+
+  /// Kind-specific: `{ assigneeId }` / `{ labelId }` / `{ notifyUserId }` for ACTION,
+  /// `{ field, op, value }` for BRANCH, `{ approverId }` for HUMAN_GATE.
+  config Json @default("{}")
+
+  createdAt DateTime @default(now())
+
+  @@unique([flowId, order])
+  @@index([flowId, order])
 }
 
 /// Status of one monitored service at one moment. Three levels, not two, because "slow but
@@ -3650,7 +4137,7 @@ model ServiceIncident {
   /// index, so open-ness has to live in a column the constraint can see. NULLs do not collide in
   /// a MySQL unique index, which is exactly the property needed: any number of CLOSED incidents
   /// per service, never two open ones.
-  openKey     String?       @unique @db.VarChar(60)
+  openKey String? @unique @db.VarChar(60)
 
   @@index([service, startedAt])
   @@index([endedAt])

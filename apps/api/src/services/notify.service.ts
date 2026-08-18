@@ -59,7 +59,16 @@ export type NotificationCategory =
    *  upgrade is the kind of send that gets a domain filtered, and no category in the email role
    *  matrix covers product announcements. Raised once per version per workspace by
    *  services/release-announce.service.ts. */
-  | "release.published";
+  | "release.published"
+  /** In-app ONLY, deliberately. Raised by the Workflow Studio for news: a flow ran for the first
+   *  time, or a step notified somebody. News does not need an email; a thing WAITING on somebody
+   *  does, and that is `workflow.approval` below. */
+  | "workflow.attention"
+  /** A workflow has stopped at a gate and is waiting for this person to decide. The one workflow
+   *  message with an email leg, because it is the only one that BLOCKS. */
+  | "workflow.approval"
+  /** Weekly, to a goal's owner: which of their goals are off track and which periods are closing. */
+  | "goal.digest";
 
 interface EmailPayload {
   templateKey: string;
@@ -114,7 +123,10 @@ const SETTINGS_FIELD: Record<NotificationCategory, string | null> = {
   "maintenance.scheduled": "emailMaintenanceScheduled",
   "ai.autonomy_applied": "emailAiAutonomyApplied",
   "timesheet.updated": null,
-  "release.published": null
+  "release.published": null,
+  "workflow.attention": null,
+  "workflow.approval": "emailWorkflowApproval",
+  "goal.digest": "emailGoalDigest"
 };
 
 const GLOBAL_ID = "global";

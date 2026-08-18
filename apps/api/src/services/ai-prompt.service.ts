@@ -298,7 +298,7 @@ export function getPromptSpec(feature: string): PromptSpec | undefined {
   return SPEC_BY_FEATURE.get(feature);
 }
 
-const TOKEN_RE = /\{\{\s*([a-zA-Z0-9_]+)\s*\}\}/g;
+const TOKEN_RE = /\{\{\s*(\w+)\s*\}\}/g;
 
 /** Every placeholder the body actually references, deduped, in first-appearance order. */
 export function extractPlaceholders(body: string): string[] {

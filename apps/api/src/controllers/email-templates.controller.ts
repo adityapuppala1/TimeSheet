@@ -26,7 +26,8 @@ import {
   TEMPLATE_DESCRIPTIONS,
   TEMPLATE_KEYS,
   TEMPLATE_VARIABLES,
-  sampleVariables
+  sampleVariables,
+  templateDefault
 } from "../services/template-store.service.js";
 
 export const emailTemplatesRouter = Router();
@@ -103,6 +104,7 @@ emailTemplatesRouter.get("/", async (_req, res) => {
   const byKey = new Map(rows.map((r) => [r.key, r]));
   const items = TEMPLATE_KEYS.map((key) => {
     const row = byKey.get(key);
+    const shipped = templateDefault(key);
     return {
       key,
       description: TEMPLATE_DESCRIPTIONS[key] ?? "",
@@ -111,6 +113,35 @@ emailTemplatesRouter.get("/", async (_req, res) => {
       enabled: row?.enabled ?? true,
       subject: row?.subject ?? null,
       bodyHtml: row?.bodyHtml ?? null,
+      /**
+       * The email this workspace actually SENDS when nothing has been customised — which is the
+       * normal case, and which the editor previously could not show. Without these the preview was a
+       * three-line stub, and saving from that screen replaced a real email with the stub.
+       *
+       * Sent for every key, override or not: an administrator editing a customised template still
+       * needs to see what they diverged from, and "revert to the shipped version" needs something to
+       * revert to.
+       */
+      defaultSubject: shipped?.subject ?? null,
+      defaultHtml: shipped?.html ?? null,
+      /**
+       * Variables the SHIPPED template uses that this workspace's customised version does not.
+       *
+       * WHY IT MATTERS: an override wins outright, so a template customised before a field existed
+       * keeps sending without it — silently, and forever. When the timesheet emails gained the module,
+       * submodule, activity and description an approver needs, every workspace that had ever saved
+       * that template carried on sending the old body and nobody would have been told.
+       *
+       * Reported rather than merged: an override is somebody's deliberate wording, and a system that
+       * edits it on their behalf is worse than one that points at the gap. The editor shows these as
+       * "your version does not use" beside the Revert button.
+       */
+      missingVariables:
+        row && shipped
+          ? (TEMPLATE_VARIABLES[key] ?? []).filter(
+              (name) => shipped.html.includes(`{{${name}}}`) && !row.bodyHtml.includes(`{{${name}}}`)
+            )
+          : [],
       updatedAt: row?.updatedAt ?? null,
       updatedById: row?.updatedById ?? null
     };
@@ -183,7 +214,22 @@ emailTemplatesRouter.delete("/:key", async (req, res) => {
  */
 async function dispatchTestSend(key: string, recipient: string, actorId: string) {
   const row = await prisma.emailTemplate.findUnique({ where: { key } });
-  if (!row) return { ok: false, status: "FAILED" as const, errorMessage: "Template not saved — open the editor and save it first" };
+  const shipped = templateDefault(key);
+
+  /**
+   * The override if there is one, otherwise the SHIPPED email.
+   *
+   * This used to refuse outright — "Template not saved, open the editor and save it first" — for any
+   * template nobody had customised, which is most of them and was all twelve of the ones that had no
+   * editor entry at all. So "send me a test of this" failed for exactly the templates an
+   * administrator most wanted to see, and the message blamed them for not saving something they had
+   * no reason to save. Testing what the workspace actually sends should never require editing it
+   * first.
+   */
+  const source = row ? { subject: row.subject, html: row.bodyHtml } : shipped;
+  if (!source) {
+    return { ok: false, status: "FAILED" as const, errorMessage: `No template body is registered for "${key}" — this is a bug, not a setting.` };
+  }
 
   const samples = sampleVariables(key);
   const apply = (input: string) =>
@@ -191,8 +237,8 @@ async function dispatchTestSend(key: string, recipient: string, actorId: string)
 
   return sendMail({
     to: recipient,
-    subject: `[Test] ${apply(row.subject)}`,
-    html: apply(row.bodyHtml),
+    subject: `[Test] ${apply(source.subject)}`,
+    html: apply(source.html),
     template: `${key}.test`,
     metadata: { triggeredBy: actorId, testSend: true },
     skipBcc: true

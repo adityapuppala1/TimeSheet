@@ -236,6 +236,13 @@ model PlanTierLimit {
   maxBlueprints             Int     @default(0)
   maxCustomFields           Int     @default(0)
   maxDashboards             Int     @default(0)
+
+  /// --- Goals / OKRs (V8 phase 1) -----------------------------------------------------------
+  /// Same restrictive-default rule as the V6 block above, same reason: a tier row that misses
+  /// its initialisation under-entitles, and the migration that adds these runs the guarded
+  /// UPDATE with the real Team/Enterprise values from @timesheet/shared's PLAN_TIER_LIMITS.
+  goalsEnabled              Boolean @default(false)
+  maxGoals                  Int     @default(0)
 }
 
 /// Platform-wide Stripe configuration (id = "global") — one Stripe account across every org on

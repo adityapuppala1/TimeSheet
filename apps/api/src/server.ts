@@ -35,8 +35,13 @@ import { startWebhookRetryWorker } from "./workers/webhook-retry.worker.js";
 import { startBugPatternDigestWorker } from "./workers/bug-pattern-digest.worker.js";
 import { startAIEvalWorker } from "./workers/ai-eval.worker.js";
 import { startAgentRunWorker } from "./workers/agent-run.worker.js";
+import { startFlowScheduleWorker } from "./workers/flow-schedule.worker.js";
+import { startGoalDigestWorker } from "./workers/goal-digest.worker.js";
 import { startAIRetentionWorker } from "./workers/ai-retention.worker.js";
 import { runForEveryOrg } from "./workers/run-for-every-org.js";
+import { registerFlowDispatch } from "./services/automation-dispatch.service.js";
+import { reportTenantSchemaDrift } from "./services/tenant-schema-check.service.js";
+import { reportDeploymentConfig } from "./config/deployment-check.js";
 import { warmFaceModelsIfEnabled } from "./services/face.service.js";
 import { announceRunningRelease } from "./services/release-announce.service.js";
 import { startIdentityWeeklyDigestWorker } from "./workers/identity-weekly-digest.worker.js";
@@ -226,7 +231,13 @@ server.on("listening", async () => {
   startAIRetentionWorker();
   startAIEvalWorker();
   startAgentRunWorker();
+  startFlowScheduleWorker();
+  startGoalDigestWorker();
   startApiTelemetryRetentionWorker();
+
+  // The Studio's event triggers. Registered once, for the whole internal event vocabulary — which
+  // flows actually fire is decided by the flows, not by what this file was compiled knowing about.
+  registerFlowDispatch();
   // Starts the machine-snapshot refresh and the buffer's flush timer. A no-op unless
   // API_TELEMETRY_ENABLED is set, so an untouched deployment starts no extra timers.
   startApiTelemetry();
@@ -234,6 +245,19 @@ server.on("listening", async () => {
   // Detached: loads the face models at boot IF any org has the feature enabled, so the first
   // verification after a restart doesn't pay the multi-second cold model load. Deployments
   // with the feature off pay nothing (see warmFaceModelsIfEnabled's header).
+  // How this deployment is ADDRESSED, checked before anything else is reported: an app whose
+  // APP_BASE_URL is missing from WEB_ORIGIN works perfectly on localhost and refuses every sign-in
+  // from the only address its users were given. Synchronous and cheap — three string comparisons.
+  reportDeploymentConfig({ appBaseUrl: env.APP_BASE_URL, webOrigin: env.WEB_ORIGIN, nodeEnv: process.env.NODE_ENV });
+
+  // Detached, and the first thing worth knowing at boot: a tenant left behind by a missed
+  // `migrate:tenants` looks exactly like healthy code until a worker touches a table that is not
+  // there. Warns rather than refusing to start — one org being behind must not take down the ones
+  // that are fine.
+  void reportTenantSchemaDrift().catch((error) =>
+    console.warn(`[tenant-schema] could not check tenant schema versions: ${(error as Error).message}`)
+  );
+
   void warmFaceModelsIfEnabled(runForEveryOrg).catch((error) =>
     console.warn(`[face] boot warm-up skipped: ${(error as Error).message}`)
   );

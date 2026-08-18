@@ -19,7 +19,7 @@ import { prisma } from "../config/prisma.js";
 import { requireAuth, requireSuperAdmin } from "../middleware/auth.js";
 import { validate } from "../middleware/validate.js";
 import { queueAgentRun, requestAbort } from "../services/agent-run.service.js";
-import { AI_CAPABILITIES, findCapability } from "../services/ai-capability.registry.js";
+import { AI_CAPABILITIES, findCapability, isAgentRunnable, needsProjectScope } from "../services/ai-capability.registry.js";
 
 export const agentRunRouter = Router();
 agentRunRouter.use(requireAuth, requireSuperAdmin);
@@ -27,29 +27,64 @@ agentRunRouter.use(requireAuth, requireSuperAdmin);
 /** The capabilities a run can currently be queued for — the ones with a runner behind them. */
 agentRunRouter.get("/capabilities", async (_req, res) => {
   res.json(
-    AI_CAPABILITIES.filter((c) => c.id === "assignment_rebalance" || (c.tools.length > 0 && c.featureToggle)).map((c) => ({
+    AI_CAPABILITIES.filter((c) => isAgentRunnable(c.id)).map((c) => ({
       id: c.id,
       title: c.title,
       description: c.description,
-      needsProject: c.id === "assignment_rebalance"
+      needsProject: needsProjectScope(c.id)
     }))
   );
 });
 
+/**
+ * The list, optionally narrowed.
+ *
+ * `flowId` is the filter that matters most now that flows queue runs: "what has this workflow been
+ * doing" is answered here, and the flow is included on every row so a run from one is never mistaken
+ * for a run somebody started by hand.
+ */
 agentRunRouter.get(
   "/",
-  validate(z.object({ query: z.object({ limit: z.coerce.number().int().min(1).max(100).optional() }).passthrough() })),
+  validate(
+    z.object({
+      query: z
+        .object({
+          limit: z.coerce.number().int().min(1).max(100).optional(),
+          capability: z.string().max(60).optional(),
+          flowId: z.string().uuid().optional()
+        })
+        .passthrough()
+    })
+  ),
   async (req, res) => {
     const runs = await prisma.agentRun.findMany({
+      where: {
+        ...(req.query.capability ? { capability: String(req.query.capability) } : {}),
+        ...(req.query.flowId ? { flowId: String(req.query.flowId) } : {})
+      },
       orderBy: { createdAt: "desc" },
       take: Number(req.query.limit) || 25,
-      include: { onBehalfOf: { select: { id: true, name: true } } }
+      include: {
+        onBehalfOf: { select: { id: true, name: true } },
+        flow: { select: { id: true, name: true, emoji: true } }
+      }
     });
     res.json(runs);
   }
 );
 
-/** One run with its full step trace — the audit answer to "what did it actually do". */
+/**
+ * One run with its full step trace — the audit answer to "what did it actually do".
+ *
+ * AND the rest of the chain, because the trace alone stops one link short. A run may have produced a
+ * proposal, that proposal may have been applied, and the applied change is what actually happened to
+ * somebody's work. Three tables, one question — and answering it in the browser would mean three round
+ * trips and a reader who gives up.
+ *
+ * The proposal is fetched separately rather than as a relation: `AgentRun.proposalId` is deliberately
+ * not one, so a proposal can be deleted while the record of the run that made it survives. A missing
+ * proposal is therefore reported as absent, never as an error.
+ */
 agentRunRouter.get(
   "/:id",
   validate(z.object({ params: z.object({ id: z.string().uuid() }) })),
@@ -58,11 +93,33 @@ agentRunRouter.get(
       where: { id: String(req.params.id) },
       include: {
         onBehalfOf: { select: { id: true, name: true } },
+        flow: { select: { id: true, name: true, emoji: true } },
         steps: { orderBy: { index: "asc" } }
       }
     });
     if (!run) return res.status(404).json({ message: "Run not found" });
-    res.json(run);
+
+    const [proposal, ledger] = await Promise.all([
+      run.proposalId
+        ? prisma.aiProposal.findUnique({
+            where: { id: run.proposalId },
+            select: {
+              id: true,
+              title: true,
+              status: true,
+              changes: { orderBy: { order: "asc" }, select: { id: true, summary: true, appliedAt: true, targetType: true, targetId: true } }
+            }
+          })
+        : null,
+      // What this run put on the same books as human work. Null is normal: only runs that finished
+      // with something to show write a ledger row.
+      prisma.agentWorkEntry.findUnique({
+        where: { agentRunId: run.id },
+        select: { costUsd: true, durationSeconds: true, displacedMinutes: true, displacedBasis: true, billable: true }
+      })
+    ]);
+
+    res.json({ ...run, proposal, ledger });
   }
 );
 

@@ -31,8 +31,8 @@ import {
   X,
   XCircle
 } from "lucide-react";
-import { useMemo, useState } from "react";
-import { useNavigate } from "react-router";
+import { useEffect, useRef, useState } from "react";
+import { useNavigate, useSearchParams } from "react-router";
 import { permissions } from "@timesheet/shared";
 import { Badge } from "../components/ui/badge";
 import { Button } from "../components/ui/button";
@@ -98,7 +98,17 @@ export function ProposalsPage() {
   const { features } = usePlanningFeatures();
   const canApply = Boolean(user?.permissions.includes(permissions.PLAN_WRITE));
 
-  const [status, setStatus] = useState("PENDING_REVIEW");
+  /**
+   * A deep link from wherever the proposal was PRODUCED — an agent run's trace, a workflow run's step.
+   *
+   * The status filter is widened to "all" when one is focused, because the commonest reason somebody
+   * follows such a link is to see what became of a suggestion that is no longer pending. Filtering it
+   * out of its own link would answer "it does not exist", which is both wrong and alarming.
+   */
+  const [searchParams] = useSearchParams();
+  const focusId = searchParams.get("focus");
+  const focusRef = useRef<HTMLDivElement | null>(null);
+  const [status, setStatus] = useState(focusId ? "all" : "PENDING_REVIEW");
   const [decisions, setDecisions] = useState<Record<string, Record<string, boolean>>>({});
 
   const proposals = useQuery({
@@ -106,6 +116,12 @@ export function ProposalsPage() {
     queryFn: () => copilotApi.listProposals({ status }),
     enabled: features.planning
   });
+
+  // Runs after the list paints, because the card cannot be scrolled to before it exists. Harmless when
+  // nothing is focused.
+  useEffect(() => {
+    focusRef.current?.scrollIntoView({ behavior: "smooth", block: "center" });
+  }, [focusId, proposals.data]);
 
   const apply = useMutation({
     mutationFn: ({ id, map }: { id: string; map: Record<string, boolean> }) => copilotApi.apply(id, map),
@@ -232,7 +248,11 @@ export function ProposalsPage() {
           const expiring = proposal.expiresAt ? new Date(proposal.expiresAt).getTime() - Date.now() < 24 * 3_600_000 : false;
 
           return (
-            <Card key={proposal.id}>
+            <Card
+              key={proposal.id}
+              ref={proposal.id === focusId ? focusRef : undefined}
+              className={cn(proposal.id === focusId && "ring-2 ring-primary ring-offset-2 ring-offset-background")}
+            >
               <CardHeader className="pb-3">
                 <div className="flex flex-wrap items-start justify-between gap-2">
                   <div className="grid gap-1">

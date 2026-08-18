@@ -3343,3 +3343,967 @@ errored, or reported success for work it had not done.
 - [ ] **The `tests/e2e` Playwright suite was not run** against this release. It is configured
   `workers: 1` because every spec shares one seeded MySQL database, and the unit suite (999 tests)
   plus the driven-app verification stood in for it.
+
+## V8 — Agentic Work Management: the research, and what not to rebuild (2026-08-17)
+
+Full plan: [AGENTIC_WORK_MANAGEMENT.md](AGENTIC_WORK_MANAGEMENT.md). Research only — nothing built.
+Branch V8 opened at 2.5.0.
+
+**The finding that shaped the plan.** Measured against asana.com/features, this product is at or
+ahead of parity on nearly everything: tickets-as-work-items with hierarchy and four dependency
+types, all four project views, custom fields, forms, blueprints-as-bundles, portfolios, dashboards,
+capacity/workload, rules, admin/audit/guests, plus timesheets and budgets Asana structurally cannot
+match because it holds estimates where this holds approved hours with a rate snapshot. Four things
+are genuinely missing, and only one of them is a feature:
+
+- [ ] **Goals / OKRs** — no `Goal`, `Objective` or `KeyResult` model exists. The real gap.
+- [ ] **A work Inbox and a per-person daily brief** — `Notification` rows and a bell exist; nothing
+  assembles "what needs me today".
+- [ ] **An agent roster** ("AI Teammates") — 16+ capabilities already run with autonomy levels; what
+  is missing is a name, a scope, an identity and a budget around them. Packaging, not authority.
+- [ ] **A workflow builder** ("AI Studio") — `TicketRule` is deterministic and fires only at ticket
+  creation. No multi-step flows, no human-input gate.
+
+**Why phases 3-5 are weeks rather than quarters.** The dangerous machinery is built and is listed by
+name in the plan: `AgentRun`'s `triggerKey` idempotency, its level copied at queue time so a policy
+edit cannot escalate a run in flight, its `taintedAt` clamp that drops effective autonomy to SUGGEST
+the moment externally-authored text enters the context, `AiCapabilityPolicy`'s code-set ceilings an
+admin may only lower, and the `AiProposal` envelope with its per-row diffs, writable-field allowlist
+and stale-state refusal. A builder that composes these must inherit all of it — the plan states the
+three inviolable rules (authority is the MINIMUM of composed steps, taint propagates, everything
+above SUGGEST writes through a proposal) precisely because a no-code surface is where those
+guarantees would otherwise quietly be lost.
+
+**The differentiator, and it is not having agents.** Every competitor's agent story ends at "it
+ran". `AgentWorkEntry` puts agent work on the same ledger as human work — attributed to a project
+and activity, priced from `AIUsageLog`, with displaced human minutes stated only where this
+workspace's own timesheets provide a baseline and `NULL` (shown as *not measurable*) where they do
+not. Workload then reads human load beside agent load, burn separates human cost from agent cost,
+and an attestation can itemise "240 approved hours, 12 agent-assisted" and prove it, because every
+agent write already has an audit row and a proposal diff. Never billable to a client by default.
+
+**Deferred deliberately**: TimeSphere as an MCP *client* (the StackAI-style reach into other
+systems) is written down as phase 6 so it cannot be smuggled into the builder phase, since outbound
+credentials plus by-definition-tainted input is a security surface of its own.
+
+**Four decisions needed before phase 1 starts** — phase order (Goals first is recommended), whether
+an agent is a dedicated non-login `AGENT` user (recommended, with a hard flag excluding it from seat
+counts and every auth path), whether agent time is ever client-billable (recommended never by
+default), and whether a measured goal may be manually overridden (recommended yes, with the override
+and the measurement both recorded).
+
+## V8 phase 1 — Goals, and progress that measures itself (2026-08-17)
+
+Plan: [AGENTIC_WORK_MANAGEMENT.md](AGENTIC_WORK_MANAGEMENT.md) §5 phase 1, built to the four
+decisions recorded in §7. The V6 constraint carried over verbatim and held: every table new, the one
+added column defaulted, inert until an admin opts in, and the whole unit suite green.
+
+- [x] **`Goal` / `GoalLink` / `GoalProgressOverride`, plus `GlobalPlanningSettings.enableGoals`.**
+  Objective → key result via `parentId`, two levels enforced in the service because a database
+  cannot express "no grandchildren" without a maintained depth column. Soft-deleted like
+  `Portfolio`: a goal that shaped a quarter's decisions is audit trail.
+- [x] **`progressSource` is the whole feature.** `MANUAL` behaves like every competitor's OKR; the
+  six measured sources each name a number the product already computes — approved hours, billed
+  spend from the rate snapshots an attestation reads, tickets closed, on-time rate, SLA escalations,
+  average project risk. A goal wired that way cannot be talked up in a review, which is the entire
+  point of an OKR and the thing spreadsheet OKRs always lose.
+- [x] **The catalogue is CLOSED**, for the two reasons the dashboard widget catalogue is closed: a
+  metric two goals can define differently will be defined differently, and a user-supplied metric is
+  a query surface. A new source costs a server change; that is the right price for a number somebody
+  is judged against.
+- [x] **Direction is a property of the source, not of the goal.** Spend, breaches and risk are
+  AT_MOST and deliberately return **no percentage at all** — "62% of the way to your spending
+  ceiling" reads as an achievement. The UI shows the raw amount against the ceiling instead.
+- [x] **`unavailable` is a first-class result, never 0.** No period, no target, or no data in scope
+  returns a reason the page prints verbatim. "No data yet" and "nothing achieved" are opposite
+  messages that look identical as a zero — the dashboard-widget rule, applied to the number that
+  matters most.
+- [x] **Nothing is stored.** Every figure is derived on read from the same tables the portfolio
+  roll-up and the client-facing attestation read, so a goals page and a signed document cannot
+  disagree. A stored figure would need a recompute worker, and a stale one is the failure mode.
+- [x] **Overrides keep the receipt** (decision 4). Append-only, note required, and each row stores
+  what the measurement said *at that moment*. The page shows both numbers side by side rather than
+  replacing one with the other, and there is no PATCH or DELETE — a correction is another row.
+- [x] **Two gates, two messages.** `enableGoals` AND the tier's `goalsEnabled`, ANDed server-side.
+  Deliberately NOT behind `enablePlanning`: goals align work whether or not the Gantt is in use.
+  Team gets 25 active goals, Enterprise unlimited, Starter none. The quota counts ACTIVE goals only
+  — counting closed ones would push people to delete the record of what they were aiming at.
+- [x] **Reading needs no permission; `goals:manage` gates writing**, and it goes to MANAGER and
+  TEAM_LEAD as well as the two admin roles. A manager who cannot write the goals their team is
+  measured against has nothing to manage.
+
+**What the replay check caught, and why it is worth running every time.** `migrate deploy` into a
+genuinely empty database (the check DATABASE.md mandates) showed the permission row present and
+**zero role grants** — because on a fresh database the migration's `RolePermission` insert matches
+nothing: roles do not exist until the seed runs. A migration-only change would therefore have
+shipped `goals:manage` to every new install with no role holding it, while every *existing* install
+was correct. Both paths are now covered and were verified to produce identical grants
+(SUPER_ADMIN, ADMIN, MANAGER, TEAM_LEAD). The V6 entry warned about the mirror image of this bug;
+this is the other half of the same lesson.
+
+**Two more things the repo's own guards caught**, both before any human review: the
+migration-portability test rejected an unguarded `ALTER` in a file that ends in DML (fixed with the
+`information_schema` + `PREPARE` pattern, and the same test objected to the words "@rerunnable"
+appearing even inside a comment), and `plan-tier-claims.test.ts` failed until the new entitlement
+was stated in the pricing contract — which is exactly what that test exists to force.
+
+Verified: 1028 unit tests (+29, including 21 that pin what a measurement MEANS — direction, pace
+thresholds, the clamps, and unavailable-is-not-zero); `npm run lint` clean; all 79 migrations
+replayed into an empty database, then seeded, then the backfill re-run to prove idempotence; live
+data untouched throughout (1,718 tickets, 237 timesheets, 346 users, 31 projects before and after);
+and the page driven in the real browser at 390 / 768 / 1366 in both themes with zero horizontal
+overflow — the `overflow-x: clip` trap from the V6 phase-2 entry.
+
+**Not done in this phase:** goals are not yet surfaced on the Portfolio page or the dashboard, and
+there is no goal-level e2e spec (the Playwright suite was not run — see the 2026-08-17 deployment
+entry, which records the same gap).
+
+## V8 phase 2 — an Inbox, and a brief that counts rather than guesses (2026-08-17)
+
+Plan: [AGENTIC_WORK_MANAGEMENT.md](AGENTIC_WORK_MANAGEMENT.md) §5 phase 2 — Asana's Inbox and Dash,
+built deterministically first. Additive: two nullable columns and one index on `Notification`,
+nothing else touched.
+
+- [x] **`Notification.handledAt` / `snoozedUntil`, and the distinction that justifies them.** `readAt`
+  is about attention; `handledAt` is about work. Collapsing the two means every glance at the bell
+  empties the queue, which is why an inbox built on "read" alone is never trusted. `snoozedUntil` is a
+  timestamp rather than a boolean because a snooze with no wake-up is a delete that pretends
+  otherwise — hidden from the queue until its time passes, then back with nobody re-filing it.
+- [x] **`handle-all` marks handled; nothing is ever deleted.** The row is the record that a person was
+  told, and it is what answers a support question a month later.
+- [x] **Ownership IS the authorisation.** Every write is an `updateMany` filtered on `{ id, userId }`,
+  so a guessed id matches zero rows and answers 404. There is deliberately no id-lookup-then-check
+  path and no admin view of somebody else's inbox — which is exactly the shape a later "simplification"
+  to `update({ where: { id } })` would break, hence the test that pins it.
+- [x] **The brief is arithmetic.** Eight sections, each calling a definition that already existed:
+  the my-work buckets, the UTC-midnight `workDate` check `/daily-status` performs, the SUBMITTED
+  predicate the approvals page acts on, `ApprovalStep` PENDING, the latest-snapshot-per-project RED
+  count, unread notifications. No model writes any of it. A narration layer is still available later
+  (`daily_brief`, ceiling AUTONOMOUS, explaining figures it cannot change) but the figures are true
+  on their own first — a fluent paragraph whose numbers cannot be reconciled against the pages they
+  came from is worse than no paragraph, because the first disagreement discredits both.
+- [x] **`computeMyWork` extracted to `services/my-work.service.ts`.** The bucketing was inline in
+  `/plan/my-work`; the moment the brief needed the same numbers, inline became two definitions, and
+  "overdue" is precisely the word that must not mean two things in one product. The route's response
+  is byte-identical — a move, not a redesign — and the full suite passing unedited is the evidence.
+- [x] **Discretion, not just arithmetic.** The approval and risk sections appear only for people
+  holding the rights that already grant those pages, and are **not queried at all** otherwise: a
+  cross-user aggregate shown to somebody who cannot act on it is both a leak and an uncleanable
+  to-do. And `allClear` ignores informational rows — if "3 things due today" could raise the alarm,
+  nobody would ever see an all-clear and the signal would be worthless.
+- [x] **Asana-shaped UI**: two panes on desktop (list beside a sticky detail, so triage is
+  read-decide-next rather than navigate-and-back), one list below `lg`, filter tabs carrying their
+  own counts, in-row actions rather than a menu (triage is a two-click loop; a menu makes it three),
+  and a genuine per-filter empty state rather than one generic "nothing here".
+
+**The bug the browser found that no test would have.** The first render of this workspace's inbox was
+**24,299 pixels tall** — 200 rows, no windowing, and the sticky detail pane lost somewhere in the
+middle of its own layout. That is not a queue, it is a log. Fixed with a 25-row reveal and a
+scrolling list pane; the same page is now 1,016px at laptop size. Also corrected: the category label
+map had been written from guessed keys, so real categories like `ticket.escalation` and
+`face.verification_flagged` rendered raw — it now keys on the categories producers actually write,
+with a family prefix fallback so a NEW producer still reads sensibly instead of being pooled into
+"Other" and hidden.
+
+Verified: 1053 unit tests (+25 — the ownership boundary, the snooze semantics, and the brief's
+discretion); lint clean; the triage loop driven against the live API end to end (mark done → leaves
+the to-do list and appears under Done → reopen → snooze → hidden → **a past-dated snooze returns by
+itself** → restored, counts 311 → 310 → 311 throughout); and the page checked at 390 / 1366 / 1600 in
+both themes with zero horizontal overflow.
+
+**Not done in this phase:** the optional AI narration of the brief, and there is still no e2e spec
+(unchanged from phase 1). The bell itself is untouched — it remains the glance, and the inbox is the
+queue.
+
+## V8 phase 3 — a roster of teammates, and three fences around each one (2026-08-17)
+
+Plan: [AGENTIC_WORK_MANAGEMENT.md](AGENTIC_WORK_MANAGEMENT.md) §5 phase 3, to decision 2 in §7.
+Additive: one defaulted column on `User`, one new table. The phase was cheap exactly as the plan
+predicted, because the dangerous machinery already existed — this is packaging over it.
+
+- [x] **`AgentProfile` grants nothing.** A name, an emoji, a capability bundle, a scope that can only
+  NARROW, and a daily spend ceiling that sits under every existing limit. `AiCapabilitySpec.maxLevel`
+  remains the product ceiling, `AiCapabilityPolicy` the administrator's lowering of it, and
+  `AgentRun.level` the record of what a run was permitted. Had a profile been able to raise a level
+  it would have become a second permission system, and the first thing those do is disagree with the
+  first one.
+- [x] **Runs attribute through the identity, with no new column.** `AgentRun.onBehalfOfId` already
+  names who a run acted as, and each profile has its own identity — so "this profile's runs" is a
+  query, a run keeps its attribution after the profile is deleted, and there is exactly one source of
+  truth for the fact. A nullable `profileId` on `AgentRun` would have been two.
+- [x] **The gallery is a code catalogue, not seeded rows.** Rows created by a migration are rows an
+  upgrade switched on, and every profile is created disabled whatever the caller asks. Six templates,
+  and a test asserts every capability id in every one of them exists in the registry — a template
+  naming a phantom capability would install a teammate that appears to work and never does.
+- [x] **Three fences, three tests, because they fail in three directions.** NO SEAT is a billing rule
+  (`countActiveSeats`); NO LOGIN is a security rule (`establishSession`, the documented funnel every
+  login method terminates in — a guard in `login()` alone would have left SSO open, which is the exact
+  bug the comment above it was written about); NO MAILBOX is an operational rule (`sendMail`, via
+  `@agents.invalid`, the domain RFC 2606 reserves so it can never resolve).
+- [x] **The seat predicate is now one definition.** `{ status: "ACTIVE", deletedAt: null }` had been
+  copied into five call sites — billing, SCIM, manual user creation, bulk creation, SSO
+  self-provisioning. A sixth copy is how the next exclusion gets missed, so a test walks `src` and
+  fails on any bare copy that returns.
+- [x] **UI**: a gallery of templates rather than a blank create form (the question on arrival is
+  "what could one of these do for me", and a blank form answers it with homework), per-capability
+  chips carrying the RESOLVED level rather than one rounded-off badge per agent, spend against
+  ceiling, recent runs with clamped runs marked, and honest empty states that distinguish "nothing yet
+  — it runs when its trigger fires" from "nothing yet, it is switched off".
+
+**What the invariant test found that review would not have.** The codebase-wide scan for bare seat
+predicates flagged `platform-admin-analytics.service.ts`, which counts active users per org for the
+platform console — the number a platform admin reads as seat usage. It would have counted every
+agent identity, inflating the apparent headcount of exactly the orgs that adopted the roster. Fixed
+inline (it runs against an injected tenant client, not the ambient one, so it cannot call the shared
+helper) with the reasoning written next to it.
+
+**One thing worth recording about the login fence.** Driving it against the live API, an attempt to
+sign in as an agent returns 401 "Invalid email or password" rather than the guard's 403 — the random
+unknowable password fails first. Both layers are correct and the outer one simply bites earlier; the
+guard's value is the SSO path, where no password exists at all, and the test asserts it with the
+password check mocked out so it cannot pass for the wrong reason.
+
+Verified: 1077 unit tests (+24); lint clean; three teammates installed through the real API (all
+arriving disabled, a duplicate refused with 409, one enabled, resolved autonomy read back per
+capability); the database confirming 10 active rows, **7 billable seats, 3 agent identities**; and the
+page checked at 390 / 1366 with the gallery open, both themes, zero horizontal overflow.
+
+- [x] **The daily ceiling is enforced, not merely displayed.** It was stored and rendered next to a
+  progress bar before it was applied, which is the worst version of a limit: shown, and therefore read
+  as a guarantee. `queueAgentRun` now sums the identity's spend since local midnight and refuses at the
+  ceiling — in the preflight beside the existing run-count check, because refusing to queue is the only
+  refusal that costs nothing. The same preflight refuses a run for a **switched-off** profile, since
+  "off" has to mean off where work is created rather than being a badge on a card. Eight tests pin it,
+  including that yesterday's spend cannot exhaust today, that a re-queued idempotent run neither trips
+  the ceiling nor consumes it, and that an agent identity whose profile was retired still runs — a
+  retired profile deliberately leaves its identity behind for the audit rows that point at it, and
+  refusing there would turn tidying the roster into a way to break a scheduled capability.
+
+**Not done in this phase:** nothing schedules an agent yet — a profile is a roster entry, and its
+capabilities still run from their existing triggers, so "enabled" means "may run" rather than "runs on
+a cadence". That is phase 4's job: the Studio is where a trigger meets a bundle.
+
+## V8 phase 3 follow-up — one capability, one owner (2026-08-17)
+
+Prompted by the right question from the product owner: *how do Agents and the AI capabilities in
+Workspace Settings conflict?* They did, in three ways, and only the first was cosmetic.
+
+1. **The same twenty-two capabilities on two screens with no cross-reference.** The product looked
+   like it held two copies of its own capability list.
+2. **Ambiguous ownership.** There is exactly one `AiCapabilityPolicy` per capability. Two enabled
+   profiles containing `triage` would both describe the same behaviour — neither would be the reason
+   it happened, and switching one off would change nothing. The roster would be names with no
+   relationship to what the workspace does.
+3. **A control that isn't.** The roster reads like where a teammate is configured while the lever
+   lives in settings, so an agent could sit there saying "On" over a bundle where every capability had
+   its AI feature switched off.
+
+Fixed as ownership, not as a second store:
+
+- [x] **`capability-claims.service.ts`** — capability → the enabled profile that owns it. Its own
+  module because `agent-profile.service` imports `ai-autonomy.service`, and the catalogue needs
+  claims; importing the profile service there would close a cycle. It imports nothing but Prisma.
+- [x] **At most one ENABLED profile per capability, refused at the moment of enabling** with a 409
+  naming the owner and the overlap. Drafts overlap freely — that is what makes building a replacement
+  teammate before retiring the original possible — and the same check catches the other route to the
+  collision, widening an already-live bundle. A profile can always be switched **off** even while it
+  overlaps: without that exception, two profiles that overlapped by any other route could each refuse
+  to be disabled, which is a deadlock.
+- [x] **Both screens name each other.** `GET /settings/ai/autonomy` carries `claimedBy`, so the row an
+  administrator is about to lower says "📰 Reporter uses this" and links to the roster; each agent card
+  links back to the one place authority is set. `AiCapabilityPolicy` is still the only lever — what
+  changed is that neither screen pretends to be alone.
+- [x] **`readiness.enabledButInert`**, so "On" cannot over-promise. An agent whose every capability has
+  its AI feature off now reads "On, but idle" and names the screen that fixes it, and each unrunnable
+  capability chip is struck through.
+- [x] **An N+1 removed while in there**: claims and the AI settings were being fetched per profile.
+  Both are workspace-wide, so `listRoster` resolves them once and threads them down.
+
+**What the failing tests taught, and it is worth recording.** Adding a dependency to
+`decorateProfile` and `describeAutonomyCatalogue` broke two existing suites — not because the product
+was wrong but because their mocks did not know about the new tables. The fix for the second one was to
+teach the SHARED `createFakeTenantClient` about `agentProfile` rather than patching one suite, since
+the next thing to read that table would have hit the same wall.
+
+Verified: 1093 unit tests (+8, covering the claim map, conflict grouping, the enable refusal, the
+draft-overlap allowance, the widening route, and the disable-escape); lint clean; and driven end to end
+against the live workspace — a rival agent created as a draft (201), refused on enable with
+*"📰 Reporter already covers weekly_digest, status_report"*, its per-capability claims visible on the
+draft, all sixteen claimed capabilities named in the settings catalogue, the claim released when the
+owner was switched off, then everything restored.
+
+## V8 phase 4 — the Workflow Studio, and the three rules made computable (2026-08-17)
+
+Plan: [AGENTIC_WORK_MANAGEMENT.md](AGENTIC_WORK_MANAGEMENT.md) §5 phase 4 — the heaviest security
+surface in the programme, and the phase the ownership follow-up was a prerequisite for. Additive: two
+tables, two enums.
+
+- [x] **`flow-authority.service.ts` is the whole safety argument, and it touches no database.** Pure
+  functions, 25 tests, for the reason `plan-schedule.service.ts` is a pure core: every failure here is
+  arithmetic over levels that renders plausibly and is wrong. A minimum computed as a maximum promotes
+  a propose-only capability by putting it in good company; a taint clamp that walks backwards silently
+  trusts inbound email; a `proposalOnly` that is false when it should be true routes a flow's writes
+  around the review path every other AI write in this product uses. None of those throw.
+- [x] **Rule 1 — authority is the MINIMUM.** `limitedBy` names the step that set the floor so a builder
+  can point at it, and a flow of purely deterministic steps is not clamped by a minimum that does not
+  exist.
+- [x] **Rule 2 — taint propagates FORWARD**, which makes step ORDER load-bearing: triage-then-assign
+  proposes, assign-then-triage applies. The card explains that in place, because an author who cannot
+  see it will build a flow that quietly proposes and conclude the feature is broken.
+- [x] **Rule 3 — anything above SUGGEST writes through `AiProposal`.** The Studio adds no write path at
+  all: composition decides what runs and at what authority, and execution goes through `queueAgentRun`,
+  so idempotency, the abort flag, the step cap, the cost cap and the audit trail are the existing ones.
+- [x] **Activation reads validation first**, refuses with the reason quoted, and records the authority
+  **as computed at that moment** — "what was this allowed to do when somebody switched it on" must not
+  depend on what the policies say weeks later. Deactivation is always allowed, the same
+  no-deadlock exception the roster has.
+- [x] **Simulation is exact about structure and explicit about the rest.** Which steps are reached,
+  where a gate stops it, apply-or-propose per step — and it calls no model, writes nothing, and assumes
+  branch conditions pass, all three in its own `disclaimer` so a replay is never read as an execution.
+  Zero samples is a finding with a reason, not an empty list.
+- [x] **A flow bound to a teammate may only use capabilities that teammate owns**, which is what stops
+  the Studio becoming a way around "one capability, one owner" — the exact reason that follow-up had to
+  land first.
+- [x] **UI**: a vertical step list with the authority banner above it, both clamps explained separately
+  (a minimum is fixed by removing a step, a taint clamp by reordering — collapsing them into
+  "restricted" would tell an author nothing), per-step level badges, errors quoted verbatim, and Replay
+  offered before Switch on.
+
+**The semantic bug a test caught, and it is the most interesting thing in this phase.** The first
+implementation clamped a flow to SUGGEST whenever ANY step read untrusted input. That made a flow whose
+only step is `triage` proposal-only — while the existing runtime happily lets that same capability apply
+at AUTO_APPLY on its own. Composing one step would have been stricter than running it, which is a
+regression dressed as caution and the kind that quietly teaches people the Studio is worse than the
+thing it replaces. Rule 2 says "every LATER WRITING step", and the fix was to make that word do its
+work: the flow is clamped only when a step that WRITES is tainted by an earlier one.
+
+**Two migration artifacts worth recording**, both from `prisma migrate diff` on Windows MariaDB: the
+usual lower-cased table names (corrected), and a `MODIFY AgentProfile.emoji` that would not go away. It
+turned out not to be an artifact at all — the phase-3 `DEFAULT '🤖'` had arrived in the database as
+`'?'`, because a multibyte literal in DDL crosses a migration file, a client connection charset and a
+server charset, and this project's stack mangled it. Stored rows were never affected (Prisma sends the
+value), but a diff nobody can make clean is a diff nobody reads. Fixed by removing the emoji from DDL
+entirely — the default now lives in `agent-profile.service.ts`, ordinary UTF-8 source with no charset
+boundary to cross — and the corrective `ALTER` is pure ASCII by design.
+
+Verified: 1135 unit tests (+42: 25 on the rules themselves, 17 on the routes); lint clean; driven end to
+end against the live workspace — read-then-write and write-then-read built as separate flows, the
+minimum rule naming its limiting step, activation refused for a gate-last flow with the message quoted,
+a gated flow activated and its replay showing `waits-for-approval` then `not-reached`, and a
+teammate-bound flow refusing a capability that teammate does not own. Screens checked at 390 / 1366 /
+1600 in both themes with zero horizontal overflow, and every flow created for the drive was deleted
+afterwards so the workspace was left as found.
+
+**Honest limit of the live drive:** with *"Allow AI features to act on their own"* switched off in this
+workspace, every capability resolves to SUGGEST, so the master latch dominates and the order asymmetry
+is not observable through the API there. It is proven in the engine tests, where levels are injected
+directly.
+
+**Not done in this phase:** nothing dispatches a flow yet. The trigger kinds are stored and validated,
+and execution deliberately reuses `queueAgentRun`, but wiring the domain-event bus, the cron sweep and
+the form-submission hook to actually fire flows is the next step — the builder, the rules and the replay
+had to be trustworthy first.
+
+## V8 phase 5 — the agent ledger, and a cross-surface disagreement fixed (2026-08-17)
+
+Plan: [AGENTIC_WORK_MANAGEMENT.md](AGENTIC_WORK_MANAGEMENT.md) §4 — the differentiator. Chosen over
+flow dispatch deliberately: the ledger is purely additive (one table, one fire-and-forget write, one
+read route) and cannot disturb a core feature, whereas firing automation against live data deserves its
+own careful pass.
+
+- [x] **`AgentWorkEntry`, shaped like `Timesheet` rather than a parallel reporting path.** Attributed to
+  a project and a capability, with the agent identity AND the human it acted for, because "which
+  teammate" and "on whose behalf" are different questions an audit answers separately.
+- [x] **Measured, not estimated.** Duration is the run's own wall clock; cost is the run's recorded
+  spend. Written from `finish`, fire-and-forget with a caught error: accounting is downstream of the
+  work, so a ledger row that cannot be written must never turn a completed run into a failed one.
+  Idempotent on `agentRunId`, the same reasoning as `AgentRun.triggerKey` one level down.
+- [x] **Displacement is measured or absent, never guessed.** Populated only where this workspace's own
+  approved timesheets give a baseline for comparable work — a MEDIAN, because one nine-hour day of
+  triage would drag a mean far enough to make every later saving look heroic — and only above five
+  samples, since a median of two rows is an anecdote sitting next to a currency amount. The basis is
+  stored beside the number so it can be checked rather than trusted, and the capability-to-activity map
+  is deliberately six entries: three honest ones beat twenty invented.
+- [x] **The summary never treats unknown as zero.** `measuredEntries` and `unmeasurableEntries` are
+  reported alongside the saving and the UI prints both — "12 hours displaced" over a ledger where two
+  thirds of the rows had no baseline is a true number that reads as a false one.
+- [x] **Never billable by default** (decision 3). Nothing is priced into `Timesheet.billedAmount`, so
+  `budget.service.ts` keeps its single definition of money, and there is deliberately no route that
+  flips the flag yet — the commercial decision comes before the switch for it.
+- [x] 15 tests, aimed at the FLATTERING failures specifically, because every mistake available here
+  makes the product look better than it is: inventing a displacement, using a mean, summing NULL as
+  zero, double-counting a retried finish, or recording a human's own run as agent work.
+
+**The duplicate the audit found, and it was real.** A sweep for duplicated concepts across the four new
+surfaces came back clean on nav, routes, API client names and service exports (the two repeated
+`app.use` prefixes are the documented pre-tenant webhook mounts) — but it surfaced a genuine
+cross-surface disagreement: **the bell listed notifications regardless of the Inbox's triage state.**
+Snoozing an item left it sitting in the bell, defeating the snooze, and a handled item lingered. The
+bell now reads the same predicate the Inbox's "to do" filter uses. The bell is the glance and the Inbox
+is the queue, but "what is still outstanding" has to mean one thing in both — and nothing is lost, since
+anything hidden is still reachable under Snoozed or Done.
+
+Verified: 1151 unit tests (+16); lint clean; the ledger route and its honest empty state confirmed in the
+running app, and the bell re-driven to confirm it still lists what it should.
+
+**Not done, and deliberately:** flow dispatch. Trigger kinds are stored and validated and execution
+reuses `queueAgentRun`; wiring the domain-event bus, the cron sweep and the form hook so flows fire on
+their own is the one remaining piece of the V8 plan. Also outstanding by design: merging the agent series
+into the workload board and the budget panel (§4 items 1 and 2). Both touch core surfaces people rely on
+daily, and neither should be done in the tail of a session.
+
+## V8 phases 6–9 — the builder becomes a rule, the flow becomes a run (2026-08-18)
+
+Four sessions of work against [AGENTIC_UX_PLAN.md](AGENTIC_UX_PLAN.md), which is now complete. Each
+phase is its own commit with its own reasoning; this records what changed and, more usefully, what each
+one got wrong first.
+
+### Phase 6 — per-step configuration, and the canvas (`fc98c32`)
+
+- [x] **A step now states what it does.** `/flows/catalogue` returns the people, labels and projects the
+  pickers need in the same response as the capability catalogue — a dialog that renders before its
+  options arrive is a dialog where somebody picks nothing. The condition vocabulary is the ticket
+  rules' own (`priority`, `source`, `projectId`, `senderDomain` × `is` / `is not`), not a new grammar:
+  a second one is a second thing to secure and explain.
+- [x] **An unconfigured step is an activation error, not a shrug.** An inert step inside a flow somebody
+  switched on is a silent no-op, which is the failure mode that wastes an afternoon.
+- [x] **Agent identities are excluded from every people picker.** Assigning work to a teammate is a real
+  idea; "who approves this gate" and "who is notified" are questions about a person, and an identity
+  with no mailbox can answer neither.
+- [x] **The flow list reads as sentences** — "Waits for Priya to approve" — resolved server-side, because
+  the list is readable at `tickets:view` while the catalogue that maps ids to names is behind the
+  Studio's entitlement. A step pointing at somebody removed says so rather than rendering blank.
+- [x] **An n8n-style canvas beside the list, not instead of it.** Positions live in each step's own
+  `config` as `{x, y}`, so it needed no migration and pre-existing flows auto-lay-out on open.
+  **Connections are not stored:** the steps are a sequence and the authority calculation depends on
+  their order, so an edge table would be a second source of truth for one fact. Dragging a card past
+  another therefore REORDERS — the picture and the rule cannot diverge because they are the same thing.
+  Below `lg` there is no canvas at all.
+
+### Phase 7 — dispatch (`ca11b78`)
+
+- [x] **`EVENT` on the domain bus, `SCHEDULE` on a per-minute sweep, `MANUAL` on a button.** A sweep
+  rather than a `cron.schedule` per flow: flows are edited and retired at runtime, and a handle leaked
+  by a missed teardown is a flow that keeps firing after somebody switched it off.
+- [x] **The idempotency key carries the SUBJECT.** `flow:<id>:ticket:<id>`. A doubled event is one run;
+  a second ticket is a second run. Getting the second half wrong makes the first ticket the only ticket
+  a flow ever touches — a bug that looks exactly like the feature working.
+- [x] **`AutomationFlowRun` is a row, not a log line**, because a gate can wait days and the run's
+  position has to survive a restart. Only the person the step named may clear it, enforced server-side.
+- [x] **Authority is obeyed, not merely described.** A proposal-only flow routes an assignment into
+  `AiProposal` with the state it was computed against. It cannot do the same for a label — the review
+  queue has no LABEL change target — so that step is recorded as **held**, in words, rather than applied
+  anyway or dropped quietly.
+- [x] **`AgentRun.flowId`** puts per-workflow spend in AI usage analytics, read from `AgentRun` and not
+  `AIUsageLog`: the usage log records what was asked of a model, not who composed the question.
+- **Two the browser found:** a run with a failed step was settling as COMPLETED (a green badge on a flow
+  that did not do what it says), and a MANUAL or SCHEDULE flow containing a ticket action has no ticket —
+  now a warning at build time rather than a discovery at run time.
+
+### Phase 8 — run visibility (`0733e84`)
+
+- **The plan was wrong about the starting point.** It said the agent run trace was stored and rendered
+  nowhere; a full trace has existed all along in Workspace Settings → AI → Agent runs. A second
+  `/agents/runs` endpoint was written and then deleted in favour of extending `/agent-runs`, which is the
+  right outcome and a reminder to read before believing a plan's own premise.
+- [x] **The chain is followable end to end**: a run's trace shows the proposal, its status and each
+  change with whether it landed; `/app/proposals?focus=<id>` rings and scrolls to one and widens the
+  filter to *All*, because somebody following that link is usually asking what became of something no
+  longer pending. Flow run steps link the same way.
+- [x] **Ledger history**: 30 days, zero-filled server-side, with `measuredDays` beside it — a day with no
+  measurement is not a day of zero displacement.
+- [x] **One "AI in this workspace" landing** (`/app/ai`, super admin): the four surfaces as the sequence
+  they are, every figure a count that can be checked against the screen it came from, and one next step
+  ordered by what blocks what. No health score — a score needs a rule for what healthy is.
+
+### Phase 9 — the boards, and the thumb (`454b7d2`)
+
+- [x] **An AI teammate was already on the workload board as a person** — active, default capacity,
+  nothing booked. Seven humans and six teammates on this machine, so the board was almost half fiction.
+  Fixed with the same `isAgent: false` seat counting uses, and pinned by a test.
+- [x] **Agent work as its own section, not extra rows.** Every column of a `WorkloadRow` is about
+  capacity and an agent has none, so an allocation percentage would be invented. Agent spend sits beside
+  a project's burn and never inside it: not billable, always in dollars against a budget in any
+  currency, and an operating cost rather than an agreement about labour.
+- [x] **Every control on the four AI screens meets 44px at phone width**, verified by hit-testing each
+  one with off-screen controls scrolled into view — not by eye. Two lessons worth keeping: the root font
+  is 14px so every rem utility lands at 14/16 of nominal (`h-11` is 38.5px), and a `<label>` does not
+  forward a click to a Radix switch, so the obvious wrapper fix looks right and does nothing.
+
+**Verified across the four:** lint clean throughout, **1189 unit tests** (+31), every migration replayed
+into an empty database with no drift after each schema change, and each phase driven in a real browser at
+390/1366/1600 in light and dark against live data (1,718 tickets, 237 timesheets, 346 users, 31 projects
+untouched).
+
+**Not seen rendered with data, and said rather than glossed:** the ledger history card, the agent
+workload section and the project's agent-spend line all hide themselves when the ledger is empty, and
+this workspace has no completed agent runs because no AI provider key is configured in development.
+Their arithmetic is pinned by test and their endpoints checked end to end.
+
+**Carried forward, none of it blocking:** the `FORM_SUBMISSION` trigger has no dispatcher; a `BRANCH`
+renders in-sequence rather than as two visible lanes; and the review queue has no LABEL change target,
+which is what forces the `held` outcome above.
+
+## V8 phase 10 — the audit, and the gaps it found (2026-08-18)
+
+Asked to verify what was still pending across [ROADMAP.md](ROADMAP.md),
+[AGENTIC_WORK_MANAGEMENT.md](AGENTIC_WORK_MANAGEMENT.md) and [AGENTIC_UX_PLAN.md](AGENTIC_UX_PLAN.md),
+and then to close everything found. All three plans' phases were genuinely complete; what was pending
+sat in the places nobody had been looking — **verification, adoption, and documentation** — plus the
+three gaps the previous phase carried forward.
+
+### The e2e suite had never been run against V8
+
+29 Playwright specs and a runner existed; the roadmap flagged in phase 1 that the suite had not been
+run, and it still had not been — across nine phases that touched **shared components** (the dialog
+close button, in every dialog in the product), Proposals, Workload and the budget panel.
+
+- [x] Run it. **185 passed, 10 failed** — and every one of the ten was an artefact of editing source
+  while the run was in flight: Vite HMR reloaded the app under the tests, and one failure screenshot is
+  simply the Vite error overlay showing a broken import of mine from sixty seconds earlier. Re-run
+  clean in three batches, all pass. **The lesson is procedural and worth keeping: do not edit during a
+  run** — the confound costs more time than the run does.
+- [x] **No V8 surface was in the suite at all.** The five new routes are now in `responsive.spec.ts`'s
+  sweep, which is the file that catches the widest constructions — and V8 added a drag-and-drop canvas,
+  a 30-day bar chart and two week-column tables.
+
+### Adoption: the product tour said nothing about any of it
+
+- [x] The tour is **derived from the sidebar**, so all five V8 destinations were correctly IN it from
+  the day their nav items landed — and had no `DESTINATION_COPY` entry, so each fell back to its nav
+  label and spotlighted an `<h1>`. That is the right failure mode (a dull step, not a broken tour) and
+  precisely why nobody noticed for weeks. Copy and a `data-tour` target written for all five.
+- [x] **The setup checklist now has workspace items**, super-admin only: write a goal, switch on a
+  teammate, build a workflow. V8's surfaces are all off by default — the correct security posture, and
+  the reason nothing ever prompts an administrator to discover them.
+- [x] **Goals surfaced where the work is already being read**: a glance card on the dashboard (only for
+  goals this person OWNS, only when one needs a look) and a "Goals measuring this work" card on
+  Portfolio. Both close the phase-1 deferral.
+
+### Emails: two holes, one of them self-inflicted
+
+- [x] **Goals emitted no notification of any kind.** A weekly digest now goes to the goal's OWNER —
+  one message per person, never one per goal — listing what is off track, what closes this week, and
+  what cannot be measured yet. It **stays silent in a week with nothing to say**, because a digest that
+  arrives regardless teaches people it contains nothing. Off by default like every other digest.
+- [x] **A workflow approval request was in-app only** — including the one message that BLOCKS. It now
+  emails, on by default, for the same reason `emailAiAutonomyApplied` is: a gate stops everything after
+  it, sometimes for days, and a request nobody sees is a workflow that reads as broken rather than as
+  blocked. The first-run summary and per-step notifications stay in-app; those are news, not a thing
+  waiting on somebody.
+
+### The three carried-forward gaps, all closed
+
+- [x] **`FORM_SUBMISSION` has a dispatcher.** Its own entry point rather than a domain-event
+  subscriber, because a flow on this trigger names a specific FORM and a `ticket.created` payload does
+  not carry that. The subject is the ticket the form created — every condition and action a flow can
+  express is about a ticket — and the submission id rides in the trigger key so a resubmission is its
+  own run.
+- [x] **A `BRANCH` draws its second lane** as a dashed arm to a "does not match — flow stops" terminus.
+  Not two columns of steps: the runtime stops the run, and drawing a path this engine cannot take would
+  be a prettier picture of a flow that does not exist.
+- [x] **The review queue has a `TICKET_LABEL` change target**, so a proposal-only flow proposes a label
+  instead of reporting it `held`. `targetType` is a `VarChar`, so this needed no migration. It matters
+  more than it sounds: a triage flow that reads inbound email is proposal-only *by construction* (the
+  taint clamp guarantees it), and "read this and label it" is the single most obvious thing such a flow
+  is for — so the commonest useful flow was the one that could do nothing.
+
+### Documentation currency
+
+- [x] `API.md` — dispatch, runs, the decision route, the manual run, the ledger history and
+  `/ai/overview`, plus what the catalogue now returns and why an unrunnable capability is refused.
+- [x] `DATABASE.md` — a section for the eight agent and automation tables, which the file's own
+  by-domain convention wanted and which had only the Goals block.
+- [x] `ARCHITECTURE.md` — §3.12 for the agentic layer and a module-reference block for its files.
+- [x] `ONBOARDING_AND_TOUR.md` — that a nav item adds a STOP automatically but its copy is a separate
+  act somebody has to remember, which is exactly how V8's five went quiet.
+- [x] `MARKETING_PAGES.md` + `Landing.tsx` — four V8 claims, each written against shipped code, and a
+  note on what each one is careful about. None of them claims a benchmark or an outcome: where a number
+  would be persuasive is exactly where this product cannot produce one honestly.
+
+**Not built, and stated rather than skipped quietly:**
+
+- **AI narration of the daily brief** (phase 2's optional deferral). Deliberately still not built. The
+  brief's entire selling point is that it COUNTS rather than guesses; putting a model between the
+  reader and the arithmetic would spend money to make a checkable number unverifiable. It stays on the
+  list as a preference, not as an omission.
+- **Calendar sync** and **TimeSphere as an MCP client** (§6 phase 6). Neither is pending work — both
+  are new product scope with their own security surface, and the agentic plan says in as many words
+  that the MCP client is "scoped, not committed" so it would not be smuggled into a later phase. They
+  need a decision, not a sprint.
+
+## V8 phase 10 follow-up — the tenant that was never migrated (2026-08-18)
+
+Reported from a running server: `The table 'automationflow' does not exist`, once a minute, for org
+`acme`.
+
+**The cause was mine and entirely procedural.** Every V8 migration was applied with
+`prisma migrate deploy` against one `DATABASE_URL` and the documented fan-out —
+`npm run migrate:tenants -w apps/api`, described at the top of [DATABASE.md](DATABASE.md) — was never
+run, across ten phases. This deployment has two ACTIVE organizations with a database each; the second
+was left on `20260817100000_session_device_identity`, missing goals, the inbox, the roster, the
+Studio, the ledger, dispatch, run visibility and the two notification columns. Every one of the
+migration replays I ran into an empty database passed, and proved nothing about this, because
+replaying is a different question from fanning out.
+
+- [x] Ran the fan-out. Both orgs now on `20260818120000_v8_phase10_goal_and_workflow_email`, both with
+  all nine V8 tables, and the control plane's `schemaVersion` finally records it — direct
+  `migrate deploy` never updates that field, which is why both orgs read as behind even though one
+  was not.
+- [x] **The upgrade path held up where it mattered**: `acme` came out of the fan-out with 4
+  `goals:manage` grants from the migration's idempotent SQL. That is phase 1's "the migration AND the
+  seed are both needed" lesson working on a real upgrade rather than in a replay.
+- [x] Verified by running one real tick of both new workers through `runForEveryOrg` — the exact code
+  path that was failing — clean for both orgs.
+
+**The hardening: nothing said so at boot.** A tenant left behind is invisible until a worker touches a
+table that is not there, and the error then names a missing table rather than the missed step.
+`tenant-schema-check.service.ts` now compares every ACTIVE/SUSPENDED org's recorded version against
+the build's latest at startup and prints which orgs are behind, what they are on, and the command that
+fixes it. It **warns rather than refusing to start** — one org being behind must not take down the
+others, the same isolation the fan-out script already applies — and is silent when everything is
+current. Verified both ways: silent on a current deployment, and correct when a version is temporarily
+set back.
+
+## Email templates, timesheet/ticket detail, and a digest worth reading (2026-08-18)
+
+Reported: several templates "not configured properly", previews not showing the HTML body or the
+details and URLs, and some emails seemingly stuck. Investigated all of it before changing anything.
+
+### What "stuck" actually was
+
+- **Nothing is stuck.** `EmailLog` had **0** rows in QUEUED, and 558 SENT since Aug 1 with the most
+  recent that morning. The failures visible in the UI are historical transport events: 186 Gmail
+  `421 Temporary System Problem`, 41 `SMTP_HOST is not configured` from July, 28 `too many login
+  attempts`. Two rows read "queued with no renderable body" — both from July/early August, both
+  handled correctly by the guard that exists for exactly that case.
+- So the real defects were elsewhere, and there were five of them.
+
+### The five defects, all in one family
+
+Every one came from the same wrong assumption: **that a template only exists once somebody has
+customised it.**
+
+- [x] **The editor previewed a stub.** The list route returned `bodyHtml: null` with no override, and
+  the editor fell back to a three-line placeholder — so an un-customised template previewed as almost
+  nothing, and **pressing Save replaced a designed email with the placeholder**. An editor whose
+  default action destroys the thing it edits is not an editor. The API now returns the shipped body
+  and subject for every key, produced by calling each compiled template with its own arguments set to
+  `{{name}}` — the genuine design, placeholders exactly where values land.
+- [x] **Default subjects existed for 8 of 31 keys** in a hand-kept map in the web app; the other 23
+  opened on `TimeSphere — reminder.daily`, a subject nothing has ever sent. Now served from the same
+  place the send reads.
+- [x] **Twelve templates were dispatched and unlisted** — `digest.bug_pattern`, `ticket.stale_nudge`,
+  `goal.digest`, `workflow.approval` and the face family — so no administrator could edit them and
+  their analytics fell into the unmapped bucket. An existing test actually ASSERTED this ("returns no
+  card for a category with a code-only email"); it documented the gap rather than closing it, and now
+  asserts the opposite.
+- [x] **"Send test" refused any un-customised template** with "Template not saved — open the editor
+  and save it first", which was all twelve of the above. Verified fixed by test-sending `goal.digest`:
+  SENT.
+- [x] **Six templates had no sample values at all**, so their previews rendered the design with every
+  field blank — which reads as broken rather than unfilled.
+
+**The guard against all of it recurring** is `email-template-registry.test.ts`, which walks the actual
+source for every `templateKey:` dispatched anywhere and holds the registry to it: no un-editable key,
+every key with a description, variables, samples, a shipped subject and a shipped body that contains a
+real `<table>` and exceeds 400 bytes — and no `{{token}}` left unresolved after a preview render.
+
+### Content
+
+- [x] **Timesheet emails** carry module, submodule, activity, the linked ticket and the task text.
+  **The approver now gets an email too** — previously the person needing no action got one and the
+  person being asked to decide got an in-app row only.
+- [x] **Ticket emails** carry the type, and the comment email carries the comment. Every ticket email
+  deep-links to `?open=<id>` rather than to the list.
+- [x] **The Monday digest** leads with last week beside MTD and YTD, then where the hours went; a
+  manager or administrator also gets the workspace user-by-user, project-by-project, and open tickets
+  by priority with shares. Year to date is the CALENDAR year — this product has no fiscal-year setting
+  and inventing one would put a number under a heading it does not match.
+- [x] **The digest no longer depends on a model.** It was gated on `generateWeeklyDigest` succeeding,
+  so an unavailable or too-small model meant the whole report silently did not send. Figures always
+  send; the paragraph is a garnish. Its fallback HTML was also a bare `<p>Hi name</p><p>summary</p>` —
+  and since almost nobody overrides a template, that stub WAS the weekly digest for most workspaces.
+
+### One consequence, reported rather than fixed for people
+
+This workspace has 20 overrides, all written within 0.2 seconds of each other on 2026-08-07. **An
+override wins outright**, so those templates keep sending their old bodies and will not show the new
+fields. Merging into somebody's customised wording would be worse than pointing at it, so the editor
+now names the exact variables an override is missing next to a Revert button.
+
+## Addressing a deployment: a decision, and a guard (2026-08-18)
+
+Handed the call on private vs public IP and `APP_BASE_URL`. Taking it properly meant naming the
+target shape, then making the app enforce it rather than trusting anybody to remember.
+
+**The decision** (now a table at the top of [DEPLOYMENT.md](DEPLOYMENT.md)):
+
+- **The public surface is the production build behind a reverse proxy on 443 — never `npm run dev` on
+  5173.** This is the security call, and it is bigger than the CORS report that started it: Vite's dev
+  server carries hot reload, source maps and none of the production hardening. It is a development
+  tool that happens to answer HTTP.
+- **One DNS name, used by everyone inside and outside.** An email carries exactly one base URL, so two
+  addresses cannot both be served; a name can resolve differently inside and out, or hairpin through
+  the router. An IP cannot be moved, cannot be secured, and changes with the lease.
+- **`APP_BASE_URL` is that canonical origin, and `WEB_ORIGIN` must contain it.** Every emailed link is
+  built on the first; a browser opening it sends exactly that origin to the second.
+- **Certificates: a publicly issued one, for a name.** No public CA issues for bare IPs, Let's Encrypt
+  included — so on an IP, every emailed link opens through a warning, which trains people to click
+  past the one thing protecting them.
+- **Until a name exists, LAN-only is a coherent position**: keep the base on the LAN address, accept
+  that links only open inside the network, and do not expose the dev server. A smaller promise, kept.
+
+**The guard**: `config/deployment-check.ts`, run at every boot. Pure, so its boundaries are a table of
+14 tests rather than a careful read. It reports the two failures that actually happened —
+`APP_BASE_URL` absent from `WEB_ORIGIN`, and a LAN base in production — plus plain HTTP on a public
+address, a bare IP as the link base, and real users on a development build. It **warns and starts**,
+following `resolveAppBaseUrl`'s existing precedent that an on-prem LAN pilot is production to the
+people using it; what it must never do is stay silent, which is precisely what the old configuration
+did while a user sat looking at a sign-in failure.
+
+Deliberately quiet on healthy setups: a private base in development with a matching allow-list entry
+gets nothing at all. A check that fires on correct deployments is one people learn to scroll past —
+which is the failure mode that makes a guard worse than none.
+
+**This machine's settings, decided accordingly**: `APP_BASE_URL=https://192.168.88.5:5173` with the
+matching allow-list entry — it is a development box on the LAN, and the public IP forwards elsewhere.
+The `.env` carries the exact one-line change for when that forward is repointed here. Boot is clean.
+
+## Static analysis, and the four bugs hiding behind the style complaints (2026-08-18)
+
+The ask was "check the SonarQube problems reported and fix them across the application." The first
+finding was that **nothing in this repo had ever run one**. `sonar-project.properties` had been here
+for a while describing how to scan — sources, exclusions, coverage paths — but no scanner ran in CI,
+`npm run lint` was `tsc --noEmit` in both workspaces, and there was no ESLint at all. So "the reported
+problems" were unknowable from inside the repo: seeing them needed a server URL and a token that live
+outside it.
+
+`eslint-plugin-sonarjs` **is** the analyzer SonarQube uses for JS/TS — the same S-numbered rules, the
+same implementations. Running it locally reports the same findings, offline, on every machine and in
+CI, with no server to own. `eslint.config.mjs` is now that, wired into `npm run lint`, which CI
+already calls. The Sonar dashboard stays the source of truth for the quality *gate*; this is the
+source of truth for the issues.
+
+**First run: 496 findings.** Not a backlog to grind through — a haystack to sort. Sorting it found
+four defects and two security problems that no test and no type-check would ever have reported.
+
+### The invite form shipped the README's password
+
+`POST /users` was the only password path in `user.controller.ts` that still *required* a caller-supplied
+password — bulk reset, CSV import and `/:id/reset-password` all generated a random one-time value, for
+the reason written on `generateTempPassword`: a default anyone who has read the README can type is not
+a password. The admin "Invite a teammate" form satisfied that requirement by pre-filling the field with
+the literal `Admin@12345`. Every teammate invited without an admin editing that box shared one password
+the whole internet can read.
+
+The rule existed. It lived in three call sites and was missing from the fourth — the fourth being the
+one an admin actually uses. **This is the fourth time this pattern has appeared in this project**
+(Studio capability filter, dispatcher project scope, the flow-authority check, now this), and it is the
+argument for a linter that reads every path rather than the one you are looking at.
+
+Fixed on both sides: `password` is optional, blank generates a one-time password returned exactly once
+through the same show-once dialog the reset flows already had, and the field defaults to empty with
+"Leave blank to generate". Verified against the live API — random password each time, it signs in,
+`Admin@12345` is rejected, `mustChangePassword` set.
+
+### ...and returned the new account's bcrypt hash
+
+Found while fixing the above. `prisma.user.create` returns every scalar, and the response spread the
+whole record — so the hash went to the admin's browser and any proxy log in between. Every list route
+in the same file already strips it. Now this one does too.
+
+### Two "line" heuristics that were not per-line
+
+`rich-text-editor.tsx` decides whether a paste is code using `/m`-anchored line patterns. Two of them
+used `[^.!?]*`, and a negated class that does not exclude the newline matches straight through it — so
+a "line" ran to the end of the paste. A paragraph of prose was classified as code whenever one of the
+keywords appeared anywhere above a line ending in an opening brace. The same crossing made the match
+quadratic: ~350ms on a 20k paste, a visible freeze while someone is typing. One fix, both problems.
+
+### A filter that skipped its own page reset
+
+`FaceVerificationSettingsCard` has a `changeFilter` helper whose comment explains it resets to page 1
+because "landing on a page that no longer exists shows a truthful-but-useless empty table." Its sibling
+`changePageSize` was wired up. `changeFilter` was written and never used — the switch called
+`setFlaggedOnly` directly. Sonar found it as a dead store.
+
+### Latency measured 12 times and thrown away
+
+Twelve `logAIUsage` call sites in `ai.service.ts` computed `const startedAt = Date.now()` and never
+passed `latencyMs`. `AIInteraction.latencyMs` exists, and `ai-quality.service.ts` *reads* it — so the
+AI quality dashboard was reporting latency over 9 of 21 features and looked complete. All 21 record it
+now.
+
+### ReDoS: measured, not assumed
+
+34 `slow-regex` findings. A rule saying "may be super-linear" is a hypothesis, so each was pumped with
+adversarial inputs up to 20k characters and timed. **14 of 20 distinct patterns were false positives** —
+anchoring saves them, which the rule cannot see. Six were real and are now linear:
+
+| where | was | why it was slow |
+|---|---|---|
+| `mail.service.ts` From parsing | 409ms | unanchored, retried from every character |
+| `rich-text-editor.tsx` x2 | ~320ms | the newline-crossing above |
+| `email-analytics.ts` address redaction | 183ms | unbounded `+` before the `@` |
+| tag strip, 5 sites | 102ms | rescanned from every `<` |
+| `ai-eval.ts` JSON extraction | 82ms | greedy `[\s\S]*` with no closing brace |
+
+None sat on an unauthenticated unbounded path, so none was a live outage — but each is now linear, and
+the five copies of the tag-strip regex became one shared `htmlToPlainText`/`plainTextLength` in
+`lib/safe-html.ts`. They had *disagreed*: some joined tags with the empty string, some with a space, so
+the same content measured a different length on different screens.
+
+### What was deliberately not done
+
+**325 of the remaining findings are three structural rules** — nested ternaries (191), cognitive
+complexity (84), nested template literals (50). Rewriting ~100k lines of working code for style is a
+large unreviewable diff with no behavioural benefit, and a permanently-red lint is one people learn to
+ignore — the same reasoning `sonar-project.properties` already records for gating new code only. Those
+rules are **warnings**: visible as debt, burnt down as files get touched, not blocking. Errors gate at
+zero, and `npm run lint` passes.
+
+`slow-regex` and `void-use` are warnings for a better reason than volume: their remaining findings were
+each checked and are demonstrably not defects here.
+
+Security hotspots (`pseudo-random`, `no-hardcoded-passwords`) were reviewed one at a time and marked
+inline with the verdict rather than switched off — telemetry sampling, retry jitter, a cache key, a
+decorative animation, a bcrypt timing sentinel, a character alphabet, a button label. A *new*
+`Math.random()` still fails the build until somebody reviews it.
+
+### Two gaps closed so this cannot silently reaccumulate
+
+- **`noUnusedLocals` is on** in `tsconfig.base.json`. It was off, which is why 30 unused imports and 5
+  dead functions had accumulated invisibly to `npm run lint`. Unused *parameters* stay unchecked —
+  Express handlers and React callbacks legitimately name arguments they do not use.
+- **The React hooks plugin is installed.** Ten `eslint-disable-next-line react-hooks/exhaustive-deps`
+  comments were scattered through `apps/web`, written by people who expected the rule to be running.
+  It was not — they suppressed nothing, and every other hook went unchecked. `rules-of-hooks` is an
+  error and reports **zero** violations; `exhaustive-deps` is a warning. One of those ten comments used
+  an em dash instead of ESLint's `--` separator, so it had never parsed as a directive at all.
+
+**Also in this pass**: the home dashboard's "My projects this month" gained Open / Closed / Done
+columns, counted server-side by one grouped query (`GET /tickets/counts-by-project`) rather than by
+fetching every closed ticket. The completion share renders an em dash, never `0%`, when there is
+nothing to divide — "none of your tickets here are done" and "you have no tickets here" are different
+facts, and only one of them is a number.
+
+1275 unit tests pass (+28: the counts route, the From-address parsing, and the invite-password
+behaviour, each pinned because each changed real logic).
+
+## Two CI gates, and the difference between "no fix" and "not a problem" (2026-08-18)
+
+The first push of V8 to origin ran the full workflow for the first time, and two jobs failed. Both
+were real; neither was caused by the work in this branch.
+
+### `./install.sh: Permission denied`
+
+`install-e2e` runs the installer the way a customer does — `TS_AUTO=1 ./install.sh` — and got exit
+126 in under a second. `install.sh` was mode **100644** in git. It had never had the executable bit.
+
+This was never only a CI problem. `README.md` says `./install.sh`. `docs/DEPLOYMENT.md` said
+"chmod +x install.sh first if needed". `docs/INSTALLATION.md` carried a troubleshooting row for it —
+*"The file isn't marked executable — normal for a fresh checkout on some setups"* — which is the
+shape of a workaround that has been repeated often enough to become documentation. It was not normal
+and it was not the setup: the mode bit is a property of the repository, and it was simply never set.
+
+`git update-index --chmod=+x` on `install.sh` and `update.sh` (both are invoked as `./…` in the
+runbooks). `.ps1` and `.cmd` stay 100644 — Windows does not use the bit.
+
+The troubleshooting row stays, corrected rather than deleted: a **ZIP download** from GitHub still
+arrives without permissions, because the zip format GitHub serves does not carry them. A clone is now
+fine; a zip is not, and that is worth saying rather than implying the problem is gone.
+
+### An advisory with no fix, and a gate that could only say "block"
+
+`npm audit --omit=dev --audit-level=high` failed on 6 findings. Two advisories, neither introduced
+here — `deepmerge-ts 7.1.5` and `postcss`'s bundled `nanoid 3.3.17` are byte-identical in the lockfile
+at `1d7aaf0`, before any of this branch's work. They are newly *published* advisories landing on
+dependencies that were already present, which is the audit gate doing precisely its job.
+
+`nanoid` took the fix: 3.3.17 → 3.3.18, one line of lockfile, nothing else moved.
+
+**`deepmerge-ts` has no fix to take**, and that is the interesting half. The advisory wants >= 8.0.0.
+As of today the LATEST published `html-to-text` (10.0.0) still requires `^7.1.5`, and the LATEST
+`@prisma/config` (7.9.1) pins `7.1.5` **exactly**. An `overrides` to 8.x would force Prisma's config
+loader off a version it pins — and that loader runs for every `prisma generate` and every
+`migrate deploy`, i.e. every deployment path this project has.
+
+So: is it reachable? Both call sites were read rather than guessed.
+
+- `@prisma/config` passes `deepmerge` as the merger for `prisma.config.ts` (`dist/index.js`,
+  `merger: deepmerge`). First-party config, read at CLI time, never a request.
+- `html-to-text` merges **caller options** with defaults —
+  `deepMergeWithOptionsComposeRules(defaultOptions, userOptions)` at `html-to-text.cjs:1470`. The
+  email body is parsed by `htmlparser2` and never passes through deepmerge. That matters because
+  `mailparser` → `html-to-text` is the one path here carrying attacker input (inbound email, via
+  `workers/inbound-email.worker.ts`), and it does not reach the vulnerable code.
+
+An unreachable advisory with no available fix is the case a bare `npm audit` cannot express. It has
+two settings, pass and block, so this would have held the pipeline red indefinitely — and a
+permanently-red gate is one people learn to skip, which is the argument `sonar-project.properties`
+and `eslint.config.mjs` already make in their own domains.
+
+**`scripts/audit-gate.mjs`** takes the same shape as those: everything high or critical blocks by
+default; an advisory can be accepted only with the call site that was read and why it is safe written
+down beside it. The part that keeps it honest is the reverse check — **an accepted entry that no
+longer matches anything fails the build**, with a message saying to delete it. Without that, an
+allowlist only ever grows, entries outlive the problem, and the list becomes a way of not looking.
+
+Both directions were verified rather than assumed: emptying the allowlist blocks on the real
+advisory, and adding a phantom entry fails as stale.
+
+### The second round: what the first two fixes uncovered (2026-08-18)
+
+Fixing the exec bit and the audit gate let both jobs run further than they ever had, and each
+uncovered a failure that had been sitting behind them.
+
+**`TS_AUTO=1` was not honoured by two prompts.** With the executable bit set, `install.sh` reached
+its configuration section and exited 1 having printed one line. `ask()` exists precisely to make
+prompts non-interactive — it returns the default when `TS_AUTO=1` — but the web-origin and API-base
+prompts called `read` directly. Under `set -euo pipefail`, a `read` with no stdin returns non-zero
+at EOF and takes the script with it. Reproduced in six lines before changing anything.
+
+Every OTHER bare `read` in the file is fine, and the reason is worth recording: they sit inside
+branches whose *condition* comes from `ask()` — the external-database block behind `DB_CHOICE`
+(default `1`) and the SMTP block behind `CONFIGURE_SMTP` (default `N`). Under `TS_AUTO` neither
+branch is entered, so those prompts are unreachable. Only the two on the unconditional path could
+ever fail, and both now go through `ask`.
+
+This was never only CI's problem: `TS_AUTO=1 ./install.sh` is the documented non-interactive mode in
+`docs/INSTALLATION.md`, offered "for anyone scripting a fleet". It could not have worked for anyone.
+
+**A path guard that answered differently per operating system.** With the audit gate no longer
+failing first, the unit step ran on Linux — and `storage-paths.test.ts` failed on an assertion that
+has existed since the storage layer landed:
+
+    expected '/tmp/ts-storage-T3quCV/docs/C:\Windows\System32\drivers\etc\hosts' to be null
+
+`resolveWithin` refused Windows-shaped absolute paths via `path.isAbsolute`, which is
+platform-specific. On Windows `C:\Windows\System32\…` is absolute and was refused. On Linux a
+backslash is an ordinary filename character, so the same string is a RELATIVE name and resolved to a
+file of that name *inside* the base.
+
+**Containment never broke** — nothing escaped the base, so this was not a traversal hole. What it
+was is one storage key meaning two different things depending on where the API runs, which is not
+something a path guard may do. `resolveWithin` now matches drive-qualified and backslash-leading
+inputs explicitly, before any `node:path` call, so the verdict cannot vary by platform; the test
+gained the shapes that only misbehave on Linux (`C:/…`, `C:evil.png`, `\Windows\…`, UNC).
+
+**And one test of mine that deserved to fail.** The `POST /users` suite proved "never the demo
+password" by generating 25 passwords through the route — 25 sequential bcrypt cost-12 rounds,
+4.6 seconds locally and comfortably over the 10-second timeout on a shared runner. The property is
+the *generator's*, not the route's: `generateTempPassword` is pure and does no hashing, so a
+thousand draws cost under a millisecond. Moved there (`security-generate-temp-password.test.ts`),
+and the route keeps one cheap assertion. 4648ms → 187ms.
+
+Writing that test found a real overstatement, too. The generator's own comment promised a fixed tail
+that "clears any complexity rule", but `!7a` supplies a symbol, a digit and a lowercase letter and
+leaves uppercase to the random draw — which omits one about once in every 800 passwords. Rare enough
+never to be seen in testing, certain to happen in production, and the failure is an admin reading out
+a password some external policy then rejects. The tail is now `!7aQ`. The entropy is entirely in the
+twelve random characters, so completing the tail costs nothing.
+
+**On reading CI from here:** the job logs of a public repository are fetchable, which is how the
+storage-paths failure was identified rather than guessed — the first hypothesis (the slow bcrypt
+test) was wrong, and the log said so.

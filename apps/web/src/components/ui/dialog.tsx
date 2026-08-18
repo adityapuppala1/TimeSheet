@@ -59,7 +59,11 @@ export const DialogContent = React.forwardRef<
       {...props}
     >
       {children}
-      <DialogPrimitive.Close className="focus-ring absolute right-4 top-4 rounded-sm opacity-70 transition hover:opacity-100 disabled:pointer-events-none">
+      {/* The glyph is 14px, which is a target a thumb misses. `after:` grows the HIT area to ~44px
+          without moving or resizing anything visible — the pseudo-element belongs to the button, so it
+          catches the tap. Applied here rather than at each call site because a close control this small
+          is a problem in every dialog in the product, not only the AI ones. */}
+      <DialogPrimitive.Close className="focus-ring absolute right-4 top-4 rounded-sm opacity-70 transition after:absolute after:-inset-[16px] after:content-[''] hover:opacity-100 disabled:pointer-events-none sm:after:hidden">
         <X className="h-4 w-4" />
         <span className="sr-only">Close</span>
       </DialogPrimitive.Close>

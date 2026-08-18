@@ -199,7 +199,10 @@ export function htmlToPlainText(html: string | null | undefined): string {
   const text = decodeBasicEntities(sanitizeHtml(withBreaks, { allowedTags: [], allowedAttributes: {} }));
 
   return text
-    .replace(/[ \t ]+/g, " ")
+    // U+00A0 written as an escape, not as the literal character it used to be: a NO-BREAK
+    // SPACE inside a character class is invisible in every diff and every review, and one
+    // reformat or paste that drops it silently stops &nbsp; from pasted HTML normalising.
+    .replace(/[ \t\u00a0]+/g, " ")
     .replace(/ *\n */g, "\n")
     .replace(/\n{3,}/g, "\n\n")
     .trim()

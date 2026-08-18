@@ -27,6 +27,7 @@ import {
   Mails,
   Minus,
   PencilLine,
+  AlertTriangle,
   RotateCcw,
   Save,
   Send,
@@ -1436,8 +1437,11 @@ function EditorDialog({ template, onClose }: { template: EmailTemplateRow | null
   // of the templates list would clobber unsaved edits in the editor.
   useEffect(() => {
     if (!template) return;
+    // An un-customised template opens on the REAL email, not on a placeholder. Editing starts from
+    // what actually goes out, and pressing Save without meaning to can no longer replace a designed
+    // template with a stub.
     setSubject(template.subject ?? defaultSubject(template));
-    setBody(template.bodyHtml ?? FALLBACK_DEFAULT);
+    setBody(template.bodyHtml ?? template.defaultHtml ?? FALLBACK_DEFAULT);
     setEnabled(template.enabled);
     setTestTo("");
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -1576,6 +1580,23 @@ function EditorDialog({ template, onClose }: { template: EmailTemplateRow | null
                   )}
                 </div>
 
+                {/* An override wins outright, so a template customised before a field existed keeps
+                    sending without it — silently, and forever. This is the only place anybody would
+                    find out. Named variables, not a vague warning: the fix is to paste them in or to
+                    revert, and both need to know which. */}
+                {template.missingVariables.length > 0 && (
+                  <p className="flex flex-wrap items-start gap-1.5 rounded-md border border-warning/40 bg-warning/5 px-3 py-2 text-xs">
+                    <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-warning" />
+                    <span>
+                      Your customised version does not use{" "}
+                      {template.missingVariables.map((v) => (
+                        <code key={v} className="mx-0.5 rounded bg-muted px-1">{`{{${v}}}`}</code>
+                      ))}
+                      , which the shipped default now includes. Add them above, or revert to pick up the newer email.
+                    </span>
+                  </p>
+                )}
+
                 <Separator />
 
                 <div className="grid gap-2">
@@ -1688,16 +1709,14 @@ function EditorDialog({ template, onClose }: { template: EmailTemplateRow | null
   );
 }
 
+/**
+ * The subject an un-customised template sends with.
+ *
+ * Comes from the SERVER now. This used to be a hand-kept map of eight keys, so the other
+ * twenty-four opened on "TimeSphere — reminder.daily" — a subject nothing has ever sent, presented as
+ * if it were the current one. The server reads it from the same place the send does, which is the
+ * only way the two cannot disagree.
+ */
 function defaultSubject(template: EmailTemplateRow): string {
-  const map: Record<string, string> = {
-    welcome: "Welcome to TimeSphere",
-    reset: "Reset your TimeSphere password",
-    "timesheet.submitted": "Timesheet submitted",
-    "timesheet.approved": "Your timesheet was approved",
-    "timesheet.rejected": "Timesheet rejected — action required",
-    "sla.breach": "[SLA breach] Approve {{employeeName}}'s timesheet",
-    escalation: "[Escalation] Approve {{employeeName}}'s timesheet",
-    "deadline.reminder": "{{daysLeft}} day(s) left to submit timesheets"
-  };
-  return map[template.key] ?? `TimeSphere — ${template.key}`;
+  return template.defaultSubject ?? `TimeSphere — ${template.key}`;
 }

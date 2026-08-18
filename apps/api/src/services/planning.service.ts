@@ -26,6 +26,7 @@ export interface PlanningSettingsRow {
   enableProofing: boolean;
   enableRequestForms: boolean;
   enableCustomWorkflows: boolean;
+  enableGoals: boolean;
   workingDays: number[];
   defaultWeeklyCapacityHours: number;
 }
@@ -37,6 +38,7 @@ const ALL_OFF: PlanningSettingsRow = {
   enableProofing: false,
   enableRequestForms: false,
   enableCustomWorkflows: false,
+  enableGoals: false,
   workingDays: [1, 2, 3, 4, 5],
   defaultWeeklyCapacityHours: 40
 };
@@ -56,6 +58,7 @@ export async function getPlanningSettings(): Promise<PlanningSettingsRow> {
     enableProofing: row.enableProofing,
     enableRequestForms: row.enableRequestForms,
     enableCustomWorkflows: row.enableCustomWorkflows,
+    enableGoals: row.enableGoals,
     workingDays: Array.isArray(row.workingDays) && (row.workingDays as number[]).length > 0 ? (row.workingDays as number[]) : [1, 2, 3, 4, 5],
     defaultWeeklyCapacityHours: Number(row.defaultWeeklyCapacityHours ?? 40)
   };
@@ -77,9 +80,26 @@ export async function getEffectivePlanning() {
       approvals: settings.enableApprovals && entitlements.approvalsEnabled,
       proofing: settings.enableProofing && entitlements.proofingEnabled,
       requestForms: settings.enableRequestForms,
-      customWorkflows: settings.enableCustomWorkflows && entitlements.customWorkflowsEnabled
+      customWorkflows: settings.enableCustomWorkflows && entitlements.customWorkflowsEnabled,
+      goals: settings.enableGoals && entitlements.goalsEnabled
     }
   };
+}
+
+/**
+ * The goals gate. Deliberately NOT behind `enablePlanning`: goals align work whether or not the
+ * timeline is in use, and requiring the Gantt entitlement to state an objective would gate an
+ * alignment tool on a scheduling one. Same two-message split as assertPlanningEnabled — the
+ * workspace toggle points at an admin, the entitlement points at a plan.
+ */
+export async function assertGoalsEnabled(): Promise<void> {
+  const settings = await getPlanningSettings();
+  if (!settings.enableGoals) {
+    throw new AppError(403, "Goals are off for this workspace. A super admin can enable them in Workspace Settings → Planning.");
+  }
+  if (!(await isPlanningCapabilityAllowed(requireTenantContext().orgId, "goalsEnabled"))) {
+    throw new AppError(403, "Goals are not included in this plan. Upgrade to Team or Enterprise to use goals.");
+  }
 }
 
 /**

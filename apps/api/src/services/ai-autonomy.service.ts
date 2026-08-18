@@ -22,6 +22,7 @@
  */
 import { Prisma, type AiAutonomyLevel } from "@prisma/client";
 import { prisma } from "../config/prisma.js";
+import { getCapabilityClaims } from "./capability-claims.service.js";
 import { AppError } from "../middleware/error.js";
 import { getGlobalAISettings } from "./ai.service.js";
 import { AI_CAPABILITIES, findCapability, levelRank, type AiCapabilitySpec } from "./ai-capability.registry.js";
@@ -162,6 +163,14 @@ export interface AutonomyCatalogueEntry extends ResolvedAutonomy {
   /** Whether the underlying feature is on at all — the UI greys the whole row when it is not,
    *  rather than showing a level that cannot currently apply to anything. */
   featureEnabled: boolean;
+  /** Which agent on the roster owns this capability, when one does (V8 phase 3 fix).
+   *
+   *  WHY THE SETTINGS SCREEN NEEDS TO SAY THIS: once the roster existed, the same twenty-two
+   *  capabilities appeared on two screens with no cross-reference, so an administrator lowering a
+   *  level here had no way to know a named teammate depends on it. The claim is display-only —
+   *  `AiCapabilityPolicy` remains the single lever — but it turns "some capability" into
+   *  "🗂️ Triage's ticket triage", which is what makes the consequence of the edit visible. */
+  claimedBy: { profileId: string; name: string; emoji: string } | null;
   /** The GlobalAISettings switch that turns this capability on, so ONE row can carry both
    *  controls. Null for a capability that reaches no model and therefore has no switch.
    *
@@ -181,7 +190,11 @@ export interface AutonomyCatalogueEntry extends ResolvedAutonomy {
  * Mirrors `mcp.service.ts#describeMcpCatalogue`, which exists for the same reason.
  */
 export async function describeAutonomyCatalogue(): Promise<{ autonomyEnabled: boolean; capabilities: AutonomyCatalogueEntry[] }> {
-  const [settings, rows] = await Promise.all([getGlobalAISettings(), prisma.aiCapabilityPolicy.findMany()]);
+  const [settings, rows, claims] = await Promise.all([
+    getGlobalAISettings(),
+    prisma.aiCapabilityPolicy.findMany(),
+    getCapabilityClaims()
+  ]);
   const byCapability = new Map(rows.map((r) => [r.capability, r]));
 
   const capabilities = AI_CAPABILITIES.map((spec: AiCapabilitySpec): AutonomyCatalogueEntry => ({
@@ -190,6 +203,7 @@ export async function describeAutonomyCatalogue(): Promise<{ autonomyEnabled: bo
     description: spec.description,
     ceilingReason: spec.ceilingReason,
     actsOnUntrustedInput: spec.actsOnUntrustedInput,
+    claimedBy: claims.get(spec.id) ?? null,
     featureToggle: spec.featureToggle,
     // A capability with no toggle reaches no model, so nothing about the AI switches
     // determines whether it is available.

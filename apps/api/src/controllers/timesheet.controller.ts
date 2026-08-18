@@ -51,6 +51,16 @@ const inputSchema = z.object({
   })
 });
 
+/**
+ * The words somebody wrote on an entry: the task, then the note when there is one.
+ *
+ * Shared by the submit and both decision emails so all three quote the same thing — three copies of
+ * this join is how one of them ends up omitting the note nobody remembers is optional.
+ */
+function entryText(entry: { taskDescription?: string | null; notes?: string | null }): string {
+  return [entry.taskDescription, entry.notes].filter((t) => t && t.trim().length > 0).join("\n\n");
+}
+
 export const timesheetRouter = Router();
 timesheetRouter.use(requireAuth);
 
@@ -317,7 +327,7 @@ export async function saveTimesheet(req: any, status: "DRAFT" | "SUBMITTED") {
             }))
           }
         },
-        include: { attachments: true, project: true, module: true, submodule: true, user: { include: { manager: true } } }
+        include: { attachments: true, project: true, module: true, submodule: true, ticket: { select: { key: true, title: true } }, user: { include: { manager: true } } }
       });
     },
     { isolationLevel: "Serializable", timeout: 8000 }
@@ -334,6 +344,23 @@ export async function saveTimesheet(req: any, status: "DRAFT" | "SUBMITTED") {
     const dateLabel = workDate.toISOString().slice(0, 10);
     const managerName = timesheet.user.manager?.name ?? null;
 
+    /**
+     * WHAT THE APPROVER ACTUALLY NEEDS. This email used to carry the date, the project and the hours
+     * — enough to know an entry exists, not enough to approve it — so every recipient had to open the
+     * app to answer "what was done". The entry's module, submodule, activity, linked ticket and the
+     * description the author wrote all travel with it now. Empty fields are dropped by the template
+     * rather than printed as dashes.
+     */
+    const entryDetail = {
+      module: timesheet.module?.name ?? null,
+      submodule: timesheet.submodule?.name ?? null,
+      activity: timesheet.activityType ?? null,
+      // The task is what was done; the note is why, or what got in the way. Both belong in a mail
+      // whose whole purpose is letting somebody decide without opening the app.
+      description: [timesheet.taskDescription, timesheet.notes].filter((t) => t && t.trim().length > 0).join("\n\n") || null,
+      ticketRef: timesheet.ticket ? `${timesheet.ticket.key} — ${timesheet.ticket.title}` : null
+    };
+
     await dispatchNotification({
       userId: req.user.id,
       category: "timesheet.submitted",
@@ -347,22 +374,63 @@ export async function saveTimesheet(req: any, status: "DRAFT" | "SUBMITTED") {
           hours: hours.toFixed(2),
           date: dateLabel,
           project: timesheet.project.name,
-          managerName: managerName ?? ""
+          managerName: managerName ?? "",
+          module: entryDetail.module ?? "",
+          submodule: entryDetail.submodule ?? "",
+          activity: entryDetail.activity ?? "",
+          description: entryDetail.description ?? "",
+          ticketRef: entryDetail.ticketRef ?? ""
         },
         fallback: {
-          subject: "Timesheet submitted",
-          html: templates.timesheetSubmitted({ name: req.user.name, hours, date: dateLabel, project: timesheet.project.name, managerName })
+          subject: `Timesheet submitted — ${dateLabel}`,
+          html: templates.timesheetSubmitted({
+            name: req.user.name,
+            hours,
+            date: dateLabel,
+            project: timesheet.project.name,
+            managerName,
+            ...entryDetail
+          })
         }
       }
     });
 
     if (timesheet.user.manager) {
+      // The approver gets the same detail, and by email as well — this is the message that asks
+      // somebody to make a decision, and it was previously in-app only while the person who needed
+      // no action at all got the email.
       await dispatchNotification({
         userId: timesheet.user.manager.id,
         category: "timesheet.submitted",
         title: `${req.user.name} submitted a timesheet`,
         body: `${hours.toFixed(2)}h on ${timesheet.project.name} for ${dateLabel} is awaiting your review.`,
-        link: "/app/approvals"
+        link: "/app/approvals",
+        email: {
+          templateKey: "timesheet.submitted",
+          vars: {
+            name: timesheet.user.manager.name,
+            hours: hours.toFixed(2),
+            date: dateLabel,
+            project: timesheet.project.name,
+            managerName: req.user.name,
+            module: entryDetail.module ?? "",
+            submodule: entryDetail.submodule ?? "",
+            activity: entryDetail.activity ?? "",
+            description: entryDetail.description ?? "",
+            ticketRef: entryDetail.ticketRef ?? ""
+          },
+          fallback: {
+            subject: `${req.user.name} submitted a timesheet — ${dateLabel}`,
+            html: templates.timesheetSubmitted({
+              name: timesheet.user.manager.name,
+              hours,
+              date: dateLabel,
+              project: timesheet.project.name,
+              managerName: req.user.name,
+              ...entryDetail
+            })
+          }
+        }
       });
     }
   }
@@ -422,7 +490,9 @@ async function approveCore(id: string, reviewerUser: { id: string; name?: string
   const item = await prisma.timesheet.update({
     where: { id: existing.id },
     data: { status: "APPROVED", reviewedAt: new Date(), reviewedById: reviewerUser.id, ...ratePatch },
-    include: { project: true, user: true }
+    // Module, submodule and the task text travel into the decision emails: somebody with four
+    // entries awaiting approval cannot tell from a date and a project which one this is about.
+    include: { project: true, user: true, module: true, submodule: true }
   });
   await resolveEscalationsFor(item.id);
   emitDomainEvent("timesheet.approved", { timesheet: item });
@@ -443,11 +513,25 @@ async function approveCore(id: string, reviewerUser: { id: string; name?: string
         hours: hours.toFixed(2),
         date: dateLabel,
         reviewer,
-        project: item.project.name
+        project: item.project.name,
+        module: item.module?.name ?? "",
+        submodule: item.submodule?.name ?? "",
+        activity: item.activityType ?? "",
+        description: entryText(item)
       },
       fallback: {
         subject: "Your timesheet was approved",
-        html: templates.timesheetApproved({ name: item.user.name, hours, date: dateLabel, reviewer, project: item.project.name })
+        html: templates.timesheetApproved({
+          name: item.user.name,
+          hours,
+          date: dateLabel,
+          reviewer,
+          project: item.project.name,
+          module: item.module?.name ?? null,
+          submodule: item.submodule?.name ?? null,
+          activity: item.activityType ?? null,
+          description: entryText(item) || null
+        })
       }
     }
   });
@@ -466,7 +550,7 @@ async function rejectCore(id: string, reason: string, reviewerUser: { id: string
   const item = await prisma.timesheet.update({
     where: { id: existing.id },
     data: { status: "REJECTED", reviewedAt: new Date(), reviewedById: reviewerUser.id, rejectionReason: reason.trim() },
-    include: { project: true, user: true }
+    include: { project: true, user: true, module: true, submodule: true }
   });
   await resolveEscalationsFor(item.id);
   return item;
@@ -564,11 +648,26 @@ timesheetRouter.patch("/:id/reject", requirePermission(permissions.TIMESHEETS_AP
         date: dateLabel,
         project: item.project.name,
         reviewer,
-        reason: cleanReason
+        reason: cleanReason,
+        module: item.module?.name ?? "",
+        submodule: item.submodule?.name ?? "",
+        activity: item.activityType ?? "",
+        description: entryText(item)
       },
       fallback: {
         subject: "Timesheet rejected — action required",
-        html: templates.timesheetRejected({ name: item.user.name, date: dateLabel, project: item.project.name, reviewer, reason: cleanReason })
+        html: templates.timesheetRejected({
+          name: item.user.name,
+          date: dateLabel,
+          project: item.project.name,
+          reviewer,
+          reason: cleanReason,
+          module: item.module?.name ?? null,
+          submodule: item.submodule?.name ?? null,
+          activity: item.activityType ?? null,
+          // What they originally wrote, so fixing it is a correction rather than a retype.
+          description: entryText(item) || null
+        })
       }
     }
   });

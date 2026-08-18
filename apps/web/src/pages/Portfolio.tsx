@@ -16,9 +16,9 @@
  * WHO renders this: `App.tsx` at `/app/portfolio`.
  */
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { AlertTriangle, Briefcase, Loader2, Lock, Plus, Trash2, TrendingUp, Wrench } from "lucide-react";
+import { AlertTriangle, Briefcase, Loader2, Lock, Plus, Target, Trash2, TrendingUp, Wrench } from "lucide-react";
 import { useState } from "react";
-import { useNavigate } from "react-router";
+import { Link, useNavigate } from "react-router";
 import { permissions } from "@timesheet/shared";
 import { Badge } from "../components/ui/badge";
 import { Button } from "../components/ui/button";
@@ -29,12 +29,13 @@ import { Progress } from "../components/ui/progress";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../components/ui/select";
 import { Skeleton } from "../components/ui/skeleton";
 import { StatCard } from "../components/ui/stat-card";
+import { usePlanningFeatures } from "../lib/use-planning";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "../components/ui/table";
 import { toast } from "../components/ui/toaster";
 import { Tooltip, TooltipContent, TooltipTrigger } from "../components/ui/tooltip";
 import { cn } from "../lib/utils";
 import { useAuthStore } from "../store/auth";
-import { copilotApi, planningApi, portfolioApi, projectApi, type PortfolioProjectRollup } from "../services/api";
+import { copilotApi, goalApi, planningApi, portfolioApi, projectApi, type PortfolioProjectRollup } from "../services/api";
 
 const serverMessage = (err: any, fallback: string) => err?.response?.data?.message ?? fallback;
 
@@ -220,6 +221,12 @@ export function PortfolioPage() {
               icon={<AlertTriangle className="h-4 w-4" />}
             />
           </div>
+
+          {/* Goals that measure THIS scope. The Portfolio page answers "how is the work going" from
+              schedule and money; a goal is the third answer — what the work was FOR — and V8 shipped it
+              on a page of its own that nobody had a reason to open from here. Rendered only when a goal
+              actually links to something in view, so it never becomes an empty region. */}
+          <PortfolioGoals projectIds={rows.map((r) => r.id)} portfolioIds={groups.map((g) => g.id)} />
 
           {groups.length > 0 && (
             <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
@@ -460,5 +467,59 @@ export function PortfolioPage() {
         </>
       )}
     </div>
+  );
+}
+
+/**
+ * The goals pointed at anything on this page.
+ *
+ * WHY IT FILTERS CLIENT-SIDE over the goal list rather than asking the server for "goals for these
+ * ids": `GoalLink` is deliberately not a foreign key (three target tables, one column), so a scoped
+ * query would have to reimplement the expansion rule — including "a PORTFOLIO link means every project
+ * in it" — in a second place. The list is small and already fetched shape-for-shape by the Goals page.
+ */
+function PortfolioGoals({ projectIds, portfolioIds }: Readonly<{ projectIds: string[]; portfolioIds: string[] }>) {
+  const { features } = usePlanningFeatures();
+  const goals = useQuery({ queryKey: ["goals", "list"], queryFn: goalApi.list, enabled: Boolean(features.goals), retry: false, staleTime: 60_000 });
+
+  if (!features.goals) return null;
+  const inScope = new Set([...projectIds, ...portfolioIds]);
+  const rows = (goals.data ?? []).filter(
+    (g) => g.status === "ACTIVE" && g.links.some((l) => (l.targetType === "PROJECT" || l.targetType === "PORTFOLIO") && inScope.has(l.targetId))
+  );
+  if (rows.length === 0) return null;
+
+  return (
+    <Card>
+      <CardHeader className="pb-2">
+        <CardTitle className="flex items-center gap-2 text-base">
+          <Target className="h-4 w-4 text-primary" />
+          Goals measuring this work
+        </CardTitle>
+        <CardDescription className="text-xs">
+          Progress is computed from what this workspace already records — the same tables the burn above reads.
+        </CardDescription>
+      </CardHeader>
+      <CardContent className="grid gap-1.5">
+        {rows.slice(0, 6).map((goal) => (
+          <Link key={goal.id} to="/app/goals" className="flex flex-wrap items-baseline gap-x-2 rounded px-1 py-1 text-xs hover:bg-muted/50">
+            <span className="font-medium">{goal.title}</span>
+            {goal.measurement.unavailable ? (
+              <span className="text-muted-foreground">not measurable yet</span>
+            ) : (
+              <>
+                {goal.measurement.health === "OFF_TRACK" && <Badge variant="destructive" className="text-[10px]">off track</Badge>}
+                {goal.measurement.health === "AT_RISK" && <Badge variant="warning" className="text-[10px]">at risk</Badge>}
+                <span className="tabular-nums text-muted-foreground">
+                  {goal.effectiveProgressPct === null ? "no percentage for this kind of goal" : `${goal.effectiveProgressPct}%`}
+                </span>
+              </>
+            )}
+            {goal.owner && <span className="ml-auto text-muted-foreground">{goal.owner.name}</span>}
+          </Link>
+        ))}
+        {rows.length > 6 && <p className="text-[11px] text-muted-foreground">and {rows.length - 6} more on the Goals page.</p>}
+      </CardContent>
+    </Card>
   );
 }

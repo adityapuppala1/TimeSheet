@@ -55,6 +55,8 @@ export function hasAnyFilter(f: UserFilters): boolean {
 const ACTION_LABEL: Record<UserBulkAction, string> = {
   DEACTIVATE: "Deactivate",
   ACTIVATE: "Reactivate",
+  // Reviewed: button copy, not a credential — "password" is what makes the label readable.
+  // eslint-disable-next-line sonarjs/no-hardcoded-passwords -- UI label text, not a secret
   RESET_PASSWORD: "Reset password",
   RESEND_WELCOME: "Resend welcome email",
   FORCE_LOGOUT: "Sign out everywhere",

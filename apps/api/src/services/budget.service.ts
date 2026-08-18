@@ -46,6 +46,21 @@ export interface ProjectBudget {
   overBudgetRisk: boolean;
   /** True once burn crosses the project's own alert threshold. */
   alerting: boolean;
+
+  /**
+   * WHAT THE AI TEAMMATES SPENT ON THIS PROJECT — beside `burn`, deliberately never inside it.
+   *
+   * Three reasons it cannot be added, each sufficient on its own. It is not billable (nothing is
+   * priced into `billedAmount`, by decision), so folding it into burn would invoice a client for a
+   * model call. It is always in **US dollars** while a project's budget may be in any currency, and
+   * this file holds no exchange rate — a silent addition would be arithmetic across units. And a
+   * budget is an agreement with somebody about labour; model spend is an operating cost of running
+   * this workspace, which is a different conversation with a different person.
+   *
+   * So it is reported, labelled in its own currency, and left for the reader to weigh.
+   */
+  agentCostUsd: number;
+  agentRuns: number;
 }
 
 export async function computeProjectBudgets(
@@ -55,7 +70,7 @@ export async function computeProjectBudgets(
   const out = new Map<string, ProjectBudget>();
   if (projectIds.length === 0) return out;
 
-  const [projects, billable, nonBillable, unrated, defaults] = await Promise.all([
+  const [projects, billable, nonBillable, unrated, defaults, agentSpend] = await Promise.all([
     prisma.project.findMany({
       where: { id: { in: projectIds } },
       select: { id: true, budgetAmount: true, budgetCurrency: true, billingCurrency: true, budgetAlertPct: true }
@@ -83,12 +98,22 @@ export async function computeProjectBudgets(
       },
       _sum: { totalHours: true }
     }),
-    prisma.globalTicketSettings.findUnique({ where: { id: "global" } })
+    prisma.globalTicketSettings.findUnique({ where: { id: "global" } }),
+    // The ledger, not `AgentRun`: the ledger is where this product already decided agent work is
+    // recorded against a project, and a second definition of "what an agent spent here" is a number
+    // nobody can reconcile.
+    prisma.agentWorkEntry.groupBy({
+      by: ["projectId"],
+      where: { projectId: { in: projectIds } },
+      _sum: { costUsd: true },
+      _count: true
+    })
   ]);
 
   const billableBy = new Map(billable.map((r) => [r.projectId, r]));
   const nonBillableBy = new Map(nonBillable.map((r) => [r.projectId, Number(r._sum.totalHours ?? 0)]));
   const unratedBy = new Map(unrated.map((r) => [r.projectId, Number(r._sum.totalHours ?? 0)]));
+  const agentBy = new Map(agentSpend.map((r) => [r.projectId ?? "", { costUsd: Number(r._sum.costUsd ?? 0), runs: r._count }]));
 
   for (const project of projects) {
     const b = billableBy.get(project.id);
@@ -114,7 +139,9 @@ export async function computeProjectBudgets(
       unratedHours: Number((unratedBy.get(project.id) ?? 0).toFixed(2)),
       forecastAtCompletion: forecast,
       overBudgetRisk: Boolean(budget && forecast && forecast > budget),
-      alerting: Boolean(budget && burnPct !== null && project.budgetAlertPct && burnPct >= project.budgetAlertPct)
+      alerting: Boolean(budget && burnPct !== null && project.budgetAlertPct && burnPct >= project.budgetAlertPct),
+      agentCostUsd: Number((agentBy.get(project.id)?.costUsd ?? 0).toFixed(4)),
+      agentRuns: agentBy.get(project.id)?.runs ?? 0
     });
   }
 

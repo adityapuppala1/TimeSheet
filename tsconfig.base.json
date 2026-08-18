@@ -7,6 +7,12 @@
     "esModuleInterop": true,
     "skipLibCheck": true,
     "forceConsistentCasingInFileNames": true,
-    "resolveJsonModule": true
+    "resolveJsonModule": true,
+    // Dead imports and dead locals were accumulating silently — thirty unused imports and five
+    // unused functions were found in one sweep, none of them visible to `npm run lint`, because
+    // nothing in the build was asking. Unused PARAMETERS stay unchecked: Express handlers and React
+    // callbacks legitimately name arguments they don't use, and the `_`-prefix convention this
+    // codebase already follows is the escape hatch for a local.
+    "noUnusedLocals": true
   }
 }

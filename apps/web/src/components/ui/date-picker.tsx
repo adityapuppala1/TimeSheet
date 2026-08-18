@@ -235,7 +235,8 @@ export function DateTimePicker({
     const target = list.querySelector<HTMLButtonElement>("button:not(:disabled)");
     if (!target) return;
     list.scrollTop = Math.max(0, target.offsetTop - list.offsetTop);
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- re-aims only when the day changes
+    // `draft.date` is listed deliberately even though the body never reads it: the effect must
+    // re-aim the list when the chosen day changes, not only when the panel opens.
   }, [open, draft.date]);
 
   const label = date

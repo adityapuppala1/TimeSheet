@@ -73,6 +73,9 @@ function shouldSample(): boolean {
   const rate = env.API_TELEMETRY_SAMPLE_RATE;
   if (rate >= 1) return true;
   if (rate <= 0) return false;
+  // Reviewed: sampling, not secrecy. Nothing is protected by an attacker being unable to predict
+  // which requests get recorded, and a CSPRNG draw per request would cost more than the telemetry.
+  // eslint-disable-next-line sonarjs/pseudo-random -- non-cryptographic by design
   return Math.random() < rate;
 }
 

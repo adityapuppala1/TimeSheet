@@ -121,7 +121,17 @@ const GROUPS: Array<{ group: string; rows: Row[] }> = [
         enterprise: true
       },
       { label: "Client-viewable share links for attestations", starter: false, team: true, enterprise: true },
-      { label: "Cost analytics with rate snapshots", starter: false, team: true, enterprise: true }
+      { label: "Cost analytics with rate snapshots", starter: false, team: true, enterprise: true },
+      {
+        // Derived, like the SSO and face-verification rows, so the cell and the entitlement it
+        // describes cannot drift. Stated as a count rather than a tick because the difference
+        // between 25 goals and unlimited is the kind of limit that should not be a surprise.
+        label: "Goals with measured progress",
+        hint: "Objectives whose progress is computed from approved hours, spend, closures, on-time rate, SLA breaches or project risk — not typed in.",
+        starter: PLAN_TIER_LIMITS.STARTER.goalsEnabled,
+        team: `${PLAN_TIER_LIMITS.TEAM.maxGoals} active`,
+        enterprise: PLAN_TIER_LIMITS.ENTERPRISE.goalsEnabled
+      }
     ]
   },
   {

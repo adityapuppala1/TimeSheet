@@ -65,7 +65,7 @@ import {
   Trash2,
   Wrench,
   X,
-  Zap, Bot
+  Zap, Bot, Target, Workflow
 } from "lucide-react";
 import type { ReactNode } from "react";
 import { useEffect, useState } from "react";
@@ -158,6 +158,8 @@ const emailRows = [
   { group: "Tickets", key: "emailTicketStaleNudge", label: "Stale-ticket nudge", description: "AI-suggested next action when the SLA sweep flags a ticket as stale. Requires the AI stale-ticket nudge toggle in the AI tab.", icon: <Hourglass className="h-4 w-4 text-warning" /> },
   { group: "Workspace", key: "emailMaintenanceScheduled", label: "Maintenance warning", description: "\"Save your work\" email when a super admin sends the maintenance-window notice from the Maintenance tab. The in-app notification always fires — this only gates the email copy.", icon: <Wrench className="h-4 w-4 text-warning" /> },
   { group: "Workspace", key: "emailAiAutonomyApplied", label: "Assistant acted on its own", description: "Tells the person a change was made for them when a capability set to Apply or Act freely in the AI tab applies its own change set. On by default — those levels move your job from approving a change to vetoing it, and a veto nobody is told about is not a veto.", icon: <Bot className="h-4 w-4 text-primary" /> },
+  { group: "Workspace", key: "emailWorkflowApproval", label: "A workflow is waiting for a decision", description: "Sent to the person a workflow's approval step names, when a run stops at that step. On by default: a gate blocks everything after it, sometimes for days, and an approval request nobody sees is a workflow that looks broken rather than blocked.", icon: <Workflow className="h-4 w-4 text-primary" /> },
+  { group: "Workspace", key: "emailGoalDigest", label: "Weekly goal digest", description: "Monday morning, to a goal's OWNER only: which of their goals are off track and which periods close this week. Off by default, like every other digest — and it stays quiet in a week where nothing needs a look.", icon: <Target className="h-4 w-4 text-primary" /> },
   { group: "Tickets", key: "emailTicketNeedsReview", label: "Email-sourced ticket needs review", description: "Alert project admins/managers when an inbound email is classified with low confidence.", icon: <Sparkles className="h-4 w-4 text-warning" /> },
   // Face (identity) verification lifecycle — none of these ever carry a captured image or a
   // score; they link into the app, where authorization is checked.
@@ -1411,6 +1413,7 @@ function AISettingsCard({ readOnly }: { readOnly: boolean }) {
       const previous = queryClient.getQueryData<GlobalAISettings>(["settings", "ai"]);
       // apiKey is write-only and not part of the cached settings shape — don't spread it into
       // the optimistic cache update, or GlobalAISettings would gain a field it never actually has.
+      // eslint-disable-next-line sonarjs/no-unused-vars -- rest-sibling omit pattern
       const { apiKey: _apiKey, ...optimistic } = payload;
       if (previous) queryClient.setQueryData(["settings", "ai"], { ...previous, ...optimistic });
       return { previous };
@@ -1748,6 +1751,56 @@ function AISettingsCard({ readOnly }: { readOnly: boolean }) {
                     <p className="mt-1 text-2xl font-black">{usage.data.totalOutputTokens.toLocaleString()}</p>
                   </div>
                 </div>
+
+                {/* The agent-driven share. Shown as "X of the total", never as its own total, because
+                    it is a subset — presenting it as a separate figure would invite adding the two. */}
+                <div className="rounded-lg border border-border bg-muted/20 p-4">
+                  <p className="text-xs uppercase text-muted-foreground">Driven by AI teammates</p>
+                  {usage.data.agentDriven.calls === 0 ? (
+                    <p className="mt-1 text-sm text-muted-foreground">
+                      None this month — every call above was made by a person using an AI feature directly.
+                    </p>
+                  ) : (
+                    <p className="mt-1 text-sm">
+                      <span className="text-2xl font-black">${usage.data.agentDriven.costUsd.toFixed(2)}</span>{" "}
+                      <span className="text-muted-foreground">
+                        of the ${usage.data.totalCostUsd.toFixed(2)} above, across {usage.data.agentDriven.calls} call
+                        {usage.data.agentDriven.calls === 1 ? "" : "s"} and{" "}
+                        {(usage.data.agentDriven.inputTokens + usage.data.agentDriven.outputTokens).toLocaleString()} tokens —
+                        see <a className="underline" href="/app/agents">Agents</a> for which teammate.
+                      </span>
+                    </p>
+                  )}
+                </div>
+
+                {/* Per-workflow spend. Read from the agent runs each flow queued rather than from the
+                    usage log, which records what was asked of a model and not who composed the
+                    question — said on its face, because it is a view from a different table and the
+                    two will not add up to the penny. */}
+                {usage.data.byFlow.length > 0 && (
+                  <div className="rounded-lg border border-border bg-muted/20 p-4">
+                    <p className="text-xs uppercase text-muted-foreground">Spent by workflows</p>
+                    <ul className="mt-2 space-y-1">
+                      {usage.data.byFlow.map((flow) => (
+                        <li key={flow.flowId} className="flex flex-wrap items-baseline gap-2 text-sm">
+                          <span aria-hidden>{flow.emoji}</span>
+                          <span className="font-medium">{flow.name}</span>
+                          <span className="tabular-nums">${flow.costUsd.toFixed(2)}</span>
+                          <span className="text-xs text-muted-foreground">
+                            across {flow.runs} run{flow.runs === 1 ? "" : "s"}
+                          </span>
+                        </li>
+                      ))}
+                    </ul>
+                    <p className="mt-2 text-xs text-muted-foreground">
+                      Part of the teammate figure above, attributed through the runs each workflow queued — see{" "}
+                      <a className="underline" href="/app/studio">
+                        Workflows
+                      </a>{" "}
+                      for what they did.
+                    </p>
+                  </div>
+                )}
 
                 {usageTrend.data && usageTrend.data.some((w) => w.costUsd > 0) && (
                   <div>

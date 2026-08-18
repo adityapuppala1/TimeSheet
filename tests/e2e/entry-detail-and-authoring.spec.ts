@@ -445,6 +445,26 @@ test.describe("ticket detail panel sizing", () => {
     // The width assertions below measure the panel, so they have to wait for its content — an
     // empty loading sheet is a different size from a populated one.
     await expect(sheet.getByRole("tab").first()).toBeVisible({ timeout: 15_000 });
+    // ...AND for it to stop MOVING. The panel slides in from the right, so between `toBeVisible` and
+    // a `boundingBox()` its x is still changing: a drag test that reads the resize handle's position
+    // mid-slide then presses the mouse at a coordinate the handle has already left, and the drag
+    // silently does nothing. That is what made this file's resize test fail roughly one run in eight
+    // — a real flake with a real cause, not a slow machine, and a `waitForTimeout` would have papered
+    // over it at the cost of a second on every call.
+    // Settled means TWO CONSECUTIVE reads agree. Comparing against a single earlier read is the
+    // version of this that looks right and is not: that reference is itself taken mid-slide.
+    let previousX = Number.NaN;
+    await expect
+      .poll(
+        async () => {
+          const x = Math.round((await sheet.boundingBox())?.x ?? -1);
+          const settled = x === previousX;
+          previousX = x;
+          return settled;
+        },
+        { timeout: 10_000, intervals: [80, 80, 120, 200] }
+      )
+      .toBe(true);
     return sheet;
   }
 

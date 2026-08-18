@@ -59,7 +59,13 @@ export const permissions = {
   /// the existing timesheet-only approval right).
   APPROVALS_MANAGE: "approvals:manage",
   /// Publish a personal dashboard to the whole workspace.
-  DASHBOARDS_SHARE: "dashboards:share"
+  DASHBOARDS_SHARE: "dashboards:share",
+
+  /// --- Goals / OKRs (V8 phase 1) -----------------------------------------------------------
+  /// Create/edit/close goals and record progress overrides. Reading is open to any signed-in
+  /// user — a goal nobody can see aligns nobody. Same migration-backfill rule as the V6 block
+  /// above: the key must ALSO be inserted by idempotent SQL inside the migration introducing it.
+  GOALS_MANAGE: "goals:manage"
 } as const;
 
 export type Permission = (typeof permissions)[keyof typeof permissions];
@@ -95,6 +101,7 @@ export interface TimesheetInput {
 }
 
 /** Admin-editable — the actual list of active types lives in the TicketType table (`ticketTypeApi.list()`). */
+// eslint-disable-next-line sonarjs/redundant-type-aliases -- names the concept at every call site
 export type TicketType = string;
 
 export const ticketPriorities = ["LOW", "MEDIUM", "HIGH", "CRITICAL"] as const;
@@ -209,6 +216,13 @@ export interface NotificationPreferences {
   /** "Maintenance window scheduled — wrap up" warning a SUPER_ADMIN sends from the Maintenance
    *  settings card. Gates only the EMAIL leg; the in-app notification always fires. */
   emailMaintenanceScheduled: boolean;
+  /** "A workflow is waiting for you to approve a step." The one Workflow Studio message with an email
+   *  leg, and on by default: a gate blocks everything after it, so a request nobody sees is a workflow
+   *  that reads as broken rather than as blocked. */
+  emailWorkflowApproval: boolean;
+  /** Monday morning, to a goal's OWNER: which of their goals are off track and which periods close
+   *  this week. Off by default like every other digest, and silent in a week with nothing to say. */
+  emailGoalDigest: boolean;
 }
 
 export const notificationPreferenceKeys: ReadonlyArray<keyof NotificationPreferences> = [
@@ -239,7 +253,9 @@ export const notificationPreferenceKeys: ReadonlyArray<keyof NotificationPrefere
   "emailBugPatternDigest",
   "emailTicketStaleNudge",
   "emailAiAutonomyApplied",
-  "emailMaintenanceScheduled"
+  "emailMaintenanceScheduled",
+  "emailWorkflowApproval",
+  "emailGoalDigest"
 ];
 
 /**
@@ -564,6 +580,12 @@ export interface PlanTierLimits {
   maxBlueprints: number;
   maxCustomFields: number;
   maxDashboards: number;
+
+  /* --- Goals / OKRs (V8 phase 1) --------------------------------------------------------- */
+  /** Goals with measured progress sources. Fails CLOSED like every planning capability. */
+  goalsEnabled: boolean;
+  /** Ceiling on ACTIVE goals; 0 = the tier cannot use goals at all. */
+  maxGoals: number;
 }
 
 export const PLAN_TIER_LIMITS: Record<PlanTier, PlanTierLimits> = {
@@ -583,7 +605,9 @@ export const PLAN_TIER_LIMITS: Record<PlanTier, PlanTierLimits> = {
     maxRequestForms: 0,
     maxBlueprints: 0,
     maxCustomFields: 0,
-    maxDashboards: 0
+    maxDashboards: 0,
+    goalsEnabled: false,
+    maxGoals: 0
   },
   TEAM: {
     seatLimit: UNLIMITED_SEATS,
@@ -604,7 +628,11 @@ export const PLAN_TIER_LIMITS: Record<PlanTier, PlanTierLimits> = {
     maxRequestForms: 5,
     maxBlueprints: 5,
     maxCustomFields: 10,
-    maxDashboards: 3
+    maxDashboards: 3,
+    // Goals are an everyday alignment surface, not an enterprise luxury — Team gets them with a
+    // ceiling. Measured sources read data the tier already holds, so there is no added cost.
+    goalsEnabled: true,
+    maxGoals: 25
   },
   ENTERPRISE: {
     seatLimit: UNLIMITED_SEATS,
@@ -622,7 +650,9 @@ export const PLAN_TIER_LIMITS: Record<PlanTier, PlanTierLimits> = {
     maxRequestForms: UNLIMITED_PLAN_ITEMS,
     maxBlueprints: UNLIMITED_PLAN_ITEMS,
     maxCustomFields: UNLIMITED_PLAN_ITEMS,
-    maxDashboards: UNLIMITED_PLAN_ITEMS
+    maxDashboards: UNLIMITED_PLAN_ITEMS,
+    goalsEnabled: true,
+    maxGoals: UNLIMITED_PLAN_ITEMS
   }
 };
 

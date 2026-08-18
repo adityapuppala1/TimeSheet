@@ -95,6 +95,29 @@ describe("resolveWithin — containment", () => {
     expect(resolveWithin(base, "C:\\Windows\\System32\\drivers\\etc\\hosts")).toBeNull();
   });
 
+  it("refuses Windows-shaped absolute paths on every platform, not just on Windows", () => {
+    /**
+     * THE ANSWER MUST NOT DEPEND ON THE OPERATING SYSTEM. `path.isAbsolute` is platform-specific:
+     * every string below is absolute on Windows and an ordinary relative filename on Linux, where a
+     * backslash carries no meaning. Before the explicit check in `resolveWithin`, the case above
+     * passed here and failed in CI — the assertion had simply never run on Linux, because the unit
+     * step sat behind an earlier failing gate in the same job.
+     *
+     * Containment was never lost (these resolved to a silly name INSIDE the base, not outside it),
+     * so this is about one storage key having one meaning wherever the API is deployed.
+     */
+    for (const attempt of [
+      "C:\\Windows\\System32\\drivers\\etc\\hosts",
+      "C:/Windows/System32/drivers/etc/hosts",
+      "c:\\temp\\evil.png",
+      "C:evil.png", // drive-relative: no separator, still drive-qualified
+      "\\Windows\\System32\\config\\SAM", // root-relative on Windows
+      "\\\\attacker-host\\share\\payload.exe" // UNC
+    ]) {
+      expect(resolveWithin(base, attempt), attempt).toBeNull();
+    }
+  });
+
   it("refuses empty input, the base itself, and NUL truncation", () => {
     expect(resolveWithin(base, "")).toBeNull();
     expect(resolveWithin(base, ".")).toBeNull();

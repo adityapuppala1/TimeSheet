@@ -8,18 +8,7 @@
  */
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import type { ColumnDef } from "@tanstack/react-table";
-import {
-  AlarmClock,
-  AlertTriangle,
-  CheckCircle2,
-  Clock,
-  Mail,
-  Network,
-  ShieldCheck,
-  ShieldX,
-  TrendingUp,
-  Users2
-} from "lucide-react";
+import { AlertTriangle, CheckCircle2, Clock, Mail, Network, ShieldCheck, ShieldX, TrendingUp, Users2 } from "lucide-react";
 import { useMemo, useState } from "react";
 import {
   Bar,
@@ -42,7 +31,7 @@ import { StatCard } from "../components/ui/stat-card";
 import { Tooltip, TooltipContent, TooltipTrigger } from "../components/ui/tooltip";
 import { toast } from "../components/ui/toaster";
 import { computeTrend } from "../lib/trend";
-import { fileUrl, teamApi, timesheetApi, type OrgChartNode, type TeamReport } from "../services/api";
+import { fileUrl, teamApi, timesheetApi, type TeamReport } from "../services/api";
 
 function initialsFor(name?: string) {
   if (!name) return "?";

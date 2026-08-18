@@ -35,7 +35,7 @@ overwriting one that already exists), run `docker compose up -d --build`, wait f
 health check, then run the one-time seed.
 
 ```bash
-./install.sh          # Linux/macOS — chmod +x install.sh first if needed
+./install.sh          # Linux/macOS (a ZIP download loses the +x bit; a clone keeps it)
 ```
 
 ```powershell
@@ -459,6 +459,81 @@ docker compose -f docker-compose.yml -f docker-compose.https.yml up -d
 In every mode, set `APP_BASE_URL` (and add the https origin to `WEB_ORIGIN` for production) to the
 address people actually open. On an internet-exposed host, also restrict the base compose file's
 plain-http ports (`5173`, `4000`) to localhost in an override so TLS is the only way in.
+
+### How this product should be addressed — the decision
+
+Four settings decide whether people can use a deployment, and they only fail as a combination. This
+is the shape to aim for, and `reportDeploymentConfig` checks it at every boot — silent when it holds,
+specific when it does not.
+
+| | Decision | Why |
+|---|---|---|
+| **Public surface** | The production build behind a reverse proxy on 443. **Never `npm run dev` on 5173.** | Vite's dev server carries hot reload, source maps and none of the production hardening. It is a development tool that happens to answer HTTP. |
+| **Address** | One **DNS name**, used by everyone, inside and outside. | Emails carry exactly one base URL. A name can resolve differently inside and out (split-horizon) or hairpin through the router; an IP cannot be moved, cannot be secured, and changes with the lease. |
+| **`APP_BASE_URL`** | That same canonical `https://` origin. | Every password reset, invitation and digest link is built on it, and read by people who may be anywhere. Whatever address the *recipients* type is the right value. |
+| **`WEB_ORIGIN`** | Must contain `APP_BASE_URL`'s origin. | A browser opening the base URL sends exactly that origin. Omit it and every sign-in from the only address users were given fails on CORS, while localhost keeps working perfectly for whoever is testing. |
+| **Certificate** | Publicly issued, for the DNS name. | **No public CA issues certificates for bare IP addresses** — Let's Encrypt included. On an IP, every emailed link opens through a browser warning, which teaches people to click past the one thing protecting them. |
+
+**One canonical URL is the whole trick.** Given a name (or a public address the router hairpins — test
+it, many do), the same link works from the office and from a phone on mobile data, so there is nothing
+to switch between and nothing to get wrong per audience. Two base URLs cannot be made to work: an
+email carries one.
+
+**On development machines, leave `APP_BASE_URL="auto"`.** A hardcoded address travels with the
+checkout and is wrong on every machine except the one it was written on. `auto` resolves to that
+machine's own LAN address at boot and logs what it chose, and because CORS auto-accepts private LAN
+origins in development, a freshly cloned box works with no edit to either setting — which the boot
+check knows, so it stays silent. Pin a real value only where it is genuinely fixed: production.
+
+**Until a DNS name exists**, a LAN-only deployment is a coherent, honest position: keep `APP_BASE_URL`
+on the LAN address, accept that emailed links only open inside the network, and do not expose the dev
+server. That is a smaller promise, kept — better than a public address whose links land on warnings.
+
+#### First: prove the address reaches THIS deployment
+
+```bash
+npm run check:public -- https://203.0.113.10:5173
+```
+
+Do this **before** changing any configuration. An address that answers on port 5173 with a TimeSphere
+login page looks exactly like your own deployment, and may not be one — a port forward can point at a
+different machine on the same LAN. That happened here: two rounds of CORS, certificate and base-URL
+fixes were applied to a developer's machine while the public address was forwarded to a second box
+running an older build, so every change was correct, verified against localhost, and irrelevant.
+
+The check compares the **version and git sha** behind the address against the local server, then tests
+whether that host accepts its own origin and whether the certificate it serves covers the address
+people type. A "DIFFERENT deployment" line means configuration has to change on THAT machine, or the
+forward has to be repointed — nothing you edit locally will help.
+
+#### Reaching a development or self-hosted box over a public IP
+
+Two settings, and missing either produces a failure that looks like something else:
+
+- **`WEB_ORIGIN` must list the public origin explicitly** — exact scheme, host and port, no trailing
+  slash. Development auto-allows private LAN ranges (`localhost`, `10.x`, `192.168.x`,
+  `172.16–31.x`) because those are unroutable from the internet; a public address is never
+  auto-allowed in any environment, because a pattern loose enough to match one is loose enough to
+  match an attacker's. The symptom is a sign-in that fails with **"Origin … is not in this server's
+  allow-list"** — and that message now carries the fix, with the exact string to paste.
+  List `http://` and `https://` separately if you switch between them: to a browser they are
+  different origins, and the dev server serves HTTPS only when `apps/web/certs` exists.
+- **`APP_BASE_URL` decides what every EMAILED link points at.** Left on `"auto"` it resolves to the
+  machine's own LAN IPv4, so the app works over the public address while every password reset,
+  invitation and digest link it sends points somewhere the recipient cannot open. There is one base
+  and it is baked into each message at send time, so choose the address the people who receive mail
+  can actually reach. On a network without NAT hairpinning, a public base may not open from inside —
+  send yourself one reset link from each side before settling on it.
+
+**On the certificate, plainly:** a self-signed certificate (mkcert or otherwise) on a bare IP can
+never be trusted by a browser that has not installed your local CA, and **no public CA issues
+certificates for IP addresses** — Let's Encrypt included. So while an IP is the address people type,
+outside users will meet a browser warning no matter what you configure, and password-reset links will
+train them to click through it. Reissuing the dev certificate to cover every address you serve on
+(`mkcert localhost 127.0.0.1 ::1 <lan-ip> <public-ip>`) removes the *name mismatch* error and gives a
+real padlock on machines that have the local CA — it does not and cannot make the site trusted
+elsewhere. The only standard fix is a DNS name in front of it with a publicly issued certificate; see
+the reverse-proxy section below.
 
 ### Production, with a public domain — use a reverse proxy
 
@@ -1284,7 +1359,7 @@ product of a measured ceiling, with the measurement recorded in
 ## Testing before you ship a change
 
 ```bash
-npm run lint                          # typecheck both packages
+npm run lint                          # typecheck both packages, then the SonarQube rules
 npm run build                         # build both packages
 npm run test -w apps/api              # unit tier — fully mocked, no DB/network, fastest signal
 npm run test:integration -w apps/api  # integration tier — needs a real MySQL (see below)

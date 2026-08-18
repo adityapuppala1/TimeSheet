@@ -1,15 +1,36 @@
 /**
- * AI weekly digest worker — fires Monday 08:00 server-local time.
- * WHAT: for every active user with at least one activity signal in the prior week (a ticket
- * created/resolved, an open assignment, or logged hours), computes those stats and has
- * `ai.service.generateWeeklyDigest()` write a short recap, then emails it.
- * WHY skip zero-activity users rather than send everyone a templated "your week" email: an
- * AI-authored recap of nothing reads as spam and erodes trust in the feature; better to say
- * nothing than to say "you did nothing" every Monday.
+ * The Monday digest — fires 08:00 server-local time.
+ *
+ * WHAT: for every active user with some signal in the prior week, sends last week's numbers beside
+ * month-to-date and year-to-date, per person and per project, with an AI-written opening paragraph
+ * when a model is available.
+ *
+ * WHAT CHANGED, AND WHY IT MATTERED: this used to be an AI paragraph and a link to the dashboard.
+ * Two consequences. The reader had to leave the email to learn anything, so the digest was a nudge
+ * rather than a report. And the whole send was gated on `generateWeeklyDigest` succeeding — if the
+ * model was slow, unconfigured, or too small to answer, the worker logged the failure and sent
+ * NOTHING. A weekly report that a manager plans around had the availability of an LLM.
+ *
+ * Now the numbers are counted from the database and always send; the summary is a garnish. That
+ * ordering is the same one the rest of this product applies — the Inbox brief counts rather than
+ * guesses, and goals report a measurement or say they cannot.
+ *
+ * WHY THE EMAIL DIFFERS BY RECIPIENT: an employee gets their own week. Somebody who may already read
+ * the reports pages also gets the workspace user-by-user and project-by-project. That is an
+ * access-control decision, so it is made here and in `weekly-digest-data.service.ts`, never in a
+ * template — a digest must not become a way around a permission.
+ *
+ * WHY skip zero-activity users rather than send everyone a templated "your week" email: a recap of
+ * nothing reads as spam and erodes trust in the feature; better to say nothing than to say "you did
+ * nothing" every Monday.
  */
 import cron from "node-cron";
 import { prisma } from "../config/prisma.js";
+import { permissions } from "@timesheet/shared";
 import { generateWeeklyDigest, getGlobalAISettings } from "../services/ai.service.js";
+import { templates } from "../services/mail-templates.js";
+import { buildDigestTables, buildPeriods } from "../services/weekly-digest-data.service.js";
+import { loadRequestUser } from "../services/principal.service.js";
 import { dispatchNotification } from "../services/notify.service.js";
 import { runForEveryOrg } from "./run-for-every-org.js";
 
@@ -45,8 +66,12 @@ async function alreadySentThisRun(userId: string, weekStart: Date): Promise<bool
 
 /** Runs the AI weekly digest for every active user with at least some activity signal in the past week. */
 export async function runWeeklyDigest(now: Date = new Date()): Promise<{ sent: number; skipped: number }> {
+  // The DIGEST toggle still gates the digest. The AI toggle no longer does: the tables are counted
+  // from this workspace's own records, and withholding a report of real numbers because a model is
+  // switched off would be the AI feature deciding whether the reporting feature runs.
   const aiSettings = await getGlobalAISettings();
-  if (!aiSettings.aiEnabled || !aiSettings.weeklyDigestEnabled) return { sent: 0, skipped: 0 };
+  if (!aiSettings.weeklyDigestEnabled) return { sent: 0, skipped: 0 };
+  const aiAvailable = Boolean(aiSettings.aiEnabled);
 
   const currentWeekStart = startOfWeekLocal(now);
   const weekStart = new Date(currentWeekStart.getTime() - 7 * DAY_MS);
@@ -55,7 +80,16 @@ export async function runWeeklyDigest(now: Date = new Date()): Promise<{ sent: n
   const weekStartUtcDate = new Date(Date.UTC(weekStart.getFullYear(), weekStart.getMonth(), weekStart.getDate()));
   const weekEndUtcDate = new Date(Date.UTC(weekEnd.getFullYear(), weekEnd.getMonth(), weekEnd.getDate()));
 
-  const users = await prisma.user.findMany({ where: { status: "ACTIVE", deletedAt: null }, select: { id: true, name: true } });
+  // Month- and year-to-date run alongside last week, because "214 hours" answers nothing on its own:
+  // the question a reader has is whether last week was normal, and that is a comparison.
+  const periods = buildPeriods(now, weekStart, weekEnd, weekLabel);
+
+  // Agent identities are excluded: an identity with no mailbox cannot read a digest, and its work is
+  // reported on the agent ledger rather than as a colleague's week.
+  const users = await prisma.user.findMany({
+    where: { status: "ACTIVE", deletedAt: null, isAgent: false },
+    select: { id: true, name: true }
+  });
 
   let sent = 0;
   let skipped = 0;
@@ -90,37 +124,52 @@ export async function runWeeklyDigest(now: Date = new Date()): Promise<{ sent: n
 
     const notableTickets = resolvedTickets.length > 0 ? resolvedTickets : openAssignedTickets.slice(0, 3);
 
-    let summary: string;
-    try {
-      const result = await generateWeeklyDigest({
-        userName: user.name,
-        weekLabel,
-        ticketsCreated,
-        ticketsResolved: resolvedTickets.length,
-        openAssigned,
-        hoursLogged: Number(hoursLogged.toFixed(1)),
-        notableTickets,
-        userId: user.id
-      });
-      summary = result.summary;
-    } catch (error) {
-      console.error(`[weekly-digest] AI generation failed for ${user.name}:`, (error as Error).message);
-      continue;
+    /**
+     * The opening paragraph, when a model can write one. A failure here is logged and the digest goes
+     * anyway — the numbers below it are the report, and this is the sentence on top of them.
+     */
+    let summary = "";
+    if (aiAvailable) {
+      try {
+        const result = await generateWeeklyDigest({
+          userName: user.name,
+          weekLabel,
+          ticketsCreated,
+          ticketsResolved: resolvedTickets.length,
+          openAssigned,
+          hoursLogged: Number(hoursLogged.toFixed(1)),
+          notableTickets,
+          userId: user.id
+        });
+        summary = result.summary ?? "";
+      } catch (error) {
+        console.warn(`[weekly-digest] no AI summary for ${user.name} (sending the figures anyway):`, (error as Error).message);
+      }
     }
-    if (!summary) continue;
+
+    // Who may see the whole workspace: the same right that opens the reports pages. Resolved per
+    // recipient rather than per role name, so a custom role with the permission is treated the same.
+    const actor = await loadRequestUser(user.id);
+    const includeWorkspace = Boolean(actor?.permissions.includes(permissions.REPORTS_VIEW));
+    const tablesHtml = await buildDigestTables({ userId: user.id, periods, includeWorkspace });
 
     await dispatchNotification({
       userId: user.id,
       category: "digest.weekly",
       title: `Your week in review — ${weekLabel}`,
-      body: summary,
+      // The in-app row keeps the sentence when there is one, and states the headline figures when
+      // there is not — a notification reading "Your week in review" and nothing else is not a summary.
+      body: summary || `${hoursLogged.toFixed(1)}h approved, ${resolvedTickets.length} resolved, ${openAssigned} still assigned to you.`,
       link: "/app",
       email: {
         templateKey: "digest.weekly",
-        vars: { name: user.name, weekLabel, summary },
+        vars: { name: user.name, weekLabel, summary, tablesHtml },
         fallback: {
           subject: `Your week in review — ${weekLabel}`,
-          html: `<p>Hi ${user.name},</p><p>${summary}</p>`
+          // The designed template, not a bare paragraph. This fallback previously emitted
+          // `<p>Hi name</p><p>summary</p>`, and since almost nobody overrides a template that stub
+          // WAS the weekly digest for every workspace — unstyled, and with none of the figures.
+          html: templates.weeklyDigest({ name: user.name, weekLabel, summary, tablesHtml })
         }
       }
     });

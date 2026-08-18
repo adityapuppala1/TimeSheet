@@ -1323,7 +1323,11 @@ function FaceReviewLog({ readOnly }: { readOnly: boolean }) {
           </div>
           <div className="flex flex-wrap items-center justify-between gap-2">
             <div className="flex items-center gap-2">
-              <Switch id="face-flagged-only" checked={flaggedOnly} onCheckedChange={setFlaggedOnly} />
+              {/* changeFilter, not setFlaggedOnly: toggling this changes the size of the result
+                  set, and staying on page 7 of a list that now has two pages shows an empty table
+                  that looks like "no flagged checks". That is what the helper exists for — it was
+                  written and then not wired up here, while its sibling changePageSize was. */}
+              <Switch id="face-flagged-only" checked={flaggedOnly} onCheckedChange={changeFilter} />
               <Label htmlFor="face-flagged-only" className="cursor-pointer">Flagged only</Label>
             </div>
             {anyFilterActive && (

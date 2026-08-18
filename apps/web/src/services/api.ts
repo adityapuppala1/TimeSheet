@@ -84,6 +84,11 @@ export function setAccessToken(token: string | null) {
  *  "expired" = the refresh simply failed (idle past the refresh window, cookie gone). */
 export type SessionEndedReason = "revoked" | "expired";
 
+/** A value the API may hand back as either a JS number or a string (Prisma Decimal serialized
+ *  over JSON), or omit — shared by the several "amount" fields below rather than repeating the
+ *  union at each one. */
+export type NumericOrString = number | string | null;
+
 type SessionEndedListener = (reason: SessionEndedReason) => void;
 const sessionEndedListeners = new Set<SessionEndedListener>();
 /** Fires at most once per established session — a burst of parallel 401s must produce ONE
@@ -490,7 +495,48 @@ export interface Notification {
   link?: string | null;
   readAt: string | null;
   createdAt: string;
+  /** Inbox triage (V8 phase 2). `readAt` is about attention; `handledAt` is about work — see
+   *  the schema comment on Notification. */
+  handledAt?: string | null;
+  snoozedUntil?: string | null;
 }
+
+/* ---- Inbox and the daily brief (V8 phase 2) ----------------------------------------------- */
+
+export type InboxFilterValue = "unhandled" | "snoozed" | "handled" | "all";
+
+export interface InboxCounts {
+  unhandled: number;
+  snoozed: number;
+  handled: number;
+  unread: number;
+}
+
+export interface BriefSection {
+  key: string;
+  label: string;
+  count: number;
+  link: string | null;
+  detail: string | null;
+  tone: "attention" | "ok";
+}
+
+export interface DailyBrief {
+  generatedAt: string;
+  allClear: boolean;
+  sections: BriefSection[];
+}
+
+export const inboxApi = {
+  list: async (filter: InboxFilterValue) =>
+    (await api.get<{ items: Notification[]; counts: InboxCounts }>("/inbox", { params: { filter } })).data,
+  brief: async () => (await api.get<DailyBrief>("/inbox/brief")).data,
+  /** Every field is optional and independent: handling, reading and snoozing are three different
+   *  statements about one row. Returns the fresh counts so the tab badges cannot drift. */
+  update: async (id: string, patch: { handled?: boolean; read?: boolean; snoozeUntil?: string | null }) =>
+    (await api.patch<InboxCounts>(`/inbox/${id}`, patch)).data,
+  handleAll: async () => (await api.post<InboxCounts>("/inbox/handle-all")).data
+};
 
 export interface AuditEntry {
   id: string;
@@ -1375,6 +1421,10 @@ export interface AutonomyEntry {
   ceilingReason: string | null;
   actsOnUntrustedInput: boolean;
   featureEnabled: boolean;
+  /** Which agent on the roster owns this capability, when one does. Display-only — the lever is
+   *  still this screen — but it turns "some capability" into "🗂️ Triage's ticket triage", so the
+   *  consequence of lowering a level here is visible before it is made. */
+  claimedBy: { profileId: string; name: string; emoji: string } | null;
   /** The GlobalAISettings switch behind this capability, so one row can carry both controls.
    *  Null for a capability that reaches no model. */
   featureToggle: string | null;
@@ -1391,8 +1441,16 @@ export interface AIUsageSummary {
   totalCalls: number;
   totalInputTokens: number;
   totalOutputTokens: number;
+  /** The agent-driven SHARE of the totals above — a subset, never an addition. Without this the panel
+   *  can say a workspace spent $40 but not whether that was forty people using refine or one teammate
+   *  running unattended all month. */
+  agentDriven: { costUsd: number; calls: number; inputTokens: number; outputTokens: number };
   byFeature: Array<{ feature: string; costUsd: number; calls: number; inputTokens: number; outputTokens: number }>;
   byModel: Array<{ model: string; costUsd: number; inputTokens: number; outputTokens: number; calls: number }>;
+  /** Per-workflow spend, attributed through the agent runs each flow queued. A subset of
+   *  `agentDriven`, and read from a different table — the usage log records what was asked of a model,
+   *  not who composed the question. */
+  byFlow: Array<{ flowId: string; name: string; emoji: string; costUsd: number; runs: number }>;
 }
 
 /** One feature's consumption over the window. Sorted by tokens, not cost — cost is an estimate
@@ -2066,6 +2124,16 @@ export interface EmailTemplateRow {
   enabled: boolean;
   subject: string | null;
   bodyHtml: string | null;
+  /** What this workspace SENDS when nothing has been customised — the real shipped email with its
+   *  `{{placeholders}}`. The editor previously had no access to this and fell back to a three-line
+   *  stub, so an un-customised template previewed as almost nothing and saving replaced the real
+   *  email with the stub. */
+  defaultSubject: string | null;
+  defaultHtml: string | null;
+  /** Variables the shipped template uses that THIS workspace's customised version does not — an
+   *  override wins outright, so a template customised before a field existed keeps sending without
+   *  it, silently, until somebody is told. */
+  missingVariables: string[];
   updatedAt: string | null;
 }
 
@@ -2457,7 +2525,7 @@ export interface TicketDetail extends TicketRow {
   endDate?: string | null;
   isMilestone?: boolean;
   progressPct?: number | null;
-  estimatedHours?: number | string | null;
+  estimatedHours?: NumericOrString;
   baselineStartDate?: string | null;
   baselineEndDate?: string | null;
   baselineSetAt?: string | null;
@@ -2472,7 +2540,19 @@ export interface AssigneeSuggestion {
   score: number;
 }
 
+/** Per-project open/closed counts for one person's tickets — counted server-side, because a long
+ *  serving assignee has hundreds of closed tickets and the list route carries a heavy include. */
+export interface TicketCountsByProject {
+  projectId: string;
+  open: number;
+  closed: number;
+}
+
 export const ticketApi = {
+  /** Per-project open/closed counts for one person's tickets, counted server-side. Defaults to the
+   *  caller; another assignee needs the same permission the list route requires. */
+  countsByProject: async (assigneeId?: string) =>
+    (await api.get<TicketCountsByProject[]>("/tickets/counts-by-project", { params: { assigneeId } })).data,
   /** `title` is optional context for the AI narration only (assigneeSuggestionAiEnabled) — the
    *  ranking itself never depends on it. */
   suggestAssignee: async (projectId: string, moduleId?: string, title?: string) =>
@@ -2926,10 +3006,14 @@ export interface FaceVerifyResult {
   message?: string;
 }
 
+/** Mirrors `FaceContext` in apps/api/src/services/face.service.ts — not imported from there since
+ *  the web app doesn't depend on API source, but named the same to keep the two in sync by eye. */
+export type FaceContext = "TIMESHEET" | "TICKET" | "APPROVAL";
+
 export interface FaceAttemptRow {
   id: string;
   userId: string;
-  context: "TIMESHEET" | "TICKET" | "APPROVAL";
+  context: FaceContext;
   outcome: FaceOutcome;
   similarity: number | null;
   antispoofReal: number | null;
@@ -2984,14 +3068,14 @@ export const faceApi = {
     ).data;
   },
   /** Issues the liveness challenge a verification must satisfy while challenge–response is on. */
-  challenge: async (context: "TIMESHEET" | "TICKET" | "APPROVAL") =>
+  challenge: async (context: FaceContext) =>
     (await api.post<FaceChallenge>("/face/challenge", { context })).data,
   /** Resolves with the outcome either way — a failed check is a 422 carrying a structured
    *  body, not an exception the caller should have to unwrap. `frames` is [neutral] when the
    *  challenge feature is off, [neutral, gesture] when on. */
   verify: async (params: {
     frames: Blob[];
-    context: "TIMESHEET" | "TICKET" | "APPROVAL";
+    context: FaceContext;
     challengeId?: string;
     deviceLabel?: string | null;
     /** Client-perceived ms from camera-ready to submit — the only place the human's actual wait
@@ -3020,7 +3104,7 @@ export const faceApi = {
   },
   /** The insecure-context pass-through: mints a consumable "skipped" verification, only while
    *  the super-admin bypass toggle is on. Recorded in the review log — never silent. */
-  skipVerification: async (context: "TIMESHEET" | "TICKET" | "APPROVAL") =>
+  skipVerification: async (context: FaceContext) =>
     (await api.post<{ verificationId: string }>("/face/skip", { context })).data,
   deleteMyEnrollment: async () => (await api.delete<{ deleted: boolean }>("/face/enrollment")).data,
   deleteEnrollmentFor: async (userId: string) => (await api.delete<{ deleted: boolean }>(`/face/enrollment/${userId}`)).data,
@@ -3103,6 +3187,7 @@ export interface PlanningSettings {
   enableProofing: boolean;
   enableRequestForms: boolean;
   enableCustomWorkflows: boolean;
+  enableGoals: boolean;
   workingDays: number[];
   defaultWeeklyCapacityHours: number | string;
   updatedAt: string;
@@ -3116,11 +3201,13 @@ export interface PlanningEntitlements {
   proofingEnabled: boolean;
   customWorkflowsEnabled: boolean;
   aiPmCopilotEnabled: boolean;
+  goalsEnabled: boolean;
   maxPortfolios: number;
   maxRequestForms: number;
   maxBlueprints: number;
   maxCustomFields: number;
   maxDashboards: number;
+  maxGoals: number;
 }
 
 /** Workspace toggle AND plan entitlement, computed server-side. This is what the UI gates on. */
@@ -3132,6 +3219,7 @@ export interface PlanningEffective {
   proofing: boolean;
   requestForms: boolean;
   customWorkflows: boolean;
+  goals: boolean;
 }
 
 export interface PlanningConfig {
@@ -3206,6 +3294,98 @@ export interface CustomFieldRow {
 }
 
 export type CustomFieldPayload = Omit<CustomFieldRow, "id" | "options"> & { options?: string[] };
+
+/* ---- Goals / OKRs (V8 phase 1) ------------------------------------------------------------ */
+
+export type GoalProgressSourceValue =
+  | "MANUAL"
+  | "APPROVED_HOURS"
+  | "BUDGET_SPEND"
+  | "TICKETS_CLOSED"
+  | "ON_TIME_RATE"
+  | "SLA_BREACHES"
+  | "RISK_SCORE";
+
+export type GoalStatusValue = "ACTIVE" | "ACHIEVED" | "CLOSED";
+export type GoalHealthValue = "ON_TRACK" | "AT_RISK" | "OFF_TRACK";
+export type GoalLinkTargetValue = "PROJECT" | "PORTFOLIO" | "TICKET";
+
+/** `unavailable` is a real state, never rendered as 0 — see goal-progress.service.ts. */
+export interface GoalMeasurement {
+  currentValue: number | null;
+  progressPct: number | null;
+  health: GoalHealthValue | null;
+  unavailable: boolean;
+  unavailableReason: string | null;
+}
+
+export interface GoalOverrideRow {
+  progressPct: number;
+  measuredValue: number | null;
+  measuredPct: number | null;
+  note: string;
+  createdAt: string;
+  createdBy: { id: string; name: string; email: string; avatarUrl?: string | null } | null;
+}
+
+export interface GoalRow {
+  id: string;
+  title: string;
+  description: string | null;
+  parentId: string | null;
+  ownerId: string | null;
+  owner: { id: string; name: string; email: string; avatarUrl?: string | null } | null;
+  createdBy: { id: string; name: string; email: string; avatarUrl?: string | null } | null;
+  startDate: string | null;
+  endDate: string | null;
+  status: GoalStatusValue;
+  progressSource: GoalProgressSourceValue;
+  targetValue: number | null;
+  unit: string | null;
+  manualProgressPct: number | null;
+  direction: "AT_LEAST" | "AT_MOST";
+  measurement: GoalMeasurement;
+  override: GoalOverrideRow | null;
+  /** An override wins the headline; the measurement stays visible beside it. */
+  effectiveProgressPct: number | null;
+  links: Array<{ id: string; targetType: GoalLinkTargetValue; targetId: string }>;
+  _count: { children: number; overrides: number };
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface GoalDetail extends GoalRow {
+  children: GoalRow[];
+}
+
+export interface GoalPayload {
+  title: string;
+  description?: string | null;
+  parentId?: string | null;
+  ownerId?: string | null;
+  startDate?: string | null;
+  endDate?: string | null;
+  progressSource?: GoalProgressSourceValue;
+  targetValue?: number | null;
+  unit?: string | null;
+  manualProgressPct?: number | null;
+  links?: Array<{ targetType: GoalLinkTargetValue; targetId: string }>;
+  status?: GoalStatusValue;
+}
+
+export const goalApi = {
+  list: async () => (await api.get<GoalRow[]>("/goals")).data,
+  get: async (id: string) => (await api.get<GoalDetail>(`/goals/${id}`)).data,
+  create: async (payload: GoalPayload) => (await api.post<GoalRow>("/goals", payload)).data,
+  update: async (id: string, payload: Partial<GoalPayload>) => (await api.patch<GoalRow>(`/goals/${id}`, payload)).data,
+  /** Appends an override; the API captures what the measurement said at that moment. There is
+   *  deliberately no edit or delete — a correction is another override. */
+  override: async (id: string, payload: { progressPct: number; note: string }) =>
+    (await api.post<GoalOverrideRow>(`/goals/${id}/override`, payload)).data,
+  remove: async (id: string) => {
+    await api.delete(`/goals/${id}`);
+  }
+};
 
 export const planningApi = {
   settings: async () => (await api.get<PlanningConfig>("/planning/settings")).data,
@@ -3568,6 +3748,9 @@ export interface WorkloadBoard {
   workingDays: number[];
   buckets: WorkloadBucket[];
   rows: WorkloadRowData[];
+  /** The AI teammates over the same buckets, as their OWN list rather than extra rows: an agent has
+   *  no capacity, so every column of a person's row would be meaningless for one. */
+  agentRows: AgentWorkloadRowData[];
   summary: {
     people: number;
     overAllocated: number;
@@ -3576,6 +3759,21 @@ export interface WorkloadBoard {
     totalBookedHours: number;
     totalLoggedHours: number;
   };
+}
+
+export interface AgentWorkloadRowData {
+  agent: { id: string; name: string; avatarUrl: string | null };
+  cells: Array<{
+    bucketStart: string;
+    /** Wall clock. Never summed with a person's hours — the two do not mean the same thing. */
+    workedHours: number;
+    costUsd: number;
+    /** Null when nothing in this bucket had a measurable baseline. Zero would claim it displaced
+     *  nothing, which is a different statement from "we cannot tell". */
+    displacedMinutes: number | null;
+    runs: number;
+  }>;
+  totals: { workedHours: number; costUsd: number; displacedMinutes: number | null; runs: number; measuredRuns: number };
 }
 
 export interface ResourceBookingRow {
@@ -3617,6 +3815,11 @@ export interface ProjectBudgetRow {
   forecastAtCompletion: number | null;
   overBudgetRisk: boolean;
   alerting: boolean;
+  /** What the AI teammates spent on this project, in US DOLLARS — beside the burn, never inside it.
+   *  Not billable, not in the project's currency, and an operating cost rather than an agreement with
+   *  a client. See the server's comment for why adding the two would be arithmetic across units. */
+  agentCostUsd: number;
+  agentRuns: number;
 }
 
 export interface EffortVarianceRow {
@@ -3843,8 +4046,8 @@ export interface AgentRunRow {
   taintedAt: string | null;
   stepCount: number;
   maxSteps: number;
-  costUsd: string | number | null;
-  maxCostUsd: string | number | null;
+  costUsd: NumericOrString;
+  maxCostUsd: NumericOrString;
   proposalId: string | null;
   error: string | null;
   startedAt: string | null;
@@ -3852,16 +4055,179 @@ export interface AgentRunRow {
   createdAt: string;
   onBehalfOf?: { id: string; name: string } | null;
   steps?: AgentRunStepRow[];
+  /** The workflow that queued this run, when one did — so a run from a flow is never mistaken for one
+   *  somebody started by hand. */
+  flow?: { id: string; name: string; emoji: string } | null;
+  /** The rest of the chain, on the detail route only: what it proposed, whether that was applied, and
+   *  what changed. Absent on the list. */
+  proposal?: {
+    id: string;
+    title: string;
+    status: string;
+    changes: Array<{ id: string; summary: string; appliedAt: string | null; targetType: string; targetId: string | null }>;
+  } | null;
+  /** What this run put on the same books as human work. Null is normal. */
+  ledger?: { costUsd: string | number; durationSeconds: number; displacedMinutes: number | null; displacedBasis: string | null; billable: boolean } | null;
 }
 
 export const agentRunApi = {
   capabilities: async () =>
     (await api.get<Array<{ id: string; title: string; description: string; needsProject: boolean }>>("/agent-runs/capabilities")).data,
-  list: async (limit = 25) => (await api.get<AgentRunRow[]>("/agent-runs", { params: { limit } })).data,
+  list: async (limit = 25, params: { capability?: string; flowId?: string } = {}) =>
+    (await api.get<AgentRunRow[]>("/agent-runs", { params: { limit, ...params } })).data,
   get: async (id: string) => (await api.get<AgentRunRow>(`/agent-runs/${id}`)).data,
   queue: async (payload: { capability: string; goal?: string; projectId?: string }) =>
     (await api.post<{ runId: string; created: boolean }>("/agent-runs", payload)).data,
   abort: async (id: string) => (await api.post<{ ok: true }>(`/agent-runs/${id}/abort`)).data
+};
+
+/* ---- The agent roster (V8 phase 3) --------------------------------------------------------- */
+
+export interface AgentAutonomy {
+  capability: string;
+  requestedLevel: string;
+  /** The only value to act on — every clamp already applied server-side. */
+  effectiveLevel: string;
+  maxLevel: string;
+  clampedReason: string | null;
+}
+
+export interface AgentRosterEntry {
+  id: string;
+  name: string;
+  emoji: string;
+  description: string | null;
+  enabled: boolean;
+  templateKey: string | null;
+  identity: { id: string; name: string; email: string };
+  scopeProjectIds: string[];
+  maxCostUsdPerDay: number | null;
+  spentTodayUsd: number;
+  capabilities: Array<{
+    id: string;
+    title: string;
+    description: string;
+    actsOnUntrustedInput: boolean;
+    autonomy: AgentAutonomy;
+    /** Whether it can act right now: AI on for the workspace AND its own feature switch on. */
+    runnable: boolean;
+    /** Set when another ENABLED profile owns this capability — only possible on a draft, since
+     *  enabling with an overlap is refused. */
+    claimedByOther: { profileId: string; name: string; emoji: string } | null;
+  }>;
+  /** What the workspace can actually deliver, as opposed to what the switch says. */
+  readiness: { runnableCount: number; enabledButInert: boolean };
+  runs: {
+    total: number;
+    recent: Array<{
+      id: string;
+      capability: string;
+      status: string;
+      trigger: string;
+      level: string;
+      stepCount: number;
+      costUsd: number | null;
+      /** The run read externally-authored text, so its authority dropped to SUGGEST for the rest
+       *  of its life. Surfaced because it explains an otherwise baffling "why did it only propose?" */
+      tainted: boolean;
+      createdAt: string;
+      finishedAt: string | null;
+      error: string | null;
+    }>;
+  };
+}
+
+export interface AgentTemplateRow {
+  key: string;
+  name: string;
+  emoji: string;
+  description: string;
+  /** For the gallery's filter row — the question somebody arrives with is "is there one for my job". */
+  category: string;
+  /** Plain-English phrases, never capability ids: an admin choosing a teammate should not need to know
+   *  that `pr_review_summary` is a thing. */
+  skills: string[];
+  capabilities: string[];
+  installed: boolean;
+}
+
+export interface AgentCapabilityRow {
+  id: string;
+  title: string;
+  description: string;
+  maxLevel: string;
+  ceilingReason: string | null;
+  actsOnUntrustedInput: boolean;
+  /** Whether an agent RUN can execute it unattended. Most capabilities are invoked inline by the
+   *  feature that owns them and have nothing for a run loop to do — a workflow step naming one would
+   *  activate and then fail, so the builder does not offer them. Ownership is a separate question: a
+   *  teammate may still be accountable for a capability it cannot be sent off to run. */
+  agentRunnable: boolean;
+}
+
+export interface AgentLedgerSummary {
+  entries: number;
+  totalCostUsd: number;
+  totalDurationHours: number;
+  /** Only the displacements that ARE measurable. Read it with the two counts below or not at all. */
+  displacedHours: number;
+  measuredEntries: number;
+  unmeasurableEntries: number;
+  billableCostUsd: number;
+  byCapability: Array<{ capability: string; entries: number; costUsd: number; displacedMinutes: number | null }>;
+}
+
+export interface AgentLedgerHistory {
+  entries: Array<{
+    agentRunId: string;
+    capability: string;
+    title: string;
+    costUsd: number;
+    durationSeconds: number;
+    displacedMinutes: number | null;
+    displacedBasis: string | null;
+    occurredAt: string;
+  }>;
+  /** Zero-filled: a day with no agent work is a 0, not a gap. */
+  daily: Array<{ day: string; costUsd: number; displacedMinutes: number; entries: number }>;
+  /** How many days in the window have a MEASURED displacement — the trend is otherwise read as
+   *  covering all of them. */
+  measuredDays: number;
+}
+
+export const agentRosterApi = {
+  list: async () => (await api.get<AgentRosterEntry[]>("/agents")).data,
+  ledger: async () => (await api.get<AgentLedgerSummary>("/agents/ledger")).data,
+  ledgerHistory: async (days = 30) => (await api.get<AgentLedgerHistory>("/agents/ledger/history", { params: { days } })).data,
+  catalogue: async () =>
+    (await api.get<{ templates: AgentTemplateRow[]; categories: string[]; capabilities: AgentCapabilityRow[] }>("/agents/catalogue")).data,
+  install: async (templateKey: string) => (await api.post<AgentRosterEntry>("/agents/install", { templateKey })).data,
+  create: async (payload: { name: string; emoji?: string; description?: string | null; capabilities: string[]; maxCostUsdPerDay?: number | null }) =>
+    (await api.post<AgentRosterEntry>("/agents", payload)).data,
+  update: async (id: string, patch: { enabled?: boolean; name?: string; emoji?: string; description?: string | null; capabilities?: string[]; maxCostUsdPerDay?: number | null }) =>
+    (await api.patch<AgentRosterEntry>(`/agents/${id}`, patch)).data,
+  retire: async (id: string) => {
+    await api.delete(`/agents/${id}`);
+  }
+};
+
+/** The map of AI in this workspace: every number a count, so each can be checked against the screen it
+ *  came from. */
+export interface AiOverview {
+  aiEnabled: boolean;
+  captureEnabled: boolean;
+  capabilities: { total: number; aboveSuggest: number; unowned: number };
+  agents: { total: number; enabled: number };
+  flows: { total: number; live: number; proposalOnly: number; runsLastWeek: number; waiting: number };
+  proposals: { pending: number; appliedLastWeek: number };
+  spend: { monthToDateUsd: number; agentDrivenUsd: number; byFlowUsd: number };
+  ledger: { entries: number; displacedHours: number; unmeasurableEntries: number };
+  /** At most one suggestion. A list of five is a list nobody acts on. */
+  nextStep: string | null;
+}
+
+export const aiOverviewApi = {
+  get: async () => (await api.get<AiOverview>("/ai/overview")).data
 };
 
 export interface ApprovalStepRow {
@@ -3995,7 +4361,7 @@ export interface RiskSignalRow {
   severity: number;
   /** severity × weight — what this signal contributed to the total. */
   points: number;
-  detail: Record<string, number | string | null>;
+  detail: Record<string, NumericOrString>;
   /** One actionable sentence, or "" when the signal is clean. */
   note: string;
 }
@@ -4009,7 +4375,7 @@ export interface ProjectRisk {
   signals: RiskSignalRow[];
   /** Worst-first — reads as what to fix, in order. */
   topConcerns: string[];
-  facts: Record<string, number | string | null>;
+  facts: Record<string, NumericOrString>;
   /** Null whenever AI is off, unavailable, or over budget. The score is never lost with it. */
   narrative: string | null;
   snapshotId?: string;
@@ -4178,11 +4544,11 @@ export interface ResolvedWidget {
   title: string;
   type: WidgetTypeValue;
   shape: WidgetShapeValue;
-  value?: number | string | null;
+  value?: NumericOrString;
   unit?: string | null;
   hint?: string | null;
   points?: Array<{ label: string; value: number; secondary?: number }>;
-  rows?: Array<Record<string, string | number | null>>;
+  rows?: Array<Record<string, NumericOrString>>;
   /** Set when the tile could not be computed. Shown instead of a zero — a zero is a claim. */
   unavailable?: string;
 }
@@ -4228,5 +4594,166 @@ export const dashboardApi = {
   }) => (await api.post<ReportSubscriptionRow>("/dashboards/subscriptions", payload)).data,
   removeSubscription: async (id: string) => {
     await api.delete(`/dashboards/subscriptions/${id}`);
+  }
+};
+
+/* ---- Workflow Studio (V8 phase 4) --------------------------------------------------------- */
+
+export type FlowTriggerKind = "EVENT" | "SCHEDULE" | "FORM_SUBMISSION" | "MANUAL";
+export type FlowStepKind = "ACTION" | "CAPABILITY" | "HUMAN_GATE" | "BRANCH";
+
+export interface FlowStepAuthority {
+  order: number;
+  kind: FlowStepKind;
+  capability: string | null;
+  ownLevel: string;
+  effectiveLevel: string;
+  /** Names WHICH rule clamped it — a minimum is fixed by removing a step, a taint clamp by
+   *  reordering, so the two must not collapse into "restricted". */
+  clampedReason: string | null;
+  taintedByEarlierStep: boolean;
+}
+
+export interface FlowAuthority {
+  effectiveLevel: string;
+  limitedBy: { order: number; capability: string; level: string } | null;
+  taintedFrom: { order: number; capability: string } | null;
+  proposalOnly: boolean;
+  gatedBeforeWrites: boolean;
+  steps: FlowStepAuthority[];
+}
+
+export interface FlowIssue {
+  severity: "error" | "warning";
+  message: string;
+  order?: number;
+}
+
+export interface FlowRow {
+  id: string;
+  name: string;
+  description: string | null;
+  emoji: string;
+  trigger: FlowTriggerKind;
+  triggerConfig: Record<string, unknown>;
+  enabled: boolean;
+  agentProfile: { id: string; name: string; emoji: string; enabled: boolean } | null;
+  steps: Array<{
+    id: string;
+    order: number;
+    kind: FlowStepKind;
+    capability: string | null;
+    title: string | null;
+    /** What the step is configured to do, in words, with ids already resolved to names. */
+    summary: string | null;
+    config: Record<string, unknown>;
+  }>;
+  authority: FlowAuthority;
+  issues: FlowIssue[];
+  /** Errors block activation; the badge and the activate route read the same value. */
+  activatable: boolean;
+  createdBy: { id: string; name: string; email: string } | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface FlowSimulation {
+  disclaimer: string;
+  trigger: FlowTriggerKind;
+  sampleCount: number;
+  noSamplesReason: string | null;
+  authority: FlowAuthority;
+  samples: Array<{
+    subject: string;
+    subjectId: string | null;
+    steps: Array<{
+      order: number;
+      kind: FlowStepKind;
+      capability: string | null;
+      title: string | null;
+      outcome: "would-run" | "would-propose" | "skipped-by-branch" | "waits-for-approval" | "not-reached";
+      level: string | null;
+      detail: string;
+    }>;
+  }>;
+}
+
+export interface FlowPayload {
+  name: string;
+  description?: string | null;
+  emoji?: string;
+  trigger?: FlowTriggerKind;
+  triggerConfig?: Record<string, unknown>;
+  agentProfileId?: string | null;
+  steps: Array<{ kind: FlowStepKind; capability?: string | null; config?: Record<string, unknown> }>;
+}
+
+/**
+ * Everything the builder's pickers need, in one response.
+ *
+ * `options` on an action or branch field names WHICH list below it draws from, so the builder renders
+ * a picker from data rather than from a switch statement that has to be edited every time the server
+ * grows a new action.
+ */
+export interface FlowCatalogue {
+  capabilities: AgentCapabilityRow[];
+  events: string[];
+  actions: Array<{ key: string; label: string; target: string; options: "people" | "labels" }>;
+  branchFields: Array<{ key: string; label: string; values?: string[]; options?: "projects"; freeText?: boolean }>;
+  people: Array<{ id: string; name: string; email: string }>;
+  labels: Array<{ id: string; name: string; color: string | null }>;
+  projects: Array<{ id: string; code: string; name: string }>;
+}
+
+/** One execution of one flow against one subject. */
+export interface FlowRunRow {
+  id: string;
+  flowId: string;
+  flow: { id: string; name: string; emoji: string } | null;
+  trigger: string;
+  subjectType: string | null;
+  subjectId: string | null;
+  subjectLabel: string | null;
+  /** RUNNING | WAITING | COMPLETED | STOPPED | FAILED. STOPPED means a condition said no, which is a
+   *  correct outcome and not a failure. */
+  status: string;
+  awaitingOrder: number | null;
+  awaitingUser: { id: string; name: string } | null;
+  summary: string | null;
+  startedAt: string;
+  finishedAt: string | null;
+  steps: Array<{
+    id: string;
+    order: number;
+    kind: FlowStepKind;
+    /** ran | proposed | queued | waiting | skipped | not-reached | held | failed */
+    outcome: string;
+    detail: string;
+    agentRunId: string | null;
+    /** Set when a proposal-only flow routed this step into the review queue — the link that makes
+     *  flow → proposal → applied change one navigable chain. */
+    proposalId: string | null;
+  }>;
+}
+
+export const flowApi = {
+  list: async () => (await api.get<FlowRow[]>("/flows")).data,
+  get: async (id: string) => (await api.get<FlowRow>(`/flows/${id}`)).data,
+  catalogue: async () => (await api.get<FlowCatalogue>("/flows/catalogue")).data,
+  /** A GET because it writes nothing — safe to re-run and refresh. */
+  simulate: async (id: string, limit = 5) => (await api.get<FlowSimulation>(`/flows/${id}/simulate`, { params: { limit } })).data,
+  create: async (payload: FlowPayload) => (await api.post<FlowRow>("/flows", payload)).data,
+  update: async (id: string, payload: Partial<FlowPayload>) => (await api.patch<FlowRow>(`/flows/${id}`, payload)).data,
+  setEnabled: async (id: string, enabled: boolean) => (await api.post<FlowRow>(`/flows/${id}/enabled`, { enabled })).data,
+  /** What the flows have actually done. Readable by anybody who can see tickets — see the route. */
+  runs: async (flowId?: string, limit = 20) =>
+    (await api.get<FlowRunRow[]>("/flows/runs", { params: { flowId, limit } })).data,
+  /** Clear a gate. Only the person the step named may — the server enforces it, not this call. */
+  decide: async (runId: string, approved: boolean) => {
+    await api.post(`/flows/runs/${runId}/decision`, { approved });
+  },
+  runNow: async (id: string) => (await api.post<{ runId: string; created: boolean }>(`/flows/${id}/run`)).data,
+  retire: async (id: string) => {
+    await api.delete(`/flows/${id}`);
   }
 };

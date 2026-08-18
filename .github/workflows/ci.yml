@@ -42,7 +42,11 @@ jobs:
       JWT_ACCESS_SECRET: "ci-only-access-secret-not-for-real-use-0123456789"
       JWT_REFRESH_SECRET: "ci-only-refresh-secret-not-for-real-use-0123456789"
       PLATFORM_ADMIN_JWT_SECRET: "ci-only-platform-admin-secret-not-for-real-use-0123456789"
-      ENCRYPTION_KEY: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcd"
+      # Exactly 64 hex characters — `env.ts` requires /^[0-9a-f]{64}$/i (32 bytes for AES-256-GCM).
+      # This was 62 for as long as it has existed: two characters short, and never caught, because
+      # every step that loads the app config sat behind an earlier failing gate in this same job and
+      # had therefore never run. Count it if you edit it; the failure is a Zod error deep in a seed.
+      ENCRYPTION_KEY: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
       WEB_ORIGIN: "http://localhost:5173"
       APP_BASE_URL: "http://localhost:5173"
       DEFAULT_ORG_SLUG: "default"
@@ -77,18 +81,32 @@ jobs:
           npx prisma generate --schema=prisma/schema.prisma
           npx prisma generate --schema=prisma/control/schema.prisma
 
-      - name: Typecheck (api + web)
+      # Three things, in one script: `tsc --noEmit` for apps/api, `tsc -b --noEmit` for apps/web,
+      # then eslint over both plus packages/shared with the SonarJS rule set (eslint.config.mjs).
+      # SonarJS is the same analyzer SonarQube runs for JS/TS, so this gate reports what the Sonar
+      # dashboard would without needing a server URL or token in CI. It fails on ERRORS only —
+      # the structural style rules are warnings by design, for the reasons in eslint.config.mjs and
+      # sonar-project.properties. `npm ci` above installs devDependencies, which is where eslint
+      # and its plugins live.
+      - name: Lint (typecheck + SonarQube rules)
         run: npm run lint
 
       # A GATE, unlike the `npm audit` in security-scan-dogfood below — that one runs with
       # `|| true` and posts findings into the app, which is right for dogfooding but means nothing
       # ever fails on a vulnerable dependency.
       #
-      # Scoped to production dependencies (`--omit=dev`) and to `high`: dev-tooling advisories are
-      # frequent, rarely reachable from shipped code, and a gate that cries wolf is one people
-      # learn to skip. A permanently-red audit is how the next real advisory gets ignored.
+      # Scoped to production dependencies and to high/critical: dev-tooling advisories are frequent,
+      # rarely reachable from shipped code, and a gate that cries wolf is one people learn to skip.
+      #
+      # Runs through scripts/audit-gate.mjs rather than `npm audit --audit-level=high` directly. A
+      # bare audit can only pass or block, so the first advisory with NO AVAILABLE FIX turns it
+      # permanently red — which is exactly what happened here (GHSA-ggr8-5vv4-36mx, where the latest
+      # published html-to-text and @prisma/config both still require the vulnerable major). The
+      # script keeps everything blocking by default and lets a reviewed advisory be accepted with
+      # its reasoning written down — and fails if an accepted entry ever stops matching anything, so
+      # the exception cannot outlive the problem it was written for.
       - name: Audit production dependencies
-        run: npm audit --omit=dev --audit-level=high
+        run: node scripts/audit-gate.mjs
 
       - name: Build (shared + api + web)
         run: npm run build
@@ -123,7 +141,12 @@ jobs:
         run: npm run test:integration -w apps/api
 
       - name: Install Playwright browsers
-        run: npx playwright install --with-deps chromium
+        # ALL browsers, not just chromium: `npm run test:e2e` below runs every project in
+        # playwright.config.ts, which includes firefox and webkit. Installing only chromium meant 56
+        # tests failed with "Executable doesn't exist at …/webkit-XXXX/pw_run.sh" — not a product
+        # failure at all, just the suite being asked to drive browsers that were never fetched.
+        # Nobody had seen it because this step had never been reached before.
+        run: npx playwright install --with-deps
 
       - name: Run e2e suite
         run: npm run test:e2e
@@ -316,7 +339,7 @@ jobs:
           npx prisma generate --schema=prisma/schema.prisma
           npx prisma generate --schema=prisma/control/schema.prisma
 
-      - name: Typecheck (api + web)
+      - name: Lint (typecheck + SonarQube rules)
         run: npm run lint
 
       - name: Build (shared + api + web)

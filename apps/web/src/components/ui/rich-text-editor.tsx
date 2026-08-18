@@ -176,16 +176,26 @@ function stripFences(text: string): string {
   return fenced ? fenced[1] : text;
 }
 
-/** Lines that are structurally code rather than sentences. Deliberately narrow — each pattern is
- *  something that essentially never appears in a sentence someone typed. */
+/**
+ * Lines that are structurally code rather than sentences. Deliberately narrow — each pattern is
+ * something that essentially never appears in a sentence someone typed.
+ *
+ * EVERY NEGATED CLASS HERE MUST EXCLUDE `\n`, and `\s` runs meant to stay on one line are written
+ * `[^\S\n]`. These are LINE patterns — `/m` anchors them to line boundaries — but a negated class
+ * that does not exclude the newline matches straight through it, so `[^.!?]*` let a single "line"
+ * run to the end of the paste. Two consequences, both observed: a paragraph of prose was
+ * classified as code whenever one of these keywords appeared anywhere above a line ending in `{`,
+ * and the same crossing turned the match into a quadratic backtrack — ~350ms on a 20k-character
+ * paste, which in an editor is a visible freeze while someone is typing.
+ */
 const CODE_SIGNALS: RegExp[] = [
   /^\s*(?:at\s+[\w$.<>]+\s*\(|Traceback \(most recent call last\)|Caused by:|Exception in thread)/m, // stack traces
-  /^\s*(?:function|class|const|let|var|def|public|private|protected|import|export|return|if|for|while|switch|try|catch|async|await)\b[^.!?]*[{();:]\s*$/m,
+  /^[^\S\n]*(?:function|class|const|let|var|def|public|private|protected|import|export|return|if|for|while|switch|try|catch|async|await)\b[^.!?\n]*[{();:][^\S\n]*$/m,
   /^\s*(?:SELECT|INSERT INTO|UPDATE|DELETE FROM|CREATE TABLE|ALTER TABLE|JOIN|WHERE|GROUP BY)\b/im, // SQL
   /^\s*[$#>]\s+\S+/m, // shell prompts
   /^\s*(?:npm|npx|yarn|pnpm|git|docker|kubectl|curl|sudo|apt|pip|python|node|mvn|gradle)\s+\S+/m, // commands
   /^\s*(?:<\/?[a-z][\w-]*(?:\s[^>]*)?>|<\?xml|<!DOCTYPE)/im, // markup
-  /^\s*[\w"'-]+\s*:\s*(?:[|>]|\S)[^.!?]*$/m, // YAML / JSON-ish key: value
+  /^[^\S\n]*[\w"'-]+[^\S\n]*:[^\S\n]*(?:[|>]|\S)[^.!?\n]*$/m, // YAML / JSON-ish key: value
   /^\s*[{}[\]]\s*[,;]?\s*$/m, // a lone brace or bracket on its own line
   /^\s*(?:\/\/|\/\*|#!|--\s)/m // comment openers and shebangs
 ];

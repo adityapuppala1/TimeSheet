@@ -67,6 +67,7 @@ export async function loadRequestUser(userId: string): Promise<RequestUser | nul
     name: user.name,
     email: user.email,
     role: user.role.name,
-    permissions: user.role.permissions.map((p) => p.permission.key)
+    permissions: user.role.permissions.map((p) => p.permission.key),
+    isAgent: user.isAgent
   };
 }

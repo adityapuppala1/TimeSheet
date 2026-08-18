@@ -96,6 +96,136 @@ function escape(input: string | number | undefined | null): string {
 
 const appUrl = (path = "") => `${env.APP_BASE_URL.replace(/\/$/, "")}${path}`;
 
+/**
+ * A numeric field that may arrive as a `{{placeholder}}`.
+ *
+ * WHY: these same template functions are rendered twice — once for a real send, with real values, and
+ * once with every argument set to its own `{{name}}` so the Email Templates editor can show the REAL
+ * default body instead of a stub. `(8).toFixed(2)` is fine; `"{{hours}}".toFixed(2)` throws, and the
+ * editor would then show nothing at all for exactly the templates that carry numbers. Five call sites
+ * needed this; the rest of the fields are strings and survive unchanged.
+ */
+const num = (value: number | string, digits = 2): string => (typeof value === "number" ? value.toFixed(digits) : String(value));
+
+/** Same idea for a fraction rendered as a percentage. */
+const pct = (value: number | string): string => (typeof value === "number" ? `${Math.round(value * 100)}%` : String(value));
+
+/**
+ * Rows for an info card, with the empty ones dropped.
+ *
+ * WHY: a timesheet entry may have no submodule, no ticket and no description, and an info card that
+ * prints "SUBMODULE  —" three times buries the two rows that matter. Passing `null` for a field that
+ * genuinely has no value is how a caller says "leave it out", and this is the one place that decides
+ * what that means so every template agrees.
+ *
+ * A `{{placeholder}}` is deliberately NOT empty: the editor's default body has to show every row an
+ * administrator might want to keep or delete.
+ */
+const rows = (pairs: Array<[string, string | null | undefined]>): Array<[string, string]> =>
+  pairs.filter((pair): pair is [string, string] => typeof pair[1] === "string" && pair[1].trim().length > 0);
+
+/**
+ * Free text somebody typed — a description, a comment, a rejection reason — as a readable block
+ * rather than a table cell.
+ *
+ * Escaped, then newlines become `<br>`: a comment written over four lines arrives as four lines. It is
+ * clipped at a length that stays an email rather than a document, and says so when it clips, because
+ * silently truncating somebody's comment is how a reader misses the sentence that mattered.
+ */
+/**
+ * A link to ONE ticket, not to the list.
+ *
+ * Every ticket email used to send the reader to `/app/tickets` and leave them to find the ticket the
+ * mail was about — in a workspace with seventeen hundred of them. `?open=<id>` is the same deep link
+ * the in-app notifications already use, so both routes land on the same panel.
+ *
+ * Falls back to the list when the caller has no id, which is honest: a link that 404s is worse than
+ * one that needs a click.
+ */
+const ticketUrl = (ticketId?: string | null) => appUrl(ticketId ? `/app/tickets?open=${ticketId}` : "/app/tickets");
+
+/**
+ * A data table that survives an email client.
+ *
+ * WHY IT IS BUILT BY HAND AND FULLY INLINE-STYLED: Outlook strips `<style>` blocks, Gmail strips
+ * classes, and neither reliably honours `border-collapse` from anywhere but an inline attribute. The
+ * shell above already accepts this constraint; this extends it to tabular data rather than dropping a
+ * `<div>` grid into an email and hoping.
+ *
+ * WHY EVERY NUMERIC COLUMN IS RIGHT-ALIGNED AND TABULAR: a column of hours that does not line up is a
+ * column nobody compares, which defeats the point of sending a table rather than a sentence.
+ *
+ * `align` is per column, so a caller states it once instead of at every cell.
+ */
+function dataTable(params: {
+  caption?: string;
+  head: string[];
+  rows: string[][];
+  /** "l" | "r" per column. Defaults to left for the first and right for the rest, which is what a
+   *  label-then-numbers table wants and saves every caller from spelling it out. */
+  align?: Array<"l" | "r">;
+  /** Shown INSTEAD of the table when there are no rows — never an empty grid, and never a zero that
+   *  reads as a measurement. */
+  empty?: string;
+}): string {
+  const align = params.align ?? params.head.map((_, i) => (i === 0 ? "l" : "r"));
+  const cell = (content: string, i: number, header: boolean) =>
+    `<td style="padding:7px 10px;font-size:${header ? "11px" : "13px"};${
+      header ? `color:${MUTED};text-transform:uppercase;letter-spacing:.5px;font-weight:700;` : `color:${FG};`
+    }text-align:${align[i] === "r" ? "right" : "left"};${align[i] === "r" && !header ? "font-variant-numeric:tabular-nums;" : ""}border-bottom:1px solid #EEF2F7;">${content}</td>`;
+
+  const caption = params.caption
+    ? `<div style="margin:18px 0 6px;font-size:13px;font-weight:700;color:${FG};">${escape(params.caption)}</div>`
+    : "";
+
+  if (params.rows.length === 0) {
+    return `${caption}<div style="padding:10px 12px;border:1px dashed #E2E8F0;border-radius:8px;font-size:13px;color:${MUTED};">${escape(
+      params.empty ?? "Nothing in this period."
+    )}</div>`;
+  }
+
+  return `${caption}<table role="presentation" cellpadding="0" cellspacing="0" width="100%" style="border:1px solid #E2E8F0;border-radius:10px;border-collapse:separate;border-spacing:0;overflow:hidden;margin:0 0 6px;">
+    <tr style="background:${SURFACE};">${params.head.map((h, i) => cell(escape(h), i, true)).join("")}</tr>
+    ${params.rows.map((r) => `<tr>${r.map((c, i) => cell(c, i, false)).join("")}</tr>`).join("")}
+  </table>`;
+}
+
+/**
+ * The three-period strip every digest leads with: last week, month to date, year to date.
+ *
+ * WHY A STRIP AND NOT THREE TABLES: the question a manager opens this to answer is "is this week
+ * normal", and that is a comparison. Three numbers side by side answer it in one glance; three tables
+ * make the reader do the arithmetic.
+ */
+function periodStrip(cells: Array<{ label: string; value: string; sub?: string }>): string {
+  return `<table role="presentation" cellpadding="0" cellspacing="0" width="100%" style="margin:14px 0;border-collapse:separate;border-spacing:6px 0;">
+    <tr>${cells
+      .map(
+        (c) =>
+          `<td width="33%" style="background:${SURFACE};border:1px solid #E2E8F0;border-radius:10px;padding:12px 10px;text-align:center;">
+            <div style="font-size:10px;letter-spacing:.7px;text-transform:uppercase;color:${MUTED};font-weight:700;">${escape(c.label)}</div>
+            <div style="font-size:20px;font-weight:800;color:${FG};margin-top:3px;font-variant-numeric:tabular-nums;">${escape(c.value)}</div>
+            ${c.sub ? `<div style="font-size:11px;color:${MUTED};margin-top:2px;">${escape(c.sub)}</div>` : ""}
+          </td>`
+      )
+      .join("")}</tr>
+  </table>`;
+}
+
+/** A share, or an em dash when the denominator is zero — "0%" of nothing is a claim, not a measurement. */
+function share(part: number, whole: number): string {
+  return whole > 0 ? `${Math.round((part / whole) * 100)}%` : "—";
+}
+
+function quoted(text: string, limit = 1200): string {
+  const clipped = text.length > limit ? `${text.slice(0, limit)}…` : text;
+  const body = escape(clipped).replace(/\r?\n/g, "<br />");
+  return `<table role="presentation" cellpadding="0" cellspacing="0" width="100%" style="margin:14px 0;"><tr><td style="border-left:3px solid #CBD5E1;padding:2px 0 2px 14px;font-size:14px;line-height:1.6;color:${FG};">${body}${
+    text.length > limit ? `<div style="margin-top:8px;font-size:12px;color:${MUTED};">Clipped — open it in TimeSphere to read the rest.</div>` : ""
+  }</td></tr></table>`;
+}
+
+
 export const templates = {
   welcome: (name: string) =>
     shell(
@@ -114,37 +244,106 @@ export const templates = {
         paragraph(`<span style="color:${MUTED};">If you didn't request a reset, you can safely ignore this email.</span>`)
     ),
 
-  timesheetSubmitted: (params: { name: string; hours: number; date: string; project: string; managerName?: string | null }) =>
+  /**
+   * WHAT CHANGED AND WHY: this used to carry date, project and hours — which is enough to know an
+   * entry exists and not enough to approve it. An approver reading it on a phone had to open the app
+   * to answer "what was actually done", so the mail was a notification that a decision was needed
+   * somewhere else. It now carries the module, submodule, activity, linked ticket and the description
+   * the person wrote, which is the whole entry.
+   *
+   * Empty fields are dropped rather than printed as dashes (see `rows`), so an entry with no
+   * submodule and no ticket reads as short instead of as mostly missing.
+   */
+  timesheetSubmitted: (params: {
+    name: string;
+    hours: number | string;
+    date: string;
+    project: string;
+    managerName?: string | null;
+    module?: string | null;
+    submodule?: string | null;
+    activity?: string | null;
+    description?: string | null;
+    ticketRef?: string | null;
+  }) =>
     shell(
-      { title: "Timesheet submitted", preheader: `${params.hours}h logged for ${params.date}.` },
+      { title: "Timesheet submitted", preheader: `${params.hours}h on ${params.project} for ${params.date}.` },
       heading("Your timesheet was submitted") +
         paragraph(`Hi ${escape(params.name.split(" ")[0])}, your entry is now in the approval queue${params.managerName ? ` with ${escape(params.managerName)}` : ""}.`) +
-        infoCard([
-          ["Date", escape(params.date)],
-          ["Project", escape(params.project)],
-          ["Hours", `${params.hours.toFixed(2)}h`]
-        ]) +
+        infoCard(
+          rows([
+            ["Date", escape(params.date)],
+            ["Hours", `${num(params.hours)}h`],
+            ["Project", escape(params.project)],
+            ["Module", escape(params.module)],
+            ["Submodule", escape(params.submodule)],
+            ["Activity", escape(params.activity)],
+            ["Ticket", escape(params.ticketRef)]
+          ])
+        ) +
+        (params.description ? quoted(params.description) : "") +
         paragraph(button("View status", appUrl("/app/history")))
     ),
 
-  timesheetApproved: (params: { name: string; hours: number; date: string; reviewer: string; project: string }) =>
+  timesheetApproved: (params: {
+    name: string;
+    hours: number | string;
+    date: string;
+    reviewer: string;
+    project: string;
+    module?: string | null;
+    submodule?: string | null;
+    activity?: string | null;
+    description?: string | null;
+  }) =>
     shell(
       { title: "Timesheet approved", preheader: `Approved by ${params.reviewer}.`, accentColor: SUCCESS },
-      heading("Approved ✔") +
-        paragraph(`Hi ${escape(params.name.split(" ")[0])}, your ${params.hours.toFixed(2)}h entry for ${escape(params.date)} on <strong>${escape(params.project)}</strong> was approved by ${escape(params.reviewer)}.`) +
+      heading("Approved") +
+        paragraph(`Hi ${escape(params.name.split(" ")[0])}, your ${num(params.hours)}h entry for ${escape(params.date)} on <strong>${escape(params.project)}</strong> was approved by ${escape(params.reviewer)}.`) +
+        // Which entry, spelled out: somebody with four entries awaiting approval cannot tell from a
+        // date and a project alone which one this is about.
+        infoCard(
+          rows([
+            ["Module", escape(params.module)],
+            ["Submodule", escape(params.submodule)],
+            ["Activity", escape(params.activity)]
+          ]),
+          SUCCESS
+        ) +
+        (params.description ? quoted(params.description) : "") +
         paragraph(button("View history", appUrl("/app/history"), SUCCESS))
     ),
 
-  timesheetRejected: (params: { name: string; date: string; project: string; reviewer: string; reason: string }) =>
+  timesheetRejected: (params: {
+    name: string;
+    date: string;
+    project: string;
+    reviewer: string;
+    reason: string;
+    module?: string | null;
+    submodule?: string | null;
+    activity?: string | null;
+    description?: string | null;
+  }) =>
     shell(
       { title: "Timesheet rejected", preheader: `Reviewer: ${params.reviewer}.`, accentColor: DESTRUCTIVE },
       heading("Action required — entry rejected") +
         paragraph(`Hi ${escape(params.name.split(" ")[0])}, your entry for <strong>${escape(params.date)}</strong> on <strong>${escape(params.project)}</strong> was rejected by ${escape(params.reviewer)}.`) +
-        infoCard([["Reason", escape(params.reason)]], DESTRUCTIVE) +
+        infoCard(
+          rows([
+            ["Module", escape(params.module)],
+            ["Submodule", escape(params.submodule)],
+            ["Activity", escape(params.activity)],
+            ["Reason", escape(params.reason)]
+          ]),
+          DESTRUCTIVE
+        ) +
+        // What they originally wrote, so a resubmission can be a correction rather than a retype.
+        (params.description ? quoted(params.description) : "") +
         paragraph(button("Fix and resubmit", appUrl("/app/history"), DESTRUCTIVE))
     ),
 
-  slaBreach: (params: { managerName: string; employeeName: string; date: string; project: string; deadline: string; hoursOverdue: number }) =>
+  slaBreach: (params: { managerName: string; employeeName: string; date: string; project: string; deadline: string; hoursOverdue: number | string }) =>
     shell(
       { title: "SLA breach — approval overdue", preheader: `${params.hoursOverdue}h overdue.`, accentColor: DESTRUCTIVE },
       heading("Approval SLA breached") +
@@ -155,7 +354,7 @@ export const templates = {
             ["Project", escape(params.project)],
             ["Work date", escape(params.date)],
             ["Deadline was", escape(params.deadline)],
-            ["Overdue by", `${params.hoursOverdue.toFixed(1)} hours`]
+            ["Overdue by", `${num(params.hoursOverdue, 1)} hours`]
           ],
           DESTRUCTIVE
         ) +
@@ -178,7 +377,7 @@ export const templates = {
         paragraph(button("Review approvals", appUrl("/app/approvals"), ACCENT))
     ),
 
-  deadlineReminder: (params: { name: string; daysLeft: number; deadlineDay: number }) =>
+  deadlineReminder: (params: { name: string; daysLeft: number | string; deadlineDay: number | string }) =>
     shell(
       { title: "Submission deadline approaching", preheader: `${params.daysLeft} day(s) left this cycle.`, accentColor: ACCENT },
       heading(`${params.daysLeft} day${params.daysLeft === 1 ? "" : "s"} left to submit`) +
@@ -186,26 +385,59 @@ export const templates = {
         paragraph(button("Log time now", appUrl("/app/timesheet"), ACCENT))
     ),
 
-  ticketAssigned: (params: { assigneeName: string; ticketKey: string; title: string; priority: string; assignedBy: string }) =>
+  ticketAssigned: (params: {
+    assigneeName: string;
+    ticketKey: string;
+    title: string;
+    priority: string;
+    assignedBy: string;
+    /** Bug, task, improvement — the first thing that decides how somebody triages it. */
+    type?: string | null;
+    module?: string | null;
+    description?: string | null;
+    ticketId?: string | null;
+  }) =>
     shell(
       { title: `Ticket assigned: ${params.ticketKey}`, preheader: `${params.assignedBy} assigned you a ${params.priority.toLowerCase()} priority ticket.` },
       heading("A ticket was assigned to you") +
         paragraph(`Hi ${escape(params.assigneeName.split(" ")[0])}, ${escape(params.assignedBy)} assigned you a ticket.`) +
-        infoCard([
-          ["Ticket", escape(params.ticketKey)],
-          ["Title", escape(params.title)],
-          ["Priority", escape(params.priority)]
-        ]) +
-        paragraph(button("Open ticket", appUrl("/app/tickets")))
+        infoCard(
+          rows([
+            ["Ticket", escape(params.ticketKey)],
+            ["Title", escape(params.title)],
+            ["Type", escape(params.type)],
+            ["Priority", escape(params.priority)],
+            ["Module", escape(params.module)]
+          ])
+        ) +
+        (params.description ? quoted(params.description) : "") +
+        paragraph(button("Open ticket", ticketUrl(params.ticketId)))
     ),
 
-  ticketStatusChanged: (params: { ticketKey: string; title: string; from: string; to: string; changedBy: string }) =>
-    shell(
-      { title: `${params.ticketKey} moved to ${params.to}`, preheader: `${params.changedBy} moved this ticket from ${params.from} to ${params.to}.`, accentColor: params.to === "RESOLVED" || params.to === "CLOSED" ? SUCCESS : PRIMARY },
+  ticketStatusChanged: (params: {
+    ticketKey: string;
+    title: string;
+    from: string;
+    to: string;
+    changedBy: string;
+    type?: string | null;
+    /** The note left WITH the move, when there was one. A status change with a reason attached is the
+     *  difference between "it moved" and "here is why", and the reason was previously in the app only. */
+    comment?: string | null;
+    ticketId?: string | null;
+  }) => {
+    const done = params.to === "RESOLVED" || params.to === "CLOSED";
+    return shell(
+      { title: `${params.ticketKey} moved to ${params.to}`, preheader: `${params.changedBy} moved this ticket from ${params.from} to ${params.to}.`, accentColor: done ? SUCCESS : PRIMARY },
       heading(`${params.ticketKey} moved to ${params.to}`) +
         paragraph(`${escape(params.changedBy)} moved "<strong>${escape(params.title)}</strong>" from ${escape(params.from)} to <strong>${escape(params.to)}</strong>.`) +
-        paragraph(button("Open ticket", appUrl("/app/tickets"), params.to === "RESOLVED" || params.to === "CLOSED" ? SUCCESS : PRIMARY))
-    ),
+        infoCard(rows([["Type", escape(params.type)], ["From", escape(params.from)], ["To", escape(params.to)]]), done ? SUCCESS : PRIMARY) +
+        // Labelled as the LATEST comment, never as a reason: this route takes no note of its own, so
+        // presenting the last thing said as an explanation for the move would be inventing a link.
+        (params.comment ? `<div style="margin-top:14px;font-size:11px;text-transform:uppercase;letter-spacing:.6px;color:${MUTED};font-weight:700;">Latest comment</div>${quoted(params.comment)}` : "") +
+        paragraph(button("Open ticket", ticketUrl(params.ticketId), done ? SUCCESS : PRIMARY))
+    );
+  },
 
   /** See services/security-report.service.ts#sendTicketClosedDigest — one email, closer + their
    *  manager as primary recipients, this ticket's own tenant admins in Cc (set by the caller,
@@ -229,17 +461,37 @@ export const templates = {
         paragraph(button("Open ticket", appUrl("/app/tickets")))
     ),
 
-  ticketCommented: (params: { ticketKey: string; title: string; author: string }) =>
+  /**
+   * WHAT CHANGED: this said that somebody had commented and did not say what they wrote, so every
+   * recipient had to open the app to find out whether it concerned them. The comment itself is the
+   * entire content of the event; an email about a comment that omits the comment is a notification
+   * that a notification exists.
+   */
+  ticketCommented: (params: {
+    ticketKey: string;
+    title: string;
+    author: string;
+    type?: string | null;
+    comment?: string | null;
+    ticketId?: string | null;
+  }) =>
     shell(
-      { title: `New comment on ${params.ticketKey}`, preheader: `${params.author} commented on "${params.title}".` },
+      {
+        title: `New comment on ${params.ticketKey}`,
+        // The preheader is the line a phone shows next to the subject, so it carries the opening of
+        // the comment rather than restating the title.
+        preheader: params.comment ? `${params.author}: ${params.comment.slice(0, 120)}` : `${params.author} commented on "${params.title}".`
+      },
       heading("New comment") +
         paragraph(`${escape(params.author)} commented on "<strong>${escape(params.title)}</strong>" (${escape(params.ticketKey)}).`) +
-        paragraph(button("View comment", appUrl("/app/tickets")))
+        infoCard(rows([["Ticket", escape(params.ticketKey)], ["Type", escape(params.type)]])) +
+        (params.comment ? quoted(params.comment) : "") +
+        paragraph(button("Open ticket", ticketUrl(params.ticketId)))
     ),
 
-  ticketSlaBreach: (params: { assigneeName: string; ticketKey: string; title: string; priority: string; hoursOverdue: number }) =>
+  ticketSlaBreach: (params: { assigneeName: string; ticketKey: string; title: string; priority: string; hoursOverdue: number | string }) =>
     shell(
-      { title: `SLA breach — ${params.ticketKey}`, preheader: `${params.hoursOverdue.toFixed(1)}h overdue.`, accentColor: DESTRUCTIVE },
+      { title: `SLA breach — ${params.ticketKey}`, preheader: `${num(params.hoursOverdue, 1)}h overdue.`, accentColor: DESTRUCTIVE },
       heading("Ticket SLA breached") +
         paragraph(`${escape(params.assigneeName.split(" ")[0])}, this ticket has missed its resolution SLA and needs attention.`) +
         infoCard(
@@ -247,7 +499,7 @@ export const templates = {
             ["Ticket", escape(params.ticketKey)],
             ["Title", escape(params.title)],
             ["Priority", escape(params.priority)],
-            ["Overdue by", `${params.hoursOverdue.toFixed(1)} hours`]
+            ["Overdue by", `${num(params.hoursOverdue, 1)} hours`]
           ],
           DESTRUCTIVE
         ) +
@@ -285,20 +537,64 @@ export const templates = {
         paragraph(`<span style="color:${MUTED};">This is an automated confirmation — no need to reply unless you have more details to add.</span>`)
     ),
 
-  weeklyDigest: (params: { name: string; weekLabel: string; summary: string }) =>
+  /**
+   * WHAT CHANGED AND WHY: this used to be one AI-written paragraph and a button to the dashboard —
+   * so the recipient had to leave the email to learn anything, and if the model was unavailable the
+   * email did not go at all. The numbers now come first and come from the database; the written
+   * summary is a garnish that may be absent without costing the reader the report.
+   *
+   * `tablesHtml` is pre-rendered by `weekly-digest-data.service.ts` rather than assembled here,
+   * because what a person sees depends on what they may see: an employee gets their own week, a
+   * manager or administrator also gets the workspace user-by-user and project-by-project. Deciding
+   * that in a template would put an access-control rule in a presentation file.
+   */
+  weeklyDigest: (params: { name: string; weekLabel: string; summary: string; tablesHtml: string }) =>
     shell(
-      { title: `Your week in review — ${params.weekLabel}`, preheader: "An AI-authored recap of your ticket and timesheet activity." },
-      heading(`Hi ${escape(params.name.split(" ")[0])}, here's your week`) +
-        paragraph(escape(params.summary)) +
+      { title: `Your week in review — ${params.weekLabel}`, preheader: `Last week, month to date and year to date — ${params.weekLabel}.` },
+      heading(`Hi ${escape(params.name.split(" ")[0])}, here is ${escape(params.weekLabel)}`) +
+        (params.summary ? paragraph(escape(params.summary)) : "") +
+        params.tablesHtml +
         paragraph(button("Open your dashboard", appUrl("/app"))) +
-        paragraph(`<span style="color:${MUTED};">This recap is AI-generated from your ticket and timesheet activity — turn it off anytime in your notification preferences.</span>`)
+        paragraph(
+          `<span style="color:${MUTED};">Every figure above is counted from this workspace's own records for the stated period. ${
+            params.summary ? "The opening paragraph is AI-written from those same numbers. " : ""
+          }Turn this digest off anytime in your notification preferences.</span>`
+        )
     ),
 
-  securityWeeklyDigest: (params: { weekLabel: string; summary: string; riskScore: number }) =>
+  /** One email per PERSON listing their goals, never one per goal — a send per goal is the send
+   *  people filter, and filtering it costs them the one that mattered. */
+  goalDigest: (params: { name: string; weekLabel: string; summary: string; lines: string[] }) =>
+    shell(
+      { title: `Your goals — ${params.weekLabel}`, preheader: params.summary },
+      heading(`Hi ${escape(params.name.split(" ")[0])}, where your goals stand`) +
+        paragraph(escape(params.summary)) +
+        infoCard(params.lines.map((line) => [escape(line.split(" — ")[0] ?? line), escape(line.split(" — ")[1] ?? "")])) +
+        paragraph(button("Open Goals", appUrl("/app/goals"))) +
+        paragraph(`<span style="color:${MUTED};">Progress is measured from what this workspace already records. Where nothing comparable exists, a goal says so rather than showing a zero.</span>`)
+    ),
+
+  /** The only workflow email. It exists because a gate BLOCKS — everything after it waits until this
+   *  person decides, potentially for days. */
+  workflowApproval: (params: { name: string; flowName: string; subject: string; stepOrder: number | string }) =>
+    shell(
+      { title: `${params.flowName} needs your approval`, preheader: `Step ${params.stepOrder} is waiting on you.`, accentColor: ACCENT },
+      heading("A workflow is waiting for you") +
+        paragraph(`Hi ${escape(params.name.split(" ")[0])}, "${escape(params.flowName)}" stopped at step ${params.stepOrder} and cannot continue until you approve or decline it.`) +
+        infoCard([
+          ["Workflow", escape(params.flowName)],
+          ["Waiting on", `step ${params.stepOrder}`],
+          ["Working on", escape(params.subject)]
+        ]) +
+        paragraph(button("Review it", appUrl("/app/studio"), ACCENT)) +
+        paragraph(`<span style="color:${MUTED};">Nothing after that step happens until you decide. Declining stops the run; it changes nothing that already happened.</span>`)
+    ),
+
+  securityWeeklyDigest: (params: { weekLabel: string; summary: string; riskScore: number | string }) =>
     shell(
       { title: `Security digest — week of ${params.weekLabel}`, preheader: "AI-authored recap of this week's security findings and risk trend." },
       heading(`Security posture — week of ${escape(params.weekLabel)}`) +
-        infoCard([["Risk score", String(params.riskScore)]], params.riskScore > 30 ? DESTRUCTIVE : params.riskScore > 10 ? ACCENT : SUCCESS) +
+        infoCard([["Risk score", String(params.riskScore)]], Number(params.riskScore) > 30 ? DESTRUCTIVE : Number(params.riskScore) > 10 ? ACCENT : SUCCESS) +
         paragraph(escape(params.summary)) +
         paragraph(button("Open Security insights", appUrl("/app/security-insights"))) +
         paragraph(`<span style="color:${MUTED};">AI-generated from this week's ingested findings — turn it off anytime in Workspace Settings → AI.</span>`)
@@ -313,7 +609,7 @@ export const templates = {
         paragraph(`<span style="color:${MUTED};">AI-generated from this period's recurring test-run failures and security findings — turn it off anytime in Workspace Settings → AI.</span>`)
     ),
 
-  ticketNeedsReview: (params: { targetName: string; ticketKey: string; title: string; senderEmail: string; confidence: number }) =>
+  ticketNeedsReview: (params: { targetName: string; ticketKey: string; title: string; senderEmail: string; confidence: number | string }) =>
     shell(
       { title: `Needs review: ${params.ticketKey}`, preheader: "An email-sourced ticket needs a human check.", accentColor: ACCENT },
       heading("An inbound ticket needs review") +
@@ -322,7 +618,7 @@ export const templates = {
           [
             ["Ticket", escape(params.ticketKey)],
             ["Summary", escape(params.title)],
-            ["AI confidence", `${Math.round(params.confidence * 100)}%`]
+            ["AI confidence", pct(params.confidence)]
           ],
           ACCENT
         ) +
@@ -360,7 +656,7 @@ export const templates = {
         paragraph(`<span style="color:${MUTED};">Why this exists: it confirms the person submitting is the account owner. Your face data is encrypted, never shared, and you can delete it from your profile at any time.</span>`)
     ),
 
-  faceVerificationFlagged: (params: { targetName: string; employeeName: string; failureCount: number; context: string }) =>
+  faceVerificationFlagged: (params: { targetName: string; employeeName: string; failureCount: number | string; context: string }) =>
     shell(
       { title: "Identity check flagged for review", preheader: "Repeated failed identity checks need a look.", accentColor: ACCENT },
       heading("An identity check needs review") +
@@ -369,7 +665,7 @@ export const templates = {
         paragraph(button("Open the review log", appUrl("/app/settings"), ACCENT))
     ),
 
-  faceReviewOverdue: (params: { targetName: string; pendingCount: number; oldestAgeHours: number }) =>
+  faceReviewOverdue: (params: { targetName: string; pendingCount: number | string; oldestAgeHours: number | string }) =>
     shell(
       { title: "Flagged identity checks awaiting review", preheader: "Flagged attempts have sat unreviewed.", accentColor: ACCENT },
       heading("Flagged identity checks are waiting") +
@@ -388,7 +684,7 @@ export const templates = {
         paragraph(`<span style="color:${MUTED};">This confirmation is part of your workspace's biometric-data record keeping. No action is needed.</span>`)
     ),
 
-  faceEntitlementLost: (params: { targetName: string; graceDays: number }) =>
+  faceEntitlementLost: (params: { targetName: string; graceDays: number | string }) =>
     shell(
       { title: "Face verification is no longer in your plan", preheader: "Enforcement paused; stored face data will be purged.", accentColor: ACCENT },
       heading("Face verification lost its plan entitlement") +
@@ -397,7 +693,7 @@ export const templates = {
         paragraph(button("Review plan & billing", appUrl("/app/settings"), ACCENT))
     ),
 
-  identityWeeklyDigest: (params: { targetName: string; weekLabel: string; total: number; passed: number; failed: number; flaggedPending: number; notes: string }) =>
+  identityWeeklyDigest: (params: { targetName: string; weekLabel: string; total: number | string; passed: number | string; failed: number | string; flaggedPending: number | string; notes: string }) =>
     shell(
       { title: `Identity assurance — week of ${params.weekLabel}`, preheader: "Weekly face verification recap." },
       heading(`Identity assurance — week of ${escape(params.weekLabel)}`) +
@@ -408,7 +704,7 @@ export const templates = {
             ["Failed", String(params.failed)],
             ["Flagged awaiting review", String(params.flaggedPending)]
           ],
-          params.flaggedPending > 0 ? ACCENT : SUCCESS
+          Number(params.flaggedPending) > 0 ? ACCENT : SUCCESS
         ) +
         (params.notes ? paragraph(escape(params.notes)) : "") +
         paragraph(button("Open the review log", appUrl("/app/settings"))) +
@@ -438,3 +734,8 @@ export const templates = {
 };
 
 export type TemplateName = keyof typeof templates;
+
+/** Shared with `weekly-digest-data.service.ts`, which assembles the digest's tables: the layout
+ *  primitives live here with the rest of the email design rather than being reinvented beside the
+ *  queries. */
+export const emailBlocks = { dataTable, periodStrip, share, escape };

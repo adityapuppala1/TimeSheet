@@ -563,6 +563,274 @@ makes the same stored value render as two different days across a boundary.
   with zero spend — the arithmetic there produces a confident number that is noise, and
   "forecast: 0" reads as "this will cost nothing".
 
+### Agent runs and the ledger
+
+- `GET /agent-runs?limit=&capability=&flowId=` · `GET /agent-runs/:id` — SUPER_ADMIN. The detail route
+  returns the run's full step trace **and the rest of the chain**: the proposal it produced, that
+  proposal's status, each change with whether it was applied, and the ledger row the run wrote. Three
+  tables, one question — answering it in the browser would mean three round trips and a reader who
+  gives up.
+- `GET /agents/ledger/history?days=` — the ledger over time: every entry in the window and the same
+  data bucketed per day, zero-filled, with `measuredDays` beside it. A day with no MEASUREMENT is not a
+  day of zero displacement, and a chart whose spacing changes meaning halfway across is worse than none.
+- `GET /ai/overview` — SUPER_ADMIN. One response describing all four AI surfaces: capability counts and
+  how many resolve above SUGGEST, teammates on and off, flows live and waiting, proposals pending, spend
+  split three ways, the ledger, and one suggested next step. Every figure is a COUNT that can be checked
+  against the screen it came from — deliberately no health score, because a score needs a rule for what
+  healthy is and that depends on what the workspace wants.
+
+## Workflow Studio (V8 phase 4)
+
+Same entitlement as the roster (`aiPmCopilotEnabled`) — a flow composes that capability family, and a
+second switch for one commercial decision is a switch somebody forgets. Reading needs `tickets:view`,
+because what automation touches your work is your business; every write is SUPER_ADMIN.
+
+- `GET /flows` — every flow with its **computed authority** and validation issues.
+- `GET /flows/catalogue` — capabilities with ceilings, the real domain-event list, and the
+  deterministic actions, in one call.
+- `GET /flows/:id` · `POST /flows` · `PATCH /flows/:id` · `DELETE /flows/:id` (soft, and switches it
+  off in the same write — a retired flow must not keep firing).
+- `GET /flows/:id/simulate?limit=` — the replay. **A GET on purpose**: it writes nothing, so it must be
+  safe to re-run and refresh, and a POST would imply otherwise.
+- `POST /flows/:id/enabled` `{ enabled }` — activation, refused with 422 on any validation error and
+  quoting it. **Deactivation is always allowed**, even for a flow that would now fail validation —
+  otherwise a flow invalidated by a retired teammate or a deleted form could not be switched off, the
+  same deadlock the roster's disable-escape avoids.
+
+Steps are replaced wholesale and `order` is assigned from array position, so a reordered builder
+cannot produce gaps or collisions. A flow is **created off**, whatever the request says.
+
+`GET /flows/catalogue` also returns the **people, labels and projects** the builder's per-step pickers
+render from, plus which config key each action fills. One call rather than four: a dialog that paints
+before its options arrive is a dialog where somebody picks nothing and wonders why the step will not
+validate. Agent identities are excluded from every people list — assigning work to a teammate is a real
+idea, but "who approves this gate" is a question about a person, and an identity with no mailbox cannot
+answer it.
+
+### Dispatch and runs (V8 phases 6–7)
+
+A flow fires from one of three places: `EVENT` off the internal domain bus, `SCHEDULE` off a per-minute
+sweep, `FORM_SUBMISSION` off the public intake, and `MANUAL` off the route below. Execution always goes
+through `queueAgentRun`, so idempotency, the abort flag, the step cap, both cost ceilings, the taint
+clamp and the audit trail are the existing ones — the Studio adds no new write path.
+
+- `GET /flows/runs?flowId=&limit=` — what the flows have actually DONE: each run with its subject,
+  status, one-line summary and every step's outcome. `tickets:view`, like the flow list.
+- `POST /flows/runs/:runId/decision` `{ approved }` — clear a gate. **Not SUPER_ADMIN**: the step named
+  a person, and that person is who may clear it. Enforced server-side, so the route is the door and not
+  the lock. `409` if the run is not waiting, `403` if somebody else was asked.
+- `POST /flows/:id/run` — a manual run. SUPER_ADMIN. `202` with the run id; the trigger key carries the
+  actor and the minute, so a double-clicked button is one run.
+
+**The idempotency key carries the SUBJECT** (`flow:<id>:ticket:<id>`). A doubled event, a retried
+delivery and a restart mid-dispatch all collapse to one run — while a *second ticket* through the same
+flow is properly a second run. Getting that half wrong makes the first ticket the only ticket a flow
+ever touches.
+
+**A capability step is refused at activation if no agent run can execute it.** Most of the registry is
+invoked inline by the feature that owns it and has no tools for a run loop to use; the builder offers
+only the runnable ones, and `validateFlow` refuses the rest — a flow that activates and then fails
+reads as the product being broken rather than as the step being impossible. The same applies to a
+capability that needs a project scope in a flow whose trigger can never supply one.
+
+### The three rules, and where they live
+
+All of them are computed in `flow-authority.service.ts`, which touches no database so the whole
+guarantee can be read — and tested exhaustively — in one place. Every failure available here is
+arithmetic that renders plausibly and is wrong, which is why that file has 25 tests of its own.
+
+1. **Authority is the MINIMUM of the capability steps'.** Composing two `AUTO_APPLY` steps must never
+   produce authority neither had. `limitedBy` names the step that set the floor, so a builder can point
+   at it.
+2. **Taint propagates FORWARD.** Once a step reads externally-authored text, every *later writing* step
+   is clamped to `SUGGEST` — generalising `AgentRun.taintedAt` from one run to a composition. This makes
+   **order load-bearing**: triage-then-assign proposes, assign-then-triage applies. The word "later"
+   does real work: a flow whose *only* step reads outside text is not clamped, because composing one
+   step must not be stricter than running that capability alone (a bug caught by a test).
+3. **Anything above `SUGGEST` writes through `AiProposal`.** The Studio adds no write path at all —
+   composition decides what runs and at what authority, and execution goes through `queueAgentRun`, so
+   idempotency, the abort flag, the step cap, the cost cap and the audit trail are the existing ones.
+
+`gatedBeforeWrites` reports whether a `HUMAN_GATE` precedes every writing step, because that is the
+cheapest way to make an ambitious flow acceptable. Activation records the authority **as computed at
+that moment** in the audit row, since "what was this allowed to do when somebody switched it on" must
+not depend on what the policies say weeks later.
+
+### What the simulation is, and is not
+
+Exact about structure: which steps are reached, where a gate stops the run, and whether each writing
+step would apply or propose. Explicit about the rest — it **calls no model, writes nothing, and assumes
+branch conditions pass**, all three stated in the response's own `disclaimer` so nobody reads a replay
+as an execution. Zero samples is a finding with a reason ("no tickets in this workspace yet"), not an
+empty list.
+
+A flow bound to a teammate may only use capabilities that teammate **owns**, which is what stops the
+Studio becoming a way around "one capability, one owner".
+
+## The agent roster (V8 phase 3)
+
+Gated on the tier's `aiPmCopilotEnabled` — the roster is a bundle of the AI capability family, which
+already has an entitlement, and a second switch for one commercial decision is one switch somebody
+forgets. Reading needs `tickets:view`; every write is SUPER_ADMIN, because creating an agent mints a
+service identity whose actions appear in the audit trail under its own name.
+
+**A profile grants nothing.** `AiCapabilitySpec.maxLevel` is the product ceiling, an administrator
+may only lower it through `AiCapabilityPolicy`, and `AgentRun.level` stays the record of what a run
+was actually permitted. A profile adds a name, a scope that can only NARROW, and a daily spend
+ceiling that sits under every existing one. If it could raise a level it would be a second
+permission system, and the first thing a second permission system does is disagree with the first.
+
+- `GET /agents` — the roster, each entry carrying its capabilities with **resolved** autonomy
+  (clamps applied), today's spend, and its five most recent runs.
+- `GET /agents/catalogue` — the built-in gallery plus the full capability catalogue with ceilings, in
+  one call because the "add a teammate" dialog needs both and two round trips is two chances to
+  render half a dialog.
+- `POST /agents/install` `{ templateKey }` — instantiates a gallery template. Separate from the
+  generic create so the bundle comes from the catalogue rather than the request body; otherwise
+  "this is the stock triage teammate, unmodified" is a claim a client can assert about anything.
+  409 on a second copy of the same template.
+- `POST /agents` — a custom profile. An unknown capability id is **refused**, not dropped: a bundle
+  naming one would appear to do something and do nothing.
+- `PATCH /agents/:id` — including `enabled`. Enabling is audited as its own action (`agent.enabled`)
+  rather than as a field list, because "who switched this on, and when" is what an incident review
+  asks.
+- `DELETE /agents/:id` — retires it. Soft delete, and the identity is **deactivated rather than
+  removed**: audit rows, comments and past runs point at it, and hard-deleting would either cascade
+  them away or leave them naming nobody.
+
+**Every profile is created switched off**, whatever the caller asks. An administrator reads the
+resolved autonomy of the bundle first — the same reasoning as the MCP server's three closed
+defaults, where a write tool added by a future release arrives disabled rather than turning itself on
+during an upgrade.
+
+### One capability, one owner
+
+A defect the roster introduced, fixed in the same release. There is exactly one
+`AiCapabilityPolicy` per capability, so two ENABLED profiles containing `triage` would both describe
+the same behaviour: neither would be the reason it happened, and switching one off would change
+nothing. The roster would be a list of names with no relationship to what the workspace does.
+
+- A capability may be claimed by **at most one enabled profile**. Drafts may overlap freely — that is
+  what makes it possible to build a replacement teammate before retiring the one it replaces.
+- **Enabling is where the claim is staked**, so that is where a conflict is refused: 409, naming the
+  owner and the overlapping capabilities ("📰 Reporter already covers weekly_digest, status_report").
+  The same check catches the other route to the same collision — widening an already-enabled bundle.
+- A profile can always be switched **off**, even while it overlaps. Without that exception two
+  profiles that overlapped by any other route could each refuse to be disabled — a deadlock.
+- `GET /agents` reports `claimedByOther` per capability on a draft, so somebody can see *why* enabling
+  would be refused before trying, and `readiness.enabledButInert` when a profile is on but every
+  capability in it has its AI feature switched off — the state a green "On" badge would lie about.
+- `GET /settings/ai/autonomy` carries `claimedBy` per capability, so the settings screen names the
+  teammate that depends on a level before somebody lowers it. **Display only** — `AiCapabilityPolicy`
+  remains the single lever, and the roster deliberately does not duplicate the control.
+
+### The identity, and its three fences
+
+An `AgentProfile` acts as a real `User` row with `isAgent = true`. That is what lets assignment,
+workload, comments, `AuditLog.actorId` and attestations work unchanged instead of threading a second
+actor type through dozens of queries. Three invariants fence it, each at a choke point rather than at
+call sites, and each with its own test because each fails in a different direction:
+
+| Fence | Where | Why it is enforced there |
+|---|---|---|
+| **No seat** | `seat-count.service.ts#countActiveSeats` | The predicate was copied into five call sites; a sixth copy is how the next exclusion gets missed, and the miss is a customer charged for robots. A test asserts no bare copy remains anywhere in `src`. |
+| **No login** | `auth.service.ts#establishSession` | The documented funnel every login method terminates in — password, Google, Microsoft, SAML, LDAP. A guard in `login()` alone would leave SSO open, which is the exact class of bug that comment was written about. 403, not 401: the credential is not the problem. |
+| **No mailbox** | `mail.service.ts#sendMail` | Agents are picked up by every "all active users" recipient query. Addresses live on `@agents.invalid` — the domain RFC 2606 reserves so it can never resolve — so the choke point recognises one with a string comparison and no join. `SKIPPED`, not an error: nothing was wrong, there was simply nobody to write to. |
+
+## Inbox and the daily brief (V8 phase 2)
+
+No permission and no entitlement: this is the caller's own queue over notifications they already
+receive, and selling "your own inbox" as an upsell would be the wrong shape (the same reasoning that
+leaves `/plan/my-work` ungated).
+
+**Ownership IS the authorisation.** Every write is an `updateMany` filtered on `{ id, userId }`, so a
+guessed id belonging to somebody else updates zero rows and answers 404 — there is deliberately no
+id-based lookup that could be pointed at another person's inbox, and no admin view of one.
+
+- `GET /inbox?filter=unhandled|snoozed|handled|all` — the queue plus `counts`. An unknown filter
+  falls back to `unhandled` rather than erroring. Returns at most 200 rows; the page reveals 25 at a
+  time.
+- `GET /inbox/brief` — today's brief (below).
+- `PATCH /inbox/:id` `{ handled?, read?, snoozeUntil? }` — three independent statements about one
+  row. **`handledAt` is not `readAt`**: opening the bell marks things read, which is about attention,
+  not about work; collapsing them would mean every glance empties the queue. Snoozing also marks the
+  row read, because the bell must stop insisting about work somebody has explicitly deferred, and a
+  `snoozeUntil` beyond a year is clamped — a five-year snooze is a delete wearing a friendlier label.
+  Returns fresh counts so tab badges cannot drift.
+- `POST /inbox/handle-all` — clears the visible queue by marking handled. **Never deletes**: the row
+  is the record that somebody was told, and a support question a month later is answered by it.
+
+A snoozed row is hidden from `unhandled` until its time passes and then **reappears on its own**,
+with nobody re-filing it. That is the only behaviour that makes snoozing safe to use.
+
+### The brief is arithmetic, not a prompt
+
+Every figure comes from a definition that already exists elsewhere in the API, called rather than
+restated — a model asked to summarise the workspace would produce a fluent paragraph whose numbers
+nobody can reconcile with the pages they came from, and the first time the brief and the dashboard
+disagree both stop being read. A narration layer can sit on top later (the plan reserves the
+`daily_brief` capability at ceiling `AUTONOMOUS`, explaining figures it cannot change, exactly as
+`project_risk_narrative` does), but the numbers are true on their own first.
+
+| Section | Source |
+|---|---|
+| Past their date · Due today · Blocked | `my-work.service.ts#computeMyWork` — the same buckets `/plan/my-work` renders. The blocked row names the actual blocker, because "you are blocked" is not actionable and "WEB-9 waits on API-2" is. |
+| No time logged today | The caller's own `Timesheet` rows at UTC-midnight `workDate`, matching `/reports/daily-status`. |
+| Timesheets awaiting review | `SUBMITTED` rows other than the caller's — **only present with `timesheets:approve`**, and not even queried without it. |
+| Sign-offs waiting on you | `ApprovalStep` rows with `decision = PENDING` for the caller. |
+| Projects reading red | Latest `ProjectRiskSnapshot` per project, RED band — **only with `reports:view`**. A project that was red in March is not red now, hence `distinct` on the descending query. |
+| Unread notifications | `readAt IS NULL`. |
+
+`allClear` is true only when nothing carries the `attention` tone. Work merely *due today* and
+unread notifications are deliberately `ok`: if informational rows could raise the alarm, nobody would
+ever see an all-clear and the signal would be worthless. A zero section carries a `null` link, so a
+reassuring row is never a dead click.
+
+## Goals / OKRs (V8 phase 1)
+
+Gated on `enableGoals` (workspace) **AND** the tier's `goalsEnabled` — ANDed server-side in
+`planning.service.ts#assertGoalsEnabled`, which returns two deliberately different 403 messages:
+"a super admin can turn it on" points at a setting, "not included in this plan" points at a
+commercial conversation. Deliberately **not** behind `enablePlanning`: goals align work whether or
+not the Gantt is in use, and gating an alignment tool on a scheduling one would be arbitrary.
+
+- `GET /goals` — the whole tree with every measurement resolved. **No permission required**: a goal
+  nobody can see aligns nobody.
+- `GET /goals/:id` — one goal, its children, and its full override history.
+- `POST|PATCH /goals[/:id]` — `goals:manage` (SUPER_ADMIN, ADMIN, MANAGER, TEAM_LEAD by default).
+  Creation is quota-checked against `maxGoals`, counting **ACTIVE goals only** — closed goals are
+  history, and counting them would push people to delete the record of what they were aiming at.
+- `POST /goals/:id/override` `{ progressPct, note }` — `goals:manage`. Append-only, and there is
+  no PATCH or DELETE by design: an override records who said what, when, **and what the
+  measurement said at that moment**, so a correction is another row rather than an edit. Refused on
+  a MANUAL goal, which has nothing to disagree with.
+- `DELETE /goals/:id` — soft delete, and refused while the objective still has key results.
+
+**Progress is never stored.** Every number is derived on read by `goal-progress.service.ts`, from
+the same tables the portfolio roll-up and the client-facing attestation read, so a goals page and a
+signed document cannot disagree. The source catalogue is **closed** for the two reasons the
+dashboard widget catalogue is closed: a metric two goals define differently will be defined
+differently, and a user-supplied metric is a query surface.
+
+| `progressSource` | Direction | Measures |
+|---|---|---|
+| `MANUAL` | at least | A stated percentage. Health is still judged against the period. |
+| `APPROVED_HOURS` | at least | `SUM(Timesheet.totalHours)` where `status = APPROVED` in the period. |
+| `BUDGET_SPEND` | at most | `SUM(Timesheet.billedAmount)` — the rate snapshots taken at approval. |
+| `TICKETS_CLOSED` | at least | Tickets whose `closedAt` falls in the period. |
+| `ON_TIME_RATE` | at least | Share of closed tickets that met `endDate`, falling back to the SLA-derived `dueAt`. Tickets with neither date are excluded from the denominator rather than counted as punctual. |
+| `SLA_BREACHES` | at most | `TicketEscalation` rows created in the period. |
+| `RISK_SCORE` | at most | Latest `ProjectRiskSnapshot` per linked project, averaged. |
+
+**`unavailable` is a first-class result, never `0`.** No period, no target, or no data in scope
+returns `{ unavailable: true, unavailableReason }` and the UI prints the reason — "no data" and
+"nothing achieved" are opposite messages that look identical as a zero. An `AT_MOST` source returns
+`progressPct: null` on purpose: "62% of the way to your spending ceiling" reads as an achievement.
+
+**Scope** comes from `GoalLink` rows (`PROJECT`, `PORTFOLIO`, `TICKET`); no links means the whole
+workspace. A `PORTFOLIO` link expands to its member projects **at read time**, so a portfolio that
+gains a project next week widens every goal linked to it without anyone touching those goals.
+
 ### Resources & budget
 
 Every `/resources` route needs `resources:manage` and both the workspace toggle and the tier
