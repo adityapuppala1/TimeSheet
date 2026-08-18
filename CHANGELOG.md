@@ -222,6 +222,16 @@ its old schema without the update saying so. After upgrading, run the fan-out on
   everything after it, sometimes for days, and until now it only raised an in-app notification — which
   made a blocked workflow look like a broken one. On by default.
 
+### 🔎 Check that a public address actually reaches your deployment
+
+- `npm run check:public -- https://your.address:5173` compares the **version and git sha** behind an
+  address against your local server, then tests whether that host accepts its own origin and whether
+  the certificate it serves covers the address people type.
+- Run it **before** changing configuration. An address that answers on port 5173 with a TimeSphere
+  login page looks exactly like your own deployment and may not be one — a port forward can point at
+  a different machine. When that happens, every local fix is correct, verifies against localhost, and
+  changes nothing that users see.
+
 ### 🩹 Two toggles that could not be saved, and a public IP that could not sign in
 
 - **"Weekly goal digest" and "A workflow is waiting for a decision" failed to save** with a wall of

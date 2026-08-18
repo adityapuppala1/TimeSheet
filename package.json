@@ -24,7 +24,8 @@
     "test:e2e:browsers": "playwright test --project=firefox --project=webkit",
     "test:e2e:report": "playwright show-report",
     "bootstrap": "node scripts/bootstrap-dev.mjs",
-    "bootstrap:sync": "node scripts/bootstrap-dev.mjs --sync"
+    "bootstrap:sync": "node scripts/bootstrap-dev.mjs --sync",
+    "check:public": "npm run check:public -w apps/api"
   },
   "devDependencies": {
     "@playwright/test": "^1.61.1",

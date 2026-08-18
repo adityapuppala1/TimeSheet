@@ -460,6 +460,23 @@ In every mode, set `APP_BASE_URL` (and add the https origin to `WEB_ORIGIN` for 
 address people actually open. On an internet-exposed host, also restrict the base compose file's
 plain-http ports (`5173`, `4000`) to localhost in an override so TLS is the only way in.
 
+#### First: prove the address reaches THIS deployment
+
+```bash
+npm run check:public -- https://203.0.113.10:5173
+```
+
+Do this **before** changing any configuration. An address that answers on port 5173 with a TimeSphere
+login page looks exactly like your own deployment, and may not be one — a port forward can point at a
+different machine on the same LAN. That happened here: two rounds of CORS, certificate and base-URL
+fixes were applied to a developer's machine while the public address was forwarded to a second box
+running an older build, so every change was correct, verified against localhost, and irrelevant.
+
+The check compares the **version and git sha** behind the address against the local server, then tests
+whether that host accepts its own origin and whether the certificate it serves covers the address
+people type. A "DIFFERENT deployment" line means configuration has to change on THAT machine, or the
+forward has to be repointed — nothing you edit locally will help.
+
 #### Reaching a development or self-hosted box over a public IP
 
 Two settings, and missing either produces a failure that looks like something else:
@@ -478,6 +495,16 @@ Two settings, and missing either produces a failure that looks like something el
   and it is baked into each message at send time, so choose the address the people who receive mail
   can actually reach. On a network without NAT hairpinning, a public base may not open from inside —
   send yourself one reset link from each side before settling on it.
+
+**On the certificate, plainly:** a self-signed certificate (mkcert or otherwise) on a bare IP can
+never be trusted by a browser that has not installed your local CA, and **no public CA issues
+certificates for IP addresses** — Let's Encrypt included. So while an IP is the address people type,
+outside users will meet a browser warning no matter what you configure, and password-reset links will
+train them to click through it. Reissuing the dev certificate to cover every address you serve on
+(`mkcert localhost 127.0.0.1 ::1 <lan-ip> <public-ip>`) removes the *name mismatch* error and gives a
+real padlock on machines that have the local CA — it does not and cannot make the site trusted
+elsewhere. The only standard fix is a DNS name in front of it with a publicly issued certificate; see
+the reverse-proxy section below.
 
 ### Production, with a public domain — use a reverse proxy
 
