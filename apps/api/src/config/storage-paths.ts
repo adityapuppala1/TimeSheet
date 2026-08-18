@@ -146,8 +146,27 @@ export function documentReadDirs(): string[] {
  * returns an ABSOLUTE path across drives, which is why the `isAbsolute` test is here and not
  * redundant), URL-encoded segments already decoded by the caller, and NUL truncation.
  */
+/**
+ * Windows-shaped absolute paths: a drive qualifier (`C:\…`, `C:/…`, or even bare `C:foo`) or a
+ * leading backslash, which also covers UNC (`\\server\share`).
+ *
+ * Matched EXPLICITLY because `path.isAbsolute` answers differently per platform, and a path guard
+ * that accepts a value on one operating system and refuses it on another is not a guard. On Windows
+ * `C:\Windows\System32\drivers\etc\hosts` is absolute and was already refused below; on Linux a
+ * backslash is an ordinary filename character, so the very same string is a RELATIVE name and
+ * resolved to `<base>/C:\Windows\System32\drivers\etc\hosts`.
+ *
+ * Nothing escaped the base in that case — containment held, so this was never a traversal hole —
+ * but it did mean creating a file named after a Windows system path, and it meant one storage key
+ * behaving two ways depending on where the API happened to be deployed. The test that asserts this
+ * has existed since the storage layer landed; it only ever ran on Windows, because CI's unit step
+ * was being skipped by an earlier failing gate in the same job.
+ */
+const WINDOWS_ABSOLUTE_RE = /^([A-Za-z]:|\\)/;
+
 export function resolveWithin(baseDir: string, requested: string): string | null {
   if (typeof requested !== "string" || requested.length === 0 || requested.includes("\0")) return null;
+  if (WINDOWS_ABSOLUTE_RE.test(requested)) return null;
   const base = path.resolve(baseDir);
   const target = path.resolve(base, requested);
   const relative = path.relative(base, target);

@@ -4252,3 +4252,58 @@ allowlist only ever grows, entries outlive the problem, and the list becomes a w
 
 Both directions were verified rather than assumed: emptying the allowlist blocks on the real
 advisory, and adding a phantom entry fails as stale.
+
+### The second round: what the first two fixes uncovered (2026-08-18)
+
+Fixing the exec bit and the audit gate let both jobs run further than they ever had, and each
+uncovered a failure that had been sitting behind them.
+
+**`TS_AUTO=1` was not honoured by two prompts.** With the executable bit set, `install.sh` reached
+its configuration section and exited 1 having printed one line. `ask()` exists precisely to make
+prompts non-interactive — it returns the default when `TS_AUTO=1` — but the web-origin and API-base
+prompts called `read` directly. Under `set -euo pipefail`, a `read` with no stdin returns non-zero
+at EOF and takes the script with it. Reproduced in six lines before changing anything.
+
+Every OTHER bare `read` in the file is fine, and the reason is worth recording: they sit inside
+branches whose *condition* comes from `ask()` — the external-database block behind `DB_CHOICE`
+(default `1`) and the SMTP block behind `CONFIGURE_SMTP` (default `N`). Under `TS_AUTO` neither
+branch is entered, so those prompts are unreachable. Only the two on the unconditional path could
+ever fail, and both now go through `ask`.
+
+This was never only CI's problem: `TS_AUTO=1 ./install.sh` is the documented non-interactive mode in
+`docs/INSTALLATION.md`, offered "for anyone scripting a fleet". It could not have worked for anyone.
+
+**A path guard that answered differently per operating system.** With the audit gate no longer
+failing first, the unit step ran on Linux — and `storage-paths.test.ts` failed on an assertion that
+has existed since the storage layer landed:
+
+    expected '/tmp/ts-storage-T3quCV/docs/C:\Windows\System32\drivers\etc\hosts' to be null
+
+`resolveWithin` refused Windows-shaped absolute paths via `path.isAbsolute`, which is
+platform-specific. On Windows `C:\Windows\System32\…` is absolute and was refused. On Linux a
+backslash is an ordinary filename character, so the same string is a RELATIVE name and resolved to a
+file of that name *inside* the base.
+
+**Containment never broke** — nothing escaped the base, so this was not a traversal hole. What it
+was is one storage key meaning two different things depending on where the API runs, which is not
+something a path guard may do. `resolveWithin` now matches drive-qualified and backslash-leading
+inputs explicitly, before any `node:path` call, so the verdict cannot vary by platform; the test
+gained the shapes that only misbehave on Linux (`C:/…`, `C:evil.png`, `\Windows\…`, UNC).
+
+**And one test of mine that deserved to fail.** The `POST /users` suite proved "never the demo
+password" by generating 25 passwords through the route — 25 sequential bcrypt cost-12 rounds,
+4.6 seconds locally and comfortably over the 10-second timeout on a shared runner. The property is
+the *generator's*, not the route's: `generateTempPassword` is pure and does no hashing, so a
+thousand draws cost under a millisecond. Moved there (`security-generate-temp-password.test.ts`),
+and the route keeps one cheap assertion. 4648ms → 187ms.
+
+Writing that test found a real overstatement, too. The generator's own comment promised a fixed tail
+that "clears any complexity rule", but `!7a` supplies a symbol, a digit and a lowercase letter and
+leaves uppercase to the random draw — which omits one about once in every 800 passwords. Rare enough
+never to be seen in testing, certain to happen in production, and the failure is an admin reading out
+a password some external policy then rejects. The tail is now `!7aQ`. The entropy is entirely in the
+twelve random characters, so completing the tail costs nothing.
+
+**On reading CI from here:** the job logs of a public repository are fetchable, which is how the
+storage-paths failure was identified rather than guessed — the first hypothesis (the slow bcrypt
+test) was wrong, and the log said so.

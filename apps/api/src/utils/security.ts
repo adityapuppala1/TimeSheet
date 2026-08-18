@@ -42,17 +42,33 @@ export const opaqueToken = () => nanoid(48);
 export const DUMMY_PASSWORD_HASH = "$2b$12$bCeTa7tNbMS12WtSV0Kb/.szOuSeRd4V6SHhkUr6yxEx3QgLjRQtG";
 
 /**
- * A one-time password for admin resets: 12 chars from an unambiguous alphabet (no 0/O/1/l/I)
- * plus a fixed "!7a" tail so it clears any complexity rule without the generator needing to
- * know one. Replaces the old fixed "Admin@12345" default, which is publicly documented in this
- * repo — a default anyone who has read the README can type is not a password. `randomInt` is
- * the CSPRNG (and rejection-samples, so the alphabet is drawn uniformly).
+ * A one-time password for admin resets: 12 chars from an unambiguous alphabet (no 0/O/1/l/I) plus a
+ * fixed tail, so it clears any complexity rule without the generator needing to know one. Replaces
+ * the old fixed "Admin@12345" default, which is publicly documented in this repo — a default anyone
+ * who has read the README can type is not a password. `randomInt` is the CSPRNG (and
+ * rejection-samples, so the alphabet is drawn uniformly).
+ *
+ * THE TAIL COVERS ALL FOUR CHARACTER CLASSES, and the uppercase in it is not decoration: it used to
+ * be "!7a", which supplies a symbol, a digit and a lowercase letter but no capital — leaving that
+ * class to the random draw, which omits one about once in every 800 passwords. Rare enough never to
+ * be noticed in testing and certain to happen in production, where the failure is an admin reading
+ * out a password some external policy then rejects. The entropy is entirely in the 12 random
+ * characters; the tail is a fixed suffix whose only job is satisfying policies, so making it
+ * complete costs nothing.
  */
 // Reviewed: a character SET the generator below draws from via a CSPRNG, not a password itself.
 // eslint-disable-next-line sonarjs/no-hardcoded-passwords -- alphabet, not a credential
 const TEMP_PASSWORD_ALPHABET = "abcdefghjkmnpqrstuvwxyzABCDEFGHJKMNPQRSTUVWXYZ23456789";
+/**
+ * Symbol, digit, lowercase, uppercase — one of each, so no policy can reject the result.
+ *
+ * Reviewed: a fixed SUFFIX appended to twelve CSPRNG-drawn characters, not a password and not a
+ * secret. It is public by design — knowing it removes no entropy, because none of it is in here.
+ */
+// eslint-disable-next-line sonarjs/no-hardcoded-passwords -- policy-satisfying suffix, not a credential
+const TEMP_PASSWORD_TAIL = "!7aQ";
 export const generateTempPassword = () =>
-  `${Array.from({ length: 12 }, () => TEMP_PASSWORD_ALPHABET[randomInt(TEMP_PASSWORD_ALPHABET.length)]).join("")}!7a`;
+  `${Array.from({ length: 12 }, () => TEMP_PASSWORD_ALPHABET[randomInt(TEMP_PASSWORD_ALPHABET.length)]).join("")}${TEMP_PASSWORD_TAIL}`;
 export const hashToken = (token: string) => bcrypt.hash(token, 10);
 export const verifyTokenHash = (token: string, hash: string) => bcrypt.compare(token, hash);
 

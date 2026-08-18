@@ -96,18 +96,17 @@ describe("when the admin supplies no password", () => {
     expect(res.body.generatedPassword.length).toBeGreaterThanOrEqual(12);
   });
 
-  it("never generates the published demo password", async () => {
+  it("never returns the published demo password", async () => {
     // The specific string that shipped as the form default. If this ever passes again, the whole
     // point of the change has been undone.
-    const seen = new Set<string>();
-    for (let i = 0; i < 25; i += 1) {
-      vi.clearAllMocks();
-      const res = await post({});
-      expect(res.body.generatedPassword).not.toBe("Admin@12345");
-      seen.add(res.body.generatedPassword);
-    }
-    // ...and a different one each time, rather than one constant dressed up as generated.
-    expect(seen.size).toBe(25);
+    //
+    // ONE call, not a loop. That it differs EVERY time is a property of `generateTempPassword`, not
+    // of this route, and it is asserted over a thousand draws in security-generate-temp-password
+    // .test.ts — which costs microseconds because the generator does no hashing. Proving it here
+    // instead meant 25 sequential bcrypt cost-12 rounds: ~4.6s on a developer machine, and over the
+    // 10s timeout on a shared CI runner, where it failed. A test that is slow enough to be flaky
+    // stops testing anything.
+    expect((await post({})).body.generatedPassword).not.toBe("Admin@12345");
   });
 
   it("stores a hash, never the password itself", async () => {

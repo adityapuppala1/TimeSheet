@@ -234,10 +234,14 @@ else
   fi
 
   printf 'This installer targets a local/trial deployment by default.\n'
-  read -r -p "Public URL for the web app [http://localhost:5173]: " WEB_ORIGIN_INPUT
-  WEB_ORIGIN_VALUE="${WEB_ORIGIN_INPUT:-http://localhost:5173}"
-  read -r -p "Public URL for the API (used as the SSO callback base) [${WEB_ORIGIN_VALUE}]: " APP_BASE_URL_INPUT
-  APP_BASE_URL_VALUE="${APP_BASE_URL_INPUT:-$WEB_ORIGIN_VALUE}"
+  # `ask`, not a bare `read`. These two were the only prompts on the unconditional path that called
+  # `read` directly, and under `set -euo pipefail` a `read` with no stdin returns non-zero at EOF and
+  # takes the whole script with it — so `TS_AUTO=1 ./install.sh`, the documented non-interactive mode
+  # (docs/INSTALLATION.md) and the exact command CI's install-e2e job runs, died here every time
+  # having printed the line above and nothing else. Every other prompt in this file either goes
+  # through `ask` or sits inside a branch whose condition does, which is why only these two failed.
+  WEB_ORIGIN_VALUE="$(ask "Public URL for the web app [http://localhost:5173]: " "http://localhost:5173")"
+  APP_BASE_URL_VALUE="$(ask "Public URL for the API (used as the SSO callback base) [${WEB_ORIGIN_VALUE}]: " "$WEB_ORIGIN_VALUE")"
 
   # Asked, not assumed, and asked HERE rather than buried in docs: this is the one setting whose
   # wrong value is completely silent. Every per-IP rate limit in the app reads req.ip, and Express
