@@ -29,13 +29,22 @@ test.use({ storageState: "tests/e2e/.auth/superadmin-settings.json" });
 test.describe.configure({ mode: "serial" });
 
 /** Screens worth showing a prospect, in the order the marketing pages use them. */
-const SHOTS = [
+const SHOTS: { slug: string; url: string; label: string; focus?: string; tab?: string }[] = [
   { slug: "dashboard", url: "/app", label: "Dashboard" },
   { slug: "tickets", url: "/app/tickets", label: "Tickets" },
   { slug: "insights", url: "/app/insights", label: "Insights" },
   { slug: "timesheet", url: "/app/timesheet", label: "Timesheet" },
   { slug: "security", url: "/app/security-insights", label: "Security insights" },
-  { slug: "settings-ai", url: "/app/settings", label: "AI settings" }
+  // `tab` clicks into a settings tab before capturing. Without it this shot was the settings
+  // page's DEFAULT tab (Reminders & schedule) published under an "AI controls" heading — the
+  // exact silent drift this spec exists to prevent.
+  { slug: "settings-ai", url: "/app/settings", label: "AI settings", tab: "AI" },
+  // The V8 surfaces the marketing pages now show. The Studio is captured from the top on
+  // purpose: the first card's quoted activation errors are the activation gate doing its job,
+  // which is exactly the claim the marketing copy makes about it.
+  { slug: "goals", url: "/app/goals", label: "Goals" },
+  { slug: "agents", url: "/app/agents", label: "AI teammates" },
+  { slug: "studio", url: "/app/studio", label: "Workflow Studio" }
 ];
 
 test.describe("product screenshots", () => {
@@ -88,6 +97,50 @@ test.describe("product screenshots", () => {
       // and the failure mode here is cosmetic (a half-drawn graph in a marketing image) rather
       // than a flaky assertion. Nothing is asserted against this delay.
       await page.waitForTimeout(1200); // NOSONAR — S2925: no observable end-of-animation signal exists.
+
+      if (shot.tab) {
+        const tab = page.getByRole("tab", { name: shot.tab, exact: true });
+        await ((await tab.count()) ? tab : page.getByRole("button", { name: shot.tab, exact: true })).first().click();
+        await page.waitForLoadState("networkidle");
+        await page.waitForTimeout(600); // NOSONAR — S2925: same Recharts/entry-animation reasoning as above.
+      }
+
+      if (shot.focus) {
+        // Plain DOM scroll rather than a locator: the text also appears in run-history rows, and
+        // Playwright's strict/stability checks have nothing useful to add to "scroll a card into
+        // view for a photograph".
+        await page.evaluate((needle) => {
+          const all = Array.from(document.querySelectorAll("h1,h2,h3,h4,p,span,div"));
+          const hit = all.find((el) => el.childElementCount === 0 && (el.textContent ?? "").trim() === needle);
+          if (hit) {
+            // behavior:"instant" matters: the app sets CSS smooth scrolling, and the default
+            // (smooth) animation would still be mid-flight when the screenshot is taken.
+            hit.scrollIntoView({ block: "start", behavior: "instant" });
+            // 100px back out gives headroom under the sticky bar without pulling the previous
+            // card's tail into frame.
+            document.scrollingElement?.scrollBy({ top: -100, behavior: "instant" });
+          }
+        }, shot.focus);
+        await page.waitForTimeout(300); // NOSONAR — S2925: scroll settling has no completion event either.
+      }
+
+      // Optional, gitignored: tests/e2e/.screenshot-anonymise.json maps text that must never
+      // appear in a public marketing image (real names, a real company identifier) to fictional
+      // replacements. The file stays out of the repo on purpose — committing a list of real
+      // employee names to anonymise would itself publish the thing it exists to hide. When the
+      // file is absent this is a no-op, so CI and fresh checkouts capture unmodified.
+      const anonPath = path.join("tests", "e2e", ".screenshot-anonymise.json");
+      if (fs.existsSync(anonPath)) {
+        const map: Record<string, string> = JSON.parse(fs.readFileSync(anonPath, "utf8"));
+        await page.evaluate((entries) => {
+          const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
+          for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+            let text = node.nodeValue ?? "";
+            for (const [find, replace] of entries) text = text.split(find).join(replace);
+            if (text !== node.nodeValue) node.nodeValue = text;
+          }
+        }, Object.entries(map));
+      }
 
       const png = path.join(OUT_DIR, `${shot.slug}.png`);
       await page.screenshot({ path: png, fullPage: false });

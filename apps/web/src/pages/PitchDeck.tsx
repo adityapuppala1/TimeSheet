@@ -23,6 +23,7 @@
  */
 import {
   ArrowRight,
+  Bot,
   Building2,
   CircleDollarSign,
   FileCheck2,
@@ -43,6 +44,7 @@ import { Button } from "../components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "../components/ui/card";
 import { Reveal, useScrollProgress, useSectionSpy } from "../components/marketing/Reveal";
 import { ScreenshotFrame } from "../components/marketing/ScreenshotFrame";
+import { AuthorityLadder } from "../components/marketing/AuthorityLadder";
 
 /**
  * The running order. It drives the slide numbers, the jump-to navigation and the scroll-spy, so
@@ -60,6 +62,7 @@ const SLIDES = [
   { id: "deployment", label: "Where it runs", nav: "Hosting" },
   { id: "moat", label: "Why it's hard to copy", nav: "Moat" },
   { id: "ai", label: "The AI position", nav: "AI" },
+  { id: "agentic", label: "The agentic layer", nav: "Teammates" },
   { id: "revenue", label: "How it makes money", nav: "Revenue" },
   { id: "next", label: "What's next", nav: "Next" },
   { id: "close", label: "In one line", nav: "One line" }
@@ -123,6 +126,12 @@ const MOATS = [
     title: "Isolation you can point at",
     body: "A database per organization, not a shared table with a tenant column. There is no query to get wrong, because there is no shared connection for one to cross.",
     why: "It's an architecture decision that's expensive to retrofit. Anyone starting from a shared schema has to rebuild their data layer to match this claim."
+  },
+  {
+    icon: Workflow,
+    title: "An agentic layer that adds no new power",
+    body: "Teammates and flows compose capabilities that already exist, under the same review, undo and audit path as every other AI change. Switching one on grants nothing new — it only names who runs what, at what budget, with what authority.",
+    why: "Most products bolt agents on as a second write-path with its own permissions to audit. Composition means the security review done once covers the agents too — and the same provenance chain explains every run."
   }
 ];
 
@@ -152,7 +161,8 @@ const SURFACES = [
   { title: "Intake", body: "Email, Slack, Teams, Google Chat, Telegram and public request forms — all landing as routed, prioritized tickets." },
   { title: "Connect", body: "GitHub repo, branch and PR pickers; webhooks from GitLab, Bitbucket, Gitea, Forgejo and Azure DevOps; an optional CI gate on Resolved." },
   { title: "Report", body: "Insights, a 22-column CSV, a real Excel workbook, truncation-honest PDFs, and dashboards scheduled to people with no account." },
-  { title: "Prove", body: "Approved, identity-verified work as a signed attestation PDF, shareable by link, priced from the rate that applied at approval." }
+  { title: "Prove", body: "Approved, identity-verified work as a signed attestation PDF, shareable by link, priced from the rate that applied at approval." },
+  { title: "Automate", body: "Named AI teammates and reviewable flows — assembled from capabilities the workspace already runs, propose-by-default, priced per run on the same ledger as human work." }
 ];
 
 /** Deployment posture. All of it is a property of the repository, not a plan. */
@@ -449,6 +459,67 @@ export function PitchDeck() {
                 caption="One screen: provider, budget, every toggle, and measured quality."
               />
             </Reveal>
+          </div>
+        </Slide>
+
+        {/* -------------------------------------------------------- Agentic */}
+        <Slide id="agentic" tinted>
+          <Reveal>
+            <SlideTitle icon={Bot} title="AI teammates you can name, scope, and switch off" />
+            <p className="mt-3 max-w-2xl text-sm leading-7 text-muted-foreground">
+              Six ready teammates — Triage, Planner, Risk watch, Security desk, Reporter, Load balancer — assembled only
+              from capabilities this workspace already runs. Adding one grants no new power, and every one arrives off.
+            </p>
+          </Reveal>
+          <div className="mt-8 grid gap-8 lg:grid-cols-[1fr_1.1fr] lg:items-center">
+            <div className="grid gap-4">
+              {[
+                ["No seat, no mailbox, no exceptions", "A teammate has its own identity in the audit trail and can be assigned work like anyone else. It holds no paid seat, cannot sign in, and its address sits on a domain reserved never to resolve — so no digest can be posted to it."],
+                ["Exactly one owner per capability", "Switching a teammate on is refused if another already covers something in its bundle, and the refusal names it. \u201cWhich teammate does this?\u201d always has exactly one answer."],
+                ["Flows you can read, replay, and refuse", "The Workflow Studio writes automation as a list you review top to bottom. Replay against your own recent triggers calls no model and writes nothing; a flow with a problem cannot be switched on, and the reason is quoted."],
+                ["Priced on the same ledger as human work", "Each card shows today's spend against its own daily ceiling, under your monthly budget and the platform cap — plus its recent runs: status, trigger, step count, and whether it was clamped."]
+              ].map(([title, body], index) => (
+                <Reveal key={title} delay={index * 70}>
+                  <Point title={title} body={body} />
+                </Reveal>
+              ))}
+            </div>
+            <Reveal delay={120}>
+              <div className="rounded-xl border border-border bg-card p-5">
+                <p className="text-xs font-bold uppercase tracking-wider text-primary">The authority ladder</p>
+                <AuthorityLadder className="mt-4 w-full" />
+                <p className="mt-3 text-xs leading-5 text-muted-foreground">
+                  A flow can never do more than its most restricted step — and the card names that step.
+                </p>
+              </div>
+            </Reveal>
+          </div>
+          <div className="mt-8 grid gap-6 lg:grid-cols-2">
+            <Reveal>
+              <ScreenshotFrame
+                src="/product/agents.png"
+                alt="The AI teammates roster with six named teammates, their capabilities, runs and spend."
+                caption="The roster — each card is the whole truth about one teammate."
+              />
+            </Reveal>
+            <Reveal delay={90}>
+              <ScreenshotFrame
+                src="/product/studio.png"
+                alt="The Workflow Studio: a flow's authority banner and a quoted reason why it cannot be switched on."
+                caption="A flow that cannot go live says why — the gate is the feature."
+              />
+            </Reveal>
+          </div>
+          <div className="mt-8 grid gap-3 sm:grid-cols-2">
+            {[
+              ["Goals that measure themselves", "Wire an objective to approved hours, billed spend, tickets closed, on-time rate, SLA escalations or project risk — progress reports itself, an override keeps the receipt, and \u201cno data yet\u201d is words, never 0%."],
+              ["An Inbox, and a brief that counts", "Notifications become a queue: done, snooze, and a snoozed item comes back on its own. Today's brief is counted from the same definitions the pages behind it use — nothing in it is generated."]
+            ].map(([title, body]) => (
+              <div key={title} className="rounded-xl border border-border bg-card p-4 transition hover:border-primary/40">
+                <p className="text-xs font-bold uppercase tracking-wider text-primary">{title}</p>
+                <p className="mt-2 text-sm leading-6 text-muted-foreground">{body}</p>
+              </div>
+            ))}
           </div>
         </Slide>
 

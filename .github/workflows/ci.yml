@@ -20,7 +20,7 @@ env:
 
 jobs:
   build-test-ubuntu:
-    name: Build, typecheck, and e2e (ubuntu)
+    name: Build, typecheck, unit + integration (ubuntu)
     runs-on: ubuntu-latest
     services:
       mysql:
@@ -140,27 +140,6 @@ jobs:
       - name: Integration tests (vitest, real MySQL)
         run: npm run test:integration -w apps/api
 
-      - name: Install Playwright browsers
-        # ALL browsers, not just chromium: `npm run test:e2e` below runs every project in
-        # playwright.config.ts, which includes firefox and webkit. Installing only chromium meant 56
-        # tests failed with "Executable doesn't exist at …/webkit-XXXX/pw_run.sh" — not a product
-        # failure at all, just the suite being asked to drive browsers that were never fetched.
-        # Nobody had seen it because this step had never been reached before.
-        run: npx playwright install --with-deps
-
-      - name: Run e2e suite
-        run: npm run test:e2e
-        env:
-          CI: "true"
-
-      - name: Upload Playwright report
-        if: failure()
-        uses: actions/upload-artifact@v4
-        with:
-          name: playwright-report
-          path: playwright-report/
-          retention-days: 14
-
       # Reports this job's own outcome as a TestRun through the app's own ingestion webhook
       # (devops-webhook.controller.ts — the same endpoint docs/SECURITY_DEVOPS_INTEGRATIONS.md
       # tells CUSTOMERS to POST to). `job.status` reflects this job's status up to this point
@@ -183,6 +162,127 @@ jobs:
             -H "Authorization: Bearer $TIMESPHERE_INGEST_TOKEN" -H "Content-Type: application/json" \
             --data "{\"provider\":\"github-actions\",\"branch\":\"${{ github.ref_name }}\",\"status\":\"$STATUS\"}" \
             || echo "::warning::Failed to report test-run status to TimeSphere (non-fatal)"
+
+  # ── The Playwright suite, split across parallel runners ──────────────────────────────────────
+  #
+  # WHY THIS IS ITS OWN JOB, AND SHARDED. It used to be the last step of the job above, and it was
+  # 94% of that job's wall clock: 71 minutes out of 75, with everything else — install, lint, audit,
+  # build, unit, migrate, seed, integration — adding up to 4½.
+  #
+  # Sharding is safe here for a specific reason. `playwright.config.ts` pins `workers: 1` and
+  # `fullyParallel: false` because specs share one seeded database and would race each other. A
+  # SHARD is not a worker: each one is a separate runner with its own MySQL service, its own seed
+  # and its own `webServer` pair, so the no-concurrency guarantee still holds INSIDE a shard while
+  # the shards themselves run side by side. Raising `workers` instead would break exactly the thing
+  # that comment protects.
+  #
+  # `fail-fast: false` because a failure in shard 2 says nothing about shard 3, and cancelling the
+  # others would hide two thirds of the picture on the run you most need it.
+  e2e:
+    name: e2e ${{ matrix.shard }}/4
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4]
+    services:
+      mysql:
+        image: mysql:8.4
+        env:
+          MYSQL_ROOT_PASSWORD: root_ci_password
+          MYSQL_DATABASE: ci_placeholder
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd="mysqladmin ping -h localhost -proot_ci_password"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=10
+    env:
+      NODE_ENV: test
+      DATABASE_URL: "mysql://root:root_ci_password@127.0.0.1:3306/ci_tenant"
+      CONTROL_DATABASE_URL: "mysql://root:root_ci_password@127.0.0.1:3306/ci_control"
+      JWT_ACCESS_SECRET: "ci-only-access-secret-not-for-real-use-0123456789"
+      JWT_REFRESH_SECRET: "ci-only-refresh-secret-not-for-real-use-0123456789"
+      PLATFORM_ADMIN_JWT_SECRET: "ci-only-platform-admin-secret-not-for-real-use-0123456789"
+      ENCRYPTION_KEY: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+      WEB_ORIGIN: "http://localhost:5173"
+      APP_BASE_URL: "http://localhost:5173"
+      DEFAULT_ORG_SLUG: "default"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Generate Prisma clients (both schemas)
+        working-directory: apps/api
+        run: |
+          npx prisma generate --schema=prisma/schema.prisma
+          npx prisma generate --schema=prisma/control/schema.prisma
+
+      # packages/shared must be built before the dev servers can resolve it; the API and web run
+      # from source via their own dev servers (playwright.config.ts's `webServer`), so this is the
+      # only build the suite needs.
+      - name: Build shared package
+        run: npm run build -w packages/shared
+
+      - name: Create CI databases
+        run: mysql -h127.0.0.1 -uroot -proot_ci_password -e "CREATE DATABASE IF NOT EXISTS ci_tenant; CREATE DATABASE IF NOT EXISTS ci_control;"
+
+      - name: Migrate both schemas
+        working-directory: apps/api
+        run: |
+          npx prisma migrate deploy --schema=prisma/schema.prisma
+          npx prisma migrate deploy --schema=prisma/control/schema.prisma
+
+      - name: Seed tenant + control-plane data
+        working-directory: apps/api
+        run: |
+          npx tsx prisma/seed.ts
+          npx tsx prisma/control/seed.ts
+
+      # Keyed on the resolved Playwright version, so a dependency bump invalidates it automatically
+      # rather than silently reusing browsers built for a different client.
+      - name: Resolve Playwright version
+        id: pw
+        run: echo "version=$(node -p "require('@playwright/test/package.json').version")" >> "$GITHUB_OUTPUT"
+
+      - name: Cache Playwright browsers
+        id: pw-cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-${{ steps.pw.outputs.version }}
+
+      # Browsers only on a cache miss. The OS libraries are installed either way, because they
+      # live in /usr/lib rather than in the cached ~/.cache/ms-playwright — restoring the cache
+      # alone would leave browser binaries that cannot start for want of a shared object.
+      - name: Install Playwright browsers
+        if: steps.pw-cache.outputs.cache-hit != 'true'
+        run: npx playwright install --with-deps
+
+      - name: Install Playwright OS dependencies (cache hit)
+        if: steps.pw-cache.outputs.cache-hit == 'true'
+        run: npx playwright install-deps
+
+      - name: Run e2e suite (shard ${{ matrix.shard }} of 4)
+        run: npm run test:e2e -- --shard=${{ matrix.shard }}/4
+        env:
+          CI: "true"
+
+      - name: Upload Playwright report
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          # Per-shard name: four jobs uploading one artifact name is a 409 on the second.
+          name: playwright-report-shard-${{ matrix.shard }}
+          path: playwright-report/
+          retention-days: 14
 
   # Exists solely to answer "is ingestion configured?" as a job OUTPUT, because a job-level `if:`
   # is the one place that question cannot be asked directly — `secrets` is unavailable there, and

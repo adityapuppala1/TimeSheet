@@ -20,7 +20,10 @@ const PRODUCT_IMAGES = [
   "/product/insights.png",
   "/product/timesheet.png",
   "/product/security.png",
-  "/product/settings-ai.png"
+  "/product/settings-ai.png",
+  "/product/goals.png",
+  "/product/agents.png",
+  "/product/studio.png"
 ];
 
 test.describe("marketing pages", () => {
