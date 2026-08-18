@@ -11,7 +11,9 @@
  */
 import { describe, expect, it } from "vitest";
 
-const { isOriginAllowed } = await import("../../src/app.js");
+// From the leaf module rather than from app.ts: the rule has one home now, shared with the boot
+// check, and importing it no longer drags in the entire Express app.
+const { isOriginAllowed } = await import("../../src/config/origins.js");
 
 const LIST = ["http://localhost:5173", "https://203.0.113.10:5173", "https://timesphere.example.com"];
 

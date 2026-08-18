@@ -38,7 +38,7 @@ describe("a correctly addressed deployment", () => {
 describe("the mismatch that caused a real outage", () => {
   it("catches APP_BASE_URL missing from WEB_ORIGIN, as an error", () => {
     const found = check({ appBaseUrl: "https://203.0.113.10:5173", webOrigin: "http://localhost:5173" });
-    const finding = found.find((f) => /not in WEB_ORIGIN/.test(f.problem));
+    const finding = found.find((f) => /CORS will refuse that origin/.test(f.problem));
     expect(finding?.severity).toBe("error");
     // The fix must name the exact string to add — that is the whole difference between this and the
     // message users were getting.
@@ -48,8 +48,35 @@ describe("the mismatch that caused a real outage", () => {
   it("compares full origins, so a right host on a wrong port is still caught", () => {
     // A browser treats these as different origins. So must this, or the check passes and CORS fails.
     expect(problems(check({ appBaseUrl: "https://app.example.com:8443", webOrigin: "https://app.example.com" }))).toMatch(
-      /not in WEB_ORIGIN/
+      /CORS will refuse that origin/
     );
+  });
+
+  it("stays silent for a fresh machine on APP_BASE_URL=auto, because CORS accepts private LAN addresses in development", () => {
+    /**
+     * THE REGRESSION THIS EXISTS TO PREVENT. `auto` resolves to whatever LAN address the machine has,
+     * which by design is not, and cannot be, listed in a checked-in WEB_ORIGIN. The CORS layer accepts
+     * any private LAN origin in development, so this configuration WORKS — and the first version of
+     * this check said ERROR on every fresh deployment because it read the list instead of asking the
+     * rule. A guard that cries on healthy setups is worse than no guard.
+     */
+    expect(
+      check({ appBaseUrl: "https://192.168.4.77:5173", webOrigin: "http://localhost:5173", nodeEnv: "development" })
+    ).toEqual([]);
+    expect(check({ appBaseUrl: "http://10.0.0.8:5173", webOrigin: "http://localhost:5173", nodeEnv: "development" })).toEqual([]);
+  });
+
+  it("still catches an unlisted PUBLIC address in development, which the shortcut never covers", () => {
+    expect(
+      problems(check({ appBaseUrl: "https://203.0.113.10:5173", webOrigin: "http://localhost:5173", nodeEnv: "development" }))
+    ).toMatch(/CORS will refuse that origin/);
+  });
+
+  it("does not extend the development shortcut into production", () => {
+    // In production the allow-list is the only thing that counts, for private addresses too.
+    expect(
+      problems(check({ appBaseUrl: "https://192.168.4.77:5173", webOrigin: "https://elsewhere.example.com", nodeEnv: "production" }))
+    ).toMatch(/CORS will refuse that origin/);
   });
 
   it("accepts a match found among several allow-listed origins", () => {

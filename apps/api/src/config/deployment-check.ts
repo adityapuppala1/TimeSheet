@@ -21,7 +21,11 @@
  * WHO CALLS THIS: `server.ts` at boot, before it starts listening.
  */
 
-/** Loopback, link-local, and the three RFC 1918 ranges — everything unreachable from the internet. */
+import { isOriginAllowed } from "./origins.js";
+
+/** Loopback, link-local, and the three RFC 1918 ranges — everything unreachable from the internet.
+ *  Broader than `origins.ts`'s pattern on purpose: that one matches whole ORIGINS for the allow-list,
+ *  this one matches bare HOSTNAMES to decide whether emailed links can leave the building. */
 const PRIVATE_HOST_RE =
   /^(localhost|127\.\d{1,3}\.\d{1,3}\.\d{1,3}|::1|0\.0\.0\.0|169\.254\.\d{1,3}\.\d{1,3}|10\.\d{1,3}\.\d{1,3}\.\d{1,3}|192\.168\.\d{1,3}\.\d{1,3}|172\.(1[6-9]|2\d|3[01])\.\d{1,3}\.\d{1,3})$/i;
 
@@ -86,14 +90,21 @@ export function inspectDeploymentConfig(input: DeploymentInputs): ConfigFinding[
 
   /**
    * THE ONE THAT BIT. The address the app tells people to use must be an address the app accepts
-   * requests from. A browser opening APP_BASE_URL sends exactly that origin, so if it is missing
-   * from WEB_ORIGIN every sign-in from the only address users were given fails on CORS — while
-   * localhost keeps working perfectly for whoever is testing.
+   * requests from. A browser opening APP_BASE_URL sends exactly that origin, so if CORS would refuse
+   * it, every sign-in from the only address users were given fails — while localhost keeps working
+   * perfectly for whoever is testing.
+   *
+   * Asked of `isOriginAllowed` rather than by scanning the list, so this cannot disagree with what the
+   * middleware will actually do. The first version DID disagree: it did not know about the
+   * development shortcut for private LAN addresses, so a fresh machine running `APP_BASE_URL="auto"`
+   * — whose entire purpose is adapting to whatever address that machine has — booted with a loud
+   * error about a setup that worked fine.
    */
-  if (!allowed.includes(base)) {
+  if (!isOriginAllowed(base, allowed, !isProduction)) {
+    const autoAllowed = !isProduction ? " (development also auto-accepts private LAN addresses, and this is not one)" : "";
     findings.push({
       severity: "error",
-      problem: `APP_BASE_URL is ${base}, but that origin is not in WEB_ORIGIN — every browser opening the address people are given will be refused on CORS.`,
+      problem: `APP_BASE_URL is ${base}, but CORS will refuse that origin${autoAllowed} — every browser opening the address people are given will be turned away.`,
       fix: `Add ${base} to WEB_ORIGIN (comma-separated, exact scheme/host/port) and restart the API.`
     });
   }

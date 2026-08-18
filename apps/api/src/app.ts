@@ -21,6 +21,7 @@ import express from "express";
 import rateLimit from "express-rate-limit";
 import helmet from "helmet";
 import morgan from "morgan";
+import { isOriginAllowed } from "./config/origins.js";
 import { env } from "./config/env.js";
 import { avatarsDir, documentReadDirs, isInsideNonPublicSubtree, isOrgSegment, resolveWithin, storageRoot } from "./config/storage-paths.js";
 import { tenantContext } from "./config/tenant-context.js";
@@ -112,30 +113,7 @@ app.use(helmet({ crossOriginResourcePolicy: { policy: "cross-origin" } }));
  * In production set `NODE_ENV=production` and pin `WEB_ORIGIN` to your real domain(s) only.
  */
 const allowedOrigins = env.WEB_ORIGIN.split(",").map((value) => value.trim()).filter(Boolean);
-
-const PRIVATE_LAN_RE =
-  /^https?:\/\/(localhost|127\.0\.0\.1|10\.\d{1,3}\.\d{1,3}\.\d{1,3}|192\.168\.\d{1,3}\.\d{1,3}|172\.(1[6-9]|2\d|3[01])\.\d{1,3}\.\d{1,3})(:\d+)?$/i;
-
 const isDev = env.NODE_ENV !== "production";
-
-/**
- * Whether one Origin header is allowed, as a pure decision.
- *
- * Extracted so it can be tested exhaustively without standing up the app. The interesting cases are
- * all boundary conditions on a security control — 172.16 is private and 172.32 is not, a public IP is
- * refused even in development, and an allow-listed entry must match scheme, host AND port, because a
- * browser treats http and https on the same host as different origins and so must this.
- */
-export function isOriginAllowed(origin: string | undefined, allowList: string[], devMode: boolean): boolean {
-  // No Origin header at all (curl, server-to-server, same-origin form posts) is not a cross-origin
-  // request, so there is nothing for CORS to decide.
-  if (!origin) return true;
-  if (allowList.includes(origin)) return true;
-  // The development shortcut, and the reason it is safe: these ranges are not routable from the
-  // internet, so "any private LAN address" cannot match a stranger. A public address never gets this
-  // treatment — it must be listed explicitly, in any environment.
-  return devMode && PRIVATE_LAN_RE.test(origin);
-}
 
 app.use(
   cors({

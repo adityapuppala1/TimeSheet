@@ -479,6 +479,12 @@ it, many do), the same link works from the office and from a phone on mobile dat
 to switch between and nothing to get wrong per audience. Two base URLs cannot be made to work: an
 email carries one.
 
+**On development machines, leave `APP_BASE_URL="auto"`.** A hardcoded address travels with the
+checkout and is wrong on every machine except the one it was written on. `auto` resolves to that
+machine's own LAN address at boot and logs what it chose, and because CORS auto-accepts private LAN
+origins in development, a freshly cloned box works with no edit to either setting — which the boot
+check knows, so it stays silent. Pin a real value only where it is genuinely fixed: production.
+
 **Until a DNS name exists**, a LAN-only deployment is a coherent, honest position: keep `APP_BASE_URL`
 on the LAN address, accept that emailed links only open inside the network, and do not expose the dev
 server. That is a smaller promise, kept — better than a public address whose links land on warnings.
