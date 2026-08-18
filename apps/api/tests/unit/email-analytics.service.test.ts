@@ -38,11 +38,19 @@ describe("resolveLogTemplate", () => {
     expect(resolveLogTemplate("welcome.test")).toEqual({ cards: ["welcome"], isTest: true });
   });
 
-  it("returns no card for a category with a code-only email, so it lands in the unmapped bucket", () => {
-    // digest.bug_pattern and ticket.stale_nudge are real NotificationCategory values with no
-    // editable template — they must be reported, never silently dropped.
-    expect(resolveLogTemplate("digest.bug_pattern").cards).toEqual([]);
-    expect(resolveLogTemplate("ticket.stale_nudge").cards).toEqual([]);
+  it("resolves the two categories that were being sent with no editable template", () => {
+    // This test used to assert the OPPOSITE, and it was right to: `digest.bug_pattern` and
+    // `ticket.stale_nudge` were dispatched in code and missing from `TEMPLATE_VARIABLES`, so the
+    // editor never listed them, no administrator could change a word, and their delivery analytics
+    // fell into the unmapped bucket. They are registered now, so each attaches to its own card like
+    // every other template — which is what the analytics were always supposed to show.
+    expect(resolveLogTemplate("digest.bug_pattern").cards).toEqual(["digest.bug_pattern"]);
+    expect(resolveLogTemplate("ticket.stale_nudge").cards).toEqual(["ticket.stale_nudge"]);
+  });
+
+  it("still returns no card for something that is genuinely not a template", () => {
+    // The unmapped bucket has to keep existing: an ad-hoc send is real and must be reported rather
+    // than silently dropped or forced onto a card it does not belong to.
     expect(resolveLogTemplate("ad-hoc").cards).toEqual([]);
   });
 });

@@ -2119,6 +2119,16 @@ export interface EmailTemplateRow {
   enabled: boolean;
   subject: string | null;
   bodyHtml: string | null;
+  /** What this workspace SENDS when nothing has been customised — the real shipped email with its
+   *  `{{placeholders}}`. The editor previously had no access to this and fell back to a three-line
+   *  stub, so an un-customised template previewed as almost nothing and saving replaced the real
+   *  email with the stub. */
+  defaultSubject: string | null;
+  defaultHtml: string | null;
+  /** Variables the shipped template uses that THIS workspace's customised version does not — an
+   *  override wins outright, so a template customised before a field existed keeps sending without
+   *  it, silently, until somebody is told. */
+  missingVariables: string[];
   updatedAt: string | null;
 }
 

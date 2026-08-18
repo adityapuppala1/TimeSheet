@@ -222,6 +222,55 @@ its old schema without the update saying so. After upgrading, run the fan-out on
   everything after it, sometimes for days, and until now it only raised an in-app notification — which
   made a blocked workflow look like a broken one. On by default.
 
+### ✉️ Email templates: the editor now shows the real email
+
+- **An un-customised template used to preview as a three-line placeholder**, and pressing Save on that
+  screen replaced the real, designed email with the placeholder. The editor now opens on the actual
+  email this workspace sends, with its real subject — for every template, customised or not.
+- **Twelve templates were being sent that the editor never listed at all**, so nobody could change a
+  word of them and their delivery analytics fell into an "unmapped" bucket: the goal digest, the
+  workflow approval, the bug-pattern digest, the stale-ticket nudge and the whole face-verification
+  family. All are now editable, previewable and reported like every other template.
+- **"Send test" refused any template that had never been customised** — "Template not saved, open the
+  editor and save it first" — which was every one of those twelve. Testing what your workspace already
+  sends no longer requires editing it first.
+- **Previews with no sample data** for the face and identity emails now render a realistic message
+  instead of a design with every field blank.
+- **If you have customised a template and it is missing a field the newer version added**, the editor
+  now names the exact variables and offers to revert. Nothing you wrote is changed for you.
+
+### 📋 Timesheet emails now say what the entry was
+
+- Submitted, approved and rejected emails carry the **module, submodule, activity, linked ticket and
+  the task description** — not just a date, a project and an hours figure. An approver can decide from
+  the email instead of opening the app to find out what the entry was for.
+- **The approver gets the email too.** The person who needed no action already got one; the person
+  being asked to approve got an in-app notification only.
+- A rejection now quotes what you originally wrote, so fixing it is a correction rather than a retype.
+
+### 🎫 Ticket emails carry the comment and the type
+
+- **A "new comment" email now contains the comment.** It previously said only that somebody had
+  commented, so every recipient had to open the app to find out whether it concerned them.
+- Assignment emails carry the **type, module and description**; status changes carry the type and the
+  latest comment for context — labelled as the latest comment, never as a reason for the move.
+- **Every ticket email links to the ticket**, not to the ticket list. In a workspace with hundreds of
+  them, "open tickets and find it" was the reader's job until now.
+
+### 📊 The Monday digest is a report, not a nudge
+
+- It carried one AI-written paragraph and a link to the dashboard. It now leads with **last week
+  beside month-to-date and year-to-date** — because "214 hours" answers nothing on its own, and the
+  question you actually have is whether last week was normal.
+- **Managers and administrators also get the workspace user-by-user and project-by-project**, plus
+  open tickets by priority with shares. Everyone else gets their own week and where their hours went.
+  Who sees what follows the same permission that opens the reports pages.
+- **It no longer depends on AI.** The figures are counted from your own records and always send; the
+  written summary is added when a model is available. Previously, if the model failed, the entire
+  digest was silently not sent.
+- Hours count **approved** timesheets only — the same basis as the portfolio and budget figures, so
+  the digest can never disagree with them. A share with nothing to divide by shows a dash, not 0%.
+
 ### 🩹 A workspace left behind by an upgrade now says so at startup
 
 - Every organization has its own database, and a release only reaches the rest of them when the

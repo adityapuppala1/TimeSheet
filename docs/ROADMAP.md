@@ -3964,3 +3964,70 @@ fixes it. It **warns rather than refusing to start** — one org being behind mu
 others, the same isolation the fan-out script already applies — and is silent when everything is
 current. Verified both ways: silent on a current deployment, and correct when a version is temporarily
 set back.
+
+## Email templates, timesheet/ticket detail, and a digest worth reading (2026-08-18)
+
+Reported: several templates "not configured properly", previews not showing the HTML body or the
+details and URLs, and some emails seemingly stuck. Investigated all of it before changing anything.
+
+### What "stuck" actually was
+
+- **Nothing is stuck.** `EmailLog` had **0** rows in QUEUED, and 558 SENT since Aug 1 with the most
+  recent that morning. The failures visible in the UI are historical transport events: 186 Gmail
+  `421 Temporary System Problem`, 41 `SMTP_HOST is not configured` from July, 28 `too many login
+  attempts`. Two rows read "queued with no renderable body" — both from July/early August, both
+  handled correctly by the guard that exists for exactly that case.
+- So the real defects were elsewhere, and there were five of them.
+
+### The five defects, all in one family
+
+Every one came from the same wrong assumption: **that a template only exists once somebody has
+customised it.**
+
+- [x] **The editor previewed a stub.** The list route returned `bodyHtml: null` with no override, and
+  the editor fell back to a three-line placeholder — so an un-customised template previewed as almost
+  nothing, and **pressing Save replaced a designed email with the placeholder**. An editor whose
+  default action destroys the thing it edits is not an editor. The API now returns the shipped body
+  and subject for every key, produced by calling each compiled template with its own arguments set to
+  `{{name}}` — the genuine design, placeholders exactly where values land.
+- [x] **Default subjects existed for 8 of 31 keys** in a hand-kept map in the web app; the other 23
+  opened on `TimeSphere — reminder.daily`, a subject nothing has ever sent. Now served from the same
+  place the send reads.
+- [x] **Twelve templates were dispatched and unlisted** — `digest.bug_pattern`, `ticket.stale_nudge`,
+  `goal.digest`, `workflow.approval` and the face family — so no administrator could edit them and
+  their analytics fell into the unmapped bucket. An existing test actually ASSERTED this ("returns no
+  card for a category with a code-only email"); it documented the gap rather than closing it, and now
+  asserts the opposite.
+- [x] **"Send test" refused any un-customised template** with "Template not saved — open the editor
+  and save it first", which was all twelve of the above. Verified fixed by test-sending `goal.digest`:
+  SENT.
+- [x] **Six templates had no sample values at all**, so their previews rendered the design with every
+  field blank — which reads as broken rather than unfilled.
+
+**The guard against all of it recurring** is `email-template-registry.test.ts`, which walks the actual
+source for every `templateKey:` dispatched anywhere and holds the registry to it: no un-editable key,
+every key with a description, variables, samples, a shipped subject and a shipped body that contains a
+real `<table>` and exceeds 400 bytes — and no `{{token}}` left unresolved after a preview render.
+
+### Content
+
+- [x] **Timesheet emails** carry module, submodule, activity, the linked ticket and the task text.
+  **The approver now gets an email too** — previously the person needing no action got one and the
+  person being asked to decide got an in-app row only.
+- [x] **Ticket emails** carry the type, and the comment email carries the comment. Every ticket email
+  deep-links to `?open=<id>` rather than to the list.
+- [x] **The Monday digest** leads with last week beside MTD and YTD, then where the hours went; a
+  manager or administrator also gets the workspace user-by-user, project-by-project, and open tickets
+  by priority with shares. Year to date is the CALENDAR year — this product has no fiscal-year setting
+  and inventing one would put a number under a heading it does not match.
+- [x] **The digest no longer depends on a model.** It was gated on `generateWeeklyDigest` succeeding,
+  so an unavailable or too-small model meant the whole report silently did not send. Figures always
+  send; the paragraph is a garnish. Its fallback HTML was also a bare `<p>Hi name</p><p>summary</p>` —
+  and since almost nobody overrides a template, that stub WAS the weekly digest for most workspaces.
+
+### One consequence, reported rather than fixed for people
+
+This workspace has 20 overrides, all written within 0.2 seconds of each other on 2026-08-07. **An
+override wins outright**, so those templates keep sending their old bodies and will not show the new
+fields. Merging into somebody's customised wording would be worse than pointing at it, so the editor
+now names the exact variables an override is missing next to a Revert button.

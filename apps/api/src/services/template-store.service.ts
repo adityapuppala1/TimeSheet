@@ -13,9 +13,9 @@ import { templates as compiledTemplates } from "./mail-templates.js";
 export const TEMPLATE_VARIABLES: Record<string, string[]> = {
   welcome: ["name", "appUrl"],
   reset: ["resetUrl", "appUrl"],
-  "timesheet.submitted": ["name", "hours", "date", "project", "managerName", "appUrl"],
-  "timesheet.approved": ["name", "hours", "date", "reviewer", "project", "appUrl"],
-  "timesheet.rejected": ["name", "date", "project", "reviewer", "reason", "appUrl"],
+  "timesheet.submitted": ["name", "hours", "date", "project", "managerName", "module", "submodule", "activity", "description", "ticketRef", "appUrl"],
+  "timesheet.approved": ["name", "hours", "date", "reviewer", "project", "module", "submodule", "activity", "description", "appUrl"],
+  "timesheet.rejected": ["name", "date", "project", "reviewer", "reason", "module", "submodule", "activity", "description", "appUrl"],
   "sla.breach": ["managerName", "employeeName", "date", "project", "deadline", "hoursOverdue", "appUrl"],
   escalation: ["targetName", "employeeName", "managerName", "date", "project", "appUrl"],
   "deadline.reminder": ["name", "daysLeft", "deadlineDay", "appUrl"],
@@ -26,16 +26,20 @@ export const TEMPLATE_VARIABLES: Record<string, string[]> = {
   "reminder.escalation.manager": ["managerName", "employeeName", "missedDate", "employeeEmail", "appUrl"],
 
   // Ticketing
-  "ticket.assigned": ["assigneeName", "ticketKey", "title", "priority", "assignedBy", "appUrl"],
-  "ticket.status_changed": ["ticketKey", "title", "from", "to", "changedBy", "appUrl"],
-  "ticket.commented": ["ticketKey", "title", "author", "appUrl"],
+  "ticket.assigned": ["assigneeName", "ticketKey", "title", "priority", "assignedBy", "type", "module", "description", "appUrl"],
+  "ticket.status_changed": ["ticketKey", "title", "from", "to", "changedBy", "type", "comment", "appUrl"],
+  "ticket.commented": ["ticketKey", "title", "author", "type", "comment", "appUrl"],
   "ticket.sla_breach": ["assigneeName", "ticketKey", "title", "priority", "hoursOverdue", "appUrl"],
   "ticket.escalation": ["targetName", "ticketKey", "title", "assigneeName", "appUrl"],
   "ticket.received_via_email": ["senderName", "ticketKey", "title", "priority", "appUrl"],
   "ticket.needs_review": ["targetName", "ticketKey", "title", "senderEmail", "confidence", "appUrl"],
-  "digest.weekly": ["name", "weekLabel", "summary", "appUrl"],
+  "digest.weekly": ["name", "weekLabel", "summary", "tablesHtml", "appUrl"],
   "ticket.closed_digest": ["ticketKey", "title", "closedBy", "riskVerdict", "findingsText", "testStatus", "appUrl"],
   "digest.security_weekly": ["weekLabel", "summary", "riskScore", "appUrl"],
+  // Both of these were being SENT and were missing from this registry, so the editor did not list
+  // them and no administrator could change a word of them. Reconciled by a test now, not by care.
+  "digest.bug_pattern": ["periodLabel", "summary", "appUrl"],
+  "ticket.stale_nudge": ["assigneeName", "ticketKey", "title", "suggestion", "appUrl"],
   "goal.digest": ["name", "weekLabel", "summary", "linesText", "appUrl"],
   "workflow.approval": ["name", "flowName", "subject", "stepOrder", "appUrl"],
 
@@ -73,6 +77,8 @@ export const TEMPLATE_DESCRIPTIONS: Record<string, string> = {
   "ticket.received_via_email": "Confirmation sent to an external sender whose email was auto-converted into a ticket.",
   "ticket.needs_review": "Sent to project admins/managers when an email-sourced ticket's AI confidence is below the threshold.",
   "digest.weekly": "Monday-morning AI-authored recap of a person's ticket + timesheet activity for the past week.",
+  "digest.bug_pattern": "Periodic AI-authored correlation of what keeps breaking, to whoever opted in.",
+  "ticket.stale_nudge": "Nudge to a ticket's assignee when it has gone quiet, with an AI-suggested next step.",
   "goal.digest": "Weekly, to a goal's OWNER: which of their goals are off track and which periods close soon. Off by default.",
   "workflow.approval": "A workflow stopped at a gate and is waiting for this person to approve or decline. On by default — it blocks.",
   "ticket.closed_digest": "Security/test-status digest sent when a ticket with ingested findings closes — to the closer + their manager, cc this workspace's admins.",
@@ -124,16 +130,23 @@ export function sampleVariables(key: string): Record<string, string> {
     welcome: { name: "Aanya Sharma", appUrl: "https://timesphere.local" },
     reset: { resetUrl: "https://timesphere.local/reset-password?token=demo", appUrl: "https://timesphere.local" },
     "timesheet.submitted": {
+      module: "Payments", submodule: "Checkout", activity: "Development",
+      description: "Reworked the retry path so a declined card no longer double-charges.\n\nBlocked for an hour on the sandbox being down.",
+      ticketRef: "HICS-OPS-88 — Invoice PDF renders blank",
       name: "Aanya Sharma", hours: "7.50", date: "2026-05-27",
       project: "HICS Operations Platform", managerName: "Mira Kapoor",
       appUrl: "https://timesphere.local"
     },
     "timesheet.approved": {
+      module: "Payments", submodule: "Checkout", activity: "Development",
+      description: "Reworked the retry path so a declined card no longer double-charges.",
       name: "Aanya Sharma", hours: "7.50", date: "2026-05-27",
       reviewer: "Mira Kapoor", project: "HICS Operations Platform",
       appUrl: "https://timesphere.local"
     },
     "timesheet.rejected": {
+      module: "Payments", submodule: "Checkout", activity: "Development",
+      description: "Reworked the retry path so a declined card no longer double-charges.",
       name: "Aanya Sharma", date: "2026-05-27",
       project: "HICS Operations Platform", reviewer: "Mira Kapoor",
       reason: "Activity should be 'Bug Fixing'.", appUrl: "https://timesphere.local"
@@ -163,14 +176,18 @@ export function sampleVariables(key: string): Record<string, string> {
       appUrl: "https://timesphere.local"
     },
     "ticket.assigned": {
+      type: "BUG", module: "Checkout",
+      description: "Customers on the annual plan see a blank invoice PDF. Reproduced on two accounts.",
       assigneeName: "Dev Patel", ticketKey: "HICS-OPS-1", title: "Login button misaligned on mobile",
       priority: "HIGH", assignedBy: "Mira Kapoor", appUrl: "https://timesphere.local"
     },
     "ticket.status_changed": {
+      type: "BUG", comment: "Priya Raman: Fix is on staging — please retest with the annual plan account.",
       ticketKey: "HICS-OPS-1", title: "Login button misaligned on mobile",
       from: "IN_PROGRESS", to: "IN_REVIEW", changedBy: "Dev Patel", appUrl: "https://timesphere.local"
     },
     "ticket.commented": {
+      type: "BUG", comment: "I can reproduce this on the annual plan only. The monthly invoice renders fine.",
       ticketKey: "HICS-OPS-1", title: "Login button misaligned on mobile",
       author: "Mira Kapoor", appUrl: "https://timesphere.local"
     },
@@ -200,7 +217,18 @@ export function sampleVariables(key: string): Record<string, string> {
       name: "Avery Stone", flowName: "Ask before it acts", subject: "HICS-OPS-1340 — checkout timeout",
       stepOrder: "1", appUrl: "https://timesphere.local"
     },
+    "digest.bug_pattern": {
+      periodLabel: "Jul 21 - Aug 17",
+      summary: "Checkout accounted for 6 of 14 bugs this period, all after the payment retry change on the 24th.",
+      appUrl: "https://timesphere.local"
+    },
+    "ticket.stale_nudge": {
+      assigneeName: "Dev Patel", ticketKey: "HICS-OPS-88", title: "Invoice PDF renders blank for one client",
+      suggestion: "Nobody has commented in 9 days. Either ask the reporter for the failing invoice id, or close it as cannot-reproduce.",
+      appUrl: "https://timesphere.local"
+    },
     "digest.weekly": {
+      tablesHtml: "<p style=\"color:#64748B;font-size:13px;\">(the tables of last week, month-to-date and year-to-date figures render here)</p>",
       name: "Dev Patel", weekLabel: "Jun 29 - Jul 5",
       summary: "It was a solid week — you resolved 4 tickets and logged 32.5 hours, mostly on the Payments module. HICS-OPS-12 (checkout timeout) is still open and worth a look Monday morning.",
       appUrl: "https://timesphere.local"
@@ -210,6 +238,23 @@ export function sampleVariables(key: string): Record<string, string> {
       riskVerdict: "Needs attention — 1 open CRITICAL finding, 1 open HIGH finding, latest test run FAILED.",
       findingsText: "Static analysis (SAST):<br />  - [CRITICAL] SQL injection in login handler (semgrep)<br /><br />Secrets scanning (SSAT):<br />  - [HIGH] Hardcoded AWS key (gitleaks)",
       testStatus: "FAILED", appUrl: "https://timesphere.local"
+    },
+    // The face family and the identity digest had NO sample values at all, so their previews rendered
+    // the design with every field blank — which reads as a broken template rather than as an
+    // unfilled one. Deliberately kept free of scores, images and anything biometric, matching what
+    // these emails are allowed to carry.
+    "face.enrollment_required": { name: "Dev Patel", appUrl: "https://timesphere.local" },
+    "face.verification_flagged": {
+      targetName: "Avery Stone", employeeName: "Dev Patel", failureCount: "3",
+      context: "three failed checks while submitting a timesheet", appUrl: "https://timesphere.local"
+    },
+    "face.review_overdue": { targetName: "Avery Stone", pendingCount: "6", oldestAgeHours: "52", appUrl: "https://timesphere.local" },
+    "face.data_deleted": { name: "Dev Patel", appUrl: "https://timesphere.local" },
+    "face.entitlement_lost": { targetName: "Avery Stone", graceDays: "14", appUrl: "https://timesphere.local" },
+    "digest.identity_weekly": {
+      targetName: "Avery Stone", weekLabel: "Aug 10 - Aug 16", total: "128", passed: "124", failed: "3",
+      flaggedPending: "1", notes: "One check is still awaiting review from Thursday.",
+      appUrl: "https://timesphere.local"
     },
     "maintenance.scheduled": {
       name: "Aanya Sharma",
@@ -227,3 +272,213 @@ export function sampleVariables(key: string): Record<string, string> {
 }
 
 export { compiledTemplates };
+
+/* ================================================================== *
+ * The shipped default for every key
+ * ================================================================== */
+
+/**
+ * WHAT: each template's real subject and real body, with `{{placeholders}}` where the values go.
+ *
+ * WHY IT EXISTS: the Email Templates editor had no idea what any un-customised template actually
+ * looked like. The list route returned `bodyHtml: null` when there was no override, and the editor
+ * fell back to a three-line stub reading "Title / Hi {{name}}, your action is required." So the
+ * preview was near-blank for every template nobody had already edited — which is most of them — and,
+ * far worse, pressing Save on that screen REPLACED a carefully built email with the stub. An editor
+ * whose default action destroys the thing it is editing is not an editor.
+ *
+ * HOW: the compiled templates in `mail-templates.ts` are called with each of their own arguments set
+ * to that argument's `{{name}}`. The result is the genuine design — shell, heading, info card,
+ * button, footer — with placeholders exactly where a real value would land. `escape()` leaves
+ * `{{name}}` untouched (it holds no HTML-special characters), and the five numeric fields go through
+ * `num`/`pct`, which pass a placeholder straight through rather than calling `.toFixed` on a string.
+ *
+ * WHY IT IS NOT DERIVED AUTOMATICALLY: every compiled template takes a differently-shaped argument
+ * object, and nothing can invent one. A test reconciles this map against `TEMPLATE_KEYS` and against
+ * every `templateKey` actually dispatched in the codebase, so the drift that hid `digest.bug_pattern`
+ * and `ticket.stale_nudge` from the editor entirely cannot recur silently.
+ */
+const V = (name: string) => `{{${name}}}`;
+
+export const TEMPLATE_DEFAULTS: Record<string, { subject: string; html: string }> = {
+  welcome: { subject: "Welcome to TimeSphere", html: compiledTemplates.welcome(V("name")) },
+  reset: { subject: "Reset your TimeSphere password", html: compiledTemplates.reset(V("resetUrl")) },
+
+  "timesheet.submitted": {
+    subject: "Timesheet submitted - {{date}}",
+    html: compiledTemplates.timesheetSubmitted({
+      name: V("name"), hours: V("hours"), date: V("date"), project: V("project"), managerName: V("managerName"),
+      module: V("module"), submodule: V("submodule"), activity: V("activity"), description: V("description"), ticketRef: V("ticketRef")
+    })
+  },
+  "timesheet.approved": {
+    subject: "Your timesheet was approved",
+    html: compiledTemplates.timesheetApproved({
+      name: V("name"), hours: V("hours"), date: V("date"), reviewer: V("reviewer"), project: V("project"),
+      module: V("module"), submodule: V("submodule"), activity: V("activity"), description: V("description")
+    })
+  },
+  "timesheet.rejected": {
+    subject: "Timesheet rejected - action required",
+    html: compiledTemplates.timesheetRejected({
+      name: V("name"), date: V("date"), project: V("project"), reviewer: V("reviewer"), reason: V("reason"),
+      module: V("module"), submodule: V("submodule"), activity: V("activity"), description: V("description")
+    })
+  },
+
+  "sla.breach": {
+    subject: "[SLA breach] Approve the timesheet for {{employeeName}}",
+    html: compiledTemplates.slaBreach({
+      managerName: V("managerName"), employeeName: V("employeeName"), date: V("date"), project: V("project"),
+      deadline: V("deadline"), hoursOverdue: V("hoursOverdue")
+    })
+  },
+  escalation: {
+    subject: "[Escalation] Approve the timesheet for {{employeeName}}",
+    html: compiledTemplates.escalation({
+      targetName: V("targetName"), employeeName: V("employeeName"), managerName: V("managerName"), date: V("date"), project: V("project")
+    })
+  },
+  "deadline.reminder": {
+    subject: "{{daysLeft}} day(s) left to submit timesheets",
+    html: compiledTemplates.deadlineReminder({ name: V("name"), daysLeft: V("daysLeft"), deadlineDay: V("deadlineDay") })
+  },
+
+  "reminder.daily": {
+    subject: "Log your hours for {{date}}",
+    html: compiledTemplates.deadlineReminder({ name: V("name"), daysLeft: V("date"), deadlineDay: V("deadlineHour") })
+  },
+  "reminder.escalation.employee": {
+    subject: "You missed logging time on {{missedDate}}",
+    html: compiledTemplates.escalation({
+      targetName: V("name"), employeeName: V("name"), managerName: V("managerName"), date: V("missedDate"), project: "-"
+    })
+  },
+  "reminder.escalation.manager": {
+    subject: "{{employeeName}} missed a timesheet on {{missedDate}}",
+    html: compiledTemplates.escalation({
+      targetName: V("managerName"), employeeName: V("employeeName"), managerName: V("managerName"), date: V("missedDate"), project: "-"
+    })
+  },
+
+  "ticket.assigned": {
+    subject: "{{ticketKey}} assigned to you",
+    html: compiledTemplates.ticketAssigned({
+      assigneeName: V("assigneeName"), ticketKey: V("ticketKey"), title: V("title"), priority: V("priority"),
+      assignedBy: V("assignedBy"), type: V("type"), module: V("module"), description: V("description")
+    })
+  },
+  "ticket.status_changed": {
+    subject: "{{ticketKey}} moved to {{to}}",
+    html: compiledTemplates.ticketStatusChanged({
+      ticketKey: V("ticketKey"), title: V("title"), from: V("from"), to: V("to"), changedBy: V("changedBy"),
+      type: V("type"), comment: V("comment")
+    })
+  },
+  "ticket.commented": {
+    subject: "New comment on {{ticketKey}}",
+    html: compiledTemplates.ticketCommented({
+      ticketKey: V("ticketKey"), title: V("title"), author: V("author"), type: V("type"), comment: V("comment")
+    })
+  },
+  "ticket.sla_breach": {
+    subject: "[SLA breach] {{ticketKey}} is {{hoursOverdue}}h overdue",
+    html: compiledTemplates.ticketSlaBreach({
+      assigneeName: V("assigneeName"), ticketKey: V("ticketKey"), title: V("title"), priority: V("priority"), hoursOverdue: V("hoursOverdue")
+    })
+  },
+  "ticket.escalation": {
+    subject: "[Escalation] {{ticketKey}} needs attention",
+    html: compiledTemplates.ticketEscalation({
+      targetName: V("targetName"), ticketKey: V("ticketKey"), title: V("title"), assigneeName: V("assigneeName")
+    })
+  },
+  "ticket.received_via_email": {
+    subject: "We received your report - {{ticketKey}}",
+    html: compiledTemplates.ticketReceivedViaEmail({
+      senderName: V("senderName"), ticketKey: V("ticketKey"), title: V("title"), priority: V("priority")
+    })
+  },
+  "ticket.needs_review": {
+    subject: "{{ticketKey}} needs a human look",
+    html: compiledTemplates.ticketNeedsReview({
+      targetName: V("targetName"), ticketKey: V("ticketKey"), title: V("title"), senderEmail: V("senderEmail"), confidence: V("confidence")
+    })
+  },
+  "ticket.stale_nudge": {
+    subject: "Suggested next step - {{ticketKey}}",
+    html: compiledTemplates.ticketStaleNudge({
+      assigneeName: V("assigneeName"), ticketKey: V("ticketKey"), title: V("title"), suggestion: V("suggestion")
+    })
+  },
+  "ticket.closed_digest": {
+    subject: "{{ticketKey}} closed - security summary",
+    html: compiledTemplates.ticketClosedDigest({
+      ticketKey: V("ticketKey"), title: V("title"), closedBy: V("closedBy"), riskVerdict: V("riskVerdict"),
+      findingsText: V("findingsText"), testStatus: V("testStatus")
+    })
+  },
+
+  "digest.weekly": {
+    subject: "Your week in review - {{weekLabel}}",
+    html: compiledTemplates.weeklyDigest({ name: V("name"), weekLabel: V("weekLabel"), summary: V("summary"), tablesHtml: V("tablesHtml") })
+  },
+  "digest.security_weekly": {
+    subject: "Security digest - week of {{weekLabel}}",
+    html: compiledTemplates.securityWeeklyDigest({ weekLabel: V("weekLabel"), summary: V("summary"), riskScore: V("riskScore") })
+  },
+  "digest.bug_pattern": {
+    subject: "What kept breaking - {{periodLabel}}",
+    html: compiledTemplates.bugPatternDigest({ periodLabel: V("periodLabel"), summary: V("summary") })
+  },
+  "digest.identity_weekly": {
+    subject: "Identity review - week of {{weekLabel}}",
+    html: compiledTemplates.identityWeeklyDigest({
+      targetName: V("targetName"), weekLabel: V("weekLabel"), total: V("total"), passed: V("passed"),
+      failed: V("failed"), flaggedPending: V("flaggedPending"), notes: V("notes")
+    })
+  },
+
+  "goal.digest": {
+    subject: "Your goals - {{weekLabel}}",
+    html: compiledTemplates.goalDigest({ name: V("name"), weekLabel: V("weekLabel"), summary: V("summary"), lines: [V("linesText")] })
+  },
+  "workflow.approval": {
+    subject: "{{flowName}} needs your approval",
+    html: compiledTemplates.workflowApproval({
+      name: V("name"), flowName: V("flowName"), subject: V("subject"), stepOrder: V("stepOrder")
+    })
+  },
+  "maintenance.scheduled": {
+    subject: "Scheduled maintenance - {{window}}",
+    html: compiledTemplates.maintenanceScheduled({ name: V("name"), window: V("window"), message: V("message") })
+  },
+
+  "face.enrollment_required": {
+    subject: "Set up face verification",
+    html: compiledTemplates.faceEnrollmentRequired({ name: V("name") })
+  },
+  "face.verification_flagged": {
+    subject: "A verification needs review",
+    html: compiledTemplates.faceVerificationFlagged({
+      targetName: V("targetName"), employeeName: V("employeeName"), failureCount: V("failureCount"), context: V("context")
+    })
+  },
+  "face.review_overdue": {
+    subject: "Face reviews are overdue",
+    html: compiledTemplates.faceReviewOverdue({ targetName: V("targetName"), pendingCount: V("pendingCount"), oldestAgeHours: V("oldestAgeHours") })
+  },
+  "face.data_deleted": {
+    subject: "Your face data was deleted",
+    html: compiledTemplates.faceDataDeleted({ name: V("name"), byAdmin: false })
+  },
+  "face.entitlement_lost": {
+    subject: "Face verification is no longer active",
+    html: compiledTemplates.faceEntitlementLost({ targetName: V("targetName"), graceDays: V("graceDays") })
+  }
+};
+
+/** The shipped default for one key, or null for a key with no compiled template behind it. */
+export function templateDefault(key: string): { subject: string; html: string } | null {
+  return TEMPLATE_DEFAULTS[key] ?? null;
+}
