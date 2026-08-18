@@ -160,6 +160,24 @@ export async function seedDefaultWorkflow(client: PrismaClient) {
  * (Phase B8) — the exact same seed logic either way, since "the whole DB is this org's" holds
  * equally in both cases under the database-per-tenant model.
  */
+/**
+ * How long ago the seeded accounts finished onboarding.
+ *
+ * NOT `new Date()`, and the difference is load-bearing. Two separate first-run experiences key off
+ * this timestamp, and they disagree about what "now" should mean:
+ *
+ *   - `onboarding.service.ts` only cares that it is SET — any value dismisses the blocking gate.
+ *   - `ProductTour.shouldAutoStartTour` opens the walkthrough when it is set AND less than 24 hours
+ *     old, which is the right rule for a person who genuinely just signed up.
+ *
+ * Stamping "now" therefore swapped one full-screen overlay for another: the gate closed and the
+ * tour opened itself over the whole app instead. Seeded demo accounts are not people who signed up
+ * a moment ago — they are an established workspace — so they are dated well outside that window.
+ * Both overlays stay shut, and `product-tour.spec.ts`'s "does NOT open itself for an established
+ * account" describes what the seed actually produces.
+ */
+const ONBOARDED_AT = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
+
 export async function seedTenant(client: PrismaClient, options: SeedTenantOptions = {}) {
   const {
     adminEmail = "superadmin@timesheet.local",
@@ -271,6 +289,7 @@ export async function seedTenant(client: PrismaClient, options: SeedTenantOption
        * here can dial a real person.
        */
       phoneNumber: "+12125550100",
+      onboardingCompletedAt: ONBOARDED_AT,
       emailVerifiedAt: new Date()
     }
   });
@@ -290,6 +309,7 @@ export async function seedTenant(client: PrismaClient, options: SeedTenantOption
         timezone: "Asia/Kolkata",
         // See the admin above: without a phone number the onboarding gate blocks this account.
         phoneNumber: "+919876543211",
+        onboardingCompletedAt: ONBOARDED_AT,
         emailVerifiedAt: new Date()
       }
     });
@@ -308,6 +328,7 @@ export async function seedTenant(client: PrismaClient, options: SeedTenantOption
         timezone: "Asia/Kolkata",
         // See the admin above: without a phone number the onboarding gate blocks this account.
         phoneNumber: "+919876543210",
+        onboardingCompletedAt: ONBOARDED_AT,
         emailVerifiedAt: new Date()
       }
     });
