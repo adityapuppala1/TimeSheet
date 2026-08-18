@@ -3751,3 +3751,95 @@ reuses `queueAgentRun`; wiring the domain-event bus, the cron sweep and the form
 their own is the one remaining piece of the V8 plan. Also outstanding by design: merging the agent series
 into the workload board and the budget panel (§4 items 1 and 2). Both touch core surfaces people rely on
 daily, and neither should be done in the tail of a session.
+
+## V8 phases 6–9 — the builder becomes a rule, the flow becomes a run (2026-08-18)
+
+Four sessions of work against [AGENTIC_UX_PLAN.md](AGENTIC_UX_PLAN.md), which is now complete. Each
+phase is its own commit with its own reasoning; this records what changed and, more usefully, what each
+one got wrong first.
+
+### Phase 6 — per-step configuration, and the canvas (`fc98c32`)
+
+- [x] **A step now states what it does.** `/flows/catalogue` returns the people, labels and projects the
+  pickers need in the same response as the capability catalogue — a dialog that renders before its
+  options arrive is a dialog where somebody picks nothing. The condition vocabulary is the ticket
+  rules' own (`priority`, `source`, `projectId`, `senderDomain` × `is` / `is not`), not a new grammar:
+  a second one is a second thing to secure and explain.
+- [x] **An unconfigured step is an activation error, not a shrug.** An inert step inside a flow somebody
+  switched on is a silent no-op, which is the failure mode that wastes an afternoon.
+- [x] **Agent identities are excluded from every people picker.** Assigning work to a teammate is a real
+  idea; "who approves this gate" and "who is notified" are questions about a person, and an identity
+  with no mailbox can answer neither.
+- [x] **The flow list reads as sentences** — "Waits for Priya to approve" — resolved server-side, because
+  the list is readable at `tickets:view` while the catalogue that maps ids to names is behind the
+  Studio's entitlement. A step pointing at somebody removed says so rather than rendering blank.
+- [x] **An n8n-style canvas beside the list, not instead of it.** Positions live in each step's own
+  `config` as `{x, y}`, so it needed no migration and pre-existing flows auto-lay-out on open.
+  **Connections are not stored:** the steps are a sequence and the authority calculation depends on
+  their order, so an edge table would be a second source of truth for one fact. Dragging a card past
+  another therefore REORDERS — the picture and the rule cannot diverge because they are the same thing.
+  Below `lg` there is no canvas at all.
+
+### Phase 7 — dispatch (`ca11b78`)
+
+- [x] **`EVENT` on the domain bus, `SCHEDULE` on a per-minute sweep, `MANUAL` on a button.** A sweep
+  rather than a `cron.schedule` per flow: flows are edited and retired at runtime, and a handle leaked
+  by a missed teardown is a flow that keeps firing after somebody switched it off.
+- [x] **The idempotency key carries the SUBJECT.** `flow:<id>:ticket:<id>`. A doubled event is one run;
+  a second ticket is a second run. Getting the second half wrong makes the first ticket the only ticket
+  a flow ever touches — a bug that looks exactly like the feature working.
+- [x] **`AutomationFlowRun` is a row, not a log line**, because a gate can wait days and the run's
+  position has to survive a restart. Only the person the step named may clear it, enforced server-side.
+- [x] **Authority is obeyed, not merely described.** A proposal-only flow routes an assignment into
+  `AiProposal` with the state it was computed against. It cannot do the same for a label — the review
+  queue has no LABEL change target — so that step is recorded as **held**, in words, rather than applied
+  anyway or dropped quietly.
+- [x] **`AgentRun.flowId`** puts per-workflow spend in AI usage analytics, read from `AgentRun` and not
+  `AIUsageLog`: the usage log records what was asked of a model, not who composed the question.
+- **Two the browser found:** a run with a failed step was settling as COMPLETED (a green badge on a flow
+  that did not do what it says), and a MANUAL or SCHEDULE flow containing a ticket action has no ticket —
+  now a warning at build time rather than a discovery at run time.
+
+### Phase 8 — run visibility (`0733e84`)
+
+- **The plan was wrong about the starting point.** It said the agent run trace was stored and rendered
+  nowhere; a full trace has existed all along in Workspace Settings → AI → Agent runs. A second
+  `/agents/runs` endpoint was written and then deleted in favour of extending `/agent-runs`, which is the
+  right outcome and a reminder to read before believing a plan's own premise.
+- [x] **The chain is followable end to end**: a run's trace shows the proposal, its status and each
+  change with whether it landed; `/app/proposals?focus=<id>` rings and scrolls to one and widens the
+  filter to *All*, because somebody following that link is usually asking what became of something no
+  longer pending. Flow run steps link the same way.
+- [x] **Ledger history**: 30 days, zero-filled server-side, with `measuredDays` beside it — a day with no
+  measurement is not a day of zero displacement.
+- [x] **One "AI in this workspace" landing** (`/app/ai`, super admin): the four surfaces as the sequence
+  they are, every figure a count that can be checked against the screen it came from, and one next step
+  ordered by what blocks what. No health score — a score needs a rule for what healthy is.
+
+### Phase 9 — the boards, and the thumb (`454b7d2`)
+
+- [x] **An AI teammate was already on the workload board as a person** — active, default capacity,
+  nothing booked. Seven humans and six teammates on this machine, so the board was almost half fiction.
+  Fixed with the same `isAgent: false` seat counting uses, and pinned by a test.
+- [x] **Agent work as its own section, not extra rows.** Every column of a `WorkloadRow` is about
+  capacity and an agent has none, so an allocation percentage would be invented. Agent spend sits beside
+  a project's burn and never inside it: not billable, always in dollars against a budget in any
+  currency, and an operating cost rather than an agreement about labour.
+- [x] **Every control on the four AI screens meets 44px at phone width**, verified by hit-testing each
+  one with off-screen controls scrolled into view — not by eye. Two lessons worth keeping: the root font
+  is 14px so every rem utility lands at 14/16 of nominal (`h-11` is 38.5px), and a `<label>` does not
+  forward a click to a Radix switch, so the obvious wrapper fix looks right and does nothing.
+
+**Verified across the four:** lint clean throughout, **1189 unit tests** (+31), every migration replayed
+into an empty database with no drift after each schema change, and each phase driven in a real browser at
+390/1366/1600 in light and dark against live data (1,718 tickets, 237 timesheets, 346 users, 31 projects
+untouched).
+
+**Not seen rendered with data, and said rather than glossed:** the ledger history card, the agent
+workload section and the project's agent-spend line all hide themselves when the ledger is empty, and
+this workspace has no completed agent runs because no AI provider key is configured in development.
+Their arithmetic is pinned by test and their endpoints checked end to end.
+
+**Carried forward, none of it blocking:** the `FORM_SUBMISSION` trigger has no dispatcher; a `BRANCH`
+renders in-sequence rather than as two visible lanes; and the review queue has no LABEL change target,
+which is what forces the `held` outcome above.
