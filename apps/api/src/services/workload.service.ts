@@ -346,6 +346,11 @@ export async function loadWorkload(params: {
     where: {
       deletedAt: null,
       status: "ACTIVE",
+      // An AI teammate is an ACTIVE user row, so without this it appears here as a person with the
+      // workspace's default capacity and nothing booked — a permanently idle colleague nobody hired.
+      // The same exclusion `seat-count.service.ts` makes, for the same reason: an identity is not a
+      // headcount. What agents actually did is a separate series — `loadAgentWorkload` below.
+      isAgent: false,
       ...(params.userIds?.length ? { id: { in: params.userIds } } : {}),
       // Scoping by project means "people assigned to it", which is the same membership the
       // ticket-assignment rules already use — not "people who happen to have logged time",
@@ -423,4 +428,111 @@ export async function loadWorkload(params: {
   });
 
   return { buckets, rows, workingDays };
+}
+
+/* ================================================================== *
+ * The agent series
+ * ================================================================== */
+
+/**
+ * What the AI teammates did over the same buckets — deliberately NOT as extra rows on the board above.
+ *
+ * WHY IT IS A SEPARATE SHAPE AND NOT A `WorkloadRow`: every column of that row is about capacity. An
+ * agent has none — there is no weekly hours figure, no leave, and therefore no allocation percentage
+ * that means anything. Rendering one anyway (100%? 0%?) would be inventing a number, and a board where
+ * some rows' percentages mean a different thing from others is worse than a board with two sections.
+ *
+ * WHY THE HOURS COME FROM THE LEDGER AND NOT FROM `AgentRun`: the ledger is the place this product has
+ * already decided agent work is recorded, with its duration, its cost, and — where the workspace's own
+ * approved hours give a baseline — how much human work it stands in for. Reading run rows directly
+ * would be a second definition of "what an agent did", and the first disagreement between them is a
+ * number nobody can explain.
+ */
+export interface AgentWorkloadCell {
+  bucketStart: string;
+  /** Wall-clock hours the runs took. Not comparable to a person's logged hours and never summed with
+   *  them — see the header. */
+  workedHours: number;
+  costUsd: number;
+  /** Null when NO entry in this bucket had a measurable baseline. Zero would say "displaced nothing",
+   *  which is a different claim from "we cannot tell". */
+  displacedMinutes: number | null;
+  runs: number;
+}
+
+export interface AgentWorkloadRow {
+  agent: { id: string; name: string; avatarUrl: string | null };
+  cells: AgentWorkloadCell[];
+  totals: { workedHours: number; costUsd: number; displacedMinutes: number | null; runs: number; measuredRuns: number };
+}
+
+export async function loadAgentWorkload(params: { from: Date; to: Date; buckets: Bucket[]; projectId?: string }): Promise<AgentWorkloadRow[]> {
+  const entries = await prisma.agentWorkEntry.findMany({
+    where: {
+      occurredAt: { gte: params.from, lte: params.to },
+      ...(params.projectId ? { projectId: params.projectId } : {})
+    },
+    select: { agentUserId: true, occurredAt: true, durationSeconds: true, costUsd: true, displacedMinutes: true }
+  });
+  if (entries.length === 0) return [];
+
+  const agents = await prisma.user.findMany({
+    where: { id: { in: [...new Set(entries.map((e) => e.agentUserId))] } },
+    select: { id: true, name: true, avatarUrl: true }
+  });
+  const byId = new Map(agents.map((a) => [a.id, a]));
+
+  /** Which bucket a moment falls in. The buckets are contiguous and ordered, so the last one whose
+   *  start is not after the entry wins — the same rule the human side uses. */
+  const bucketFor = (at: Date): string | null => {
+    let found: string | null = null;
+    for (const bucket of params.buckets) {
+      if (dayKey(at) >= bucket.start) found = bucket.start;
+      else break;
+    }
+    return found;
+  };
+
+  const rows = new Map<string, AgentWorkloadRow>();
+  for (const entry of entries) {
+    const agent = byId.get(entry.agentUserId);
+    if (!agent) continue;
+    let row = rows.get(agent.id);
+    if (!row) {
+      row = {
+        agent,
+        cells: params.buckets.map((b) => ({ bucketStart: b.start, workedHours: 0, costUsd: 0, displacedMinutes: null, runs: 0 })),
+        totals: { workedHours: 0, costUsd: 0, displacedMinutes: null, runs: 0, measuredRuns: 0 }
+      };
+      rows.set(agent.id, row);
+    }
+
+    const key = bucketFor(entry.occurredAt);
+    const cell = row.cells.find((c) => c.bucketStart === key);
+    const cost = Number(entry.costUsd);
+    const hours = entry.durationSeconds / 3600;
+
+    row.totals.workedHours += hours;
+    row.totals.costUsd += cost;
+    row.totals.runs += 1;
+    if (entry.displacedMinutes != null) {
+      row.totals.displacedMinutes = (row.totals.displacedMinutes ?? 0) + entry.displacedMinutes;
+      row.totals.measuredRuns += 1;
+    }
+    if (cell) {
+      cell.workedHours += hours;
+      cell.costUsd += cost;
+      cell.runs += 1;
+      if (entry.displacedMinutes != null) cell.displacedMinutes = (cell.displacedMinutes ?? 0) + entry.displacedMinutes;
+    }
+  }
+
+  const round = (n: number) => Number(n.toFixed(2));
+  return [...rows.values()]
+    .map((row) => ({
+      ...row,
+      cells: row.cells.map((c) => ({ ...c, workedHours: round(c.workedHours), costUsd: Number(c.costUsd.toFixed(4)) })),
+      totals: { ...row.totals, workedHours: round(row.totals.workedHours), costUsd: Number(row.totals.costUsd.toFixed(4)) }
+    }))
+    .sort((a, b) => b.totals.costUsd - a.totals.costUsd);
 }

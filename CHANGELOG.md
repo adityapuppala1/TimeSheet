@@ -179,6 +179,26 @@ its old schema without the update saying so. After upgrading, run the fan-out on
   Agents page, with the recent entries and the basis for each measurement. Days with no measurement are
   named as unmeasured rather than drawn as zero.
 
+### 🧑‍🤝‍🧑 AI teammates on the workload board and the budget, honestly
+
+- **An AI teammate no longer appears on the workload board as a person.** It was showing up as a
+  colleague with your default weekly capacity and nothing booked — a permanently idle hire. Fixed.
+- **Agent work is its own section under the board**, over the same weeks: cost and wall-clock time per
+  teammate. Deliberately not an allocation percentage — a teammate has no capacity to be a percentage
+  of, and putting one in the same grid would make some cells mean a different thing from others.
+- **Agent spend shows beside a project's burn, never inside it.** None of it is billable, it is always
+  in US dollars while your budget may be in any currency, and a budget is an agreement about labour
+  rather than a cost of running the workspace. The panel says which, and stays out of the way entirely
+  on projects no teammate has touched.
+
+### 👍 Thumb-sized controls on the AI screens
+
+- Every button, link, disclosure and picker on **Workflows**, **Agents**, **AI overview** and the
+  workflow builder now meets the 44px a finger actually lands on, at phone width — checked by
+  hit-testing every control on those screens rather than by eye. Desktop density is unchanged.
+- The **close control on every dialog** in the product gained a real hit area too. It was a 14-pixel
+  glyph, which is a target you miss twice before hitting.
+
 ### ⚖️ Agent work on the same ledger as human work
 
 - **When a teammate runs, it is recorded the way a person's work is** — attributed to a project,

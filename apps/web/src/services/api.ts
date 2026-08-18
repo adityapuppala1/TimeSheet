@@ -3717,6 +3717,9 @@ export interface WorkloadBoard {
   workingDays: number[];
   buckets: WorkloadBucket[];
   rows: WorkloadRowData[];
+  /** The AI teammates over the same buckets, as their OWN list rather than extra rows: an agent has
+   *  no capacity, so every column of a person's row would be meaningless for one. */
+  agentRows: AgentWorkloadRowData[];
   summary: {
     people: number;
     overAllocated: number;
@@ -3725,6 +3728,21 @@ export interface WorkloadBoard {
     totalBookedHours: number;
     totalLoggedHours: number;
   };
+}
+
+export interface AgentWorkloadRowData {
+  agent: { id: string; name: string; avatarUrl: string | null };
+  cells: Array<{
+    bucketStart: string;
+    /** Wall clock. Never summed with a person's hours — the two do not mean the same thing. */
+    workedHours: number;
+    costUsd: number;
+    /** Null when nothing in this bucket had a measurable baseline. Zero would claim it displaced
+     *  nothing, which is a different statement from "we cannot tell". */
+    displacedMinutes: number | null;
+    runs: number;
+  }>;
+  totals: { workedHours: number; costUsd: number; displacedMinutes: number | null; runs: number; measuredRuns: number };
 }
 
 export interface ResourceBookingRow {
@@ -3766,6 +3784,11 @@ export interface ProjectBudgetRow {
   forecastAtCompletion: number | null;
   overBudgetRisk: boolean;
   alerting: boolean;
+  /** What the AI teammates spent on this project, in US DOLLARS — beside the burn, never inside it.
+   *  Not billable, not in the project's currency, and an operating cost rather than an agreement with
+   *  a client. See the server's comment for why adding the two would be arithmetic across units. */
+  agentCostUsd: number;
+  agentRuns: number;
 }
 
 export interface EffortVarianceRow {

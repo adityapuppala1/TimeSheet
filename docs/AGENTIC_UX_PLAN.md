@@ -123,18 +123,49 @@ the chain, so the work became extending that panel rather than building a second
   and a link, over one honest next step. Every figure is a COUNT rather than a score: a score needs a
   rule for what healthy is, and the honest answer depends on what the workspace wants.
 
-### 3.5 The workload and budget merge (§4 of the mechanism doc)
+### 3.5 The workload and budget merge — **shipped**
 
-Agent load beside human load on the workload board; agent cost beside human cost in budget burn.
+**A bug found while building it, and the reason this could not simply be "add a second series":** an AI
+teammate is an ACTIVE `User` row, and the workload board's people query said only "active and not
+deleted". Every teammate was therefore already on the board as a colleague with the workspace's default
+capacity and nothing booked — a permanently idle person nobody hired. Fixed with the same `isAgent:
+false` that `seat-count.service.ts` uses, and pinned by a test, because it is invisible in a workspace
+with no agents and obvious in one with six.
 
-**Decision: deferred deliberately, and not for lack of time.** Both touch surfaces people rely on daily,
-and the ledger has to be producing real rows before a second series on those boards means anything.
-Nothing is priced into `billedAmount`, so this is presentation, not accounting.
+- **Agent work is its own section below the board, not extra rows in it.** Every column of a
+  `WorkloadRow` is about capacity, and an agent has none — there is no weekly hours figure, no leave,
+  and so no allocation percentage that means anything. A board where some rows' percentages meant a
+  different thing from others' would be worse than two sections. The agent section shows cost and
+  wall-clock time per week, and says "not measurable here" rather than 0 where no baseline exists.
+- **Agent spend appears beside a project's burn and never inside it.** Three reasons, each sufficient:
+  none of it is billable, so folding it in would invoice a client for a model call; it is always in US
+  dollars while a budget may be in any currency and this code holds no exchange rate; and a budget is an
+  agreement about labour, while model spend is a cost of running the workspace. The panel says so, and
+  hides the line entirely when no teammate has worked on that project — a $0.00 row invites addition.
+- Read from the **ledger**, not from `AgentRun`, in both places: the ledger is where this product already
+  decided agent work is recorded against a project, and a second definition of "what an agent did" is a
+  number nobody can reconcile.
 
-### 3.6 Mobile ergonomics
+### 3.6 Mobile ergonomics — **shipped**
 
-Everything stacks and nothing overflows at 390px — that was verified for *fit*, not for *touch*. The
-roster's capability chips and the Studio's step list need thumb-sized targets and a considered order.
+Verified by measurement rather than by eye: a script walks every button, link, summary, tab and combobox
+on the four agentic screens at 390px, scrolls each into view, and **hit-tests** the points a thumb would
+land on. All four now report zero targets under 44px.
+
+- **The minimums are in pixels, not rem.** This app's root font is 14px, so every rem-based size utility
+  lands at 14/16 of its nominal value — `h-11` is 38.5px, not 44. That was measured, not assumed, and it
+  is why the first attempt looked correct and was not.
+- **Hit area, not visual size, where a control is shared.** The roster's switch (39×21) and the dialog's
+  close glyph (14×14) belong to every form in the product, so their hit areas are grown with a
+  pseudo-element and nothing on screen moves. A first attempt wrapped the switch in a `<label>` — which
+  does *not* forward a click to a Radix switch, because that renders a button rather than an input. It
+  would have looked right and done nothing.
+- **Density is untouched above `sm`.** These screens are for a super admin at a desk; the mobile
+  minimums are behind a breakpoint so the desktop stays as dense as it was.
+- **Deliberately not changed:** the shared `Input`/`Select`/`Button` default heights (35px at this root
+  size). Raising those is a product-wide design decision touching every form in the app, not a mobile
+  fix for the agentic screens — and at full width a 35px target is a very different proposition from a
+  21px one.
 
 ## 4. Super-admin-only: the audit
 
@@ -163,10 +194,12 @@ list plus a seed change — say so and it is done.
 2. ~~**The canvas** (§3.1)~~ — shipped, less the two-lane branch node.
 3. ~~**Dispatch and per-flow attribution** (§3.2)~~ — shipped, less the `FORM_SUBMISSION` trigger.
 4. ~~**Run visibility and the cross-surface links** (§3.4)~~ — shipped.
-5. **Workload/budget merge** (§3.5) and **mobile ergonomics** (§3.6) — all that is left of this plan,
-   plus three named gaps carried forward: the `FORM_SUBMISSION` trigger has no dispatcher (§3.2), a
-   `BRANCH` renders in-sequence rather than as two lanes (§3.1), and the review queue has no LABEL
-   change target so a proposal-only flow can only hold a label rather than propose it (§3.2).
+5. ~~**Workload/budget merge** (§3.5) and **mobile ergonomics** (§3.6)~~ — shipped.
+
+**This plan is complete.** Three named gaps are carried forward as their own work, each stated where it
+belongs: the `FORM_SUBMISSION` trigger has no dispatcher (§3.2), a `BRANCH` renders in-sequence rather
+than as two lanes (§3.1), and the review queue has no LABEL change target, so a proposal-only flow can
+only hold a label rather than propose it (§3.2). None of the three blocks anything shipped here.
 
 Written in this order because each step makes the next honest: a canvas over unconfigurable steps, or
 dispatch of flows nobody can inspect afterwards, would both be features that demo well and disappoint.

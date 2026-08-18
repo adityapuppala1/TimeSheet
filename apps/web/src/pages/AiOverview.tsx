@@ -189,7 +189,9 @@ export function AiOverviewPage() {
                     </div>
                     <Link
                       to={surface.to}
-                      className={cn("inline-flex items-center gap-1 text-xs font-medium text-primary hover:underline")}
+                      /* A 14px-tall link is a link people miss. The row it sits in is otherwise empty,
+                         so the target grows downward without moving anything. */
+                      className={cn("inline-flex min-h-[44px] items-center gap-1 text-xs font-medium text-primary hover:underline sm:min-h-0")}
                     >
                       Open it
                       <ArrowRight className="h-3 w-3" />

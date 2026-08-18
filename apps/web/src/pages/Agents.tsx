@@ -159,7 +159,7 @@ export function AgentsPage() {
           </p>
         </div>
         {isSuperAdmin && !gateMessage && (
-          <Button onClick={() => setGalleryOpen(true)} className="shrink-0">
+          <Button onClick={() => setGalleryOpen(true)} className="min-h-[44px] shrink-0 sm:min-h-0">
             <Plus className="mr-1.5 h-4 w-4" />
             Add a teammate
           </Button>
@@ -552,8 +552,10 @@ function TemplateCard({ template, busy, onInstall }: Readonly<{ template: AgentT
         </div>
       )}
 
+      {/* A disclosure is a target as much as a button is. `py-2` gives the summary a thumb-sized row
+          on a phone without changing how it reads on a desktop. */}
       <details className="text-[11px] text-muted-foreground">
-        <summary className="cursor-pointer">What it actually calls</summary>
+        <summary className="min-h-[44px] cursor-pointer py-3 sm:min-h-0 sm:py-0">What it actually calls</summary>
         <div className="mt-1 flex flex-wrap gap-1">
           {template.capabilities.map((c) => (
             <span key={c} className="rounded bg-muted px-1.5 py-0.5 font-mono text-[10px]">
@@ -762,8 +764,18 @@ function AgentCard({
             </div>
           </div>
           {canManage && (
+            /* The switch is 39x21 by design and shared with every form in the product, so its HIT
+               area is grown rather than the control redrawn. It has to be done on the control itself:
+               a wrapping <label> does not forward a click to a Radix switch (which renders a button,
+               not an input), so that version would have looked correct and done nothing. */
             <div className="flex shrink-0 items-center gap-2">
-              <Switch checked={entry.enabled} disabled={busy} onCheckedChange={onToggle} aria-label={`Enable ${entry.name}`} />
+              <Switch
+                checked={entry.enabled}
+                disabled={busy}
+                onCheckedChange={onToggle}
+                aria-label={`Enable ${entry.name}`}
+                className="relative after:absolute after:-inset-[14px] after:content-[''] sm:after:hidden"
+              />
             </div>
           )}
         </div>
@@ -921,10 +933,10 @@ function AgentCard({
                 Applies its own changes, within guardrails
               </span>
             )}
-            <Link to="/app/settings" className="text-[11px] text-muted-foreground underline decoration-dotted">
+            <Link to="/app/settings" className="inline-flex min-h-[44px] items-center text-[11px] text-muted-foreground underline decoration-dotted sm:min-h-0">
               Set how much authority each capability has
             </Link>
-            <Button variant="ghost" size="sm" className="ml-auto h-7 px-2 text-xs" onClick={onRetire} disabled={busy}>
+            <Button variant="ghost" size="sm" className="ml-auto min-h-[44px] px-3 text-xs sm:min-h-0 sm:h-7 sm:px-2" onClick={onRetire} disabled={busy}>
               <Trash2 className="mr-1 h-3 w-3" />
               Retire
             </Button>

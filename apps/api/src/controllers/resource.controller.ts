@@ -31,7 +31,7 @@ import { buildPlan, dayKey, toDay } from "../services/plan-schedule.service.js";
 // tier higher than the pricing page says.
 import { assertPlanningCapability, assertPlanningEnabled, getPlanningSettings } from "../services/planning.service.js";
 import { ticketProjectScope } from "../services/ticket.service.js";
-import { findConflicts, loadWorkload, type BookingSpan } from "../services/workload.service.js";
+import { findConflicts, loadAgentWorkload, loadWorkload, type BookingSpan } from "../services/workload.service.js";
 
 export const resourceRouter = Router();
 resourceRouter.use(requireAuth);
@@ -67,6 +67,9 @@ resourceRouter.get("/workload", requirePermission(permissions.RESOURCES_MANAGE),
   const projectId = typeof req.query.projectId === "string" && req.query.projectId ? req.query.projectId : undefined;
 
   const { buckets, rows, workingDays } = await loadWorkload({ from, to, granularity, projectId });
+  // The agent series, over the same buckets. A separate list rather than extra rows: an agent has no
+  // capacity, so every column of a `WorkloadRow` would be meaningless for one — see the service.
+  const agentRows = await loadAgentWorkload({ from, to, buckets, projectId });
 
   res.json({
     from: dayKey(from),
@@ -75,6 +78,7 @@ resourceRouter.get("/workload", requirePermission(permissions.RESOURCES_MANAGE),
     workingDays,
     buckets,
     rows,
+    agentRows,
     summary: {
       people: rows.length,
       overAllocated: rows.filter((r) => r.totals.overAllocatedBuckets > 0).length,

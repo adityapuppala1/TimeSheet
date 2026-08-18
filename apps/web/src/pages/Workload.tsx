@@ -21,7 +21,7 @@
  * WHO renders this: `App.tsx` at `/app/workload`.
  */
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { AlertTriangle, CalendarClock, Loader2, Lock, Plus, Trash2, Users2, Wallet } from "lucide-react";
+import { AlertTriangle, Bot, CalendarClock, Loader2, Lock, Plus, Trash2, Users2, Wallet } from "lucide-react";
 import { useMemo, useState } from "react";
 import { permissions } from "@timesheet/shared";
 import { Avatar, AvatarFallback, AvatarImage } from "../components/ui/avatar";
@@ -397,6 +397,98 @@ export function WorkloadPage() {
           )}
         </CardContent>
       </Card>
+
+      {/* The agent series, as its own section below the board rather than as extra rows in it.
+          An agent has no capacity, so it has no allocation percentage — putting one in the same grid
+          would mean some cells' percentages meant a different thing from others', which is worse than
+          two sections. See `loadAgentWorkload`. */}
+      {(data?.agentRows.length ?? 0) > 0 && (
+        <Card className="animate-fade-in">
+          <CardHeader className="pb-3">
+            <CardTitle className="flex items-center gap-2 text-base">
+              <Bot className="h-4 w-4 text-primary" />
+              AI teammates over the same weeks
+            </CardTitle>
+            <CardDescription className="text-xs">
+              Wall-clock time and cost from the agent ledger. Deliberately not an allocation percentage: a teammate has no
+              capacity to be a percentage of, and these hours are not comparable with a person&apos;s.
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="overflow-x-auto pt-0">
+            <table className="w-full min-w-[560px] border-collapse">
+              <thead>
+                <tr className="border-b border-border">
+                  <th className="px-3 py-2 text-left text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+                    Teammate
+                  </th>
+                  {data!.buckets.map((b) => (
+                    <th key={b.start} className="px-1 py-2 text-center text-[11px] font-medium text-muted-foreground">
+                      {b.label}
+                    </th>
+                  ))}
+                  <th className="px-3 py-2 text-right text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+                    Total
+                  </th>
+                </tr>
+              </thead>
+              <tbody>
+                {data!.agentRows.map((row) => (
+                  <tr key={row.agent.id} className="border-b border-border/50">
+                    <td className="px-3 py-1.5">
+                      <span className="flex items-center gap-2">
+                        <span className="grid h-6 w-6 shrink-0 place-items-center rounded-full bg-primary/10 text-[10px]" aria-hidden>
+                          <Bot className="h-3 w-3 text-primary" />
+                        </span>
+                        <span className="truncate text-xs font-medium">{row.agent.name}</span>
+                      </span>
+                    </td>
+                    {row.cells.map((cell) => (
+                      <td key={cell.bucketStart} className="p-0.5">
+                        <Tooltip>
+                          <TooltipTrigger asChild>
+                            <div
+                              className={cn(
+                                "grid h-9 place-items-center rounded text-[11px] tabular-nums",
+                                cell.runs === 0 ? "bg-muted/40 text-muted-foreground" : "bg-primary/15 text-foreground"
+                              )}
+                            >
+                              {cell.runs === 0 ? "—" : `$${cell.costUsd.toFixed(2)}`}
+                            </div>
+                          </TooltipTrigger>
+                          <TooltipContent>
+                            <div className="grid gap-0.5 text-xs">
+                              <p className="font-medium">Week of {cell.bucketStart}</p>
+                              <p>
+                                {cell.runs} run{cell.runs === 1 ? "" : "s"}, {cell.workedHours}h wall clock
+                              </p>
+                              <p className="text-muted-foreground">
+                                {cell.displacedMinutes === null
+                                  ? "Human time displaced: not measurable here"
+                                  : `Stands in for about ${cell.displacedMinutes} minutes of human work`}
+                              </p>
+                            </div>
+                          </TooltipContent>
+                        </Tooltip>
+                      </td>
+                    ))}
+                    <td className="px-3 py-1.5 text-right">
+                      <span className="grid">
+                        <span className="text-xs font-medium tabular-nums">${row.totals.costUsd.toFixed(2)}</span>
+                        <span className="text-[10px] text-muted-foreground tabular-nums">
+                          {row.totals.runs} run{row.totals.runs === 1 ? "" : "s"}
+                          {row.totals.measuredRuns < row.totals.runs
+                            ? ` · ${row.totals.runs - row.totals.measuredRuns} unmeasured`
+                            : ""}
+                        </span>
+                      </span>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </CardContent>
+        </Card>
+      )}
 
       <div className="flex flex-wrap items-center gap-3 text-[11px] text-muted-foreground">
         <span className="inline-flex items-center gap-1">

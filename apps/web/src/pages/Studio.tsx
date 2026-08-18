@@ -18,6 +18,18 @@
  * calls no model and writes nothing, and says so on its own face so nobody reads it as an execution.
  *
  * WHO renders this: `App.tsx` at `/app/studio`.
+ *
+ * TOUCH TARGETS BELOW `sm`, DENSITY ABOVE IT.
+ *
+ * These screens are built for a super admin at a desk, so the default sizing is deliberately tight —
+ * every control on one screen beats a roomy screen you have to scroll. That trade stops working at a
+ * thumb's width: a 24px icon button is comfortably inside the 44px a finger actually lands on, so on a
+ * phone the same buttons are enlarged and given labels rather than being left as targets people miss
+ * twice before hitting. The desktop density is untouched.
+ *
+ * The minimums are written in PIXELS (`min-h-[44px]`), not in `h-11`: this app's root font is 14px, so
+ * every rem-based size utility lands at 14/16 of its nominal value and `h-11` is 38.5px, not 44. That
+ * was measured, not assumed.
  */
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
@@ -196,7 +208,7 @@ export function StudioPage() {
           </p>
         </div>
         {isSuperAdmin && !gateMessage && (
-          <Button onClick={() => setCreating(true)} className="shrink-0">
+          <Button onClick={() => setCreating(true)} className="min-h-[44px] shrink-0 sm:min-h-0">
             <Plus className="mr-1.5 h-4 w-4" />
             New flow
           </Button>
@@ -399,11 +411,11 @@ function RunRow({
           </span>
           {canDecide && (
             <span className="ml-auto flex gap-1.5">
-              <Button size="sm" className="h-7 px-2 text-xs" disabled={busy} onClick={() => onDecide(true)}>
+              <Button size="sm" className="min-h-[44px] px-3 text-xs sm:min-h-0 sm:h-7 sm:px-2" disabled={busy} onClick={() => onDecide(true)}>
                 <CheckCircle2 className="mr-1 h-3 w-3" />
                 Approve
               </Button>
-              <Button size="sm" variant="outline" className="h-7 px-2 text-xs" disabled={busy} onClick={() => onDecide(false)}>
+              <Button size="sm" variant="outline" className="min-h-[44px] px-3 text-xs sm:min-h-0 sm:h-7 sm:px-2" disabled={busy} onClick={() => onDecide(false)}>
                 <Ban className="mr-1 h-3 w-3" />
                 Decline
               </Button>
@@ -539,7 +551,7 @@ function FlowCard({
           </div>
           {canManage && (
             <div className="flex shrink-0 items-center gap-1.5">
-              <Button variant="outline" size="sm" onClick={onSimulate}>
+              <Button variant="outline" size="sm" className="min-h-[44px] sm:min-h-0" onClick={onSimulate}>
                 <PlayCircle className="mr-1.5 h-3.5 w-3.5" />
                 Replay
               </Button>
@@ -547,7 +559,7 @@ function FlowCard({
                   when the flow is live, because running a draft would be running something nobody
                   activated. */}
               {flow.trigger === "MANUAL" && flow.enabled && (
-                <Button variant="outline" size="sm" onClick={onRunNow} disabled={busy}>
+                <Button variant="outline" size="sm" className="min-h-[44px] sm:min-h-0" onClick={onRunNow} disabled={busy}>
                   <Play className="mr-1.5 h-3.5 w-3.5" />
                   Run now
                 </Button>
@@ -555,6 +567,7 @@ function FlowCard({
               <Button
                 variant={flow.enabled ? "ghost" : "default"}
                 size="sm"
+                className="min-h-[44px] sm:min-h-0"
                 disabled={busy || (!flow.enabled && !flow.activatable)}
                 onClick={() => onToggle(!flow.enabled)}
               >
@@ -657,7 +670,7 @@ function FlowCard({
 
         {canManage && (
           <div className="flex flex-wrap items-center gap-1.5 pt-1">
-            <Button variant="outline" size="sm" onClick={onEdit} className="h-7 px-2 text-xs">
+            <Button variant="outline" size="sm" onClick={onEdit} className="min-h-[44px] px-3 text-xs sm:min-h-0 sm:h-7 sm:px-2">
               <Settings2 className="mr-1 h-3 w-3" />
               Edit
             </Button>
@@ -667,7 +680,7 @@ function FlowCard({
                 Fix the errors above to switch it on
               </span>
             )}
-            <Button variant="ghost" size="sm" className="ml-auto h-7 px-2 text-xs" onClick={onRetire}>
+            <Button variant="ghost" size="sm" className="ml-auto min-h-[44px] px-3 text-xs sm:min-h-0 sm:h-7 sm:px-2" onClick={onRetire}>
               <Trash2 className="mr-1 h-3 w-3" />
               Retire
             </Button>
@@ -717,7 +730,7 @@ function StepConfigFields({
             patch({ ...cleared, action: v });
           }}
         >
-          <SelectTrigger className="h-8 text-xs">
+          <SelectTrigger className="min-h-[44px] text-xs sm:min-h-0 sm:h-8">
             <SelectValue placeholder="What should it do?" />
           </SelectTrigger>
           <SelectContent>
@@ -730,7 +743,7 @@ function StepConfigFields({
         </Select>
         {chosen && (
           <Select value={text(chosen.target)} onValueChange={(v) => patch({ [chosen.target]: v })}>
-            <SelectTrigger className="h-8 text-xs">
+            <SelectTrigger className="min-h-[44px] text-xs sm:min-h-0 sm:h-8">
               <SelectValue placeholder={chosen.options === "labels" ? "Which label?" : "Which person?"} />
             </SelectTrigger>
             <SelectContent>
@@ -751,7 +764,7 @@ function StepConfigFields({
     return (
       <div className="grid gap-1.5 sm:grid-cols-3">
         <Select value={text("field")} onValueChange={(v) => patch({ field: v, value: undefined })}>
-          <SelectTrigger className="h-8 text-xs">
+          <SelectTrigger className="min-h-[44px] text-xs sm:min-h-0 sm:h-8">
             <SelectValue placeholder="Only if…" />
           </SelectTrigger>
           <SelectContent>
@@ -763,7 +776,7 @@ function StepConfigFields({
           </SelectContent>
         </Select>
         <Select value={text("op") || "is"} onValueChange={(v) => patch({ op: v })}>
-          <SelectTrigger className="h-8 text-xs">
+          <SelectTrigger className="min-h-[44px] text-xs sm:min-h-0 sm:h-8">
             <SelectValue />
           </SelectTrigger>
           <SelectContent>
@@ -780,7 +793,7 @@ function StepConfigFields({
           />
         ) : (
           <Select value={text("value")} onValueChange={(v) => patch({ value: v })} disabled={!field}>
-            <SelectTrigger className="h-8 text-xs">
+            <SelectTrigger className="min-h-[44px] text-xs sm:min-h-0 sm:h-8">
               <SelectValue placeholder="Which one?" />
             </SelectTrigger>
             <SelectContent>
@@ -805,7 +818,7 @@ function StepConfigFields({
   if (step.kind === "HUMAN_GATE") {
     return (
       <Select value={text("approverId")} onValueChange={(v) => patch({ approverId: v })}>
-        <SelectTrigger className="h-8 text-xs">
+        <SelectTrigger className="min-h-[44px] text-xs sm:min-h-0 sm:h-8">
           <SelectValue placeholder="Who is asked to approve?" />
         </SelectTrigger>
         <SelectContent>
@@ -1047,7 +1060,7 @@ function FlowDialog({ flow, onClose, onSaved }: Readonly<{ flow: FlowRow | null;
                         value={steps[selectedIndex].capability ?? ""}
                         onValueChange={(v) => setSteps((prev) => prev.map((s, i) => (i === selectedIndex ? { ...s, capability: v } : s)))}
                       >
-                        <SelectTrigger className="h-8 text-xs">
+                        <SelectTrigger className="min-h-[44px] text-xs sm:min-h-0 sm:h-8">
                           <SelectValue placeholder="Pick a capability" />
                         </SelectTrigger>
                         <SelectContent>
@@ -1065,7 +1078,7 @@ function FlowDialog({ flow, onClose, onSaved }: Readonly<{ flow: FlowRow | null;
                         onChange={(config) => setSteps((prev) => prev.map((s, i) => (i === selectedIndex ? { ...s, config } : s)))}
                       />
                     )}
-                    <Button variant="ghost" size="sm" className="h-7 px-2 text-xs" onClick={() => removeStep(selectedIndex)}>
+                    <Button variant="ghost" size="sm" className="min-h-[44px] px-3 text-xs sm:min-h-0 sm:h-7 sm:px-2" onClick={() => removeStep(selectedIndex)}>
                       <Trash2 className="mr-1 h-3 w-3" />
                       Remove this step
                     </Button>
@@ -1110,7 +1123,7 @@ function FlowDialog({ flow, onClose, onSaved }: Readonly<{ flow: FlowRow | null;
                         value={step.capability ?? ""}
                         onValueChange={(v) => setSteps((prev) => prev.map((s, i) => (i === index ? { ...s, capability: v } : s)))}
                       >
-                        <SelectTrigger className="h-8">
+                        <SelectTrigger className="min-h-[44px] sm:min-h-0 sm:h-8">
                           <SelectValue placeholder="Pick a capability" />
                         </SelectTrigger>
                         <SelectContent>
@@ -1130,15 +1143,18 @@ function FlowDialog({ flow, onClose, onSaved }: Readonly<{ flow: FlowRow | null;
                       onChange={(config) => setSteps((prev) => prev.map((s, i) => (i === index ? { ...s, config } : s)))}
                     />
                   </div>
-                  <div className="flex shrink-0 flex-col gap-0.5">
-                    <Button variant="ghost" size="icon" className="h-6 w-6" onClick={() => move(index, -1)} aria-label="Move up">
-                      <ChevronRight className="h-3 w-3 -rotate-90" />
+                  {/* Row on a phone, column on a desktop: three 44px targets stacked would push the
+                      step's own controls off the bottom of a small screen, while side by side they sit
+                      under the thumb that is already there. See the note at the top of this file. */}
+                  <div className="flex shrink-0 flex-row gap-1 sm:flex-col sm:gap-0.5">
+                    <Button variant="ghost" size="icon" className="h-[44px] w-[44px] sm:h-6 sm:w-6" onClick={() => move(index, -1)} aria-label="Move up">
+                      <ChevronRight className="h-4 w-4 -rotate-90 sm:h-3 sm:w-3" />
                     </Button>
-                    <Button variant="ghost" size="icon" className="h-6 w-6" onClick={() => move(index, 1)} aria-label="Move down">
-                      <ChevronRight className="h-3 w-3 rotate-90" />
+                    <Button variant="ghost" size="icon" className="h-[44px] w-[44px] sm:h-6 sm:w-6" onClick={() => move(index, 1)} aria-label="Move down">
+                      <ChevronRight className="h-4 w-4 rotate-90 sm:h-3 sm:w-3" />
                     </Button>
-                    <Button variant="ghost" size="icon" className="h-6 w-6" onClick={() => removeStep(index)} aria-label="Remove step">
-                      <Trash2 className="h-3 w-3" />
+                    <Button variant="ghost" size="icon" className="h-[44px] w-[44px] sm:h-6 sm:w-6" onClick={() => removeStep(index)} aria-label="Remove step">
+                      <Trash2 className="h-4 w-4 sm:h-3 sm:w-3" />
                     </Button>
                   </div>
                 </div>
@@ -1146,7 +1162,7 @@ function FlowDialog({ flow, onClose, onSaved }: Readonly<{ flow: FlowRow | null;
             })}
             <div className="flex flex-wrap gap-1.5">
               {(Object.keys(STEP_META) as FlowStepKind[]).map((kind) => (
-                <Button key={kind} variant="outline" size="sm" onClick={() => addStep(kind)} className="h-7 text-xs">
+                <Button key={kind} variant="outline" size="sm" onClick={() => addStep(kind)} className="min-h-[44px] flex-1 text-xs sm:min-h-0 sm:h-7 sm:flex-none">
                   <Plus className="mr-1 h-3 w-3" />
                   {STEP_META[kind].label}
                 </Button>
@@ -1157,10 +1173,10 @@ function FlowDialog({ flow, onClose, onSaved }: Readonly<{ flow: FlowRow | null;
         </div>
 
         <DialogFooter>
-          <Button variant="outline" onClick={onClose} disabled={save.isPending}>
+          <Button variant="outline" className="min-h-[44px] sm:min-h-0" onClick={onClose} disabled={save.isPending}>
             Cancel
           </Button>
-          <Button onClick={() => save.mutate()} disabled={save.isPending || name.trim().length === 0}>
+          <Button className="min-h-[44px] sm:min-h-0" onClick={() => save.mutate()} disabled={save.isPending || name.trim().length === 0}>
             {save.isPending && <Loader2 className="mr-1.5 h-4 w-4 animate-spin" />}
             {flow ? "Save" : "Create as draft"}
           </Button>
