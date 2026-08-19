@@ -106,14 +106,94 @@ export async function isProjectMember(userId: string, projectId: string): Promis
   return Boolean(assignment);
 }
 
-/** Reporter/assignee can edit their own ticket; tickets:assign / tickets:manage holders can edit any. */
+/**
+ * Synchronous "may this person edit the ticket" test, over the parties already on the row.
+ *
+ * DELIBERATELY DOES NOT KNOW ABOUT COLLABORATORS: they live in their own table and answering for
+ * them needs a query. Callers that can await should use `canWorkOnTicket()` below, which is this
+ * predicate plus the collaborator roster; this one stays for the synchronous call sites and as the
+ * cheap first branch of that function.
+ */
 export function canModifyTicket(req: any, ticket: { reporterId: string; assigneeId: string | null }): boolean {
   if (PRIVILEGED_ROLES.has(req.user.role)) return true;
-  if (req.user.permissions.includes(permissions.TICKETS_ASSIGN) || req.user.permissions.includes(permissions.TICKETS_MANAGE)) {
-    return true;
-  }
+  if (req.user.permissions.includes(permissions.TICKETS_MANAGE)) return true;
   return ticket.reporterId === req.user.id || ticket.assigneeId === req.user.id;
 }
+
+/**
+ * The authority test for working on a ticket: the reporter who raised it, the assignee it sits
+ * with, anyone explicitly added as a collaborator, a privileged role, or the manager the reporter
+ * or assignee actually reports to.
+ *
+ * WHY `TICKETS_ASSIGN` NO LONGER GRANTS THIS ON ITS OWN: that permission is held tenant-wide by
+ * every MANAGER and TEAM_LEAD, so it made "may I edit this ticket" answer yes for every manager in
+ * the workspace, including ones with no relationship to the work. The rule now follows the
+ * reporting line — `managerId` — which is the same relation the approvals chain, the org chart and
+ * the Kanban swimlanes already read, so no new concept is introduced to enforce it.
+ *
+ * TICKETS_MANAGE is kept as a blanket grant: it is the delete-any-ticket right, and a role that may
+ * remove a ticket outright cannot meaningfully be barred from editing one.
+ */
+export async function canWorkOnTicket(
+  req: any,
+  ticket: { id: string; reporterId: string; assigneeId: string | null }
+): Promise<boolean> {
+  if (canModifyTicket(req, ticket)) return true;
+  if (await isMappedManagerFor(req.user.id, ticket)) return true;
+  const collaborator = await prisma.ticketCollaborator.findFirst({
+    where: { ticketId: ticket.id, userId: req.user.id },
+    select: { id: true }
+  });
+  return Boolean(collaborator);
+}
+
+/**
+ * Is `userId` the direct manager of this ticket's reporter or its assignee?
+ *
+ * Either side counts, deliberately. A ticket raised by one team against another has two people
+ * with a legitimate stake in it, and a rule that recognised only the assignee's manager would stop
+ * the raiser's own manager from chasing work their report is waiting on.
+ */
+async function isMappedManagerFor(
+  userId: string,
+  ticket: { reporterId: string; assigneeId: string | null }
+): Promise<boolean> {
+  const parties = [ticket.reporterId, ticket.assigneeId].filter((id): id is string => Boolean(id));
+  if (parties.length === 0) return false;
+  const managed = await prisma.user.findFirst({
+    where: { id: { in: parties }, managerId: userId, deletedAt: null },
+    select: { id: true }
+  });
+  return Boolean(managed);
+}
+
+/**
+ * Who may change a ticket's assignee, or add and remove collaborators.
+ *
+ * Narrower than `canWorkOnTicket` on purpose: doing the work and deciding who does the work are
+ * different rights. A SUPER_ADMIN or ADMIN administers the workspace and keeps both; beyond them,
+ * only the manager the reporter or assignee actually reports to may move the ticket. An assignee
+ * cannot hand their own ticket to somebody else, which is the whole point of the restriction.
+ */
+export async function canReassignTicket(
+  req: any,
+  ticket: { reporterId: string; assigneeId: string | null }
+): Promise<boolean> {
+  if (PRIVILEGED_ROLES.has(req.user.role)) return true;
+  return isMappedManagerFor(req.user.id, ticket);
+}
+
+/**
+ * The 403 an edit attempt raises. Says who MAY act rather than just refusing, because the most
+ * common way to hit this is a manager who is simply not in this ticket's reporting line, and
+ * "Forbidden" leaves them with no idea who to ask.
+ */
+export const WORK_FORBIDDEN_MESSAGE =
+  "Only this ticket's reporter, its assignee, its collaborators, or their manager can work on it.";
+
+/** The 403 both reassignment routes raise, phrased once so they cannot drift apart. */
+export const REASSIGN_FORBIDDEN_MESSAGE =
+  "Only a super admin, an admin, or the manager this ticket's reporter or assignee reports to can change who works on it.";
 
 /** Throws a 422 unless `type` matches an active TicketType.name row. */
 export async function assertValidTicketType(type: string): Promise<void> {

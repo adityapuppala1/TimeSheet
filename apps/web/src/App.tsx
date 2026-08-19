@@ -43,6 +43,9 @@ const TimelinePage = lazy(() => import("./pages/Timeline").then((m) => ({ defaul
 const MyWorkPage = lazy(() => import("./pages/MyWork").then((m) => ({ default: m.MyWorkPage })));
 const PortfolioPage = lazy(() => import("./pages/Portfolio").then((m) => ({ default: m.PortfolioPage })));
 const GoalsPage = lazy(() => import("./pages/Goals").then((m) => ({ default: m.GoalsPage })));
+const ChangesPage = lazy(() => import("./pages/Changes").then((m) => ({ default: m.Changes })));
+const ChangeDetailPage = lazy(() => import("./pages/ChangeDetail").then((m) => ({ default: m.ChangeDetailPage })));
+const ChangeCalendarPage = lazy(() => import("./pages/ChangeCalendar").then((m) => ({ default: m.ChangeCalendarPage })));
 const InboxPage = lazy(() => import("./pages/Inbox").then((m) => ({ default: m.InboxPage })));
 const AgentsPage = lazy(() => import("./pages/Agents").then((m) => ({ default: m.AgentsPage })));
 const StudioPage = lazy(() => import("./pages/Studio").then((m) => ({ default: m.StudioPage })));
@@ -124,6 +127,13 @@ const router = createBrowserRouter([
       // checked inside the page for the write affordances, and the page renders its own
       // "goals are off" state for the same reason the planning pages do.
       { path: "goals", element: <PageShell><GoalsPage /></PageShell> },
+      // No RequirePermission: READING changes needs no key — a change about to take a service down
+      // is not a secret from the people who depend on it. The page renders its own "off" or
+      // "not in your plan" state, the same way the planning pages do, so somebody who lands here
+      // from a link is told which half is missing rather than bounced.
+      { path: "changes", element: <PageShell><ChangesPage /></PageShell> },
+      { path: "changes/calendar", element: <PageShell><ChangeCalendarPage /></PageShell> },
+      { path: "changes/:id", element: <PageShell><ChangeDetailPage /></PageShell> },
       // The inbox is personal: no permission, no entitlement, no feature flag. Everyone has
       // notifications, so everyone has an inbox — the same reasoning as "my-work" above.
       { path: "inbox", element: <PageShell><InboxPage /></PageShell> },

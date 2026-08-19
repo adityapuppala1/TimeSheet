@@ -757,6 +757,25 @@ TimeSphere calling a model. Nothing here imports `ai.service.ts` and nothing her
 | `services/ai-overview.service.ts` | One response describing all four surfaces, and the single next step ordered by what blocks what. | Every service above, `ai.service.ts` | `ai.controller.ts` |
 | `services/goal-progress.service.ts` + `workers/goal-digest.worker.ts` | Goal measurement derived on read, and the weekly nudge to the goal's owner that stays silent when nothing needs a look. | `plan-schedule.service.ts`, `notify.service.ts` | `goal.controller.ts`, `server.ts` |
 
+### Change management (V8)
+
+Same pure-core split as the planning layer, and for the same reason: the rules worth getting right
+here are arithmetic and predicates — what a change still owes before it can be submitted, what its
+risk actually scores, whether a stage clock has breached — and each is a pure function the tests
+drive with no database at all (`change-sla.test.ts`, `change-readiness.test.ts`).
+
+| File | Responsibility | Depends on | Called by |
+|---|---|---|---|
+| `services/change.service.ts` | The rules. `missingForSubmit` / `missingForTransition` / `assertReadyFor` (what a change owes), `computeRiskScore` + `bandForScore` (the weighted, normalised score), `resolveChangeApprovers` (the requester's manager, else every active super admin), `canDecideChange`, `assertLegalChangeTransition`, `isNoOpTransition`, `findScheduleConflicts`, and `judgeSla` / `judgeChangeSlas`. **A finished stage is judged on how long it took, never against `now`** — the alternative turns every overrun green the moment it closes. `assertChangeManagementEnabled` raises two deliberately different 403s for "switched off" and "not in your plan". | `@timesheet/shared` (`changeStateTransitions`, `CHANGE_STATE_TO_TICKET_STATUS`), `plan-limits.service.ts` | `change.controller.ts` |
+| `services/change-key.service.ts` | `PROJECTCODE-YYYYMMDD-NNNN`. Count-and-retry against the unique index, counted on the key prefix so two changes raised in the same second cannot collide. | `prisma` | `change.controller.ts` |
+| `services/change-mail.service.ts` | The two outbound mails and `audienceFor` — To is requester + implementer + approvers + collaborators, BCC is every super admin via `alwaysBcc`. Falls back to the compiled template when the editable row is missing, so the seeded row and the code path render an identical email. | `mail.service.ts`, `mail-templates.ts`, `template-store.service.ts` | `change.controller.ts` |
+| `services/change-export.service.ts` | `buildChangeWorkbook` (ExcelJS — summary sheet built from the same capped rows as its detail sheet) and `renderChangeRegisterPdf` (landscape register, HIGH risk in red, `Page N of M` via `bufferPages`). The caller owns the stream, same split as `security-report-pdf.service.ts`. | `exceljs`, `pdfkit` | `change.controller.ts` |
+| `controllers/change.controller.ts` | Every route. Static `export.*` paths are registered **before** `/:id` — Express matches in declaration order, and `/:id` otherwise swallows `export.csv` as an id. `assertMayEditChange` freezes the plan after approval while leaving outcome fields writable; `loadChangeForRunbook` deliberately does not, because filling in the runbook is post-approval work. | `change*.service.ts`, `ticket.service.ts` (`ticketProjectScope`, `assertTicketVisible`, `issueTicketKey`) | `app.ts` |
+| `pages/ChangeDetail.tsx` (web) | The thirteen-tab change page. Tabs rather than a wizard: a change is drafted over days by two or three people and read far more often than written. Fields save on blur through one shared primitive, so no section can invent its own save path. | `services/api.ts`, `lib/change-visuals.ts` | `App.tsx` |
+| `components/change/ChangeRunbook.tsx` (web) | Steps, test cases and dependencies as one shell with three column sets — the same interaction three times, written once so the third cannot drift from the first. Plus `ChangeSlaLadder`. | `services/api.ts` | `ChangeDetail.tsx` |
+| `components/change/ChangeAnalytics.tsx` (web) | Delivery health and the twelve-week trend. Every point comes from real timestamps bucketed server-side — nothing is synthesised from the current total, the same rule the ticket metric cards follow. | `recharts`, `services/api.ts` | `Changes.tsx` |
+| `pages/ChangeCalendar.tsx` (web) | 24-hour tracks rather than a month grid, because a change occupies a window and the question worth opening a calendar for is whether two windows overlap. Blackouts are drawn underneath, not filtered out. | `services/api.ts` | `App.tsx` |
+
 ### Planning layer (V6)
 
 Every service below is split the same way, and the split is the point: an exported **pure**

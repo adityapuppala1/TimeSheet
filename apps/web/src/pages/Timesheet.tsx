@@ -21,6 +21,7 @@ import { Form, FormControl, FormDescription, FormField, FormItem, FormLabel, For
 import { Progress } from "../components/ui/progress";
 import { RichTextEditor } from "../components/ui/rich-text-editor";
 import { Command, CommandEmpty, CommandGroup, CommandInput, CommandItem, CommandList } from "../components/ui/command";
+import { SearchableSelect } from "../components/ui/searchable-select";
 import { Popover, PopoverContent, PopoverTrigger } from "../components/ui/popover";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../components/ui/select";
 import { Separator } from "../components/ui/separator";
@@ -413,16 +414,18 @@ export function Timesheet() {
                   render={({ field }) => (
                     <FormItem>
                       <FormLabel>Module</FormLabel>
-                      <Select value={field.value} onValueChange={(v) => { field.onChange(v); form.setValue("submoduleId", ""); }} disabled={!selectedProject}>
-                        <FormControl>
-                          <SelectTrigger><SelectValue placeholder={selectedProject ? "Select module" : "Pick a project first"} /></SelectTrigger>
-                        </FormControl>
-                        <SelectContent>
-                          {selectedProject?.modules?.map((m: any) => (
-                            <SelectItem key={m.id} value={m.id}>{m.name}</SelectItem>
-                          ))}
-                        </SelectContent>
-                      </Select>
+                      <FormControl>
+                        <SearchableSelect
+                          aria-label="Module"
+                          options={selectedProject?.modules ?? []}
+                          value={field.value}
+                          onChange={(v) => { field.onChange(v); form.setValue("submoduleId", ""); }}
+                          disabled={!selectedProject}
+                          placeholder={selectedProject ? "Select module" : "Pick a project first"}
+                          searchPlaceholder="Search modules…"
+                          emptyText="No modules match."
+                        />
+                      </FormControl>
                       <FormMessage />
                     </FormItem>
                   )}
@@ -433,16 +436,20 @@ export function Timesheet() {
                   render={({ field }) => (
                     <FormItem>
                       <FormLabel>Submodule <span className="text-muted-foreground">(optional)</span></FormLabel>
-                      <Select value={field.value || ""} onValueChange={field.onChange} disabled={!selectedModule}>
-                        <FormControl>
-                          <SelectTrigger><SelectValue placeholder={selectedModule ? "Optional" : "Pick a module first"} /></SelectTrigger>
-                        </FormControl>
-                        <SelectContent>
-                          {selectedModule?.submodules?.map((s: any) => (
-                            <SelectItem key={s.id} value={s.id}>{s.name}</SelectItem>
-                          ))}
-                        </SelectContent>
-                      </Select>
+                      <FormControl>
+                        <SearchableSelect
+                          aria-label="Submodule"
+                          options={selectedModule?.submodules ?? []}
+                          value={field.value || ""}
+                          onChange={field.onChange}
+                          disabled={!selectedModule}
+                          placeholder={selectedModule ? "Optional" : "Pick a module first"}
+                          searchPlaceholder="Search submodules…"
+                          emptyText="No submodules match."
+                          clearable
+                          clearLabel="None"
+                        />
+                      </FormControl>
                     </FormItem>
                   )}
                 />

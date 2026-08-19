@@ -327,6 +327,39 @@ Every one of these migrations was replayed into an empty database before commit,
 top of this file. Two of them needed the lower-case table name the diff emitted (`agentrun`,
 `automationflowrunstep`) corrected to canonical casing first — the 2.4.0 lesson, checked every time.
 
+## Change management tables (V8)
+
+`ChangeRequest` is an **extension row on a ticket**, not a parallel entity: it holds a required
+`ticketId` and the governance columns a ticket cannot express. Comments, attachments, watchers,
+links, the audit trail and project-scoped visibility all come from the ticket half for free, which is
+why this module added no second visibility rule to keep in step.
+
+| Table | What it holds |
+|---|---|
+| `ChangeRequest` | The governance record — kind, category, environment, the business case, the impact and risk assessment, the schedule, the plans (implementation, backout, test, communication), and the outcome. `changeKey` is uniquely indexed; `state` is the lifecycle. |
+| `ChangeImplementationStep` | The runbook, numbered. `stepNumber` is issued from the current maximum, not the row count, so deleting step 2 of 3 does not make the next new step a second step 3. |
+| `ChangeTestCase` | How anyone will know it worked. `reference` defaults to `TC-01`, `TC-02`… when not supplied — requiring somebody to invent an identifier first is how test sections end up empty. |
+| `ChangeDependency` | What has to be true first. `PREDECESSOR`/`BLOCKS` left `OPEN` refuse the move to `IMPLEMENTING`; `SUCCESSOR`/`RELATED` never block. |
+| `ChangeApproval` | One row per approver per **round**. A rejection opens a new round rather than overwriting the first, so the original objection survives the rework. `dueAt` is the approval SLA clock. |
+| `ChangeCollaborator`, `ChangeTicketLink` | Who else is working on it, and which closed tickets it delivers. |
+| `ChangeCategory`, `ChangeSource`, `ChangeApplication` | Admin-editable master data. `requiresSecurityReview` on a category forces the review gate. |
+| `MaintenanceWindow`, `BlackoutPeriod` | When change is welcome, and when it is refused. Both feed the calendar and the conflict check. |
+| `ChangeRiskParameter` | The weighted questions behind the risk score. Deactivating one removes it from the required set as well as the maths — the two must not drift. |
+| `ChangeSlaConfig` | One budget + warning fraction per stage. An **inactive** row means the stage has no clock, not a zero-hour one. |
+| `GlobalChangeSettings` | Workspace toggles, the approval SLA, and the freeze policy. |
+
+Also added: `TicketCollaborator` (multiple people on one ticket, distinct from the single `assignee`),
+`ApprovalRequest.quorum`, and thirteen `emailChange*` columns on `GlobalNotificationSettings` so the
+new mail obeys the same category × role grid as everything else.
+
+### Why the risk score is stored, not derived at read time
+
+`riskScore` and `riskLevel` are columns. The score normalises across whichever parameters were
+**active when the assessment was made**, and recomputing it later against a changed parameter set
+would silently re-band historical changes — including ones whose backout plan was waived because they
+banded LOW at the time. The stored pair is the record of what was decided; `ChangeRiskParameter` is
+only the input to the next one.
+
 ## Face (identity) verification tables
 
 Only populated when the feature is switched on (it is off by default). These hold **biometric

@@ -67,7 +67,8 @@ import { AiRefinePanel, AiRefineTrigger, useAiRefine } from "../components/AiRef
 import { PlanCalendar } from "../components/PlanCalendar";
 import { TicketApprovalsPanel } from "../components/TicketApprovalsPanel";
 import { ProofingPanel } from "../components/ProofingPanel";
-import { SavedViewsBar } from "../components/SavedViewsBar";
+import { SavedViewsBar, type TicketFilters } from "../components/SavedViewsBar";
+import { TicketMetricsPanel } from "../components/TicketMetricsPanel";
 import { TicketPlanningPanel } from "../components/TicketPlanningPanel";
 import { PlanTimeline, TimelineLegend, scheduledItemIds, type TimelineZoom } from "../components/PlanTimeline";
 import { TicketKanban } from "../components/TicketKanban";
@@ -117,21 +118,11 @@ export function iconForType(type: string) {
   return DEFAULT_TYPE_ICONS[type.toUpperCase()] ?? Tag;
 }
 
-export const STATUS_VARIANT: Record<TicketStatus, BadgeProps["variant"]> = {
-  OPEN: "info",
-  IN_PROGRESS: "warning",
-  IN_REVIEW: "warning",
-  RESOLVED: "success",
-  CLOSED: "muted",
-  REOPENED: "destructive"
-};
-
-export const PRIORITY_VARIANT: Record<TicketPriority, BadgeProps["variant"]> = {
-  LOW: "muted",
-  MEDIUM: "info",
-  HIGH: "warning",
-  CRITICAL: "destructive"
-};
+/** Re-exported rather than defined here: the metric tiles above the table need the same palette,
+ *  and they live in their own component, so the maps moved to lib/ticket-visuals.ts to avoid a
+ *  circular import. TicketKanban.tsx still imports both from this module. */
+import { PRIORITY_VARIANT, STATUS_VARIANT } from "../lib/ticket-visuals";
+export { PRIORITY_VARIANT, STATUS_VARIANT };
 
 export function serverMessage(err: any, fallback: string) {
   return err?.response?.data?.message ?? fallback;
@@ -150,7 +141,37 @@ function formatDate(value?: string | null) {
 /** Column defs for the desktop list view's DataTable — module-level since these don't depend on
  *  component state, just the row shape and the module-level helpers/variant maps above. */
 const ticketColumns: ColumnDef<TicketRow, any>[] = [
-  { accessorKey: "key", header: "Key", cell: (info) => <span className="font-mono text-xs text-muted-foreground">{info.getValue()}</span> },
+  {
+    id: "serial",
+    header: "S.No",
+    enableSorting: false,
+    /** Accesses the KEY even though the cell renders a position. Two reasons: the "Search these
+     *  results" box filters on accessor values, so without this, replacing the Key column would
+     *  have silently broken searching for "HICS-TS-3" — the way people actually look a ticket up;
+     *  and the key stays one hover away on the cell below. */
+    accessorFn: (row) => row.key,
+    /** The row's position in the list as currently sorted and paginated — NOT a stored number.
+     *  `row.index` is the index within the sorted model, so re-sorting renumbers rather than
+     *  scrambling. The ticket key it replaced is still how the ticket is identified everywhere it
+     *  matters (the title tooltip below, the detail sheet, emails, git branches), so nothing that
+     *  needs a stable identifier is reading this. */
+    cell: ({ row, table }) => {
+      // TanStack's row pipeline is core → filtered → sorted → paginated, so the sorted model is
+      // every row the search box left in, across ALL pages. The position within it therefore keeps
+      // counting onto page 2 instead of restarting at 1, and re-sorting renumbers cleanly.
+      const sorted = table.getSortedRowModel().rows.findIndex((r) => r.id === row.id);
+      return (
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <span className="font-mono text-xs tabular-nums text-muted-foreground">
+              {(sorted === -1 ? row.index : sorted) + 1}
+            </span>
+          </TooltipTrigger>
+          <TooltipContent>{row.original.key}</TooltipContent>
+        </Tooltip>
+      );
+    }
+  },
   {
     accessorKey: "title",
     header: "Title",
@@ -208,24 +229,58 @@ const ticketColumns: ColumnDef<TicketRow, any>[] = [
     }
   },
   {
-    id: "labels",
-    accessorFn: (row) => row.labels.map((tl) => tl.label.name).join(", "),
-    header: "Labels",
-    enableSorting: false,
-    cell: ({ row }) => (
-      <div className="flex flex-wrap gap-1">
-        {row.original.labels.map((tl) => (
-          <span
-            key={tl.id}
-            className="inline-flex items-center gap-1 rounded-full border border-border px-1.5 py-0.5 text-[10px] font-medium"
-          >
-            <span className="h-1.5 w-1.5 rounded-full" style={{ backgroundColor: tl.label.color ?? "#94A3B8" }} />
-            {tl.label.name}
-          </span>
-        ))}
-        {row.original.labels.length === 0 && <span className="text-xs text-muted-foreground">—</span>}
-      </div>
-    )
+    id: "files",
+    accessorFn: (row) => row._count.attachments,
+    header: "Files",
+    /** Replaced the Labels column. Sortable on the count so "which of these has evidence attached"
+     *  is one click, which is the question the column exists to answer — a bug report with a
+     *  screenshot is triaged differently from one without. The labels themselves are unchanged and
+     *  still live on the ticket, its detail sheet, and the label filter above this table. */
+    cell: ({ row }) => {
+      const count = row.original._count.attachments;
+      if (count === 0) return <span className="text-xs text-muted-foreground">—</span>;
+      return (
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <span className="inline-flex items-center gap-1 text-xs font-medium text-muted-foreground">
+              <Paperclip className="h-3.5 w-3.5" />
+              {count}
+            </span>
+          </TooltipTrigger>
+          <TooltipContent>
+            {count} file{count === 1 ? "" : "s"} attached
+          </TooltipContent>
+        </Tooltip>
+      );
+    }
+  },
+  {
+    id: "reporter",
+    accessorFn: (row) => row.reporter?.name ?? "",
+    header: "Raised by",
+    cell: ({ row }) => {
+      const reporter = row.original.reporter;
+      // An email- or chat-sourced ticket's `reporter` is a seeded system account, so the real
+      // sender is the external name the intake recorded — showing "Email Intake" for every one of
+      // them would make the column useless on exactly the tickets people most want to trace.
+      const external = row.original.externalReporterName || row.original.externalReporterEmail;
+      const name = external || reporter?.name || "—";
+      const avatarSrc = external ? null : fileUrl(reporter?.avatarUrl);
+      return (
+        <div className="flex items-center gap-2">
+          <Avatar className="h-7 w-7">
+            {avatarSrc ? <AvatarImage src={avatarSrc} alt={name} /> : null}
+            <AvatarFallback className="text-[10px]">{initialsFor(name)}</AvatarFallback>
+          </Avatar>
+          <span className="truncate text-sm">{name}</span>
+        </div>
+      );
+    }
+  },
+  {
+    accessorKey: "createdAt",
+    header: "Created",
+    cell: ({ row }) => <span className="text-xs text-muted-foreground">{formatDate(row.original.createdAt)}</span>
   },
   {
     id: "assignee",
@@ -268,13 +323,38 @@ const ticketColumns: ColumnDef<TicketRow, any>[] = [
   }
 ];
 
+/** Every filter axis at rest. Also the shape an older saved view is merged over, so a view stored
+ *  before an axis existed cannot leave that axis `undefined`. */
+export const DEFAULT_TICKET_FILTERS: TicketFilters = {
+  projectId: "all",
+  status: "all",
+  priority: "all",
+  type: "all",
+  reporterId: "all",
+  onlyMine: false
+};
+
+/** The page's filter state as the query string both the list and the metrics endpoint take. */
+function ticketQueryParams(filters: TicketFilters, userId: string | undefined) {
+  // "all" is the UI's word for "no filter"; the API's is an absent parameter.
+  const set = (value: string) => (value !== "all" ? value : undefined);
+  return {
+    projectId: set(filters.projectId),
+    status: set(filters.status),
+    priority: set(filters.priority),
+    type: set(filters.type),
+    reporterId: set(filters.reporterId),
+    assigneeId: filters.onlyMine ? userId : undefined
+  };
+}
+
 export function Tickets() {
   const user = useAuthStore((s) => s.user);
   const queryClient = useQueryClient();
   const [searchParams, setSearchParams] = useSearchParams();
   const openId = searchParams.get("open");
 
-  const [filters, setFilters] = useState({ projectId: "all", status: "all", priority: "all", labelId: "all", onlyMine: false });
+  const [filters, setFilters] = useState<TicketFilters>({ ...DEFAULT_TICKET_FILTERS });
   const [createOpen, setCreateOpen] = useState(false);
   // Timeline and Calendar join List and Board here rather than becoming their own pages, so the
   // filters someone has already set carry across every way of looking at the same work. A
@@ -321,17 +401,31 @@ export function Tickets() {
   });
 
   const projects = useQuery({ queryKey: ["projects"], queryFn: () => projectApi.list() });
-  const labels = useQuery({ queryKey: ["labels"], queryFn: labelApi.list });
-  const tickets = useQuery({
-    queryKey: ["tickets", filters],
-    queryFn: () =>
-      ticketApi.list({
-        projectId: filters.projectId !== "all" ? filters.projectId : undefined,
-        status: filters.status !== "all" ? filters.status : undefined,
-        priority: filters.priority !== "all" ? filters.priority : undefined,
-        labelId: filters.labelId !== "all" ? filters.labelId : undefined,
-        assigneeId: filters.onlyMine ? user?.id : undefined
-      })
+  // Types are admin-editable rows, not an enum, so the filter reads them rather than hard-coding
+  // BUG/TASK/IMPROVEMENT. Shares its cache key with the create dialog's copy.
+  const ticketTypes = useQuery({ queryKey: ["ticket-types"], queryFn: () => ticketTypeApi.list() });
+  // Built once and handed to BOTH the list and the metric tiles. They must agree on what is being
+  // filtered — a tile counting a different set than the table under it is worse than no tile — and
+  // two hand-maintained copies of this mapping is exactly how they would drift.
+  const queryParams = ticketQueryParams(filters, user?.id);
+  /** The tallies belong to the two views that show a filtered set of tickets. Timeline and Calendar
+   *  answer a scheduling question, where a status count is noise above the thing you came to read. */
+  const showMetrics = viewMode === "list" || viewMode === "board";
+
+  const tickets = useQuery({ queryKey: ["tickets", filters], queryFn: () => ticketApi.list(queryParams) });
+
+  /**
+   * The tiles' counts. Keyed on the same `filters` object the list is keyed on, so the two refetch
+   * together and a tile can never describe a different set of tickets than the table under it.
+   * `assigneeId` is included because "Assigned to me" narrows the tiles too — a personal queue whose
+   * headline number counted the whole workspace would be worse than no number.
+   */
+  const metrics = useQuery({
+    queryKey: ["tickets", "metrics", filters, user?.id],
+    queryFn: () => ticketApi.metrics(queryParams),
+    // Keeps the previous tallies on screen while the next ones load, so clicking a tile does not
+    // blank the whole strip it was clicked in.
+    placeholderData: (prev) => prev
   });
 
   function openTicket(id: string) {
@@ -394,53 +488,131 @@ export function Tickets() {
         </div>
       </div>
 
+      {/* Above the filter row rather than below it: the tiles ARE filters, and a summary that sits
+          under the controls it drives reads as a result rather than a starting point. Hidden on the
+          two planning views, which answer a scheduling question that a status tally does not. */}
+      {showMetrics && (
+        <TicketMetricsPanel
+          metrics={metrics.data}
+          loading={metrics.isLoading}
+          filters={{
+            projectId: filters.projectId,
+            status: filters.status,
+            priority: filters.priority,
+            type: filters.type,
+            reporterId: filters.reporterId
+          }}
+          onFilterChange={(patch) => setFilters((f) => ({ ...f, ...patch }))}
+        />
+      )}
+
       <Card data-tour="tickets-workspace">
-        <CardContent className="flex flex-wrap items-center gap-3 pt-6">
-          <Select value={filters.projectId} onValueChange={(v) => setFilters((f) => ({ ...f, projectId: v }))}>
-            <SelectTrigger className="w-full sm:w-[180px]"><SelectValue placeholder="All projects" /></SelectTrigger>
-            <SelectContent>
-              <SelectItem value="all">All projects</SelectItem>
-              {projects.data?.map((p: any) => <SelectItem key={p.id} value={p.id}>{p.name}</SelectItem>)}
-            </SelectContent>
-          </Select>
-          <Select value={filters.status} onValueChange={(v) => setFilters((f) => ({ ...f, status: v }))}>
-            <SelectTrigger className="w-full sm:w-[160px]"><SelectValue placeholder="All statuses" /></SelectTrigger>
-            <SelectContent>
-              <SelectItem value="all">All statuses</SelectItem>
-              {ticketStatuses.map((s) => <SelectItem key={s} value={s}>{s.replace("_", " ")}</SelectItem>)}
-            </SelectContent>
-          </Select>
-          <Select value={filters.priority} onValueChange={(v) => setFilters((f) => ({ ...f, priority: v }))}>
-            <SelectTrigger className="w-full sm:w-[150px]"><SelectValue placeholder="All priorities" /></SelectTrigger>
-            <SelectContent>
-              <SelectItem value="all">All priorities</SelectItem>
-              {ticketPriorities.map((p) => <SelectItem key={p} value={p}>{p}</SelectItem>)}
-            </SelectContent>
-          </Select>
-          <Select value={filters.labelId} onValueChange={(v) => setFilters((f) => ({ ...f, labelId: v }))}>
-            <SelectTrigger className="w-full sm:w-[150px]"><SelectValue placeholder="All labels" /></SelectTrigger>
-            <SelectContent>
-              <SelectItem value="all">All labels</SelectItem>
-              {(labels.data ?? []).map((l) => (
-                <SelectItem key={l.id} value={l.id}>
-                  <span className="inline-flex items-center gap-1.5">
-                    <span className="h-2 w-2 rounded-full" style={{ backgroundColor: l.color ?? "#94A3B8" }} />
-                    {l.name}
-                  </span>
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
+        {/* `items-end` rather than `items-center`: the selects now carry a label above them, so
+            centring would float the "Assigned to me" button halfway up the row instead of sitting
+            it on the same baseline as the controls it belongs with. */}
+        <CardContent className="flex flex-wrap items-end gap-3 pt-6">
+          <div className="grid w-full gap-1.5 sm:w-auto">
+            <Label htmlFor="ticket-filter-project">Project</Label>
+            <Select value={filters.projectId} onValueChange={(v) => setFilters((f) => ({ ...f, projectId: v }))}>
+              <SelectTrigger id="ticket-filter-project" className="w-full sm:w-[180px]">
+                <SelectValue placeholder="All projects" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">All projects</SelectItem>
+                {projects.data?.map((p: any) => <SelectItem key={p.id} value={p.id}>{p.name}</SelectItem>)}
+              </SelectContent>
+            </Select>
+          </div>
+          <div className="grid w-full gap-1.5 sm:w-auto">
+            <Label htmlFor="ticket-filter-status">Status</Label>
+            <Select value={filters.status} onValueChange={(v) => setFilters((f) => ({ ...f, status: v }))}>
+              <SelectTrigger id="ticket-filter-status" className="w-full sm:w-[160px]">
+                <SelectValue placeholder="All statuses" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">All statuses</SelectItem>
+                {ticketStatuses.map((s) => <SelectItem key={s} value={s}>{s.replace("_", " ")}</SelectItem>)}
+              </SelectContent>
+            </Select>
+          </div>
+          <div className="grid w-full gap-1.5 sm:w-auto">
+            <Label htmlFor="ticket-filter-priority">Priority</Label>
+            <Select value={filters.priority} onValueChange={(v) => setFilters((f) => ({ ...f, priority: v }))}>
+              <SelectTrigger id="ticket-filter-priority" className="w-full sm:w-[150px]">
+                <SelectValue placeholder="All priorities" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">All priorities</SelectItem>
+                {ticketPriorities.map((p) => <SelectItem key={p} value={p}>{p}</SelectItem>)}
+              </SelectContent>
+            </Select>
+          </div>
+          <div className="grid w-full gap-1.5 sm:w-auto">
+            <Label htmlFor="ticket-filter-type">Type</Label>
+            {/* Reads the admin-editable TicketType rows rather than a hard-coded list, so a
+                workspace that added "Spike" can filter by it the day it exists. */}
+            <Select value={filters.type} onValueChange={(v) => setFilters((f) => ({ ...f, type: v }))}>
+              <SelectTrigger id="ticket-filter-type" className="w-full sm:w-[150px]">
+                <SelectValue placeholder="All types" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">All types</SelectItem>
+                {(ticketTypes.data ?? []).map((t) => {
+                  const TypeIcon = iconForType(t.name);
+                  return (
+                    <SelectItem key={t.id} value={t.name}>
+                      <span className="inline-flex items-center gap-1.5">
+                        <TypeIcon className="h-3.5 w-3.5 text-muted-foreground" />
+                        {t.name}
+                      </span>
+                    </SelectItem>
+                  );
+                })}
+              </SelectContent>
+            </Select>
+          </div>
+          <div className="grid w-full gap-1.5 sm:w-auto">
+            <Label htmlFor="ticket-filter-reporter">Raised by</Label>
+            {/* Options come from the metrics endpoint — the people who have actually raised a
+                ticket in this scope, with their counts — not the user directory, most of whom have
+                never filed one. */}
+            <Select value={filters.reporterId} onValueChange={(v) => setFilters((f) => ({ ...f, reporterId: v }))}>
+              <SelectTrigger id="ticket-filter-reporter" className="w-full sm:w-[170px]">
+                <SelectValue placeholder="Anyone" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">Anyone</SelectItem>
+                {(metrics.data?.byReporter ?? []).map((r) => (
+                  <SelectItem key={r.userId} value={r.userId}>
+                    <span className="inline-flex items-center gap-1.5">
+                      {r.name}
+                      <span className="text-xs text-muted-foreground">({r.count})</span>
+                    </span>
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+          {/* No label of its own — it is a toggle, not a field, and the button's own text already
+              names it. `h-10` matches SelectTrigger so the row keeps one baseline. */}
           <Button
             variant={filters.onlyMine ? "default" : "outline"}
             size="sm"
+            className="h-10"
             onClick={() => setFilters((f) => ({ ...f, onlyMine: !f.onlyMine }))}
           >
             Assigned to me
           </Button>
           {/* Sits with the filters it saves, not in the header — the thing being named is what is
               on this row. Renders nothing at all when planning is off. */}
-          <SavedViewsBar viewMode={viewMode} filters={filters} onApply={setFilters} />
+          {/* Merged over the defaults rather than assigned: a view saved before Type and Raised by
+              existed carries neither, and replacing state with it outright would set both to
+              `undefined` — which axios then serialises as the literal string "undefined". */}
+          <SavedViewsBar
+            viewMode={viewMode}
+            filters={filters}
+            onApply={(saved) => setFilters({ ...DEFAULT_TICKET_FILTERS, ...saved })}
+          />
         </CardContent>
       </Card>
 
@@ -1040,16 +1212,31 @@ function TicketDetailSheet({
   // Cached by the shared hook, so asking again here costs nothing and keeps this sheet honest
   // about which tabs the workspace actually has.
   const { features: planFeatures } = usePlanningFeatures();
-  const canAssign = Boolean(
-    user?.permissions.includes(permissions.TICKETS_ASSIGN) || user?.permissions.includes(permissions.TICKETS_MANAGE)
-  );
-  const canReopen = canAssign || user?.role === "SUPER_ADMIN" || user?.role === "ADMIN";
+  // Reopening is still a permission question, not a relationship one — unchanged from before.
+  const canReopen =
+    Boolean(user?.permissions.includes(permissions.TICKETS_ASSIGN) || user?.permissions.includes(permissions.TICKETS_MANAGE)) ||
+    user?.role === "SUPER_ADMIN" ||
+    user?.role === "ADMIN";
 
   const detail = useQuery({
     queryKey: ["ticket", ticketId],
     queryFn: () => ticketApi.get(ticketId as string),
     enabled: Boolean(ticketId)
   });
+
+  /**
+   * Whether this viewer may change who works on the ticket — taken from the SERVER's answer, not
+   * re-derived from permissions here.
+   *
+   * It used to be `tickets:assign || tickets:manage`, which every manager and team lead holds
+   * tenant-wide. The API now also requires the viewer to be the mapped manager of the reporter or
+   * assignee, and that is a `managerId` lookup the browser cannot do — so guessing would render an
+   * assignee dropdown that 403s on use. Defaults to false while the detail loads, which hides a
+   * control for a moment rather than flashing one that then disappears.
+   */
+  const canAssign = Boolean(detail.data?.canReassign);
+  /** Same source, same reason: whether this viewer may edit the ticket or move its status. */
+  const canWork = Boolean(detail.data?.canWork);
 
   const members = useQuery({
     queryKey: ["project-assignments", detail.data?.project.id],
@@ -1100,6 +1287,20 @@ function TicketDetailSheet({
       watching ? ticketApi.watchers.remove(ticketId as string, user!.id) : ticketApi.watchers.add(ticketId as string),
     onSuccess: () => invalidate(),
     onError: (err: any) => toast.error("Could not update watch status", { description: serverMessage(err, "Try again.") })
+  });
+
+  const addCollaboratorMutation = useMutation({
+    mutationFn: (userId: string) => ticketApi.collaborators.add(ticketId as string, userId),
+    onSuccess: () => {
+      toast.success("Collaborator added");
+      invalidate();
+    },
+    onError: (err: any) => toast.error("Could not add collaborator", { description: serverMessage(err, "Try again.") })
+  });
+  const removeCollaboratorMutation = useMutation({
+    mutationFn: (userId: string) => ticketApi.collaborators.remove(ticketId as string, userId),
+    onSuccess: () => invalidate(),
+    onError: (err: any) => toast.error("Could not remove collaborator", { description: serverMessage(err, "Try again.") })
   });
 
   const allLabels = useQuery({ queryKey: ["labels"], queryFn: labelApi.list });
@@ -1192,10 +1393,14 @@ function TicketDetailSheet({
               <div className="grid gap-4 sm:grid-cols-2">
                 <div className="grid gap-1.5">
                   <Label className="text-xs uppercase text-muted-foreground">Status</Label>
+                  {/* Disabled rather than hidden when the viewer may not work on this ticket: the
+                      current status is information everybody who can open the sheet is entitled to,
+                      and removing the control would leave a blank where a value belongs. The
+                      explanation underneath is what stops it reading as a bug. */}
                   <Select
                     value={ticket.status}
                     onValueChange={(v) => requestStatusChange(v as TicketStatus)}
-                    disabled={statusMutation.isPending}
+                    disabled={statusMutation.isPending || !canWork}
                   >
                     <SelectTrigger><SelectValue /></SelectTrigger>
                     <SelectContent>
@@ -1203,6 +1408,11 @@ function TicketDetailSheet({
                       {allowedNext.map((s) => <SelectItem key={s} value={s}>{s.replace("_", " ")}</SelectItem>)}
                     </SelectContent>
                   </Select>
+                  {!canWork && (
+                    <p className="text-[11px] leading-snug text-muted-foreground">
+                      Only this ticket&apos;s reporter, its assignee, its collaborators, or their manager can move it.
+                    </p>
+                  )}
                 </div>
                 <div className="grid gap-1.5">
                   <Label className="text-xs uppercase text-muted-foreground">Assignee</Label>
@@ -1220,6 +1430,66 @@ function TicketDetailSheet({
                     </Select>
                   ) : (
                     <p className="text-sm">{ticket.assignee?.name ?? "Unassigned"}</p>
+                  )}
+                </div>
+              </div>
+
+              {/* Sits directly under the assignee, because it extends it: a collaborator holds the
+                  same working rights the assignee does. Rendered for everyone, not only people who
+                  may edit it — knowing who else is on a ticket is not an admin question — but the
+                  add/remove controls appear only when the server said this viewer may reassign. */}
+              <div className="grid gap-1.5">
+                <Label className="text-xs uppercase text-muted-foreground">
+                  Collaborators
+                  <span className="ml-1.5 normal-case tracking-normal text-muted-foreground">
+                    (can work on this ticket)
+                  </span>
+                </Label>
+                <div className="flex flex-wrap items-center gap-2">
+                  {ticket.collaborators.map((c) => (
+                    <span
+                      key={c.id}
+                      className="inline-flex items-center gap-1.5 rounded-full border border-border py-1 pl-1 pr-2.5 text-xs font-medium"
+                      title={c.addedBy ? `Added by ${c.addedBy.name}` : undefined}
+                    >
+                      <Avatar className="h-5 w-5">
+                        <AvatarFallback className="text-[9px]">{initialsFor(c.user.name)}</AvatarFallback>
+                      </Avatar>
+                      {c.user.name}
+                      {/* Anyone may stand themselves down; only a reassigner may remove someone
+                          else — the API enforces exactly this split. */}
+                      {(canAssign || c.userId === user?.id) && (
+                        <button
+                          type="button"
+                          aria-label={`Remove ${c.user.name}`}
+                          onClick={() => removeCollaboratorMutation.mutate(c.userId)}
+                          disabled={removeCollaboratorMutation.isPending}
+                          className="ml-0.5 text-muted-foreground hover:text-destructive"
+                        >
+                          <X className="h-3 w-3" />
+                        </button>
+                      )}
+                    </span>
+                  ))}
+                  {ticket.collaborators.length === 0 && !canAssign && (
+                    <span className="text-xs text-muted-foreground">No collaborators</span>
+                  )}
+                  {canAssign && (
+                    <Select value="" onValueChange={(v) => addCollaboratorMutation.mutate(v)}>
+                      <SelectTrigger className="h-7 w-[170px] text-xs"><SelectValue placeholder="+ Add collaborator" /></SelectTrigger>
+                      <SelectContent>
+                        {(members.data ?? [])
+                          // The assignee and reporter can already work on it, and the API rejects
+                          // adding them, so offering them here would only produce a 422.
+                          .filter(
+                            (a: any) =>
+                              a.userId !== ticket.assignee?.id &&
+                              a.userId !== ticket.reporter.id &&
+                              !ticket.collaborators.some((c) => c.userId === a.userId)
+                          )
+                          .map((a: any) => <SelectItem key={a.userId} value={a.userId}>{a.user.name}</SelectItem>)}
+                      </SelectContent>
+                    </Select>
                   )}
                 </div>
               </div>

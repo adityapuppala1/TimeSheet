@@ -41,7 +41,9 @@ describe("plan tier limits", () => {
         maxCustomFields: 0,
         maxDashboards: 0,
         goalsEnabled: false,
-        maxGoals: 0
+        maxGoals: 0,
+        changeManagementEnabled: false,
+        maxChangePolicies: 0
       },
       TEAM: {
         seatLimit: UNLIMITED_SEATS,
@@ -63,7 +65,9 @@ describe("plan tier limits", () => {
         // Goals are an everyday alignment surface, not an enterprise luxury: Team gets them with a
         // ceiling, because the measured sources read data the tier already holds.
         goalsEnabled: true,
-        maxGoals: 25
+        maxGoals: 25,
+        changeManagementEnabled: true,
+        maxChangePolicies: 5
       },
       ENTERPRISE: {
         seatLimit: UNLIMITED_SEATS,
@@ -83,7 +87,9 @@ describe("plan tier limits", () => {
         maxCustomFields: UNLIMITED_PLAN_ITEMS,
         maxDashboards: UNLIMITED_PLAN_ITEMS,
         goalsEnabled: true,
-        maxGoals: UNLIMITED_PLAN_ITEMS
+        maxGoals: UNLIMITED_PLAN_ITEMS,
+        changeManagementEnabled: true,
+        maxChangePolicies: UNLIMITED_PLAN_ITEMS
       }
     });
   });

@@ -44,6 +44,7 @@ import {
   ChevronRight,
   Check,
   Clock,
+  FileStack,
   Hourglass,
   Inbox,
   KeyRound,
@@ -112,6 +113,7 @@ import { SecurityDevOpsSettingsCard } from "./settings/SecurityDevOpsSettingsCar
 import { FaceVerificationSettingsCard } from "./settings/FaceVerificationSettingsCard";
 import { BrandingSettingsCard } from "./settings/BrandingSettingsCard";
 import { MaintenanceSettingsCard } from "./settings/MaintenanceSettingsCard";
+import { ChangeManagementSettingsCard } from "./settings/ChangeManagementSettingsCard";
 import { PlanningSettingsCard } from "./settings/PlanningSettingsCard";
 import { StorageAndLogsCard } from "./settings/StorageAndLogsCard";
 
@@ -134,7 +136,7 @@ interface ToggleRow {
   description: string;
   icon: ReactNode;
   /** Section heading this row sits under in the matrix. */
-  group: "Timesheets" | "Tickets" | "Digests" | "Identity" | "Workspace";
+  group: "Timesheets" | "Tickets" | "Changes" | "Digests" | "Identity" | "Workspace";
 }
 
 /**
@@ -178,6 +180,24 @@ const emailRows = [
   { group: "Tickets", key: "emailTicketSlaBreach", label: "Ticket SLA breached", description: "Email the assignee when a ticket passes its priority's SLA window.", icon: <Hourglass className="h-4 w-4 text-warning" /> },
   { group: "Tickets", key: "emailTicketEscalation", label: "Ticket escalation", description: "Email the assignee's manager when a breached ticket escalates.", icon: <ShieldX className="h-4 w-4 text-destructive" /> },
   { group: "Tickets", key: "emailTicketClosedDigest", label: "Ticket-closed security digest", description: "Security/test-status recap to whoever closed a ticket, their manager, and this org's admins. Needs a connected scan source to be meaningful.", icon: <ShieldCheck className="h-4 w-4 text-success" /> }
+,
+  /* --- Change management. Every one of these except the digest is the direct consequence of an
+     action somebody took, which is why they ship enabled — see the schema comments. Muting one
+     suppresses only the EMAIL leg; the in-app bell always fires, because an approval that goes
+     quiet because somebody tidied their mail settings is a governance hole. --- */
+  { group: "Changes", key: "emailChangeSubmitted", label: "Change submitted", description: "Tell the requester and implementer that a change has gone forward for assessment or approval.", icon: <FileStack className="h-4 w-4 text-info" /> },
+  { group: "Changes", key: "emailChangeApprovalRequested", label: "Approval needed", description: "Email an approver the moment their step in a change's chain opens. The one that blocks everything after it.", icon: <ShieldCheck className="h-4 w-4 text-warning" /> },
+  { group: "Changes", key: "emailChangeApproved", label: "Change approved", description: "The board said yes — sent to the requester, the implementer and anyone watching.", icon: <ShieldCheck className="h-4 w-4 text-success" /> },
+  { group: "Changes", key: "emailChangeRejected", label: "Change rejected", description: "The board said no, carrying the rejecting approver's comment.", icon: <ShieldX className="h-4 w-4 text-destructive" /> },
+  { group: "Changes", key: "emailChangeScheduled", label: "Change scheduled", description: "An approved change has been given an implementation window.", icon: <CalendarClock className="h-4 w-4 text-info" /> },
+  { group: "Changes", key: "emailChangeWindowReminder", label: "Window reminder", description: "The implementation window opens shortly — sent a day out and again an hour out.", icon: <Hourglass className="h-4 w-4 text-warning" /> },
+  { group: "Changes", key: "emailChangeImplementationStarted", label: "Implementation started", description: "Work on an approved change has begun. Off by default: the people who need this are already watching the change.", icon: <Hourglass className="h-4 w-4 text-muted-foreground" /> },
+  { group: "Changes", key: "emailChangeCompleted", label: "Change completed", description: "A change finished implementing, with the outcome that was recorded.", icon: <ShieldCheck className="h-4 w-4 text-success" /> },
+  { group: "Changes", key: "emailChangeFailed", label: "Change failed or rolled back", description: "Sent to this org's admins as well as the parties — a failed change is everyone's problem.", icon: <ShieldX className="h-4 w-4 text-destructive" /> },
+  { group: "Changes", key: "emailChangePirDue", label: "Review due", description: "A change is waiting on its post-implementation review before it can close.", icon: <FileStack className="h-4 w-4 text-warning" /> },
+  { group: "Changes", key: "emailChangeFreezeConflict", label: "Freeze conflict", description: "A change's window collides with a freeze period. Reported, never silently blocked.", icon: <ShieldX className="h-4 w-4 text-warning" /> },
+  { group: "Changes", key: "emailChangeOverdueApproval", label: "Approval overdue", description: "An approval has sat undecided past the workspace's approval SLA — nudges the approver, then their manager.", icon: <Hourglass className="h-4 w-4 text-destructive" /> },
+  { group: "Changes", key: "emailChangeWeeklyDigest", label: "Weekly change digest", description: "Monday morning to change managers: next week's calendar and last week's outcomes. Off by default, like every digest here.", icon: <CalendarClock className="h-4 w-4 text-muted-foreground" /> }
 ] as const satisfies readonly ToggleRow[];
 
 /**
@@ -191,7 +211,7 @@ type UncoveredEmailKey = Exclude<keyof NotificationPreferences, (typeof emailRow
 const _emailChannelCoverage: UncoveredEmailKey extends never ? true : never = true;
 void _emailChannelCoverage;
 
-const EMAIL_GROUP_ORDER: ReadonlyArray<ToggleRow["group"]> = ["Timesheets", "Tickets", "Digests", "Identity", "Workspace"];
+const EMAIL_GROUP_ORDER: ReadonlyArray<ToggleRow["group"]> = ["Timesheets", "Tickets", "Changes", "Digests", "Identity", "Workspace"];
 
 /**
  * Transactional mail that deliberately has NO toggle and no role column. These go to one specific
@@ -277,6 +297,7 @@ export function WorkspaceSettingsPage() {
               product, and an admin looking for "where do I turn on the Gantt" looks near the
               thing it plans. */}
           <TabsTrigger value="planning">Planning</TabsTrigger>
+          <TabsTrigger value="changes">Change management</TabsTrigger>
           <TabsTrigger value="ai">AI</TabsTrigger>
           <TabsTrigger value="email-intake">Email intake</TabsTrigger>
           <TabsTrigger value="chat-integrations">Chat integrations</TabsTrigger>
@@ -315,6 +336,10 @@ export function WorkspaceSettingsPage() {
 
         <TabsContent value="ticketing">
           <TicketingSettingsCard readOnly={!isSuperAdmin} />
+        </TabsContent>
+
+        <TabsContent value="changes">
+          <ChangeManagementSettingsCard readOnly={!isSuperAdmin} />
         </TabsContent>
 
         <TabsContent value="planning">

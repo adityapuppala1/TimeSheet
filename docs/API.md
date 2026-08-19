@@ -959,6 +959,157 @@ tickets and hours, which every workspace already has.
   months is the one worth designing against. `lastSentAt` is the cadence guard, so a restart or a
   double-fired cron re-sends nothing.
 
+## Change management (V8)
+
+**A change request IS a ticket** plus a `ChangeRequest` extension row. That is the whole design
+decision, and everything below follows from it: comments, attachments, watchers, cross-links, the
+audit trail, search and project-scoped visibility all hang off the ticket half and needed no new
+code. What this module adds is the governance a ticket cannot express — a risk assessment, an
+approval with a name against it, a scheduled window, a runbook, and a recorded outcome.
+
+Every route 403s unless change management is switched on for the workspace **and** the org's tier
+includes it, with deliberately different messages for the two cases — "turn it on in settings" and
+"upgrade your plan" need different people to do different things. Same pattern as planning.
+
+**Every state write also writes `Ticket.status`.** `CHANGE_STATE_TO_TICKET_STATUS` is the same
+compatibility hinge `WorkflowStatus.legacyStatus` provides for custom ticket statuses: the ~40 places
+already reading `Ticket.status` keep working precisely because the pair is never written apart.
+
+### Identity
+
+Change keys are `PROJECTCODE-YYYYMMDD-NNNN` — e.g. `HICS-TS-20260819-0001` — issued by
+`change-key.service.ts` with a count-and-retry against the unique index. The date part is the day it
+was raised, so the key stays meaningful when it is read a year later in an audit response.
+
+### The lifecycle
+
+`DRAFT → AWAITING_APPROVAL → APPROVED → SCHEDULED → IMPLEMENTING → VALIDATION → PIR → CLOSED`, with
+`REJECTED` and `CANCELLED` as terminal branches.
+
+Two things are deliberately **not** in that list. `FAILED` and `ROLLED_BACK` are **outcomes**, not
+states: a change that failed still has to be validated, reviewed and closed, and modelling failure as
+a state would strand it outside the process that exists to learn from it. And the lifecycle is its
+own state machine rather than a `Workflow` — custom workflows collapse to the system workflow when
+the feature is off, which would have made the whole module Enterprise-only.
+
+- `GET /changes` — the register, project-scoped. Filters: `state`, `riskLevel`, `changeKind`,
+  `environment`, `projectId`, `search`.
+- `GET /changes/:id` — one change with everything on it, plus four server-computed answers the
+  browser cannot work out for itself: `canEdit`, `canDecide`, `blockingForSubmit` (what the change
+  still owes before it could be submitted), `blockingDependencies`, and `sla`.
+- `POST /changes` — raise one. `justification` is required at creation; a change with no stated
+  reason is the thing this module exists to stop.
+- `PATCH /changes/:id` — fill in any section. The plan **freezes** at `APPROVED` for non-privileged
+  editors: scope, risk and schedule are what got approved, so changing them afterwards means raising
+  a new change. Outcome fields stay writable, because recording what happened is post-approval work.
+- `POST /changes/:id/transition` — move it. Refuses illegal edges, answers a no-op rather than
+  performing it (a double-click was otherwise enough to open a second approval round and re-mail the
+  approver), and refuses `IMPLEMENTING` while a dependency is open.
+- `POST /changes/:id/decision` — approve or reject. `CHANGES_APPROVE`.
+
+### What submission requires, and why it is not advisory
+
+`missingForSubmit` demands a **complete** risk assessment, a justification, an implementation plan, a
+planned window, a test plan above LOW risk, and a backout plan wherever the risk band calls for one.
+
+The completeness rule is not fussiness. The risk score normalises across every active parameter, so
+an unanswered one contributes zero — correct in itself (a blank is not "low"), but it means a
+half-filled assessment **under-reports**. Measured: high business impact plus high data risk, with
+the other nine parameters left blank, scored 27 and banded LOW — and the band is exactly what decides
+whether a backout plan is mandatory. Leaving fields empty was a way to skip the module's central
+rule. A draft can still be saved with any subset.
+
+### Approval routing
+
+`resolveChangeApprovers` returns **the requester's manager**, or every active super admin if they
+have none. There is no multi-level chain: one named approver, or the people who can always act.
+
+A requester can never approve their own change, and submitting with no manager and no active super
+admin is refused at submission time with an actionable message rather than creating a change nobody
+can decide. Rejection opens a **new round** rather than overwriting the first, so the objection stays
+on the record when the change is reworked and resubmitted.
+
+### The runbook
+
+Three child tables — implementation steps, test cases, dependencies — read off `GET /changes/:id`,
+so these are writes only:
+
+- `POST|PATCH|DELETE /changes/:id/steps[/:stepId]`
+- `POST|PATCH|DELETE /changes/:id/tests[/:testId]`
+- `POST|PATCH|DELETE /changes/:id/dependencies[/:dependencyId]`
+
+These deliberately **do not** apply the post-approval freeze. Recording that step 4 failed, or that a
+regression test passed, is precisely the work that happens after approval — see
+`loadChangeForRunbook`, which checks visibility and authorship but not state.
+
+A `PREDECESSOR` or `BLOCKS` dependency left `OPEN` refuses the move to `IMPLEMENTING` with a 409 that
+names it. `SUCCESSOR` and `RELATED` do not block — successors follow this change and related work is
+context, so blocking on either would make the field unusable for what it is for. `WAIVED` clears the
+gate the same way `COMPLETED` does, and the row keeps saying which it was.
+
+### SLA
+
+`ChangeSlaConfig` holds a budget and a warning fraction per stage (`APPROVAL`, `IMPLEMENTATION`,
+`VALIDATION`, `PIR`, `CLOSURE`). `judgeSla` returns `ON_TRACK` / `WARNING` / `BREACHED` for a running
+clock and `MET` / `BREACHED` for one that has stopped.
+
+A finished stage is judged on **how long it actually took**, never against the current time. A stage
+that ran 60 hours against a 48-hour budget and then closed is a breach that already happened;
+reporting it as fine the moment it closes is how an SLA dashboard comes to say everything is green
+while the register is full of overruns. A stage with no configured budget has no clock at all rather
+than a zero-hour one, which would breach everything on sight.
+
+### Tagging
+
+- `GET /changes/:id/linkable-tickets` — **only closed work is offered.** A change is a record of
+  shipping something finished; letting somebody attach an in-progress ticket would turn the manifest
+  into a promise.
+- `POST|DELETE /changes/:id/tickets[/:ticketId]`, `POST|DELETE /changes/:id/collaborators[/:userId]`.
+
+### Calendar and conflicts
+
+- `GET /changes/calendar?from=&to=` — scheduled work **and** the blackout periods it has to dodge, in
+  one call. A calendar that fetches its bars and its no-go zones separately renders them a frame
+  apart.
+- `GET /changes/:id/conflicts` — overlapping changes on the same application, and any blackout the
+  planned window collides with. Reported, never auto-corrected.
+
+### Metrics
+
+`GET /changes/metrics` returns the state/risk/kind/environment tallies, `awaitingMyDecision`,
+`inFlight`, a twelve-week `trend` of raised-against-closed bucketed by real timestamps, the busiest
+eight projects, the running-clock SLA rollup, and three delivery-health rates.
+
+`changeFailureRate`, `emergencyRate` and `avgApprovalHours` are **null, never 0**, when there is
+nothing to divide by. "No change has closed yet" and "every change succeeded" are different facts,
+and a 0% failure rate over an empty set is exactly the number that ends up quoted in a review. The UI
+renders null as an em dash.
+
+### Exports
+
+`GET /changes/export.csv`, `.xlsx`, `.pdf` — one query feeds all three, so no two formats can
+disagree about which changes matched.
+
+All three are fetched as **authenticated blobs**, never linked. The access token lives in memory
+only, so an `<a href>` reaches these routes with no `Authorization` header and gets a 401 — that is
+not hypothetical, it shipped that way. Same pattern as `reportApi.download`.
+
+Every format states its own limits: `X-Export-Rows-Included` and `X-Export-Truncated` come back on
+all three (with `Access-Control-Expose-Headers` so the browser can read them), the PDF prints the cap
+in its header *and* footer, and the workbook's summary sheet is built from the same capped row set as
+its detail sheet — so a truncated export can never ship a summary that does not add up.
+
+### Email
+
+Two templates, `changeSubmitted` and `changeDecided`, editable in **Workspace Settings → Email
+templates** like every other outbound mail, with the same delivery analytics and failure triage.
+
+The submission mail carries project, title, type, risk, activity window, description, requester and
+approver; the decision mail adds who decided it and their comments. Both go **to** the requester,
+implementer, approvers and collaborators, with every super admin in **BCC** via `alwaysBcc` — one
+merged, deduplicated recipient set, so somebody already on the To line does not also get a blind
+copy. Mail is best-effort: a slow SMTP server cannot lose a transition that already happened.
+
 ## Timesheet reporting and exports
 
 All three share one filter set — `from`, `to`, `projectId`, `moduleId`, `userId`, `ticketId`,

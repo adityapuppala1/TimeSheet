@@ -635,6 +635,65 @@ visible — this file is a living reference, not a changelog.
   capability functions have no dedicated tests yet; the mocking patterns in
   `apps/api/tests/unit/*.test.ts`'s header comments generalize directly.
 
+### Change management, end to end (2026-08-19)
+
+Built as a **ticket extension**, not a parallel entity — `ChangeRequest` holds a required `ticketId`
+and the governance columns a ticket cannot express. Comments, attachments, watchers, links, the audit
+trail, search and project-scoped visibility came from the ticket half unchanged, which is why the
+module added no second visibility rule to keep in step with the first.
+
+Three deliberate deviations from the plan as published, each reported at the time:
+
+- **The lifecycle is its own state machine, not a `Workflow`.** Custom workflows collapse to the
+  system workflow when the feature is off, which would have made the entire module Enterprise-only.
+- **Change management owns its decision route.** The planning approvals route is gated on a different
+  capability, so reusing it would have coupled two entitlements that are sold separately.
+- **`FAILED` and `ROLLED_BACK` are outcomes, not states.** A change that failed still has to be
+  validated, reviewed and closed; modelling failure as a state strands it outside the process that
+  exists to learn from it.
+
+What the build actually taught, beyond the plan:
+
+- ~~A half-filled risk assessment under-reported~~ — the score normalises across every active
+  parameter, so an unanswered one contributes zero. Correct in itself (a blank is not "low"), but
+  measured: high business impact plus high data risk with the other nine blank scored **27 and banded
+  LOW** — and the band is what decides whether a backout plan is mandatory. Leaving fields empty was a
+  way to skip the module's central rule. A *complete* assessment is now required to submit; a draft
+  still saves with any subset.
+- ~~The backout-plan rule was silently dead~~ — `missingForTransition` keyed on `"SUBMITTED"` after the
+  flow changed to `DRAFT → AWAITING_APPROVAL`, so every requirement the module exists for was
+  unenforced on the only path that reached approval. Now keyed on both, named explicitly rather than
+  inferred, so adding a third door has to come here.
+- ~~A double-click opened a second approval round and re-mailed the approver~~ — `isNoOpTransition`
+  answers a no-op rather than performing it.
+- ~~`sendMail` silently dropped the super-admin BCC~~ — there was no `bcc` field, and an `as never`
+  cast hid it. Added `alwaysBcc`, merged and deduplicated against the To line so somebody already
+  addressed does not also get a blind copy.
+- ~~`/:id` swallowed `export.csv`~~ — Express matches in declaration order. The static export paths are
+  now registered before the parameterised one.
+- ~~Every export download returned "Authentication required"~~ — they were plain `<a href>` links, and
+  the access token lives in memory only, so the browser arrived with no `Authorization` header. The
+  codebase already documents the fix (`reportApi.download`): fetch as a blob through the authenticated
+  axios instance. Worth recording because the wrong version *looked* right and shipped.
+- ~~A finished SLA stage reported itself as fine~~ — judging a stopped clock against "now" turns every
+  overrun green the moment it closes. A finished stage is judged on how long it actually took. Pinned
+  in `change-sla.test.ts`, which is the first thing that file asserts.
+- **Migration portability**: 37 `information_schema` + `PREPARE`/`EXECUTE` guards, because DDL followed
+  by fallible DML is what strands a migration half-applied. MariaDB also refuses `JSON NOT NULL` via
+  `ALTER`, so nine JSON columns were added nullable, backfilled, then tightened. Verified by replaying
+  every migration into an empty database — the rule in DATABASE.md, applied.
+
+Still open, deliberately:
+
+- **Chat and ITSM integrations** (ServiceNow, Jira Service Management) — the plan names them as
+  future work and nothing here forecloses them; `ChangeSource` already exists as the seam.
+- **The `MAJOR` change type** is in the enum and the risk matrix but not in the §10 vocabulary
+  (Standard / Normal / Emergency). It is currently reachable and behaves like a high-ceremony Normal.
+  Worth a decision before the tag: keep it and document it, or drop it and migrate the one demo row.
+- **Multi-level approval chains.** The requirement was explicitly "the requester's manager, or a super
+  admin", and that is what shipped. `ChangeApproval` is already per-approver-per-round, so a chain is
+  an additive change if it is ever wanted.
+
 ### Verification-log pagination + the biometric accuracy roadmap (2026-07-30)
 
 - ~~The verification log had no pagination~~ — `GET /face/attempts` is now paginated

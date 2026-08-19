@@ -13,11 +13,13 @@ import {
   Bot,
   Briefcase,
   CalendarDays,
+  ClipboardList,
   FileClock,
   FileStack,
   FolderKanban,
   GanttChartSquare,
   Gauge,
+  Home,
   Inbox,
   LayoutDashboard,
   ListTodo,
@@ -89,7 +91,7 @@ export interface NavItem {
  *  rule the sidebar renders from. Duplicating either would let the tour offer someone a page their
  *  role can't open — the one failure a role-aware tour must not have. */
 export const nav: NavItem[] = [
-  { to: "/app", label: "Dashboard", icon: LayoutDashboard, end: true },
+  { to: "/app", label: "Home", icon: Home, end: true },
 
   { to: "/app/timesheet", label: "Log timesheet", icon: CalendarDays, permission: permissions.TIMESHEETS_WRITE, section: "Work" },
   { to: "/app/tickets", label: "Tickets", icon: Ticket, permission: permissions.TICKETS_VIEW, section: "Work" },
@@ -98,6 +100,13 @@ export const nav: NavItem[] = [
   // definitions that exist whether or not any optional feature is on.
   { to: "/app/inbox", label: "Inbox", icon: Mailbox, section: "Work" },
   { to: "/app/requests", label: "Requests", icon: Inbox, permission: permissions.TICKETS_VIEW, section: "Work", feature: "requestForms" },
+  // Carries no `feature` and no permission, for the same reason the Agents roster does not: its
+  // gate is a workspace toggle AND a plan entitlement, neither of which the planning `effective`
+  // object models, and the page renders its own "switched off" / "not in your plan" state. Hiding
+  // the item instead would leave no surface on which to explain what change management is. Reading
+  // changes needs no permission at all — a change about to take a service down is not a secret
+  // from the people who depend on it.
+  { to: "/app/changes", label: "Change Management", icon: ClipboardList, section: "Work" },
 
   // Planning layer (V6). "My work" is deliberately FIRST and deliberately ungated: it is a
   // personal queue that reads dates every workspace already has, so it is useful before anything
@@ -126,7 +135,7 @@ export const nav: NavItem[] = [
   { to: "/app/approvals", label: "Approvals", icon: Shield, permission: permissions.TIMESHEETS_APPROVE, section: "Team" },
   { to: "/app/team", label: "My team", icon: Users2, permission: permissions.TIMESHEETS_APPROVE, section: "Team" },
 
-  { to: "/app/dashboards", label: "Dashboards", icon: LayoutDashboard, section: "Analytics", feature: "planning" },
+  { to: "/app/dashboards", label: "Custom Dashboards", icon: LayoutDashboard, section: "Analytics", feature: "planning" },
   { to: "/app/reports", label: "Reports", icon: BarChart3, permission: permissions.REPORTS_VIEW, section: "Analytics" },
   { to: "/app/insights", label: "Insights", icon: TrendingUp, permission: permissions.REPORTS_VIEW, section: "Analytics" },
   { to: "/app/security-insights", label: "Security insights", icon: ShieldAlert, permission: permissions.REPORTS_VIEW, section: "Analytics" },

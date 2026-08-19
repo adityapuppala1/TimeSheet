@@ -385,6 +385,91 @@ export const templates = {
         paragraph(button("Log time now", appUrl("/app/timesheet"), ACCENT))
     ),
 
+  /**
+   * The two change-management messages.
+   *
+   * Both carry the SAME block of facts, in the same order, so an approver reading the decision mail
+   * recognises the request without re-reading it. Built from the shared `shell`/`infoCard` helpers
+   * like every other template here — a governance email that looked different from the rest of the
+   * app's mail would read as a phishing attempt, which is the opposite of what it needs to achieve.
+   */
+  changeSubmitted: (params: {
+    changeKey: string;
+    projectName: string;
+    title: string;
+    changeType: string;
+    riskLevel: string;
+    riskScore: string;
+    activityWindow: string;
+    description?: string | null;
+    requestedBy: string;
+    receivedBy: string;
+    peopleInvolved?: string | null;
+    appUrl: string;
+  }) =>
+    shell(
+      { title: `Approval needed: ${params.changeKey}`, preheader: `${params.requestedBy} submitted a change that needs your approval.` },
+      heading("A change needs your approval") +
+        paragraph(`${escape(params.requestedBy)} submitted a change on ${escape(params.projectName)} and it is waiting on you.`) +
+        infoCard(
+          rows([
+            ["Change", escape(params.changeKey)],
+            ["Project", escape(params.projectName)],
+            ["Title", escape(params.title)],
+            ["Type", escape(params.changeType)],
+            ["Risk", `${escape(params.riskLevel)} (${escape(params.riskScore)})`],
+            ["Activity window", escape(params.activityWindow)],
+            ["Requested by", escape(params.requestedBy)],
+            ["Received by", escape(params.receivedBy)],
+            ["People involved", escape(params.peopleInvolved)]
+          ])
+        ) +
+        (params.description ? quoted(params.description) : "") +
+        paragraph(button("Review and decide", params.appUrl))
+    ),
+
+  changeDecided: (params: {
+    changeKey: string;
+    projectName: string;
+    title: string;
+    changeType: string;
+    riskLevel: string;
+    riskScore: string;
+    activityWindow: string;
+    requestedBy: string;
+    decision: string;
+    decidedBy: string;
+    comments?: string | null;
+    peopleInvolved?: string | null;
+    appUrl: string;
+  }) =>
+    shell(
+      {
+        title: `Change ${params.decision}: ${params.changeKey}`,
+        preheader: `${params.decidedBy} ${params.decision.toLowerCase()} this change.`,
+        // Green for approved, amber for anything else. Colour carries the outcome before the words do,
+        // which matters on a phone lock screen.
+        accentColor: params.decision === "APPROVED" ? SUCCESS : ACCENT
+      },
+      heading(`${params.changeKey} was ${escape(params.decision.toLowerCase())}`) +
+        paragraph(`${escape(params.decidedBy)} reviewed "${escape(params.title)}" on ${escape(params.projectName)}.`) +
+        infoCard(
+          rows([
+            ["Change", escape(params.changeKey)],
+            ["Project", escape(params.projectName)],
+            ["Title", escape(params.title)],
+            ["Type", escape(params.changeType)],
+            ["Risk", `${escape(params.riskLevel)} (${escape(params.riskScore)})`],
+            ["Activity window", escape(params.activityWindow)],
+            ["Requested by", escape(params.requestedBy)],
+            [params.decision === "APPROVED" ? "Approved by" : "Rejected by", escape(params.decidedBy)],
+            ["People involved", escape(params.peopleInvolved)]
+          ])
+        ) +
+        (params.comments ? quoted(params.comments) : "") +
+        paragraph(button("Open the change", params.appUrl))
+    ),
+
   ticketAssigned: (params: {
     assigneeName: string;
     ticketKey: string;

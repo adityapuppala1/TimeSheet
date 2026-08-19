@@ -38,7 +38,7 @@ import { emitDomainEvent, emitTicketStatusChanged } from "./domain-events.js";
 import {
   assertTicketVisible,
   assertValidTicketType,
-  canModifyTicket,
+  canWorkOnTicket,
   computeTicketDueDate,
   getGlobalTicketSettings,
   issueTicketKey,
@@ -684,9 +684,9 @@ const TOOLS: readonly McpToolRegistration[] = [
     handler: async (ctx, args) => {
       const existing = await resolveVisibleTicket(ctx, args.ticketKey);
       // Visibility is not permission to edit: ticket.controller.ts's own status route applies
-      // this same reporter/assignee-or-privileged predicate on top of tickets:write.
-      if (!canModifyTicket(ctx.req, existing)) {
-        throw new AppError(403, `${existing.key} can only be moved by its reporter, its assignee, or someone who manages tickets.`);
+      // this same reporter/assignee/collaborator-or-manager predicate on top of tickets:write.
+      if (!(await canWorkOnTicket(ctx.req, existing))) {
+        throw new AppError(403, `${existing.key} can only be moved by its reporter, its assignee, a collaborator on it, or their manager.`);
       }
 
       const currentStatus = existing.status as TicketStatus;

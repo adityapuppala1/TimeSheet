@@ -243,6 +243,15 @@ model PlanTierLimit {
   /// UPDATE with the real Team/Enterprise values from @timesheet/shared's PLAN_TIER_LIMITS.
   goalsEnabled              Boolean @default(false)
   maxGoals                  Int     @default(0)
+
+  /// --- Change management (V8 phase 11) -----------------------------------------------------
+  /// Same restrictive-default rule as every block above: a tier row that misses its initialisation
+  /// under-entitles rather than over-entitles, and the migration that adds these runs the guarded
+  /// UPDATE with the real Team/Enterprise values from @timesheet/shared's PLAN_TIER_LIMITS.
+  changeManagementEnabled   Boolean @default(false)
+  /// Ceiling on approval POLICIES, not on changes — a workspace should never be unable to record a
+  /// change it actually made because it hit a plan limit. 0 = the tier cannot use the module.
+  maxChangePolicies         Int     @default(0)
 }
 
 /// Platform-wide Stripe configuration (id = "global") — one Stripe account across every org on

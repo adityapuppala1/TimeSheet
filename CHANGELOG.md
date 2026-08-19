@@ -7,10 +7,179 @@ user of a running installation.
 
 ## Unreleased
 
-Empty right now: everything currently unshipped is gathered under 2.5.0 below, which is written
-but not yet tagged. Anything landing after that tag is cut goes here. The parser that feeds the
-in-app What's-new page ignores this section until it gains a version number, on purpose — an
-installation must never render history for a version that does not exist yet.
+Landed after v2.5.0 was tagged. The parser that feeds the in-app What's-new page ignores this
+section until it gains a version number, on purpose — an installation must never render history
+for a version that does not exist yet.
+
+### 🔀 Change management
+
+- **The full request form**, in twelve tabbed sections on the change's own page — classification,
+  business case, structured impact, weighted risk, implementation, testing, rollback, release,
+  schedule, communications, tagging, and outcome. Tabs rather than a wizard: a change is drafted over
+  days and read far more often than it is written, and a stepper is for a form you fill once. A
+  checklist in the header names what is still missing rather than implying a percentage.
+- **A change number of its own** — `HICS-TS-20260812-0001`. Project code, the UTC date it was raised,
+  and a sequence that restarts daily. The underlying ticket key still exists; it just never appears in
+  an approval email, where it would read as a bug report.
+- **Approval goes straight to the requester's manager** the moment a change is submitted, falling back
+  to super admins when somebody has no manager set. A super admin can decide anything — which is both
+  the rule and the escape hatch for an approver who has since left. Nobody approves their own change,
+  and re-submitting after a rejection opens a new round rather than overwriting the first decision.
+- **A risk score you cannot game.** Impact and likelihood per parameter, weighted by an admin-editable
+  matrix and normalised so adding a twelfth parameter cannot silently deflate every existing score. A
+  complete assessment is required to submit: unanswered parameters count as nothing, which correctly
+  refuses to treat a blank as "low" but would otherwise have let somebody lower a change's risk — and
+  so skip the mandatory backout plan — by leaving fields empty.
+- **Tag the closed tickets a change delivers**, and the people working on it. Only RESOLVED and CLOSED
+  tickets from the change's own project are offered, and the server re-checks: a change records work
+  that is finished, not work that is promised.
+- **A change calendar** drawn as 24-hour tracks rather than a month grid, because a change occupies a
+  window and the only question worth opening a calendar for is whether two windows overlap. Freeze
+  periods are drawn underneath rather than filtered out — a change scheduled inside one is exactly
+  what somebody needs to see. Conflicts are reported, never refused; overriding costs a written reason.
+- **A register dashboard** — in flight, waiting on you, awaiting approval, high risk, closed — with
+  breakdowns by state, risk and environment, and a CSV export carrying the columns a change record is
+  actually judged on.
+- **Both emails are real templates**, editable on the Email templates page with preview, test send,
+  revert, per-template send volume and the failure triage desk — the same treatment every other message
+  in this app gets, from the same compiled design, so the seeded row and the code fallback render an
+  identical email.
+
+- **A controlled path for changes that need sign-off before they ship.** Raise a change, have its
+  risk derived rather than asserted, send it to the approvers it earns, schedule a window,
+  implement it, and record how it actually went. Under **Work → Changes**, off until a super admin
+  turns it on in **Workspace Settings → Change management**, and included from Team upward.
+- **The backout plan is the point.** A change that is high risk, major, or moves data cannot be
+  submitted without one — enforced by the API at the moment somebody asks for approval, not by a
+  hopeful placeholder in a form. A test plan is required above low risk; a communication plan and a
+  duration are required whenever there is downtime. Every gap is reported at once, so a long form
+  costs one round trip rather than four.
+- **Risk is computed, never typed.** Impact × likelihood through a stated matrix, stored with the
+  time it was scored so retuning the matrix next quarter cannot silently rewrite the risk a board
+  already approved against. Two changes with the same answers cannot carry different risk because
+  two people judged them differently.
+- **Approval policies decide who signs off what.** Ordered, first match wins, with a catch-all that
+  cannot be disabled — a change nobody can approve is a change nobody can close. A disabled policy
+  is *skipped*, never treated as a match, because the alternative reading of "disabled" is silent
+  auto-approval. Emergency changes get a quorum: any one of a named group settles it, rather than
+  everybody being kept waiting.
+- **A change cannot be walked past its own board.** Approved and rejected are written only by a
+  settled approval chain; they are absent from the transition table entirely, so no caller can
+  PATCH around it. Once approved, the plan freezes — the outcome fields stay writable, because
+  recording what happened is not the same act as amending what was agreed.
+- **Thirteen notifications**, in-app and email, from "approval needed" through window reminders to
+  a weekly digest, all on the existing per-category, per-role grid. Muting one suppresses only the
+  email leg, as everywhere else here: an approval that goes silent because somebody tidied their
+  mail settings would be a governance hole, not a preference.
+- Built on the ticket underneath, so comments, attachments, watchers, links, the audit trail,
+  project-scoped visibility and search all work on day one rather than being rebuilt slightly
+  differently. Approval chains, guest approvers by expiring single-use link, and terminal rejection
+  come from the same engine work items already use — the only addition to it is the quorum, which
+  defaults to "everyone must approve" and therefore changes nothing that existed before it.
+
+- **A runbook that stays editable after approval.** Numbered implementation steps, test cases with an
+  expected and an actual result, and dependencies — each added inline, edited in place, saved on blur.
+  Deliberately exempt from the post-approval freeze that covers the rest of the change: scope and risk
+  are what got approved, but recording that step 4 failed, or that a regression test passed, is
+  precisely the work that happens afterwards. The API applies the same rule, so the two cannot drift.
+- **A change waits on its dependencies, and says so.** A predecessor or blocker left open refuses the
+  move to Implementing with a message that names it, on the page and in the API. Successors and
+  related work never block — successors follow this change and related work is context, so blocking on
+  either would make the field unusable for what it is for. Waiving is a recorded decision that clears
+  the gate the same way completing it does, and the row keeps saying which it was.
+- **Per-stage SLA clocks** for approval, implementation, validation and closure, shown as a ladder
+  rather than a single number, because "approval met, implementation running, validation not started"
+  is what somebody actually needs to read. A finished stage is judged on **how long it really took**,
+  never against the current time — a stage that ran 60 hours against a 48-hour budget and then closed
+  is a breach that already happened, and reporting it as fine the moment it closes is how an SLA
+  dashboard comes to say everything is green while the register is full of overruns. A stage with no
+  configured budget has no clock at all, rather than a zero-hour one that would breach on sight.
+- **Excel and PDF export**, alongside the CSV, from one shared query — so no two formats can disagree
+  about which changes matched. The workbook has a summary sheet built from the same capped rows as its
+  own detail sheet; the PDF is a real landscape register with high risk in red and *Page N of M*. All
+  three state their own row cap in headers a script can read, and the PDF prints it in the header and
+  the footer, because a truncated export that looks complete is the failure exports exist to avoid.
+- **Fixed: every export download returned "Authentication required".** They were plain links, and this
+  app keeps its access token in memory — so the browser reached the route with no `Authorization`
+  header and was correctly refused. Now fetched as authenticated blobs, the same way report downloads
+  already worked. A truncated export also warns at the moment it downloads rather than leaving the
+  reader to notice a short file.
+- **Delivery analytics for the register** — change failure rate, emergency rate, approval turnaround
+  and the SLA rollup, over a twelve-week trend of what was raised against what was closed, plus which
+  projects are carrying the load. Every point is bucketed from real timestamps server-side; nothing is
+  synthesised from the current total. The three rates are **null, never 0%**, when there is nothing to
+  divide by: "no change has closed yet" and "every change succeeded" are different facts, and a 0%
+  failure rate over an empty set is exactly the number that ends up quoted in a review.
+
+### 🎫 The ticket list now counts, and the counts are the filters
+
+- **A metric card per status and per priority above the table** — an icon, the live count, how it
+  moved since yesterday, and a 14-day trend chart — colour-coded to the same palette the badges in
+  the rows below use, so the day CRITICAL is recoloured it is recoloured everywhere. The numbers are
+  counted server-side over the whole workspace, not tallied from the 200-row page the table renders:
+  a tile reporting "200 open" for a workspace with 900 is the one thing a metric must never do.
+- **The sparklines are measured, not decorative.** Each day's count is reconstructed by replaying
+  recorded creations and status changes backwards from the live figure, so the last point of every
+  chart *is* the number printed above it. Status history is exact; the priority series says so when
+  it is not, because a ticket re-prioritised mid-window has no record of what it was before. A chart
+  that draws a pleasing curve unrelated to its own number is worse than no chart.
+- **The comparison is the increment, not a percentage.** "+7 vs yesterday" rather than "+700%" —
+  at these magnitudes a percentage turns one ticket into a crisis. The percentage is on hover. A
+  bucket where direction carries no judgement (a rising MEDIUM count) stays grey rather than being
+  painted green or red.
+- **Every tile is a filter.** Click one and the table below narrows to it; click it again and it
+  clears. The tiles and the list are built from one filter object and one shared query-string
+  mapping, so a tile can never describe a different set of tickets than the rows under it. The
+  tallies respect the filters already applied — except along the axis being counted, since a status
+  tally filtered by status would report the selected status and zero for everything else.
+- **A per-project breakdown** on the same strip (collapsed by default), with each project's total,
+  open, closed and a priority mix bar. Clicking a row filters the table to that project.
+- **The filter row names its fields**, and swapped Label for **Type** — read from the admin-editable
+  ticket types, so a workspace that added "Spike" can filter by it the day it exists — plus a new
+  **Raised by** filter. Its options are the people who have actually raised a ticket in what you can
+  see, with counts, rather than the whole user directory; most of a company has never filed one.
+  Labels are still on the ticket, its detail sheet, and the label column's replacement below.
+- **New columns: who raised it, and when.** An email- or chat-sourced ticket shows the real sender
+  rather than the intake system account it is technically reported by. Labels gave up their column
+  to a **file count** — "which of these has a screenshot attached" is the question being asked at
+  triage, and labels are still on the ticket, its detail sheet and the filter row. The ticket key
+  column became a **serial number**; the key stays searchable in the results box and one hover away,
+  because that is how people actually look a ticket up.
+
+### 🔐 A ticket belongs to the people on it
+
+- **Working on a ticket now follows the reporting line.** Its reporter, its assignee, anyone added
+  as a collaborator, and the manager those people actually report to. Previously `tickets:assign` —
+  which every manager and team lead holds workspace-wide — answered yes for every manager in the
+  organization, including ones with no relationship to the work.
+- **Deciding who works on it is narrower than doing the work.** Reassignment and the collaborator
+  list are limited to a super admin, an admin, or the manager the reporter or assignee reports to.
+  An assignee can move their own ticket but cannot hand it to somebody else.
+- **Collaborators: more than one person on a ticket, deliberately not watchers.** A watcher is a
+  notification subscription anybody can self-grant and it still grants nothing; a collaborator holds
+  the same working rights the assignee does, so only the people who may reassign may add one.
+  Collaborators hear about status changes on the same terms as the assignee, and anyone may stand
+  themselves down without needing that right.
+- Both answers are computed by the API and sent with the ticket, so the sheet never offers a control
+  the server then refuses — the same rule the planning layer's `effective` object follows. A viewer
+  who may not move a ticket sees the status picker disabled with a line saying who can.
+
+### 🔎 Searchable module and submodule pickers
+
+- The timesheet form and its edit dialog now type-ahead over modules and submodules instead of
+  scrolling a plain dropdown, matching the ticket picker that already sat beside them on the same
+  row. A real project's module list is long enough that scrolling it was the slow part of logging
+  an entry.
+
+### 🩹 "My projects this month" showed an em dash where the ticket counts belonged
+
+- The Open, Closed and Done columns counted only tickets assigned to **you**, so anybody who logged
+  time against a project without personally holding tickets in it — most admins, reviewing a team's
+  work — saw three dashes on every row. They now show the **project's** totals, bounded by the
+  projects the viewer can already see, with your own share of each on hover.
+- A second, quieter half of the same bug: once the server had answered, a project it did not mention
+  kept rendering as "—" rather than a real zero, which made "none closed" indistinguishable from
+  "still loading". The two are different claims and now read differently.
 
 ## 2.5.0 — goals that measure themselves, teammates that hold no seat, and the releases you could not see — 2026-08-18
 

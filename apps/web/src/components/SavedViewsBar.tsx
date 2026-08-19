@@ -32,11 +32,20 @@ import { useAuthStore } from "../store/auth";
 
 const serverMessage = (err: any, fallback: string) => err?.response?.data?.message ?? fallback;
 
+/**
+ * The Tickets page's filter state, saved verbatim into a saved view.
+ *
+ * VIEWS SAVED BEFORE A FIELD EXISTED still apply cleanly: `Tickets.tsx` merges what it reads over
+ * the default shape rather than replacing state with it, so an older view carrying the retired
+ * `labelId` simply contributes nothing and the newer axes keep their "all" default instead of
+ * becoming `undefined` and filtering on the string "undefined".
+ */
 export type TicketFilters = {
   projectId: string;
   status: string;
   priority: string;
-  labelId: string;
+  type: string;
+  reporterId: string;
   onlyMine: boolean;
 };
 

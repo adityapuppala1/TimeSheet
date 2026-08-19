@@ -423,6 +423,59 @@ export const SEED_TEMPLATES: Record<string, SeedTemplate> = {
     })
   },
 
+  // --- Change management -------------------------------------------------------------------
+  // Both carry the same block of facts, in the order the requirement listed them, so an approver
+  // reading the second mail recognises the first without re-reading it.
+  "change.submitted": {
+    subject: "Approval needed: {{changeKey}} - {{title}}",
+    bodyHtml: shell({
+      preheader: "{{requestedBy}} submitted a change that needs your approval.",
+      accent: COLORS.primary,
+      body: [
+        heading("A change needs your approval"),
+        lead("<strong>{{requestedBy}}</strong> submitted a change on <strong>{{projectName}}</strong> and it is waiting on you."),
+        infoCard([
+          { label: "Change", value: "{{changeKey}}", emphasize: true },
+          { label: "Project", value: "{{projectName}}" },
+          { label: "Title", value: "{{title}}" },
+          { label: "Type", value: "{{changeType}}" },
+          { label: "Risk", value: "{{riskLevel}} ({{riskScore}})" },
+          { label: "Activity window", value: "{{activityWindow}}" },
+          { label: "Requested by", value: "{{requestedBy}}" },
+          { label: "Received by", value: "{{receivedBy}}" },
+          { label: "People involved", value: "{{peopleInvolved}}" }
+        ]),
+        lead("{{description}}"),
+        button("Review and decide", "{{appUrl}}")
+      ].join("\n")
+    })
+  },
+
+  "change.decided": {
+    subject: "Change {{decision}}: {{changeKey}} - {{title}}",
+    bodyHtml: shell({
+      preheader: "{{decidedBy}} {{decision}} this change.",
+      accent: COLORS.primary,
+      body: [
+        heading("{{changeKey}} was {{decision}}"),
+        lead("<strong>{{decidedBy}}</strong> reviewed \"<strong>{{title}}</strong>\" on {{projectName}}."),
+        infoCard([
+          { label: "Change", value: "{{changeKey}}", emphasize: true },
+          { label: "Project", value: "{{projectName}}" },
+          { label: "Title", value: "{{title}}" },
+          { label: "Type", value: "{{changeType}}" },
+          { label: "Risk", value: "{{riskLevel}} ({{riskScore}})" },
+          { label: "Activity window", value: "{{activityWindow}}" },
+          { label: "Requested by", value: "{{requestedBy}}" },
+          { label: "Decision by", value: "{{decidedBy}}" },
+          { label: "Comments", value: "{{comments}}" },
+          { label: "People involved", value: "{{peopleInvolved}}" }
+        ]),
+        button("Open the change", "{{appUrl}}")
+      ].join("\n")
+    })
+  },
+
   "ticket.assigned": {
     subject: "Ticket {{ticketKey}} assigned to you",
     bodyHtml: shell({

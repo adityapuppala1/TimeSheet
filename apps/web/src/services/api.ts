@@ -7,6 +7,11 @@ import type {
   ChatMatchType,
   ChatPlatform,
   ChatRoutingRuleRow,
+  ChangeBand,
+  ChangeKind,
+  ChangeOutcome,
+  ChangePolicyStep,
+  ChangeState,
   EmailIntakeSettings,
   EmailMatchType,
   EmailRoutingRuleRow,
@@ -34,7 +39,10 @@ import type {
  * To override (e.g. point a hosted SPA at a separately-deployed API), set
  * `VITE_API_URL=https://api.example.com/api` at build time.
  */
-const API_BASE_URL = import.meta.env.VITE_API_URL ?? "/api";
+/** Exported so a page can build a plain download link. A fetch-then-blob download would have to
+ *  re-attach auth and hold the whole file in memory; an anchor lets the browser stream it and honour
+ *  the server's Content-Disposition. */
+export const API_BASE_URL = import.meta.env.VITE_API_URL ?? "/api";
 
 /** Empty when API_BASE_URL is relative — file paths resolve against current origin. */
 export const SERVER_ORIGIN = API_BASE_URL.startsWith("http")
@@ -2494,6 +2502,7 @@ export interface TicketBranchRow {
 export interface TicketDetail extends TicketRow {
   description: string | null;
   watchers: TicketWatcherRow[];
+  collaborators: TicketCollaboratorRow[];
   comments: TicketComment[];
   attachments: TicketAttachmentRow[];
   timesheets: TicketTimesheetRow[];
@@ -2503,6 +2512,17 @@ export interface TicketDetail extends TicketRow {
   /** The most recent face check spent on this ticket (creation or a status transition). */
   identityVerified: boolean;
   identityVerifiedAt: string | null;
+
+  /** May the viewer edit this ticket / change its status? Reporter, assignee, a collaborator, a
+   *  privileged role, or the manager of the reporter or assignee. */
+  canWork: boolean;
+  /** May the viewer change the assignee or the collaborator list? Narrower than `canWork` — a
+   *  super admin, an admin, or the reporter's/assignee's own manager.
+   *
+   *  BOTH ARE COMPUTED SERVER-SIDE, deliberately: "is this viewer the mapped manager of one of the
+   *  parties" is a `managerId` lookup the browser has no data for, so re-deriving either here would
+   *  put a control on screen that the API refuses. */
+  canReassign: boolean;
 
   /** Planning layer (V6). Present on the DETAIL only — the ticket list stays one query, and
    *  hierarchy is a per-ticket question. All nullable: a workspace that never enabled planning
@@ -2540,12 +2560,69 @@ export interface AssigneeSuggestion {
   score: number;
 }
 
-/** Per-project open/closed counts for one person's tickets — counted server-side, because a long
- *  serving assignee has hundreds of closed tickets and the list route carries a heavy include. */
+/** Per-project open/closed ticket counts — counted server-side, because a long serving assignee has
+ *  hundreds of closed tickets and the list route carries a heavy include.
+ *
+ *  `open`/`closed` are the PROJECT's totals (bounded by what the caller may see); `mineOpen`/
+ *  `mineClosed` are the caller's own share of them. The dashboard shows the totals and keeps the
+ *  personal figures for the tooltip — a rollup row that reads "—" because you happen to hold no
+ *  tickets in a project you logged time against tells you nothing about the project. */
 export interface TicketCountsByProject {
   projectId: string;
   open: number;
   closed: number;
+  mineOpen: number;
+  mineClosed: number;
+}
+
+/** Status/priority tallies for the Tickets page's metric tiles. Counted over the whole (scoped)
+ *  workspace rather than the 200-row list the table renders, so a tile can never describe a page
+ *  of results as if it were the total. */
+/** The daily history behind each metric card's sparkline, reconstructed server-side by undoing
+ *  recorded creations and status transitions — so the LAST point of every array is the same number
+ *  the card's headline shows. See apps/api/src/services/ticket-metrics.service.ts for what is exact
+ *  (status) and what is an approximation (priority, when something was re-prioritised in window). */
+export interface TicketMetricSeries {
+  /** ISO `YYYY-MM-DD`, oldest first; the last entry is today. */
+  days: string[];
+  total: number[];
+  byStatus: Partial<Record<TicketStatus, number[]>>;
+  byPriority: Partial<Record<TicketPriority, number[]>>;
+  /** False when a ticket was re-prioritised inside the window, making that series approximate. */
+  priorityExact: boolean;
+  /** True when the server hit its event cap, so the history is incomplete and says so. */
+  truncated: boolean;
+}
+
+export interface TicketMetrics {
+  total: number;
+  byStatus: Partial<Record<TicketStatus, number>>;
+  byPriority: Partial<Record<TicketPriority, number>>;
+  /** Who has raised tickets in the current scope, most first. Populates the "Raised by" filter with
+   *  exactly the people who actually appear, rather than the whole user directory. */
+  byReporter: Array<{ userId: string; name: string; count: number }>;
+  /** Null when the caller can see no projects at all — there is no history of nothing. */
+  series: TicketMetricSeries | null;
+  byProject: Array<{
+    projectId: string;
+    code: string;
+    name: string;
+    total: number;
+    open: number;
+    closed: number;
+    byStatus: Partial<Record<TicketStatus, number>>;
+    byPriority: Partial<Record<TicketPriority, number>>;
+  }>;
+}
+
+/** Somebody explicitly added to a ticket so they may work on it, alongside its reporter and
+ *  assignee. Distinct from a watcher, which is a notification subscription and grants nothing. */
+export interface TicketCollaboratorRow {
+  id: string;
+  userId: string;
+  user: TicketUserSummary;
+  addedBy: { id: string; name: string } | null;
+  createdAt: string;
 }
 
 export const ticketApi = {
@@ -2553,6 +2630,17 @@ export const ticketApi = {
    *  caller; another assignee needs the same permission the list route requires. */
   countsByProject: async (assigneeId?: string) =>
     (await api.get<TicketCountsByProject[]>("/tickets/counts-by-project", { params: { assigneeId } })).data,
+  /** Status/priority tallies for the metric tiles. Takes the SAME filters as `list` so the tiles and
+   *  the table below them can never describe different sets of tickets. */
+  metrics: async (params?: {
+    projectId?: string;
+    status?: string;
+    priority?: string;
+    type?: string;
+    reporterId?: string;
+    labelId?: string;
+    assigneeId?: string;
+  }) => (await api.get<TicketMetrics>("/tickets/metrics", { params })).data,
   /** `title` is optional context for the AI narration only (assigneeSuggestionAiEnabled) — the
    *  ranking itself never depends on it. */
   suggestAssignee: async (projectId: string, moduleId?: string, title?: string) =>
@@ -2563,6 +2651,8 @@ export const ticketApi = {
     type?: string;
     projectId?: string;
     assigneeId?: string;
+    /** "Raised by" — the ticket's reporter. */
+    reporterId?: string;
     source?: TicketSourceValue;
     labelId?: string;
     aiOnly?: boolean;
@@ -2597,6 +2687,14 @@ export const ticketApi = {
   watchers: {
     add: async (id: string, userId?: string) => (await api.post(`/tickets/${id}/watchers`, userId ? { userId } : {})).data,
     remove: async (id: string, userId: string) => api.delete(`/tickets/${id}/watchers/${userId}`)
+  },
+  /** Extra people who may WORK ON the ticket. Adding one is the same decision as reassigning, so
+   *  the API refuses it for anybody but a super admin, an admin, or the reporter's/assignee's
+   *  manager — see ticket.service.ts#canReassignTicket. */
+  collaborators: {
+    add: async (id: string, userId: string) =>
+      (await api.post<TicketCollaboratorRow>(`/tickets/${id}/collaborators`, { userId })).data,
+    remove: async (id: string, userId: string) => api.delete(`/tickets/${id}/collaborators/${userId}`)
   },
   labels: {
     add: async (id: string, labelId: string) => (await api.post<TicketLabelRow>(`/tickets/${id}/labels`, { labelId })).data,
@@ -4230,10 +4328,15 @@ export const aiOverviewApi = {
   get: async () => (await api.get<AiOverview>("/ai/overview")).data
 };
 
+/** One approver's verdict, and the request's own status once enough of them are in. Aliased rather
+ *  than repeated: the same three words describe an approval step, an approval request, and both
+ *  halves of a change's chain, and four copies of a union is four places to forget a value. */
+export type ApprovalDecisionValue = "PENDING" | "APPROVED" | "REJECTED";
+
 export interface ApprovalStepRow {
   id: string;
   order: number;
-  decision: "PENDING" | "APPROVED" | "REJECTED";
+  decision: ApprovalDecisionValue;
   comment: string | null;
   decidedAt: string | null;
   approver: { id: string; name: string; email: string; avatarUrl?: string | null } | null;
@@ -4248,7 +4351,7 @@ export interface ApprovalRequestRow {
   description: string | null;
   dueAt: string | null;
   isSequential: boolean;
-  status: "PENDING" | "APPROVED" | "REJECTED";
+  status: ApprovalDecisionValue;
   completedAt: string | null;
   requestedBy: { id: string; name: string } | null;
   steps: ApprovalStepRow[];
@@ -4755,5 +4858,482 @@ export const flowApi = {
   runNow: async (id: string) => (await api.post<{ runId: string; created: boolean }>(`/flows/${id}/run`)).data,
   retire: async (id: string) => {
     await api.delete(`/flows/${id}`);
+  }
+};
+
+/* ------------------------------------------------------------------ *
+ * CHANGE MANAGEMENT
+ * ------------------------------------------------------------------ */
+
+export type ChangeEnvironment = "DEVELOPMENT" | "QA" | "UAT" | "STAGING" | "PRODUCTION" | "DR";
+
+export interface ChangeCategoryRow {
+  id: string;
+  name: string;
+  color: string | null;
+  requiresSecurityReview: boolean;
+}
+
+export interface ChangeTicketSummary {
+  id: string;
+  key: string;
+  title: string;
+  description: string | null;
+  status: TicketStatus;
+  priority: TicketPriority;
+  dueAt: string | null;
+  createdAt: string;
+  project: { id: string; code: string; name: string };
+  module: { id: string; name: string } | null;
+  reporter: TicketUserSummary;
+  assignee: TicketUserSummary | null;
+  _count: { comments: number; attachments: number };
+}
+
+export interface ChangeRow {
+  id: string;
+  ticketId: string;
+  /** The number people quote: `HICS-TS-20260812-0001`. Project code, the UTC date it was raised, and
+   *  a sequence that restarts each day. Distinct from the underlying ticket key, which reads as a bug
+   *  report in an approval email. */
+  changeKey: string;
+  justification: string;
+  changeKind: ChangeKind;
+  categoryId: string | null;
+  category: ChangeCategoryRow | null;
+  state: ChangeState;
+  impact: ChangeBand;
+  likelihood: ChangeBand;
+  /** Derived from impact x likelihood by the server. Never sent up — the API ignores it. */
+  riskLevel: ChangeBand;
+  riskScoredAt: string | null;
+  affectedServices: string[];
+  affectedUserCount: number | null;
+  requiresDowntime: boolean;
+  downtimeMinutes: number | null;
+  securityReviewRequired: boolean;
+  dataMigration: boolean;
+  complianceTags: string[];
+  implementationPlan: string | null;
+  backoutPlan: string | null;
+  testPlan: string | null;
+  communicationPlan: string | null;
+  plannedStart: string | null;
+  plannedEnd: string | null;
+  actualStart: string | null;
+  actualEnd: string | null;
+  outcome: ChangeOutcome | null;
+  pirNotes: string | null;
+  closureNotes: string | null;
+  submittedAt: string | null;
+  approvedAt: string | null;
+  closedAt: string | null;
+  createdAt: string;
+  ticket: ChangeTicketSummary;
+
+  /* --- Classification (spec 10) --- */
+  sourceId: string | null;
+  source: { id: string; name: string } | null;
+  applicationId: string | null;
+  application: { id: string; name: string; code: string | null } | null;
+  environment: ChangeEnvironment;
+  businessUnit: string | null;
+  department: string | null;
+  serviceName: string | null;
+  productName: string | null;
+  businessOwnerId: string | null;
+  technicalOwnerId: string | null;
+
+  /* --- Business case (spec 11) --- */
+  problemStatement: string | null;
+  currentSituation: string | null;
+  reasonForChange: string | null;
+  expectedOutcome: string | null;
+  businessBenefits: string | null;
+  costOfNotImplementing: string | null;
+  revenueImpact: string | null;
+  customerImpactNotes: string | null;
+  slaImpactNotes: string | null;
+  regulatoryRequirement: boolean;
+  complianceReference: string | null;
+  projectReference: string | null;
+
+  /* --- Impact (spec 12) --- */
+  affectedApplications: string[];
+  affectedCustomers: string[];
+  affectedLocations: string[];
+  affectedDepartments: string[];
+  affectedInfrastructure: string[];
+  affectedApis: string[];
+  affectedDatabases: string[];
+  affectedIntegrations: string[];
+  productionAffected: boolean;
+  customerAffected: boolean;
+  serviceInterruption: boolean;
+  dataModified: boolean;
+  appRestartRequired: boolean;
+  serverRestartRequired: boolean;
+  dbRestartRequired: boolean;
+  securityImpact: boolean;
+  complianceImpact: boolean;
+  slaImpact: boolean;
+  externalIntegrationImpact: boolean;
+  downtimeStart: string | null;
+  downtimeEnd: string | null;
+  customerNotificationRequired: boolean;
+
+  /** The per-parameter bands the score was computed from, keyed by risk-parameter key. Stored with
+   *  the score so retuning the matrix cannot rewrite what an approver actually agreed to. */
+  riskInputs: Record<string, ChangeBand>;
+  riskScore: number;
+
+  /* --- Implementation (spec 14) --- */
+  implementationSummary: string | null;
+  implementationObjective: string | null;
+  prerequisites: string | null;
+  requiredAccess: string | null;
+  requiredTools: string | null;
+  requiredResources: string | null;
+  primaryEngineerId: string | null;
+  backupEngineerId: string | null;
+  expectedDurationMinutes: number | null;
+  implementationNotes: string | null;
+  implementationIssues: string | null;
+
+  /* --- Testing (spec 15) --- */
+  testEnvironment: ChangeEnvironment | null;
+  testingTeam: string | null;
+  uatRequired: boolean;
+  businessValidationRequired: boolean;
+  testingStart: string | null;
+  testingEnd: string | null;
+  validationCriteria: string | null;
+
+  /* --- Rollback (spec 16, 24) --- */
+  rollbackRequired: boolean;
+  rollbackCriteria: string | null;
+  rollbackProcedure: string | null;
+  rollbackOwnerId: string | null;
+  estimatedRollbackMinutes: number | null;
+  backupRequired: boolean;
+  backupLocation: string | null;
+  backupVerified: boolean;
+  restoreProcedure: string | null;
+  rollbackStatus: string;
+  rollbackStartedAt: string | null;
+  rollbackEndedAt: string | null;
+  rollbackReason: string | null;
+  rollbackResult: string | null;
+
+  /* --- Release (spec 17) --- */
+  releaseVersion: string | null;
+  buildNumber: string | null;
+  deploymentPackage: string | null;
+  repository: string | null;
+  branch: string | null;
+  cicdPipeline: string | null;
+  releaseTicket: string | null;
+  deploymentTool: string | null;
+  deploymentMethod: string | null;
+  configurationChanges: boolean;
+  databaseChanges: boolean;
+  apiChanges: boolean;
+  infrastructureChanges: boolean;
+
+  /* --- Communication (spec 20) --- */
+  internalCommRequired: boolean;
+  stakeholderNotifyRequired: boolean;
+  communicationChannel: string | null;
+  notificationAudience: string | null;
+  communicationOwnerId: string | null;
+  notificationDate: string | null;
+
+  /* --- Schedule (spec 18) --- */
+  conflictOverridden: boolean;
+  conflictOverrideReason: string | null;
+
+  /* --- Validation (spec 25) --- */
+  validationOwnerId: string | null;
+  validationDate: string | null;
+  validationResult: string | null;
+  businessConfirmation: boolean;
+  technicalConfirmation: boolean;
+  validationIssues: string | null;
+
+  /* --- PIR (spec 26) --- */
+  implementationSuccessful: boolean | null;
+  expectedResultAchieved: boolean | null;
+  actualResult: string | null;
+  issuesEncountered: string | null;
+  incidentCreated: boolean;
+  incidentReference: string | null;
+  actualDowntimeMinutes: number | null;
+  lessonsLearned: string | null;
+  recommendations: string | null;
+  followUpActions: string | null;
+  followUpOwnerId: string | null;
+  followUpTargetDate: string | null;
+
+  /* --- Closure (spec 27) --- */
+  closureStatus: string | null;
+  documentationUpdated: boolean;
+  monitoringCompleted: boolean;
+  closedById: string | null;
+
+  /* --- Children --- */
+  collaborators: Array<{ id: string; userId: string; roleLabel: string | null; user: TicketUserSummary }>;
+  linkedTickets: Array<{ id: string; ticketId: string; ticket: { id: string; key: string; title: string; status: string; type: string } }>;
+}
+
+export interface ChangeApprovalRow {
+  id: string;
+  round: number;
+  approverId: string;
+  approver: TicketUserSummary | null;
+  /** Why this person was asked — recorded because reporting lines move. */
+  reason: "MANAGER_OF_REQUESTER" | "SUPER_ADMIN";
+  status: "PENDING" | "APPROVED" | "REJECTED" | "RETURNED" | "CANCELLED";
+  comments: string | null;
+  decidedAt: string | null;
+  dueAt: string | null;
+}
+
+/* ------------------------------------------------------------------ *
+ * The runbook
+ * ------------------------------------------------------------------ */
+
+export type ChangeStepStatus = "NOT_STARTED" | "IN_PROGRESS" | "COMPLETED" | "FAILED" | "SKIPPED";
+export type ChangeTestStatus = "NOT_STARTED" | "PASSED" | "FAILED" | "BLOCKED";
+export type ChangeDependencyType = "PREDECESSOR" | "SUCCESSOR" | "RELATED" | "BLOCKS";
+export type ChangeDependencyStatus = "OPEN" | "COMPLETED" | "WAIVED";
+
+export interface ChangeStep {
+  id: string;
+  stepNumber: number;
+  description: string;
+  ownerId: string | null;
+  plannedStart: string | null;
+  plannedEnd: string | null;
+  status: ChangeStepStatus;
+  comments: string | null;
+}
+export type ChangeStepInput = Omit<ChangeStep, "id" | "stepNumber">;
+
+export interface ChangeTest {
+  id: string;
+  reference: string;
+  description: string;
+  expectedResult: string | null;
+  actualResult: string | null;
+  status: ChangeTestStatus;
+  testerId: string | null;
+  comments: string | null;
+}
+export type ChangeTestInput = Omit<ChangeTest, "id" | "reference"> & { reference?: string };
+
+export interface ChangeDependency {
+  id: string;
+  dependencyType: ChangeDependencyType;
+  description: string;
+  relatedChangeId: string | null;
+  application: string | null;
+  team: string | null;
+  ownerId: string | null;
+  status: ChangeDependencyStatus;
+}
+export type ChangeDependencyInput = Omit<ChangeDependency, "id">;
+
+/** One stage's clock, judged server-side. The browser has the timestamps but not the configured
+ *  budgets, and a second copy of the thresholds here is a second thing to get wrong. */
+export interface ChangeSlaVerdict {
+  state: "BREACHED" | "WARNING" | "ON_TRACK" | "NOT_STARTED" | "MET";
+  /** Negative once breached, so a card can say "9h over" without consulting a second field. */
+  hoursRemaining: number;
+  dueAt: string | null;
+  pctElapsed: number;
+}
+
+export interface ChangeDetail extends ChangeRow {
+  /** Every decision ever asked for, newest round first. A change rejected and reworked opens a new
+   *  round rather than overwriting the first — the objection stays on the record. */
+  approvals: ChangeApprovalRow[];
+  canEdit: boolean;
+  /** Whether THIS viewer has a pending step and the permission to decide it. Computed server-side:
+   *  the browser cannot work that out without the chain, and guessing would render a Decide button
+   *  the API then refuses. */
+  canDecide: boolean;
+  myPendingStepId: string | null;
+  /** What the change still owes before it could be submitted, so the form can say so up front
+   *  rather than letting somebody press Submit to find out. */
+  blockingForSubmit: string[];
+  implementationSteps: ChangeStep[];
+  testCases: ChangeTest[];
+  dependencies: ChangeDependency[];
+  /** Every stage clock, keyed by stage — APPROVAL, IMPLEMENTATION, VALIDATION, CLOSURE. */
+  sla: Record<string, ChangeSlaVerdict>;
+  /** Open predecessors, named. Implementation is refused while any exist, so the page can say which
+   *  rather than letting somebody press Implement to find out. */
+  blockingDependencies: Array<{ id: string; description: string; dependencyType: ChangeDependencyType }>;
+}
+
+export interface ChangeMetrics {
+  total: number;
+  byState: Partial<Record<ChangeState, number>>;
+  byRisk: Partial<Record<ChangeBand, number>>;
+  byKind: Partial<Record<ChangeKind, number>>;
+  byEnvironment: Partial<Record<ChangeEnvironment, number>>;
+  /** Approval steps waiting on this viewer. The number that decides whether they open the page. */
+  /** Decisions waiting on THIS viewer. A super admin sees every pending one, because they can act
+   *  on any of them. */
+  awaitingMyDecision: number;
+  /** Submitted but not yet resting — the change manager's headline. */
+  inFlight: number;
+  /** NULL, never 0, when nothing has closed yet. "No change has closed" and "every change succeeded"
+   *  are different facts, and a 0% failure rate over an empty set is the kind of number that gets
+   *  quoted in a review. Every rate below follows the same rule. */
+  changeFailureRate: number | null;
+  emergencyRate: number | null;
+  avgApprovalHours: number | null;
+  /** Running clocks only — a stage that already finished late is history, not something to save. */
+  sla: { ON_TRACK: number; WARNING: number; BREACHED: number };
+  /** Twelve weekly buckets, oldest first, for the trend chart. */
+  trend: Array<{ week: string; raised: number; closed: number; high: number }>;
+  /** Busiest eight projects. Capped server-side: a register spanning sixty projects would otherwise
+   *  render a chart nobody can read. */
+  byProject: Array<{ id: string; code: string; name: string; total: number; inFlight: number; high: number }>;
+}
+
+export interface ChangeApprovalPolicyRow {
+  id: string;
+  name: string;
+  order: number;
+  matchKind: ChangeKind | null;
+  matchRiskLevel: ChangeBand | null;
+  matchCategoryId: string | null;
+  isCatchAll: boolean;
+  isSequential: boolean;
+  quorum: number | null;
+  steps: ChangePolicyStep[];
+  enabled: boolean;
+}
+
+export interface ChangeSettingsResponse {
+  settings: {
+    enableChangeManagement: boolean;
+    approvalSlaHours: number;
+    requireFaceOnApproval: boolean;
+  };
+  entitlements: { changeManagementEnabled: boolean; maxChangePolicies: number };
+  /** The AND of the workspace toggle and the plan entitlement, computed server-side so the client
+   *  can never offer a page the API then refuses — the rule the planning layer's `effective`
+   *  object follows. */
+  effective: boolean;
+}
+
+export const changeApi = {
+  list: async (params?: { state?: string; changeKind?: string; riskLevel?: string; projectId?: string; mine?: boolean }) =>
+    (await api.get<ChangeRow[]>("/changes", { params })).data,
+  metrics: async () => (await api.get<ChangeMetrics>("/changes/metrics")).data,
+  get: async (id: string) => (await api.get<ChangeDetail>(`/changes/${id}`)).data,
+  create: async (payload: Record<string, unknown>) => (await api.post<ChangeRow>("/changes", payload)).data,
+  update: async (id: string, payload: Record<string, unknown>) => (await api.patch<ChangeRow>(`/changes/${id}`, payload)).data,
+  /** The one route that moves a change. Every rule — legality, the fields the target state demands,
+   *  building the approval chain — is enforced server-side; this just asks. */
+  transition: async (id: string, to: ChangeState, note?: string) =>
+    (await api.post<ChangeRow>(`/changes/${id}/transition`, { to, note })).data,
+  /** Decide YOUR pending step on this change's chain. The module has its own decision route rather
+   *  than reusing the planning one, which is gated on a different feature — see the route's comment
+   *  for why two features gating each other would be a support ticket waiting to happen. */
+  decide: async (id: string, decision: "APPROVED" | "REJECTED", comments?: string) =>
+    (await api.post<ChangeRow>(`/changes/${id}/decision`, { decision, comments })).data,
+  /** Closed tickets in this change's project that are not already linked. */
+  linkableTickets: async (id: string, q?: string) =>
+    (await api.get<Array<{ id: string; key: string; title: string; status: string; type: string }>>(`/changes/${id}/linkable-tickets`, { params: { q } })).data,
+  linkTickets: async (id: string, ticketIds: string[]) => (await api.post<ChangeDetail>(`/changes/${id}/tickets`, { ticketIds })).data,
+  unlinkTicket: async (id: string, ticketId: string) => api.delete(`/changes/${id}/tickets/${ticketId}`),
+  addCollaborators: async (id: string, userIds: string[], roleLabel?: string) =>
+    (await api.post<ChangeDetail>(`/changes/${id}/collaborators`, { userIds, roleLabel })).data,
+  removeCollaborator: async (id: string, userId: string) => api.delete(`/changes/${id}/collaborators/${userId}`),
+
+  /**
+   * The runbook: implementation steps, test cases and dependencies.
+   *
+   * All three are read off the change detail response rather than fetched separately — they arrive
+   * with it — so these are writes only, and every one of them invalidates the same detail query.
+   */
+  addStep: async (id: string, body: ChangeStepInput) =>
+    (await api.post<ChangeStep>(`/changes/${id}/steps`, body)).data,
+  updateStep: async (id: string, stepId: string, body: Partial<ChangeStepInput>) =>
+    (await api.patch<ChangeStep>(`/changes/${id}/steps/${stepId}`, body)).data,
+  removeStep: async (id: string, stepId: string) => api.delete(`/changes/${id}/steps/${stepId}`),
+
+  addTest: async (id: string, body: ChangeTestInput) =>
+    (await api.post<ChangeTest>(`/changes/${id}/tests`, body)).data,
+  updateTest: async (id: string, testId: string, body: Partial<ChangeTestInput>) =>
+    (await api.patch<ChangeTest>(`/changes/${id}/tests/${testId}`, body)).data,
+  removeTest: async (id: string, testId: string) => api.delete(`/changes/${id}/tests/${testId}`),
+
+  addDependency: async (id: string, body: ChangeDependencyInput) =>
+    (await api.post<ChangeDependency>(`/changes/${id}/dependencies`, body)).data,
+  updateDependency: async (id: string, dependencyId: string, body: Partial<ChangeDependencyInput>) =>
+    (await api.patch<ChangeDependency>(`/changes/${id}/dependencies/${dependencyId}`, body)).data,
+  removeDependency: async (id: string, dependencyId: string) => api.delete(`/changes/${id}/dependencies/${dependencyId}`),
+  /**
+   * The register in one of three formats.
+   *
+   * A BLOB through the authenticated axios instance, never an `<a href>`: this app keeps its access
+   * token in memory (see store/auth.ts), so a bare link reaches the export route with no
+   * Authorization header and gets a 401. That is not a hypothetical — it shipped that way once.
+   *
+   * The truncation headers come back with it so the caller can warn at the moment of download rather
+   * than leaving the reader to notice a short file.
+   */
+  download: async (format: "csv" | "xlsx" | "pdf") => {
+    const res = await api.get(`/changes/export.${format}`, { responseType: "blob" });
+    return {
+      blob: res.data as Blob,
+      rowsIncluded: Number(res.headers["x-export-rows-included"] ?? 0),
+      truncated: String(res.headers["x-export-truncated"] ?? "false") === "true"
+    };
+  },
+  /** Scheduled work and the freeze periods it has to dodge, in one call — a calendar that fetches its
+   *  bars and its no-go zones separately renders them a frame apart. */
+  calendar: async (from: string, to: string) =>
+    (await api.get<{
+      changes: Array<{
+        id: string;
+        changeKey: string;
+        state: ChangeState;
+        riskLevel: ChangeBand;
+        changeKind: ChangeKind;
+        environment: ChangeEnvironment;
+        plannedStart: string | null;
+        plannedEnd: string | null;
+        ticket: { title: string; project: { code: string; name: string } };
+      }>;
+      blackouts: Array<{ id: string; name: string; reason: string | null; environment: ChangeEnvironment | null; startsAt: string; endsAt: string }>;
+    }>("/changes/calendar", { params: { from, to } })).data,
+  conflicts: async (id: string) =>
+    (await api.get<{ conflicts: Array<{ kind: string; message: string; reference?: string }> }>(`/changes/${id}/conflicts`)).data,
+  /** Categories, sources, applications and the active risk parameters — one call, because the form
+   *  needs all four before it can render a single dropdown. */
+  masterData: async () =>
+    (await api.get<{
+      categories: ChangeCategoryRow[];
+      sources: Array<{ id: string; name: string }>;
+      applications: Array<{ id: string; name: string; code: string | null }>;
+      riskParameters: Array<{ id: string; key: string; label: string; weight: number }>;
+    }>("/changes/config/master-data")).data,
+  policies: {
+    list: async () => (await api.get<ChangeApprovalPolicyRow[]>("/changes/config/policies")).data,
+    create: async (payload: Record<string, unknown>) =>
+      (await api.post<ChangeApprovalPolicyRow>("/changes/config/policies", payload)).data,
+    update: async (id: string, payload: Record<string, unknown>) =>
+      (await api.patch<ChangeApprovalPolicyRow>(`/changes/config/policies/${id}`, payload)).data,
+    remove: async (id: string) => api.delete(`/changes/config/policies/${id}`)
+  },
+  settings: {
+    get: async () => (await api.get<ChangeSettingsResponse>("/changes/config/settings")).data,
+    update: async (payload: Record<string, unknown>) => (await api.patch("/changes/config/settings", payload)).data
   }
 };

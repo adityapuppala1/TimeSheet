@@ -32,7 +32,16 @@ const TEMPLATE_VARIABLES: Record<string, string[]> = {
   "ticket.status_changed": ["ticketKey", "title", "from", "to", "changedBy", "appUrl"],
   "ticket.commented": ["ticketKey", "title", "author", "appUrl"],
   "ticket.sla_breach": ["assigneeName", "ticketKey", "title", "priority", "hoursOverdue", "appUrl"],
-  "ticket.escalation": ["targetName", "ticketKey", "title", "assigneeName", "appUrl"]
+  "ticket.escalation": ["targetName", "ticketKey", "title", "assigneeName", "appUrl"],
+  "change.submitted": [
+    "changeKey", "projectName", "title", "changeType", "riskLevel", "riskScore",
+    "activityWindow", "description", "requestedBy", "receivedBy", "peopleInvolved", "appUrl"
+  ],
+  "change.decided": [
+    "changeKey", "projectName", "title", "changeType", "riskLevel", "riskScore",
+    "activityWindow", "description", "requestedBy", "receivedBy", "peopleInvolved",
+    "decision", "decidedBy", "comments", "appUrl"
+  ]
 };
 
 const TEMPLATE_DESCRIPTIONS: Record<string, string> = {
@@ -51,7 +60,9 @@ const TEMPLATE_DESCRIPTIONS: Record<string, string> = {
   "ticket.status_changed": "Sent to the reporter, assignee, and watchers when a ticket's status changes.",
   "ticket.commented": "Sent to the reporter, assignee, and watchers when someone comments on a ticket.",
   "ticket.sla_breach": "Sent to the assignee when a ticket misses its resolution SLA.",
-  "ticket.escalation": "Sent to the escalation target when a ticket's SLA breach is escalated."
+  "ticket.escalation": "Sent to the escalation target when a ticket's SLA breach is escalated.",
+  "change.submitted": "Sent the moment a change is submitted - to its approver, the requester, and everyone tagged on it.",
+  "change.decided": "Sent when a change is approved or rejected, carrying who decided and their comments."
 };
 
 export interface SeedTenantOptions {
@@ -229,6 +240,18 @@ export async function seedTenant(client: PrismaClient, options: SeedTenantOption
     ],
     EMPLOYEE: [permissions.TIMESHEETS_WRITE, permissions.TICKETS_VIEW, permissions.TICKETS_WRITE]
   };
+
+  // V8 phase 11: change management. Kept out of the literal above so the addition reads as one
+  // decision rather than five edited lines. Mirrored by idempotent SQL in
+  // migrations/20260819160000_change_management/migration.sql — this seed is a ONE-TIME bootstrap
+  // and never runs on upgrade, so a key added here alone reaches fresh installs and no others.
+  //
+  // Raising a change is open to everyone who can raise a ticket; APPROVING one starts at TEAM_LEAD,
+  // because the whole point of the module is that somebody accountable signs off. Reading needs no
+  // key at all — a change about to take a service down is not a secret from the people who use it.
+  grants.EMPLOYEE.push(permissions.CHANGES_WRITE);
+  grants.MANAGER.push(permissions.CHANGES_WRITE, permissions.CHANGES_APPROVE);
+  grants.TEAM_LEAD.push(permissions.CHANGES_WRITE, permissions.CHANGES_APPROVE);
 
   for (const [name, rolePermissions] of Object.entries(grants)) {
     const role = await client.role.upsert({

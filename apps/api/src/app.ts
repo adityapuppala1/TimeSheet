@@ -58,6 +58,7 @@ import { blueprintRouter } from "./controllers/blueprint.controller.js";
 import { dashboardRouter } from "./controllers/dashboard.controller.js";
 import { agentRouter } from "./controllers/agent.controller.js";
 import { automationFlowRouter } from "./controllers/automation-flow.controller.js";
+import { changeRouter } from "./controllers/change.controller.js";
 import { goalRouter } from "./controllers/goal.controller.js";
 import { inboxRouter } from "./controllers/inbox.controller.js";
 import { portfolioRouter } from "./controllers/portfolio.controller.js";
@@ -471,6 +472,7 @@ app.use("/api/portfolios", portfolioRouter);
 // entitlement (goals align work whether or not the Gantt is in use — see
 // planning.service.ts#assertGoalsEnabled), and reading them needs no permission at all.
 app.use("/api/goals", goalRouter);
+app.use("/api/changes", changeRouter);
 // The inbox is a personal surface: no permission, no entitlement, every route scoped to the
 // caller's own rows. It sits beside /notifications rather than inside it because the bell is a
 // glance and the inbox is a queue with triage state — see controllers/inbox.controller.ts.

@@ -43,6 +43,13 @@ import {
 import { useMemo, useState } from "react";
 import { Link } from "react-router";
 import { Area, AreaChart, Bar, BarChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
+// Aliased: `Tooltip` in this module is recharts' chart tooltip, and the rollup table needs the
+// UI one. Importing both unaliased would silently shadow whichever came second.
+import {
+  Tooltip as HoverTip,
+  TooltipContent as HoverTipContent,
+  TooltipTrigger as HoverTipTrigger
+} from "../components/ui/tooltip";
 import { Alert, AlertDescription, AlertTitle } from "../components/ui/alert";
 import { GoalsGlanceCard } from "../components/GoalsGlanceCard";
 import { SetupChecklistCard } from "../components/SetupChecklistCard";
@@ -263,18 +270,42 @@ export function Dashboard() {
    * the permission, and a column that flickers between a number and nothing is worse than one that
    * shows what it can. `closed` is null — not zero — whenever the server has not answered, so the
    * table can say "not known yet" rather than "none closed", which are different claims.
+   *
+   * ONCE THE SERVER HAS ANSWERED, A MISSING PROJECT MEANS ZERO, NOT UNKNOWN. That distinction was
+   * the bug: the loop below only ever wrote the projects the response mentioned, so a project with
+   * no tickets kept `closed: null` and rendered an em dash forever — indistinguishable from "still
+   * loading". `settled` closes that gap by seeding every rollup row with a real zero the moment the
+   * query succeeds.
    */
   const ticketsByProject = useMemo(() => {
-    const counts = new Map<string, { open: number; closed: number | null }>();
+    const counts = new Map<string, { open: number; closed: number | null; mineOpen: number; mineClosed: number | null }>();
     for (const ticket of myTickets.data ?? []) {
       const key = (ticket as TicketRow & { project?: { id?: string } }).project?.id;
-      if (key) counts.set(key, { open: (counts.get(key)?.open ?? 0) + 1, closed: counts.get(key)?.closed ?? null });
+      if (key) {
+        const prev = counts.get(key);
+        counts.set(key, {
+          open: (prev?.open ?? 0) + 1,
+          closed: prev?.closed ?? null,
+          mineOpen: (prev?.mineOpen ?? 0) + 1,
+          mineClosed: prev?.mineClosed ?? null
+        });
+      }
     }
-    for (const row of ticketCounts.data ?? []) {
-      counts.set(row.projectId, { open: row.open, closed: row.closed });
+    if (ticketCounts.isSuccess) {
+      for (const row of derived.projectRows) {
+        counts.set(row.id, { open: 0, closed: 0, mineOpen: 0, mineClosed: 0 });
+      }
+      for (const row of ticketCounts.data ?? []) {
+        counts.set(row.projectId, {
+          open: row.open,
+          closed: row.closed,
+          mineOpen: row.mineOpen ?? 0,
+          mineClosed: row.mineClosed ?? 0
+        });
+      }
     }
     return counts;
-  }, [myTickets.data, ticketCounts.data]);
+  }, [myTickets.data, ticketCounts.data, ticketCounts.isSuccess, derived.projectRows]);
 
   const adminStats: Array<{ label: string; value: string | number; tone?: "success" | "warning" | "destructive"; trend?: Trend | null }> = [
     { label: "Users", value: admin.data?.users ?? 0, trend: computeTrend(admin.data?.users ?? 0, admin.data?.usersYesterday ?? 0, true) },
@@ -1125,8 +1156,9 @@ function ProjectRollup({
   loading
 }: {
   rows: Array<{ id: string; name: string; code?: string; monthHours: number; approvedHours: number; entries: number; lastDate: string }>;
-  /** Per project: open now, and closed — null while the server's counts have not arrived. */
-  ticketsByProject: Map<string, { open: number; closed: number | null }>;
+  /** Per project: the PROJECT's open/closed totals (null while the server's counts have not
+   *  arrived), plus the viewer's own share of each for the hover detail. */
+  ticketsByProject: Map<string, { open: number; closed: number | null; mineOpen: number; mineClosed: number | null }>;
   loading: boolean;
 }) {
   const [page, setPage] = useState(1);
@@ -1144,8 +1176,9 @@ function ProjectRollup({
           My projects this month
         </CardTitle>
         <CardDescription>
-          Hours, approval progress, and how your tickets stand per project you&apos;ve logged against. Ticket counts are a
-          snapshot of now, not of the month, so the completion share divides two figures measured the same way.
+          Hours and approval progress for the projects you&apos;ve logged against this month, alongside how each
+          project&apos;s tickets stand overall — hover a count for your own share of it. Ticket counts are a snapshot of
+          now, not of the month, so the completion share divides two figures measured the same way.
         </CardDescription>
       </CardHeader>
       <CardContent>
@@ -1182,6 +1215,10 @@ function ProjectRollup({
                     const open = tickets?.open ?? 0;
                     const closed = tickets?.closed ?? null;
                     const donePct = closedShare(open, closed);
+                    // A real zero once the server has answered; the em dash is reserved for "not
+                    // known yet". `closed` is the one that carries that distinction, so it decides
+                    // for both columns.
+                    const emptyOpen = closed === null ? "—" : "0";
                     return (
                       <tr key={row.id} className="border-t border-border">
                         <td className="p-2">
@@ -1192,16 +1229,26 @@ function ProjectRollup({
                         <td className="p-2 text-right tabular-nums text-muted-foreground">{row.entries}</td>
                         <td className="p-2 text-right" data-testid="rollup-open">
                           {open > 0 ? (
-                            <Badge variant="info"><TicketIcon className="mr-1 h-3 w-3" />{open}</Badge>
+                            <HoverTip>
+                              <HoverTipTrigger asChild>
+                                <Badge variant="info"><TicketIcon className="mr-1 h-3 w-3" />{open}</Badge>
+                              </HoverTipTrigger>
+                              <HoverTipContent>{tickets?.mineOpen ?? 0} of these are assigned to you</HoverTipContent>
+                            </HoverTip>
                           ) : (
-                            <span className="text-muted-foreground">—</span>
+                            <span className="text-muted-foreground">{emptyOpen}</span>
                           )}
                         </td>
                         <td className="p-2 text-right" data-testid="rollup-closed">
                           {closed === null ? (
                             <span className="text-muted-foreground">—</span>
                           ) : closed > 0 ? (
-                            <Badge variant="success"><CheckCircle2 className="mr-1 h-3 w-3" />{closed}</Badge>
+                            <HoverTip>
+                              <HoverTipTrigger asChild>
+                                <Badge variant="success"><CheckCircle2 className="mr-1 h-3 w-3" />{closed}</Badge>
+                              </HoverTipTrigger>
+                              <HoverTipContent>{tickets?.mineClosed ?? 0} of these are assigned to you</HoverTipContent>
+                            </HoverTip>
                           ) : (
                             <span className="text-muted-foreground">0</span>
                           )}
