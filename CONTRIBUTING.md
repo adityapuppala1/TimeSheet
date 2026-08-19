@@ -108,6 +108,66 @@ in the **same** PR. Same for `docs/API.md` (endpoints), `docs/DATABASE.md` (sche
 alongside open ones, with dates and file references, so the history of what was found and fixed
 stays visible.
 
+### Regenerating README's "By the numbers"
+
+That table is counted, not estimated, so it goes stale silently. Re-run these from the repo root
+before a release and correct any that moved:
+
+```bash
+echo "routes      $(grep -rhoE '\.(get|post|put|patch|delete)\("' apps/api/src/controllers/*.ts | wc -l)"
+echo "controllers $(ls apps/api/src/controllers/*.ts | wc -l)"
+echo "models      $(grep -c '^model ' apps/api/prisma/schema.prisma)"
+echo "enums       $(grep -c '^enum ' apps/api/prisma/schema.prisma)"
+echo "migrations  $(ls apps/api/prisma/migrations | grep -c '^2')"
+echo "services    $(ls apps/api/src/services/*.ts | wc -l)"
+echo "workers     $(ls apps/api/src/workers/*.ts | wc -l)"
+echo "web pages   $(find apps/web/src/pages -name '*.tsx' | wc -l)"
+echo "e2e specs   $(find tests -name '*.spec.ts' | wc -l)"
+echo "permissions $(grep -cE '^\s+[A-Z_]+:\s*\"' packages/shared/src/index.ts)"
+```
+
+Test and lint counts come from the tools themselves — `npm test -w apps/api` prints the suite total,
+and `npm run lint` prints `N problems (E errors, W warnings)`.
+
+### Checking the Mermaid diagrams
+
+`README.md` and `docs/ARCHITECTURE.md` carry Mermaid diagrams. A diagram that does not parse renders
+on GitHub as a raw red error box — strictly worse than no diagram — and nothing else here catches it,
+because a broken fence is still valid markdown. **Check one when you add or edit it.**
+
+Either paste the block into [mermaid.live](https://mermaid.live), or run the whole set through
+mermaid itself. There is deliberately no repo script for this: mermaid needs a DOM even to validate,
+so it drags in jsdom, and neither belongs in this project's dependency tree for a docs check. Node's
+ESM resolver also ignores `NODE_PATH`, so `npx -p mermaid` alone will *not* work — the checker has to
+live beside its own install:
+
+```bash
+mkdir -p /tmp/mermaid-check && cd /tmp/mermaid-check
+npm init -y && npm install mermaid@11 jsdom
+cat > check.mjs <<'EOF'
+import { readFileSync } from "node:fs";
+import { JSDOM } from "jsdom";
+const dom = new JSDOM("<!doctype html><body></body>", { pretendToBeVisual: true });
+globalThis.window = dom.window;
+globalThis.document = dom.window.document;
+const mermaid = (await import("mermaid")).default;
+mermaid.initialize({ startOnLoad: false, securityLevel: "loose" });
+let bad = 0;
+for (const f of process.argv.slice(2)) {
+  const text = readFileSync(f, "utf8").split("\r").join("");
+  for (const [, body] of text.matchAll(/```mermaid\n([\s\S]*?)```/g)) {
+    const head = body.trim().split("\n")[0];
+    try { await mermaid.parse(body); console.log("  ok   ", head); }
+    catch (e) { bad++; console.log("  FAIL ", head, "—", String(e.message).split("\n")[0]); }
+  }
+}
+process.exit(bad ? 1 : 0);
+EOF
+node check.mjs /path/to/repo/README.md /path/to/repo/docs/ARCHITECTURE.md
+```
+
+Twelve diagrams parse as of v3.0.0.
+
 ## Migrations
 
 ```bash

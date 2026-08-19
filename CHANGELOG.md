@@ -7,9 +7,36 @@ user of a running installation.
 
 ## Unreleased
 
-Landed after v2.5.0 was tagged. The parser that feeds the in-app What's-new page ignores this
-section until it gains a version number, on purpose — an installation must never render history
-for a version that does not exist yet.
+Nothing yet. The parser that feeds the in-app What's-new page ignores this section until it gains a
+version number, on purpose — an installation must never render history for a version that does not
+exist yet.
+
+## 3.0.0 — the change somebody has to approve — 2026-08-19
+
+**A major version for an additive release.** Nothing here breaks: no route changed shape, no column
+was dropped, no default moved, and an installation that never turns change management on behaves
+exactly as 2.5.0 did. The number went to 3.0.0 because the product gained a governance surface it
+did not have — a change now has a risk score, a named approver, a scheduled window and a recorded
+outcome — and that is a different claim about what this software is for, not another feature on the
+ticket page.
+
+### ⬆ Upgrading
+
+- **Run the migrations, then fan them out.** Six tenant migrations and one control-plane migration
+  ship in this release. `update.sh` applies the default org's automatically; every *additional*
+  organization needs the fan-out, which cannot run inside the container's boot chain:
+  `docker compose exec api npm run migrate:tenants -w apps/api`.
+- **Nothing switches itself on.** Change management is off after upgrading, exactly as it was
+  before it existed. A super admin turns it on in **Workspace Settings → Change management**, and
+  the org's plan tier must include it (Team and up). The two conditions fail with deliberately
+  different messages, because "turn it on" and "upgrade your plan" need different people to act.
+- **Set `managerId` on your users before you turn it on.** Approval routes to the requester's
+  manager; with none set it falls back to every active super admin, which works but sends every
+  approval to the same two inboxes.
+- **Two new email templates** (`changeSubmitted`, `changeDecided`) are seeded on migration and are
+  editable on the Email templates page like every other message. They obey the same category × role
+  grid, so if you mute a category for a role, the change mail respects it.
+- No environment variables were added, and no existing one changed meaning.
 
 ### 🔀 Change management
 

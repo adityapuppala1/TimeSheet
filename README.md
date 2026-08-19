@@ -2,7 +2,8 @@
 
 A full-stack workspace platform that combines **timesheet management** (daily work logging,
 approvals, SLA-driven escalation, reporting) with a **Jira-like ticketing system**, a full
-**project-planning layer** (Gantt timelines, dependencies, portfolios, capacity and budgets), a
+**project-planning layer** (Gantt timelines, dependencies, portfolios, capacity and budgets),
+**change management** (risk-scored, approved, scheduled and reviewed releases), a
 **bring-your-own-key AI layer** (Anthropic or any OpenAI-compatible provider), and an
 **analytics/insights dashboard** — all under one roof, one login, and one admin-configurable
 settings surface.
@@ -14,6 +15,12 @@ workload board can put planned hours, real logged hours and contracted capacity 
 and a budget forecast is priced from the same approved rates a client-facing attestation reads. A
 timesheet tool cannot plan and a planning tool cannot measure — the whole product is the argument
 that those should not be two systems.
+
+Change management extends the same argument one step further. A change request here **is** a ticket
+plus a governance record, so the thing you asked approval for and the work that delivered it are the
+same row — which is why a closed change can name the tickets it shipped, price the hours against
+them, and hand an auditor a register that reconciles with the timesheets underneath it. A standalone
+CAB tool holds none of that.
 
 > **v2.0.0 — the planning layer.** Everything in it ships **off by default**: upgrading changes
 > nothing a user can see until an admin turns it on. See [CHANGELOG.md](CHANGELOG.md).
@@ -44,6 +51,20 @@ that those should not be two systems.
 > (Prisma **P3009**) instead of retrying into it forever, and this release's one migration revokes
 > surplus sessions beyond each user's 10 most recent. See
 > [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md#what-240-adds-to-that-dance-session-device-identity--and-the-first-migration-that-can-strand-a-database).
+>
+> **v2.5.0 — multi-org deployments, again: the fan-out is the step people miss.** The tenant schema
+> fan-out has never been able to run inside a container, so every organization beyond the default
+> one has been sitting on its old schema without any update saying so. After upgrading:
+> `docker compose exec api npm run migrate:tenants -w apps/api`.
+>
+> **v3.0.0 — change management, and nothing breaks.** A major version for an *additive* release: no
+> route changed shape, no column was dropped, no default moved, and an installation that never turns
+> the module on behaves exactly as 2.5.0 did. The number moved because the product gained a
+> governance surface it did not have. Six tenant migrations and one control-plane migration ship
+> with it — run the fan-out above for multi-org installs. It is **off after upgrading**; a super
+> admin enables it in Workspace Settings → Change management, and the org's tier must include it.
+> Set `managerId` on your users first: approval routes to the requester's manager, and with none set
+> it falls back to every active super admin. **No new environment variables.**
 
 ## Feature areas
 
@@ -78,6 +99,35 @@ that those should not be two systems.
 | **Change management (V8, opt-in)** | Raise, assess, approve, schedule, implement, validate and close a change — with the governance a ticket cannot express. **A change IS a ticket** plus an extension row, so comments, attachments, watchers, the audit trail and project-scoped visibility came free and there is no second visibility rule to keep in step. Keys read `HICS-TS-20260819-0001`. A weighted **risk assessment** bands the change and the band decides whether a backout plan is mandatory — which is why a *complete* assessment is required to submit: an unanswered parameter contributes zero to a normalised score, so a half-filled form under-reports (measured: high impact + high data risk with nine blanks scored 27 and banded LOW), and leaving fields empty was a way to skip the module's central rule. Approval is **the requester's manager, or a super admin** — never the requester, and a rejection opens a new round rather than overwriting the first, so the objection survives the rework. A **runbook** of numbered implementation steps, test cases and dependencies stays editable *after* approval, because recording that step 4 failed is the work that happens then; an open predecessor refuses the move to Implementing with a 409 that names it. Per-stage **SLA clocks** judge a finished stage on how long it actually took rather than against the current time — the alternative is a dashboard that turns green the moment an overrun closes. A **calendar** shows scheduled work against the blackout periods it has to dodge, in one call. CSV, Excel and PDF export from one shared query, fetched as authenticated blobs and stating their own row caps. Two email templates live in **Workspace Settings → Email templates** with the same analytics and failure triage as every other mail, going to the requester, implementer, approvers and collaborators with super admins in BCC. Delivery-health figures are **null, never 0%**, when nothing has closed yet. See [docs/API.md](docs/API.md#change-management-v8). |
 | **Multi-tenant SaaS platform** | Runs as either a single-org on-prem deployment or a true multi-org SaaS platform on the same codebase. Each organization gets its own physically separate MySQL database (never a shared table filtered by a tenant column) — see [Multi-tenancy](#multi-tenancy) below. |
 | **Platform administration** | A separate `/platform-admin` console (its own auth, its own JWT secret, zero shared client state with the tenant app) for organization lifecycle, plan-tier limits (seat counts, AI budget ceilings, allowed SSO providers/chat platforms), and cross-org analytics — restricted by convention to aggregate numbers, never row-level tenant content. |
+
+## By the numbers
+
+Counted from the tree at v3.0.0, not estimated — regenerate any of these with the one-liners in
+[CONTRIBUTING.md](CONTRIBUTING.md#regenerating-readmes-by-the-numbers) rather than trusting a figure
+that looks stale.
+
+| | |
+|---|---|
+| REST routes | **410** across 49 controllers |
+| Prisma models / enums | **122** / 41, plus **91** tenant migrations and 7 control-plane migrations |
+| Services / cron workers | **91** / 23 |
+| Web pages | **62** |
+| Unit tests | **1,380** across 114 files (`npm test -w apps/api`) |
+| End-to-end specs | **28** Playwright specs, run across desktop, phone, tablet, laptop, 4K, Firefox and WebKit |
+| Editable email templates | **35**, every one of them with preview, test send, revert and per-template delivery analytics |
+| RBAC permissions | **38**, over 5 roles |
+| Lint | **0 errors**, warnings tracked as a baseline rather than driven to zero — see below |
+
+**On the lint number.** The repo runs ESLint with `sonarjs` and sits at roughly 420 warnings and
+zero errors. That is the healthy state, not a backlog: the warnings are overwhelmingly
+`no-nested-conditional` and `cognitive-complexity` on code where the nesting is the clearest form,
+and "fixing" the count by mechanically extracting ternaries has previously made the code worse.
+Errors are the gate; warnings are a signal to read, not a score to beat.
+
+**On the test number.** Unit tests here deliberately favour *pure* functions over mocked databases —
+the schedule solver, the risk score, the SLA clocks, the CSV escaper, the changelog parser. That is
+why a suite this size runs in about 20 seconds and why its failures point at a rule rather than a
+fixture. Anything needing a real database is an e2e spec instead.
 
 ## Stack
 
@@ -531,6 +581,18 @@ specific message instead of you working backward from one of the errors below.
 
 ## Testing
 
+Two suites, and they answer different questions. **Unit tests** check the rules — the schedule
+solver, the change risk score, the SLA clocks, the CSV escaper, the changelog parser — and run
+against no database at all, which is why 1,380 of them finish in about twenty seconds and why a
+failure points at a rule rather than a fixture. **End-to-end specs** drive a real browser against a
+real seeded database, and are where anything needing one belongs.
+
+```bash
+npm test -w apps/api         # the unit suite (~20s): 1,380 tests across 114 files
+npm run test:coverage -w apps/api
+npm run lint                 # typecheck both apps + eslint/sonarjs across the monorepo
+```
+
 ```bash
 npm run test:e2e             # everything (~22 min): 7 projects — 5 viewports + Firefox + WebKit
 npm run test:e2e:quick       # day-to-day loop (~7 min): every FUNCTIONAL spec once, desktop only
@@ -640,6 +702,93 @@ Every org's `MySQL` box above is a physically separate database — see [Multi-t
 
 ## Key workflows
 
+### A change, from raised to closed
+
+The lifecycle is its own state machine. Two things are deliberately **not** states: `FAILED` and
+`ROLLED_BACK` are **outcomes**, because a change that failed still has to be validated, reviewed and
+closed — modelling failure as a state strands it outside the process that exists to learn from it.
+
+```mermaid
+stateDiagram-v2
+  [*] --> DRAFT
+  DRAFT --> AWAITING_APPROVAL: submit (gated)
+  DRAFT --> CANCELLED
+  AWAITING_APPROVAL --> APPROVED: manager or super admin
+  AWAITING_APPROVAL --> REJECTED: with comments
+  REJECTED --> DRAFT: rework opens a NEW round
+  APPROVED --> SCHEDULED
+  SCHEDULED --> IMPLEMENTING: refused while a predecessor is OPEN
+  IMPLEMENTING --> VALIDATION
+  VALIDATION --> PIR: outcome required
+  PIR --> CLOSED
+  CLOSED --> [*]
+  REJECTED --> [*]
+  CANCELLED --> [*]
+```
+
+The gate on `submit` is the module's whole point, so it is enforced by the API at the moment
+approval is asked for — not by a hopeful placeholder in a form:
+
+```mermaid
+flowchart TD
+  S["Submit for approval"] --> R{"Risk assessment<br/>COMPLETE?"}
+  R -- "no" --> X["422 — names every gap at once"]
+  R -- "yes" --> J{"Justification,<br/>implementation plan,<br/>planned window?"}
+  J -- "missing" --> X
+  J -- "yes" --> B{"Risk band needs<br/>a backout plan?"}
+  B -- "yes, and absent" --> X
+  B -- "satisfied" --> T{"Above LOW risk<br/>without a test plan?"}
+  T -- "yes" --> X
+  T -- "no" --> D{"Downtime declared<br/>without a comms plan<br/>or a duration?"}
+  D -- "yes" --> X
+  D -- "no" --> A["AWAITING_APPROVAL<br/>→ routed, mailed, clock started"]
+```
+
+**Why a *complete* risk assessment is required, and not merely encouraged.** The score normalises
+across every active parameter, so an unanswered one contributes zero. That is correct in itself — a
+blank is not "low" — but it means a half-filled assessment *under-reports*. Measured during the
+build: high business impact plus high data risk, with the other nine parameters left blank, scored
+**27 and banded LOW** — and the band is exactly what decides whether a backout plan is mandatory.
+Leaving fields empty was therefore a way to skip the module's central rule. A draft still saves with
+any subset; only submission demands the full set.
+
+```mermaid
+sequenceDiagram
+  actor Requester
+  participant UI as Change page
+  participant API as REST API
+  participant Rules as change.service.ts
+  participant DB as MySQL
+  participant Mail as SMTP
+  actor Approver as Manager / Super admin
+
+  Requester->>UI: Fill the twelve sections, add a runbook
+  UI->>API: POST /changes/:id/transition {to: AWAITING_APPROVAL}
+  API->>Rules: missingForSubmit(change, activeRiskKeys)
+  alt anything missing
+    Rules-->>API: ["Backout plan", "Test plan"]
+    API-->>UI: 422 — every gap in one response
+  else complete
+    API->>Rules: resolveChangeApprovers(requesterId)
+    Rules-->>API: the requester's manager, else all active super admins
+    API->>DB: open approval round N, write state + Ticket.status together
+    API->>Mail: to requester + implementer + approvers, BCC every super admin
+  end
+
+  Approver->>API: POST /changes/:id/decision {APPROVED, comments}
+  API->>API: canDecideChange — never the requester, even as super admin
+  API->>DB: settle the round, stamp approvedAt (starts the next SLA clock)
+  API->>Mail: decision mail, adding who decided and why
+```
+
+**Why every state write also writes `Ticket.status`.** A change *is* a ticket plus an extension row,
+so about forty existing readers already query `Ticket.status`. `CHANGE_STATE_TO_TICKET_STATUS` is the
+same compatibility hinge `WorkflowStatus.legacyStatus` provides for custom ticket statuses — the pair
+is never written apart, which is what lets comments, attachments, watchers, links, the audit trail,
+search and project-scoped visibility keep working with no second implementation to keep in step.
+
+### Logging time
+
 ```mermaid
 sequenceDiagram
   actor Employee
@@ -653,6 +802,8 @@ sequenceDiagram
   API->>DB: Persist entry and audit log
   API-->>UI: Submitted status + totals
 ```
+
+### Email → ticket intake
 
 ```mermaid
 sequenceDiagram

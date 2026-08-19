@@ -165,8 +165,9 @@ const NOTE_CATEGORIES: NoteCategory[] = [
     icon: Palette,
     // 🧭 a landing/orientation screen, 🔗 following one thing across screens, 👍 touch targets,
     // 🧑 the workload board (from the 🧑‍🤝‍🧑 sequence, which reduces to 🧑 once the joiners are
-    // stripped below). All four described a screen and were reading as a generic "Changes" chip.
-    emoji: ["🎨", "🪟", "🗞", "✍", "📊", "🧭", "🔗", "👍", "🧑"],
+    // stripped below), 🔎 a search affordance added to a screen that already existed. All five
+    // described a screen and were reading as a generic "Changes" chip.
+    emoji: ["🎨", "🪟", "🗞", "✍", "📊", "🧭", "🔗", "👍", "🧑", "🔎"],
     match: [
       /\bui\b|\bux\b|\bcharts?\b|\blabels?\b|layout/i,
       /dialog|popup|\bmodal\b|panel|window|sidebar/i,
@@ -192,9 +193,11 @@ const NOTE_CATEGORIES: NoteCategory[] = [
     tone: "bg-success/10 text-success",
     icon: Sparkles,
     // 🎯 a goal/target feature, ▶ something that now runs on its own, ⚖ measurement and
-    // accounting, ✉ an outbound message that did not exist before. Last category in the list, so
-    // a more specific one above still wins — "✉ Email templates: the editor…" stays Interface.
-    emoji: ["✨", "🆕", "🎉", "🔌", "🤖", "🪪", "⚙", "🎯", "▶", "⚖", "✉"],
+    // accounting, ✉ an outbound message that did not exist before, 🔀 a governance flow the
+    // product did not have (change management), 🎫 the ticket surface itself. Last category in the
+    // list, so a more specific one above still wins — "✉ Email templates: the editor…" stays
+    // Interface, and "🔐 A ticket belongs to the people on it" stays Security.
+    emoji: ["✨", "🆕", "🎉", "🔌", "🤖", "🪪", "⚙", "🎯", "▶", "⚖", "✉", "🔀", "🎫"],
     match: [
       /feature|\bnew\b|integrations?\b|\bmcp\b|\banalytics\b/i,
       /planning layer|release history|everything else|user management|status page/i,
