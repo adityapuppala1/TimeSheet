@@ -45,6 +45,7 @@ import {
   assertChangeManagementEnabled,
   activeRiskParameterKeys,
   assertLegalChangeTransition,
+  assertDependenciesClear,
   assertReadyFor,
   isNoOpTransition,
   canDecideChange,
@@ -989,31 +990,6 @@ const transitionSchema = z.object({
  * rule the module exists to enforce, and it is enforced by the shape of the table rather than by a
  * condition somebody could forget.
  */
-/**
- * Implementation is refused while something this change waits on is still open.
- *
- * ONLY `PREDECESSOR` AND `BLOCKS` COUNT. A `SUCCESSOR` is work that follows this change and a
- * `RELATED` is context — blocking on either would make the field unusable for the thing it is for.
- * `WAIVED` is an explicit, recorded decision to proceed anyway, which is why it clears the gate the
- * same way `COMPLETED` does; the row keeps saying which it was.
- *
- * Checked here and not in `missingForTransition` because that function is pure and database-free by
- * design — the tests drive it without a connection.
- */
-async function assertDependenciesClear(changeId: string, target: ChangeState): Promise<void> {
-  if (target !== "IMPLEMENTING") return;
-  const blocking = await prisma.changeDependency.findMany({
-    where: { changeId, status: "OPEN", dependencyType: { in: ["PREDECESSOR", "BLOCKS"] } },
-    select: { description: true }
-  });
-  if (blocking.length === 0) return;
-  throw new AppError(
-    409,
-    `This change is still waiting on ${blocking.length} ${blocking.length === 1 ? "dependency" : "dependencies"}: ` +
-      `${blocking.map((d) => d.description).join("; ")}. Complete or waive ${blocking.length === 1 ? "it" : "them"} before implementing.`
-  );
-}
-
 changeRouter.post("/:id/transition", requirePermission(permissions.CHANGES_WRITE), validate(transitionSchema), async (req, res) => {
   await assertChangeManagementEnabled();
   const existing = await prisma.changeRequest.findFirst({

@@ -36,6 +36,7 @@ import {
 import { resumeFlowRun, startFlowRun } from "../services/automation-dispatch.service.js";
 import { listCapabilityCatalogue } from "../services/agent-profile.service.js";
 import { DOMAIN_EVENTS } from "../services/domain-events.js";
+import { changeStates } from "@timesheet/shared";
 import { isPlanningCapabilityAllowed } from "../services/plan-limits.service.js";
 
 export const automationFlowRouter = Router();
@@ -112,8 +113,19 @@ automationFlowRouter.get("/catalogue", requirePermission(permissions.TICKETS_VIE
     actions: [
       { key: "assign", label: "Assign it to somebody", target: "assigneeId", options: "people" },
       { key: "label", label: "Add a label", target: "labelId", options: "labels" },
-      { key: "notify", label: "Notify somebody", target: "notifyUserId", options: "people" }
+      { key: "notify", label: "Notify somebody", target: "notifyUserId", options: "people" },
+      // Change-shaped. A run whose subject is an ordinary ticket SKIPS these rather than failing,
+      // so a flow that fires on both kinds does not report a failure for the half that cannot apply.
+      // Approve and reject are absent on purpose and at every level: an approval is a named person
+      // accepting risk, and there is no undo.
+      { key: "change_transition", label: "Move a change to a state", target: "toState", options: "changeStates", changeOnly: true },
+      { key: "change_comment", label: "Comment on a change", target: "commentBody", freeText: true, changeOnly: true },
+      { key: "change_collaborator", label: "Tag somebody on a change", target: "collaboratorId", options: "people", changeOnly: true }
     ],
+    /* The states a workflow may move a change to. APPROVED and REJECTED are not on this list, and
+       the dispatcher refuses them again even if one arrives — relying on a catalogue the client
+       renders from to enforce the module's central rule is how it stops being enforced. */
+    changeStates: changeStates.filter((state) => state !== "APPROVED" && state !== "REJECTED"),
     branchFields: [
       { key: "priority", label: "Priority", values: ["LOW", "MEDIUM", "HIGH", "CRITICAL"] },
       { key: "source", label: "Where it came from", values: ["MANUAL", "EMAIL", "API", "CHAT"] },

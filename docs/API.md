@@ -1095,6 +1095,38 @@ than a zero-hour one, which would breach everything on sight.
 - `GET /changes/:id/conflicts` — overlapping changes on the same application, and any blackout the
   planned window collides with. Reported, never auto-corrected.
 
+### Derived context
+
+`GET /changes/:id/context` — what this change is actually shipping, assembled from the tickets it
+links rather than typed: repositories, branches, pull requests and merge states (from `TicketBranch`,
+kept live by the git webhook), the latest ingested CI run per branch, open security findings, the
+people who did the work and their **approved** hours, and how the last five changes to the same
+application went.
+
+Two rules it follows. Hours are approved-only — draft time is time somebody typed, not time anybody
+signed off. And a repository with no ingested CI run reports **null**, rendered as "not reported",
+never as passing: nobody having told us and everything being green are different facts, and only one
+is a reason to approve.
+
+Its own route rather than part of `GET /:id` because it reads across five tables — worth paying for
+when the Context tab is opened, not on every load of a form somebody came to edit one field on.
+
+### Automation
+
+Change events are already in `DOMAIN_EVENTS` and already exposed by `GET /flows/catalogue`, so
+Workflow Studio can trigger a flow on `change.approved`, `change.closed` and the rest. A change
+resolves to its own **ticket** as the flow subject — a change *is* a ticket — so every existing
+action and branch field works on it.
+
+Three change-shaped actions: `change_transition`, `change_comment`, `change_collaborator`. Each
+re-enters `assertLegalChangeTransition`, `assertReadyFor` and `assertDependenciesClear`, the same
+three functions the transition route calls; an automation that reimplemented four of the five checks
+is exactly how one ends up able to do what the API refuses.
+
+**A workflow cannot approve or reject.** Neither state is reachable from an undecided one through
+the transition table, `changeStates` in the catalogue omits both, and the dispatcher refuses them by
+name — three layers, because this is the rule the module exists for.
+
 ### Metrics
 
 `GET /changes/metrics` returns the state/risk/kind/environment tallies, `awaitingMyDecision`,

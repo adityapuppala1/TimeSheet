@@ -224,6 +224,35 @@ export function missingForTransition(
   return [];
 }
 
+/**
+ * Implementation is refused while something this change waits on is still open.
+ *
+ * ONLY `PREDECESSOR` AND `BLOCKS` COUNT. A `SUCCESSOR` is work that follows this change and a
+ * `RELATED` is context — blocking on either would make the field unusable for the thing it is for.
+ * `WAIVED` is an explicit, recorded decision to proceed anyway, which is why it clears the gate the
+ * same way `COMPLETED` does; the row keeps saying which it was.
+ *
+ * Checked here and not in `missingForTransition` because that function is pure and database-free by
+ * design — the tests drive it without a connection.
+ *
+ * Lives in the service rather than the controller because it is a RULE, and it now has two callers:
+ * the transition route and the automation dispatcher's change action. A second copy in the
+ * dispatcher is exactly how an automation ends up able to walk a change past a gate the API refuses.
+ */
+export async function assertDependenciesClear(changeId: string, target: ChangeState): Promise<void> {
+  if (target !== "IMPLEMENTING") return;
+  const blocking = await prisma.changeDependency.findMany({
+    where: { changeId, status: "OPEN", dependencyType: { in: ["PREDECESSOR", "BLOCKS"] } },
+    select: { description: true }
+  });
+  if (blocking.length === 0) return;
+  throw new AppError(
+    409,
+    `This change is still waiting on ${blocking.length} ${blocking.length === 1 ? "dependency" : "dependencies"}: ` +
+      `${blocking.map((d) => d.description).join("; ")}. Complete or waive ${blocking.length === 1 ? "it" : "them"} before implementing.`
+  );
+}
+
 export function assertReadyFor(change: ChangeReadinessInput, target: ChangeState, requiredRiskKeys: string[] = []): void {
   const missing = missingForTransition(change, target, requiredRiskKeys);
   if (missing.length > 0) {

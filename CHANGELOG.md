@@ -11,6 +11,22 @@ Landed after v3.0.0 was tagged. The parser that feeds the in-app What's-new page
 until it gains a version number, on purpose — an installation must never render history for a version
 that does not exist yet.
 
+### 🔀 A change now shows what it is shipping, and workflows can act on it
+
+- **A Context tab** on every change: the repositories and pull requests it delivers, whether their CI
+  is green, what security findings are open against them, who did the work and for how many approved
+  hours, and how the last few changes to the same application went. None of it is typed — it is
+  derived from the tickets the change links, so it cannot drift the way a second copy would. A
+  repository with no ingested CI run says "not reported", never "passing".
+- **Workflow Studio can act on changes**, not only fire when one moves. Three actions — move a change
+  to a state, comment on it, tag somebody on it — each re-entering every gate the API applies, so an
+  automation cannot walk a change past its own requirements. **It cannot approve or reject one**:
+  that is a named person accepting risk, and there is no undo.
+- Fixed while building it: a change-triggered flow used to receive a subject with no id, so every
+  step except "notify" failed with "this run has no ticket to change". The trigger fired and the flow
+  could do nothing. A change now resolves to its own ticket, which is what makes every existing
+  ticket action work on it.
+
 ### 🩹 Fixes
 
 - **Tagging a ticket no longer pushes the timesheet form off the page.** A long ticket title grew the
@@ -155,8 +171,9 @@ ticket page.
   manager or a super admin", and a chain of ordered match-rules is a great deal of machinery for a
   question with one answer.
 - **A change cannot be walked past its own board.** Approved and rejected are written only by a
-  settled approval chain; they are absent from the transition table entirely, so no caller can
-  PATCH around it. Once approved, the plan freezes — the outcome fields stay writable, because
+  recorded decision. No state that has not already been decided can reach them through the
+  transition table, so no caller can PATCH around the approver — the one route into Approved is from
+  Scheduled, which means giving up a window on a change that was approved already. Once approved, the plan freezes — the outcome fields stay writable, because
   recording what happened is not the same act as amending what was agreed.
 - **Thirteen notifications**, in-app and email, from "approval needed" through window reminders to
   a weekly digest, all on the existing per-category, per-role grid. Muting one suppresses only the

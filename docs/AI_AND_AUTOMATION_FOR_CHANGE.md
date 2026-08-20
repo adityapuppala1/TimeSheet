@@ -1,7 +1,7 @@
 # AI, agents and workflows for Tickets and Change Management — a plan
 
-Status: **proposal, nothing here is built.** Written against the seams that already exist, so every
-item below says which of them it extends and what it would cost. Read
+Status: **steps 1 and 2 are built; 3–5 are still a proposal.** Written against the seams that already
+exist, so every item below says which of them it extends and what it would cost. Read
 [ARCHITECTURE.md §3.12](ARCHITECTURE.md) and [API.md](API.md#change-management-v8) first.
 
 ---
@@ -33,7 +33,7 @@ So the plan is two layers, and **the first is worth building even if you never t
 
 ## Part 1 — Change management (item 6)
 
-### 1.1 Layer one: the change context pack (no AI)
+### 1.1 Layer one: the change context pack (no AI) — **BUILT**
 
 A new service assembles, for any change, everything derivable from its linked tickets:
 
@@ -118,7 +118,13 @@ of it. A super admin can build these **now**, with no code:
 
 This is worth saying plainly because it changes what needs building: **the trigger side is done.**
 
-### 2.2 What is missing: the action side
+**One correction to that, found while building §2.2.** The trigger fired, but `subjectOf` read
+`payload.ticket` and a change event emits `{ change }` — so every change-triggered flow received a
+`workspace` subject with a null id, and every step except `notify` failed with "this run has no
+ticket to change". A change resolves to its own ticket now, which is the module's founding decision
+applied here: every action and branch field that works on a ticket works on a change for free.
+
+### 2.2 The action side — **BUILT**
 
 `AutomationStepKind.ACTION` performs the deterministic things `TicketRule` does — assign, label,
 notify. None of them touch a change. The gap is a small set of change-shaped actions:
@@ -127,11 +133,23 @@ notify. None of them touch a change. The gap is a small set of change-shaped act
 |---|---|
 | `CHANGE_TRANSITION` | Move a change to a named state. Must re-enter the same `assertReadyFor` / dependency gates the API uses — an automation that walks a change past its own requirements is the one thing this must not become. |
 | `CHANGE_COMMENT` | Post to the underlying ticket. Trivial; the ticket half already supports it. |
-| `CHANGE_LINK_TICKET` | Tag a ticket onto a change. Still restricted to closed tickets. |
 | `CHANGE_TAG_COLLABORATOR` | Add a named person. |
 
+`CHANGE_LINK_TICKET` was dropped rather than built. A flow triggered by a change event has no second
+ticket to link, and one triggered by a ticket event would have to guess which open change the ticket
+belongs to — a guess with no right answer. Tagging stays a human act on the Tickets & team tab.
+
 Deliberately **not** on that list: approve, reject, and edit-the-plan-after-approval. Same reason as
-§1.3.
+§1.3. Every one re-enters `assertLegalChangeTransition`, `assertReadyFor` and
+`assertDependenciesClear` — the same three functions the API route calls, which is why that gate
+moved out of the controller and into the service. `change-automation-actions.test.ts` pins that a
+second caller cannot walk a change past them.
+
+**A precision worth recording**, because an earlier version of these notes and the 3.0.0 changelog
+both got it slightly wrong: `APPROVED` is *not* absent from the transition table. `SCHEDULED →
+APPROVED` is legal and means "unschedule it" — the approval already happened and only the window is
+being given up. What is impossible is reaching `APPROVED` from a state that has not been decided,
+and `REJECTED` is unreachable from everywhere. A workflow is refused even the unschedule.
 
 ### 2.3 Agents on tickets and changes
 
@@ -160,9 +178,8 @@ here; it should be marked on each new capability rather than argued about later.
 
 ## Suggested order
 
-1. **The context pack** (§1.1). No AI, no schema change, immediately useful, and it is the input
-   everything else needs.
-2. **The four change actions** (§2.2). Unlocks the automation half, which is otherwise trigger-only.
+1. ~~**The context pack** (§1.1).~~ **Built.** `GET /changes/:id/context` and the Context tab.
+2. ~~**The change actions** (§2.2).~~ **Built** — three of the four; see why the fourth was dropped.
 3. **`change_risk_narrative`** (§1.2). The cheapest capability — it narrates a number that already
    exists, and the pattern is copied from `project_risk_narrative`.
 4. **`change_draft_assist`** as a proposal (§1.2). The largest win and the largest blast radius; do

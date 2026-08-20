@@ -28,6 +28,15 @@
  */
 import type { AutomationStepKind, Prisma } from "@prisma/client";
 import { prisma } from "../config/prisma.js";
+import { changeStates, type ChangeState } from "@timesheet/shared";
+import {
+  activeRiskParameterKeys,
+  assertDependenciesClear,
+  assertLegalChangeTransition,
+  assertReadyFor,
+  isNoOpTransition,
+  ticketStatusFor
+} from "./change.service.js";
 import { AppError } from "../middleware/error.js";
 import { audit } from "./audit.service.js";
 import { getFlow, type DecoratedFlow } from "./automation-flow.service.js";
@@ -140,6 +149,111 @@ async function performAction(params: {
 
   if (subject.type !== "ticket" || !subject.id) {
     return { ...base, outcome: "failed", detail: "This action changes a ticket, and this run has no ticket to change." };
+  }
+
+  /* ---------------- change-shaped actions ----------------
+   *
+   * The subject is the change's TICKET (see subjectOf), so each of these looks the change back up
+   * from it. A flow whose subject is an ordinary ticket simply skips them, rather than failing —
+   * a mixed flow that fires on both kinds should not report a failure for the half that does not
+   * apply.
+   *
+   * WHAT IS DELIBERATELY ABSENT: approve, reject, and editing the plan after approval. An approval
+   * is a named person accepting risk and there is no undo, which is the one thing this module exists
+   * to make real — see ai-capability.registry.ts for the same reasoning applied to AI. No autonomy
+   * level and no toggle should reach them.
+   */
+  if (action === "change_transition" || action === "change_comment" || action === "change_collaborator") {
+    const change = await prisma.changeRequest.findUnique({
+      where: { ticketId: subject.id },
+      include: { ticket: { select: { id: true, reporterId: true, assigneeId: true } } }
+    });
+    if (!change) {
+      return { ...base, outcome: "skipped", detail: "This run is about a ticket, not a change." };
+    }
+
+    if (action === "change_comment") {
+      const body = String(config.commentBody ?? "").trim();
+      if (!body) return { ...base, outcome: "failed", detail: "No comment text was set on this step." };
+      // Posted to the ticket half, which is where every comment on a change already lives.
+      await prisma.ticketComment.create({ data: { ticketId: subject.id, authorId: params.actorId, body } });
+      return { ...base, outcome: "ran", detail: `Commented on ${change.changeKey}.` };
+    }
+
+    if (action === "change_collaborator") {
+      const userId = String(config.collaboratorId ?? "");
+      if (!userId) return { ...base, outcome: "failed", detail: "Nobody was chosen to tag." };
+      const already = await prisma.changeCollaborator.findFirst({ where: { changeId: change.id, userId }, select: { id: true } });
+      if (already) return { ...base, outcome: "skipped", detail: "They were already tagged on it." };
+      await prisma.changeCollaborator.create({ data: { changeId: change.id, userId } });
+      return { ...base, outcome: "ran", detail: `Tagged them on ${change.changeKey}.` };
+    }
+
+    /* change_transition */
+    const to = String(config.toState ?? "") as ChangeState;
+    if (!changeStates.includes(to)) return { ...base, outcome: "failed", detail: "No target state was set on this step." };
+    const from = change.state as ChangeState;
+    if (isNoOpTransition(from, to)) return { ...base, outcome: "skipped", detail: `It is already ${to.toLowerCase().replace(/_/g, " ")}.` };
+
+    // EVERY gate the API applies, re-entered here rather than reimplemented. An automation that can
+    // walk a change past its own requirements is the one thing this must not become, and the way
+    // that happens is a second code path that forgot one of them.
+    try {
+      assertLegalChangeTransition(from, to);
+      assertReadyFor(change, to, await activeRiskParameterKeys());
+      await assertDependenciesClear(change.id, to);
+    } catch (err: any) {
+      return { ...base, outcome: "failed", detail: err?.message ?? "That move was refused." };
+    }
+
+    // Belt and braces. The table above already refuses every route into APPROVED from an undecided
+    // state, and refuses REJECTED from everywhere — those are written only by a recorded decision.
+    // The one route it DOES allow is SCHEDULED → APPROVED, which means "unschedule it" and involves
+    // no approval at all. A workflow is refused even that: giving up a window is a scheduling
+    // decision somebody should make on purpose, and the cost of blocking it is one convenience
+    // against a rule that must not have exceptions a reader has to reason about.
+    if (to === "APPROVED" || to === "REJECTED") {
+      return { ...base, outcome: "failed", detail: "A workflow cannot approve or reject a change. A person decides that." };
+    }
+
+    if (proposalOnly) {
+      const proposal = await createProposal({
+        kind: "SCHEDULE_ADJUSTMENT",
+        title: `${flow.name}: move ${change.changeKey} to ${to.toLowerCase().replace(/_/g, " ")}`,
+        rationale: `Proposed by the workflow "${flow.name}", which may only propose.`,
+        scopeTicketId: subject.id,
+        scopeProjectId: subject.projectId ?? null,
+        requestedById: params.actorId,
+        changes: [
+          {
+            targetType: "TICKET",
+            targetId: subject.id,
+            op: "UPDATE",
+            before: { state: from },
+            after: { state: to },
+            summary: `Move ${change.changeKey} from ${from.toLowerCase().replace(/_/g, " ")} to ${to.toLowerCase().replace(/_/g, " ")}`
+          }
+        ]
+      });
+      return { ...base, outcome: "proposed", detail: "Proposed the move for review.", proposalId: proposal.id };
+    }
+
+    const now = new Date();
+    await prisma.$transaction(async (tx) => {
+      // The state and Ticket.status are never written apart — the compatibility hinge ~40 readers
+      // depend on. Same rule the transition route follows.
+      await tx.ticket.update({ where: { id: subject.id! }, data: { status: ticketStatusFor(to) } });
+      await tx.changeRequest.update({
+        where: { id: change.id },
+        data: {
+          state: to,
+          ...(to === "IMPLEMENTING" ? { actualStart: change.actualStart ?? now } : {}),
+          ...(to === "VALIDATION" ? { actualEnd: change.actualEnd ?? now } : {}),
+          ...(to === "CLOSED" ? { closedAt: now, closedById: params.actorId } : {})
+        }
+      });
+    });
+    return { ...base, outcome: "ran", detail: `Moved ${change.changeKey} to ${to.toLowerCase().replace(/_/g, " ")}.` };
   }
 
   if (action === "assign") {
@@ -495,8 +609,35 @@ export async function resumeFlowRun(runId: string, approverId: string, approved:
   await advance(runId, flow, { type: (run.subjectType as FlowSubject["type"]) ?? "workspace", id: run.subjectId, label: run.subjectLabel ?? "this run" }, run.awaitingOrder ?? 0);
 }
 
-/** The subject a domain event is about, in the words a person would use for it. */
+/**
+ * The subject a domain event is about, in the words a person would use for it.
+ *
+ * WHY A CHANGE RESOLVES TO ITS TICKET: a change IS a ticket plus an extension row, which is the
+ * decision the whole module rests on. Mapping it to that ticket means every action and branch field
+ * that already works on tickets — assign, label, notify, priority, project — works on a change with
+ * no second implementation, and the change-specific actions below simply look the change up again
+ * from the ticket.
+ *
+ * This was a real gap rather than a nicety: `change.*` events emit `{ change }` with no top-level
+ * `ticket`, so before this every change-triggered flow got a `workspace` subject with a null id, and
+ * every step except `notify` failed with "this run has no ticket to change". The trigger fired and
+ * the flow could do nothing.
+ */
 function subjectOf(payload: Record<string, unknown>): FlowSubject {
+  const change = payload.change as
+    | { changeKey?: string; ticket?: { id?: string; key?: string; title?: string; project?: { id?: string }; projectId?: string } }
+    | undefined;
+  if (change?.ticket?.id) {
+    return {
+      type: "ticket",
+      id: change.ticket.id,
+      // Named by its CHANGE key, not its ticket key. The ticket key never appears anywhere else in
+      // this module, and a run report quoting one would read as being about a bug report.
+      label: `${change.changeKey ?? "a change"} — ${change.ticket.title ?? ""}`.trim(),
+      projectId: change.ticket.project?.id ?? change.ticket.projectId ?? null
+    };
+  }
+
   const ticket = payload.ticket as { id?: string; key?: string; title?: string; projectId?: string } | undefined;
   if (ticket?.id) {
     return {
