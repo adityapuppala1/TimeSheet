@@ -90,3 +90,68 @@ export const CHANGE_ACTION_LABEL: Partial<Record<ChangeState, string>> = {
   CANCELLED: "Cancel change",
   DRAFT: "Reopen as draft"
 };
+
+/**
+ * Which tab holds the field a submission requirement is complaining about.
+ *
+ * WHY IT EXISTS: `blockingForSubmit` comes back as a list of human phrases — "Backout plan",
+ * "Planned window" — and the form has thirteen tabs. Telling somebody what is missing without
+ * telling them where it lives is most of the way to not telling them. The server owns the phrases,
+ * so this map is keyed on them and falls back to no marker rather than guessing.
+ *
+ * Keep it in step with `missingForSubmit` / `missingForClose` in change.service.ts.
+ */
+export const CHANGE_REQUIREMENT_TAB: Record<string, string> = {
+  Justification: "business",
+  "Risk assessment": "risk",
+  "Implementation plan": "implementation",
+  "Planned window": "schedule",
+  "Backout plan": "rollback",
+  "Test plan": "testing",
+  "Communication plan": "comms",
+  "Expected downtime": "impact",
+  Outcome: "outcome",
+  "Post-implementation review": "outcome"
+};
+
+/** The risk requirement arrives counted — "Risk assessment (3 of 11 unanswered)" — so an exact key
+ *  lookup misses it. Prefix matching is enough because no two requirements share a prefix. */
+export function tabForRequirement(requirement: string): string | undefined {
+  const exact = CHANGE_REQUIREMENT_TAB[requirement];
+  if (exact) return exact;
+  const key = Object.keys(CHANGE_REQUIREMENT_TAB).find((k) => requirement.startsWith(k));
+  return key ? CHANGE_REQUIREMENT_TAB[key] : undefined;
+}
+
+/** The three phases the thirteen tabs actually fall into. Rendered as separators in the strip so a
+ *  long row of equal-weight tabs reads as a sequence rather than a list. */
+export const CHANGE_TAB_GROUPS: Array<{ label: string; tabs: Array<{ value: string; label: string }> }> = [
+  {
+    label: "Define",
+    tabs: [
+      { value: "basics", label: "Basics" },
+      { value: "business", label: "Business case" },
+      { value: "impact", label: "Impact" },
+      { value: "risk", label: "Risk" }
+    ]
+  },
+  {
+    label: "Plan",
+    tabs: [
+      { value: "implementation", label: "Implementation" },
+      { value: "testing", label: "Testing" },
+      { value: "rollback", label: "Rollback" },
+      { value: "release", label: "Release" },
+      { value: "schedule", label: "Schedule" },
+      { value: "comms", label: "Comms" }
+    ]
+  },
+  {
+    label: "Deliver",
+    tabs: [
+      { value: "runbook", label: "Runbook" },
+      { value: "tagging", label: "Tickets & team" },
+      { value: "outcome", label: "Outcome" }
+    ]
+  }
+];

@@ -19,7 +19,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { changeBands, changeKinds, changeOutcomes, changeStateTransitions, permissions, type ChangeBand, type ChangeState } from "@timesheet/shared";
 import { AlertTriangle, ArrowLeft, CheckCircle2, ExternalLink, Loader2, Plus, ShieldCheck, Trash2, X } from "lucide-react";
-import { useState } from "react";
+import { Fragment, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router";
 import {
   CHANGE_ACTION_LABEL,
@@ -28,7 +28,9 @@ import {
   CHANGE_RISK_TONE,
   CHANGE_STATE_TONE,
   humanizeChange,
-  CHANGE_KIND_MEANING
+  CHANGE_KIND_MEANING,
+  CHANGE_TAB_GROUPS,
+  tabForRequirement
 } from "../lib/change-visuals";
 import { cn } from "../lib/utils";
 import { changeApi, userApi, type ChangeDetail as ChangeDetailRow } from "../services/api";
@@ -256,6 +258,12 @@ export function ChangeDetailPage() {
   const legalMoves = (changeStateTransitions[change.state] ?? []) as ChangeState[];
   const md = master.data;
 
+  // Which tabs still owe something, mapped from the server's own list of missing requirements so
+  // the two can never disagree about what is outstanding.
+  const outstandingTabs = new Set(
+    (change.blockingForSubmit ?? []).map(tabForRequirement).filter((t): t is string => Boolean(t))
+  );
+
   return (
     <div className="grid gap-4">
       <ChangeHeader change={change} onBack={() => navigate("/app/changes")} />
@@ -306,21 +314,31 @@ export function ChangeDetailPage() {
         <CardContent className="p-3 sm:p-4">
           <Tabs defaultValue="basics">
             {/* Scrolls rather than wraps: thirteen tabs on a laptop is a two-line strip that pushes
-                the form down every time, and a strip that moves is one people lose their place in. */}
-            <TabsList className="mb-4 flex w-full flex-nowrap overflow-x-auto">
-              <TabsTrigger value="basics">Basics</TabsTrigger>
-              <TabsTrigger value="business">Business case</TabsTrigger>
-              <TabsTrigger value="impact">Impact</TabsTrigger>
-              <TabsTrigger value="risk">Risk</TabsTrigger>
-              <TabsTrigger value="implementation">Implementation</TabsTrigger>
-              <TabsTrigger value="testing">Testing</TabsTrigger>
-              <TabsTrigger value="rollback">Rollback</TabsTrigger>
-              <TabsTrigger value="release">Release</TabsTrigger>
-              <TabsTrigger value="schedule">Schedule</TabsTrigger>
-              <TabsTrigger value="comms">Comms</TabsTrigger>
-              <TabsTrigger value="runbook">Runbook</TabsTrigger>
-              <TabsTrigger value="tagging">Tickets &amp; team</TabsTrigger>
-              <TabsTrigger value="outcome">Outcome</TabsTrigger>
+                the form down every time, and a strip that moves is one people lose their place in.
+                Grouped into Define / Plan / Deliver so it reads as a sequence rather than a list of
+                thirteen equal things, and each tab holding an outstanding requirement carries a dot —
+                naming what is missing without saying where it lives is most of the way to not saying
+                it at all. */}
+            <TabsList className="mb-4 flex w-full flex-nowrap items-center gap-0.5 overflow-x-auto">
+              {CHANGE_TAB_GROUPS.map((group, groupIndex) => (
+                <Fragment key={group.label}>
+                  {groupIndex > 0 && <span aria-hidden className="mx-1 h-4 w-px shrink-0 bg-border" />}
+                  <span className="shrink-0 select-none px-1 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
+                    {group.label}
+                  </span>
+                  {group.tabs.map((tab) => (
+                    <TabsTrigger key={tab.value} value={tab.value} className="shrink-0">
+                      {tab.label}
+                      {outstandingTabs.has(tab.value) && (
+                        <span
+                          className="ml-1.5 h-1.5 w-1.5 rounded-full bg-warning"
+                          title="Something on this tab is still needed before this change can be submitted"
+                        />
+                      )}
+                    </TabsTrigger>
+                  ))}
+                </Fragment>
+              ))}
             </TabsList>
 
             <TabsContent value="basics">
@@ -680,8 +698,38 @@ function ChangeHeader({ change, onBack }: { change: ChangeDetailRow; onBack: () 
           </Link>
         </div>
       </div>
+
+      {/* The four facts somebody checks before opening a single tab: where it lands, when, who runs
+          it, and what kind of thing it is. Each lives in a tab as well — this is a reading surface,
+          not a second place to edit them. */}
+      <dl className="mt-1 flex flex-wrap gap-x-6 gap-y-1 text-xs">
+        <HeaderFact label="Environment" value={humanizeChange(change.environment)} />
+        <HeaderFact label="Window" value={formatWindow(change.plannedStart, change.plannedEnd)} />
+        <HeaderFact label="Implementer" value={change.ticket.assignee?.name ?? "Unassigned"} />
+        <HeaderFact label="Category" value={change.category?.name ?? "None"} />
+      </dl>
     </div>
   );
+}
+
+function HeaderFact({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="flex items-baseline gap-1.5">
+      <dt className="uppercase tracking-wide text-muted-foreground">{label}</dt>
+      <dd className="font-medium text-foreground">{value}</dd>
+    </div>
+  );
+}
+
+/** "not scheduled" rather than an empty cell — the absence is the useful fact when a change is
+ *  waiting on a window. */
+function formatWindow(start: string | null, end: string | null): string {
+  if (!start) return "Not scheduled";
+  const from = new Date(start);
+  const to = end ? new Date(end) : null;
+  const day = from.toLocaleDateString(undefined, { day: "numeric", month: "short" });
+  const time = (d: Date) => d.toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" });
+  return to ? `${day} ${time(from)}–${time(to)}` : `${day} ${time(from)}`;
 }
 
 const DECISION_TONE: Record<string, "success" | "destructive" | "muted"> = {
