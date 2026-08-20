@@ -1489,3 +1489,247 @@ changeRouter.delete("/:id/dependencies/:dependencyId", requirePermission(permiss
   await audit(req.user!.id, "change.dependency.delete", "ChangeRequest", change.id, { dependencyId: String(req.params.dependencyId) });
   res.status(204).end();
 });
+
+/* ------------------------------------------------------------------ *
+ * Master data — the dropdowns, editable
+ * ------------------------------------------------------------------ *
+ *
+ * WHAT: list / create / rename / enable / disable / delete for every catalogue behind a change's
+ * dropdowns — categories, sources, applications, risk parameters, SLA stages, maintenance windows
+ * and blackout periods.
+ *
+ * WHY IT EXISTS: the tables were seeded and read, but nothing could edit them. A workspace whose
+ * change categories are not ours had no way to say so short of a migration. Same gap
+ * `activity-type.controller.ts` was written to close, and deliberately the same shape — one list
+ * route readable by anyone who fills the form, writes behind the super admin.
+ *
+ * WHY DELETE IS REFUSED RATHER THAN CASCADED: a change is a record of something that happened, and
+ * retiring a category a year later must not rewrite or orphan the changes filed under it. Every
+ * delete that would strand history answers 409 with the count and points at disabling instead —
+ * which removes it from the picker and leaves the record readable. Exactly the rule activity types
+ * follow for timesheets.
+ *
+ * WHY ONE FACTORY FOR SEVEN CATALOGUES: they are the same interaction seven times. Writing them out
+ * separately is how the sixth one ends up without an audit entry.
+ */
+
+/** Everything that differs between one catalogue and the next. */
+interface CatalogueSpec {
+  /** URL segment under `/changes/config`. */
+  path: string;
+  /** Singular, for error messages people read. */
+  label: string;
+  /** The Prisma delegate. Typed loosely on purpose — seven delegates share no common interface, and
+   *  the alternative is seven copies of this file. */
+  model: any;
+  /** Zod shape for create; the PATCH schema is this, partial. */
+  shape: z.ZodRawShape;
+  orderBy: any;
+  /** How many live records would be stranded by deleting this row. Omitted where nothing points at
+   *  it, in which case delete is unconditional. */
+  usage?: (id: string, row: any) => Promise<number>;
+  /** What the stranded records ARE, for the refusal message. */
+  usageNoun?: string;
+}
+
+const CATALOGUES: CatalogueSpec[] = [
+  {
+    path: "categories",
+    label: "category",
+    model: () => prisma.changeCategory,
+    shape: {
+      name: z.string().trim().min(1).max(80),
+      color: z.string().trim().max(20).nullish(),
+      requiresSecurityReview: z.boolean().optional(),
+      isActive: z.boolean().optional(),
+      order: z.number().int().min(0).max(9999).optional()
+    },
+    orderBy: [{ order: "asc" }, { name: "asc" }],
+    usage: (id) => prisma.changeRequest.count({ where: { categoryId: id } }),
+    usageNoun: "change"
+  },
+  {
+    path: "sources",
+    label: "source",
+    model: () => prisma.changeSource,
+    shape: {
+      name: z.string().trim().min(1).max(80),
+      isActive: z.boolean().optional(),
+      order: z.number().int().min(0).max(9999).optional()
+    },
+    orderBy: [{ order: "asc" }, { name: "asc" }],
+    usage: (id) => prisma.changeRequest.count({ where: { sourceId: id } }),
+    usageNoun: "change"
+  },
+  {
+    path: "applications",
+    label: "application",
+    model: () => prisma.changeApplication,
+    shape: {
+      name: z.string().trim().min(1).max(120),
+      code: z.string().trim().max(40).nullish(),
+      ownerId: z.string().uuid().nullish(),
+      isActive: z.boolean().optional()
+    },
+    orderBy: [{ name: "asc" }],
+    usage: (id) => prisma.changeRequest.count({ where: { applicationId: id } }),
+    usageNoun: "change"
+  },
+  {
+    path: "risk-parameters",
+    label: "risk parameter",
+    model: () => prisma.changeRiskParameter,
+    shape: {
+      key: z
+        .string()
+        .trim()
+        .min(1)
+        .max(60)
+        // The scoring engine reads this key out of each change's stored `riskInputs`, so it has to be
+        // a stable identifier rather than prose. Constrained at the edge, where the mistake is cheap.
+        .regex(/^[a-zA-Z]\w*$/, "Use letters, digits and underscores, starting with a letter"),
+      label: z.string().trim().min(1).max(120),
+      weight: z.number().int().min(0).max(100).optional(),
+      isActive: z.boolean().optional(),
+      order: z.number().int().min(0).max(9999).optional()
+    },
+    orderBy: [{ order: "asc" }],
+    usage: async (_id, row) => countChangesScoredOn(row.key),
+    usageNoun: "assessed change"
+  },
+  {
+    path: "sla",
+    label: "SLA stage",
+    model: () => prisma.changeSlaConfig,
+    shape: {
+      stage: z.string().trim().min(1).max(40),
+      hours: z.number().int().min(1).max(8760).optional(),
+      warnAtPct: z.number().int().min(1).max(99).optional(),
+      isActive: z.boolean().optional()
+    },
+    orderBy: [{ stage: "asc" }]
+  },
+  {
+    path: "maintenance-windows",
+    label: "maintenance window",
+    model: () => prisma.maintenanceWindow,
+    shape: {
+      name: z.string().trim().min(1).max(120),
+      environment: z.enum(["DEVELOPMENT", "QA", "UAT", "STAGING", "PRODUCTION", "DR"]).optional(),
+      dayOfWeek: z.number().int().min(0).max(6),
+      startMinute: z.number().int().min(0).max(1439),
+      endMinute: z.number().int().min(0).max(1439),
+      isActive: z.boolean().optional()
+    },
+    orderBy: [{ dayOfWeek: "asc" }, { startMinute: "asc" }]
+  },
+  {
+    path: "blackouts",
+    label: "blackout period",
+    model: () => prisma.blackoutPeriod,
+    shape: {
+      name: z.string().trim().min(1).max(120),
+      reason: z.string().trim().max(2000).nullish(),
+      environment: z.enum(["DEVELOPMENT", "QA", "UAT", "STAGING", "PRODUCTION", "DR"]).nullish(),
+      startsAt: z.string().datetime(),
+      endsAt: z.string().datetime(),
+      isActive: z.boolean().optional()
+    },
+    orderBy: [{ startsAt: "desc" }]
+  }
+];
+
+/**
+ * How many changes were assessed against a risk parameter.
+ *
+ * WHY IT READS THE COLUMN RATHER THAN FILTERING IN SQL: `riskInputs` is a JSON map keyed by
+ * parameter key, and JSON path filtering differs between MySQL and MariaDB — this app runs on both.
+ * Selecting one column and counting in memory is portable, and this runs only when a super admin
+ * tries to delete a parameter, which is rare.
+ *
+ * The stored `riskScore` is NOT affected by deleting a parameter — the score is a column, recorded
+ * against whichever set was active when it was made. What deleting breaks is the ability to read
+ * back WHY: the answers stay in `riskInputs` under a key nothing can name any more.
+ */
+async function countChangesScoredOn(key: string): Promise<number> {
+  const rows = await prisma.changeRequest.findMany({ select: { riskInputs: true } });
+  return rows.filter((r) => {
+    const inputs = r.riskInputs as Record<string, unknown> | null;
+    return Boolean(inputs && typeof inputs === "object" && inputs[key]);
+  }).length;
+}
+
+/** Dates arrive as ISO strings and have to reach Prisma as Dates. */
+function coerceDates(body: Record<string, any>): Record<string, any> {
+  const out = { ...body };
+  for (const field of ["startsAt", "endsAt"]) {
+    if (typeof out[field] === "string") out[field] = new Date(out[field]);
+  }
+  return out;
+}
+
+for (const spec of CATALOGUES) {
+  const base = `/config/${spec.path}`;
+
+  /**
+   * Readable by anyone signed in who can see change management at all, deliberately: everybody
+   * raising a change needs these lists to fill the form. `?all=true` additionally returns disabled
+   * rows and is gated — that view is for the settings screen, and offering a retired category in the
+   * raise form is the thing disabling it was meant to stop.
+   */
+  changeRouter.get(base, async (req, res) => {
+    await assertChangeManagementEnabled();
+    const wantsAll = req.query.all === "true" && req.user!.role === "SUPER_ADMIN";
+    const rows = await spec.model().findMany({
+      where: wantsAll ? {} : { isActive: true },
+      orderBy: spec.orderBy
+    });
+    res.json(rows);
+  });
+
+  changeRouter.post(base, requireSuperAdmin, validate(z.object({ body: z.object(spec.shape).strict() })), async (req, res) => {
+    await assertChangeManagementEnabled();
+    const row = await spec.model().create({ data: coerceDates(req.body) });
+    await audit(req.user!.id, `change.${spec.path}.created`, "ChangeConfig", row.id, { path: spec.path, name: row.name ?? row.stage ?? row.key });
+    res.status(201).json(row);
+  });
+
+  changeRouter.patch(
+    `${base}/:id`,
+    requireSuperAdmin,
+    validate(z.object({ body: z.object(spec.shape).partial().strict() })),
+    async (req, res) => {
+      await assertChangeManagementEnabled();
+      const existing = await spec.model().findUnique({ where: { id: String(req.params.id) } });
+      if (!existing) throw new AppError(404, `That ${spec.label} no longer exists.`);
+      const row = await spec.model().update({ where: { id: existing.id }, data: coerceDates(req.body) });
+      await audit(req.user!.id, `change.${spec.path}.updated`, "ChangeConfig", row.id, { path: spec.path, fields: Object.keys(req.body) });
+      res.json(row);
+    }
+  );
+
+  changeRouter.delete(`${base}/:id`, requireSuperAdmin, async (req, res) => {
+    await assertChangeManagementEnabled();
+    const existing = await spec.model().findUnique({ where: { id: String(req.params.id) } });
+    if (!existing) throw new AppError(404, `That ${spec.label} no longer exists.`);
+
+    if (spec.usage) {
+      const used = await spec.usage(existing.id, existing);
+      if (used > 0) {
+        const noun = spec.usageNoun ?? "record";
+        throw new AppError(
+          409,
+          `${used} ${used === 1 ? noun : `${noun}s`} ${used === 1 ? "uses" : "use"} this ${spec.label}, so it cannot be deleted. ` +
+            `Disable it instead — it disappears from the form and the existing records stay readable.`
+        );
+      }
+    }
+
+    await spec.model().delete({ where: { id: existing.id } });
+    await audit(req.user!.id, `change.${spec.path}.deleted`, "ChangeConfig", existing.id, {
+      path: spec.path,
+      name: existing.name ?? existing.stage ?? existing.key
+    });
+    res.status(204).end();
+  });
+}

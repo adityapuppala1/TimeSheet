@@ -10,7 +10,6 @@ import type {
   ChangeBand,
   ChangeKind,
   ChangeOutcome,
-  ChangePolicyStep,
   ChangeState,
   EmailIntakeSettings,
   EmailMatchType,
@@ -5198,6 +5197,24 @@ export interface ChangeSlaVerdict {
   pctElapsed: number;
 }
 
+/** The URL segment for each editable change catalogue. */
+export type ChangeCatalogueKind =
+  | "categories"
+  | "sources"
+  | "applications"
+  | "risk-parameters"
+  | "sla"
+  | "maintenance-windows"
+  | "blackouts";
+
+/** The union of every catalogue row. Loose on purpose — one editor renders all seven, and the
+ *  columns it shows come from a per-kind field list rather than from the type. */
+export interface ChangeCatalogueRow {
+  id: string;
+  isActive: boolean;
+  [field: string]: unknown;
+}
+
 export interface ChangeDetail extends ChangeRow {
   /** Every decision ever asked for, newest round first. A change rejected and reworked opens a new
    *  round rather than overwriting the first — the objection stays on the record. */
@@ -5248,19 +5265,6 @@ export interface ChangeMetrics {
   byProject: Array<{ id: string; code: string; name: string; total: number; inFlight: number; high: number }>;
 }
 
-export interface ChangeApprovalPolicyRow {
-  id: string;
-  name: string;
-  order: number;
-  matchKind: ChangeKind | null;
-  matchRiskLevel: ChangeBand | null;
-  matchCategoryId: string | null;
-  isCatchAll: boolean;
-  isSequential: boolean;
-  quorum: number | null;
-  steps: ChangePolicyStep[];
-  enabled: boolean;
-}
 
 export interface ChangeSettingsResponse {
   settings: {
@@ -5341,6 +5345,22 @@ export const changeApi = {
       truncated: String(res.headers["x-export-truncated"] ?? "false") === "true"
     };
   },
+  /**
+   * The seven catalogues behind a change's dropdowns, editable.
+   *
+   * One set of methods rather than seven, because the server exposes them under one shape — the
+   * `kind` is the URL segment. `all` additionally returns disabled rows and is refused for anyone
+   * but a super admin: the settings screen wants them, the raise form must never offer them.
+   */
+  configList: async (kind: ChangeCatalogueKind, all = false) =>
+    (await api.get<ChangeCatalogueRow[]>(`/changes/config/${kind}`, { params: all ? { all: "true" } : undefined })).data,
+  configCreate: async (kind: ChangeCatalogueKind, body: Record<string, unknown>) =>
+    (await api.post<ChangeCatalogueRow>(`/changes/config/${kind}`, body)).data,
+  configUpdate: async (kind: ChangeCatalogueKind, id: string, body: Record<string, unknown>) =>
+    (await api.patch<ChangeCatalogueRow>(`/changes/config/${kind}/${id}`, body)).data,
+  /** Refused with a 409 and a count when live records point at it — disable instead, so the
+   *  history stays readable. Same rule activity types follow. */
+  configRemove: async (kind: ChangeCatalogueKind, id: string) => api.delete(`/changes/config/${kind}/${id}`),
   /** Scheduled work and the freeze periods it has to dodge, in one call — a calendar that fetches its
    *  bars and its no-go zones separately renders them a frame apart. */
   calendar: async (from: string, to: string) =>
@@ -5369,14 +5389,6 @@ export const changeApi = {
       applications: Array<{ id: string; name: string; code: string | null }>;
       riskParameters: Array<{ id: string; key: string; label: string; weight: number }>;
     }>("/changes/config/master-data")).data,
-  policies: {
-    list: async () => (await api.get<ChangeApprovalPolicyRow[]>("/changes/config/policies")).data,
-    create: async (payload: Record<string, unknown>) =>
-      (await api.post<ChangeApprovalPolicyRow>("/changes/config/policies", payload)).data,
-    update: async (id: string, payload: Record<string, unknown>) =>
-      (await api.patch<ChangeApprovalPolicyRow>(`/changes/config/policies/${id}`, payload)).data,
-    remove: async (id: string) => api.delete(`/changes/config/policies/${id}`)
-  },
   settings: {
     get: async () => (await api.get<ChangeSettingsResponse>("/changes/config/settings")).data,
     update: async (payload: Record<string, unknown>) => (await api.patch("/changes/config/settings", payload)).data

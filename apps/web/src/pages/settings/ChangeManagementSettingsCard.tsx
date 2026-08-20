@@ -1,24 +1,28 @@
 /**
- * WHAT: the Workspace Settings card for change management — the master switch, the approval SLA,
- * the optional face check on approvals, and the approval policies that decide who signs off what.
+ * WHAT: the Workspace Settings card for change management — the master switch, the approval SLA, the
+ * optional face check on approvals, and every catalogue behind a change's dropdowns.
  *
  * WHY THE SWITCH STILL MOVES WHEN THE PLAN DOES NOT INCLUDE THE MODULE: the same reasoning the
  * planning toggles follow. The preference is real and survives an upgrade, so saving it is honest;
  * what would be dishonest is pretending it does anything today, which is what the lock badge says.
  * The API refuses the feature either way, so nothing here can over-grant.
+ *
+ * WHAT USED TO BE HERE AND IS NOT: an "Approval policies" editor — ordered rules deciding who signs
+ * off what. That engine was never built. Approval in this module routes to the REQUESTER'S MANAGER,
+ * falling back to every active super admin, which is the requirement as stated; the policy table was
+ * dropped in the same migration that settled it. The card, its API client and its types survived the
+ * removal and went on calling `GET /changes/config/policies`, which has never existed — a 404 on
+ * every visit to this tab. Removed rather than implemented, because the simpler rule is the one
+ * that was asked for.
  */
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { changeBands, changeKinds, type ChangeBand, type ChangeKind } from "@timesheet/shared";
-import { Lock, Plus, ShieldCheck, Trash2 } from "lucide-react";
-import { useState } from "react";
-import { changeApi, type ChangeApprovalPolicyRow } from "../../services/api";
-import { humanizeChange } from "../../lib/change-visuals";
+import { Lock, ShieldCheck } from "lucide-react";
+import { changeApi } from "../../services/api";
 import { Badge } from "../../components/ui/badge";
-import { Button } from "../../components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../../components/ui/card";
+import { ChangeCatalogueEditor } from "../../components/change/ChangeCatalogueEditor";
 import { Input } from "../../components/ui/input";
 import { Label } from "../../components/ui/label";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../../components/ui/select";
 import { Skeleton } from "../../components/ui/skeleton";
 import { Switch } from "../../components/ui/switch";
 import { toast } from "../../components/ui/toaster";
@@ -123,7 +127,60 @@ export function ChangeManagementSettingsCard({ readOnly }: { readOnly: boolean }
         </CardContent>
       </Card>
 
-      <ApprovalPolicies readOnly={readOnly} maxPolicies={entitlements.maxChangePolicies} />
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-base">Dropdowns &amp; scoring</CardTitle>
+          <CardDescription>
+            Everything a change's form offers, and the two things that score it. Disabling a row takes it out of the
+            form and leaves every change already filed under it readable — which is why deleting one is refused when
+            anything still points at it.
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="grid gap-4">
+          <ChangeCatalogueEditor
+            kind="categories"
+            title="Categories"
+            description="What kind of thing is being changed. A category can also force a security approver onto the chain."
+            readOnly={readOnly}
+          />
+          <ChangeCatalogueEditor
+            kind="sources"
+            title="Sources"
+            description="What prompted the change — an incident, a project, routine maintenance."
+            readOnly={readOnly}
+          />
+          <ChangeCatalogueEditor
+            kind="applications"
+            title="Applications"
+            description="The systems changes are raised against. Used to suggest a technical owner and to spot two changes booked on the same application at once."
+            readOnly={readOnly}
+          />
+          <ChangeCatalogueEditor
+            kind="risk-parameters"
+            title="Risk parameters"
+            description="The weighted questions behind every risk score. Scores normalise against the sum of ACTIVE weights, so adding a parameter does not deflate the scale — but a complete assessment is required to submit, so each one you add is one more question every requester must answer."
+            readOnly={readOnly}
+          />
+          <ChangeCatalogueEditor
+            kind="sla"
+            title="SLA stages"
+            description="How long each stage gets, and when it starts warning rather than breaching. A disabled stage has no clock at all rather than a zero-hour one."
+            readOnly={readOnly}
+          />
+          <ChangeCatalogueEditor
+            kind="maintenance-windows"
+            title="Maintenance windows"
+            description="When change is welcome. Times are UTC minutes past midnight, so a window may cross midnight without needing a second row."
+            readOnly={readOnly}
+          />
+          <ChangeCatalogueEditor
+            kind="blackouts"
+            title="Blackout periods"
+            description="When change is refused. Drawn under the change calendar rather than filtering it, because a change scheduled inside a freeze is exactly what somebody needs to see."
+            readOnly={readOnly}
+          />
+        </CardContent>
+      </Card>
     </div>
   );
 }
@@ -132,195 +189,3 @@ export function ChangeManagementSettingsCard({ readOnly }: { readOnly: boolean }
  * Policies
  * ------------------------------------------------------------------ */
 
-function describeMatch(policy: ChangeApprovalPolicyRow): string {
-  if (policy.isCatchAll) return "Anything nothing else matched";
-  const parts: string[] = [];
-  if (policy.matchKind) parts.push(`${humanizeChange(policy.matchKind).toLowerCase()} changes`);
-  if (policy.matchRiskLevel) parts.push(`${humanizeChange(policy.matchRiskLevel).toLowerCase()} risk`);
-  return parts.length > 0 ? parts.join(" · ") : "Everything";
-}
-
-function describeSteps(policy: ChangeApprovalPolicyRow): string {
-  const labels = policy.steps.map((s) => {
-    if (s.kind === "MANAGER_OF_IMPLEMENTER") return "the implementer's manager";
-    if (s.kind === "ROLE") return `any ${s.value}`;
-    if (s.kind === "GUEST") return s.value ?? "an external approver";
-    return "a named person";
-  });
-  const joined = labels.join(policy.isSequential ? " → " : " + ");
-  return policy.quorum ? `${joined} (any ${policy.quorum})` : joined;
-}
-
-function ApprovalPolicies({ readOnly, maxPolicies }: { readOnly: boolean; maxPolicies: number }) {
-  const queryClient = useQueryClient();
-  const policies = useQuery({ queryKey: ["changes", "policies"], queryFn: changeApi.policies.list });
-  const [adding, setAdding] = useState(false);
-  const [draft, setDraft] = useState({
-    name: "",
-    matchKind: "any" as ChangeKind | "any",
-    matchRiskLevel: "any" as ChangeBand | "any",
-    approverRole: "ADMIN",
-    quorum: ""
-  });
-
-  const invalidate = () => queryClient.invalidateQueries({ queryKey: ["changes", "policies"] });
-
-  const create = useMutation({
-    mutationFn: () =>
-      changeApi.policies.create({
-        name: draft.name,
-        order: (policies.data?.length ?? 0) * 10,
-        matchKind: draft.matchKind === "any" ? null : draft.matchKind,
-        matchRiskLevel: draft.matchRiskLevel === "any" ? null : draft.matchRiskLevel,
-        isSequential: false,
-        quorum: draft.quorum ? Number(draft.quorum) : null,
-        steps: [{ kind: "ROLE", value: draft.approverRole }]
-      }),
-    onSuccess: () => {
-      toast.success("Policy added");
-      setAdding(false);
-      setDraft({ name: "", matchKind: "any", matchRiskLevel: "any", approverRole: "ADMIN", quorum: "" });
-      invalidate();
-    },
-    onError: (err: any) => toast.error("Could not add the policy", { description: serverMessage(err, "Try again.") })
-  });
-
-  const toggle = useMutation({
-    mutationFn: ({ id, enabled }: { id: string; enabled: boolean }) => changeApi.policies.update(id, { enabled }),
-    onSuccess: invalidate,
-    onError: (err: any) => toast.error("Could not update", { description: serverMessage(err, "Try again.") })
-  });
-
-  const remove = useMutation({
-    mutationFn: (id: string) => changeApi.policies.remove(id),
-    onSuccess: () => {
-      toast.success("Policy removed");
-      invalidate();
-    },
-    onError: (err: any) => toast.error("Could not remove", { description: serverMessage(err, "Try again.") })
-  });
-
-  const rows = policies.data ?? [];
-  const atCap = rows.length >= maxPolicies;
-
-  return (
-    <Card>
-      <CardHeader>
-        <CardTitle className="text-base">Approval policies</CardTitle>
-        <CardDescription>
-          Which chain a change earns. Evaluated top to bottom — <strong>the first match wins</strong> — and the
-          catch-all is the floor: it cannot be disabled, because a change with nobody to approve it is a change nobody
-          can close.
-        </CardDescription>
-      </CardHeader>
-      <CardContent className="grid gap-3">
-        {policies.isLoading ? (
-          <Skeleton className="h-24 w-full" />
-        ) : (
-          rows.map((policy) => (
-            <div key={policy.id} className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-border p-3">
-              <div className="min-w-0 grid gap-0.5">
-                <div className="flex flex-wrap items-center gap-2">
-                  <span className="font-medium">{policy.name}</span>
-                  {policy.isCatchAll && <Badge variant="secondary">Catch-all</Badge>}
-                  {!policy.enabled && <Badge variant="muted">Disabled</Badge>}
-                </div>
-                <p className="text-xs text-muted-foreground">
-                  Matches: {describeMatch(policy)} · Asks: {describeSteps(policy)}
-                </p>
-              </div>
-              <div className="flex items-center gap-2">
-                <Switch
-                  checked={policy.enabled}
-                  // A disabled catch-all would silently strand every change that reached it, so the
-                  // switch is not offered rather than offered and refused.
-                  disabled={readOnly || policy.isCatchAll || toggle.isPending}
-                  onCheckedChange={(v) => toggle.mutate({ id: policy.id, enabled: v })}
-                />
-                {!policy.isCatchAll && (
-                  <Button size="sm" variant="ghost" disabled={readOnly || remove.isPending} onClick={() => remove.mutate(policy.id)}>
-                    <Trash2 className="h-3.5 w-3.5" />
-                  </Button>
-                )}
-              </div>
-            </div>
-          ))
-        )}
-
-        {adding ? (
-          <div className="grid gap-3 rounded-lg border border-primary/30 bg-primary/5 p-3">
-            <div className="grid gap-1.5">
-              <Label htmlFor="policy-name">Name</Label>
-              <Input id="policy-name" value={draft.name} onChange={(e) => setDraft((d) => ({ ...d, name: e.target.value }))} placeholder="High-risk database changes" />
-            </div>
-            <div className="grid gap-3 sm:grid-cols-2">
-              <div className="grid gap-1.5">
-                <Label htmlFor="policy-kind">Applies to type</Label>
-                <Select value={draft.matchKind} onValueChange={(v) => setDraft((d) => ({ ...d, matchKind: v as ChangeKind | "any" }))}>
-                  <SelectTrigger id="policy-kind"><SelectValue /></SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="any">Any type</SelectItem>
-                    {changeKinds.map((k) => <SelectItem key={k} value={k}>{humanizeChange(k)}</SelectItem>)}
-                  </SelectContent>
-                </Select>
-              </div>
-              <div className="grid gap-1.5">
-                <Label htmlFor="policy-risk">Applies to risk</Label>
-                <Select value={draft.matchRiskLevel} onValueChange={(v) => setDraft((d) => ({ ...d, matchRiskLevel: v as ChangeBand | "any" }))}>
-                  <SelectTrigger id="policy-risk"><SelectValue /></SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="any">Any risk</SelectItem>
-                    {changeBands.map((b) => <SelectItem key={b} value={b}>{humanizeChange(b)}</SelectItem>)}
-                  </SelectContent>
-                </Select>
-              </div>
-            </div>
-            <div className="grid gap-3 sm:grid-cols-2">
-              <div className="grid gap-1.5">
-                <Label htmlFor="policy-role">Ask everyone with this role</Label>
-                <Select value={draft.approverRole} onValueChange={(v) => setDraft((d) => ({ ...d, approverRole: v }))}>
-                  <SelectTrigger id="policy-role"><SelectValue /></SelectTrigger>
-                  <SelectContent>
-                    {["SUPER_ADMIN", "ADMIN", "MANAGER", "TEAM_LEAD"].map((r) => (
-                      <SelectItem key={r} value={r}>{r.replace("_", " ")}</SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
-              <div className="grid gap-1.5">
-                <Label htmlFor="policy-quorum">How many must approve</Label>
-                <Input
-                  id="policy-quorum"
-                  type="number"
-                  min={1}
-                  placeholder="All of them"
-                  value={draft.quorum}
-                  onChange={(e) => setDraft((d) => ({ ...d, quorum: e.target.value }))}
-                />
-                <p className="text-xs text-muted-foreground">Leave blank to require everyone. 1 is the emergency pattern.</p>
-              </div>
-            </div>
-            <div className="flex justify-end gap-2">
-              <Button size="sm" variant="ghost" onClick={() => setAdding(false)}>Cancel</Button>
-              <Button size="sm" disabled={!draft.name.trim() || create.isPending} onClick={() => create.mutate()}>
-                Add policy
-              </Button>
-            </div>
-          </div>
-        ) : (
-          <div>
-            <Button size="sm" variant="outline" disabled={readOnly || atCap} onClick={() => setAdding(true)}>
-              <Plus className="h-3.5 w-3.5" />
-              Add policy
-            </Button>
-            {atCap && (
-              <p className="mt-2 text-xs text-muted-foreground">
-                This plan allows {maxPolicies} {maxPolicies === 1 ? "policy" : "policies"}. Upgrade to add more.
-              </p>
-            )}
-          </div>
-        )}
-      </CardContent>
-    </Card>
-  );
-}

@@ -100,11 +100,12 @@ ticket page.
   time it was scored so retuning the matrix next quarter cannot silently rewrite the risk a board
   already approved against. Two changes with the same answers cannot carry different risk because
   two people judged them differently.
-- **Approval policies decide who signs off what.** Ordered, first match wins, with a catch-all that
-  cannot be disabled — a change nobody can approve is a change nobody can close. A disabled policy
-  is *skipped*, never treated as a match, because the alternative reading of "disabled" is silent
-  auto-approval. Emergency changes get a quorum: any one of a named group settles it, rather than
-  everybody being kept waiting.
+- **One approver, named.** A change goes to the requester's manager, falling back to every active
+  super admin when somebody has none set. A super admin can decide anything, which is both the rule
+  and the escape hatch for an approver who has since left. Nobody approves their own change. There
+  is deliberately no rules engine deciding who signs off what: the requirement was "the respective
+  manager or a super admin", and a chain of ordered match-rules is a great deal of machinery for a
+  question with one answer.
 - **A change cannot be walked past its own board.** Approved and rejected are written only by a
   settled approval chain; they are absent from the transition table entirely, so no caller can
   PATCH around it. Once approved, the plan freezes — the outcome fields stay writable, because
