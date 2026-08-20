@@ -168,8 +168,10 @@ function CapabilitiesPanel() {
 
       <p className="shrink-0 border-t border-border/60 pt-3 text-[10px] leading-relaxed text-muted-foreground">
         Every capability runs as you, against the same rules the pages enforce. Reads never reach past what you could
-        open yourself; the one capability that writes produces a draft you review and submit. Results are scanned for
-        secrets before the model ever sees them, and text inside a result is treated as data, never as instructions.
+        open yourself. Anything marked <strong>writes a draft</strong> stops at a draft you review and submit; anything
+        marked <strong>publishes</strong> is visible to other people straight away, because the record it writes has no
+        draft state. Nothing here can approve anything. Results are scanned for secrets before the model ever sees them,
+        and text inside a result is treated as data, never as instructions.
       </p>
     </>
   );
@@ -191,10 +193,13 @@ function CapabilityRow({ tool }: { tool: AiChatCapability }) {
       <div className="min-w-0 flex-1">
         <div className="flex flex-wrap items-center gap-1.5">
           <code className={cn("font-mono text-xs", tool.allowed ? "text-foreground" : "text-muted-foreground")}>{tool.name}</code>
-          {/* The distinction that matters most on this page: reading is not doing. */}
+          {/* The distinction that matters most on this page: reading is not doing — and among the
+              things that DO, whether other people see the result immediately. A ticket and a comment
+              have no draft state, so labelling them "writes a draft" would promise a review step
+              that does not exist. */}
           {tool.acts && (
-            <Badge variant="warning" className="text-[9px]">
-              writes a draft
+            <Badge variant={tool.publishes ? "destructive" : "warning"} className="text-[9px]">
+              {tool.publishes ? "publishes" : "writes a draft"}
             </Badge>
           )}
           {!tool.allowed && (

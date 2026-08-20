@@ -41,6 +41,12 @@ export interface AiChatToolSpec {
   readonly access?: ToolAccess;
   /** True only in the actions registry. Surfaced in the panel so "reads" and "does" stay visibly apart. */
   readonly acts?: boolean;
+  /** True for an action whose result is immediately visible to OTHER PEOPLE — a ticket on a board, a
+   *  comment that notifies watchers. The panel must not describe these as drafts: `Ticket` and
+   *  `TicketComment` have no unpublished state, and a label promising a review step that does not
+   *  exist is worse than no label. False/absent means the action stops at a draft the person
+   *  submits themselves. */
+  readonly publishes?: boolean;
 }
 
 /** The request-shaped context every executor needs — who is asking, with which permissions. */

@@ -2,8 +2,15 @@ import * as React from "react";
 import { cva, type VariantProps } from "class-variance-authority";
 import { cn } from "../../lib/utils";
 
+// `min-w-0 break-words` is load-bearing, not tidying. An alert is almost always a grid/flex item,
+// and such an item's automatic minimum size is its MIN-CONTENT — so an alert quoting an env var,
+// a URL or a stack trace pushes its whole page wider than the viewport on a phone, dragging every
+// sibling out with it. `min-w-0` lets the box shrink to the track; `break-words` then wraps the
+// long token inside it instead of letting it hang out over the edge. Alerts are exactly where
+// unbreakable machine text (hosts, ports, file paths, error strings) shows up, so this belongs on
+// the primitive rather than being rediscovered per page.
 const alertVariants = cva(
-  "relative w-full rounded-lg border px-4 py-3 text-sm [&>svg+div]:translate-y-[-3px] [&>svg]:absolute [&>svg]:left-4 [&>svg]:top-4 [&>svg~*]:pl-7 [&>svg]:h-4 [&>svg]:w-4",
+  "relative w-full min-w-0 break-words rounded-lg border px-4 py-3 text-sm [&>svg+div]:translate-y-[-3px] [&>svg]:absolute [&>svg]:left-4 [&>svg]:top-4 [&>svg~*]:pl-7 [&>svg]:h-4 [&>svg]:w-4",
   {
     variants: {
       variant: {

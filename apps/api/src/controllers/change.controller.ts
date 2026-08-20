@@ -20,7 +20,7 @@
  * WHO MOUNTS THIS: `app.ts`, after the blanket `resolveTenant`.
  */
 import { Router } from "express";
-import type { Prisma } from "@prisma/client";
+import type { Prisma, TicketPriority } from "@prisma/client";
 import { z } from "zod";
 import {
   changeBands,
@@ -770,15 +770,31 @@ async function scoreFor(inputs: Record<string, ChangeBand | undefined>) {
   return computeRiskScore(inputs, parameters);
 }
 
-changeRouter.post("/", requirePermission(permissions.CHANGES_WRITE), validate(createSchema), async (req, res) => {
+/**
+ * Raises a change, in DRAFT — extracted from the route below so a second caller re-enters exactly
+ * these gates rather than a paraphrase of them. The Ask AI chat's `draft_change_request` is that
+ * second caller (see services/ai-chat-actions.ts).
+ *
+ * `ChangeRequest.state` is `@default(DRAFT)` and nothing here sets it, which is the property the
+ * chat action depends on: a drafted change is not submitted, so no approval policy is evaluated,
+ * no CAB slot is taken and no approver is asked for anything until a person presses Submit.
+ *
+ * `justification` is required by `createSchema` and is NOT defaulted here. A change with no stated
+ * reason is the thing this module exists to stop, and a caller that cannot supply one must fail
+ * rather than have prose invented for it.
+ */
+export async function createChangeRequest(
+  actor: { id: string; role: string; permissions: string[] },
+  body: Record<string, unknown>
+) {
   await assertChangeManagementEnabled();
   // Anyone may raise a change for a project they are on — and only for those, which is what this
   // check enforces.
-  await assertTicketVisible(req, req.body.projectId);
+  await assertTicketVisible({ user: actor }, String(body.projectId));
 
   const slaSettings = await getGlobalTicketSettings();
-  const priority = req.body.priority ?? "MEDIUM";
-  const riskInputs = (req.body.riskInputs ?? {}) as Record<string, ChangeBand>;
+  const priority = (body.priority ?? "MEDIUM") as TicketPriority;
+  const riskInputs = (body.riskInputs ?? {}) as Record<string, ChangeBand>;
   const scored = await scoreFor(riskInputs);
 
   const change = await prisma.$transaction(async (tx) => {
@@ -788,35 +804,40 @@ changeRouter.post("/", requirePermission(permissions.CHANGES_WRITE), validate(cr
       create: { name: CHANGE_TICKET_TYPE, color: "#0B6B72" }
     });
 
-    const ticketKey = await issueTicketKey(tx, req.body.projectId);
-    const changeKey = await issueChangeKey(tx, req.body.projectId);
+    const ticketKey = await issueTicketKey(tx, String(body.projectId));
+    const changeKey = await issueChangeKey(tx, String(body.projectId));
     const createdAt = new Date();
     const ticket = await tx.ticket.create({
       data: {
         key: ticketKey,
-        projectId: req.body.projectId,
-        moduleId: req.body.moduleId || null,
+        projectId: String(body.projectId),
+        moduleId: (body.moduleId as string) || null,
         type: CHANGE_TICKET_TYPE,
-        title: req.body.title,
-        description: req.body.description ?? null,
+        title: String(body.title),
+        description: (body.description as string) ?? null,
         priority,
-        reporterId: req.user!.id,
-        assigneeId: req.body.implementerId || null,
+        reporterId: actor.id,
+        assigneeId: (body.implementerId as string) || null,
         dueAt: computeTicketDueDate(createdAt, priority, slaSettings)
       }
     });
 
     const data: Record<string, unknown> = { ticketId: ticket.id, changeKey, ...scored, riskInputs };
     for (const key of Object.keys(detailShape)) {
-      if (key in req.body && !DATE_FIELDS.includes(key)) data[key] = (req.body as Record<string, unknown>)[key];
+      if (key in body && !DATE_FIELDS.includes(key)) data[key] = body[key];
     }
     for (const key of DATE_FIELDS) {
-      if (key in req.body) data[key] = req.body[key] ? new Date(req.body[key]) : null;
+      if (key in body) data[key] = body[key] ? new Date(body[key] as string) : null;
     }
     return tx.changeRequest.create({ data: data as never, include: CHANGE_INCLUDE });
   });
 
-  await audit(req.user!.id, "change.created", "ChangeRequest", change.id, { changeKey: change.changeKey });
+  await audit(actor.id, "change.created", "ChangeRequest", change.id, { changeKey: change.changeKey });
+  return change;
+}
+
+changeRouter.post("/", requirePermission(permissions.CHANGES_WRITE), validate(createSchema), async (req, res) => {
+  const change = await createChangeRequest(req.user!, req.body);
   res.status(201).json(change);
 });
 

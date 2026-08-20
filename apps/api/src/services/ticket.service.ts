@@ -10,7 +10,7 @@
  * the same "can this user touch this ticket" check) — keeping them here means the access-
  * control logic can't drift between call sites.
  */
-import type { Prisma, TicketPriority } from "@prisma/client";
+import type { Prisma, TicketPriority, TicketSource } from "@prisma/client";
 import { permissions } from "@timesheet/shared";
 import { env } from "../config/env.js";
 import { prisma } from "../config/prisma.js";
@@ -269,4 +269,142 @@ export async function applyTicketRules(ticket: {
   // so returning the matched rule here lets it reuse that exact same code path for a
   // rule-assigned ticket instead of this function duplicating it.
   return { ruleId: matched.id, ruleName: matched.name, assigneeId: matched.actionAssigneeId, notifyUserId: matched.actionNotifyUserId };
+}
+
+/* ------------------------------------------------------------------------------------------ *
+ * Raising work on someone's behalf
+ *
+ * WHY THESE LIVE HERE rather than inside the MCP catalogue that first grew them: three callers now
+ * raise a ticket or post a comment FOR a person — the MCP server (an outside client), an agent run,
+ * and the Ask AI chat. Each one has to resolve the project or ticket the caller can actually see,
+ * refuse a type the workspace does not use, sanitise prose that came out of a model, attribute the
+ * row to the human rather than to the machine, and compute the SLA clock the same way. A second
+ * copy of that list is how one caller quietly ends up with a weaker version of it.
+ *
+ * WHAT IS DELIBERATELY NOT HERE: any notion of a "draft" ticket or comment. Neither has one —
+ * `TicketStatus` starts at OPEN and `TicketComment` has no unpublished state — so both of these
+ * genuinely publish. That is the same position the MCP server took, and the reason the timesheet
+ * action next door is different: submitting a timesheet starts an approval SLA and, where the
+ * workspace requires it, an identity check. Raising a ticket starts neither. What both callers owe
+ * their model instead is the instruction never to raise work because TEXT THEY READ asked them to.
+ * ------------------------------------------------------------------------------------------ */
+
+/** The minimum an authorization helper needs: `assertTicketVisible` and the permission middleware
+ *  both read `req.user`, and nothing here reads anything else off a request. */
+export interface TicketActorContext {
+  user: { id: string; role: string; permissions: string[] };
+}
+
+/** Resolves a project by its human CODE, refusing one the caller cannot see. Codes are what a
+ *  person and a model both know; accepting an id would let a caller probe for rows by guessing
+ *  uuids — the reasoning the MCP catalogue recorded when it first needed this. */
+export async function resolveVisibleProjectByCode(ctx: TicketActorContext, code: string) {
+  const project = await prisma.project.findFirst({
+    where: { code, deletedAt: null },
+    select: { id: true, code: true, name: true, status: true }
+  });
+  if (!project) throw new AppError(404, `No project with code "${code}".`);
+  await assertTicketVisible(ctx, project.id);
+  return project;
+}
+
+/** Resolves a ticket by key and confirms the caller may see the project it lives in — the same
+ *  two-step every ticket sub-resource route performs, because a workspace-wide `tickets:view` is a
+ *  permission and not, by itself, visibility. */
+export async function resolveVisibleTicketByKey(ctx: TicketActorContext, key: string) {
+  const ticket = await prisma.ticket.findFirst({ where: { key, deletedAt: null } });
+  if (!ticket) throw new AppError(404, `No ticket with key "${key}".`);
+  await assertTicketVisible(ctx, ticket.projectId);
+  return ticket;
+}
+
+export interface CreateTicketForActorInput {
+  projectCode: string;
+  title: string;
+  type?: string;
+  description?: string | null;
+  priority?: TicketPriority;
+  /** How the row got here. Reports that separate "raised in the app" from "raised by a tool" stop
+   *  being able to tell the difference the moment this lies, so every non-UI caller names itself.
+   *  `API` for both tool callers: `CHAT` already means an inbound Slack/Teams message
+   *  (chat-intake.service.ts), and reusing it would make a Slack-raised ticket and an
+   *  assistant-raised one indistinguishable in exactly the report that exists to tell them apart. */
+  source: TicketSource;
+}
+
+/**
+ * Raises a ticket AS the acting person: they are the reporter, the SLA clock starts from now, and
+ * the description is sanitised because it may have been written by a model.
+ *
+ * Callers are responsible for the PERMISSION (`tickets:write`); this function enforces VISIBILITY,
+ * which is the part that cannot be expressed as a permission.
+ */
+export async function createTicketForActor(ctx: TicketActorContext, input: CreateTicketForActorInput) {
+  // Imported at CALL time, not module load, and not because of a cycle — there is none. This file is
+  // imported by most of the API, and `domain-events` pulls the outbound-webhook dispatcher in behind
+  // it; a static import here would put that whole subtree into every consumer's module graph,
+  // including test files that mock only what they actually exercise.
+  const { sanitizeRichText } = await import("../utils/sanitize.js");
+  const { emitDomainEvent } = await import("./domain-events.js");
+
+  const project = await resolveVisibleProjectByCode(ctx, input.projectCode);
+  const type = input.type ?? "BUG";
+  await assertValidTicketType(type);
+
+  const priority = input.priority ?? "MEDIUM";
+  const createdAt = new Date();
+  const slaSettings = await getGlobalTicketSettings();
+  const description = input.description ? sanitizeRichText(input.description) : null;
+
+  const ticket = await prisma.$transaction(async (tx) => {
+    const key = await issueTicketKey(tx, project.id);
+    return tx.ticket.create({
+      data: {
+        key,
+        projectId: project.id,
+        type,
+        title: input.title,
+        description,
+        priority,
+        source: input.source,
+        reporterId: ctx.user.id,
+        dueAt: computeTicketDueDate(createdAt, priority, slaSettings)
+      },
+      select: {
+        key: true,
+        type: true,
+        title: true,
+        priority: true,
+        status: true,
+        source: true,
+        dueAt: true,
+        resolvedAt: true,
+        closedAt: true,
+        createdAt: true,
+        updatedAt: true,
+        project: { select: { code: true, name: true } },
+        module: { select: { name: true } },
+        assignee: { select: { name: true, email: true } },
+        reporter: { select: { name: true, email: true } }
+      }
+    });
+  });
+
+  emitDomainEvent("ticket.created", { ticket });
+  return ticket;
+}
+
+/**
+ * Posts a comment AS the acting person, on a ticket they can see. Visible to everyone who can see
+ * the ticket and it notifies the ticket's participants, which is why the caller's model must be
+ * told to write it as the person would — and never because some other text asked it to.
+ */
+export async function addTicketCommentForActor(ctx: TicketActorContext, input: { ticketKey: string; body: string }) {
+  const { sanitizeRichText } = await import("../utils/sanitize.js");
+  const ticket = await resolveVisibleTicketByKey(ctx, input.ticketKey);
+  const comment = await prisma.ticketComment.create({
+    data: { ticketId: ticket.id, authorId: ctx.user.id, body: sanitizeRichText(input.body) },
+    select: { id: true, createdAt: true }
+  });
+  return { ticketKey: ticket.key, commentId: comment.id, createdAt: comment.createdAt };
 }

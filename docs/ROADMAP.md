@@ -4514,8 +4514,10 @@ tools consulted) and thumbs that feed the same golden datasets every other capab
   own `saveTimesheet` so the overlap check, assignment gate and audit row apply from one
   implementation.
 
-Measured on the seeded workspace: 31 capabilities for a super admin, 15 for a manager, 13 for an
-employee.
+Measured on the seeded workspace: 31 capabilities for a super admin, 17 for a manager, 13 for an
+employee. Counted as 30 read tools plus the one draft action, filtered through `visibleTools` with
+each seeded role's real permission list — the three earlier numbers in this file and the changelog
+were each written before the last tools landed and disagreed with one another.
 
 ### What the measuring found, and what it cost to learn
 
@@ -4544,12 +4546,152 @@ introduced by the fix for the one before:
   description. Rewording the description first had changed nothing, which is what makes this worth
   recording: the instruction was not missing, it was too far away.
 
-### Still open from this branch
+### Closed from this branch (v3.1.0, 2026-08-20)
 
-- [ ] **Ask AI has one action.** Drafting a timesheet entry is the only thing the assistant can do
-  rather than read. Raising a ticket, commenting, and drafting a change are all shaped the same way
-  (a draft somebody submits) and none are built. Not a gap so much as an unmade decision: each new
-  action widens what a sentence can cause, and the draft-only rule is what keeps that bounded.
-- [ ] **The e2e suite has not been run against this branch.** The unit suite (1416) and lint pass;
-  Playwright is configured and sharded in CI but was not run locally against V9.
+- [x] **Ask AI has one action** — now four. See below; the decision that was unmade is made.
+- [x] **The e2e suite has been run against this branch.** 373 passed, 14 skipped, across all five
+  viewport projects plus Firefox and WebKit. Five failures, every one traced to the machine rather
+  than to the product — the workings are under "what the five failures actually were" below, because
+  "environmental" is the easiest thing in the world to say and the easiest to be wrong about.
+
+## v3.1.0 — the assistant that can act, and the phone that finally fits (2026-08-20)
+
+### The three new actions, and the sentence that had to be rewritten
+
+`raise_ticket`, `comment_on_ticket` and `draft_change_request` join `log_timesheet_draft`.
+
+**The old rule did not survive contact, and pretending it had would have been the worse outcome.**
+`ai-chat-actions.ts` opened with *"EVERYTHING HERE PRODUCES A DRAFT, NEVER A SUBMISSION"*. Two of
+the three new actions cannot honour that sentence: `TicketStatus` begins at OPEN and `TicketComment`
+has no unpublished column, so raising a ticket and posting a comment genuinely publish — the board
+shows the ticket, watchers get the notification, the SLA clock starts. The available moves were to
+build a draft substrate for both, to route them through `AiProposal`, or to permit them as real
+writes and say so.
+
+`AiProposal` was the tempting one and is worth recording as rejected: its whole review surface sits
+behind `assertPlanningEnabled()`, so on a workspace with planning off a chat-created ticket would
+have become a row nobody could see or apply — a black hole that looks like a working feature.
+
+What settled it is that **the product had already answered this question**. The MCP server ships
+`create_ticket` and `add_ticket_comment` as real writes, gated on `tickets:write`, attributed to the
+acting person, prose sanitised, and each carrying an explicit instruction never to act on text it
+merely read. Re-reading the sentence the actions file opened with, its own justification is about
+*approval*: "submitting starts an approval SLA clock and, where required, an identity check". That
+is a fact about timesheets and changes, not about tickets. The rule was always narrower than the
+words it had been given.
+
+So the invariant is now stated as what it actually is — **nothing here starts or settles an
+approval** — and the two publishing actions are named `raise_ticket` and `comment_on_ticket` rather
+than dressed as drafts. A change request *does* have a `DRAFT` state, so `draft_change_request`
+keeps the word honestly and stops there.
+
+**Two gates, because one was never enough.** Each publishing action declares the permission its page
+requires, and each executor then re-checks visibility. Running them proved why that second check
+earns its place: an employee holding `tickets:write` was still refused a project they are not
+assigned to. A workspace-wide permission is a permission, not a boundary.
+
+**The checks were extracted rather than copied.** `createTicketForActor` and
+`addTicketCommentForActor` now live in `ticket.service.ts` and both the MCP handlers and the chat
+actions call them, so there is one copy of visibility, the ticket-type check, sanitisation, the SLA
+clock and the reporter attribution. `createChangeRequest` came out of `POST /changes` the same way.
+
+**A guard caught the author.** The new test asserting every publishing action tells the model never
+to act on text it read failed on `draft_change_request`, which had been written without that line.
+The test was written first and found a real omission in the same commit — which is the only
+interesting kind of test.
+
+Capabilities on the seeded workspace: 34 for a super admin, 20 for a manager, 16 for an employee.
+
+### Two phone overflows, and why neither reproduced on the machine that fixed them
+
+Both CI failures were real bugs that a developer's machine could not see.
+
+- **Workspace settings → Maintenance widened a 390px phone to 432px.** The server-health tiles are
+  grid items, and a grid item's automatic minimum size is its MIN-CONTENT — so a tile refuses to
+  shrink below the widest unbreakable string inside it, and the `truncate` on those lines never gets
+  a narrow box to clip against. The strings are machine text: a CPU model, an interface list, and
+  the filesystem path. `C:\xampp\htdocs\...` fits; `/home/runner/work/TimeSheet/TimeSheet/apps/api`
+  does not. One `min-w-0` on the tile fixes all four.
+- **Email templates reached 397px.** The four `SMTP_*` names in the "not configured" banner had no
+  whitespace between them — JSX drops whitespace containing a newline, and the chips' own `px-1`
+  padding made the gap *look* real. Measured: the alert's min-content was 355px unfixed and 149px
+  fixed. 355 fits inside a 390px phone on Windows and does not on Linux, whose monospace fallback is
+  wider, which is the entire difference between green locally and red on CI.
+
+**Diagnosis by reproduction, not by reading.** Neither failed locally, and three rounds of reasoning
+about the markup produced three wrong culprits. What actually found them was running the app against
+the CI image (`mcr.microsoft.com/playwright:v1.62.1-noble`) pointed at the local dev server, which
+reproduced both immediately. Every route was then swept at 390px and 320px on that image: clean.
+
+**Both tests now pin the environment they measure** — the longest realistic health payload, and the
+unconfigured mail transport — so neither can pass again merely because the host had a short path or
+working SMTP. The Maintenance test now fails on Windows too, verified by reverting the fix.
+
+### Seeded entries the API refused to open
+
+Three e2e failures had one cause: demo entries were seeded as `seed-entry-1`…`6` while
+`Timesheet.id` is `@default(uuid())` and every route acting on one validates it as a uuid. The
+seeded rows therefore deep-linked to `?entry=seed-entry-6`, returned *"Validation failed — id:
+Invalid uuid"* on edit, and exported to a filename built from a truncated sentinel. The tests were
+right and the fixture was wrong — worth stating, because the cheap read is that three tests are
+over-specified about an id format.
+
+### What the five failures actually were
+
+A clean re-run finished 373/378. None of the five survived being looked at:
+
+- **Two were midnight.** The run started at 23:40 and took 43 minutes. A date picker asked for
+  *"Thursday, August 20, 2026"* while the page had re-rendered into the 21st, and a test whose whole
+  subject is *"today's already-passed times"* ran in a minute when almost none had. Both pass on
+  re-run. Worth keeping: a suite long enough to cross midnight will do this again, and the tests are
+  not wrong to use the real clock — they are testing behaviour that depends on it.
+- **One was a slow machine.** The WebKit date-picker walk steps back 24 months one click at a time,
+  and each click has to settle. CI does it in 14.9s; this box needed 40s, against a dev database
+  carrying months of accumulated test rows. It passes unchanged with a longer timeout, so the test
+  was left alone — loosening a limit that CI comfortably meets would only hide the next real
+  regression.
+- **Two were a live model.** `/ai-proposals/risk/:id/refresh` and the `?narrate=true` read both hit a
+  real configured provider and exceeded the 30s client timeout. They skip on CI, where planning is
+  off — which is the same coverage hole recorded under "still open" below, seen from the other side.
+
+### The 502s, and reading your own test output
+
+The first full e2e run reported 22 failures. All of them were **502s from the Vite proxy**, caused
+by editing API source files while the suite ran: `tsx watch` restarted the server under it each
+time. The run was re-done cleanly. Recorded because a 502 in an e2e log looks exactly like a product
+bug and cost real time before the timestamps were compared.
+
+Also worth recording: the first pass at reading that log grepped for `✘` and found none, and the run
+was briefly believed green. The list reporter had written the failures in a summary block using a
+different marker. **A test suite that is believed to have passed is worse than one known to have
+failed**, so the count is now read from the summary line rather than by matching a symbol.
+
+### A capability count that disagreed with itself
+
+Three documents gave three different numbers (28/15/13, 31/15/13, 31/17/13) because each was written
+before the next tool landed. Counted from the registry with each seeded role's real permission list,
+the answer at the time was 31/17/13. All three were corrected before being superseded by 3.1.0's
+34/20/16.
+
+### Also
+
+- The Ask AI boundary tests had been **erroring on every CI run**, not passing: they read their own
+  source through a hand-rolled `href.replace("file:///", "")`, which yields `C:/x/y` on Windows and
+  `home/runner/x` — no leading slash — everywhere else. The strictest tests in the suite were
+  silently absent from Linux. Now `fileURLToPath`.
+- `deploy/helm/timesphere/Chart.yaml`'s `appVersion` had drifted to 2.5.0 against a 3.0.0 repo. CI
+  catches this; the drift has now happened three releases running, which suggests the check is doing
+  its job and the release checklist is not.
+- Every GitHub Action moved to a current major, clearing the Node 20 deprecation.
+- `apps/web/src/components/ui.tsx` deleted — a legacy shim, self-described as temporary, with zero
+  importers.
+
+### Still open
+
+- [ ] **The planning e2e specs skip in CI.** Fourteen of them guard on
+  `test.skip(!config.effective.planning)`, and the seed leaves every planning toggle `false`, so the
+  whole planning layer is untested on CI while appearing green. The budget-panel test was the one
+  that *lacked* the guard, which is the only reason this was noticed. Enabling planning in the CI
+  seed step would light all fourteen up — deliberately not done in the same change as the fix, since
+  it will surface failures that deserve their own pass.
 

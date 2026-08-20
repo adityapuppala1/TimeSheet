@@ -133,6 +133,7 @@ aiChatRouter.get("/capabilities", (req, res) => {
     description: tool.description,
     group: tool.group,
     acts: Boolean(tool.acts),
+    publishes: Boolean(tool.publishes),
     allowed: canUseTool(tool, actor),
     requires: accessLabel(tool)
   });

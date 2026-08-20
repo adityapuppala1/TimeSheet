@@ -484,8 +484,29 @@ export async function seedTenant(client: PrismaClient, options: SeedTenantOption
       { daysAgo: 1, activity: "Documentation", task: "Write up the escalation matrix for the runbook", start: "09:45", end: "11:45", hours: 2, status: "DRAFT", reviewer: null }
     ] as const;
 
+    /**
+     * Seeded entry ids are REAL uuids, not readable sentinels like `seed-entry-1`.
+     *
+     * `Timesheet.id` is `@default(uuid())`, so every entry a person creates is a uuid — and the
+     * routes that act on one (`PUT /timesheets/:id`, the correction endpoint, the per-entry export)
+     * validate `:id` with `z.string().uuid()`. A readable sentinel therefore seeds demo rows the
+     * API itself refuses to touch: opening one from history deep-links to `?entry=seed-entry-6`,
+     * editing it returns `422 Validation failed — id: Invalid uuid`, and the single-entry export
+     * names the file after a truncated sentinel. Demo data you cannot click on is worse than none,
+     * because the failure looks like a broken feature rather than a broken fixture.
+     *
+     * Still deterministic, so the upsert stays idempotent and the specs can address a known row:
+     * a fixed prefix plus the index, shaped as a valid v4 uuid (version nibble `4`, variant `8`).
+     */
+    const seedEntryId = (n: number) => `5eed0000-0000-4000-8000-${String(n).padStart(12, "0")}`;
+
+    // Workspaces seeded before that change carry the old sentinel rows. Left in place they would
+    // sit alongside the uuid ones as permanent un-editable duplicates, so they are retired here —
+    // scoped to the `seed-entry-` prefix, which only this seed has ever produced.
+    await client.timesheet.deleteMany({ where: { id: { startsWith: "seed-entry-" } } });
+
     for (const [index, e] of demoEntries.entries()) {
-      const id = `seed-entry-${index + 1}`;
+      const id = seedEntryId(index + 1);
       await client.timesheet.upsert({
         where: { id },
         update: {},

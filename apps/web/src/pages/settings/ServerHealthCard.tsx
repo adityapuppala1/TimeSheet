@@ -57,9 +57,16 @@ function usageBarClass(percent: number): string {
   return "";
 }
 
+// `min-w-0` is what makes the `truncate` inside these tiles actually work. A tile is a GRID ITEM,
+// and a grid item's automatic minimum size is its min-content — so the tile refuses to shrink below
+// the widest unbreakable string it contains, and `truncate` never gets a narrow box to clip against.
+// Everything on this card is machine text with no break opportunities: a CPU model, a filesystem
+// path, an interface list. The disk path is the sharp end — `C:\xampp\htdocs\...` on a dev box is
+// short enough to fit, `/home/runner/work/TimeSheet/TimeSheet/apps/api` on a CI runner is not, which
+// is exactly how this shipped looking fine and widened a 390px phone to 432px on a Linux host.
 function MetricTile({ icon, label, children }: { icon: ReactNode; label: string; children: ReactNode }) {
   return (
-    <div className="rounded-lg border p-4">
+    <div className="min-w-0 rounded-lg border p-4">
       <p className="mb-2 flex items-center gap-1.5 text-xs font-medium uppercase tracking-wider text-muted-foreground">
         {icon} {label}
       </p>

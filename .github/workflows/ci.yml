@@ -58,9 +58,9 @@ jobs:
       TIMESPHERE_INGEST_URL: ${{ secrets.TIMESPHERE_INGEST_URL }}
       TIMESPHERE_ORG_SLUG: ${{ secrets.TIMESPHERE_ORG_SLUG }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: ${{ env.NODE_VERSION }}
           cache: npm
@@ -210,8 +210,8 @@ jobs:
       APP_BASE_URL: "http://localhost:5173"
       DEFAULT_ORG_SLUG: "default"
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
         with:
           node-version: ${{ env.NODE_VERSION }}
           cache: npm
@@ -254,7 +254,7 @@ jobs:
 
       - name: Cache Playwright browsers
         id: pw-cache
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: ~/.cache/ms-playwright
           key: playwright-${{ runner.os }}-${{ steps.pw.outputs.version }}
@@ -277,7 +277,7 @@ jobs:
 
       - name: Upload Playwright report
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           # Per-shard name: four jobs uploading one artifact name is a 409 on the second.
           name: playwright-report-shard-${{ matrix.shard }}
@@ -334,9 +334,9 @@ jobs:
       REPO: ${{ github.repository }}
       BRANCH: ${{ github.ref_name }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: ${{ env.NODE_VERSION }}
           cache: npm
@@ -347,12 +347,12 @@ jobs:
       # --- SAST: CodeQL, output kept local (upload: false) since results go to TimeSphere, not
       #     GitHub's own code-scanning tab — this repo may not have GitHub Advanced Security.
       - name: Initialize CodeQL
-        uses: github/codeql-action/init@v3
+        uses: github/codeql-action/init@v4
         with:
           languages: javascript-typescript
 
       - name: Run CodeQL analysis
-        uses: github/codeql-action/analyze@v3
+        uses: github/codeql-action/analyze@v4
         with:
           output: codeql-results
           upload: false
@@ -421,9 +421,9 @@ jobs:
       DATABASE_URL: "mysql://unused:unused@localhost:3306/unused"
       CONTROL_DATABASE_URL: "mysql://unused:unused@localhost:3306/unused"
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: ${{ env.NODE_VERSION }}
           cache: npm
@@ -449,7 +449,7 @@ jobs:
     name: Validate installer scripts
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Syntax-check install.sh and update.sh (bash -n, no execution)
         run: bash -n install.sh && bash -n update.sh
@@ -467,9 +467,9 @@ jobs:
     name: Validate Helm chart + compose files
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: azure/setup-helm@v4
+      - uses: azure/setup-helm@v5
 
       # The label a cluster reports as app.kubernetes.io/version comes from Chart.yaml's
       # appVersion, so a stale value makes `kubectl get deploy -L app.kubernetes.io/version` lie
@@ -564,7 +564,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 25
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Run the installer exactly as a customer would
         run: TS_AUTO=1 ./install.sh
@@ -579,7 +579,7 @@ jobs:
     name: Validate install.ps1 (PowerShell parser, no execution)
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Parse install.ps1 without running it (PowerShell 7 / pwsh)
         shell: pwsh

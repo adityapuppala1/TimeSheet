@@ -34,18 +34,17 @@ import { requirePermission, type RequestUser } from "../middleware/auth.js";
 import { AppError } from "../middleware/error.js";
 import { audit } from "../services/audit.service.js";
 import { saveTimesheet } from "../controllers/timesheet.controller.js";
-import { emitDomainEvent, emitTicketStatusChanged } from "./domain-events.js";
+import { emitTicketStatusChanged } from "./domain-events.js";
 import {
-  assertTicketVisible,
-  assertValidTicketType,
+  addTicketCommentForActor,
   canWorkOnTicket,
-  computeTicketDueDate,
-  getGlobalTicketSettings,
-  issueTicketKey,
+  createTicketForActor,
+  resolveVisibleProjectByCode,
+  resolveVisibleTicketByKey,
   ticketProjectScope
 } from "./ticket.service.js";
 import { buildTimesheetReport, GROUP_BY_KEYS, type GroupByKey } from "./timesheet-report.service.js";
-import { sanitizeRichText, htmlToText } from "../utils/sanitize.js";
+import { htmlToText } from "../utils/sanitize.js";
 
 /** The subset of GlobalMcpSettings the enablement rules read. Structural rather than the Prisma
  *  row type so tests can build one without a database. */
@@ -147,29 +146,6 @@ const TICKET_SELECT = {
 
 const ISO_DATE = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "Use yyyy-mm-dd");
 const CLOCK_TIME = z.string().regex(/^\d{2}:\d{2}$/, "Use 24-hour HH:MM");
-
-/** Resolves a project by its human key (e.g. "WEB"), refusing one the caller cannot see. Project
- *  CODES are what a person and a model both know; ids are not, and accepting an id would let a
- *  caller probe for rows by guessing uuids. */
-async function resolveVisibleProject(ctx: McpToolContext, code: string) {
-  const project = await prisma.project.findFirst({
-    where: { code, deletedAt: null },
-    select: { id: true, code: true, name: true, status: true }
-  });
-  if (!project) throw new AppError(404, `No project with code "${code}".`);
-  await assertTicketVisible(ctx.req, project.id);
-  return project;
-}
-
-/** Resolves a ticket by key and confirms the caller may see the project it lives in — the same
- *  two-step every ticket sub-resource route in ticket.controller.ts performs, for the same reason
- *  (a coarse tickets:view permission is held workspace-wide and is not, by itself, visibility). */
-async function resolveVisibleTicket(ctx: McpToolContext, key: string) {
-  const ticket = await prisma.ticket.findFirst({ where: { key, deletedAt: null } });
-  if (!ticket) throw new AppError(404, `No ticket with key "${key}".`);
-  await assertTicketVisible(ctx.req, ticket.projectId);
-  return ticket;
-}
 
 /** Restricts a ticket query to the projects this user may see. Returns null when the caller is
  *  unrestricted (privileged roles), meaning "add no filter". */
@@ -273,7 +249,7 @@ const TOOLS: readonly McpToolRegistration[] = [
     destructive: false,
     untrustedContent: true,
     handler: async (ctx, args) => {
-      const found = await resolveVisibleTicket(ctx, args.key);
+      const found = await resolveVisibleTicketByKey(ctx, args.key);
       const ticket = await prisma.ticket.findUniqueOrThrow({
         where: { id: found.id },
         select: { ...TICKET_SELECT, description: true, externalReporterEmail: true, externalReporterName: true }
@@ -487,7 +463,7 @@ const TOOLS: readonly McpToolRegistration[] = [
     destructive: false,
     untrustedContent: false,
     handler: async (ctx, args) => {
-      const project = args.projectCode ? await resolveVisibleProject(ctx, args.projectCode) : null;
+      const project = args.projectCode ? await resolveVisibleProjectByCode(ctx, args.projectCode) : null;
       // The service every REST export already runs through, so an MCP report and a downloaded
       // spreadsheet for the same filters cannot disagree — see timesheet-report.service.ts's
       // header for why that mattered enough to become a service.
@@ -537,7 +513,7 @@ const TOOLS: readonly McpToolRegistration[] = [
     destructive: false,
     untrustedContent: false,
     handler: async (ctx, args) => {
-      const project = await resolveVisibleProject(ctx, args.projectCode);
+      const project = await resolveVisibleProjectByCode(ctx, args.projectCode);
       const module = await prisma.projectModule.findFirst({
         where: { projectId: project.id, name: args.moduleName },
         select: { id: true }
@@ -556,7 +532,7 @@ const TOOLS: readonly McpToolRegistration[] = [
 
       let ticketId: string | undefined;
       if (args.ticketKey) {
-        const ticket = await resolveVisibleTicket(ctx, args.ticketKey);
+        const ticket = await resolveVisibleTicketByKey(ctx, args.ticketKey);
         ticketId = ticket.id;
       }
 
@@ -602,37 +578,20 @@ const TOOLS: readonly McpToolRegistration[] = [
     destructive: false,
     untrustedContent: false,
     handler: async (ctx, args) => {
-      const project = await resolveVisibleProject(ctx, args.projectCode);
-      const type = args.type ?? "BUG";
-      await assertValidTicketType(type);
-
-      const priority = args.priority ?? "MEDIUM";
-      const createdAt = new Date();
-      const slaSettings = await getGlobalTicketSettings();
-      const description = args.description ? sanitizeRichText(args.description) : null;
-
-      const ticket = await prisma.$transaction(async (tx) => {
-        const key = await issueTicketKey(tx, project.id);
-        return tx.ticket.create({
-          data: {
-            key,
-            projectId: project.id,
-            type,
-            title: args.title,
-            description,
-            priority,
-            // API, not MANUAL: the reporter really did author this, but it arrived through an
-            // integration, and reports that split "raised in the app" from "raised by a tool"
-            // stop being able to tell the difference the moment this lies.
-            source: "API",
-            reporterId: ctx.user.id,
-            dueAt: computeTicketDueDate(createdAt, priority, slaSettings)
-          },
-          select: TICKET_SELECT
-        });
+      // Shared with the Ask AI chat's `raise_ticket` (ticket.service.ts). Visibility, the ticket-type
+      // check, sanitisation, the SLA clock, the reporter attribution and the domain event all live
+      // in one place so a second caller cannot end up with a weaker version of any of them.
+      // `source: "API"`, not MANUAL: the reporter really did author this, but it arrived through an
+      // integration, and reports that split "raised in the app" from "raised by a tool" stop being
+      // able to tell the difference the moment this lies.
+      const ticket = await createTicketForActor(ctx, {
+        projectCode: args.projectCode,
+        title: args.title,
+        type: args.type,
+        description: args.description,
+        priority: args.priority,
+        source: "API"
       });
-
-      emitDomainEvent("ticket.created", { ticket });
       return { created: true, ...ticket };
     }
   },
@@ -654,12 +613,9 @@ const TOOLS: readonly McpToolRegistration[] = [
     destructive: false,
     untrustedContent: false,
     handler: async (ctx, args) => {
-      const ticket = await resolveVisibleTicket(ctx, args.ticketKey);
-      const comment = await prisma.ticketComment.create({
-        data: { ticketId: ticket.id, authorId: ctx.user.id, body: sanitizeRichText(args.body) },
-        select: { id: true, createdAt: true }
-      });
-      return { created: true, ticket: ticket.key, commentId: comment.id, createdAt: comment.createdAt };
+      // Shared with the Ask AI chat's `comment_on_ticket` — see createTicketForActor's note above.
+      const posted = await addTicketCommentForActor(ctx, { ticketKey: args.ticketKey, body: args.body });
+      return { created: true, ticket: posted.ticketKey, commentId: posted.commentId, createdAt: posted.createdAt };
     }
   },
 
@@ -682,7 +638,7 @@ const TOOLS: readonly McpToolRegistration[] = [
     destructive: true,
     untrustedContent: false,
     handler: async (ctx, args) => {
-      const existing = await resolveVisibleTicket(ctx, args.ticketKey);
+      const existing = await resolveVisibleTicketByKey(ctx, args.ticketKey);
       // Visibility is not permission to edit: ticket.controller.ts's own status route applies
       // this same reporter/assignee/collaborator-or-manager predicate on top of tickets:write.
       if (!(await canWorkOnTicket(ctx.req, existing))) {

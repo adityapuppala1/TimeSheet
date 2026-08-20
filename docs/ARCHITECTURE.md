@@ -629,10 +629,21 @@ inside a ticket, would reach a real query. Tool output then passes `sanitiseTool
 applies the same secret masking the AI capture layer uses and one shared size cap.
 
 **Actions are a third registry with a different contract.** `ai-chat-actions.ts` holds what the
-assistant may DO, and everything in it produces a **draft, never a submission** — submitting starts an
-approval SLA clock and, where required, an identity check, and an assistant must not trigger either
-from a sentence. Its one action calls the timesheet form's own `saveTimesheet`, so every validation
-applies from one implementation.
+assistant may DO: `log_timesheet_draft`, `raise_ticket`, `comment_on_ticket` and
+`draft_change_request`. The invariant is that **nothing here starts or settles an approval**. Where
+the record has a draft state the action uses it and stops — a timesheet is saved DRAFT, a change is
+raised DRAFT — because submitting either starts an approval SLA clock and, where required, an
+identity check, and an assistant must not trigger those from a sentence. Where there is no draft
+state the action says so instead of borrowing the word: a ticket starts at OPEN and a comment
+notifies its watchers, so those two publish, on the same terms the MCP server already publishes
+them.
+
+**Every action delegates its validation.** `saveTimesheet` for time, `createTicketForActor` /
+`addTicketCommentForActor` in `ticket.service.ts` for tickets and comments — shared with the MCP
+handlers so the two callers cannot drift — and `createChangeRequest`, the extracted body of
+`POST /changes`. Each publishing action declares the permission its page requires AND re-checks
+that the caller can see the project or ticket, because a workspace-wide permission is not a
+boundary.
 
 Two behaviours here were established by measurement and are load-bearing rather than stylistic;
 both are recorded in `docs/ROADMAP.md` under V9. **Only exchanges that consulted a tool become

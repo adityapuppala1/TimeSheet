@@ -57,6 +57,14 @@ CAB tool holds none of that.
 > one has been sitting on its old schema without any update saying so. After upgrading:
 > `docker compose exec api npm run migrate:tenants -w apps/api`.
 >
+> **v3.1.0 — the assistant can act, on a short leash.** Ask AI gained three actions beyond drafting
+> time: raising a ticket, commenting on one, and drafting a change request. Each is offered only to
+> someone holding the permission the matching button requires, and each re-checks that they can see
+> the project or ticket before it writes. Raising a ticket and commenting **publish** — neither has a
+> draft state — and the assistant says so rather than calling them drafts; a change request is raised
+> as a DRAFT and stops there. **Nothing can start or settle an approval, at any autonomy level.** No
+> migrations, no new environment variables, nothing to switch on.
+>
 > **v3.0.0 — change management, and nothing breaks.** A major version for an *additive* release: no
 > route changed shape, no column was dropped, no default moved, and an installation that never turns
 > the module on behaves exactly as 2.5.0 did. The number moved because the product gained a
@@ -102,19 +110,19 @@ CAB tool holds none of that.
 
 ## By the numbers
 
-Counted from the tree at v3.0.0, not estimated — regenerate any of these with the one-liners in
+Counted from the tree at v3.1.0, not estimated — regenerate any of these with the one-liners in
 [CONTRIBUTING.md](CONTRIBUTING.md#regenerating-readmes-by-the-numbers) rather than trusting a figure
 that looks stale.
 
 | | |
 |---|---|
-| REST routes | **410** across 49 controllers |
-| Prisma models / enums | **122** / 41, plus **91** tenant migrations and 7 control-plane migrations |
-| Services / cron workers | **91** / 23 |
-| Web pages | **62** |
-| Unit tests | **1,380** across 114 files (`npm test -w apps/api`) |
+| REST routes | **422** across 50 controllers |
+| Prisma models / enums | **123** / 41, plus **96** tenant migrations and 7 control-plane migrations |
+| Services / cron workers | **96** / 23 |
+| Web pages | **63** |
+| Unit tests | **1,419** across 118 files (`npm test -w apps/api`) |
 | End-to-end specs | **28** Playwright specs, run across desktop, phone, tablet, laptop, 4K, Firefox and WebKit |
-| Editable email templates | **35**, every one of them with preview, test send, revert and per-template delivery analytics |
+| Editable email templates | **22**, every one of them with preview, test send, revert and per-template delivery analytics |
 | RBAC permissions | **38**, over 5 roles |
 | Lint | **0 errors**, warnings tracked as a baseline rather than driven to zero — see below |
 

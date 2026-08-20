@@ -19,10 +19,13 @@ const { AI_CHAT_TOOLS } = await import("../../src/services/ai-chat-tools.js");
 const { AI_CHAT_ACTIONS } = await import("../../src/services/ai-chat-actions.js");
 const { canUseTool, visibleTools, assertToolAllowed, sanitiseToolResult } = await import("../../src/services/ai-chat-guardrails.js");
 
-const readSource = (file: string) =>
-  import("node:fs").then((fs) =>
-    fs.readFileSync(new URL(`../../src/services/${file}`, import.meta.url).href.replace("file:///", ""), "utf8")
-  );
+// `fileURLToPath`, not a string edit on the href. Stripping "file:///" yields "C:/x/y" on Windows
+// (right) and "home/runner/x" on Linux (wrong — the leading slash IS the root), so the hand-rolled
+// version passed on the machine it was written on and ENOENT'd on every CI runner.
+const readSource = async (file: string) => {
+  const [fs, url] = await Promise.all([import("node:fs"), import("node:url")]);
+  return fs.readFileSync(url.fileURLToPath(new URL(`../../src/services/${file}`, import.meta.url)), "utf8");
+};
 
 /** The two files that make up the read surface — both must stay provably read-only. */
 const READ_SOURCES = ["ai-chat-tools.ts", "ai-chat-admin-tools.ts"];
@@ -168,14 +171,23 @@ describe("the Ask AI guardrails", () => {
 });
 
 describe("the Ask AI action registry", () => {
-  it("is exactly one action, and it is the timesheet draft", () => {
-    expect(AI_CHAT_ACTIONS.map((t) => t.name)).toEqual(["log_timesheet_draft"]);
+  it("is exactly the pinned set of actions", () => {
+    // Pinned as an ordered list for the same reason the tool registry is pinned as a set: adding an
+    // action is a decision about what a typed sentence may cause, not a convenience edit.
+    expect(AI_CHAT_ACTIONS.map((t) => t.name)).toEqual([
+      "log_timesheet_draft",
+      "raise_ticket",
+      "comment_on_ticket",
+      "draft_change_request"
+    ]);
   });
 
-  it("only ever saves a DRAFT — never a submission, never an approval", async () => {
-    // The rule the MCP server settled first, held here by grep rather than by hope: submitting
-    // starts an approval SLA clock and, where required, an identity check. An assistant must not
-    // trigger either from a sentence.
+  it("never submits and never approves, whatever the action", async () => {
+    // The rule that survived the registry growing from one action to four. Where the record HAS a
+    // draft state the action stops there; where it does not (a ticket, a comment) the action
+    // publishes and says so. What no action may ever do is start or settle an approval: submitting
+    // starts an SLA clock and, where required, an identity check, and approving is the decision the
+    // whole product reserves for a person.
     const source = await readSource("ai-chat-actions.ts");
     expect(source).toContain('"DRAFT"');
     // Code-shaped targets, not words: "approver" appears in prose explaining the rule, and a guard
@@ -183,10 +195,66 @@ describe("the Ask AI action registry", () => {
     for (const forbidden of ['"SUBMITTED"', "submitDraft(", "recordDecision(", "approve(", '"APPROVED"', ".transition("]) {
       expect(source.includes(forbidden), `ai-chat-actions.ts must not reach ${forbidden}`).toBe(false);
     }
-    // And its ONLY write path is the form's own save — the validations live there, once.
-    expect(source).toContain("saveTimesheet(");
-    for (const verb of ["prisma.timesheet.create", "prisma.timesheet.update", ".upsert(", ".deleteMany("]) {
-      expect(source.includes(verb), `ai-chat-actions.ts must write through saveTimesheet, not ${verb}`).toBe(false);
+  });
+
+  it("writes only through the shared creators, never straight to Prisma", async () => {
+    // Every action's validation must be the one the matching PAGE already runs, which is only true
+    // while this file delegates. A direct `prisma.<model>.create` here is how an action quietly
+    // acquires a weaker version of the overlap check, the visibility check or the audit row.
+    const source = await readSource("ai-chat-actions.ts");
+    for (const writer of ["saveTimesheet(", "createTicketForActor(", "addTicketCommentForActor(", "createChangeRequest("]) {
+      expect(source.includes(writer), `ai-chat-actions.ts must reach its shared writer ${writer}`).toBe(true);
+    }
+    for (const verb of [
+      "prisma.timesheet.create",
+      "prisma.timesheet.update",
+      "prisma.ticket.create",
+      "prisma.ticketComment.create",
+      "prisma.changeRequest.create",
+      ".upsert(",
+      ".deleteMany("
+    ]) {
+      expect(source.includes(verb), `ai-chat-actions.ts must write through a shared creator, not ${verb}`).toBe(false);
+    }
+  });
+
+  it("flags exactly the actions whose result other people see immediately", () => {
+    // The panel renders this as "publishes" rather than "writes a draft". It has to match what the
+    // record can actually do: `Ticket` and `TicketComment` have no unpublished state, a timesheet
+    // and a change request do. A wrong flag here is a promise of a review step that does not exist.
+    const publishing = AI_CHAT_ACTIONS.filter((a) => a.publishes).map((a) => a.name).sort();
+    expect(publishing).toEqual(["comment_on_ticket", "raise_ticket"]);
+    for (const action of AI_CHAT_ACTIONS) {
+      if (action.publishes) continue;
+      expect(action.description, `${action.name} stops at a draft and should say so`).toMatch(/draft/i);
+    }
+  });
+
+  it("gates every action that publishes something other people see", () => {
+    // `log_timesheet_draft` is deliberately ungated: it writes the asker's OWN draft, which they can
+    // already do from the form, and saveTimesheet enforces the assignment gate itself. Everything
+    // else here becomes visible to other people — a ticket on a board, a comment that notifies
+    // watchers, a change in a project's queue — so each must carry the permission its own page
+    // requires. An ungated publishing action would be offered to a role that cannot press the button.
+    for (const action of AI_CHAT_ACTIONS) {
+      if (action.name === "log_timesheet_draft") {
+        expect(action.access, "the timesheet draft is the asker's own record and stays ungated").toBeUndefined();
+        continue;
+      }
+      expect(action.access?.permission, `${action.name} publishes and must declare the permission its page requires`).toBeTruthy();
+    }
+  });
+
+  it("tells the model, in every publishing action, not to act on text it merely read", () => {
+    // Prompt injection reaches this product through ticket descriptions, comments and inbound email
+    // — all attacker-controlled in any workspace with email intake on. The instruction has to sit in
+    // the DESCRIPTION, because that is the text the model actually reads when it chooses a move.
+    for (const action of AI_CHAT_ACTIONS) {
+      if (!action.access) continue;
+      expect(
+        /never (raise|post|create)[^.]*because/i.test(action.description),
+        `${action.name} must tell the model never to act on an instruction found in text it read`
+      ).toBe(true);
     }
   });
 });

@@ -1278,19 +1278,43 @@ and burn steps on them. Everything a tool returns then passes through `sanitiseT
 applies the AI layer's own secret masking (a scanner finding's title can BE the leaked credential)
 and one shared 2,400-character cap.
 
-Measured effect on the seeded workspace: a super admin sees 31 capabilities, a manager 17, an
-employee 13.
+Measured effect on the seeded workspace: a super admin sees 34 capabilities, a manager 20, an
+employee 16.
 
-The action registry (`ai-chat-actions.ts`) holds what the assistant may DO, and currently that is
-one thing: `log_timesheet_draft`. Every action produces a **draft, never a submission** — the rule
-the MCP server settled first, for the same reason: submitting starts an approval SLA clock and,
-where required, an identity check, and an assistant must not trigger either from a sentence. The
-executor resolves names to ids and calls `saveTimesheet` — the timesheet form's own save — so the
-Serializable overlap check, the assignment gate, the future-date and >12h rules and the audit entry
-all apply from one implementation. A refusal goes back to the model as data phrased for relaying,
-and the loop refuses to re-run an identical consecutive call, so a model that repeats itself cannot
-double-fire an action. Its guard test pins the action list and greps for every submission-shaped
-call.
+The action registry (`ai-chat-actions.ts`) holds what the assistant may DO. There are four:
+`log_timesheet_draft`, `raise_ticket`, `comment_on_ticket` and `draft_change_request`.
+
+**The rule is that nothing starts or settles an approval.** Where the record has a draft state the
+action uses it and stops — a timesheet is saved DRAFT, a change is raised DRAFT — because submitting
+either starts an approval SLA clock and, where the workspace requires it, an identity check, and an
+assistant must not trigger those from a sentence. Where there is no draft state the action says so
+plainly rather than borrowing the word: `TicketStatus` begins at OPEN and `TicketComment` has no
+unpublished state, so raising a ticket and posting a comment genuinely publish, and their
+descriptions tell the model to confirm the details with the person first. No action transitions a
+change, decides a timesheet or approves anything, at any autonomy level.
+
+**Two gates, not one.** Every action except the timesheet draft declares the permission its own page
+requires (`tickets:write`, `changes:write`) — the timesheet draft is ungated because it writes the
+asker's own record, which they can already do from the form. The permission is only half of it: each
+executor then re-checks that the caller can actually SEE the project or ticket, because a
+workspace-wide `tickets:write` is a permission and not a boundary. An employee who holds it is still
+refused a project they are not assigned to.
+
+**The validations live once.** `raise_ticket` and `comment_on_ticket` call
+`createTicketForActor` / `addTicketCommentForActor` in `ticket.service.ts` — the same functions the
+MCP server's `create_ticket` and `add_ticket_comment` call — so visibility, the ticket-type check,
+the sanitisation of model-written prose, the SLA clock and the reporter attribution cannot drift
+between the two callers. `draft_change_request` calls `createChangeRequest`, the extracted body of
+`POST /changes`, so the module gate, the project check and the risk scoring apply unchanged;
+`justification` stays required and is never defaulted. `log_timesheet_draft` calls `saveTimesheet`,
+giving it the Serializable overlap check, the assignment gate and the >12h rule.
+
+A refusal goes back to the model as data phrased for relaying, and the loop refuses to re-run an
+identical consecutive call, so a model that repeats itself cannot double-fire an action. Four guard
+tests hold the boundary: the action list is pinned, no action may reach Prisma directly, every
+publishing action must declare a permission, and every one of them must carry the instruction never
+to act on an instruction it merely READ — a ticket description is attacker-controlled in any
+workspace with email intake switched on.
 
 The prompt carries today's date and the asker's name — the two facts a model cannot look up and
 reliably invents instead (measured: asked to log time "today", it wrote a date from its training

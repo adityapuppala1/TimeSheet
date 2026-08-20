@@ -7,9 +7,75 @@ user of a running installation.
 
 ## Unreleased
 
-Landed after v3.0.0 was tagged. The parser that feeds the in-app What's-new page ignores this section
-until it gains a version number, on purpose — an installation must never render history for a version
-that does not exist yet.
+Nothing yet. The parser that feeds the in-app What's-new page ignores this section until it gains a
+version number, on purpose — an installation must never render history for a version that does not
+exist yet.
+
+## 3.1.0 — the assistant that can act, and the phone that finally fits — 2026-08-20
+
+### ✨ Ask AI can now do four things, not one
+
+- **Raise a ticket, comment on one, and draft a change request** — alongside the timesheet draft it
+  could already write. Each is offered only to someone who holds the permission the matching button
+  requires (`tickets:write`, `changes:write`), and each re-checks that you can actually see the
+  project or ticket before it writes: a workspace-wide permission is a permission, not a boundary,
+  and holding one does not put you on a project.
+- **Two of them publish, and they say so rather than pretending otherwise.** A ticket has no draft
+  state and neither does a comment — `TicketStatus` begins at OPEN, and a posted comment notifies
+  everyone watching. So the assistant tells you that up front and is told to confirm the details
+  with you first, instead of the wording being softened to "draft" to keep a slogan intact. A change
+  request *does* have a draft state, so it is raised as a DRAFT and stops there.
+- **Nothing here starts or settles an approval, at any autonomy level.** A drafted change asks no
+  approver for anything and takes no CAB slot until you press Submit. No action transitions a
+  change, decides a timesheet, or approves a request — the same hole the workflow action list
+  carries on purpose.
+- **A change with no reason is still refused.** `justification` is required, and if you cannot give
+  one the assistant says the change cannot be raised rather than writing a reason for you. This is
+  the omission rule from 3.0.0, now enforced in code rather than requested of the model.
+- **The checks live in one place.** Raising a ticket and posting a comment now run through the same
+  functions the MCP server uses, so the visibility check, the ticket-type check, the sanitisation of
+  model-written prose, the SLA clock and the reporter attribution cannot drift between the two. Four
+  tests hold the boundary: the action list is pinned, no action may reach Prisma directly, every
+  publishing action must declare its permission, and every one of them must carry the instruction
+  never to act on an instruction it merely *read* in a ticket or an email.
+- On the seeded workspace a super admin now sees 34 capabilities, a manager 20, an employee 16.
+
+### 🐛 Two ways a phone could be pushed sideways, both fixed
+
+- **Workspace settings → Maintenance no longer widens the page.** The server-health tiles print
+  machine text with no break opportunities in it — a CPU model, a filesystem path, a network
+  interface list. Each tile is a grid item, and a grid item refuses to shrink below its widest
+  unbreakable string, so the `truncate` on those lines never got a narrow box to clip against and
+  the whole page grew instead. On a developer's machine the path is short enough to fit; on a Linux
+  server it is not, which is how this shipped looking perfectly fine.
+- **The "SMTP is not configured" banner no longer runs off the edge.** The four `SMTP_*` names in it
+  had no spaces between them — JSX drops whitespace containing a newline, so they rendered as one
+  unbreakable ~340px run that the chips' own padding made *look* correctly spaced. Alerts are now
+  shrinkable and wrap long machine text by default, since an alert quoting a host, a path or a stack
+  trace is exactly where this recurs.
+- **Both tests now fail on any machine, not just an unlucky one.** Each pinned the environment it
+  was measuring — the longest realistic health payload, and the unconfigured mail transport — so
+  neither can pass again merely because the host it ran on had a short path or working SMTP.
+
+### 🐛 Seeded demo entries the app itself refused to open
+
+- **Demo timesheet entries are real UUIDs now.** They were seeded as `seed-entry-1`…`6`, but
+  `Timesheet.id` is a uuid and the routes that act on one validate it as a uuid. So every seeded
+  entry deep-linked to `?entry=seed-entry-6`, returned *"Validation failed — id: Invalid uuid"* when
+  edited, and exported to a file named after a truncated sentinel. Demo data you cannot click on is
+  worse than none, because it reads as a broken feature rather than a broken fixture. Existing
+  workspaces have the old rows retired on the next seed.
+
+### 🚢 Deployment and CI
+
+- **The Helm chart's `appVersion` tracks the repo again** (it had drifted to 2.5.0 while the repo
+  shipped 3.0.0), so `kubectl get deploy -L app.kubernetes.io/version` answers honestly.
+- **Every GitHub Action updated to a current major**, clearing the Node 20 deprecation warning that
+  was about to become a hard failure on GitHub's runners.
+- **The Ask AI boundary tests run on Linux again.** They read their own source to prove it contains
+  no write verbs, using a hand-rolled `file:///` strip that produced a valid path on Windows and a
+  path missing its leading slash everywhere else — so the strictest tests in the suite had been
+  erroring out, rather than passing, on every CI run.
 
 ### 🛡 The assistant knows who is asking — and shows you exactly what it can do for you
 
@@ -23,8 +89,8 @@ that does not exist yet.
   needs audit access, the same as the Audit log page. Headcount needs user management, the same as
   Users. Spend, mail, security, health and configuration are super-admin-only, because that is who
   those settings pages are for. Nothing here invents an access rule; where the chat could not mirror
-  a page's rule exactly, it took the stricter one. On the seeded workspace a super admin sees 28
-  capabilities, a manager 15, an employee 13.
+  a page's rule exactly, it took the stricter one. On the seeded workspace a super admin sees 31
+  capabilities, a manager 17, an employee 13.
 - **"What can it do?"** — a new panel listing every capability your role opens, grouped by area, with
   the ones it does not open shown greyed and labelled with what they would need. Hiding them would
   make the panel read as the product's whole surface, and you would reasonably conclude the workspace

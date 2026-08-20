@@ -364,7 +364,13 @@ test.describe("planning layer", () => {
 
   test("the project budget panel never reports a forecast it cannot support", async ({ page }) => {
     await signIn(page);
-    const { token } = await planningConfig(page);
+    const { config, token } = await planningConfig(page);
+    // The guard every other planning test in this file carries, and the only one that was missing
+    // it. `/api/resources/budget/:id` calls assertPlanningEnabled, which is the toggle AND the
+    // tier's ganttEnabled entitlement — precisely `effective.timeline`. Without this the test
+    // parsed a 403 body as the panel and asserted on `undefined`, which reads as a broken forecast
+    // rather than as a feature that is simply switched off.
+    test.skip(!config.effective.timeline, "planning is off in this workspace");
     const headers = { Authorization: `Bearer ${token}` };
     const projects = await (await page.request.get("/api/projects", { headers })).json();
 

@@ -124,6 +124,9 @@ echo "workers     $(ls apps/api/src/workers/*.ts | wc -l)"
 echo "web pages   $(find apps/web/src/pages -name '*.tsx' | wc -l)"
 echo "e2e specs   $(find tests -name '*.spec.ts' | wc -l)"
 echo "permissions $(grep -cE '^\s+[A-Z_]+:\s*\"' packages/shared/src/index.ts)"
+# Template keys are a mix of quoted ("ticket.assigned") and bare (welcome), so a pattern that only
+# matches one shape silently under-counts. This one drifted to 35-against-22 for exactly that reason.
+echo "email tmpl  $(awk '/^export const SEED_TEMPLATES/{f=1} f && (/^  "[a-zA-Z_.]+": \{$/ || /^  [a-zA-Z_]+: \{$/){c++} END{print c}' apps/api/prisma/email-templates-seed.ts)"
 ```
 
 Test and lint counts come from the tools themselves — `npm test -w apps/api` prints the suite total,

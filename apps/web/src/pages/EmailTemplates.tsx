@@ -1350,10 +1350,17 @@ function TransportStatusBanner({
         <AlertCircle />
         <AlertTitle>SMTP is not configured — test emails will NOT be delivered</AlertTitle>
         <AlertDescription>
-          The API server has no <code className="rounded bg-background/40 px-1">SMTP_HOST</code> set. Every "Send test" is logged as <Badge variant="destructive">FAILED</Badge> and never leaves the box. Add
-          <code className="rounded bg-background/40 px-1">SMTP_HOST</code>,
-          <code className="rounded bg-background/40 px-1">SMTP_PORT</code>,
-          <code className="rounded bg-background/40 px-1">SMTP_USER</code>,
+          The API server has no <code className="rounded bg-background/40 px-1">SMTP_HOST</code> set. Every "Send test" is logged as <Badge variant="destructive">FAILED</Badge> and never leaves the box.{" "}
+          {/* The `{" "}` after each comma is required, not cosmetic. JSX drops whitespace that
+              contains a newline, so a `</code>,` followed by a newline and the next `<code>` renders
+              the four chips as ONE unbreakable inline run with no line-break opportunity between
+              them — ~340px of text that cannot wrap, which widened this page past a 390px phone
+              viewport and pushed the header and every card out with it. The chips' own `px-1`
+              padding made it LOOK correctly spaced, which is why the missing space stayed invisible
+              until the page was actually measured. */}
+          Add <code className="rounded bg-background/40 px-1">SMTP_HOST</code>,{" "}
+          <code className="rounded bg-background/40 px-1">SMTP_PORT</code>,{" "}
+          <code className="rounded bg-background/40 px-1">SMTP_USER</code>,{" "}
           <code className="rounded bg-background/40 px-1">SMTP_PASS</code> to{" "}
           <code className="rounded bg-background/40 px-1">apps/api/.env</code> and restart the API.
         </AlertDescription>

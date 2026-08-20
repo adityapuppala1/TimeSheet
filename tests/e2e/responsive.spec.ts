@@ -129,6 +129,17 @@ test("no horizontal overflow on the public landing page", async ({ page }) => {
  * be called viewport-clean if its every tab has been measured.
  */
 test("no horizontal overflow on either email-templates tab", async ({ page }) => {
+  // Pinned to the UNCONFIGURED transport for the same reason the settings sweep pins the health
+  // payload: this page's widest element is the "SMTP is not configured" banner, and it only renders
+  // on a workspace that has no SMTP_HOST. A developer's box usually does, so the widest variant was
+  // never measured there — the overflow was discoverable only on CI, where mail is never set up.
+  // Which state is exercised should be the test's decision, not the environment's.
+  await page.route("**/api/email-templates/transport-status", (route) =>
+    route.fulfill({
+      json: { configured: false, host: null, port: null, secure: false, user: null, verified: null, fromIssues: [] }
+    })
+  );
+
   await page.goto("/app/email-templates");
   await page.waitForLoadState("networkidle");
   await assertNoOverflow(page);
@@ -272,6 +283,28 @@ test("no Workspace Settings tab widens the page beyond the viewport", async ({ p
   // to see the late render is a test that passes for the wrong reason, which is exactly the failure
   // this test exists to prevent.
   test.setTimeout(120_000);
+
+  // The Maintenance panel's health tiles print MACHINE text — a filesystem path, a CPU model, an
+  // interface list — none of which has a break opportunity in it. Whether that text overflows a
+  // phone therefore depends on how long the strings happen to be on the host running the suite,
+  // and that is not something a test should be left to luck on: this exact bug passed on a dev box
+  // (`C:\xampp\htdocs\...`) and failed on a CI runner (`/home/runner/work/TimeSheet/TimeSheet/...`)
+  // for no reason other than path length. Pinning the payload to the longest realistic values makes
+  // the assertion mean the same thing everywhere, and fails on the shorter host too.
+  await page.route("**/api/maintenance/health", async (route) => {
+    const response = await route.fetch();
+    const body = await response.json().catch(() => null);
+    if (!body) return route.fulfill({ response });
+    if (body.disk) body.disk.path = "/home/runner/work/TimeSphere/TimeSphere/apps/api";
+    if (body.cpu) body.cpu.model = "AMD EPYC 7763 64-Core Processor";
+    if (body.network?.interfaces) {
+      body.network.interfaces = [
+        { name: "eth0", address: "10.1.0.123" },
+        { name: "docker0", address: "172.17.0.1" }
+      ];
+    }
+    return route.fulfill({ json: body });
+  });
 
   await page.goto("/app/settings");
   await page.waitForLoadState("networkidle");

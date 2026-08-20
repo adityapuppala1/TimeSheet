@@ -4732,6 +4732,8 @@ export interface AiChatCapability {
   group: string;
   /** True for the ones that write something — kept visibly apart from the reads in the panel. */
   acts: boolean;
+  /** True when the write is immediately visible to other people rather than stopping at a draft. */
+  publishes: boolean;
   allowed: boolean;
   /** Human-readable gate: "Everyone", "Super admin", "Reports access". */
   requires: string;
