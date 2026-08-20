@@ -5396,6 +5396,14 @@ export const changeApi = {
    */
   riskNarrative: async (id: string) =>
     (await api.post<{ narrative: string | null }>(`/changes/${id}/risk-narrative`, {})).data,
+  /**
+   * Drafts the sections this change still owes, as a PROPOSAL nobody has accepted yet.
+   *
+   * Returns a proposal id, not text: each drafted section becomes a row somebody accepts or rejects
+   * on the AI suggestions page. Nothing reaches the change until they do.
+   */
+  draftAssist: async (id: string) =>
+    (await api.post<{ proposalId: string | null; drafted: string[]; message?: string }>(`/changes/${id}/draft-assist`, {})).data,
   /** Scheduled work and the freeze periods it has to dodge, in one call — a calendar that fetches its
    *  bars and its no-go zones separately renders them a frame apart. */
   calendar: async (from: string, to: string) =>

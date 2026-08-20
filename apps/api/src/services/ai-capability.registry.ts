@@ -138,6 +138,23 @@ const CAPABILITIES: ReadonlyArray<AiCapabilitySpec> = [
     tools: []
   },
   {
+    id: "change_draft_assist",
+    title: "Draft a change's blocking sections",
+    description:
+      "Drafts the justification, implementation, backout, test and communication plans a change owes before it can be submitted. Every section is a proposal row somebody accepts or rejects.",
+    featureToggle: "changeDraftAssistEnabled",
+    // SUGGEST, permanently. This is the only capability in the module that can put words into the
+    // record an approver reads, and the backout plan is the single most consequential field here.
+    maxLevel: "SUGGEST",
+    ceilingReason:
+      "It drafts the sections an approver relies on, including the backout plan. A person accepts each one — a draft nobody wrote is worse than a blank field, because a blank field is honest.",
+    // Its context is derived from linked tickets, and some of that ORIGINATED outside the workspace:
+    // an emailed ticket's title, a scanner's repository string. Marked accordingly rather than
+    // argued about later.
+    actsOnUntrustedInput: true,
+    tools: []
+  },
+  {
     id: "change_risk_narrative",
     title: "Change risk narrative",
     description: "Explains a change's computed risk score in prose for its approver. Never sets the score, and never approves.",

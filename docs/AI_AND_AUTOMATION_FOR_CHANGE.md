@@ -1,6 +1,6 @@
 # AI, agents and workflows for Tickets and Change Management — a plan
 
-Status: **steps 1, 2 and 3 are built; 4 and 5 are still a proposal.** Written against the seams that already
+Status: **steps 1-4 are built; 5 is still a proposal.** Written against the seams that already
 exist, so every item below says which of them it extends and what it would cost. Read
 [ARCHITECTURE.md §3.12](ARCHITECTURE.md) and [API.md](API.md#change-management-v8) first.
 
@@ -66,15 +66,18 @@ in `AIUsageLog` keyed on the capability id so usage and policy join.
 
 | Capability | What it does | Ceiling | Why that ceiling |
 |---|---|---|---|
-| `change_draft_assist` | Drafts justification, impact narrative, test plan and **backout plan** from the context pack | `SUGGEST` | It is writing the thing an approver relies on. A draft nobody wrote is worse than a blank field, because a blank field is honest. |
+| `change_draft_assist` — **BUILT** | Drafts the five prose sections that BLOCK submission — justification, implementation, **backout**, test and communication plans — from the context pack | `SUGGEST` | It is writing the thing an approver relies on. A draft nobody wrote is worse than a blank field, because a blank field is honest. |
 | `change_risk_narrative` — **BUILT** | Explains the **already-computed** score in prose — which parameters drove it | `AUTONOMOUS` | Narrates, never scores; writes nothing at all, and reads only the change's own recorded assessment. Shipped at the same ceiling as `project_risk_narrative` for the same reason. The top rung is not a licence to approve — no capability can, at any level. |
 | `change_conflict_brief` | Reads the calendar and says what else is booked on this application in this window | `PROPOSE` | It reports; it does not move anything. |
 | `change_pir_assist` | Drafts the post-implementation review from what actually happened — steps that failed, tests that did not pass, the outcome | `SUGGEST` | The PIR is the record of a failure. Its author should be the person accountable for it. |
 
-**`change_draft_assist` must produce an `AiProposal`, not field writes.** `AiProposalKind` gains
-`CHANGE_DRAFT`; each field becomes an `AiProposalChange` a human accepts or rejects individually,
-and a row whose underlying value changed since is refused rather than quietly reverting somebody's
-edit. That machinery exists and is used by `PLAN_BREAKDOWN` today.
+**`change_draft_assist` produces an `AiProposal`, not field writes** — built that way. `AiProposalKind`
+gained `CHANGE_DRAFT` and `ChangeTarget` gained `CHANGE`; each field is an `AiProposalChange` a human
+accepts or rejects individually, and a row whose underlying value changed since is refused rather
+than quietly reverting somebody's edit. Two guards beyond that: an allowlist of exactly five prose
+fields (so no state, risk, schedule or outcome is reachable however the model replies), and the same
+post-approval freeze the plan itself is under, checked at the route *before* a model call is spent
+and again at apply time.
 
 ### 1.3 The one thing that must never be automated
 
@@ -184,8 +187,10 @@ here; it should be marked on each new capability rather than argued about later.
    "Explain this score" button on the Risk tab, and a `changeRiskNarrativeEnabled` toggle that
    appears in the AI capability grid on its own — the registry drives that screen, so no settings UI
    changed, which was the point of routing it through the existing contract.
-4. **`change_draft_assist`** as a proposal (§1.2). The largest win and the largest blast radius; do
-   it once the proposal queue has been exercised by the three above.
+4. ~~**`change_draft_assist`** as a proposal (§1.2).~~ **Built.** `POST /changes/:id/draft-assist`
+   emits a `CHANGE_DRAFT` proposal; each section is a row accepted on the AI suggestions page. Only
+   EMPTY sections are drafted, and the field allowlist is five prose fields — no state, no risk, no
+   schedule, no outcome.
 5. **`change_conflict_brief`** and **`change_pir_assist`**.
 
 Nothing in steps 1–2 needs AI switched on at all, which is the point: a workspace that never enables

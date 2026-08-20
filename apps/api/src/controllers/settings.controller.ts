@@ -346,6 +346,7 @@ export const aiSettingsSchema = z.object({
       chatIngestionEnabled: z.boolean().optional(),
       projectRiskAgentEnabled: z.boolean().optional(),
       changeRiskNarrativeEnabled: z.boolean().optional(),
+      changeDraftAssistEnabled: z.boolean().optional(),
       planBreakdownEnabled: z.boolean().optional(),
       duplicateDetectionEnabled: z.boolean().optional(),
       writingAssistantEnabled: z.boolean().optional(),

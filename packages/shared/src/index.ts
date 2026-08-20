@@ -437,6 +437,10 @@ export interface GlobalAISettings {
    *  prose. Never scores, and never approves: approving is excluded at every autonomy level, since
    *  it is a named person accepting risk with no undo. */
   changeRiskNarrativeEnabled: boolean;
+  /** Gates ai.service.ts#draftChangeSections — drafts the prose sections that BLOCK a change's
+   *  submission. Never writes them: each section becomes a proposal row a person accepts or
+   *  rejects. Capped at SUGGEST permanently. */
+  changeDraftAssistEnabled: boolean;
   /** Gates ai.service.ts#generateBugPatternDigest — monthly "what keeps breaking" recap over
    *  recurring CI failures and security-finding hotspots. See workers/bug-pattern-digest.worker.ts. */
   bugPatternDigestEnabled: boolean;

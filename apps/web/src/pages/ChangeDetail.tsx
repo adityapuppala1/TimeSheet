@@ -281,6 +281,10 @@ export function ChangeDetailPage() {
               <li key={f}>· {f}</li>
             ))}
           </ul>
+          {/* Offered exactly where the gap is named. It drafts only the sections still EMPTY, and
+              nothing reaches the change until each row is accepted on the AI suggestions page — the
+              backout plan is the most consequential field here, so a person stays in between. */}
+          <DraftAssistButton changeId={change.id} />
         </div>
       )}
 
@@ -676,6 +680,54 @@ export function ChangeDetailPage() {
 /* ------------------------------------------------------------------ *
  * Header, approval, and the sections with their own behaviour
  * ------------------------------------------------------------------ */
+
+/**
+ * Asks the model to draft the sections this change still owes.
+ *
+ * It writes NOTHING. The reply is a proposal id, and each drafted section is a row somebody accepts
+ * or rejects — so the button's success state points at that queue rather than claiming the change
+ * has been filled in. A draft nobody wrote is worse than a blank field, because a blank field is
+ * honest about not having been thought about.
+ */
+function DraftAssistButton({ changeId }: { changeId: string }) {
+  const [busy, setBusy] = useState(false);
+  const [proposalId, setProposalId] = useState<string | null>(null);
+
+  const run = async () => {
+    setBusy(true);
+    try {
+      const result = await changeApi.draftAssist(changeId);
+      if (!result.proposalId) {
+        toast.info("Nothing to draft", { description: result.message ?? "Every section already has something in it." });
+        return;
+      }
+      setProposalId(result.proposalId);
+      toast.success(`Drafted ${result.drafted.length} section${result.drafted.length === 1 ? "" : "s"}`, {
+        description: "Nothing has been written yet — accept the ones you want."
+      });
+    } catch (err: any) {
+      // Usually "AI is off for this workspace", which the server says plainly. Surfaced rather than
+      // swallowed: "nothing happened" is the worst possible answer to a button.
+      toast.error("Could not draft", { description: serverMessage(err, "Try again.") });
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="mt-2.5 flex flex-wrap items-center gap-2">
+      <Button variant="ai" size="sm" disabled={busy} onClick={() => void run()}>
+        {busy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Sparkles className="h-3.5 w-3.5" />}
+        Draft the missing sections
+      </Button>
+      {proposalId && (
+        <Link to="/app/proposals" className="text-xs font-medium text-primary hover:underline">
+          Review and accept them →
+        </Link>
+      )}
+    </div>
+  );
+}
 
 function ChangeHeader({ change, onBack }: { change: ChangeDetailRow; onBack: () => void }) {
   return (

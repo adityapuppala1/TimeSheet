@@ -292,6 +292,7 @@ export type AIFeatureToggle =
   | "aiPrInlineReviewEnabled"
   | "projectRiskAgentEnabled"
   | "changeRiskNarrativeEnabled"
+  | "changeDraftAssistEnabled"
   | "planBreakdownEnabled"
   | "emailFailureTriageEnabled";
 
@@ -2795,6 +2796,110 @@ export async function narrateChangeRisk(input: {
   });
 
   return result.text || null;
+}
+
+/** The five sections a change owes before it can be submitted, and the question each one answers. */
+const CHANGE_DRAFT_SECTIONS = [
+  { field: "justification", label: "Justification", asks: "Why now, and what happens if this does not go ahead?" },
+  { field: "implementationPlan", label: "Implementation plan", asks: "What will actually be done, in order?" },
+  { field: "backoutPlan", label: "Backout plan", asks: "If this goes wrong, how is it undone, and how long does that take?" },
+  { field: "testPlan", label: "Test plan", asks: "How will anyone know it worked?" },
+  { field: "communicationPlan", label: "Communication plan", asks: "Who is told, when, and through what channel?" }
+] as const;
+
+const ChangeDraftSchema = z.object({
+  sections: z
+    .array(
+      z.object({
+        field: z.enum(["justification", "implementationPlan", "backoutPlan", "testPlan", "communicationPlan"]),
+        text: z.string().min(1).max(8000)
+      })
+    )
+    .max(5)
+});
+
+/**
+ * Drafts the prose sections that BLOCK a change's submission, from what the change already knows.
+ *
+ * WHY IT RETURNS TEXT AND WRITES NOTHING: the caller turns each section into an `AiProposalChange` a
+ * person accepts or rejects individually. These are the sections an approver relies on, and a draft
+ * nobody wrote is worse than a blank field — a blank field is honest about not having been thought
+ * about, where a fluent paragraph invites the reader to assume somebody did. The proposal envelope
+ * is what keeps a human between the model and the record.
+ *
+ * WHY IT IS HANDED THE DERIVED CONTEXT: a model asked for a backout plan with nothing to go on
+ * writes a generic paragraph about "restoring from backup". Told which repositories are changing,
+ * which pull requests are merged, whether CI is green and how the last few changes to this
+ * application went, it writes something specific enough to argue with. That context is derived, not
+ * generated — see change-context.service.ts.
+ *
+ * ONLY EMPTY SECTIONS ARE ASKED FOR. Re-drafting a section somebody already wrote is how an
+ * assistant becomes something people switch off.
+ */
+export async function draftChangeSections(input: {
+  changeKey: string;
+  title: string;
+  description: string | null;
+  changeKind: string;
+  environment: string;
+  riskLevel: string;
+  projectName: string;
+  /** Field names still empty on the change. Nothing else is drafted. */
+  wanted: string[];
+  /** Derived facts, already assembled. Free-form because the shape is a reading of five tables. */
+  context: string;
+  userId?: string;
+}): Promise<Array<{ field: string; text: string }>> {
+  const { settings } = await preflight("changeDraftAssistEnabled");
+
+  const asked = CHANGE_DRAFT_SECTIONS.filter((s) => input.wanted.includes(s.field));
+  if (asked.length === 0) return [];
+
+  const prompt = [
+    "You are helping an engineer write up a change request before it goes to their manager for approval.",
+    "",
+    "Write ONLY the sections listed under WANTED. For each one, write 2-5 sentences of plain prose.",
+    "Ground every sentence in the facts given below. Do not invent a repository, a system, a person, a",
+    "date or a number that does not appear. Where you do not have enough to be specific, say what is",
+    "not yet known instead of writing something that sounds specific and is not — the reader is an",
+    "approver, and a confident guess is worse to them than an admitted gap.",
+    "Do not state or estimate the risk level. It has already been computed and is given to you as a fact.",
+    "",
+    "=== BEGIN FACTS ===",
+    `Change: ${input.changeKey} — ${input.title}`,
+    `Project: ${input.projectName}`,
+    `Type: ${input.changeKind}, targeting ${input.environment}`,
+    `Risk, already assessed: ${input.riskLevel}`,
+    input.description ? `What the requester wrote: ${input.description}` : "The requester wrote no description.",
+    "",
+    "What this change is shipping, derived from the tickets it delivers:",
+    input.context || "(nothing linked yet)",
+    "=== END FACTS ===",
+    "",
+    "WANTED:",
+    asked.map((s) => `- ${s.field} (${s.label}) — ${s.asks}`).join("\n"),
+    "",
+    "Return JSON only: { \"sections\": [ { \"field\": \"...\", \"text\": \"...\" } ] }"
+  ].join("\n");
+
+  const result = await callChat(settings, { model: settings.model, maxTokens: 1600, prompt });
+
+  await logAIUsage({
+    feature: "change_draft_assist",
+    params: { changeKey: input.changeKey, wanted: asked.map((s) => s.field) },
+    model: settings.model,
+    inputTokens: result.usage.inputTokens,
+    outputTokens: result.usage.outputTokens,
+    userId: input.userId
+  });
+
+  const parsed = parseJsonResponse(result.text, ChangeDraftSchema);
+  if (!parsed) return [];
+
+  // Filtered again on the way out. The prompt asks for only the wanted sections; this makes it true.
+  // A model that returns a sixth section must not be able to write a field nobody asked about, and
+  // the proposal allowlist would refuse it anyway — two checks, because they fail differently.
+  return parsed.sections.filter((s) => input.wanted.includes(s.field) && s.text.trim().length > 0);
 }
 
 const PlanBreakdownSchema = z.object({

@@ -65,7 +65,8 @@ import { CSV_EOL, UTF8_BOM, csvCell } from "../utils/csv.js";
 import PDFDocument from "pdfkit";
 import { buildChangeWorkbook, renderChangeRegisterPdf } from "../services/change-export.service.js";
 import { buildChangeContext } from "../services/change-context.service.js";
-import { narrateChangeRisk } from "../services/ai.service.js";
+import { draftChangeSections, narrateChangeRisk } from "../services/ai.service.js";
+import { createProposal } from "../services/ai-proposal.service.js";
 
 export const changeRouter = Router();
 changeRouter.use(requireAuth);
@@ -1215,6 +1216,113 @@ changeRouter.post("/:id/risk-narrative", async (req, res) => {
   });
 
   res.json({ narrative });
+});
+
+/** The five sections the drafting assistant may write, and the order a reviewer reads them in. */
+const DRAFTABLE_SECTIONS = [
+  { field: "justification", label: "Justification" },
+  { field: "implementationPlan", label: "Implementation plan" },
+  { field: "backoutPlan", label: "Backout plan" },
+  { field: "testPlan", label: "Test plan" },
+  { field: "communicationPlan", label: "Communication plan" }
+] as const;
+
+/** The derived context, flattened to the few lines a prompt can actually use. Counts rather than
+ *  titles for findings: a scanner's title is externally-authored text, and the model needs to know
+ *  that three highs are open, not what they are called. */
+function contextForPrompt(context: Awaited<ReturnType<typeof buildChangeContext>>): string {
+  const lines: string[] = [];
+  for (const repo of context.repositories) {
+    const ci = repo.latestCi ? `CI ${repo.latestCi.status.toLowerCase()}` : "CI not reported";
+    const prs = repo.pullRequests.length ? `${repo.pullRequests.length} pull request(s), ${repo.pullRequests.map((p) => p.status.toLowerCase()).join("/")}` : "no pull requests";
+    const open = repo.openFindings.critical + repo.openFindings.high;
+    lines.push(`- ${repo.repository}: ${prs}; ${ci}${open > 0 ? `; ${open} critical/high security finding(s) still open` : ""}`);
+  }
+  if (context.tickets.length > 0) {
+    lines.push(`- Delivers ${context.tickets.length} ticket(s): ${context.tickets.map((t) => t.key).join(", ")}`);
+  }
+  if (context.totals.approvedHours > 0) lines.push(`- ${context.totals.approvedHours} approved hours logged against it`);
+  for (const prior of context.applicationHistory.slice(0, 3)) {
+    lines.push(`- Earlier change to this application, ${prior.changeKey}: ${prior.outcome ?? prior.state}`);
+  }
+  return lines.join("\n");
+}
+
+/**
+ * Drafts the sections this change still owes, as a PROPOSAL nobody has accepted yet.
+ *
+ * WHY IT WRITES NOTHING: these are the sections an approver relies on, and the backout plan is the
+ * single most consequential field in the module. Each drafted section becomes an `AiProposalChange`
+ * a person accepts or rejects individually, and one whose underlying value moved since is refused
+ * rather than quietly overwriting somebody's edit. That envelope already exists — this is the same
+ * machinery `PLAN_BREAKDOWN` uses.
+ *
+ * ONLY EMPTY SECTIONS ARE DRAFTED. Re-writing something somebody already wrote is how an assistant
+ * becomes the thing people switch off.
+ */
+changeRouter.post("/:id/draft-assist", requirePermission(permissions.CHANGES_WRITE), async (req, res) => {
+  await assertChangeManagementEnabled();
+  const change = await prisma.changeRequest.findFirst({
+    where: { id: String(req.params.id) },
+    include: { ticket: { select: { title: true, description: true, projectId: true, project: { select: { name: true } } } } }
+  });
+  if (!change) throw new AppError(404, "Change not found");
+  await assertTicketVisible(req, change.ticket.projectId);
+
+  // The same freeze the plan itself is under. Drafting into an approved change would rewrite what
+  // was agreed, and the proposal's apply step refuses it too — this is the earlier of the two, so
+  // the person finds out before spending a model call rather than after.
+  if (FROZEN_AFTER.includes(change.state as ChangeState)) {
+    throw new AppError(409, "This change has been approved, so its plan can no longer be edited.");
+  }
+
+  const empty = DRAFTABLE_SECTIONS.filter((s) => {
+    const value = (change as unknown as Record<string, string | null>)[s.field];
+    return !value || value.trim().length === 0;
+  });
+  if (empty.length === 0) {
+    return res.json({ proposalId: null, drafted: [], message: "Every section already has something in it." });
+  }
+
+  const context = await buildChangeContext(change.id);
+  const sections = await draftChangeSections({
+    changeKey: change.changeKey,
+    title: change.ticket.title,
+    description: change.ticket.description,
+    changeKind: String(change.changeKind),
+    environment: String(change.environment),
+    riskLevel: String(change.riskLevel),
+    projectName: change.ticket.project.name,
+    wanted: empty.map((s) => s.field),
+    context: contextForPrompt(context),
+    userId: req.user!.id
+  });
+
+  if (sections.length === 0) {
+    return res.json({ proposalId: null, drafted: [], message: "The model returned nothing usable." });
+  }
+
+  const labelOf = (field: string) => DRAFTABLE_SECTIONS.find((s) => s.field === field)?.label ?? field;
+  const proposal = await createProposal({
+    kind: "CHANGE_DRAFT",
+    title: `Draft ${sections.length} section${sections.length === 1 ? "" : "s"} for ${change.changeKey}`,
+    rationale: "Drafted from what this change already knows. Nothing is written until each section is accepted.",
+    scopeTicketId: change.ticketId,
+    scopeProjectId: change.ticket.projectId,
+    requestedById: req.user!.id,
+    changes: sections.map((s) => ({
+      targetType: "CHANGE" as const,
+      targetId: change.id,
+      op: "UPDATE" as const,
+      // The state it was drafted against. Application refuses if the field has moved since — the one
+      // guarantee the whole proposal design rests on.
+      before: { [s.field]: (change as unknown as Record<string, unknown>)[s.field] ?? null },
+      after: { [s.field]: s.text },
+      summary: `${labelOf(s.field)} for ${change.changeKey}`
+    }))
+  });
+
+  res.status(201).json({ proposalId: proposal.id, drafted: sections.map((s) => s.field) });
 });
 
 changeRouter.get("/:id/conflicts", async (req, res) => {

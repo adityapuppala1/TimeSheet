@@ -11,6 +11,23 @@ Landed after v3.0.0 was tagged. The parser that feeds the in-app What's-new page
 until it gains a version number, on purpose — an installation must never render history for a version
 that does not exist yet.
 
+### 📝 It can draft the sections a change is missing, and write none of them
+
+- **"Draft the missing sections"** sits next to the checklist that names what is missing, and drafts
+  only the sections still empty — justification, implementation plan, backout plan, test plan,
+  communication plan. Re-writing something somebody already wrote is how an assistant becomes the
+  thing people switch off.
+- **It writes nothing.** Every section becomes a row on the AI suggestions page that somebody accepts
+  or rejects individually, and a row whose field moved since it was drafted is refused rather than
+  overwriting the edit. The backout plan is the most consequential field in the module, which is
+  exactly why a person stays between the model and the record.
+- **It cannot reach anything but those five fields**, whatever it replies — an allowlist, not a
+  request in the prompt. No state, no risk score, no schedule, no outcome. And it refuses a change
+  whose plan has frozen, before spending the model call rather than after.
+- It is handed what the change is actually shipping — repositories, merged pull requests, CI status,
+  how the last few changes to the same application went. A model asked for a backout plan with
+  nothing to go on writes a paragraph about restoring from backup.
+
 ### 🤖 AI can explain a change's risk score, and still cannot approve it
 
 - **"Explain this score"** on a change's Risk tab turns the recorded assessment into a paragraph its
