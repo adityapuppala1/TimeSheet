@@ -15,11 +15,19 @@
  * Reports page requires and says "not permitted" as DATA rather than throwing — the model should
  * tell the person that, not crash the answer.
  *
+ * EVERY TOOL CARRIES A `group` AND AN OPTIONAL `access`. The group is what the "what can I ask"
+ * panel sorts by; the access is what `ai-chat-guardrails.ts` filters on, twice — once when building
+ * the prompt, once before running. The tools in THIS file are scoped by project and need no gate
+ * beyond the route's own; the operational ones live in `ai-chat-admin-tools.ts`, where every entry
+ * names a permission. The exported registry is the two concatenated, so callers see one list.
+ *
  * WHO CALLS THIS: `ai.service.ts#askWorkspaceChat`, one tool per loop step.
  */
 import { permissions } from "@timesheet/shared";
 import { prisma } from "../config/prisma.js";
 import { ticketProjectScope } from "./ticket.service.js";
+import { AI_CHAT_ADMIN_TOOLS } from "./ai-chat-admin-tools.js";
+import type { ToolAccess } from "./ai-chat-guardrails.js";
 
 /** What the model sees per tool: the name it must use, and when to use it. */
 export interface AiChatToolSpec {
@@ -27,6 +35,12 @@ export interface AiChatToolSpec {
   readonly description: string;
   /** Argument hints, shown to the model verbatim. Loose on purpose — the executor validates. */
   readonly args: string;
+  /** The area this belongs to — what the capabilities panel groups by. */
+  readonly group: string;
+  /** Absent means "anyone who can reach the page", which the route already gates. */
+  readonly access?: ToolAccess;
+  /** True only in the actions registry. Surfaced in the panel so "reads" and "does" stay visibly apart. */
+  readonly acts?: boolean;
 }
 
 /** The request-shaped context every executor needs — who is asking, with which permissions. */
@@ -46,9 +60,12 @@ async function scopeWhere(ctx: AiChatToolContext) {
   return scope.unrestricted ? {} : { projectId: { in: scope.projectIds } };
 }
 
-export const AI_CHAT_TOOLS: ReadonlyArray<AiChatToolSpec & { run: (args: Record<string, unknown>, ctx: AiChatToolContext) => Promise<string> }> = [
+export type AiChatTool = AiChatToolSpec & { run: (args: Record<string, unknown>, ctx: AiChatToolContext) => Promise<string> };
+
+const EVERYDAY_TOOLS: ReadonlyArray<AiChatTool> = [
   {
     name: "search_tickets",
+    group: "Tickets",
     description: "Find tickets by text, status or priority. Use before answering anything about specific tickets.",
     args: '{ "query"?: string, "status"?: string, "priority"?: string, "limit"?: number }',
     run: async (args, ctx) => {
@@ -73,6 +90,7 @@ export const AI_CHAT_TOOLS: ReadonlyArray<AiChatToolSpec & { run: (args: Record<
   },
   {
     name: "get_ticket",
+    group: "Tickets",
     description: "One ticket in detail, by its key.",
     args: '{ "key": string }',
     run: async (args, ctx) => {
@@ -96,6 +114,7 @@ export const AI_CHAT_TOOLS: ReadonlyArray<AiChatToolSpec & { run: (args: Record<
   },
   {
     name: "ticket_metrics",
+    group: "Tickets",
     description: "Ticket counts by status and priority across the person's accessible projects.",
     args: "{}",
     run: async (_args, ctx) => {
@@ -114,6 +133,7 @@ export const AI_CHAT_TOOLS: ReadonlyArray<AiChatToolSpec & { run: (args: Record<
   },
   {
     name: "list_changes",
+    group: "Change management",
     description: "Change requests, optionally by state or risk level. Use for anything about change management.",
     args: '{ "state"?: string, "riskLevel"?: string, "limit"?: number }',
     run: async (args, ctx) => {
@@ -146,6 +166,7 @@ export const AI_CHAT_TOOLS: ReadonlyArray<AiChatToolSpec & { run: (args: Record<
   },
   {
     name: "change_metrics",
+    group: "Change management",
     description: "Change counts by state and risk, plus how many are in flight.",
     args: "{}",
     run: async (_args, ctx) => {
@@ -166,6 +187,7 @@ export const AI_CHAT_TOOLS: ReadonlyArray<AiChatToolSpec & { run: (args: Record<
   },
   {
     name: "my_timesheets",
+    group: "Timesheets",
     description: "The asking person's OWN recent timesheet entries. Dates are YYYY-MM-DD.",
     args: '{ "from"?: string, "to"?: string }',
     run: async (args, ctx) => {
@@ -187,6 +209,7 @@ export const AI_CHAT_TOOLS: ReadonlyArray<AiChatToolSpec & { run: (args: Record<
   },
   {
     name: "timesheet_stats",
+    group: "Timesheets",
     description:
       "Counts and hours BY STATUS — approved, pending, draft, rejected. The asking person's own by default; scope 'workspace' needs the reports permission. This is the tool for 'how many entries are approved', 'hours pending approval', 'my rejected entries'.",
     args: '{ "scope"?: "mine" | "workspace", "from"?: "YYYY-MM-DD", "to"?: "YYYY-MM-DD" }',
@@ -219,6 +242,8 @@ export const AI_CHAT_TOOLS: ReadonlyArray<AiChatToolSpec & { run: (args: Record<
   },
   {
     name: "timesheet_report",
+    group: "Timesheets",
+    access: { permission: permissions.REPORTS_VIEW },
     description: "Workspace-wide approved-hours totals by project over a range. Needs the reports permission.",
     args: '{ "from": string, "to": string }',
     run: async (args, ctx) => {
@@ -251,6 +276,7 @@ export const AI_CHAT_TOOLS: ReadonlyArray<AiChatToolSpec & { run: (args: Record<
   },
   {
     name: "list_projects",
+    group: "Projects",
     description: "Projects with their codes, modules and submodules. The tool for any question about project structure, module counts or submodule counts — and for finding a code before logging time.",
     args: "{}",
     run: async (_args, ctx) => {
@@ -278,6 +304,7 @@ export const AI_CHAT_TOOLS: ReadonlyArray<AiChatToolSpec & { run: (args: Record<
   },
   {
     name: "find_people",
+    group: "People",
     description:
       "The people the asking person can already see: admins get the whole directory; everyone else gets themselves, their manager, and their direct reports. Names, roles, designations.",
     args: '{ "query"?: string }',
@@ -313,7 +340,38 @@ export const AI_CHAT_TOOLS: ReadonlyArray<AiChatToolSpec & { run: (args: Record<
     }
   },
   {
+    name: "goals_overview",
+    description: "Goals and OKRs with their status and progress. The tool for 'how are our goals tracking'.",
+    args: "{}",
+    group: "Goals",
+    run: async () => {
+      const rows = await prisma.goal.findMany({
+        where: { deletedAt: null },
+        select: { title: true, status: true, targetValue: true, unit: true, manualProgressPct: true, owner: { select: { name: true } }, endDate: true },
+        orderBy: { createdAt: "desc" },
+        take: 25
+      });
+      if (rows.length === 0) return "No goals defined.";
+      return clip(
+        rows
+          .map((g) => {
+            // Progress is either hand-entered or derived from links; there is no single stored
+            // percentage, so a manual figure is reported as one and everything else as its target.
+            const progress =
+              g.manualProgressPct !== null
+                ? ` ${g.manualProgressPct}%`
+                : g.targetValue
+                  ? ` target ${Number(g.targetValue)}${g.unit ?? ""}`
+                  : "";
+            return `${g.title} (${g.status}${progress})${g.owner ? ` — ${g.owner.name}` : ""}${g.endDate ? `, due ${g.endDate.toISOString().slice(0, 10)}` : ""}`;
+          })
+          .join(String.fromCharCode(10))
+      );
+    }
+  },
+  {
     name: "list_agents",
+    group: "Automation",
     description: "The AI teammate roster — each agent's name and what it owns.",
     args: "{}",
     run: async () => {
@@ -331,6 +389,7 @@ export const AI_CHAT_TOOLS: ReadonlyArray<AiChatToolSpec & { run: (args: Record<
   },
   {
     name: "list_workflows",
+    group: "Automation",
     description: "Workflow Studio flows — name, trigger, and whether each is switched on.",
     args: "{}",
     run: async () => {
@@ -352,6 +411,15 @@ export const AI_CHAT_TOOLS: ReadonlyArray<AiChatToolSpec & { run: (args: Record<
     }
   }
 ];
+
+/**
+ * The whole read surface: project-scoped tools first, operational ones after.
+ *
+ * Concatenated rather than merged by hand so the two files stay independently reviewable — the
+ * question "which tools reach past the asking person's projects" is answered by which FILE a tool is
+ * in, not by reading every entry.
+ */
+export const AI_CHAT_TOOLS: ReadonlyArray<AiChatTool> = [...EVERYDAY_TOOLS, ...AI_CHAT_ADMIN_TOOLS];
 
 export function findAiChatTool(name: string) {
   return AI_CHAT_TOOLS.find((t) => t.name === name);

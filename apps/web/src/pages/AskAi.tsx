@@ -21,6 +21,7 @@ import { Fragment, useEffect, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { AlertTriangle, Check, Copy, Eraser, Loader2, MessagesSquare, Send, Sparkles, ThumbsDown, ThumbsUp, Wrench } from "lucide-react";
 import { askAiApi, type AiAskExchangeRow } from "../services/api";
+import { AskAiCapabilitiesButton, useAskAiSuggestions } from "../components/ai/ask-ai-capabilities";
 import { copyText } from "../lib/clipboard";
 import { cn } from "../lib/utils";
 import { AiMarkdown } from "../components/ui/ai-markdown";
@@ -34,20 +35,16 @@ import { toast } from "../components/ui/toaster";
 
 const serverMessage = (err: any, fallback: string) => err?.response?.data?.message ?? fallback;
 
-const SUGGESTIONS = [
-  "Summarize open critical bugs.",
-  "How many of my entries are approved?",
-  "How many changes are in flight, and at what risk?",
-  "Log 2 hours on HICS-TS today, 09:00 to 11:00, development work on the release notes.",
-  "Who reports to whom in this workspace?"
-];
-
 export function AskAi() {
   const qc = useQueryClient();
   const [prompt, setPrompt] = useState("");
   const feedRef = useRef<HTMLDivElement>(null);
 
   const history = useQuery({ queryKey: ["ask-ai", "history"], queryFn: () => askAiApi.history() });
+  // Role-derived, not hardcoded: every chip is backed by a capability this person's assistant can
+  // actually reach, so an administrator is offered the spend and health questions and an engineer
+  // is not offered a question that would only come back refused.
+  const suggestions = useAskAiSuggestions();
 
   const ask = useMutation({
     mutationFn: (q: string) => askAiApi.ask(q),
@@ -104,7 +101,10 @@ export function AskAi() {
             </p>
           </div>
         </div>
-        {rows.length > 0 && <ClearHistoryButton />}
+        <div className="flex items-center gap-1">
+          <AskAiCapabilitiesButton />
+          {rows.length > 0 && <ClearHistoryButton />}
+        </div>
       </header>
 
       <div ref={feedRef} onScroll={onFeedScroll} className="min-h-0 flex-1 overflow-y-auto">
@@ -141,7 +141,7 @@ export function AskAi() {
       <div className="mx-auto w-full max-w-3xl pt-2">
         {showChips && rows.length > 0 && (
           <div className="mb-2 flex flex-wrap gap-1.5">
-            {SUGGESTIONS.slice(0, 3).map((s) => (
+            {suggestions.slice(0, 3).map((s) => (
               <SuggestionChip key={s} text={s} onPick={(q) => ask.mutate(q)} />
             ))}
           </div>
@@ -185,11 +185,12 @@ export function AskAi() {
           <p className="text-lg font-semibold">Ask your workspace anything</p>
           <p className="mx-auto mt-1 max-w-md text-sm text-muted-foreground">
             Live answers from your tickets, timesheets, changes and people — with tables and charts where the numbers
-            deserve them.
+            deserve them. What it can reach depends on your role; <em>What can it do?</em> above lists every capability
+            and names the ones your role does not open.
           </p>
         </div>
         <div className="mx-auto flex max-w-xl flex-wrap justify-center gap-2">
-          {SUGGESTIONS.map((s) => (
+          {suggestions.map((s) => (
             <SuggestionChip key={s} text={s} onPick={(q) => ask.mutate(q)} />
           ))}
         </div>

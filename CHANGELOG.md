@@ -11,6 +11,58 @@ Landed after v3.0.0 was tagged. The parser that feeds the in-app What's-new page
 until it gains a version number, on purpose — an installation must never render history for a version
 that does not exist yet.
 
+### 🛡 The assistant knows who is asking — and shows you exactly what it can do for you
+
+- **Ask AI answers operational questions now, for the people entitled to them.** AI spend by feature,
+  answer quality and thumbs, email volume and what is bouncing, which templates are switched off,
+  service health, the slowest endpoints by p95, the audit log, open security findings, CI runs,
+  identity-check outcomes, what is switched on in the workspace, headcount by role, SLA breaches, and
+  what the agents and workflows have actually been doing. Fifteen new capabilities, on top of the
+  tickets, timesheets, changes, projects, goals and people it already read.
+- **Every one of them is gated on the permission the matching page already requires.** `audit_log`
+  needs audit access, the same as the Audit log page. Headcount needs user management, the same as
+  Users. Spend, mail, security, health and configuration are super-admin-only, because that is who
+  those settings pages are for. Nothing here invents an access rule; where the chat could not mirror
+  a page's rule exactly, it took the stricter one. On the seeded workspace a super admin sees 28
+  capabilities, a manager 15, an employee 13.
+- **"What can it do?"** — a new panel listing every capability your role opens, grouped by area, with
+  the ones it does not open shown greyed and labelled with what they would need. Hiding them would
+  make the panel read as the product's whole surface, and you would reasonably conclude the workspace
+  has no spend reporting because your role cannot see it. The list comes from the server, built
+  through the same filter the assistant's own prompt is — the panel and the model cannot disagree
+  about what exists.
+- **The starter questions are yours, not everyone's.** Each chip is backed by a capability your role
+  can actually reach, so an administrator is offered the spend and health questions and an engineer
+  is not offered one that would only come back refused.
+- **A capability is filtered twice, from one rule.** Once when the prompt is built, once before
+  anything runs. Filtering only the prompt is security by suggestion — a model that guesses a name it
+  never saw, or is talked into one by text inside a ticket, would reach a real query. Filtering only
+  at execution would work but waste your steps on refusals.
+- **Everything a capability returns is scanned for secrets before the model sees it**, using the same
+  masking the AI capture layer applies. A scanner finding's title can *be* the leaked credential.
+- **The chat is rate-limited like every other thing that spends model calls** (20/min). A chat box is
+  the easiest place in the product to spend a budget by holding down Enter, and the monthly ceiling
+  underneath it is too coarse to notice a minute of hammering.
+
+#### Fixed
+
+- **One bad answer no longer causes five more.** Recent exchanges are handed back to the model so
+  follow-ups work — and a failed one taught it to fail again. It declined questions it had answered
+  correctly minutes earlier, and copied a malformed fragment from two turns back. Only exchanges that
+  actually consulted a capability become context now; failures still appear in your feed, where "it
+  failed at 14:02, and this is why" belongs.
+- **Machine syntax no longer reaches the chat window.** When a model replies in its provider's own
+  tool-call dialect instead of the format this loop asks for, it now gets one correction and then an
+  explanation — rather than `<|tool_call>call:ai_spend{days:30}` appearing as your answer. A
+  hand-built JSON blob of invented figures met the same fate.
+- **The assistant stopped asking permission to read.** Caution meant for the one thing it can write
+  had leaked into everything it can look at, so "how much email went out?" came back as "would you
+  like me to pull that?".
+- **It stopped declining things it could plainly do.** The scope rules had been written as a wall of
+  prohibitions, and on a small model that produced the behaviour they forbade — six operational
+  questions in a row answered with polite refusals that paraphrased the prohibition, without a single
+  lookup. Rewritten as positives.
+
 ### 🔭 Two more readings, and one more draft
 
 - **"Which of these matters?"** on a change's Schedule tab, once its window collides with something.

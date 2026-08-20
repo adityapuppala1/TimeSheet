@@ -4725,8 +4725,29 @@ export interface AiAskExchangeRow {
   createdAt: string;
 }
 
+/** One capability the assistant either can or cannot use, as the server judged it for this caller. */
+export interface AiChatCapability {
+  name: string;
+  description: string;
+  group: string;
+  /** True for the ones that write something — kept visibly apart from the reads in the panel. */
+  acts: boolean;
+  allowed: boolean;
+  /** Human-readable gate: "Everyone", "Super admin", "Reports access". */
+  requires: string;
+}
+
+export interface AiChatCapabilities {
+  role: string;
+  allowedCount: number;
+  totalCount: number;
+  groups: Array<{ group: string; tools: AiChatCapability[] }>;
+}
+
 export const askAiApi = {
   ask: async (prompt: string) => (await api.post<AiAskExchangeRow>("/ai-chat/ask", { prompt })).data,
+  /** What this person's assistant can actually do — the same filter the prompt is built through. */
+  capabilities: async () => (await api.get<AiChatCapabilities>("/ai-chat/capabilities")).data,
   history: async (limit = 50) => (await api.get<AiAskExchangeRow[]>("/ai-chat/history", { params: { limit } })).data,
   /** 0 clears — pressing the same thumb twice un-rates. */
   feedback: async (id: string, feedback: 1 | -1 | 0) => api.post(`/ai-chat/${id}/feedback`, { feedback }),

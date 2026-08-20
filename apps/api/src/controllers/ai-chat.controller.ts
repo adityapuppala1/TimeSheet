@@ -24,8 +24,12 @@ import { prisma } from "../config/prisma.js";
 import { requireAuth, requirePermission } from "../middleware/auth.js";
 import { AppError } from "../middleware/error.js";
 import { validate } from "../middleware/validate.js";
-import { askWorkspaceChat } from "../services/ai.service.js";
+import { aiRateLimit } from "../middleware/ai-rate-limit.js";
+import { askWorkspaceChat, isUsableAskAnswer } from "../services/ai.service.js";
 import { setInteractionFeedback } from "../services/ai-quality.service.js";
+import { AI_CHAT_TOOLS } from "../services/ai-chat-tools.js";
+import { AI_CHAT_ACTIONS } from "../services/ai-chat-actions.js";
+import { accessLabel, canUseTool, type ChatActor } from "../services/ai-chat-guardrails.js";
 
 export const aiChatRouter = Router();
 aiChatRouter.use(requireAuth);
@@ -37,17 +41,39 @@ const askSchema = z.object({
   body: z.object({ prompt: z.string().trim().min(3).max(2000) }).strict()
 });
 
-aiChatRouter.post("/ask", requirePermission(permissions.TICKETS_VIEW), validate(askSchema), async (req, res) => {
+// The per-user AI limiter, the same one every other model-spending route carries. A chat box is the
+// easiest place in the product to spend a budget by holding down Enter, and the ceiling below it
+// (getEffectiveAiBudgetCeiling, inside the service) is a monthly figure — too coarse to stop a
+// minute of hammering before it lands.
+aiChatRouter.post("/ask", requirePermission(permissions.TICKETS_VIEW), aiRateLimit, validate(askSchema), async (req, res) => {
   const prompt = String(req.body.prompt);
 
-  // The model gets the recent exchanges so follow-up questions resolve — "and how many of those"
-  // has to mean something.
-  const recent = await prisma.aiAskExchange.findMany({
-    where: { userId: req.user!.id },
-    orderBy: { createdAt: "desc" },
-    take: 6,
-    select: { prompt: true, answer: true }
-  });
+  // The model gets recent exchanges so follow-up questions resolve — "and how many of those are
+  // critical?" has to mean something.
+  //
+  // ONLY EXCHANGES THAT ACTUALLY CONSULTED A TOOL, and this rule was measured rather than reasoned
+  // into. Fed its own failures back as "recent conversation", the model copied them: it declined
+  // questions it had answered correctly moments earlier on a clean history, and reproduced a
+  // malformed tool-call fragment from two turns before. Excluding outright errors was not enough —
+  // a fluent "I'm sorry, I encountered an error" is stored as an ANSWER, and is the single most
+  // copyable thing in the window.
+  //
+  // A consulted tool is the positive signal that separates the two: an exchange that fetched data is
+  // exactly the one a follow-up refers back to, and an exchange that fetched nothing is a decline, a
+  // format failure or small talk — none of which help the next question, and all of which model the
+  // wrong behaviour. Over-fetched then filtered, so six useful turns survive a bad patch instead of
+  // the window collapsing the moment something fails.
+  const recent = (
+    await prisma.aiAskExchange.findMany({
+      where: { userId: req.user!.id, error: null },
+      orderBy: { createdAt: "desc" },
+      take: 30,
+      select: { prompt: true, answer: true, toolCalls: true }
+    })
+  )
+    .filter((row) => isUsableAskAnswer(row.answer) && Array.isArray(row.toolCalls) && row.toolCalls.length > 0)
+    .slice(0, 6)
+    .map((row) => ({ prompt: row.prompt, answer: row.answer }));
 
   const startedAt = Date.now();
   try {
@@ -85,6 +111,42 @@ aiChatRouter.post("/ask", requirePermission(permissions.TICKETS_VIEW), validate(
     });
     res.status(201).json(row);
   }
+});
+
+/**
+ * What THIS person can ask the assistant to do — the same filter the prompt is built through, so the
+ * panel and the model never disagree about what exists.
+ *
+ * Refused tools are returned too, marked `allowed: false` with the reason. Hiding them entirely
+ * would make the panel read as the product's whole surface, and somebody would reasonably conclude
+ * the workspace has no spend reporting because their role cannot see it. Naming what exists and who
+ * it needs is the honest version, and it leaks nothing beyond a capability name a permission list
+ * already implies.
+ *
+ * Static above the route: this must precede nothing dynamic here, but keeping it beside /history
+ * keeps the read routes together.
+ */
+aiChatRouter.get("/capabilities", (req, res) => {
+  const actor: ChatActor = { id: req.user!.id, role: req.user!.role, permissions: req.user!.permissions ?? [] };
+  const describe = (tool: (typeof AI_CHAT_TOOLS)[number] | (typeof AI_CHAT_ACTIONS)[number]) => ({
+    name: tool.name,
+    description: tool.description,
+    group: tool.group,
+    acts: Boolean(tool.acts),
+    allowed: canUseTool(tool, actor),
+    requires: accessLabel(tool)
+  });
+  const tools = [...AI_CHAT_TOOLS, ...AI_CHAT_ACTIONS].map(describe);
+  const groups = [...new Set(tools.map((t) => t.group))].map((group) => ({
+    group,
+    tools: tools.filter((t) => t.group === group)
+  }));
+  res.json({
+    role: req.user!.role,
+    allowedCount: tools.filter((t) => t.allowed).length,
+    totalCount: tools.length,
+    groups
+  });
 });
 
 aiChatRouter.get("/history", async (req, res) => {

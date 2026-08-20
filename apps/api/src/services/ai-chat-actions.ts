@@ -29,6 +29,8 @@ const ISO_DAY = /^\d{4}-\d{2}-\d{2}$/;
 export const AI_CHAT_ACTIONS: ReadonlyArray<AiChatToolSpec & { run: (args: Record<string, unknown>, ctx: AiChatToolContext) => Promise<string> }> = [
   {
     name: "log_timesheet_draft",
+    group: "Timesheets",
+    acts: true,
     description:
       "Record time the asking person says they worked, as a DRAFT they will review and submit themselves. " +
       "Ask them for anything you are missing before calling — never invent hours, dates or descriptions. " +
