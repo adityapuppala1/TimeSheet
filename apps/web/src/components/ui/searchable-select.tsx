@@ -66,9 +66,15 @@ export function SearchableSelect({
           aria-expanded={open}
           aria-label={ariaLabel}
           disabled={disabled}
-          className={cn("w-full justify-between font-normal", className)}
+          /* `min-w-0` is load-bearing, not tidying. `truncate` sets overflow:hidden +
+             text-overflow:ellipsis, but a flex/grid item defaults to `min-width: auto`, which
+             refuses to shrink below its own content — so a long value grows the trigger past its
+             column instead of ellipsing, and the whole page scrolls sideways. Measured: a 250px
+             cell rendering a 727px trigger. Needed on the button (a grid item) AND on the span
+             (a flex item inside it). */
+          className={cn("w-full min-w-0 justify-between font-normal", className)}
         >
-          <span className={cn("truncate", selected ? "" : "text-muted-foreground")}>
+          <span className={cn("min-w-0 truncate", selected ? "" : "text-muted-foreground")}>
             {selected ? selected.name : placeholder}
           </span>
           <ChevronsUpDown className="ml-2 h-4 w-4 shrink-0 opacity-50" />
