@@ -40,6 +40,11 @@ that does not exist yet.
   at execution would work but waste your steps on refusals.
 - **Everything a capability returns is scanned for secrets before the model sees it**, using the same
   masking the AI capture layer applies. A scanner finding's title can *be* the leaked credential.
+- **Sign-in, scheduled reports and project risk answer too.** Whether SSO is on and which provider,
+  what reports go out weekly and whether any failed to send, and which projects are carrying risk
+  right now with the signals behind it. Email answers also cover the per-category switches and name
+  the super-admin BCC explicitly — it is the usual reason one inbox sees everything, and the category
+  toggles almost never are. Secrets are reported as set or not set, never read.
 - **The chat is rate-limited like every other thing that spends model calls** (20/min). A chat box is
   the easiest place in the product to spend a budget by holding down Enter, and the monthly ceiling
   underneath it is too coarse to notice a minute of hammering.
@@ -58,6 +63,10 @@ that does not exist yet.
 - **The assistant stopped asking permission to read.** Caution meant for the one thing it can write
   had leaked into everything it can look at, so "how much email went out?" came back as "would you
   like me to pull that?".
+- **It stopped asking permission for sensitive-sounding topics.** "Is SSO enabled?" came back as
+  "would you like me to check?" every time, while questions about spend answered straight away. The
+  rule saying reads never need permission was there — just too far from the point where the
+  assistant decides what to do next.
 - **It stopped declining things it could plainly do.** The scope rules had been written as a wall of
   prohibitions, and on a small model that produced the behaviour they forbade — six operational
   questions in a row answered with polite refusals that paraphrased the prohibition, without a single

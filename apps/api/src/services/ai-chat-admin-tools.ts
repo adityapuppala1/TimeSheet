@@ -21,6 +21,8 @@
  */
 import { permissions } from "@timesheet/shared";
 import { prisma } from "../config/prisma.js";
+import { controlPrisma } from "../config/control-prisma.js";
+import { requireTenantContext } from "../config/tenant-context.js";
 import type { AiChatToolContext } from "./ai-chat-tools.js";
 import type { ToolAccess } from "./ai-chat-guardrails.js";
 
@@ -331,7 +333,7 @@ export const AI_CHAT_ADMIN_TOOLS: ReadonlyArray<AdminTool> = [
     group: "Configuration",
     access: SUPER,
     run: async () => {
-      const [ai, tickets, planning, change, intake, chat, git, face] = await Promise.all([
+      const [ai, tickets, planning, change, intake, chat, git, face, notify, mail] = await Promise.all([
         prisma.globalAISettings.findFirst(),
         prisma.globalTicketSettings.findFirst(),
         prisma.globalPlanningSettings.findFirst(),
@@ -339,7 +341,9 @@ export const AI_CHAT_ADMIN_TOOLS: ReadonlyArray<AdminTool> = [
         prisma.ingestionSettings.findFirst(),
         prisma.chatIntegration.findMany({ select: { platform: true, isEnabled: true } }),
         prisma.gitConnection.findMany({ select: { provider: true, connectedAt: true } }),
-        prisma.globalFaceVerificationSettings.findFirst()
+        prisma.globalFaceVerificationSettings.findFirst(),
+        prisma.globalNotificationSettings.findFirst(),
+        prisma.globalMailSettings.findFirst()
       ]);
       const onOff = (v: unknown) => (v ? "on" : "off");
       const lines: string[] = [];
@@ -362,6 +366,26 @@ export const AI_CHAT_ADMIN_TOOLS: ReadonlyArray<AdminTool> = [
       lines.push(`Chat platforms: ${chat.length ? chat.map((c) => `${c.platform}=${onOff(c.isEnabled)}`).join(", ") : "none configured"}`);
       lines.push(`Git: ${git.length ? git.map((g) => `${g.provider} connected ${g.connectedAt?.toISOString().slice(0, 10) ?? "?"}`).join(", ") : "not connected"}`);
       if (face) lines.push(`Face verification: enabled=${onOff(face.enabled)}`);
+      if (notify) {
+        // The per-category email switches, in full. "Why is my inbox full" is one of the commonest
+        // questions this tool gets, and the answer is almost always one of these rows plus the
+        // super-admin BCC below it — not a bug in a template.
+        const categories = Object.entries(notify).filter(([k, v]) => typeof v === "boolean" && k.startsWith("email"));
+        const on = categories.filter(([, v]) => v).map(([k]) => k.replace(/^email/, ""));
+        const off = categories.filter(([, v]) => !v).map(([k]) => k.replace(/^email/, ""));
+        lines.push(`Email categories ON: ${on.join(", ") || "none"}`);
+        lines.push(`Email categories OFF: ${off.join(", ") || "none"}`);
+        if (notify.bccSuperAdminOnAllEmails) {
+          lines.push("NOTE: every outbound email is BCC'd to the super admin. This is the usual reason one inbox sees everything, ahead of any category toggle.");
+        }
+      }
+      if (mail) {
+        lines.push(
+          `Mail delivery: ${mail.host ? `${mail.host}:${mail.port}${mail.secure ? " (TLS)" : ""}` : "no SMTP host set"}, ` +
+            `${mail.fromAddress ? `from ${mail.fromAddress}` : "no from address"}, ` +
+            `throttle ${mail.maxMessagesPerWindow}/${Math.round(mail.rateWindowMs / 1000)}s`
+        );
+      }
       return lines.join(NL);
     }
   },
@@ -404,6 +428,131 @@ export const AI_CHAT_ADMIN_TOOLS: ReadonlyArray<AdminTool> = [
         `Since ${from.toISOString().slice(0, 10)}: ${escalations} timesheet escalations (${unresolved} still unresolved).${NL}` +
         `Tickets past their SLA due date and not yet resolved: ${breached}.`
       );
+    }
+  },
+  {
+    name: "sso_and_auth",
+    description:
+      "SSO providers and their enabled state, plus the password-login and SSO-required switches. The tool for 'is SSO on', 'which identity provider do we use', 'can people still use passwords'.",
+    args: "{}",
+    group: "Configuration",
+    access: SUPER,
+    run: async () => {
+      // The ONE tool here that reads the control plane rather than the tenant database. SSO is about
+      // how people authenticate INTO this org, so it lives in OrgSsoConfig/OrgAuthMethod beside the
+      // org registry — scoped to this org's id, exactly as GET /settings/sso does.
+      const { orgId } = requireTenantContext();
+      const [configs, authMethod] = await Promise.all([
+        controlPrisma.orgSsoConfig.findMany({ where: { organizationId: orgId } }),
+        controlPrisma.orgAuthMethod.findUnique({ where: { organizationId: orgId } })
+      ]);
+      const lines = configs.map((c) => {
+        // Secrets are reported as SET or NOT SET and never read — the same write-only masking the
+        // settings page uses. A chat answer is somewhere a client secret must never appear, and
+        // "is it configured" is the whole question anybody actually asks.
+        const detail = [
+          c.clientId ? `client ${c.clientId}` : null,
+          c.encryptedClientSecret ? "secret SET" : "secret NOT SET",
+          c.idpSsoUrl ? `IdP ${c.idpSsoUrl}` : null,
+          c.ldapUrl ? `LDAP ${c.ldapUrl}` : null,
+          c.tenantHint ? `tenant ${c.tenantHint}` : null
+        ].filter(Boolean);
+        return `${c.providerType}: ${c.isEnabled ? "enabled" : "configured but off"}${detail.length ? ` — ${detail.join(", ")}` : ""}`;
+      });
+      const password = authMethod?.passwordLoginEnabled ?? true;
+      const ssoOnly = authMethod?.requireSsoOnly ?? false;
+      return (
+        `${configs.length ? lines.join(NL) : "No SSO providers configured — everyone signs in with a password."}${NL}` +
+        `Password login: ${password ? "allowed" : "blocked"}. SSO required: ${ssoOnly ? "yes" : "no"}.`
+      );
+    }
+  },
+  {
+    name: "scheduled_reports",
+    description:
+      "Scheduled report subscriptions and recurring reminders — what goes out, how often, to whom, when it last sent, and whether the last send failed. The tool for 'what reports go out weekly', 'who gets the digest', 'did the scheduled report send'.",
+    args: "{}",
+    group: "Delivery",
+    access: { permission: permissions.REPORTS_VIEW },
+    run: async () => {
+      const rows = await prisma.reportSubscription.findMany({
+        select: {
+          name: true, reportKey: true, cadence: true, dayOfWeek: true, dayOfMonth: true, hourUtc: true,
+          recipients: true, format: true, isActive: true, lastSentAt: true, lastSendError: true,
+          dashboard: { select: { name: true } }
+        },
+        orderBy: { name: "asc" },
+        take: 40
+      });
+      if (rows.length === 0) return "No scheduled reports configured.";
+      const DAYS = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
+      const lines = rows.map((r) => {
+        const when =
+          r.cadence === "WEEKLY" && r.dayOfWeek !== null
+            ? `weekly on ${DAYS[r.dayOfWeek] ?? `day ${r.dayOfWeek}`}`
+            : r.cadence === "MONTHLY" && r.dayOfMonth !== null
+              ? `monthly on day ${r.dayOfMonth}`
+              : String(r.cadence).toLowerCase();
+        const to = Array.isArray(r.recipients) ? `${r.recipients.length} recipient${r.recipients.length === 1 ? "" : "s"}` : "recipients not set";
+        const subject = r.dashboard?.name ?? r.reportKey ?? "custom";
+        // The last error matters as often as the schedule does: a subscription that is "active" and
+        // has failed every week for a month reads as perfectly healthy in a list of names.
+        return (
+          `${r.name} (${r.isActive ? "active" : "paused"}) — ${subject}, ${when} at ${r.hourUtc}:00 UTC, ${r.format}, ${to}` +
+          (r.lastSentAt ? `, last sent ${r.lastSentAt.toISOString().slice(0, 16).replace("T", " ")}` : ", never sent") +
+          (r.lastSendError ? ` — LAST SEND FAILED: ${r.lastSendError.slice(0, 120)}` : "")
+        );
+      });
+      return `${rows.length} scheduled reports:${NL}${lines.join(NL)}`;
+    }
+  },
+  {
+    name: "project_health",
+    description:
+      "The latest computed risk score and band per project, with the signals behind it. The tool for 'which projects are at risk', 'how healthy is delivery', 'what is driving the risk on X'.",
+    args: '{ "project"?: string }',
+    group: "Delivery",
+    access: { permission: permissions.REPORTS_VIEW },
+    run: async (args) => {
+      const query = typeof args.project === "string" ? args.project.trim() : "";
+      const projects = await prisma.project.findMany({
+        where: { deletedAt: null, ...(query ? { OR: [{ code: { contains: query } }, { name: { contains: query } }] } : {}) },
+        select: {
+          code: true,
+          name: true,
+          // The LATEST snapshot only. The table keeps history for the trend chart; a chat answer to
+          // "which projects are at risk" wants today's reading, not every reading ever taken.
+          riskSnapshots: { orderBy: { computedAt: "desc" }, take: 1, select: { riskScore: true, band: true, signals: true, computedAt: true } }
+        },
+        orderBy: { code: "asc" },
+        take: 40
+      });
+      const scored = projects.filter((project) => project.riskSnapshots.length > 0);
+      if (scored.length === 0) {
+        return projects.length === 0
+          ? "No projects matched."
+          : "No risk has been computed for those projects yet. Snapshots are written by the planning layer — an empty result means 'not yet measured', not 'healthy'.";
+      }
+      // RiskBand is GREEN/AMBER/RED — not the CRITICAL/HIGH/MEDIUM/LOW vocabulary the security and
+      // ticket models use. Worth stating, because a plausible-looking map of the wrong enum sorts
+      // everything into the fallback bucket and silently degrades to "by score", which still looks
+      // like a working answer.
+      const BAND_ORDER: Record<string, number> = { RED: 0, AMBER: 1, GREEN: 2 };
+      const lines = scored
+        .map((project) => ({ project, snap: project.riskSnapshots[0] }))
+        .sort((a, b) => (BAND_ORDER[String(a.snap.band)] ?? 9) - (BAND_ORDER[String(b.snap.band)] ?? 9) || b.snap.riskScore - a.snap.riskScore)
+        .map(({ project, snap }) => {
+          const signals =
+            snap.signals && typeof snap.signals === "object" && !Array.isArray(snap.signals)
+              ? Object.entries(snap.signals as Record<string, unknown>)
+                  .filter(([, value]) => typeof value === "number" || typeof value === "string" || typeof value === "boolean")
+                  .map(([key, value]) => `${key}=${value}`)
+                  .slice(0, 6)
+                  .join(", ")
+              : "";
+          return `${project.code} (${project.name}): ${snap.band} ${snap.riskScore}/100 as of ${snap.computedAt.toISOString().slice(0, 10)}${signals ? ` — ${signals}` : ""}`;
+        });
+      return lines.join(NL);
     }
   },
   {

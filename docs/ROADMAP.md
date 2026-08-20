@@ -2664,10 +2664,14 @@ Still open, and deliberately not built yet:
   database-per-org product a subtly wrong key is a cross-tenant disclosure rather than a stale
   answer. Worth doing under real traffic, with that as the first test.
 - [ ] **Prompt caching is not wired, and may not fire if it were.** Every call ships one
-  concatenated `user` string with no `system` block, and the variable data is placed FIRST — caching
-  works on a stable prefix, so as written there is nothing cacheable. Reordering is cheap; the open
-  question is whether these prompts clear the provider's minimum cacheable prefix at all on the
-  economy model, which needs checking against current provider docs before any work is planned on it.
+  concatenated `user` string with no `system` block. **Corrected 2026-08-20:** this item used to say
+  the variable data is placed first on every call, so nothing is cacheable. That is no longer true of
+  the largest prompt in the product. `askWorkspaceChat` orders its prompt preamble → tool list →
+  history → question → tool results, so roughly 7KB of it is stable for a given role and only the
+  tail varies. The tool list is role-filtered, which means a cache key would need the role in it, but
+  a super admin asking five questions in a row sends the same 7KB prefix five times. The open
+  question is unchanged: whether these prompts clear the provider's minimum cacheable prefix at all
+  on the economy model, which needs checking against current provider docs before work is planned.
 - [ ] **Cache-token usage is not captured.** `CallChatResult.usage` records input and output only.
   The providers return cache-read and cache-creation counts separately, and without them there is no
   way to show whether either item above actually worked. This is the prerequisite for the two, not
@@ -4440,3 +4444,112 @@ claims otherwise is how you end up looking in the wrong log.
 
 **Expected wall clock**: ~2 minutes of setup per shard plus a quarter of the test time. Around 18
 minutes with today's failures still present, and roughly 6 once they are fixed — against 75.
+
+## V9 — Change Management, and an assistant that knows who is asking (2026-08-19 → 2026-08-20)
+
+Branch `V9`, cut from V8. Two bodies of work that turned out to share a spine: a change-management
+module, and the AI surfaces that read it. Recorded here in the order the decisions were forced,
+because several of them were forced by measurement rather than chosen.
+
+### The module (v3.0.0)
+
+**A change IS a ticket.** `ChangeRequest` extends a `Ticket` rather than paralleling it, which is the
+decision every later one falls out of: comments, attachments, watchers, SLA clocks, project scope,
+the audit trail and every automation action that works on a ticket work on a change for free. The
+alternative — a second work item with its own everything — would have been a second product.
+
+Shipped: the state machine with `assertLegalChangeTransition` / `assertReadyFor` /
+`assertDependenciesClear` living in the SERVICE rather than the controller, so a second caller (the
+Workflow Studio) re-enters the same gates; runbooks with a dependency gate; risk scoring;
+approval policies; the CAB calendar with collision detection; post-implementation review; seven
+master-data catalogues under super-admin CRUD; CSV/Excel/PDF export; and the Context tab.
+
+Decisions worth not re-litigating:
+
+- **`MAJOR` stays in the enum.** It was reachable but absent from the §10 vocabulary
+  (Standard/Normal/Emergency). Retained as a high-ceremony Normal with tripwire tests, rather than
+  removed — an enum value in a shipped database is not a free deletion.
+- **The finished-stage SLA is judged on elapsed time, not `now`.** A stage that finished last Tuesday
+  was being measured against the current clock, so every completed stage eventually breached.
+- **The month rollup moved server-side.** The home page computed it from a 100-row-capped list, so on
+  a busy account the projects worked early in the month simply vanished. It looked right in
+  development and wrong in production, which is the whole reason it is worth recording.
+- **Approval-policies card removed.** It called `GET /changes/config/policies`, a route for an engine
+  that was never built — a 404 on every settings visit. The v3.0.0 release notes claimed it shipped;
+  that claim was corrected rather than the route stubbed.
+
+### The AI capabilities
+
+Four, each through the existing contract — a `GlobalAISettings` toggle, a registry entry with a
+ceiling, a versioned prompt, a usage row. `change_risk_narrative` and `change_conflict_brief` narrate
+and write nothing; `change_draft_assist` and `change_pir_assist` emit proposal rows somebody accepts
+individually. Full reasoning in [AI_AND_AUTOMATION_FOR_CHANGE.md](AI_AND_AUTOMATION_FOR_CHANGE.md),
+which is now complete.
+
+**The omission rule**, which is the finding worth carrying forward: asked to draft a backout plan
+with nothing to draft from, the model wrote *"A backout procedure has not been documented at this
+time"* into the field an approver relies on. A confident sentence saying nothing is worse than a
+blank field, because a blank field is honest and a paragraph is not. Every drafting capability now
+declines a section it cannot ground, and says which.
+
+**Nothing can approve a change**, at any autonomy level, behind any toggle. The workflow action list
+carries the same hole deliberately: `CHANGE_TRANSITION` exists and re-enters all three gates;
+approve, reject and edit-after-approval are absent.
+
+### Ask AI — the page, the loop, and the guardrails
+
+A full-page assistant with a stored history, per-answer receipts (model, tokens, cost, duration,
+tools consulted) and thumbs that feed the same golden datasets every other capability's ratings do.
+
+- **A JSON action loop, not native tool-calling.** This is a bring-your-own-key product; native tool
+  calling is a per-provider dialect many configured models do not speak.
+- **The read surface is two files, and the split IS the access boundary.**
+  `ai-chat-tools.ts` is project-scoped and reaches nothing the asker could not already open;
+  `ai-chat-admin-tools.ts` reaches the workspace and every entry carries a gate mirroring the
+  permission its equivalent PAGE requires. A test asserts nothing in the second file is ungated, and
+  greps both for every Prisma write verb.
+- **One predicate, applied twice** (`ai-chat-guardrails.ts`): once to decide what the prompt may
+  mention, once before anything runs. Prompt-only filtering is security by suggestion.
+- **Actions produce drafts, never submissions.** One action exists, and it calls the timesheet form's
+  own `saveTimesheet` so the overlap check, assignment gate and audit row apply from one
+  implementation.
+
+Measured on the seeded workspace: 31 capabilities for a super admin, 15 for a manager, 13 for an
+employee.
+
+### What the measuring found, and what it cost to learn
+
+An adversarial review (17 agents) confirmed 14 bugs, all fixed — the notable ones being prompt
+injection through undelimited tool results, `find_people` leaking the full directory to anyone with
+`tickets:view`, and a chart repair that ran before parsing and could corrupt valid input.
+
+Four more came from running the thing rather than reading it, and three of the four were regressions
+introduced by the fix for the one before:
+
+- **A failed exchange poisoned the next several.** Recent turns are fed back as context and the model
+  copied its own failures — declining questions it had answered correctly minutes earlier.
+  Excluding errors was not enough: a fluent *"I'm sorry, I encountered an error"* is stored as an
+  ANSWER and is the most copyable thing in the window. Only exchanges that consulted a tool are
+  carried now.
+- **Provider tool-call syntax reached the chat window.** The format guard recognised only
+  JSON-shaped attempts, so `<|tool_call>call:ai_spend{days:30}` was published as somebody's answer.
+- **Prohibitions taught the behaviour they forbade.** The scope rules were written as five dense
+  lines of "never decline / never offer alternatives / do not invent". On the configured model that
+  produced six operational questions in a row answered with polite refusals that paraphrased the
+  prohibition — **0 of 8 questions consulted a tool**. Rewritten as positives: **7 of 8**.
+- **Position beat wording.** Even then, authentication questions came back as "would you like me to
+  look that up?" three times out of three, while spend and health answered directly. The read-first
+  rule was present but sat in the preamble, far from where the choice is made. Repeating it beside
+  the reply-format block fixed all three — **6 of 6** — with no change to the tool or its
+  description. Rewording the description first had changed nothing, which is what makes this worth
+  recording: the instruction was not missing, it was too far away.
+
+### Still open from this branch
+
+- [ ] **Ask AI has one action.** Drafting a timesheet entry is the only thing the assistant can do
+  rather than read. Raising a ticket, commenting, and drafting a change are all shaped the same way
+  (a draft somebody submits) and none are built. Not a gap so much as an unmade decision: each new
+  action widens what a sentence can cause, and the draft-only rule is what keeps that bounded.
+- [ ] **The e2e suite has not been run against this branch.** The unit suite (1416) and lint pass;
+  Playwright is configured and sharded in CI but was not run locally against V9.
+

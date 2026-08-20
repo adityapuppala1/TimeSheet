@@ -1255,8 +1255,11 @@ the agent roster and the workflow list — each scoped through the same `ticketP
 use, each running as the asking person, none reaching past what that person could already open.
 `ai-chat-admin-tools.ts` holds the OPERATIONAL ones — AI spend and answer quality, email volume and
 failure reasons, email templates, service health, API latency percentiles, the audit log, security
-findings, CI runs, identity-check outcomes, workspace configuration, headcount, SLA breaches and
-automation activity — and every entry there carries an access gate. Both files are held provably
+findings, CI runs, identity-check outcomes, workspace configuration, SSO and auth methods, scheduled
+report subscriptions, project risk, headcount, SLA breaches and automation activity — and every entry
+there carries an access gate. `sso_and_auth` is the one tool that reads the CONTROL plane rather than
+the tenant database, scoped to the caller's own org exactly as `GET /settings/sso` is, and it reports
+every secret as SET or NOT SET rather than reading it. Both files are held provably
 read-only by a test that greps them for every Prisma write verb, and a second test asserts that no
 tool in the admin registry is ungated.
 
@@ -1275,7 +1278,7 @@ and burn steps on them. Everything a tool returns then passes through `sanitiseT
 applies the AI layer's own secret masking (a scanner finding's title can BE the leaked credential)
 and one shared 2,400-character cap.
 
-Measured effect on the seeded workspace: a super admin sees 28 capabilities, a manager 15, an
+Measured effect on the seeded workspace: a super admin sees 31 capabilities, a manager 17, an
 employee 13.
 
 The action registry (`ai-chat-actions.ts`) holds what the assistant may DO, and currently that is
@@ -1302,6 +1305,13 @@ consulted tool is the positive signal that separates the two: an exchange that f
 exactly what a follow-up refers back to, and one that fetched nothing is a decline, a format failure
 or small talk. Failures still render in the page's feed, where "it failed at 14:02, and this is why"
 belongs.
+
+**The read-first rule appears twice, and position mattered more than wording.** Even with the
+prompt rewritten in positives, questions about authentication came back as "would you like me to look
+that up?" three times out of three, while spend and health answered directly — a model being careful
+about a topic it is trained to be careful about. Rewording the tool's description changed nothing.
+Repeating the rule beside the reply-format block, where the choice is actually made, fixed all three.
+The instruction was not missing; it was too far from the decision.
 
 **The prompt is written in positives, and that is load-bearing.** An earlier draft framed the scope
 rules as five lines of prohibitions — "never decline", "never offer alternatives", "may you say a

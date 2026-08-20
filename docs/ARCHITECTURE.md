@@ -129,9 +129,12 @@ isolation boundary (the separate physical databases are).
 ### 3.3 The AI layer — one choke point
 
 `apps/api/src/services/ai.service.ts` is the **only** place that knows how to call an LLM.
-Every capability (`classifyTicket`, `classifyChatMessage`, `findDuplicateTickets`, writing
-assistant, comment summary, workspace search, weekly digest) goes through `preflight(feature)` →
-`callChat(settings, params)`. `preflight` enforces: the workspace-wide `aiEnabled` switch, the
+Every capability goes through `preflight(feature)` → `callChat(settings, params)` — around thirty of
+them now, so the authoritative list is `ai-capability.registry.ts` rather than a sentence here that
+goes stale every release. The families: ticket and chat classification, duplicate detection, the
+writing assistant, comment summaries, weekly digests, the two face assessments, project risk
+narration, agent steps, the four change-management capabilities (§3.13), and the Ask AI answer loop
+(§3.14). `preflight` enforces: the workspace-wide `aiEnabled` switch, the
 specific feature's own toggle, and the **effective AI budget** (`min(org's own budget, plan-tier
 ceiling)`, re-read on every call so a platform admin lowering a tier's ceiling takes effect
 immediately, not after some reconciliation job). `callChat` branches on `GlobalAISettings.provider`
@@ -578,6 +581,65 @@ and cost sit beside a **measured or absent** estimate of the human time it displ
 Everything is inert until switched on: `aiPmCopilotEnabled` gates the whole family at the tier,
 profiles and flows are created off, and activation is refused while a flow has any validation error.
 
+### 3.13 Change management (V9) — a change IS a ticket
+
+The founding decision, and the one every other falls out of: `ChangeRequest` **extends** a `Ticket`
+rather than paralleling it. A change has a ticket id, and therefore has comments, attachments,
+watchers, SLA clocks, project scope, the audit trail, export, search and every automation action that
+works on a ticket — none of it re-implemented. The alternative, a second work item with its own
+everything, would have been a second product to maintain and a second place for every bug.
+
+**The gates live in the service, not the controller.** `assertLegalChangeTransition`,
+`assertReadyFor` and `assertDependenciesClear` sit in `change.service.ts` because there are now two
+callers — the API route and the Workflow Studio's `CHANGE_TRANSITION` action — and a gate that lives
+in a controller is a gate the second caller walks past. `change-automation-actions.test.ts` pins
+exactly that: an automation cannot move a change past its own requirements.
+
+**Nothing may approve a change.** Not at any autonomy level, not behind any toggle, not through a
+workflow. An approval is a statement that a named person accepts the risk, it has no undo, and the
+module exists to make that statement real. The workflow action list carries the hole deliberately:
+transition, comment and tag-collaborator exist; approve, reject and edit-after-approval do not.
+
+Four AI capabilities read the module, none of them writing directly — two narrate
+(`change_risk_narrative`, `change_conflict_brief`) and two emit proposal rows a person accepts per
+field (`change_draft_assist`, `change_pir_assist`), through the same `AiProposal` envelope §3.12
+describes. The allowlist is six prose fields; no state, risk score, schedule or outcome is reachable
+however a model replies. Reasoning in `docs/AI_AND_AUTOMATION_FOR_CHANGE.md`.
+
+### 3.14 Ask AI — an answer loop with two filters and one predicate
+
+`askWorkspaceChat` answers a question by consulting a tool registry, up to five steps, then
+answering. It is **not native tool-calling**: this is a bring-your-own-key product where the
+configured model may be anything, and "reply with exactly one JSON object — a tool request or an
+answer" works on anything that follows an instruction. A model that ignores the format degrades to
+its raw text becoming the answer.
+
+**The read surface is two files, and the split is the access boundary made structural.**
+`ai-chat-tools.ts` holds project-scoped tools that reach nothing the asker could not already open;
+`ai-chat-admin-tools.ts` holds operational ones — spend, mail, health, audit, security,
+configuration, SSO, scheduled reports, project risk — and every entry there carries an access gate
+mirroring the permission its equivalent PAGE requires. A tool in the wrong file is visible in review,
+and a test asserts nothing in the admin registry is ungated. Both are held provably read-only by a
+grep for every Prisma write verb.
+
+**One predicate, applied twice.** `ai-chat-guardrails.ts` holds `canUseTool`; `visibleTools` decides
+what the prompt may mention and `assertToolAllowed` decides what may run. Filtering only the prompt
+is security by suggestion — a model that guesses a name it never saw, or is talked into one by text
+inside a ticket, would reach a real query. Tool output then passes `sanitiseToolResult`, which
+applies the same secret masking the AI capture layer uses and one shared size cap.
+
+**Actions are a third registry with a different contract.** `ai-chat-actions.ts` holds what the
+assistant may DO, and everything in it produces a **draft, never a submission** — submitting starts an
+approval SLA clock and, where required, an identity check, and an assistant must not trigger either
+from a sentence. Its one action calls the timesheet form's own `saveTimesheet`, so every validation
+applies from one implementation.
+
+Two behaviours here were established by measurement and are load-bearing rather than stylistic;
+both are recorded in `docs/ROADMAP.md` under V9. **Only exchanges that consulted a tool become
+context for the next question** — fed its own failures back, the model copies them. And **the
+prompt is written in positives, with the read-first rule repeated at the decision point** — as
+prohibitions in the preamble it produced the refusals it forbade.
+
 ## 4. Request lifecycle (a normal, tenant-resolved API call)
 
 ```mermaid
@@ -959,4 +1021,4 @@ flowchart TB
 
 ---
 
-*Last updated during: Track D (LDAP SSO), Track E (Slack/Teams/Google Chat/Telegram connectors), Track F (CI/CD, one-click installers, Kubernetes Helm chart with autoscaling).*
+*Last updated: 2026-08-20, for V9 — change management (§3.13) and the Ask AI answer loop (§3.14).*
