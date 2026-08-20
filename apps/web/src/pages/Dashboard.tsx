@@ -31,6 +31,7 @@ import {
   Clock,
   Clock3,
   FolderKanban,
+  GitPullRequestArrow,
   Gauge,
   Maximize2,
   PencilLine,
@@ -65,7 +66,7 @@ import { StatCard, TrendBadge } from "../components/ui/stat-card";
 import { ProjectUtilizationChart } from "../components/ProjectUtilizationChart";
 import { TimesheetEntryDialog } from "../components/TimesheetEntryDialog";
 import { computeTrend, type Trend } from "../lib/trend";
-import { reportApi, ticketApi, timesheetApi, type TicketRow } from "../services/api";
+import { dashboardApi, reportApi, ticketApi, timesheetApi, type MyMonthRollup, type TicketRow } from "../services/api";
 import { useAuthStore } from "../store/auth";
 import { DatePicker } from "../components/ui/date-picker";
 import type { CalendarDayAnnotations } from "../components/ui/calendar-primitives";
@@ -135,27 +136,14 @@ export function Dashboard() {
     refetchInterval: 60_000
   });
   const timesheets = useQuery({ queryKey: ["timesheets"], queryFn: timesheetApi.list });
+  // Counted server-side and UNCAPPED. The list above is capped at 100 rows, which silently dropped
+  // projects from the month rollup on any busy account — see dashboardApi.myMonth.
+  const myMonth = useQuery({ queryKey: ["dashboard", "my-month"], queryFn: dashboardApi.myMonth });
   const daily = useQuery({ queryKey: ["daily-status"], queryFn: reportApi.dailyStatus });
   const myTickets = useQuery({
     queryKey: ["tickets", "for-dashboard", user?.id],
     queryFn: () => ticketApi.list({ assigneeId: user!.id, status: "OPEN,IN_PROGRESS,IN_REVIEW,REOPENED" }),
     enabled: Boolean(user?.id && user.permissions.includes("tickets:view"))
-  });
-
-  /**
-   * Open and closed counts per project, COUNTED SERVER-SIDE.
-   *
-   * The open figure could be tallied from `myTickets` above, and was. Closed cannot: a long-serving
-   * assignee has hundreds of closed tickets and that list route carries a heavy include per row, so
-   * fetching them all to render one number is the thing that works on a demo workspace and falls over
-   * on a real one. One grouped query returns both, which also means the two halves of the percentage
-   * are counted the same way.
-   */
-  const ticketCounts = useQuery({
-    queryKey: ["tickets", "counts-by-project", user?.id],
-    queryFn: () => ticketApi.countsByProject(user!.id),
-    enabled: Boolean(user?.id && user.permissions.includes("tickets:view")),
-    staleTime: 60_000
   });
 
   const all: TimesheetRowLite[] = Array.isArray(timesheets.data) ? timesheets.data : [];
@@ -262,51 +250,6 @@ export function Dashboard() {
     }));
   }, [admin.data]);
 
-  /**
-   * Per-project ticket counts, preferring the server's figures and falling back to the open tickets
-   * already in hand.
-   *
-   * The fallback matters: the counts request may still be in flight, or refused for somebody without
-   * the permission, and a column that flickers between a number and nothing is worse than one that
-   * shows what it can. `closed` is null — not zero — whenever the server has not answered, so the
-   * table can say "not known yet" rather than "none closed", which are different claims.
-   *
-   * ONCE THE SERVER HAS ANSWERED, A MISSING PROJECT MEANS ZERO, NOT UNKNOWN. That distinction was
-   * the bug: the loop below only ever wrote the projects the response mentioned, so a project with
-   * no tickets kept `closed: null` and rendered an em dash forever — indistinguishable from "still
-   * loading". `settled` closes that gap by seeding every rollup row with a real zero the moment the
-   * query succeeds.
-   */
-  const ticketsByProject = useMemo(() => {
-    const counts = new Map<string, { open: number; closed: number | null; mineOpen: number; mineClosed: number | null }>();
-    for (const ticket of myTickets.data ?? []) {
-      const key = (ticket as TicketRow & { project?: { id?: string } }).project?.id;
-      if (key) {
-        const prev = counts.get(key);
-        counts.set(key, {
-          open: (prev?.open ?? 0) + 1,
-          closed: prev?.closed ?? null,
-          mineOpen: (prev?.mineOpen ?? 0) + 1,
-          mineClosed: prev?.mineClosed ?? null
-        });
-      }
-    }
-    if (ticketCounts.isSuccess) {
-      for (const row of derived.projectRows) {
-        counts.set(row.id, { open: 0, closed: 0, mineOpen: 0, mineClosed: 0 });
-      }
-      for (const row of ticketCounts.data ?? []) {
-        counts.set(row.projectId, {
-          open: row.open,
-          closed: row.closed,
-          mineOpen: row.mineOpen ?? 0,
-          mineClosed: row.mineClosed ?? 0
-        });
-      }
-    }
-    return counts;
-  }, [myTickets.data, ticketCounts.data, ticketCounts.isSuccess, derived.projectRows]);
-
   const adminStats: Array<{ label: string; value: string | number; tone?: "success" | "warning" | "destructive"; trend?: Trend | null }> = [
     { label: "Users", value: admin.data?.users ?? 0, trend: computeTrend(admin.data?.users ?? 0, admin.data?.usersYesterday ?? 0, true) },
     { label: "Projects", value: admin.data?.projects ?? 0, trend: computeTrend(admin.data?.projects ?? 0, admin.data?.projectsYesterday ?? 0, true) },
@@ -385,6 +328,8 @@ export function Dashboard() {
             weekHours={derived.weekHours}
             monthByStatus={derived.monthByStatus}
             monthHours={derived.monthHours}
+            completion={myMonth.data?.completion}
+            totals={myMonth.data?.totals}
           />
         </HeroCard>
       </div>
@@ -465,7 +410,7 @@ export function Dashboard() {
       </div>
 
       {/* ---- Per-project rollup — the Trackline "Project List", from data already loaded ---- */}
-      <ProjectRollup rows={derived.projectRows} ticketsByProject={ticketsByProject} loading={timesheets.isLoading} />
+      <ProjectRollup rollup={myMonth.data} loading={myMonth.isLoading} />
     </div>
   );
 }
@@ -627,17 +572,22 @@ function ProgressCard({
   loading,
   weekHours,
   monthByStatus,
-  monthHours
+  monthHours,
+  completion,
+  totals
 }: {
   loading: boolean;
   weekHours: number;
   monthByStatus: Record<string, number>;
   monthHours: number;
+  /** The three completion shares, counted server-side. Undefined while the rollup is in flight. */
+  completion?: MyMonthRollup["completion"];
+  totals?: MyMonthRollup["totals"];
 }) {
   if (loading) return <Skeleton className="h-full min-h-56 w-full" />;
   const weekTarget = 40;
   const weekPct = Math.min(100, Math.round((weekHours / weekTarget) * 100));
-  const approvalPct = monthHours > 0 ? Math.round(((monthByStatus.APPROVED ?? 0) / monthHours) * 100) : 0;
+  const approvedHours = monthByStatus.APPROVED ?? 0;
 
   return (
     <Card className="h-full">
@@ -646,18 +596,42 @@ function ProgressCard({
           <Gauge className="h-4 w-4 text-primary" />
           Progress
         </CardTitle>
-        <CardDescription>Week target and month approval rate.</CardDescription>
+        <CardDescription>Week target, then how much of each kind of work is finished.</CardDescription>
       </CardHeader>
       <CardContent className="grid gap-5">
         <TickMeter label={`Week target (${weekTarget}h)`} percent={weekPct} detail={`${weekHours.toFixed(1)}h logged`} tone="primary" />
+
+        {/* THREE BARS, ONE DEFINITION. Each is "done ÷ total" for its own kind of work, so they can
+            be read against each other — hours approved, tickets closed, changes closed. A single
+            combined number would hide which of the three is actually stuck. */}
         <TickMeter
-          label="Approved this month"
-          percent={approvalPct}
-          detail={`${(monthByStatus.APPROVED ?? 0).toFixed(1)}h of ${monthHours.toFixed(1)}h`}
+          label="Timesheets approved"
+          percent={completion?.timesheetPct ?? null}
+          detail={`${approvedHours.toFixed(1)}h of ${monthHours.toFixed(1)}h this month`}
           tone="success"
         />
+        <TickMeter
+          label="Tickets closed"
+          percent={completion?.ticketPct ?? null}
+          detail={
+            totals ? `${totals.tickets.closed} of ${totals.tickets.total} on your projects` : "Counting…"
+          }
+          tone="info"
+        />
+        {/* Absent, not zeroed, when change management is off — a bar reading 0% would claim a
+            measurement of something the workspace does not do. */}
+        {totals?.changes && (
+          <TickMeter
+            label="Changes closed"
+            percent={completion?.changePct ?? null}
+            detail={`${totals.changes.closed} of ${totals.changes.raised} raised on your projects`}
+            tone="warning"
+          />
+        )}
+
         <p className="text-xs text-muted-foreground">
-          Approval rate counts hours a manager has signed off. Pending hours move here once reviewed.
+          Each bar is finished work over total work of that kind. A dash means there is nothing of that kind yet —
+          which is not the same as none of it being done.
         </p>
       </CardContent>
     </Card>
@@ -666,18 +640,30 @@ function ProgressCard({
 
 /** The Trackline dotted meter: ~36 thin ticks, filled left-to-right. Sequential (one hue) —
  *  magnitude, not identity — with the number said in text right beside it. */
-function TickMeter({ label, percent, detail, tone }: { label: string; percent: number; detail: string; tone: "primary" | "success" }) {
+function TickMeter({
+  label,
+  percent,
+  detail,
+  tone
+}: {
+  label: string;
+  /** Null when there is nothing to divide by. Rendered as a dash, never as 0% — "no tickets yet"
+   *  and "no tickets done" are different claims and only one of them is a measurement. */
+  percent: number | null;
+  detail: string;
+  tone: "primary" | "success" | "info" | "warning";
+}) {
   const TICKS = 36;
-  const filled = Math.round((percent / 100) * TICKS);
-  const fill = tone === "primary" ? "bg-primary" : "bg-success";
+  const filled = percent === null ? 0 : Math.round((percent / 100) * TICKS);
+  const fill = { primary: "bg-primary", success: "bg-success", info: "bg-info", warning: "bg-warning" }[tone];
 
   return (
     <div className="grid gap-1.5">
       <div className="flex items-baseline justify-between gap-2">
         <p className="text-sm font-medium">{label}</p>
-        <p className="text-lg font-black tabular-nums">{percent}%</p>
+        <p className="text-lg font-black tabular-nums">{percent === null ? <span className="text-muted-foreground">—</span> : `${percent}%`}</p>
       </div>
-      <div className="flex items-end gap-[3px]" role="img" aria-label={`${label}: ${percent}%`}>
+      <div className="flex items-end gap-[3px]" role="img" aria-label={`${label}: ${percent === null ? "not measurable yet" : `${percent}%`}`}>
         {Array.from({ length: TICKS }, (_, i) => (
           <span key={i} className={`h-4 w-1 rounded-full ${i < filled ? fill : "bg-muted"}`} />
         ))}
@@ -1144,24 +1130,10 @@ const ROLLUP_PAGE_SIZE = 10;
  * yet. "None of your tickets here are done" and "you have no tickets here" are different facts, and a
  * dashboard that renders both as 0% is the kind that gets quoted in a meeting.
  */
-function closedShare(open: number, closed: number | null): number | null {
-  if (closed === null) return null;
-  const total = open + closed;
-  return total > 0 ? Math.round((closed / total) * 100) : null;
-}
-
-function ProjectRollup({
-  rows,
-  ticketsByProject,
-  loading
-}: {
-  rows: Array<{ id: string; name: string; code?: string; monthHours: number; approvedHours: number; entries: number; lastDate: string }>;
-  /** Per project: the PROJECT's open/closed totals (null while the server's counts have not
-   *  arrived), plus the viewer's own share of each for the hover detail. */
-  ticketsByProject: Map<string, { open: number; closed: number | null; mineOpen: number; mineClosed: number | null }>;
-  loading: boolean;
-}) {
+function ProjectRollup({ rollup, loading }: { rollup: MyMonthRollup | undefined; loading: boolean }) {
   const [page, setPage] = useState(1);
+  const rows = rollup?.projects ?? [];
+  const showChanges = Boolean(rollup?.totals.changes);
   const pageCount = Math.max(1, Math.ceil(rows.length / ROLLUP_PAGE_SIZE));
   const safePage = Math.min(page, pageCount);
   const pageRows = rows.slice((safePage - 1) * ROLLUP_PAGE_SIZE, safePage * ROLLUP_PAGE_SIZE);
@@ -1176,9 +1148,10 @@ function ProjectRollup({
           My projects this month
         </CardTitle>
         <CardDescription>
-          Hours and approval progress for the projects you&apos;ve logged against this month, alongside how each
-          project&apos;s tickets stand overall — hover a count for your own share of it. Ticket counts are a snapshot of
-          now, not of the month, so the completion share divides two figures measured the same way.
+          Every project you are assigned to or have logged against this month — hours, approval progress, how each
+          project&apos;s tickets stand{showChanges ? ", and the changes raised against it" : ""}. Counted server-side over
+          the whole month, so a busy month cannot push a project off the list. Ticket
+          {showChanges ? " and change" : ""} counts are a snapshot of now, not of the month.
         </CardDescription>
       </CardHeader>
       <CardContent>
@@ -1186,7 +1159,7 @@ function ProjectRollup({
           <Skeleton className="h-32 w-full" />
         ) : rows.length === 0 ? (
           <div className="py-8 text-center text-sm text-muted-foreground">
-            No entries this month yet.{" "}
+            No projects assigned, and nothing logged this month.{" "}
             <Link to="/app/timesheet" className="font-semibold text-primary hover:underline">
               Log your first entry →
             </Link>
@@ -1204,65 +1177,79 @@ function ProjectRollup({
                     <th className="p-2 text-right font-medium">Open</th>
                     <th className="p-2 text-right font-medium">Closed</th>
                     <th className="p-2 text-right font-medium">Done</th>
+                    {showChanges && <th className="p-2 text-right font-medium">Changes</th>}
+                    {showChanges && <th className="p-2 text-right font-medium">CM done</th>}
                     <th className="p-2 font-medium">Last entry</th>
-                    <th className="w-[26%] p-2 font-medium">Approved</th>
+                    <th className="w-[20%] p-2 font-medium">Approved</th>
                   </tr>
                 </thead>
                 <tbody>
                   {pageRows.map((row) => {
-                    const approvedPct = row.monthHours > 0 ? Math.round((row.approvedHours / row.monthHours) * 100) : 0;
-                    const tickets = ticketsByProject.get(row.id);
-                    const open = tickets?.open ?? 0;
-                    const closed = tickets?.closed ?? null;
-                    const donePct = closedShare(open, closed);
-                    // A real zero once the server has answered; the em dash is reserved for "not
-                    // known yet". `closed` is the one that carries that distinction, so it decides
-                    // for both columns.
-                    const emptyOpen = closed === null ? "—" : "0";
+                    const approvedPct = row.monthHours > 0 ? Math.round((row.approvedHours / row.monthHours) * 100) : null;
+                    const ticketTotal = row.tickets.open + row.tickets.closed;
+                    const donePct = ticketTotal > 0 ? Math.round((row.tickets.closed / ticketTotal) * 100) : null;
+                    const cmDonePct = row.changes && row.changes.raised > 0 ? Math.round((row.changes.closed / row.changes.raised) * 100) : null;
                     return (
                       <tr key={row.id} className="border-t border-border">
                         <td className="p-2">
                           <span className="font-medium">{row.name}</span>
                           {row.code && <span className="ml-2 font-mono text-xs text-muted-foreground">{row.code}</span>}
+                          {/* Says why a zero-hour row is here at all — without it an untouched project
+                              reads as a bug rather than as something you are responsible for. */}
+                          {row.entries === 0 && <Badge variant="muted" className="ml-2">assigned</Badge>}
                         </td>
                         <td className="p-2 text-right font-semibold tabular-nums">{row.monthHours.toFixed(1)}</td>
                         <td className="p-2 text-right tabular-nums text-muted-foreground">{row.entries}</td>
                         <td className="p-2 text-right" data-testid="rollup-open">
-                          {open > 0 ? (
+                          {row.tickets.open > 0 ? (
                             <HoverTip>
                               <HoverTipTrigger asChild>
-                                <Badge variant="info"><TicketIcon className="mr-1 h-3 w-3" />{open}</Badge>
+                                <Badge variant="info"><TicketIcon className="mr-1 h-3 w-3" />{row.tickets.open}</Badge>
                               </HoverTipTrigger>
-                              <HoverTipContent>{tickets?.mineOpen ?? 0} of these are assigned to you</HoverTipContent>
-                            </HoverTip>
-                          ) : (
-                            <span className="text-muted-foreground">{emptyOpen}</span>
-                          )}
-                        </td>
-                        <td className="p-2 text-right" data-testid="rollup-closed">
-                          {closed === null ? (
-                            <span className="text-muted-foreground">—</span>
-                          ) : closed > 0 ? (
-                            <HoverTip>
-                              <HoverTipTrigger asChild>
-                                <Badge variant="success"><CheckCircle2 className="mr-1 h-3 w-3" />{closed}</Badge>
-                              </HoverTipTrigger>
-                              <HoverTipContent>{tickets?.mineClosed ?? 0} of these are assigned to you</HoverTipContent>
+                              <HoverTipContent>{row.tickets.mineOpen} of these are assigned to you</HoverTipContent>
                             </HoverTip>
                           ) : (
                             <span className="text-muted-foreground">0</span>
                           )}
                         </td>
-                        {/* An em dash rather than 0% when there is nothing to divide: "none of your
-                            tickets here are done" and "you have no tickets here" are different facts. */}
+                        <td className="p-2 text-right" data-testid="rollup-closed">
+                          {row.tickets.closed > 0 ? (
+                            <HoverTip>
+                              <HoverTipTrigger asChild>
+                                <Badge variant="success"><CheckCircle2 className="mr-1 h-3 w-3" />{row.tickets.closed}</Badge>
+                              </HoverTipTrigger>
+                              <HoverTipContent>{row.tickets.mineClosed} of these are assigned to you</HoverTipContent>
+                            </HoverTip>
+                          ) : (
+                            <span className="text-muted-foreground">0</span>
+                          )}
+                        </td>
+                        {/* An em dash rather than 0% when there is nothing to divide: "none of these
+                            tickets are done" and "there are no tickets here" are different facts. */}
                         <td className="p-2 text-right text-xs font-semibold tabular-nums" data-testid="rollup-done">
                           {donePct === null ? <span className="font-normal text-muted-foreground">—</span> : `${donePct}%`}
                         </td>
-                        <td className="p-2 text-muted-foreground">{row.lastDate}</td>
+                        {showChanges && (
+                          <td className="p-2 text-right" data-testid="rollup-changes">
+                            {row.changes && row.changes.raised > 0 ? (
+                              <Badge variant="warning"><GitPullRequestArrow className="mr-1 h-3 w-3" />{row.changes.raised}</Badge>
+                            ) : (
+                              <span className="text-muted-foreground">0</span>
+                            )}
+                          </td>
+                        )}
+                        {showChanges && (
+                          <td className="p-2 text-right text-xs font-semibold tabular-nums">
+                            {cmDonePct === null ? <span className="font-normal text-muted-foreground">—</span> : `${cmDonePct}%`}
+                          </td>
+                        )}
+                        <td className="p-2 text-muted-foreground">{row.lastDate ?? "—"}</td>
                         <td className="p-2">
                           <div className="flex items-center gap-2">
-                            <Progress value={approvedPct} className="h-1.5" />
-                            <span className="w-9 text-right text-xs font-semibold tabular-nums">{approvedPct}%</span>
+                            <Progress value={approvedPct ?? 0} className="h-1.5" />
+                            <span className="w-9 text-right text-xs font-semibold tabular-nums">
+                              {approvedPct === null ? <span className="font-normal text-muted-foreground">—</span> : `${approvedPct}%`}
+                            </span>
                           </div>
                         </td>
                       </tr>
@@ -1274,11 +1261,9 @@ function ProjectRollup({
 
             <div className="grid gap-2 sm:hidden">
               {pageRows.map((row) => {
-                const approvedPct = row.monthHours > 0 ? Math.round((row.approvedHours / row.monthHours) * 100) : 0;
-                const tickets = ticketsByProject.get(row.id);
-                const open = tickets?.open ?? 0;
-                const closed = tickets?.closed ?? null;
-                const donePct = closedShare(open, closed);
+                const approvedPct = row.monthHours > 0 ? Math.round((row.approvedHours / row.monthHours) * 100) : null;
+                const ticketTotal = row.tickets.open + row.tickets.closed;
+                const donePct = ticketTotal > 0 ? Math.round((row.tickets.closed / ticketTotal) * 100) : null;
                 return (
                   <div key={row.id} className="rounded-lg border border-border p-3">
                     <div className="flex items-center justify-between gap-2">
@@ -1286,14 +1271,15 @@ function ProjectRollup({
                       <span className="font-semibold tabular-nums">{row.monthHours.toFixed(1)}h</span>
                     </div>
                     <div className="mt-2 flex items-center gap-2">
-                      <Progress value={approvedPct} className="h-1.5" />
-                      <span className="text-xs font-semibold tabular-nums">{approvedPct}%</span>
+                      <Progress value={approvedPct ?? 0} className="h-1.5" />
+                      <span className="text-xs font-semibold tabular-nums">{approvedPct === null ? "—" : `${approvedPct}%`}</span>
                     </div>
                     <div className="mt-2 flex items-center justify-between text-xs text-muted-foreground">
-                      <span>{row.entries} entries · last {row.lastDate}</span>
+                      <span>{row.entries} entries · last {row.lastDate ?? "—"}</span>
                       <span className="flex items-center gap-1.5">
-                        {open > 0 && <Badge variant="info">{open} open</Badge>}
-                        {closed !== null && closed > 0 && <Badge variant="success">{closed} closed</Badge>}
+                        {row.tickets.open > 0 && <Badge variant="info">{row.tickets.open} open</Badge>}
+                        {row.tickets.closed > 0 && <Badge variant="success">{row.tickets.closed} closed</Badge>}
+                        {row.changes && row.changes.raised > 0 && <Badge variant="warning">{row.changes.raised} CM</Badge>}
                         {donePct !== null && <span className="font-semibold tabular-nums">{donePct}% done</span>}
                       </span>
                     </div>
@@ -1301,6 +1287,14 @@ function ProjectRollup({
                 );
               })}
             </div>
+
+            {/* Stated rather than silent — the server caps the list, and a card that quietly drops
+                projects is the bug this whole route was written to fix. */}
+            {rollup?.truncated && (
+              <p className="mt-3 text-xs text-muted-foreground">
+                Showing the busiest projects only — this account is on more than the card can list.
+              </p>
+            )}
 
             {/* Only surfaces once there's more than one page — a footer under three rows is
                 noise. Same visual shape as DataTable's footer for consistency. */}
@@ -1435,6 +1429,19 @@ function WorkforceSnapshot({ data, loading }: { data?: any; loading: boolean }) 
   const remindersTrend = computeTrend(reminders, Number(data.todayDailyRemindersSentYesterday ?? 0), false);
   const escalationsTrend = computeTrend(escalations, Number(data.todayEscalationsSentYesterday ?? 0), false);
 
+  const ticketsRaised = Number(data.ticketsRaisedToday ?? 0);
+  const ticketsClosed = Number(data.ticketsClosedToday ?? 0);
+  // Null passes straight through, so "change management is off" stays distinguishable from "none
+  // raised today" — the same rule the rest of this page follows.
+  const changesRaised = data.changesRaisedToday ?? null;
+  const changesClosed = data.changesClosedToday ?? null;
+  // More tickets raised is not good news and not bad news on its own, so it carries no colour;
+  // closing more is good, and both change figures follow the same reading.
+  const ticketsRaisedTrend = computeTrend(ticketsRaised, Number(data.ticketsRaisedYesterday ?? 0), null);
+  const ticketsClosedTrend = computeTrend(ticketsClosed, Number(data.ticketsClosedYesterday ?? 0), true);
+  const changesRaisedTrend = computeTrend(Number(changesRaised ?? 0), Number(data.changesRaisedYesterday ?? 0), null);
+  const changesClosedTrend = computeTrend(Number(changesClosed ?? 0), Number(data.changesClosedYesterday ?? 0), true);
+
   return (
     <Card>
       <CardHeader className="flex flex-row flex-wrap items-center justify-between gap-3 space-y-0 pb-3">
@@ -1455,6 +1462,21 @@ function WorkforceSnapshot({ data, loading }: { data?: any; loading: boolean }) 
           <SnapshotStat label="Reminders sent" value={reminders} trend={remindersTrend} trendLabel="vs yesterday" />
           <SnapshotStat label="Escalations" value={escalations} trend={escalationsTrend} trendLabel="vs yesterday" />
           <SnapshotStat label="vs YTD avg/day" value={`${ytdAvgLoggedPerDay.toFixed(1)}`} trend={vsYtdAvg} trendLabel="today vs avg" />
+        </div>
+
+        {/* The other two kinds of work the workforce did today. Same day boundary and same
+            vs-yesterday comparison as the row above, so the three read as one picture rather than
+            three widgets that happen to share a card. */}
+        <div className="grid grid-cols-2 gap-2.5 text-sm sm:grid-cols-4">
+          <SnapshotStat label="Tickets raised" value={ticketsRaised} trend={ticketsRaisedTrend} trendLabel="vs yesterday" />
+          <SnapshotStat label="Tickets closed" value={ticketsClosed} trend={ticketsClosedTrend} trendLabel="vs yesterday" />
+          {/* Absent, not zeroed, when change management is off. */}
+          {changesRaised !== null && (
+            <SnapshotStat label="Changes raised" value={changesRaised} trend={changesRaisedTrend} trendLabel="vs yesterday" />
+          )}
+          {changesClosed !== null && (
+            <SnapshotStat label="Changes closed" value={changesClosed} trend={changesClosedTrend} trendLabel="vs yesterday" />
+          )}
         </div>
       </CardContent>
     </Card>

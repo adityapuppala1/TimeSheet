@@ -14,7 +14,9 @@
 import { Router, type Request } from "express";
 import PDFDocument from "pdfkit";
 import { permissions } from "@timesheet/shared";
+import type { TicketStatus } from "@prisma/client";
 import { prisma } from "../config/prisma.js";
+import { isChangeManagementOn } from "../services/change.service.js";
 import { controlPrisma } from "../config/control-prisma.js";
 import { tenantContext } from "../config/tenant-context.js";
 import { requireAuth, requirePermission } from "../middleware/auth.js";
@@ -197,6 +199,33 @@ reportRouter.get("/admin-summary", requirePermission(permissions.REPORTS_VIEW), 
     select: { id: true, name: true, code: true }
   });
 
+  // Ticket and change activity for the SAME day boundary the logging figures use, so the card's
+  // rows are comparable. Counted here rather than in a second request because the workforce card
+  // renders them together and a half-arrived card is the bug the project rollup was just fixed for.
+  // Typed through Prisma's own enum rather than string literals, so renaming a status is a
+  // compile error here instead of a silently-zero count.
+  const CLOSED_TICKET: TicketStatus[] = ["RESOLVED", "CLOSED"];
+  const changesOn = await isChangeManagementOn().catch(() => false);
+  const [
+    ticketsRaisedToday,
+    ticketsRaisedYesterday,
+    ticketsClosedToday,
+    ticketsClosedYesterday,
+    changesRaisedToday,
+    changesRaisedYesterday,
+    changesClosedToday,
+    changesClosedYesterday
+  ] = await Promise.all([
+    prisma.ticket.count({ where: { deletedAt: null, createdAt: { gte: sinceLocal } } }),
+    prisma.ticket.count({ where: { deletedAt: null, createdAt: { gte: sinceYesterdayLocal, lt: sinceLocal } } }),
+    prisma.ticket.count({ where: { deletedAt: null, status: { in: CLOSED_TICKET }, updatedAt: { gte: sinceLocal } } }),
+    prisma.ticket.count({ where: { deletedAt: null, status: { in: CLOSED_TICKET }, updatedAt: { gte: sinceYesterdayLocal, lt: sinceLocal } } }),
+    changesOn ? prisma.changeRequest.count({ where: { createdAt: { gte: sinceLocal } } }) : Promise.resolve(0),
+    changesOn ? prisma.changeRequest.count({ where: { createdAt: { gte: sinceYesterdayLocal, lt: sinceLocal } } }) : Promise.resolve(0),
+    changesOn ? prisma.changeRequest.count({ where: { closedAt: { gte: sinceLocal } } }) : Promise.resolve(0),
+    changesOn ? prisma.changeRequest.count({ where: { closedAt: { gte: sinceYesterdayLocal, lt: sinceLocal } } }) : Promise.resolve(0)
+  ]);
+
   const loggedToday = loggedTodayDistinct.length;
   const notLoggedToday = Math.max(0, activeWorkforce - loggedToday);
   const loggedYesterday = loggedYesterdayDistinct.length;
@@ -230,6 +259,16 @@ reportRouter.get("/admin-summary", requirePermission(permissions.REPORTS_VIEW), 
     todayDailyRemindersSentYesterday,
     todayEscalationsSent,
     todayEscalationsSentYesterday,
+    ticketsRaisedToday,
+    ticketsRaisedYesterday,
+    ticketsClosedToday,
+    ticketsClosedYesterday,
+    /** Null, not zero, when change management is off — the card drops the tiles rather than
+     *  claiming a measurement of something this workspace does not do. */
+    changesRaisedToday: changesOn ? changesRaisedToday : null,
+    changesRaisedYesterday: changesOn ? changesRaisedYesterday : null,
+    changesClosedToday: changesOn ? changesClosedToday : null,
+    changesClosedYesterday: changesOn ? changesClosedYesterday : null,
     byProject: byProject.map((row) => {
       const project = projectNames.find((p) => p.id === row.projectId);
       return { ...row, project: project?.name ?? "Unknown", projectCode: project?.code ?? null };

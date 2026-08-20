@@ -4671,8 +4671,53 @@ export interface ReportSubscriptionRow {
   lastSendError: string | null;
 }
 
+/** One project on the home page's "My projects this month" card. */
+export interface MyMonthProject {
+  id: string;
+  code: string;
+  name: string;
+  monthHours: number;
+  approvedHours: number;
+  entries: number;
+  lastDate: string | null;
+  /** Assigned to the viewer, as opposed to merely logged against. A project can be both, or only
+   *  one — which is exactly why the card unions the two rather than deriving from entries alone. */
+  assigned: boolean;
+  /** The project's standing, plus the viewer's own share of it for the hover detail. */
+  tickets: { open: number; closed: number; mineOpen: number; mineClosed: number };
+  /** Null when change management is off for the workspace, so the card can drop the column rather
+   *  than render zeroes that look like measurements. */
+  changes: { raised: number; closed: number } | null;
+}
+
+export interface MyMonthRollup {
+  month: { from: string; to: string };
+  projects: MyMonthProject[];
+  truncated: boolean;
+  totals: {
+    monthHours: number;
+    approvedHours: number;
+    submittedHours: number;
+    draftHours: number;
+    rejectedHours: number;
+    tickets: { open: number; closed: number; total: number };
+    changes: { raised: number; closed: number; total: number } | null;
+  };
+  /** Each is done ÷ total for its own kind of work, so the three bars are comparable rather than
+   *  three unrelated numbers sharing a row. Null when the denominator is empty. */
+  completion: { timesheetPct: number | null; ticketPct: number | null; changePct: number | null };
+}
+
 export const dashboardApi = {
   catalogue: async () => (await api.get<WidgetDescriptorRow[]>("/dashboards/catalogue")).data,
+  /**
+   * The home page's month rollup, counted server-side.
+   *
+   * WHY NOT DERIVED FROM `timesheetApi.list`: that list is capped at 100 rows, newest first, so on a
+   * busy account the older half of the month falls off the end and the projects only worked on early
+   * in the month disappear from the card. It looked right in development and wrong in production.
+   */
+  myMonth: async () => (await api.get<MyMonthRollup>("/dashboards/my-month")).data,
   list: async () => (await api.get<DashboardRow[]>("/dashboards")).data,
   /** Layout plus resolved data in one request — a grid of eight tiles fetched separately would be
    *  eight round trips on every page load. */

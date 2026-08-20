@@ -50,6 +50,19 @@ export async function getChangeSettings() {
  * sentence, and a single generic 403 sends both to the wrong place. Same split every planning gate
  * uses.
  */
+/**
+ * The same two conditions as `assertChangeManagementEnabled`, answered rather than thrown.
+ *
+ * WHY BOTH FORMS EXIST: a change route should refuse with a message naming which condition failed,
+ * but a caller that merely wants to know whether to INCLUDE change data — the home dashboard — must
+ * not turn "change management is off" into a failed page. Same predicate, two callers, one place.
+ */
+export async function isChangeManagementOn(): Promise<boolean> {
+  const settings = await getChangeSettings();
+  if (!settings.enableChangeManagement) return false;
+  return isPlanningCapabilityAllowed(requireTenantContext().orgId, "changeManagementEnabled");
+}
+
 export async function assertChangeManagementEnabled(): Promise<void> {
   const settings = await getChangeSettings();
   if (!settings.enableChangeManagement) {
