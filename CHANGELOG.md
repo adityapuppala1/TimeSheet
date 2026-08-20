@@ -11,6 +11,54 @@ Landed after v3.0.0 was tagged. The parser that feeds the in-app What's-new page
 until it gains a version number, on purpose — an installation must never render history for a version
 that does not exist yet.
 
+### 🩹 Fixes
+
+- **Tagging a ticket no longer pushes the timesheet form off the page.** A long ticket title grew the
+  picker past its column instead of ellipsing, and the whole page scrolled sideways — measured, a
+  250px cell rendering a 727px control. The module and submodule pickers shared the flaw and are
+  fixed with it.
+- **"My projects this month" was missing projects, and only in production.** The card grouped
+  whatever `GET /timesheets` returned, and that list is capped at 100 rows newest-first — so on a
+  busy account the older half of the month fell off the end and whole projects vanished. It also
+  derived the list from entries alone, so a project you are assigned to but have not logged against
+  was invisible regardless. Now counted server-side over the whole month, uncapped, listing every
+  project you are assigned to or have worked on.
+- **The Change management settings tab stopped 404ing on every visit.** It rendered an "Approval
+  policies" editor for an engine that was never built — approval routes to the requester's manager,
+  falling back to super admins — and called a route that has never existed. Removed.
+
+### 📊 The home page counts the other two kinds of work
+
+- **Progress is four bars, not two**: week target, then timesheets approved, tickets closed and
+  changes closed. Each is finished-over-total for its own kind of work, so they read against each
+  other; a single combined number hides which of the three is stuck. The changes bar is absent, not
+  zeroed, when change management is off.
+- **"Today across the workforce" gains tickets and changes** raised and closed, on the same day
+  boundary and the same vs-yesterday comparison as the logging figures.
+- **A trend can now say "no opinion".** More tickets *raised* today is neither good news nor bad, and
+  the badge could only be green or red — so it asserted a reading the number does not support. Those
+  now render grey.
+
+### ⚙️ Every change dropdown is editable
+
+- **Categories, sources, applications, risk parameters, SLA stages, maintenance windows and blackout
+  periods** are all add / rename / retune / disable / delete from Workspace Settings → Change
+  management, for a super admin. Same rules activity types follow: everyone who fills the form can
+  read the list, only a super admin writes it, and **deleting a row that live records point at is
+  refused with the count** — disable it instead, and the changes filed under it stay readable.
+- **The change page reads as a sequence.** Thirteen equal tabs became Define / Plan / Deliver, and
+  any tab still owing something for submission carries a dot — driven by the server's own list, so
+  the header checklist and the strip cannot disagree. The header gained the four facts you check
+  before opening a tab at all: environment, window, implementer, category.
+
+### 🎨 An AI button that says what pressing it costs
+
+- The app already marked AI *surfaces* (a glowing frame) and AI *thinking* (flowing strands). It had
+  no mark for the resting control that spends a model call, so buttons wore gradient text — which
+  reads as decoration on a label rather than a property of the action. There is now a proper button
+  variant: a tinted face with a highlight that sweeps once on hover. Under reduced motion the tint
+  stays and only the sweep goes, because identifying the control is the point.
+
 ### 🔀 The change type now says what it will cost you
 
 - **Picking a change type tells you what it commits you to**, in the dropdown, before you pick it.

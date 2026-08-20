@@ -687,6 +687,13 @@ Still open, deliberately:
 
 - **Chat and ITSM integrations** (ServiceNow, Jira Service Management) — the plan names them as
   future work and nothing here forecloses them; `ChangeSource` already exists as the seam.
+- **AI, agents and workflows over changes** — planned in
+  [AI_AND_AUTOMATION_FOR_CHANGE.md](AI_AND_AUTOMATION_FOR_CHANGE.md), nothing built. Worth recording
+  two findings from writing it: the `change.*` domain events are already in `DOMAIN_EVENTS` and
+  already exposed raw by `GET /flows/catalogue`, so **Workflow Studio can trigger on change events
+  today with no code** — the gap is on the action side, which has nothing change-shaped. And most of
+  what was asked for as "AI fills the CI/CD, repo, branch and version fields" is derivable from the
+  linked tickets' `TicketBranch` rows rather than generated, which is both cheaper and auditable.
 - ~~**The `MAJOR` change type** is in the enum but not in the §10 vocabulary (Standard / Normal /
   Emergency) — keep it or drop it?~~ **Kept, 2026-08-19, and it was closer than it looked.** Tracing
   it first was what settled it: MAJOR is load-bearing in two rules and nothing else can express
