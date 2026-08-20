@@ -186,6 +186,38 @@ export const AI_CHAT_TOOLS: ReadonlyArray<AiChatToolSpec & { run: (args: Record<
     }
   },
   {
+    name: "timesheet_stats",
+    description:
+      "Counts and hours BY STATUS — approved, pending, draft, rejected. The asking person's own by default; scope 'workspace' needs the reports permission. This is the tool for 'how many entries are approved', 'hours pending approval', 'my rejected entries'.",
+    args: '{ "scope"?: "mine" | "workspace", "from"?: "YYYY-MM-DD", "to"?: "YYYY-MM-DD" }',
+    run: async (args, ctx) => {
+      const workspace = args.scope === "workspace";
+      if (workspace && !ctx.req.user.permissions.includes(permissions.REPORTS_VIEW)) {
+        return "Not permitted: workspace-wide figures need the reports permission the asking person does not hold. Their OWN figures are available with scope 'mine'.";
+      }
+      const from = typeof args.from === "string" && args.from ? new Date(args.from) : null;
+      const to = typeof args.to === "string" && args.to ? new Date(args.to) : null;
+      if ((from && Number.isNaN(from.getTime())) || (to && Number.isNaN(to.getTime()))) {
+        return "Invalid dates — use YYYY-MM-DD.";
+      }
+      const rows = await prisma.timesheet.groupBy({
+        by: ["status"],
+        where: {
+          deletedAt: null,
+          ...(workspace ? {} : { userId: ctx.req.user.id }),
+          ...(from || to ? { workDate: { ...(from ? { gte: from } : {}), ...(to ? { lte: to } : {}) } } : {})
+        },
+        _count: true,
+        _sum: { totalHours: true }
+      });
+      if (rows.length === 0) return "No entries matched.";
+      const scopeLabel = workspace ? "workspace-wide" : "the asking person's own entries";
+      const range = from || to ? ` (${from ? from.toISOString().slice(0, 10) : "start"} to ${to ? to.toISOString().slice(0, 10) : "now"})` : " (all time)";
+      const lines = rows.map((r) => `${r.status}: ${r._count} entries, ${Number(r._sum.totalHours ?? 0).toFixed(1)}h`);
+      return `By status, ${scopeLabel}${range}:` + String.fromCharCode(10) + lines.join(String.fromCharCode(10));
+    }
+  },
+  {
     name: "timesheet_report",
     description: "Workspace-wide approved-hours totals by project over a range. Needs the reports permission.",
     args: '{ "from": string, "to": string }',
@@ -219,37 +251,60 @@ export const AI_CHAT_TOOLS: ReadonlyArray<AiChatToolSpec & { run: (args: Record<
   },
   {
     name: "list_projects",
-    description: "Projects with their codes and modules. Use before logging time or answering anything project-shaped.",
+    description: "Projects with their codes, modules and submodules. The tool for any question about project structure, module counts or submodule counts — and for finding a code before logging time.",
     args: "{}",
     run: async (_args, ctx) => {
       const scope = await ticketProjectScope(ctx.req);
       const rows = await prisma.project.findMany({
         where: { deletedAt: null, ...(scope.unrestricted ? {} : { id: { in: scope.projectIds } }) },
-        select: { code: true, name: true, modules: { select: { name: true } } },
+        // Submodules included: "how many submodules does X have" was asked in the field and
+        // declined, because the hierarchy stopped one level short of what the schema holds.
+        select: { code: true, name: true, modules: { take: 30, select: { name: true, submodules: { take: 20, select: { name: true } } } } },
         orderBy: { code: "asc" },
         take: 40
       });
       if (rows.length === 0) return "No accessible projects.";
-      return clip(rows.map((r) => `${r.code} — ${r.name} (modules: ${r.modules.map((m) => m.name).join(", ") || "none"})`).join(String.fromCharCode(10)));
+      return clip(
+        rows
+          .map((r) => {
+            const modules = r.modules
+              .map((m) => (m.submodules.length ? `${m.name} [${m.submodules.map((sub) => sub.name).join("; ")}]` : m.name))
+              .join(", ");
+            return `${r.code} — ${r.name} (modules: ${modules || "none"})`;
+          })
+          .join(String.fromCharCode(10))
+      );
     }
   },
   {
     name: "find_people",
-    description: "The workspace directory — names, roles, designations, managers. What the Team page already shows.",
+    description:
+      "The people the asking person can already see: admins get the whole directory; everyone else gets themselves, their manager, and their direct reports. Names, roles, designations.",
     args: '{ "query"?: string }',
-    run: async (args) => {
+    run: async (args, ctx) => {
       const query = typeof args.query === "string" ? args.query.trim() : "";
+      // The same line the app draws elsewhere: /api/users needs the manage permission, and the org
+      // chart shows non-privileged people their own subtree. A chat tool must not out-see the pages.
+      const privileged = ["SUPER_ADMIN", "ADMIN"].includes(ctx.req.user.role);
+      const where = privileged
+        ? { deletedAt: null, isAgent: false, ...(query ? { name: { contains: query } } : {}) }
+        : {
+            deletedAt: null,
+            isAgent: false,
+            OR: [{ id: ctx.req.user.id }, { managerId: ctx.req.user.id }, { reports: { some: { id: ctx.req.user.id } } }],
+            ...(query ? { name: { contains: query } } : {})
+          };
       const rows = await prisma.user.findMany({
-        where: {
-          deletedAt: null,
-          isAgent: false,
-          ...(query ? { name: { contains: query } } : {})
-        },
+        where,
         select: { name: true, designation: true, role: { select: { name: true } }, manager: { select: { name: true } } },
         orderBy: { name: "asc" },
         take: 30
       });
-      if (rows.length === 0) return "Nobody matched.";
+      if (rows.length === 0) {
+        return privileged
+          ? "Nobody matched."
+          : "Nobody matched within the people visible to the asking person (themselves, their manager, their reports). The full directory needs an admin role.";
+      }
       return clip(
         rows
           .map((u) => `${u.name} — ${u.role.name}${u.designation ? `, ${u.designation}` : ""}${u.manager ? ` (manager: ${u.manager.name})` : ""}`)

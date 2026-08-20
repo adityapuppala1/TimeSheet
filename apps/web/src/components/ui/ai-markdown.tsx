@@ -40,7 +40,17 @@ type Segment = { kind: "markdown"; text: string } | { kind: "chart"; spec: Chart
 /** Shape-checks a chart fence by hand — a fence that fails any of this renders as code instead. */
 function parseChartSpec(raw: string): ChartSpec | null {
   try {
-    const parsed = JSON.parse(raw) as Partial<ChartSpec>;
+    // The raw text FIRST — a well-formed fence must never be touched. Only when that fails, one
+    // targeted repair: doubled opening braces before a key (`{{"label"`) are a measured
+    // diffusion-model artifact. The order matters and was got wrong once: the sequence `{{"` CAN
+    // occur inside a valid fence, as a string value ending in braces followed by its closing quote,
+    // so repairing before parsing corrupted exactly the fences that needed no help.
+    let parsed: Partial<ChartSpec>;
+    try {
+      parsed = JSON.parse(raw) as Partial<ChartSpec>;
+    } catch {
+      parsed = JSON.parse(raw.replace(/\{\{+\s*"/g, '{"')) as Partial<ChartSpec>;
+    }
     if (parsed.type !== "bar" && parsed.type !== "line" && parsed.type !== "pie") return null;
     if (!Array.isArray(parsed.data) || parsed.data.length === 0 || parsed.data.length > 40) return null;
     const data = parsed.data

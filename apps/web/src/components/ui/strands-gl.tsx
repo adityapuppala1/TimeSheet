@@ -67,11 +67,18 @@ vec3 samplePalette(float t) {
 }
 
 void main() {
-  vec2 uv = (gl_FragCoord.xy - 0.5 * uResolution) / uResolution.y;
-  uv /= max(uScale, 0.0001);
+  // Two x-coordinates on purpose. The ENVELOPE runs in 0..1 canvas space, so the fade-in/fade-out
+  // spans the whole width exactly once — the upstream demo normalised by height alone, and on a
+  // wide, short loader strip (14:1) its cosine envelope repeated into a row of separate pods
+  // instead of one thread. The WAVE runs in aspect-aware space, so ripples still travel at the
+  // same visual density however wide the strip is.
+  vec2 frag = gl_FragCoord.xy / uResolution;
+  float aspect = uResolution.x / max(uResolution.y, 1.0);
+  float nx = frag.x - 0.5;
+  vec2 uv = vec2(nx * aspect, frag.y - 0.5) / max(uScale, 0.0001);
 
   float e = 0.06 + uIntensity * 0.94;
-  float env = pow(max(cos(uv.x * PI * 1.3), 0.0), uTaper);
+  float env = pow(max(cos(nx * PI), 0.0), uTaper);
 
   vec3 col = vec3(0.0);
 
@@ -162,7 +169,7 @@ export function StrandsGL({ className }: { className?: string }) {
 
     let renderer: Renderer;
     try {
-      renderer = new Renderer({ alpha: true, premultipliedAlpha: true, antialias: true });
+      renderer = new Renderer({ alpha: true, premultipliedAlpha: true, antialias: true, dpr: Math.min(window.devicePixelRatio || 1, 2) });
     } catch {
       // No WebGL (a locked-down browser, a headless run) — the container simply stays empty and
       // the label beside it still says what is happening. A loader must never be the crash.
@@ -185,17 +192,17 @@ export function StrandsGL({ className }: { className?: string }) {
         uResolution: { value: [container.offsetWidth, container.offsetHeight] },
         uColors: { value: buildPalette(themePalette()) },
         uColorCount: { value: 3 },
-        uStrandCount: { value: 4 },
-        uSpeed: { value: 0.8 },
+        uStrandCount: { value: 1 },
+        uSpeed: { value: 0.9 },
         uAmplitude: { value: 1 },
-        uWaviness: { value: 1 },
-        uThickness: { value: 0.7 },
+        uWaviness: { value: 1.6 },
+        uThickness: { value: 0.9 },
         uGlow: { value: 2.4 },
         uTaper: { value: 3 },
         uSpread: { value: 1 },
         uIntensity: { value: 0.55 },
         uOpacity: { value: 1 },
-        uScale: { value: 1.4 },
+        uScale: { value: 1.0 },
         uSaturation: { value: 1.3 }
       }
     });
@@ -204,10 +211,20 @@ export function StrandsGL({ className }: { className?: string }) {
     container.appendChild(gl.canvas);
 
     const resize = () => {
-      renderer.setSize(container.offsetWidth, container.offsetHeight);
-      program.uniforms.uResolution.value = [container.offsetWidth, container.offsetHeight];
+      const width = container.offsetWidth;
+      const height = container.offsetHeight;
+      // A hidden or still-animating container measures 0 — skip rather than allocating a 0x0
+      // buffer; the observer fires again the moment it has real size.
+      if (width === 0 || height === 0) return;
+      renderer.setSize(width, height);
+      // BUFFER pixels, not CSS pixels: gl_FragCoord is in buffer space, and with dpr > 1 the two
+      // differ by exactly the factor that made the strands render off-scale.
+      program.uniforms.uResolution.value = [gl.canvas.width, gl.canvas.height];
     };
-    window.addEventListener("resize", resize);
+    // The container, not the window: ogl pins the canvas to inline pixel sizes, so a sidebar
+    // collapse or an appearing scrollbar resizes the container with no window event at all.
+    const resizeObserver = new ResizeObserver(resize);
+    resizeObserver.observe(container);
     resize();
 
     // Theme flips swap the tokens under us; watching the root's class/attr keeps the canvas on
@@ -228,7 +245,7 @@ export function StrandsGL({ className }: { className?: string }) {
     return () => {
       cancelAnimationFrame(frame);
       observer.disconnect();
-      window.removeEventListener("resize", resize);
+      resizeObserver.disconnect();
       if (gl.canvas.parentNode === container) container.removeChild(gl.canvas);
       gl.getExtension("WEBGL_lose_context")?.loseContext();
     };

@@ -14,7 +14,7 @@ vi.mock("../../src/config/prisma.js", () => ({ prisma: {} }));
 const { AI_CHAT_TOOLS } = await import("../../src/services/ai-chat-tools.js");
 
 describe("the Ask AI tool registry", () => {
-  it("is exactly the eleven read tools", () => {
+  it("is exactly the twelve read tools", () => {
     // Pinned as a set: adding a tool is a decision about what a model may see, not a convenience
     // edit — and REMOVING one silently degrades answers into guesses.
     expect(AI_CHAT_TOOLS.map((t) => t.name).sort()).toEqual(
@@ -29,7 +29,8 @@ describe("the Ask AI tool registry", () => {
         "my_timesheets",
         "search_tickets",
         "ticket_metrics",
-        "timesheet_report"
+        "timesheet_report",
+        "timesheet_stats"
       ].sort()
     );
   });

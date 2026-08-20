@@ -54,6 +54,30 @@ that does not exist yet.
   that can approve a change, which is the absence of a capability rather than a limit on one. An
   approval is a named person accepting risk, and there is no undo.
 
+### 🧵 One strand, a real chat, and analytics that stop declining
+
+- **The loader is one luminous thread.** The ported Strands shader assumed a square-ish canvas; on a
+  wide, short loader strip its envelope repeated into a row of separate pods. The envelope now spans
+  the strip exactly once — the fade runs in canvas space, the ripple in aspect space — and a single
+  strand breathes across the answer bubble while the model works.
+- **The page is shaped like a messenger**, because that is the mental model "ask, answer, follow up"
+  brings: one centred column, your words in bubbles on the right, the assistant's beside its avatar
+  on the left, day separators when the history spans days, copy-answer on every reply, suggestion
+  chips that retire once you have a rhythm, and the receipts strip tightened under each answer.
+- **"How many of my entries are approved?" now has a real answer** — a stats tool that counts
+  entries and hours by status, yours always, workspace-wide with the reports permission. The intent
+  guide names it, so the model reaches for it first.
+- **Submodules joined the project tool** after a question about them was declined in the field —
+  the hierarchy stopped one level short of what the schema holds.
+- **A past refusal no longer poisons the follow-up.** The model was parroting its own earlier "I do
+  not have access" from the conversation history, verbatim, three times running — the history is now
+  framed as context only, with the tool list as the current truth, and multi-part questions are
+  instructed part by part.
+- **Doubled-brace chart JSON is repaired at render.** The configured diffusion model emits
+  `{{"label"` — invalid JSON, so charts fell back to code blocks. The sequence `{{"` cannot occur in
+  valid JSON, so the targeted rewrite can never damage a well-formed fence; anything else malformed
+  still renders honestly as code.
+
 ### 🖊 Ask AI can now do one thing — and it is a draft
 
 - **"Log 2 hours on HICS-TS today, 9 to 11, development" now works as a sentence.** The assistant
