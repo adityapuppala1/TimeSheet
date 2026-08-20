@@ -6,7 +6,11 @@ const ALLOWED_TAGS = [
   "blockquote",
   "h1", "h2", "h3",
   "ul", "ol", "li",
-  "a", "span"
+  "a", "span",
+  // Tables, for model-authored markdown (Ask AI answers render comparisons as GFM tables through
+  // marked). Harmless to the rich-text surfaces sharing this list — the editor never emits them —
+  // and without these DOMPurify silently flattened every table into one run of words.
+  "table", "thead", "tbody", "tr", "th", "td"
 ];
 
 const ALLOWED_ATTR = ["href", "rel", "target", "style"];

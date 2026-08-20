@@ -25,6 +25,7 @@ import {
   ListTodo,
   Mail,
   Mailbox,
+  MessagesSquare,
   PanelLeftClose,
   PanelLeftOpen,
   ScrollText,
@@ -99,6 +100,7 @@ export const nav: NavItem[] = [
   // First in Work and deliberately ungated: it is where the day starts, and its brief reads
   // definitions that exist whether or not any optional feature is on.
   { to: "/app/inbox", label: "Inbox", icon: Mailbox, section: "Work" },
+  { to: "/app/ask-ai", label: "Ask AI", icon: MessagesSquare, permission: permissions.TICKETS_VIEW, section: "Work" },
   { to: "/app/requests", label: "Requests", icon: Inbox, permission: permissions.TICKETS_VIEW, section: "Work", feature: "requestForms" },
   // Carries no `feature` and no permission, for the same reason the Agents roster does not: its
   // gate is a workspace toggle AND a plan entitlement, neither of which the planning `effective`

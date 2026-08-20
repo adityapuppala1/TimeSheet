@@ -39,6 +39,7 @@ import { z } from "zod";
 import type { TicketPriority } from "@prisma/client";
 import { env } from "../config/env.js";
 import { prisma } from "../config/prisma.js";
+import { AI_CHAT_TOOLS, findAiChatTool, type AiChatToolContext } from "./ai-chat-tools.js";
 import { requireTenantContext } from "../config/tenant-context.js";
 import { AppError } from "../middleware/error.js";
 import { decryptSecret } from "../utils/encryption.js";
@@ -3151,6 +3152,165 @@ export async function draftPostImplementationReview(input: {
 
   const parsed = parseJsonResponse(result.text, PirDraftSchema);
   return parsed?.text?.trim() || null;
+}
+
+/* ------------------------------------------------------------------ *
+ * Ask AI — the page's answer loop
+ * ------------------------------------------------------------------ */
+
+const AskActionSchema = z.union([
+  z.object({ action: z.literal("tool"), tool: z.string().min(1), args: z.record(z.unknown()).optional() }),
+  z.object({ action: z.literal("answer"), markdown: z.string().min(1) })
+]);
+
+/** How many tool consultations one question may spend. Enough for "compare X across Y", small
+ *  enough that a model stuck in a loop costs five calls, not fifty. */
+const ASK_MAX_STEPS = 5;
+
+/** Recent exchanges carried into the prompt, so follow-ups work. Trimmed hard — history is context,
+ *  not the question. */
+const ASK_HISTORY_TURNS = 6;
+const ASK_HISTORY_CLIP = 500;
+
+export interface AskChatResult {
+  answer: string;
+  toolCalls: Array<{ tool: string; detail: string }>;
+  model: string;
+  provider: string;
+  inputTokens: number;
+  outputTokens: number;
+  costUsd: number;
+}
+
+/**
+ * Answers one question about the workspace, consulting the read-only tool registry as it goes.
+ *
+ * WHY A JSON ACTION LOOP RATHER THAN NATIVE TOOL-CALLING: this is a bring-your-own-key product, and
+ * the configured model can be anything from Claude to a free-tier community model. Native tool
+ * calling is a per-provider dialect that many of those do not speak; "reply with one JSON object,
+ * either a tool request or an answer" works on anything that can follow an instruction, through the
+ * same `callChat` and `parseJsonResponse` every other capability already uses. A model that ignores
+ * the format entirely still degrades gracefully — its raw text becomes the answer.
+ *
+ * WHY THE TOOLS ARE READS AND THE ANSWER MAY ONLY POINT AT ACTIONS: an action taken from a chat
+ * transcript has no review step, no proposal row and no undo. The loop can look at anything the
+ * asking person could open in the app — the registry scopes every read as them — and change
+ * nothing. Where the person wants an action, the answer names the page where a person does it.
+ *
+ * WHY SCOPE IS ENFORCED IN THE PROMPT AND SHAPE-CHECKED NOWHERE: "is this question about the
+ * workspace" is a judgement, not a schema. The model is told to decline anything else briefly and
+ * point back at what it can do; a person determined to chat about the weather gets one polite
+ * sentence, at one small model call of cost, and that is an acceptable price for not building a
+ * classifier in front of a classifier.
+ */
+export async function askWorkspaceChat(input: {
+  prompt: string;
+  history: Array<{ prompt: string; answer: string | null }>;
+  toolCtx: AiChatToolContext;
+  userId: string;
+}): Promise<AskChatResult> {
+  const { settings } = await preflight("workspaceSearchEnabled");
+
+  const toolLines = AI_CHAT_TOOLS.map((t) => `- ${t.name}: ${t.description} Args: ${t.args}`).join("\n");
+  const historyLines = input.history
+    .slice(-ASK_HISTORY_TURNS)
+    .map((h) => `Q: ${h.prompt.slice(0, ASK_HISTORY_CLIP)}\nA: ${(h.answer ?? "(no answer)").slice(0, ASK_HISTORY_CLIP)}`)
+    .join("\n---\n");
+
+  const transcript: string[] = [];
+  const toolCalls: Array<{ tool: string; detail: string }> = [];
+  let inputTokens = 0;
+  let outputTokens = 0;
+  let costUsd = 0;
+
+  const ask = async (extra: string): Promise<string> => {
+    const prompt = [
+      "You are TimeSphere's workspace assistant. You answer questions about THIS workspace only —",
+      "its tickets, timesheets, change requests, projects, agents and workflows. For anything else",
+      "(general knowledge, other products, the wider world), decline in one sentence and say what",
+      "you can help with instead.",
+      "",
+      "You have READ-ONLY tools. You cannot create, edit, approve or delete anything. When the",
+      "person wants an action taken, answer with where in the app a person does it — for example",
+      "'open the ticket and use Transition', or 'raise it from Change Management → New change'.",
+      "",
+      "TOOLS:",
+      toolLines,
+      "",
+      "Reply with EXACTLY ONE JSON object and nothing else:",
+      '  { "action": "tool", "tool": "<name>", "args": { ... } }   — to consult a tool',
+      '  { "action": "answer", "markdown": "..." }                 — when you can answer',
+      "",
+      "The answer is markdown. Cite ticket and change keys like [HICS-TS-3]. Use tables for",
+      "comparisons. When numbers would read better drawn, you may include ONE chart as a fenced",
+      "block — three backticks, the word chart, then JSON on the next lines:",
+      '  { "type": "bar" | "line" | "pie", "title": "...", "data": [ { "label": "...", "value": 1 } ] }',
+      "Only chart numbers a tool actually returned. Never invent a ticket, a person or a figure —",
+      "if the tools did not show it, say it was not found.",
+      "",
+      historyLines ? `RECENT CONVERSATION (for context):\n${historyLines}\n` : "",
+      `QUESTION: ${input.prompt}`,
+      extra
+    ]
+      .filter(Boolean)
+      .join("\n");
+
+    const result = await callChat(settings, { model: settings.model, maxTokens: 1400, prompt });
+    inputTokens += result.usage.inputTokens;
+    outputTokens += result.usage.outputTokens;
+    costUsd += estimateCostUsd(settings.model, result.usage.inputTokens, result.usage.outputTokens);
+    return result.text;
+  };
+
+  let extra = "";
+  for (let step = 0; step < ASK_MAX_STEPS; step++) {
+    const raw = await ask(extra);
+    const parsed = parseJsonResponse(raw, AskActionSchema);
+
+    // A model that will not speak the format still gets its say: raw text as the answer beats a
+    // hard failure, and free-tier models earn this fallback weekly.
+    if (!parsed) {
+      await logAIUsage({ feature: "ask_ai", params: { steps: step + 1, freeform: true }, model: settings.model, inputTokens, outputTokens, userId: input.userId });
+      return { answer: raw.trim() || "The model returned nothing usable — try rephrasing.", toolCalls, model: settings.model, provider: String(settings.provider), inputTokens, outputTokens, costUsd };
+    }
+
+    if (parsed.action === "answer") {
+      await logAIUsage({ feature: "ask_ai", params: { steps: step + 1, tools: toolCalls.map((t) => t.tool) }, model: settings.model, inputTokens, outputTokens, userId: input.userId });
+      return { answer: parsed.markdown, toolCalls, model: settings.model, provider: String(settings.provider), inputTokens, outputTokens, costUsd };
+    }
+
+    const tool = findAiChatTool(parsed.tool);
+    let result: string;
+    if (!tool) {
+      result = `No such tool. The available tools are: ${AI_CHAT_TOOLS.map((t) => t.name).join(", ")}.`;
+    } else {
+      try {
+        result = await tool.run(parsed.args ?? {}, input.toolCtx);
+      } catch (error) {
+        // A broken tool is reported INTO the loop, so the model can answer from what it has rather
+        // than the whole question failing on one bad read.
+        result = `The tool failed: ${(error as Error).message.slice(0, 200)}`;
+      }
+      toolCalls.push({ tool: parsed.tool, detail: JSON.stringify(parsed.args ?? {}).slice(0, 160) });
+    }
+    transcript.push(`TOOL ${parsed.tool} RETURNED:\n${result}`);
+    extra = `\nWhat the tools have returned so far:\n${transcript.join("\n\n")}\n\nAnswer now if you can; use another tool only if something is still missing.`;
+  }
+
+  // Out of steps: force a final answer from whatever was gathered rather than failing a question
+  // five tool calls deep.
+  const finalRaw = await ask(`${extra}\n\nYou have no tool calls left. Answer now with { "action": "answer", ... } from what you have.`);
+  const final = parseJsonResponse(finalRaw, AskActionSchema);
+  await logAIUsage({ feature: "ask_ai", params: { steps: ASK_MAX_STEPS + 1, exhausted: true }, model: settings.model, inputTokens, outputTokens, userId: input.userId });
+  return {
+    answer: final?.action === "answer" ? final.markdown : finalRaw.trim() || "The model could not settle on an answer — try a narrower question.",
+    toolCalls,
+    model: settings.model,
+    provider: String(settings.provider),
+    inputTokens,
+    outputTokens,
+    costUsd
+  };
 }
 
 const PlanBreakdownSchema = z.object({

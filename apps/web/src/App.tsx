@@ -53,6 +53,7 @@ const BlueprintsPage = lazy(() => import("./pages/Blueprints").then((m) => ({ de
 const WorkloadPage = lazy(() => import("./pages/Workload").then((m) => ({ default: m.WorkloadPage })));
 const RequestsPage = lazy(() => import("./pages/Requests").then((m) => ({ default: m.RequestsPage })));
 const ProposalsPage = lazy(() => import("./pages/Proposals").then((m) => ({ default: m.ProposalsPage })));
+const AskAi = lazy(() => import("./pages/AskAi").then((m) => ({ default: m.AskAi })));
 const AiOverviewPage = lazy(() => import("./pages/AiOverview").then((m) => ({ default: m.AiOverviewPage })));
 const DashboardsPage = lazy(() => import("./pages/Dashboards").then((m) => ({ default: m.DashboardsPage })));
 const PublicRequestFormPage = lazy(() => import("./pages/PublicRequestForm").then((m) => ({ default: m.PublicRequestFormPage })));
@@ -158,6 +159,7 @@ const router = createBrowserRouter([
       { path: "requests", element: <RequirePermission permission={permissions.TICKETS_VIEW}><PageShell><RequestsPage /></PageShell></RequirePermission> },
       // Readable by anyone who can see tickets; applying a suggestion needs plan:write, which
       // the page checks itself — seeing what the assistant proposed is not a privilege.
+      { path: "ask-ai", element: <RequirePermission permission={permissions.TICKETS_VIEW}><PageShell><AskAi /></PageShell></RequirePermission> },
       { path: "proposals", element: <RequirePermission permission={permissions.TICKETS_VIEW}><PageShell><ProposalsPage /></PageShell></RequirePermission> },
       // No permission gate: a dashboard shows only what its viewer can already see, so building
       // one is not a privilege. Publishing to the workspace needs dashboards:share.

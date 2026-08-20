@@ -1213,6 +1213,44 @@ implementer, approvers and collaborators, with every super admin in **BCC** via 
 merged, deduplicated recipient set, so somebody already on the To line does not also get a blind
 copy. Mail is best-effort: a slow SMTP server cannot lose a transition that already happened.
 
+## Ask AI (the page)
+
+`/ai-chat/*` — the full-page Ask AI: a conversation with a memory, distinct from the palette's
+one-shot `POST /ai/ask`. Same toggle (`workspaceSearchEnabled`), same capability (`ask_ai`).
+
+- `POST /ai-chat/ask` `{ prompt }` — answers through a tool loop and PERSISTS the exchange: prompt,
+  answer, which tools were consulted, model, provider, tokens, estimated cost and duration, all
+  stored at answer time so the history keeps saying what each answer actually cost after the
+  workspace's model changes. A failed attempt is stored too, with its error — "it failed at 14:02"
+  is part of the history.
+- `GET /ai-chat/history?limit=` — the asker's OWN exchanges, oldest first. There is no cross-user
+  read and no admin view: what somebody asks an assistant is closer to a search history than to a
+  work record.
+- `POST /ai-chat/:id/feedback` `{ feedback: 1 | -1 | 0 }` — thumbs on one answer; 0 clears, so
+  "unrated" stays expressible. Own rows only.
+- `DELETE /ai-chat/history` — the clear-my-history gesture. Own rows only.
+
+**How the loop works, and why it is not native tool-calling.** The model is asked for exactly one
+JSON object per step — a tool request or a markdown answer — through the same `callChat` +
+`parseJsonResponse` every capability uses. This is a bring-your-own-key product: native tool calling
+is a per-provider dialect many configured models do not speak, and "reply with one JSON object"
+works on anything that follows instructions. A model that ignores the format degrades gracefully —
+its raw text becomes the answer. Five tool steps maximum, then a forced final answer from whatever
+was gathered.
+
+**Every tool is a read, and that is the design.** The registry (`ai-chat-tools.ts`) covers tickets,
+changes, timesheets, metrics, the agent roster and the workflow list — each scoped through the same
+`ticketProjectScope` the pages use, each running as the asking person. An action taken from a chat
+transcript has no review step, no proposal row and no undo, so the loop can look at anything the
+asker could open and change nothing; where an answer leads to an action it names the page where a
+person does it. `ask-ai-chat.test.ts` greps the registry for every Prisma write verb, so a write
+added there fails a test rather than shipping quietly.
+
+**Answers are markdown, with real charts.** The model may emit one fenced ```chart block with
+numbers a tool actually returned; the page shape-checks the JSON and draws it with the app's own
+chart components. Everything textual passes through the same `marked` + DOMPurify pipe the
+What's-new page renders the changelog with.
+
 ## Timesheet reporting and exports
 
 All three share one filter set — `from`, `to`, `projectId`, `moduleId`, `userId`, `ticketId`,

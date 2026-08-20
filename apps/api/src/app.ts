@@ -31,6 +31,7 @@ import { resolveStoredFile } from "./services/attachment-storage.service.js";
 import { getUpdateStatus } from "./services/update-check.service.js";
 import { activityTypeRouter } from "./controllers/activity-type.controller.js";
 import { aiRouter } from "./controllers/ai.controller.js";
+import { aiChatRouter } from "./controllers/ai-chat.controller.js";
 import { auditRouter } from "./controllers/audit.controller.js";
 import { authRouter } from "./controllers/auth.controller.js";
 import { brandingRouter } from "./controllers/branding.controller.js";
@@ -457,6 +458,7 @@ app.use("/api/ticket-types", ticketTypeRouter);
 // /api/ticket-types because it is the same shape of thing for the other half of the product.
 app.use("/api/activity-types", activityTypeRouter);
 app.use("/api/ai", aiRouter);
+app.use("/api/ai-chat", aiChatRouter);
 app.use("/api/email-intake", emailIntakeRouter);
 app.use("/api/chat-integrations", chatIntegrationsRouter);
 app.use("/api/labels", labelRouter);

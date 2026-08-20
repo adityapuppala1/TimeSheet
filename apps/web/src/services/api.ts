@@ -4707,6 +4707,32 @@ export interface MyMonthRollup {
   completion: { timesheetPct: number | null; ticketPct: number | null; changePct: number | null };
 }
 
+/** One question-and-answer on the Ask AI page. Meta figures are stored at answer time, so the
+ *  history keeps saying what each answer actually cost even after the workspace's model changes. */
+export interface AiAskExchangeRow {
+  id: string;
+  prompt: string;
+  answer: string | null;
+  error: string | null;
+  toolCalls: Array<{ tool: string; detail: string }>;
+  model: string | null;
+  provider: string | null;
+  inputTokens: number;
+  outputTokens: number;
+  costUsd: string | number | null;
+  durationMs: number;
+  feedback: 1 | -1 | null;
+  createdAt: string;
+}
+
+export const askAiApi = {
+  ask: async (prompt: string) => (await api.post<AiAskExchangeRow>("/ai-chat/ask", { prompt })).data,
+  history: async (limit = 50) => (await api.get<AiAskExchangeRow[]>("/ai-chat/history", { params: { limit } })).data,
+  /** 0 clears — pressing the same thumb twice un-rates. */
+  feedback: async (id: string, feedback: 1 | -1 | 0) => api.post(`/ai-chat/${id}/feedback`, { feedback }),
+  clear: async () => (await api.delete<{ deleted: number }>("/ai-chat/history")).data
+};
+
 export const dashboardApi = {
   catalogue: async () => (await api.get<WidgetDescriptorRow[]>("/dashboards/catalogue")).data,
   /**

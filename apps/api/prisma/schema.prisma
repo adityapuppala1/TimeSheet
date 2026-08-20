@@ -287,6 +287,7 @@ model User {
   proofAnnotations       ProofAnnotation[]
   dashboards             Dashboard[]
   reportSubscriptions    ReportSubscription[]
+  aiAskExchanges         AiAskExchange[]
   aiProposalsRequested   AiProposal[]           @relation("AiProposalRequester")
   aiProposalsReviewed    AiProposal[]           @relation("AiProposalReviewer")
   aiCapabilityPolicies   AiCapabilityPolicy[]   @relation("AiCapabilityPolicyEditor")
@@ -3568,6 +3569,43 @@ enum AiProposalChangeOp {
 /// It also gives the existing AI quality loop something to learn from: accept/reject per row is a
 /// far richer signal than the thumbs-up/down on AIInteraction, and it is generated as a
 /// by-product of people doing their normal work.
+/// One question-and-answer on the Ask AI page — the page's memory.
+///
+/// A row per EXCHANGE rather than per message: the page renders question-answer cards, follow-ups
+/// are given to the model as recent history, and a chat-log-of-roles would be a second shape for
+/// the same fact. Everything the meta strip shows is stored at answer time — model, provider,
+/// tokens, cost, duration — because the settings can change tomorrow and the history must keep
+/// saying what THIS answer actually cost.
+model AiAskExchange {
+  id     String @id @default(uuid())
+  userId String
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  prompt String  @db.Text
+  /// Markdown, possibly carrying ```chart fences the page renders as real charts. Null when the
+  /// attempt failed — the row is still kept, because "it failed at 14:02" is part of the history.
+  answer String? @db.Text
+  error  String? @db.VarChar(500)
+
+  /// Which tools the answer actually consulted, [{ tool, detail }] — the transparency strip.
+  toolCalls Json @default("[]")
+
+  model        String?  @db.VarChar(120)
+  provider     String?  @db.VarChar(40)
+  inputTokens  Int      @default(0)
+  outputTokens Int      @default(0)
+  costUsd      Decimal? @db.Decimal(10, 6)
+  durationMs   Int      @default(0)
+
+  /// 1 = up, -1 = down, null = unrated. An Int rather than a Boolean so "rated down" and "not
+  /// rated" cannot be confused.
+  feedback Int?
+
+  createdAt DateTime @default(now())
+
+  @@index([userId, createdAt])
+}
+
 model AiProposal {
   id   String         @id @default(uuid())
   kind AiProposalKind

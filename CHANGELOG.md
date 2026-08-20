@@ -54,6 +54,32 @@ that does not exist yet.
   that can approve a change, which is the absence of a capability rather than a limit on one. An
   approval is a named person accepting risk, and there is no undo.
 
+### 💬 Ask AI grew a page, a memory, and hands that only read
+
+- **A full Ask AI page** (Work → Ask AI): a conversation with the workspace that remembers. Every
+  prompt and answer is kept, with what each answer actually cost — model, tokens, estimated dollars,
+  response time — stored at answer time, so the history stays honest after the workspace's model
+  changes. Thumbs up or down on any answer; press the same thumb again to un-rate. Failed attempts
+  stay in the feed with their reason, because a page that forgets failures reads as one that never
+  fails.
+- **It consults the workspace, live.** Nine read-only tools — ticket search and detail, ticket and
+  change metrics, the change register, your own timesheets, the workspace hours report (permission
+  respected: without it, the answer says so), the agent roster and the workflow list — every one
+  scoped exactly as the asking person, through the same project scope the pages use. Each answer
+  shows which tools it consulted, so "it looked" and "it made that up" stay distinguishable.
+- **It acts on nothing, on purpose.** An action taken from a chat transcript has no review step and
+  no undo. Where an answer leads to an action, it names the page where a person does it — and a test
+  greps the tool registry for every database write verb, so a write added there fails the build.
+- **Answers in any shape the data deserves**: markdown with tables, and one real chart per answer —
+  bar, line or pie — drawn from numbers a tool actually returned, never invented. Off-topic
+  questions get one polite sentence back.
+- **Works with whatever model is configured.** The loop speaks plain JSON rather than any provider's
+  native tool-calling dialect, so it runs on everything from Claude to a free community model — and
+  a model that will not follow the format still answers in plain text rather than failing.
+- The palette's quick Ask AI stays for one-off questions and now links to the page. Fixed alongside:
+  markdown tables in AI answers were being silently flattened to a run of words by the HTML
+  sanitiser's allowlist, which predates AI answers carrying tables.
+
 ### 📝 The assistant now declines what it cannot draft — and says so
 
 - **Fixed the placeholder that could pass a gate.** Told to "admit what is not known", the drafting
