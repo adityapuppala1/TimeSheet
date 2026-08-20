@@ -340,9 +340,9 @@ function UseBlueprintDialog({ blueprintId, onClose }: { blueprintId: string | nu
         {/* The two paths, with the difference stated where the choice is made. */}
         <div className="grid gap-2 rounded-lg border border-border bg-muted/30 p-3 sm:grid-cols-2">
           <div className="grid gap-1.5">
-            <Button disabled={!projectId || busy || items.length === 0} onClick={() => propose.mutate()}>
+            <Button variant="ai" disabled={!projectId || busy || items.length === 0} onClick={() => propose.mutate()}>
               {propose.isPending ? <Loader2 className="mr-2 h-3.5 w-3.5 animate-spin" /> : <Sparkles className="mr-2 h-3.5 w-3.5" />}
-              <span className={!projectId || busy || items.length === 0 ? undefined : "ai-gradient-text"}>Propose for review</span>
+              Propose for review
             </Button>
             <p className="text-[11px] text-muted-foreground">
               Every item becomes a row you accept or reject, and the whole set can be undone afterwards.

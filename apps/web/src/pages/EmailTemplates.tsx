@@ -943,13 +943,10 @@ function FailureDetailDialog({
             <div className="grid gap-2 p-3">
             <div className="flex flex-wrap items-center justify-between gap-2">
               <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">AI diagnosis of this case</p>
-              <Button
-                size="sm"
-                variant="outline"
-                className="ai-gradient-text"
-                disabled={analyze.isPending}
-                onClick={() => analyze.mutate()}
-              >
+              {/* `ai` is the variant for a control that SPENDS a model call — see the AI effect
+                  layer. The gradient label came off with it: two treatments on one small button
+                  competed, and the specular face already says what the gradient was saying. */}
+              <Button size="sm" variant="ai" disabled={analyze.isPending} onClick={() => analyze.mutate()}>
                 {analyze.isPending ? <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" /> : <Sparkles className="mr-1.5 h-3.5 w-3.5" />}
                 {analyze.data ? "Re-analyze" : "Analyze with AI"}
               </Button>
