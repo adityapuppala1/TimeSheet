@@ -18,7 +18,7 @@
  */
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { changeBands, changeKinds, changeOutcomes, changeStateTransitions, permissions, type ChangeBand, type ChangeState } from "@timesheet/shared";
-import { AlertTriangle, ArrowLeft, CheckCircle2, ExternalLink, Loader2, Plus, ShieldCheck, Trash2, X } from "lucide-react";
+import { AlertTriangle, ArrowLeft, CheckCircle2, ExternalLink, Loader2, Plus, ShieldCheck, Sparkles, Trash2, X } from "lucide-react";
 import { Fragment, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router";
 import {
@@ -36,6 +36,7 @@ import { cn } from "../lib/utils";
 import { changeApi, userApi, type ChangeDetail as ChangeDetailRow } from "../services/api";
 import { useAuthStore } from "../store/auth";
 import { Badge } from "../components/ui/badge";
+import { BorderGlow } from "../components/ui/border-glow";
 import { Button } from "../components/ui/button";
 import { Card, CardContent } from "../components/ui/card";
 import { Input } from "../components/ui/input";
@@ -846,6 +847,22 @@ function RiskSection({
 }) {
   const inputs = (change.riskInputs ?? {}) as Record<string, ChangeBand>;
   const unanswered = parameters.filter((p) => !inputs[p.key]).length;
+  const [narrative, setNarrative] = useState<string | null>(null);
+  const [narrating, setNarrating] = useState(false);
+
+  const explain = async () => {
+    setNarrating(true);
+    try {
+      const result = await changeApi.riskNarrative(change.id);
+      setNarrative(result.narrative ?? "The model returned nothing to show.");
+    } catch (err: any) {
+      // The usual failure is that AI is switched off for the workspace, and the server says so
+      // plainly — surfaced rather than swallowed, because "nothing happened" is the worst answer.
+      toast.error("Could not explain the score", { description: serverMessage(err, "Try again.") });
+    } finally {
+      setNarrating(false);
+    }
+  };
 
   return (
     <div className="grid gap-4">
@@ -857,7 +874,16 @@ function RiskSection({
             <span className="text-base font-normal text-muted-foreground">/100</span>
           </p>
         </div>
-        <Badge variant={CHANGE_RISK_TONE[change.riskLevel]}>{humanizeChange(change.riskLevel)}</Badge>
+        <div className="flex items-center gap-2">
+          <Badge variant={CHANGE_RISK_TONE[change.riskLevel]}>{humanizeChange(change.riskLevel)}</Badge>
+          {/* Explains the score; never sets it. The number above is computed from the answers below
+              and stored — a model inventing it would make the rule that decides whether a backout
+              plan is mandatory unreproducible. This is its cover letter. */}
+          <Button variant="ai" size="sm" disabled={narrating} onClick={() => void explain()}>
+            {narrating ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Sparkles className="h-3.5 w-3.5" />}
+            Explain this score
+          </Button>
+        </div>
         {unanswered > 0 && (
           <p className="text-xs text-warning">
             {unanswered} question{unanswered === 1 ? "" : "s"} unanswered — all are required before submitting, because a blank
@@ -865,6 +891,22 @@ function RiskSection({
           </p>
         )}
       </div>
+
+      {/* BorderGlow is the app-wide marker for "this surface is the model talking", and the sweep
+          fires when the answer lands. Kept visually distinct from the recorded assessment below it,
+          because one of the two is a record and the other is a paragraph about it. */}
+      {narrative && (
+        <BorderGlow animated>
+          <div className="grid gap-1.5 p-3">
+            <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">What this score means</p>
+            <p className="text-sm leading-relaxed">{narrative}</p>
+            <p className="text-[11px] text-muted-foreground">
+              Written from the answers recorded below. It explains the score — it did not set it, and it is not a
+              recommendation to approve.
+            </p>
+          </div>
+        </BorderGlow>
+      )}
 
       <div className="grid gap-3 sm:grid-cols-2">
         {parameters.map((p) => (

@@ -11,6 +11,18 @@ Landed after v3.0.0 was tagged. The parser that feeds the in-app What's-new page
 until it gains a version number, on purpose — an installation must never render history for a version
 that does not exist yet.
 
+### 🤖 AI can explain a change's risk score, and still cannot approve it
+
+- **"Explain this score"** on a change's Risk tab turns the recorded assessment into a paragraph its
+  approver can act on: what the answers mean together, and what to look hardest at. Off by default,
+  behind its own switch in the AI capability grid like every other capability.
+- **It narrates; it never scores.** The number is computed from weighted parameters and stored on the
+  change — a model inventing it would make the rule that decides whether a backout plan is mandatory
+  unreproducible, and indefensible to the person asking why theirs needs one.
+- **And it does not tell anyone whether to approve.** There is no AI capability at any autonomy level
+  that can approve a change, which is the absence of a capability rather than a limit on one. An
+  approval is a named person accepting risk, and there is no undo.
+
 ### 🔀 A change now shows what it is shipping, and workflows can act on it
 
 - **A Context tab** on every change: the repositories and pull requests it delivers, whether their CI

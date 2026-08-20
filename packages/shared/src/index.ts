@@ -433,6 +433,10 @@ export interface GlobalAISettings {
   /** Gates ai.service.ts#explainThresholdRecommendation — narrates (never sets) the
    *  deterministically-computed face-match threshold recommendation. */
   facePolicyCopilotEnabled: boolean;
+  /** Gates ai.service.ts#narrateChangeRisk — explains a change's ALREADY-COMPUTED risk score in
+   *  prose. Never scores, and never approves: approving is excluded at every autonomy level, since
+   *  it is a named person accepting risk with no undo. */
+  changeRiskNarrativeEnabled: boolean;
   /** Gates ai.service.ts#generateBugPatternDigest — monthly "what keeps breaking" recap over
    *  recurring CI failures and security-finding hotspots. See workers/bug-pattern-digest.worker.ts. */
   bugPatternDigestEnabled: boolean;

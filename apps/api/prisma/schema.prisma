@@ -1206,6 +1206,11 @@ model GlobalAISettings {
   /// same reason: a score a model invented is not reproducible and not defensible in the meeting
   /// where someone asks why their project is red.
   projectRiskAgentEnabled     Boolean @default(false)
+  /// Gates ai.service.ts#narrateChangeRisk — the same division of labour one module over. A change's
+  /// risk score is computed from weighted parameters and STORED; this only turns it into a sentence
+  /// an approver can act on. It never scores, and it never approves: see
+  /// docs/AI_AND_AUTOMATION_FOR_CHANGE.md §1.3 for why approving is excluded at every level.
+  changeRiskNarrativeEnabled  Boolean @default(false)
   /// Gates ai.service.ts#proposePlanBreakdown — turns a goal or an epic into a PROPOSED tree of
   /// child work items. Never writes: it emits an AiProposal whose rows a human accepts or
   /// rejects individually. See ai-proposal.service.ts for why that envelope exists.

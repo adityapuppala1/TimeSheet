@@ -55,6 +55,7 @@ import {
   getSlaConfig,
   judgeChangeSlas,
   missingForTransition,
+  requiresBackoutPlan,
   resolveChangeApprovers,
   stateAfterDecision,
   ticketStatusFor
@@ -64,6 +65,7 @@ import { CSV_EOL, UTF8_BOM, csvCell } from "../utils/csv.js";
 import PDFDocument from "pdfkit";
 import { buildChangeWorkbook, renderChangeRegisterPdf } from "../services/change-export.service.js";
 import { buildChangeContext } from "../services/change-context.service.js";
+import { narrateChangeRisk } from "../services/ai.service.js";
 
 export const changeRouter = Router();
 changeRouter.use(requireAuth);
@@ -1169,6 +1171,50 @@ changeRouter.get("/:id/context", async (req, res) => {
   // than one, and neither can anything derived from it.
   await assertTicketVisible(req, change.ticket.projectId);
   res.json(await buildChangeContext(change.id));
+});
+
+/**
+ * A plain-prose briefing on this change's ALREADY-RECORDED risk score, for the person deciding it.
+ *
+ * POST rather than GET because it spends a model call — a GET should be safe to re-run and refresh,
+ * and this is not free. It writes nothing to the change either way.
+ *
+ * The score is never recomputed here and never comes from the model. It is read off the row, along
+ * with the answers that produced it, and handed over as facts the briefing may explain but not
+ * change. And it does not say whether to approve: that is a named person accepting risk.
+ */
+changeRouter.post("/:id/risk-narrative", async (req, res) => {
+  await assertChangeManagementEnabled();
+  const change = await prisma.changeRequest.findFirst({
+    where: { id: String(req.params.id) },
+    include: { ticket: { select: { title: true, projectId: true } } }
+  });
+  if (!change) throw new AppError(404, "Change not found");
+  await assertTicketVisible(req, change.ticket.projectId);
+
+  // Labels, not keys: the briefing is written for a person, and `rollbackComplexity` is not a phrase
+  // anybody says. Inactive parameters are excluded — they are not part of the score any more.
+  const parameters = await prisma.changeRiskParameter.findMany({ where: { isActive: true }, orderBy: { order: "asc" } });
+  const inputs = (change.riskInputs ?? {}) as Record<string, string>;
+  const answers = parameters
+    .filter((p) => inputs[p.key])
+    .map((p) => ({ label: p.label, band: inputs[p.key], weight: p.weight }))
+    .sort((a, b) => b.weight - a.weight);
+
+  const narrative = await narrateChangeRisk({
+    changeKey: change.changeKey,
+    title: change.ticket.title,
+    changeKind: String(change.changeKind),
+    environment: String(change.environment),
+    riskScore: change.riskScore,
+    riskLevel: String(change.riskLevel),
+    answers,
+    requiresBackoutPlan: requiresBackoutPlan(change),
+    hasBackoutPlan: Boolean(change.backoutPlan && change.backoutPlan.trim().length > 0),
+    userId: req.user!.id
+  });
+
+  res.json({ narrative });
 });
 
 changeRouter.get("/:id/conflicts", async (req, res) => {

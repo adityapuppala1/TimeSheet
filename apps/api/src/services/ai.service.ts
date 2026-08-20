@@ -291,6 +291,7 @@ export type AIFeatureToggle =
   | "staleTicketNudgeEnabled"
   | "aiPrInlineReviewEnabled"
   | "projectRiskAgentEnabled"
+  | "changeRiskNarrativeEnabled"
   | "planBreakdownEnabled"
   | "emailFailureTriageEnabled";
 
@@ -2714,6 +2715,79 @@ export async function narrateProjectRisk(input: {
   await logAIUsage({
     feature: "project_risk_narrative",
     params: { projectName: input.projectName, riskScore: input.riskScore, band: input.band, concerns: input.topConcerns.length },
+    model: settings.model,
+    inputTokens: result.usage.inputTokens,
+    outputTokens: result.usage.outputTokens,
+    userId: input.userId
+  });
+
+  return result.text || null;
+}
+
+/**
+ * Narrates a CHANGE's risk score, which was already computed by `change.service.ts#computeRiskScore`
+ * from weighted parameters and stored on the row.
+ *
+ * The same division of labour as `narrateProjectRisk`, one module over, and load-bearing for the
+ * same reason: the score decides whether a backout plan is mandatory, so a model inventing it would
+ * make the module's central rule unreproducible. Run it twice and get two answers, and there is no
+ * defending it to the person asking why their change needs a rollback plan. The score is the
+ * product; this is its cover letter.
+ *
+ * WHAT IT CANNOT DO, said here as well as in the registry: approve. There is no capability that
+ * approves a change at any autonomy level. This prepares a decision; a named person still makes it.
+ *
+ * Sees the assessment and the computed breakdown. No PR bodies, no CI logs, no comments — nothing
+ * authored outside this workspace, which is why the capability is not marked as acting on untrusted
+ * input.
+ */
+export async function narrateChangeRisk(input: {
+  changeKey: string;
+  title: string;
+  changeKind: string;
+  environment: string;
+  riskScore: number;
+  riskLevel: string;
+  /** Parameter label → the band answered, worst first. Labels rather than keys: the model is writing
+   *  for a person, and `rollbackComplexity` is not a phrase anybody says. */
+  answers: Array<{ label: string; band: string; weight: number }>;
+  requiresBackoutPlan: boolean;
+  hasBackoutPlan: boolean;
+  userId?: string;
+}): Promise<string | null> {
+  const { settings } = await preflight("changeRiskNarrativeEnabled");
+
+  const answerLines = input.answers.length
+    ? input.answers.map((a) => `- ${a.label}: ${a.band} (weight ${a.weight})`).join("\n")
+    : "- (nothing answered)";
+
+  const prompt = [
+    "You are briefing the person who has to approve one change.",
+    "The score and the answers below were COMPUTED and RECORDED. Do not change any number, do not",
+    "invent facts, and do not add risks that are not listed. Explain what these answers mean",
+    "together and what the approver should look at hardest, in 3-5 sentences of plain prose.",
+    "Do not tell them whether to approve it. That is their decision, not yours.",
+    "",
+    "=== BEGIN RECORDED ASSESSMENT ===",
+    `Change: ${input.changeKey} — ${input.title}`,
+    `Type: ${input.changeKind}, targeting ${input.environment}`,
+    `Risk score: ${input.riskScore}/100 (${input.riskLevel})`,
+    input.requiresBackoutPlan
+      ? `A backout plan is REQUIRED for this change, and one is ${input.hasBackoutPlan ? "recorded" : "MISSING"}.`
+      : "A backout plan is not required at this risk level.",
+    "",
+    "Answers given, highest weight first:",
+    answerLines,
+    "=== END RECORDED ASSESSMENT ===",
+    "",
+    "Write the briefing now. No preamble, no headings, no bullet points."
+  ].join("\n");
+
+  const result = await callChat(settings, { model: settings.model, maxTokens: 400, prompt });
+
+  await logAIUsage({
+    feature: "change_risk_narrative",
+    params: { changeKey: input.changeKey, riskScore: input.riskScore, riskLevel: input.riskLevel, answered: input.answers.length },
     model: settings.model,
     inputTokens: result.usage.inputTokens,
     outputTokens: result.usage.outputTokens,

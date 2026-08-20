@@ -137,6 +137,22 @@ const CAPABILITIES: ReadonlyArray<AiCapabilitySpec> = [
     actsOnUntrustedInput: false,
     tools: []
   },
+  {
+    id: "change_risk_narrative",
+    title: "Change risk narrative",
+    description: "Explains a change's computed risk score in prose for its approver. Never sets the score, and never approves.",
+    featureToggle: "changeRiskNarrativeEnabled",
+    // AUTONOMOUS for the same reason its project-shaped sibling is: it writes nothing. The score is
+    // a stored column computed from weighted parameters; this only turns it into a sentence. What is
+    // NOT reachable at any level is the approval itself — that is not a ceiling on this capability,
+    // it is the absence of any capability that can do it.
+    maxLevel: "AUTONOMOUS",
+    ceilingReason: null,
+    // Sees the change's own assessment and its stored score. No PR bodies, no CI logs, no comments —
+    // everything it reads was typed by somebody inside this workspace.
+    actsOnUntrustedInput: false,
+    tools: []
+  },
 
   // ── Plan-shaped changes. Reversible, scoped to a project, and reviewed row by row — the
   //    capabilities the proposal envelope was actually built for.

@@ -1,6 +1,6 @@
 # AI, agents and workflows for Tickets and Change Management — a plan
 
-Status: **steps 1 and 2 are built; 3–5 are still a proposal.** Written against the seams that already
+Status: **steps 1, 2 and 3 are built; 4 and 5 are still a proposal.** Written against the seams that already
 exist, so every item below says which of them it extends and what it would cost. Read
 [ARCHITECTURE.md §3.12](ARCHITECTURE.md) and [API.md](API.md#change-management-v8) first.
 
@@ -67,7 +67,7 @@ in `AIUsageLog` keyed on the capability id so usage and policy join.
 | Capability | What it does | Ceiling | Why that ceiling |
 |---|---|---|---|
 | `change_draft_assist` | Drafts justification, impact narrative, test plan and **backout plan** from the context pack | `SUGGEST` | It is writing the thing an approver relies on. A draft nobody wrote is worse than a blank field, because a blank field is honest. |
-| `change_risk_narrative` | Explains the **already-computed** score in prose — which parameters drove it | `SUGGEST` | Narrates, never scores. The score stays arithmetic, exactly as `project_risk_narrative` does today. |
+| `change_risk_narrative` — **BUILT** | Explains the **already-computed** score in prose — which parameters drove it | `AUTONOMOUS` | Narrates, never scores; writes nothing at all, and reads only the change's own recorded assessment. Shipped at the same ceiling as `project_risk_narrative` for the same reason. The top rung is not a licence to approve — no capability can, at any level. |
 | `change_conflict_brief` | Reads the calendar and says what else is booked on this application in this window | `PROPOSE` | It reports; it does not move anything. |
 | `change_pir_assist` | Drafts the post-implementation review from what actually happened — steps that failed, tests that did not pass, the outcome | `SUGGEST` | The PIR is the record of a failure. Its author should be the person accountable for it. |
 
@@ -180,8 +180,10 @@ here; it should be marked on each new capability rather than argued about later.
 
 1. ~~**The context pack** (§1.1).~~ **Built.** `GET /changes/:id/context` and the Context tab.
 2. ~~**The change actions** (§2.2).~~ **Built** — three of the four; see why the fourth was dropped.
-3. **`change_risk_narrative`** (§1.2). The cheapest capability — it narrates a number that already
-   exists, and the pattern is copied from `project_risk_narrative`.
+3. ~~**`change_risk_narrative`** (§1.2).~~ **Built.** `POST /changes/:id/risk-narrative`, an
+   "Explain this score" button on the Risk tab, and a `changeRiskNarrativeEnabled` toggle that
+   appears in the AI capability grid on its own — the registry drives that screen, so no settings UI
+   changed, which was the point of routing it through the existing contract.
 4. **`change_draft_assist`** as a proposal (§1.2). The largest win and the largest blast radius; do
    it once the proposal queue has been exercised by the three above.
 5. **`change_conflict_brief`** and **`change_pir_assist`**.

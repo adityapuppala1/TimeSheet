@@ -5388,6 +5388,14 @@ export const changeApi = {
    * and not on every load of a form they came to edit one field on.
    */
   context: async (id: string) => (await api.get<ChangeContext>(`/changes/${id}/context`)).data,
+  /**
+   * A plain-prose briefing on this change's already-recorded risk score.
+   *
+   * POST because it spends a model call — a GET should be safe to re-run and refresh. It writes
+   * nothing either way, and it never returns a score: the number is read off the row.
+   */
+  riskNarrative: async (id: string) =>
+    (await api.post<{ narrative: string | null }>(`/changes/${id}/risk-narrative`, {})).data,
   /** Scheduled work and the freeze periods it has to dodge, in one call — a calendar that fetches its
    *  bars and its no-go zones separately renders them a frame apart. */
   calendar: async (from: string, to: string) =>
