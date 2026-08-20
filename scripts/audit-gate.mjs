@@ -35,7 +35,7 @@ const ACCEPTED = [
   {
     id: "GHSA-ggr8-5vv4-36mx",
     package: "deepmerge-ts",
-    reviewed: "2026-08-18",
+    reviewed: "2026-08-21",
     why: [
       "Stack exhaustion when deep-merging a deliberately recursive object graph. Reached two ways",
       "here, and neither carries attacker input:",
@@ -46,12 +46,22 @@ const ACCEPTED = [
       "    parsed by htmlparser2 and never passes through deepmerge, so inbound mail — the one",
       "    attacker-controlled input in this dependency path (workers/inbound-email.worker.ts) —",
       "    cannot reach it.",
-      "No upstream fix is takeable: the fix is deepmerge-ts >= 8, and as of the review date the",
-      "LATEST html-to-text (10.0.0) still requires ^7.1.5 and the LATEST @prisma/config (7.9.1) pins",
-      "7.1.5 exactly. An `overrides` to 8.x would force Prisma's config loader off a pinned version,",
-      "which every migration and every `prisma generate` depends on — a real risk taken to remove an",
-      "unreachable one.",
-      "RE-CHECK when either publishes a release that accepts deepmerge-ts 8, then delete this entry."
+      "No upstream fix is takeable yet, and the reason CHANGED at the 2026-08-21 re-check, so the",
+      "state of each path is recorded separately rather than as one sentence that ages badly:",
+      "  - html-to-text HAS shipped the fix. 10.0.1 requires deepmerge-ts ^8.0.1 (10.0.0 required",
+      "    ^7.1.5). It is still not reachable from here: mailparser — the only thing that pulls it —",
+      "    pins `html-to-text: \"10.0.0\"` EXACTLY, in 3.9.14 and in the latest 3.9.15 alike. Taking it",
+      "    would mean an `overrides` forcing mailparser onto a patch its author pinned away from, to",
+      "    close a path this entry already establishes attacker input cannot reach. RE-CHECK when",
+      "    mailparser publishes a release taking html-to-text >= 10.0.1; at that point this bullet",
+      "    goes away on a plain dependency bump.",
+      "  - @prisma/config has NOT. 6.19.3 (what this repo resolves) and the latest 7.9.1 both pin",
+      "    deepmerge-ts 7.1.5 exactly, so 7.1.5 stays in the tree and this advisory keeps firing even",
+      "    once the bullet above clears. An `overrides` to 8.x would force Prisma's config loader off",
+      "    a pinned version that every migration and every `prisma generate` depends on — a real risk",
+      "    taken to remove an unreachable one.",
+      "DELETE this entry when @prisma/config accepts deepmerge-ts 8; until then it cannot be, and the",
+      "gate will keep insisting the entry still matches something real."
     ]
   }
 ];
