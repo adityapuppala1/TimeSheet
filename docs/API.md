@@ -1238,13 +1238,32 @@ works on anything that follows instructions. A model that ignores the format deg
 its raw text becomes the answer. Five tool steps maximum, then a forced final answer from whatever
 was gathered.
 
-**Every tool is a read, and that is the design.** The registry (`ai-chat-tools.ts`) covers tickets,
-changes, timesheets, metrics, the agent roster and the workflow list — each scoped through the same
-`ticketProjectScope` the pages use, each running as the asking person. An action taken from a chat
-transcript has no review step, no proposal row and no undo, so the loop can look at anything the
-asker could open and change nothing; where an answer leads to an action it names the page where a
-person does it. `ask-ai-chat.test.ts` greps the registry for every Prisma write verb, so a write
-added there fails a test rather than shipping quietly.
+**Reads and actions are two registries with two contracts.** The read registry
+(`ai-chat-tools.ts`) covers tickets, changes, timesheets, metrics, projects, the people directory,
+the agent roster and the workflow list — each scoped through the same `ticketProjectScope` the pages
+use, each running as the asking person, and the file is held provably read-only by a test that greps
+it for every Prisma write verb.
+
+The action registry (`ai-chat-actions.ts`) holds what the assistant may DO, and currently that is
+one thing: `log_timesheet_draft`. Every action produces a **draft, never a submission** — the rule
+the MCP server settled first, for the same reason: submitting starts an approval SLA clock and,
+where required, an identity check, and an assistant must not trigger either from a sentence. The
+executor resolves names to ids and calls `saveTimesheet` — the timesheet form's own save — so the
+Serializable overlap check, the assignment gate, the future-date and >12h rules and the audit entry
+all apply from one implementation. A refusal goes back to the model as data phrased for relaying,
+and the loop refuses to re-run an identical consecutive call, so a model that repeats itself cannot
+double-fire an action. Its guard test pins the action list and greps for every submission-shaped
+call.
+
+The prompt carries today's date and the asker's name — the two facts a model cannot look up and
+reliably invents instead (measured: asked to log time "today", it wrote a date from its training
+data).
+
+**A thumb feeds the golden datasets.** When interaction capture is on, the final answer is captured
+as an `AIInteraction` and the exchange stores its id; a thumb on the page then writes the same
+`up`/`down` feedback the AI activity log writes, which is exactly what golden datasets are promoted
+from (`ai-dataset.service.ts`). Without capture there is no interaction row and the rating stays a
+page-local preference — the tooltip on the thumbs says which loop it feeds either way.
 
 **Answers are markdown, with real charts.** The model may emit one fenced ```chart block with
 numbers a tool actually returned; the page shape-checks the JSON and draws it with the app's own

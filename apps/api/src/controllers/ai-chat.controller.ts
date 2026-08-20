@@ -25,6 +25,7 @@ import { requireAuth, requirePermission } from "../middleware/auth.js";
 import { AppError } from "../middleware/error.js";
 import { validate } from "../middleware/validate.js";
 import { askWorkspaceChat } from "../services/ai.service.js";
+import { setInteractionFeedback } from "../services/ai-quality.service.js";
 
 export const aiChatRouter = Router();
 aiChatRouter.use(requireAuth);
@@ -54,7 +55,8 @@ aiChatRouter.post("/ask", requirePermission(permissions.TICKETS_VIEW), validate(
       prompt,
       history: recent.reverse(),
       toolCtx: { req: req as never },
-      userId: req.user!.id
+      userId: req.user!.id,
+      asker: { name: req.user!.name, role: req.user!.role }
     });
 
     const row = await prisma.aiAskExchange.create({
@@ -68,7 +70,8 @@ aiChatRouter.post("/ask", requirePermission(permissions.TICKETS_VIEW), validate(
         inputTokens: result.inputTokens,
         outputTokens: result.outputTokens,
         costUsd: result.costUsd,
-        durationMs: Date.now() - startedAt
+        durationMs: Date.now() - startedAt,
+        interactionId: result.interactionId
       }
     });
     res.status(201).json(row);
@@ -102,11 +105,26 @@ const feedbackSchema = z.object({
 });
 
 aiChatRouter.post("/:id/feedback", validate(feedbackSchema), async (req, res) => {
-  const updated = await prisma.aiAskExchange.updateMany({
+  const row = await prisma.aiAskExchange.findFirst({
     where: { id: String(req.params.id), userId: req.user!.id },
-    data: { feedback: req.body.feedback === 0 ? null : req.body.feedback }
+    select: { id: true, interactionId: true }
   });
-  if (updated.count === 0) throw new AppError(404, "That answer is not in your history.");
+  if (!row) throw new AppError(404, "That answer is not in your history.");
+  const value = req.body.feedback === 0 ? null : (req.body.feedback as 1 | -1);
+  await prisma.aiAskExchange.update({ where: { id: row.id }, data: { feedback: value } });
+
+  // The thumb also reaches the AI quality loop. Rated interactions are what golden datasets are
+  // promoted from (ai-dataset.service.ts), so a thumb here weighs exactly as much as one on the AI
+  // activity log — when capture was on at answer time; without capture there is no interaction row
+  // and the rating stays a page-local preference. Best-effort: the interaction may have been
+  // pruned by retention, and a missing capture must not fail the thumb.
+  if (row.interactionId) {
+    await setInteractionFeedback({
+      interactionId: row.interactionId,
+      feedback: value === 1 ? "up" : value === -1 ? "down" : null,
+      userId: req.user!.id
+    }).catch(() => undefined);
+  }
   res.json({ ok: true });
 });
 

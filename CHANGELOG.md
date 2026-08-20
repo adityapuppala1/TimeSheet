@@ -54,6 +54,31 @@ that does not exist yet.
   that can approve a change, which is the absence of a capability rather than a limit on one. An
   approval is a named person accepting risk, and there is no undo.
 
+### 🖊 Ask AI can now do one thing — and it is a draft
+
+- **"Log 2 hours on HICS-TS today, 9 to 11, development" now works as a sentence.** The assistant
+  gathers what is missing conversationally — asked without a module, it lists the project's modules
+  and asks which — and then logs the entry through the timesheet form's own save, so the overlap
+  check, the assignment gate, the future-date rule and the audit entry all apply unchanged. What it
+  creates is a **draft**: nothing reaches an approver until the person reviews and submits it
+  themselves, the same line the MCP server drew and for the same reason.
+- **It cannot double-fire.** A model that repeats a successful action verbatim gets its earlier
+  result replayed instead of a second run — and the one measured double-fire was also refused
+  independently by the overlap check, which is what reusing the form's own save buys.
+- **It knows what day it is.** Asked to log time "today", the model wrote a date from its training
+  data — the prompt now carries today's date and the asker's name, the two facts a model cannot
+  look up and reliably invents instead.
+- **Thumbs feed the golden datasets.** Each answer is captured into the same AI quality loop every
+  other capability uses (when capture is on), and a thumb on the page writes the same rating the AI
+  activity log writes — which is what golden datasets are promoted from. The tooltips say so.
+- **The loader is now the strands.** The "consulting the workspace" state draws reactbits' Strands
+  on a WebGL canvas, ported in-tree against the theme tokens and re-coloured live on theme flips.
+  Under reduced motion it does not slow down — it holds still, falling back to the quiet SVG form.
+- **The page reads as a chat**: the assistant's answers sit beside an avatar in their own gutter,
+  the person's questions in bubbles opposite, and the directory joined the tool set — "who reports
+  to whom" is now answerable. Malformed tool calls from small models are corrected and retried
+  instead of being published as the answer, and a stray trailing brace no longer sinks a reply.
+
 ### 💬 Ask AI grew a page, a memory, and hands that only read
 
 - **A full Ask AI page** (Work → Ask AI): a conversation with the workspace that remembers. Every

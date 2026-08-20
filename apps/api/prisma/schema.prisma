@@ -3601,6 +3601,12 @@ model AiAskExchange {
   /// rated" cannot be confused.
   feedback Int?
 
+  /// The captured AIInteraction this answer became, when capture is on. Deliberately NOT a foreign
+  /// key — interactions are pruned on a retention schedule and the exchange must outlive its
+  /// capture. This is what lets a thumb here flow into the same quality loop and golden datasets
+  /// every other capability's ratings feed.
+  interactionId String? @db.VarChar(64)
+
   createdAt DateTime @default(now())
 
   @@index([userId, createdAt])

@@ -14,15 +14,17 @@ vi.mock("../../src/config/prisma.js", () => ({ prisma: {} }));
 const { AI_CHAT_TOOLS } = await import("../../src/services/ai-chat-tools.js");
 
 describe("the Ask AI tool registry", () => {
-  it("is exactly the nine read tools", () => {
+  it("is exactly the eleven read tools", () => {
     // Pinned as a set: adding a tool is a decision about what a model may see, not a convenience
     // edit — and REMOVING one silently degrades answers into guesses.
     expect(AI_CHAT_TOOLS.map((t) => t.name).sort()).toEqual(
       [
         "change_metrics",
+        "find_people",
         "get_ticket",
         "list_agents",
         "list_changes",
+        "list_projects",
         "list_workflows",
         "my_timesheets",
         "search_tickets",
@@ -58,6 +60,33 @@ describe("the Ask AI tool registry", () => {
     for (const tool of AI_CHAT_TOOLS) {
       expect(tool.description.length, tool.name).toBeGreaterThan(10);
       expect(tool.args.length, tool.name).toBeGreaterThan(1);
+    }
+  });
+});
+
+describe("the Ask AI action registry", () => {
+  it("is exactly one action, and it is the timesheet draft", async () => {
+    const { AI_CHAT_ACTIONS } = await import("../../src/services/ai-chat-actions.js");
+    expect(AI_CHAT_ACTIONS.map((t) => t.name)).toEqual(["log_timesheet_draft"]);
+  });
+
+  it("only ever saves a DRAFT — never a submission, never an approval", async () => {
+    // The rule the MCP server settled first, held here by grep rather than by hope: submitting
+    // starts an approval SLA clock and, where required, an identity check. An assistant must not
+    // trigger either from a sentence.
+    const source = await import("node:fs").then((fs) =>
+      fs.readFileSync(new URL("../../src/services/ai-chat-actions.js", import.meta.url).href.replace("/ai-chat-actions.js", "/ai-chat-actions.ts").replace("file:///", ""), "utf8")
+    );
+    expect(source).toContain('"DRAFT"');
+    // Code-shaped targets, not words: "approver" appears in prose explaining the rule, and a guard
+    // that fails on its own explanation teaches people to delete the explanation.
+    for (const forbidden of ['"SUBMITTED"', "submitDraft(", "recordDecision(", "approve(", '"APPROVED"', ".transition("]) {
+      expect(source.includes(forbidden), `ai-chat-actions.ts must not reach ${forbidden}`).toBe(false);
+    }
+    // And its ONLY write path is the form's own save — the validations live there, once.
+    expect(source).toContain("saveTimesheet(");
+    for (const verb of ["prisma.timesheet.create", "prisma.timesheet.update", ".upsert(", ".deleteMany("]) {
+      expect(source.includes(verb), `ai-chat-actions.ts must write through saveTimesheet, not ${verb}`).toBe(false);
     }
   });
 });

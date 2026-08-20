@@ -22,7 +22,7 @@ import { AlertTriangle, Eraser, Loader2, MessagesSquare, Send, Sparkles, ThumbsD
 import { askAiApi, type AiAskExchangeRow } from "../services/api";
 import { cn } from "../lib/utils";
 import { AiMarkdown } from "../components/ui/ai-markdown";
-import { AiStrands } from "../components/ui/ai-strands";
+import { AiLoader } from "../components/ui/strands-gl";
 import { Badge } from "../components/ui/badge";
 import { BorderGlow } from "../components/ui/border-glow";
 import { Button } from "../components/ui/button";
@@ -37,7 +37,8 @@ const SUGGESTIONS = [
   "Summarize open critical bugs.",
   "How many changes are in flight, and at what risk?",
   "How many hours did I log this week, and where?",
-  "Which workflows are switched on, and what triggers them?"
+  "Log 2 hours on HICS-TS today, 09:00 to 11:00, development work on the release notes.",
+  "Who reports to whom in this workspace?"
 ];
 
 export function AskAi() {
@@ -79,8 +80,9 @@ export function AskAi() {
           <div>
             <h1 className="text-2xl font-black tracking-tight">Ask AI</h1>
             <p className="mt-1 text-sm text-muted-foreground">
-              Answers only from this workspace — tickets, timesheets, changes, projects, agents and workflows. It reads
-              as you and acts on nothing; every answer shows what it consulted and what it cost.
+              Answers only from this workspace — tickets, timesheets, changes, projects, people, agents and workflows.
+              It reads as you, and the one thing it can write is a <em>draft</em> timesheet entry you review and submit
+              yourself. Every answer shows what it consulted and what it cost.
             </p>
           </div>
         </div>
@@ -100,11 +102,15 @@ export function AskAi() {
             {ask.isPending && (
               <div className="grid gap-2">
                 <UserBubble text={ask.variables ?? ""} />
-                <Card>
-                  <CardContent className="p-4">
-                    <AiStrands label="Consulting the workspace…" />
-                  </CardContent>
-                </Card>
+                <AssistantRow>
+                  <Card className="border-primary/20">
+                    <CardContent className="p-4">
+                      {/* The large-canvas form of the app's "waiting for the answer" mark — see
+                          strands-gl.tsx for where it sits in the AI grammar. */}
+                      <AiLoader label="Consulting the workspace…" />
+                    </CardContent>
+                  </Card>
+                </AssistantRow>
               </div>
             )}
           </div>
@@ -173,10 +179,24 @@ function UserBubble({ text }: { text: string }) {
   );
 }
 
+/** The assistant's gutter: avatar beside the card, so the feed reads as a conversation between two
+ *  parties rather than a stack of forms. The avatar column is fixed-width; the card takes the rest. */
+function AssistantRow({ children }: { children: React.ReactNode }) {
+  return (
+    <div className="flex items-start gap-2.5">
+      <div className="mt-1 grid h-8 w-8 shrink-0 place-items-center rounded-full bg-gradient-to-br from-primary/20 to-info/20 text-primary">
+        <Sparkles className="h-4 w-4" />
+      </div>
+      <div className="min-w-0 flex-1">{children}</div>
+    </div>
+  );
+}
+
 function Exchange({ row }: { row: AiAskExchangeRow }) {
   return (
     <div className="grid gap-2">
       <UserBubble text={row.prompt} />
+      <AssistantRow>
       <Card>
         <CardContent className="grid gap-3 p-4">
           {row.error ? (
@@ -204,6 +224,7 @@ function Exchange({ row }: { row: AiAskExchangeRow }) {
           <MetaStrip row={row} />
         </CardContent>
       </Card>
+      </AssistantRow>
     </div>
   );
 }
@@ -239,6 +260,7 @@ function MetaStrip({ row }: { row: AiAskExchangeRow }) {
             size="icon"
             className={cn("h-7 w-7", row.feedback === 1 ? "text-success" : "text-muted-foreground")}
             onClick={() => rate.mutate(1)}
+            title="Good answer — ratings feed the workspace's AI quality loop and its golden datasets"
             aria-label="Good answer"
             aria-pressed={row.feedback === 1}
           >
@@ -249,6 +271,7 @@ function MetaStrip({ row }: { row: AiAskExchangeRow }) {
             size="icon"
             className={cn("h-7 w-7", row.feedback === -1 ? "text-destructive" : "text-muted-foreground")}
             onClick={() => rate.mutate(-1)}
+            title="Bad answer — a thumbs-down is the strongest negative example the quality datasets get"
             aria-label="Bad answer"
             aria-pressed={row.feedback === -1}
           >

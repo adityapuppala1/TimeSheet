@@ -40,6 +40,7 @@ import type { TicketPriority } from "@prisma/client";
 import { env } from "../config/env.js";
 import { prisma } from "../config/prisma.js";
 import { AI_CHAT_TOOLS, findAiChatTool, type AiChatToolContext } from "./ai-chat-tools.js";
+import { AI_CHAT_ACTIONS, findAiChatAction } from "./ai-chat-actions.js";
 import { requireTenantContext } from "../config/tenant-context.js";
 import { AppError } from "../middleware/error.js";
 import { decryptSecret } from "../utils/encryption.js";
@@ -987,6 +988,37 @@ function parseJsonResponse<T>(raw: string, schema: z.ZodType<T>): T | null {
   try {
     return schema.parse(JSON.parse(cleaned));
   } catch {
+    // Second try: the first BALANCED object in the text. Small and free-tier models wrap valid
+    // JSON in prose, or append a stray closing brace — measured, not hypothesised: a tool call
+    // arrived as `{...} }` and the extra brace failed the whole answer. Walking brace depth
+    // (string-aware) recovers the object without loosening what the schema then checks.
+    const start = cleaned.indexOf("{");
+    if (start === -1) return null;
+    let depth = 0;
+    let inString = false;
+    let escaped = false;
+    for (let i = start; i < cleaned.length; i++) {
+      const ch = cleaned[i];
+      if (escaped) {
+        escaped = false;
+      } else if (ch === "\\") {
+        escaped = true;
+      } else if (ch === '"') {
+        inString = !inString;
+      } else if (!inString) {
+        if (ch === "{") depth++;
+        else if (ch === "}") {
+          depth--;
+          if (depth === 0) {
+            try {
+              return schema.parse(JSON.parse(cleaned.slice(start, i + 1)));
+            } catch {
+              return null;
+            }
+          }
+        }
+      }
+    }
     return null;
   }
 }
@@ -3180,6 +3212,9 @@ export interface AskChatResult {
   inputTokens: number;
   outputTokens: number;
   costUsd: number;
+  /** The captured AIInteraction, when capture is on — what lets a thumb on the page feed the same
+   *  quality loop and golden datasets every other capability's ratings feed. */
+  interactionId: string | null;
 }
 
 /**
@@ -3208,10 +3243,14 @@ export async function askWorkspaceChat(input: {
   history: Array<{ prompt: string; answer: string | null }>;
   toolCtx: AiChatToolContext;
   userId: string;
+  /** Who is asking, for "log time for me" and "my tickets" to resolve without a tool call. */
+  asker: { name: string; role: string };
 }): Promise<AskChatResult> {
   const { settings } = await preflight("workspaceSearchEnabled");
 
-  const toolLines = AI_CHAT_TOOLS.map((t) => `- ${t.name}: ${t.description} Args: ${t.args}`).join("\n");
+  const NL = String.fromCharCode(10);
+  const toolLines = AI_CHAT_TOOLS.map((t) => `- ${t.name}: ${t.description} Args: ${t.args}`).join(NL);
+  const actionLines = AI_CHAT_ACTIONS.map((t) => `- ${t.name}: ${t.description} Args: ${t.args}`).join(NL);
   const historyLines = input.history
     .slice(-ASK_HISTORY_TURNS)
     .map((h) => `Q: ${h.prompt.slice(0, ASK_HISTORY_CLIP)}\nA: ${(h.answer ?? "(no answer)").slice(0, ASK_HISTORY_CLIP)}`)
@@ -3230,12 +3269,22 @@ export async function askWorkspaceChat(input: {
       "(general knowledge, other products, the wider world), decline in one sentence and say what",
       "you can help with instead.",
       "",
-      "You have READ-ONLY tools. You cannot create, edit, approve or delete anything. When the",
-      "person wants an action taken, answer with where in the app a person does it — for example",
-      "'open the ticket and use Transition', or 'raise it from Change Management → New change'.",
+      // The two facts a model cannot look up and reliably invents instead: measured — asked to log
+      // time "today", it wrote a date from its training data.
+      `Today's date is ${new Date().toISOString().slice(0, 10)}. The person asking is ${input.asker.name} (${input.asker.role}).`,
       "",
-      "TOOLS:",
+      "You have READ tools, and a small set of ACTIONS. Every action only ever creates a DRAFT the",
+      "person reviews and submits themselves — you cannot submit, approve, transition or delete",
+      "anything. For anything beyond the actions below, answer with where in the app a person does",
+      "it — for example 'open the ticket and use Transition', or 'raise it from Change Management'.",
+      "Before an action, make sure you have the real details from the person — never invent hours,",
+      "dates or descriptions; ask instead. A refusal is final: relay it, do not retry around it.",
+      "",
+      "READ TOOLS:",
       toolLines,
+      "",
+      "ACTIONS (draft-only):",
+      actionLines,
       "",
       "Reply with EXACTLY ONE JSON object and nothing else:",
       '  { "action": "tool", "tool": "<name>", "args": { ... } }   — to consult a tool',
@@ -3263,26 +3312,65 @@ export async function askWorkspaceChat(input: {
   };
 
   let extra = "";
+  // The last tool call, as a signature. Small models repeat a successful action verbatim on the
+  // next step; per-action validation caught the one measured case (the timesheet overlap check
+  // refused the duplicate draft), but surviving double-fire by luck of each action's own rules is
+  // not a design. An identical consecutive call is answered from memory instead of re-run.
+  let lastCallSignature = "";
+  let lastCallResult = "";
   for (let step = 0; step < ASK_MAX_STEPS; step++) {
     const raw = await ask(extra);
     const parsed = parseJsonResponse(raw, AskActionSchema);
 
     // A model that will not speak the format still gets its say: raw text as the answer beats a
     // hard failure, and free-tier models earn this fallback weekly.
+    if (!parsed && raw.includes('"action"') && step < ASK_MAX_STEPS - 1) {
+      // It TRIED to act and mangled the format. Publishing mangled JSON as the answer is the worst
+      // of the options; one correction costs a small call and usually lands.
+      extra = `${extra}${NL}${NL}Your last reply was not valid JSON. Reply again with exactly one JSON object and nothing else.`;
+      continue;
+    }
+
     if (!parsed) {
-      await logAIUsage({ feature: "ask_ai", params: { steps: step + 1, freeform: true }, model: settings.model, inputTokens, outputTokens, userId: input.userId });
-      return { answer: raw.trim() || "The model returned nothing usable — try rephrasing.", toolCalls, model: settings.model, provider: String(settings.provider), inputTokens, outputTokens, costUsd };
+      const answer = raw.trim() || "The model returned nothing usable — try rephrasing.";
+      const { interactionId } = await logAIUsage({
+        feature: "ask_ai",
+        params: { steps: step + 1, freeform: true },
+        model: settings.model,
+        inputTokens,
+        outputTokens,
+        userId: input.userId,
+        prompt: input.prompt,
+        output: answer
+      });
+      return { answer, toolCalls, model: settings.model, provider: String(settings.provider), inputTokens, outputTokens, costUsd, interactionId: interactionId ?? null };
     }
 
     if (parsed.action === "answer") {
-      await logAIUsage({ feature: "ask_ai", params: { steps: step + 1, tools: toolCalls.map((t) => t.tool) }, model: settings.model, inputTokens, outputTokens, userId: input.userId });
-      return { answer: parsed.markdown, toolCalls, model: settings.model, provider: String(settings.provider), inputTokens, outputTokens, costUsd };
+      const { interactionId } = await logAIUsage({
+        feature: "ask_ai",
+        params: { steps: step + 1, tools: toolCalls.map((t) => t.tool) },
+        model: settings.model,
+        inputTokens,
+        outputTokens,
+        userId: input.userId,
+        prompt: input.prompt,
+        output: parsed.markdown
+      });
+      return { answer: parsed.markdown, toolCalls, model: settings.model, provider: String(settings.provider), inputTokens, outputTokens, costUsd, interactionId: interactionId ?? null };
     }
 
-    const tool = findAiChatTool(parsed.tool);
+    const signature = `${parsed.tool}:${JSON.stringify(parsed.args ?? {})}`;
+    if (signature === lastCallSignature) {
+      transcript.push(`TOOL ${parsed.tool} (repeat of the previous call - NOT re-run):\n${lastCallResult}`);
+      extra = `\nWhat the tools have returned so far:\n${transcript.join("\n\n")}\n\nYou already made that exact call. Answer now, or call something different.`;
+      continue;
+    }
+
+    const tool = findAiChatTool(parsed.tool) ?? findAiChatAction(parsed.tool);
     let result: string;
     if (!tool) {
-      result = `No such tool. The available tools are: ${AI_CHAT_TOOLS.map((t) => t.name).join(", ")}.`;
+      result = `No such tool. Available: ${[...AI_CHAT_TOOLS, ...AI_CHAT_ACTIONS].map((t) => t.name).join(", ")}.`;
     } else {
       try {
         result = await tool.run(parsed.args ?? {}, input.toolCtx);
@@ -3293,23 +3381,36 @@ export async function askWorkspaceChat(input: {
       }
       toolCalls.push({ tool: parsed.tool, detail: JSON.stringify(parsed.args ?? {}).slice(0, 160) });
     }
+    lastCallSignature = signature;
+    lastCallResult = result;
     transcript.push(`TOOL ${parsed.tool} RETURNED:\n${result}`);
     extra = `\nWhat the tools have returned so far:\n${transcript.join("\n\n")}\n\nAnswer now if you can; use another tool only if something is still missing.`;
   }
 
   // Out of steps: force a final answer from whatever was gathered rather than failing a question
   // five tool calls deep.
-  const finalRaw = await ask(`${extra}\n\nYou have no tool calls left. Answer now with { "action": "answer", ... } from what you have.`);
+  const finalRaw = await ask(`${extra}${NL}${NL}You have no tool calls left. Answer now with { "action": "answer", ... } from what you have.`);
   const final = parseJsonResponse(finalRaw, AskActionSchema);
-  await logAIUsage({ feature: "ask_ai", params: { steps: ASK_MAX_STEPS + 1, exhausted: true }, model: settings.model, inputTokens, outputTokens, userId: input.userId });
+  const answer = final?.action === "answer" ? final.markdown : finalRaw.trim() || "The model could not settle on an answer — try a narrower question.";
+  const { interactionId } = await logAIUsage({
+    feature: "ask_ai",
+    params: { steps: ASK_MAX_STEPS + 1, exhausted: true },
+    model: settings.model,
+    inputTokens,
+    outputTokens,
+    userId: input.userId,
+    prompt: input.prompt,
+    output: answer
+  });
   return {
-    answer: final?.action === "answer" ? final.markdown : finalRaw.trim() || "The model could not settle on an answer — try a narrower question.",
+    answer,
     toolCalls,
     model: settings.model,
     provider: String(settings.provider),
     inputTokens,
     outputTokens,
-    costUsd
+    costUsd,
+    interactionId: interactionId ?? null
   };
 }
 

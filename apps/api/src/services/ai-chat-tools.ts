@@ -218,6 +218,46 @@ export const AI_CHAT_TOOLS: ReadonlyArray<AiChatToolSpec & { run: (args: Record<
     }
   },
   {
+    name: "list_projects",
+    description: "Projects with their codes and modules. Use before logging time or answering anything project-shaped.",
+    args: "{}",
+    run: async (_args, ctx) => {
+      const scope = await ticketProjectScope(ctx.req);
+      const rows = await prisma.project.findMany({
+        where: { deletedAt: null, ...(scope.unrestricted ? {} : { id: { in: scope.projectIds } }) },
+        select: { code: true, name: true, modules: { select: { name: true } } },
+        orderBy: { code: "asc" },
+        take: 40
+      });
+      if (rows.length === 0) return "No accessible projects.";
+      return clip(rows.map((r) => `${r.code} — ${r.name} (modules: ${r.modules.map((m) => m.name).join(", ") || "none"})`).join(String.fromCharCode(10)));
+    }
+  },
+  {
+    name: "find_people",
+    description: "The workspace directory — names, roles, designations, managers. What the Team page already shows.",
+    args: '{ "query"?: string }',
+    run: async (args) => {
+      const query = typeof args.query === "string" ? args.query.trim() : "";
+      const rows = await prisma.user.findMany({
+        where: {
+          deletedAt: null,
+          isAgent: false,
+          ...(query ? { name: { contains: query } } : {})
+        },
+        select: { name: true, designation: true, role: { select: { name: true } }, manager: { select: { name: true } } },
+        orderBy: { name: "asc" },
+        take: 30
+      });
+      if (rows.length === 0) return "Nobody matched.";
+      return clip(
+        rows
+          .map((u) => `${u.name} — ${u.role.name}${u.designation ? `, ${u.designation}` : ""}${u.manager ? ` (manager: ${u.manager.name})` : ""}`)
+          .join(String.fromCharCode(10))
+      );
+    }
+  },
+  {
     name: "list_agents",
     description: "The AI teammate roster — each agent's name and what it owns.",
     args: "{}",
