@@ -293,6 +293,8 @@ export type AIFeatureToggle =
   | "projectRiskAgentEnabled"
   | "changeRiskNarrativeEnabled"
   | "changeDraftAssistEnabled"
+  | "changeConflictBriefEnabled"
+  | "changePirAssistEnabled"
   | "planBreakdownEnabled"
   | "emailFailureTriageEnabled";
 
@@ -2900,6 +2902,129 @@ export async function draftChangeSections(input: {
   // A model that returns a sixth section must not be able to write a field nobody asked about, and
   // the proposal allowlist would refuse it anyway — two checks, because they fail differently.
   return parsed.sections.filter((s) => input.wanted.includes(s.field) && s.text.trim().length > 0);
+}
+
+/**
+ * Briefs the person scheduling a change on what else is booked around its window.
+ *
+ * WHY THE MODEL DOES NOT FIND THE CONFLICTS: `findScheduleConflicts` already does, by comparing
+ * windows and blackout periods — arithmetic over dates, reproducible and checkable. Asking a model
+ * to work out whether two windows overlap would make the answer differ between runs, and this is a
+ * question with exactly one right answer. What the model adds is the reading: which of several
+ * overlaps actually matters, and what to do about it.
+ *
+ * It reports. It does not move anything — the conflicts are surfaced and a person decides.
+ */
+export async function briefChangeConflicts(input: {
+  changeKey: string;
+  title: string;
+  environment: string;
+  windowLabel: string;
+  /** Already computed. Each is a real overlap or a real freeze, not a suspicion. */
+  conflicts: Array<{ kind: string; message: string }>;
+  userId?: string;
+}): Promise<string | null> {
+  const { settings } = await preflight("changeConflictBriefEnabled");
+  if (input.conflicts.length === 0) return null;
+
+  const prompt = [
+    "You are briefing whoever is scheduling one change on what else is happening around its window.",
+    "The conflicts below were COMPUTED by comparing windows and freeze periods. Every one is real.",
+    "Do not invent a conflict, do not dismiss one, and do not change any date. In 2-4 sentences of",
+    "plain prose, say which of these matters most and what the scheduler should do about it.",
+    "Do not tell them to reschedule or to proceed — say what the trade-off is and let them decide.",
+    "",
+    "=== BEGIN COMPUTED CONFLICTS ===",
+    `Change: ${input.changeKey} — ${input.title}`,
+    `Targeting ${input.environment}, window ${input.windowLabel}`,
+    "",
+    input.conflicts.map((c) => `- [${c.kind}] ${c.message}`).join("\n"),
+    "=== END COMPUTED CONFLICTS ===",
+    "",
+    "Write the briefing now. No preamble, no headings, no bullet points."
+  ].join("\n");
+
+  const result = await callChat(settings, { model: settings.model, maxTokens: 350, prompt });
+
+  await logAIUsage({
+    feature: "change_conflict_brief",
+    params: { changeKey: input.changeKey, conflicts: input.conflicts.length },
+    model: settings.model,
+    inputTokens: result.usage.inputTokens,
+    outputTokens: result.usage.outputTokens,
+    userId: input.userId
+  });
+
+  return result.text || null;
+}
+
+const PirDraftSchema = z.object({ text: z.string().min(1).max(8000) });
+
+/**
+ * Drafts a post-implementation review from what actually happened.
+ *
+ * WHY IT IS A PROPOSAL AND CAPPED AT SUGGEST: a PIR is the record of how a change went, and most
+ * often it is written because something went wrong. Its author should be the person accountable for
+ * it — a model writing that unreviewed produces a record of a failure that nobody stood behind,
+ * which is worse than no record at all because it looks like one.
+ *
+ * Reads only what the change itself recorded: the outcome, which implementation steps failed, which
+ * test cases did not pass. No prose from outside, and nothing invented — a step that failed without
+ * a comment is reported as exactly that.
+ */
+export async function draftPostImplementationReview(input: {
+  changeKey: string;
+  title: string;
+  outcome: string | null;
+  steps: Array<{ stepNumber: number; description: string; status: string; comments: string | null }>;
+  tests: Array<{ reference: string; description: string; status: string; actualResult: string | null }>;
+  userId?: string;
+}): Promise<string | null> {
+  const { settings } = await preflight("changePirAssistEnabled");
+
+  const failedSteps = input.steps.filter((s) => s.status === "FAILED" || s.status === "SKIPPED");
+  const failedTests = input.tests.filter((t) => t.status === "FAILED" || t.status === "BLOCKED");
+
+  const prompt = [
+    "You are drafting the post-implementation review for a change that has been carried out.",
+    "Everything below is what was RECORDED while it ran. Do not invent a cause, a consequence or an",
+    "action item that is not supported by it. Where a step failed with no comment, say that no reason",
+    "was recorded rather than guessing one — an invented cause in a review is worse than an admitted",
+    "gap, because somebody will act on it.",
+    "Write 4-8 sentences: what happened, what went wrong if anything, and what is worth changing next",
+    "time. Plain prose.",
+    "",
+    "=== BEGIN RECORD ===",
+    `Change: ${input.changeKey} — ${input.title}`,
+    `Recorded outcome: ${input.outcome ?? "not yet recorded"}`,
+    "",
+    `Implementation steps: ${input.steps.length} total, ${failedSteps.length} failed or skipped.`,
+    failedSteps.length
+      ? failedSteps.map((s) => `- Step ${s.stepNumber} (${s.status.toLowerCase()}): ${s.description}${s.comments ? ` — ${s.comments}` : " — no reason recorded"}`).join("\n")
+      : "- Every step completed.",
+    "",
+    `Test cases: ${input.tests.length} total, ${failedTests.length} failed or blocked.`,
+    failedTests.length
+      ? failedTests.map((t) => `- ${t.reference} (${t.status.toLowerCase()}): ${t.description}${t.actualResult ? ` — observed: ${t.actualResult}` : " — no result recorded"}`).join("\n")
+      : "- Every test passed, or none were recorded.",
+    "=== END RECORD ===",
+    "",
+    "Return JSON only: { \"text\": \"...\" }"
+  ].join("\n");
+
+  const result = await callChat(settings, { model: settings.model, maxTokens: 900, prompt });
+
+  await logAIUsage({
+    feature: "change_pir_assist",
+    params: { changeKey: input.changeKey, failedSteps: failedSteps.length, failedTests: failedTests.length },
+    model: settings.model,
+    inputTokens: result.usage.inputTokens,
+    outputTokens: result.usage.outputTokens,
+    userId: input.userId
+  });
+
+  const parsed = parseJsonResponse(result.text, PirDraftSchema);
+  return parsed?.text?.trim() || null;
 }
 
 const PlanBreakdownSchema = z.object({

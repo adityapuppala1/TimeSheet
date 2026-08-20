@@ -155,6 +155,32 @@ const CAPABILITIES: ReadonlyArray<AiCapabilitySpec> = [
     tools: []
   },
   {
+    id: "change_conflict_brief",
+    title: "Change scheduling conflicts",
+    description: "Reads the conflicts already computed for a change's window and says which one matters. Moves nothing.",
+    featureToggle: "changeConflictBriefEnabled",
+    // It reports on arithmetic somebody else did. Nothing is rescheduled, and the conflicts are
+    // found by comparing dates, not by the model — so there is nothing here for autonomy to break.
+    maxLevel: "AUTONOMOUS",
+    ceilingReason: null,
+    actsOnUntrustedInput: false,
+    tools: []
+  },
+  {
+    id: "change_pir_assist",
+    title: "Draft a post-implementation review",
+    description: "Drafts the review from what was recorded while the change ran — the failed steps, the failed tests, the outcome.",
+    featureToggle: "changePirAssistEnabled",
+    // A PIR is usually written because something went wrong, and its author should be the person
+    // accountable for it. A model writing one unreviewed produces a record of a failure nobody stood
+    // behind — worse than no record, because it looks like one.
+    maxLevel: "SUGGEST",
+    ceilingReason:
+      "A post-implementation review is the record of how a change went, most often when it went badly. The person accountable for it should be the one who signs it.",
+    actsOnUntrustedInput: false,
+    tools: []
+  },
+  {
     id: "change_risk_narrative",
     title: "Change risk narrative",
     description: "Explains a change's computed risk score in prose for its approver. Never sets the score, and never approves.",

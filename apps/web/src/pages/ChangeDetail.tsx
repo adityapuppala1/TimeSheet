@@ -628,6 +628,11 @@ export function ChangeDetailPage() {
                   value={change.pirNotes}
                   onSave={(v) => set({ pirNotes: v })}
                 />
+                {/* Offered only while the field is empty and the change has actually run. It drafts
+                    from what was recorded — failed steps, failed tests, the outcome — and writes
+                    nothing: a review nobody stood behind is worse than no review, because it looks
+                    like one. */}
+                {!change.pirNotes && change.state !== "CLOSED" && <PirAssistButton changeId={change.id} />}
                 <div className="grid gap-4 sm:grid-cols-2">
                   <TextField label="Actual result" multiline disabled={change.state === "CLOSED"} value={change.actualResult} onSave={(v) => set({ actualResult: v })} />
                   <TextField label="Issues encountered" multiline disabled={change.state === "CLOSED"} value={change.issuesEncountered} onSave={(v) => set({ issuesEncountered: v })} />
@@ -982,6 +987,43 @@ function RiskSection({
 }
 
 /** The window, plus whatever it collides with. Conflicts are reported, never refused. */
+/** Drafts the post-implementation review, as a proposal. See the route for why it is not a write. */
+function PirAssistButton({ changeId }: { changeId: string }) {
+  const [busy, setBusy] = useState(false);
+  const [proposalId, setProposalId] = useState<string | null>(null);
+
+  const run = async () => {
+    setBusy(true);
+    try {
+      const result = await changeApi.pirAssist(changeId);
+      if (!result.proposalId) {
+        toast.info("Nothing to draft", { description: result.message ?? "There is nothing recorded to review yet." });
+        return;
+      }
+      setProposalId(result.proposalId);
+      toast.success("Review drafted", { description: "Nothing has been written yet — accept it if it reads right." });
+    } catch (err: any) {
+      toast.error("Could not draft the review", { description: serverMessage(err, "Try again.") });
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="flex flex-wrap items-center gap-2">
+      <Button variant="ai" size="sm" disabled={busy} onClick={() => void run()}>
+        {busy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Sparkles className="h-3.5 w-3.5" />}
+        Draft it from what happened
+      </Button>
+      {proposalId && (
+        <Link to="/app/proposals" className="text-xs font-medium text-primary hover:underline">
+          Review and accept it →
+        </Link>
+      )}
+    </div>
+  );
+}
+
 function ScheduleSection({
   change,
   disabled,
@@ -997,6 +1039,21 @@ function ScheduleSection({
     enabled: Boolean(change.plannedStart && change.plannedEnd)
   });
   const found = conflicts.data?.conflicts ?? [];
+  const [brief, setBrief] = useState<string | null>(null);
+  const [briefing, setBriefing] = useState(false);
+
+  const explainConflicts = async () => {
+    setBriefing(true);
+    try {
+      const result = await changeApi.conflictBrief(change.id);
+      // A null brief is not a failure — it means nothing collides, which the server says plainly.
+      setBrief(result.brief ?? result.message ?? "Nothing else is booked against this window.");
+    } catch (err: any) {
+      toast.error("Could not read the conflicts", { description: serverMessage(err, "Try again.") });
+    } finally {
+      setBriefing(false);
+    }
+  };
 
   return (
     <div className="grid gap-4">
@@ -1033,6 +1090,19 @@ function ScheduleSection({
           <p className="mt-2 text-xs text-muted-foreground">
             Reported, not blocked — sometimes two changes genuinely do share a window. Overriding records a reason against the change.
           </p>
+          {/* The overlaps above are arithmetic; this reads which of them matters. It moves nothing,
+              so the scheduler still decides. */}
+          <div className="mt-2 flex flex-wrap items-center gap-2">
+            <Button variant="ai" size="sm" disabled={briefing} onClick={() => void explainConflicts()}>
+              {briefing ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Sparkles className="h-3.5 w-3.5" />}
+              Which of these matters?
+            </Button>
+          </div>
+          {brief && (
+            <BorderGlow animated className="mt-2">
+              <p className="p-3 text-sm leading-relaxed">{brief}</p>
+            </BorderGlow>
+          )}
           <div className="mt-2">
             <TextField
               label="Override reason"

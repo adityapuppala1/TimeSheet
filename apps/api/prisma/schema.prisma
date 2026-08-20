@@ -1216,6 +1216,14 @@ model GlobalAISettings {
   /// individually, and a row whose underlying value moved since is refused rather than clobbering
   /// somebody's edit. Capped at SUGGEST in the registry, permanently.
   changeDraftAssistEnabled    Boolean @default(false)
+  /// Gates ai.service.ts#briefChangeConflicts — reads the calendar around a change's window and says
+  /// what else is booked on the same application, and whether it lands in a freeze. Reports; moves
+  /// nothing. The conflicts themselves are computed by findScheduleConflicts, not by the model.
+  changeConflictBriefEnabled  Boolean @default(false)
+  /// Gates ai.service.ts#draftPostImplementationReview — drafts the PIR from what actually happened:
+  /// which steps failed, which tests did not pass, the recorded outcome. A proposal, never a write —
+  /// the PIR is the record of a failure and its author should be the person accountable for it.
+  changePirAssistEnabled      Boolean @default(false)
   /// Gates ai.service.ts#proposePlanBreakdown — turns a goal or an epic into a PROPOSED tree of
   /// child work items. Never writes: it emits an AiProposal whose rows a human accepts or
   /// rejects individually. See ai-proposal.service.ts for why that envelope exists.

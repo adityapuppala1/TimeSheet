@@ -1111,6 +1111,39 @@ is a reason to approve.
 Its own route rather than part of `GET /:id` because it reads across five tables — worth paying for
 when the Context tab is opened, not on every load of a form somebody came to edit one field on.
 
+### AI over changes
+
+Four capabilities, each off by default, each with a `GlobalAISettings` toggle and a stated ceiling in
+`ai-capability.registry.ts`. They appear in the AI capability grid on their own — that screen renders
+from the registry.
+
+| Route | Capability | Ceiling | Writes |
+|---|---|---|---|
+| `POST /changes/:id/risk-narrative` | `change_risk_narrative` | `AUTONOMOUS` | Nothing |
+| `POST /changes/:id/conflict-brief` | `change_conflict_brief` | `AUTONOMOUS` | Nothing |
+| `POST /changes/:id/draft-assist` | `change_draft_assist` | `SUGGEST` | A `CHANGE_DRAFT` proposal, one row per section |
+| `POST /changes/:id/pir-assist` | `change_pir_assist` | `SUGGEST` | A `CHANGE_DRAFT` proposal for the review |
+
+POST rather than GET throughout: each spends a model call, and a GET should be safe to re-run.
+
+**Nothing here scores, schedules or decides.** The risk score and the schedule conflicts are computed
+by `computeRiskScore` and `findScheduleConflicts` — arithmetic with one right answer — and the
+capabilities only read them. A score a model produced would be unreproducible, and the score is what
+decides whether a backout plan is mandatory.
+
+**The two that write go through the proposal envelope.** `ChangeTarget` gained `CHANGE`, and
+`CHANGE_WRITABLE` admits exactly six fields: the five blocking prose sections plus `pirNotes`. No
+state, risk, schedule or outcome is reachable however a model replies — an allowlist, not a request
+in the prompt. Each row is accepted individually on the AI suggestions page, and one whose underlying
+field moved since it was drafted is refused rather than overwriting the edit.
+
+**The plan freeze applies, with one exemption.** A drafted section cannot be applied to a change past
+`APPROVED` — that would rewrite what was agreed. `pirNotes` is exempt, because a review is written
+after the change has run, which is exactly when the plan is frozen.
+
+**No capability approves a change**, at any level. That is the absence of a capability rather than a
+ceiling on one, and `change-draft-proposal.test.ts` asserts it against the whole registry.
+
 ### Automation
 
 Change events are already in `DOMAIN_EVENTS` and already exposed by `GET /flows/catalogue`, so

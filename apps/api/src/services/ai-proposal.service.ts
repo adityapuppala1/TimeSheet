@@ -140,7 +140,17 @@ const DATE_FIELDS = new Set(["startDate", "endDate"]);
  * `backoutPlan` being here at all is worth stating: it is the single most consequential field in the
  * module, which is exactly why the assistant may only PROPOSE it and a person must accept the row.
  */
-const CHANGE_WRITABLE = new Set(["justification", "implementationPlan", "backoutPlan", "testPlan", "communicationPlan"]);
+const CHANGE_WRITABLE = new Set([
+  "justification",
+  "implementationPlan",
+  "backoutPlan",
+  "testPlan",
+  "communicationPlan",
+  // The post-implementation review. Written by `change_pir_assist` through this same envelope, and
+  // deliberately NOT subject to the plan freeze below — a review is written after the change has
+  // run, which is exactly when the plan is frozen. See the apply branch.
+  "pirNotes"
+]);
 
 function projectChangeData(after: Record<string, unknown>): Record<string, unknown> {
   const data: Record<string, unknown> = {};
@@ -435,7 +445,11 @@ export async function applyProposal(params: {
         // The plan freezes once a change is approved — scope and risk are what got approved, and a
         // drafted section arriving afterwards would rewrite what was agreed. The API refuses the
         // same edit by hand; refusing it here too is the point of one rule having two callers.
-        if (FROZEN_CHANGE_STATES.has(String(current.state))) {
+        // The PLAN freezes at approval; the REVIEW does not, because a review is written after the
+        // change has run — which is precisely when the plan is frozen. Freezing both would make the
+        // PIR assistant unable to write the only field it exists for.
+        const touchesPlanOnly = Object.keys(after).some((k) => k !== "pirNotes");
+        if (touchesPlanOnly && FROZEN_CHANGE_STATES.has(String(current.state))) {
           throw new Error("this change has been approved, so its plan can no longer be edited");
         }
 

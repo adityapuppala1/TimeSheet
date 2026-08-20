@@ -21,13 +21,13 @@ import { changeStates } from "@timesheet/shared";
 
 /** Mirrors `CHANGE_WRITABLE` in ai-proposal.service.ts. Duplicated on purpose: a test that imports
  *  the list it is checking asserts only that the list equals itself. */
-const EXPECTED_WRITABLE = ["backoutPlan", "communicationPlan", "implementationPlan", "justification", "testPlan"];
+const EXPECTED_WRITABLE = ["backoutPlan", "communicationPlan", "implementationPlan", "justification", "pirNotes", "testPlan"];
 
 /** Mirrors `FROZEN_CHANGE_STATES` there, and `FROZEN_AFTER` in change.controller.ts. */
 const EXPECTED_FROZEN = ["APPROVED", "IMPLEMENTING", "PIR", "SCHEDULED", "VALIDATION", "CLOSED"];
 
 describe("what a drafted change proposal may touch", () => {
-  it("writes only the five prose sections that block submission", async () => {
+  it("writes only the blocking prose sections, plus the review", async () => {
     const source = await import("node:fs").then((fs) =>
       fs.readFileSync(new URL("../../src/services/ai-proposal.service.ts", import.meta.url), "utf8")
     );
@@ -61,6 +61,16 @@ describe("what a drafted change proposal may touch", () => {
     for (const state of actual) {
       expect(changeStates as readonly string[], `${state} is not a change state`).toContain(state);
     }
+  });
+  it("exempts the review from the plan freeze, and nothing else", async () => {
+    // A post-implementation review is written AFTER the change has run, which is precisely when the
+    // plan is frozen. Freezing it too would make the PIR assistant unable to write the one field it
+    // exists for. Every other field stays frozen — that is the distinction, so it is asserted.
+    const source = await import("node:fs").then((fs) =>
+      fs.readFileSync(new URL("../../src/services/ai-proposal.service.ts", import.meta.url), "utf8")
+    );
+    expect(source).toContain('Object.keys(after).some((k) => k !== "pirNotes")');
+    expect(source, "the freeze must still apply to plan fields").toContain("FROZEN_CHANGE_STATES.has(String(current.state))");
   });
 });
 

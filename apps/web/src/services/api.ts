@@ -5404,6 +5404,17 @@ export const changeApi = {
    */
   draftAssist: async (id: string) =>
     (await api.post<{ proposalId: string | null; drafted: string[]; message?: string }>(`/changes/${id}/draft-assist`, {})).data,
+  /** A reading of the conflicts already computed for this change's window. Null brief means there
+   *  was nothing to brief — not that the model failed. */
+  conflictBrief: async (id: string) =>
+    (await api.post<{ brief: string | null; conflicts?: Array<{ kind: string; message: string }>; message?: string }>(
+      `/changes/${id}/conflict-brief`,
+      {}
+    )).data,
+  /** Drafts the post-implementation review as a proposal. Returns a proposal id, never the text
+   *  written into the change — a review nobody stood behind is worse than no review. */
+  pirAssist: async (id: string) =>
+    (await api.post<{ proposalId: string | null; message?: string }>(`/changes/${id}/pir-assist`, {})).data,
   /** Scheduled work and the freeze periods it has to dodge, in one call — a calendar that fetches its
    *  bars and its no-go zones separately renders them a frame apart. */
   calendar: async (from: string, to: string) =>

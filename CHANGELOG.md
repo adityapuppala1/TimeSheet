@@ -11,6 +11,20 @@ Landed after v3.0.0 was tagged. The parser that feeds the in-app What's-new page
 until it gains a version number, on purpose — an installation must never render history for a version
 that does not exist yet.
 
+### 🔭 Two more readings, and one more draft
+
+- **"Which of these matters?"** on a change's Schedule tab, once its window collides with something.
+  The overlaps themselves are found by comparing dates — arithmetic with one right answer — and this
+  only reads which of them is the one to worry about. It moves nothing; the scheduler still decides,
+  and when nothing collides it says so instead of writing a paragraph confirming it.
+- **"Draft it from what happened"** under an empty post-implementation review, once a change has
+  actually run. It reads what was recorded — which steps failed, which tests did not pass, the
+  outcome — and where a step failed with no comment it says no reason was recorded rather than
+  inventing one. An invented cause in a review is worse than an admitted gap, because somebody acts
+  on it. Like every draft here it becomes a row somebody accepts.
+- The review is the one field deliberately exempt from the post-approval freeze: a review is written
+  after the change has run, which is exactly when the plan is frozen. Everything else stays frozen.
+
 ### 📝 It can draft the sections a change is missing, and write none of them
 
 - **"Draft the missing sections"** sits next to the checklist that names what is missing, and drafts

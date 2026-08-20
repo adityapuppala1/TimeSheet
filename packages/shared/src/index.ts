@@ -441,6 +441,12 @@ export interface GlobalAISettings {
    *  submission. Never writes them: each section becomes a proposal row a person accepts or
    *  rejects. Capped at SUGGEST permanently. */
   changeDraftAssistEnabled: boolean;
+  /** Gates ai.service.ts#briefChangeConflicts — reads computed schedule conflicts and says which
+   *  matters. Reports; moves nothing. */
+  changeConflictBriefEnabled: boolean;
+  /** Gates ai.service.ts#draftPostImplementationReview — drafts the PIR from what was recorded while
+   *  the change ran. A proposal, never a write. */
+  changePirAssistEnabled: boolean;
   /** Gates ai.service.ts#generateBugPatternDigest — monthly "what keeps breaking" recap over
    *  recurring CI failures and security-finding hotspots. See workers/bug-pattern-digest.worker.ts. */
   bugPatternDigestEnabled: boolean;

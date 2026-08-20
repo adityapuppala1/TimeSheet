@@ -256,7 +256,17 @@ describe("the ceilings themselves", () => {
     // is the absence of a capability rather than a ceiling on this one.
     const autonomous = AI_CAPABILITIES.filter((c) => c.maxLevel === "AUTONOMOUS").map((c) => c.id).sort();
     expect(autonomous).toEqual(
-      ["bug_pattern_digest", "change_risk_narrative", "project_risk_narrative", "security_weekly_digest", "weekly_digest"].sort()
+      [
+        "bug_pattern_digest",
+        // change_conflict_brief JOINED on the same terms: the conflicts are found by comparing dates
+        // — arithmetic with one right answer — and it only reads which of them matters. It moves
+        // nothing and reschedules nothing, so there is nothing here for autonomy to break.
+        "change_conflict_brief",
+        "change_risk_narrative",
+        "project_risk_narrative",
+        "security_weekly_digest",
+        "weekly_digest"
+      ].sort()
     );
   });
 

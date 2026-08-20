@@ -65,7 +65,7 @@ import { CSV_EOL, UTF8_BOM, csvCell } from "../utils/csv.js";
 import PDFDocument from "pdfkit";
 import { buildChangeWorkbook, renderChangeRegisterPdf } from "../services/change-export.service.js";
 import { buildChangeContext } from "../services/change-context.service.js";
-import { draftChangeSections, narrateChangeRisk } from "../services/ai.service.js";
+import { briefChangeConflicts, draftChangeSections, draftPostImplementationReview, narrateChangeRisk } from "../services/ai.service.js";
 import { createProposal } from "../services/ai-proposal.service.js";
 
 export const changeRouter = Router();
@@ -1323,6 +1323,121 @@ changeRouter.post("/:id/draft-assist", requirePermission(permissions.CHANGES_WRI
   });
 
   res.status(201).json({ proposalId: proposal.id, drafted: sections.map((s) => s.field) });
+});
+
+/**
+ * A reading of the conflicts already computed for this change's window.
+ *
+ * The conflicts themselves come from `findScheduleConflicts` — comparing windows and freeze periods,
+ * arithmetic with one right answer. This only says which of them matters. Returns null when there is
+ * nothing to brief, rather than a paragraph confirming that nothing is wrong.
+ */
+changeRouter.post("/:id/conflict-brief", async (req, res) => {
+  await assertChangeManagementEnabled();
+  const change = await prisma.changeRequest.findFirst({
+    where: { id: String(req.params.id) },
+    include: { ticket: { select: { title: true, projectId: true } } }
+  });
+  if (!change) throw new AppError(404, "Change not found");
+  await assertTicketVisible(req, change.ticket.projectId);
+
+  if (!change.plannedStart || !change.plannedEnd) {
+    return res.json({ brief: null, message: "This change has no window yet, so there is nothing to collide with." });
+  }
+
+  const conflicts = await findScheduleConflicts({
+    changeId: change.id,
+    environment: String(change.environment),
+    plannedStart: change.plannedStart,
+    plannedEnd: change.plannedEnd
+  });
+  if (conflicts.length === 0) {
+    return res.json({ brief: null, message: "Nothing else is booked against this window." });
+  }
+
+  const brief = await briefChangeConflicts({
+    changeKey: change.changeKey,
+    title: change.ticket.title,
+    environment: String(change.environment),
+    windowLabel: `${change.plannedStart.toISOString().slice(0, 16).replace("T", " ")} – ${change.plannedEnd.toISOString().slice(0, 16).replace("T", " ")} UTC`,
+    conflicts: conflicts.map((c) => ({ kind: c.kind, message: c.message })),
+    userId: req.user!.id
+  });
+
+  res.json({ brief, conflicts });
+});
+
+/**
+ * Drafts the post-implementation review, as a PROPOSAL nobody has accepted.
+ *
+ * A PIR is the record of how a change went, and most often it exists because something went wrong.
+ * Its author should be the person accountable for it, which is why this emits a proposal row rather
+ * than filling the field: a review nobody stood behind is worse than no review, because it looks
+ * like one.
+ */
+changeRouter.post("/:id/pir-assist", requirePermission(permissions.CHANGES_WRITE), async (req, res) => {
+  await assertChangeManagementEnabled();
+  const change = await prisma.changeRequest.findFirst({
+    where: { id: String(req.params.id) },
+    include: {
+      ticket: { select: { title: true, projectId: true } },
+      implementationSteps: { orderBy: { stepNumber: "asc" } },
+      testCases: { orderBy: { createdAt: "asc" } }
+    }
+  });
+  if (!change) throw new AppError(404, "Change not found");
+  await assertTicketVisible(req, change.ticket.projectId);
+
+  // Nothing to review until the change has actually run. Refused here rather than producing a
+  // review of work that has not happened.
+  if (!change.actualStart) {
+    throw new AppError(409, "This change has not been implemented yet, so there is nothing to review.");
+  }
+  if (change.pirNotes && change.pirNotes.trim().length > 0) {
+    return res.json({ proposalId: null, message: "A review has already been written for this change." });
+  }
+
+  const text = await draftPostImplementationReview({
+    changeKey: change.changeKey,
+    title: change.ticket.title,
+    outcome: change.outcome ? String(change.outcome) : null,
+    steps: change.implementationSteps.map((s) => ({
+      stepNumber: s.stepNumber,
+      description: s.description,
+      status: s.status,
+      comments: s.comments
+    })),
+    tests: change.testCases.map((t) => ({
+      reference: t.reference,
+      description: t.description,
+      status: t.status,
+      actualResult: t.actualResult
+    })),
+    userId: req.user!.id
+  });
+
+  if (!text) return res.json({ proposalId: null, message: "The model returned nothing usable." });
+
+  const proposal = await createProposal({
+    kind: "CHANGE_DRAFT",
+    title: `Draft the review for ${change.changeKey}`,
+    rationale: "Drafted from what was recorded while this change ran. Nothing is written until it is accepted.",
+    scopeTicketId: change.ticketId,
+    scopeProjectId: change.ticket.projectId,
+    requestedById: req.user!.id,
+    changes: [
+      {
+        targetType: "CHANGE" as const,
+        targetId: change.id,
+        op: "UPDATE" as const,
+        before: { pirNotes: change.pirNotes ?? null },
+        after: { pirNotes: text },
+        summary: `Post-implementation review for ${change.changeKey}`
+      }
+    ]
+  });
+
+  res.status(201).json({ proposalId: proposal.id });
 });
 
 changeRouter.get("/:id/conflicts", async (req, res) => {

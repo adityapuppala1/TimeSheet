@@ -1,6 +1,7 @@
 # AI, agents and workflows for Tickets and Change Management — a plan
 
-Status: **steps 1-4 are built; 5 is still a proposal.** Written against the seams that already
+Status: **built — all five steps.** Kept as the design record rather than a to-do list; every
+section below says what shipped and why it is shaped that way. Written against the seams that already
 exist, so every item below says which of them it extends and what it would cost. Read
 [ARCHITECTURE.md §3.12](ARCHITECTURE.md) and [API.md](API.md#change-management-v8) first.
 
@@ -68,8 +69,8 @@ in `AIUsageLog` keyed on the capability id so usage and policy join.
 |---|---|---|---|
 | `change_draft_assist` — **BUILT** | Drafts the five prose sections that BLOCK submission — justification, implementation, **backout**, test and communication plans — from the context pack | `SUGGEST` | It is writing the thing an approver relies on. A draft nobody wrote is worse than a blank field, because a blank field is honest. |
 | `change_risk_narrative` — **BUILT** | Explains the **already-computed** score in prose — which parameters drove it | `AUTONOMOUS` | Narrates, never scores; writes nothing at all, and reads only the change's own recorded assessment. Shipped at the same ceiling as `project_risk_narrative` for the same reason. The top rung is not a licence to approve — no capability can, at any level. |
-| `change_conflict_brief` | Reads the calendar and says what else is booked on this application in this window | `PROPOSE` | It reports; it does not move anything. |
-| `change_pir_assist` | Drafts the post-implementation review from what actually happened — steps that failed, tests that did not pass, the outcome | `SUGGEST` | The PIR is the record of a failure. Its author should be the person accountable for it. |
+| `change_conflict_brief` — **BUILT** | Reads the conflicts already computed for the window and says which one matters | `AUTONOMOUS` | It reports; it moves nothing, and the overlaps are found by comparing dates rather than by the model. Shipped above `PROPOSE` because there is nothing here for autonomy to break. |
+| `change_pir_assist` — **BUILT** | Drafts the post-implementation review from what actually happened — steps that failed, tests that did not pass, the outcome | `SUGGEST` | The PIR is the record of a failure. Its author should be the person accountable for it, so it emits a proposal row somebody accepts. |
 
 **`change_draft_assist` produces an `AiProposal`, not field writes** — built that way. `AiProposalKind`
 gained `CHANGE_DRAFT` and `ChangeTarget` gained `CHANGE`; each field is an `AiProposalChange` a human
@@ -191,7 +192,26 @@ here; it should be marked on each new capability rather than argued about later.
    emits a `CHANGE_DRAFT` proposal; each section is a row accepted on the AI suggestions page. Only
    EMPTY sections are drafted, and the field allowlist is five prose fields — no state, no risk, no
    schedule, no outcome.
-5. **`change_conflict_brief`** and **`change_pir_assist`**.
+5. ~~**`change_conflict_brief`** and **`change_pir_assist`**.~~ **Built.** The brief reads computed
+   conflicts and returns null when there are none, rather than a paragraph confirming nothing is
+   wrong. The PIR assistant emits a `CHANGE_DRAFT` proposal for `pirNotes`, which is the one field
+   deliberately EXEMPT from the post-approval plan freeze — a review is written after the change has
+   run, which is exactly when the plan is frozen.
 
 Nothing in steps 1–2 needs AI switched on at all, which is the point: a workspace that never enables
-a model still gets the autofill, the Context tab, and change-aware automation.
+a model still gets the derived context, the Context tab, and change-aware automation. Steps 3–5 are
+four capabilities, each off by default, each with a stated ceiling, and none of them able to approve
+anything.
+
+**The final shape of the ceilings**, since it is the part worth arguing with:
+
+| Capability | Ceiling | Writes |
+|---|---|---|
+| `change_risk_narrative` | `AUTONOMOUS` | Nothing |
+| `change_conflict_brief` | `AUTONOMOUS` | Nothing |
+| `change_draft_assist` | `SUGGEST` | A proposal row per section, accepted individually |
+| `change_pir_assist` | `SUGGEST` | A proposal row for the review |
+
+The two that write go through the proposal envelope, and the allowlist admits six fields — five
+blocking prose sections plus the review. No state, no risk score, no schedule, no outcome is
+reachable however a model replies.
