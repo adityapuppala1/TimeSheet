@@ -5403,7 +5403,15 @@ export const changeApi = {
    * on the AI suggestions page. Nothing reaches the change until they do.
    */
   draftAssist: async (id: string) =>
-    (await api.post<{ proposalId: string | null; drafted: string[]; message?: string }>(`/changes/${id}/draft-assist`, {})).data,
+    (await api.post<{ proposalId: string | null; drafted: string[]; skipped?: string[]; message?: string }>(`/changes/${id}/draft-assist`, {})).data,
+  /**
+   * Drafts ONE section inline and hands the text back — nothing is saved. The suggestion renders
+   * beside the empty field, and pressing "Use this" writes it through the form's own save as the
+   * person's edit. Same trust model as AiRefine. A null text means the drafter had too little to
+   * ground a real draft and declined — for a gating field, a padded draft would be worse than none.
+   */
+  draftField: async (id: string, field: string) =>
+    (await api.post<{ text: string | null; message?: string }>(`/changes/${id}/draft-field`, { field })).data,
   /** A reading of the conflicts already computed for this change's window. Null brief means there
    *  was nothing to brief — not that the model failed. */
   conflictBrief: async (id: string) =>

@@ -1037,6 +1037,39 @@ export const terminalChangeStates: readonly ChangeState[] = ["CLOSED"];
  * Deliberately conservative on the diagonal: MEDIUM x MEDIUM reads HIGH. A matrix that rounds down
  * in the middle is a matrix that lets the most common change in any workspace skip the board.
  */
+/* ------------------------------------------------------------------ *
+ * Which sections a change OWES, by rule.
+ *
+ * These three predicates decide the conditional submission requirements — the backout plan, the
+ * test plan, the communication plan. They live in shared because two surfaces read them and must
+ * never disagree: `missingForSubmit` on the API refuses submission on them, and the change form
+ * marks fields as required from them. Two hand-maintained copies of "when is a backout plan
+ * mandatory" is how the form ends up promising something the server then refuses.
+ * ------------------------------------------------------------------ */
+
+export interface ChangeRequirementInput {
+  riskLevel?: string | null;
+  changeKind?: string | null;
+  dataMigration?: boolean | null;
+  requiresDowntime?: boolean | null;
+}
+
+/** High risk, MAJOR, or anything that moves data. The rule the whole module exists to make
+ *  non-optional — see `requiresBackoutPlan` in change.service.ts, which delegates here. */
+export function changeNeedsBackoutPlan(change: ChangeRequirementInput): boolean {
+  return change.riskLevel === "HIGH" || change.changeKind === "MAJOR" || Boolean(change.dataMigration);
+}
+
+/** Anything above LOW. A low-risk routine change may ship on its runbook alone. */
+export function changeNeedsTestPlan(change: ChangeRequirementInput): boolean {
+  return change.riskLevel !== "LOW";
+}
+
+/** Downtime means somebody's work stops — they get told, and the plan says how. */
+export function changeNeedsCommunicationPlan(change: ChangeRequirementInput): boolean {
+  return Boolean(change.requiresDowntime);
+}
+
 export const CHANGE_RISK_MATRIX: Record<ChangeBand, Record<ChangeBand, ChangeBand>> = {
   LOW: { LOW: "LOW", MEDIUM: "LOW", HIGH: "MEDIUM" },
   MEDIUM: { LOW: "LOW", MEDIUM: "HIGH", HIGH: "HIGH" },

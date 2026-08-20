@@ -20,6 +20,9 @@
  * callback that tells a change its chain has settled.
  */
 import {
+  changeNeedsBackoutPlan,
+  changeNeedsCommunicationPlan,
+  changeNeedsTestPlan,
   CHANGE_STATE_TO_TICKET_STATUS,
   changeStateTransitions,
   deriveChangeRisk,
@@ -160,7 +163,9 @@ const filled = (v: unknown): boolean => {
  */
 /** True when this change may not be asked for without a documented way back. */
 export function requiresBackoutPlan(change: ChangeReadinessInput): boolean {
-  return change.riskLevel === "HIGH" || change.changeKind === "MAJOR" || change.dataMigration;
+  // Delegates to shared: the form marks the field required from the same predicate, and two copies
+  // of "when is a backout plan mandatory" is how the form promises what the server then refuses.
+  return changeNeedsBackoutPlan(change);
 }
 
 /** True when closing owes an explanation as well as an outcome. */
@@ -191,8 +196,8 @@ function missingForSubmit(change: ChangeReadinessInput, requiredRiskKeys: string
   if (!filled(change.plannedStart) || !filled(change.plannedEnd)) missing.push("Planned window");
   // The rule the whole module exists to make non-optional.
   if (requiresBackoutPlan(change) && !filled(change.backoutPlan)) missing.push("Backout plan");
-  if (change.riskLevel !== "LOW" && !filled(change.testPlan)) missing.push("Test plan");
-  if (change.requiresDowntime) {
+  if (changeNeedsTestPlan(change) && !filled(change.testPlan)) missing.push("Test plan");
+  if (changeNeedsCommunicationPlan(change)) {
     if (!filled(change.communicationPlan)) missing.push("Communication plan");
     if (!filled(change.downtimeMinutes)) missing.push("Expected downtime");
   }

@@ -1123,6 +1123,23 @@ from the registry.
 | `POST /changes/:id/conflict-brief` | `change_conflict_brief` | `AUTONOMOUS` | Nothing |
 | `POST /changes/:id/draft-assist` | `change_draft_assist` | `SUGGEST` | A `CHANGE_DRAFT` proposal, one row per section |
 | `POST /changes/:id/pir-assist` | `change_pir_assist` | `SUGGEST` | A `CHANGE_DRAFT` proposal for the review |
+| `POST /changes/:id/draft-field` | `change_draft_assist` | `SUGGEST` | Nothing — returns text the person accepts into the form themselves |
+
+`draft-field` drafts ONE section inline, for the assist button beside each empty prose field. It does
+not use the proposal envelope, and that is a decision, not an omission: the envelope keeps a human
+between the model and the record when writing happens in the background, and here the human IS the
+foreground — the suggestion renders beside the field, and nothing reaches the change until they press
+"Use this", at which point the form's own save writes it as THEIR edit through the same PATCH,
+validation and audit trail as anything typed. The same trust model AiRefine established. The
+draftable set is `CHANGE_DRAFTABLE_FIELDS` — ten prose fields, validated at the route and pinned by
+`change-field-requirements.test.ts`; the five that gate submission plus five business-case fields.
+
+**The omission rule.** The drafter LEAVES OUT a section it cannot ground rather than padding it, and
+both routes report what was skipped. This rule exists because its opposite shipped: told to "admit
+what is not known", the model answered a backout-plan request with "a backout procedure has not been
+documented at this time" — text which, if accepted, would satisfy the mandatory-backout submission
+gate while containing no plan. The gate checks that the field has words; only a human can check that
+the words are a plan.
 
 POST rather than GET throughout: each spends a model call, and a GET should be safe to re-run.
 

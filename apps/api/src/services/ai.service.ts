@@ -145,7 +145,7 @@ async function callAnthropic(apiKey: string, params: CallChatParams): Promise<Ca
   if (!apiKey) {
     throw new AppError(503, "AI features are not configured — set an Anthropic API key (ANTHROPIC_API_KEY, or the workspace AI settings).");
   }
-  const client = new Anthropic({ apiKey });
+  const client = new Anthropic({ apiKey, timeout: MODEL_CALL_TIMEOUT_MS, maxRetries: 1 });
 
   const content: Anthropic.MessageParam["content"] = params.images?.length
     ? [
@@ -172,12 +172,23 @@ async function callAnthropic(apiKey: string, params: CallChatParams): Promise<Ca
   };
 }
 
+/**
+ * Ceiling on one model call, applied to BOTH provider clients.
+ *
+ * Neither SDK defaults sanely for an interactive product: both wait ~10 minutes before giving up.
+ * Measured here with an OpenRouter free-tier model that queued indefinitely — every AI button in the
+ * app span for as long as the person kept the page open, with nothing to say. Ninety seconds is
+ * beyond any healthy completion at these token budgets; past it, a clear "the provider did not
+ * answer" beats a spinner, and the person can simply press the button again.
+ */
+const MODEL_CALL_TIMEOUT_MS = 90_000;
+
 async function callOpenAICompatible(settings: AISettingsRow, apiKey: string, params: CallChatParams): Promise<CallChatResult> {
   if (!settings.baseUrl) {
     throw new AppError(503, "AI features are not configured — set a base URL for the selected provider in workspace AI settings.");
   }
   // Local providers (Ollama, LM Studio) don't require a real key, but the SDK still wants a non-empty string.
-  const client = new OpenAI({ apiKey: apiKey || "not-needed", baseURL: settings.baseUrl });
+  const client = new OpenAI({ apiKey: apiKey || "not-needed", baseURL: settings.baseUrl, timeout: MODEL_CALL_TIMEOUT_MS, maxRetries: 1 });
 
   const promptText = params.jsonSchema
     ? `${params.prompt}\n\nRespond with ONLY a single valid JSON object (no markdown fences, no commentary) matching this shape:\n${JSON.stringify(params.jsonSchema.schema)}`
@@ -206,13 +217,30 @@ async function callOpenAICompatible(settings: AISettingsRow, apiKey: string, par
   } catch (error) {
     // Some OpenAI-compatible endpoints (notably local ones) reject `response_format` outright —
     // retry once relying purely on the prompt instruction rather than hard-failing the request.
-    if (!params.jsonSchema) throw error;
+    //
+    // ONLY for that case. A rejected request shape comes back as a fast 4xx; a timeout or a dead
+    // connection means the provider is not answering, and repeating the identical call would double
+    // the hang the timeout above exists to bound.
+    if (!params.jsonSchema || error instanceof OpenAI.APIConnectionError) throw error;
     response = await client.chat.completions.create({ model: params.model, max_tokens: params.maxTokens, messages });
   }
 
-  const choice = response.choices[0];
+  // OpenAI-compatible is a promise, not a guarantee. OpenRouter's free tier in particular answers
+  // rate limits and queue rejections as an `{ error }` body inside an HTTP 200 — no `choices` at
+  // all — and reading choices[0] off that crashed every AI feature with a bare TypeError. Found in
+  // the field, not hypothesised: the log line was "Cannot read properties of undefined (reading '0')".
+  const choice = response.choices?.[0];
+  if (!choice) {
+    const providerError = (response as unknown as { error?: { message?: string } }).error?.message;
+    throw new AppError(
+      502,
+      providerError
+        ? `The AI provider refused the request: ${providerError}`
+        : "The AI provider returned no answer. Try again — or pick a different model in Workspace Settings → AI; free-tier models drop requests under load."
+    );
+  }
   return {
-    text: typeof choice?.message?.content === "string" ? choice.message.content.trim() : "",
+    text: typeof choice.message?.content === "string" ? choice.message.content.trim() : "",
     usage: {
       inputTokens: response.usage?.prompt_tokens ?? 0,
       outputTokens: response.usage?.completion_tokens ?? 0
@@ -2800,43 +2828,128 @@ export async function narrateChangeRisk(input: {
   return result.text || null;
 }
 
-/** The five sections a change owes before it can be submitted, and the question each one answers. */
-const CHANGE_DRAFT_SECTIONS = [
-  { field: "justification", label: "Justification", asks: "Why now, and what happens if this does not go ahead?" },
-  { field: "implementationPlan", label: "Implementation plan", asks: "What will actually be done, in order?" },
-  { field: "backoutPlan", label: "Backout plan", asks: "If this goes wrong, how is it undone, and how long does that take?" },
-  { field: "testPlan", label: "Test plan", asks: "How will anyone know it worked?" },
-  { field: "communicationPlan", label: "Communication plan", asks: "Who is told, when, and through what channel?" }
+/**
+ * Every prose field the drafting assistant may write, and what each one is FOR.
+ *
+ * ONE SPEC, TWO CALLERS: the bulk draft (`POST /changes/:id/draft-assist`) asks for the empty
+ * `blocking` sections and routes them through the proposal envelope; the inline assist
+ * (`POST /changes/:id/draft-field`) asks for one field at a time and hands the text back for the
+ * person to accept into the form themselves. Both validate against this list, so what the assistant
+ * may write is decided here and nowhere else — never a state, a risk figure, a schedule or an
+ * outcome.
+ *
+ * `guidance` is per-field because the failure modes differ per field. A vague justification is
+ * merely useless; a vague backout plan is dangerous, because the field IS the plan.
+ */
+export const CHANGE_DRAFTABLE_FIELDS = [
+  {
+    field: "justification",
+    label: "Justification",
+    blocking: true,
+    asks: "Why now, and what happens if this does not go ahead?",
+    guidance: "Argue from the tickets and the stated problem. The approver reads this first."
+  },
+  {
+    field: "problemStatement",
+    label: "Problem statement",
+    blocking: false,
+    asks: "What is wrong today?",
+    guidance: "State the problem as observed, not the solution."
+  },
+  {
+    field: "currentSituation",
+    label: "Current situation",
+    blocking: false,
+    asks: "How do things work right now, before this change?",
+    guidance: "Describe the present state the change will alter."
+  },
+  {
+    field: "reasonForChange",
+    label: "Reason for change",
+    blocking: false,
+    asks: "Why this change, rather than doing nothing or doing something else?",
+    guidance: "Tie the reason to the problem statement and the tickets."
+  },
+  {
+    field: "expectedOutcome",
+    label: "Expected outcome",
+    blocking: false,
+    asks: "What is true after this change that is not true today?",
+    guidance: "Write outcomes somebody could verify, not aspirations."
+  },
+  {
+    field: "businessBenefits",
+    label: "Business benefits",
+    blocking: false,
+    asks: "Who is better off, and how?",
+    guidance: "Only benefits the facts support. Do not invent figures."
+  },
+  {
+    field: "implementationPlan",
+    label: "Implementation plan",
+    blocking: true,
+    asks: "What will actually be done, in order?",
+    guidance: "Order the steps from the pull requests and tickets listed in the facts. Name what is deployed where."
+  },
+  {
+    field: "backoutPlan",
+    label: "Backout plan",
+    blocking: true,
+    asks: "If this goes wrong, how is it undone, and how long does that take?",
+    guidance:
+      "Write the CONCRETE reversal the facts support: reverting the named merged pull requests, redeploying the previous version of the named repositories, restoring whatever data the change touches. If the facts do not support a real procedure, OMIT this section — this field is the plan itself, and text saying a plan does not exist would satisfy the submission requirement with nothing behind it."
+  },
+  {
+    field: "testPlan",
+    label: "Test plan",
+    blocking: true,
+    asks: "How will anyone know it worked?",
+    guidance: "Tie verification to the tickets being delivered and to the CI signal in the facts."
+  },
+  {
+    field: "communicationPlan",
+    label: "Communication plan",
+    blocking: true,
+    asks: "Who is told, when, and through what channel?",
+    guidance: "Anchor timings to the change window where one is given. If downtime is declared, say who hears before and after."
+  }
 ] as const;
+
+export type ChangeDraftableField = (typeof CHANGE_DRAFTABLE_FIELDS)[number]["field"];
+
+const DRAFTABLE_FIELD_NAMES = CHANGE_DRAFTABLE_FIELDS.map((s) => s.field) as [ChangeDraftableField, ...ChangeDraftableField[]];
 
 const ChangeDraftSchema = z.object({
   sections: z
     .array(
       z.object({
-        field: z.enum(["justification", "implementationPlan", "backoutPlan", "testPlan", "communicationPlan"]),
+        field: z.enum(DRAFTABLE_FIELD_NAMES),
         text: z.string().min(1).max(8000)
       })
     )
-    .max(5)
+    .max(CHANGE_DRAFTABLE_FIELDS.length)
 });
 
 /**
- * Drafts the prose sections that BLOCK a change's submission, from what the change already knows.
+ * Drafts prose sections of a change from what the change already knows.
  *
- * WHY IT RETURNS TEXT AND WRITES NOTHING: the caller turns each section into an `AiProposalChange` a
- * person accepts or rejects individually. These are the sections an approver relies on, and a draft
- * nobody wrote is worse than a blank field — a blank field is honest about not having been thought
- * about, where a fluent paragraph invites the reader to assume somebody did. The proposal envelope
- * is what keeps a human between the model and the record.
+ * WHY IT RETURNS TEXT AND WRITES NOTHING: the bulk caller turns each section into an
+ * `AiProposalChange` a person accepts or rejects individually; the inline caller shows the text
+ * beside the field and the person's own save is the write. Either way a human stands between the
+ * model and the record — these are the sections an approver relies on.
  *
- * WHY IT IS HANDED THE DERIVED CONTEXT: a model asked for a backout plan with nothing to go on
- * writes a generic paragraph about "restoring from backup". Told which repositories are changing,
- * which pull requests are merged, whether CI is green and how the last few changes to this
- * application went, it writes something specific enough to argue with. That context is derived, not
- * generated — see change-context.service.ts.
+ * A SECTION IT CANNOT GROUND IS OMITTED, NOT PADDED. This rule exists because its opposite shipped:
+ * told to "admit what is not known", the model answered a backout-plan request with "a backout
+ * procedure has not been documented at this time" — text which, if accepted, would satisfy the
+ * mandatory-backout-plan submission gate while containing no plan. The submission gate checks that
+ * the field has words in it; only a human can check that the words are a plan. So the model returns
+ * nothing for that section, the caller reports it as skipped, and the field stays honestly empty.
  *
- * ONLY EMPTY SECTIONS ARE ASKED FOR. Re-drafting a section somebody already wrote is how an
- * assistant becomes something people switch off.
+ * WHY IT IS HANDED THE DERIVED CONTEXT AND THE RECORDED SECTIONS: a model asked for a backout plan
+ * with nothing to go on writes a generic paragraph about restoring from backup. Told which
+ * repositories are changing, which pull requests are merged, whether CI is green and what the
+ * requester already wrote in the sections they did fill in, it writes something specific enough to
+ * argue with — and consistent with the rest of the form.
  */
 export async function draftChangeSections(input: {
   changeKey: string;
@@ -2846,45 +2959,57 @@ export async function draftChangeSections(input: {
   environment: string;
   riskLevel: string;
   projectName: string;
-  /** Field names still empty on the change. Nothing else is drafted. */
+  /** Field names to draft. Anything not in the spec above is ignored. */
   wanted: string[];
   /** Derived facts, already assembled. Free-form because the shape is a reading of five tables. */
   context: string;
+  /** What the requester has ALREADY written — the filled sections, downtime facts, the window. The
+   *  draft has to agree with these, not restate or contradict them. */
+  recorded: string;
   userId?: string;
 }): Promise<Array<{ field: string; text: string }>> {
   const { settings } = await preflight("changeDraftAssistEnabled");
 
-  const asked = CHANGE_DRAFT_SECTIONS.filter((s) => input.wanted.includes(s.field));
+  const asked = CHANGE_DRAFTABLE_FIELDS.filter((s) => input.wanted.includes(s.field));
   if (asked.length === 0) return [];
 
   const prompt = [
     "You are helping an engineer write up a change request before it goes to their manager for approval.",
     "",
-    "Write ONLY the sections listed under WANTED. For each one, write 2-5 sentences of plain prose.",
-    "Ground every sentence in the facts given below. Do not invent a repository, a system, a person, a",
-    "date or a number that does not appear. Where you do not have enough to be specific, say what is",
-    "not yet known instead of writing something that sounds specific and is not — the reader is an",
-    "approver, and a confident guess is worse to them than an admitted gap.",
-    "Do not state or estimate the risk level. It has already been computed and is given to you as a fact.",
+    "Write ONLY the sections listed under WANTED. For each one, write 2-5 sentences of plain prose,",
+    "grounded in the facts given below. Do not invent a repository, a system, a person, a date or a",
+    "number that does not appear.",
+    "",
+    "THE OMISSION RULE, which overrides everything else: a section you cannot write something real",
+    "for is LEFT OUT of your reply entirely. Never write, as the content of a section, that the thing",
+    "is missing, unknown, or not yet documented — several of these fields gate the change's",
+    "submission, and an accepted placeholder would pass that gate carrying no plan at all. Returning",
+    "fewer sections than were asked for is the correct behaviour, not a failure.",
+    "",
+    "Do not state or estimate the risk level; it is computed and given as a fact. Where the requester",
+    "has already written other sections, stay consistent with them rather than restating them.",
     "",
     "=== BEGIN FACTS ===",
     `Change: ${input.changeKey} — ${input.title}`,
     `Project: ${input.projectName}`,
     `Type: ${input.changeKind}, targeting ${input.environment}`,
     `Risk, already assessed: ${input.riskLevel}`,
-    input.description ? `What the requester wrote: ${input.description}` : "The requester wrote no description.",
+    input.description ? `What the requester wrote as the description: ${input.description}` : "The requester wrote no description.",
     "",
     "What this change is shipping, derived from the tickets it delivers:",
     input.context || "(nothing linked yet)",
+    "",
+    "What is already recorded on the change:",
+    input.recorded || "(nothing else filled in yet)",
     "=== END FACTS ===",
     "",
-    "WANTED:",
-    asked.map((s) => `- ${s.field} (${s.label}) — ${s.asks}`).join("\n"),
+    "WANTED — each with the question it answers and how to answer it:",
+    asked.map((s) => `- ${s.field} (${s.label}) — ${s.asks} ${s.guidance}`).join("\n"),
     "",
     "Return JSON only: { \"sections\": [ { \"field\": \"...\", \"text\": \"...\" } ] }"
   ].join("\n");
 
-  const result = await callChat(settings, { model: settings.model, maxTokens: 1600, prompt });
+  const result = await callChat(settings, { model: settings.model, maxTokens: 2000, prompt });
 
   await logAIUsage({
     feature: "change_draft_assist",
@@ -2899,8 +3024,9 @@ export async function draftChangeSections(input: {
   if (!parsed) return [];
 
   // Filtered again on the way out. The prompt asks for only the wanted sections; this makes it true.
-  // A model that returns a sixth section must not be able to write a field nobody asked about, and
-  // the proposal allowlist would refuse it anyway — two checks, because they fail differently.
+  // A model that returns an extra section must not be able to write a field nobody asked about — and
+  // for the bulk path the proposal allowlist would refuse it anyway. Two checks, because they fail
+  // differently.
   return parsed.sections.filter((s) => input.wanted.includes(s.field) && s.text.trim().length > 0);
 }
 

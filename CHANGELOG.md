@@ -54,6 +54,40 @@ that does not exist yet.
   that can approve a change, which is the absence of a capability rather than a limit on one. An
   approval is a named person accepting risk, and there is no undo.
 
+### 📝 The assistant now declines what it cannot draft — and says so
+
+- **Fixed the placeholder that could pass a gate.** Told to "admit what is not known", the drafting
+  assistant answered a backout-plan request with "a backout procedure has not been documented at this
+  time" — text which, accepted, would have satisfied the mandatory-backout submission requirement
+  while containing no plan. The rule is now inverted: a section the model cannot ground is OMITTED,
+  the response names what was skipped, and the field stays honestly empty. Verified against the exact
+  case: the same request now answers "not enough to draft this from — it needs writing by hand".
+- **Every mandatory field says so, from one source of truth.** The three conditional requirements —
+  backout plan, test plan, communication plan — are now decided by shared predicates that both the
+  submission gate and the form's required markers read, so the form can never promise what the server
+  refuses. Hints say *why*: "Required to submit — this change is high risk, major, or moves data."
+- **"Suggest a draft" beside every empty prose field.** Ten fields take it — the five that gate
+  submission plus the business-case five. The suggestion renders beside the field and nothing is
+  saved until "Use this", at which point the form's own save writes it as the person's edit, through
+  the same validation and audit trail as anything typed. It only offers on EMPTY fields: drafting
+  over somebody's writing is how an assistant becomes the thing people switch off.
+
+### 🩹 The provider can be slow, wrong, or silent — and the app now survives all three
+
+- **A hung model call is bounded at 90 seconds.** Both SDK clients defaulted to ~10 minutes, so a
+  free-tier provider that queued indefinitely left every AI button in the app spinning for as long as
+  the page stayed open. Measured with OpenRouter's free tier before fixing.
+- **An answer with no answer in it no longer crashes.** OpenRouter's free tier returns rate limits as
+  an error body inside HTTP 200 — no `choices` at all — and reading `choices[0]` off that took every
+  AI feature down with a bare TypeError. It now surfaces as "the AI provider refused the request",
+  quoting the provider's own reason where one is given.
+- **A dead connection is no longer retried as if it were a formatting quirk.** The fallback that
+  retries without `response_format` (for local endpoints that reject it) now fires only on fast
+  rejections, not on timeouts — repeating an identical call into a hung provider doubled the wait the
+  timeout exists to bound.
+- Also fixed while diagnosing: the tenant fan-out had not run for the newest migrations, so the
+  second organisation's workers were erroring once a minute on columns that did not exist there yet.
+
 ### 🔀 A change now shows what it is shipping, and workflows can act on it
 
 - **A Context tab** on every change: the repositories and pull requests it delivers, whether their CI

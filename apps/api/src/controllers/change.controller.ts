@@ -65,7 +65,13 @@ import { CSV_EOL, UTF8_BOM, csvCell } from "../utils/csv.js";
 import PDFDocument from "pdfkit";
 import { buildChangeWorkbook, renderChangeRegisterPdf } from "../services/change-export.service.js";
 import { buildChangeContext } from "../services/change-context.service.js";
-import { briefChangeConflicts, draftChangeSections, draftPostImplementationReview, narrateChangeRisk } from "../services/ai.service.js";
+import {
+  briefChangeConflicts,
+  CHANGE_DRAFTABLE_FIELDS,
+  draftChangeSections,
+  draftPostImplementationReview,
+  narrateChangeRisk
+} from "../services/ai.service.js";
 import { createProposal } from "../services/ai-proposal.service.js";
 
 export const changeRouter = Router();
@@ -1218,14 +1224,9 @@ changeRouter.post("/:id/risk-narrative", async (req, res) => {
   res.json({ narrative });
 });
 
-/** The five sections the drafting assistant may write, and the order a reviewer reads them in. */
-const DRAFTABLE_SECTIONS = [
-  { field: "justification", label: "Justification" },
-  { field: "implementationPlan", label: "Implementation plan" },
-  { field: "backoutPlan", label: "Backout plan" },
-  { field: "testPlan", label: "Test plan" },
-  { field: "communicationPlan", label: "Communication plan" }
-] as const;
+/** The blocking sections the BULK draft goes after — the ones `missingForSubmit` demands. The
+ *  inline assist accepts the wider `CHANGE_DRAFTABLE_FIELDS` list; both are defined in ai.service. */
+const DRAFTABLE_SECTIONS = CHANGE_DRAFTABLE_FIELDS.filter((s) => s.blocking);
 
 /** The derived context, flattened to the few lines a prompt can actually use. Counts rather than
  *  titles for findings: a scanner's title is externally-authored text, and the model needs to know
@@ -1248,6 +1249,35 @@ function contextForPrompt(context: Awaited<ReturnType<typeof buildChangeContext>
   return lines.join("\n");
 }
 
+/** Strips markup and answers "did a person actually write something here". The rich-text editor
+ *  saves `<p></p>` for a field somebody opened and left, and that must not count as written. */
+function looksWritten(value: string | null | undefined): boolean {
+  return Boolean(value && value.replace(/<[^>]*>/g, "").trim().length > 0);
+}
+
+/**
+ * What the requester has ALREADY recorded, for the drafter to stay consistent with.
+ *
+ * Prose fields are truncated: they anchor the draft's voice and facts, and past a few hundred
+ * characters they stop adding grounding and start crowding out the derived context.
+ */
+function recordedFactsFor(change: Record<string, unknown>): string {
+  const clip = (v: unknown) => String(v).replace(/<[^>]*>/g, " ").replace(/\s+/g, " ").trim().slice(0, 400);
+  const lines: string[] = [];
+  for (const section of CHANGE_DRAFTABLE_FIELDS) {
+    const value = change[section.field];
+    if (looksWritten(value as string)) lines.push(`- ${section.label}, as written by the requester: ${clip(value)}`);
+  }
+  if (change.requiresDowntime) {
+    lines.push(`- Downtime is declared${change.downtimeMinutes ? `, expected ${change.downtimeMinutes} minutes` : ""}.`);
+  }
+  if (change.plannedStart && change.plannedEnd) {
+    const stamp = (v: unknown) => new Date(String(v)).toISOString().slice(0, 16).replace("T", " ");
+    lines.push(`- Planned window: ${stamp(change.plannedStart)} to ${stamp(change.plannedEnd)} UTC.`);
+  }
+  return lines.join("\n");
+}
+
 /**
  * Drafts the sections this change still owes, as a PROPOSAL nobody has accepted yet.
  *
@@ -1256,6 +1286,11 @@ function contextForPrompt(context: Awaited<ReturnType<typeof buildChangeContext>
  * a person accepts or rejects individually, and one whose underlying value moved since is refused
  * rather than quietly overwriting somebody's edit. That envelope already exists — this is the same
  * machinery `PLAN_BREAKDOWN` uses.
+ *
+ * WHY `skipped` IS PART OF THE ANSWER: the drafter OMITS a section it cannot ground rather than
+ * padding it — a placeholder accepted into the backout plan would satisfy the submission gate while
+ * containing no plan. What was skipped, and that it should be written by hand, is exactly what the
+ * person needs to hear back.
  *
  * ONLY EMPTY SECTIONS ARE DRAFTED. Re-writing something somebody already wrote is how an assistant
  * becomes the thing people switch off.
@@ -1276,12 +1311,9 @@ changeRouter.post("/:id/draft-assist", requirePermission(permissions.CHANGES_WRI
     throw new AppError(409, "This change has been approved, so its plan can no longer be edited.");
   }
 
-  const empty = DRAFTABLE_SECTIONS.filter((s) => {
-    const value = (change as unknown as Record<string, string | null>)[s.field];
-    return !value || value.trim().length === 0;
-  });
+  const empty = DRAFTABLE_SECTIONS.filter((s) => !looksWritten((change as unknown as Record<string, string | null>)[s.field]));
   if (empty.length === 0) {
-    return res.json({ proposalId: null, drafted: [], message: "Every section already has something in it." });
+    return res.json({ proposalId: null, drafted: [], skipped: [], message: "Every section already has something in it." });
   }
 
   const context = await buildChangeContext(change.id);
@@ -1295,14 +1327,19 @@ changeRouter.post("/:id/draft-assist", requirePermission(permissions.CHANGES_WRI
     projectName: change.ticket.project.name,
     wanted: empty.map((s) => s.field),
     context: contextForPrompt(context),
+    recorded: recordedFactsFor(change as unknown as Record<string, unknown>),
     userId: req.user!.id
   });
 
+  const labelOf = (field: string) => CHANGE_DRAFTABLE_FIELDS.find((s) => s.field === field)?.label ?? field;
+  // What the drafter declined to write. Reported by name so the person knows which sections are
+  // theirs to write by hand — silence here would read as "nothing else was needed".
+  const skipped = empty.filter((s) => !sections.some((d) => d.field === s.field)).map((s) => labelOf(s.field));
+
   if (sections.length === 0) {
-    return res.json({ proposalId: null, drafted: [], message: "The model returned nothing usable." });
+    return res.json({ proposalId: null, drafted: [], skipped, message: "There was not enough to draft from — these need writing by hand." });
   }
 
-  const labelOf = (field: string) => DRAFTABLE_SECTIONS.find((s) => s.field === field)?.label ?? field;
   const proposal = await createProposal({
     kind: "CHANGE_DRAFT",
     title: `Draft ${sections.length} section${sections.length === 1 ? "" : "s"} for ${change.changeKey}`,
@@ -1322,7 +1359,74 @@ changeRouter.post("/:id/draft-assist", requirePermission(permissions.CHANGES_WRI
     }))
   });
 
-  res.status(201).json({ proposalId: proposal.id, drafted: sections.map((s) => s.field) });
+  res.status(201).json({ proposalId: proposal.id, drafted: sections.map((s) => s.field), skipped });
+});
+
+const draftFieldSchema = z.object({
+  params: z.object({ id: z.string().uuid() }),
+  body: z
+    .object({
+      // The full draftable list, not just the blocking five: the business-case fields take the
+      // inline assist too. Validated against the same spec the drafter itself reads, so what the
+      // assistant may write is decided in one place.
+      field: z.enum(CHANGE_DRAFTABLE_FIELDS.map((s) => s.field) as [string, ...string[]])
+    })
+    .strict()
+});
+
+/**
+ * Drafts ONE section, inline, and hands the text back.
+ *
+ * WHY THIS ONE DOES NOT GO THROUGH THE PROPOSAL ENVELOPE: the envelope exists to keep a human
+ * between the model and the record when the writing happens in the background. Here the human IS
+ * the foreground — the suggestion renders beside the empty field, and nothing reaches the change
+ * until they press "Use this", at which point the form's own save writes it as THEIR edit through
+ * the same PATCH, validation and audit trail as anything they typed. Same trust model as AiRefine,
+ * which established it.
+ *
+ * Refused for a field that already has words in it: drafting over somebody's writing is the
+ * assistant becoming the thing people switch off. AiRefine is the tool for improving written text.
+ */
+changeRouter.post("/:id/draft-field", requirePermission(permissions.CHANGES_WRITE), validate(draftFieldSchema), async (req, res) => {
+  await assertChangeManagementEnabled();
+  const change = await prisma.changeRequest.findFirst({
+    where: { id: String(req.params.id) },
+    include: { ticket: { select: { title: true, description: true, projectId: true, project: { select: { name: true } } } } }
+  });
+  if (!change) throw new AppError(404, "Change not found");
+  await assertTicketVisible(req, change.ticket.projectId);
+
+  if (FROZEN_AFTER.includes(change.state as ChangeState)) {
+    throw new AppError(409, "This change has been approved, so its plan can no longer be edited.");
+  }
+
+  const field = String(req.body.field);
+  if (looksWritten((change as unknown as Record<string, string | null>)[field])) {
+    throw new AppError(409, "That section already has something in it. The assistant only drafts empty sections — edit it directly, or clear it first.");
+  }
+
+  const context = await buildChangeContext(change.id);
+  const sections = await draftChangeSections({
+    changeKey: change.changeKey,
+    title: change.ticket.title,
+    description: change.ticket.description,
+    changeKind: String(change.changeKind),
+    environment: String(change.environment),
+    riskLevel: String(change.riskLevel),
+    projectName: change.ticket.project.name,
+    wanted: [field],
+    context: contextForPrompt(context),
+    recorded: recordedFactsFor(change as unknown as Record<string, unknown>),
+    userId: req.user!.id
+  });
+
+  const text = sections.find((s) => s.field === field)?.text ?? null;
+  res.json({
+    text,
+    // The drafter omitted it, which is a statement, not a failure: there was not enough to ground a
+    // real draft, and for a gating field a padded one would be worse than none.
+    message: text ? undefined : "There was not enough to draft this from — it needs writing by hand."
+  });
 });
 
 /**

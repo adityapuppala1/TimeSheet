@@ -17,7 +17,18 @@
  * copies are how two surfaces start disagreeing about the same conversation.
  */
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { changeBands, changeKinds, changeOutcomes, changeStateTransitions, permissions, type ChangeBand, type ChangeState } from "@timesheet/shared";
+import {
+  changeBands,
+  changeKinds,
+  changeNeedsBackoutPlan,
+  changeNeedsCommunicationPlan,
+  changeNeedsTestPlan,
+  changeOutcomes,
+  changeStateTransitions,
+  permissions,
+  type ChangeBand,
+  type ChangeState
+} from "@timesheet/shared";
 import { AlertTriangle, ArrowLeft, CheckCircle2, ExternalLink, Loader2, Plus, ShieldCheck, Sparkles, Trash2, X } from "lucide-react";
 import { Fragment, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router";
@@ -408,12 +419,28 @@ export function ChangeDetailPage() {
                   value={change.justification}
                   onSave={(v) => set({ justification: v })}
                 />
+                <FieldAssist changeId={change.id} field="justification" value={change.justification} disabled={ro} onUse={(v) => set({ justification: v })} />
                 <div className="grid gap-4 sm:grid-cols-2">
-                  <TextField label="Problem statement" multiline disabled={ro} value={change.problemStatement} onSave={(v) => set({ problemStatement: v })} />
-                  <TextField label="Current situation" multiline disabled={ro} value={change.currentSituation} onSave={(v) => set({ currentSituation: v })} />
-                  <TextField label="Reason for change" multiline disabled={ro} value={change.reasonForChange} onSave={(v) => set({ reasonForChange: v })} />
-                  <TextField label="Expected outcome" multiline disabled={ro} value={change.expectedOutcome} onSave={(v) => set({ expectedOutcome: v })} />
-                  <TextField label="Business benefits" multiline disabled={ro} value={change.businessBenefits} onSave={(v) => set({ businessBenefits: v })} />
+                  <div className="grid gap-2">
+                    <TextField label="Problem statement" multiline disabled={ro} value={change.problemStatement} onSave={(v) => set({ problemStatement: v })} />
+                    <FieldAssist changeId={change.id} field="problemStatement" value={change.problemStatement} disabled={ro} onUse={(v) => set({ problemStatement: v })} />
+                  </div>
+                  <div className="grid gap-2">
+                    <TextField label="Current situation" multiline disabled={ro} value={change.currentSituation} onSave={(v) => set({ currentSituation: v })} />
+                    <FieldAssist changeId={change.id} field="currentSituation" value={change.currentSituation} disabled={ro} onUse={(v) => set({ currentSituation: v })} />
+                  </div>
+                  <div className="grid gap-2">
+                    <TextField label="Reason for change" multiline disabled={ro} value={change.reasonForChange} onSave={(v) => set({ reasonForChange: v })} />
+                    <FieldAssist changeId={change.id} field="reasonForChange" value={change.reasonForChange} disabled={ro} onUse={(v) => set({ reasonForChange: v })} />
+                  </div>
+                  <div className="grid gap-2">
+                    <TextField label="Expected outcome" multiline disabled={ro} value={change.expectedOutcome} onSave={(v) => set({ expectedOutcome: v })} />
+                    <FieldAssist changeId={change.id} field="expectedOutcome" value={change.expectedOutcome} disabled={ro} onUse={(v) => set({ expectedOutcome: v })} />
+                  </div>
+                  <div className="grid gap-2">
+                    <TextField label="Business benefits" multiline disabled={ro} value={change.businessBenefits} onSave={(v) => set({ businessBenefits: v })} />
+                    <FieldAssist changeId={change.id} field="businessBenefits" value={change.businessBenefits} disabled={ro} onUse={(v) => set({ businessBenefits: v })} />
+                  </div>
                   <TextField label="Cost of not implementing" multiline disabled={ro} value={change.costOfNotImplementing} onSave={(v) => set({ costOfNotImplementing: v })} />
                   <TextField label="Revenue impact" disabled={ro} value={change.revenueImpact} onSave={(v) => set({ revenueImpact: v })} />
                   <TextField label="Project reference" disabled={ro} value={change.projectReference} onSave={(v) => set({ projectReference: v })} />
@@ -483,7 +510,15 @@ export function ChangeDetailPage() {
 
             <TabsContent value="implementation">
               <div className="grid gap-4">
-                <RichField label="Implementation plan" required disabled={ro} value={change.implementationPlan} onSave={(v) => set({ implementationPlan: v })} />
+                <RichField
+                  label="Implementation plan"
+                  required
+                  hint="Required to submit. What will actually be done, in order."
+                  disabled={ro}
+                  value={change.implementationPlan}
+                  onSave={(v) => set({ implementationPlan: v })}
+                />
+                <FieldAssist changeId={change.id} field="implementationPlan" value={change.implementationPlan} disabled={ro} onUse={(v) => set({ implementationPlan: v })} />
                 <div className="grid gap-4 sm:grid-cols-2">
                   <TextField label="Summary" multiline disabled={ro} value={change.implementationSummary} onSave={(v) => set({ implementationSummary: v })} />
                   <TextField label="Objective" multiline disabled={ro} value={change.implementationObjective} onSave={(v) => set({ implementationObjective: v })} />
@@ -502,11 +537,13 @@ export function ChangeDetailPage() {
               <div className="grid gap-4">
                 <RichField
                   label="Test plan"
-                  hint={change.riskLevel !== "LOW" ? "Required above low risk." : undefined}
+                  required={changeNeedsTestPlan(change)}
+                  hint={changeNeedsTestPlan(change) ? "Required to submit — this change is above low risk." : undefined}
                   disabled={ro}
                   value={change.testPlan}
                   onSave={(v) => set({ testPlan: v })}
                 />
+                <FieldAssist changeId={change.id} field="testPlan" value={change.testPlan} disabled={ro} onUse={(v) => set({ testPlan: v })} />
                 <div className="grid gap-4 sm:grid-cols-2">
                   <PickField label="Test environment" disabled={ro} value={change.testEnvironment} options={ENVIRONMENTS.map(band)} onSave={(v) => set({ testEnvironment: v })} />
                   <TextField label="Testing team" disabled={ro} value={change.testingTeam} onSave={(v) => set({ testingTeam: v })} />
@@ -523,16 +560,17 @@ export function ChangeDetailPage() {
               <div className="grid gap-4">
                 <RichField
                   label="Backout plan"
-                  required={change.riskLevel === "HIGH" || change.changeKind === "MAJOR" || change.dataMigration}
+                  required={changeNeedsBackoutPlan(change)}
                   hint={
-                    change.riskLevel === "HIGH" || change.changeKind === "MAJOR" || change.dataMigration
-                      ? "Required — this change is high risk, major, or moves data."
+                    changeNeedsBackoutPlan(change)
+                      ? "Required to submit — this change is high risk, major, or moves data."
                       : "Optional at this risk level, and still the field people wish they had written."
                   }
                   disabled={ro}
                   value={change.backoutPlan}
                   onSave={(v) => set({ backoutPlan: v })}
                 />
+                <FieldAssist changeId={change.id} field="backoutPlan" value={change.backoutPlan} disabled={ro} onUse={(v) => set({ backoutPlan: v })} />
                 <div className="grid gap-4 sm:grid-cols-2">
                   <BoolField label="Rollback required" disabled={ro} value={change.rollbackRequired} onSave={(v) => set({ rollbackRequired: v })} />
                   <BoolField label="Backup required" disabled={ro} value={change.backupRequired} onSave={(v) => set({ backupRequired: v })} />
@@ -575,11 +613,13 @@ export function ChangeDetailPage() {
               <div className="grid gap-4">
                 <RichField
                   label="Communication plan"
-                  hint={change.requiresDowntime ? "Required — this change takes something down. Who gets told, and when?" : undefined}
+                  required={changeNeedsCommunicationPlan(change)}
+                  hint={changeNeedsCommunicationPlan(change) ? "Required to submit — this change takes something down. Who gets told, and when?" : undefined}
                   disabled={ro}
                   value={change.communicationPlan}
                   onSave={(v) => set({ communicationPlan: v })}
                 />
+                <FieldAssist changeId={change.id} field="communicationPlan" value={change.communicationPlan} disabled={ro} onUse={(v) => set({ communicationPlan: v })} />
                 <div className="grid gap-4 sm:grid-cols-2">
                   <BoolField label="Internal communication required" disabled={ro} value={change.internalCommRequired} onSave={(v) => set({ internalCommRequired: v })} />
                   <BoolField label="Stakeholder notification required" disabled={ro} value={change.stakeholderNotifyRequired} onSave={(v) => set({ stakeholderNotifyRequired: v })} />
@@ -707,8 +747,12 @@ function DraftAssistButton({ changeId }: { changeId: string }) {
         return;
       }
       setProposalId(result.proposalId);
+      const skipped = result.skipped ?? [];
       toast.success(`Drafted ${result.drafted.length} section${result.drafted.length === 1 ? "" : "s"}`, {
-        description: "Nothing has been written yet — accept the ones you want."
+        description:
+          skipped.length > 0
+            ? `Nothing has been written yet — accept the ones you want. Not enough to draft ${skipped.join(", ")}; ${skipped.length === 1 ? "it needs" : "they need"} writing by hand.`
+            : "Nothing has been written yet — accept the ones you want."
       });
     } catch (err: any) {
       // Usually "AI is off for this workspace", which the server says plainly. Surfaced rather than
@@ -730,6 +774,90 @@ function DraftAssistButton({ changeId }: { changeId: string }) {
           Review and accept them →
         </Link>
       )}
+    </div>
+  );
+}
+
+/**
+ * The inline "suggest a draft" affordance under an EMPTY prose field.
+ *
+ * WHY IT VANISHES ONCE THE FIELD HAS WORDS: drafting over somebody's writing is how an assistant
+ * becomes the thing people switch off — and once accepted, the suggestion becomes the field's value,
+ * so this unmounts itself by its own success. Improving written text is AiRefine's job, not this.
+ *
+ * WHY "USE THIS" IS THE WRITE: the suggestion goes through the field's own onSave — the same PATCH,
+ * validation, freeze rule and audit trail as anything the person typed. The model never touches the
+ * record; the person's acceptance is the edit. Same trust model as AiRefine, which established it.
+ */
+function FieldAssist({
+  changeId,
+  field,
+  value,
+  disabled,
+  onUse
+}: {
+  changeId: string;
+  field: string;
+  value: string | null | undefined;
+  disabled: boolean;
+  onUse: (text: string) => void;
+}) {
+  const [busy, setBusy] = useState(false);
+  const [suggestion, setSuggestion] = useState<string | null>(null);
+
+  // `<p></p>` is what the rich editor saves for a field somebody opened and left — not written.
+  const written = Boolean(value && value.replace(/<[^>]*>/g, "").trim().length > 0);
+  if (disabled || written) return null;
+
+  const run = async () => {
+    setBusy(true);
+    try {
+      const result = await changeApi.draftField(changeId, field);
+      if (!result.text) {
+        // The drafter declined: too little to ground a real draft. For a gating field a padded one
+        // would satisfy the submission check while containing no plan, so declining is the feature.
+        toast.info("Not enough to draft from", { description: result.message ?? "This one needs writing by hand." });
+        return;
+      }
+      setSuggestion(result.text);
+    } catch (err: any) {
+      toast.error("Could not draft", { description: serverMessage(err, "Try again.") });
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  if (suggestion) {
+    return (
+      <BorderGlow animated>
+        <div className="grid gap-2 p-3">
+          <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Suggested — nothing saved yet</p>
+          <p className="whitespace-pre-wrap text-sm leading-relaxed">{suggestion}</p>
+          <div className="flex items-center gap-2">
+            <Button
+              size="sm"
+              onClick={() => {
+                onUse(suggestion);
+                setSuggestion(null);
+              }}
+            >
+              Use this
+            </Button>
+            <Button size="sm" variant="ghost" onClick={() => setSuggestion(null)}>
+              Discard
+            </Button>
+          </div>
+        </div>
+      </BorderGlow>
+    );
+  }
+
+  return (
+    <div>
+      <Button variant="ai" size="sm" disabled={busy} onClick={() => void run()}>
+        {busy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Sparkles className="h-3.5 w-3.5" />}
+        Suggest a draft
+      </Button>
     </div>
   );
 }
