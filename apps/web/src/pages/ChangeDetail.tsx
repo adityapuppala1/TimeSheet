@@ -27,7 +27,8 @@ import {
   CHANGE_OUTCOME_TONE,
   CHANGE_RISK_TONE,
   CHANGE_STATE_TONE,
-  humanizeChange
+  humanizeChange,
+  CHANGE_KIND_MEANING
 } from "../lib/change-visuals";
 import { cn } from "../lib/utils";
 import { changeApi, userApi, type ChangeDetail as ChangeDetailRow } from "../services/api";
@@ -153,17 +154,34 @@ function PickField({
   onSave,
   placeholder,
   ...shell
-}: FieldProps & { value: string | null; options: Array<{ id: string; name: string }>; onSave: (v: string) => void; placeholder?: string }) {
+}: FieldProps & {
+  value: string | null;
+  /** `hint` is rendered under the option's name in the open dropdown. Used where the choice carries
+   *  consequences the word alone does not convey — see CHANGE_KIND_MEANING. */
+  options: Array<{ id: string; name: string; hint?: string }>;
+  onSave: (v: string) => void;
+  placeholder?: string;
+}) {
   return (
     <FieldShell {...shell}>
       <Select value={value ?? ""} disabled={shell.disabled} onValueChange={onSave}>
         <SelectTrigger>
-          <SelectValue placeholder={placeholder ?? "Not set"} />
+          {/* The NAME only. Radix mirrors the selected item's content into the trigger, so an option
+              carrying a hint would render both lines inside the collapsed control and overflow into
+              the field below it. Undefined children fall back to the placeholder, as intended. */}
+          <SelectValue placeholder={placeholder ?? "Not set"}>{options.find((o) => o.id === value)?.name}</SelectValue>
         </SelectTrigger>
         <SelectContent>
           {options.map((o) => (
             <SelectItem key={o.id} value={o.id}>
-              {o.name}
+              {o.hint ? (
+                <span className="grid gap-0.5 py-0.5">
+                  <span>{o.name}</span>
+                  <span className="text-xs text-muted-foreground">{o.hint}</span>
+                </span>
+              ) : (
+                o.name
+              )}
             </SelectItem>
           ))}
         </SelectContent>
@@ -313,9 +331,9 @@ export function ChangeDetailPage() {
                   required
                   disabled={ro}
                   value={change.changeKind}
-                  options={changeKinds.map(band)}
+                  options={changeKinds.map((k) => ({ ...band(k), hint: CHANGE_KIND_MEANING[k] }))}
                   onSave={(v) => set({ changeKind: v })}
-                  hint="Standard is pre-approved and skips the board."
+                  hint="Each type carries different obligations — see the options."
                 />
                 <PickField
                   label="Category"

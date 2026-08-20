@@ -687,9 +687,18 @@ Still open, deliberately:
 
 - **Chat and ITSM integrations** (ServiceNow, Jira Service Management) — the plan names them as
   future work and nothing here forecloses them; `ChangeSource` already exists as the seam.
-- **The `MAJOR` change type** is in the enum and the risk matrix but not in the §10 vocabulary
-  (Standard / Normal / Emergency). It is currently reachable and behaves like a high-ceremony Normal.
-  Worth a decision before the tag: keep it and document it, or drop it and migrate the one demo row.
+- ~~**The `MAJOR` change type** is in the enum but not in the §10 vocabulary (Standard / Normal /
+  Emergency) — keep it or drop it?~~ **Kept, 2026-08-19, and it was closer than it looked.** Tracing
+  it first was what settled it: MAJOR is load-bearing in two rules and nothing else can express
+  either. `requiresBackoutPlan` demands a backout plan for a MAJOR change *even when the matrix bands
+  it LOW* — a platform migration can score low on every parameter and still be the thing you must be
+  able to undo, because the matrix scores probability of harm and has no way to say "structurally
+  significant". `requiresReview` demands a post-implementation review *even when the outcome was
+  SUCCESSFUL*, where everything else owes one only when it went wrong. Dropping MAJOR would have
+  deleted both silently — a tidy-up back to three types compiles, lints and passes every other test.
+  So: kept, documented as **NORMAL escalated rather than a fourth peer**, with the consequence now
+  stated in both pickers (`CHANGE_KIND_MEANING`) instead of arriving as a 422 at submission, and a
+  tripwire in `change-rules.test.ts` that pins the enum alongside the two behaviours.
 - **Multi-level approval chains.** The requirement was explicitly "the requester's manager, or a super
   admin", and that is what shipped. `ChangeApproval` is already per-approver-per-round, so a chain is
   an additive change if it is ever wanted.

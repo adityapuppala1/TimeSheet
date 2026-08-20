@@ -7,7 +7,7 @@
  * the TRANSITION table is what stops a caller PATCHing a change straight past its own approval.
  */
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { deriveChangeRisk, changeStateTransitions } from "@timesheet/shared";
+import { deriveChangeRisk, changeKinds, changeStateTransitions } from "@timesheet/shared";
 
 const userFindMany = vi.fn().mockResolvedValue([]);
 const userFindFirst = vi.fn().mockResolvedValue(null);
@@ -165,6 +165,33 @@ describe("what a change owes before it can close", () => {
     expect(missingForTransition({ ...BASE, changeKind: "MAJOR", outcome: "SUCCESSFUL" }, "CLOSED")).toContain(
       "Post-implementation review"
     );
+  });
+});
+
+/**
+ * MAJOR looks like a fourth peer next to ITIL's Standard / Normal / Emergency, and a tidy-up pass
+ * that trims the vocabulary back to three would compile, lint and pass every other test in this file
+ * — while silently deleting two obligations nothing else can express. This is the tripwire.
+ */
+describe("why MAJOR is in the vocabulary at all", () => {
+  it("is the only way to demand a backout plan for a change the matrix scored LOW", () => {
+    // The contrast is the whole argument. Same LOW risk, same no data migration; only the kind moves.
+    expect(missingForTransition({ ...BASE, changeKind: "NORMAL", riskLevel: "LOW" }, "SUBMITTED")).not.toContain("Backout plan");
+    expect(missingForTransition({ ...BASE, changeKind: "MAJOR", riskLevel: "LOW" }, "SUBMITTED")).toContain("Backout plan");
+  });
+
+  it("is the only way to demand a review of a change that went perfectly", () => {
+    expect(missingForTransition({ ...BASE, changeKind: "NORMAL", outcome: "SUCCESSFUL" }, "CLOSED")).not.toContain(
+      "Post-implementation review"
+    );
+    expect(missingForTransition({ ...BASE, changeKind: "MAJOR", outcome: "SUCCESSFUL" }, "CLOSED")).toContain(
+      "Post-implementation review"
+    );
+  });
+
+  it("stays in the shared vocabulary, so removing it has to be a decision rather than a cleanup", () => {
+    // Asserted as a set, not a length: reordering is harmless, dropping MAJOR is not.
+    expect([...changeKinds].sort()).toEqual(["EMERGENCY", "MAJOR", "NORMAL", "STANDARD"]);
   });
 });
 

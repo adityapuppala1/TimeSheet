@@ -7,9 +7,24 @@ user of a running installation.
 
 ## Unreleased
 
-Nothing yet. The parser that feeds the in-app What's-new page ignores this section until it gains a
-version number, on purpose — an installation must never render history for a version that does not
-exist yet.
+Landed after v3.0.0 was tagged. The parser that feeds the in-app What's-new page ignores this section
+until it gains a version number, on purpose — an installation must never render history for a version
+that does not exist yet.
+
+### 🔀 The change type now says what it will cost you
+
+- **Picking a change type tells you what it commits you to**, in the dropdown, before you pick it.
+  Choosing **Major** silently obliged a change to carry a backout plan *and* a post-implementation
+  review — obligations you previously met as a 422 at submission time, having already written the
+  rest of the form. Both pickers now state the consequence next to the word.
+- **Why there are four types and not ITIL's three**, settled and written down. `Major` is not a
+  fourth peer next to Standard, Normal and Emergency — it is **Normal escalated**, and it exists
+  because two rules cannot be derived from the risk score: a Major change needs a backout plan *even
+  when impact × likelihood bands it Low* (a platform migration can score low on every parameter and
+  still be the thing you must be able to undo — the matrix scores probability of harm, not
+  significance), and it owes a review *even when it went perfectly*, where everything else owes one
+  only when it went wrong. Trimming the vocabulary back to three would have compiled, linted and
+  passed every other test while deleting both, so the enum is now pinned by a test that says so.
 
 ## 3.0.0 — the change somebody has to approve — 2026-08-19
 

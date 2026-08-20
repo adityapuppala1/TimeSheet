@@ -981,6 +981,27 @@ Change keys are `PROJECTCODE-YYYYMMDD-NNNN` — e.g. `HICS-TS-20260819-0001` —
 `change-key.service.ts` with a count-and-retry against the unique index. The date part is the day it
 was raised, so the key stays meaningful when it is read a year later in an audit response.
 
+### The four change types, and why there are four
+
+`STANDARD`, `NORMAL` and `EMERGENCY` are ITIL's vocabulary: pre-approved routine work, planned work
+that earns a decision, and work that cannot wait for one.
+
+**`MAJOR` is not a fourth peer — it is `NORMAL` escalated**, and it exists because two obligations
+cannot be derived from the risk score:
+
+| | |
+|---|---|
+| `requiresBackoutPlan` | A MAJOR change needs one **even when impact × likelihood bands it LOW**. A platform migration can score low on every parameter and still be the thing you must be able to undo. The matrix scores *probability of harm*; it has no way to say "structurally significant". |
+| `requiresReview` | A MAJOR change owes a post-implementation review **even when its outcome was `SUCCESSFUL`**. Everything else owes one only when it went wrong. |
+
+Removing MAJOR would therefore delete both rules with nothing to replace them, which is why
+`change-rules.test.ts` pins the enum as well as the two behaviours — a vocabulary tidy-up would
+otherwise compile, lint and pass. It means "significant regardless of what the matrix scored", **not**
+"riskier than HIGH"; risk is a separate axis and stays one.
+
+Both pickers state the consequence in the dropdown rather than letting somebody discover it as a 422
+at submission time (`CHANGE_KIND_MEANING`).
+
 ### The lifecycle
 
 `DRAFT → AWAITING_APPROVAL → APPROVED → SCHEDULED → IMPLEMENTING → VALIDATION → PIR → CLOSED`, with

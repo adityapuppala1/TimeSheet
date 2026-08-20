@@ -48,6 +48,22 @@ export const CHANGE_KIND_TONE: Record<ChangeKind, Tone> = {
   MAJOR: "warning"
 };
 
+/**
+ * What picking each type actually commits you to.
+ *
+ * WHY THIS EXISTS: two of these choices silently add obligations. MAJOR forces a backout plan even
+ * when the risk matrix bands the change LOW, and forces a post-implementation review even when it
+ * succeeds — see `changeKinds` in @timesheet/shared. A picker that renders four bare words lets
+ * somebody take on both without knowing, and then meet them as a 422 at submission time. The rule is
+ * the same one the risk section follows: say what a field will demand before it demands it.
+ */
+export const CHANGE_KIND_MEANING: Record<ChangeKind, string> = {
+  STANDARD: "Pre-approved routine work. Low ceremony.",
+  NORMAL: "Planned work that earns a decision. The default.",
+  EMERGENCY: "Cannot wait for the usual decision. Expect scrutiny after the fact.",
+  MAJOR: "Normal, escalated. Always needs a backout plan and a post-implementation review, whatever the risk score says."
+};
+
 export const CHANGE_OUTCOME_TONE: Record<ChangeOutcome, Tone> = {
   SUCCESSFUL: "success",
   SUCCESSFUL_WITH_ISSUES: "warning",

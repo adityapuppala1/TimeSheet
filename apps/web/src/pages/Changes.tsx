@@ -37,6 +37,7 @@ import {
 import { useState } from "react";
 import { useNavigate } from "react-router";
 import {
+  CHANGE_KIND_MEANING,
   CHANGE_KIND_TONE,
   CHANGE_RISK_TONE,
   CHANGE_STATE_TONE,
@@ -563,9 +564,22 @@ function CreateChangeDialog({ open, onClose, onCreated }: { open: boolean; onClo
             <div className="grid gap-1.5">
               <Label htmlFor="change-kind">Type</Label>
               <Select value={form.changeKind} onValueChange={(v) => setForm((f) => ({ ...f, changeKind: v as ChangeKind }))}>
-                <SelectTrigger id="change-kind"><SelectValue /></SelectTrigger>
+                {/* Explicit children, not a bare <SelectValue />: Radix mirrors the SELECTED ITEM's
+                    content into the trigger, so the two-line option below would render its hint
+                    inside the collapsed control and overflow into the next field. */}
+                <SelectTrigger id="change-kind"><SelectValue>{humanizeChange(form.changeKind)}</SelectValue></SelectTrigger>
                 <SelectContent>
-                  {changeKinds.map((k) => <SelectItem key={k} value={k}>{humanizeChange(k)}</SelectItem>)}
+                  {/* The meaning, not just the word: picking Major quietly commits this change to a
+                      backout plan and a post-implementation review, and meeting that as a 422 at
+                      submission time is the wrong place to learn it. */}
+                  {changeKinds.map((k) => (
+                    <SelectItem key={k} value={k}>
+                      <span className="grid gap-0.5 py-0.5">
+                        <span>{humanizeChange(k)}</span>
+                        <span className="text-xs text-muted-foreground">{CHANGE_KIND_MEANING[k]}</span>
+                      </span>
+                    </SelectItem>
+                  ))}
                 </SelectContent>
               </Select>
             </div>

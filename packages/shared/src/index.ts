@@ -911,6 +911,26 @@ export interface GlobalPlanningSettings {
  * come from one table or the UI eventually offers a move the server refuses.
  * ------------------------------------------------------------------ */
 
+/**
+ * The four change types, and why there are four rather than ITIL's three.
+ *
+ * STANDARD, NORMAL and EMERGENCY are the classic vocabulary: pre-approved routine work, planned work
+ * that earns a decision, and work that cannot wait for one.
+ *
+ * MAJOR IS NOT A FOURTH PEER — it is NORMAL escalated, and it exists because two obligations cannot
+ * be derived from the risk score:
+ *
+ *   1. `requiresBackoutPlan` — a MAJOR change needs one even when impact × likelihood bands it LOW.
+ *      A platform migration can be low-impact and low-likelihood on every parameter and still be the
+ *      thing you must be able to undo. The matrix scores *probability of harm*; it has no way to say
+ *      "structurally significant".
+ *   2. `requiresReview` — a MAJOR change owes a post-implementation review even when its outcome was
+ *      SUCCESSFUL. Everything else owes one only when it went wrong.
+ *
+ * Deleting MAJOR would therefore silently delete both rules with nothing to replace them. Keep it,
+ * and keep it honest: it means "this is significant regardless of what the matrix scored", not
+ * "riskier than HIGH".
+ */
 export const changeKinds = ["STANDARD", "NORMAL", "EMERGENCY", "MAJOR"] as const;
 export type ChangeKind = (typeof changeKinds)[number];
 
