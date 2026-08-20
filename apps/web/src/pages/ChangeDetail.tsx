@@ -47,6 +47,7 @@ import { Skeleton } from "../components/ui/skeleton";
 import { Switch } from "../components/ui/switch";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "../components/ui/tabs";
 import { ChangeRunbook, ChangeSlaLadder } from "../components/change/ChangeRunbook";
+import { ChangeContextTab } from "../components/change/ChangeContextTab";
 import { Textarea } from "../components/ui/textarea";
 import { toast } from "../components/ui/toaster";
 
@@ -583,6 +584,10 @@ export function ChangeDetailPage() {
                 </div>
                 <TextField label="Notification audience" multiline disabled={ro} value={change.notificationAudience} onSave={(v) => set({ notificationAudience: v })} />
               </div>
+            </TabsContent>
+
+            <TabsContent value="context">
+              <ChangeContextTab changeId={change.id} />
             </TabsContent>
 
             <TabsContent value="runbook">

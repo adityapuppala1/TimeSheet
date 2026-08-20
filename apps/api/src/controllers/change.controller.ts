@@ -62,6 +62,7 @@ import { assertTicketVisible, computeTicketDueDate, getGlobalTicketSettings, iss
 import { CSV_EOL, UTF8_BOM, csvCell } from "../utils/csv.js";
 import PDFDocument from "pdfkit";
 import { buildChangeWorkbook, renderChangeRegisterPdf } from "../services/change-export.service.js";
+import { buildChangeContext } from "../services/change-context.service.js";
 
 export const changeRouter = Router();
 changeRouter.use(requireAuth);
@@ -1173,6 +1174,27 @@ changeRouter.delete("/:id/collaborators/:userId", requirePermission(permissions.
 
 /** What is wrong with a proposed window. A GET because it writes nothing and the form calls it on
  *  every date edit — safe to re-run, cacheable, and it never blocks anything on its own. */
+/**
+ * Everything about this change that can be DERIVED rather than typed — what it ships, whether CI is
+ * green, who did the work, and how the last few changes to the same application went.
+ *
+ * Its own route rather than part of `GET /:id` because it reads across tickets, branches, CI runs,
+ * findings and timesheets: worth paying for when somebody opens the Context tab, not on every load
+ * of a form they came to edit one field on.
+ */
+changeRouter.get("/:id/context", async (req, res) => {
+  await assertChangeManagementEnabled();
+  const change = await prisma.changeRequest.findFirst({
+    where: { id: String(req.params.id) },
+    select: { id: true, ticket: { select: { projectId: true } } }
+  });
+  if (!change) throw new AppError(404, "Change not found");
+  // Scoped exactly like everything else here: a change is a ticket, so it can never be more visible
+  // than one, and neither can anything derived from it.
+  await assertTicketVisible(req, change.ticket.projectId);
+  res.json(await buildChangeContext(change.id));
+});
+
 changeRouter.get("/:id/conflicts", async (req, res) => {
   await assertChangeManagementEnabled();
   const change = await prisma.changeRequest.findFirst({

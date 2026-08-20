@@ -149,6 +149,7 @@ export const CHANGE_TAB_GROUPS: Array<{ label: string; tabs: Array<{ value: stri
   {
     label: "Deliver",
     tabs: [
+      { value: "context", label: "Context" },
       { value: "runbook", label: "Runbook" },
       { value: "tagging", label: "Tickets & team" },
       { value: "outcome", label: "Outcome" }

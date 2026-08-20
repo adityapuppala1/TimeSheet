@@ -5215,6 +5215,27 @@ export interface ChangeCatalogueRow {
   [field: string]: unknown;
 }
 
+/** Everything about a change that is DERIVED from its linked tickets rather than typed — see
+ *  `change-context.service.ts` and docs/AI_AND_AUTOMATION_FOR_CHANGE.md. */
+export interface ChangeContextRepo {
+  repository: string;
+  branches: string[];
+  pullRequests: Array<{ url: string; status: string; branch: string; ticketKey: string }>;
+  /** Null means nobody has ingested a run — which is NOT the same as passing, and is the
+   *  distinction an approver needs. */
+  latestCi: { status: string; provider: string; branch: string | null; passCount: number | null; failCount: number | null; at: string } | null;
+  openFindings: { critical: number; high: number; medium: number; low: number };
+}
+
+export interface ChangeContext {
+  tickets: Array<{ id: string; key: string; title: string; status: string; assignee: string | null; approvedHours: number }>;
+  repositories: ChangeContextRepo[];
+  contributors: Array<{ id: string; name: string; approvedHours: number }>;
+  totals: { tickets: number; repositories: number; pullRequests: number; approvedHours: number; openFindings: number };
+  applicationHistory: Array<{ changeKey: string; title: string; state: string; outcome: string | null; closedAt: string | null }>;
+  suggestions: { affectedApplications: string[]; affectedServices: string[]; implementerId: string | null };
+}
+
 export interface ChangeDetail extends ChangeRow {
   /** Every decision ever asked for, newest round first. A change rejected and reworked opens a new
    *  round rather than overwriting the first — the objection stays on the record. */
@@ -5361,6 +5382,12 @@ export const changeApi = {
   /** Refused with a 409 and a count when live records point at it — disable instead, so the
    *  history stays readable. Same rule activity types follow. */
   configRemove: async (kind: ChangeCatalogueKind, id: string) => api.delete(`/changes/config/${kind}/${id}`),
+  /**
+   * The derived context pack. Its own request, not part of `get`: it reads across tickets, branches,
+   * CI runs, findings and timesheets, which is worth paying for when somebody opens the Context tab
+   * and not on every load of a form they came to edit one field on.
+   */
+  context: async (id: string) => (await api.get<ChangeContext>(`/changes/${id}/context`)).data,
   /** Scheduled work and the freeze periods it has to dodge, in one call — a calendar that fetches its
    *  bars and its no-go zones separately renders them a frame apart. */
   calendar: async (from: string, to: string) =>

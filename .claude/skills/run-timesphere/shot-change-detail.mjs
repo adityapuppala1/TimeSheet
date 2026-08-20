@@ -44,6 +44,15 @@ if (target) {
 }
 await page.waitForTimeout(2000);
 
+// Optional third arg: a tab to open before shooting.
+const NL = String.fromCharCode(10);
+const tab = process.argv[3];
+if (tab) {
+  await page.getByRole("tab", { name: new RegExp(tab, "i") }).click();
+  await page.waitForTimeout(1800);
+  const body = await page.locator('[role="tabpanel"]:not([hidden])').first().innerText();
+  console.log("tab body:", body.split(NL).filter(Boolean).slice(0, 12).join(" | "));
+}
 console.log("tabs:", (await page.locator('[role="tab"]').allInnerTexts()).join(" | "));
 console.log("header facts:", (await page.locator("dl dt").allInnerTexts()).join(", "));
 
