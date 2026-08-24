@@ -46,6 +46,8 @@ services:
       # deployment left at 0 attributes every browser request to nginx's address and turns every
       # per-IP rate limit into one shared bucket. 1 as shipped, 2 behind docker-compose.https.yml.
       TRUST_PROXY_HOPS: ${TRUST_PROXY_HOPS:-0}
+      # SSRF guard on admin-typed outbound URLs — see docker-compose.yml and utils/egress.ts.
+      ALLOW_PRIVATE_NETWORK_EGRESS: ${ALLOW_PRIVATE_NETWORK_EGRESS:-false}
       # Relocatable file storage / rotating file logs. Empty = unchanged behaviour. A path set
       # here must live inside a mounted volume, or it is written into the container's ephemeral
       # layer and lost on the next rebuild.

@@ -16,6 +16,10 @@ data:
   # env.ts defaults it to 0 and every per-IP rate limit behind the ingress becomes one bucket.
   TRUST_PROXY_HOPS: {{ .Values.env.trustProxyHops | quote }}
   RATE_LIMIT_PER_MINUTE: {{ .Values.env.rateLimitPerMinute | quote }}
+  # SSRF guard on the four admin-configurable outbound URLs — see values.yaml and
+  # apps/api/src/utils/egress.ts. A cluster deployment is the case where leaving this open
+  # matters most: the pod can reach the cloud metadata endpoint and every ClusterIP service.
+  ALLOW_PRIVATE_NETWORK_EGRESS: {{ .Values.env.allowPrivateNetworkEgress | quote }}
   TENANT_DB_CONNECTION_LIMIT: {{ .Values.env.tenantDbConnectionLimit | quote }}
   ACCESS_TOKEN_TTL: {{ .Values.env.accessTokenTtl | quote }}
   REFRESH_TOKEN_TTL_DAYS: {{ .Values.env.refreshTokenTtlDays | quote }}

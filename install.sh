@@ -211,6 +211,16 @@ if [ -f "$ENV_FILE" ]; then
     warn "  Add to .env and re-run:  TRUST_PROXY_HOPS=1   (2 with docker-compose.https.yml's Caddy;"
     warn "  add one more for anything else in front, e.g. Cloudflare). See docs/DEPLOYMENT.md."
   fi
+  # Same "has a default, so a missing one starts fine — which is exactly the problem" reasoning as
+  # TRUST_PROXY_HOPS above, except the default here is the SAFE value. The notice exists because an
+  # .env that predates this key gets the secure behaviour silently, and an operator running an
+  # on-prem box with internal webhook receivers needs to know why their deliveries went "blocked".
+  if ! grep -qE "^ALLOW_PRIVATE_NETWORK_EGRESS=" "$ENV_FILE"; then
+    log "ALLOW_PRIVATE_NETWORK_EGRESS is not set in .env — defaulting to false (private/loopback"
+    log "  targets are refused for outbound webhooks and the AI base URL). That is the safe value."
+    log "  If this box's webhook receivers genuinely live on a private address, add:"
+    log "    ALLOW_PRIVATE_NETWORK_EGRESS=true      (see docs/DEPLOYMENT.md)"
+  fi
   # MYSQL_ROOT_PASSWORD only ever gets written when a previous run chose the bundled-Docker-MySQL
   # path (see the else branch below) — its absence is exactly how a re-run recognizes "this
   # deployment uses its own external MySQL server" without asking again.
@@ -264,6 +274,33 @@ else
   if ! [[ "$TRUST_PROXY_HOPS_VALUE" =~ ^[0-9]+$ ]]; then
     warn "'$TRUST_PROXY_HOPS_VALUE' isn't a number — using 1 (this stack's shipped topology)."
     TRUST_PROXY_HOPS_VALUE=1
+  fi
+
+  # The other setting whose wrong value is silent, and the mirror image of the one above: this one
+  # is safe by DEFAULT and only needs turning on deliberately. Four features let a workspace admin
+  # type a URL the API then fetches, so with private egress allowed an admin can aim one at cloud
+  # instance metadata (169.254.169.254, which hands out IAM credentials) or an internal service —
+  # and the request originates inside the network. Refusing those is the default; an on-prem box
+  # whose webhook receivers are genuinely internal is the case that needs the switch.
+  #
+  # Phrased as "are your webhook targets internal" rather than naming the variable, because that is
+  # the question the operator can actually answer without reading utils/egress.ts.
+  printf '
+Will this deployment send webhooks to servers on your PRIVATE network
+'
+  printf '(an internal ticketing system on 10.x/192.168.x, or a local AI model on localhost)?
+'
+  printf '  Answer no if this box is reachable from the internet — it keeps the API from being
+'
+  printf '  used to reach your internal services. See docs/DEPLOYMENT.md.
+'
+  ALLOW_PRIVATE_EGRESS_ANSWER="$(ask "Allow private-network outbound requests? [y/N]: " "N")"
+  if [[ "$ALLOW_PRIVATE_EGRESS_ANSWER" =~ ^[Yy] ]]; then
+    ALLOW_PRIVATE_EGRESS_VALUE=true
+    warn "Private-network egress ENABLED. Turn it off (ALLOW_PRIVATE_NETWORK_EGRESS=false) if this"
+    warn "  box is ever exposed to the internet."
+  else
+    ALLOW_PRIVATE_EGRESS_VALUE=false
   fi
 
   printf '\nWhere should the database live?\n'
@@ -368,6 +405,13 @@ APP_BASE_URL=${APP_BASE_URL_VALUE}
 # Reverse-proxy hops in front of the API. Every per-IP rate limit reads req.ip, which Express
 # derives from X-Forwarded-For only when this is set. See docs/DEPLOYMENT.md.
 TRUST_PROXY_HOPS=${TRUST_PROXY_HOPS_VALUE}
+# May the API fetch private/loopback addresses? Four features let a workspace admin type a URL the
+# SERVER then requests (outbound webhooks, the Google Chat webhook, Bot Framework replies, the BYOK
+# AI base URL), so leaving this open lets an admin aim one at cloud instance metadata
+# (169.254.169.254 — IAM credentials) or an internal host FROM INSIDE your network. Written
+# explicitly rather than left to the code default so the value is visible and reviewable in .env.
+# Set true ONLY for an on-prem box whose webhook receivers really are internal.
+ALLOW_PRIVATE_NETWORK_EGRESS=${ALLOW_PRIVATE_EGRESS_VALUE}
 ANTHROPIC_API_KEY=
 MAIL_FROM=${MAIL_FROM_VALUE}
 SMTP_HOST=${SMTP_HOST_VALUE}
