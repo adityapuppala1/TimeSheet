@@ -16,10 +16,84 @@ const ALLOWED_TAGS = [
 const ALLOWED_ATTR = ["href", "rel", "target", "style"];
 
 /**
+ * The ONLY CSS this renderer will honour, mirroring `allowedStyles` in
+ * apps/api/src/utils/sanitize.ts — which permits `text-align` and nothing else, because
+ * `text-align` is the only style the editor's TextAlign extension actually emits.
+ *
+ * WHY A `style` ALLOW-LIST AND NOT JUST "style is harmless, it cannot run script":
+ * CSS does not need to run script to be an attack here. `position:fixed;inset:0;z-index:9999`
+ * inside a ticket comment — a field any colleague can write and every colleague renders — floats
+ * an invisible layer over the whole application, and the click it captures lands on whatever is
+ * underneath. That is UI redress, and this app's approve/reject/decide controls are exactly the
+ * one-click irreversible targets it is worth aiming at. The nginx `frame-ancestors 'none'` closes
+ * the same attack from OUTSIDE the origin; this closes it from inside a rendered field.
+ *
+ * WHY IT HAD TO CHANGE HERE SPECIFICALLY, when the server was already strict: the server's
+ * `sanitizeRichText` only runs on values that were SAVED through it. Two of this function's
+ * callers render content that never passes through it at all — `ui/ai-markdown.tsx` renders
+ * `marked.parse()` over MODEL output, and `pages/WhatsNew.tsx` renders release-note markdown
+ * fetched from a REMOTE GitHub API. For those, this is not defence in depth; it is the only
+ * sanitizer there is.
+ */
+const ALLOWED_STYLE_PROPERTIES = new Set(["text-align"]);
+const ALLOWED_TEXT_ALIGN = new Set(["left", "right", "center", "justify"]);
+
+/**
+ * Registered once at module load, not per call: `addHook` appends, so hooking inside `safeHtml`
+ * would stack a new copy of these on every render and turn a busy list into a leak.
+ */
+let hooksRegistered = false;
+
+/**
+ * Rebuilds a `style` attribute out of ONLY the declarations above, and returns "" when nothing
+ * survives. Built from an allow-list rather than by removing known-bad properties, because a
+ * denylist cannot be outflanked only by properties somebody already thought of.
+ */
+function filterStyleAttribute(style: string): string {
+  const kept: string[] = [];
+  for (const declaration of style.split(";")) {
+    const separator = declaration.indexOf(":");
+    if (separator === -1) continue;
+    const property = declaration.slice(0, separator).trim().toLowerCase();
+    const value = declaration.slice(separator + 1).trim().toLowerCase();
+    if (!ALLOWED_STYLE_PROPERTIES.has(property)) continue;
+    if (property === "text-align" && !ALLOWED_TEXT_ALIGN.has(value)) continue;
+    kept.push(`${property}: ${value}`);
+  }
+  return kept.join("; ");
+}
+
+function registerHooks() {
+  if (hooksRegistered) return;
+  hooksRegistered = true;
+
+  DOMPurify.addHook("afterSanitizeAttributes", (node) => {
+    if (!(node instanceof Element)) return;
+
+    const style = node.getAttribute("style");
+    if (style !== null) {
+      const filtered = filterStyleAttribute(style);
+      if (filtered) node.setAttribute("style", filtered);
+      else node.removeAttribute("style");
+    }
+
+    // Any link that opens a new context gets the full `rel`, matching the server's
+    // `transformTags` for anchors. `noopener` severs `window.opener` (reverse tabnabbing — the
+    // opened page rewriting this one's location to a credential-phishing copy); `noreferrer`
+    // additionally withholds the Referer, which matters because this app's `/uploads` URLs are
+    // signed capabilities and a leaked one IS read access to the file.
+    if (node.tagName === "A" && node.hasAttribute("target")) {
+      node.setAttribute("rel", "noopener noreferrer nofollow");
+    }
+  });
+}
+
+/**
  * Defense-in-depth: even though the server sanitizes on save, we re-sanitize on render.
  * Returns a value safe to pass to React's `dangerouslySetInnerHTML`.
  */
 export function safeHtml(html: string | null | undefined): { __html: string } {
+  registerHooks();
   const clean = DOMPurify.sanitize(html ?? "", {
     ALLOWED_TAGS,
     ALLOWED_ATTR,

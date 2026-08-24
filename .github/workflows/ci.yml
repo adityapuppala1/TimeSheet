@@ -117,6 +117,36 @@ jobs:
       - name: Unit tests (vitest)
         run: npm run test -w apps/api
 
+      # The web workspace's own unit tests. Currently one file, and it earns the step on its own:
+      # src/lib/safe-html.ts is the ONLY sanitizer for two of its callers (Ask AI's model-authored
+      # markdown, and the What's-new page's release notes fetched from GitHub), so a regression
+      # there is an XSS/UI-redress hole with nothing else behind it. Needs a DOM, which is why it
+      # cannot live in the api project — see apps/web/vitest.config.ts.
+      - name: Unit tests — web (vitest, jsdom)
+        run: npm run test -w apps/web
+
+      # The web container's nginx config is a TEMPLATE rendered at container start, so a malformed
+      # directive does not fail here — it crash-loops the pod at deploy time with the reason buried
+      # in container logs. Render it exactly as the image's entrypoint does and let nginx parse it.
+      #
+      # The `grep -q` is not padding: a bind-mount or path mistake silently leaves the image's own
+      # stock default.conf in place, and `nginx -t` then reports "syntax is ok" for a file that is
+      # not ours at all. Asserting a directive that only this template carries is what makes the
+      # step's success mean something. (That exact false pass happened once during review.)
+      - name: Validate the web nginx template
+        run: |
+          docker run --rm \
+            -e API_UPSTREAM=127.0.0.1:4000 -e CSP_CONNECT_SRC="" \
+            -v "$PWD/apps/web/nginx.conf.template:/etc/nginx/templates/default.conf.template:ro" \
+            --entrypoint sh nginx:1.27-alpine -c '
+              /docker-entrypoint.d/20-envsubst-on-templates.sh >/dev/null 2>&1
+              grep -q "Content-Security-Policy" /etc/nginx/conf.d/default.conf \
+                || { echo "::error::rendered conf is missing our CSP — the template was not applied"; exit 1; }
+              grep -q "frame-ancestors" /etc/nginx/conf.d/default.conf \
+                || { echo "::error::CSP rendered without frame-ancestors"; exit 1; }
+              nginx -t
+            '
+
       - name: Create CI databases
         run: |
           mysql -h127.0.0.1 -uroot -proot_ci_password -e "CREATE DATABASE IF NOT EXISTS ci_tenant; CREATE DATABASE IF NOT EXISTS ci_control;"
