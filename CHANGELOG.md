@@ -11,6 +11,185 @@ Nothing yet. The parser that feeds the in-app What's-new page ignores this secti
 version number, on purpose — an installation must never render history for a version that does not
 exist yet.
 
+## 3.2.0 — the requests this server makes on your behalf — 2026-08-24
+
+A security pass over the places where TimeSphere acts as a *client* rather than a server, plus the
+one browser origin that had never been anybody's responsibility. Nothing here changes how the app is
+used; two things change how it is configured, and both are called out below.
+
+### 🔐 An admin-typed URL can no longer point at your own network
+
+Four features let a workspace admin enter a URL that the **server** then fetches: outbound webhooks,
+the Google Chat incoming webhook, the Bot Framework reply endpoint, and the BYOK OpenAI-compatible
+base URL. All four accepted anything `new URL()` parses, and three were guarded only by
+`z.string().url()` — which is perfectly happy with
+`http://169.254.169.254/latest/meta-data/iam/security-credentials/`, the cloud metadata service that
+hands IAM credentials to anything that asks. The BYOK base URL had no URL validation at all.
+
+That matters because the API sits *inside* the deployment's trusted network, and in the hosted
+product a workspace admin is a **customer**, not the operator. Two of the four made it worse by
+returning the result: the AI model-list preview hands back the fetched body or the remote error text,
+and the webhook test and retry routes hand back `http_<status>` — a readable internal port scanner
+rather than a one-way probe.
+
+- **One choke point, not four patches.** `utils/egress.ts` refuses non-HTTP(S) schemes, URLs with
+  embedded credentials, and any target in private, loopback, link-local, CGNAT or reserved space.
+- **DNS is resolved, and every returned address must be public.** A hostname's text proves nothing:
+  `internal.example.com` with an `A` record of `127.0.0.1` passes any string check. A name that
+  resolves to one public and one private address is refused, because which one `fetch` picks is not
+  ours to decide.
+- **Checked again at every delivery, not just at save.** A target that was legitimate when it was
+  saved can resolve somewhere private later; validating once would trust a DNS record indefinitely.
+- **A refused webhook says so.** The delivery reports `blocked` with the reason on the webhook row
+  rather than failing silently — and a bad URL is now refused on the settings form, with a message
+  naming the problem, instead of being accepted and never working.
+- A known bound, stated rather than implied: a DNS-rebinding window remains between the check and
+  the socket. Closing it needs a pinned-IP agent, which is a larger change than this pass.
+
+### 🔐 The bot token stops being handed to whoever asks
+
+`sendTeamsMessage` posted to a URL taken from the inbound Teams activity body, with an app-only AAD
+token for the workspace's bot in the `Authorization` header. The inbound token *is* verified
+properly — signature against Microsoft's JWKS, issuer, and `aud` equal to this org's app id — but
+that signature covers the **token**, not the **body** it arrived with, and a Bot Framework JWT is a
+bearer token valid for about an hour. A replayed token with a rewritten `serviceUrl` therefore
+authenticated and redirected the credential. Microsoft's own guidance asks for this check.
+
+The reply target is now validated against the hosts Microsoft actually operates, **before** the token
+is minted — there is no reason to ask Azure for a credential we have already decided not to send. The
+allow-list is a mix of exact hosts and narrow suffixes rather than the tidier suffix-only list it
+started as, because Teams' commercial cloud uses `smba.trafficmanager.net`, and `trafficmanager.net`
+is shared Azure infrastructure where any subscriber can claim a label.
+
+### 🔒 The app's own pages now carry security headers
+
+`helmet()` was correctly configured on the API — which is what made this easy to miss, because the
+API returns JSON. The HTML document that actually runs the bundle is served off disk by the web
+container's nginx, which attached nothing: no CSP, no `X-Frame-Options`, no `Referrer-Policy`, no
+`Permissions-Policy`. The policy existed only on responses no browser renders.
+
+- **`frame-ancestors 'none'`** (plus `X-Frame-Options` for older browsers). The approve, reject and
+  change-decision controls are one-click and irreversible, which is exactly what a clickjacking
+  overlay aims at.
+- **`Referrer-Policy: strict-origin-when-cross-origin`**, which directly protects the signed,
+  expiring `/uploads` links — those URLs *are* the authorisation to read an attachment.
+- `X-Content-Type-Options`, `Cross-Origin-Opener-Policy`, and a `Permissions-Policy` that denies
+  everything except the camera face verification needs.
+- **HSTS is set on Caddy, not nginx**, with `includeSubDomains` (every tenant is a subdomain) and
+  deliberately without `preload`. There is no `upgrade-insecure-requests`: this repo supports
+  plain-HTTP LAN deployments on purpose, and both would break them.
+- Scoped to the static half only. At server level these would also stamp the proxied `/api` responses
+  that already carry helmet's own, and two CSP headers on one response is not additive — the browser
+  enforces the *intersection*.
+
+### 🔐 Public API keys can expire
+
+`ApiKey` had `revokedAt` but no `expiresAt`, so a key was valid forever unless somebody remembered to
+revoke it — the credential nobody revisits, pasted into a customer's Zapier account or a cron script.
+`McpCredential` already had this column for the same reason; this closes the inconsistency.
+
+Workspace Settings → Public API now offers 30 days, 90 days, 1 year or never when generating a key,
+defaulting to 90 days. The list shows each key's expiry and warns two weeks out; an expired key is
+badged as expired rather than looking identical to a working one.
+
+**Nothing that works today stops working.** The column is NULL for every existing key and NULL means
+"never expires" — back-dating an expiry onto live integrations during an upgrade would be the wrong
+direction for a mistake to fail in. An expired key is refused with the same message as an unknown or
+revoked one, so the endpoint cannot be used to learn that a key was once real.
+
+### 🎨 The dashboard's "This week" card says something now
+
+The three hero cards stretch to a shared height and this was the shortest, so it padded the
+difference with roughly 200px of nothing while the card beside it was dense. It also stopped at a
+bare status breakdown — four numbers with no context for the headline figure.
+
+It now carries three facts computed from data already on the client (no new query, nothing
+invented): **weekdays logged**, **average per logged day**, and the **busiest day** — plus one
+sentence naming where the week's hours actually sit, rather than leaving you to infer it from the
+list. "2 entries are waiting on a reviewer." "Everything so far is still a draft — submit it to start
+the review clock." The footer link is pinned to the bottom, which is what the existing `mt-auto` had
+been trying and failing to do inside a grid.
+
+### 🔬 The web workspace has unit tests now
+
+`src/lib/safe-html.ts` is a security control with no test behind it, because DOMPurify needs a DOM
+and `apps/api`'s vitest runs in `node`. A small `jsdom` project covers it with 27 assertions, and CI
+runs them.
+
+The suite was **mutation-tested before being trusted**: disabling the sanitizer hook fails 12 of the
+27. That check is the only evidence a passing security test means anything — and it earned its keep
+immediately. The first attempt used `happy-dom`, under which DOMPurify strips *every* element
+(`sanitize("<p>x</p>")` returns bare `"x"`), so assertions of the form "the dangerous thing is
+absent" passed beautifully while proving nothing at all.
+
+CI also now renders `apps/web/nginx.conf.template` through the image's own entrypoint and runs
+`nginx -t` against it — asserting the template was actually applied first, because a mount mistake
+silently validates nginx's stock config instead and reports "syntax is ok" for a file that is not
+ours.
+
+### 🐛 Three bugs that only running the thing could find
+
+Each of these passed every unit test and every review of the code. They were caught by driving the
+real server and the real browser, which is the whole argument for doing both.
+
+- **A bracketed IPv6 address walked straight past the new SSRF guard.**
+  `new URL("http://[::1]/").hostname` returns `"[::1]"` — *brackets included* — so `net.isIP()`
+  answered "not an IP", the IPv6 branch never ran, and `http://[::ffff:127.0.0.1]/hook` was accepted
+  with a 201 by the running server. Every bare-address assertion in the test file passed the whole
+  time; nothing was feeding the predicate the shape a URL parser actually produces. Fixed, and the
+  bracketed form is now pinned in tests alongside the bare one.
+- **The "expiry is already in the past" check never fired, on either credential.**
+  `middleware/validate.ts` parses the schema and **discards the result**, so `z.coerce.date()` never
+  writes the coerced Date back and the handler still holds an ISO *string*. Comparing
+  `"2020-01-01…" <= new Date()` takes the Date as a timestamp and coerces the string to `NaN`, and
+  every comparison with NaN is false — so an API key could be created already expired, authenticate
+  nothing, and send its owner debugging their integration instead of their typo. **The MCP
+  credential route had the identical dead guard and pre-dates this release**; both now go through one
+  `parseOptionalExpiry` helper.
+- **The Public API panel pushed a phone sideways.** Adding the lifetime picker gave that row a third
+  control, and a 390px viewport cannot seat Input + `w-32` + `w-36` + button on one line — 400px
+  against a 391px budget, caught by `responsive.spec.ts`'s "no tab widens the page" guard. Fixed with
+  `flex-wrap` plus `min-w-0` on the name field; `min-w-0` is the load-bearing half, because a flex
+  item will not shrink below its intrinsic content width without it.
+
+### 🩹 Two rules that lived in one caller and not the next
+
+- **The browser-side sanitiser now matches the server's.** `sanitizeRichText` restricts `style` to
+  `text-align` and forces `rel="noopener noreferrer nofollow"` on every link; the client's `safeHtml`
+  allowed `style` with no property restriction and `target` with no forced `rel`. CSS does not need
+  to run script to be an attack — `position:fixed;inset:0;z-index:9999` in a ticket comment floats an
+  invisible layer over the app. This mattered on the client specifically because two callers render
+  content the server sanitiser never sees: Ask AI's markdown (model output) and the What's-new page
+  (release notes fetched from GitHub).
+- **`doctor` now checks the outbound posture** and warns when private egress is enabled on a
+  deployment that looks internet-facing — the one combination that is almost certainly a mistake.
+
+### 🔧 Two configuration changes, and what each one asks of you
+
+- **`ALLOW_PRIVATE_NETWORK_EGRESS`** (default `false`). Leave it alone for anything internet-facing.
+  Set it `true` **only** on a self-hosted box whose webhook receivers genuinely live on the LAN, or
+  whose BYOK model runs on `localhost` — both are normal on-prem setups, which is why this is a
+  switch and not a hard block. Development permits private targets regardless, so local testing and
+  a local Ollama keep working with no configuration. `install.sh` / `install.ps1` now ask; the update
+  scripts explain the change in both directions; `doctor` flags the risky combination.
+- **`CSP_CONNECT_SRC`** (default empty). Only a **split** deployment needs it — SPA on a CDN or a
+  different hostname from the API. Set it to the same origin as `VITE_API_URL`, or the browser will
+  block every API call. Every topology this repo ships puts nginx in front of the API, where `'self'`
+  already covers it.
+
+### 🔎 What was tested and found clear
+
+Recorded because a negative result is only worth something if it says what was checked. No SQL
+injection (four raw-SQL calls, none reachable by user input), no mass assignment (every
+`data: req.body` site is `.strict()`), no missing route auth (all 497 handlers across 50 controllers,
+with the 14 routers lacking a blanket guard audited per route), no prototype pollution (every dynamic
+key write sits behind a `Set` allow-list), and **no exploitable ReDoS** — the linter's `slow-regex`
+warnings on the attacker-reachable paths were benchmarked rather than patched: `htmlToPlainText`
+handles 2 MB of spaces in 31 ms because the collapse pass runs first, and the email regex is linear
+in V8. Two `minimatch` ReDoS advisories in the lint toolchain were patched with a scoped override;
+the remaining `deepmerge-ts` advisories were traced to options-object merges that inbound email
+cannot reach, so no compatibility risk was taken for no security gain.
+
 ## 3.1.0 — the assistant that can act, and the phone that finally fits — 2026-08-20
 
 ### ✨ Ask AI can now do four things, not one

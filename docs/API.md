@@ -1889,6 +1889,25 @@ Every key is **org-wide** (not scoped to a subset of projects) and carries one o
 
 A `READ`-scope key calling a write endpoint gets `403`, not a silent no-op.
 
+### Key lifetime
+
+A key can carry an **expiry**, chosen when you generate it: 30 days, 90 days, 1 year, or never.
+90 days is the default offered, and "never" is a deliberate choice rather than the path of least
+resistance — a standing bearer token pasted into a Zapier account or a cron script is the
+credential nobody revisits, and `lastUsedAt` is the only signal it is still out there.
+
+Workspace Settings → Public API shows each key's expiry, warns two weeks out, and badges an expired
+key as expired rather than letting it look identical to a working one.
+
+Once past its expiry a key is refused with **401** and the *same* message an unknown or revoked key
+gets — `Invalid or revoked API key.` That is deliberate: a distinct "your key expired" would confirm
+to an unauthenticated caller that the key they hold was once real, which is the one thing a guesser
+actually wants to learn. If an integration starts 401-ing, check the key's row in Workspace Settings
+rather than inferring the reason from the response.
+
+Keys created before this field existed have **no expiry and keep working** — nothing that works
+today stops working because this was added. Revocation is unchanged and still immediate.
+
 ### Endpoints
 
 - `GET /tickets?status=&projectCode=&limit=50` — list tickets (newest first, capped at 200).

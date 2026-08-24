@@ -27,13 +27,26 @@ the seeded three as fixtures.
 ```bash
 npm run lint                        # typecheck api + web, then the SonarQube rules
 npm run build
-npm run test -w apps/api            # unit (mocked, no DB, ~1s)
+npm test                            # BOTH unit suites (api, then web) — mocked, no DB
+npm run test -w apps/api            # just the api tier (~1s)
+npm run test -w apps/web            # just the web tier (jsdom, ~2s)
 npm run test:integration -w apps/api # integration (real throwaway MySQL, ~13s)
 npm run test:e2e                    # Playwright (needs the dev servers, or it starts them)
 ```
 
 CI runs all of these. Run at least `lint`, `build`, and the unit tier locally — they're fast, and
 they catch most of what CI would.
+
+**Why there are two unit tiers.** `apps/api`'s vitest runs in `node`; `apps/web`'s runs in `jsdom`,
+because the one thing it currently covers — `src/lib/safe-html.ts` — is a sanitizer, and DOMPurify
+needs a DOM. That file is the *only* sanitizer for two of its callers (Ask AI's model-authored
+markdown, and the What's-new page's release notes fetched from GitHub), so it is a security control
+rather than a formatting helper.
+
+If you touch a security control, **mutation-test the suite before trusting it**: break the control on
+purpose and confirm the tests go red. Disabling `safe-html`'s hook fails 12 of its 27. This is not
+ceremony — the first version of that suite ran under `happy-dom`, where DOMPurify strips *every*
+element, so "the dangerous thing is absent" assertions passed while proving nothing at all.
 
 ### Reading `npm run lint`
 

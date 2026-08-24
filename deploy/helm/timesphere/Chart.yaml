@@ -14,7 +14,7 @@ version: 0.4.0
 # It had drifted to 2.1.0 while the repo shipped 2.4.0, which is the failure mode a label like
 # this has: nothing breaks, so nothing tells you. `kubectl get deploy -L app.kubernetes.io/version`
 # is a normal way to ask a cluster what it runs, and a stale answer there is worse than none.
-appVersion: "3.1.0"
+appVersion: "3.2.0"
 keywords:
   - timesheet
   - ticketing

@@ -4546,6 +4546,80 @@ introduced by the fix for the one before:
   description. Rewording the description first had changed nothing, which is what makes this worth
   recording: the instruction was not missing, it was too far away.
 
+### Closed from this branch (v3.2.0, 2026-08-24)
+
+Security pass. The findings all sit where the app acts as a **client** rather than a server, which
+is the part of the surface every prior review walked past — plus one browser origin that had never
+been anybody's responsibility.
+
+- [x] **Four admin-typed URLs were unrestricted server-side fetches.** Outbound webhooks, the Google
+  Chat webhook, Bot Framework replies and the BYOK AI base URL. Three were guarded only by
+  `z.string().url()`, which accepts `http://169.254.169.254/…`; the fourth had no URL validation at
+  all. Closed with one choke point (`utils/egress.ts`) that resolves DNS and requires every resolved
+  address to be public, re-checked at every delivery rather than only at save.
+- [x] **`update.ps1` omits the platform-admin login check** — carried open since the v2.4.0 review
+  under "Open — reported, not fixed". Now performed, advisory-only, matching `update.sh`'s wording
+  and its reasoning: it is the only layer that proves the control plane is serving rather than
+  merely migrated.
+- [x] **`ApiKey` had no expiry**, while `McpCredential` — the other standing bearer credential in the
+  product — has had one since 20260808230000. Closed with an additive, NULL-defaulted migration, a
+  duration picker defaulting to 90 days, and expiry enforcement at the auth boundary.
+- [x] **The SPA carried no security headers.** `helmet()` was correctly configured and decorating
+  JSON; nginx served the HTML with nothing. Now CSP (`frame-ancestors 'none'`),
+  `X-Frame-Options`, `Referrer-Policy`, `Permissions-Policy`, `X-Content-Type-Options` and
+  `Cross-Origin-Opener-Policy`, with HSTS on the Caddy terminator.
+- [x] **`nginx -t` and the header wire-check were run this time**, which the v3.1.0 pass could not do
+  (no Docker daemon). Both were exercised in the real `nginx:1.27-alpine` image: the template renders
+  through the entrypoint's `envsubst`, `nginx -t` passes, and all six headers were confirmed on an
+  actual `GET /` **and** on the SPA fallback route.
+- [x] **The Public API panel widened a phone past the viewport.** The regression this branch
+  introduced, caught by `responsive.spec.ts`'s "no tab widens the page" guard: the key-generation row
+  grew a third control (the lifetime picker) and a 390px viewport could not seat
+  Input + `w-32` + `w-36` + button on one line — 400px against a 391px budget. Fixed with
+  `flex-wrap` plus `min-w-0` on the name field, and the guard now passes. `min-w-0` is the
+  load-bearing half: a flex item will not shrink below its intrinsic content width without it, so
+  wrapping alone would not have been enough. Third instance of this exact shape in this repo.
+- [x] **The `tests/e2e` Playwright suite was run against this branch.** 369 passed, 8 failed, 15 skipped across all five viewport projects plus Firefox and WebKit (49.0m).
+  **One failure was a real regression from this branch and is fixed** — see below. The other seven were
+  traced rather than assumed: two reproduced identically on a clean `git stash` baseline at HEAD (which
+  also failed one test this branch passed), one failed 3/3 at baseline versus 2/3 here, one passed on an
+  isolated re-run, and the rest are the documented date-picker/clock and slow-browser families from the
+  v3.1.0 analysis.
+
+#### What live probing caught that the unit tests did not
+
+Worth recording as a method note, not just a fix. The SSRF guard shipped with 31 unit tests, all
+passing, including `isBlockedAddress("::ffff:127.0.0.1") === true`. Probing the **running server**
+then accepted `http://[::ffff:127.0.0.1]/h` with a 201.
+
+`new URL("http://[::1]/").hostname` returns `"[::1]"` — brackets included. `net.isIP` says that is
+not an address, so the IPv6 branch never ran. The predicate was correct the whole time; nothing was
+handing it the shape the URL parser actually produces, and every test fed it the bare form. Fixed
+with an `unbracket` step at both call sites, plus regression tests that assert on the bracketed form
+specifically.
+
+The general lesson, which this repo has now hit twice: a test that constructs the value itself
+verifies the predicate, not the path. The Bot Framework allow-list failed the same way in the
+opposite direction — it was tidy, suffix-only, and rejected every real Teams reply, because the
+commercial cloud uses `smba.trafficmanager.net`. One test with a real endpoint caught it before it
+shipped.
+
+#### Still open after this pass
+
+- [ ] **DNS rebinding remains possible in principle.** `assertPublicEgressTarget` resolves and
+  validates; `fetch` then resolves again. Closing the window needs an agent that pins the validated
+  IP for the connection. Documented in the file rather than left implicit, because the alternative is
+  someone later reading the guard as airtight.
+- [ ] **`helm lint` still could not run** — helm is not installed on this machine. Substituted, as in
+  the v2.4.0 pass: all 62 `.Values` references across the 14 templates were resolved against
+  `values.yaml` (every one resolves, including the new `env.allowPrivateNetworkEgress`), and both
+  compose files were validated with `docker compose config` supplying the required secrets.
+- [ ] **No DOM test environment exists for `apps/web`.** The client sanitiser hardening
+  (`safe-html.ts`) is the one change in this pass with no automated test behind it: `apps/api`'s
+  Vitest runs in `node`, and neither `jsdom` nor `happy-dom` is installed, while DOMPurify needs a
+  DOM. The style allow-list and the forced `rel` are verified by reading and by the build, not by a
+  test.
+
 ### Closed from this branch (v3.1.0, 2026-08-20)
 
 - [x] **Ask AI has one action** — now four. See below; the decision that was unmade is made.
