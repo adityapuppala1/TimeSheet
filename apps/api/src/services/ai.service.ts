@@ -45,6 +45,7 @@ import { assertToolAllowed, sanitiseToolResult, visibleTools, type AccessibleToo
 import { requireTenantContext } from "../config/tenant-context.js";
 import { AppError } from "../middleware/error.js";
 import { decryptSecret } from "../utils/encryption.js";
+import { assertPublicEgressTarget } from "../utils/egress.js";
 import { resolvePrompt } from "./ai-prompt.service.js";
 import { getEffectiveAiBudgetCeiling } from "./plan-limits.service.js";
 import { htmlToPlainText, htmlToText, plainTextToRichText } from "../utils/sanitize.js";
@@ -190,6 +191,12 @@ async function callOpenAICompatible(settings: AISettingsRow, apiKey: string, par
   if (!settings.baseUrl) {
     throw new AppError(503, "AI features are not configured — set a base URL for the selected provider in workspace AI settings.");
   }
+  // SSRF gate on the admin-supplied BYOK endpoint — see utils/egress.ts. Note that a self-hosted
+  // Ollama/LM Studio on localhost is a FIRST-CLASS use of this field (see `aiProviderPresets`),
+  // which is exactly why the guard permits private targets in development and behind
+  // ALLOW_PRIVATE_NETWORK_EGRESS rather than blocking them outright: the goal is to stop a
+  // hosted tenant reaching the platform's internal network, not to break on-prem local models.
+  await assertPublicEgressTarget(settings.baseUrl, "The AI provider base URL");
   // Local providers (Ollama, LM Studio) don't require a real key, but the SDK still wants a non-empty string.
   const client = new OpenAI({ apiKey: apiKey || "not-needed", baseURL: settings.baseUrl, timeout: MODEL_CALL_TIMEOUT_MS, maxRetries: 1 });
 
@@ -263,6 +270,13 @@ async function callOpenAICompatible(settings: AISettingsRow, apiKey: string, par
  * without provider-specific branching.
  */
 export async function listAvailableOpenAICompatibleModels(baseUrl: string, apiKey: string): Promise<string[]> {
+  // THE SHARPEST SSRF EDGE IN THE APP, which is why the guard is repeated here rather than left
+  // to the caller: `POST /settings/ai/available-models` passes a `baseUrl` straight out of the
+  // REQUEST BODY (it previews an unsaved draft, so it cannot use the stored value), and its
+  // handler returns either the fetched list or the remote error message to the caller. That is a
+  // read-capable probe of the deployment's internal network with a readable oracle, not a blind
+  // one — worth the duplicated line.
+  await assertPublicEgressTarget(baseUrl, "The AI provider base URL");
   const client = new OpenAI({ apiKey: apiKey || "not-needed", baseURL: baseUrl });
   const response = await client.models.list();
   return response.data.map((m) => m.id).sort();

@@ -14,6 +14,7 @@
  */
 import crypto from "node:crypto";
 import { prisma } from "../config/prisma.js";
+import { assertPublicEgressTarget } from "../utils/egress.js";
 
 export const WEBHOOK_EVENTS = [
   "ticket.created",
@@ -36,7 +37,7 @@ function sign(secret: string, rawBody: string): string {
 }
 
 export interface DeliveryOutcome {
-  /** "delivered" | "http_<status>" | "failed" (network error/timeout). */
+  /** "delivered" | "http_<status>" | "failed" (network error/timeout) | "blocked" (SSRF guard). */
   status: string;
   ok: boolean;
   error?: string;
@@ -46,6 +47,22 @@ export interface DeliveryOutcome {
  *  forget dispatch below and the retry worker, so "what counts as success" can never drift
  *  between the two call sites. */
 export async function attemptWebhookDelivery(url: string, secret: string, event: string, body: string): Promise<DeliveryOutcome> {
+  // SSRF gate, HERE rather than only in the settings schema that saved the URL — this one
+  // function is the single choke point every delivery path goes through (initial dispatch, the
+  // retry worker, the admin's manual retry, the test button), so a target that was legitimate
+  // when saved and now resolves somewhere private is re-checked on every attempt. Validating
+  // only on save would trust a DNS record indefinitely.
+  //
+  // Returned as an OUTCOME, not thrown: this runs inside a detached `Promise.allSettled` for
+  // real events, where a throw would be an unhandled rejection, and the admin needs to SEE why
+  // nothing is arriving — "blocked" plus the reason lands on the webhook row and the delivery
+  // row exactly like any other failure.
+  try {
+    await assertPublicEgressTarget(url, "This webhook URL");
+  } catch (error) {
+    return { status: "blocked", ok: false, error: (error as Error).message.slice(0, 500) };
+  }
+
   const signature = sign(secret, body);
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), DELIVERY_TIMEOUT_MS);

@@ -38,6 +38,7 @@ import { getGlobalTicketSettings } from "../services/ticket.service.js";
 import { describeMcpCatalogue, generateMcpToken, getGlobalMcpSettings, updateGlobalMcpSettings } from "../services/mcp.service.js";
 import { MCP_TOOLS } from "../services/mcp-tools.js";
 import { decryptSecret, encryptSecret } from "../utils/encryption.js";
+import { egressUrl } from "../utils/egress.js";
 import { getTransportStatus, invalidateMailTransportCache } from "../services/mail.service.js";
 import { attemptWebhookDelivery, nextRetryAt, WEBHOOK_EVENTS } from "../services/webhook-dispatch.service.js";
 import {
@@ -383,7 +384,10 @@ export const aiSettingsSchema = z.object({
       confidenceThreshold: z.coerce.number().min(0).max(1).optional(),
       monthlyBudgetUsd: z.coerce.number().min(0).optional().nullable(),
       provider: z.enum(["ANTHROPIC", "OPENAI_COMPATIBLE"]).optional(),
-      baseUrl: z.string().max(300).optional().nullable(),
+      // SSRF-validated at save time so a bad endpoint is refused on the form rather than
+      // silently failing every later model call — see utils/egress.ts. Empty string stays legal:
+      // it is how the UI CLEARS a configured endpoint.
+      baseUrl: egressUrl(300).or(z.literal("")).optional().nullable(),
       // Empty string means "clear the stored key" (switch back to the env var fallback); a
       // non-empty string is encrypted before it ever touches the database. Omitting the field
       // entirely leaves whatever key is already stored untouched.
@@ -479,7 +483,7 @@ const availableModelsSchema = z.object({
       // to what's already saved" convention as /mail/test-connection above. Anthropic is
       // deliberately not handled here: its model list is small/stable and already a fixed
       // dropdown in the UI (packages/shared's `aiModels`), not something worth a live API call.
-      baseUrl: z.string().max(300).optional(),
+      baseUrl: egressUrl(300).or(z.literal("")).optional(),
       apiKey: z.string().max(2000).optional()
     })
     .strict()
@@ -1008,17 +1012,56 @@ settingsRouter.get("/api-keys", requireSuperAdmin, async (_req, res) => {
       lastUsedAt: true,
       createdAt: true,
       revokedAt: true,
+      expiresAt: true,
       createdBy: { select: { id: true, name: true } }
     }
   });
   res.json(keys);
 });
 
+/**
+ * Reads an optional `expiresAt` off a request body as a real `Date`, refusing one already past.
+ *
+ * WHY THIS EXISTS RATHER THAN AN INLINE COMPARISON (a real, previously-shipping bug — do not
+ * inline this again): `middleware/validate.ts` runs `schema.parse({ body, params, query })` and
+ * DISCARDS the result. Zod's `z.coerce.date()` therefore validates the value but never writes the
+ * coerced Date back, so `req.body.expiresAt` is still the raw ISO **string** in the handler.
+ *
+ * `"2020-01-01T00:00:00.000Z" <= new Date()` then does not compare dates at all: a relational
+ * operator takes the Date with hint "number" (a timestamp) and coerces the string to `NaN`, and
+ * every comparison involving NaN is false. The guard was dead code that always passed — which is
+ * how a key could be created already expired. It then authenticates nothing, and the admin debugs
+ * their integration instead of their typo.
+ *
+ * Returns `null` for "not supplied", which is what both callers store to mean "never expires".
+ */
+export function parseOptionalExpiry(value: unknown): Date | null {
+  if (value === undefined || value === null || value === "") return null;
+  const when = value instanceof Date ? value : new Date(String(value));
+  if (Number.isNaN(when.getTime())) throw new AppError(422, "That expiry isn't a valid date.");
+  if (when <= new Date()) throw new AppError(422, "That expiry is already in the past.");
+  return when;
+}
+
 const createApiKeySchema = z.object({
-  body: z.object({ name: z.string().min(1).max(120), scope: z.enum(["READ", "WRITE"]).default("READ") })
+  body: z
+    .object({
+      name: z.string().min(1).max(120),
+      scope: z.enum(["READ", "WRITE"]).default("READ"),
+      /** Absolute expiry. Omitted means it never expires, which is the pre-existing behaviour and
+       *  what every key issued before this field existed does — same shape and same reasoning as
+       *  the MCP credential's `expiresAt` below. */
+      expiresAt: z.coerce.date().optional()
+    })
+    .strict()
 });
 
 settingsRouter.post("/api-keys", requireSuperAdmin, validate(createApiKeySchema), async (req, res) => {
+  // Refused, not silently dropped: a key created already-expired would authenticate nothing, and
+  // the admin would debug their integration rather than their typo. See `parseOptionalExpiry` for
+  // why this cannot be an inline comparison against `req.body.expiresAt`.
+  const keyExpiresAt = parseOptionalExpiry(req.body.expiresAt);
+
   const plaintext = `tsk_${crypto.randomBytes(24).toString("hex")}`;
   const keyHash = crypto.createHash("sha256").update(plaintext).digest("hex");
   const created = await prisma.apiKey.create({
@@ -1027,13 +1070,18 @@ settingsRouter.post("/api-keys", requireSuperAdmin, validate(createApiKeySchema)
       scope: req.body.scope,
       keyHash,
       keyPrefix: plaintext.slice(0, 12),
-      createdById: req.user!.id
+      createdById: req.user!.id,
+      expiresAt: keyExpiresAt
     }
   });
-  await audit(req.user!.id, "settings.api_key_created", "ApiKey", created.id, { name: created.name, scope: created.scope });
+  await audit(req.user!.id, "settings.api_key_created", "ApiKey", created.id, {
+    name: created.name,
+    scope: created.scope,
+    expiresAt: created.expiresAt
+  });
   // Same one-time-plaintext-reveal pattern as /security-ingestion/rotate-token above — this
   // response is the only place the full key is ever visible again.
-  res.status(201).json({ id: created.id, name: created.name, scope: created.scope, key: plaintext });
+  res.status(201).json({ id: created.id, name: created.name, scope: created.scope, expiresAt: created.expiresAt, key: plaintext });
 });
 
 settingsRouter.delete("/api-keys/:id", requireSuperAdmin, async (req, res) => {
@@ -1158,9 +1206,11 @@ settingsRouter.post("/mcp/credentials", requireSuperAdmin, validate(createMcpCre
     const unknown = requestedTools.filter((n) => !known.has(n));
     if (unknown.length) throw new AppError(422, `Unknown MCP tool(s): ${unknown.join(", ")}`);
   }
-  if (req.body.expiresAt && (req.body.expiresAt as Date) <= new Date()) {
-    throw new AppError(422, "That expiry is already in the past.");
-  }
+  // Was the same dead comparison as the API-key route above — see `parseOptionalExpiry`. This one
+  // PRE-DATES the API-key expiry work; fixed here because the two must not disagree about what an
+  // expiry means, and because an MCP credential minted already-expired is the worse of the two
+  // failures: it acts as a named person, so its silence looks like a permissions problem.
+  const mcpExpiresAt = parseOptionalExpiry(req.body.expiresAt);
 
   const { plaintext, tokenHash, tokenPrefix } = generateMcpToken();
   const created = await prisma.mcpCredential.create({
@@ -1171,7 +1221,7 @@ settingsRouter.post("/mcp/credentials", requireSuperAdmin, validate(createMcpCre
       userId: target.id,
       createdById: req.user!.id,
       allowedTools: requestedTools.length ? requestedTools : Prisma.DbNull,
-      expiresAt: (req.body.expiresAt as Date | undefined) ?? null
+      expiresAt: mcpExpiresAt
     }
   });
   await audit(req.user!.id, "settings.mcp_credential_created", "McpCredential", created.id, {
@@ -1224,7 +1274,11 @@ settingsRouter.get("/webhooks", requireSuperAdmin, async (_req, res) => {
 const createWebhookSchema = z.object({
   body: z.object({
     name: z.string().min(1).max(120),
-    url: z.string().url(),
+    // `egressUrl` rather than `z.string().url()`: the latter accepts file://, http://localhost
+    // and http://169.254.169.254 alike, which is how this field became an SSRF surface. 500 to
+    // match the OutboundWebhook.url column, so an over-long URL is refused here instead of
+    // truncating at the INSERT.
+    url: egressUrl(500),
     events: z.array(z.enum(WEBHOOK_EVENTS)).min(1)
   })
 });

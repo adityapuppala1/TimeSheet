@@ -2503,6 +2503,17 @@ model ApiKey {
   createdBy   User?     @relation(fields: [createdById], references: [id], onDelete: SetNull)
   createdAt   DateTime  @default(now())
   revokedAt   DateTime?
+  /// When this key stops working on its own.
+  ///
+  /// NULL means it never expires, which is what every key issued before this column existed
+  /// does — expiring them retroactively would break working integrations on upgrade with no
+  /// warning at all. New keys are offered an expiry at creation.
+  ///
+  /// WHY IT MATTERS MORE THAN revokedAt: revoking requires somebody to remember. A long-lived
+  /// bearer token pasted into a customer's Zapier account or a cron script is precisely the
+  /// credential nobody revisits, and `lastUsedAt` is the only signal it is still out there.
+  /// Same argument (and the same nullable shape) as McpCredential.expiresAt.
+  expiresAt   DateTime?
 
   @@index([keyHash])
 }
