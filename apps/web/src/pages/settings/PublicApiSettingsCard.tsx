@@ -135,6 +135,56 @@ function WebhookDeliveries({ webhookId, readOnly }: { webhookId: string; readOnl
   );
 }
 
+/**
+ * How long a new key should live.
+ *
+ * OFFERED AS A DURATION, NOT A DATE PICKER, on purpose: the question an admin is actually asking
+ * is "how long should this integration keep working", and a calendar makes them do arithmetic to
+ * answer it. The absolute instant is computed here and sent as `expiresAt`, because the SERVER must
+ * own what the date means — a duration sent to the API would be re-interpreted against the server's
+ * clock and could land somewhere the admin never saw.
+ *
+ * "Never" is kept and is NOT the default. It has to exist: every key issued before expiry existed
+ * is non-expiring, and some integrations genuinely are permanent fixtures. But defaulting to it is
+ * what made this a finding in the first place, so the default is 90 days and choosing forever is a
+ * deliberate act.
+ */
+const KEY_LIFETIMES = [
+  { value: "30", label: "Expires in 30 days" },
+  { value: "90", label: "Expires in 90 days" },
+  { value: "365", label: "Expires in 1 year" },
+  { value: "never", label: "Never expires" }
+] as const;
+
+type KeyLifetime = (typeof KEY_LIFETIMES)[number]["value"];
+
+/** `undefined` for "never" — the field is omitted from the request rather than sent as null. */
+function expiryFromLifetime(lifetime: KeyLifetime): string | undefined {
+  if (lifetime === "never") return undefined;
+  const expiry = new Date();
+  expiry.setDate(expiry.getDate() + Number(lifetime));
+  return expiry.toISOString();
+}
+
+/**
+ * The at-a-glance state of a key's expiry, in the list.
+ *
+ * An EXPIRED key still appears here — it is not revoked, so it is still a row in the table, and
+ * silently rendering it identically to a working one is how someone spends an afternoon debugging
+ * an integration that the server is refusing on purpose. The 14-day warning exists so that
+ * afternoon is pre-empted rather than merely explained afterwards.
+ */
+function expiryBadge(expiresAt: string | null) {
+  if (!expiresAt) return null;
+  const when = new Date(expiresAt);
+  const days = Math.ceil((when.getTime() - Date.now()) / 86_400_000);
+  if (days <= 0) return <Badge variant="destructive">Expired</Badge>;
+  if (days <= 14) return <Badge variant="warning">Expires in {days}d</Badge>;
+  return (
+    <span className="text-xs text-muted-foreground">Expires {when.toLocaleDateString()}</span>
+  );
+}
+
 export function PublicApiSettingsCard({ readOnly }: { readOnly: boolean }) {
   const queryClient = useQueryClient();
   const keys = useQuery({ queryKey: ["settings", "api-keys"], queryFn: settingsApi.listApiKeys });
@@ -142,10 +192,18 @@ export function PublicApiSettingsCard({ readOnly }: { readOnly: boolean }) {
 
   const [newKeyName, setNewKeyName] = useState("");
   const [newKeyScope, setNewKeyScope] = useState<ApiKeyScope>("READ");
+  const [newKeyLifetime, setNewKeyLifetime] = useState<KeyLifetime>("90");
   const [revealedKey, setRevealedKey] = useState<string | null>(null);
 
   const createKey = useMutation({
-    mutationFn: () => settingsApi.createApiKey({ name: newKeyName.trim(), scope: newKeyScope }),
+    mutationFn: () =>
+      settingsApi.createApiKey({
+        name: newKeyName.trim(),
+        scope: newKeyScope,
+        // Omitted entirely for "never" — the server reads a missing field as "no expiry", which is
+        // also what every key issued before expiry existed carries.
+        expiresAt: expiryFromLifetime(newKeyLifetime)
+      }),
     onSuccess: (created) => {
       setRevealedKey(created.key);
       setNewKeyName("");
@@ -227,6 +285,7 @@ export function PublicApiSettingsCard({ readOnly }: { readOnly: boolean }) {
                     <span className="font-medium">{k.name}</span>
                     <code className="text-xs text-muted-foreground">{k.keyPrefix}…</code>
                     <Badge variant={k.scope === "WRITE" ? "warning" : "muted"}>{k.scope}</Badge>
+                    {expiryBadge(k.expiresAt)}
                     <span className="ml-auto text-xs text-muted-foreground">
                       {k.lastUsedAt ? `Last used ${new Date(k.lastUsedAt).toLocaleDateString()}` : "Never used"}
                     </span>
@@ -241,14 +300,34 @@ export function PublicApiSettingsCard({ readOnly }: { readOnly: boolean }) {
                   <p className="py-2 text-center text-sm text-muted-foreground">No active API keys yet.</p>
                 )}
               </div>
+              {/* `flex-wrap`, and the name field allowed to shrink, because this row grew a third
+                  control (the lifetime picker) and a 390px phone cannot seat Input + w-32 + w-36 +
+                  button on one line — it pushed Workspace Settings 9px past the viewport, which is
+                  exactly what responsive.spec.ts's "no tab widens the page" guard exists to catch.
+                  `min-w-0` on the input is the load-bearing half: a flex item refuses to shrink
+                  below its intrinsic content width without it, so wrapping alone would not have been
+                  enough. Same fix, same reason, as the 3.1.0 maintenance-tile overflow. */}
               {!readOnly && (
-                <div className="flex gap-2">
-                  <Input value={newKeyName} onChange={(e) => setNewKeyName(e.target.value)} placeholder="Key name (e.g. Zapier)" />
+                <div className="flex flex-wrap gap-2">
+                  <Input
+                    className="min-w-0 flex-1 basis-48"
+                    value={newKeyName}
+                    onChange={(e) => setNewKeyName(e.target.value)}
+                    placeholder="Key name (e.g. Zapier)"
+                  />
                   <Select value={newKeyScope} onValueChange={(v) => setNewKeyScope(v as ApiKeyScope)}>
                     <SelectTrigger className="w-32"><SelectValue /></SelectTrigger>
                     <SelectContent>
                       {apiKeyScopes.map((s) => (
                         <SelectItem key={s} value={s}>{s}</SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                  <Select value={newKeyLifetime} onValueChange={(v) => setNewKeyLifetime(v as KeyLifetime)}>
+                    <SelectTrigger className="w-36"><SelectValue /></SelectTrigger>
+                    <SelectContent>
+                      {KEY_LIFETIMES.map((l) => (
+                        <SelectItem key={l.value} value={l.value}>{l.label}</SelectItem>
                       ))}
                     </SelectContent>
                   </Select>

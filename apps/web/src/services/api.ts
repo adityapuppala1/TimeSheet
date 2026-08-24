@@ -1921,7 +1921,7 @@ export const settingsApi = {
   // Public API keys & outbound webhooks — see docs/ROADMAP.md's "Public REST API + outbound
   // webhooks" theme. Both "create" endpoints return the plaintext secret exactly once.
   listApiKeys: async () => (await api.get<ApiKeyRow[]>("/settings/api-keys")).data,
-  createApiKey: async (payload: { name: string; scope: ApiKeyScope }) =>
+  createApiKey: async (payload: { name: string; scope: ApiKeyScope; expiresAt?: string }) =>
     (await api.post<ApiKeyCreated>("/settings/api-keys", payload)).data,
   revokeApiKey: async (id: string) => api.delete(`/settings/api-keys/${id}`),
 
@@ -1994,12 +1994,15 @@ export interface ApiKeyRow {
   lastUsedAt: string | null;
   createdAt: string;
   revokedAt: string | null;
+  /** Null means it never expires — every key issued before expiry existed reads that way. */
+  expiresAt: string | null;
   createdBy: { id: string; name: string } | null;
 }
 export interface ApiKeyCreated {
   id: string;
   name: string;
   scope: ApiKeyScope;
+  expiresAt: string | null;
   /** Shown exactly once — the server never returns it again after this response. */
   key: string;
 }

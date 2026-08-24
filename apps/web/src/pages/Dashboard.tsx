@@ -317,6 +317,7 @@ export function Dashboard() {
             weekHours={derived.weekHours}
             byStatus={derived.weekByStatus}
             pendingCount={derived.pendingCount}
+            trend={derived.trend}
           />
         </HeroCard>
         <HeroCard delay={0.05}>
@@ -432,6 +433,20 @@ const WEEK_SEGMENTS = [
   { key: "DRAFT", label: "Draft", bar: "bg-muted-foreground/40", dot: "bg-muted-foreground/40" }
 ] as const;
 
+/**
+ * One honest sentence about where the week's hours actually sit — computed, never invented, the
+ * same rule the rhythm card's insight strip follows. Extracted from the component so the branching
+ * lives in a plain function instead of a nested ternary inside JSX.
+ */
+function weekNote(weekHours: number, pendingCount: number, byStatus: Record<string, number>): string {
+  if (weekHours === 0) return "No hours logged yet this week — your entries will show up here as you add them.";
+  if (pendingCount > 0) return `${pendingCount} ${pendingCount === 1 ? "entry is" : "entries are"} waiting on a reviewer.`;
+  if ((byStatus.DRAFT ?? 0) === weekHours) return "Everything so far is still a draft — submit it to start the review clock.";
+  const approvedShare = Math.round(((byStatus.APPROVED ?? 0) / weekHours) * 100);
+  if (approvedShare >= 100) return "Every hour this week is approved. Nothing outstanding.";
+  return `${approvedShare}% of this week's hours are approved.`;
+}
+
 /** Trackline's "Overall Tasks" card, for hours: headline number + a segmented STATUS bar.
  *  Every segment also gets a labeled value row below — state is never color-alone (the
  *  green↔amber pair sits in the CVD warn band, which is only acceptable with exactly this
@@ -440,16 +455,28 @@ function WeekAtAGlance({
   loading,
   weekHours,
   byStatus,
-  pendingCount
+  pendingCount,
+  trend
 }: {
   loading: boolean;
   weekHours: number;
   byStatus: Record<string, number>;
   pendingCount: number;
+  /** The same per-weekday series the rhythm chart uses — read here for the insight rows so this
+   *  card fills its height with computed facts rather than empty space. Never a second query. */
+  trend: Array<{ day: string; hours: number }>;
 }) {
   if (loading) return <Skeleton className="h-full min-h-56 w-full" />;
   const total = weekHours || 1;
   const segments = WEEK_SEGMENTS.map((s) => ({ ...s, hours: byStatus[s.key] ?? 0 })).filter((s) => s.hours > 0);
+
+  // ── Insights, all derived from data already on this card — nothing invented, nothing fetched.
+  // This block exists because the card is the shortest of the three in its row and stretched to a
+  // tall empty gap; filling it with real facts is better than padding it with whitespace.
+  const daysLogged = trend.filter((d) => d.hours > 0).length;
+  const busiest = trend.reduce((best, d) => (d.hours > best.hours ? d : best), { day: "—", hours: 0 });
+  const dailyAvg = daysLogged > 0 ? weekHours / daysLogged : 0;
+  const note = weekNote(weekHours, pendingCount, byStatus);
 
   return (
     <Card className="h-full">
@@ -460,7 +487,7 @@ function WeekAtAGlance({
         </CardTitle>
         <CardDescription>Your logged hours by state, Monday to today.</CardDescription>
       </CardHeader>
-      <CardContent className="grid gap-4">
+      <CardContent className="flex flex-col gap-4">
         <div className="flex items-baseline justify-between">
           <p className="text-3xl font-black tabular-nums tracking-tight">{weekHours.toFixed(1)}h</p>
           {pendingCount > 0 && <Badge variant="warning">{pendingCount} awaiting review</Badge>}
@@ -489,7 +516,26 @@ function WeekAtAGlance({
           ))}
         </div>
 
-        <Link to="/app/history" className="mt-auto inline-flex items-center gap-1 text-sm font-semibold text-primary hover:underline">
+        {/* Insight band — fills the height the card was padding with blank space, and gives the
+            headline number some context (a busiest day and a daily average) it lacked. */}
+        <div className="mt-1 grid grid-cols-3 gap-2 border-t border-border pt-4">
+          <div>
+            <p className="text-lg font-bold tabular-nums leading-none">{daysLogged}<span className="text-sm font-medium text-muted-foreground">/5</span></p>
+            <p className="mt-1 text-xs text-muted-foreground">weekdays logged</p>
+          </div>
+          <div>
+            <p className="text-lg font-bold tabular-nums leading-none">{dailyAvg.toFixed(1)}h</p>
+            <p className="mt-1 text-xs text-muted-foreground">avg / logged day</p>
+          </div>
+          <div>
+            <p className="text-lg font-bold tabular-nums leading-none">{busiest.hours > 0 ? busiest.day : "—"}</p>
+            <p className="mt-1 text-xs text-muted-foreground">busiest{busiest.hours > 0 ? ` · ${busiest.hours.toFixed(1)}h` : ""}</p>
+          </div>
+        </div>
+
+        <p className="text-sm text-muted-foreground">{note}</p>
+
+        <Link to="/app/history" className="mt-auto inline-flex items-center gap-1 pt-1 text-sm font-semibold text-primary hover:underline">
           View history <ArrowRight className="h-3.5 w-3.5" />
         </Link>
       </CardContent>
