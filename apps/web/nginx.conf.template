@@ -37,5 +37,72 @@ server {
 
   location / {
     try_files $uri $uri/ /index.html;
+
+    # ── BROWSER SECURITY HEADERS ──────────────────────────────────────────────────────────────
+    #
+    # WHY THEY LIVE HERE AND NOT IN THE API: `helmet()` in apps/api/src/app.ts decorates API
+    # responses, which are JSON. Every header below governs a DOCUMENT — and the document is
+    # served by this nginx, straight off disk, which until now attached nothing at all. So the
+    # app had a Content-Security-Policy that applied only to responses no browser ever renders,
+    # and none on the HTML that actually executes the bundle.
+    #
+    # WHY `location /` AND NOT THE SERVER BLOCK: `add_header` at server level would also stamp
+    # the proxied /api/ and /uploads/ responses, which already carry helmet's own versions. Two
+    # CSP headers on one response is not additive — the browser enforces the INTERSECTION of
+    # both policies, so the stricter API policy would silently start breaking the SPA. Keeping
+    # these on the static half means each origin surface has exactly one policy.
+    #
+    # `always` on every one: without it nginx attaches headers only to 2xx/3xx, so a 404 or a
+    # 500 — the responses most likely to be reflecting something back — would go out bare.
+
+    # frame-ancestors 'none' is the load-bearing directive, and X-Frame-Options below is its
+    # pre-CSP2 twin for older browsers. This product's approval and change-decision screens are
+    # one-click, irreversible actions, which is precisely the shape a UI-redress (clickjacking)
+    # overlay monetises: iframe the real app, float an invisible "Approve" under the visitor's
+    # cursor. Nothing in TimeSphere is designed to be embedded, so the answer is "never".
+    #
+    # 'wasm-unsafe-eval' is required, not defensive: face verification runs @vladmandic/human in
+    # the browser (lib/use-face-tracker.ts) to help the user aim the camera, and instantiating
+    # WebAssembly counts as script evaluation under CSP. It permits WASM compilation ONLY — it
+    # does NOT re-enable eval() or new Function(), which is why it is here instead of the
+    # 'unsafe-eval' that would otherwise be reached for.
+    #
+    # 'unsafe-inline' on style-src covers the inline `style` attributes Radix UI and Recharts set
+    # on elements at runtime. Style attributes cannot carry script, so this is not the hole the
+    # same keyword would be on script-src — and script-src deliberately does NOT have it.
+    #
+    # blob: on img-src/media-src is the webcam capture preview and every client-side export
+    # (URL.createObjectURL); data: is the canvas stills the face capture produces.
+    #
+    # connect-src is templated because a SPLIT deployment (SPA on a CDN, API on its own
+    # hostname — see VITE_API_URL in apps/web/Dockerfile) talks cross-origin, and a hardcoded
+    # 'self' would break exactly that topology while looking correct in every other one. Empty
+    # by default, which is the same-origin case both compose files and the Helm chart produce.
+    #
+    # NO upgrade-insecure-requests: this repo deliberately supports plain-http LAN deployments
+    # (see APP_BASE_URL="auto" in config/env.ts), and that directive would rewrite every request
+    # on such a box to https and break it. HSTS belongs on the TLS terminator instead — see
+    # deploy/caddy/Caddyfile.domain.
+    add_header Content-Security-Policy "default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; connect-src 'self' ${CSP_CONNECT_SRC}; worker-src 'self' blob:; media-src 'self' blob:; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'" always;
+    add_header X-Frame-Options "DENY" always;
+
+    # The SPA serves user-supplied filenames nowhere, but it does serve a JS bundle — and a
+    # browser that sniffs a mistyped Content-Type into something executable is the whole reason
+    # this header exists. Matches what the API already sends on /uploads.
+    add_header X-Content-Type-Options "nosniff" always;
+
+    # Directly protects a capability: utils/file-url.ts mints signed, expiring /uploads URLs that
+    # ARE the authorisation to read an attachment. A full Referer on an outbound click would leak
+    # one to a third party. This is the modern browser default, pinned so it does not depend on
+    # the visitor's browser being new enough to have it.
+    add_header Referrer-Policy "strict-origin-when-cross-origin" always;
+
+    # camera=(self) is NOT boilerplate — removing it disables face verification entirely. The
+    # rest are powerful features this app never uses, denied so a future dependency cannot
+    # quietly start asking for them.
+    add_header Permissions-Policy "camera=(self), microphone=(), geolocation=(), payment=(), usb=(), magnetometer=(), gyroscope=()" always;
+
+    # Severs the window.opener relationship, so a page this app opens cannot reach back into it.
+    add_header Cross-Origin-Opener-Policy "same-origin" always;
   }
 }

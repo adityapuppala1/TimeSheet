@@ -9,5 +9,21 @@
 # docs/DEPLOYMENT.md § Serving over HTTPS for the full runbook.
 {$HTTPS_DOMAIN} {
 	encode gzip
+
+	# HSTS lives HERE and not in the web container's nginx, and that placement is the whole point:
+	# this is the only file in the repo guaranteed to be serving over TLS. The same header added to
+	# nginx would also be sent on the plain-http LAN deployments this repo supports on purpose
+	# (APP_BASE_URL="auto", docker-compose.yml with no TLS) — where it is either ignored, or worse,
+	# pins a browser that once reached the box over https into never accepting http from it again.
+	#
+	# Two years, subdomains included: every tenant is a subdomain (middleware/tenant.ts resolves
+	# the org from it), so omitting includeSubDomains would leave every actual customer hostname
+	# unprotected while the bare apex looked covered.
+	#
+	# NO `preload` directive: that submits the domain to a browser-baked list which is slow and
+	# painful to leave, and it is not this repo's call to make for whatever domain an operator
+	# points at it. Add it deliberately, per deployment, once TLS is known to be permanent.
+	header Strict-Transport-Security "max-age=63072000; includeSubDomains"
+
 	reverse_proxy web:80
 }

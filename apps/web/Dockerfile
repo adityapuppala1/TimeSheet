@@ -47,5 +47,13 @@ FROM nginx:1.27-alpine
 # the release's real API service name.
 COPY apps/web/nginx.conf.template /etc/nginx/templates/default.conf.template
 ENV API_UPSTREAM=api:4000
+# Extra origins appended to the SPA's `connect-src` CSP directive. MUST be declared here even
+# though it is empty by default: the entrypoint's envsubst pass only substitutes variables that
+# exist in the environment, so an undeclared `${CSP_CONNECT_SRC}` would be left in the rendered
+# conf VERBATIM — and nginx refuses to start on a malformed header value, crash-looping the web
+# container. Empty is the correct default: every topology this repo ships puts the API behind the
+# same nginx, so 'self' already covers it. Set it only for a SPLIT deployment, to the same origin
+# passed as VITE_API_URL above, e.g. CSP_CONNECT_SRC="https://api.example.com".
+ENV CSP_CONNECT_SRC=""
 COPY --from=build /app/apps/web/dist /usr/share/nginx/html
 EXPOSE 80
