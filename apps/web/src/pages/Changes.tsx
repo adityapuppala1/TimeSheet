@@ -34,8 +34,8 @@ import {
   Plus,
   ShieldCheck,
 } from "lucide-react";
-import { useState } from "react";
-import { useNavigate } from "react-router";
+import { useEffect, useState } from "react";
+import { useLocation, useNavigate } from "react-router";
 import {
   CHANGE_KIND_MEANING,
   CHANGE_KIND_TONE,
@@ -114,9 +114,28 @@ export function Changes() {
   const user = useAuthStore((s) => s.user);
   const queryClient = useQueryClient();
   const navigate = useNavigate();
+  const location = useLocation();
 
   const [filters, setFilters] = useState({ state: "all", changeKind: "all", riskLevel: "all", mine: false });
   const [createOpen, setCreateOpen] = useState(false);
+  /** The day the calendar asked us to schedule for, as `YYYY-MM-DD`. Null for the plain button. */
+  const [createPlannedDate, setCreatePlannedDate] = useState<string | null>(null);
+
+  /**
+   * The calendar cannot open this dialog itself — the form needs the project picker, the category
+   * list and the risk bands, and a second copy of it would be a second copy of the module's
+   * validation rules. So it navigates here with the request in router state and this picks it up.
+   *
+   * The state is CLEARED via `replace` immediately after reading it, so a browser back/forward or
+   * a refresh does not re-open the dialog for a date the person already dealt with.
+   */
+  useEffect(() => {
+    const requested = location.state as { createChange?: boolean; plannedDate?: string | null } | null;
+    if (!requested?.createChange) return;
+    setCreatePlannedDate(requested.plannedDate ?? null);
+    setCreateOpen(true);
+    navigate(location.pathname, { replace: true, state: null });
+  }, [location.state, location.pathname, navigate]);
 
   const canWrite = Boolean(user?.permissions.includes(permissions.CHANGES_WRITE));
 
@@ -190,7 +209,12 @@ export function Changes() {
           </Button>
           <ExportMenu />
           {canWrite && (
-            <Button onClick={() => setCreateOpen(true)}>
+            <Button
+              onClick={() => {
+                setCreatePlannedDate(null);
+                setCreateOpen(true);
+              }}
+            >
               <Plus className="h-4 w-4" />
               New change
             </Button>
@@ -348,6 +372,7 @@ export function Changes() {
       {createOpen && (
         <CreateChangeDialog
           open={createOpen}
+          plannedDate={createPlannedDate}
           onClose={() => setCreateOpen(false)}
           onCreated={(id) => {
             queryClient.invalidateQueries({ queryKey: ["changes"] });
@@ -481,7 +506,18 @@ function ChangeCharts({ metrics }: { metrics: ChangeMetrics }) {
  * Create
  * ------------------------------------------------------------------ */
 
-function CreateChangeDialog({ open, onClose, onCreated }: { open: boolean; onClose: () => void; onCreated: (id: string) => void }) {
+function CreateChangeDialog({
+  open,
+  onClose,
+  onCreated,
+  plannedDate
+}: {
+  open: boolean;
+  onClose: () => void;
+  onCreated: (id: string) => void;
+  /** `YYYY-MM-DD` when raised from a day on the calendar; null from the plain button. */
+  plannedDate?: string | null;
+}) {
   const projects = useQuery({ queryKey: ["projects"], queryFn: () => projectApi.list() });
   const categories = useQuery({ queryKey: ["changes", "master-data"], queryFn: changeApi.masterData });
 
@@ -495,9 +531,24 @@ function CreateChangeDialog({ open, onClose, onCreated }: { open: boolean; onClo
     justification: ""
   });
 
+  /**
+   * A day picked on the calendar becomes a real planned window, not just a hint: 09:00-17:00 UTC on
+   * that date. The calendar is drawn in UTC and labelled as such, so building the window in UTC is
+   * what makes the bar land on the row that was clicked — a local-time window would draw a day
+   * early or late for anyone far enough from UTC, which is exactly the class of bug that made the
+   * reminders fire on the wrong day.
+   *
+   * It is a DEFAULT, not a decision. The window is editable on the change itself afterwards, and
+   * the times are the ordinary working span rather than something invented per change.
+   */
+  const plannedWindow = plannedDate
+    ? { plannedStart: `${plannedDate}T09:00:00.000Z`, plannedEnd: `${plannedDate}T17:00:00.000Z` }
+    : {};
+
   const create = useMutation({
     mutationFn: () =>
       changeApi.create({
+        ...plannedWindow,
         title: form.title,
         projectId: form.projectId,
         categoryId: form.categoryId || null,

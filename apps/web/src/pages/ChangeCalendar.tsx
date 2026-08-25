@@ -10,13 +10,15 @@
  * freeze is exactly what somebody needs to see, and hiding either one would hide the conflict.
  */
 import { useQuery } from "@tanstack/react-query";
-import { AlertTriangle, CalendarDays, ChevronLeft, ChevronRight } from "lucide-react";
+import { AlertTriangle, ArrowLeft, CalendarDays, ChevronLeft, ChevronRight, Plus } from "lucide-react";
 import { useMemo, useState } from "react";
 import { useNavigate } from "react-router";
 import { CHANGE_RISK_TONE, CHANGE_STATE_TONE, humanizeChange } from "../lib/change-visuals";
 import { TONE_ACCENT_CLASS, type Tone } from "../lib/ticket-visuals";
 import { cn } from "../lib/utils";
+import { permissions } from "@timesheet/shared";
 import { changeApi } from "../services/api";
+import { useAuthStore } from "../store/auth";
 import { Badge } from "../components/ui/badge";
 import { Button } from "../components/ui/button";
 import { Card, CardContent } from "../components/ui/card";
@@ -61,6 +63,26 @@ export function ChangeCalendarPage() {
     queryFn: () => changeApi.calendar(from.toISOString(), to.toISOString())
   });
 
+  const user = useAuthStore((state) => state.user);
+  const canWrite = Boolean(user?.permissions.includes(permissions.CHANGES_WRITE));
+
+  /**
+   * Raising a change from the calendar.
+   *
+   * The create form lives on the changes LIST page — it needs the project picker, the category
+   * list and the risk bands, and duplicating it here would be a second copy of a form whose
+   * validation rules are the point of the module. So the calendar navigates there and hands over
+   * the date through router state; `pages/Changes.tsx` opens the dialog and pre-fills the planned
+   * window from it.
+   *
+   * `null` means "no particular day" — the New change button in the header. A day row passes its
+   * own date, which is the whole point of being able to click one.
+   */
+  const raiseFor = (day: Date | null) =>
+    navigate("/app/changes", {
+      state: { createChange: true, plannedDate: day ? day.toISOString().slice(0, 10) : null }
+    });
+
   const rows = useMemo(() => Array.from({ length: days }, (_, i) => utcDay(offset + i)), [offset, days]);
   const changes = calendar.data?.changes ?? [];
   const blackouts = calendar.data?.blackouts ?? [];
@@ -79,16 +101,31 @@ export function ChangeCalendarPage() {
             </p>
           </div>
         </div>
-        <div className="flex items-center gap-1">
-          <Button variant="outline" size="sm" onClick={() => setOffset((o) => o - days)} aria-label="Previous fortnight">
-            <ChevronLeft className="h-3.5 w-3.5" />
+        <div className="flex flex-wrap items-center gap-2">
+          {/* The way out. The calendar is reached from the changes list but had no route back to
+              it, so the only exit was the browser's own back button or the sidebar — which is not
+              an exit a page should rely on. */}
+          <Button variant="outline" size="sm" onClick={() => navigate("/app/changes")}>
+            <ArrowLeft className="h-3.5 w-3.5" />
+            Back to changes
           </Button>
-          <Button variant="outline" size="sm" onClick={() => setOffset(0)} disabled={offset === 0}>
-            Today
-          </Button>
-          <Button variant="outline" size="sm" onClick={() => setOffset((o) => o + days)} aria-label="Next fortnight">
-            <ChevronRight className="h-3.5 w-3.5" />
-          </Button>
+          <div className="flex items-center gap-1">
+            <Button variant="outline" size="sm" onClick={() => setOffset((o) => o - days)} aria-label="Previous fortnight">
+              <ChevronLeft className="h-3.5 w-3.5" />
+            </Button>
+            <Button variant="outline" size="sm" onClick={() => setOffset(0)} disabled={offset === 0}>
+              Today
+            </Button>
+            <Button variant="outline" size="sm" onClick={() => setOffset((o) => o + days)} aria-label="Next fortnight">
+              <ChevronRight className="h-3.5 w-3.5" />
+            </Button>
+          </div>
+          {canWrite && (
+            <Button size="sm" onClick={() => raiseFor(null)}>
+              <Plus className="h-3.5 w-3.5" />
+              New change
+            </Button>
+          )}
         </div>
       </div>
 
@@ -120,7 +157,32 @@ export function ChangeCalendarPage() {
                     <span className={cn("text-xs", isToday ? "font-semibold text-primary" : "text-muted-foreground")}>
                       {dayLabel(day)}
                     </span>
-                    <div className={cn("relative h-9 rounded-md border border-border bg-muted/30", isToday && "ring-1 ring-primary/40")}>
+                    {/* The lane is a button when you may raise a change, and a plain div when you
+                        may not — rather than a button that reports "no permission" after the click.
+                        The bars inside it stop their own clicks, so opening an existing change
+                        still wins over scheduling a new one on the same day. */}
+                    <div
+                      role={canWrite ? "button" : undefined}
+                      tabIndex={canWrite ? 0 : undefined}
+                      aria-label={canWrite ? `Raise a change scheduled for ${dayLabel(day)}` : undefined}
+                      onClick={canWrite ? () => raiseFor(day) : undefined}
+                      onKeyDown={
+                        canWrite
+                          ? (e) => {
+                              if (e.key === "Enter" || e.key === " ") {
+                                e.preventDefault();
+                                raiseFor(day);
+                              }
+                            }
+                          : undefined
+                      }
+                      className={cn(
+                        "relative h-9 rounded-md border border-border bg-muted/30",
+                        isToday && "ring-1 ring-primary/40",
+                        canWrite &&
+                          "cursor-pointer transition-colors hover:border-primary/50 hover:bg-primary/5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"
+                      )}
+                    >
                       {dayBlackouts.map((b) => {
                         const g = barGeometry(new Date(b.startsAt), new Date(b.endsAt), day)!;
                         return (
