@@ -24,6 +24,7 @@ import { useState } from "react";
 import { Bot, Camera, CheckCircle2, ChevronRight, Circle, ClipboardList, Phone, ScanFace, Target, Workflow, X } from "lucide-react";
 import { Link } from "react-router";
 import { useFaceStatus } from "../lib/use-face-status";
+import { usePlanningFeatures } from "../lib/use-planning";
 import { aiOverviewApi, goalApi } from "../services/api";
 import { useAuthStore } from "../store/auth";
 import { Button } from "./ui/button";
@@ -46,6 +47,7 @@ export function SetupChecklistCard() {
   const [dismissed, setDismissed] = useState(() => localStorage.getItem(dismissKey) === "1");
 
   const faceStatus = useFaceStatus();
+  const { features: planningFeatures } = usePlanningFeatures();
 
   /**
    * The workspace's own state, fetched only for a super admin — the one person whose checklist this
@@ -61,10 +63,16 @@ export function SetupChecklistCard() {
     retry: false,
     staleTime: 5 * 60_000
   });
+  // Gated on the same `effective.goals` flag the sidebar uses to decide whether to show the Goals
+  // nav item at all (see use-planning.ts) — not just on isSuperAdmin. GET /api/goals 403s whenever
+  // goals are off for the workspace or not in its plan tier (planning.service.ts#assertGoalsEnabled),
+  // which is the common case since goals default to off. Without this the "suggest a first goal"
+  // probe would 403 on every dashboard load for most workspaces, purely to learn a fact this hook
+  // already knows for free.
   const goals = useQuery({
     queryKey: ["goals", "list"],
     queryFn: () => goalApi.list(),
-    enabled: isSuperAdmin,
+    enabled: isSuperAdmin && planningFeatures.goals,
     retry: false,
     staleTime: 5 * 60_000
   });

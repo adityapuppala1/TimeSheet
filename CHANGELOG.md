@@ -7,9 +7,18 @@ user of a running installation.
 
 ## Unreleased
 
-Nothing yet. The parser that feeds the in-app What's-new page ignores this section until it gains a
-version number, on purpose — an installation must never render history for a version that does not
-exist yet.
+The parser that feeds the in-app What's-new page ignores this section until it gains a version
+number, on purpose — an installation must never render history for a version that does not exist yet.
+
+### 🩹 Fixes
+
+- **The setup checklist stopped asking about goals it already knew were off.** Its "write your first
+  goal" probe called `GET /api/goals` for every super admin on every dashboard load, regardless of
+  whether the workspace had goals turned on — and that route 403s by design when they're off (the
+  default) or not in the plan tier. Harmless, since the missing data just meant the suggestion never
+  appeared, but it put a 403 in the console on most dashboards. It now checks the same
+  `effective.goals` flag the sidebar already reads before deciding what to show, and only asks when
+  the answer isn't already known to be no.
 
 ## 3.3.0 — the week you can read, and a workspace that installs itself — 2026-08-25
 
