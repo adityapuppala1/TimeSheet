@@ -1,42 +1,194 @@
+import { Color, Mesh, Program, Renderer, RenderTarget, Triangle } from "ogl";
 import { useEffect, useRef } from "react";
 
 import { cn } from "../../lib/utils";
 
 /**
- * WHAT: the flowing-strands background used by the app-wide loader — a full-viewport fragment
- * shader drawing `count` glowing sine ribbons that drift and interfere.
+ * The flowing-strands background from React Bits (reactbits.dev/animations/strands), ported to
+ * TypeScript from the official JS-CSS registry source. The shaders (VERT / FRAG / GLASS_FRAG) and
+ * the OGL render loop are the upstream component verbatim; only the prop typing and this header
+ * are ours.
  *
- * WHY IT IS WRITTEN HERE RATHER THAN INSTALLED: the React Bits original is built on `ogl`, and for
- * a single full-screen quad `ogl` abstracts almost nothing — one buffer, one program, one draw
- * call, which is what this file is. Taking a WebGL runtime into the dependency tree to avoid
- * thirty lines of setup is a poor trade in a codebase whose supply chain we audit, and the loader
- * is the one component that renders on EVERY route transition, so its cost is paid constantly.
- * The prop API is kept identical to the original so the documented presets transfer unchanged.
+ * WHY IT IS OGL AND A PER-MOUNT CANVAS, and why an earlier hand-rolled version rendered nothing:
+ * a first attempt bound a single React `<canvas ref>` and called
+ * `WEBGL_lose_context.loseContext()` on cleanup. That KILLS the context permanently, and React
+ * StrictMode (enabled in main.tsx) mounts every effect, tears it down, and mounts it again on the
+ * SAME canvas -- so the second mount inherited a dead context and every `compileShader` failed
+ * silently with a null log. The upstream pattern here avoids that: each mount constructs its OWN
+ * `Renderer` (its own canvas), appends it to the container, and removes it on cleanup, so a lost
+ * context is never reused. That is the load-bearing difference, kept deliberately.
  *
- * ── THREE THINGS THIS HAS TO GET RIGHT, BECAUSE IT IS A LOADER ────────────────────────────────
+ * It never throws, and the loader (components/ui/app-loader.tsx) paints a themed gradient beneath
+ * this so a machine without WebGL still shows something intentional rather than a blank box.
  *
- * 1. IT MUST NEVER BE THE REASON A PAGE FAILS. Every WebGL step is checked and any failure returns
- *    quietly, leaving the caller's own fallback visible. A machine with no GPU, a blocked context,
- *    or a browser that refuses a second context still gets a working app — see `AppLoader`, which
- *    paints a CSS gradient underneath this canvas rather than relying on it.
- *
- * 2. IT MUST STOP. A loader outlives its usefulness the moment content arrives, and an
- *    unreferenced `requestAnimationFrame` loop keeps a GPU busy on a laptop battery. The effect
- *    cancels the frame and deletes its GL objects on unmount. It does NOT force the context away
- *    — see the cleanup, where doing so is what made this render nothing at all under StrictMode.
- *
- * 3. IT MUST RESPECT `prefers-reduced-motion`. Flowing, undulating motion across a whole viewport
- *    is exactly what that setting is for. Reduced motion renders ONE still frame — the strands are
- *    still drawn, they simply do not move — rather than hiding the visual entirely.
- *
- * WHO calls this: components/ui/app-loader.tsx. Nothing else should — a second live WebGL context
- * competing with the face-verification models is not worth a decoration.
+ * WHO calls this: components/ui/app-loader.tsx. Nothing else -- one live WebGL context for a
+ * decoration is plenty, and a second competing with the face-verification models is not worth it.
  */
 
+const MAX_STRANDS = 12;
+const MAX_COLORS = 8;
+
+const VERT = `#version 300 es
+in vec2 position;
+void main() {
+  gl_Position = vec4(position, 0.0, 1.0);
+}
+`;
+
+const FRAG = `#version 300 es
+precision highp float;
+
+uniform float uTime;
+uniform vec2 uResolution;
+uniform vec3 uColors[${MAX_COLORS}];
+uniform int uColorCount;
+uniform int uStrandCount;
+uniform float uSpeed;
+uniform float uAmplitude;
+uniform float uWaviness;
+uniform float uThickness;
+uniform float uGlow;
+uniform float uTaper;
+uniform float uSpread;
+uniform float uHueShift;
+uniform float uIntensity;
+uniform float uOpacity;
+uniform float uScale;
+uniform float uSaturation;
+
+out vec4 fragColor;
+
+const float PI = 3.14159265;
+
+vec3 spectrum(float t) {
+  return 0.5 + 0.5 * cos(2.0 * PI * (t + vec3(0.00, 0.33, 0.67)));
+}
+
+vec3 samplePalette(float t) {
+  t = fract(t);
+  float scaled = t * float(uColorCount);
+  int idx = int(floor(scaled));
+  float blend = fract(scaled);
+  int nextIdx = idx + 1;
+  if (nextIdx >= uColorCount) nextIdx = 0;
+  return mix(uColors[idx], uColors[nextIdx], blend);
+}
+
+vec3 strandColor(float t) {
+  if (uColorCount > 0) return samplePalette(t);
+  return spectrum(t);
+}
+
+void main() {
+  vec2 uv = (gl_FragCoord.xy - 0.5 * uResolution) / uResolution.y;
+  uv /= max(uScale, 0.0001);
+
+  float e = 0.06 + uIntensity * 0.94;
+  float env = pow(max(cos(uv.x * PI * 1.3), 0.0), uTaper);
+
+  vec3 col = vec3(0.0);
+
+  for (int i = 0; i < ${MAX_STRANDS}; i++) {
+    if (i >= uStrandCount) break;
+
+    float fi = float(i);
+    float ph = fi * 1.7 * uSpread;
+    float freq = (2.0 + fi * 0.35) * uWaviness;
+    float spd = 1.4 + fi * 1.2;
+
+    float tt = uTime * uSpeed;
+    float w = sin(uv.x * freq + tt * spd + ph) * 0.60
+            + sin(uv.x * freq * 1.1 - tt * spd * 0.7 + ph * 1.7) * 0.40;
+
+    float amp = (0.1 + 0.02 * e) * env * uAmplitude;
+    float y = w * amp;
+
+    float d = abs(uv.y - y);
+    float thick = (0.001 + 0.05 * e) * (0.35 + env) * uThickness;
+    float g = thick / (d + thick * 0.45);
+    g = g * g;
+
+    float h = fi / float(uStrandCount) + uv.x * 0.30 + uTime * 0.04 + uHueShift;
+    col += strandColor(h) * g * env;
+  }
+
+  col *= 0.45 + 0.7 * e;
+  col = 1.0 - exp(-col * uGlow);
+
+  float gray = dot(col, vec3(0.2126, 0.7152, 0.0722));
+  col = max(mix(vec3(gray), col, uSaturation), 0.0);
+
+  float lum = max(max(col.r, col.g), col.b);
+  float alpha = clamp(lum, 0.0, 1.0) * uOpacity;
+
+  fragColor = vec4(col * uOpacity, alpha);
+}
+`;
+
+const GLASS_FRAG = `#version 300 es
+precision highp float;
+
+uniform sampler2D uScene;
+uniform vec2 uResolution;
+uniform float uRadius;
+uniform float uRefraction;
+uniform float uDispersion;
+
+out vec4 fragColor;
+
+vec2 toUv(vec2 p) {
+  return p * (uResolution.y / uResolution) + 0.5;
+}
+
+void main() {
+  vec2 p = (gl_FragCoord.xy - 0.5 * uResolution) / uResolution.y;
+  float d = length(p);
+  float r = uRadius;
+
+  float edge = fwidth(d) * 1.5;
+  float mask = 1.0 - smoothstep(r - edge, r + edge, d);
+  if (mask <= 0.0) {
+    fragColor = vec4(0.0);
+    return;
+  }
+
+  float z = sqrt(max(r * r - d * d, 0.0)) / r;
+  float nd = d / r;
+
+  vec2 dir = d > 0.0 ? p / d : vec2(0.0);
+  float lens = smoothstep(0.85, 1.0, nd) * pow(nd, 6.0);
+  vec2 offset = -dir * lens * uRefraction * 0.15;
+  vec2 disp = -dir * lens * uDispersion * 0.012;
+
+  vec3 light;
+  light.r = texture(uScene, toUv(p + offset - disp)).r;
+  light.g = texture(uScene, toUv(p + offset)).g;
+  light.b = texture(uScene, toUv(p + offset + disp)).b;
+
+  float fres = pow(1.0 - z, 3.0);
+  vec3 rim = vec3(1.0) * fres * 0.18;
+
+  vec2 lightDir = normalize(vec2(-0.55, 0.6));
+  float spec = pow(max(dot(p / max(r, 1e-4), lightDir), 0.0), 6.0);
+  spec *= smoothstep(r, r * 0.55, d);
+
+  vec3 emissive = light + rim + vec3(spec) * 0.4;
+  float emissiveA = clamp(max(max(emissive.r, emissive.g), emissive.b), 0.0, 1.0);
+
+  float bodyA = 0.05 + fres * 0.05;
+
+  float outA = emissiveA + bodyA * (1.0 - emissiveA);
+  vec3 outRGB = emissive;
+
+  outRGB *= mask;
+  outA *= mask;
+
+  fragColor = vec4(outRGB, outA);
+}
+`;
+
 export interface StrandsProps {
-  /** Ribbon colours, cycled across `count`. Any CSS-parseable hex. */
   colors?: string[];
-  /** How many ribbons. Clamped to MAX_STRANDS. */
   count?: number;
   speed?: number;
   amplitude?: number;
@@ -45,306 +197,197 @@ export interface StrandsProps {
   glow?: number;
   taper?: number;
   spread?: number;
+  hueShift?: number;
   intensity?: number;
   saturation?: number;
   opacity?: number;
   scale?: number;
+  glass?: boolean;
+  refraction?: number;
+  dispersion?: number;
+  glassSize?: number;
   className?: string;
   style?: React.CSSProperties;
 }
 
-/** Matches the original's ceiling; the uniform arrays below are sized to it. */
-const MAX_STRANDS = 12;
-
-const VERTEX_SHADER = `#version 300 es
-in vec2 position;
-void main() { gl_Position = vec4(position, 0.0, 1.0); }`;
-
-/**
- * Each strand is a horizontal sine ribbon; a pixel's brightness is its distance from that curve,
- * shaped by `thickness` and `glow`. `taper` fades the ends so ribbons do not stop dead at the
- * viewport edge, and `intensity` is the final exposure applied before the tone curve.
- *
- * Accumulated ADDITIVELY, which is why overlaps brighten into white — that interference is the
- * effect, not an artefact to correct.
- */
-const FRAGMENT_SHADER = `#version 300 es
-precision highp float;
-
-uniform vec2  uResolution;
-uniform float uTime;
-uniform int   uCount;
-uniform vec3  uColors[${MAX_STRANDS}];
-uniform float uAmplitude;
-uniform float uWaviness;
-uniform float uThickness;
-uniform float uGlow;
-uniform float uTaper;
-uniform float uSpread;
-uniform float uIntensity;
-uniform float uSaturation;
-uniform float uOpacity;
-uniform float uScale;
-
-out vec4 fragColor;
-
-vec3 saturate3(vec3 c, float s) {
-  // Rec. 709 luma, so desaturating keeps perceived brightness rather than dimming reds.
-  float l = dot(c, vec3(0.2126, 0.7152, 0.0722));
-  return mix(vec3(l), c, s);
-}
-
-void main() {
-  // Aspect-corrected, origin at centre: strands stay the same shape on a phone and a 4K monitor.
-  vec2 uv = (gl_FragCoord.xy * 2.0 - uResolution) / uResolution.y;
-  uv /= max(uScale, 0.001);
-
-  vec3 total = vec3(0.0);
-  int count = int(min(float(uCount), float(${MAX_STRANDS})));
-
-  for (int i = 0; i < ${MAX_STRANDS}; i++) {
-    if (i >= count) break;
-    float fi = float(i);
-
-    // Spread the ribbons vertically around the centre and give each its own phase, so they drift
-    // in and out of alignment instead of moving as one rigid comb.
-    float offset = (fi - (float(count) - 1.0) * 0.5) * uSpread * 0.22;
-    float phase  = fi * 1.7;
-
-    // The multipliers here are the mapping from the documented prop range onto this viewport,
-    // and they are tuned, not arbitrary. At 1:1 the published defaults (waviness 1.5, amplitude
-    // 0.8) put barely half a wavelength across the width and swung each ribbon clear off the top
-    // and bottom — the result read as three huge diagonal sweeps rather than a flowing bundle.
-    // 2.2x on the frequency gives roughly two crests across a desktop width; 0.42x on the swing
-    // keeps the ribbons inside the frame so they overlap and interfere, which is the effect.
-    float x = uv.x * uWaviness * 2.2;
-    float wave =
-        sin(x + uTime + phase) * uAmplitude * 0.42
-      + sin(x * 1.9 + uTime * 0.7 + phase * 1.3) * uAmplitude * 0.15;
-
-    float dist = abs(uv.y - offset - wave);
-
-    // Thin core, wide falloff: the core is the ribbon, the falloff is the glow around it.
-    float core = uThickness * 0.06 + 0.004;
-    float line = core / (dist + core);
-    line = pow(line, max(uGlow, 0.1));
-
-    // Ends fade rather than being clipped by the viewport edge.
-    // Normalised against the visible half-width rather than raw uv, so uTaper behaves the same
-    // on a phone and an ultrawide instead of being effectively off on one of them.
-    float taper = 1.0 - smoothstep(0.55, 1.0, abs(uv.x) / max(uTaper * 0.5, 0.001));
-
-    total += uColors[i] * line * max(taper, 0.0);
+/** Pads the caller's colours out to MAX_COLORS and converts each to an OGL Color triple. */
+function buildPalette(colors: string[]): [number, number, number][] {
+  const filled = colors && colors.length ? colors : ["#ffffff"];
+  const padded: [number, number, number][] = [];
+  for (let i = 0; i < MAX_COLORS; i++) {
+    const hex = filled[i] ?? filled[filled.length - 1];
+    const c = new Color(hex);
+    padded.push([c.r, c.g, c.b]);
   }
-
-  vec3 color = saturate3(total * uIntensity, uSaturation);
-  // Reinhard rather than a hard clamp: overlaps roll off into white instead of flat-topping into
-  // a posterised blob.
-  color = color / (1.0 + color);
-
-  // Premultiplied: the canvas composites over whatever the loader painted beneath it, and
-  // straight alpha would fringe dark at the ribbon edges.
-  float a = clamp(max(max(color.r, color.g), color.b), 0.0, 1.0) * uOpacity;
-  fragColor = vec4(color * uOpacity, a);
-}`;
-
-/** `#RGB` / `#RRGGBB` -> linear-ish 0..1 triple. Unparseable input falls back to white, which is
- *  visible rather than an invisible strand somebody would have to debug. */
-function hexToRgb(hex: string): [number, number, number] {
-  const clean = hex.trim().replace("#", "");
-  const full = clean.length === 3 ? clean.split("").map((c) => c + c).join("") : clean;
-  if (full.length !== 6 || /[^0-9a-f]/i.test(full)) return [1, 1, 1];
-  return [
-    parseInt(full.slice(0, 2), 16) / 255,
-    parseInt(full.slice(2, 4), 16) / 255,
-    parseInt(full.slice(4, 6), 16) / 255
-  ];
-}
-
-function compile(gl: WebGL2RenderingContext, type: number, source: string): WebGLShader | null {
-  const shader = gl.createShader(type);
-  if (!shader) return null;
-  gl.shaderSource(shader, source);
-  gl.compileShader(shader);
-  if (!gl.getShaderParameter(shader, gl.COMPILE_STATUS)) {
-    // Logged, not thrown: a shader that will not compile on some driver must degrade to the
-    // caller's fallback, never take the route transition down with it.
-    console.warn("[strands] shader did not compile:", gl.getShaderInfoLog(shader));
-    gl.deleteShader(shader);
-    return null;
-  }
-  return shader;
+  return padded;
 }
 
 export function Strands({
-  colors = ["#F97316", "#7C3AED", "#06B6D4"],
-  count = 5,
-  speed = 0.9,
-  amplitude = 0.8,
-  waviness = 1.5,
-  thickness = 0.5,
+  colors = ["#FF4242", "#7C3AED", "#06B6D4", "#EAB308"],
+  count = 3,
+  speed = 0.5,
+  amplitude = 1,
+  waviness = 1,
+  thickness = 0.7,
   glow = 2.6,
-  taper = 3.5,
-  spread = 1.5,
-  intensity = 0.65,
+  taper = 3,
+  spread = 1,
+  hueShift = 0,
+  intensity = 0.6,
   saturation = 1.5,
   opacity = 1,
-  scale = 1.4,
-  className,
+  scale = 1.5,
+  glass = false,
+  refraction = 1,
+  dispersion = 1,
+  glassSize = 1,
+  className = "",
   style
 }: StrandsProps) {
-  const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  // Live prop mirror the render loop reads each frame, so changing a prop re-uploads a uniform
+  // rather than tearing down the GL context.
+  const propsRef = useRef({
+    colors, count, speed, amplitude, waviness, thickness, glow, taper, spread,
+    hueShift, intensity, saturation, opacity, scale, glass, refraction, dispersion, glassSize
+  });
+  propsRef.current = {
+    colors, count, speed, amplitude, waviness, thickness, glow, taper, spread,
+    hueShift, intensity, saturation, opacity, scale, glass, refraction, dispersion, glassSize
+  };
 
-  // Live props read by the render loop, so a prop change does not tear down the GL context and
-  // rebuild the program — it just changes what the next frame uploads.
-  const props = useRef({ colors, count, speed, amplitude, waviness, thickness, glow, taper, spread, intensity, saturation, opacity, scale });
-  props.current = { colors, count, speed, amplitude, waviness, thickness, glow, taper, spread, intensity, saturation, opacity, scale };
+  const ctnDom = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
-    const canvas = canvasRef.current;
-    if (!canvas) return;
+    const ctn = ctnDom.current;
+    if (!ctn) return;
 
-    const gl = canvas.getContext("webgl2", { alpha: true, premultipliedAlpha: true, antialias: false });
-    if (!gl) return; // No WebGL2 — the caller's own background stays visible. See the header.
-
-    const vs = compile(gl, gl.VERTEX_SHADER, VERTEX_SHADER);
-    const fs = compile(gl, gl.FRAGMENT_SHADER, FRAGMENT_SHADER);
-    if (!vs || !fs) return;
-
-    const program = gl.createProgram();
-    if (!program) return;
-    gl.attachShader(program, vs);
-    gl.attachShader(program, fs);
-    gl.linkProgram(program);
-    if (!gl.getProgramParameter(program, gl.LINK_STATUS)) {
-      console.warn("[strands] program did not link:", gl.getProgramInfoLog(program));
-      return;
-    }
-    gl.useProgram(program);
-
-    // One triangle larger than the viewport, not two for a quad: it covers the same pixels with
-    // no seam down the diagonal and one fewer vertex to interpolate across.
-    const buffer = gl.createBuffer();
-    gl.bindBuffer(gl.ARRAY_BUFFER, buffer);
-    gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 3, -1, -1, 3]), gl.STATIC_DRAW);
-    const position = gl.getAttribLocation(program, "position");
-    gl.enableVertexAttribArray(position);
-    gl.vertexAttribPointer(position, 2, gl.FLOAT, false, 0, 0);
-
-    const u = (name: string) => gl.getUniformLocation(program, name);
-    const uniforms = {
-      resolution: u("uResolution"),
-      time: u("uTime"),
-      count: u("uCount"),
-      colors: u("uColors"),
-      amplitude: u("uAmplitude"),
-      waviness: u("uWaviness"),
-      thickness: u("uThickness"),
-      glow: u("uGlow"),
-      taper: u("uTaper"),
-      spread: u("uSpread"),
-      intensity: u("uIntensity"),
-      saturation: u("uSaturation"),
-      opacity: u("uOpacity"),
-      scale: u("uScale")
-    };
-
+    const renderer = new Renderer({ alpha: true, premultipliedAlpha: true, antialias: true });
+    const gl = renderer.gl;
+    gl.clearColor(0, 0, 0, 0);
     gl.enable(gl.BLEND);
     gl.blendFunc(gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
+    gl.canvas.style.backgroundColor = "transparent";
 
-    const resize = () => {
-      // Capped at 2x: beyond that a full-viewport shader costs four times the fill rate for a
-      // difference nobody can see on a loader that shows for a few hundred milliseconds.
-      const dpr = Math.min(window.devicePixelRatio || 1, 2);
-      const width = Math.max(1, Math.floor(canvas.clientWidth * dpr));
-      const height = Math.max(1, Math.floor(canvas.clientHeight * dpr));
-      if (canvas.width !== width || canvas.height !== height) {
-        canvas.width = width;
-        canvas.height = height;
-        gl.viewport(0, 0, width, height);
+    const geometry = new Triangle(gl);
+    if (geometry.attributes.uv) {
+      delete (geometry.attributes as Record<string, unknown>).uv;
+    }
+
+    const program = new Program(gl, {
+      vertex: VERT,
+      fragment: FRAG,
+      uniforms: {
+        uTime: { value: 0 },
+        uResolution: { value: [ctn.offsetWidth, ctn.offsetHeight] },
+        uColors: { value: buildPalette(propsRef.current.colors) },
+        uColorCount: { value: Math.min(propsRef.current.colors.length, MAX_COLORS) },
+        uStrandCount: { value: Math.min(propsRef.current.count, MAX_STRANDS) },
+        uSpeed: { value: speed },
+        uAmplitude: { value: amplitude },
+        uWaviness: { value: waviness },
+        uThickness: { value: thickness },
+        uGlow: { value: glow },
+        uTaper: { value: taper },
+        uSpread: { value: spread },
+        uHueShift: { value: hueShift },
+        uIntensity: { value: intensity },
+        uOpacity: { value: opacity },
+        uScale: { value: scale },
+        uSaturation: { value: saturation }
       }
-    };
+    });
+
+    const mesh = new Mesh(gl, { geometry, program });
+
+    const renderTarget = new RenderTarget(gl, { width: ctn.offsetWidth, height: ctn.offsetHeight });
+
+    const glassProgram = new Program(gl, {
+      vertex: VERT,
+      fragment: GLASS_FRAG,
+      uniforms: {
+        uScene: { value: renderTarget.texture },
+        uResolution: { value: [ctn.offsetWidth, ctn.offsetHeight] },
+        uRadius: { value: 0.46 * glassSize },
+        uRefraction: { value: refraction },
+        uDispersion: { value: dispersion }
+      }
+    });
+    const glassMesh = new Mesh(gl, { geometry, program: glassProgram });
+
+    ctn.appendChild(gl.canvas);
+
+    function resize() {
+      if (!ctn) return;
+      const width = ctn.offsetWidth;
+      const height = ctn.offsetHeight;
+      renderer.setSize(width, height);
+      program.uniforms.uResolution.value = [width, height];
+      renderTarget.setSize(width, height);
+      glassProgram.uniforms.uResolution.value = [width, height];
+    }
+    window.addEventListener("resize", resize);
+    resize();
 
     const reduceMotion = window.matchMedia?.("(prefers-reduced-motion: reduce)").matches ?? false;
 
-    let frame = 0;
-    const start = performance.now();
+    let animateId = 0;
+    const update = (t: number) => {
+      animateId = requestAnimationFrame(update);
+      const current = propsRef.current;
+      // Frozen at a representative instant when motion is reduced: a still, drawn frame rather
+      // than a hidden visual or a flat (t=0) comb.
+      program.uniforms.uTime.value = (reduceMotion ? 2500 : t) * 0.001;
+      program.uniforms.uColors.value = buildPalette(current.colors);
+      program.uniforms.uColorCount.value = Math.min(current.colors.length, MAX_COLORS);
+      program.uniforms.uStrandCount.value = Math.min(Math.max(Math.round(current.count), 1), MAX_STRANDS);
+      program.uniforms.uSpeed.value = current.speed;
+      program.uniforms.uAmplitude.value = current.amplitude;
+      program.uniforms.uWaviness.value = current.waviness;
+      program.uniforms.uThickness.value = current.thickness;
+      program.uniforms.uGlow.value = current.glow;
+      program.uniforms.uTaper.value = current.taper;
+      program.uniforms.uSpread.value = current.spread;
+      program.uniforms.uHueShift.value = current.hueShift;
+      program.uniforms.uIntensity.value = current.intensity;
+      program.uniforms.uOpacity.value = current.opacity;
+      program.uniforms.uScale.value = current.scale;
+      program.uniforms.uSaturation.value = current.saturation;
 
-    const draw = (now: number) => {
-      resize();
-      const p = props.current;
-
-      // Frozen at a non-zero time under reduced motion: t=0 puts every strand at the same phase,
-      // which draws a flat comb rather than the effect.
-      const t = reduceMotion ? 2.5 : ((now - start) / 1000) * p.speed;
-
-      const palette = new Float32Array(MAX_STRANDS * 3);
-      const strandCount = Math.max(1, Math.min(p.count, MAX_STRANDS));
-      for (let i = 0; i < strandCount; i++) {
-        const [r, g, b] = hexToRgb(p.colors[i % p.colors.length] ?? "#ffffff");
-        palette[i * 3] = r;
-        palette[i * 3 + 1] = g;
-        palette[i * 3 + 2] = b;
+      if (current.glass) {
+        renderer.render({ scene: mesh, target: renderTarget });
+        glassProgram.uniforms.uScene.value = renderTarget.texture;
+        glassProgram.uniforms.uRefraction.value = current.refraction;
+        glassProgram.uniforms.uDispersion.value = current.dispersion;
+        glassProgram.uniforms.uRadius.value = 0.46 * current.glassSize;
+        renderer.render({ scene: glassMesh });
+      } else {
+        renderer.render({ scene: mesh });
       }
 
-      gl.uniform2f(uniforms.resolution, canvas.width, canvas.height);
-      gl.uniform1f(uniforms.time, t);
-      gl.uniform1i(uniforms.count, strandCount);
-      gl.uniform3fv(uniforms.colors, palette);
-      gl.uniform1f(uniforms.amplitude, p.amplitude);
-      gl.uniform1f(uniforms.waviness, p.waviness);
-      gl.uniform1f(uniforms.thickness, p.thickness);
-      gl.uniform1f(uniforms.glow, p.glow);
-      gl.uniform1f(uniforms.taper, p.taper);
-      gl.uniform1f(uniforms.spread, p.spread);
-      gl.uniform1f(uniforms.intensity, p.intensity);
-      gl.uniform1f(uniforms.saturation, p.saturation);
-      gl.uniform1f(uniforms.opacity, p.opacity);
-      gl.uniform1f(uniforms.scale, p.scale);
-
-      gl.clearColor(0, 0, 0, 0);
-      gl.clear(gl.COLOR_BUFFER_BIT);
-      gl.drawArrays(gl.TRIANGLES, 0, 3);
-
-      // One frame and stop when motion is reduced — no loop to cancel, no battery to spend.
-      if (!reduceMotion) frame = requestAnimationFrame(draw);
+      // Reduced motion draws exactly one frame and then leaves the GPU alone.
+      if (reduceMotion) cancelAnimationFrame(animateId);
     };
-
-    frame = requestAnimationFrame(draw);
+    animateId = requestAnimationFrame(update);
 
     return () => {
-      // Stop the loop and hand back the GL objects. That is the whole cleanup: the context itself
-      // dies with the canvas when React removes the node, and the browser reclaims it.
-      cancelAnimationFrame(frame);
-      gl.deleteBuffer(buffer);
-      gl.deleteProgram(program);
-      gl.deleteShader(vs);
-      gl.deleteShader(fs);
-
-      /**
-       * DO NOT ADD `WEBGL_lose_context.loseContext()` HERE. It was here, and it made the loader
-       * render nothing at all.
-       *
-       * `loseContext()` kills the context PERMANENTLY, and a canvas cannot be given a new one —
-       * `getContext("webgl2")` afterwards returns the same dead object. React StrictMode (which
-       * this app enables in main.tsx) mounts every effect, tears it down, and mounts it again on
-       * the SAME canvas node. So the second mount got the corpse: `createShader` and
-       * `compileShader` fail silently, `getShaderInfoLog` returns null rather than a message, and
-       * the canvas stays transparent. It looked exactly like a shader bug, and it was not.
-       *
-       * The reason it was added — browsers cap simultaneous contexts and evict the oldest — is
-       * real, but it does not apply: this component holds ONE context, unmounts with its canvas,
-       * and the count only climbs if contexts are leaked from canvases still in the document.
-       */
+      cancelAnimationFrame(animateId);
+      window.removeEventListener("resize", resize);
+      if (ctn && gl.canvas.parentNode === ctn) {
+        ctn.removeChild(gl.canvas);
+      }
+      // Safe HERE (unlike a shared React-owned canvas): this canvas was created by THIS mount and
+      // is being removed with it, so nothing reuses the context after it is lost.
+      gl.getExtension("WEBGL_lose_context")?.loseContext();
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   return (
-    <canvas
-      ref={canvasRef}
+    <div
+      ref={ctnDom}
       aria-hidden
-      className={cn("h-full w-full", className)}
-      style={{ display: "block", ...style }}
+      className={cn("relative h-full w-full overflow-hidden", className)}
+      style={{ background: "transparent", ...style }}
     />
   );
 }
