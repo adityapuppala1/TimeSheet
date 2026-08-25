@@ -206,7 +206,15 @@ export function ChangeCalendarPage() {
                             <TooltipTrigger asChild>
                               <button
                                 type="button"
-                                onClick={() => navigate(`/app/changes/${c.id}`)}
+                                // stopPropagation is load-bearing: the day lane behind this bar is
+                                // itself a button that raises a NEW change for the day (see raiseFor).
+                                // Without this, clicking an existing change fired BOTH handlers and
+                                // the lane's "new change" won the race — so an existing record could
+                                // never be opened from the calendar. Opening the record must win.
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  navigate(`/app/changes/${c.id}`);
+                                }}
                                 className={cn(
                                   "absolute inset-y-1 overflow-hidden rounded px-1.5 text-left text-[10px] font-medium text-white transition hover:brightness-110",
                                   TONE_ACCENT_CLASS[tone]

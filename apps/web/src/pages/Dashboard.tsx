@@ -1501,7 +1501,7 @@ function DailyStatusBanner({
   }
 
   return (
-    <Alert variant="success">
+    <Alert variant="success" onDismiss={dismiss} dismissLabel="Dismiss this confirmation">
       <CheckCircle2 />
       <AlertTitle>Today's timesheet is logged</AlertTitle>
       <AlertDescription>

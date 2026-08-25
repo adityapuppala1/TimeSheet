@@ -62,7 +62,13 @@ export const Alert = React.forwardRef<HTMLDivElement, AlertProps>(
           // `absolute` matches how the leading icon is positioned by alertVariants, so the button
           // sits on the alert rather than in the text flow and cannot be pushed around by a long
           // title wrapping onto a second line.
-          className="absolute right-2 top-2 inline-flex h-7 w-7 items-center justify-center rounded-md opacity-60 transition-opacity hover:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-current focus-visible:ring-offset-1"
+          //
+          // A faint tinted chip rather than a bare icon: at opacity-60 the previous X was almost
+          // invisible on the low-contrast tinted grounds these alerts use (a pale-blue X on a
+          // pale-blue info banner), and people reported not seeing it. `bg-current/10` gives it a
+          // just-perceptible circle in the variant's own colour, darkening on hover, so it reads as
+          // a control without fighting the alert's palette.
+          className="absolute right-2 top-2 inline-flex h-7 w-7 items-center justify-center rounded-full bg-current/10 opacity-80 transition hover:bg-current/20 hover:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-current focus-visible:ring-offset-1"
         >
           <X className="h-4 w-4" aria-hidden />
         </button>
