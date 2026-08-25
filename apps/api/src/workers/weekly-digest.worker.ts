@@ -1,5 +1,5 @@
 /**
- * The Monday digest — fires 08:00 server-local time.
+ * The Monday digest — fires 10:00 server-local time.
  *
  * WHAT: for every active user with some signal in the prior week, sends last week's numbers beside
  * month-to-date and year-to-date, per person and per project, with an AI-written opening paragraph
@@ -29,7 +29,7 @@ import { prisma } from "../config/prisma.js";
 import { permissions } from "@timesheet/shared";
 import { generateWeeklyDigest, getGlobalAISettings } from "../services/ai.service.js";
 import { templates } from "../services/mail-templates.js";
-import { buildDigestTables, buildPeriods } from "../services/weekly-digest-data.service.js";
+import { buildDigestTables, buildPeriods, type DigestScope } from "../services/weekly-digest-data.service.js";
 import { loadRequestUser } from "../services/principal.service.js";
 import { dispatchNotification } from "../services/notify.service.js";
 import { runForEveryOrg } from "./run-for-every-org.js";
@@ -55,6 +55,30 @@ function startOfWeekLocal(date: Date): Date {
   const diff = (day + 6) % 7; // days since Monday
   d.setDate(d.getDate() - diff);
   return d;
+}
+
+/**
+ * How much of the workspace this recipient may see. Resolved from what they HOLD and what they
+ * MANAGE, never from a role name — a custom role carrying `reports:view` is an administrator for
+ * this purpose, and somebody is a manager because people report to them.
+ */
+function digestScopeFor(perms: string[], reportCount: number): DigestScope {
+  if (perms.includes(permissions.REPORTS_VIEW)) return "WORKSPACE";
+  if (reportCount > 0) return "TEAM";
+  return "SELF";
+}
+
+/**
+ * The in-app notification line when no model wrote one. A manager's own week is usually empty, so
+ * quoting "0.0h approved, 0 resolved" at them would read as their report rather than as the
+ * preamble to the team and workspace tables underneath.
+ */
+function digestBodyFor(scope: DigestScope, own: { hoursLogged: number; resolved: number; openAssigned: number }): string {
+  if (scope === "SELF") {
+    return `${own.hoursLogged.toFixed(1)}h approved, ${own.resolved} resolved, ${own.openAssigned} still assigned to you.`;
+  }
+  const subject = scope === "WORKSPACE" ? "the workspace" : "your team";
+  return `Last week's figures for ${subject}, with your own week alongside.`;
 }
 
 async function alreadySentThisRun(userId: string, weekStart: Date): Promise<boolean> {
@@ -88,7 +112,9 @@ export async function runWeeklyDigest(now: Date = new Date()): Promise<{ sent: n
   // reported on the agent ledger rather than as a colleague's week.
   const users = await prisma.user.findMany({
     where: { status: "ACTIVE", deletedAt: null, isAgent: false },
-    select: { id: true, name: true }
+    // `_count.reports` is what promotes somebody to the TEAM scope below. Counting it here is one
+    // query for everybody rather than one per candidate inside the loop.
+    select: { id: true, name: true, _count: { select: { reports: true } } }
   });
 
   let sent = 0;
@@ -117,7 +143,26 @@ export async function runWeeklyDigest(now: Date = new Date()): Promise<{ sent: n
     const hoursLogged = Number(hoursAgg._sum.totalHours ?? 0);
     const openAssigned = openAssignedTickets.length;
 
-    if (ticketsCreated === 0 && resolvedTickets.length === 0 && openAssigned === 0 && hoursLogged === 0) {
+    // Who may see what. Resolved per recipient rather than by role NAME, so a custom role carrying
+    // `reports:view` is treated the same as SUPER_ADMIN — and a line manager is recognised by
+    // actually having reports rather than by being called one.
+    const actor = await loadRequestUser(user.id);
+    const scope = digestScopeFor(actor?.permissions ?? [], user._count.reports);
+
+    /**
+     * THE GATE THAT WAS EXCLUDING THE PEOPLE WHO MOST NEEDED THIS.
+     *
+     * Skipping a recipient with no activity is right for an employee: a recap of nothing reads as
+     * spam. But it was applied to EVERYBODY, and it only ever looked at the recipient's OWN
+     * tickets and hours. A super admin or a line manager who manages rather than logs time has no
+     * personal activity by definition — so the digest was filtered out before the workspace and
+     * team tables it exists to deliver were ever built. That is the reported symptom: "the weekly
+     * dashboard is not going to Super Admin and Manager."
+     *
+     * So the gate now applies only at SELF scope. Anyone with people or a workspace to report on
+     * gets the report, because for them the personal figures were never the point.
+     */
+    if (scope === "SELF" && ticketsCreated === 0 && resolvedTickets.length === 0 && openAssigned === 0 && hoursLogged === 0) {
       skipped += 1;
       continue;
     }
@@ -147,11 +192,7 @@ export async function runWeeklyDigest(now: Date = new Date()): Promise<{ sent: n
       }
     }
 
-    // Who may see the whole workspace: the same right that opens the reports pages. Resolved per
-    // recipient rather than per role name, so a custom role with the permission is treated the same.
-    const actor = await loadRequestUser(user.id);
-    const includeWorkspace = Boolean(actor?.permissions.includes(permissions.REPORTS_VIEW));
-    const tablesHtml = await buildDigestTables({ userId: user.id, periods, includeWorkspace });
+    const tablesHtml = await buildDigestTables({ userId: user.id, periods, scope });
 
     await dispatchNotification({
       userId: user.id,
@@ -159,7 +200,9 @@ export async function runWeeklyDigest(now: Date = new Date()): Promise<{ sent: n
       title: `Your week in review — ${weekLabel}`,
       // The in-app row keeps the sentence when there is one, and states the headline figures when
       // there is not — a notification reading "Your week in review" and nothing else is not a summary.
-      body: summary || `${hoursLogged.toFixed(1)}h approved, ${resolvedTickets.length} resolved, ${openAssigned} still assigned to you.`,
+      // A manager whose own week is empty must not be told "0.0h approved, 0 resolved" as though
+      // that were their report — theirs is the team and workspace tables underneath.
+      body: summary || digestBodyFor(scope, { hoursLogged, resolved: resolvedTickets.length, openAssigned }),
       link: "/app",
       email: {
         templateKey: "digest.weekly",
@@ -183,8 +226,9 @@ export function startWeeklyDigestWorker() {
   if (started) return;
   started = true;
 
-  // Monday 08:00 server-local time.
-  cron.schedule("0 8 * * 1", () => {
+  // Monday 10:00. Moved from 08:00 on request: the digest is read at the start of the working
+  // week rather than before it, and 10:00 clears the first-hour inbox rush.
+  cron.schedule("0 10 * * 1", () => {
     if (running) return;
     running = true;
     runForEveryOrg("weekly-digest", async () => {
