@@ -675,14 +675,18 @@ export const templates = {
         paragraph(`<span style="color:${MUTED};">Nothing after that step happens until you decide. Declining stops the run; it changes nothing that already happened.</span>`)
     ),
 
-  securityWeeklyDigest: (params: { weekLabel: string; summary: string; riskScore: number | string }) =>
+  /** `tablesHtml` is the counted report; `summary` is an optional paragraph on top of it. The
+   *  preheader and the footnote both say "counted" rather than "AI-authored" because the figures
+   *  are read from this workspace's own findings and send whether or not a model answered. */
+  securityWeeklyDigest: (params: { weekLabel: string; summary: string; riskScore: number | string; tablesHtml?: string }) =>
     shell(
-      { title: `Security digest — week of ${params.weekLabel}`, preheader: "AI-authored recap of this week's security findings and risk trend." },
+      { title: `Security digest — week of ${params.weekLabel}`, preheader: "Last week's security findings, risk trend and SLA breaches." },
       heading(`Security posture — week of ${escape(params.weekLabel)}`) +
         infoCard([["Risk score", String(params.riskScore)]], Number(params.riskScore) > 30 ? DESTRUCTIVE : Number(params.riskScore) > 10 ? ACCENT : SUCCESS) +
-        paragraph(escape(params.summary)) +
+        (params.summary ? paragraph(escape(params.summary)) : "") +
+        (params.tablesHtml ?? "") +
         paragraph(button("Open Security insights", appUrl("/app/security-insights"))) +
-        paragraph(`<span style="color:${MUTED};">AI-generated from this week's ingested findings — turn it off anytime in Workspace Settings → AI.</span>`)
+        paragraph(`<span style="color:${MUTED};">Figures are counted from this workspace's ingested findings. The opening paragraph, when present, is AI-generated — turn it off anytime in Workspace Settings → AI.</span>`)
     ),
 
   bugPatternDigest: (params: { periodLabel: string; summary: string }) =>
