@@ -1442,22 +1442,98 @@ export interface AutonomyCatalogue {
   capabilities: AutonomyEntry[];
 }
 
-export interface AIUsageSummary {
-  monthStart: string;
+/** One provider×model combination's usage over the picked range — one row of the usage table. */
+/** One entry in the ranked BYOK list (Workspace Settings → AI). `callChat` tries ENABLED rows in
+ *  ascending `priority` order; only the top one ever honors a feature's requested model — every
+ *  row after it uses its own `model`, since a fallback was chosen for a different vendor's
+ *  catalogue and is unlikely to serve a model by the primary's name at all. */
+export interface AIProviderConfigRow {
+  id: string;
+  provider: "ANTHROPIC" | "OPENAI_COMPATIBLE";
+  label: string | null;
+  baseUrl: string | null;
+  model: string;
+  enabled: boolean;
+  priority: number;
+  apiKeySet: boolean;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface AIProviderConfigInput {
+  provider: "ANTHROPIC" | "OPENAI_COMPATIBLE";
+  label?: string | null;
+  baseUrl?: string | null;
+  model: string;
+  apiKey?: string;
+  enabled?: boolean;
+}
+
+/** One provider's real 30-day track record, behind the "Suggest order" recommendation. */
+export interface SuggestedProviderOrderEntry {
+  id: string;
+  label: string;
+  /** null = no calls in the window — neither good nor bad, just unproven. */
+  successRatePct: number | null;
+  avgLatencyMs: number | null;
+  avgCostUsd: number | null;
+  calls: number;
+}
+
+export interface AIUsageRow {
+  provider: string;
+  model: string;
+  /** Every ATTEMPT against this provider×model, successful or not. */
+  calls: number;
+  successCount: number;
+  failureCount: number;
+  /** null = zero calls in this group — "never tried" and "fails every time" are different claims;
+   *  render "n/a", never "0%". */
+  successRatePct: number | null;
+  inputTokens: number;
+  outputTokens: number;
+  totalTokens: number;
+  /** null = no call in this group had a measured duration — render "not measured", never 0ms. */
+  avgLatencyMs: number | null;
+  /** How many of `calls` contributed to avgLatencyMs, so "842ms" can be qualified with "measured
+   *  on 8 of 10 calls" rather than implying every call was timed. */
+  latencyMeasuredCalls: number;
+  costUsd: number;
+  costSharePct: number;
+}
+
+export interface AIUsageBreakdown {
+  /** Inclusive range actually reported — echoes back whatever from/to were requested. */
+  from: string;
+  to: string;
   totalCostUsd: number;
+  /** Every ATTEMPT in the range, successful or not — see AIUsageRow.calls. */
   totalCalls: number;
+  totalFailures: number;
+  /** null = zero calls in the range at all. */
+  overallSuccessRatePct: number | null;
   totalInputTokens: number;
   totalOutputTokens: number;
   /** The agent-driven SHARE of the totals above — a subset, never an addition. Without this the panel
    *  can say a workspace spent $40 but not whether that was forty people using refine or one teammate
    *  running unattended all month. */
   agentDriven: { costUsd: number; calls: number; inputTokens: number; outputTokens: number };
-  byFeature: Array<{ feature: string; costUsd: number; calls: number; inputTokens: number; outputTokens: number }>;
-  byModel: Array<{ model: string; costUsd: number; inputTokens: number; outputTokens: number; calls: number }>;
+  /** Options for the feature filter, with a call count — scoped to the date range only, so picking
+   *  one feature never collapses this list down to just that entry. */
+  features: Array<{ feature: string; calls: number }>;
+  /** The provider×model cross-tab — one row per combination actually used in the range. */
+  rows: AIUsageRow[];
   /** Per-workflow spend, attributed through the agent runs each flow queued. A subset of
    *  `agentDriven`, and read from a different table — the usage log records what was asked of a model,
    *  not who composed the question. */
   byFlow: Array<{ flowId: string; name: string; emoji: string; costUsd: number; runs: number }>;
+}
+
+/** One week's spend, split by provider — `weekStart` plus one numeric key per provider name seen
+ *  in the range (dynamic keys, since the provider set isn't known ahead of time). */
+export interface AIUsageTrendWeek {
+  weekStart: string;
+  [provider: string]: string | number;
 }
 
 /** One feature's consumption over the window. Sorted by tokens, not cost — cost is an estimate
@@ -1683,10 +1759,6 @@ export const aiPromptApi = {
   activate: async (feature: string, versionId: string | null) => api.post(`/ai/prompts/${feature}/activate`, { versionId })
 };
 
-export interface AIUsageWeek {
-  weekStart: string;
-  costUsd: number;
-}
 
 /// General-purpose if/then automation on manually-created tickets — see
 /// prisma/schema.prisma's TicketRule doc comment (apps/api) for the full evaluation model.
@@ -1808,6 +1880,20 @@ export const settingsApi = {
    *  omit to leave the stored key untouched, pass "" to clear it back to the env-var fallback. */
   updateAI: async (payload: Partial<GlobalAISettings> & { apiKey?: string }) =>
     (await api.patch<GlobalAISettings>("/settings/ai", payload)).data,
+  /** The ranked BYOK list, ascending priority — what `callChat` actually tries in order. */
+  listAiProviders: async () => (await api.get<AIProviderConfigRow[]>("/settings/ai/providers")).data,
+  createAiProvider: async (payload: AIProviderConfigInput) => (await api.post<AIProviderConfigRow>("/settings/ai/providers", payload)).data,
+  /** `apiKey` write-only, same convention as updateAI: omit to leave the stored key untouched. */
+  updateAiProvider: async (id: string, payload: Partial<AIProviderConfigInput>) =>
+    (await api.patch<AIProviderConfigRow>(`/settings/ai/providers/${id}`, payload)).data,
+  deleteAiProvider: async (id: string) => api.delete(`/settings/ai/providers/${id}`),
+  /** Rewrites priority to match this exact order — the whole list, not a delta. */
+  reorderAiProviders: async (orderedIds: string[]) =>
+    (await api.post<AIProviderConfigRow[]>("/settings/ai/providers/reorder", { orderedIds })).data,
+  /** A RECOMMENDATION over the last 30 days of real usage — never applied automatically. Call
+   *  reorderAiProviders yourself with `suggestedOrderIds` once the admin accepts it. */
+  getSuggestedAiProviderOrder: async () =>
+    (await api.get<{ suggestedOrderIds: string[]; reasoning: SuggestedProviderOrderEntry[] }>("/settings/ai/providers/suggested-order")).data,
   /** How much authority each AI capability holds, as opposed to whether it runs at all.
    *  The server returns BOTH `requestedLevel` and `effectiveLevel`; the UI must render the
    *  second and never re-derive it, or the screen will eventually disagree with the server. */
@@ -1816,12 +1902,21 @@ export const settingsApi = {
    *  caller should surface the server's message rather than a generic one. */
   updateAIAutonomy: async (payload: { capability: string; level: AutonomyLevel }) =>
     (await api.patch<AutonomyEntry>("/settings/ai/autonomy", payload)).data,
-  getAIUsageSummary: async () => (await api.get<AIUsageSummary>("/settings/ai/usage-summary")).data,
+  getAIUsageSummary: async (params: { from: string; to: string; feature?: string }) =>
+    (await api.get<AIUsageBreakdown>("/settings/ai/usage-summary", { params })).data,
   /** AI QUALITY (not cost) — see api/src/services/ai-quality.service.ts for why the headline
    *  number is parse-failure rate rather than thumbs-up rate. */
   getAIQualitySummary: async (windowDays = 30) =>
     (await api.get<AIQualitySummary>("/settings/ai/quality-summary", { params: { windowDays } })).data,
-  getAIUsageTrend: async (weeks = 8) => (await api.get<AIUsageWeek[]>("/settings/ai/usage-trend", { params: { weeks } })).data,
+  getAIUsageTrend: async (params: { from: string; to: string }) =>
+    (await api.get<{ providerNames: string[]; weeks: AIUsageTrendWeek[] }>("/settings/ai/usage-trend", { params })).data,
+  /** A BLOB through the authenticated axios instance, never an `<a href>` — same reasoning as
+   *  changeApi.download: this app keeps its access token in memory, so a bare link would reach
+   *  the export route with no Authorization header and 401. */
+  downloadAiUsageExcel: async (params: { from: string; to: string; feature?: string }) => {
+    const res = await api.get("/settings/ai/usage-export.xlsx", { params, responseType: "blob" });
+    return { blob: res.data as Blob, rowsIncluded: Number(res.headers["x-export-rows-included"] ?? 0) };
+  },
   /** Per-feature token consumption — "what is spending the budget", as opposed to the summary's
    *  "what did we spend". */
   getAIFeatureUsage: async (days = 30) =>

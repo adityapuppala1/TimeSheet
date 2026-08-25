@@ -106,7 +106,7 @@ describe("mechanical features are routed to the economy model", () => {
     await runInTenant(client, () => classifyTicket(TRIAGE_ARGS as never));
 
     expect(client.aIUsageLog.create).toHaveBeenCalledWith(
-      expect.objectContaining({ data: expect.objectContaining({ feature: "triage", model: "claude-haiku-4-5" }) })
+      expect.objectContaining({ data: expect.objectContaining({ feature: "triage", model: "claude-haiku-4-5", provider: "Anthropic" }) })
     );
   });
 

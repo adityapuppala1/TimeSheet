@@ -18,7 +18,6 @@ import { serverTimezone } from "../config/env.js";
 import { getLoggingStatus } from "../config/logger.js";
 import { describeStorageLayout, validateDirectory } from "../config/storage-paths.js";
 import { requireAuth, requirePermission, requireSuperAdmin } from "../middleware/auth.js";
-import { env } from "../config/env.js";
 import { AppError } from "../middleware/error.js";
 import { validate } from "../middleware/validate.js";
 import { audit } from "../services/audit.service.js";
@@ -31,7 +30,16 @@ import {
   notifyEnrollmentRequired
 } from "../services/face.service.js";
 import { getGlobalNotificationSettings } from "../services/notify.service.js";
-import { getGlobalAISettings, getMonthlyAIUsageSummary, getWeeklyAIUsageTrend, getAIFeatureUsage, listAvailableOpenAICompatibleModels, resolveApiKey } from "../services/ai.service.js";
+import { getGlobalAISettings, getEnabledProviderConfigs, getAIUsageBreakdown, getAIUsageDailyDetail, getWeeklyAIUsageTrend, getAIFeatureUsage, listAvailableOpenAICompatibleModels, resolveApiKey } from "../services/ai.service.js";
+import { buildAiUsageWorkbook } from "../services/ai-usage-export.service.js";
+import {
+  listProviderConfigs,
+  createProviderConfig,
+  updateProviderConfig,
+  deleteProviderConfig,
+  reorderProviderConfigs,
+  getSuggestedProviderOrder
+} from "../services/ai-provider-config.service.js";
 import { getAIQualitySummary } from "../services/ai-quality.service.js";
 import { getAllowedSsoProviders } from "../services/plan-limits.service.js";
 import { getGlobalTicketSettings } from "../services/ticket.service.js";
@@ -296,20 +304,40 @@ settingsRouter.delete("/ticket-rules/:id", requireSuperAdmin, async (req, res) =
 });
 
 /**
- * BYOK: `apiKey` is write-only — a saved key is never returned, only `apiKeySet: boolean`
- * (same masking convention as EmailIntakeSettings.imapPassword). `apiKeyConfigured` stays for
- * backward compatibility (true when either a stored key OR the env var fallback is usable for
- * the current provider) since the frontend's existing "is AI actually usable" check reads it.
+ * BYOK: `apiKey` is write-only — a saved key is never returned, only `apiKeySet: boolean` (same
+ * masking convention as EmailIntakeSettings.imapPassword) — describes the DEPRECATED singleton
+ * field above, kept only as the source the provider-list migration copied from.
+ *
+ * `apiKeyConfigured` answers a different, still-live question — "would an AI call actually work
+ * right now" — so it is computed from the PRIMARY entry in the ranked provider list (V9,
+ * provider-priority) instead: `resolveApiKey` already encodes the one exception that matters,
+ * ANTHROPIC with no stored key still counts as configured when the server's own
+ * ANTHROPIC_API_KEY is set.
  */
 settingsRouter.get("/ai", requireSuperAdmin, async (_req, res) => {
   const { apiKey, ...settings } = await getGlobalAISettings();
   const apiKeySet = Boolean(apiKey);
-  const apiKeyConfigured = settings.provider === "ANTHROPIC" ? apiKeySet || Boolean(env.ANTHROPIC_API_KEY) : apiKeySet;
+  const [primary] = await getEnabledProviderConfigs();
+  const apiKeyConfigured = Boolean(resolveApiKey(primary));
   res.json({ ...settings, apiKeySet, apiKeyConfigured });
 });
 
-settingsRouter.get("/ai/usage-summary", requireSuperAdmin, async (_req, res) => {
-  res.json(await getMonthlyAIUsageSummary());
+/** `?from=&to=` are ISO dates from the client's DateRangePicker; absent defaults to the current
+ *  calendar month, matching what this route showed before it took a range at all. `to` is
+ *  exclusive downstream, so the caller's inclusive last day is added back here — a picker showing
+ *  "through Aug 25" must actually include every row written ON Aug 25. */
+function parseUsageRange(req: { query: Record<string, unknown> }): { from: Date; to: Date } {
+  const now = new Date();
+  const from = req.query.from ? new Date(String(req.query.from)) : new Date(now.getFullYear(), now.getMonth(), 1);
+  const toParam = req.query.to ? new Date(String(req.query.to)) : now;
+  const to = new Date(toParam.getFullYear(), toParam.getMonth(), toParam.getDate() + 1);
+  return { from, to };
+}
+
+settingsRouter.get("/ai/usage-summary", requireSuperAdmin, async (req, res) => {
+  const { from, to } = parseUsageRange(req);
+  const feature = req.query.feature ? String(req.query.feature) : undefined;
+  res.json(await getAIUsageBreakdown({ from, to, feature }));
 });
 
 /** Per-feature AI QUALITY (as opposed to cost, above) — see services/ai-quality.service.ts for
@@ -320,8 +348,33 @@ settingsRouter.get("/ai/quality-summary", requireSuperAdmin, async (req, res) =>
 });
 
 settingsRouter.get("/ai/usage-trend", requireSuperAdmin, async (req, res) => {
-  const weeks = Math.min(26, Math.max(1, Number(req.query.weeks) || 8));
-  res.json(await getWeeklyAIUsageTrend(weeks));
+  const { from, to } = parseUsageRange(req);
+  res.json(await getWeeklyAIUsageTrend({ from, to }));
+});
+
+/** The provider × model breakdown, PLUS a day × feature × provider × model detail sheet, as a real
+ *  workbook — same range/feature params as usage-summary, so what somebody sees on screen is
+ *  exactly what they download. No row cap: rows are bounded by this app's own AI call volume,
+ *  never the thousands a ticket/change export can reach. */
+settingsRouter.get("/ai/usage-export.xlsx", requireSuperAdmin, async (req, res) => {
+  const { from, to } = parseUsageRange(req);
+  const feature = req.query.feature ? String(req.query.feature) : undefined;
+  const [breakdown, dailyRows] = await Promise.all([
+    getAIUsageBreakdown({ from, to, feature }),
+    getAIUsageDailyDetail({ from, to, feature })
+  ]);
+  const buffer = await buildAiUsageWorkbook(breakdown.rows, dailyRows, {
+    generatedBy: req.user!.name,
+    workspace: requireTenantContext().orgSlug,
+    from: breakdown.from,
+    to: breakdown.to,
+    feature: feature ?? null
+  });
+  res.setHeader("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
+  res.setHeader("Content-Disposition", `attachment; filename="ai-usage-${breakdown.from}-to-${breakdown.to}.xlsx"`);
+  res.setHeader("X-Export-Rows-Included", String(breakdown.rows.length + dailyRows.length));
+  res.setHeader("Access-Control-Expose-Headers", "X-Export-Rows-Included, Content-Disposition");
+  res.send(buffer);
 });
 
 /** Per-feature token consumption, cumulative and day by day — "what is spending the budget",
@@ -413,6 +466,66 @@ settingsRouter.patch("/ai", requireSuperAdmin, validate(aiSettingsSchema), async
   // eslint-disable-next-line sonarjs/no-unused-vars -- rest-sibling omit pattern
   const { apiKey: _omit, ...safeUpdated } = updated;
   res.json({ ...safeUpdated, apiKeySet: Boolean(updated.apiKey) });
+});
+
+/**
+ * THE RANKED PROVIDER LIST (V9, provider-priority) — replaces `provider`/`baseUrl`/`apiKey`/
+ * `model` on `aiSettingsSchema` above as the actual BYOK surface. Those four fields are left in
+ * place (see the schema comment on GlobalAISettings) but nothing in the current UI writes to them
+ * any more; this is where a Super Admin adds, edits, reorders, and removes providers.
+ *
+ * Its own sub-resource for the same reason `/ai/autonomy` is: a `.strict()` PATCH schema for a
+ * LIST doesn't make sense (you don't "patch" a list's shape), and this now owns credentials —
+ * mixing it into the general settings PATCH would make one giant handler respond wrong to a
+ * partial payload that happened to omit a provider a caller didn't mean to touch.
+ */
+const providerConfigBodySchema = z.object({
+  provider: z.enum(["ANTHROPIC", "OPENAI_COMPATIBLE"]),
+  label: z.string().max(60).optional().nullable(),
+  // SSRF-validated at save time — see utils/egress.ts. Empty string/omitted both mean "no base
+  // URL", matching ANTHROPIC's own default (baseUrl is meaningless for the native Messages API).
+  baseUrl: egressUrl(300).or(z.literal("")).optional().nullable(),
+  model: z.string().min(1).max(80),
+  // Non-empty encrypts before it ever touches the database; omitted on CREATE means "no key yet"
+  // (legal for a local Ollama/LM Studio, which needs none); omitted on UPDATE leaves the stored
+  // key untouched, same convention as GlobalAISettings.apiKey.
+  apiKey: z.string().max(2000).optional(),
+  enabled: z.boolean().optional()
+});
+
+const createProviderConfigSchema = z.object({ body: providerConfigBodySchema.strict() });
+settingsRouter.get("/ai/providers", requireSuperAdmin, async (_req, res) => {
+  res.json(await listProviderConfigs());
+});
+settingsRouter.post("/ai/providers", requireSuperAdmin, validate(createProviderConfigSchema), async (req, res) => {
+  res.status(201).json(await createProviderConfig(req.body, req.user!.id));
+});
+
+const updateProviderConfigSchema = z.object({
+  params: z.object({ id: z.string().uuid() }),
+  body: providerConfigBodySchema.partial().strict()
+});
+settingsRouter.patch("/ai/providers/:id", requireSuperAdmin, validate(updateProviderConfigSchema), async (req, res) => {
+  res.json(await updateProviderConfig(String(req.params.id), req.body, req.user!.id));
+});
+
+settingsRouter.delete("/ai/providers/:id", requireSuperAdmin, async (req, res) => {
+  await deleteProviderConfig(String(req.params.id), req.user!.id);
+  res.status(204).end();
+});
+
+const reorderProviderConfigSchema = z.object({
+  body: z.object({ orderedIds: z.array(z.string().uuid()).min(1) }).strict()
+});
+settingsRouter.post("/ai/providers/reorder", requireSuperAdmin, validate(reorderProviderConfigSchema), async (req, res) => {
+  res.json(await reorderProviderConfigs(req.body.orderedIds, req.user!.id));
+});
+
+/** A RECOMMENDATION, not an automatic change — see getSuggestedProviderOrder's own header for why
+ *  this stays a suggestion an admin applies (via the existing reorder endpoint) rather than
+ *  something this route applies on its own. */
+settingsRouter.get("/ai/providers/suggested-order", requireSuperAdmin, async (_req, res) => {
+  res.json(await getSuggestedProviderOrder());
 });
 
 /**

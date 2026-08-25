@@ -175,7 +175,7 @@ export function FlowCanvas({
   const triggerNode = { x: 24, y: (first?.at.y ?? LANE_Y) + NODE_H / 2 - 28 };
 
   return (
-    <div className="relative overflow-hidden rounded-lg border bg-muted/20 bg-[radial-gradient(circle,theme(colors.muted-foreground/0.18)_1px,transparent_1px)] [background-size:18px_18px]">
+    <div className="relative overflow-hidden rounded-lg border bg-muted/20 bg-[radial-gradient(circle,hsl(var(--muted-foreground)/0.18)_1px,transparent_1px)] [background-size:18px_18px]">
       {/* Zoom controls, mirroring n8n's corner rail. */}
       <div className="absolute right-3 top-3 z-10 flex flex-col gap-1 rounded-md border bg-background/90 p-1 shadow-sm backdrop-blur">
         <button type="button" className="grid h-7 w-7 place-items-center rounded text-sm hover:bg-muted" onClick={() => setZoom((z) => Math.min(1.6, +(z + 0.15).toFixed(2)))} aria-label="Zoom in">

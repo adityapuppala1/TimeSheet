@@ -1264,21 +1264,16 @@ model GlobalAISettings {
   /// other. Off by default: an eval should be cheap unless you decide otherwise.
   aiEvalJudgeEnabled      Boolean @default(false)
 
-  model               String     @default("claude-haiku-4-5") @db.VarChar(80)
   confidenceThreshold Float      @default(0.6)
   monthlyBudgetUsd    Decimal?   @db.Decimal(10, 2)
-  /// BYOK: which model family to call. ANTHROPIC uses this row's apiKey (falling back to the
-  /// server's ANTHROPIC_API_KEY env var when unset) against the native Messages API; every
-  /// other supported vendor (OpenAI, Groq, Mistral, DeepSeek, OpenRouter, Gemini, Qwen, Kimi,
-  /// Nvidia NIM, Ollama, LM Studio, or any other custom endpoint) goes through
-  /// OPENAI_COMPATIBLE's generic adapter using this row's baseUrl.
+  /// DEPRECATED (V9, provider-priority): BYOK now lives on AIProviderConfig, one row per
+  /// configured provider, ranked by `priority`. These four columns are kept, unread by any
+  /// dispatch code, ONLY as the source the migration copied into that table's first row — dropping
+  /// them would be one more irreversible step than the switch to a ranked list actually needs.
+  /// `getGlobalAISettings()` callers must not read them for anything but that one-time migration.
+  model               String     @default("claude-haiku-4-5") @db.VarChar(80)
   provider            AIProvider @default(ANTHROPIC)
-  /// Only meaningful for OPENAI_COMPATIBLE — e.g. https://api.groq.com/openai/v1 or
-  /// http://localhost:11434/v1 for a local Ollama install.
   baseUrl             String?    @db.VarChar(300)
-  /// AES-256-GCM ciphertext (see utils/encryption.ts) — never returned to the client; the API
-  /// exposes only an `apiKeySet: boolean`, same masking convention as
-  /// EmailIntakeSettings.imapPassword.
   apiKey              String?    @db.Text
   /// THE MASTER LATCH FOR AUTONOMY. While false, `resolveAutonomy()` returns SUGGEST for every
   /// capability no matter what any AiCapabilityPolicy row says — so "stop the assistants acting,
@@ -1291,6 +1286,45 @@ model GlobalAISettings {
   aiAutonomyEnabled   Boolean    @default(false)
   updatedAt           DateTime   @updatedAt
   updatedById         String?
+}
+
+/// One configured AI provider, ranked by `priority` — the BYOK list that replaced
+/// GlobalAISettings' single provider/baseUrl/apiKey/model quartet (V9, provider-priority).
+/// `callChat` (ai.service.ts) tries the ENABLED rows in ascending priority order and falls
+/// through to the next one on an availability failure (a rejected key, a rate limit, an empty
+/// answer — anything `translateProviderError` already turns into a clear, recognizable error) —
+/// never on a real bug in the request itself, which would just fail identically against every
+/// other provider and is better reported once than retried silently five times.
+///
+/// WHY EVERY ROW HAS ITS OWN `model`, NOT ONE SHARED CHOICE: providers do not share a model
+/// catalogue. A fallback that reused the primary's model name would ask Groq for
+/// "claude-haiku-4-5" and fail for an unrelated reason, defeating the point of falling back at
+/// all — so only the highest-priority row ever honors a caller's requested model; every other row
+/// uses its own.
+model AIProviderConfig {
+  id     String     @id @default(uuid())
+  /// Same two-family split as the deprecated singleton: ANTHROPIC calls the native Messages API,
+  /// everything else goes through the OpenAI-compatible adapter via `baseUrl`.
+  provider AIProvider @default(ANTHROPIC)
+  /// Admin-facing name shown in the priority list — "Groq (fast, cheap)" reads better than a bare
+  /// provider enum once there is more than one row of the same provider type (e.g. two Anthropic
+  /// keys on different billing accounts as failover). Falls back to `resolveProviderLabel` when unset.
+  label    String?    @db.VarChar(60)
+  baseUrl  String?    @db.VarChar(300)
+  /// AES-256-GCM ciphertext, same convention as the deprecated GlobalAISettings.apiKey.
+  apiKey   String?    @db.Text
+  model    String     @db.VarChar(80)
+  /// A disabled row is skipped by the dispatcher entirely but keeps its place in the list — an
+  /// admin pausing a flaky provider for a day should not have to re-enter its key tomorrow.
+  enabled  Boolean    @default(true)
+  /// Ascending — 0 is tried first. Not `@unique`: a tie is resolved by insertion order (id), which
+  /// only matters for the instant between two rows momentarily sharing a value during a reorder.
+  priority Int        @default(0)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([priority])
 }
 
 /// How much authority one AI capability has when it runs.
@@ -1492,9 +1526,30 @@ model AIUsageLog {
   id              String   @id @default(uuid())
   feature         String   @db.VarChar(60)
   model           String   @db.VarChar(80)
+  /// Resolved display name of whatever served the call ("Anthropic", "Mistral", a bare hostname
+  /// for an unrecognized custom endpoint) — see resolveProviderLabel in packages/shared. NULL for
+  /// every row written before this column existed: GlobalAISettings.provider/baseUrl can change
+  /// over time, so guessing the CURRENT provider onto historical rows would misattribute past
+  /// spend the first time a workspace ever switches providers.
+  provider        String?  @db.VarChar(40)
   inputTokens     Int
   outputTokens    Int
   costUsdEstimate Decimal  @db.Decimal(10, 4)
+  /// Wall-clock time of the model call itself, when the caller measured it. NULL rather than
+  /// 0-default (mirrors AIInteraction.latencyMs) — several call sites never measure a single-call
+  /// duration, and 0 would read as "instant" rather than "not measured".
+  durationMs      Int?
+  /// True for every row before this column existed (only successful calls were ever logged, so
+  /// every historical row genuinely was one) and for every successful call since. False marks an
+  /// ATTEMPT that failed — a rejected key, a rate limit, an empty answer — written by `callChat`'s
+  /// priority-fallback dispatcher itself (V9, provider-priority) for each provider it tried, so
+  /// "which provider actually gets the job done" is finally answerable from this table instead of
+  /// only "which provider we happened to spend money with". inputTokens/outputTokens/costUsdEstimate
+  /// are 0 for a failed attempt — nothing was consumed or billed.
+  success         Boolean  @default(true)
+  /// Populated only when success is false — the translated, human-readable failure reason (see
+  /// translateProviderError), truncated to fit. Null for a success.
+  errorReason     String?  @db.VarChar(300)
   ticketId        String?
   ticket          Ticket?  @relation(fields: [ticketId], references: [id], onDelete: SetNull)
   /// The user whose action triggered this AI call (nullable: some triggers, like the
@@ -1506,6 +1561,7 @@ model AIUsageLog {
   @@index([feature, createdAt])
   @@index([createdAt])
   @@index([model, createdAt])
+  @@index([provider, createdAt])
   @@index([userId])
 }
 

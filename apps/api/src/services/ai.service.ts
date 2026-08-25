@@ -37,6 +37,7 @@ import Anthropic from "@anthropic-ai/sdk";
 import OpenAI from "openai";
 import { z } from "zod";
 import type { TicketPriority } from "@prisma/client";
+import { resolveProviderLabel } from "@timesheet/shared";
 import { env } from "../config/env.js";
 import { prisma } from "../config/prisma.js";
 import { AI_CHAT_TOOLS, findAiChatTool, type AiChatToolContext } from "./ai-chat-tools.js";
@@ -118,8 +119,10 @@ export async function getGlobalAISettings() {
 
 type AISettingsRow = Awaited<ReturnType<typeof getGlobalAISettings>>;
 
-/** Decrypts the row's stored key if one was set; falls back to the env var for the default Anthropic path only. */
-export function resolveApiKey(settings: AISettingsRow): string {
+/** Decrypts a stored key if one was set; falls back to the env var for the default Anthropic path
+ *  only. Structurally typed so the same function serves both the deprecated GlobalAISettings
+ *  singleton and the new AIProviderConfig rows — same two fields, same rule, one implementation. */
+export function resolveApiKey(settings: { provider: string; apiKey: string | null }): string {
   if (settings.apiKey) {
     try {
       return decryptSecret(settings.apiKey);
@@ -130,7 +133,41 @@ export function resolveApiKey(settings: AISettingsRow): string {
   return settings.provider === "ANTHROPIC" ? env.ANTHROPIC_API_KEY : "";
 }
 
+/** The shape `callChat`'s dispatch loop actually needs — satisfied by a real AIProviderConfig row
+ *  (extra fields ignored) or by the synthesized implicit default below. */
+export interface ProviderConfigRow {
+  id: string | null;
+  provider: "ANTHROPIC" | "OPENAI_COMPATIBLE";
+  label: string | null;
+  baseUrl: string | null;
+  apiKey: string | null;
+  model: string;
+}
+
+/**
+ * The ranked BYOK list, ascending priority — what `callChat` tries in order (V9, provider-priority).
+ *
+ * An EMPTY result (nobody has ever added a row, or every row is currently disabled) synthesizes
+ * the exact implicit default this product has always had: Anthropic, the server's own
+ * ANTHROPIC_API_KEY, GlobalAISettings' default model. That keeps "never configured BYOK" working
+ * exactly as it did before this table existed, rather than turning "add nothing" into "AI is now
+ * broken until somebody visits Workspace Settings → AI".
+ */
+export async function getEnabledProviderConfigs(): Promise<ProviderConfigRow[]> {
+  const rows = await prisma.aIProviderConfig.findMany({
+    where: { enabled: true },
+    orderBy: { priority: "asc" }
+  });
+  if (rows.length > 0) return rows;
+  const settings = await getGlobalAISettings();
+  return [{ id: null, provider: settings.provider, label: null, baseUrl: settings.baseUrl, apiKey: settings.apiKey, model: settings.model }];
+}
+
 interface CallChatParams {
+  /** Which capability is calling — unused by either provider client (callAnthropic /
+   *  callOpenAICompatible just ignore it), but `callChat`'s dispatcher needs it to attribute a
+   *  FAILED attempt to the right feature when it logs one itself (see callChat's header). */
+  feature: string;
   model: string;
   maxTokens: number;
   prompt: string;
@@ -143,6 +180,15 @@ interface CallChatParams {
 interface CallChatResult {
   text: string;
   usage: { inputTokens: number; outputTokens: number };
+}
+
+/** `callChat`'s own result additionally names which config actually answered — necessary once a
+ *  fallback can substitute a different model than the caller asked for (see callChat's header).
+ *  Every caller must log THIS model/provider to AIUsageLog, not whatever it originally requested,
+ *  or the cost ledger would price and attribute the call to a model that never actually ran. */
+interface CallChatOutcome extends CallChatResult {
+  model: string;
+  provider: string;
 }
 
 async function callAnthropic(apiKey: string, params: CallChatParams): Promise<CallChatResult> {
@@ -161,14 +207,23 @@ async function callAnthropic(apiKey: string, params: CallChatParams): Promise<Ca
       ]
     : params.prompt;
 
-  const response = await client.messages.create({
-    model: params.model,
-    max_tokens: params.maxTokens,
-    messages: [{ role: "user", content }],
-    ...(params.jsonSchema
-      ? { output_config: { format: { type: "json_schema" as const, schema: params.jsonSchema.schema } } }
-      : {})
-  });
+  let response;
+  try {
+    response = await client.messages.create({
+      model: params.model,
+      max_tokens: params.maxTokens,
+      messages: [{ role: "user", content }],
+      ...(params.jsonSchema
+        ? { output_config: { format: { type: "json_schema" as const, schema: params.jsonSchema.schema } } }
+        : {})
+    });
+  } catch (error) {
+    // Same reasoning as callOpenAICompatible's translation below — left uncaught, the Anthropic
+    // SDK's own error classes are just an `Error` to everything above callChat, and (since the
+    // priority-fallback dispatcher landed) an untranslated error also fails to signal "try the
+    // next configured provider" at all, since only a recognizable AppError(502, ...) does that.
+    throw translateProviderError(error);
+  }
 
   return {
     text: firstTextBlock(response.content),
@@ -187,7 +242,44 @@ async function callAnthropic(apiKey: string, params: CallChatParams): Promise<Ca
  */
 const MODEL_CALL_TIMEOUT_MS = 90_000;
 
-async function callOpenAICompatible(settings: AISettingsRow, apiKey: string, params: CallChatParams): Promise<CallChatResult> {
+/**
+ * Both provider SDKs' errors carry a real HTTP status and, usually, a provider-written message —
+ * but left uncaught they're just an `Error` to everything above `callChat`, which turns anything
+ * that isn't an AppError into an opaque 500 (see middleware/error.ts). That is the worst possible
+ * answer to "your API key is wrong" or "you're rate-limited": the admin who broke the config sees
+ * the same blank failure as a genuine server bug. Translates the ones an admin can actually act on
+ * (401/403 = bad or scopeless key, 429 = rate limited) into a clear, actionable AppError(502, ...);
+ * anything else that isn't a recognized SDK error is passed through untouched for the generic
+ * handler.
+ *
+ * WHY 502 SPECIFICALLY MATTERS BEYOND THE HTTP STATUS: `callChat`'s priority-fallback dispatcher
+ * (V9, provider-priority) uses `AppError(502, ...)` as its OWN signal for "this was an
+ * availability failure, try the next configured provider" — an error this function doesn't
+ * recognize falls through untranslated and stops the dispatcher from trying anything else,
+ * correctly treating it as a real bug rather than a provider being unavailable.
+ *
+ * BOTH SDKs, because both are used by real dispatch paths: Anthropic's `APIError` hierarchy is
+ * structurally identical to OpenAI's (same base class shape, same 401/403/429 subclasses) but is a
+ * different class from a different package, so `instanceof` has to check both.
+ */
+function translateProviderError(error: unknown): unknown {
+  if (!(error instanceof OpenAI.APIError) && !(error instanceof Anthropic.APIError)) return error;
+  // Several providers (Mistral among them) answer 403 with an empty body, so the SDK's own
+  // message is just "403 status code (no body)" — worth omitting rather than echoing back.
+  const detail = error.message && !/^\d+ status code \(no body\)$/.test(error.message) ? `: ${error.message}` : "";
+  if (error.status === 401 || error.status === 403) {
+    return new AppError(
+      502,
+      `The AI provider rejected the request (${error.status})${detail}. Check the API key in Workspace Settings → AI — it may be missing, revoked, or scoped to a different model.`
+    );
+  }
+  if (error.status === 429) {
+    return new AppError(502, `The AI provider is rate-limiting this key${detail}. Wait a moment and try again, or pick a different model in Workspace Settings → AI.`);
+  }
+  return new AppError(502, `The AI provider returned an error (${error.status})${detail}.`);
+}
+
+async function callOpenAICompatible(settings: { baseUrl: string | null }, apiKey: string, params: CallChatParams): Promise<CallChatResult> {
   if (!settings.baseUrl) {
     throw new AppError(503, "AI features are not configured — set a base URL for the selected provider in workspace AI settings.");
   }
@@ -231,8 +323,12 @@ async function callOpenAICompatible(settings: AISettingsRow, apiKey: string, par
     // ONLY for that case. A rejected request shape comes back as a fast 4xx; a timeout or a dead
     // connection means the provider is not answering, and repeating the identical call would double
     // the hang the timeout above exists to bound.
-    if (!params.jsonSchema || error instanceof OpenAI.APIConnectionError) throw error;
-    response = await client.chat.completions.create({ model: params.model, max_tokens: params.maxTokens, messages });
+    if (!params.jsonSchema || error instanceof OpenAI.APIConnectionError) throw translateProviderError(error);
+    try {
+      response = await client.chat.completions.create({ model: params.model, max_tokens: params.maxTokens, messages });
+    } catch (retryError) {
+      throw translateProviderError(retryError);
+    }
   }
 
   // OpenAI-compatible is a promise, not a guarantee. OpenRouter's free tier in particular answers
@@ -295,17 +391,63 @@ export async function listAvailableOpenAICompatibleModels(baseUrl: string, apiKe
  * Reserve before, settle after: admission atomically increments the month ledger by a provisional
  * amount, the provider call runs, and settlement replaces the provision with the actual estimated
  * cost (or releases it entirely on failure). See reserveAiSpend for the serialization argument.
+ *
+ * PROVIDER-PRIORITY FALLBACK (V9): tries every ENABLED AIProviderConfig row in ascending priority
+ * order. Only the highest-priority row ever honors `params.model` — that choice (economyModelFor,
+ * or a feature's own fixed pick) was made against ITS catalogue. Every row after it was chosen for
+ * a DIFFERENT vendor and is unlikely to serve a model by that name at all, so it uses its own
+ * configured `model` instead — which is why the result carries back the model/provider that
+ * ACTUALLY ran: every caller must log that, not what it originally asked for, or the cost ledger
+ * would price and attribute the call to a model that never ran.
+ *
+ * Falls through only on an AVAILABILITY failure — a rejected key, a rate limit, an empty answer,
+ * anything `translateProviderError` already turns into a 502. Anything else (a malformed request,
+ * an SSRF-blocked baseUrl) is a real bug that would fail identically against every other provider
+ * too, and is better reported once than retried silently N times.
+ *
+ * EVERY failed attempt is logged (`AIUsageLog.success = false`), not only the ones that trigger a
+ * fallthrough — this is the other half of "which provider actually gets the job done", the
+ * question the cost-only ledger could never answer on its own. 0 tokens/cost, since nothing was
+ * consumed or billed for a rejected attempt.
  */
-async function callChat(settings: AISettingsRow, params: CallChatParams): Promise<CallChatResult> {
-  const apiKey = resolveApiKey(settings);
+async function callChat(settings: AISettingsRow, params: CallChatParams): Promise<CallChatOutcome> {
+  const configs = await getEnabledProviderConfigs();
   const settle = await reserveAiSpend(await effectiveMonthlyBudgetUsd(settings));
+  let lastError: unknown;
   try {
-    const result =
-      settings.provider === "OPENAI_COMPATIBLE"
-        ? await callOpenAICompatible(settings, apiKey, params)
-        : await callAnthropic(apiKey, params);
-    await settle(estimateCostUsd(params.model, result.usage.inputTokens, result.usage.outputTokens));
-    return result;
+    for (let i = 0; i < configs.length; i++) {
+      const config = configs[i];
+      const apiKey = resolveApiKey(config);
+      const model = i === 0 ? params.model : config.model;
+      const providerLabel = resolveProviderLabel(config.provider, config.baseUrl);
+      try {
+        const result =
+          config.provider === "OPENAI_COMPATIBLE"
+            ? await callOpenAICompatible(config, apiKey, { ...params, model })
+            : await callAnthropic(apiKey, { ...params, model });
+        await settle(estimateCostUsd(model, result.usage.inputTokens, result.usage.outputTokens));
+        return { ...result, model, provider: providerLabel };
+      } catch (error) {
+        lastError = error;
+        // Every failed ATTEMPT is worth recording, not just the ones that trigger a fallthrough —
+        // "which provider actually gets the job done" needs the failures a real bug produced too,
+        // not only the availability kind. Best-effort: a broken audit write must never mask the
+        // real error about to be thrown or rethrown below.
+        await logAIUsage({
+          feature: params.feature,
+          model,
+          provider: providerLabel,
+          inputTokens: 0,
+          outputTokens: 0,
+          success: false,
+          errorReason: (error instanceof Error ? error.message : String(error)).slice(0, 300)
+        }).catch(() => {});
+        if (!(error instanceof AppError) || error.statusCode !== 502) throw error;
+        // else: an availability failure — the loop tries the next configured provider, if any.
+      }
+    }
+    // Every configured provider was tried and every one failed availability-wise.
+    throw lastError;
   } catch (error) {
     // The call spent nothing that reached a ledger-worthy invoice (or failed on the way there) —
     // release the provision so a run of failures cannot eat the month's budget.
@@ -598,11 +740,23 @@ function truncateForCapture(value: string | undefined): { text: string | undefin
 export async function logAIUsage(params: {
   feature: string;
   model: string;
+  /** The provider that actually served the call (from CallChatOutcome.provider). Optional so any
+   *  call site that hasn't been updated yet keeps compiling — falls back to the deprecated
+   *  GlobalAISettings-derived provider below when omitted. */
+  provider?: string;
   inputTokens: number;
   outputTokens: number;
   ticketId?: string;
   userId?: string;
-  /** Everything below is optional so all 18 existing call sites keep compiling untouched and can
+  /** False for a failed ATTEMPT — written by `callChat`'s priority-fallback dispatcher itself for
+   *  each provider it tried, never by a capability function. Defaults true, which is correct for
+   *  every one of the 30-odd existing call sites: they only ever call this after `callChat`
+   *  already returned successfully. */
+  success?: boolean;
+  /** The translated, human-readable failure reason — only meaningful (and only ever passed) when
+   *  `success` is false. */
+  errorReason?: string;
+  /** Everything below is optional so all existing call sites keep compiling untouched and can
    *  adopt capture incrementally. Absent = that field simply isn't recorded. */
   prompt?: string;
   output?: string;
@@ -614,13 +768,22 @@ export async function logAIUsage(params: {
   promptFallbackReason?: string;
 }): Promise<{ interactionId: string | null }> {
   const costUsdEstimate = estimateCostUsd(params.model, params.inputTokens, params.outputTokens);
+  // Prefer the provider that actually served the call (CallChatOutcome.provider, threaded through
+  // by the caller). Only fall back to the deprecated GlobalAISettings-derived provider when a call
+  // site hasn't been updated to pass one — see the `provider` field's own doc comment above.
+  const provider =
+    params.provider ?? (await getGlobalAISettings().then((settings) => resolveProviderLabel(settings.provider, settings.baseUrl)));
   await prisma.aIUsageLog.create({
     data: {
       feature: params.feature,
       model: params.model,
+      provider,
       inputTokens: params.inputTokens,
       outputTokens: params.outputTokens,
       costUsdEstimate,
+      durationMs: params.latencyMs ?? null,
+      success: params.success ?? true,
+      errorReason: params.errorReason ?? null,
       ticketId: params.ticketId,
       userId: params.userId
     }
@@ -630,12 +793,19 @@ export async function logAIUsage(params: {
   // already succeeded and already cost real money, so throwing here would turn a working feature
   // into a broken one purely for the sake of observability.
   //
+  // Skipped entirely for a failed attempt: AIInteraction is the QUALITY loop (did the response
+  // parse, was it any good), and a provider that rejected a key never produced a response to judge
+  // — there is nothing here for that table to say.
+  //
   // The returned id is what lets a proposal remember which interaction it came from — every
   // existing call site ignores the return value and compiles untouched.
-  const interactionId = await captureInteraction(params).catch((error) => {
-    console.warn(`[ai] interaction capture failed for ${params.feature}: ${(error as Error).message}`);
-    return null;
-  });
+  const interactionId =
+    params.success === false
+      ? null
+      : await captureInteraction(params).catch((error) => {
+          console.warn(`[ai] interaction capture failed for ${params.feature}: ${(error as Error).message}`);
+          return null;
+        });
   return { interactionId };
 }
 
@@ -705,7 +875,7 @@ function localIsoDate(date: Date): string {
 export async function getMonthlyAIUsageSummary() {
   const now = new Date();
   const monthStart = new Date(now.getFullYear(), now.getMonth(), 1);
-  const [total, byFeature, byModel, agentDriven, byFlowRaw] = await Promise.all([
+  const [total, byFeature, byModel, byProvider, byProviderModel, agentDriven, byFlowRaw] = await Promise.all([
     prisma.aIUsageLog.aggregate({
       where: { createdAt: { gte: monthStart } },
       _sum: { costUsdEstimate: true, inputTokens: true, outputTokens: true },
@@ -722,6 +892,23 @@ export async function getMonthlyAIUsageSummary() {
     }),
     prisma.aIUsageLog.groupBy({
       by: ["model"],
+      where: { createdAt: { gte: monthStart } },
+      _sum: { costUsdEstimate: true, inputTokens: true, outputTokens: true },
+      _count: true
+    }),
+    // Which PROVIDER served the calls — rows written before this column existed carry `provider:
+    // null`, mapped to "Unknown" below rather than guessed, same reasoning as the migration itself.
+    prisma.aIUsageLog.groupBy({
+      by: ["provider"],
+      where: { createdAt: { gte: monthStart } },
+      _sum: { costUsdEstimate: true, inputTokens: true, outputTokens: true },
+      _count: true
+    }),
+    // The actual cross-tab: which provider served which model. A workspace that switched
+    // providers mid-month can have the SAME model name under two different providers — a plain
+    // byModel total would blur that together.
+    prisma.aIUsageLog.groupBy({
+      by: ["provider", "model"],
       where: { createdAt: { gte: monthStart } },
       _sum: { costUsdEstimate: true, inputTokens: true, outputTokens: true },
       _count: true
@@ -799,6 +986,24 @@ export async function getMonthlyAIUsageSummary() {
       outputTokens: row._sum.outputTokens ?? 0,
       calls: row._count
     })),
+    byProvider: byProvider.map((row) => ({
+      provider: row.provider ?? "Unknown",
+      costUsd: Number(row._sum.costUsdEstimate ?? 0),
+      inputTokens: row._sum.inputTokens ?? 0,
+      outputTokens: row._sum.outputTokens ?? 0,
+      calls: row._count
+    })),
+    /** The cross-tab: which provider served how much of which model. What answers "which
+     *  provider has consumed how much against the model" — byProvider and byModel alone can each
+     *  only answer their own half of that question. */
+    byProviderModel: byProviderModel.map((row) => ({
+      provider: row.provider ?? "Unknown",
+      model: row.model,
+      costUsd: Number(row._sum.costUsdEstimate ?? 0),
+      inputTokens: row._sum.inputTokens ?? 0,
+      outputTokens: row._sum.outputTokens ?? 0,
+      calls: row._count
+    })),
     /** Per-workflow spend, attributed through the agent runs each flow queued. A subset of
      *  `agentDriven`, read from `AgentRun` - see the query's comment for why it cannot come from the
      *  usage log. A retired flow keeps its row: the money was still spent. */
@@ -812,6 +1017,263 @@ export async function getMonthlyAIUsageSummary() {
       }))
       .sort((a, b) => b.costUsd - a.costUsd)
   };
+}
+
+export interface AIUsageBreakdownParams {
+  from: Date;
+  /** Exclusive upper bound — the caller passes "the day after the picker's `to`" so the whole
+   *  `to` calendar day is included, the same convention `assertPeriodOrder`-style range params
+   *  use elsewhere in this app. */
+  to: Date;
+  feature?: string;
+}
+
+/**
+ * Provider × model breakdown for an arbitrary date range, optionally narrowed to one feature —
+ * feeds the redesigned usage table in Workspace Settings → AI. A sibling of
+ * `getMonthlyAIUsageSummary()` rather than a replacement for it: that function is also read by
+ * `ai-overview.service.ts` (the super-admin AI Overview widget, always current-month) and pinned
+ * by its own test's `Promise.all` call ordering — changing its shape would ripple into both for no
+ * benefit to either.
+ *
+ * NULL-SAFE AVERAGE LATENCY: Prisma's `_avg` on a nullable Int column compiles to SQL `AVG()`,
+ * which already excludes NULL rows from both the numerator and the denominator. A row with
+ * `durationMs: null` ("not measured", see the AIUsageLog migration) therefore never drags a
+ * group's average toward zero — no manual filtering needed here. `_count.durationMs` (calls that
+ * WERE measured) is returned alongside `_count._all` (every call) so the UI can say "842ms,
+ * measured on 12 of 40 calls" rather than implying every call was timed.
+ */
+export async function getAIUsageBreakdown({ from, to, feature }: AIUsageBreakdownParams) {
+  const rangeWhere = { createdAt: { gte: from, lt: to } };
+  const where = feature ? { ...rangeWhere, feature } : rangeWhere;
+
+  const [total, byProviderModel, successCounts, featureCounts, agentDriven, byFlowRaw] = await Promise.all([
+    prisma.aIUsageLog.aggregate({
+      where,
+      _sum: { costUsdEstimate: true, inputTokens: true, outputTokens: true },
+      _count: true
+    }),
+    prisma.aIUsageLog.groupBy({
+      by: ["provider", "model"],
+      where,
+      _sum: { costUsdEstimate: true, inputTokens: true, outputTokens: true },
+      _avg: { durationMs: true },
+      _count: { _all: true, durationMs: true }
+    }),
+    // Success/failure split, same dimensions plus `success` — kept as a SEPARATE groupBy rather
+    // than folded into the one above because Prisma's groupBy has no conditional-sum, so counting
+    // successes and failures in one pass needs `success` in the grouping key, and merging two
+    // narrower result sets in JS is simpler than reshaping one 3-dimensional one.
+    prisma.aIUsageLog.groupBy({ by: ["provider", "model", "success"], where, _count: true }),
+    // Deliberately scoped to the date range but NOT the feature filter — narrowing to one feature
+    // must not collapse the filter dropdown down to just that one option.
+    prisma.aIUsageLog.groupBy({ by: ["feature"], where: rangeWhere, _count: true }),
+    prisma.aIUsageLog.aggregate({
+      where: { ...where, user: { isAgent: true } },
+      _sum: { costUsdEstimate: true, inputTokens: true, outputTokens: true },
+      _count: true
+    }),
+    prisma.agentRun.groupBy({
+      by: ["flowId"],
+      where: { createdAt: { gte: from, lt: to }, flowId: { not: null } },
+      _sum: { costUsd: true },
+      _count: true
+    })
+  ]);
+
+  const successByKey = new Map<string, { successCount: number; failureCount: number }>();
+  for (const row of successCounts) {
+    const key = `${row.provider ?? "Unknown"}|${row.model}`;
+    const entry = successByKey.get(key) ?? { successCount: 0, failureCount: 0 };
+    if (row.success) entry.successCount += row._count;
+    else entry.failureCount += row._count;
+    successByKey.set(key, entry);
+  }
+
+  const flowNames = new Map<string, { name: string; emoji: string }>();
+  const spendingFlowIds = byFlowRaw.map((row) => row.flowId).filter((id): id is string => Boolean(id));
+  if (spendingFlowIds.length > 0) {
+    const rows = await prisma.automationFlow.findMany({
+      where: { id: { in: spendingFlowIds } },
+      select: { id: true, name: true, emoji: true }
+    });
+    for (const row of rows) flowNames.set(row.id, { name: row.name, emoji: row.emoji });
+  }
+
+  const totalCostUsd = Number(total._sum.costUsdEstimate ?? 0);
+  const totalSuccesses = [...successByKey.values()].reduce((sum, v) => sum + v.successCount, 0);
+  const totalFailures = [...successByKey.values()].reduce((sum, v) => sum + v.failureCount, 0);
+
+  return {
+    from: localIsoDate(from),
+    // `to` was passed in EXCLUSIVE; report the inclusive last day back to the caller so a
+    // round-tripped export filename or summary line reads as the range somebody actually picked.
+    to: localIsoDate(new Date(to.getTime() - 1)),
+    totalCostUsd,
+    // Every ATTEMPT, successful or not — see AIUsageLog.success's own comment for why a failure is
+    // still logged. "totalCalls" answering "how many times did we try" is the honest number; the
+    // reliability question has its own field right below it rather than being folded in silently.
+    totalCalls: total._count,
+    totalFailures,
+    overallSuccessRatePct: totalSuccesses + totalFailures === 0 ? null : Number(((totalSuccesses / (totalSuccesses + totalFailures)) * 100).toFixed(1)),
+    totalInputTokens: total._sum.inputTokens ?? 0,
+    totalOutputTokens: total._sum.outputTokens ?? 0,
+    agentDriven: {
+      costUsd: Number(agentDriven._sum.costUsdEstimate ?? 0),
+      calls: agentDriven._count,
+      inputTokens: agentDriven._sum.inputTokens ?? 0,
+      outputTokens: agentDriven._sum.outputTokens ?? 0
+    },
+    /** Options for the feature filter, with a call count so an admin can tell a busy feature from
+     *  a barely-used one before picking it. */
+    features: featureCounts.map((row) => ({ feature: row.feature, calls: row._count })).sort((a, b) => b.calls - a.calls),
+    rows: byProviderModel
+      .map((row) => {
+        const costUsd = Number(row._sum.costUsdEstimate ?? 0);
+        const key = `${row.provider ?? "Unknown"}|${row.model}`;
+        // Defensive fallback only — every row here shares the same where-clause and grouping
+        // dimensions as successCounts, just without `success` in the key, so a miss should be
+        // impossible. Treating an unexpected miss as "all successful" is the safer wrong answer:
+        // it can't manufacture a reliability problem that doesn't exist.
+        const { successCount, failureCount } = successByKey.get(key) ?? { successCount: row._count._all, failureCount: 0 };
+        return {
+          provider: row.provider ?? "Unknown",
+          model: row.model,
+          calls: row._count._all,
+          successCount,
+          failureCount,
+          successRatePct: successCount + failureCount === 0 ? null : Number(((successCount / (successCount + failureCount)) * 100).toFixed(1)),
+          inputTokens: row._sum.inputTokens ?? 0,
+          outputTokens: row._sum.outputTokens ?? 0,
+          totalTokens: (row._sum.inputTokens ?? 0) + (row._sum.outputTokens ?? 0),
+          avgLatencyMs: row._avg.durationMs === null ? null : Math.round(row._avg.durationMs),
+          latencyMeasuredCalls: row._count.durationMs,
+          costUsd,
+          costSharePct: totalCostUsd === 0 ? 0 : Number(((costUsd / totalCostUsd) * 100).toFixed(1))
+        };
+      })
+      .sort((a, b) => b.costUsd - a.costUsd),
+    byFlow: byFlowRaw
+      .map((row) => ({
+        flowId: row.flowId as string,
+        name: flowNames.get(row.flowId as string)?.name ?? "a retired workflow",
+        emoji: flowNames.get(row.flowId as string)?.emoji ?? "⚙️",
+        costUsd: Number(row._sum.costUsd ?? 0),
+        runs: row._count
+      }))
+      .sort((a, b) => b.costUsd - a.costUsd)
+  };
+}
+
+export interface AIUsageDailyDetailRow {
+  date: string;
+  feature: string;
+  provider: string;
+  model: string;
+  calls: number;
+  successCount: number;
+  failureCount: number;
+  successRatePct: number | null;
+  inputTokens: number;
+  outputTokens: number;
+  totalTokens: number;
+  avgLatencyMs: number | null;
+  latencyMeasuredCalls: number;
+  costUsd: number;
+}
+
+/**
+ * Day × feature × provider × model detail — deliberately NOT part of `getAIUsageBreakdown`'s
+ * payload (that one feeds the on-screen table; a row per day per combination would bloat it for no
+ * on-screen benefit, since the table already lets you narrow by feature and date range yourself).
+ * Exists only for the Excel export's Daily detail sheet, so "which provider/model handled triage
+ * on the 14th, and what did it cost" is answerable without reading a month of raw log lines.
+ * Bucketed in JS over raw rows — same low-call-volume, DB-engine-portable reasoning as
+ * `getAIFeatureUsage`/`getWeeklyAIUsageTrend` above.
+ */
+export async function getAIUsageDailyDetail({ from, to, feature }: AIUsageBreakdownParams): Promise<AIUsageDailyDetailRow[]> {
+  const rangeWhere = { createdAt: { gte: from, lt: to } };
+  const where = feature ? { ...rangeWhere, feature } : rangeWhere;
+
+  const rows = await prisma.aIUsageLog.findMany({
+    where,
+    select: {
+      createdAt: true,
+      feature: true,
+      provider: true,
+      model: true,
+      inputTokens: true,
+      outputTokens: true,
+      costUsdEstimate: true,
+      durationMs: true,
+      success: true
+    }
+  });
+
+  interface Bucket {
+    date: string;
+    feature: string;
+    provider: string;
+    model: string;
+    calls: number;
+    successCount: number;
+    failureCount: number;
+    inputTokens: number;
+    outputTokens: number;
+    costUsd: number;
+    durationSum: number;
+    durationCount: number;
+  }
+  const buckets = new Map<string, Bucket>();
+  for (const row of rows) {
+    const date = localIsoDate(row.createdAt);
+    const provider = row.provider ?? "Unknown";
+    const key = `${date}|${row.feature}|${provider}|${row.model}`;
+    const bucket = buckets.get(key) ?? {
+      date,
+      feature: row.feature,
+      provider,
+      model: row.model,
+      calls: 0,
+      successCount: 0,
+      failureCount: 0,
+      inputTokens: 0,
+      outputTokens: 0,
+      costUsd: 0,
+      durationSum: 0,
+      durationCount: 0
+    };
+    bucket.calls += 1;
+    if (row.success) bucket.successCount += 1;
+    else bucket.failureCount += 1;
+    bucket.inputTokens += row.inputTokens;
+    bucket.outputTokens += row.outputTokens;
+    bucket.costUsd += Number(row.costUsdEstimate ?? 0);
+    if (row.durationMs !== null) {
+      bucket.durationSum += row.durationMs;
+      bucket.durationCount += 1;
+    }
+    buckets.set(key, bucket);
+  }
+
+  return [...buckets.values()]
+    .map((b) => ({
+      date: b.date,
+      feature: b.feature,
+      provider: b.provider,
+      model: b.model,
+      calls: b.calls,
+      successCount: b.successCount,
+      failureCount: b.failureCount,
+      successRatePct: b.calls === 0 ? null : Number(((b.successCount / b.calls) * 100).toFixed(1)),
+      inputTokens: b.inputTokens,
+      outputTokens: b.outputTokens,
+      totalTokens: b.inputTokens + b.outputTokens,
+      avgLatencyMs: b.durationCount === 0 ? null : Math.round(b.durationSum / b.durationCount),
+      latencyMeasuredCalls: b.durationCount,
+      costUsd: Number(b.costUsd.toFixed(4))
+    }))
+    .sort((a, b) => (a.date === b.date ? b.costUsd - a.costUsd : a.date.localeCompare(b.date)));
 }
 
 /**
@@ -923,35 +1385,42 @@ export async function getAIFeatureUsage(days: number) {
 }
 
 /**
- * Weekly AI spend for the last `weeks` calendar weeks (Monday-start, including the current
- * partial week) — powers the spend-trend line in Workspace Settings. Bucketed in JS rather
- * than a SQL date-trunc: this app's AI call volume is low enough that fetching the raw rows
- * for a ~2-month window and grouping them here is simpler than a raw query, and stays
- * portable across whatever database engine a future multi-tenant deployment might use.
+ * Weekly AI spend across an arbitrary range (Monday-start buckets), segmented by provider so the
+ * redesigned trend chart can show spend AND provider mix in one view rather than a flat cost line.
+ * Bucketed in JS rather than a SQL date-trunc: this app's AI call volume is low enough that
+ * fetching the raw rows and grouping them here is simpler than a raw query, and stays portable
+ * across whatever database engine a future multi-tenant deployment might use — same reasoning as
+ * `getAIFeatureUsage`'s daily pivot just above.
  */
-export async function getWeeklyAIUsageTrend(weeks = 8) {
-  const now = new Date();
-  const currentWeekStart = startOfWeek(now);
-  const rangeStart = new Date(currentWeekStart);
-  rangeStart.setDate(rangeStart.getDate() - (weeks - 1) * 7);
+export async function getWeeklyAIUsageTrend({ from, to }: { from: Date; to: Date }) {
+  const rangeStart = startOfWeek(from);
 
   const rows = await prisma.aIUsageLog.findMany({
-    where: { createdAt: { gte: rangeStart } },
-    select: { createdAt: true, costUsdEstimate: true }
+    where: { createdAt: { gte: rangeStart, lt: to } },
+    select: { createdAt: true, costUsdEstimate: true, provider: true }
   });
 
-  const buckets = new Map<string, number>();
-  for (let i = 0; i < weeks; i++) {
-    const weekStart = new Date(rangeStart);
-    weekStart.setDate(weekStart.getDate() + i * 7);
-    buckets.set(localIsoDate(weekStart), 0);
+  const buckets = new Map<string, Map<string, number>>();
+  for (let weekStart = new Date(rangeStart); weekStart < to; weekStart.setDate(weekStart.getDate() + 7)) {
+    buckets.set(localIsoDate(weekStart), new Map());
   }
+  const providerNames = new Set<string>();
   for (const row of rows) {
-    const weekStart = localIsoDate(startOfWeek(row.createdAt));
-    buckets.set(weekStart, (buckets.get(weekStart) ?? 0) + Number(row.costUsdEstimate));
+    const weekKey = localIsoDate(startOfWeek(row.createdAt));
+    const provider = row.provider ?? "Unknown";
+    providerNames.add(provider);
+    const bucket = buckets.get(weekKey) ?? new Map<string, number>();
+    bucket.set(provider, (bucket.get(provider) ?? 0) + Number(row.costUsdEstimate));
+    buckets.set(weekKey, bucket);
   }
 
-  return [...buckets.entries()].map(([weekStart, costUsd]) => ({ weekStart, costUsd: Math.round(costUsd * 10000) / 10000 }));
+  const sortedProviders = [...providerNames].sort();
+  const weeks = [...buckets.entries()].map(([weekStart, byProvider]) => {
+    const entry: Record<string, string | number> = { weekStart };
+    for (const provider of sortedProviders) entry[provider] = Math.round((byProvider.get(provider) ?? 0) * 10000) / 10000;
+    return entry;
+  });
+  return { providerNames: sortedProviders, weeks };
 }
 
 /** Monday-start week boundary, in local time (matches the calendar-month convention above). */
@@ -1128,7 +1597,7 @@ export async function classifyTicket(params: {
   // the one that ran would make the cost estimate — and the monthly budget built on it — wrong.
   const model = economyModelFor(settings);
   const startedAt = Date.now();
-  const result = await callChat(settings, {
+  const result = await callChat(settings, { feature: "triage",
     model,
     maxTokens: 1024,
     prompt,
@@ -1157,7 +1626,8 @@ export async function classifyTicket(params: {
 
   await logAIUsage({
     feature: "triage",
-    model,
+    model: result.model,
+    provider: result.provider,
     inputTokens: result.usage.inputTokens,
     outputTokens: result.usage.outputTokens,
     userId: params.userId,
@@ -1229,7 +1699,7 @@ export async function classifyCiFailure(params: {
   ].join("\n");
 
   const startedAt = Date.now();
-  const result = await callChat(settings, {
+  const result = await callChat(settings, { feature: "ci_failure_triage",
     model: settings.model,
     maxTokens: 512,
     prompt,
@@ -1256,7 +1726,8 @@ export async function classifyCiFailure(params: {
   await logAIUsage({
     feature: "ci_failure_triage",
     params: { failureText: params.failureText, provider: params.provider, ticketKey: params.ticketKey },
-    model: settings.model,
+    model: result.model,
+    provider: result.provider,
     inputTokens: result.usage.inputTokens,
     outputTokens: result.usage.outputTokens,
     userId: params.userId,
@@ -1321,7 +1792,7 @@ export async function classifySecurityFinding(params: {
     .join("\n");
 
   const startedAt = Date.now();
-  const result = await callChat(settings, {
+  const result = await callChat(settings, { feature: "security_finding_triage",
     model: settings.model,
     maxTokens: 700,
     prompt,
@@ -1348,7 +1819,8 @@ export async function classifySecurityFinding(params: {
   await logAIUsage({
     feature: "security_finding_triage",
     params: { type: params.type, tool: params.tool, severity: params.severity, title: params.title, description: params.description, filePath: params.filePath, cwe: params.cwe },
-    model: settings.model,
+    model: result.model,
+    provider: result.provider,
     inputTokens: result.usage.inputTokens,
     outputTokens: result.usage.outputTokens,
     userId: params.userId,
@@ -1411,7 +1883,7 @@ export async function summarizePullRequest(params: {
   ].join("\n");
 
   const startedAt = Date.now();
-  const result = await callChat(settings, {
+  const result = await callChat(settings, { feature: "pr_review_summary",
     model: settings.model,
     maxTokens: 512,
     prompt,
@@ -1438,7 +1910,8 @@ export async function summarizePullRequest(params: {
   await logAIUsage({
     feature: "pr_review_summary",
     params: { title: params.title, body: params.body, filesChanged: params.filesChanged, ticketKey: params.ticketKey },
-    model: settings.model,
+    model: result.model,
+    provider: result.provider,
     inputTokens: result.usage.inputTokens,
     outputTokens: result.usage.outputTokens,
     prompt,
@@ -1532,7 +2005,7 @@ export async function reviewPullRequestDiff(params: {
   ].join("\n");
 
   const startedAt = Date.now();
-  const result = await callChat(settings, {
+  const result = await callChat(settings, { feature: "pr_inline_review",
     model: settings.model,
     maxTokens: 1024,
     prompt,
@@ -1564,7 +2037,8 @@ export async function reviewPullRequestDiff(params: {
 
   await logAIUsage({
     feature: "pr_inline_review",
-    model: settings.model,
+    model: result.model,
+    provider: result.provider,
     inputTokens: result.usage.inputTokens,
     outputTokens: result.usage.outputTokens,
     prompt,
@@ -1628,7 +2102,7 @@ export async function classifyChatMessage(params: {
   ].join("\n");
 
   const startedAt = Date.now();
-  const result = await callChat(settings, {
+  const result = await callChat(settings, { feature: "chat_triage",
     model: settings.model,
     maxTokens: 1024,
     prompt,
@@ -1658,7 +2132,8 @@ export async function classifyChatMessage(params: {
   await logAIUsage({
     feature: "chat_triage",
     params: { messageText: params.messageText, senderName: params.senderName, project: params.project, typeNames: params.typeNames },
-    model: settings.model,
+    model: result.model,
+    provider: result.provider,
     inputTokens: result.usage.inputTokens,
     outputTokens: result.usage.outputTokens,
     prompt,
@@ -1725,7 +2200,7 @@ export async function findDuplicateTickets(params: {
 
   const model = economyModelFor(settings);
   const startedAt = Date.now();
-  const result = await callChat(settings, {
+  const result = await callChat(settings, { feature: "duplicate_detection",
     model,
     maxTokens: 1024,
     prompt,
@@ -1762,7 +2237,8 @@ export async function findDuplicateTickets(params: {
   await logAIUsage({
     feature: "duplicate_detection",
     params: { title: params.title, description: params.description, candidates: params.candidates },
-    model,
+    model: result.model,
+    provider: result.provider,
     inputTokens: result.usage.inputTokens,
     outputTokens: result.usage.outputTokens,
     userId: params.userId,
@@ -1800,12 +2276,13 @@ export async function improveText(params: { text: string; context: "ticket_descr
   const p = await resolvePrompt("writing_assistant", { instruction, context: params.context, text: plain });
 
   const startedAt = Date.now();
-  const result = await callChat(settings, { model: settings.model, maxTokens: 1024, prompt: p.text });
+  const result = await callChat(settings, { feature: "writing_assistant", model: settings.model, maxTokens: 1024, prompt: p.text });
 
   await logAIUsage({
     feature: "writing_assistant",
     params: { text: params.text, context: params.context },
-    model: settings.model,
+    model: result.model,
+    provider: result.provider,
     inputTokens: result.usage.inputTokens,
     outputTokens: result.usage.outputTokens,
     latencyMs: Date.now() - startedAt,
@@ -1925,7 +2402,7 @@ export async function refineText(params: { text: string; field: RefineField; use
 
   const model = economyModelFor(settings);
   const startedAt = Date.now();
-  const result = await callChat(settings, { model, maxTokens: spec.maxTokens, prompt: p.text });
+  const result = await callChat(settings, { feature: "text_refine", model, maxTokens: spec.maxTokens, prompt: p.text });
 
   const refined = spec.format === "plain"
     ? stripWrappingQuotes(result.text).replace(/\s*\n+\s*/g, " ").slice(0, 255)
@@ -1934,7 +2411,8 @@ export async function refineText(params: { text: string; field: RefineField; use
   await logAIUsage({
     feature: "text_refine",
     params: { text: params.text, field: params.field },
-    model,
+    model: result.model,
+    provider: result.provider,
     inputTokens: result.usage.inputTokens,
     outputTokens: result.usage.outputTokens,
     userId: params.userId,
@@ -2015,12 +2493,13 @@ export async function summarizeComments(params: {
   const p = await resolvePrompt("comment_summary", { ticketTitle: params.ticketTitle, thread });
 
   const startedAt = Date.now();
-  const result = await callChat(settings, { model: settings.model, maxTokens: 512, prompt: p.text });
+  const result = await callChat(settings, { feature: "comment_summary", model: settings.model, maxTokens: 512, prompt: p.text });
 
   await logAIUsage({
     feature: "comment_summary",
     params: { ticketTitle: params.ticketTitle, comments: params.comments },
-    model: settings.model,
+    model: result.model,
+    provider: result.provider,
     inputTokens: result.usage.inputTokens,
     outputTokens: result.usage.outputTokens,
     latencyMs: Date.now() - startedAt,
@@ -2064,12 +2543,13 @@ export async function answerWorkspaceQuestion(params: {
   const p = await resolvePrompt("ask_ai", { tickets: context, analyticsSnapshot: snapshotBlock, question: params.question });
 
   const startedAt = Date.now();
-  const result = await callChat(settings, { model: settings.model, maxTokens: 1024, prompt: p.text });
+  const result = await callChat(settings, { feature: "ask_ai", model: settings.model, maxTokens: 1024, prompt: p.text });
 
   await logAIUsage({
     feature: "ask_ai",
     params: { question: params.question, tickets: params.tickets, insightsSnapshot: params.insightsSnapshot },
-    model: settings.model,
+    model: result.model,
+    provider: result.provider,
     inputTokens: result.usage.inputTokens,
     outputTokens: result.usage.outputTokens,
     latencyMs: Date.now() - startedAt,
@@ -2106,12 +2586,13 @@ export async function generateWeeklyDigest(params: {
   });
 
   const startedAt = Date.now();
-  const result = await callChat(settings, { model: settings.model, maxTokens: 400, prompt: p.text });
+  const result = await callChat(settings, { feature: "weekly_digest", model: settings.model, maxTokens: 400, prompt: p.text });
 
   await logAIUsage({
     feature: "weekly_digest",
     params: { userName: params.userName, weekLabel: params.weekLabel, ticketsCreated: params.ticketsCreated, ticketsResolved: params.ticketsResolved, openAssigned: params.openAssigned, hoursLogged: params.hoursLogged, notableTickets: params.notableTickets },
-    model: settings.model,
+    model: result.model,
+    provider: result.provider,
     inputTokens: result.usage.inputTokens,
     outputTokens: result.usage.outputTokens,
     latencyMs: Date.now() - startedAt,
@@ -2156,12 +2637,13 @@ export async function generateSecurityWeeklyDigest(params: {
   });
 
   const startedAt = Date.now();
-  const result = await callChat(settings, { model: settings.model, maxTokens: 400, prompt: p.text });
+  const result = await callChat(settings, { feature: "security_weekly_digest", model: settings.model, maxTokens: 400, prompt: p.text });
 
   await logAIUsage({
     feature: "security_weekly_digest",
     params: { weekLabel: params.weekLabel, openFindings: params.openFindings, newCriticalOrHigh: params.newCriticalOrHigh, resolvedThisWeek: params.resolvedThisWeek, riskScore: params.riskScore, riskScoreLastWeek: params.riskScoreLastWeek, ticketsStuckPastSla: params.ticketsStuckPastSla, topRepositories: params.topRepositories },
-    model: settings.model,
+    model: result.model,
+    provider: result.provider,
     inputTokens: result.usage.inputTokens,
     outputTokens: result.usage.outputTokens,
     latencyMs: Date.now() - startedAt,
@@ -2204,12 +2686,13 @@ export async function generateBugPatternDigest(params: {
   });
 
   const startedAt = Date.now();
-  const result = await callChat(settings, { model: settings.model, maxTokens: 400, prompt: p.text });
+  const result = await callChat(settings, { feature: "bug_pattern_digest", model: settings.model, maxTokens: 400, prompt: p.text });
 
   await logAIUsage({
     feature: "bug_pattern_digest",
     params: { periodLabel: params.periodLabel, recurringFailures: params.recurringFailures, hotTickets: params.hotTickets, findingHotspots: params.findingHotspots },
-    model: settings.model,
+    model: result.model,
+    provider: result.provider,
     inputTokens: result.usage.inputTokens,
     outputTokens: result.usage.outputTokens,
     latencyMs: Date.now() - startedAt,
@@ -2252,12 +2735,13 @@ export async function generateStatusReport(params: {
   });
 
   const startedAt = Date.now();
-  const result = await callChat(settings, { model: settings.model, maxTokens: 500, prompt: p.text });
+  const result = await callChat(settings, { feature: "status_report", model: settings.model, maxTokens: 500, prompt: p.text });
 
   await logAIUsage({
     feature: "status_report",
     params: { projectName: params.projectName, periodLabel: params.periodLabel, ticketsCreated: params.ticketsCreated, ticketsResolved: params.ticketsResolved, openCount: params.openCount, overdueCount: params.overdueCount, hoursLogged: params.hoursLogged, notableTickets: params.notableTickets },
-    model: settings.model,
+    model: result.model,
+    provider: result.provider,
     inputTokens: result.usage.inputTokens,
     outputTokens: result.usage.outputTokens,
     latencyMs: Date.now() - startedAt,
@@ -2317,10 +2801,11 @@ export async function explainThresholdRecommendation(rec: {
   ].join("\n");
 
   const startedAt = Date.now();
-  const result = await callChat(settings, { model: settings.model, maxTokens: 400, prompt });
+  const result = await callChat(settings, { feature: "face_policy_copilot", model: settings.model, maxTokens: 400, prompt });
   await logAIUsage({
     feature: "face_policy_copilot",
-    model: settings.model,
+    model: result.model,
+    provider: result.provider,
     inputTokens: result.usage.inputTokens,
     outputTokens: result.usage.outputTokens,
     latencyMs: Date.now() - startedAt,
@@ -2391,10 +2876,11 @@ export async function analyzeEmailFailure(params: {
   ].join("\n");
 
   const startedAt = Date.now();
-  const result = await callChat(settings, { model: settings.model, maxTokens: 600, prompt });
+  const result = await callChat(settings, { feature: "email_failure_triage", model: settings.model, maxTokens: 600, prompt });
   await logAIUsage({
     feature: "email_failure_triage",
-    model: settings.model,
+    model: result.model,
+    provider: result.provider,
     inputTokens: result.usage.inputTokens,
     outputTokens: result.usage.outputTokens,
     latencyMs: Date.now() - startedAt,
@@ -2425,11 +2911,12 @@ export async function explainAssigneeSuggestion(params: {
 
   const model = economyModelFor(settings);
   const startedAt = Date.now();
-  const result = await callChat(settings, { model, maxTokens: 150, prompt: p.text });
+  const result = await callChat(settings, { feature: "assignee_suggestion_explanation", model, maxTokens: 150, prompt: p.text });
   await logAIUsage({
     feature: "assignee_suggestion_explanation",
     params: { candidates: params.candidates, ticketTitle: params.ticketTitle },
-    model,
+    model: result.model,
+    provider: result.provider,
     inputTokens: result.usage.inputTokens,
     outputTokens: result.usage.outputTokens,
     latencyMs: Date.now() - startedAt,
@@ -2469,11 +2956,12 @@ export async function suggestStaleTicketNextAction(params: {
 
   const model = economyModelFor(settings);
   const startedAt = Date.now();
-  const result = await callChat(settings, { model, maxTokens: 150, prompt: p.text });
+  const result = await callChat(settings, { feature: "stale_ticket_nudge", model, maxTokens: 150, prompt: p.text });
   await logAIUsage({
     feature: "stale_ticket_nudge",
     params: { ticketTitle: params.ticketTitle, ticketType: params.ticketType, priority: params.priority, hoursOverdue: params.hoursOverdue, commentCount: params.commentCount, hasLinkedBranch: params.hasLinkedBranch },
-    model,
+    model: result.model,
+    provider: result.provider,
     inputTokens: result.usage.inputTokens,
     outputTokens: result.usage.outputTokens,
     latencyMs: Date.now() - startedAt,
@@ -2655,11 +3143,12 @@ export async function summarizeFaceReviewAttempt(params: {
   ].join("\n");
 
   const startedAt = Date.now();
-  const result = await callChat(settings, { model: settings.model, maxTokens: 500, prompt });
+  const result = await callChat(settings, { feature: "face_review_summary", model: settings.model, maxTokens: 500, prompt });
 
   await logAIUsage({
     feature: "face_review_summary",
-    model: settings.model,
+    model: result.model,
+    provider: result.provider,
     inputTokens: result.usage.inputTokens,
     outputTokens: result.usage.outputTokens,
     latencyMs: Date.now() - startedAt,
@@ -2708,7 +3197,7 @@ export async function judgeAnswerEquivalence(params: {
   ].join("\n");
 
   const startedAt = Date.now();
-  const result = await callChat(settings, {
+  const result = await callChat(settings, { feature: "eval_judge",
     model: settings.model,
     maxTokens: 200,
     prompt,
@@ -2728,7 +3217,8 @@ export async function judgeAnswerEquivalence(params: {
   // being graded, instead of disappearing into it.
   await logAIUsage({
     feature: "eval_judge",
-    model: settings.model,
+    model: result.model,
+    provider: result.provider,
     inputTokens: result.usage.inputTokens,
     outputTokens: result.usage.outputTokens,
     parseOk: Boolean(parsed),
@@ -2789,12 +3279,13 @@ export async function narrateProjectRisk(input: {
     "Write the briefing now. No preamble, no headings, no bullet points."
   ].join("\n");
 
-  const result = await callChat(settings, { model: settings.model, maxTokens: 400, prompt });
+  const result = await callChat(settings, { feature: "project_risk_narrative", model: settings.model, maxTokens: 400, prompt });
 
   await logAIUsage({
     feature: "project_risk_narrative",
     params: { projectName: input.projectName, riskScore: input.riskScore, band: input.band, concerns: input.topConcerns.length },
-    model: settings.model,
+    model: result.model,
+    provider: result.provider,
     inputTokens: result.usage.inputTokens,
     outputTokens: result.usage.outputTokens,
     userId: input.userId
@@ -2862,12 +3353,13 @@ export async function narrateChangeRisk(input: {
     "Write the briefing now. No preamble, no headings, no bullet points."
   ].join("\n");
 
-  const result = await callChat(settings, { model: settings.model, maxTokens: 400, prompt });
+  const result = await callChat(settings, { feature: "change_risk_narrative", model: settings.model, maxTokens: 400, prompt });
 
   await logAIUsage({
     feature: "change_risk_narrative",
     params: { changeKey: input.changeKey, riskScore: input.riskScore, riskLevel: input.riskLevel, answered: input.answers.length },
-    model: settings.model,
+    model: result.model,
+    provider: result.provider,
     inputTokens: result.usage.inputTokens,
     outputTokens: result.usage.outputTokens,
     userId: input.userId
@@ -3057,12 +3549,13 @@ export async function draftChangeSections(input: {
     "Return JSON only: { \"sections\": [ { \"field\": \"...\", \"text\": \"...\" } ] }"
   ].join("\n");
 
-  const result = await callChat(settings, { model: settings.model, maxTokens: 2000, prompt });
+  const result = await callChat(settings, { feature: "change_draft_assist", model: settings.model, maxTokens: 2000, prompt });
 
   await logAIUsage({
     feature: "change_draft_assist",
     params: { changeKey: input.changeKey, wanted: asked.map((s) => s.field) },
-    model: settings.model,
+    model: result.model,
+    provider: result.provider,
     inputTokens: result.usage.inputTokens,
     outputTokens: result.usage.outputTokens,
     userId: input.userId
@@ -3118,12 +3611,13 @@ export async function briefChangeConflicts(input: {
     "Write the briefing now. No preamble, no headings, no bullet points."
   ].join("\n");
 
-  const result = await callChat(settings, { model: settings.model, maxTokens: 350, prompt });
+  const result = await callChat(settings, { feature: "change_conflict_brief", model: settings.model, maxTokens: 350, prompt });
 
   await logAIUsage({
     feature: "change_conflict_brief",
     params: { changeKey: input.changeKey, conflicts: input.conflicts.length },
-    model: settings.model,
+    model: result.model,
+    provider: result.provider,
     inputTokens: result.usage.inputTokens,
     outputTokens: result.usage.outputTokens,
     userId: input.userId
@@ -3186,12 +3680,13 @@ export async function draftPostImplementationReview(input: {
     "Return JSON only: { \"text\": \"...\" }"
   ].join("\n");
 
-  const result = await callChat(settings, { model: settings.model, maxTokens: 900, prompt });
+  const result = await callChat(settings, { feature: "change_pir_assist", model: settings.model, maxTokens: 900, prompt });
 
   await logAIUsage({
     feature: "change_pir_assist",
     params: { changeKey: input.changeKey, failedSteps: failedSteps.length, failedTests: failedTests.length },
-    model: settings.model,
+    model: result.model,
+    provider: result.provider,
     inputTokens: result.usage.inputTokens,
     outputTokens: result.usage.outputTokens,
     userId: input.userId
@@ -3342,6 +3837,13 @@ export async function askWorkspaceChat(input: {
   let inputTokens = 0;
   let outputTokens = 0;
   let costUsd = 0;
+  // The model/provider that actually served the MOST RECENT step's call — a multi-step exchange
+  // can, in principle, fall back to a different provider on one step than another, but the final
+  // step is what produced the answer being logged/returned, so that step's actual model/provider
+  // is what AIUsageLog and the caller-facing result should reflect (never the originally-requested
+  // settings.model/provider, which is what a fallback would have substituted away from).
+  let lastModel = settings.model;
+  let lastProvider = String(settings.provider);
 
   const ask = async (extra: string): Promise<string> => {
     const prompt = [
@@ -3430,10 +3932,12 @@ export async function askWorkspaceChat(input: {
       .filter(Boolean)
       .join("\n");
 
-    const result = await callChat(settings, { model: settings.model, maxTokens: 1400, prompt });
+    const result = await callChat(settings, { feature: "ask_ai", model: settings.model, maxTokens: 1400, prompt });
     inputTokens += result.usage.inputTokens;
     outputTokens += result.usage.outputTokens;
-    costUsd += estimateCostUsd(settings.model, result.usage.inputTokens, result.usage.outputTokens);
+    costUsd += estimateCostUsd(result.model, result.usage.inputTokens, result.usage.outputTokens);
+    lastModel = result.model;
+    lastProvider = result.provider;
     return result.text;
   };
 
@@ -3465,28 +3969,30 @@ export async function askWorkspaceChat(input: {
       const { interactionId } = await logAIUsage({
         feature: "ask_ai",
         params: { steps: step + 1, freeform: true },
-        model: settings.model,
+        model: lastModel,
+        provider: lastProvider,
         inputTokens,
         outputTokens,
         userId: input.userId,
         prompt: input.prompt,
         output: answer
       });
-      return { answer, toolCalls, model: settings.model, provider: String(settings.provider), inputTokens, outputTokens, costUsd, interactionId: interactionId ?? null };
+      return { answer, toolCalls, model: lastModel, provider: lastProvider, inputTokens, outputTokens, costUsd, interactionId: interactionId ?? null };
     }
 
     if (parsed.action === "answer") {
       const { interactionId } = await logAIUsage({
         feature: "ask_ai",
         params: { steps: step + 1, tools: toolCalls.map((t) => t.tool) },
-        model: settings.model,
+        model: lastModel,
+        provider: lastProvider,
         inputTokens,
         outputTokens,
         userId: input.userId,
         prompt: input.prompt,
         output: parsed.markdown
       });
-      return { answer: parsed.markdown, toolCalls, model: settings.model, provider: String(settings.provider), inputTokens, outputTokens, costUsd, interactionId: interactionId ?? null };
+      return { answer: parsed.markdown, toolCalls, model: lastModel, provider: lastProvider, inputTokens, outputTokens, costUsd, interactionId: interactionId ?? null };
     }
 
     const signature = `${parsed.tool}:${JSON.stringify(parsed.args ?? {})}`;
@@ -3537,7 +4043,8 @@ export async function askWorkspaceChat(input: {
   const { interactionId } = await logAIUsage({
     feature: "ask_ai",
     params: { steps: ASK_MAX_STEPS + 1, exhausted: true },
-    model: settings.model,
+    model: lastModel,
+    provider: lastProvider,
     inputTokens,
     outputTokens,
     userId: input.userId,
@@ -3547,8 +4054,8 @@ export async function askWorkspaceChat(input: {
   return {
     answer,
     toolCalls,
-    model: settings.model,
-    provider: String(settings.provider),
+    model: lastModel,
+    provider: lastProvider,
     inputTokens,
     outputTokens,
     costUsd,
@@ -3628,7 +4135,7 @@ export async function proposePlanBreakdown(input: {
     .filter(Boolean)
     .join("\n");
 
-  const chat = await callChat(settings, {
+  const chat = await callChat(settings, { feature: "plan_breakdown",
     model: settings.model,
     maxTokens: 1500,
     prompt,
@@ -3667,7 +4174,8 @@ export async function proposePlanBreakdown(input: {
     prompt,
     output: chat.text,
     parseOk: parsed !== null,
-    model: settings.model,
+    model: chat.model,
+    provider: chat.provider,
     inputTokens: chat.usage.inputTokens,
     outputTokens: chat.usage.outputTokens,
     userId: input.userId
@@ -3689,7 +4197,7 @@ export async function proposePlanBreakdown(input: {
     dependsOnIndex: item.dependsOnIndex >= 0 && item.dependsOnIndex < index ? item.dependsOnIndex : -1
   }));
 
-  return { ...parsed, items, model: settings.model, interactionId };
+  return { ...parsed, items, model: chat.model, interactionId };
 }
 
 /* ================================================================== *
@@ -3880,7 +4388,7 @@ export async function planAgentStep(input: {
         ])
   ].join("\n");
 
-  const chat = await callChat(settings, {
+  const chat = await callChat(settings, { feature: "agent_step",
     model: settings.model,
     maxTokens: 1024,
     prompt,
@@ -3912,7 +4420,8 @@ export async function planAgentStep(input: {
     // should show the stepping separately from the capability's one-shot path. Which capability
     // was stepping is in the params.
     feature: "agent_step",
-    model: settings.model,
+    model: chat.model,
+    provider: chat.provider,
     inputTokens: chat.usage.inputTokens,
     outputTokens: chat.usage.outputTokens,
     prompt,
@@ -3939,7 +4448,7 @@ export async function planAgentStep(input: {
 
   return {
     decision,
-    costUsd: estimateCostUsd(settings.model, chat.usage.inputTokens, chat.usage.outputTokens),
+    costUsd: estimateCostUsd(chat.model, chat.usage.inputTokens, chat.usage.outputTokens),
     raw: chat.text
   };
 }

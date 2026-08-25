@@ -11,7 +11,21 @@ import type { PrismaClient } from "@prisma/client";
 export function createFakeTenantClient(): PrismaClient {
   return {
     globalAISettings: { upsert: vi.fn(), findUnique: vi.fn() },
-    aIUsageLog: { create: vi.fn(), aggregate: vi.fn() },
+    // Defaults to no rows so callChat's getEnabledProviderConfigs() falls through to its
+    // synthesized-default single config (GlobalAISettings' provider/model) — exactly like
+    // production for a workspace that has never configured AIProviderConfig through the new UI.
+    aIProviderConfig: {
+      findMany: vi.fn().mockResolvedValue([]),
+      findFirst: vi.fn(),
+      findUnique: vi.fn(),
+      create: vi.fn(),
+      update: vi.fn(),
+      delete: vi.fn()
+    },
+    // Only ever called with an ARRAY of already-invoked operation promises in this codebase
+    // (reorderProviderConfigs) — never the callback form — so resolving them is the whole stub.
+    $transaction: vi.fn((ops: Promise<unknown>[]) => Promise.all(ops)),
+    aIUsageLog: { create: vi.fn(), aggregate: vi.fn(), groupBy: vi.fn(), findMany: vi.fn() },
     aIInteraction: {
       create: vi.fn(),
       findMany: vi.fn(),
@@ -73,7 +87,8 @@ export function createFakeTenantClient(): PrismaClient {
     serviceIncident: { findMany: vi.fn(), findUnique: vi.fn(), create: vi.fn(), update: vi.fn() },
     auditLog: { create: vi.fn(), findMany: vi.fn(), count: vi.fn() },
     aiCapabilityPolicy: { findUnique: vi.fn(), findMany: vi.fn(), upsert: vi.fn() },
-    agentRun: { findUnique: vi.fn(), findFirst: vi.fn(), create: vi.fn(), update: vi.fn(), updateMany: vi.fn(), count: vi.fn() },
+    agentRun: { findUnique: vi.fn(), findFirst: vi.fn(), create: vi.fn(), update: vi.fn(), updateMany: vi.fn(), count: vi.fn(), groupBy: vi.fn() },
+    automationFlow: { findMany: vi.fn() },
     // V8 phase 3: the autonomy catalogue reports which agent owns each capability, so anything
     // touching it reads this table. Defaults to no claims — a suite that cares sets its own rows.
     agentProfile: { findMany: vi.fn().mockResolvedValue([]), findFirst: vi.fn(), create: vi.fn(), update: vi.fn() },

@@ -23,9 +23,8 @@
  * `chat-integrations.controller.ts` — this page is the one UI surface for all three.
  */
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import type { ColumnDef } from "@tanstack/react-table";
 import {
-  aiModels,
-  aiProviderPresets,
   emailMatchTypes,
   isEmailRoleMuted,
   notificationPreferenceKeys,
@@ -47,7 +46,6 @@ import {
   FileStack,
   Hourglass,
   Inbox,
-  KeyRound,
   Loader2,
   LogIn,
   Mail,
@@ -66,17 +64,19 @@ import {
   Trash2,
   Wrench,
   X,
-  Zap, Bot, Target, Workflow
+  Zap, Bot, Target, Workflow, Download
 } from "lucide-react";
 import type { ReactNode } from "react";
 import { useEffect, useState } from "react";
-import { Bar, BarChart, CartesianGrid, Cell, Line, LineChart, ResponsiveContainer, Tooltip as RTooltip, XAxis, YAxis } from "recharts";
+import { Bar, BarChart, CartesianGrid, ResponsiveContainer, Tooltip as RTooltip, XAxis, YAxis } from "recharts";
 import { AiFeatureUsagePanel } from "../components/AiFeatureUsagePanel";
 import { Alert, AlertDescription, AlertTitle } from "../components/ui/alert";
 import { Badge } from "../components/ui/badge";
 import { Button } from "../components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../components/ui/card";
 import { Checkbox } from "../components/ui/checkbox";
+import { DataTable } from "../components/ui/data-table";
+import { DateRangePicker, type DateRangeValue } from "../components/ui/date-range-picker";
 import { Input } from "../components/ui/input";
 import { Label } from "../components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../components/ui/select";
@@ -94,6 +94,7 @@ import {
   settingsApi,
   ticketTypeApi,
   userApi,
+  type AIUsageRow,
   type SsoProviderConfig,
   type TicketRuleInput
 } from "../services/api";
@@ -116,6 +117,7 @@ import { MaintenanceSettingsCard } from "./settings/MaintenanceSettingsCard";
 import { ChangeManagementSettingsCard } from "./settings/ChangeManagementSettingsCard";
 import { PlanningSettingsCard } from "./settings/PlanningSettingsCard";
 import { StorageAndLogsCard } from "./settings/StorageAndLogsCard";
+import { AIProviderListCard } from "./settings/AIProviderListCard";
 
 // Matches the exact chart styling convention used in Insights.tsx (this repo's `dataviz`
 // skill): CSS-variable colors only, fixed categorical order never re-cycled by rank.
@@ -129,6 +131,53 @@ const MODEL_COLORS = ["hsl(var(--primary))", "hsl(var(--info))", "hsl(var(--acce
 function formatWeek(iso: string) {
   return new Date(iso).toLocaleDateString(undefined, { month: "short", day: "numeric" });
 }
+
+/** yyyy-mm-dd in LOCAL time, matching DateRangePicker's own ISO shape — `toISOString()` would
+ *  shift near midnight for any timezone ahead of UTC. */
+function localIso(date: Date): string {
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
+}
+
+/** Columns for the AI usage table — one row per provider×model combination actually used in the
+ *  picked range. Module-level, matching Tickets.tsx's ticketColumns convention. */
+const usageColumns: ColumnDef<AIUsageRow, unknown>[] = [
+  { accessorKey: "provider", header: "Provider" },
+  { accessorKey: "model", header: "Model" },
+  { accessorKey: "calls", header: "Calls", cell: ({ row }) => row.original.calls.toLocaleString() },
+  {
+    accessorKey: "successRatePct",
+    header: "Success rate",
+    cell: ({ row }) => {
+      const pct = row.original.successRatePct;
+      if (pct === null) return <span className="text-muted-foreground">n/a</span>;
+      // Amber/red only below a real reliability concern — a single stray timeout in a busy month
+      // shouldn't paint an otherwise-solid provider as troubled.
+      const tone = pct >= 95 ? "text-success" : pct >= 80 ? "text-warning" : "text-destructive";
+      return (
+        <span className={tone} title={`${row.original.successCount} succeeded, ${row.original.failureCount} failed`}>
+          {pct}%
+        </span>
+      );
+    }
+  },
+  { accessorKey: "inputTokens", header: "Input tokens", cell: ({ row }) => row.original.inputTokens.toLocaleString() },
+  { accessorKey: "outputTokens", header: "Output tokens", cell: ({ row }) => row.original.outputTokens.toLocaleString() },
+  { accessorKey: "totalTokens", header: "Total tokens", cell: ({ row }) => row.original.totalTokens.toLocaleString() },
+  {
+    accessorKey: "avgLatencyMs",
+    header: "Avg latency",
+    cell: ({ row }) =>
+      row.original.avgLatencyMs === null ? (
+        <span className="text-muted-foreground">not measured</span>
+      ) : (
+        <span title={`measured on ${row.original.latencyMeasuredCalls} of ${row.original.calls} calls`}>
+          {row.original.avgLatencyMs.toLocaleString()} ms
+        </span>
+      )
+  },
+  { accessorKey: "costUsd", header: "Cost", cell: ({ row }) => `$${row.original.costUsd.toFixed(2)}` },
+  { accessorKey: "costSharePct", header: "% of total", cell: ({ row }) => `${row.original.costSharePct}%` }
+];
 
 interface ToggleRow {
   key: keyof NotificationPreferences;
@@ -1417,18 +1466,59 @@ function TicketRulesCard({ readOnly }: { readOnly: boolean }) {
   );
 }
 
+/** A single Excel-export button for the AI usage table — one format, not the 3-way CSV/XLSX/PDF
+ *  menu Change Management's register export has, since only Excel was asked for here. Downloads
+ *  via an authenticated blob GET (settingsApi.downloadAiUsageExcel), never a bare `<a href>` —
+ *  this app keeps its access token in memory, so a plain link would 401. Same dance as Changes.tsx's
+ *  ExportMenu: createObjectURL, a programmatic click, then revokeObjectURL. */
+function AiUsageExportButton({ range, feature }: { range: DateRangeValue; feature: string }) {
+  const [busy, setBusy] = useState(false);
+  const run = async () => {
+    setBusy(true);
+    try {
+      const { blob } = await settingsApi.downloadAiUsageExcel({ from: range.from, to: range.to, feature: feature || undefined });
+      const url = URL.createObjectURL(blob);
+      const anchor = document.createElement("a");
+      anchor.href = url;
+      anchor.download = `ai-usage-${range.from}-to-${range.to}.xlsx`;
+      anchor.click();
+      URL.revokeObjectURL(url);
+    } catch (err: any) {
+      toast.error("Could not export", { description: err?.response?.data?.message ?? "Try again." });
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <Button variant="outline" size="sm" disabled={busy} onClick={run}>
+      {busy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Download className="h-3.5 w-3.5" />}
+      Export .xlsx
+    </Button>
+  );
+}
+
 function AISettingsCard({ readOnly }: { readOnly: boolean }) {
   const queryClient = useQueryClient();
   const settings = useQuery({ queryKey: ["settings", "ai"], queryFn: settingsApi.getAI });
+
+  // Defaults to the current calendar month — same window the card always showed before it could
+  // be changed at all. `allowAllTime={false}` on the picker below keeps the range bounded: a spend
+  // report over "all time" isn't a period anyone can act on.
+  const [usageRange, setUsageRange] = useState<DateRangeValue>(() => {
+    const now = new Date();
+    return { from: localIso(new Date(now.getFullYear(), now.getMonth(), 1)), to: localIso(now) };
+  });
+  const [usageFeature, setUsageFeature] = useState<string>("");
+
   const usage = useQuery({
-    queryKey: ["settings", "ai", "usage"],
-    queryFn: settingsApi.getAIUsageSummary,
-    enabled: Boolean(settings.data?.aiEnabled)
+    queryKey: ["settings", "ai", "usage", usageRange.from, usageRange.to, usageFeature],
+    queryFn: () => settingsApi.getAIUsageSummary({ from: usageRange.from, to: usageRange.to, feature: usageFeature || undefined }),
+    enabled: Boolean(settings.data?.aiEnabled && usageRange.from && usageRange.to)
   });
   const usageTrend = useQuery({
-    queryKey: ["settings", "ai", "usage-trend"],
-    queryFn: () => settingsApi.getAIUsageTrend(8),
-    enabled: Boolean(settings.data?.aiEnabled)
+    queryKey: ["settings", "ai", "usage-trend", usageRange.from, usageRange.to],
+    queryFn: () => settingsApi.getAIUsageTrend({ from: usageRange.from, to: usageRange.to }),
+    enabled: Boolean(settings.data?.aiEnabled && usageRange.from && usageRange.to)
   });
 
   const update = useMutation({
@@ -1454,43 +1544,6 @@ function AISettingsCard({ readOnly }: { readOnly: boolean }) {
   useEffect(() => {
     if (settings.data) setBudgetDraft(settings.data.monthlyBudgetUsd != null ? String(settings.data.monthlyBudgetUsd) : "");
   }, [settings.data?.monthlyBudgetUsd]);
-
-  const [apiKeyDraft, setApiKeyDraft] = useState("");
-  // Model picker for OPENAI_COMPATIBLE providers — see settings.controller.ts's
-  // POST /settings/ai/available-models. Manual entry is always reachable (some endpoints don't
-  // implement `/models`, or the fetch just fails), so this never blocks configuration.
-  const [manualModelEntry, setManualModelEntry] = useState(false);
-  const fetchModels = useMutation({
-    mutationFn: () => settingsApi.fetchAvailableAiModels({ baseUrl: settings.data?.baseUrl || undefined, apiKey: apiKeyDraft || undefined }),
-    onSuccess: (result) => {
-      if (!result.ok || result.models.length === 0) {
-        toast.error("Could not fetch models", { description: result.message ?? "Enter the model name manually instead." });
-        setManualModelEntry(true);
-      } else {
-        setManualModelEntry(false);
-      }
-    },
-    onError: (err: any) => {
-      toast.error("Could not fetch models", { description: err?.response?.data?.message ?? "Try again, or enter the model name manually." });
-      setManualModelEntry(true);
-    }
-  });
-
-  // Which preset the current provider/baseUrl combination matches — purely a UI convenience for
-  // the dropdown; only `provider` and `baseUrl` are ever actually persisted.
-  const activePresetKey =
-    settings.data?.provider === "ANTHROPIC"
-      ? "anthropic"
-      : (aiProviderPresets.find((p) => p.baseUrl && p.baseUrl === settings.data?.baseUrl)?.key ?? "custom");
-
-  function selectPreset(key: string) {
-    if (key === "anthropic") {
-      update.mutate({ provider: "ANTHROPIC" });
-      return;
-    }
-    const preset = aiProviderPresets.find((p) => p.key === key);
-    update.mutate({ provider: "OPENAI_COMPATIBLE", baseUrl: preset?.baseUrl || settings.data?.baseUrl || "" });
-  }
 
   const toggles: Array<{ key: keyof GlobalAISettings; label: string; description: string }> = [
     // ONLY the settings that are NOT a capability. Every per-capability switch moved into
@@ -1526,15 +1579,9 @@ function AISettingsCard({ readOnly }: { readOnly: boolean }) {
                   <ShieldAlert />
                   <AlertTitle>No API key configured</AlertTitle>
                   <AlertDescription>
-                    {settings.data.provider === "ANTHROPIC" ? (
-                      <>
-                        Set <code className="rounded bg-background/60 px-1">ANTHROPIC_API_KEY</code> in{" "}
-                        <code className="rounded bg-background/60 px-1">apps/api/.env</code>, or save a key below —
-                        toggles will save either way, but nothing will actually run until a key is available.
-                      </>
-                    ) : (
-                      "Save an API key below (or leave it blank for a local provider like Ollama/LM Studio that doesn't need one) — toggles will save, but nothing will actually run until then."
-                    )}
+                    Set <code className="rounded bg-background/60 px-1">ANTHROPIC_API_KEY</code> in{" "}
+                    <code className="rounded bg-background/60 px-1">apps/api/.env</code>, or add a provider below —
+                    toggles will save either way, but nothing will actually run until a key is available.
                   </AlertDescription>
                 </Alert>
               )}
@@ -1562,146 +1609,9 @@ function AISettingsCard({ readOnly }: { readOnly: boolean }) {
                 ))}
               </div>
 
-              <div className="grid gap-4 rounded-lg border border-border p-4">
-                <div className="flex items-center gap-2">
-                  <KeyRound className="h-4 w-4 text-primary" />
-                  <p className="text-sm font-semibold">Bring your own key (BYOK)</p>
-                </div>
-                <p className="-mt-2 text-xs text-muted-foreground">
-                  Choose which LLM provider this workspace's AI features call. Every non-Anthropic option here talks to the
-                  same OpenAI-compatible chat API — pick a preset to fill in its base URL, or "Custom endpoint" for anything
-                  else that speaks that protocol (including a self-hosted Ollama or LM Studio).
-                </p>
-                <div className="grid gap-4 sm:grid-cols-2">
-                  <div className="grid gap-1.5">
-                    <Label>Provider</Label>
-                    <Select value={activePresetKey} onValueChange={selectPreset} disabled={readOnly}>
-                      <SelectTrigger><SelectValue /></SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="anthropic">Anthropic</SelectItem>
-                        {aiProviderPresets.map((p) => (
-                          <SelectItem key={p.key} value={p.key}>{p.label}</SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
-                  </div>
-                  <div className="grid gap-1.5">
-                    <Label>API key {settings.data.apiKeySet && <span className="font-normal text-muted-foreground">(saved)</span>}</Label>
-                    <div className="flex gap-2">
-                      <Input
-                        type="password"
-                        placeholder={settings.data.apiKeySet ? "•••••••••••••••• (unchanged)" : "Not set"}
-                        value={apiKeyDraft}
-                        disabled={readOnly}
-                        onChange={(e) => setApiKeyDraft(e.target.value)}
-                      />
-                      <Button
-                        size="sm"
-                        variant="outline"
-                        disabled={readOnly || !apiKeyDraft}
-                        onClick={() => {
-                          update.mutate({ apiKey: apiKeyDraft });
-                          setApiKeyDraft("");
-                        }}
-                      >
-                        Save
-                      </Button>
-                      {settings.data.apiKeySet && (
-                        <Button
-                          size="sm"
-                          variant="ghost"
-                          disabled={readOnly}
-                          onClick={() => update.mutate({ apiKey: "" })}
-                        >
-                          Clear
-                        </Button>
-                      )}
-                    </div>
-                  </div>
-                </div>
-
-                {settings.data.provider === "OPENAI_COMPATIBLE" && (
-                  <div className="grid gap-4 sm:grid-cols-2">
-                    <div className="grid gap-1.5">
-                      <Label>Base URL</Label>
-                      <Input
-                        value={settings.data.baseUrl ?? ""}
-                        placeholder="https://api.example.com/v1"
-                        disabled={readOnly}
-                        onChange={(e) => update.mutate({ baseUrl: e.target.value })}
-                      />
-                    </div>
-                    <div className="grid gap-1.5">
-                      <div className="flex items-center justify-between gap-2">
-                        <Label>Model</Label>
-                        <Button
-                          type="button"
-                          variant="ghost"
-                          size="sm"
-                          className="h-6 px-2 text-xs"
-                          disabled={readOnly || fetchModels.isPending || !(settings.data.baseUrl ?? "").trim()}
-                          onClick={() => fetchModels.mutate()}
-                        >
-                          <RefreshCw className={`mr-1 h-3 w-3 ${fetchModels.isPending ? "animate-spin" : ""}`} />
-                          {fetchModels.isPending ? "Fetching…" : "Fetch available models"}
-                        </Button>
-                      </div>
-                      {fetchModels.data?.ok && fetchModels.data.models.length > 0 && !manualModelEntry ? (
-                        <>
-                          <Select value={settings.data.model} onValueChange={(v) => update.mutate({ model: v })} disabled={readOnly}>
-                            <SelectTrigger><SelectValue /></SelectTrigger>
-                            <SelectContent>
-                              {/* Keeps the currently-set model selectable even if the live list
-                                  doesn't include it (e.g. switched providers, or the endpoint's
-                                  list changed) — never silently drops what's already configured. */}
-                              {settings.data.model && !fetchModels.data.models.includes(settings.data.model) && (
-                                <SelectItem value={settings.data.model}>{settings.data.model} (current)</SelectItem>
-                              )}
-                              {fetchModels.data.models.map((m) => (
-                                <SelectItem key={m} value={m}>{m}</SelectItem>
-                              ))}
-                            </SelectContent>
-                          </Select>
-                          <button
-                            type="button"
-                            className="justify-self-start text-xs text-muted-foreground underline-offset-2 hover:underline"
-                            onClick={() => setManualModelEntry(true)}
-                          >
-                            Enter manually instead
-                          </button>
-                        </>
-                      ) : (
-                        <>
-                          <Input
-                            value={settings.data.model}
-                            placeholder="e.g. llama3.1, mixtral-8x7b, gpt-4o-mini"
-                            disabled={readOnly}
-                            onChange={(e) => update.mutate({ model: e.target.value })}
-                          />
-                          <p className="text-xs text-muted-foreground">
-                            {fetchModels.data && !fetchModels.data.ok
-                              ? `Couldn't fetch a model list (${fetchModels.data.message ?? "unknown error"}) — enter the exact model name.`
-                              : 'Exact model name as this provider expects it, or click "Fetch available models" above to pick from a list.'}
-                          </p>
-                        </>
-                      )}
-                    </div>
-                  </div>
-                )}
-              </div>
+              <AIProviderListCard readOnly={readOnly} />
 
               <div className="grid gap-4 sm:grid-cols-2">
-                {settings.data.provider === "ANTHROPIC" && (
-                  <div className="grid gap-1.5">
-                    <Label>Model</Label>
-                    <Select value={settings.data.model} onValueChange={(v) => update.mutate({ model: v })} disabled={readOnly}>
-                      <SelectTrigger><SelectValue /></SelectTrigger>
-                      <SelectContent>
-                        {aiModels.map((m) => <SelectItem key={m.id} value={m.id}>{m.label}</SelectItem>)}
-                      </SelectContent>
-                    </Select>
-                  </div>
-                )}
                 <div className="grid gap-1.5">
                   <Label>Confidence threshold</Label>
                   <Input
@@ -1751,14 +1661,16 @@ function AISettingsCard({ readOnly }: { readOnly: boolean }) {
       {settings.data?.aiEnabled && (
         <Card>
           <CardHeader>
-            <CardTitle className="text-base">This month's usage</CardTitle>
-            <CardDescription>Estimated cost and token consumption from {usage.data?.monthStart ?? "this month"}.</CardDescription>
+            <CardTitle className="text-base">AI usage</CardTitle>
+            <CardDescription>
+              Estimated cost and token consumption{usage.data ? ` from ${usage.data.from} to ${usage.data.to}` : ""}.
+            </CardDescription>
           </CardHeader>
           <CardContent className="grid gap-5">
             {usage.isLoading && <Skeleton className="h-20 w-full" />}
             {!usage.isLoading && usage.data && (
               <>
-                <div className="grid gap-4 grid-cols-2 lg:grid-cols-4">
+                <div className="grid gap-4 grid-cols-2 lg:grid-cols-5">
                   <div className="rounded-lg border border-border bg-muted/30 p-4">
                     <p className="text-xs uppercase text-muted-foreground">Estimated spend</p>
                     <p className="mt-1 text-2xl font-black">${usage.data.totalCostUsd.toFixed(2)}</p>
@@ -1766,6 +1678,19 @@ function AISettingsCard({ readOnly }: { readOnly: boolean }) {
                   <div className="rounded-lg border border-border bg-muted/30 p-4">
                     <p className="text-xs uppercase text-muted-foreground">AI calls</p>
                     <p className="mt-1 text-2xl font-black">{usage.data.totalCalls}</p>
+                  </div>
+                  <div className="rounded-lg border border-border bg-muted/30 p-4">
+                    <p className="text-xs uppercase text-muted-foreground">Success rate</p>
+                    <p className="mt-1 text-2xl font-black">
+                      {usage.data.overallSuccessRatePct === null ? (
+                        <span className="text-base font-normal text-muted-foreground">n/a</span>
+                      ) : (
+                        `${usage.data.overallSuccessRatePct}%`
+                      )}
+                    </p>
+                    {usage.data.totalFailures > 0 && (
+                      <p className="text-xs text-muted-foreground">{usage.data.totalFailures} failed attempt{usage.data.totalFailures === 1 ? "" : "s"}</p>
+                    )}
                   </div>
                   <div className="rounded-lg border border-border bg-muted/30 p-4">
                     <p className="text-xs uppercase text-muted-foreground">Input tokens</p>
@@ -1827,63 +1752,54 @@ function AISettingsCard({ readOnly }: { readOnly: boolean }) {
                   </div>
                 )}
 
-                {usageTrend.data && usageTrend.data.some((w) => w.costUsd > 0) && (
+                {usageTrend.data && usageTrend.data.providerNames.length > 0 && (
                   <div>
-                    <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground">Spend trend, last 8 weeks</p>
+                    <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground">Spend trend, by provider</p>
                     <div className="h-48">
                       <ResponsiveContainer width="100%" height="100%">
-                        <LineChart data={usageTrend.data} margin={{ left: -20, right: 8 }}>
+                        <BarChart data={usageTrend.data.weeks} margin={{ left: -20, right: 8 }}>
                           <CartesianGrid {...GRID_STYLE} vertical={false} />
                           <XAxis dataKey="weekStart" tickFormatter={formatWeek} tick={AXIS_STYLE} axisLine={false} tickLine={false} />
                           <YAxis tick={AXIS_STYLE} axisLine={false} tickLine={false} width={56} tickFormatter={(v) => `$${v}`} />
-                          <RTooltip {...TOOLTIP_STYLE} formatter={(v: number) => [`$${v.toFixed(2)}`, "Spend"]} labelFormatter={formatWeek} />
-                          <Line type="monotone" dataKey="costUsd" stroke="hsl(var(--primary))" strokeWidth={2} dot={{ r: 3 }} />
-                        </LineChart>
-                      </ResponsiveContainer>
-                    </div>
-                  </div>
-                )}
-
-                {usage.data.byModel.length > 0 && (
-                  <div>
-                    <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground">Spend by model</p>
-                    <div className="h-48">
-                      <ResponsiveContainer width="100%" height="100%">
-                        <BarChart data={usage.data.byModel} margin={{ left: -20, right: 8 }}>
-                          <CartesianGrid {...GRID_STYLE} vertical={false} />
-                          <XAxis dataKey="model" tick={AXIS_STYLE} axisLine={false} tickLine={false} interval={0} angle={-15} textAnchor="end" height={50} />
-                          <YAxis tick={AXIS_STYLE} axisLine={false} tickLine={false} width={56} tickFormatter={(v) => `$${v}`} />
-                          <RTooltip
-                            {...TOOLTIP_STYLE}
-                            formatter={(v: number, _name, item) => [`$${v.toFixed(2)} · ${item.payload.calls} calls`, item.payload.model]}
-                          />
-                          <Bar dataKey="costUsd" radius={[4, 4, 0, 0]}>
-                            {usage.data.byModel.map((row, index) => (
-                              <Cell key={row.model} fill={MODEL_COLORS[index % MODEL_COLORS.length]} />
-                            ))}
-                          </Bar>
+                          <RTooltip {...TOOLTIP_STYLE} formatter={(v: number, name) => [`$${Number(v).toFixed(2)}`, name]} labelFormatter={formatWeek} />
+                          {usageTrend.data.providerNames.map((provider, index) => (
+                            <Bar key={provider} dataKey={provider} stackId="cost" fill={MODEL_COLORS[index % MODEL_COLORS.length]} radius={index === usageTrend.data.providerNames.length - 1 ? [4, 4, 0, 0] : undefined} />
+                          ))}
                         </BarChart>
                       </ResponsiveContainer>
                     </div>
                   </div>
                 )}
 
-                {usage.data.byFeature.length > 0 && (
-                  <div>
-                    <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground">By feature</p>
-                    <div className="divide-y divide-border rounded-lg border border-border">
-                      {usage.data.byFeature.map((f) => (
-                        <div key={f.feature} className="flex items-center justify-between gap-3 p-3 text-sm">
-                          <span className="min-w-0 truncate">{f.feature}</span>
-                          <span className="shrink-0 text-muted-foreground">
-                            {f.calls} calls · {(f.inputTokens + f.outputTokens).toLocaleString()} tokens · ${f.costUsd.toFixed(2)}
-                          </span>
-                        </div>
-                      ))}
-                    </div>
+                <div>
+                  <div className="mb-2 flex items-center justify-between gap-2">
+                    <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Provider &amp; model breakdown</p>
                   </div>
-                )}
-                {usage.data.byFeature.length === 0 && <p className="text-sm text-muted-foreground">No AI calls yet this month.</p>}
+                  <DataTable
+                    columns={usageColumns}
+                    data={usage.data.rows}
+                    isLoading={usage.isLoading}
+                    searchPlaceholder="Search provider or model..."
+                    emptyMessage="No AI calls in this range."
+                    toolbar={
+                      <div className="flex flex-wrap items-center gap-2">
+                        <Select value={usageFeature || "__all"} onValueChange={(v) => setUsageFeature(v === "__all" ? "" : v)}>
+                          <SelectTrigger className="w-[180px]"><SelectValue placeholder="All features" /></SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value="__all">All features</SelectItem>
+                            {usage.data.features.map((f) => (
+                              <SelectItem key={f.feature} value={f.feature}>
+                                {f.feature} ({f.calls})
+                              </SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                        <DateRangePicker value={usageRange} onChange={setUsageRange} allowAllTime={false} className="w-auto" />
+                        <AiUsageExportButton range={usageRange} feature={usageFeature} />
+                      </div>
+                    }
+                  />
+                </div>
               </>
             )}
           </CardContent>

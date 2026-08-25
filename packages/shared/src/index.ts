@@ -400,6 +400,25 @@ export const aiProviderPresets: Array<{ key: string; label: string; baseUrl: str
   { key: "custom", label: "Custom endpoint", baseUrl: "", needsKey: true }
 ];
 
+/**
+ * Friendly display name for whatever is actually configured — "Anthropic" for the built-in path,
+ * or the matching preset's label for OPENAI_COMPATIBLE (falling back to the bare hostname, then
+ * "Custom endpoint", when baseUrl matches no known preset). Shared between the API (AIUsageLog.provider,
+ * resolved once per call in ai.service.ts#logAIUsage) and the web app (display) so the two can
+ * never disagree on what a given baseUrl is called.
+ */
+export function resolveProviderLabel(provider: AIProvider, baseUrl: string | null | undefined): string {
+  if (provider === "ANTHROPIC") return "Anthropic";
+  const preset = aiProviderPresets.find((p) => p.baseUrl && p.baseUrl === baseUrl);
+  if (preset) return preset.label;
+  if (!baseUrl) return "Custom endpoint";
+  try {
+    return new URL(baseUrl).hostname;
+  } catch {
+    return "Custom endpoint";
+  }
+}
+
 /** Master + per-feature AI toggles. `aiEnabled` is the workspace-wide kill switch. */
 export interface GlobalAISettings {
   aiEnabled: boolean;
