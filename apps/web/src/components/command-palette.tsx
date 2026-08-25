@@ -9,7 +9,7 @@
  */
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useMemo, useState } from "react";
-import { useNavigate } from "react-router";
+import { Link, useNavigate } from "react-router";
 import {
   BarChart3,
   Bot,
@@ -293,6 +293,15 @@ function AskAIDialog({ open, onOpenChange }: { open: boolean; onOpenChange: (ope
           />
           <Button onClick={submit} disabled={question.trim().length < 3 || ask.isPending}>Ask</Button>
         </div>
+        {/* The dialog answers one question and forgets it. The page keeps the history, rates the
+            answers, and can consult timesheets and changes too — say so where the question is asked. */}
+        <Link
+          to="/app/ask-ai"
+          onClick={() => onOpenChange(false)}
+          className="text-center text-xs font-medium text-primary hover:underline"
+        >
+          Open the full Ask AI page — history, charts, timesheets and changes →
+        </Link>
       </DialogContent>
     </Dialog>
   );

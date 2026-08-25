@@ -58,9 +58,9 @@ jobs:
       TIMESPHERE_INGEST_URL: ${{ secrets.TIMESPHERE_INGEST_URL }}
       TIMESPHERE_ORG_SLUG: ${{ secrets.TIMESPHERE_ORG_SLUG }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: ${{ env.NODE_VERSION }}
           cache: npm
@@ -116,6 +116,36 @@ jobs:
       # wait behind migrate/seed to tell you something's broken.
       - name: Unit tests (vitest)
         run: npm run test -w apps/api
+
+      # The web workspace's own unit tests. Currently one file, and it earns the step on its own:
+      # src/lib/safe-html.ts is the ONLY sanitizer for two of its callers (Ask AI's model-authored
+      # markdown, and the What's-new page's release notes fetched from GitHub), so a regression
+      # there is an XSS/UI-redress hole with nothing else behind it. Needs a DOM, which is why it
+      # cannot live in the api project — see apps/web/vitest.config.ts.
+      - name: Unit tests — web (vitest, jsdom)
+        run: npm run test -w apps/web
+
+      # The web container's nginx config is a TEMPLATE rendered at container start, so a malformed
+      # directive does not fail here — it crash-loops the pod at deploy time with the reason buried
+      # in container logs. Render it exactly as the image's entrypoint does and let nginx parse it.
+      #
+      # The `grep -q` is not padding: a bind-mount or path mistake silently leaves the image's own
+      # stock default.conf in place, and `nginx -t` then reports "syntax is ok" for a file that is
+      # not ours at all. Asserting a directive that only this template carries is what makes the
+      # step's success mean something. (That exact false pass happened once during review.)
+      - name: Validate the web nginx template
+        run: |
+          docker run --rm \
+            -e API_UPSTREAM=127.0.0.1:4000 -e CSP_CONNECT_SRC="" \
+            -v "$PWD/apps/web/nginx.conf.template:/etc/nginx/templates/default.conf.template:ro" \
+            --entrypoint sh nginx:1.27-alpine -c '
+              /docker-entrypoint.d/20-envsubst-on-templates.sh >/dev/null 2>&1
+              grep -q "Content-Security-Policy" /etc/nginx/conf.d/default.conf \
+                || { echo "::error::rendered conf is missing our CSP — the template was not applied"; exit 1; }
+              grep -q "frame-ancestors" /etc/nginx/conf.d/default.conf \
+                || { echo "::error::CSP rendered without frame-ancestors"; exit 1; }
+              nginx -t
+            '
 
       - name: Create CI databases
         run: |
@@ -210,8 +240,8 @@ jobs:
       APP_BASE_URL: "http://localhost:5173"
       DEFAULT_ORG_SLUG: "default"
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
         with:
           node-version: ${{ env.NODE_VERSION }}
           cache: npm
@@ -254,7 +284,7 @@ jobs:
 
       - name: Cache Playwright browsers
         id: pw-cache
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: ~/.cache/ms-playwright
           key: playwright-${{ runner.os }}-${{ steps.pw.outputs.version }}
@@ -277,7 +307,7 @@ jobs:
 
       - name: Upload Playwright report
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           # Per-shard name: four jobs uploading one artifact name is a 409 on the second.
           name: playwright-report-shard-${{ matrix.shard }}
@@ -334,9 +364,9 @@ jobs:
       REPO: ${{ github.repository }}
       BRANCH: ${{ github.ref_name }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: ${{ env.NODE_VERSION }}
           cache: npm
@@ -347,12 +377,12 @@ jobs:
       # --- SAST: CodeQL, output kept local (upload: false) since results go to TimeSphere, not
       #     GitHub's own code-scanning tab — this repo may not have GitHub Advanced Security.
       - name: Initialize CodeQL
-        uses: github/codeql-action/init@v3
+        uses: github/codeql-action/init@v4
         with:
           languages: javascript-typescript
 
       - name: Run CodeQL analysis
-        uses: github/codeql-action/analyze@v3
+        uses: github/codeql-action/analyze@v4
         with:
           output: codeql-results
           upload: false
@@ -421,9 +451,9 @@ jobs:
       DATABASE_URL: "mysql://unused:unused@localhost:3306/unused"
       CONTROL_DATABASE_URL: "mysql://unused:unused@localhost:3306/unused"
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: ${{ env.NODE_VERSION }}
           cache: npm
@@ -449,7 +479,7 @@ jobs:
     name: Validate installer scripts
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Syntax-check install.sh and update.sh (bash -n, no execution)
         run: bash -n install.sh && bash -n update.sh
@@ -467,9 +497,9 @@ jobs:
     name: Validate Helm chart + compose files
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: azure/setup-helm@v4
+      - uses: azure/setup-helm@v5
 
       # The label a cluster reports as app.kubernetes.io/version comes from Chart.yaml's
       # appVersion, so a stale value makes `kubectl get deploy -L app.kubernetes.io/version` lie
@@ -564,7 +594,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 25
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Run the installer exactly as a customer would
         run: TS_AUTO=1 ./install.sh
@@ -579,7 +609,7 @@ jobs:
     name: Validate install.ps1 (PowerShell parser, no execution)
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Parse install.ps1 without running it (PowerShell 7 / pwsh)
         shell: pwsh

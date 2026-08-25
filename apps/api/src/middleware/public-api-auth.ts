@@ -29,7 +29,16 @@ export async function publicApiAuth(req: PublicApiRequest, _res: Response, next:
   if (!key) throw new AppError(401, "Missing API key. Pass it as 'Authorization: Bearer <key>'.");
 
   const record = await prisma.apiKey.findUnique({ where: { keyHash: hashKey(key) } });
-  if (!record || record.revokedAt) throw new AppError(401, "Invalid or revoked API key.");
+  // Unknown, revoked and EXPIRED all answer identically, and deliberately so: a distinct "your
+  // key expired" would confirm to an unauthenticated caller that the key they hold was once real,
+  // which is the one bit of information a guesser actually wants. Same single-message discipline
+  // as middleware/mcp-auth.ts.
+  //
+  // `expiresAt === null` means never expires — every key issued before that column existed reads
+  // that way, so nothing working stops working on upgrade (see the migration's note).
+  if (!record || record.revokedAt || (record.expiresAt && record.expiresAt <= new Date())) {
+    throw new AppError(401, "Invalid or revoked API key.");
+  }
 
   await prisma.apiKey.update({ where: { id: record.id }, data: { lastUsedAt: new Date() } }).catch(() => undefined);
   req.apiKey = { id: record.id, scope: record.scope as "READ" | "WRITE" };

@@ -137,6 +137,65 @@ const CAPABILITIES: ReadonlyArray<AiCapabilitySpec> = [
     actsOnUntrustedInput: false,
     tools: []
   },
+  {
+    id: "change_draft_assist",
+    title: "Draft a change's blocking sections",
+    description:
+      "Drafts the justification, implementation, backout, test and communication plans a change owes before it can be submitted. Every section is a proposal row somebody accepts or rejects.",
+    featureToggle: "changeDraftAssistEnabled",
+    // SUGGEST, permanently. This is the only capability in the module that can put words into the
+    // record an approver reads, and the backout plan is the single most consequential field here.
+    maxLevel: "SUGGEST",
+    ceilingReason:
+      "It drafts the sections an approver relies on, including the backout plan. A person accepts each one — a draft nobody wrote is worse than a blank field, because a blank field is honest.",
+    // Its context is derived from linked tickets, and some of that ORIGINATED outside the workspace:
+    // an emailed ticket's title, a scanner's repository string. Marked accordingly rather than
+    // argued about later.
+    actsOnUntrustedInput: true,
+    tools: []
+  },
+  {
+    id: "change_conflict_brief",
+    title: "Change scheduling conflicts",
+    description: "Reads the conflicts already computed for a change's window and says which one matters. Moves nothing.",
+    featureToggle: "changeConflictBriefEnabled",
+    // It reports on arithmetic somebody else did. Nothing is rescheduled, and the conflicts are
+    // found by comparing dates, not by the model — so there is nothing here for autonomy to break.
+    maxLevel: "AUTONOMOUS",
+    ceilingReason: null,
+    actsOnUntrustedInput: false,
+    tools: []
+  },
+  {
+    id: "change_pir_assist",
+    title: "Draft a post-implementation review",
+    description: "Drafts the review from what was recorded while the change ran — the failed steps, the failed tests, the outcome.",
+    featureToggle: "changePirAssistEnabled",
+    // A PIR is usually written because something went wrong, and its author should be the person
+    // accountable for it. A model writing one unreviewed produces a record of a failure nobody stood
+    // behind — worse than no record, because it looks like one.
+    maxLevel: "SUGGEST",
+    ceilingReason:
+      "A post-implementation review is the record of how a change went, most often when it went badly. The person accountable for it should be the one who signs it.",
+    actsOnUntrustedInput: false,
+    tools: []
+  },
+  {
+    id: "change_risk_narrative",
+    title: "Change risk narrative",
+    description: "Explains a change's computed risk score in prose for its approver. Never sets the score, and never approves.",
+    featureToggle: "changeRiskNarrativeEnabled",
+    // AUTONOMOUS for the same reason its project-shaped sibling is: it writes nothing. The score is
+    // a stored column computed from weighted parameters; this only turns it into a sentence. What is
+    // NOT reachable at any level is the approval itself — that is not a ceiling on this capability,
+    // it is the absence of any capability that can do it.
+    maxLevel: "AUTONOMOUS",
+    ceilingReason: null,
+    // Sees the change's own assessment and its stored score. No PR bodies, no CI logs, no comments —
+    // everything it reads was typed by somebody inside this workspace.
+    actsOnUntrustedInput: false,
+    tools: []
+  },
 
   // ── Plan-shaped changes. Reversible, scoped to a project, and reviewed row by row — the
   //    capabilities the proposal envelope was actually built for.

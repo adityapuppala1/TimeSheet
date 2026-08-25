@@ -258,6 +258,68 @@ test.describe("Timesheet", () => {
     await expect(page.getByText(/check the highlighted field/i)).toBeVisible({ timeout: 10_000 });
   });
 
+
+  test("tagging a long-titled ticket does not push the form off the page", async ({ page }) => {
+    // THE BUG THIS PINS: the picker's trigger used `truncate`, which sets overflow:hidden and
+    // text-overflow:ellipsis — but a flex/grid item defaults to `min-width: auto` and refuses to
+    // shrink below its own content. So a long ticket title grew the trigger past its column instead
+    // of ellipsing, and the whole document scrolled sideways. Measured before the fix: a 250px cell
+    // rendering a 727px trigger, document scrollWidth 1819 against a 1400px viewport.
+    //
+    // WHY IT ISN'T CAUGHT BY responsive.spec.ts: that suite asserts no horizontal overflow, but it
+    // visits every route AT REST. This overflow only exists after an interaction puts long text into
+    // a control, which is why the guard belongs here, next to the interaction.
+    await signInAsEmployee(page);
+    await page.goto("/app/timesheet");
+
+    const project = page.getByLabel("Project", { exact: true });
+    await expect(project).toBeVisible({ timeout: 15_000 });
+    await project.click();
+    // Both selectors: the project control is a Radix Select ([role=option]) while the ticket picker
+    // below is a cmdk Command ([cmdk-item]). Matching only one silently fails on the other.
+    const projectOption = page.locator('[role="option"], [cmdk-item]').first();
+    await expect(projectOption).toBeVisible({ timeout: 10_000 });
+    await projectOption.click();
+
+    const ticket = page.getByRole("combobox").filter({ hasText: /ticket/i }).first();
+    await ticket.scrollIntoViewIfNeeded();
+    await ticket.click();
+
+    // The LONGEST title available — a short one fits either way and would pass against the bug.
+    const items = page.locator('[cmdk-item], [role="option"]');
+    await expect(items.first()).toBeVisible({ timeout: 10_000 });
+    const count = await items.count();
+    if (count < 2) {
+      test.skip(true, "this project has no open tickets to tag, so there is nothing to overflow");
+      return;
+    }
+    let longestIndex = 1;
+    let longest = 0;
+    for (let i = 1; i < count; i++) {
+      const length = (await items.nth(i).innerText()).length;
+      if (length > longest) {
+        longest = length;
+        longestIndex = i;
+      }
+    }
+    await items.nth(longestIndex).click();
+
+    const measured = await page.evaluate(() => {
+      const trigger = [...document.querySelectorAll('button[role="combobox"]')].find((b) => /—/.test(b.textContent ?? ""));
+      return {
+        docScroll: document.documentElement.scrollWidth,
+        docClient: document.documentElement.clientWidth,
+        triggerWidth: trigger ? Math.round(trigger.getBoundingClientRect().width) : 0,
+        parentWidth: trigger?.parentElement ? Math.round(trigger.parentElement.getBoundingClientRect().width) : 0
+      };
+    });
+
+    // Both halves matter: the page must not scroll sideways, AND the trigger must actually be
+    // inside its column — a page can stay within the viewport while one control still overhangs.
+    expect(measured.docScroll, "tagging a ticket made the page scroll horizontally").toBeLessThanOrEqual(measured.docClient + 1);
+    expect(measured.triggerWidth, "the ticket trigger is wider than the cell holding it").toBeLessThanOrEqual(measured.parentWidth + 1);
+  });
+
   test("refuses to delete an approved entry, even for a superadmin", async ({}, testInfo) => {
     // The guard that protects the billing record: approved hours feed rate snapshots, cost
     // reports and Verified Work Attestations. If this ever starts returning 204, history becomes

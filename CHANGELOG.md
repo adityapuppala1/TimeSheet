@@ -7,10 +7,893 @@ user of a running installation.
 
 ## Unreleased
 
-Empty right now: everything currently unshipped is gathered under 2.5.0 below, which is written
-but not yet tagged. Anything landing after that tag is cut goes here. The parser that feeds the
-in-app What's-new page ignores this section until it gains a version number, on purpose — an
-installation must never render history for a version that does not exist yet.
+Nothing yet. The parser that feeds the in-app What's-new page ignores this section until it gains a
+version number, on purpose — an installation must never render history for a version that does not
+exist yet.
+
+## 3.3.0 — the week you can read, and a workspace that installs itself — 2026-08-25
+
+Scheduled email that reaches the people it is about, a dashboard that answers rather than pads, and
+an upgrade that no longer needs you to remember a command.
+
+### 🐛 Friday's reminder arrived on Monday
+
+Reported as "some users are not receiving mails on Friday — they arrive Monday morning instead." It
+was not the mail queue and not a failed send.
+
+`daily-reminder.worker.ts` asked two questions with `now.getDay()` and `now.getHours()` — **the
+server's** clock. The server defaults to `Asia/Kolkata` while `User.timezone` is populated per
+person, and IST is far enough ahead that the two disagree for most of a western Friday afternoon:
+
+| New York | on an IST server |
+| --- | --- |
+| Fri 14:00 | Fri 23:30 — sent |
+| Fri 15:00 | **Sat 00:30** — dropped by the weekend filter |
+| Fri 17:00 | **Sat 02:30** — dropped |
+
+`remindOnWeekdaysOnly` then suppressed the whole tick, and the next tick that is not a weekend *on
+the server* is Monday. The escalation notice the dashboard shows — "file today's entry before 5 PM"
+— sits squarely inside that dead zone, which is why it was the one people noticed.
+
+Every clock question is now asked in the **recipient's** timezone (`utils/recipient-time.ts`, using
+the platform's own IANA data), and the hour and weekday gates moved inside the per-user loop.
+"Already told them today" is measured from the start of *their* day, because a recipient far enough
+west shares one server-day with two of their own and the second was being swallowed as a duplicate.
+The mirror case is fixed too: Auckland is 6.5h ahead, so their Saturday 06:00 is still Friday to the
+server and a reminder would have landed in their weekend.
+
+**A second bug found while in there:** `lastFiredHour` was module state, and the reminder tick runs
+through `runForEveryOrg`, which loops tenants sequentially in one process. The first org set the
+flag and every org after it returned immediately — in a multi-tenant deployment exactly one
+workspace received daily reminders and the rest silently received none. Deleted rather than made
+per-org, because the real guard was always the database.
+
+### 📊 The weekly digest now reaches managers and admins
+
+"The weekly dashboard is not going to Super Admin and Manager." Two separate causes.
+
+**The activity gate excluded the people it exists to inform.** The digest skipped any recipient with
+no tickets and no hours *of their own* — right for an employee, since a recap of nothing reads as
+spam, but a super admin or a line manager who manages rather than logs time has no personal activity
+by definition. They were filtered out before the workspace and team tables were ever built.
+
+**There was no manager view at all.** Scope was binary: hold `reports:view` and see every person, or
+hold nothing and see only yourself. A line manager with five reports got a personal recap and no way
+to answer "did my team file their time?".
+
+Scope is now **SELF / TEAM / WORKSPACE**, and the levels accumulate — a super admin who also
+line-manages gets their own week, then their team, then the workspace, because a twelve-row
+workspace table does not answer "did *my* people file". Resolved from what somebody holds and what
+they manage, never from a role name.
+
+The team section leads with the number a manager acts on: how many reports filed at all, as a ratio
+rather than a percentage (with five people a percentage is false precision), and a report who logged
+nothing is marked on its row rather than left as a `0.0h` to be scanned past.
+
+**Change-management figures** join hours and tickets throughout — raised and closed, per person and
+workspace-wide. `CANCELLED` and `REJECTED` do **not** count as closed: a change that never happened
+is not delivered work, and rolling them in would flatter the number every time a plan is abandoned.
+
+Both Monday digests moved to **10:00** and **10:30**.
+
+### 🔐 The security digest no longer depends on an LLM to send at all
+
+The whole send was gated on the model: if `generateSecurityWeeklyDigest` threw or came back empty
+the worker returned early, so an unconfigured, slow or too-small model produced **no security
+digest** — not a degraded one. No open-finding count, no risk score, no SLA breaches, nothing. The
+per-user digest had this corrected long ago; the security one kept it, on the report where a silent
+week is most expensive, because silence is indistinguishable from a clean week.
+
+The figures are counted from the workspace's own findings and always send; the summary is a
+paragraph on top of them. It also gains the table it never had — severity mix in fixed
+CRITICAL-first order (sorting by count buries CRITICAL under LOW), week-over-week movement with the
+risk delta explicitly signed, the repositories carrying the most open findings, and SLA breaches
+named for what they are.
+
+### 🎨 A loader, and a dashboard that fills its own space
+
+- **The app has a loading state.** Lazy routes fell back to grey skeleton bars matching no page, so
+  every transition flashed one layout on its way to a different one. It is now the React Bits
+  **Strands** animation with a line of text — one loader, shown both while the session hydrates and
+  while a route resolves, so a refresh no longer shows two different things in a row.
+- **"This week" no longer pads itself with 200px of nothing.** It is the shortest of the three hero
+  cards and stretched to fill the row. It now carries weekdays logged, average per logged day,
+  busiest day, and a project breakdown — the question neither neighbour answers (the status list
+  says what *state* the time is in, the chart says which *day*, neither says what it was spent
+  *on*). All computed from rows already on the client.
+- **Every notice on the dashboard can be closed**, and the close button is now visible — at
+  `opacity-60` with no background it was a pale-blue X on a pale-blue banner. A dismissal is consent
+  to hide *this* message, not this *kind* of message: it lapses when the situation changes, so the
+  escalation notice cleared on Tuesday returns on Friday when a different day has been missed.
+
+### 🔀 The Workflow Studio canvas, rebuilt around n8n's shape
+
+A trigger start node, left-to-right flow, curved connectors between input and output handles, node
+cards with a coloured icon per kind, and wheel zoom. Both authoring experiences stay and the choice
+now sticks — the toggle is labelled **Form / Canvas** with a hint on each, and the last pick becomes
+the default next time.
+
+Dragging still **reorders** rather than drawing an edge: the steps *are* the sequence and the
+authority calculation depends on their order, so storing edges as well would give two sources of
+truth for one fact. That is the one place the metaphor bends to this engine, and it bends
+deliberately.
+
+### 🩹 Smaller fixes
+
+- **Clicking an existing change on the calendar opened the new-entry dialog.** The day lane is a
+  button that raises a change for that day, and the bars sit on top of it without stopping their
+  click from bubbling — so both handlers fired and "new change" won. Both features now work: click
+  empty space to raise one, click a bar to open it. The calendar also gains **Back to changes** and
+  **New change**, and a day can be clicked to raise a change already scheduled for it.
+- **The org chart reaches everyone**, without a second page. `/app/team` is now open to all: an
+  approver gets the queue, SLA metrics and reports roll-up; everybody else gets the org chart alone,
+  and the nav item names itself accordingly. The endpoint already self-scoped to the caller's own
+  reporting subtree.
+- **Insights and Security insights are open to every member**, front end and API. Stated plainly
+  because it is a data-governance choice: the workspace's security findings, SBOM and cost figures
+  are now visible to all staff. Each broadened endpoint carries a comment, so dialling any of them
+  back is a one-line change.
+- **A guaranteed-401 request on every page load is gone.** `POST /platform-admin/auth/refresh` fired
+  for every visitor; a tenant user has no such cookie, so it could only ever fail. It is now
+  attempted only when this browser has held a platform-admin session or the visitor deep-linked into
+  the console.
+- **The loader no longer takes the page down on a machine with no WebGL.** Its own header claimed
+  "it never throws" while nothing caught anything — and on a GPU-less CI runner the WebGL request
+  threw straight through React Router's error boundary, so `/login` never rendered. Guarded, and the
+  animation now waits 250ms before starting, so a fast route transition never touches the GPU.
+
+### 🔧 Pull, run, and it fixes itself
+
+`npm run dev` and `npm run build` now check that `node_modules` matches `package-lock.json` first,
+and install automatically when it does not. Pulling a release that added a dependency used to fail
+with `Cannot find package '…'` — a stack trace deep inside Vite naming a package the reader never
+heard of, which never says "run npm install". This release adds `ogl` (the loader animation), so it
+would have reproduced it.
+
+Silent when the tree is healthy (one `stat`, no output), and it never fails the command — offline or
+behind a registry that is briefly down, you get a warning and the app still starts. `npm ci` is
+deliberately not used: CI calls that itself, and it would delete and rebuild `node_modules` for a
+developer who pulled one new package.
+
+**Nothing else changes about installing or upgrading.** `npm run setup`, `install.sh` /
+`install.ps1`, `update.sh` / `update.ps1`, the Compose files and the Helm chart are unchanged and
+need no new step.
+
+## 3.2.0 — the requests this server makes on your behalf — 2026-08-24
+
+A security pass over the places where TimeSphere acts as a *client* rather than a server, plus the
+one browser origin that had never been anybody's responsibility. Nothing here changes how the app is
+used; two things change how it is configured, and both are called out below.
+
+### 🔐 An admin-typed URL can no longer point at your own network
+
+Four features let a workspace admin enter a URL that the **server** then fetches: outbound webhooks,
+the Google Chat incoming webhook, the Bot Framework reply endpoint, and the BYOK OpenAI-compatible
+base URL. All four accepted anything `new URL()` parses, and three were guarded only by
+`z.string().url()` — which is perfectly happy with
+`http://169.254.169.254/latest/meta-data/iam/security-credentials/`, the cloud metadata service that
+hands IAM credentials to anything that asks. The BYOK base URL had no URL validation at all.
+
+That matters because the API sits *inside* the deployment's trusted network, and in the hosted
+product a workspace admin is a **customer**, not the operator. Two of the four made it worse by
+returning the result: the AI model-list preview hands back the fetched body or the remote error text,
+and the webhook test and retry routes hand back `http_<status>` — a readable internal port scanner
+rather than a one-way probe.
+
+- **One choke point, not four patches.** `utils/egress.ts` refuses non-HTTP(S) schemes, URLs with
+  embedded credentials, and any target in private, loopback, link-local, CGNAT or reserved space.
+- **DNS is resolved, and every returned address must be public.** A hostname's text proves nothing:
+  `internal.example.com` with an `A` record of `127.0.0.1` passes any string check. A name that
+  resolves to one public and one private address is refused, because which one `fetch` picks is not
+  ours to decide.
+- **Checked again at every delivery, not just at save.** A target that was legitimate when it was
+  saved can resolve somewhere private later; validating once would trust a DNS record indefinitely.
+- **A refused webhook says so.** The delivery reports `blocked` with the reason on the webhook row
+  rather than failing silently — and a bad URL is now refused on the settings form, with a message
+  naming the problem, instead of being accepted and never working.
+- A known bound, stated rather than implied: a DNS-rebinding window remains between the check and
+  the socket. Closing it needs a pinned-IP agent, which is a larger change than this pass.
+
+### 🔐 The bot token stops being handed to whoever asks
+
+`sendTeamsMessage` posted to a URL taken from the inbound Teams activity body, with an app-only AAD
+token for the workspace's bot in the `Authorization` header. The inbound token *is* verified
+properly — signature against Microsoft's JWKS, issuer, and `aud` equal to this org's app id — but
+that signature covers the **token**, not the **body** it arrived with, and a Bot Framework JWT is a
+bearer token valid for about an hour. A replayed token with a rewritten `serviceUrl` therefore
+authenticated and redirected the credential. Microsoft's own guidance asks for this check.
+
+The reply target is now validated against the hosts Microsoft actually operates, **before** the token
+is minted — there is no reason to ask Azure for a credential we have already decided not to send. The
+allow-list is a mix of exact hosts and narrow suffixes rather than the tidier suffix-only list it
+started as, because Teams' commercial cloud uses `smba.trafficmanager.net`, and `trafficmanager.net`
+is shared Azure infrastructure where any subscriber can claim a label.
+
+### 🔒 The app's own pages now carry security headers
+
+`helmet()` was correctly configured on the API — which is what made this easy to miss, because the
+API returns JSON. The HTML document that actually runs the bundle is served off disk by the web
+container's nginx, which attached nothing: no CSP, no `X-Frame-Options`, no `Referrer-Policy`, no
+`Permissions-Policy`. The policy existed only on responses no browser renders.
+
+- **`frame-ancestors 'none'`** (plus `X-Frame-Options` for older browsers). The approve, reject and
+  change-decision controls are one-click and irreversible, which is exactly what a clickjacking
+  overlay aims at.
+- **`Referrer-Policy: strict-origin-when-cross-origin`**, which directly protects the signed,
+  expiring `/uploads` links — those URLs *are* the authorisation to read an attachment.
+- `X-Content-Type-Options`, `Cross-Origin-Opener-Policy`, and a `Permissions-Policy` that denies
+  everything except the camera face verification needs.
+- **HSTS is set on Caddy, not nginx**, with `includeSubDomains` (every tenant is a subdomain) and
+  deliberately without `preload`. There is no `upgrade-insecure-requests`: this repo supports
+  plain-HTTP LAN deployments on purpose, and both would break them.
+- Scoped to the static half only. At server level these would also stamp the proxied `/api` responses
+  that already carry helmet's own, and two CSP headers on one response is not additive — the browser
+  enforces the *intersection*.
+
+### 🔐 Public API keys can expire
+
+`ApiKey` had `revokedAt` but no `expiresAt`, so a key was valid forever unless somebody remembered to
+revoke it — the credential nobody revisits, pasted into a customer's Zapier account or a cron script.
+`McpCredential` already had this column for the same reason; this closes the inconsistency.
+
+Workspace Settings → Public API now offers 30 days, 90 days, 1 year or never when generating a key,
+defaulting to 90 days. The list shows each key's expiry and warns two weeks out; an expired key is
+badged as expired rather than looking identical to a working one.
+
+**Nothing that works today stops working.** The column is NULL for every existing key and NULL means
+"never expires" — back-dating an expiry onto live integrations during an upgrade would be the wrong
+direction for a mistake to fail in. An expired key is refused with the same message as an unknown or
+revoked one, so the endpoint cannot be used to learn that a key was once real.
+
+### 🎨 The dashboard's "This week" card says something now
+
+The three hero cards stretch to a shared height and this was the shortest, so it padded the
+difference with roughly 200px of nothing while the card beside it was dense. It also stopped at a
+bare status breakdown — four numbers with no context for the headline figure.
+
+It now carries three facts computed from data already on the client (no new query, nothing
+invented): **weekdays logged**, **average per logged day**, and the **busiest day** — plus one
+sentence naming where the week's hours actually sit, rather than leaving you to infer it from the
+list. "2 entries are waiting on a reviewer." "Everything so far is still a draft — submit it to start
+the review clock." The footer link is pinned to the bottom, which is what the existing `mt-auto` had
+been trying and failing to do inside a grid.
+
+### 🔬 The web workspace has unit tests now
+
+`src/lib/safe-html.ts` is a security control with no test behind it, because DOMPurify needs a DOM
+and `apps/api`'s vitest runs in `node`. A small `jsdom` project covers it with 27 assertions, and CI
+runs them.
+
+The suite was **mutation-tested before being trusted**: disabling the sanitizer hook fails 12 of the
+27. That check is the only evidence a passing security test means anything — and it earned its keep
+immediately. The first attempt used `happy-dom`, under which DOMPurify strips *every* element
+(`sanitize("<p>x</p>")` returns bare `"x"`), so assertions of the form "the dangerous thing is
+absent" passed beautifully while proving nothing at all.
+
+CI also now renders `apps/web/nginx.conf.template` through the image's own entrypoint and runs
+`nginx -t` against it — asserting the template was actually applied first, because a mount mistake
+silently validates nginx's stock config instead and reports "syntax is ok" for a file that is not
+ours.
+
+### 🐛 Three bugs that only running the thing could find
+
+Each of these passed every unit test and every review of the code. They were caught by driving the
+real server and the real browser, which is the whole argument for doing both.
+
+- **A bracketed IPv6 address walked straight past the new SSRF guard.**
+  `new URL("http://[::1]/").hostname` returns `"[::1]"` — *brackets included* — so `net.isIP()`
+  answered "not an IP", the IPv6 branch never ran, and `http://[::ffff:127.0.0.1]/hook` was accepted
+  with a 201 by the running server. Every bare-address assertion in the test file passed the whole
+  time; nothing was feeding the predicate the shape a URL parser actually produces. Fixed, and the
+  bracketed form is now pinned in tests alongside the bare one.
+- **The "expiry is already in the past" check never fired, on either credential.**
+  `middleware/validate.ts` parses the schema and **discards the result**, so `z.coerce.date()` never
+  writes the coerced Date back and the handler still holds an ISO *string*. Comparing
+  `"2020-01-01…" <= new Date()` takes the Date as a timestamp and coerces the string to `NaN`, and
+  every comparison with NaN is false — so an API key could be created already expired, authenticate
+  nothing, and send its owner debugging their integration instead of their typo. **The MCP
+  credential route had the identical dead guard and pre-dates this release**; both now go through one
+  `parseOptionalExpiry` helper.
+- **The Public API panel pushed a phone sideways.** Adding the lifetime picker gave that row a third
+  control, and a 390px viewport cannot seat Input + `w-32` + `w-36` + button on one line — 400px
+  against a 391px budget, caught by `responsive.spec.ts`'s "no tab widens the page" guard. Fixed with
+  `flex-wrap` plus `min-w-0` on the name field; `min-w-0` is the load-bearing half, because a flex
+  item will not shrink below its intrinsic content width without it.
+
+### 🩹 Two rules that lived in one caller and not the next
+
+- **The browser-side sanitiser now matches the server's.** `sanitizeRichText` restricts `style` to
+  `text-align` and forces `rel="noopener noreferrer nofollow"` on every link; the client's `safeHtml`
+  allowed `style` with no property restriction and `target` with no forced `rel`. CSS does not need
+  to run script to be an attack — `position:fixed;inset:0;z-index:9999` in a ticket comment floats an
+  invisible layer over the app. This mattered on the client specifically because two callers render
+  content the server sanitiser never sees: Ask AI's markdown (model output) and the What's-new page
+  (release notes fetched from GitHub).
+- **`doctor` now checks the outbound posture** and warns when private egress is enabled on a
+  deployment that looks internet-facing — the one combination that is almost certainly a mistake.
+
+### 🔧 Two configuration changes, and what each one asks of you
+
+- **`ALLOW_PRIVATE_NETWORK_EGRESS`** (default `false`). Leave it alone for anything internet-facing.
+  Set it `true` **only** on a self-hosted box whose webhook receivers genuinely live on the LAN, or
+  whose BYOK model runs on `localhost` — both are normal on-prem setups, which is why this is a
+  switch and not a hard block. Development permits private targets regardless, so local testing and
+  a local Ollama keep working with no configuration. `install.sh` / `install.ps1` now ask; the update
+  scripts explain the change in both directions; `doctor` flags the risky combination.
+- **`CSP_CONNECT_SRC`** (default empty). Only a **split** deployment needs it — SPA on a CDN or a
+  different hostname from the API. Set it to the same origin as `VITE_API_URL`, or the browser will
+  block every API call. Every topology this repo ships puts nginx in front of the API, where `'self'`
+  already covers it.
+
+### 🔎 What was tested and found clear
+
+Recorded because a negative result is only worth something if it says what was checked. No SQL
+injection (four raw-SQL calls, none reachable by user input), no mass assignment (every
+`data: req.body` site is `.strict()`), no missing route auth (all 497 handlers across 50 controllers,
+with the 14 routers lacking a blanket guard audited per route), no prototype pollution (every dynamic
+key write sits behind a `Set` allow-list), and **no exploitable ReDoS** — the linter's `slow-regex`
+warnings on the attacker-reachable paths were benchmarked rather than patched: `htmlToPlainText`
+handles 2 MB of spaces in 31 ms because the collapse pass runs first, and the email regex is linear
+in V8. Two `minimatch` ReDoS advisories in the lint toolchain were patched with a scoped override;
+the remaining `deepmerge-ts` advisories were traced to options-object merges that inbound email
+cannot reach, so no compatibility risk was taken for no security gain.
+
+## 3.1.0 — the assistant that can act, and the phone that finally fits — 2026-08-20
+
+### ✨ Ask AI can now do four things, not one
+
+- **Raise a ticket, comment on one, and draft a change request** — alongside the timesheet draft it
+  could already write. Each is offered only to someone who holds the permission the matching button
+  requires (`tickets:write`, `changes:write`), and each re-checks that you can actually see the
+  project or ticket before it writes: a workspace-wide permission is a permission, not a boundary,
+  and holding one does not put you on a project.
+- **Two of them publish, and they say so rather than pretending otherwise.** A ticket has no draft
+  state and neither does a comment — `TicketStatus` begins at OPEN, and a posted comment notifies
+  everyone watching. So the assistant tells you that up front and is told to confirm the details
+  with you first, instead of the wording being softened to "draft" to keep a slogan intact. A change
+  request *does* have a draft state, so it is raised as a DRAFT and stops there.
+- **Nothing here starts or settles an approval, at any autonomy level.** A drafted change asks no
+  approver for anything and takes no CAB slot until you press Submit. No action transitions a
+  change, decides a timesheet, or approves a request — the same hole the workflow action list
+  carries on purpose.
+- **A change with no reason is still refused.** `justification` is required, and if you cannot give
+  one the assistant says the change cannot be raised rather than writing a reason for you. This is
+  the omission rule from 3.0.0, now enforced in code rather than requested of the model.
+- **The checks live in one place.** Raising a ticket and posting a comment now run through the same
+  functions the MCP server uses, so the visibility check, the ticket-type check, the sanitisation of
+  model-written prose, the SLA clock and the reporter attribution cannot drift between the two. Four
+  tests hold the boundary: the action list is pinned, no action may reach Prisma directly, every
+  publishing action must declare its permission, and every one of them must carry the instruction
+  never to act on an instruction it merely *read* in a ticket or an email.
+- On the seeded workspace a super admin now sees 34 capabilities, a manager 20, an employee 16.
+
+### 🐛 Two ways a phone could be pushed sideways, both fixed
+
+- **Workspace settings → Maintenance no longer widens the page.** The server-health tiles print
+  machine text with no break opportunities in it — a CPU model, a filesystem path, a network
+  interface list. Each tile is a grid item, and a grid item refuses to shrink below its widest
+  unbreakable string, so the `truncate` on those lines never got a narrow box to clip against and
+  the whole page grew instead. On a developer's machine the path is short enough to fit; on a Linux
+  server it is not, which is how this shipped looking perfectly fine.
+- **The "SMTP is not configured" banner no longer runs off the edge.** The four `SMTP_*` names in it
+  had no spaces between them — JSX drops whitespace containing a newline, so they rendered as one
+  unbreakable ~340px run that the chips' own padding made *look* correctly spaced. Alerts are now
+  shrinkable and wrap long machine text by default, since an alert quoting a host, a path or a stack
+  trace is exactly where this recurs.
+- **Both tests now fail on any machine, not just an unlucky one.** Each pinned the environment it
+  was measuring — the longest realistic health payload, and the unconfigured mail transport — so
+  neither can pass again merely because the host it ran on had a short path or working SMTP.
+
+### 🐛 Seeded demo entries the app itself refused to open
+
+- **Demo timesheet entries are real UUIDs now.** They were seeded as `seed-entry-1`…`6`, but
+  `Timesheet.id` is a uuid and the routes that act on one validate it as a uuid. So every seeded
+  entry deep-linked to `?entry=seed-entry-6`, returned *"Validation failed — id: Invalid uuid"* when
+  edited, and exported to a file named after a truncated sentinel. Demo data you cannot click on is
+  worse than none, because it reads as a broken feature rather than a broken fixture. Existing
+  workspaces have the old rows retired on the next seed.
+
+### 🚢 Deployment and CI
+
+- **The Helm chart's `appVersion` tracks the repo again** (it had drifted to 2.5.0 while the repo
+  shipped 3.0.0), so `kubectl get deploy -L app.kubernetes.io/version` answers honestly.
+- **Every GitHub Action updated to a current major**, clearing the Node 20 deprecation warning that
+  was about to become a hard failure on GitHub's runners.
+- **The Ask AI boundary tests run on Linux again.** They read their own source to prove it contains
+  no write verbs, using a hand-rolled `file:///` strip that produced a valid path on Windows and a
+  path missing its leading slash everywhere else — so the strictest tests in the suite had been
+  erroring out, rather than passing, on every CI run.
+
+### 🛡 The assistant knows who is asking — and shows you exactly what it can do for you
+
+- **Ask AI answers operational questions now, for the people entitled to them.** AI spend by feature,
+  answer quality and thumbs, email volume and what is bouncing, which templates are switched off,
+  service health, the slowest endpoints by p95, the audit log, open security findings, CI runs,
+  identity-check outcomes, what is switched on in the workspace, headcount by role, SLA breaches, and
+  what the agents and workflows have actually been doing. Fifteen new capabilities, on top of the
+  tickets, timesheets, changes, projects, goals and people it already read.
+- **Every one of them is gated on the permission the matching page already requires.** `audit_log`
+  needs audit access, the same as the Audit log page. Headcount needs user management, the same as
+  Users. Spend, mail, security, health and configuration are super-admin-only, because that is who
+  those settings pages are for. Nothing here invents an access rule; where the chat could not mirror
+  a page's rule exactly, it took the stricter one. On the seeded workspace a super admin sees 31
+  capabilities, a manager 17, an employee 13.
+- **"What can it do?"** — a new panel listing every capability your role opens, grouped by area, with
+  the ones it does not open shown greyed and labelled with what they would need. Hiding them would
+  make the panel read as the product's whole surface, and you would reasonably conclude the workspace
+  has no spend reporting because your role cannot see it. The list comes from the server, built
+  through the same filter the assistant's own prompt is — the panel and the model cannot disagree
+  about what exists.
+- **The starter questions are yours, not everyone's.** Each chip is backed by a capability your role
+  can actually reach, so an administrator is offered the spend and health questions and an engineer
+  is not offered one that would only come back refused.
+- **A capability is filtered twice, from one rule.** Once when the prompt is built, once before
+  anything runs. Filtering only the prompt is security by suggestion — a model that guesses a name it
+  never saw, or is talked into one by text inside a ticket, would reach a real query. Filtering only
+  at execution would work but waste your steps on refusals.
+- **Everything a capability returns is scanned for secrets before the model sees it**, using the same
+  masking the AI capture layer applies. A scanner finding's title can *be* the leaked credential.
+- **Sign-in, scheduled reports and project risk answer too.** Whether SSO is on and which provider,
+  what reports go out weekly and whether any failed to send, and which projects are carrying risk
+  right now with the signals behind it. Email answers also cover the per-category switches and name
+  the super-admin BCC explicitly — it is the usual reason one inbox sees everything, and the category
+  toggles almost never are. Secrets are reported as set or not set, never read.
+- **The chat is rate-limited like every other thing that spends model calls** (20/min). A chat box is
+  the easiest place in the product to spend a budget by holding down Enter, and the monthly ceiling
+  underneath it is too coarse to notice a minute of hammering.
+
+#### Fixed
+
+- **One bad answer no longer causes five more.** Recent exchanges are handed back to the model so
+  follow-ups work — and a failed one taught it to fail again. It declined questions it had answered
+  correctly minutes earlier, and copied a malformed fragment from two turns back. Only exchanges that
+  actually consulted a capability become context now; failures still appear in your feed, where "it
+  failed at 14:02, and this is why" belongs.
+- **Machine syntax no longer reaches the chat window.** When a model replies in its provider's own
+  tool-call dialect instead of the format this loop asks for, it now gets one correction and then an
+  explanation — rather than `<|tool_call>call:ai_spend{days:30}` appearing as your answer. A
+  hand-built JSON blob of invented figures met the same fate.
+- **The assistant stopped asking permission to read.** Caution meant for the one thing it can write
+  had leaked into everything it can look at, so "how much email went out?" came back as "would you
+  like me to pull that?".
+- **It stopped asking permission for sensitive-sounding topics.** "Is SSO enabled?" came back as
+  "would you like me to check?" every time, while questions about spend answered straight away. The
+  rule saying reads never need permission was there — just too far from the point where the
+  assistant decides what to do next.
+- **It stopped declining things it could plainly do.** The scope rules had been written as a wall of
+  prohibitions, and on a small model that produced the behaviour they forbade — six operational
+  questions in a row answered with polite refusals that paraphrased the prohibition, without a single
+  lookup. Rewritten as positives.
+
+### 🔭 Two more readings, and one more draft
+
+- **"Which of these matters?"** on a change's Schedule tab, once its window collides with something.
+  The overlaps themselves are found by comparing dates — arithmetic with one right answer — and this
+  only reads which of them is the one to worry about. It moves nothing; the scheduler still decides,
+  and when nothing collides it says so instead of writing a paragraph confirming it.
+- **"Draft it from what happened"** under an empty post-implementation review, once a change has
+  actually run. It reads what was recorded — which steps failed, which tests did not pass, the
+  outcome — and where a step failed with no comment it says no reason was recorded rather than
+  inventing one. An invented cause in a review is worse than an admitted gap, because somebody acts
+  on it. Like every draft here it becomes a row somebody accepts.
+- The review is the one field deliberately exempt from the post-approval freeze: a review is written
+  after the change has run, which is exactly when the plan is frozen. Everything else stays frozen.
+
+### 📝 It can draft the sections a change is missing, and write none of them
+
+- **"Draft the missing sections"** sits next to the checklist that names what is missing, and drafts
+  only the sections still empty — justification, implementation plan, backout plan, test plan,
+  communication plan. Re-writing something somebody already wrote is how an assistant becomes the
+  thing people switch off.
+- **It writes nothing.** Every section becomes a row on the AI suggestions page that somebody accepts
+  or rejects individually, and a row whose field moved since it was drafted is refused rather than
+  overwriting the edit. The backout plan is the most consequential field in the module, which is
+  exactly why a person stays between the model and the record.
+- **It cannot reach anything but those five fields**, whatever it replies — an allowlist, not a
+  request in the prompt. No state, no risk score, no schedule, no outcome. And it refuses a change
+  whose plan has frozen, before spending the model call rather than after.
+- It is handed what the change is actually shipping — repositories, merged pull requests, CI status,
+  how the last few changes to the same application went. A model asked for a backout plan with
+  nothing to go on writes a paragraph about restoring from backup.
+
+### 🤖 AI can explain a change's risk score, and still cannot approve it
+
+- **"Explain this score"** on a change's Risk tab turns the recorded assessment into a paragraph its
+  approver can act on: what the answers mean together, and what to look hardest at. Off by default,
+  behind its own switch in the AI capability grid like every other capability.
+- **It narrates; it never scores.** The number is computed from weighted parameters and stored on the
+  change — a model inventing it would make the rule that decides whether a backout plan is mandatory
+  unreproducible, and indefensible to the person asking why theirs needs one.
+- **And it does not tell anyone whether to approve.** There is no AI capability at any autonomy level
+  that can approve a change, which is the absence of a capability rather than a limit on one. An
+  approval is a named person accepting risk, and there is no undo.
+
+### 🧵 One strand, a real chat, and analytics that stop declining
+
+- **The loader is one luminous thread.** The ported Strands shader assumed a square-ish canvas; on a
+  wide, short loader strip its envelope repeated into a row of separate pods. The envelope now spans
+  the strip exactly once — the fade runs in canvas space, the ripple in aspect space — and a single
+  strand breathes across the answer bubble while the model works.
+- **The page is shaped like a messenger**, because that is the mental model "ask, answer, follow up"
+  brings: one centred column, your words in bubbles on the right, the assistant's beside its avatar
+  on the left, day separators when the history spans days, copy-answer on every reply, suggestion
+  chips that retire once you have a rhythm, and the receipts strip tightened under each answer.
+- **"How many of my entries are approved?" now has a real answer** — a stats tool that counts
+  entries and hours by status, yours always, workspace-wide with the reports permission. The intent
+  guide names it, so the model reaches for it first.
+- **Submodules joined the project tool** after a question about them was declined in the field —
+  the hierarchy stopped one level short of what the schema holds.
+- **A past refusal no longer poisons the follow-up.** The model was parroting its own earlier "I do
+  not have access" from the conversation history, verbatim, three times running — the history is now
+  framed as context only, with the tool list as the current truth, and multi-part questions are
+  instructed part by part.
+- **Doubled-brace chart JSON is repaired at render.** The configured diffusion model emits
+  `{{"label"` — invalid JSON, so charts fell back to code blocks. The sequence `{{"` cannot occur in
+  valid JSON, so the targeted rewrite can never damage a well-formed fence; anything else malformed
+  still renders honestly as code.
+
+### 🖊 Ask AI can now do one thing — and it is a draft
+
+- **"Log 2 hours on HICS-TS today, 9 to 11, development" now works as a sentence.** The assistant
+  gathers what is missing conversationally — asked without a module, it lists the project's modules
+  and asks which — and then logs the entry through the timesheet form's own save, so the overlap
+  check, the assignment gate, the future-date rule and the audit entry all apply unchanged. What it
+  creates is a **draft**: nothing reaches an approver until the person reviews and submits it
+  themselves, the same line the MCP server drew and for the same reason.
+- **It cannot double-fire.** A model that repeats a successful action verbatim gets its earlier
+  result replayed instead of a second run — and the one measured double-fire was also refused
+  independently by the overlap check, which is what reusing the form's own save buys.
+- **It knows what day it is.** Asked to log time "today", the model wrote a date from its training
+  data — the prompt now carries today's date and the asker's name, the two facts a model cannot
+  look up and reliably invents instead.
+- **Thumbs feed the golden datasets.** Each answer is captured into the same AI quality loop every
+  other capability uses (when capture is on), and a thumb on the page writes the same rating the AI
+  activity log writes — which is what golden datasets are promoted from. The tooltips say so.
+- **The loader is now the strands.** The "consulting the workspace" state draws reactbits' Strands
+  on a WebGL canvas, ported in-tree against the theme tokens and re-coloured live on theme flips.
+  Under reduced motion it does not slow down — it holds still, falling back to the quiet SVG form.
+- **The page reads as a chat**: the assistant's answers sit beside an avatar in their own gutter,
+  the person's questions in bubbles opposite, and the directory joined the tool set — "who reports
+  to whom" is now answerable. Malformed tool calls from small models are corrected and retried
+  instead of being published as the answer, and a stray trailing brace no longer sinks a reply.
+
+### 💬 Ask AI grew a page, a memory, and hands that only read
+
+- **A full Ask AI page** (Work → Ask AI): a conversation with the workspace that remembers. Every
+  prompt and answer is kept, with what each answer actually cost — model, tokens, estimated dollars,
+  response time — stored at answer time, so the history stays honest after the workspace's model
+  changes. Thumbs up or down on any answer; press the same thumb again to un-rate. Failed attempts
+  stay in the feed with their reason, because a page that forgets failures reads as one that never
+  fails.
+- **It consults the workspace, live.** Nine read-only tools — ticket search and detail, ticket and
+  change metrics, the change register, your own timesheets, the workspace hours report (permission
+  respected: without it, the answer says so), the agent roster and the workflow list — every one
+  scoped exactly as the asking person, through the same project scope the pages use. Each answer
+  shows which tools it consulted, so "it looked" and "it made that up" stay distinguishable.
+- **It acts on nothing, on purpose.** An action taken from a chat transcript has no review step and
+  no undo. Where an answer leads to an action, it names the page where a person does it — and a test
+  greps the tool registry for every database write verb, so a write added there fails the build.
+- **Answers in any shape the data deserves**: markdown with tables, and one real chart per answer —
+  bar, line or pie — drawn from numbers a tool actually returned, never invented. Off-topic
+  questions get one polite sentence back.
+- **Works with whatever model is configured.** The loop speaks plain JSON rather than any provider's
+  native tool-calling dialect, so it runs on everything from Claude to a free community model — and
+  a model that will not follow the format still answers in plain text rather than failing.
+- The palette's quick Ask AI stays for one-off questions and now links to the page. Fixed alongside:
+  markdown tables in AI answers were being silently flattened to a run of words by the HTML
+  sanitiser's allowlist, which predates AI answers carrying tables.
+
+### 📝 The assistant now declines what it cannot draft — and says so
+
+- **Fixed the placeholder that could pass a gate.** Told to "admit what is not known", the drafting
+  assistant answered a backout-plan request with "a backout procedure has not been documented at this
+  time" — text which, accepted, would have satisfied the mandatory-backout submission requirement
+  while containing no plan. The rule is now inverted: a section the model cannot ground is OMITTED,
+  the response names what was skipped, and the field stays honestly empty. Verified against the exact
+  case: the same request now answers "not enough to draft this from — it needs writing by hand".
+- **Every mandatory field says so, from one source of truth.** The three conditional requirements —
+  backout plan, test plan, communication plan — are now decided by shared predicates that both the
+  submission gate and the form's required markers read, so the form can never promise what the server
+  refuses. Hints say *why*: "Required to submit — this change is high risk, major, or moves data."
+- **"Suggest a draft" beside every empty prose field.** Ten fields take it — the five that gate
+  submission plus the business-case five. The suggestion renders beside the field and nothing is
+  saved until "Use this", at which point the form's own save writes it as the person's edit, through
+  the same validation and audit trail as anything typed. It only offers on EMPTY fields: drafting
+  over somebody's writing is how an assistant becomes the thing people switch off.
+
+### 🩹 The provider can be slow, wrong, or silent — and the app now survives all three
+
+- **A hung model call is bounded at 90 seconds.** Both SDK clients defaulted to ~10 minutes, so a
+  free-tier provider that queued indefinitely left every AI button in the app spinning for as long as
+  the page stayed open. Measured with OpenRouter's free tier before fixing.
+- **An answer with no answer in it no longer crashes.** OpenRouter's free tier returns rate limits as
+  an error body inside HTTP 200 — no `choices` at all — and reading `choices[0]` off that took every
+  AI feature down with a bare TypeError. It now surfaces as "the AI provider refused the request",
+  quoting the provider's own reason where one is given.
+- **A dead connection is no longer retried as if it were a formatting quirk.** The fallback that
+  retries without `response_format` (for local endpoints that reject it) now fires only on fast
+  rejections, not on timeouts — repeating an identical call into a hung provider doubled the wait the
+  timeout exists to bound.
+- Also fixed while diagnosing: the tenant fan-out had not run for the newest migrations, so the
+  second organisation's workers were erroring once a minute on columns that did not exist there yet.
+
+### 🔀 A change now shows what it is shipping, and workflows can act on it
+
+- **A Context tab** on every change: the repositories and pull requests it delivers, whether their CI
+  is green, what security findings are open against them, who did the work and for how many approved
+  hours, and how the last few changes to the same application went. None of it is typed — it is
+  derived from the tickets the change links, so it cannot drift the way a second copy would. A
+  repository with no ingested CI run says "not reported", never "passing".
+- **Workflow Studio can act on changes**, not only fire when one moves. Three actions — move a change
+  to a state, comment on it, tag somebody on it — each re-entering every gate the API applies, so an
+  automation cannot walk a change past its own requirements. **It cannot approve or reject one**:
+  that is a named person accepting risk, and there is no undo.
+- Fixed while building it: a change-triggered flow used to receive a subject with no id, so every
+  step except "notify" failed with "this run has no ticket to change". The trigger fired and the flow
+  could do nothing. A change now resolves to its own ticket, which is what makes every existing
+  ticket action work on it.
+
+### 🩹 Fixes
+
+- **Tagging a ticket no longer pushes the timesheet form off the page.** A long ticket title grew the
+  picker past its column instead of ellipsing, and the whole page scrolled sideways — measured, a
+  250px cell rendering a 727px control. The module and submodule pickers shared the flaw and are
+  fixed with it.
+- **"My projects this month" was missing projects, and only in production.** The card grouped
+  whatever `GET /timesheets` returned, and that list is capped at 100 rows newest-first — so on a
+  busy account the older half of the month fell off the end and whole projects vanished. It also
+  derived the list from entries alone, so a project you are assigned to but have not logged against
+  was invisible regardless. Now counted server-side over the whole month, uncapped, listing every
+  project you are assigned to or have worked on.
+- **The Change management settings tab stopped 404ing on every visit.** It rendered an "Approval
+  policies" editor for an engine that was never built — approval routes to the requester's manager,
+  falling back to super admins — and called a route that has never existed. Removed.
+
+### 📊 The home page counts the other two kinds of work
+
+- **Progress is four bars, not two**: week target, then timesheets approved, tickets closed and
+  changes closed. Each is finished-over-total for its own kind of work, so they read against each
+  other; a single combined number hides which of the three is stuck. The changes bar is absent, not
+  zeroed, when change management is off.
+- **"Today across the workforce" gains tickets and changes** raised and closed, on the same day
+  boundary and the same vs-yesterday comparison as the logging figures.
+- **A trend can now say "no opinion".** More tickets *raised* today is neither good news nor bad, and
+  the badge could only be green or red — so it asserted a reading the number does not support. Those
+  now render grey.
+
+### ⚙️ Every change dropdown is editable
+
+- **Categories, sources, applications, risk parameters, SLA stages, maintenance windows and blackout
+  periods** are all add / rename / retune / disable / delete from Workspace Settings → Change
+  management, for a super admin. Same rules activity types follow: everyone who fills the form can
+  read the list, only a super admin writes it, and **deleting a row that live records point at is
+  refused with the count** — disable it instead, and the changes filed under it stay readable.
+- **The change page reads as a sequence.** Thirteen equal tabs became Define / Plan / Deliver, and
+  any tab still owing something for submission carries a dot — driven by the server's own list, so
+  the header checklist and the strip cannot disagree. The header gained the four facts you check
+  before opening a tab at all: environment, window, implementer, category.
+
+### 🎨 An AI button that says what pressing it costs
+
+- The app already marked AI *surfaces* (a glowing frame) and AI *thinking* (flowing strands). It had
+  no mark for the resting control that spends a model call, so buttons wore gradient text — which
+  reads as decoration on a label rather than a property of the action. There is now a proper button
+  variant: a tinted face with a highlight that sweeps once on hover. Under reduced motion the tint
+  stays and only the sweep goes, because identifying the control is the point.
+
+### 🔀 The change type now says what it will cost you
+
+- **Picking a change type tells you what it commits you to**, in the dropdown, before you pick it.
+  Choosing **Major** silently obliged a change to carry a backout plan *and* a post-implementation
+  review — obligations you previously met as a 422 at submission time, having already written the
+  rest of the form. Both pickers now state the consequence next to the word.
+- **Why there are four types and not ITIL's three**, settled and written down. `Major` is not a
+  fourth peer next to Standard, Normal and Emergency — it is **Normal escalated**, and it exists
+  because two rules cannot be derived from the risk score: a Major change needs a backout plan *even
+  when impact × likelihood bands it Low* (a platform migration can score low on every parameter and
+  still be the thing you must be able to undo — the matrix scores probability of harm, not
+  significance), and it owes a review *even when it went perfectly*, where everything else owes one
+  only when it went wrong. Trimming the vocabulary back to three would have compiled, linted and
+  passed every other test while deleting both, so the enum is now pinned by a test that says so.
+
+## 3.0.0 — the change somebody has to approve — 2026-08-19
+
+**A major version for an additive release.** Nothing here breaks: no route changed shape, no column
+was dropped, no default moved, and an installation that never turns change management on behaves
+exactly as 2.5.0 did. The number went to 3.0.0 because the product gained a governance surface it
+did not have — a change now has a risk score, a named approver, a scheduled window and a recorded
+outcome — and that is a different claim about what this software is for, not another feature on the
+ticket page.
+
+### ⬆ Upgrading
+
+- **Run the migrations, then fan them out.** Six tenant migrations and one control-plane migration
+  ship in this release. `update.sh` applies the default org's automatically; every *additional*
+  organization needs the fan-out, which cannot run inside the container's boot chain:
+  `docker compose exec api npm run migrate:tenants -w apps/api`.
+- **Nothing switches itself on.** Change management is off after upgrading, exactly as it was
+  before it existed. A super admin turns it on in **Workspace Settings → Change management**, and
+  the org's plan tier must include it (Team and up). The two conditions fail with deliberately
+  different messages, because "turn it on" and "upgrade your plan" need different people to act.
+- **Set `managerId` on your users before you turn it on.** Approval routes to the requester's
+  manager; with none set it falls back to every active super admin, which works but sends every
+  approval to the same two inboxes.
+- **Two new email templates** (`changeSubmitted`, `changeDecided`) are seeded on migration and are
+  editable on the Email templates page like every other message. They obey the same category × role
+  grid, so if you mute a category for a role, the change mail respects it.
+- No environment variables were added, and no existing one changed meaning.
+
+### 🔀 Change management
+
+- **The full request form**, in twelve tabbed sections on the change's own page — classification,
+  business case, structured impact, weighted risk, implementation, testing, rollback, release,
+  schedule, communications, tagging, and outcome. Tabs rather than a wizard: a change is drafted over
+  days and read far more often than it is written, and a stepper is for a form you fill once. A
+  checklist in the header names what is still missing rather than implying a percentage.
+- **A change number of its own** — `HICS-TS-20260812-0001`. Project code, the UTC date it was raised,
+  and a sequence that restarts daily. The underlying ticket key still exists; it just never appears in
+  an approval email, where it would read as a bug report.
+- **Approval goes straight to the requester's manager** the moment a change is submitted, falling back
+  to super admins when somebody has no manager set. A super admin can decide anything — which is both
+  the rule and the escape hatch for an approver who has since left. Nobody approves their own change,
+  and re-submitting after a rejection opens a new round rather than overwriting the first decision.
+- **A risk score you cannot game.** Impact and likelihood per parameter, weighted by an admin-editable
+  matrix and normalised so adding a twelfth parameter cannot silently deflate every existing score. A
+  complete assessment is required to submit: unanswered parameters count as nothing, which correctly
+  refuses to treat a blank as "low" but would otherwise have let somebody lower a change's risk — and
+  so skip the mandatory backout plan — by leaving fields empty.
+- **Tag the closed tickets a change delivers**, and the people working on it. Only RESOLVED and CLOSED
+  tickets from the change's own project are offered, and the server re-checks: a change records work
+  that is finished, not work that is promised.
+- **A change calendar** drawn as 24-hour tracks rather than a month grid, because a change occupies a
+  window and the only question worth opening a calendar for is whether two windows overlap. Freeze
+  periods are drawn underneath rather than filtered out — a change scheduled inside one is exactly
+  what somebody needs to see. Conflicts are reported, never refused; overriding costs a written reason.
+- **A register dashboard** — in flight, waiting on you, awaiting approval, high risk, closed — with
+  breakdowns by state, risk and environment, and a CSV export carrying the columns a change record is
+  actually judged on.
+- **Both emails are real templates**, editable on the Email templates page with preview, test send,
+  revert, per-template send volume and the failure triage desk — the same treatment every other message
+  in this app gets, from the same compiled design, so the seeded row and the code fallback render an
+  identical email.
+
+- **A controlled path for changes that need sign-off before they ship.** Raise a change, have its
+  risk derived rather than asserted, send it to the approvers it earns, schedule a window,
+  implement it, and record how it actually went. Under **Work → Changes**, off until a super admin
+  turns it on in **Workspace Settings → Change management**, and included from Team upward.
+- **The backout plan is the point.** A change that is high risk, major, or moves data cannot be
+  submitted without one — enforced by the API at the moment somebody asks for approval, not by a
+  hopeful placeholder in a form. A test plan is required above low risk; a communication plan and a
+  duration are required whenever there is downtime. Every gap is reported at once, so a long form
+  costs one round trip rather than four.
+- **Risk is computed, never typed.** Impact × likelihood through a stated matrix, stored with the
+  time it was scored so retuning the matrix next quarter cannot silently rewrite the risk a board
+  already approved against. Two changes with the same answers cannot carry different risk because
+  two people judged them differently.
+- **One approver, named.** A change goes to the requester's manager, falling back to every active
+  super admin when somebody has none set. A super admin can decide anything, which is both the rule
+  and the escape hatch for an approver who has since left. Nobody approves their own change. There
+  is deliberately no rules engine deciding who signs off what: the requirement was "the respective
+  manager or a super admin", and a chain of ordered match-rules is a great deal of machinery for a
+  question with one answer.
+- **A change cannot be walked past its own board.** Approved and rejected are written only by a
+  recorded decision. No state that has not already been decided can reach them through the
+  transition table, so no caller can PATCH around the approver — the one route into Approved is from
+  Scheduled, which means giving up a window on a change that was approved already. Once approved, the plan freezes — the outcome fields stay writable, because
+  recording what happened is not the same act as amending what was agreed.
+- **Thirteen notifications**, in-app and email, from "approval needed" through window reminders to
+  a weekly digest, all on the existing per-category, per-role grid. Muting one suppresses only the
+  email leg, as everywhere else here: an approval that goes silent because somebody tidied their
+  mail settings would be a governance hole, not a preference.
+- Built on the ticket underneath, so comments, attachments, watchers, links, the audit trail,
+  project-scoped visibility and search all work on day one rather than being rebuilt slightly
+  differently. Approval chains, guest approvers by expiring single-use link, and terminal rejection
+  come from the same engine work items already use — the only addition to it is the quorum, which
+  defaults to "everyone must approve" and therefore changes nothing that existed before it.
+
+- **A runbook that stays editable after approval.** Numbered implementation steps, test cases with an
+  expected and an actual result, and dependencies — each added inline, edited in place, saved on blur.
+  Deliberately exempt from the post-approval freeze that covers the rest of the change: scope and risk
+  are what got approved, but recording that step 4 failed, or that a regression test passed, is
+  precisely the work that happens afterwards. The API applies the same rule, so the two cannot drift.
+- **A change waits on its dependencies, and says so.** A predecessor or blocker left open refuses the
+  move to Implementing with a message that names it, on the page and in the API. Successors and
+  related work never block — successors follow this change and related work is context, so blocking on
+  either would make the field unusable for what it is for. Waiving is a recorded decision that clears
+  the gate the same way completing it does, and the row keeps saying which it was.
+- **Per-stage SLA clocks** for approval, implementation, validation and closure, shown as a ladder
+  rather than a single number, because "approval met, implementation running, validation not started"
+  is what somebody actually needs to read. A finished stage is judged on **how long it really took**,
+  never against the current time — a stage that ran 60 hours against a 48-hour budget and then closed
+  is a breach that already happened, and reporting it as fine the moment it closes is how an SLA
+  dashboard comes to say everything is green while the register is full of overruns. A stage with no
+  configured budget has no clock at all, rather than a zero-hour one that would breach on sight.
+- **Excel and PDF export**, alongside the CSV, from one shared query — so no two formats can disagree
+  about which changes matched. The workbook has a summary sheet built from the same capped rows as its
+  own detail sheet; the PDF is a real landscape register with high risk in red and *Page N of M*. All
+  three state their own row cap in headers a script can read, and the PDF prints it in the header and
+  the footer, because a truncated export that looks complete is the failure exports exist to avoid.
+- **Fixed: every export download returned "Authentication required".** They were plain links, and this
+  app keeps its access token in memory — so the browser reached the route with no `Authorization`
+  header and was correctly refused. Now fetched as authenticated blobs, the same way report downloads
+  already worked. A truncated export also warns at the moment it downloads rather than leaving the
+  reader to notice a short file.
+- **Delivery analytics for the register** — change failure rate, emergency rate, approval turnaround
+  and the SLA rollup, over a twelve-week trend of what was raised against what was closed, plus which
+  projects are carrying the load. Every point is bucketed from real timestamps server-side; nothing is
+  synthesised from the current total. The three rates are **null, never 0%**, when there is nothing to
+  divide by: "no change has closed yet" and "every change succeeded" are different facts, and a 0%
+  failure rate over an empty set is exactly the number that ends up quoted in a review.
+
+### 🎫 The ticket list now counts, and the counts are the filters
+
+- **A metric card per status and per priority above the table** — an icon, the live count, how it
+  moved since yesterday, and a 14-day trend chart — colour-coded to the same palette the badges in
+  the rows below use, so the day CRITICAL is recoloured it is recoloured everywhere. The numbers are
+  counted server-side over the whole workspace, not tallied from the 200-row page the table renders:
+  a tile reporting "200 open" for a workspace with 900 is the one thing a metric must never do.
+- **The sparklines are measured, not decorative.** Each day's count is reconstructed by replaying
+  recorded creations and status changes backwards from the live figure, so the last point of every
+  chart *is* the number printed above it. Status history is exact; the priority series says so when
+  it is not, because a ticket re-prioritised mid-window has no record of what it was before. A chart
+  that draws a pleasing curve unrelated to its own number is worse than no chart.
+- **The comparison is the increment, not a percentage.** "+7 vs yesterday" rather than "+700%" —
+  at these magnitudes a percentage turns one ticket into a crisis. The percentage is on hover. A
+  bucket where direction carries no judgement (a rising MEDIUM count) stays grey rather than being
+  painted green or red.
+- **Every tile is a filter.** Click one and the table below narrows to it; click it again and it
+  clears. The tiles and the list are built from one filter object and one shared query-string
+  mapping, so a tile can never describe a different set of tickets than the rows under it. The
+  tallies respect the filters already applied — except along the axis being counted, since a status
+  tally filtered by status would report the selected status and zero for everything else.
+- **A per-project breakdown** on the same strip (collapsed by default), with each project's total,
+  open, closed and a priority mix bar. Clicking a row filters the table to that project.
+- **The filter row names its fields**, and swapped Label for **Type** — read from the admin-editable
+  ticket types, so a workspace that added "Spike" can filter by it the day it exists — plus a new
+  **Raised by** filter. Its options are the people who have actually raised a ticket in what you can
+  see, with counts, rather than the whole user directory; most of a company has never filed one.
+  Labels are still on the ticket, its detail sheet, and the label column's replacement below.
+- **New columns: who raised it, and when.** An email- or chat-sourced ticket shows the real sender
+  rather than the intake system account it is technically reported by. Labels gave up their column
+  to a **file count** — "which of these has a screenshot attached" is the question being asked at
+  triage, and labels are still on the ticket, its detail sheet and the filter row. The ticket key
+  column became a **serial number**; the key stays searchable in the results box and one hover away,
+  because that is how people actually look a ticket up.
+
+### 🔐 A ticket belongs to the people on it
+
+- **Working on a ticket now follows the reporting line.** Its reporter, its assignee, anyone added
+  as a collaborator, and the manager those people actually report to. Previously `tickets:assign` —
+  which every manager and team lead holds workspace-wide — answered yes for every manager in the
+  organization, including ones with no relationship to the work.
+- **Deciding who works on it is narrower than doing the work.** Reassignment and the collaborator
+  list are limited to a super admin, an admin, or the manager the reporter or assignee reports to.
+  An assignee can move their own ticket but cannot hand it to somebody else.
+- **Collaborators: more than one person on a ticket, deliberately not watchers.** A watcher is a
+  notification subscription anybody can self-grant and it still grants nothing; a collaborator holds
+  the same working rights the assignee does, so only the people who may reassign may add one.
+  Collaborators hear about status changes on the same terms as the assignee, and anyone may stand
+  themselves down without needing that right.
+- Both answers are computed by the API and sent with the ticket, so the sheet never offers a control
+  the server then refuses — the same rule the planning layer's `effective` object follows. A viewer
+  who may not move a ticket sees the status picker disabled with a line saying who can.
+
+### 🔎 Searchable module and submodule pickers
+
+- The timesheet form and its edit dialog now type-ahead over modules and submodules instead of
+  scrolling a plain dropdown, matching the ticket picker that already sat beside them on the same
+  row. A real project's module list is long enough that scrolling it was the slow part of logging
+  an entry.
+
+### 🩹 "My projects this month" showed an em dash where the ticket counts belonged
+
+- The Open, Closed and Done columns counted only tickets assigned to **you**, so anybody who logged
+  time against a project without personally holding tickets in it — most admins, reviewing a team's
+  work — saw three dashes on every row. They now show the **project's** totals, bounded by the
+  projects the viewer can already see, with your own share of each on hover.
+- A second, quieter half of the same bug: once the server had answered, a project it did not mention
+  kept rendering as "—" rather than a real zero, which made "none closed" indistinguishable from
+  "still loading". The two are different claims and now read differently.
 
 ## 2.5.0 — goals that measure themselves, teammates that hold no seat, and the releases you could not see — 2026-08-18
 

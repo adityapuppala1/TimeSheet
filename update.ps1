@@ -59,6 +59,33 @@ if ($ProxyWarned) {
   Write-Warn "  Not a blocker - this update continues. See docs/DEPLOYMENT.md."
 }
 
+# -- Outbound-egress posture check -------------------------------------------------------------
+# ALLOW_PRIVATE_NETWORK_EGRESS is the same shape of problem as TRUST_PROXY_HOPS above - a default
+# invisible to every other check here - but it points the OTHER way: the default is the SAFE one,
+# so an .env predating this key silently becomes MORE restrictive on update.
+#
+# Both directions are worth a line:
+#   * unset on an on-prem box whose webhook receivers are internal -> deliveries start reporting
+#     "blocked" after this update, and nothing else in the output would explain why.
+#   * explicitly true on a deployment addressed by a public domain -> any workspace admin can aim
+#     an outbound webhook or the AI base URL at 169.254.169.254 (cloud metadata, which returns IAM
+#     credentials) or an internal service, with the request leaving from inside the network.
+$envRaw = Get-Content ".env" -Raw
+$egressMatch = [regex]::Match($envRaw, "(?m)^ALLOW_PRIVATE_NETWORK_EGRESS=(.*)$")
+$egressValue = if ($egressMatch.Success) { $egressMatch.Groups[1].Value.Trim() } else { "" }
+if ([string]::IsNullOrWhiteSpace($egressValue)) {
+  Write-Step "ALLOW_PRIVATE_NETWORK_EGRESS is unset - defaulting to false, so outbound webhooks and"
+  Write-Step "  the AI base URL must resolve to PUBLIC addresses (this release adds that guard)."
+  Write-Step "  If any webhook receiver here lives on 10.x/192.168.x/localhost, its deliveries will"
+  Write-Step "  now report ""blocked"" - add ALLOW_PRIVATE_NETWORK_EGRESS=true to .env and restart api."
+} elseif ($egressValue -eq "true" -and $envRaw -match "(?m)^HTTPS_DOMAIN=.+") {
+  Write-Warn "ALLOW_PRIVATE_NETWORK_EGRESS=true while HTTPS_DOMAIN is set - this looks public."
+  Write-Warn "  A workspace admin can then aim an outbound webhook or the BYOK AI base URL at cloud"
+  Write-Warn "  instance metadata (169.254.169.254 - IAM credentials) or an internal host, and the"
+  Write-Warn "  request originates INSIDE your network. Set it to false unless a receiver genuinely"
+  Write-Warn "  lives on a private address. Not a blocker - this update continues."
+}
+
 # -- Resolve the target release ----------------------------------------------------------------
 if ([string]::IsNullOrWhiteSpace($To)) {
   Write-Step "Fetching release tags..."
@@ -129,6 +156,25 @@ function Invoke-Verification([string]$Expected) {
   if ($LASTEXITCODE -ne 0) { return $false }
   docker compose -f $ComposeFile exec -T api npx prisma migrate status --schema=apps/api/prisma/control/schema.prisma | Out-Null
   if ($LASTEXITCODE -ne 0) { return $false }
+  # Platform-admin login — the check update.sh has always performed and this script did not.
+  # It is the only layer that proves the CONTROL-plane database is not just migrated but
+  # actually serving: the tenant login above can succeed against a control plane whose
+  # PlatformAdminUser table never got seeded, and that failure surfaces later as "nobody can
+  # reach /platform-admin" long after the update was called a success.
+  #
+  # ADVISORY, not a rollback trigger, for the same reason update.sh treats it that way: the
+  # seeded password is expected to be changed on any real deployment, so a failure here means
+  # "could not confirm", not "broken".
+  try {
+    $paBody = '{"email":"platform-admin@timesphere.local","password":"PlatformAdmin@12345"}'
+    $pa = Invoke-WebRequest -Uri "http://localhost:4000/api/platform-admin/auth/login" -Method Post `
+      -ContentType "application/json" -Body $paBody -UseBasicParsing -TimeoutSec 5
+    if ($pa.Content -notmatch "accessToken") {
+      Write-Warn "Platform-admin login check inconclusive (the seeded password may have been changed - that is fine)."
+    }
+  } catch {
+    Write-Warn "Platform-admin login check inconclusive (the seeded password may have been changed - that is fine)."
+  }
   # Advisory, matching install.ps1: missing face-detection models mean no camera guidance, but
   # they must never roll back an otherwise good update.
   try {

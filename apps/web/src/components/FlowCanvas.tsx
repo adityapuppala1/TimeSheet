@@ -1,46 +1,58 @@
 /**
- * The Workflow Studio's canvas — drag the nodes, see the shape, keep the guarantees.
+ * The Workflow Studio's canvas — an n8n-style node graph: a trigger on the left, steps flowing
+ * left to right, curved connectors between output and input handles, drag to move, wheel to zoom.
  *
- * WHY POSITIONS LIVE IN EACH STEP'S `config` AS `{x, y}`: that column is already free-form per step
- * kind, so a canvas needed no migration. A step with no position is auto-laid-out on open, which means
- * every flow built before the canvas existed opens as a sensible graph rather than a pile at the origin.
+ * WHY POSITIONS LIVE IN EACH STEP'S `config` AS `{x, y}`: that column is already free-form per
+ * step kind, so the canvas needs no migration. A step with no position is auto-laid-out on open,
+ * so every flow built before the canvas existed opens as a sensible graph rather than a pile at
+ * the origin.
  *
- * WHY DRAGGING A CONNECTION REORDERS RATHER THAN STORING AN EDGE: the steps ARE a sequence, and the
- * authority calculation depends on their order (taint propagates forward, so triage-then-assign and
- * assign-then-triage are different flows). Storing edges as well would give two sources of truth for
- * one fact, and the first disagreement between them is a flow nobody can read. So the canvas is a VIEW
- * of the sequence: moving a node up past another swaps their order, and the connector redraws.
+ * WHY DRAGGING A NODE REORDERS RATHER THAN STORING AN EDGE: the steps ARE a sequence, and the
+ * authority calculation depends on their order (taint propagates forward, so triage-then-assign
+ * and assign-then-triage are different flows). Storing edges as well would give two sources of
+ * truth for one fact, and the first disagreement between them is a flow nobody can read. So the
+ * canvas is a VIEW of the sequence: drag a node left past another and their order swaps, and the
+ * connectors redraw. This is the one place the n8n metaphor bends to the engine — n8n edges are
+ * free, ours are the order — and it is deliberate.
  *
- * WHY A BRANCH SHOWS AN ARM TO A TERMINUS RATHER THAN TWO COLUMNS OF STEPS: a condition that does not
- * match STOPS the run — that is what the dispatcher does, and the simulation says the same. Drawing a
- * second column of steps would show a path this engine cannot take, which is a prettier picture of a
- * flow that does not exist. The dashed arm says exactly what happens instead.
+ * WHY A BRANCH DROPS AN ARM TO A TERMINUS RATHER THAN FORKING INTO TWO LANES: a condition that
+ * does not match STOPS the run — that is what the dispatcher does, and the simulation says the
+ * same. A second lane of steps would draw a path this engine cannot take. The dashed arm down to
+ * "flow stops" says exactly what happens instead.
  *
- * WHY ORTHOGONAL ELBOWS AND NOT BEZIER CURVES: the timeline made this call already — curves become an
- * unreadable tangle once there are more than a handful, and a workflow is read to answer "what happens
- * after what", which a right angle answers better than a swoop.
+ * WHY CURVED CONNECTORS HERE (the vertical version used elbows): a horizontal left-to-right graph
+ * is the n8n convention, and a horizontal cubic bezier between two handles is the connector people
+ * recognise from it — it reads as "output flows into input" at a glance. With one linear spine and
+ * a single branch arm there is no tangle for a curve to become, which was the elbow's whole reason.
  *
- * WHY IT IS HAND-BUILT SVG: the same argument the Gantt made. Every canvas library ships its own design
- * system, assumes it owns the data layer, or is unmaintained — and the genuinely hard part here (the
- * authority arithmetic) is already server-side, leaving `x = f(order)`.
+ * WHY IT IS HAND-BUILT SVG: every canvas library ships its own design system, assumes it owns the
+ * data layer, or is unmaintained — and the genuinely hard part (the authority arithmetic) is
+ * already server-side, leaving `x = f(order)`.
  *
- * WHO renders this: `pages/Studio.tsx`, on the Canvas tab, at `lg` and above only.
+ * WHO renders this: `pages/Studio.tsx`, on the Canvas tab, at `lg` and above.
  */
-import { GitBranch, Hand, Sparkles, Zap } from "lucide-react";
+import { GitBranch, Hand, Play, Sparkles, Zap } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { cn } from "../lib/utils";
 import type { FlowRow, FlowStepKind } from "../services/api";
 
-const NODE_W = 260;
-const NODE_H = 96;
-/** Vertical gap between auto-laid-out nodes. Wide enough that a connector is visibly a connector. */
-const GAP_Y = 150;
+const NODE_W = 208;
+const NODE_H = 84;
+/** Horizontal gap between auto-laid-out nodes — wide enough that a connector reads as a connector. */
+const GAP_X = 268;
+/** The lane every auto-laid-out node sits on until it is dragged. */
+const LANE_Y = 150;
+/** Left inset for the first step, leaving room for the trigger node. */
+const FIRST_X = 150;
 
-const KIND_META: Record<FlowStepKind, { label: string; icon: typeof Zap; ring: string }> = {
-  CAPABILITY: { label: "AI step", icon: Sparkles, ring: "border-primary/50" },
-  ACTION: { label: "Action", icon: Zap, ring: "border-emerald-500/50" },
-  HUMAN_GATE: { label: "Ask a person", icon: Hand, ring: "border-amber-500/60" },
-  BRANCH: { label: "Only if", icon: GitBranch, ring: "border-sky-500/50" }
+const KIND_META: Record<
+  FlowStepKind,
+  { label: string; icon: typeof Zap; ring: string; chip: string }
+> = {
+  CAPABILITY: { label: "AI step", icon: Sparkles, ring: "border-primary/50", chip: "bg-primary/15 text-primary" },
+  ACTION: { label: "Action", icon: Zap, ring: "border-emerald-500/50", chip: "bg-emerald-500/15 text-emerald-600 dark:text-emerald-400" },
+  HUMAN_GATE: { label: "Ask a person", icon: Hand, ring: "border-amber-500/60", chip: "bg-amber-500/15 text-amber-600 dark:text-amber-400" },
+  BRANCH: { label: "Only if", icon: GitBranch, ring: "border-sky-500/50", chip: "bg-sky-500/15 text-sky-600 dark:text-sky-400" }
 };
 
 export interface CanvasStep {
@@ -57,23 +69,24 @@ interface Point {
 }
 
 /** A step's stored position, or the one it should get if it has none yet. Auto-layout is a single
- *  column: a flow is a sequence, and pretending otherwise before the user has moved anything would be
- *  inventing a shape they did not choose. */
+ *  left-to-right lane: a flow is a sequence, and pretending otherwise before the user has moved
+ *  anything would be inventing a shape they did not choose. */
 function positionOf(step: CanvasStep, index: number): Point {
-  const x = typeof step.config?.x === "number" ? (step.config.x as number) : 80;
-  const y = typeof step.config?.y === "number" ? (step.config.y as number) : 60 + index * GAP_Y;
+  const x = typeof step.config?.x === "number" ? (step.config.x as number) : FIRST_X + index * GAP_X;
+  const y = typeof step.config?.y === "number" ? (step.config.y as number) : LANE_Y;
   return { x, y };
 }
 
-/** An orthogonal connector from the bottom of `from` to the top of `to`. Three segments, so it reads
- *  as "down, across, down" however the two nodes are placed relative to each other. */
-function elbow(from: Point, to: Point): string {
-  const startX = from.x + NODE_W / 2;
-  const startY = from.y + NODE_H;
-  const endX = to.x + NODE_W / 2;
-  const endY = to.y;
-  const midY = startY + Math.max(24, (endY - startY) / 2);
-  return `M ${startX} ${startY} L ${startX} ${midY} L ${endX} ${midY} L ${endX} ${endY}`;
+/** A horizontal cubic bezier from an output handle (right edge) to an input handle (left edge) —
+ *  the n8n connector. Control points are pushed out horizontally by half the gap so the curve
+ *  leaves and arrives flat, however the two nodes are stacked. */
+function bezier(from: Point, to: Point): string {
+  const sx = from.x + NODE_W;
+  const sy = from.y + NODE_H / 2;
+  const ex = to.x;
+  const ey = to.y + NODE_H / 2;
+  const dx = Math.max(40, Math.abs(ex - sx) * 0.5);
+  return `M ${sx} ${sy} C ${sx + dx} ${sy}, ${ex - dx} ${ey}, ${ex} ${ey}`;
 }
 
 export function FlowCanvas({
@@ -81,6 +94,7 @@ export function FlowCanvas({
   steps,
   readOnly,
   selectedId,
+  trigger,
   onSelect,
   onMove,
   onReorder
@@ -90,10 +104,12 @@ export function FlowCanvas({
   steps: CanvasStep[];
   readOnly: boolean;
   selectedId: string | null;
+  /** The flow's trigger, rendered as the start node — n8n always begins with one. */
+  trigger?: { label: string };
   onSelect: (id: string) => void;
   /** Persisted into the step's own config by the caller. */
   onMove: (id: string, at: Point) => void;
-  /** Dragging a node above/below another reorders the sequence — see the header. */
+  /** Dragging a node left/right past another reorders the sequence — see the header. */
   onReorder: (id: string, newIndex: number) => void;
 }>) {
   const surfaceRef = useRef<HTMLDivElement>(null);
@@ -129,13 +145,13 @@ export function FlowCanvas({
     };
 
     const up = () => {
-      // On release, the node's vertical position decides where it sits in the SEQUENCE. This is the
-      // whole "connections are implied by order" decision made tangible: you move a box, and what
-      // changes is what runs when.
+      // On release, the node's HORIZONTAL position decides where it sits in the SEQUENCE — the
+      // "connections are implied by order" decision made tangible in a left-to-right graph: you
+      // move a box, and what changes is what runs when.
       if (drag.current?.moved) {
         const id = drag.current.id;
-        const withPositions = ordered.map((s, i) => ({ id: s.id, y: positionOf(s, i).y }));
-        const sorted = [...withPositions].sort((a, b) => a.y - b.y);
+        const withPositions = ordered.map((s, i) => ({ id: s.id, x: positionOf(s, i).x }));
+        const sorted = [...withPositions].sort((a, b) => a.x - b.x);
         const newIndex = sorted.findIndex((s) => s.id === id);
         const oldIndex = ordered.findIndex((s) => s.id === id);
         if (newIndex >= 0 && newIndex !== oldIndex) onReorder(id, newIndex);
@@ -152,16 +168,20 @@ export function FlowCanvas({
     };
   }, [ordered, onMove, onReorder, readOnly, toCanvas]);
 
-  const height = Math.max(420, positions.reduce((max, p) => Math.max(max, p.at.y + NODE_H + 60), 0));
+  const width = Math.max(1200, positions.reduce((max, p) => Math.max(max, p.at.x + NODE_W + 120), 0));
+  const height = Math.max(460, positions.reduce((max, p) => Math.max(max, p.at.y + NODE_H + 140), 0));
+
+  const first = positions[0];
+  const triggerNode = { x: 24, y: (first?.at.y ?? LANE_Y) + NODE_H / 2 - 28 };
 
   return (
-    <div className="relative overflow-hidden rounded-lg border bg-[radial-gradient(circle,theme(colors.muted.DEFAULT)_1px,transparent_1px)] [background-size:16px_16px]">
-      {/* Zoom controls, mirroring the reference's left rail. */}
-      <div className="absolute left-3 top-3 z-10 flex flex-col gap-1 rounded-md border bg-background/90 p-1 shadow-sm backdrop-blur">
-        <button type="button" className="grid h-7 w-7 place-items-center rounded text-sm hover:bg-muted" onClick={() => setZoom((z) => Math.min(1.6, z + 0.15))} aria-label="Zoom in">
+    <div className="relative overflow-hidden rounded-lg border bg-muted/20 bg-[radial-gradient(circle,theme(colors.muted-foreground/0.18)_1px,transparent_1px)] [background-size:18px_18px]">
+      {/* Zoom controls, mirroring n8n's corner rail. */}
+      <div className="absolute right-3 top-3 z-10 flex flex-col gap-1 rounded-md border bg-background/90 p-1 shadow-sm backdrop-blur">
+        <button type="button" className="grid h-7 w-7 place-items-center rounded text-sm hover:bg-muted" onClick={() => setZoom((z) => Math.min(1.6, +(z + 0.15).toFixed(2)))} aria-label="Zoom in">
           +
         </button>
-        <button type="button" className="grid h-7 w-7 place-items-center rounded text-sm hover:bg-muted" onClick={() => setZoom((z) => Math.max(0.5, z - 0.15))} aria-label="Zoom out">
+        <button type="button" className="grid h-7 w-7 place-items-center rounded text-sm hover:bg-muted" onClick={() => setZoom((z) => Math.max(0.5, +(z - 0.15).toFixed(2)))} aria-label="Zoom out">
           −
         </button>
         <button
@@ -184,58 +204,96 @@ export function FlowCanvas({
           // Panning starts only on the background — a pointer-down on a node is a drag of that node.
           if (e.target === e.currentTarget) panning.current = { from: { x: e.clientX, y: e.clientY }, origin: pan };
         }}
+        onWheel={(e) => {
+          // Wheel zooms toward the cursor, the n8n gesture. Non-passive via React's synthetic
+          // handler; the small step keeps it controllable on a trackpad.
+          const delta = e.deltaY > 0 ? -0.1 : 0.1;
+          setZoom((z) => Math.min(1.6, Math.max(0.5, +(z + delta).toFixed(2))));
+        }}
       >
         <div
           className="absolute origin-top-left"
-          style={{ transform: `translate(${pan.x}px, ${pan.y}px) scale(${zoom})`, width: 1400, height }}
+          style={{ transform: `translate(${pan.x}px, ${pan.y}px) scale(${zoom})`, width, height }}
         >
-          <svg className="pointer-events-none absolute inset-0 h-full w-full" aria-hidden>
+          <svg className="pointer-events-none absolute inset-0 h-full w-full" width={width} height={height} aria-hidden>
+            <defs>
+              <marker id="flow-arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="5" markerHeight="5" orient="auto">
+                <path d="M 0 0 L 10 5 L 0 10 z" className="fill-muted-foreground/70" />
+              </marker>
+            </defs>
+
+            {/* Trigger → first step. */}
+            {first && (
+              <path
+                d={bezier({ x: triggerNode.x - NODE_W + 56, y: triggerNode.y - NODE_H / 2 + 28 }, first.at)}
+                fill="none"
+                className="stroke-muted-foreground/50"
+                strokeWidth={2}
+                markerEnd="url(#flow-arrow)"
+              />
+            )}
+
+            {/* Spine: step → next step. */}
             {positions.slice(0, -1).map((p, i) => (
               <path
                 key={p.step.id}
-                d={elbow(p.at, positions[i + 1].at)}
+                d={bezier(p.at, positions[i + 1].at)}
                 fill="none"
-                className="stroke-muted-foreground/40"
+                className="stroke-muted-foreground/50"
                 strokeWidth={2}
                 markerEnd="url(#flow-arrow)"
               />
             ))}
-            {/* A branch's SECOND lane. The runtime stops the whole flow when a condition does not
-                match, so the honest second lane is a short arm to a terminus — not a parallel column
-                of steps, which would draw a path this engine cannot take. Drawing what the runtime
-                actually does is the same rule the connectors follow: the picture may not claim more
-                than the sequence can do. */}
+
+            {/* A branch's "does not match" arm drops down to a terminus — the run stops, so the
+                honest picture is an arm to nowhere rather than a second lane of steps. */}
             {positions
               .filter(({ step }) => step.kind === "BRANCH")
-              .map(({ step, at }) => (
-                <path
-                  key={`no-${step.id}`}
-                  d={`M ${at.x + NODE_W} ${at.y + NODE_H / 2} L ${at.x + NODE_W + 46} ${at.y + NODE_H / 2}`}
-                  fill="none"
-                  className="stroke-muted-foreground/30"
-                  strokeWidth={2}
-                  strokeDasharray="4 3"
-                  markerEnd="url(#flow-arrow)"
-                />
-              ))}
-            <defs>
-              <marker id="flow-arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="5" markerHeight="5" orient="auto">
-                <path d="M 0 0 L 10 5 L 0 10 z" className="fill-muted-foreground/60" />
-              </marker>
-            </defs>
+              .map(({ step, at }) => {
+                const sx = at.x + NODE_W / 2;
+                const sy = at.y + NODE_H;
+                const ey = at.y + NODE_H + 58;
+                return (
+                  <path
+                    key={`no-${step.id}`}
+                    d={`M ${sx} ${sy} C ${sx} ${sy + 30}, ${sx} ${ey - 30}, ${sx} ${ey}`}
+                    fill="none"
+                    className="stroke-muted-foreground/35"
+                    strokeWidth={2}
+                    strokeDasharray="4 3"
+                    markerEnd="url(#flow-arrow)"
+                  />
+                );
+              })}
           </svg>
 
+          {/* Branch terminus chips. */}
           {positions
             .filter(({ step }) => step.kind === "BRANCH")
             .map(({ step, at }) => (
               <span
                 key={`stop-${step.id}`}
-                style={{ left: at.x + NODE_W + 52, top: at.y + NODE_H / 2 - 11 }}
-                className="absolute whitespace-nowrap rounded-full border border-dashed bg-muted/60 px-2 py-0.5 text-[10px] text-muted-foreground"
+                style={{ left: at.x + NODE_W / 2 - 62, top: at.y + NODE_H + 60 }}
+                className="absolute whitespace-nowrap rounded-full border border-dashed bg-muted/70 px-2 py-0.5 text-[10px] text-muted-foreground"
               >
                 does not match — flow stops
               </span>
             ))}
+
+          {/* The trigger start node. Not draggable and not selectable — the trigger is edited in the
+              form, not on the canvas — but drawn so the graph reads like n8n: a thing that starts it. */}
+          <div
+            style={{ left: triggerNode.x, top: triggerNode.y, width: 56, height: 56 }}
+            className="absolute grid place-items-center rounded-full border-2 border-primary/60 bg-primary/10 shadow-sm"
+            title={trigger?.label ?? "Trigger"}
+          >
+            <Play className="h-5 w-5 fill-primary text-primary" aria-hidden />
+            <span className="absolute -bottom-5 left-1/2 -translate-x-1/2 whitespace-nowrap text-[10px] font-medium text-muted-foreground">
+              {trigger?.label ?? "Trigger"}
+            </span>
+            {/* Output handle. */}
+            <span className="absolute -right-1.5 top-1/2 h-3 w-3 -translate-y-1/2 rounded-full border-2 border-primary/70 bg-background" />
+          </div>
 
           {positions.map(({ step, at }) => {
             const meta = KIND_META[step.kind];
@@ -259,27 +317,37 @@ export function FlowCanvas({
                 }}
                 style={{ left: at.x, top: at.y, width: NODE_W, minHeight: NODE_H }}
                 className={cn(
-                  "absolute rounded-xl border-2 bg-card p-3 shadow-sm transition-shadow",
+                  "absolute rounded-xl border-2 bg-card shadow-sm transition-shadow hover:shadow-md",
                   meta.ring,
                   selected && "ring-2 ring-primary ring-offset-2 ring-offset-background",
                   !readOnly && "cursor-grab active:cursor-grabbing"
                 )}
               >
-                <div className="flex items-center gap-1.5 text-[11px] text-muted-foreground">
-                  <Icon className="h-3 w-3" aria-hidden />
-                  {meta.label}
-                  <span className="ml-auto tabular-nums">{step.order}</span>
+                {/* Input handle (left) and output handle (right) — the n8n connection dots. */}
+                <span className="absolute -left-1.5 top-1/2 h-3 w-3 -translate-y-1/2 rounded-full border-2 border-muted-foreground/50 bg-background" aria-hidden />
+                <span className="absolute -right-1.5 top-1/2 h-3 w-3 -translate-y-1/2 rounded-full border-2 border-muted-foreground/50 bg-background" aria-hidden />
+
+                <div className="flex items-start gap-2.5 p-2.5">
+                  {/* Icon square, n8n-style. */}
+                  <span className={cn("mt-0.5 grid h-9 w-9 shrink-0 place-items-center rounded-lg", meta.chip)}>
+                    <Icon className="h-4.5 w-4.5" aria-hidden />
+                  </span>
+                  <div className="min-w-0 flex-1">
+                    <div className="flex items-center gap-1.5 text-[10px] uppercase tracking-wide text-muted-foreground">
+                      {meta.label}
+                      <span className="ml-auto tabular-nums">{step.order}</span>
+                    </div>
+                    {/* The kind is the line above, so a node whose title WOULD be its kind states what
+                        it is configured to do instead — "Action / Action" reads as broken. */}
+                    <p className="mt-0.5 truncate text-sm font-semibold">{step.title ?? describeConfig(step)}</p>
+                    {authority && step.kind === "CAPABILITY" && (
+                      <p className={cn("mt-0.5 truncate text-[11px]", authority.clampedReason ? "text-warning-foreground" : "text-muted-foreground")}>
+                        {authority.effectiveLevel}
+                        {authority.clampedReason ? " · clamped" : ""}
+                      </p>
+                    )}
+                  </div>
                 </div>
-                {/* The kind is already the line above, so a node whose title WOULD be its kind says
-                    what it is configured to do instead — "Action / Action" is a card that reads as
-                    broken. */}
-                <p className="mt-1 truncate text-sm font-medium">{step.title ?? describeConfig(step)}</p>
-                {authority && step.kind === "CAPABILITY" && (
-                  <p className={cn("mt-1 text-[11px]", authority.clampedReason ? "text-warning-foreground" : "text-muted-foreground")}>
-                    {authority.effectiveLevel}
-                    {authority.clampedReason ? " · clamped" : ""}
-                  </p>
-                )}
               </div>
             );
           })}

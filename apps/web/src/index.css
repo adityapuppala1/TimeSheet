@@ -497,10 +497,63 @@
   }
 }
 
+/* The button that CALLS the model, as opposed to a surface that shows what it said.
+   reactbits' specular-button, implemented in-tree against the theme tokens like BorderGlow —
+   a tinted face with a specular highlight that sweeps across on hover.
+
+   WHY IT IS A BUTTON TREATMENT AND NOT ANOTHER GLOW: `.ai-glow` already means "the model is
+   working on this box", and reusing it on a resting control would make the two indistinguishable.
+   This says "pressing this spends a model call", which is the thing worth marking before the click
+   rather than during it.
+
+   The sweep is hover-only and one pass. A control that shimmers permanently in a toolbar is the
+   kind of motion people disable the whole app's animation to escape. */
+.ai-specular {
+  position: relative;
+  overflow: hidden;
+  background-image: linear-gradient(135deg, hsl(var(--primary) / 0.16), hsl(var(--info) / 0.14));
+  border: 1px solid hsl(var(--primary) / 0.35);
+  color: hsl(var(--foreground));
+}
+.ai-specular:hover {
+  border-color: hsl(var(--primary) / 0.6);
+}
+.ai-specular::after {
+  content: "";
+  pointer-events: none;
+  position: absolute;
+  inset: 0;
+  /* Sits off the left edge until hovered, then crosses once. */
+  transform: translateX(-120%);
+  background: linear-gradient(
+    100deg,
+    transparent 20%,
+    hsl(var(--primary) / 0.28) 45%,
+    hsl(var(--info) / 0.34) 55%,
+    transparent 80%
+  );
+}
+.ai-specular:hover::after,
+.ai-specular:focus-visible::after {
+  animation: ai-specular-sweep 900ms ease-out;
+}
+
+@keyframes ai-specular-sweep {
+  to {
+    transform: translateX(120%);
+  }
+}
+
 @media (prefers-reduced-motion: reduce) {
   .ai-glow::before,
   .ai-gradient-text,
   .ai-strand {
+    animation: none;
+  }
+  /* The tint and border stay — identifying the control is the point, and that survives
+     without motion. Only the sweep goes. */
+  .ai-specular:hover::after,
+  .ai-specular:focus-visible::after {
     animation: none;
   }
 }

@@ -2,7 +2,8 @@
 
 A full-stack workspace platform that combines **timesheet management** (daily work logging,
 approvals, SLA-driven escalation, reporting) with a **Jira-like ticketing system**, a full
-**project-planning layer** (Gantt timelines, dependencies, portfolios, capacity and budgets), a
+**project-planning layer** (Gantt timelines, dependencies, portfolios, capacity and budgets),
+**change management** (risk-scored, approved, scheduled and reviewed releases), a
 **bring-your-own-key AI layer** (Anthropic or any OpenAI-compatible provider), and an
 **analytics/insights dashboard** — all under one roof, one login, and one admin-configurable
 settings surface.
@@ -14,6 +15,12 @@ workload board can put planned hours, real logged hours and contracted capacity 
 and a budget forecast is priced from the same approved rates a client-facing attestation reads. A
 timesheet tool cannot plan and a planning tool cannot measure — the whole product is the argument
 that those should not be two systems.
+
+Change management extends the same argument one step further. A change request here **is** a ticket
+plus a governance record, so the thing you asked approval for and the work that delivered it are the
+same row — which is why a closed change can name the tickets it shipped, price the hours against
+them, and hand an auditor a register that reconciles with the timesheets underneath it. A standalone
+CAB tool holds none of that.
 
 > **v2.0.0 — the planning layer.** Everything in it ships **off by default**: upgrading changes
 > nothing a user can see until an admin turns it on. See [CHANGELOG.md](CHANGELOG.md).
@@ -44,6 +51,52 @@ that those should not be two systems.
 > (Prisma **P3009**) instead of retrying into it forever, and this release's one migration revokes
 > surplus sessions beyond each user's 10 most recent. See
 > [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md#what-240-adds-to-that-dance-session-device-identity--and-the-first-migration-that-can-strand-a-database).
+>
+> **v2.5.0 — multi-org deployments, again: the fan-out is the step people miss.** The tenant schema
+> fan-out has never been able to run inside a container, so every organization beyond the default
+> one has been sitting on its old schema without any update saying so. After upgrading:
+> `docker compose exec api npm run migrate:tenants -w apps/api`.
+>
+> **v3.3.0 — the week you can read, and a workspace that installs itself.** Scheduled email now
+> answers to the RECIPIENT's clock: reminders were being judged against the server's timezone, so
+> anything after ~2:30pm on a New York Friday looked like Saturday to an IST server and was dropped
+> until Monday. The Monday digest reaches managers and admins for the first time (the activity gate
+> was filtering out exactly the people it exists to inform), gains a manager's team view and
+> change-management figures, and the security digest no longer refuses to send when the AI is
+> unavailable. Both moved to 10:00 / 10:30. Plus: an app loader, a dashboard "This week" card that
+> fills its own space, closable notices, an n8n-style Workflow canvas, and the org chart for
+> everyone. **Nothing to configure** — and `npm run dev` / `npm run build` now install new
+> dependencies for you after a pull, so a release that adds one no longer greets you with
+> `Cannot find package`.
+>
+> > **v3.2.0 — the requests this server makes on your behalf.** A security pass over the places where
+> TimeSphere acts as a *client*: the four admin-typed URLs the server fetches (outbound webhooks, the
+> Google Chat webhook, Bot Framework replies, the BYOK AI base URL) now go through one guard that
+> resolves DNS and refuses private, loopback and cloud-metadata targets. The SPA finally carries its
+> own security headers — CSP with `frame-ancestors 'none'`, `Referrer-Policy`, `Permissions-Policy` —
+> which nginx was serving without. Public API keys can expire. **Two configuration notes:** set
+> `ALLOW_PRIVATE_NETWORK_EGRESS=true` only if this box's webhook receivers genuinely live on your LAN
+> (the installers now ask, and `npm run doctor` flags the risky combination), and a *split* deployment
+> — SPA on a different origin from the API — must set `CSP_CONNECT_SRC` to that API origin or the
+> browser will block every call. One migration, additive and NULL-defaulted: no key that works today
+> stops working.
+>
+> **v3.1.0 — the assistant can act, on a short leash.** Ask AI gained three actions beyond drafting
+> time: raising a ticket, commenting on one, and drafting a change request. Each is offered only to
+> someone holding the permission the matching button requires, and each re-checks that they can see
+> the project or ticket before it writes. Raising a ticket and commenting **publish** — neither has a
+> draft state — and the assistant says so rather than calling them drafts; a change request is raised
+> as a DRAFT and stops there. **Nothing can start or settle an approval, at any autonomy level.** No
+> migrations, no new environment variables, nothing to switch on.
+>
+> **v3.0.0 — change management, and nothing breaks.** A major version for an *additive* release: no
+> route changed shape, no column was dropped, no default moved, and an installation that never turns
+> the module on behaves exactly as 2.5.0 did. The number moved because the product gained a
+> governance surface it did not have. Six tenant migrations and one control-plane migration ship
+> with it — run the fan-out above for multi-org installs. It is **off after upgrading**; a super
+> admin enables it in Workspace Settings → Change management, and the org's tier must include it.
+> Set `managerId` on your users first: approval routes to the requester's manager, and with none set
+> it falls back to every active super admin. **No new environment variables.**
 
 ## Feature areas
 
@@ -75,8 +128,38 @@ that those should not be two systems.
 | **Intake, blueprints & approvals (V6, opt-in)** | **Request forms** with conditional questions, publishable to a link that needs no account; a hidden question is neither required nor accepted, so a submitter is never blocked by a branch they were routed away from and nobody can POST past one. **Blueprints** save a project's shape as relative day offsets and stamp it out against any start date, previewable before anything is created, or learned from a project that already ran. **Approval chains** on work items — sequential or parallel, colleagues or external reviewers, where a guest gets a single-use link rather than a half-real account that would sit in every permission check forever. One rejection settles the request and stops asking everybody else. **Proofing** pins comments to a spot on an attached image or PDF, anchored so they land correctly at any zoom. |
 | **Delivery risk & the AI planning copilot (V6, opt-in)** | Every project gets a 0–100 **risk score** from six measured signals — schedule slip against baseline, budget forecast, blocked work, over-allocation, SLA breaches and rework — with stated weights and the full breakdown stored alongside, snapshotted nightly so trends are visible. It is **arithmetic and works with AI switched off entirely**; only the plain-English summary needs a model. When the assistant *does* propose work, it never writes: every change becomes a reviewable row you accept or reject individually, showing exactly what it would alter, and a row whose underlying value has changed since is refused rather than quietly reverting somebody else's edit. There is deliberately no apply-everything button. |
 | **Custom dashboards & scheduled reports (V6, opt-in)** | Build a view from a fixed catalogue of tiles — closed on purpose, so "open items" has one definition and two dashboards cannot disagree. A shared dashboard stores a *layout*, never data: every tile resolves against the viewer's own projects, so publishing one can never publish a project somebody could not already see. Email a dashboard daily, weekly or monthly to stakeholders with no account; the report is built with the sender's access and stops itself if that person leaves. |
+| **Change management (V8, opt-in)** | Raise, assess, approve, schedule, implement, validate and close a change — with the governance a ticket cannot express. **A change IS a ticket** plus an extension row, so comments, attachments, watchers, the audit trail and project-scoped visibility came free and there is no second visibility rule to keep in step. Keys read `HICS-TS-20260819-0001`. Four change types — Standard, Normal, Emergency, and **Major, which is Normal escalated rather than a fourth peer**: it forces a backout plan even when the matrix bands the change Low, and a post-implementation review even when it succeeded, because the matrix scores probability of harm and has no way to say *structurally significant*. A weighted **risk assessment** bands the change and the band decides whether a backout plan is mandatory — which is why a *complete* assessment is required to submit: an unanswered parameter contributes zero to a normalised score, so a half-filled form under-reports (measured: high impact + high data risk with nine blanks scored 27 and banded LOW), and leaving fields empty was a way to skip the module's central rule. Approval is **the requester's manager, or a super admin** — never the requester, and a rejection opens a new round rather than overwriting the first, so the objection survives the rework. A **runbook** of numbered implementation steps, test cases and dependencies stays editable *after* approval, because recording that step 4 failed is the work that happens then; an open predecessor refuses the move to Implementing with a 409 that names it. Per-stage **SLA clocks** judge a finished stage on how long it actually took rather than against the current time — the alternative is a dashboard that turns green the moment an overrun closes. A **calendar** shows scheduled work against the blackout periods it has to dodge, in one call. CSV, Excel and PDF export from one shared query, fetched as authenticated blobs and stating their own row caps. Two email templates live in **Workspace Settings → Email templates** with the same analytics and failure triage as every other mail, going to the requester, implementer, approvers and collaborators with super admins in BCC. Delivery-health figures are **null, never 0%**, when nothing has closed yet. See [docs/API.md](docs/API.md#change-management-v8). |
 | **Multi-tenant SaaS platform** | Runs as either a single-org on-prem deployment or a true multi-org SaaS platform on the same codebase. Each organization gets its own physically separate MySQL database (never a shared table filtered by a tenant column) — see [Multi-tenancy](#multi-tenancy) below. |
 | **Platform administration** | A separate `/platform-admin` console (its own auth, its own JWT secret, zero shared client state with the tenant app) for organization lifecycle, plan-tier limits (seat counts, AI budget ceilings, allowed SSO providers/chat platforms), and cross-org analytics — restricted by convention to aggregate numbers, never row-level tenant content. |
+
+## By the numbers
+
+Counted from the tree at v3.1.0, not estimated — regenerate any of these with the one-liners in
+[CONTRIBUTING.md](CONTRIBUTING.md#regenerating-readmes-by-the-numbers) rather than trusting a figure
+that looks stale.
+
+| | |
+|---|---|
+| REST routes | **422** across 50 controllers |
+| Prisma models / enums | **123** / 41, plus **96** tenant migrations and 7 control-plane migrations |
+| Services / cron workers | **96** / 23 |
+| Web pages | **63** |
+| Unit tests | **1,419** across 118 files (`npm test -w apps/api`) |
+| End-to-end specs | **28** Playwright specs, run across desktop, phone, tablet, laptop, 4K, Firefox and WebKit |
+| Editable email templates | **22**, every one of them with preview, test send, revert and per-template delivery analytics |
+| RBAC permissions | **38**, over 5 roles |
+| Lint | **0 errors**, warnings tracked as a baseline rather than driven to zero — see below |
+
+**On the lint number.** The repo runs ESLint with `sonarjs` and sits at roughly 420 warnings and
+zero errors. That is the healthy state, not a backlog: the warnings are overwhelmingly
+`no-nested-conditional` and `cognitive-complexity` on code where the nesting is the clearest form,
+and "fixing" the count by mechanically extracting ternaries has previously made the code worse.
+Errors are the gate; warnings are a signal to read, not a score to beat.
+
+**On the test number.** Unit tests here deliberately favour *pure* functions over mocked databases —
+the schedule solver, the risk score, the SLA clocks, the CSV escaper, the changelog parser. That is
+why a suite this size runs in about 20 seconds and why its failures point at a rule rather than a
+fixture. Anything needing a real database is an e2e spec instead.
 
 ## Stack
 
@@ -530,6 +613,18 @@ specific message instead of you working backward from one of the errors below.
 
 ## Testing
 
+Two suites, and they answer different questions. **Unit tests** check the rules — the schedule
+solver, the change risk score, the SLA clocks, the CSV escaper, the changelog parser — and run
+against no database at all, which is why 1,380 of them finish in about twenty seconds and why a
+failure points at a rule rather than a fixture. **End-to-end specs** drive a real browser against a
+real seeded database, and are where anything needing one belongs.
+
+```bash
+npm test -w apps/api         # the unit suite (~20s): 1,380 tests across 114 files
+npm run test:coverage -w apps/api
+npm run lint                 # typecheck both apps + eslint/sonarjs across the monorepo
+```
+
 ```bash
 npm run test:e2e             # everything (~22 min): 7 projects — 5 viewports + Firefox + WebKit
 npm run test:e2e:quick       # day-to-day loop (~7 min): every FUNCTIONAL spec once, desktop only
@@ -639,6 +734,93 @@ Every org's `MySQL` box above is a physically separate database — see [Multi-t
 
 ## Key workflows
 
+### A change, from raised to closed
+
+The lifecycle is its own state machine. Two things are deliberately **not** states: `FAILED` and
+`ROLLED_BACK` are **outcomes**, because a change that failed still has to be validated, reviewed and
+closed — modelling failure as a state strands it outside the process that exists to learn from it.
+
+```mermaid
+stateDiagram-v2
+  [*] --> DRAFT
+  DRAFT --> AWAITING_APPROVAL: submit (gated)
+  DRAFT --> CANCELLED
+  AWAITING_APPROVAL --> APPROVED: manager or super admin
+  AWAITING_APPROVAL --> REJECTED: with comments
+  REJECTED --> DRAFT: rework opens a NEW round
+  APPROVED --> SCHEDULED
+  SCHEDULED --> IMPLEMENTING: refused while a predecessor is OPEN
+  IMPLEMENTING --> VALIDATION
+  VALIDATION --> PIR: outcome required
+  PIR --> CLOSED
+  CLOSED --> [*]
+  REJECTED --> [*]
+  CANCELLED --> [*]
+```
+
+The gate on `submit` is the module's whole point, so it is enforced by the API at the moment
+approval is asked for — not by a hopeful placeholder in a form:
+
+```mermaid
+flowchart TD
+  S["Submit for approval"] --> R{"Risk assessment<br/>COMPLETE?"}
+  R -- "no" --> X["422 — names every gap at once"]
+  R -- "yes" --> J{"Justification,<br/>implementation plan,<br/>planned window?"}
+  J -- "missing" --> X
+  J -- "yes" --> B{"Risk band needs<br/>a backout plan?"}
+  B -- "yes, and absent" --> X
+  B -- "satisfied" --> T{"Above LOW risk<br/>without a test plan?"}
+  T -- "yes" --> X
+  T -- "no" --> D{"Downtime declared<br/>without a comms plan<br/>or a duration?"}
+  D -- "yes" --> X
+  D -- "no" --> A["AWAITING_APPROVAL<br/>→ routed, mailed, clock started"]
+```
+
+**Why a *complete* risk assessment is required, and not merely encouraged.** The score normalises
+across every active parameter, so an unanswered one contributes zero. That is correct in itself — a
+blank is not "low" — but it means a half-filled assessment *under-reports*. Measured during the
+build: high business impact plus high data risk, with the other nine parameters left blank, scored
+**27 and banded LOW** — and the band is exactly what decides whether a backout plan is mandatory.
+Leaving fields empty was therefore a way to skip the module's central rule. A draft still saves with
+any subset; only submission demands the full set.
+
+```mermaid
+sequenceDiagram
+  actor Requester
+  participant UI as Change page
+  participant API as REST API
+  participant Rules as change.service.ts
+  participant DB as MySQL
+  participant Mail as SMTP
+  actor Approver as Manager / Super admin
+
+  Requester->>UI: Fill the twelve sections, add a runbook
+  UI->>API: POST /changes/:id/transition {to: AWAITING_APPROVAL}
+  API->>Rules: missingForSubmit(change, activeRiskKeys)
+  alt anything missing
+    Rules-->>API: ["Backout plan", "Test plan"]
+    API-->>UI: 422 — every gap in one response
+  else complete
+    API->>Rules: resolveChangeApprovers(requesterId)
+    Rules-->>API: the requester's manager, else all active super admins
+    API->>DB: open approval round N, write state + Ticket.status together
+    API->>Mail: to requester + implementer + approvers, BCC every super admin
+  end
+
+  Approver->>API: POST /changes/:id/decision {APPROVED, comments}
+  API->>API: canDecideChange — never the requester, even as super admin
+  API->>DB: settle the round, stamp approvedAt (starts the next SLA clock)
+  API->>Mail: decision mail, adding who decided and why
+```
+
+**Why every state write also writes `Ticket.status`.** A change *is* a ticket plus an extension row,
+so about forty existing readers already query `Ticket.status`. `CHANGE_STATE_TO_TICKET_STATUS` is the
+same compatibility hinge `WorkflowStatus.legacyStatus` provides for custom ticket statuses — the pair
+is never written apart, which is what lets comments, attachments, watchers, links, the audit trail,
+search and project-scoped visibility keep working with no second implementation to keep in step.
+
+### Logging time
+
 ```mermaid
 sequenceDiagram
   actor Employee
@@ -652,6 +834,8 @@ sequenceDiagram
   API->>DB: Persist entry and audit log
   API-->>UI: Submitted status + totals
 ```
+
+### Email → ticket intake
 
 ```mermaid
 sequenceDiagram
@@ -688,6 +872,8 @@ See `.env.example` for all supported variables. Remember: the actual file the AP
 - **API telemetry**: `API_TELEMETRY_ENABLED` (off by default), `API_TELEMETRY_SAMPLE_RATE`, `API_TELEMETRY_FLUSH_MS`, `API_TELEMETRY_MAX_BUFFER`, `API_TELEMETRY_RETENTION_DAYS`, and `POD_NAME`/`POD_NAMESPACE`/`CLUSTER_NAME` for host identity. Deliberately env-only rather than an admin toggle — it runs on every request, so an operator has to ask for that cost. See [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md#operating-api-request-telemetry)
 - **Capacity tuning**: `RATE_LIMIT_PER_MINUTE` (default `900` — the blanket per-IP budget; per *egress* IP, so an office NAT is one bucket: raise it for NAT-heavy deployments) and `TENANT_DB_CONNECTION_LIMIT` (default `5` in code — multi-tenant arithmetic; the Compose files and Helm chart ship `20` because a single-org install has one live tenant and load testing measured 5 capping the authed path near 90 req/s on pool queueing alone). Both knobs exist because a measurement said so — the numbers are in [reports/quality-load-report.html](reports/quality-load-report.html)
 - **Reverse proxies**: `TRUST_PROXY_HOPS` — the number of proxies in front of this API, `0` by default. **Set it if anything sits in front**, including the Docker Compose stack as shipped (the web container's nginx proxies `/api` to the API): every per-IP rate limit reads `req.ip`, and at `0` behind a proxy that is the proxy's address for every caller, so the login limiter becomes one shared global bucket — silently. A hop *count* rather than a boolean because trusting `X-Forwarded-For` wholesale lets anyone forge `req.ip`. See [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md#reverse-proxies-and-client-ip-attribution-trust_proxy_hops)
+- **Outbound requests**: `ALLOW_PRIVATE_NETWORK_EGRESS` (default `false`) — whether this server may fetch **private, loopback or link-local** addresses. Four features let a workspace admin type a URL the *server* then requests (outbound webhooks, the Google Chat webhook, Bot Framework replies, the BYOK AI base URL), and the API sits inside your network — so leaving those unrestricted lets an admin aim one at cloud instance metadata (`169.254.169.254`, which issues IAM credentials to anything that asks) or an internal service. The guard resolves DNS and requires every resolved address to be public, because a hostname's text proves nothing. Set it `true` **only** on a self-hosted box whose webhook receivers genuinely live on the LAN, or whose BYOK model runs on `localhost`; development permits private targets regardless, so local testing needs no configuration. `npm run doctor` warns when it is on and the deployment looks internet-facing. See [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md#outbound-request-restrictions-allow_private_network_egress)
+- **Browser security headers**: `CSP_CONNECT_SRC` (default empty) — extra origins appended to the SPA's `connect-src` policy, read by the **web** container's nginx, not the API. Empty is correct for every topology this repo ships (nginx fronts the API, so `'self'` covers it). A **split** deployment — SPA on a CDN or a different hostname from the API — must set it to the same origin passed as `VITE_API_URL` at build time, or the browser blocks every API call. Everything else in the policy (CSP, `X-Frame-Options`, `Referrer-Policy`, `Permissions-Policy`, `Cross-Origin-Opener-Policy`) is fixed in `apps/web/nginx.conf.template`; HSTS is set by the TLS terminator in `deploy/caddy/Caddyfile.domain`. See [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md#browser-security-headers)
 - **File storage**: `STORAGE_ROOT`, `STORAGE_DOCUMENTS_DIR`, `STORAGE_AVATARS_DIR`, `STORAGE_FACE_DIR` — all empty by default, which keeps uploads exactly where they are today (under `UPLOAD_DIR`, relative to the API's working directory). Set them to move storage onto its own volume, segregated into documents / avatars / face subtrees you can back up and encrypt separately. Absolute paths only, and changing one affects new files only — nothing is moved for you, and reads fall back to the previous root. See [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md#relocating-file-storage)
 - **Log files**: `LOG_DIR` (empty = off), `LOG_ROTATE_HOURS`, `LOG_RETENTION_DAYS`, `LOG_COMPRESS_ON_ROLLOVER` — mirrors everything the process prints into rotating, date-bucketed files. Console output is never taken away, and an unwritable directory degrades to console-only with one warning rather than stopping the app. See [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md#log-files)
 - **Update checks**: `UPDATE_CHECK` (`off` disables the hourly GitHub release call — the air-gapped posture; the **What's new** page then lists the history bundled in this build's own `CHANGELOG.md`), `UPDATE_CHECK_REPO` (override for forks), `UPDATE_CHECK_TOKEN` (a read-only Contents PAT, needed only when the repo is **private**, where anonymous release lookups 404). Note that only the literal `off` disables the check — any other value, `false` included, leaves it on
@@ -710,6 +896,7 @@ See `.env.example` for all supported variables. Remember: the actual file the AP
 - [CONTRIBUTING.md](CONTRIBUTING.md) — getting a working checkout, what to run before a PR, and the "extend the existing choke point, don't add a parallel system" conventions this codebase is built on.
 - [.github/SECURITY.md](.github/SECURITY.md) — how to report a vulnerability privately, what protections already exist, and two deliberate design points worth understanding before you deploy.
 - [docs/FACE_VERIFICATION.md](docs/FACE_VERIFICATION.md) — face (identity) verification: how the server-side check works, the biometric-privacy obligations it carries, calibrating the match threshold, retention and deletion.
+- [docs/AI_AND_AUTOMATION_FOR_CHANGE.md](docs/AI_AND_AUTOMATION_FOR_CHANGE.md) — **a proposal, not shipped code**: how AI, agents and Workflow Studio could serve tickets and change management, written against the seams that already exist. Opens with the distinction the rest depends on — most of what looks like "let AI fill this in" is derivable from the linked tickets' branches, PRs and CI runs, and a derived value is auditable and free where a generated one has to be checked.
 - [docs/ROADMAP.md](docs/ROADMAP.md) — what differentiates this product today, next-feature themes (AI workflow automation, conversational analytics, integrations, billing), and how each maps to plan tiers.
 - [docs/SECURITY_DEVOPS_INTEGRATIONS.md](docs/SECURITY_DEVOPS_INTEGRATIONS.md) — connect GitHub Actions, GitLab CI, Jenkins, Bitbucket, or any internal git/CI system to the security-findings ingestion webhook (SAST/DAST/SSAT/SSCT), with copy-pasteable pipeline examples.
 - [CHANGELOG.md](CHANGELOG.md) — what each release changed; the source for GitHub release bodies and the in-app What's-new page. The release process itself is in CONTRIBUTING.md's "Releasing a version".

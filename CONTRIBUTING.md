@@ -13,6 +13,14 @@ first**: it validates `.env`, scans the machine for running MySQL servers (ident
 actual handshake, not just an open port), and tells you the specific fix. `npm run doctor:fix-env
 -w apps/api` will correct a wrong host/port in `.env` for you.
 
+**After a `git pull` you do not need to remember `npm install`.** `npm run dev` and `npm run build`
+compare `node_modules` against `package-lock.json` first (`scripts/ensure-deps.mjs`, wired to npm's
+own `predev`/`prebuild` hooks) and install when the lockfile has moved. Before that, pulling a
+release which added a dependency failed with `Cannot find package '…'` — a stack trace deep inside
+Vite naming a package you had never heard of, which never says "run npm install". It is silent when
+the tree is healthy, and it never fails the command: offline, you get a warning and the app still
+starts.
+
 Demo logins after seeding: `superadmin@timesheet.local` / `Admin@12345` (also `manager@…`,
 `employee@…`).
 
@@ -27,13 +35,26 @@ the seeded three as fixtures.
 ```bash
 npm run lint                        # typecheck api + web, then the SonarQube rules
 npm run build
-npm run test -w apps/api            # unit (mocked, no DB, ~1s)
+npm test                            # BOTH unit suites (api, then web) — mocked, no DB
+npm run test -w apps/api            # just the api tier (~1s)
+npm run test -w apps/web            # just the web tier (jsdom, ~2s)
 npm run test:integration -w apps/api # integration (real throwaway MySQL, ~13s)
 npm run test:e2e                    # Playwright (needs the dev servers, or it starts them)
 ```
 
 CI runs all of these. Run at least `lint`, `build`, and the unit tier locally — they're fast, and
 they catch most of what CI would.
+
+**Why there are two unit tiers.** `apps/api`'s vitest runs in `node`; `apps/web`'s runs in `jsdom`,
+because the one thing it currently covers — `src/lib/safe-html.ts` — is a sanitizer, and DOMPurify
+needs a DOM. That file is the *only* sanitizer for two of its callers (Ask AI's model-authored
+markdown, and the What's-new page's release notes fetched from GitHub), so it is a security control
+rather than a formatting helper.
+
+If you touch a security control, **mutation-test the suite before trusting it**: break the control on
+purpose and confirm the tests go red. Disabling `safe-html`'s hook fails 12 of its 27. This is not
+ceremony — the first version of that suite ran under `happy-dom`, where DOMPurify strips *every*
+element, so "the dangerous thing is absent" assertions passed while proving nothing at all.
 
 ### Reading `npm run lint`
 
@@ -107,6 +128,69 @@ in the **same** PR. Same for `docs/API.md` (endpoints), `docs/DATABASE.md` (sche
 `docs/ROADMAP.md` is a living audit trail, not a changelog: resolved items stay (struck through)
 alongside open ones, with dates and file references, so the history of what was found and fixed
 stays visible.
+
+### Regenerating README's "By the numbers"
+
+That table is counted, not estimated, so it goes stale silently. Re-run these from the repo root
+before a release and correct any that moved:
+
+```bash
+echo "routes      $(grep -rhoE '\.(get|post|put|patch|delete)\("' apps/api/src/controllers/*.ts | wc -l)"
+echo "controllers $(ls apps/api/src/controllers/*.ts | wc -l)"
+echo "models      $(grep -c '^model ' apps/api/prisma/schema.prisma)"
+echo "enums       $(grep -c '^enum ' apps/api/prisma/schema.prisma)"
+echo "migrations  $(ls apps/api/prisma/migrations | grep -c '^2')"
+echo "services    $(ls apps/api/src/services/*.ts | wc -l)"
+echo "workers     $(ls apps/api/src/workers/*.ts | wc -l)"
+echo "web pages   $(find apps/web/src/pages -name '*.tsx' | wc -l)"
+echo "e2e specs   $(find tests -name '*.spec.ts' | wc -l)"
+echo "permissions $(grep -cE '^\s+[A-Z_]+:\s*\"' packages/shared/src/index.ts)"
+# Template keys are a mix of quoted ("ticket.assigned") and bare (welcome), so a pattern that only
+# matches one shape silently under-counts. This one drifted to 35-against-22 for exactly that reason.
+echo "email tmpl  $(awk '/^export const SEED_TEMPLATES/{f=1} f && (/^  "[a-zA-Z_.]+": \{$/ || /^  [a-zA-Z_]+: \{$/){c++} END{print c}' apps/api/prisma/email-templates-seed.ts)"
+```
+
+Test and lint counts come from the tools themselves — `npm test -w apps/api` prints the suite total,
+and `npm run lint` prints `N problems (E errors, W warnings)`.
+
+### Checking the Mermaid diagrams
+
+`README.md` and `docs/ARCHITECTURE.md` carry Mermaid diagrams. A diagram that does not parse renders
+on GitHub as a raw red error box — strictly worse than no diagram — and nothing else here catches it,
+because a broken fence is still valid markdown. **Check one when you add or edit it.**
+
+Either paste the block into [mermaid.live](https://mermaid.live), or run the whole set through
+mermaid itself. There is deliberately no repo script for this: mermaid needs a DOM even to validate,
+so it drags in jsdom, and neither belongs in this project's dependency tree for a docs check. Node's
+ESM resolver also ignores `NODE_PATH`, so `npx -p mermaid` alone will *not* work — the checker has to
+live beside its own install:
+
+```bash
+mkdir -p /tmp/mermaid-check && cd /tmp/mermaid-check
+npm init -y && npm install mermaid@11 jsdom
+cat > check.mjs <<'EOF'
+import { readFileSync } from "node:fs";
+import { JSDOM } from "jsdom";
+const dom = new JSDOM("<!doctype html><body></body>", { pretendToBeVisual: true });
+globalThis.window = dom.window;
+globalThis.document = dom.window.document;
+const mermaid = (await import("mermaid")).default;
+mermaid.initialize({ startOnLoad: false, securityLevel: "loose" });
+let bad = 0;
+for (const f of process.argv.slice(2)) {
+  const text = readFileSync(f, "utf8").split("\r").join("");
+  for (const [, body] of text.matchAll(/```mermaid\n([\s\S]*?)```/g)) {
+    const head = body.trim().split("\n")[0];
+    try { await mermaid.parse(body); console.log("  ok   ", head); }
+    catch (e) { bad++; console.log("  FAIL ", head, "—", String(e.message).split("\n")[0]); }
+  }
+}
+process.exit(bad ? 1 : 0);
+EOF
+node check.mjs /path/to/repo/README.md /path/to/repo/docs/ARCHITECTURE.md
+```
+
+Twelve diagrams parse as of v3.0.0.
 
 ## Migrations
 

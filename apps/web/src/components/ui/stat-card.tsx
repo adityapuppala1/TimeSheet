@@ -15,7 +15,11 @@ import type { Trend } from "../../lib/trend";
 import { cn } from "../../lib/utils";
 
 export function TrendBadge({ trend, label }: { trend: Trend; label?: string }) {
-  const colorClass = trend.direction === "flat" ? "text-muted-foreground" : trend.good ? "text-success" : "text-destructive";
+  // Grey covers two different cases on purpose: a flat trend, and one whose direction carries no
+  // judgement (`good: null`) — see the Trend type. Colouring the latter would assert a reading the
+  // number does not support.
+  const colorClass =
+    trend.direction === "flat" || trend.good === null ? "text-muted-foreground" : trend.good ? "text-success" : "text-destructive";
   const Icon = trend.direction === "up" ? TrendingUp : trend.direction === "down" ? TrendingDown : Minus;
   return (
     <span className={cn("inline-flex items-center gap-0.5 text-[10px] font-semibold sm:text-xs", colorClass)} title={label}>

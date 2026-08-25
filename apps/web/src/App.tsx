@@ -12,6 +12,7 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { ReactNode } from "react";
 import { lazy, Suspense, useEffect } from "react";
+import { AppLoader } from "./components/ui/app-loader";
 import { createBrowserRouter, Navigate, RouterProvider } from "react-router";
 import { permissions, type Permission } from "@timesheet/shared";
 import { AppLayout } from "./layouts/AppLayout";
@@ -19,10 +20,9 @@ import { PlatformAdminLayout } from "./layouts/PlatformAdminLayout";
 import { authApi } from "./services/api";
 import { platformAdminAuthApi } from "./services/platform-admin-api";
 import { useAuthStore } from "./store/auth";
-import { usePlatformAdminAuthStore } from "./store/platform-admin-auth";
+import { hasSeenPlatformAdminSession, usePlatformAdminAuthStore } from "./store/platform-admin-auth";
 import { Toaster } from "./components/ui/toaster";
 import { TooltipProvider } from "./components/ui/tooltip";
-import { Skeleton } from "./components/ui/skeleton";
 import { BackendHealthGate } from "./components/BackendHealthGate";
 import { ErrorBoundary } from "./components/ErrorBoundary";
 
@@ -43,6 +43,9 @@ const TimelinePage = lazy(() => import("./pages/Timeline").then((m) => ({ defaul
 const MyWorkPage = lazy(() => import("./pages/MyWork").then((m) => ({ default: m.MyWorkPage })));
 const PortfolioPage = lazy(() => import("./pages/Portfolio").then((m) => ({ default: m.PortfolioPage })));
 const GoalsPage = lazy(() => import("./pages/Goals").then((m) => ({ default: m.GoalsPage })));
+const ChangesPage = lazy(() => import("./pages/Changes").then((m) => ({ default: m.Changes })));
+const ChangeDetailPage = lazy(() => import("./pages/ChangeDetail").then((m) => ({ default: m.ChangeDetailPage })));
+const ChangeCalendarPage = lazy(() => import("./pages/ChangeCalendar").then((m) => ({ default: m.ChangeCalendarPage })));
 const InboxPage = lazy(() => import("./pages/Inbox").then((m) => ({ default: m.InboxPage })));
 const AgentsPage = lazy(() => import("./pages/Agents").then((m) => ({ default: m.AgentsPage })));
 const StudioPage = lazy(() => import("./pages/Studio").then((m) => ({ default: m.StudioPage })));
@@ -50,6 +53,7 @@ const BlueprintsPage = lazy(() => import("./pages/Blueprints").then((m) => ({ de
 const WorkloadPage = lazy(() => import("./pages/Workload").then((m) => ({ default: m.WorkloadPage })));
 const RequestsPage = lazy(() => import("./pages/Requests").then((m) => ({ default: m.RequestsPage })));
 const ProposalsPage = lazy(() => import("./pages/Proposals").then((m) => ({ default: m.ProposalsPage })));
+const AskAi = lazy(() => import("./pages/AskAi").then((m) => ({ default: m.AskAi })));
 const AiOverviewPage = lazy(() => import("./pages/AiOverview").then((m) => ({ default: m.AiOverviewPage })));
 const DashboardsPage = lazy(() => import("./pages/Dashboards").then((m) => ({ default: m.DashboardsPage })));
 const PublicRequestFormPage = lazy(() => import("./pages/PublicRequestForm").then((m) => ({ default: m.PublicRequestFormPage })));
@@ -124,6 +128,13 @@ const router = createBrowserRouter([
       // checked inside the page for the write affordances, and the page renders its own
       // "goals are off" state for the same reason the planning pages do.
       { path: "goals", element: <PageShell><GoalsPage /></PageShell> },
+      // No RequirePermission: READING changes needs no key — a change about to take a service down
+      // is not a secret from the people who depend on it. The page renders its own "off" or
+      // "not in your plan" state, the same way the planning pages do, so somebody who lands here
+      // from a link is told which half is missing rather than bounced.
+      { path: "changes", element: <PageShell><ChangesPage /></PageShell> },
+      { path: "changes/calendar", element: <PageShell><ChangeCalendarPage /></PageShell> },
+      { path: "changes/:id", element: <PageShell><ChangeDetailPage /></PageShell> },
       // The inbox is personal: no permission, no entitlement, no feature flag. Everyone has
       // notifications, so everyone has an inbox — the same reasoning as "my-work" above.
       { path: "inbox", element: <PageShell><InboxPage /></PageShell> },
@@ -148,6 +159,7 @@ const router = createBrowserRouter([
       { path: "requests", element: <RequirePermission permission={permissions.TICKETS_VIEW}><PageShell><RequestsPage /></PageShell></RequirePermission> },
       // Readable by anyone who can see tickets; applying a suggestion needs plan:write, which
       // the page checks itself — seeing what the assistant proposed is not a privilege.
+      { path: "ask-ai", element: <RequirePermission permission={permissions.TICKETS_VIEW}><PageShell><AskAi /></PageShell></RequirePermission> },
       { path: "proposals", element: <RequirePermission permission={permissions.TICKETS_VIEW}><PageShell><ProposalsPage /></PageShell></RequirePermission> },
       // No permission gate: a dashboard shows only what its viewer can already see, so building
       // one is not a privilege. Publishing to the workspace needs dashboards:share.
@@ -159,13 +171,18 @@ const router = createBrowserRouter([
       // Version details + release notes. No permission gate: notes describe features people use,
       // and the page itself hides the admin-only update card from non-admins.
       { path: "whats-new", element: <PageShell><WhatsNewPage /></PageShell> },
-      { path: "team", element: <RequirePermission permission={permissions.TIMESHEETS_APPROVE}><PageShell><Team /></PageShell></RequirePermission> },
+      // Open to everyone: the page shows the org chart to all, and reveals the approval queue, SLA
+      // metrics and direct-reports roll-up only to an approver (see pages/Team.tsx). One page
+      // rather than a second, employee-facing copy of the same chart.
+      { path: "team", element: <PageShell><Team /></PageShell> },
       { path: "approvals", element: <RequirePermission permission={permissions.TIMESHEETS_APPROVE}><PageShell><ApprovalsPage /></PageShell></RequirePermission> },
       { path: "users", element: <RequirePermission permission={permissions.USERS_MANAGE}><PageShell><UsersPage /></PageShell></RequirePermission> },
       { path: "projects", element: <RequirePermission permission={permissions.PROJECTS_MANAGE}><PageShell><ProjectsPage /></PageShell></RequirePermission> },
       { path: "reports", element: <RequirePermission permission={permissions.REPORTS_VIEW}><PageShell><ReportsPage /></PageShell></RequirePermission> },
-      { path: "insights", element: <RequirePermission permission={permissions.REPORTS_VIEW}><PageShell><Insights /></PageShell></RequirePermission> },
-      { path: "security-insights", element: <RequirePermission permission={permissions.REPORTS_VIEW}><PageShell><SecurityInsightsPage /></PageShell></RequirePermission> },
+      // Insights and security insights are open to every authenticated member (team leads and
+      // employees included), and the matching server endpoints were broadened to match.
+      { path: "insights", element: <PageShell><Insights /></PageShell> },
+      { path: "security-insights", element: <PageShell><SecurityInsightsPage /></PageShell> },
       { path: "audit", element: <RequirePermission permission={permissions.AUDIT_VIEW}><PageShell><AuditLog /></PageShell></RequirePermission> },
       { path: "ai-activity", element: <RequirePermission permission={permissions.TICKETS_ASSIGN}><PageShell><AIActivityLog /></PageShell></RequirePermission> },
       { path: "settings", element: <RequireRole role="SUPER_ADMIN"><PageShell><WorkspaceSettingsPage /></PageShell></RequireRole> },
@@ -227,6 +244,15 @@ function AuthBootstrap() {
 function PlatformAdminAuthBootstrap() {
   const setAdmin = usePlatformAdminAuthStore((s) => s.setAdmin);
   useEffect(() => {
+    // Only try to restore a platform-admin session when there is plausibly one to restore: this
+    // browser has held one before (the marker), or the visitor deep-linked into the console. A
+    // tenant user on /app has neither, so we skip the request entirely rather than firing a
+    // guaranteed-401 `POST /platform-admin/auth/refresh` into their console on every load.
+    const onConsole = window.location.pathname.startsWith("/platform-admin");
+    if (!onConsole && !hasSeenPlatformAdminSession()) {
+      setAdmin(undefined);
+      return;
+    }
     platformAdminAuthApi
       .refresh()
       .then(() => platformAdminAuthApi.me())
@@ -277,17 +303,13 @@ function RequirePlatformAdmin({ children }: { children: ReactNode }) {
 function PageShell({ children }: { children: ReactNode }) {
   return (
     <Suspense
+      // The generic skeleton this replaced was a stack of grey bars matching no page in the app,
+      // so every lazy route flashed one layout on its way to a different one. A loader that does
+      // not pretend to be the page is more honest than a placeholder shaped like the wrong one.
+      // In-card <Skeleton>s are unaffected and still correct — see components/ui/app-loader.tsx.
       fallback={
-        <div className="mx-auto grid w-full max-w-5xl gap-4 p-4 sm:p-6">
-          <Skeleton className="h-8 w-1/3" />
-          <Skeleton className="h-4 w-1/2" />
-          <div className="grid gap-3 sm:grid-cols-2 md:grid-cols-4">
-            <Skeleton className="h-24" />
-            <Skeleton className="h-24" />
-            <Skeleton className="h-24" />
-            <Skeleton className="h-24" />
-          </div>
-          <Skeleton className="h-64" />
+        <div className="mx-auto w-full max-w-5xl p-4 sm:p-6">
+          <AppLoader label="Loading…" />
         </div>
       }
     >

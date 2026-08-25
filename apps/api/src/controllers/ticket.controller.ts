@@ -31,6 +31,7 @@ import { preserveTenantContext, upload } from "../middleware/upload.js";
 import { validate } from "../middleware/validate.js";
 import { processUpload } from "../services/attachment-storage.service.js";
 import { audit } from "../services/audit.service.js";
+import { buildTicketMetricSeriesFor } from "../services/ticket-metrics.service.js";
 import { dispatchNotification } from "../services/notify.service.js";
 import { templates } from "../services/mail-templates.js";
 import { buildTicketSecurityReport, sendTicketClosedDigest } from "../services/security-report.service.js";
@@ -44,7 +45,10 @@ import {
   applyTicketRules,
   assertTicketVisible,
   assertValidTicketType,
-  canModifyTicket,
+  canReassignTicket,
+  canWorkOnTicket,
+  REASSIGN_FORBIDDEN_MESSAGE,
+  WORK_FORBIDDEN_MESSAGE,
   canReopenClosedTicket,
   computeTicketDueDate,
   getGlobalTicketSettings,
@@ -102,6 +106,9 @@ ticketRouter.get("/", requirePermission(permissions.TICKETS_VIEW), async (req, r
   const type = typeof req.query.type === "string" && req.query.type ? req.query.type : undefined;
   const projectId = typeof req.query.projectId === "string" && req.query.projectId ? req.query.projectId : undefined;
   const assigneeId = typeof req.query.assigneeId === "string" && req.query.assigneeId ? req.query.assigneeId : undefined;
+  // "Raised by". No extra permission gate: the project scope above already decides which tickets
+  // this caller may see at all, and filtering a set you can already read reveals nothing new.
+  const reporterId = typeof req.query.reporterId === "string" && req.query.reporterId ? req.query.reporterId : undefined;
   const source = typeof req.query.source === "string" && req.query.source ? req.query.source : undefined;
   const labelId = typeof req.query.labelId === "string" && req.query.labelId ? req.query.labelId : undefined;
   // AI Activity Log: every ticket an AI classifier touched, whether email-sourced or a manually-created
@@ -117,6 +124,7 @@ ticketRouter.get("/", requirePermission(permissions.TICKETS_VIEW), async (req, r
       ...(priority ? { priority: priority as any } : {}),
       ...(type ? { type: type as any } : {}),
       ...(assigneeId ? { assigneeId } : {}),
+      ...(reporterId ? { reporterId } : {}),
       ...(source ? { source: source as any } : {}),
       ...(labelId ? { labels: { some: { labelId } } } : {}),
       ...(aiOnly ? { OR: [{ source: "EMAIL" }, { aiConfidence: { not: null } }] } : {})
@@ -161,8 +169,187 @@ ticketRouter.get("/", requirePermission(permissions.TICKETS_VIEW), async (req, r
  * registration order, so `/:id` would otherwise swallow `/suggest-assignee` as if "id" were the
  * literal string "suggest-assignee".
  */
+/** The metric route's query string, normalised. An absent or empty parameter means "no filter". */
+function readMetricFilters(req: any) {
+  const str = (key: string): string | undefined => {
+    const raw = req.query[key];
+    return typeof raw === "string" && raw ? raw : undefined;
+  };
+  const status = str("status");
+  return {
+    projectId: str("projectId"),
+    labelId: str("labelId"),
+    assigneeId: str("assigneeId"),
+    reporterId: str("reporterId"),
+    type: str("type"),
+    priority: str("priority"),
+    // The list route accepts a comma-separated status set (the dashboard asks for four at once), so
+    // this has to as well or the tiles would miscount exactly the callers that use it.
+    statusList: status ? status.split(",").map((v) => v.trim()).filter(Boolean) : undefined
+  };
+}
+
+/** `[{ status: "OPEN", _count: 4 }, …]` → `{ OPEN: 4, … }`. */
+function tallyBy<K extends string>(rows: Array<Record<K, string> & { _count: number }>, key: K): Record<string, number> {
+  const out: Record<string, number> = {};
+  for (const row of rows) out[row[key]] = row._count;
+  return out;
+}
+
+/** Folds the three-way (project × status × priority) grouping into one row per project. */
+function shapeProjectMetrics(
+  rows: Array<{ projectId: string; status: string; priority: string; _count: number }>,
+  projects: Array<{ id: string; code: string; name: string }>
+) {
+  const meta = new Map(projects.map((p) => [p.id, p]));
+  type Entry = {
+    projectId: string;
+    code: string;
+    name: string;
+    total: number;
+    open: number;
+    closed: number;
+    byStatus: Record<string, number>;
+    byPriority: Record<string, number>;
+  };
+  const perProject = new Map<string, Entry>();
+  for (const row of rows) {
+    const project = meta.get(row.projectId);
+    // A ticket whose project fell outside the caller's scope cannot appear here (the `where`
+    // already excludes it); a missing meta row therefore means a soft-deleted project, and naming
+    // it "Unknown" is more honest than dropping its tickets out of a total the tiles above show.
+    const entry: Entry = perProject.get(row.projectId) ?? {
+      projectId: row.projectId,
+      code: project?.code ?? "—",
+      name: project?.name ?? "Unknown project",
+      total: 0,
+      open: 0,
+      closed: 0,
+      byStatus: {},
+      byPriority: {}
+    };
+    entry.total += row._count;
+    // "Closed" means RESOLVED or CLOSED, the same definition counts-by-project and the status
+    // filters already use — the three must agree or the same ticket is done on one surface and
+    // open on another.
+    if (row.status === "RESOLVED" || row.status === "CLOSED") entry.closed += row._count;
+    else entry.open += row._count;
+    entry.byStatus[row.status] = (entry.byStatus[row.status] ?? 0) + row._count;
+    entry.byPriority[row.priority] = (entry.byPriority[row.priority] ?? 0) + row._count;
+    perProject.set(row.projectId, entry);
+  }
+  return [...perProject.values()].sort((a, b) => b.total - a.total);
+}
+
 /**
- * Per-project open/closed counts for ONE person's tickets.
+ * Status and priority tallies for the Tickets page's metric tiles, plus the same tallies broken
+ * down per project.
+ *
+ * WHY A COUNTING ROUTE RATHER THAN TALLYING THE LIST THE PAGE ALREADY HAS: the list is capped at
+ * `take: 200`, so counting it would silently describe the first 200 rows as if they were the whole
+ * workspace — the one thing a metric tile must never do. Two `groupBy`s answer over everything.
+ *
+ * WHY IT ACCEPTS THE SAME FILTERS AS THE LIST: the tiles sit directly above the table and are
+ * clickable filters themselves. If they counted an unfiltered workspace while the table showed a
+ * filtered slice, clicking a tile would produce a row count that disagrees with the number on the
+ * tile that was clicked. The one filter deliberately NOT applied is the dimension being counted —
+ * a status tally filtered by status would report the selected status and zero for every other.
+ *
+ * Scoped by `ticketProjectScope` exactly like the list, so these tiles can never total up work in a
+ * project the caller cannot open.
+ */
+ticketRouter.get("/metrics", requirePermission(permissions.TICKETS_VIEW), async (req, res) => {
+  const scope = await ticketProjectScope(req);
+  const empty = { total: 0, byStatus: {}, byPriority: {}, byProject: [] as unknown[], byReporter: [] as unknown[], series: null };
+  if (!scope.unrestricted && scope.projectIds.length === 0) return res.json(empty);
+
+  const { projectId, labelId, assigneeId, reporterId, type, priority, statusList } = readMetricFilters(req);
+  if (projectId) await assertTicketVisible(req, projectId);
+  // `assigneeId` here is the page's own "Assigned to me" toggle, so it may only ever be the caller —
+  // otherwise this route would report any colleague's workload to anybody holding tickets:view.
+  if (assigneeId && assigneeId !== req.user!.id && !req.user!.permissions.includes(permissions.REPORTS_VIEW)) {
+    throw new AppError(403, "You can only filter these counts by your own assignments.");
+  }
+
+  // The filters that are NOT an axis anything here counts — they narrow every tally alike.
+  const base = {
+    deletedAt: null,
+    ...(scope.unrestricted ? {} : { projectId: { in: scope.projectIds } }),
+    ...(projectId ? { projectId } : {}),
+    ...(labelId ? { labels: { some: { labelId } } } : {}),
+    ...(assigneeId ? { assigneeId } : {}),
+    ...(type ? { type } : {})
+  };
+  const statusWhere = statusList ? { status: { in: statusList as any[] } } : {};
+  const priorityWhere = priority ? { priority: priority as any } : {};
+  const reporterWhere = reporterId ? { reporterId } : {};
+
+  // Each tally drops its OWN axis and keeps every other filter. A status tally filtered by status
+  // would report the selected status and zero for everything else; the same is true of the "Raised
+  // by" options, which have to keep listing the other people a click would take you to.
+  //
+  // Named once and reused by both the tallies and their histories: the cards and their sparklines
+  // must be built over identical sets, or a chart ends somewhere other than the number above it.
+  const statusScopedWhere = { ...base, ...priorityWhere, ...reporterWhere };
+  const priorityScopedWhere = { ...base, ...statusWhere, ...reporterWhere };
+  const reporterScopedWhere = { ...base, ...statusWhere, ...priorityWhere };
+  const fullyScopedWhere = { ...base, ...statusWhere, ...priorityWhere, ...reporterWhere };
+
+  const [byStatusRows, byPriorityRows, byReporterRows, byProjectRows, projects] = await Promise.all([
+    prisma.ticket.groupBy({ by: ["status"], where: statusScopedWhere, _count: true }),
+    prisma.ticket.groupBy({ by: ["priority"], where: priorityScopedWhere, _count: true }),
+    // Who has raised tickets in this scope, so the "Raised by" picker offers exactly the people who
+    // actually appear rather than the whole user directory — most of whom have never filed one.
+    prisma.ticket.groupBy({ by: ["reporterId"], where: reporterScopedWhere, _count: true }),
+    // The per-project breakdown honours EVERY dimension: it is a summary of the current selection
+    // rather than another filter axis competing with them.
+    prisma.ticket.groupBy({ by: ["projectId", "status", "priority"], where: fullyScopedWhere, _count: true }),
+    prisma.project.findMany({
+      where: { deletedAt: null, ...(scope.unrestricted ? {} : { id: { in: scope.projectIds } }) },
+      select: { id: true, code: true, name: true }
+    })
+  ]);
+
+  // Names resolved in a second query rather than through an include, because `groupBy` cannot join.
+  // Bounded by the number of distinct reporters, not by the ticket count.
+  const reporterIds = byReporterRows.map((r) => r.reporterId).filter(Boolean);
+  const reporterNames = await prisma.user.findMany({
+    where: { id: { in: reporterIds } },
+    select: { id: true, name: true }
+  });
+  const nameById = new Map(reporterNames.map((u) => [u.id, u.name]));
+  const byReporter = byReporterRows
+    .map((row) => ({ userId: row.reporterId, name: nameById.get(row.reporterId) ?? "Unknown", count: row._count }))
+    .sort((a, b) => b.count - a.count || a.name.localeCompare(b.name));
+
+  const byStatus = tallyBy(byStatusRows, "status");
+  const byPriority = tallyBy(byPriorityRows, "priority");
+
+  // The daily history behind each card's sparkline, reconstructed from creations and status-change
+  // audits so the last point of every series IS the number printed above it. See
+  // ticket-metrics.service.ts for what is exact and what is not.
+  const series = await buildTicketMetricSeriesFor({
+    statusWhere: statusScopedWhere,
+    priorityWhere: priorityScopedWhere,
+    crossFiltered: Boolean(priority || statusList),
+    byStatus,
+    byPriority
+  });
+
+
+  res.json({
+    total: byStatusRows.reduce((sum, row) => sum + row._count, 0),
+    byStatus,
+    byPriority,
+    byProject: shapeProjectMetrics(byProjectRows, projects),
+    byReporter,
+    series
+  });
+});
+
+/**
+ * Per-project open/closed ticket counts for "My projects this month" — the PROJECT's totals, plus
+ * the caller's own share of them.
  *
  * WHY A COUNTING ROUTE RATHER THAN A LIST THE BROWSER TALLIES: the dashboard already counts open
  * tickets per project by fetching every open ticket and grouping them in the browser. That is
@@ -171,9 +358,15 @@ ticketRouter.get("/", requirePermission(permissions.TICKETS_VIEW), async (req, r
  * attachment counts and the latest CI run for each. Shipping all of that to render two numbers is the
  * kind of thing that is fine on a demo workspace and falls over on a real one.
  *
- * WHY IT IS SCOPED TO ONE ASSIGNEE AND DEFAULTS TO THE CALLER: this feeds "My projects this month". A
- * caller may ask about somebody else only with the permission that already grants a cross-user view
- * of tickets — the same rule the list route applies — so this cannot become a way to profile a
+ * WHY IT RETURNS PROJECT TOTALS AND NOT ONLY THE CALLER'S: it used to answer for one assignee only,
+ * which made the dashboard's Open/Closed/Done columns read as an em dash for anybody who logs time
+ * against a project without holding tickets in it — a super admin reviewing a team's work saw three
+ * dashes on every row and no way to tell that from "no data". `mineOpen`/`mineClosed` keep the
+ * personal figure available beside the totals.
+ *
+ * WHAT BOUNDS IT: `ticketProjectScope`, the same predicate the list route uses, so the totals can
+ * never include a project the caller cannot open. The `assigneeId` parameter still only widens to
+ * another person for a caller holding `reports:view`, so this cannot become a way to profile a
  * colleague's throughput.
  *
  * NOT month-scoped, deliberately. Both numbers are a snapshot of where the work stands now, so the
@@ -186,23 +379,31 @@ ticketRouter.get("/counts-by-project", requirePermission(permissions.TICKETS_VIE
     throw new AppError(403, "You can only see your own ticket counts.");
   }
 
-  const grouped = await prisma.ticket.groupBy({
-    by: ["projectId", "status"],
-    where: { assigneeId: requested, deletedAt: null },
-    _count: true
-  });
+  const scope = await ticketProjectScope(req);
+  if (!scope.unrestricted && scope.projectIds.length === 0) return res.json([]);
+  const visible = { deletedAt: null, ...(scope.unrestricted ? {} : { projectId: { in: scope.projectIds } }) };
+
+  const [allRows, mineRows] = await Promise.all([
+    prisma.ticket.groupBy({ by: ["projectId", "status"], where: visible, _count: true }),
+    prisma.ticket.groupBy({ by: ["projectId", "status"], where: { ...visible, assigneeId: requested }, _count: true })
+  ]);
 
   // Shaped per project here rather than in the browser, so every consumer gets the same definition of
   // "closed" — RESOLVED and CLOSED both count as done, exactly as the status filters elsewhere treat
   // them.
-  const byProject = new Map<string, { projectId: string; open: number; closed: number }>();
-  for (const row of grouped) {
-    if (!row.projectId) continue;
-    const entry = byProject.get(row.projectId) ?? { projectId: row.projectId, open: 0, closed: 0 };
-    if (row.status === "RESOLVED" || row.status === "CLOSED") entry.closed += row._count;
-    else entry.open += row._count;
-    byProject.set(row.projectId, entry);
-  }
+  type Row = { projectId: string; open: number; closed: number; mineOpen: number; mineClosed: number };
+  const byProject = new Map<string, Row>();
+  const tally = (rows: typeof allRows, openKey: "open" | "mineOpen", closedKey: "closed" | "mineClosed") => {
+    for (const row of rows) {
+      if (!row.projectId) continue;
+      const entry = byProject.get(row.projectId) ?? { projectId: row.projectId, open: 0, closed: 0, mineOpen: 0, mineClosed: 0 };
+      if (row.status === "RESOLVED" || row.status === "CLOSED") entry[closedKey] += row._count;
+      else entry[openKey] += row._count;
+      byProject.set(row.projectId, entry);
+    }
+  };
+  tally(allRows, "open", "closed");
+  tally(mineRows, "mineOpen", "mineClosed");
 
   res.json([...byProject.values()]);
 });
@@ -283,6 +484,10 @@ ticketRouter.get("/:id", requirePermission(permissions.TICKETS_VIEW), async (req
       reporter: { select: USER_SUMMARY },
       assignee: { select: USER_SUMMARY },
       watchers: { include: { user: { select: USER_SUMMARY } } },
+      collaborators: {
+        include: { user: { select: USER_SUMMARY }, addedBy: { select: { id: true, name: true } } },
+        orderBy: { createdAt: "asc" }
+      },
       labels: { include: { label: true } },
       comments: { include: { author: { select: USER_SUMMARY } }, orderBy: { createdAt: "asc" } },
       attachments: { include: { uploadedBy: { select: { id: true, name: true } } }, orderBy: { createdAt: "desc" } },
@@ -322,10 +527,19 @@ ticketRouter.get("/:id", requirePermission(permissions.TICKETS_VIEW), async (req
     select: { createdAt: true, userId: true }
   });
 
+  // The two authority answers, computed HERE rather than re-derived in the browser. The client
+  // cannot work them out: whether the viewer is the mapped manager of this ticket's reporter or
+  // assignee is a `managerId` lookup it has no data for, so a client-side guess would show an
+  // assignee dropdown that the API then refuses — the same "nav offers a page the API 403s" failure
+  // the planning layer's server-computed `effective` object exists to prevent.
+  const [canWork, canReassign] = await Promise.all([canWorkOnTicket(req, ticket), canReassignTicket(req, ticket)]);
+
   res.json({
     ...serializeTicketLinks(ticket),
     identityVerified: Boolean(lastVerification),
-    identityVerifiedAt: lastVerification?.createdAt ?? null
+    identityVerifiedAt: lastVerification?.createdAt ?? null,
+    canWork,
+    canReassign
   });
 });
 
@@ -510,10 +724,10 @@ ticketRouter.patch("/:id", requirePermission(permissions.TICKETS_WRITE), validat
   const existing = await prisma.ticket.findFirst({ where: { id: String(req.params.id), deletedAt: null } });
   if (!existing) throw new AppError(404, "Ticket not found");
   // Two different questions, both required: assertTicketVisible answers "is this ticket in a
-  // project you can see at all" (canModifyTicket can't — it returns true for any TICKETS_ASSIGN
-  // holder, tenant-wide), canModifyTicket answers "may you edit it".
+  // project you can see at all" (canWorkOnTicket can't — it answers yes for a privileged role
+  // tenant-wide), canWorkOnTicket answers "may you edit this one".
   await assertTicketVisible(req, existing.projectId);
-  if (!canModifyTicket(req, existing)) throw new AppError(403, "Forbidden");
+  if (!(await canWorkOnTicket(req, existing))) throw new AppError(403, WORK_FORBIDDEN_MESSAGE);
   if (typeof req.body.type === "string") await assertValidTicketType(req.body.type);
 
   const data: any = {};
@@ -596,11 +810,11 @@ const statusSchema = z.object({
 ticketRouter.patch("/:id/status", requirePermission(permissions.TICKETS_WRITE), validate(statusSchema), async (req, res) => {
   const existing = await prisma.ticket.findFirst({
     where: { id: String(req.params.id), deletedAt: null },
-    include: { watchers: true }
+    include: { watchers: true, collaborators: { select: { userId: true } } }
   });
   if (!existing) throw new AppError(404, "Ticket not found");
   await assertTicketVisible(req, existing.projectId);
-  if (!canModifyTicket(req, existing)) throw new AppError(403, "Forbidden");
+  if (!(await canWorkOnTicket(req, existing))) throw new AppError(403, WORK_FORBIDDEN_MESSAGE);
 
   const nextStatus = req.body.status as TicketStatus;
   const currentStatus = existing.status as TicketStatus;
@@ -670,6 +884,9 @@ ticketRouter.patch("/:id/status", requirePermission(permissions.TICKETS_WRITE), 
   if (existing.reporterId !== req.user!.id) recipients.add(existing.reporterId);
   if (existing.assigneeId && existing.assigneeId !== req.user!.id) recipients.add(existing.assigneeId);
   for (const watcher of existing.watchers) if (watcher.userId !== req.user!.id) recipients.add(watcher.userId);
+  // Collaborators are working the ticket, not merely observing it, so they hear about a status
+  // change on the same terms as the assignee rather than having to opt in as watchers.
+  for (const c of existing.collaborators) if (c.userId !== req.user!.id) recipients.add(c.userId);
 
   /**
    * The last thing anybody said on the ticket, carried into the status email as CONTEXT.
@@ -751,6 +968,11 @@ ticketRouter.patch("/:id/assign", requirePermission(permissions.TICKETS_ASSIGN),
   // when unassigning. Without this line a TEAM_LEAD scoped to one project could reassign, or
   // silently unassign, any ticket in the workspace.
   await assertTicketVisible(req, existing.projectId);
+  // Deciding WHO works on a ticket is narrower than working on it: `tickets:assign` is held
+  // tenant-wide by every manager and team lead, so on its own it let any of them reassign work
+  // they have no relationship to. Beyond the two admin roles, only the manager the reporter or
+  // assignee actually reports to gets past this.
+  if (!(await canReassignTicket(req, existing))) throw new AppError(403, REASSIGN_FORBIDDEN_MESSAGE);
 
   const isPrivileged = ["SUPER_ADMIN", "ADMIN"].includes(req.user!.role);
   if (req.body.assigneeId && !isPrivileged && !(await isProjectMember(req.body.assigneeId, existing.projectId))) {
@@ -916,6 +1138,90 @@ ticketRouter.delete("/:id/watchers/:userId", requirePermission(permissions.TICKE
   }
   await prisma.ticketWatcher.deleteMany({ where: { ticketId, userId } });
   await audit(req.user!.id, "ticket.watcher_removed", "Ticket", ticketId, { userId });
+  res.status(204).send();
+});
+
+/* ---------- Collaborators ---------- */
+
+/**
+ * Extra people who may work on a ticket.
+ *
+ * WHY THE GATE IS `canReassignTicket` AND NOT `tickets:write`: adding a collaborator grants the
+ * same authority the assignee has, so it is a decision about who does the work — the identical
+ * decision PATCH /:id/assign makes, and it would be pointless to lock reassignment down while
+ * leaving a route that hands out the same access to anybody who can edit.
+ *
+ * The assignee-membership rule from the assign route applies here too: a non-privileged granter may
+ * only add someone who is already a member of the project, so this cannot become a way to pull an
+ * outsider into work they otherwise cannot see.
+ */
+ticketRouter.post("/:id/collaborators", requirePermission(permissions.TICKETS_WRITE), async (req, res) => {
+  const ticketId = String(req.params.id);
+  const ticket = await prisma.ticket.findFirst({
+    where: { id: ticketId, deletedAt: null },
+    select: { id: true, key: true, title: true, projectId: true, reporterId: true, assigneeId: true }
+  });
+  if (!ticket) throw new AppError(404, "Ticket not found");
+  await assertTicketVisible(req, ticket.projectId);
+  if (!(await canReassignTicket(req, ticket))) throw new AppError(403, REASSIGN_FORBIDDEN_MESSAGE);
+
+  const userId = typeof req.body?.userId === "string" ? req.body.userId.trim() : "";
+  if (!userId) throw new AppError(422, "userId is required");
+
+  const target = await prisma.user.findFirst({ where: { id: userId, deletedAt: null }, select: { id: true, name: true } });
+  if (!target) throw new AppError(404, "User not found");
+  // Already the assignee, or the person who raised it: they can work on it without a row here, and
+  // a duplicate entry in the roster reads as though it granted something.
+  if (userId === ticket.assigneeId || userId === ticket.reporterId) {
+    throw new AppError(422, "That person is already the assignee or reporter on this ticket");
+  }
+
+  const isPrivileged = ["SUPER_ADMIN", "ADMIN"].includes(req.user!.role);
+  if (!isPrivileged && !(await isProjectMember(userId, ticket.projectId))) {
+    throw new AppError(422, "Collaborator is not a member of this project");
+  }
+
+  const collaborator = await prisma.ticketCollaborator.upsert({
+    where: { ticketId_userId: { ticketId, userId } },
+    update: {},
+    create: { ticketId, userId, addedById: req.user!.id },
+    include: { user: { select: USER_SUMMARY }, addedBy: { select: { id: true, name: true } } }
+  });
+  await audit(req.user!.id, "ticket.collaborator_added", "Ticket", ticketId, { userId });
+
+  // Same posture as the assign route: the person gaining the access is told, and nobody is
+  // notified about themselves.
+  if (userId !== req.user!.id) {
+    await dispatchNotification({
+      userId,
+      category: "ticket.assigned",
+      title: `Added to ticket: ${ticket.key}`,
+      body: `${req.user!.name} added you as a collaborator on "${ticket.title}".`,
+      link: `/app/tickets?open=${ticket.id}`
+    });
+  }
+
+  res.status(201).json(collaborator);
+});
+
+ticketRouter.delete("/:id/collaborators/:userId", requirePermission(permissions.TICKETS_WRITE), async (req, res) => {
+  const ticketId = String(req.params.id);
+  const ticket = await prisma.ticket.findFirst({
+    where: { id: ticketId, deletedAt: null },
+    select: { id: true, projectId: true, reporterId: true, assigneeId: true }
+  });
+  if (!ticket) throw new AppError(404, "Ticket not found");
+  await assertTicketVisible(req, ticket.projectId);
+
+  const userId = String(req.params.userId);
+  // Standing down from a ticket is not the same decision as putting somebody on one, so a
+  // collaborator may always remove themselves without needing the reassignment right.
+  if (userId !== req.user!.id && !(await canReassignTicket(req, ticket))) {
+    throw new AppError(403, REASSIGN_FORBIDDEN_MESSAGE);
+  }
+
+  await prisma.ticketCollaborator.deleteMany({ where: { ticketId, userId } });
+  await audit(req.user!.id, "ticket.collaborator_removed", "Ticket", ticketId, { userId });
   res.status(204).send();
 });
 

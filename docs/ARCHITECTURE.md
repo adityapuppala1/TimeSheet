@@ -129,9 +129,12 @@ isolation boundary (the separate physical databases are).
 ### 3.3 The AI layer — one choke point
 
 `apps/api/src/services/ai.service.ts` is the **only** place that knows how to call an LLM.
-Every capability (`classifyTicket`, `classifyChatMessage`, `findDuplicateTickets`, writing
-assistant, comment summary, workspace search, weekly digest) goes through `preflight(feature)` →
-`callChat(settings, params)`. `preflight` enforces: the workspace-wide `aiEnabled` switch, the
+Every capability goes through `preflight(feature)` → `callChat(settings, params)` — around thirty of
+them now, so the authoritative list is `ai-capability.registry.ts` rather than a sentence here that
+goes stale every release. The families: ticket and chat classification, duplicate detection, the
+writing assistant, comment summaries, weekly digests, the two face assessments, project risk
+narration, agent steps, the four change-management capabilities (§3.13), and the Ask AI answer loop
+(§3.14). `preflight` enforces: the workspace-wide `aiEnabled` switch, the
 specific feature's own toggle, and the **effective AI budget** (`min(org's own budget, plan-tier
 ceiling)`, re-read on every call so a platform admin lowering a tier's ceiling takes effect
 immediately, not after some reconciliation job). `callChat` branches on `GlobalAISettings.provider`
@@ -578,6 +581,76 @@ and cost sit beside a **measured or absent** estimate of the human time it displ
 Everything is inert until switched on: `aiPmCopilotEnabled` gates the whole family at the tier,
 profiles and flows are created off, and activation is refused while a flow has any validation error.
 
+### 3.13 Change management (V9) — a change IS a ticket
+
+The founding decision, and the one every other falls out of: `ChangeRequest` **extends** a `Ticket`
+rather than paralleling it. A change has a ticket id, and therefore has comments, attachments,
+watchers, SLA clocks, project scope, the audit trail, export, search and every automation action that
+works on a ticket — none of it re-implemented. The alternative, a second work item with its own
+everything, would have been a second product to maintain and a second place for every bug.
+
+**The gates live in the service, not the controller.** `assertLegalChangeTransition`,
+`assertReadyFor` and `assertDependenciesClear` sit in `change.service.ts` because there are now two
+callers — the API route and the Workflow Studio's `CHANGE_TRANSITION` action — and a gate that lives
+in a controller is a gate the second caller walks past. `change-automation-actions.test.ts` pins
+exactly that: an automation cannot move a change past its own requirements.
+
+**Nothing may approve a change.** Not at any autonomy level, not behind any toggle, not through a
+workflow. An approval is a statement that a named person accepts the risk, it has no undo, and the
+module exists to make that statement real. The workflow action list carries the hole deliberately:
+transition, comment and tag-collaborator exist; approve, reject and edit-after-approval do not.
+
+Four AI capabilities read the module, none of them writing directly — two narrate
+(`change_risk_narrative`, `change_conflict_brief`) and two emit proposal rows a person accepts per
+field (`change_draft_assist`, `change_pir_assist`), through the same `AiProposal` envelope §3.12
+describes. The allowlist is six prose fields; no state, risk score, schedule or outcome is reachable
+however a model replies. Reasoning in `docs/AI_AND_AUTOMATION_FOR_CHANGE.md`.
+
+### 3.14 Ask AI — an answer loop with two filters and one predicate
+
+`askWorkspaceChat` answers a question by consulting a tool registry, up to five steps, then
+answering. It is **not native tool-calling**: this is a bring-your-own-key product where the
+configured model may be anything, and "reply with exactly one JSON object — a tool request or an
+answer" works on anything that follows an instruction. A model that ignores the format degrades to
+its raw text becoming the answer.
+
+**The read surface is two files, and the split is the access boundary made structural.**
+`ai-chat-tools.ts` holds project-scoped tools that reach nothing the asker could not already open;
+`ai-chat-admin-tools.ts` holds operational ones — spend, mail, health, audit, security,
+configuration, SSO, scheduled reports, project risk — and every entry there carries an access gate
+mirroring the permission its equivalent PAGE requires. A tool in the wrong file is visible in review,
+and a test asserts nothing in the admin registry is ungated. Both are held provably read-only by a
+grep for every Prisma write verb.
+
+**One predicate, applied twice.** `ai-chat-guardrails.ts` holds `canUseTool`; `visibleTools` decides
+what the prompt may mention and `assertToolAllowed` decides what may run. Filtering only the prompt
+is security by suggestion — a model that guesses a name it never saw, or is talked into one by text
+inside a ticket, would reach a real query. Tool output then passes `sanitiseToolResult`, which
+applies the same secret masking the AI capture layer uses and one shared size cap.
+
+**Actions are a third registry with a different contract.** `ai-chat-actions.ts` holds what the
+assistant may DO: `log_timesheet_draft`, `raise_ticket`, `comment_on_ticket` and
+`draft_change_request`. The invariant is that **nothing here starts or settles an approval**. Where
+the record has a draft state the action uses it and stops — a timesheet is saved DRAFT, a change is
+raised DRAFT — because submitting either starts an approval SLA clock and, where required, an
+identity check, and an assistant must not trigger those from a sentence. Where there is no draft
+state the action says so instead of borrowing the word: a ticket starts at OPEN and a comment
+notifies its watchers, so those two publish, on the same terms the MCP server already publishes
+them.
+
+**Every action delegates its validation.** `saveTimesheet` for time, `createTicketForActor` /
+`addTicketCommentForActor` in `ticket.service.ts` for tickets and comments — shared with the MCP
+handlers so the two callers cannot drift — and `createChangeRequest`, the extracted body of
+`POST /changes`. Each publishing action declares the permission its page requires AND re-checks
+that the caller can see the project or ticket, because a workspace-wide permission is not a
+boundary.
+
+Two behaviours here were established by measurement and are load-bearing rather than stylistic;
+both are recorded in `docs/ROADMAP.md` under V9. **Only exchanges that consulted a tool become
+context for the next question** — fed its own failures back, the model copies them. And **the
+prompt is written in positives, with the read-first rule repeated at the decision point** — as
+prohibitions in the preamble it produced the refusals it forbade.
+
 ## 4. Request lifecycle (a normal, tenant-resolved API call)
 
 ```mermaid
@@ -756,6 +829,25 @@ TimeSphere calling a model. Nothing here imports `ai.service.ts` and nothing her
 | `services/agent-ledger.service.ts` + `agent-ledger-history.service.ts` | The write side (idempotent, agent-identities only, median baseline) and the read side (per entry and per zero-filled day). | `ai-capability.registry.ts` | `agent-run.service.ts#finish`, `agent.controller.ts` |
 | `services/ai-overview.service.ts` | One response describing all four surfaces, and the single next step ordered by what blocks what. | Every service above, `ai.service.ts` | `ai.controller.ts` |
 | `services/goal-progress.service.ts` + `workers/goal-digest.worker.ts` | Goal measurement derived on read, and the weekly nudge to the goal's owner that stays silent when nothing needs a look. | `plan-schedule.service.ts`, `notify.service.ts` | `goal.controller.ts`, `server.ts` |
+
+### Change management (V8)
+
+Same pure-core split as the planning layer, and for the same reason: the rules worth getting right
+here are arithmetic and predicates — what a change still owes before it can be submitted, what its
+risk actually scores, whether a stage clock has breached — and each is a pure function the tests
+drive with no database at all (`change-sla.test.ts`, `change-readiness.test.ts`).
+
+| File | Responsibility | Depends on | Called by |
+|---|---|---|---|
+| `services/change.service.ts` | The rules. `missingForSubmit` / `missingForTransition` / `assertReadyFor` (what a change owes), `computeRiskScore` + `bandForScore` (the weighted, normalised score), `resolveChangeApprovers` (the requester's manager, else every active super admin), `canDecideChange`, `assertLegalChangeTransition`, `isNoOpTransition`, `findScheduleConflicts`, and `judgeSla` / `judgeChangeSlas`. **A finished stage is judged on how long it took, never against `now`** — the alternative turns every overrun green the moment it closes. `assertChangeManagementEnabled` raises two deliberately different 403s for "switched off" and "not in your plan". | `@timesheet/shared` (`changeStateTransitions`, `CHANGE_STATE_TO_TICKET_STATUS`), `plan-limits.service.ts` | `change.controller.ts` |
+| `services/change-key.service.ts` | `PROJECTCODE-YYYYMMDD-NNNN`. Count-and-retry against the unique index, counted on the key prefix so two changes raised in the same second cannot collide. | `prisma` | `change.controller.ts` |
+| `services/change-mail.service.ts` | The two outbound mails and `audienceFor` — To is requester + implementer + approvers + collaborators, BCC is every super admin via `alwaysBcc`. Falls back to the compiled template when the editable row is missing, so the seeded row and the code path render an identical email. | `mail.service.ts`, `mail-templates.ts`, `template-store.service.ts` | `change.controller.ts` |
+| `services/change-export.service.ts` | `buildChangeWorkbook` (ExcelJS — summary sheet built from the same capped rows as its detail sheet) and `renderChangeRegisterPdf` (landscape register, HIGH risk in red, `Page N of M` via `bufferPages`). The caller owns the stream, same split as `security-report-pdf.service.ts`. | `exceljs`, `pdfkit` | `change.controller.ts` |
+| `controllers/change.controller.ts` | Every route. Static `export.*` paths are registered **before** `/:id` — Express matches in declaration order, and `/:id` otherwise swallows `export.csv` as an id. `assertMayEditChange` freezes the plan after approval while leaving outcome fields writable; `loadChangeForRunbook` deliberately does not, because filling in the runbook is post-approval work. | `change*.service.ts`, `ticket.service.ts` (`ticketProjectScope`, `assertTicketVisible`, `issueTicketKey`) | `app.ts` |
+| `pages/ChangeDetail.tsx` (web) | The thirteen-tab change page. Tabs rather than a wizard: a change is drafted over days by two or three people and read far more often than written. Fields save on blur through one shared primitive, so no section can invent its own save path. | `services/api.ts`, `lib/change-visuals.ts` | `App.tsx` |
+| `components/change/ChangeRunbook.tsx` (web) | Steps, test cases and dependencies as one shell with three column sets — the same interaction three times, written once so the third cannot drift from the first. Plus `ChangeSlaLadder`. | `services/api.ts` | `ChangeDetail.tsx` |
+| `components/change/ChangeAnalytics.tsx` (web) | Delivery health and the twelve-week trend. Every point comes from real timestamps bucketed server-side — nothing is synthesised from the current total, the same rule the ticket metric cards follow. | `recharts`, `services/api.ts` | `Changes.tsx` |
+| `pages/ChangeCalendar.tsx` (web) | 24-hour tracks rather than a month grid, because a change occupies a window and the question worth opening a calendar for is whether two windows overlap. Blackouts are drawn underneath, not filtered out. | `services/api.ts` | `App.tsx` |
 
 ### Planning layer (V6)
 
@@ -940,4 +1032,4 @@ flowchart TB
 
 ---
 
-*Last updated during: Track D (LDAP SSO), Track E (Slack/Teams/Google Chat/Telegram connectors), Track F (CI/CD, one-click installers, Kubernetes Helm chart with autoscaling).*
+*Last updated: 2026-08-20, for V9 — change management (§3.13) and the Ask AI answer loop (§3.14).*

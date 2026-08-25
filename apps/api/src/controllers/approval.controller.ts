@@ -233,7 +233,10 @@ async function persistDecision(params: {
     steps: toState(request.steps),
     stepId: step.id,
     decision,
-    isSequential: request.isSequential
+    isSequential: request.isSequential,
+    // Null for every chain but an emergency change's, and null means "all must approve" — exactly
+    // what this call did before the parameter existed.
+    quorum: request.quorum
   });
 
   await prisma.$transaction(async (tx) => {
@@ -272,6 +275,7 @@ async function persistDecision(params: {
     ticket: request.ticket?.key,
     by: params.actorLabel
   });
+
 
   try {
     if (outcome.completed) {

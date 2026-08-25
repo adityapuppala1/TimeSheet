@@ -57,7 +57,7 @@ import {
   Workflow,
   Zap
 } from "lucide-react";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Link } from "react-router";
 import { FlowCanvas, type CanvasStep } from "../components/FlowCanvas";
 import { Badge } from "../components/ui/badge";
@@ -835,6 +835,36 @@ function StepConfigFields({
   return null;
 }
 
+/**
+ * The remembered builder preference. Stored per browser rather than per account: which editor you
+ * like is a habit of the person at the keyboard, and syncing it to the server would mean a write
+ * on every toggle for something nobody else needs to know.
+ *
+ * Reads are guarded — Safari private mode throws on `localStorage` access, and a preference is
+ * never worth taking the Studio down for. The fallback is "list", the mode that works at every
+ * width, which is the right thing to be wrong about.
+ */
+const BUILDER_KEY = "timesphere.studio.builder";
+
+function readPreferredBuilder(): "list" | "canvas" {
+  try {
+    // A canvas preference only applies where the canvas is offered — the toggle is `lg`-and-up, so
+    // honouring it on a narrow window would open an editor whose steps are all hidden.
+    const wide = typeof window !== "undefined" && window.matchMedia?.("(min-width: 1024px)").matches;
+    return wide && localStorage.getItem(BUILDER_KEY) === "canvas" ? "canvas" : "list";
+  } catch {
+    return "list";
+  }
+}
+
+function writePreferredBuilder(view: "list" | "canvas"): void {
+  try {
+    localStorage.setItem(BUILDER_KEY, view);
+  } catch {
+    /* storage unavailable — the choice lasts this dialog, which is better than failing the save */
+  }
+}
+
 function FlowDialog({ flow, onClose, onSaved }: Readonly<{ flow: FlowRow | null; onClose: () => void; onSaved: () => void }>) {
   const [name, setName] = useState(flow?.name ?? "");
   const [description, setDescription] = useState(flow?.description ?? "");
@@ -846,7 +876,18 @@ function FlowDialog({ flow, onClose, onSaved }: Readonly<{ flow: FlowRow | null;
   const [steps, setSteps] = useState<FlowPayload["steps"]>(
     flow?.steps.map((s) => ({ kind: s.kind, capability: s.capability, config: s.config })) ?? []
   );
-  const [view, setView] = useState<"list" | "canvas">("list");
+  /**
+   * Which builder this flow opens in. Two genuinely different ways to author the same sequence —
+   * a guided form (every field visible, works at any width) and an n8n-style canvas (spatial, drag
+   * to reorder) — and which one somebody prefers is a lasting preference, not a per-dialog choice.
+   * So the last pick is remembered and becomes the default next time; the toggle still switches
+   * mid-edit. Canvas is only ever the default where it fits: below `lg` the toggle is not offered
+   * at all, so a remembered "canvas" would otherwise open an editor with no visible steps.
+   */
+  const [view, setView] = useState<"list" | "canvas">(() => readPreferredBuilder());
+  useEffect(() => {
+    writePreferredBuilder(view);
+  }, [view]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
 
   const catalogue = useQuery({ queryKey: ["flows", "catalogue"], queryFn: flowApi.catalogue });
@@ -1020,19 +1061,29 @@ function FlowDialog({ flow, onClose, onSaved }: Readonly<{ flow: FlowRow | null;
               <Label>Steps</Label>
               {/* The toggle is offered only where a canvas fits. Below `lg` it is not a squashed
                   canvas, it is no canvas — the same call the Gantt made. */}
-              <div className="hidden rounded-md border p-0.5 lg:flex">
-                {(["list", "canvas"] as const).map((v) => (
+              {/* Two ways to build the same sequence, and the choice sticks — see
+                  `readPreferredBuilder`. Titled rather than bare so the difference is stated:
+                  "Form" is every field at once, "Canvas" is the n8n-style graph. */}
+              <div className="hidden rounded-md border p-0.5 lg:flex" role="group" aria-label="Choose how to build this flow">
+                {(
+                  [
+                    { v: "list", label: "Form", hint: "Guided form — every field visible, works at any width." },
+                    { v: "canvas", label: "Canvas", hint: "Node graph — drag to arrange, drag past a node to reorder." }
+                  ] as const
+                ).map(({ v, label, hint }) => (
                   <button
                     key={v}
                     type="button"
                     onClick={() => setView(v)}
+                    title={hint}
+                    aria-pressed={view === v}
                     className={cn(
-                      "flex items-center gap-1.5 rounded px-2.5 py-1 text-xs capitalize transition-colors",
+                      "flex items-center gap-1.5 rounded px-2.5 py-1 text-xs transition-colors",
                       view === v ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:bg-muted"
                     )}
                   >
                     {v === "list" ? <LayoutList className="h-3 w-3" /> : <Network className="h-3 w-3" />}
-                    {v}
+                    {label}
                   </button>
                 ))}
               </div>
@@ -1043,6 +1094,9 @@ function FlowDialog({ flow, onClose, onSaved }: Readonly<{ flow: FlowRow | null;
                 <FlowCanvas
                   authoritySteps={flow?.authority.steps ?? []}
                   steps={canvasSteps}
+                  // The trigger is edited in the form above, but the canvas draws it as the start
+                  // node so the graph reads the way an n8n one does: something sets it off.
+                  trigger={{ label: TRIGGERS.find((t) => t.value === trigger)?.label ?? "Trigger" }}
                   readOnly={false}
                   selectedId={selectedId}
                   onSelect={setSelectedId}

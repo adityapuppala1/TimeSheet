@@ -52,7 +52,19 @@ export const DOMAIN_EVENTS = [
   "proposal.applied",
   "proposal.undone",
   "agent.run_finished",
-  "agent.run_blocked"
+  "agent.run_blocked",
+  /* Change management. Internal only for now: promoting any of these to WEBHOOK_EVENTS is a
+     promise to customers about the payload shape, and that is worth making once the module has
+     been used rather than on the day it ships. */
+  "change.submitted",
+  "change.awaiting_approval",
+  "change.approved",
+  "change.rejected",
+  "change.scheduled",
+  "change.implementing",
+  "change.pir",
+  "change.closed",
+  "change.cancelled"
 ] as const;
 
 export type DomainEvent = (typeof DOMAIN_EVENTS)[number];

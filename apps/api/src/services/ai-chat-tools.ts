@@ -1,0 +1,432 @@
+/**
+ * WHAT: the tools the Ask AI page's answer loop may consult — tickets, changes, timesheets, metrics,
+ * the agent roster and the workflow list.
+ *
+ * EVERY TOOL IS A READ, AND THAT IS THE DESIGN, NOT THE FIRST DRAFT. The chat answers questions; it
+ * does not act. An action taken from a chat transcript has no review step, no proposal row and no
+ * undo, which is everything this product's AI layer is built to avoid — so the loop can LOOK at
+ * anything the asking person could open in the app, and change nothing. Where an answer naturally
+ * leads to an action ("raise a change for this"), the model is told to point at the page where a
+ * person does it. The guard test greps this file for prisma write verbs, so a write added here
+ * fails a test rather than shipping quietly.
+ *
+ * EVERY TOOL RUNS AS THE ASKING USER. Ticket and change reads go through the same
+ * `ticketProjectScope` the pages use; the timesheet report tool checks the same permission the
+ * Reports page requires and says "not permitted" as DATA rather than throwing — the model should
+ * tell the person that, not crash the answer.
+ *
+ * EVERY TOOL CARRIES A `group` AND AN OPTIONAL `access`. The group is what the "what can I ask"
+ * panel sorts by; the access is what `ai-chat-guardrails.ts` filters on, twice — once when building
+ * the prompt, once before running. The tools in THIS file are scoped by project and need no gate
+ * beyond the route's own; the operational ones live in `ai-chat-admin-tools.ts`, where every entry
+ * names a permission. The exported registry is the two concatenated, so callers see one list.
+ *
+ * WHO CALLS THIS: `ai.service.ts#askWorkspaceChat`, one tool per loop step.
+ */
+import { permissions } from "@timesheet/shared";
+import { prisma } from "../config/prisma.js";
+import { ticketProjectScope } from "./ticket.service.js";
+import { AI_CHAT_ADMIN_TOOLS } from "./ai-chat-admin-tools.js";
+import type { ToolAccess } from "./ai-chat-guardrails.js";
+
+/** What the model sees per tool: the name it must use, and when to use it. */
+export interface AiChatToolSpec {
+  readonly name: string;
+  readonly description: string;
+  /** Argument hints, shown to the model verbatim. Loose on purpose — the executor validates. */
+  readonly args: string;
+  /** The area this belongs to — what the capabilities panel groups by. */
+  readonly group: string;
+  /** Absent means "anyone who can reach the page", which the route already gates. */
+  readonly access?: ToolAccess;
+  /** True only in the actions registry. Surfaced in the panel so "reads" and "does" stay visibly apart. */
+  readonly acts?: boolean;
+  /** True for an action whose result is immediately visible to OTHER PEOPLE — a ticket on a board, a
+   *  comment that notifies watchers. The panel must not describe these as drafts: `Ticket` and
+   *  `TicketComment` have no unpublished state, and a label promising a review step that does not
+   *  exist is worse than no label. False/absent means the action stops at a draft the person
+   *  submits themselves. */
+  readonly publishes?: boolean;
+}
+
+/** The request-shaped context every executor needs — who is asking, with which permissions. */
+export interface AiChatToolContext {
+  req: { user: { id: string; role: string; permissions: string[] } };
+}
+
+/** One result cap for every tool. A tool that returns 40KB of tickets drowns the question. */
+const RESULT_CHAR_CAP = 2400;
+
+const clip = (text: string): string => (text.length > RESULT_CHAR_CAP ? `${text.slice(0, RESULT_CHAR_CAP)}\n…(truncated)` : text);
+
+const CLOSED_TICKET = new Set(["RESOLVED", "CLOSED"]);
+
+async function scopeWhere(ctx: AiChatToolContext) {
+  const scope = await ticketProjectScope(ctx.req);
+  return scope.unrestricted ? {} : { projectId: { in: scope.projectIds } };
+}
+
+export type AiChatTool = AiChatToolSpec & { run: (args: Record<string, unknown>, ctx: AiChatToolContext) => Promise<string> };
+
+const EVERYDAY_TOOLS: ReadonlyArray<AiChatTool> = [
+  {
+    name: "search_tickets",
+    group: "Tickets",
+    description: "Find tickets by text, status or priority. Use before answering anything about specific tickets.",
+    args: '{ "query"?: string, "status"?: string, "priority"?: string, "limit"?: number }',
+    run: async (args, ctx) => {
+      const where = {
+        deletedAt: null,
+        ...(await scopeWhere(ctx)),
+        ...(typeof args.status === "string" && args.status ? { status: args.status as never } : {}),
+        ...(typeof args.priority === "string" && args.priority ? { priority: args.priority as never } : {}),
+        ...(typeof args.query === "string" && args.query
+          ? { OR: [{ title: { contains: args.query } }, { key: { contains: args.query } }] }
+          : {})
+      };
+      const rows = await prisma.ticket.findMany({
+        where,
+        select: { key: true, title: true, status: true, priority: true, assignee: { select: { name: true } }, project: { select: { code: true } } },
+        orderBy: { updatedAt: "desc" },
+        take: Math.min(Number(args.limit) || 20, 40)
+      });
+      if (rows.length === 0) return "No tickets matched.";
+      return clip(rows.map((t) => `[${t.key}] (${t.status}, ${t.priority}, ${t.project.code}) ${t.title}${t.assignee ? ` — ${t.assignee.name}` : ""}`).join("\n"));
+    }
+  },
+  {
+    name: "get_ticket",
+    group: "Tickets",
+    description: "One ticket in detail, by its key.",
+    args: '{ "key": string }',
+    run: async (args, ctx) => {
+      const ticket = await prisma.ticket.findFirst({
+        where: { key: String(args.key ?? ""), deletedAt: null, ...(await scopeWhere(ctx)) },
+        select: {
+          key: true, title: true, status: true, priority: true, type: true, description: true, dueAt: true,
+          assignee: { select: { name: true } }, reporter: { select: { name: true } }, project: { select: { name: true } },
+          _count: { select: { comments: true, attachments: true } }
+        }
+      });
+      if (!ticket) return "No such ticket in your accessible projects.";
+      const text = (ticket.description ?? "").replace(/<[^>]*>/g, " ").replace(/\s+/g, " ").trim().slice(0, 600);
+      return clip(
+        `[${ticket.key}] ${ticket.title}\nProject: ${ticket.project.name} · ${ticket.type} · ${ticket.status} · ${ticket.priority}` +
+          `\nReporter: ${ticket.reporter.name} · Assignee: ${ticket.assignee?.name ?? "unassigned"} · Due: ${ticket.dueAt?.toISOString().slice(0, 10) ?? "none"}` +
+          `\nComments: ${ticket._count.comments} · Attachments: ${ticket._count.attachments}` +
+          (text ? `\nDescription: ${text}` : "")
+      );
+    }
+  },
+  {
+    name: "ticket_metrics",
+    group: "Tickets",
+    description: "Ticket counts by status and priority across the person's accessible projects.",
+    args: "{}",
+    run: async (_args, ctx) => {
+      const where = { deletedAt: null, ...(await scopeWhere(ctx)) };
+      const [byStatus, byPriority] = await Promise.all([
+        prisma.ticket.groupBy({ by: ["status"], where, _count: true }),
+        prisma.ticket.groupBy({ by: ["priority"], where, _count: true })
+      ]);
+      const open = byStatus.filter((r) => !CLOSED_TICKET.has(String(r.status))).reduce((sum, r) => sum + r._count, 0);
+      return (
+        `Open (not resolved/closed): ${open}\n` +
+        `By status: ${byStatus.map((r) => `${r.status}=${r._count}`).join(", ")}\n` +
+        `By priority: ${byPriority.map((r) => `${r.priority}=${r._count}`).join(", ")}`
+      );
+    }
+  },
+  {
+    name: "list_changes",
+    group: "Change management",
+    description: "Change requests, optionally by state or risk level. Use for anything about change management.",
+    args: '{ "state"?: string, "riskLevel"?: string, "limit"?: number }',
+    run: async (args, ctx) => {
+      const scope = await ticketProjectScope(ctx.req);
+      const rows = await prisma.changeRequest.findMany({
+        where: {
+          ...(scope.unrestricted ? {} : { ticket: { projectId: { in: scope.projectIds } } }),
+          ...(typeof args.state === "string" && args.state ? { state: args.state as never } : {}),
+          ...(typeof args.riskLevel === "string" && args.riskLevel ? { riskLevel: args.riskLevel as never } : {})
+        },
+        select: {
+          changeKey: true, state: true, riskLevel: true, riskScore: true, changeKind: true, environment: true,
+          plannedStart: true, outcome: true, ticket: { select: { title: true } }
+        },
+        orderBy: { createdAt: "desc" },
+        take: Math.min(Number(args.limit) || 15, 30)
+      });
+      if (rows.length === 0) return "No changes matched.";
+      return clip(
+        rows
+          .map(
+            (c) =>
+              `[${c.changeKey}] (${c.state}, ${c.riskLevel} ${c.riskScore}/100, ${c.changeKind}, ${c.environment}) ${c.ticket.title}` +
+              (c.plannedStart ? ` — window ${c.plannedStart.toISOString().slice(0, 16).replace("T", " ")}` : "") +
+              (c.outcome ? ` — outcome ${c.outcome}` : "")
+          )
+          .join("\n")
+      );
+    }
+  },
+  {
+    name: "change_metrics",
+    group: "Change management",
+    description: "Change counts by state and risk, plus how many are in flight.",
+    args: "{}",
+    run: async (_args, ctx) => {
+      const scope = await ticketProjectScope(ctx.req);
+      const where = scope.unrestricted ? {} : { ticket: { projectId: { in: scope.projectIds } } };
+      const [byState, byRisk] = await Promise.all([
+        prisma.changeRequest.groupBy({ by: ["state"], where, _count: true }),
+        prisma.changeRequest.groupBy({ by: ["riskLevel"], where, _count: true })
+      ]);
+      const resting = new Set(["DRAFT", "CLOSED", "REJECTED", "CANCELLED"]);
+      const inFlight = byState.filter((r) => !resting.has(String(r.state))).reduce((sum, r) => sum + r._count, 0);
+      return (
+        `In flight: ${inFlight}\n` +
+        `By state: ${byState.map((r) => `${r.state}=${r._count}`).join(", ") || "none"}\n` +
+        `By risk: ${byRisk.map((r) => `${r.riskLevel}=${r._count}`).join(", ") || "none"}`
+      );
+    }
+  },
+  {
+    name: "my_timesheets",
+    group: "Timesheets",
+    description: "The asking person's OWN recent timesheet entries. Dates are YYYY-MM-DD.",
+    args: '{ "from"?: string, "to"?: string }',
+    run: async (args, ctx) => {
+      const from = typeof args.from === "string" && args.from ? new Date(args.from) : new Date(Date.now() - 14 * 86_400_000);
+      const to = typeof args.to === "string" && args.to ? new Date(args.to) : new Date();
+      const rows = await prisma.timesheet.findMany({
+        where: { userId: ctx.req.user.id, deletedAt: null, workDate: { gte: from, lte: to } },
+        select: { workDate: true, totalHours: true, status: true, activityType: true, project: { select: { code: true } } },
+        orderBy: { workDate: "desc" },
+        take: 60
+      });
+      if (rows.length === 0) return "No entries in that range.";
+      const total = rows.reduce((sum, r) => sum + Number(r.totalHours ?? 0), 0);
+      return clip(
+        `${rows.length} entries, ${total.toFixed(1)}h total (${from.toISOString().slice(0, 10)} to ${to.toISOString().slice(0, 10)}):\n` +
+          rows.map((r) => `${r.workDate.toISOString().slice(0, 10)} ${r.project?.code ?? "—"} ${Number(r.totalHours).toFixed(1)}h ${r.activityType} (${r.status})`).join("\n")
+      );
+    }
+  },
+  {
+    name: "timesheet_stats",
+    group: "Timesheets",
+    description:
+      "Counts and hours BY STATUS — approved, pending, draft, rejected. The asking person's own by default; scope 'workspace' needs the reports permission. This is the tool for 'how many entries are approved', 'hours pending approval', 'my rejected entries'.",
+    args: '{ "scope"?: "mine" | "workspace", "from"?: "YYYY-MM-DD", "to"?: "YYYY-MM-DD" }',
+    run: async (args, ctx) => {
+      const workspace = args.scope === "workspace";
+      if (workspace && !ctx.req.user.permissions.includes(permissions.REPORTS_VIEW)) {
+        return "Not permitted: workspace-wide figures need the reports permission the asking person does not hold. Their OWN figures are available with scope 'mine'.";
+      }
+      const from = typeof args.from === "string" && args.from ? new Date(args.from) : null;
+      const to = typeof args.to === "string" && args.to ? new Date(args.to) : null;
+      if ((from && Number.isNaN(from.getTime())) || (to && Number.isNaN(to.getTime()))) {
+        return "Invalid dates — use YYYY-MM-DD.";
+      }
+      const rows = await prisma.timesheet.groupBy({
+        by: ["status"],
+        where: {
+          deletedAt: null,
+          ...(workspace ? {} : { userId: ctx.req.user.id }),
+          ...(from || to ? { workDate: { ...(from ? { gte: from } : {}), ...(to ? { lte: to } : {}) } } : {})
+        },
+        _count: true,
+        _sum: { totalHours: true }
+      });
+      if (rows.length === 0) return "No entries matched.";
+      const scopeLabel = workspace ? "workspace-wide" : "the asking person's own entries";
+      const range = from || to ? ` (${from ? from.toISOString().slice(0, 10) : "start"} to ${to ? to.toISOString().slice(0, 10) : "now"})` : " (all time)";
+      const lines = rows.map((r) => `${r.status}: ${r._count} entries, ${Number(r._sum.totalHours ?? 0).toFixed(1)}h`);
+      return `By status, ${scopeLabel}${range}:` + String.fromCharCode(10) + lines.join(String.fromCharCode(10));
+    }
+  },
+  {
+    name: "timesheet_report",
+    group: "Timesheets",
+    access: { permission: permissions.REPORTS_VIEW },
+    description: "Workspace-wide approved-hours totals by project over a range. Needs the reports permission.",
+    args: '{ "from": string, "to": string }',
+    run: async (args, ctx) => {
+      // Answered as data, not thrown: "you cannot see this" is the correct ANSWER for somebody
+      // without the permission, and the model should say it rather than the request failing.
+      if (!ctx.req.user.permissions.includes(permissions.REPORTS_VIEW)) {
+        return "Not permitted: the asking person does not hold the reports permission, so workspace-wide hours are not visible to them.";
+      }
+      const from = new Date(String(args.from ?? ""));
+      const to = new Date(String(args.to ?? ""));
+      if (Number.isNaN(from.getTime()) || Number.isNaN(to.getTime())) return "Invalid dates — use YYYY-MM-DD.";
+      const rows = await prisma.timesheet.groupBy({
+        by: ["projectId"],
+        where: { deletedAt: null, status: "APPROVED", workDate: { gte: from, lte: to } },
+        _sum: { totalHours: true }
+      });
+      if (rows.length === 0) return "No approved hours in that range.";
+      const projects = await prisma.project.findMany({
+        where: { id: { in: rows.map((r) => r.projectId).filter((id): id is string => Boolean(id)) } },
+        select: { id: true, code: true, name: true }
+      });
+      const nameOf = new Map(projects.map((p) => [p.id, `${p.code} (${p.name})`]));
+      return clip(
+        rows
+          .sort((a, b) => Number(b._sum.totalHours ?? 0) - Number(a._sum.totalHours ?? 0))
+          .map((r) => `${nameOf.get(r.projectId ?? "") ?? "Unknown"}: ${Number(r._sum.totalHours ?? 0).toFixed(1)}h approved`)
+          .join("\n")
+      );
+    }
+  },
+  {
+    name: "list_projects",
+    group: "Projects",
+    description: "Projects with their codes, modules and submodules. The tool for any question about project structure, module counts or submodule counts — and for finding a code before logging time.",
+    args: "{}",
+    run: async (_args, ctx) => {
+      const scope = await ticketProjectScope(ctx.req);
+      const rows = await prisma.project.findMany({
+        where: { deletedAt: null, ...(scope.unrestricted ? {} : { id: { in: scope.projectIds } }) },
+        // Submodules included: "how many submodules does X have" was asked in the field and
+        // declined, because the hierarchy stopped one level short of what the schema holds.
+        select: { code: true, name: true, modules: { take: 30, select: { name: true, submodules: { take: 20, select: { name: true } } } } },
+        orderBy: { code: "asc" },
+        take: 40
+      });
+      if (rows.length === 0) return "No accessible projects.";
+      return clip(
+        rows
+          .map((r) => {
+            const modules = r.modules
+              .map((m) => (m.submodules.length ? `${m.name} [${m.submodules.map((sub) => sub.name).join("; ")}]` : m.name))
+              .join(", ");
+            return `${r.code} — ${r.name} (modules: ${modules || "none"})`;
+          })
+          .join(String.fromCharCode(10))
+      );
+    }
+  },
+  {
+    name: "find_people",
+    group: "People",
+    description:
+      "The people the asking person can already see: admins get the whole directory; everyone else gets themselves, their manager, and their direct reports. Names, roles, designations.",
+    args: '{ "query"?: string }',
+    run: async (args, ctx) => {
+      const query = typeof args.query === "string" ? args.query.trim() : "";
+      // The same line the app draws elsewhere: /api/users needs the manage permission, and the org
+      // chart shows non-privileged people their own subtree. A chat tool must not out-see the pages.
+      const privileged = ["SUPER_ADMIN", "ADMIN"].includes(ctx.req.user.role);
+      const where = privileged
+        ? { deletedAt: null, isAgent: false, ...(query ? { name: { contains: query } } : {}) }
+        : {
+            deletedAt: null,
+            isAgent: false,
+            OR: [{ id: ctx.req.user.id }, { managerId: ctx.req.user.id }, { reports: { some: { id: ctx.req.user.id } } }],
+            ...(query ? { name: { contains: query } } : {})
+          };
+      const rows = await prisma.user.findMany({
+        where,
+        select: { name: true, designation: true, role: { select: { name: true } }, manager: { select: { name: true } } },
+        orderBy: { name: "asc" },
+        take: 30
+      });
+      if (rows.length === 0) {
+        return privileged
+          ? "Nobody matched."
+          : "Nobody matched within the people visible to the asking person (themselves, their manager, their reports). The full directory needs an admin role.";
+      }
+      return clip(
+        rows
+          .map((u) => `${u.name} — ${u.role.name}${u.designation ? `, ${u.designation}` : ""}${u.manager ? ` (manager: ${u.manager.name})` : ""}`)
+          .join(String.fromCharCode(10))
+      );
+    }
+  },
+  {
+    name: "goals_overview",
+    description: "Goals and OKRs with their status and progress. The tool for 'how are our goals tracking'.",
+    args: "{}",
+    group: "Goals",
+    run: async () => {
+      const rows = await prisma.goal.findMany({
+        where: { deletedAt: null },
+        select: { title: true, status: true, targetValue: true, unit: true, manualProgressPct: true, owner: { select: { name: true } }, endDate: true },
+        orderBy: { createdAt: "desc" },
+        take: 25
+      });
+      if (rows.length === 0) return "No goals defined.";
+      return clip(
+        rows
+          .map((g) => {
+            // Progress is either hand-entered or derived from links; there is no single stored
+            // percentage, so a manual figure is reported as one and everything else as its target.
+            const progress =
+              g.manualProgressPct !== null
+                ? ` ${g.manualProgressPct}%`
+                : g.targetValue
+                  ? ` target ${Number(g.targetValue)}${g.unit ?? ""}`
+                  : "";
+            return `${g.title} (${g.status}${progress})${g.owner ? ` — ${g.owner.name}` : ""}${g.endDate ? `, due ${g.endDate.toISOString().slice(0, 10)}` : ""}`;
+          })
+          .join(String.fromCharCode(10))
+      );
+    }
+  },
+  {
+    name: "list_agents",
+    group: "Automation",
+    description: "The AI teammate roster — each agent's name and what it owns.",
+    args: "{}",
+    run: async () => {
+      const rows = await prisma.agentProfile.findMany({
+        where: { deletedAt: null },
+        select: { name: true, emoji: true, enabled: true, capabilities: true },
+        take: 30
+      });
+      if (rows.length === 0) return "No agents configured.";
+      const lines = rows.map(
+        (a) => `${a.emoji} ${a.name} (${a.enabled ? "on" : "off"}): ${Array.isArray(a.capabilities) ? (a.capabilities as string[]).join(", ") : "no capabilities"}`
+      );
+      return clip(lines.join("\n"));
+    }
+  },
+  {
+    name: "list_workflows",
+    group: "Automation",
+    description: "Workflow Studio flows — name, trigger, and whether each is switched on.",
+    args: "{}",
+    run: async () => {
+      const rows = await prisma.automationFlow.findMany({
+        where: { deletedAt: null },
+        select: { name: true, emoji: true, trigger: true, triggerConfig: true, enabled: true },
+        take: 30
+      });
+      if (rows.length === 0) return "No workflows built yet.";
+      return clip(
+        rows
+          .map((f) => {
+            const config = f.triggerConfig as { event?: string; cron?: string };
+            const trigger = f.trigger === "EVENT" ? `on ${config.event ?? "an event"}` : f.trigger === "SCHEDULE" ? `cron ${config.cron ?? ""}` : f.trigger.toLowerCase();
+            return `${f.emoji} ${f.name} (${f.enabled ? "on" : "off"}) — ${trigger}`;
+          })
+          .join("\n")
+      );
+    }
+  }
+];
+
+/**
+ * The whole read surface: project-scoped tools first, operational ones after.
+ *
+ * Concatenated rather than merged by hand so the two files stay independently reviewable — the
+ * question "which tools reach past the asking person's projects" is answered by which FILE a tool is
+ * in, not by reading every entry.
+ */
+export const AI_CHAT_TOOLS: ReadonlyArray<AiChatTool> = [...EVERYDAY_TOOLS, ...AI_CHAT_ADMIN_TOOLS];
+
+export function findAiChatTool(name: string) {
+  return AI_CHAT_TOOLS.find((t) => t.name === name);
+}

@@ -65,7 +65,20 @@ export const permissions = {
   /// Create/edit/close goals and record progress overrides. Reading is open to any signed-in
   /// user — a goal nobody can see aligns nobody. Same migration-backfill rule as the V6 block
   /// above: the key must ALSO be inserted by idempotent SQL inside the migration introducing it.
-  GOALS_MANAGE: "goals:manage"
+  GOALS_MANAGE: "goals:manage",
+
+  /// --- Change management (V8 phase 11) -----------------------------------------------------
+  /// Reading is open to any signed-in user within their project scope: a change that is about to
+  /// take a service down is not a secret from the people who depend on it. Same migration-backfill
+  /// rule as the V6 and goals blocks above — the seed is a one-time bootstrap and never runs on
+  /// upgrade, so each key must ALSO be inserted by idempotent SQL inside the migration.
+  CHANGES_WRITE: "changes:write",
+  /// Decide an approval step that was assigned to you. Deliberately separate from CHANGES_WRITE:
+  /// raising a change and signing one off are different authorities, and the person who wrote it
+  /// must not be able to wave it through.
+  CHANGES_APPROVE: "changes:approve",
+  /// Approval policies, categories, freeze windows, force-close.
+  CHANGES_MANAGE: "changes:manage"
 } as const;
 
 export type Permission = (typeof permissions)[keyof typeof permissions];
@@ -223,6 +236,24 @@ export interface NotificationPreferences {
   /** Monday morning, to a goal's OWNER: which of their goals are off track and which periods close
    *  this week. Off by default like every other digest, and silent in a week with nothing to say. */
   emailGoalDigest: boolean;
+
+  /* --- Change management (V8 phase 11). Transactional messages ship ON, the digest ships OFF —
+     the same rule every other block here follows. Muting one suppresses only the EMAIL leg; the
+     in-app bell always fires, because a change approval that goes silent because somebody tidied
+     their mail settings is a governance hole rather than a preference. --- */
+  emailChangeSubmitted: boolean;
+  emailChangeApprovalRequested: boolean;
+  emailChangeApproved: boolean;
+  emailChangeRejected: boolean;
+  emailChangeScheduled: boolean;
+  emailChangeWindowReminder: boolean;
+  emailChangeImplementationStarted: boolean;
+  emailChangeCompleted: boolean;
+  emailChangeFailed: boolean;
+  emailChangePirDue: boolean;
+  emailChangeFreezeConflict: boolean;
+  emailChangeOverdueApproval: boolean;
+  emailChangeWeeklyDigest: boolean;
 }
 
 export const notificationPreferenceKeys: ReadonlyArray<keyof NotificationPreferences> = [
@@ -255,7 +286,20 @@ export const notificationPreferenceKeys: ReadonlyArray<keyof NotificationPrefere
   "emailAiAutonomyApplied",
   "emailMaintenanceScheduled",
   "emailWorkflowApproval",
-  "emailGoalDigest"
+  "emailGoalDigest",
+  "emailChangeSubmitted",
+  "emailChangeApprovalRequested",
+  "emailChangeApproved",
+  "emailChangeRejected",
+  "emailChangeScheduled",
+  "emailChangeWindowReminder",
+  "emailChangeImplementationStarted",
+  "emailChangeCompleted",
+  "emailChangeFailed",
+  "emailChangePirDue",
+  "emailChangeFreezeConflict",
+  "emailChangeOverdueApproval",
+  "emailChangeWeeklyDigest"
 ];
 
 /**
@@ -389,6 +433,20 @@ export interface GlobalAISettings {
   /** Gates ai.service.ts#explainThresholdRecommendation — narrates (never sets) the
    *  deterministically-computed face-match threshold recommendation. */
   facePolicyCopilotEnabled: boolean;
+  /** Gates ai.service.ts#narrateChangeRisk — explains a change's ALREADY-COMPUTED risk score in
+   *  prose. Never scores, and never approves: approving is excluded at every autonomy level, since
+   *  it is a named person accepting risk with no undo. */
+  changeRiskNarrativeEnabled: boolean;
+  /** Gates ai.service.ts#draftChangeSections — drafts the prose sections that BLOCK a change's
+   *  submission. Never writes them: each section becomes a proposal row a person accepts or
+   *  rejects. Capped at SUGGEST permanently. */
+  changeDraftAssistEnabled: boolean;
+  /** Gates ai.service.ts#briefChangeConflicts — reads computed schedule conflicts and says which
+   *  matters. Reports; moves nothing. */
+  changeConflictBriefEnabled: boolean;
+  /** Gates ai.service.ts#draftPostImplementationReview — drafts the PIR from what was recorded while
+   *  the change ran. A proposal, never a write. */
+  changePirAssistEnabled: boolean;
   /** Gates ai.service.ts#generateBugPatternDigest — monthly "what keeps breaking" recap over
    *  recurring CI failures and security-finding hotspots. See workers/bug-pattern-digest.worker.ts. */
   bugPatternDigestEnabled: boolean;
@@ -586,6 +644,13 @@ export interface PlanTierLimits {
   goalsEnabled: boolean;
   /** Ceiling on ACTIVE goals; 0 = the tier cannot use goals at all. */
   maxGoals: number;
+
+  /* --- Change management (V8 phase 11) --------------------------------------------------- */
+  /** Request/assess/approve/schedule/review changes. Fails CLOSED like every capability here. */
+  changeManagementEnabled: boolean;
+  /** Ceiling on approval POLICIES. Never on changes themselves — a workspace must always be able
+   *  to record a change it actually made, whatever its plan says. */
+  maxChangePolicies: number;
 }
 
 export const PLAN_TIER_LIMITS: Record<PlanTier, PlanTierLimits> = {
@@ -607,7 +672,9 @@ export const PLAN_TIER_LIMITS: Record<PlanTier, PlanTierLimits> = {
     maxCustomFields: 0,
     maxDashboards: 0,
     goalsEnabled: false,
-    maxGoals: 0
+    maxGoals: 0,
+    changeManagementEnabled: false,
+    maxChangePolicies: 0
   },
   TEAM: {
     seatLimit: UNLIMITED_SEATS,
@@ -632,7 +699,12 @@ export const PLAN_TIER_LIMITS: Record<PlanTier, PlanTierLimits> = {
     // Goals are an everyday alignment surface, not an enterprise luxury — Team gets them with a
     // ceiling. Measured sources read data the tier already holds, so there is no added cost.
     goalsEnabled: true,
-    maxGoals: 25
+    maxGoals: 25,
+    // Change control is governance, not a luxury — a ten-person team shipping to production needs
+    // a backout plan as much as a bank does. Team gets it with a policy ceiling; the ceiling is
+    // what Enterprise buys off, not the capability.
+    changeManagementEnabled: true,
+    maxChangePolicies: 5
   },
   ENTERPRISE: {
     seatLimit: UNLIMITED_SEATS,
@@ -652,7 +724,9 @@ export const PLAN_TIER_LIMITS: Record<PlanTier, PlanTierLimits> = {
     maxCustomFields: UNLIMITED_PLAN_ITEMS,
     maxDashboards: UNLIMITED_PLAN_ITEMS,
     goalsEnabled: true,
-    maxGoals: UNLIMITED_PLAN_ITEMS
+    maxGoals: UNLIMITED_PLAN_ITEMS,
+    changeManagementEnabled: true,
+    maxChangePolicies: UNLIMITED_PLAN_ITEMS
   }
 };
 
@@ -841,4 +915,210 @@ export interface GlobalPlanningSettings {
   defaultWeeklyCapacityHours: number;
   updatedAt: string;
   updatedById: string | null;
+}
+
+/* ------------------------------------------------------------------ *
+ * CHANGE MANAGEMENT (V8 phase 11) — the vocabulary both apps agree on.
+ *
+ * Everything here is shared for the same reason `ticketStatusTransitions` is: the API decides
+ * whether a move is legal and the UI decides which buttons to offer, and those two answers must
+ * come from one table or the UI eventually offers a move the server refuses.
+ * ------------------------------------------------------------------ */
+
+/**
+ * The four change types, and why there are four rather than ITIL's three.
+ *
+ * STANDARD, NORMAL and EMERGENCY are the classic vocabulary: pre-approved routine work, planned work
+ * that earns a decision, and work that cannot wait for one.
+ *
+ * MAJOR IS NOT A FOURTH PEER — it is NORMAL escalated, and it exists because two obligations cannot
+ * be derived from the risk score:
+ *
+ *   1. `requiresBackoutPlan` — a MAJOR change needs one even when impact × likelihood bands it LOW.
+ *      A platform migration can be low-impact and low-likelihood on every parameter and still be the
+ *      thing you must be able to undo. The matrix scores *probability of harm*; it has no way to say
+ *      "structurally significant".
+ *   2. `requiresReview` — a MAJOR change owes a post-implementation review even when its outcome was
+ *      SUCCESSFUL. Everything else owes one only when it went wrong.
+ *
+ * Deleting MAJOR would therefore silently delete both rules with nothing to replace them. Keep it,
+ * and keep it honest: it means "this is significant regardless of what the matrix scored", not
+ * "riskier than HIGH".
+ */
+export const changeKinds = ["STANDARD", "NORMAL", "EMERGENCY", "MAJOR"] as const;
+export type ChangeKind = (typeof changeKinds)[number];
+
+export const changeBands = ["LOW", "MEDIUM", "HIGH"] as const;
+export type ChangeBand = (typeof changeBands)[number];
+
+export const changeStates = [
+  "DRAFT",
+  "SUBMITTED",
+  "RISK_ASSESSMENT",
+  "AWAITING_APPROVAL",
+  "APPROVED",
+  "SCHEDULED",
+  "IMPLEMENTING",
+  "VALIDATION",
+  "PIR",
+  "CLOSED",
+  "REJECTED",
+  "CANCELLED"
+] as const;
+export type ChangeState = (typeof changeStates)[number];
+
+export const changeOutcomes = ["SUCCESSFUL", "SUCCESSFUL_WITH_ISSUES", "FAILED", "ROLLED_BACK"] as const;
+export type ChangeOutcome = (typeof changeOutcomes)[number];
+
+/**
+ * THE COMPATIBILITY HINGE, the same one `WorkflowStatus.legacyStatus` provides for custom ticket
+ * statuses. Every change state declares which built-in `TicketStatus` it writes to the underlying
+ * ticket, and both are written in one update — so the SLA sweep, the escalation worker, every
+ * report, the Kanban, the exports, the public API and the webhook payloads keep reading a correct
+ * `Ticket.status` without knowing this module exists.
+ *
+ * REJECTED and CANCELLED map to CLOSED rather than to anything alarming: the work is over. FAILED
+ * is not here because it is an OUTCOME, not a state — a failed change still owes a review.
+ */
+export const CHANGE_STATE_TO_TICKET_STATUS: Record<ChangeState, TicketStatus> = {
+  DRAFT: "OPEN",
+  SUBMITTED: "OPEN",
+  RISK_ASSESSMENT: "IN_PROGRESS",
+  AWAITING_APPROVAL: "IN_REVIEW",
+  APPROVED: "IN_PROGRESS",
+  SCHEDULED: "IN_PROGRESS",
+  IMPLEMENTING: "IN_PROGRESS",
+  VALIDATION: "IN_REVIEW",
+  PIR: "IN_REVIEW",
+  CLOSED: "CLOSED",
+  REJECTED: "CLOSED",
+  CANCELLED: "CLOSED"
+};
+
+/**
+ * Legal moves. Cancellation is reachable from every live state — a change called off after
+ * approval is ordinary, and a lifecycle that traps it there would be one people work around.
+ *
+ * AWAITING_APPROVAL has no manual edge to APPROVED or REJECTED: only the approval chain writes
+ * those, from `change.service.ts#settleApproval`. Listing them here would let a determined caller
+ * PATCH straight past the board.
+ */
+export const changeStateTransitions: Record<ChangeState, readonly ChangeState[]> = {
+  // Submitting goes STRAIGHT to the approver. There is no queue in between, because the moment a
+  // change is submitted the only thing standing between it and a decision is one person reading it.
+  DRAFT: ["AWAITING_APPROVAL", "CANCELLED"],
+  SUBMITTED: ["RISK_ASSESSMENT", "AWAITING_APPROVAL", "DRAFT", "CANCELLED"],
+  RISK_ASSESSMENT: ["AWAITING_APPROVAL", "DRAFT", "CANCELLED"],
+  // Nothing manual leads out of here except cancellation. APPROVED and REJECTED are written only by
+  // a recorded decision — see change.service.ts#recordDecision — so no caller can PATCH past the
+  // approver, which is the single rule the whole module exists to enforce.
+  AWAITING_APPROVAL: ["CANCELLED"],
+  APPROVED: ["SCHEDULED", "IMPLEMENTING", "CANCELLED"],
+  SCHEDULED: ["IMPLEMENTING", "APPROVED", "CANCELLED"],
+  IMPLEMENTING: ["VALIDATION", "CANCELLED"],
+  // Validation can send it back: a change that failed its checks is implemented again, not closed.
+  VALIDATION: ["PIR", "IMPLEMENTING"],
+  PIR: ["CLOSED"],
+  CLOSED: [],
+  // A rejected change is reworked and resubmitted rather than argued about — the resubmission opens
+  // a new approval round, so the first decision stays on the record.
+  REJECTED: ["DRAFT"],
+  CANCELLED: ["DRAFT"]
+};
+
+/** Nothing transitions out of these; they are where a change comes to rest. */
+export const terminalChangeStates: readonly ChangeState[] = ["CLOSED"];
+
+/**
+ * The risk matrix. Impact x likelihood, and the ONLY place a risk level is decided — the field is
+ * derived, never typed, so two changes with the same answers cannot carry different risk because
+ * two people judged them differently.
+ *
+ * Deliberately conservative on the diagonal: MEDIUM x MEDIUM reads HIGH. A matrix that rounds down
+ * in the middle is a matrix that lets the most common change in any workspace skip the board.
+ */
+/* ------------------------------------------------------------------ *
+ * Which sections a change OWES, by rule.
+ *
+ * These three predicates decide the conditional submission requirements — the backout plan, the
+ * test plan, the communication plan. They live in shared because two surfaces read them and must
+ * never disagree: `missingForSubmit` on the API refuses submission on them, and the change form
+ * marks fields as required from them. Two hand-maintained copies of "when is a backout plan
+ * mandatory" is how the form ends up promising something the server then refuses.
+ * ------------------------------------------------------------------ */
+
+export interface ChangeRequirementInput {
+  riskLevel?: string | null;
+  changeKind?: string | null;
+  dataMigration?: boolean | null;
+  requiresDowntime?: boolean | null;
+}
+
+/** High risk, MAJOR, or anything that moves data. The rule the whole module exists to make
+ *  non-optional — see `requiresBackoutPlan` in change.service.ts, which delegates here. */
+export function changeNeedsBackoutPlan(change: ChangeRequirementInput): boolean {
+  return change.riskLevel === "HIGH" || change.changeKind === "MAJOR" || Boolean(change.dataMigration);
+}
+
+/** Anything above LOW. A low-risk routine change may ship on its runbook alone. */
+export function changeNeedsTestPlan(change: ChangeRequirementInput): boolean {
+  return change.riskLevel !== "LOW";
+}
+
+/** Downtime means somebody's work stops — they get told, and the plan says how. */
+export function changeNeedsCommunicationPlan(change: ChangeRequirementInput): boolean {
+  return Boolean(change.requiresDowntime);
+}
+
+export const CHANGE_RISK_MATRIX: Record<ChangeBand, Record<ChangeBand, ChangeBand>> = {
+  LOW: { LOW: "LOW", MEDIUM: "LOW", HIGH: "MEDIUM" },
+  MEDIUM: { LOW: "LOW", MEDIUM: "HIGH", HIGH: "HIGH" },
+  HIGH: { LOW: "MEDIUM", MEDIUM: "HIGH", HIGH: "HIGH" }
+};
+
+export function deriveChangeRisk(impact: ChangeBand, likelihood: ChangeBand): ChangeBand {
+  return CHANGE_RISK_MATRIX[impact][likelihood];
+}
+
+/** One approver slot in a policy. */
+export const changeApproverKinds = ["USER", "ROLE", "MANAGER_OF_IMPLEMENTER", "GUEST"] as const;
+export type ChangeApproverKind = (typeof changeApproverKinds)[number];
+
+export interface ChangePolicyStep {
+  kind: ChangeApproverKind;
+  /** A user id, a RoleName, or an email address. Ignored for MANAGER_OF_IMPLEMENTER. */
+  value?: string;
+  /** Steps sharing an order are asked together even in a sequential chain. */
+  order?: number;
+}
+
+/**
+ * Which fields a state demands before a change may ENTER it.
+ *
+ * Enforced at the transition, never on save: a draft you cannot save until it is complete is a
+ * draft nobody starts. `conditional` entries are evaluated against the change itself, which is why
+ * this is a predicate table rather than a list of column names.
+ */
+export interface ChangeReadiness {
+  /** Always required to leave DRAFT. */
+  always: readonly string[];
+  /** Required only when the predicate holds. */
+  conditional: ReadonlyArray<{ field: string; when: string }>;
+}
+
+export const CHANGE_SUBMIT_REQUIREMENTS: ChangeReadiness = {
+  always: ["justification", "implementationPlan", "plannedStart", "plannedEnd"],
+  conditional: [
+    { field: "backoutPlan", when: "risk is HIGH, kind is MAJOR, or the change migrates data" },
+    { field: "testPlan", when: "risk is above LOW" },
+    { field: "communicationPlan", when: "the change requires downtime" },
+    { field: "downtimeMinutes", when: "the change requires downtime" }
+  ]
+};
+
+export interface GlobalChangeSettingsRow {
+  enableChangeManagement: boolean;
+  approvalSlaHours: number;
+  remindHoursBefore: number[];
+  requireFaceOnApproval: boolean;
 }

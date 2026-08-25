@@ -58,6 +58,13 @@ interface Totals {
   hours: number;
   ticketsCreated: number;
   ticketsResolved: number;
+  /** Change requests RAISED in the period. Counted through the owning ticket, because a
+   *  ChangeRequest has no reporter of its own — `ChangeRequest.ticketId` is unique. */
+  changesRaised: number;
+  /** Change requests that reached CLOSED in the period. `CANCELLED` and `REJECTED` are
+   *  deliberately not counted as closed: a change that never happened is not delivered work, and
+   *  rolling them in would flatter the number every time a plan is abandoned. */
+  changesClosed: number;
 }
 
 const hoursIn = async (where: object) =>
@@ -65,7 +72,7 @@ const hoursIn = async (where: object) =>
 
 /** One person's or one workspace's totals over a period. `userId` omitted means the whole workspace. */
 async function totalsFor(period: Period, userId?: string): Promise<Totals> {
-  const [hours, created, resolved] = await Promise.all([
+  const [hours, created, resolved, changesRaised, changesClosed] = await Promise.all([
     hoursIn({
       deletedAt: null,
       status: "APPROVED",
@@ -77,9 +84,35 @@ async function totalsFor(period: Period, userId?: string): Promise<Totals> {
     }),
     prisma.ticket.count({
       where: { deletedAt: null, resolvedAt: { gte: period.from, lt: period.to }, ...(userId ? { assigneeId: userId } : {}) }
+    }),
+    // Raised: the change's ticket was created in the window, by this person when scoped.
+    prisma.changeRequest.count({
+      where: {
+        ticket: {
+          deletedAt: null,
+          createdAt: { gte: period.from, lt: period.to },
+          ...(userId ? { reporterId: userId } : {})
+        }
+      }
+    }),
+    // Closed: reached CLOSED, attributed to whoever the ticket is assigned to. `updatedAt` is the
+    // best available "when did it get there" signal — ChangeRequest carries no closedAt column, and
+    // inventing one would need a migration and a backfill that could only guess at history.
+    prisma.changeRequest.count({
+      where: {
+        state: "CLOSED",
+        updatedAt: { gte: period.from, lt: period.to },
+        ticket: { deletedAt: null, ...(userId ? { assigneeId: userId } : {}) }
+      }
     })
   ]);
-  return { hours: Number(hours.toFixed(2)), ticketsCreated: created, ticketsResolved: resolved };
+  return {
+    hours: Number(hours.toFixed(2)),
+    ticketsCreated: created,
+    ticketsResolved: resolved,
+    changesRaised,
+    changesClosed
+  };
 }
 
 const hoursLabel = (n: number) => `${n.toFixed(1)}h`;
@@ -126,13 +159,15 @@ async function personalTables(userId: string, periods: DigestPeriods): Promise<s
         ["Approved hours", hoursLabel(week.hours), hoursLabel(month.hours), hoursLabel(year.hours)],
         ["Tickets you raised", String(week.ticketsCreated), String(month.ticketsCreated), String(year.ticketsCreated)],
         ["Tickets you resolved", String(week.ticketsResolved), String(month.ticketsResolved), String(year.ticketsResolved)],
+        ["Changes you raised", String(week.changesRaised), String(month.changesRaised), String(year.changesRaised)],
+        ["Changes you closed", String(week.changesClosed), String(month.changesClosed), String(year.changesClosed)],
         // Open work is a SNAPSHOT, not a period total. The other two columns are dashes rather than a
         // repeated number, because repeating it under "month to date" would claim a measurement that
         // was never taken — and the note below says which column the figure belongs to.
         ["Still assigned to you", String(openAssigned), "—", "—"]
       ]
     }) +
-    `<div style="font-size:11px;color:#64748B;margin:-2px 0 4px;">Hours count APPROVED timesheets only, the same basis as the portfolio and budget figures. "Still assigned to you" is a count as of this morning, not a total for a period.</div>` +
+    `<div style="font-size:11px;color:#64748B;margin:-2px 0 4px;">Hours count APPROVED timesheets only, the same basis as the portfolio and budget figures. "Still assigned to you" is a count as of this morning, not a total for a period. A change counts as closed only when it reaches CLOSED — cancelled and rejected changes are not delivered work.</div>` +
     dataTable({
       caption: `Where your hours went — ${periods.week.label}`,
       head: ["Project", "Hours", "Share"],
@@ -143,6 +178,89 @@ async function personalTables(userId: string, periods: DigestPeriods): Promise<s
       ]),
       empty: "No approved hours last week."
     })
+  );
+}
+
+/* ------------------------------------------------------------------ *
+ * The team half — a manager's own reports, and nobody else's
+ * ------------------------------------------------------------------ */
+
+/**
+ * WHY THIS EXISTS SEPARATELY FROM THE WORKSPACE HALF: a manager needs to see whether their people
+ * logged their week, and previously could not. The digest was binary — hold `reports:view` and see
+ * every person in the workspace, or hold nothing and see only yourself — so a line manager with
+ * five reports got a personal recap and no way to answer "did my team file their time?".
+ *
+ * Scoped strictly to `managerId = this manager`. It is a direct-reports view, not a transitive
+ * tree: a skip-level manager sees their own reports, and each of those sees theirs. Widening it to
+ * the whole subtree would quietly turn a team digest into a department one, and the permission that
+ * governs seeing everybody is `reports:view`, which has its own section below.
+ */
+async function teamTables(managerId: string, periods: DigestPeriods): Promise<string> {
+  const reports = await prisma.user.findMany({
+    where: { managerId, status: "ACTIVE", deletedAt: null, isAgent: false },
+    select: { id: true, name: true, email: true },
+    orderBy: { name: "asc" }
+  });
+  if (reports.length === 0) return "";
+
+  const ids = reports.map((r) => r.id);
+
+  const [hoursByUser, resolvedByUser, openByUser, teamWeek] = await Promise.all([
+    prisma.timesheet.groupBy({
+      by: ["userId"],
+      where: { userId: { in: ids }, deletedAt: null, status: "APPROVED", workDate: { gte: periods.week.from, lt: periods.week.to } },
+      _sum: { totalHours: true }
+    }),
+    prisma.ticket.groupBy({
+      by: ["assigneeId"],
+      where: { assigneeId: { in: ids }, deletedAt: null, resolvedAt: { gte: periods.week.from, lt: periods.week.to } },
+      _count: { _all: true }
+    }),
+    prisma.ticket.groupBy({
+      by: ["assigneeId"],
+      where: { assigneeId: { in: ids }, deletedAt: null, status: { notIn: ["RESOLVED", "CLOSED"] } },
+      _count: { _all: true }
+    }),
+    // The team's own roll-up, so the header figure and the rows below cannot disagree.
+    Promise.all(ids.map((id) => totalsFor(periods.week, id)))
+  ]);
+
+  const hoursFor = new Map(hoursByUser.map((r) => [r.userId, Number(r._sum.totalHours ?? 0)]));
+  const resolvedFor = new Map(resolvedByUser.map((r) => [r.assigneeId, r._count._all]));
+  const openFor = new Map(openByUser.map((r) => [r.assigneeId, r._count._all]));
+
+  const teamHours = teamWeek.reduce((sum, t) => sum + t.hours, 0);
+  const teamResolved = teamWeek.reduce((sum, t) => sum + t.ticketsResolved, 0);
+  const teamChangesClosed = teamWeek.reduce((sum, t) => sum + t.changesClosed, 0);
+  const loggedCount = reports.filter((r) => (hoursFor.get(r.id) ?? 0) > 0).length;
+
+  return (
+    `<div style="margin:26px 0 4px;font-size:13px;font-weight:800;letter-spacing:.4px;text-transform:uppercase;color:#0F172A;">Your team — ${escape(periods.week.label)}</div>` +
+    periodStrip([
+      { label: "Team hours", value: hoursLabel(teamHours), sub: `${reports.length} report${reports.length === 1 ? "" : "s"}` },
+      // The number a manager actually acts on: who did NOT file. Stated as a ratio rather than a
+      // percentage, because with five reports a percentage is false precision.
+      { label: "Logged last week", value: `${loggedCount}/${reports.length}`, sub: loggedCount === reports.length ? "everyone filed" : `${reports.length - loggedCount} with nothing` },
+      { label: "Resolved", value: String(teamResolved), sub: `${teamChangesClosed} change${teamChangesClosed === 1 ? "" : "s"} closed` }
+    ]) +
+    dataTable({
+      caption: "Per person, last week",
+      head: ["Person", "Approved hours", "Resolved", "Open now"],
+      rows: reports.map((r) => {
+        const hours = hoursFor.get(r.id) ?? 0;
+        return [
+          // A report who filed nothing is the row worth finding, so it is marked rather than left
+          // as a 0.0h to be scanned past.
+          escape(r.name) + (hours === 0 ? ' <span style="color:#B45309;">· nothing logged</span>' : ""),
+          hoursLabel(hours),
+          String(resolvedFor.get(r.id) ?? 0),
+          String(openFor.get(r.id) ?? 0)
+        ];
+      }),
+      empty: "No active reports."
+    }) +
+    `<div style="font-size:11px;color:#64748B;margin:-2px 0 4px;">Your direct reports only. Hours are APPROVED timesheets for last week; "Open now" is a count as of this morning.</div>`
   );
 }
 
@@ -195,6 +313,7 @@ async function workspaceTables(periods: DigestPeriods): Promise<string> {
   // tickets resolved last week are mostly not the ones raised last week — so it is labelled as the
   // ratio it is rather than as a performance figure it is not.
   const closedRatio = (t: Totals) => share(t.ticketsResolved, t.ticketsCreated);
+  const changeRatio = (t: Totals) => share(t.changesClosed, t.changesRaised);
 
   return (
     `<div style="margin:26px 0 4px;font-size:13px;font-weight:800;letter-spacing:.4px;text-transform:uppercase;color:#0F172A;">The whole workspace</div>` +
@@ -205,7 +324,10 @@ async function workspaceTables(periods: DigestPeriods): Promise<string> {
         ["Approved hours", hoursLabel(week.hours), hoursLabel(month.hours), hoursLabel(year.hours)],
         ["Tickets raised", String(week.ticketsCreated), String(month.ticketsCreated), String(year.ticketsCreated)],
         ["Tickets resolved", String(week.ticketsResolved), String(month.ticketsResolved), String(year.ticketsResolved)],
-        ["Resolved vs raised", closedRatio(week), closedRatio(month), closedRatio(year)]
+        ["Resolved vs raised", closedRatio(week), closedRatio(month), closedRatio(year)],
+        ["Changes raised", String(week.changesRaised), String(month.changesRaised), String(year.changesRaised)],
+        ["Changes closed", String(week.changesClosed), String(month.changesClosed), String(year.changesClosed)],
+        ["Closed vs raised", changeRatio(week), changeRatio(month), changeRatio(year)]
       ]
     }) +
     dataTable({
@@ -245,12 +367,33 @@ async function workspaceTables(periods: DigestPeriods): Promise<string> {
  * The workspace half is appended only for somebody who may already see it elsewhere — the same
  * permission that opens the reports pages. A digest must never become a way around a permission.
  */
+/**
+ * How much of the workspace this recipient's digest may show.
+ *
+ *   SELF      — their own week. Everybody gets this.
+ *   TEAM      — plus their direct reports. Anybody who has reports.
+ *   WORKSPACE — plus every person and project. Anybody holding `reports:view`.
+ *
+ * The levels ACCUMULATE rather than replace: a super admin who also line-manages three people
+ * gets their own week, then their team, then the workspace. Before this, the digest was binary and
+ * a manager without `reports:view` had no way to see whether their own reports had filed.
+ */
+export type DigestScope = "SELF" | "TEAM" | "WORKSPACE";
+
 export async function buildDigestTables(params: {
   userId: string;
   periods: DigestPeriods;
-  includeWorkspace: boolean;
+  scope: DigestScope;
 }): Promise<string> {
-  const personal = await personalTables(params.userId, params.periods);
-  if (!params.includeWorkspace) return personal;
-  return personal + (await workspaceTables(params.periods));
+  let html = await personalTables(params.userId, params.periods);
+
+  // A WORKSPACE recipient still gets their team section when they have reports — the workspace
+  // table is 12 rows of everybody and does not answer "did MY people file this week".
+  if (params.scope === "TEAM" || params.scope === "WORKSPACE") {
+    html += await teamTables(params.userId, params.periods);
+  }
+  if (params.scope === "WORKSPACE") {
+    html += await workspaceTables(params.periods);
+  }
+  return html;
 }

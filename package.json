@@ -7,10 +7,13 @@
   ],
   "scripts": {
     "postinstall": "node -e \"const{existsSync}=require('fs');if(existsSync('packages/shared/tsconfig.json')){require('child_process').execSync('npm run build -w packages/shared',{stdio:'inherit'})}else{console.log('postinstall: packages/shared sources absent (manifest-only install layer) - skipping build')}\"",
+    "predev": "node scripts/ensure-deps.mjs",
     "dev": "concurrently \"npm run dev -w apps/api\" \"npm run dev -w apps/web\"",
+    "prebuild": "node scripts/ensure-deps.mjs",
     "build": "npm run build -w packages/shared && npm run build -w apps/api && npm run build -w apps/web",
     "lint": "npm run lint -w apps/api && npm run lint -w apps/web && npm run lint:sonar",
     "lint:sonar": "eslint apps/api/src apps/web/src packages/shared/src",
+    "test": "npm run test -w apps/api && npm run test -w apps/web",
     "doctor": "npm run doctor -w apps/api",
     "doctor:heal": "npm run doctor:heal -w apps/api",
     "db:generate": "npm run prisma:generate -w apps/api && npm run control:generate -w apps/api",
@@ -41,6 +44,9 @@
   },
   "overrides": {
     "form-data": "^4.0.6",
+    "eslint-plugin-sonarjs": {
+      "minimatch": "^10.2.6"
+    },
     "exceljs": {
       "uuid": "^11.1.1"
     }

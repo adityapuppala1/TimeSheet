@@ -53,7 +53,9 @@ export const TEMPLATE_VARIABLES: Record<string, string[]> = {
   "face.review_overdue": ["targetName", "pendingCount", "oldestAgeHours", "appUrl"],
   "face.data_deleted": ["name", "appUrl"],
   "face.entitlement_lost": ["targetName", "graceDays", "appUrl"],
-  "digest.identity_weekly": ["targetName", "weekLabel", "total", "passed", "failed", "flaggedPending", "notes", "appUrl"]
+  "digest.identity_weekly": ["targetName", "weekLabel", "total", "passed", "failed", "flaggedPending", "notes", "appUrl"],
+  "change.submitted": ["changeKey", "projectName", "title", "changeType", "riskLevel", "riskScore", "activityWindow", "description", "requestedBy", "receivedBy", "peopleInvolved", "appUrl"],
+  "change.decided": ["changeKey", "projectName", "title", "changeType", "riskLevel", "riskScore", "activityWindow", "requestedBy", "decision", "decidedBy", "comments", "peopleInvolved", "appUrl"]
 };
 
 export const TEMPLATE_DESCRIPTIONS: Record<string, string> = {
@@ -90,7 +92,11 @@ export const TEMPLATE_DESCRIPTIONS: Record<string, string> = {
   "face.review_overdue": "Sent to admins when flagged identity checks have sat unreviewed for more than 48 hours.",
   "face.data_deleted": "Confirmation to the person whose face enrollment/captures were deleted (self-service or by an admin).",
   "face.entitlement_lost": "Sent to admins when the org's plan tier stops including face verification — enforcement pauses and a purge grace window starts.",
-  "digest.identity_weekly": "Monday-morning deterministic identity-assurance recap (checks run, failures, flagged pending) sent to every ADMIN/SUPER_ADMIN."
+  "digest.identity_weekly": "Monday-morning deterministic identity-assurance recap (checks run, failures, flagged pending) sent to every ADMIN/SUPER_ADMIN.",
+  "change.submitted":
+    "Sent the moment a change is submitted — to its approver, the requester, and everyone tagged on it. Super admins are BCC'd.",
+  "change.decided":
+    "Sent when a change is approved or rejected, carrying who decided and the comments they left."
 };
 
 export const TEMPLATE_KEYS = Object.keys(TEMPLATE_VARIABLES);
@@ -266,6 +272,35 @@ export function sampleVariables(key: string): Record<string, string> {
       weekLabel: "Jun 29 - Jul 5",
       summary: "Risk dropped this week — 2 CRITICAL findings from last week were resolved and no new CRITICAL/HIGH issues landed. One security-linked ticket is still past its SLA and worth a look Monday morning.",
       riskScore: "18", appUrl: "https://timesphere.local"
+    },
+    "change.submitted": {
+      changeKey: "HICS-TS-20260812-0001",
+      projectName: "HICS Operations Platform",
+      title: "Upgrade the payments database to 15.4",
+      changeType: "NORMAL",
+      riskLevel: "HIGH",
+      riskScore: "72/100",
+      activityWindow: "2026-08-29 22:00 to 2026-08-30 02:00 UTC",
+      description: "15.2 leaves support in October and the CVE backlog is growing. Snapshot, upgrade in place, verify with the payment smoke suite.",
+      requestedBy: "Dev Patel",
+      receivedBy: "Mira Kapoor",
+      peopleInvolved: "Dev Patel (requester), Mira Kapoor (approver), Aditya Teja",
+      appUrl: "https://timesphere.local/app/changes"
+    },
+    "change.decided": {
+      changeKey: "HICS-TS-20260812-0001",
+      projectName: "HICS Operations Platform",
+      title: "Upgrade the payments database to 15.4",
+      changeType: "NORMAL",
+      riskLevel: "HIGH",
+      riskScore: "72/100",
+      activityWindow: "2026-08-29 22:00 to 2026-08-30 02:00 UTC",
+      requestedBy: "Dev Patel",
+      decision: "APPROVED",
+      decidedBy: "Mira Kapoor",
+      comments: "Window is outside the billing run. Please confirm the snapshot completed before starting.",
+      peopleInvolved: "Dev Patel (requester), Mira Kapoor (approver), Aditya Teja",
+      appUrl: "https://timesphere.local/app/changes"
     }
   };
   return samples[key] ?? {};
@@ -475,6 +510,26 @@ export const TEMPLATE_DEFAULTS: Record<string, { subject: string; html: string }
   "face.entitlement_lost": {
     subject: "Face verification is no longer active",
     html: compiledTemplates.faceEntitlementLost({ targetName: V("targetName"), graceDays: V("graceDays") })
+  },
+
+  "change.submitted": {
+    subject: "Approval needed: {{changeKey}} - {{title}}",
+    html: compiledTemplates.changeSubmitted({
+      changeKey: V("changeKey"), projectName: V("projectName"), title: V("title"), changeType: V("changeType"),
+      riskLevel: V("riskLevel"), riskScore: V("riskScore"), activityWindow: V("activityWindow"),
+      description: V("description"), requestedBy: V("requestedBy"), receivedBy: V("receivedBy"),
+      peopleInvolved: V("peopleInvolved"), appUrl: V("appUrl")
+    })
+  },
+
+  "change.decided": {
+    subject: "Change {{decision}}: {{changeKey}} - {{title}}",
+    html: compiledTemplates.changeDecided({
+      changeKey: V("changeKey"), projectName: V("projectName"), title: V("title"), changeType: V("changeType"),
+      riskLevel: V("riskLevel"), riskScore: V("riskScore"), activityWindow: V("activityWindow"),
+      requestedBy: V("requestedBy"), decision: V("decision"), decidedBy: V("decidedBy"),
+      comments: V("comments"), peopleInvolved: V("peopleInvolved"), appUrl: V("appUrl")
+    })
   }
 };
 

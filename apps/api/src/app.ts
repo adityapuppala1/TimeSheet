@@ -31,6 +31,7 @@ import { resolveStoredFile } from "./services/attachment-storage.service.js";
 import { getUpdateStatus } from "./services/update-check.service.js";
 import { activityTypeRouter } from "./controllers/activity-type.controller.js";
 import { aiRouter } from "./controllers/ai.controller.js";
+import { aiChatRouter } from "./controllers/ai-chat.controller.js";
 import { auditRouter } from "./controllers/audit.controller.js";
 import { authRouter } from "./controllers/auth.controller.js";
 import { brandingRouter } from "./controllers/branding.controller.js";
@@ -58,6 +59,7 @@ import { blueprintRouter } from "./controllers/blueprint.controller.js";
 import { dashboardRouter } from "./controllers/dashboard.controller.js";
 import { agentRouter } from "./controllers/agent.controller.js";
 import { automationFlowRouter } from "./controllers/automation-flow.controller.js";
+import { changeRouter } from "./controllers/change.controller.js";
 import { goalRouter } from "./controllers/goal.controller.js";
 import { inboxRouter } from "./controllers/inbox.controller.js";
 import { portfolioRouter } from "./controllers/portfolio.controller.js";
@@ -456,6 +458,7 @@ app.use("/api/ticket-types", ticketTypeRouter);
 // /api/ticket-types because it is the same shape of thing for the other half of the product.
 app.use("/api/activity-types", activityTypeRouter);
 app.use("/api/ai", aiRouter);
+app.use("/api/ai-chat", aiChatRouter);
 app.use("/api/email-intake", emailIntakeRouter);
 app.use("/api/chat-integrations", chatIntegrationsRouter);
 app.use("/api/labels", labelRouter);
@@ -471,6 +474,7 @@ app.use("/api/portfolios", portfolioRouter);
 // entitlement (goals align work whether or not the Gantt is in use — see
 // planning.service.ts#assertGoalsEnabled), and reading them needs no permission at all.
 app.use("/api/goals", goalRouter);
+app.use("/api/changes", changeRouter);
 // The inbox is a personal surface: no permission, no entitlement, every route scoped to the
 // caller's own rows. It sits beside /notifications rather than inside it because the bell is a
 // glance and the inbox is a queue with triage state — see controllers/inbox.controller.ts.

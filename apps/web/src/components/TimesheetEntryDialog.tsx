@@ -62,6 +62,7 @@ import { DatePicker, TimeField } from "./ui/date-picker";
 import { FileDropzone } from "./ui/file-dropzone";
 import { Label } from "./ui/label";
 import { RichTextEditor } from "./ui/rich-text-editor";
+import { SearchableSelect } from "./ui/searchable-select";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "./ui/select";
 import { toast } from "./ui/toaster";
 
@@ -609,29 +610,34 @@ function EntryEditForm({
         </div>
         <div className="grid gap-1.5">
           <Label>Module</Label>
-          <Select
+          {/* Type-ahead rather than a plain dropdown, matching the logging form next door: a real
+              project's module list runs long enough that scrolling it is the slow part of editing
+              an entry. */}
+          <SearchableSelect
+            aria-label="Module"
+            options={selectedProject?.modules ?? []}
             value={form.moduleId}
-            onValueChange={(v) => setForm((f) => ({ ...f, moduleId: v, submoduleId: "" }))}
+            onChange={(v) => setForm((f) => ({ ...f, moduleId: v, submoduleId: "" }))}
             disabled={!selectedProject}
-          >
-            <SelectTrigger><SelectValue placeholder={selectedProject ? "Select module" : "Pick a project first"} /></SelectTrigger>
-            <SelectContent>
-              {(selectedProject?.modules ?? []).map((m: any) => <SelectItem key={m.id} value={m.id}>{m.name}</SelectItem>)}
-            </SelectContent>
-          </Select>
+            placeholder={selectedProject ? "Select module" : "Pick a project first"}
+            searchPlaceholder="Search modules…"
+            emptyText="No modules match."
+          />
         </div>
         <div className="grid gap-1.5">
           <Label>Submodule <span className="text-muted-foreground">(optional)</span></Label>
-          <Select
+          <SearchableSelect
+            aria-label="Submodule"
+            options={selectedModule?.submodules ?? []}
             value={form.submoduleId}
-            onValueChange={(v) => setForm((f) => ({ ...f, submoduleId: v }))}
+            onChange={(v) => setForm((f) => ({ ...f, submoduleId: v }))}
             disabled={!selectedModule || (selectedModule.submodules ?? []).length === 0}
-          >
-            <SelectTrigger><SelectValue placeholder="Optional" /></SelectTrigger>
-            <SelectContent>
-              {(selectedModule?.submodules ?? []).map((s: any) => <SelectItem key={s.id} value={s.id}>{s.name}</SelectItem>)}
-            </SelectContent>
-          </Select>
+            placeholder="Optional"
+            searchPlaceholder="Search submodules…"
+            emptyText="No submodules match."
+            clearable
+            clearLabel="None"
+          />
         </div>
       </div>
 

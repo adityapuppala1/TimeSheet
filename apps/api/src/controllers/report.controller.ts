@@ -14,7 +14,9 @@
 import { Router, type Request } from "express";
 import PDFDocument from "pdfkit";
 import { permissions } from "@timesheet/shared";
+import type { TicketStatus } from "@prisma/client";
 import { prisma } from "../config/prisma.js";
+import { isChangeManagementOn } from "../services/change.service.js";
 import { controlPrisma } from "../config/control-prisma.js";
 import { tenantContext } from "../config/tenant-context.js";
 import { requireAuth, requirePermission } from "../middleware/auth.js";
@@ -197,6 +199,33 @@ reportRouter.get("/admin-summary", requirePermission(permissions.REPORTS_VIEW), 
     select: { id: true, name: true, code: true }
   });
 
+  // Ticket and change activity for the SAME day boundary the logging figures use, so the card's
+  // rows are comparable. Counted here rather than in a second request because the workforce card
+  // renders them together and a half-arrived card is the bug the project rollup was just fixed for.
+  // Typed through Prisma's own enum rather than string literals, so renaming a status is a
+  // compile error here instead of a silently-zero count.
+  const CLOSED_TICKET: TicketStatus[] = ["RESOLVED", "CLOSED"];
+  const changesOn = await isChangeManagementOn().catch(() => false);
+  const [
+    ticketsRaisedToday,
+    ticketsRaisedYesterday,
+    ticketsClosedToday,
+    ticketsClosedYesterday,
+    changesRaisedToday,
+    changesRaisedYesterday,
+    changesClosedToday,
+    changesClosedYesterday
+  ] = await Promise.all([
+    prisma.ticket.count({ where: { deletedAt: null, createdAt: { gte: sinceLocal } } }),
+    prisma.ticket.count({ where: { deletedAt: null, createdAt: { gte: sinceYesterdayLocal, lt: sinceLocal } } }),
+    prisma.ticket.count({ where: { deletedAt: null, status: { in: CLOSED_TICKET }, updatedAt: { gte: sinceLocal } } }),
+    prisma.ticket.count({ where: { deletedAt: null, status: { in: CLOSED_TICKET }, updatedAt: { gte: sinceYesterdayLocal, lt: sinceLocal } } }),
+    changesOn ? prisma.changeRequest.count({ where: { createdAt: { gte: sinceLocal } } }) : Promise.resolve(0),
+    changesOn ? prisma.changeRequest.count({ where: { createdAt: { gte: sinceYesterdayLocal, lt: sinceLocal } } }) : Promise.resolve(0),
+    changesOn ? prisma.changeRequest.count({ where: { closedAt: { gte: sinceLocal } } }) : Promise.resolve(0),
+    changesOn ? prisma.changeRequest.count({ where: { closedAt: { gte: sinceYesterdayLocal, lt: sinceLocal } } }) : Promise.resolve(0)
+  ]);
+
   const loggedToday = loggedTodayDistinct.length;
   const notLoggedToday = Math.max(0, activeWorkforce - loggedToday);
   const loggedYesterday = loggedYesterdayDistinct.length;
@@ -230,6 +259,16 @@ reportRouter.get("/admin-summary", requirePermission(permissions.REPORTS_VIEW), 
     todayDailyRemindersSentYesterday,
     todayEscalationsSent,
     todayEscalationsSentYesterday,
+    ticketsRaisedToday,
+    ticketsRaisedYesterday,
+    ticketsClosedToday,
+    ticketsClosedYesterday,
+    /** Null, not zero, when change management is off — the card drops the tiles rather than
+     *  claiming a measurement of something this workspace does not do. */
+    changesRaisedToday: changesOn ? changesRaisedToday : null,
+    changesRaisedYesterday: changesOn ? changesRaisedYesterday : null,
+    changesClosedToday: changesOn ? changesClosedToday : null,
+    changesClosedYesterday: changesOn ? changesClosedYesterday : null,
     byProject: byProject.map((row) => {
       const project = projectNames.find((p) => p.id === row.projectId);
       return { ...row, project: project?.name ?? "Unknown", projectCode: project?.code ?? null };
@@ -243,7 +282,8 @@ reportRouter.get("/admin-summary", requirePermission(permissions.REPORTS_VIEW), 
  * Ticket metrics for the Reports page — kept separate from /admin-summary
  * (already a large batched payload) for cleaner separation of concerns.
  */
-reportRouter.get("/ticket-summary", requirePermission(permissions.REPORTS_VIEW), async (_req, res) => {
+// Broadened to every authenticated member (was reports:view). Team leads and employees can now see workspace productivity — see docs note on the org-visibility change.
+reportRouter.get("/ticket-summary", async (_req, res) => {
   const weekAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
   const twoWeeksAgo = new Date(Date.now() - 14 * 24 * 60 * 60 * 1000);
   const sinceLocal = startOfLocalDay();
@@ -361,7 +401,8 @@ const CYCLE_TIME_BUCKETS = [
  * and estimate-vs-actual variance. Kept as one batched call (Promise.all), same style as
  * /admin-summary and /ticket-summary, since the Insights page loads all of it together.
  */
-reportRouter.get("/ticket-insights", requirePermission(permissions.REPORTS_VIEW), async (_req, res) => {
+// Broadened to every authenticated member (was reports:view). Team leads and employees can now see workspace productivity — see docs note on the org-visibility change.
+reportRouter.get("/ticket-insights", async (_req, res) => {
   const velocityWeeks = recentWeekStarts(8);
   const heatmapWeeks = recentWeekStarts(6);
   const rangeStart = velocityWeeks[0];
@@ -586,7 +627,8 @@ function computeRiskScore(openFindings: Array<{ severity: (typeof SECURITY_SEVER
  * not an exact remediation-time measurement. Documented here rather than silently treated as
  * precise; a dedicated `resolvedAt` column is a reasonable follow-up if this proves too noisy.
  */
-reportRouter.get("/security-insights", requirePermission(permissions.REPORTS_VIEW), async (_req, res) => {
+// Broadened to every authenticated member (was reports:view). NOTE: this deliberately exposes the workspace's security findings / SBOM to all staff — an internal-transparency decision, reversible by restoring requirePermission(REPORTS_VIEW).
+reportRouter.get("/security-insights", async (_req, res) => {
   const weeks = recentWeekStarts(8);
   const rangeStart = weeks[0];
   const sinceLocal = startOfLocalDay();
@@ -660,7 +702,8 @@ reportRouter.get("/security-insights", requirePermission(permissions.REPORTS_VIE
  * /sbom route). Deliberately not attempting Black Duck's full license-obligation-text depth —
  * see docs/ROADMAP.md's "Competitive parity" Phase 3.
  */
-reportRouter.get("/sbom-inventory", requirePermission(permissions.REPORTS_VIEW), async (_req, res) => {
+// Broadened to every authenticated member (was reports:view). NOTE: this deliberately exposes the workspace's security findings / SBOM to all staff — an internal-transparency decision, reversible by restoring requirePermission(REPORTS_VIEW).
+reportRouter.get("/sbom-inventory", async (_req, res) => {
   const [totalComponents, vulnerableComponents, byEcosystem, byRepository] = await Promise.all([
     prisma.sbomComponent.count(),
     prisma.sbomComponent.findMany({
@@ -708,7 +751,8 @@ reportRouter.get("/sbom-inventory", requirePermission(permissions.REPORTS_VIEW),
  *
  * The response is strictly additive — existing consumers (Insights.tsx) keep working unchanged.
  */
-reportRouter.get("/cost-insights", requirePermission(permissions.REPORTS_VIEW), async (_req, res) => {
+// Broadened to every authenticated member (was reports:view). NOTE: exposes workspace cost figures to all staff — reversible by restoring requirePermission(REPORTS_VIEW).
+reportRouter.get("/cost-insights", async (_req, res) => {
   const settings = await prisma.globalTicketSettings.findUnique({ where: { id: "global" } });
   if (!settings?.enableCostAnalytics) throw new AppError(403, "Cost analytics is disabled for this workspace.");
 
@@ -785,7 +829,8 @@ reportRouter.get("/cost-insights", requirePermission(permissions.REPORTS_VIEW), 
 });
 
 /** Opt-in team leaderboard — gated behind GlobalTicketSettings.enableLeaderboard. Framed as recognition, not surveillance. */
-reportRouter.get("/leaderboard", requirePermission(permissions.REPORTS_VIEW), async (_req, res) => {
+// Broadened to every authenticated member (was reports:view). Team leads and employees can now see workspace productivity — see docs note on the org-visibility change.
+reportRouter.get("/leaderboard", async (_req, res) => {
   const settings = await prisma.globalTicketSettings.findUnique({ where: { id: "global" } });
   if (!settings?.enableLeaderboard) throw new AppError(403, "The team leaderboard is disabled for this workspace.");
 

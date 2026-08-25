@@ -325,6 +325,19 @@ interface SendArgs {
    */
   skipBcc?: boolean;
   /**
+   * Addresses to BCC on THIS message regardless of the workspace-wide audit BCC.
+   *
+   * The blanket `bccSuperAdminOnAllEmails` setting is exactly that — blanket — and most workspaces
+   * leave it off because it copies a super admin on every reminder for every employee every day. A
+   * handful of messages are governance records rather than correspondence (a change approval, and
+   * its decision), where oversight is the point of the message. Those name their own recipients
+   * here instead of forcing the blanket switch on and drowning the inbox it protects.
+   *
+   * Merged with, never replacing, the computed list, and de-duplicated against the To line so
+   * nobody receives the same message twice.
+   */
+  alwaysBcc?: string[];
+  /**
    * "This message body contains a credential — never persist it."
    *
    * WHY IT EXISTS: the retry queue keeps the RENDERED body on the `EmailLog` row so a deferred
@@ -638,7 +651,11 @@ export async function sendMail(
     return { ok: false, status: "SKIPPED", errorMessage: "Recipient is an automation identity with no mailbox" };
   }
 
-  const bcc = args.skipBcc ? [] : await getBccList(args.to, args.preferenceKey);
+  const computedBcc = args.skipBcc ? [] : await getBccList(args.to, args.preferenceKey);
+  const recipients = new Set(args.to.split(",").map((a) => a.trim().toLowerCase()).filter(Boolean));
+  const bcc = [...new Set([...computedBcc, ...(args.alwaysBcc ?? [])])].filter(
+    (address) => address && !recipients.has(address.trim().toLowerCase())
+  );
 
   // `to` may itself be a comma-separated list of multiple primary recipients (the ticket-closed
   // digest puts both the closer and their manager there) — split it so cc-dedup checks every

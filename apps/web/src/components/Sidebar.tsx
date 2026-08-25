@@ -13,16 +13,19 @@ import {
   Bot,
   Briefcase,
   CalendarDays,
+  ClipboardList,
   FileClock,
   FileStack,
   FolderKanban,
   GanttChartSquare,
   Gauge,
+  Home,
   Inbox,
   LayoutDashboard,
   ListTodo,
   Mail,
   Mailbox,
+  MessagesSquare,
   PanelLeftClose,
   PanelLeftOpen,
   ScrollText,
@@ -40,7 +43,7 @@ import {
 import { useQuery } from "@tanstack/react-query";
 import { useState } from "react";
 import { NavLink } from "react-router";
-import { permissions } from "@timesheet/shared";
+import { permissions, type Permission } from "@timesheet/shared";
 import { cn } from "../lib/utils";
 import { usePlanningFeatures } from "../lib/use-planning";
 import type { PlanningEffective } from "../services/api";
@@ -76,6 +79,10 @@ export interface NavItem {
   icon: any;
   end?: boolean;
   permission?: string;
+  /** An alternative label for viewers who LACK this permission — used where one route serves two
+   *  audiences and calling it the same thing for both would misdescribe what they actually get.
+   *  Typed as `Permission` to match `user.permissions`, so a typo is a compile error. */
+  labelWithout?: { permission: Permission; label: string };
   role?: "SUPER_ADMIN";
   /** Omit for the ungrouped lead item (Dashboard). */
   section?: NavSection;
@@ -89,7 +96,7 @@ export interface NavItem {
  *  rule the sidebar renders from. Duplicating either would let the tour offer someone a page their
  *  role can't open — the one failure a role-aware tour must not have. */
 export const nav: NavItem[] = [
-  { to: "/app", label: "Dashboard", icon: LayoutDashboard, end: true },
+  { to: "/app", label: "Home", icon: Home, end: true },
 
   { to: "/app/timesheet", label: "Log timesheet", icon: CalendarDays, permission: permissions.TIMESHEETS_WRITE, section: "Work" },
   { to: "/app/tickets", label: "Tickets", icon: Ticket, permission: permissions.TICKETS_VIEW, section: "Work" },
@@ -97,7 +104,15 @@ export const nav: NavItem[] = [
   // First in Work and deliberately ungated: it is where the day starts, and its brief reads
   // definitions that exist whether or not any optional feature is on.
   { to: "/app/inbox", label: "Inbox", icon: Mailbox, section: "Work" },
+  { to: "/app/ask-ai", label: "Ask AI", icon: MessagesSquare, permission: permissions.TICKETS_VIEW, section: "Work" },
   { to: "/app/requests", label: "Requests", icon: Inbox, permission: permissions.TICKETS_VIEW, section: "Work", feature: "requestForms" },
+  // Carries no `feature` and no permission, for the same reason the Agents roster does not: its
+  // gate is a workspace toggle AND a plan entitlement, neither of which the planning `effective`
+  // object models, and the page renders its own "switched off" / "not in your plan" state. Hiding
+  // the item instead would leave no surface on which to explain what change management is. Reading
+  // changes needs no permission at all — a change about to take a service down is not a secret
+  // from the people who depend on it.
+  { to: "/app/changes", label: "Change Management", icon: ClipboardList, section: "Work" },
 
   // Planning layer (V6). "My work" is deliberately FIRST and deliberately ungated: it is a
   // personal queue that reads dates every workspace already has, so it is useful before anything
@@ -124,12 +139,23 @@ export const nav: NavItem[] = [
   { to: "/app/ai", label: "AI overview", icon: Sparkles, role: "SUPER_ADMIN", section: "Plan" },
 
   { to: "/app/approvals", label: "Approvals", icon: Shield, permission: permissions.TIMESHEETS_APPROVE, section: "Team" },
-  { to: "/app/team", label: "My team", icon: Users2, permission: permissions.TIMESHEETS_APPROVE, section: "Team" },
+  // ONE entry, no permission gate — the page adapts instead of there being two of it. An approver
+  // gets the queue, SLA metrics and reports roll-up; everybody else gets the org chart alone, which
+  // is why the label follows the permission rather than the route.
+  {
+    to: "/app/team",
+    label: "My team",
+    labelWithout: { permission: permissions.TIMESHEETS_APPROVE, label: "Org chart" },
+    icon: Users2,
+    section: "Team"
+  },
 
-  { to: "/app/dashboards", label: "Dashboards", icon: LayoutDashboard, section: "Analytics", feature: "planning" },
+  { to: "/app/dashboards", label: "Custom Dashboards", icon: LayoutDashboard, section: "Analytics", feature: "planning" },
   { to: "/app/reports", label: "Reports", icon: BarChart3, permission: permissions.REPORTS_VIEW, section: "Analytics" },
-  { to: "/app/insights", label: "Insights", icon: TrendingUp, permission: permissions.REPORTS_VIEW, section: "Analytics" },
-  { to: "/app/security-insights", label: "Security insights", icon: ShieldAlert, permission: permissions.REPORTS_VIEW, section: "Analytics" },
+  // Insights and security insights are open to everyone (team leads and employees included) — the
+  // matching server endpoints were broadened to match. "Reports" above keeps its reports:view gate.
+  { to: "/app/insights", label: "Insights", icon: TrendingUp, section: "Analytics" },
+  { to: "/app/security-insights", label: "Security insights", icon: ShieldAlert, section: "Analytics" },
 
   { to: "/app/users", label: "Users", icon: Users, permission: permissions.USERS_MANAGE, section: "Administration" },
   { to: "/app/projects", label: "Projects", icon: FolderKanban, permission: permissions.PROJECTS_MANAGE, section: "Administration" },
@@ -178,6 +204,14 @@ export function isVisible(
 }
 
 function NavLinkRow({ item, onNavigate, slim = false }: { item: NavItem; onNavigate?: () => void; slim?: boolean }) {
+  const user = useAuthStore((s) => s.user);
+  // One route, two audiences: /app/team is "My team" to an approver and "Org chart" to everybody
+  // else, because that is what each of them actually gets when they open it.
+  const label =
+    item.labelWithout && !user?.permissions.includes(item.labelWithout.permission)
+      ? item.labelWithout.label
+      : item.label;
+
   const link = (
     <NavLink
       to={item.to}
@@ -198,7 +232,7 @@ function NavLinkRow({ item, onNavigate, slim = false }: { item: NavItem; onNavig
           </span>
           {/* The label leaves the layout in slim mode rather than being clipped — a truncated
               "Wor…" next to an icon reads as broken, an icon with a tooltip reads as designed. */}
-          {!slim && item.label}
+          {!slim && label}
         </>
       )}
     </NavLink>
@@ -208,7 +242,7 @@ function NavLinkRow({ item, onNavigate, slim = false }: { item: NavItem; onNavig
   return (
     <Tooltip>
       <TooltipTrigger asChild>{link}</TooltipTrigger>
-      <TooltipContent side="right" sideOffset={8}>{item.label}</TooltipContent>
+      <TooltipContent side="right" sideOffset={8}>{label}</TooltipContent>
     </Tooltip>
   );
 }

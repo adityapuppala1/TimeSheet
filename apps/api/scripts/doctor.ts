@@ -642,6 +642,64 @@ async function checkFaceReadiness(env: { APP_BASE_URL: string; UPLOAD_DIR: strin
   } else {
     info("  (run with --face to also load the ML models and time an inference)");
   }
+
+  await checkOutboundEgressPosture(env!);
+}
+
+/**
+ * The one security setting whose WRONG value is silent and whose right value depends on facts
+ * doctor can actually see.
+ *
+ * `ALLOW_PRIVATE_NETWORK_EGRESS=true` re-permits the API to fetch private/loopback/link-local
+ * addresses for the four admin-configurable outbound URLs (outbound webhooks, the Google Chat
+ * webhook, Bot Framework replies, the BYOK AI base URL — see src/utils/egress.ts). On a LAN box
+ * whose webhook receivers really are internal, that is correct and necessary. On an
+ * internet-facing deployment it hands any workspace admin a request issued from inside the
+ * trusted network: cloud instance metadata at 169.254.169.254 (which returns IAM credentials to
+ * anything that asks), a database on localhost, an internal admin panel.
+ *
+ * WHY IT IS A DOCTOR CHECK RATHER THAN A BOOT REFUSAL: both values are legitimate, so the API
+ * cannot decide for the operator. What it CAN do is notice the combination that is almost
+ * certainly a mistake — private egress allowed on something addressed as a public deployment —
+ * and say so before it matters, which is exactly the job of this script.
+ */
+async function checkOutboundEgressPosture(env: typeof import("../src/config/env.js")["env"]): Promise<void> {
+  info("\nOutbound request posture (SSRF guard)...");
+
+  const { privateEgressAllowed } = await import("../src/utils/egress.js");
+  const allowed = privateEgressAllowed();
+  const origins = env.WEB_ORIGIN.split(",").map((value) => value.trim()).filter(Boolean);
+  // Reuse the shipped predicate rather than re-deriving "is this public" — config/origins.ts is
+  // the same rule the CORS middleware enforces, and a second copy here is how the two drift.
+  const { PRIVATE_LAN_RE } = await import("../src/config/origins.js");
+  const publicOrigins = origins.filter((origin) => !PRIVATE_LAN_RE.test(origin));
+  const looksInternetFacing = env.NODE_ENV === "production" || publicOrigins.length > 0;
+
+  if (!allowed) {
+    ok("Private/loopback egress is BLOCKED — webhook and AI base URLs must resolve to public addresses");
+    if (!looksInternetFacing && env.NODE_ENV !== "production") {
+      info("  (development permits private targets automatically, so a localhost receiver or a local Ollama still works)");
+    }
+    return;
+  }
+
+  if (looksInternetFacing) {
+    warn(
+      `ALLOW_PRIVATE_NETWORK_EGRESS is ON, but this looks like an internet-facing deployment` +
+        `${publicOrigins.length > 0 ? ` (WEB_ORIGIN includes ${publicOrigins.join(", ")})` : ""}` +
+        `${env.NODE_ENV === "production" ? " (NODE_ENV=production)" : ""}.\n` +
+        `  Any workspace admin can then point an outbound webhook or the AI base URL at\n` +
+        `  169.254.169.254 (cloud metadata — IAM credentials), 127.0.0.1 or an internal host, and the\n` +
+        `  request leaves from INSIDE your network. Set ALLOW_PRIVATE_NETWORK_EGRESS=false unless a\n` +
+        `  webhook receiver genuinely lives on a private address. See docs/DEPLOYMENT.md.`
+    );
+    return;
+  }
+
+  info(
+    "ALLOW_PRIVATE_NETWORK_EGRESS is ON — correct for an on-prem LAN box whose webhook receivers are internal.\n" +
+      "  Turn it off if this deployment is ever exposed to the internet."
+  );
 }
 
 main();

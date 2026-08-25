@@ -75,7 +75,8 @@ export type PlanningCapability =
   | "proofingEnabled"
   | "customWorkflowsEnabled"
   | "aiPmCopilotEnabled"
-  | "goalsEnabled";
+  | "goalsEnabled"
+  | "changeManagementEnabled";
 
 export type PlanningQuota =
   | "maxPortfolios"
@@ -83,7 +84,8 @@ export type PlanningQuota =
   | "maxBlueprints"
   | "maxCustomFields"
   | "maxDashboards"
-  | "maxGoals";
+  | "maxGoals"
+  | "maxChangePolicies";
 
 /** One boolean capability. Callers should 403 with an upgrade message when this is false. */
 export async function isPlanningCapabilityAllowed(orgId: string, capability: PlanningCapability): Promise<boolean> {
@@ -103,12 +105,14 @@ export async function getPlanningEntitlements(orgId: string): Promise<Record<Pla
     customWorkflowsEnabled: Boolean(tierLimit.customWorkflowsEnabled),
     aiPmCopilotEnabled: Boolean(tierLimit.aiPmCopilotEnabled),
     goalsEnabled: Boolean(tierLimit.goalsEnabled),
+    changeManagementEnabled: Boolean(tierLimit.changeManagementEnabled),
     maxPortfolios: tierLimit.maxPortfolios,
     maxRequestForms: tierLimit.maxRequestForms,
     maxBlueprints: tierLimit.maxBlueprints,
     maxCustomFields: tierLimit.maxCustomFields,
     maxDashboards: tierLimit.maxDashboards,
-    maxGoals: tierLimit.maxGoals
+    maxGoals: tierLimit.maxGoals,
+    maxChangePolicies: tierLimit.maxChangePolicies
   };
 }
 

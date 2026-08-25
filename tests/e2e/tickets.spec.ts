@@ -49,9 +49,23 @@ test.describe("Tickets", () => {
     await expect(page.getByText(/status updated/i)).toBeVisible({ timeout: 10_000 });
 
     // Add a checklist item.
+    //
+    // The Add button is `disabled={!newLabel.trim() || add.isPending}` (pages/Tickets.tsx), so it
+    // only becomes clickable once the controlled input's onChange has round-tripped through React
+    // state. Playwright's click waits for "visible, enabled and stable" and then simply times out
+    // if that update is late — which WebKit occasionally is, and which made this the flakiest test
+    // in the suite: it failed on WebKit in CI and roughly one run in three locally, always here,
+    // always with the button resolved but never enabled.
+    //
+    // Waiting for the button to be enabled is not weakening the test — an Add button that stays
+    // disabled after you type IS a bug, so this assertion would catch it rather than hide it. It
+    // just moves the wait to the condition that is actually being waited on.
     await page.getByRole("tab", { name: /checklist/i }).click();
-    await page.getByPlaceholder(/add a sub-task/i).fill("Verify the fix");
-    await page.getByRole("button", { name: /^add$/i }).click();
+    const subTask = page.getByPlaceholder(/add a sub-task/i);
+    await subTask.fill("Verify the fix");
+    const addSubTask = page.getByRole("button", { name: /^add$/i });
+    await expect(addSubTask).toBeEnabled({ timeout: 10_000 });
+    await addSubTask.click();
     await expect(page.getByText("Verify the fix")).toBeVisible();
 
     // Clean up so the demo dataset doesn't accumulate one ticket per run.

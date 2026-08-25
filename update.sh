@@ -71,6 +71,31 @@ if [ -z "$TRUST_PROXY_LINE" ] || [ "$TRUST_PROXY_LINE" = "0" ]; then
   warn "  Not a blocker — this update continues. See docs/DEPLOYMENT.md."
 fi
 
+# ── Outbound-egress posture check ─────────────────────────────────────────────────────────────
+# ALLOW_PRIVATE_NETWORK_EGRESS is the same shape of problem as TRUST_PROXY_HOPS above — a default
+# that is invisible to every other check in this script — but it points the OTHER way: the default
+# is the safe one, so an .env predating this key silently becomes MORE restrictive on update.
+#
+# Both directions are worth a line here:
+#   * unset on an on-prem box whose webhook receivers are internal → deliveries start reporting
+#     "blocked" after this update, and nothing else in the output would explain why.
+#   * explicitly true on a deployment addressed by a public domain → any workspace admin can point
+#     an outbound webhook or the AI base URL at 169.254.169.254 (cloud metadata, which returns IAM
+#     credentials) or an internal service, with the request leaving from inside the network.
+EGRESS_LINE="$(grep -E '^ALLOW_PRIVATE_NETWORK_EGRESS=' .env | head -n1 | cut -d= -f2- | tr -d '[:space:]' || true)"
+if [ -z "$EGRESS_LINE" ]; then
+  log "ALLOW_PRIVATE_NETWORK_EGRESS is unset — defaulting to false, so outbound webhooks and the AI"
+  log "  base URL must resolve to PUBLIC addresses (this release adds that guard; see docs/DEPLOYMENT.md)."
+  log "  If any webhook receiver here lives on 10.x/192.168.x/localhost, its deliveries will now"
+  log "  report \"blocked\" — add ALLOW_PRIVATE_NETWORK_EGRESS=true to .env and restart the api container."
+elif [ "$EGRESS_LINE" = "true" ] && grep -qE '^HTTPS_DOMAIN=.+' .env; then
+  warn "ALLOW_PRIVATE_NETWORK_EGRESS=true while HTTPS_DOMAIN is set — this looks like a public deployment."
+  warn "  A workspace admin can then aim an outbound webhook or the BYOK AI base URL at cloud instance"
+  warn "  metadata (169.254.169.254 — IAM credentials) or an internal host, and the request originates"
+  warn "  INSIDE your network. Set it to false unless a receiver genuinely lives on a private address."
+  warn "  Not a blocker — this update continues. See docs/DEPLOYMENT.md."
+fi
+
 # ── Resolve the target release ────────────────────────────────────────────────────────────────
 TARGET_TAG="${2:-}"
 if [ "${1:-}" = "--to" ] && [ -n "$TARGET_TAG" ]; then

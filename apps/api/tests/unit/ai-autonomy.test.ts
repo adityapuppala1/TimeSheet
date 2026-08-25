@@ -248,9 +248,25 @@ describe("the ceilings themselves", () => {
     // If this list changes, it should be a decision somebody made on purpose, not a default.
     // status_report LEFT it deliberately: gaining ticket-reading tools for the agent loop moved
     // it into the untrusted-input class, and the invariant above priced that at the top rung.
+    //
+    // change_risk_narrative JOINED it deliberately, on the same terms as its project-shaped sibling:
+    // it writes nothing, and it reads only the change's own recorded assessment — no PR bodies, no
+    // CI logs, no comments, nothing authored outside this workspace. Worth being explicit that the
+    // top rung here is not a licence to APPROVE: there is no capability at any level that can, which
+    // is the absence of a capability rather than a ceiling on this one.
     const autonomous = AI_CAPABILITIES.filter((c) => c.maxLevel === "AUTONOMOUS").map((c) => c.id).sort();
     expect(autonomous).toEqual(
-      ["bug_pattern_digest", "project_risk_narrative", "security_weekly_digest", "weekly_digest"].sort()
+      [
+        "bug_pattern_digest",
+        // change_conflict_brief JOINED on the same terms: the conflicts are found by comparing dates
+        // — arithmetic with one right answer — and it only reads which of them matters. It moves
+        // nothing and reschedules nothing, so there is nothing here for autonomy to break.
+        "change_conflict_brief",
+        "change_risk_narrative",
+        "project_risk_narrative",
+        "security_weekly_digest",
+        "weekly_digest"
+      ].sort()
     );
   });
 

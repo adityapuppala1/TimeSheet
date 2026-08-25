@@ -32,7 +32,16 @@ const TEMPLATE_VARIABLES: Record<string, string[]> = {
   "ticket.status_changed": ["ticketKey", "title", "from", "to", "changedBy", "appUrl"],
   "ticket.commented": ["ticketKey", "title", "author", "appUrl"],
   "ticket.sla_breach": ["assigneeName", "ticketKey", "title", "priority", "hoursOverdue", "appUrl"],
-  "ticket.escalation": ["targetName", "ticketKey", "title", "assigneeName", "appUrl"]
+  "ticket.escalation": ["targetName", "ticketKey", "title", "assigneeName", "appUrl"],
+  "change.submitted": [
+    "changeKey", "projectName", "title", "changeType", "riskLevel", "riskScore",
+    "activityWindow", "description", "requestedBy", "receivedBy", "peopleInvolved", "appUrl"
+  ],
+  "change.decided": [
+    "changeKey", "projectName", "title", "changeType", "riskLevel", "riskScore",
+    "activityWindow", "description", "requestedBy", "receivedBy", "peopleInvolved",
+    "decision", "decidedBy", "comments", "appUrl"
+  ]
 };
 
 const TEMPLATE_DESCRIPTIONS: Record<string, string> = {
@@ -51,7 +60,9 @@ const TEMPLATE_DESCRIPTIONS: Record<string, string> = {
   "ticket.status_changed": "Sent to the reporter, assignee, and watchers when a ticket's status changes.",
   "ticket.commented": "Sent to the reporter, assignee, and watchers when someone comments on a ticket.",
   "ticket.sla_breach": "Sent to the assignee when a ticket misses its resolution SLA.",
-  "ticket.escalation": "Sent to the escalation target when a ticket's SLA breach is escalated."
+  "ticket.escalation": "Sent to the escalation target when a ticket's SLA breach is escalated.",
+  "change.submitted": "Sent the moment a change is submitted - to its approver, the requester, and everyone tagged on it.",
+  "change.decided": "Sent when a change is approved or rejected, carrying who decided and their comments."
 };
 
 export interface SeedTenantOptions {
@@ -229,6 +240,18 @@ export async function seedTenant(client: PrismaClient, options: SeedTenantOption
     ],
     EMPLOYEE: [permissions.TIMESHEETS_WRITE, permissions.TICKETS_VIEW, permissions.TICKETS_WRITE]
   };
+
+  // V8 phase 11: change management. Kept out of the literal above so the addition reads as one
+  // decision rather than five edited lines. Mirrored by idempotent SQL in
+  // migrations/20260819160000_change_management/migration.sql — this seed is a ONE-TIME bootstrap
+  // and never runs on upgrade, so a key added here alone reaches fresh installs and no others.
+  //
+  // Raising a change is open to everyone who can raise a ticket; APPROVING one starts at TEAM_LEAD,
+  // because the whole point of the module is that somebody accountable signs off. Reading needs no
+  // key at all — a change about to take a service down is not a secret from the people who use it.
+  grants.EMPLOYEE.push(permissions.CHANGES_WRITE);
+  grants.MANAGER.push(permissions.CHANGES_WRITE, permissions.CHANGES_APPROVE);
+  grants.TEAM_LEAD.push(permissions.CHANGES_WRITE, permissions.CHANGES_APPROVE);
 
   for (const [name, rolePermissions] of Object.entries(grants)) {
     const role = await client.role.upsert({
@@ -461,8 +484,29 @@ export async function seedTenant(client: PrismaClient, options: SeedTenantOption
       { daysAgo: 1, activity: "Documentation", task: "Write up the escalation matrix for the runbook", start: "09:45", end: "11:45", hours: 2, status: "DRAFT", reviewer: null }
     ] as const;
 
+    /**
+     * Seeded entry ids are REAL uuids, not readable sentinels like `seed-entry-1`.
+     *
+     * `Timesheet.id` is `@default(uuid())`, so every entry a person creates is a uuid — and the
+     * routes that act on one (`PUT /timesheets/:id`, the correction endpoint, the per-entry export)
+     * validate `:id` with `z.string().uuid()`. A readable sentinel therefore seeds demo rows the
+     * API itself refuses to touch: opening one from history deep-links to `?entry=seed-entry-6`,
+     * editing it returns `422 Validation failed — id: Invalid uuid`, and the single-entry export
+     * names the file after a truncated sentinel. Demo data you cannot click on is worse than none,
+     * because the failure looks like a broken feature rather than a broken fixture.
+     *
+     * Still deterministic, so the upsert stays idempotent and the specs can address a known row:
+     * a fixed prefix plus the index, shaped as a valid v4 uuid (version nibble `4`, variant `8`).
+     */
+    const seedEntryId = (n: number) => `5eed0000-0000-4000-8000-${String(n).padStart(12, "0")}`;
+
+    // Workspaces seeded before that change carry the old sentinel rows. Left in place they would
+    // sit alongside the uuid ones as permanent un-editable duplicates, so they are retired here —
+    // scoped to the `seed-entry-` prefix, which only this seed has ever produced.
+    await client.timesheet.deleteMany({ where: { id: { startsWith: "seed-entry-" } } });
+
     for (const [index, e] of demoEntries.entries()) {
-      const id = `seed-entry-${index + 1}`;
+      const id = seedEntryId(index + 1);
       await client.timesheet.upsert({
         where: { id },
         update: {},

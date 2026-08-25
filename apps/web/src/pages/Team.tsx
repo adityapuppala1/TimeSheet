@@ -32,6 +32,8 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "../components/ui/toolti
 import { toast } from "../components/ui/toaster";
 import { computeTrend } from "../lib/trend";
 import { fileUrl, teamApi, timesheetApi, type TeamReport } from "../services/api";
+import { permissions } from "@timesheet/shared";
+import { useAuthStore } from "../store/auth";
 
 function initialsFor(name?: string) {
   if (!name) return "?";
@@ -57,9 +59,25 @@ function relativeTime(value: string) {
 export function Team() {
   const queryClient = useQueryClient();
   const [trendFor, setTrendFor] = useState<TeamReport | null>(null);
-  const reports = useQuery({ queryKey: ["team", "reports"], queryFn: teamApi.reports });
-  const summary = useQuery({ queryKey: ["team", "sla-summary"], queryFn: teamApi.slaSummary, refetchInterval: 30_000 });
-  const escalations = useQuery({ queryKey: ["team", "escalations"], queryFn: teamApi.escalations });
+  /**
+   * WHO SEES WHAT ON THIS PAGE. Everybody may open it, because the org chart at the bottom is for
+   * everybody — `GET /team/org-chart` self-scopes to the caller's own reporting subtree. The
+   * approval machinery above it is not: the reports roll-up, the SLA metrics and the escalation
+   * queue are a manager's tools, and their endpoints require `timesheets:approve`.
+   *
+   * So this page renders the manager half only for an approver, rather than existing twice. A
+   * separate employee-facing org-chart page was the first attempt and was the wrong call — one
+   * page, one org chart, two shapes.
+   *
+   * The queries are DISABLED rather than merely hidden: left enabled they would fire three
+   * requests that can only 403, filling an employee's console with errors to render nothing.
+   */
+  const user = useAuthStore((s) => s.user);
+  const canApprove = Boolean(user?.permissions.includes(permissions.TIMESHEETS_APPROVE));
+
+  const reports = useQuery({ queryKey: ["team", "reports"], queryFn: teamApi.reports, enabled: canApprove });
+  const summary = useQuery({ queryKey: ["team", "sla-summary"], queryFn: teamApi.slaSummary, refetchInterval: 30_000, enabled: canApprove });
+  const escalations = useQuery({ queryKey: ["team", "escalations"], queryFn: teamApi.escalations, enabled: canApprove });
 
   const approve = useMutation({
     mutationFn: (id: string) => timesheetApi.approve(id),
@@ -237,15 +255,20 @@ export function Team() {
             <Users2 className="h-5 w-5" />
           </div>
           <div>
-            <h1 className="text-2xl font-black tracking-tight">My team</h1>
+            {/* The page is honestly named for what this viewer actually gets: an approver sees
+                their team's queue, everybody else sees the reporting lines. */}
+            <h1 className="text-2xl font-black tracking-tight">{canApprove ? "My team" : "Org chart"}</h1>
             <p className="mt-1 text-sm text-muted-foreground">
-              Direct reports, approval queue, and SLA health — all in one view.
+              {canApprove
+                ? "Direct reports, approval queue, and SLA health — all in one view."
+                : "Reporting lines, built from each person's assigned manager."}
             </p>
           </div>
         </div>
       </div>
 
-      {/* Top stats */}
+      {/* Top stats — approver only: every figure here is about approving other people's work. */}
+      {canApprove && (
       <div className="grid grid-cols-2 gap-2.5 sm:gap-3 md:grid-cols-4">
         <StatCard
           label="Awaiting approval"
@@ -280,6 +303,7 @@ export function Team() {
           trendLabel="vs yesterday"
         />
       </div>
+      )}
 
       {/* Escalations to me */}
       {(escalations.data?.length ?? 0) > 0 && (
@@ -328,7 +352,8 @@ export function Team() {
         </Card>
       )}
 
-      {/* Direct reports */}
+      {/* Direct reports — approver only. */}
+      {canApprove && (
       <Card>
         <CardHeader>
           <CardTitle className="flex items-center gap-2 text-base">
@@ -386,8 +411,12 @@ export function Team() {
           </div>
         </CardContent>
       </Card>
+      )}
 
-      <AnomaliesCard />
+      {/* Timesheet anomalies are a reviewer's signal too — same gate as the roll-up above. */}
+      {canApprove && <AnomaliesCard />}
+
+      {/* The one section EVERYBODY gets — see the note on `canApprove` above. */}
       <OrgChartCard />
 
       <HoursTrendDialog person={trendFor} onClose={() => setTrendFor(null)} />

@@ -121,6 +121,13 @@ env:
   # one egress IP (office NAT, corporate proxy) — the per-surface limiters (auth, public shares,
   # webhooks) stay fixed regardless. Default matches what the code has always shipped.
   rateLimitPerMinute: 900
+  # May the API fetch private / loopback / link-local addresses? Four features let a workspace
+  # admin type a URL the server then requests (outbound webhooks, the Google Chat webhook, Bot
+  # Framework replies, the BYOK AI base URL), so an unrestricted one is SSRF from inside the
+  # cluster: the node metadata endpoint (169.254.169.254 — IAM credentials), any ClusterIP
+  # service, the MySQL StatefulSet. FALSE is correct for essentially every cluster install;
+  # flip it only if a webhook receiver genuinely lives on an internal address.
+  allowPrivateNetworkEgress: false
   # Connections per tenant Prisma client. The code default (5) is multi-tenant arithmetic —
   # 50 cached tenant clients x 5 must stay under MySQL max_connections. A Shape-1 single-org
   # install has ONE live tenant, and load testing showed 5 caps the authed path near 90 req/s

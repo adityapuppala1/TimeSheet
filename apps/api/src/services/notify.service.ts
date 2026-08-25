@@ -68,7 +68,35 @@ export type NotificationCategory =
    *  message with an email leg, because it is the only one that BLOCKS. */
   | "workflow.approval"
   /** Weekly, to a goal's owner: which of their goals are off track and which periods are closing. */
-  | "goal.digest";
+  | "goal.digest"
+  /* --- Change management. Every one of these except the digest is a direct consequence of an
+     action somebody took, which is this codebase's test for whether a message ships enabled. --- */
+  /** A change has been raised and needs assessment or approval. */
+  | "change.submitted"
+  /** Sent to an approver the moment their step in a change's chain opens. */
+  | "change.approval_requested"
+  /** The board said yes — sent to the requester, implementer and watchers. */
+  | "change.approved"
+  /** The board said no, with the rejecting approver's comment. */
+  | "change.rejected"
+  /** An approved change has been given a window. */
+  | "change.scheduled"
+  /** The implementation window opens shortly — sent a day out and an hour out. */
+  | "change.window_reminder"
+  /** Work on an approved change has begun. */
+  | "change.implementation_started"
+  /** A change finished implementing, with its outcome. */
+  | "change.completed"
+  /** A change failed or was rolled back — sent to admins as well as the parties. */
+  | "change.failed"
+  /** A change is waiting on its post-implementation review. */
+  | "change.pir_due"
+  /** A change's window collides with a freeze period. */
+  | "change.freeze_conflict"
+  /** An approval has sat undecided past the workspace's approval SLA. */
+  | "change.overdue_approval"
+  /** Monday digest to change managers: next week's calendar, last week's outcomes. */
+  | "digest.change_weekly";
 
 interface EmailPayload {
   templateKey: string;
@@ -126,7 +154,20 @@ const SETTINGS_FIELD: Record<NotificationCategory, string | null> = {
   "release.published": null,
   "workflow.attention": null,
   "workflow.approval": "emailWorkflowApproval",
-  "goal.digest": "emailGoalDigest"
+  "goal.digest": "emailGoalDigest",
+  "change.submitted": "emailChangeSubmitted",
+  "change.approval_requested": "emailChangeApprovalRequested",
+  "change.approved": "emailChangeApproved",
+  "change.rejected": "emailChangeRejected",
+  "change.scheduled": "emailChangeScheduled",
+  "change.window_reminder": "emailChangeWindowReminder",
+  "change.implementation_started": "emailChangeImplementationStarted",
+  "change.completed": "emailChangeCompleted",
+  "change.failed": "emailChangeFailed",
+  "change.pir_due": "emailChangePirDue",
+  "change.freeze_conflict": "emailChangeFreezeConflict",
+  "change.overdue_approval": "emailChangeOverdueApproval",
+  "digest.change_weekly": "emailChangeWeeklyDigest"
 };
 
 const GLOBAL_ID = "global";

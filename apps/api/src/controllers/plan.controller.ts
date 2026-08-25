@@ -38,7 +38,7 @@ import {
   toDay,
   type PlanDependency
 } from "../services/plan-schedule.service.js";
-import { assertTicketVisible, canModifyTicket, ticketProjectScope } from "../services/ticket.service.js";
+import { assertTicketVisible, canWorkOnTicket, ticketProjectScope, WORK_FORBIDDEN_MESSAGE } from "../services/ticket.service.js";
 
 export const planRouter = Router();
 planRouter.use(requireAuth);
@@ -226,7 +226,7 @@ planRouter.patch("/items/:id", requirePermission(permissions.PLAN_WRITE), valida
   });
   if (!existing) throw new AppError(404, "Work item not found");
   await assertTicketVisible(req, existing.projectId);
-  if (!canModifyTicket(req, existing)) throw new AppError(403, "Forbidden");
+  if (!(await canWorkOnTicket(req, existing))) throw new AppError(403, WORK_FORBIDDEN_MESSAGE);
 
   const data: Record<string, unknown> = {};
   if ("startDate" in req.body) data.startDate = req.body.startDate ? toDay(req.body.startDate) : null;
@@ -302,7 +302,7 @@ planRouter.post(
     });
     if (!existing) throw new AppError(404, "Work item not found");
     await assertTicketVisible(req, existing.projectId);
-    if (!canModifyTicket(req, existing)) throw new AppError(403, "Forbidden");
+    if (!(await canWorkOnTicket(req, existing))) throw new AppError(403, WORK_FORBIDDEN_MESSAGE);
 
     if (req.body.clear) {
       const cleared = await prisma.ticket.update({

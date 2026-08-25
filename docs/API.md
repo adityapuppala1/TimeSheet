@@ -959,6 +959,404 @@ tickets and hours, which every workspace already has.
   months is the one worth designing against. `lastSentAt` is the cadence guard, so a restart or a
   double-fired cron re-sends nothing.
 
+## Change management (V8)
+
+**A change request IS a ticket** plus a `ChangeRequest` extension row. That is the whole design
+decision, and everything below follows from it: comments, attachments, watchers, cross-links, the
+audit trail, search and project-scoped visibility all hang off the ticket half and needed no new
+code. What this module adds is the governance a ticket cannot express — a risk assessment, an
+approval with a name against it, a scheduled window, a runbook, and a recorded outcome.
+
+Every route 403s unless change management is switched on for the workspace **and** the org's tier
+includes it, with deliberately different messages for the two cases — "turn it on in settings" and
+"upgrade your plan" need different people to do different things. Same pattern as planning.
+
+**Every state write also writes `Ticket.status`.** `CHANGE_STATE_TO_TICKET_STATUS` is the same
+compatibility hinge `WorkflowStatus.legacyStatus` provides for custom ticket statuses: the ~40 places
+already reading `Ticket.status` keep working precisely because the pair is never written apart.
+
+### Identity
+
+Change keys are `PROJECTCODE-YYYYMMDD-NNNN` — e.g. `HICS-TS-20260819-0001` — issued by
+`change-key.service.ts` with a count-and-retry against the unique index. The date part is the day it
+was raised, so the key stays meaningful when it is read a year later in an audit response.
+
+### The four change types, and why there are four
+
+`STANDARD`, `NORMAL` and `EMERGENCY` are ITIL's vocabulary: pre-approved routine work, planned work
+that earns a decision, and work that cannot wait for one.
+
+**`MAJOR` is not a fourth peer — it is `NORMAL` escalated**, and it exists because two obligations
+cannot be derived from the risk score:
+
+| | |
+|---|---|
+| `requiresBackoutPlan` | A MAJOR change needs one **even when impact × likelihood bands it LOW**. A platform migration can score low on every parameter and still be the thing you must be able to undo. The matrix scores *probability of harm*; it has no way to say "structurally significant". |
+| `requiresReview` | A MAJOR change owes a post-implementation review **even when its outcome was `SUCCESSFUL`**. Everything else owes one only when it went wrong. |
+
+Removing MAJOR would therefore delete both rules with nothing to replace them, which is why
+`change-rules.test.ts` pins the enum as well as the two behaviours — a vocabulary tidy-up would
+otherwise compile, lint and pass. It means "significant regardless of what the matrix scored", **not**
+"riskier than HIGH"; risk is a separate axis and stays one.
+
+Both pickers state the consequence in the dropdown rather than letting somebody discover it as a 422
+at submission time (`CHANGE_KIND_MEANING`).
+
+### The lifecycle
+
+`DRAFT → AWAITING_APPROVAL → APPROVED → SCHEDULED → IMPLEMENTING → VALIDATION → PIR → CLOSED`, with
+`REJECTED` and `CANCELLED` as terminal branches.
+
+Two things are deliberately **not** in that list. `FAILED` and `ROLLED_BACK` are **outcomes**, not
+states: a change that failed still has to be validated, reviewed and closed, and modelling failure as
+a state would strand it outside the process that exists to learn from it. And the lifecycle is its
+own state machine rather than a `Workflow` — custom workflows collapse to the system workflow when
+the feature is off, which would have made the whole module Enterprise-only.
+
+- `GET /changes` — the register, project-scoped. Filters: `state`, `riskLevel`, `changeKind`,
+  `environment`, `projectId`, `search`.
+- `GET /changes/:id` — one change with everything on it, plus four server-computed answers the
+  browser cannot work out for itself: `canEdit`, `canDecide`, `blockingForSubmit` (what the change
+  still owes before it could be submitted), `blockingDependencies`, and `sla`.
+- `POST /changes` — raise one. `justification` is required at creation; a change with no stated
+  reason is the thing this module exists to stop.
+- `PATCH /changes/:id` — fill in any section. The plan **freezes** at `APPROVED` for non-privileged
+  editors: scope, risk and schedule are what got approved, so changing them afterwards means raising
+  a new change. Outcome fields stay writable, because recording what happened is post-approval work.
+- `POST /changes/:id/transition` — move it. Refuses illegal edges, answers a no-op rather than
+  performing it (a double-click was otherwise enough to open a second approval round and re-mail the
+  approver), and refuses `IMPLEMENTING` while a dependency is open.
+- `POST /changes/:id/decision` — approve or reject. `CHANGES_APPROVE`.
+
+### What submission requires, and why it is not advisory
+
+`missingForSubmit` demands a **complete** risk assessment, a justification, an implementation plan, a
+planned window, a test plan above LOW risk, and a backout plan wherever the risk band calls for one.
+
+The completeness rule is not fussiness. The risk score normalises across every active parameter, so
+an unanswered one contributes zero — correct in itself (a blank is not "low"), but it means a
+half-filled assessment **under-reports**. Measured: high business impact plus high data risk, with
+the other nine parameters left blank, scored 27 and banded LOW — and the band is exactly what decides
+whether a backout plan is mandatory. Leaving fields empty was a way to skip the module's central
+rule. A draft can still be saved with any subset.
+
+### Approval routing
+
+`resolveChangeApprovers` returns **the requester's manager**, or every active super admin if they
+have none. There is no multi-level chain: one named approver, or the people who can always act.
+
+A requester can never approve their own change, and submitting with no manager and no active super
+admin is refused at submission time with an actionable message rather than creating a change nobody
+can decide. Rejection opens a **new round** rather than overwriting the first, so the objection stays
+on the record when the change is reworked and resubmitted.
+
+### The runbook
+
+Three child tables — implementation steps, test cases, dependencies — read off `GET /changes/:id`,
+so these are writes only:
+
+- `POST|PATCH|DELETE /changes/:id/steps[/:stepId]`
+- `POST|PATCH|DELETE /changes/:id/tests[/:testId]`
+- `POST|PATCH|DELETE /changes/:id/dependencies[/:dependencyId]`
+
+These deliberately **do not** apply the post-approval freeze. Recording that step 4 failed, or that a
+regression test passed, is precisely the work that happens after approval — see
+`loadChangeForRunbook`, which checks visibility and authorship but not state.
+
+A `PREDECESSOR` or `BLOCKS` dependency left `OPEN` refuses the move to `IMPLEMENTING` with a 409 that
+names it. `SUCCESSOR` and `RELATED` do not block — successors follow this change and related work is
+context, so blocking on either would make the field unusable for what it is for. `WAIVED` clears the
+gate the same way `COMPLETED` does, and the row keeps saying which it was.
+
+### SLA
+
+`ChangeSlaConfig` holds a budget and a warning fraction per stage (`APPROVAL`, `IMPLEMENTATION`,
+`VALIDATION`, `PIR`, `CLOSURE`). `judgeSla` returns `ON_TRACK` / `WARNING` / `BREACHED` for a running
+clock and `MET` / `BREACHED` for one that has stopped.
+
+A finished stage is judged on **how long it actually took**, never against the current time. A stage
+that ran 60 hours against a 48-hour budget and then closed is a breach that already happened;
+reporting it as fine the moment it closes is how an SLA dashboard comes to say everything is green
+while the register is full of overruns. A stage with no configured budget has no clock at all rather
+than a zero-hour one, which would breach everything on sight.
+
+### Tagging
+
+- `GET /changes/:id/linkable-tickets` — **only closed work is offered.** A change is a record of
+  shipping something finished; letting somebody attach an in-progress ticket would turn the manifest
+  into a promise.
+- `POST|DELETE /changes/:id/tickets[/:ticketId]`, `POST|DELETE /changes/:id/collaborators[/:userId]`.
+
+### Calendar and conflicts
+
+- `GET /changes/calendar?from=&to=` — scheduled work **and** the blackout periods it has to dodge, in
+  one call. A calendar that fetches its bars and its no-go zones separately renders them a frame
+  apart.
+- `GET /changes/:id/conflicts` — overlapping changes on the same application, and any blackout the
+  planned window collides with. Reported, never auto-corrected.
+
+### Derived context
+
+`GET /changes/:id/context` — what this change is actually shipping, assembled from the tickets it
+links rather than typed: repositories, branches, pull requests and merge states (from `TicketBranch`,
+kept live by the git webhook), the latest ingested CI run per branch, open security findings, the
+people who did the work and their **approved** hours, and how the last five changes to the same
+application went.
+
+Two rules it follows. Hours are approved-only — draft time is time somebody typed, not time anybody
+signed off. And a repository with no ingested CI run reports **null**, rendered as "not reported",
+never as passing: nobody having told us and everything being green are different facts, and only one
+is a reason to approve.
+
+Its own route rather than part of `GET /:id` because it reads across five tables — worth paying for
+when the Context tab is opened, not on every load of a form somebody came to edit one field on.
+
+### AI over changes
+
+Four capabilities, each off by default, each with a `GlobalAISettings` toggle and a stated ceiling in
+`ai-capability.registry.ts`. They appear in the AI capability grid on their own — that screen renders
+from the registry.
+
+| Route | Capability | Ceiling | Writes |
+|---|---|---|---|
+| `POST /changes/:id/risk-narrative` | `change_risk_narrative` | `AUTONOMOUS` | Nothing |
+| `POST /changes/:id/conflict-brief` | `change_conflict_brief` | `AUTONOMOUS` | Nothing |
+| `POST /changes/:id/draft-assist` | `change_draft_assist` | `SUGGEST` | A `CHANGE_DRAFT` proposal, one row per section |
+| `POST /changes/:id/pir-assist` | `change_pir_assist` | `SUGGEST` | A `CHANGE_DRAFT` proposal for the review |
+| `POST /changes/:id/draft-field` | `change_draft_assist` | `SUGGEST` | Nothing — returns text the person accepts into the form themselves |
+
+`draft-field` drafts ONE section inline, for the assist button beside each empty prose field. It does
+not use the proposal envelope, and that is a decision, not an omission: the envelope keeps a human
+between the model and the record when writing happens in the background, and here the human IS the
+foreground — the suggestion renders beside the field, and nothing reaches the change until they press
+"Use this", at which point the form's own save writes it as THEIR edit through the same PATCH,
+validation and audit trail as anything typed. The same trust model AiRefine established. The
+draftable set is `CHANGE_DRAFTABLE_FIELDS` — ten prose fields, validated at the route and pinned by
+`change-field-requirements.test.ts`; the five that gate submission plus five business-case fields.
+
+**The omission rule.** The drafter LEAVES OUT a section it cannot ground rather than padding it, and
+both routes report what was skipped. This rule exists because its opposite shipped: told to "admit
+what is not known", the model answered a backout-plan request with "a backout procedure has not been
+documented at this time" — text which, if accepted, would satisfy the mandatory-backout submission
+gate while containing no plan. The gate checks that the field has words; only a human can check that
+the words are a plan.
+
+POST rather than GET throughout: each spends a model call, and a GET should be safe to re-run.
+
+**Nothing here scores, schedules or decides.** The risk score and the schedule conflicts are computed
+by `computeRiskScore` and `findScheduleConflicts` — arithmetic with one right answer — and the
+capabilities only read them. A score a model produced would be unreproducible, and the score is what
+decides whether a backout plan is mandatory.
+
+**The two that write go through the proposal envelope.** `ChangeTarget` gained `CHANGE`, and
+`CHANGE_WRITABLE` admits exactly six fields: the five blocking prose sections plus `pirNotes`. No
+state, risk, schedule or outcome is reachable however a model replies — an allowlist, not a request
+in the prompt. Each row is accepted individually on the AI suggestions page, and one whose underlying
+field moved since it was drafted is refused rather than overwriting the edit.
+
+**The plan freeze applies, with one exemption.** A drafted section cannot be applied to a change past
+`APPROVED` — that would rewrite what was agreed. `pirNotes` is exempt, because a review is written
+after the change has run, which is exactly when the plan is frozen.
+
+**No capability approves a change**, at any level. That is the absence of a capability rather than a
+ceiling on one, and `change-draft-proposal.test.ts` asserts it against the whole registry.
+
+### Automation
+
+Change events are already in `DOMAIN_EVENTS` and already exposed by `GET /flows/catalogue`, so
+Workflow Studio can trigger a flow on `change.approved`, `change.closed` and the rest. A change
+resolves to its own **ticket** as the flow subject — a change *is* a ticket — so every existing
+action and branch field works on it.
+
+Three change-shaped actions: `change_transition`, `change_comment`, `change_collaborator`. Each
+re-enters `assertLegalChangeTransition`, `assertReadyFor` and `assertDependenciesClear`, the same
+three functions the transition route calls; an automation that reimplemented four of the five checks
+is exactly how one ends up able to do what the API refuses.
+
+**A workflow cannot approve or reject.** Neither state is reachable from an undecided one through
+the transition table, `changeStates` in the catalogue omits both, and the dispatcher refuses them by
+name — three layers, because this is the rule the module exists for.
+
+### Metrics
+
+`GET /changes/metrics` returns the state/risk/kind/environment tallies, `awaitingMyDecision`,
+`inFlight`, a twelve-week `trend` of raised-against-closed bucketed by real timestamps, the busiest
+eight projects, the running-clock SLA rollup, and three delivery-health rates.
+
+`changeFailureRate`, `emergencyRate` and `avgApprovalHours` are **null, never 0**, when there is
+nothing to divide by. "No change has closed yet" and "every change succeeded" are different facts,
+and a 0% failure rate over an empty set is exactly the number that ends up quoted in a review. The UI
+renders null as an em dash.
+
+### Exports
+
+`GET /changes/export.csv`, `.xlsx`, `.pdf` — one query feeds all three, so no two formats can
+disagree about which changes matched.
+
+All three are fetched as **authenticated blobs**, never linked. The access token lives in memory
+only, so an `<a href>` reaches these routes with no `Authorization` header and gets a 401 — that is
+not hypothetical, it shipped that way. Same pattern as `reportApi.download`.
+
+Every format states its own limits: `X-Export-Rows-Included` and `X-Export-Truncated` come back on
+all three (with `Access-Control-Expose-Headers` so the browser can read them), the PDF prints the cap
+in its header *and* footer, and the workbook's summary sheet is built from the same capped row set as
+its detail sheet — so a truncated export can never ship a summary that does not add up.
+
+### Email
+
+Two templates, `changeSubmitted` and `changeDecided`, editable in **Workspace Settings → Email
+templates** like every other outbound mail, with the same delivery analytics and failure triage.
+
+The submission mail carries project, title, type, risk, activity window, description, requester and
+approver; the decision mail adds who decided it and their comments. Both go **to** the requester,
+implementer, approvers and collaborators, with every super admin in **BCC** via `alwaysBcc` — one
+merged, deduplicated recipient set, so somebody already on the To line does not also get a blind
+copy. Mail is best-effort: a slow SMTP server cannot lose a transition that already happened.
+
+## Ask AI (the page)
+
+`/ai-chat/*` — the full-page Ask AI: a conversation with a memory, distinct from the palette's
+one-shot `POST /ai/ask`. Same toggle (`workspaceSearchEnabled`), same capability (`ask_ai`).
+
+- `POST /ai-chat/ask` `{ prompt }` — answers through a tool loop and PERSISTS the exchange: prompt,
+  answer, which tools were consulted, model, provider, tokens, estimated cost and duration, all
+  stored at answer time so the history keeps saying what each answer actually cost after the
+  workspace's model changes. A failed attempt is stored too, with its error — "it failed at 14:02"
+  is part of the history.
+- `GET /ai-chat/history?limit=` — the asker's OWN exchanges, oldest first. There is no cross-user
+  read and no admin view: what somebody asks an assistant is closer to a search history than to a
+  work record.
+- `POST /ai-chat/:id/feedback` `{ feedback: 1 | -1 | 0 }` — thumbs on one answer; 0 clears, so
+  "unrated" stays expressible. Own rows only.
+- `DELETE /ai-chat/history` — the clear-my-history gesture. Own rows only.
+- `GET /ai-chat/capabilities` — every capability the assistant has, judged for THIS caller: name,
+  description, group, whether it writes, whether they may use it, and the gate it needs. Built
+  through the same filter the prompt is, so the page's "What can it do?" panel and the model can
+  never disagree about what exists. Refused capabilities are returned too, marked `allowed: false` —
+  hiding them would make the panel read as the product's whole surface, and somebody would
+  reasonably conclude the workspace has no spend reporting because their role cannot see it.
+
+`POST /ai-chat/ask` carries `aiRateLimit` (20/min per user) like every other model-spending route:
+a chat box is the easiest place in the product to spend a budget by holding down Enter, and the
+monthly AI ceiling underneath it is too coarse to stop a minute of hammering before it lands.
+
+**How the loop works, and why it is not native tool-calling.** The model is asked for exactly one
+JSON object per step — a tool request or a markdown answer — through the same `callChat` +
+`parseJsonResponse` every capability uses. This is a bring-your-own-key product: native tool calling
+is a per-provider dialect many configured models do not speak, and "reply with one JSON object"
+works on anything that follows instructions. A model that ignores the format degrades gracefully —
+its raw text becomes the answer. Five tool steps maximum, then a forced final answer from whatever
+was gathered.
+
+**Reads and actions are two registries with two contracts.** The read surface is split across two
+files, and the split is the access boundary made structural. `ai-chat-tools.ts` holds the everyday,
+PROJECT-SCOPED tools — tickets, changes, timesheets, metrics, projects, goals, the people directory,
+the agent roster and the workflow list — each scoped through the same `ticketProjectScope` the pages
+use, each running as the asking person, none reaching past what that person could already open.
+`ai-chat-admin-tools.ts` holds the OPERATIONAL ones — AI spend and answer quality, email volume and
+failure reasons, email templates, service health, API latency percentiles, the audit log, security
+findings, CI runs, identity-check outcomes, workspace configuration, SSO and auth methods, scheduled
+report subscriptions, project risk, headcount, SLA breaches and automation activity — and every entry
+there carries an access gate. `sso_and_auth` is the one tool that reads the CONTROL plane rather than
+the tenant database, scoped to the caller's own org exactly as `GET /settings/sso` is, and it reports
+every secret as SET or NOT SET rather than reading it. Both files are held provably
+read-only by a test that greps them for every Prisma write verb, and a second test asserts that no
+tool in the admin registry is ungated.
+
+**Every gate mirrors a page.** `audit_log` needs `audit:view`, the same as the Audit log page;
+`user_stats` needs `users:manage`, the same as Users; `timesheet_report` and `sla_and_escalations`
+need `reports:view`. Spend, mail, security, health, API telemetry and configuration are
+super-admin-only, because that is who those settings pages are for. Nothing invents an access rule;
+where the chat cannot mirror a page's rule exactly it takes the stricter one.
+
+**A tool is filtered twice, from one predicate.** `ai-chat-guardrails.ts` holds `canUseTool`;
+`visibleTools` decides what the prompt may even mention, and `assertToolAllowed` decides what may
+actually run. Filtering only the prompt would be security by suggestion — a model that hallucinates
+a name it never saw, or is talked into one by injected text, would reach a real query. Filtering
+only at execution would be correct but wasteful: the model would keep proposing tools it is refused
+and burn steps on them. Everything a tool returns then passes through `sanitiseToolResult`, which
+applies the AI layer's own secret masking (a scanner finding's title can BE the leaked credential)
+and one shared 2,400-character cap.
+
+Measured effect on the seeded workspace: a super admin sees 34 capabilities, a manager 20, an
+employee 16.
+
+The action registry (`ai-chat-actions.ts`) holds what the assistant may DO. There are four:
+`log_timesheet_draft`, `raise_ticket`, `comment_on_ticket` and `draft_change_request`.
+
+**The rule is that nothing starts or settles an approval.** Where the record has a draft state the
+action uses it and stops — a timesheet is saved DRAFT, a change is raised DRAFT — because submitting
+either starts an approval SLA clock and, where the workspace requires it, an identity check, and an
+assistant must not trigger those from a sentence. Where there is no draft state the action says so
+plainly rather than borrowing the word: `TicketStatus` begins at OPEN and `TicketComment` has no
+unpublished state, so raising a ticket and posting a comment genuinely publish, and their
+descriptions tell the model to confirm the details with the person first. No action transitions a
+change, decides a timesheet or approves anything, at any autonomy level.
+
+**Two gates, not one.** Every action except the timesheet draft declares the permission its own page
+requires (`tickets:write`, `changes:write`) — the timesheet draft is ungated because it writes the
+asker's own record, which they can already do from the form. The permission is only half of it: each
+executor then re-checks that the caller can actually SEE the project or ticket, because a
+workspace-wide `tickets:write` is a permission and not a boundary. An employee who holds it is still
+refused a project they are not assigned to.
+
+**The validations live once.** `raise_ticket` and `comment_on_ticket` call
+`createTicketForActor` / `addTicketCommentForActor` in `ticket.service.ts` — the same functions the
+MCP server's `create_ticket` and `add_ticket_comment` call — so visibility, the ticket-type check,
+the sanitisation of model-written prose, the SLA clock and the reporter attribution cannot drift
+between the two callers. `draft_change_request` calls `createChangeRequest`, the extracted body of
+`POST /changes`, so the module gate, the project check and the risk scoring apply unchanged;
+`justification` stays required and is never defaulted. `log_timesheet_draft` calls `saveTimesheet`,
+giving it the Serializable overlap check, the assignment gate and the >12h rule.
+
+A refusal goes back to the model as data phrased for relaying, and the loop refuses to re-run an
+identical consecutive call, so a model that repeats itself cannot double-fire an action. Four guard
+tests hold the boundary: the action list is pinned, no action may reach Prisma directly, every
+publishing action must declare a permission, and every one of them must carry the instruction never
+to act on an instruction it merely READ — a ticket description is attacker-controlled in any
+workspace with email intake switched on.
+
+The prompt carries today's date and the asker's name — the two facts a model cannot look up and
+reliably invents instead (measured: asked to log time "today", it wrote a date from its training
+data).
+
+**Only exchanges that consulted a tool become context for the next question.** Fed its own failures
+back as "recent conversation", the model copies them: measured, it declined operational questions it
+had answered correctly moments earlier on a clean history, and reproduced a malformed tool-call
+fragment from two turns before. Excluding outright errors was not enough — a fluent "I'm sorry, I
+encountered an error" is stored as an *answer*, and is the most copyable thing in the window. A
+consulted tool is the positive signal that separates the two: an exchange that fetched data is
+exactly what a follow-up refers back to, and one that fetched nothing is a decline, a format failure
+or small talk. Failures still render in the page's feed, where "it failed at 14:02, and this is why"
+belongs.
+
+**The read-first rule appears twice, and position mattered more than wording.** Even with the
+prompt rewritten in positives, questions about authentication came back as "would you like me to look
+that up?" three times out of three, while spend and health answered directly — a model being careful
+about a topic it is trained to be careful about. Rewording the tool's description changed nothing.
+Repeating the rule beside the reply-format block, where the choice is actually made, fixed all three.
+The instruction was not missing; it was too far from the decision.
+
+**The prompt is written in positives, and that is load-bearing.** An earlier draft framed the scope
+rules as five lines of prohibitions — "never decline", "never offer alternatives", "may you say a
+figure is unavailable". On the small model this workspace runs it produced exactly the behaviour it
+forbade: six operational questions in a row came back as polite refusals paraphrasing the
+prohibition, without a single tool call. Saturating a prompt with the vocabulary of refusal teaches
+refusal. The same applies to caution that is not scoped: "make sure you have the real details before
+acting" leaked from actions into reads until it said so explicitly, and the assistant started asking
+permission to look things up. Reads never ask; actions always do.
+
+**A thumb feeds the golden datasets.** When interaction capture is on, the final answer is captured
+as an `AIInteraction` and the exchange stores its id; a thumb on the page then writes the same
+`up`/`down` feedback the AI activity log writes, which is exactly what golden datasets are promoted
+from (`ai-dataset.service.ts`). Without capture there is no interaction row and the rating stays a
+page-local preference — the tooltip on the thumbs says which loop it feeds either way.
+
+**Answers are markdown, with real charts.** The model may emit one fenced ```chart block with
+numbers a tool actually returned; the page shape-checks the JSON and draws it with the app's own
+chart components. Everything textual passes through the same `marked` + DOMPurify pipe the
+What's-new page renders the changelog with.
+
 ## Timesheet reporting and exports
 
 All three share one filter set — `from`, `to`, `projectId`, `moduleId`, `userId`, `ticketId`,
@@ -1490,6 +1888,25 @@ Every key is **org-wide** (not scoped to a subset of projects) and carries one o
 | `WRITE` | Everything `READ` can, plus `POST /tickets`, `PATCH /tickets/:key/status`, `POST /tickets/:key/comments` |
 
 A `READ`-scope key calling a write endpoint gets `403`, not a silent no-op.
+
+### Key lifetime
+
+A key can carry an **expiry**, chosen when you generate it: 30 days, 90 days, 1 year, or never.
+90 days is the default offered, and "never" is a deliberate choice rather than the path of least
+resistance — a standing bearer token pasted into a Zapier account or a cron script is the
+credential nobody revisits, and `lastUsedAt` is the only signal it is still out there.
+
+Workspace Settings → Public API shows each key's expiry, warns two weeks out, and badges an expired
+key as expired rather than letting it look identical to a working one.
+
+Once past its expiry a key is refused with **401** and the *same* message an unknown or revoked key
+gets — `Invalid or revoked API key.` That is deliberate: a distinct "your key expired" would confirm
+to an unauthenticated caller that the key they hold was once real, which is the one thing a guesser
+actually wants to learn. If an integration starts 401-ing, check the key's row in Workspace Settings
+rather than inferring the reason from the response.
+
+Keys created before this field existed have **no expiry and keep working** — nothing that works
+today stops working because this was added. Revocation is unchanged and still immediate.
 
 ### Endpoints
 

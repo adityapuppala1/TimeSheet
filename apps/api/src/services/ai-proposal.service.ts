@@ -32,9 +32,19 @@ import { levelRank } from "./ai-capability.registry.js";
 import { dispatchNotification } from "./notify.service.js";
 import { assertNoParentCycle, toDay } from "./plan-schedule.service.js";
 
-export type ProposalKind = "PLAN_BREAKDOWN" | "SCHEDULE_ADJUSTMENT" | "ASSIGNMENT_REBALANCE" | "RISK_MITIGATION" | "BLUEPRINT_SUGGESTION";
+/** The states after which a change's PLAN is frozen. Mirrors `FROZEN_AFTER` in change.controller.ts
+ *  — a drafted section applied after approval would rewrite what was agreed. */
+const FROZEN_CHANGE_STATES = new Set(["APPROVED", "SCHEDULED", "IMPLEMENTING", "VALIDATION", "PIR", "CLOSED"]);
+
+export type ProposalKind =
+  | "PLAN_BREAKDOWN"
+  | "SCHEDULE_ADJUSTMENT"
+  | "ASSIGNMENT_REBALANCE"
+  | "RISK_MITIGATION"
+  | "BLUEPRINT_SUGGESTION"
+  | "CHANGE_DRAFT";
 export type ChangeOp = "CREATE" | "UPDATE" | "LINK";
-export type ChangeTarget = "TICKET" | "PROJECT" | "BOOKING" | "LINK" | "TICKET_LABEL";
+export type ChangeTarget = "TICKET" | "PROJECT" | "BOOKING" | "LINK" | "TICKET_LABEL" | "CHANGE";
 
 export interface DraftChange {
   targetType: ChangeTarget;
@@ -115,6 +125,41 @@ export async function createProposal(params: {
  *  schema grows. */
 const TICKET_WRITABLE = new Set(["startDate", "endDate", "assigneeId", "estimatedHours", "parentId", "priority", "progressPct", "isMilestone", "sortOrder"]);
 const DATE_FIELDS = new Set(["startDate", "endDate"]);
+
+/**
+ * Fields a proposal may touch on a CHANGE REQUEST. Five, and every one of them is prose that BLOCKS
+ * submission — the sections `missingForSubmit` demands.
+ *
+ * WHY THE LIST IS THIS SHORT, and why it is a list at all: everything else on a change is either
+ * governance (`state`, `riskScore`, `riskLevel`), schedule, or an outcome. A risk score a model
+ * could write would make the rule that decides whether a backout plan is mandatory unreproducible;
+ * a state a model could write would walk the change past its own approver. Neither belongs in a
+ * drafting assistant, and an allowlist is what makes that true by construction rather than by the
+ * prompt asking nicely.
+ *
+ * `backoutPlan` being here at all is worth stating: it is the single most consequential field in the
+ * module, which is exactly why the assistant may only PROPOSE it and a person must accept the row.
+ */
+const CHANGE_WRITABLE = new Set([
+  "justification",
+  "implementationPlan",
+  "backoutPlan",
+  "testPlan",
+  "communicationPlan",
+  // The post-implementation review. Written by `change_pir_assist` through this same envelope, and
+  // deliberately NOT subject to the plan freeze below — a review is written after the change has
+  // run, which is exactly when the plan is frozen. See the apply branch.
+  "pirNotes"
+]);
+
+function projectChangeData(after: Record<string, unknown>): Record<string, unknown> {
+  const data: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(after)) {
+    if (!CHANGE_WRITABLE.has(key)) continue;
+    data[key] = value;
+  }
+  return data;
+}
 
 /**
  * Fields a proposal may touch on a PROJECT. Deliberately just the two planning dates.
@@ -393,6 +438,26 @@ export async function applyProposal(params: {
         });
         createdByOrder.set(change.order, created.id);
         await prisma.aiProposalChange.update({ where: { id: change.id }, data: { targetId: created.id } });
+      } else if (change.op === "UPDATE" && change.targetType === "CHANGE" && change.targetId) {
+        const current = await prisma.changeRequest.findFirst({ where: { id: change.targetId } });
+        if (!current) throw new Error("that change no longer exists");
+
+        // The plan freezes once a change is approved — scope and risk are what got approved, and a
+        // drafted section arriving afterwards would rewrite what was agreed. The API refuses the
+        // same edit by hand; refusing it here too is the point of one rule having two callers.
+        // The PLAN freezes at approval; the REVIEW does not, because a review is written after the
+        // change has run — which is precisely when the plan is frozen. Freezing both would make the
+        // PIR assistant unable to write the only field it exists for.
+        const touchesPlanOnly = Object.keys(after).some((k) => k !== "pirNotes");
+        if (touchesPlanOnly && FROZEN_CHANGE_STATES.has(String(current.state))) {
+          throw new Error("this change has been approved, so its plan can no longer be edited");
+        }
+
+        assertNotStale(change.before, current as unknown as Record<string, unknown>);
+
+        const data = projectChangeData(after);
+        if (Object.keys(data).length === 0) throw new Error("nothing in this change is applicable");
+        await prisma.changeRequest.update({ where: { id: current.id }, data });
       } else if (change.op === "UPDATE" && change.targetType === "PROJECT" && change.targetId) {
         // The scope wins over the payload, exactly as it does for a ticket CREATE below: a
         // proposal scoped to one project must not be able to move a different one.
@@ -691,6 +756,14 @@ export async function undoProposal(params: { proposalId: string; actorId: string
         const restore = projectTicketData(before);
         if (Object.keys(restore).length === 0) throw new Error("there is no recorded previous value for this");
         await prisma.ticket.update({ where: { id: current.id }, data: restore });
+      } else if (change.op === "UPDATE" && change.targetType === "CHANGE" && change.targetId) {
+        const current = await prisma.changeRequest.findFirst({ where: { id: change.targetId } });
+        if (!current) throw new Error("that change no longer exists");
+        assertStillOurs(projectChangeData(after), current as unknown as Record<string, unknown>);
+
+        const restore = projectChangeData(before);
+        if (Object.keys(restore).length === 0) throw new Error("there is no recorded previous value for this");
+        await prisma.changeRequest.update({ where: { id: current.id }, data: restore });
       } else if (change.op === "UPDATE" && change.targetType === "PROJECT" && change.targetId) {
         const current = await prisma.project.findFirst({ where: { id: change.targetId, deletedAt: null } });
         if (!current) throw new Error("that project no longer exists");

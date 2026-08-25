@@ -132,6 +132,27 @@ const schema = z.object({
   TRUST_PROXY_HOPS: z.coerce.number().int().min(0).max(10).default(0),
 
   /**
+   * May this server make HTTP requests to private, loopback or link-local addresses?
+   *
+   * Four features let an admin type a URL the API then fetches (outbound webhooks, the Google
+   * Chat incoming webhook, the Bot Framework reply endpoint, the BYOK OpenAI-compatible
+   * `baseUrl`). Because the API sits INSIDE the deployment's trusted network, an unrestricted
+   * URL there is server-side request forgery: cloud instance metadata (169.254.169.254, which
+   * hands out IAM credentials to anything that asks), a database on localhost, an internal admin
+   * panel. See utils/egress.ts for the full argument and the DNS-resolution check.
+   *
+   * DEFAULT FALSE, and the default is the security control — same posture as TRUST_PROXY_HOPS
+   * above. Set it true only for a self-hosted install whose webhook targets genuinely live on
+   * the LAN, which is a normal on-prem setup and the whole reason this is a switch rather than a
+   * hard block. Development ignores it and permits private targets regardless, because a local
+   * receiver on localhost is how anyone tests these features at all.
+   */
+  ALLOW_PRIVATE_NETWORK_EGRESS: z
+    .string()
+    .default("false")
+    .transform((value) => value === "true" || value === "1"),
+
+  /**
    * The blanket per-IP request budget, requests per minute. The default is the number the code
    * has always shipped (900/min ≈ 15 req/s), which bounds abuse hard while staying above what a
    * busy single user's SPA produces. WHY IT IS TUNABLE NOW: load testing surfaced the case the

@@ -31,6 +31,7 @@ import {
   Clock,
   Clock3,
   FolderKanban,
+  GitPullRequestArrow,
   Gauge,
   Maximize2,
   PencilLine,
@@ -43,7 +44,15 @@ import {
 import { useMemo, useState } from "react";
 import { Link } from "react-router";
 import { Area, AreaChart, Bar, BarChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
+// Aliased: `Tooltip` in this module is recharts' chart tooltip, and the rollup table needs the
+// UI one. Importing both unaliased would silently shadow whichever came second.
+import {
+  Tooltip as HoverTip,
+  TooltipContent as HoverTipContent,
+  TooltipTrigger as HoverTipTrigger
+} from "../components/ui/tooltip";
 import { Alert, AlertDescription, AlertTitle } from "../components/ui/alert";
+import { useDismissed } from "../hooks/use-dismissed";
 import { GoalsGlanceCard } from "../components/GoalsGlanceCard";
 import { SetupChecklistCard } from "../components/SetupChecklistCard";
 import { Badge } from "../components/ui/badge";
@@ -58,7 +67,7 @@ import { StatCard, TrendBadge } from "../components/ui/stat-card";
 import { ProjectUtilizationChart } from "../components/ProjectUtilizationChart";
 import { TimesheetEntryDialog } from "../components/TimesheetEntryDialog";
 import { computeTrend, type Trend } from "../lib/trend";
-import { reportApi, ticketApi, timesheetApi, type TicketRow } from "../services/api";
+import { dashboardApi, reportApi, ticketApi, timesheetApi, type MyMonthRollup, type TicketRow } from "../services/api";
 import { useAuthStore } from "../store/auth";
 import { DatePicker } from "../components/ui/date-picker";
 import type { CalendarDayAnnotations } from "../components/ui/calendar-primitives";
@@ -128,27 +137,14 @@ export function Dashboard() {
     refetchInterval: 60_000
   });
   const timesheets = useQuery({ queryKey: ["timesheets"], queryFn: timesheetApi.list });
+  // Counted server-side and UNCAPPED. The list above is capped at 100 rows, which silently dropped
+  // projects from the month rollup on any busy account — see dashboardApi.myMonth.
+  const myMonth = useQuery({ queryKey: ["dashboard", "my-month"], queryFn: dashboardApi.myMonth });
   const daily = useQuery({ queryKey: ["daily-status"], queryFn: reportApi.dailyStatus });
   const myTickets = useQuery({
     queryKey: ["tickets", "for-dashboard", user?.id],
     queryFn: () => ticketApi.list({ assigneeId: user!.id, status: "OPEN,IN_PROGRESS,IN_REVIEW,REOPENED" }),
     enabled: Boolean(user?.id && user.permissions.includes("tickets:view"))
-  });
-
-  /**
-   * Open and closed counts per project, COUNTED SERVER-SIDE.
-   *
-   * The open figure could be tallied from `myTickets` above, and was. Closed cannot: a long-serving
-   * assignee has hundreds of closed tickets and that list route carries a heavy include per row, so
-   * fetching them all to render one number is the thing that works on a demo workspace and falls over
-   * on a real one. One grouped query returns both, which also means the two halves of the percentage
-   * are counted the same way.
-   */
-  const ticketCounts = useQuery({
-    queryKey: ["tickets", "counts-by-project", user?.id],
-    queryFn: () => ticketApi.countsByProject(user!.id),
-    enabled: Boolean(user?.id && user.permissions.includes("tickets:view")),
-    staleTime: 60_000
   });
 
   const all: TimesheetRowLite[] = Array.isArray(timesheets.data) ? timesheets.data : [];
@@ -170,6 +166,10 @@ export function Dashboard() {
     let monthH = 0;
     let pendingCount = 0;
     const weekByStatus = { APPROVED: 0, SUBMITTED: 0, REJECTED: 0, DRAFT: 0 } as Record<string, number>;
+    /** This week's hours per project — the "where did it go" half of the week card. Keyed by the
+     *  display label rather than the id, so entries whose project was removed still collapse into
+     *  one honest "No project" row instead of one row per orphaned id. */
+    const weekByProject = new Map<string, number>();
     const monthByStatus = { APPROVED: 0, SUBMITTED: 0, REJECTED: 0, DRAFT: 0 } as Record<string, number>;
     /** Every loaded entry grouped by calendar day — the timeline's date picker reads this. */
     const entriesByDate = new Map<string, TimesheetRowLite[]>();
@@ -201,6 +201,8 @@ export function Dashboard() {
         weekByStatus[row.status] = (weekByStatus[row.status] ?? 0) + hours;
         const label = dayLabels[(workDay.getDay() + 6) % 7];
         buckets.set(label, (buckets.get(label) ?? 0) + hours);
+        const projectLabel = row.project?.code ?? row.project?.name ?? "No project";
+        weekByProject.set(projectLabel, (weekByProject.get(projectLabel) ?? 0) + hours);
       }
       if (workDay >= lastWeekStart && workDay < weekStart) lastWeekH += hours;
       if (workDay >= monthStart && workDay <= today) {
@@ -236,6 +238,10 @@ export function Dashboard() {
       monthHours: monthH,
       pendingCount,
       weekByStatus,
+      // Biggest first, so the card can take the top few and total the rest.
+      weekProjects: [...weekByProject.entries()]
+        .map(([label, hours]) => ({ label, hours }))
+        .sort((a, b) => b.hours - a.hours),
       monthByStatus,
       entriesByDate,
       projectRows: [...projects.values()].sort((a, b) => b.monthHours - a.monthHours),
@@ -254,27 +260,6 @@ export function Dashboard() {
       value: Number(row._sum?.totalHours ?? 0)
     }));
   }, [admin.data]);
-
-  /**
-   * Per-project ticket counts, preferring the server's figures and falling back to the open tickets
-   * already in hand.
-   *
-   * The fallback matters: the counts request may still be in flight, or refused for somebody without
-   * the permission, and a column that flickers between a number and nothing is worse than one that
-   * shows what it can. `closed` is null — not zero — whenever the server has not answered, so the
-   * table can say "not known yet" rather than "none closed", which are different claims.
-   */
-  const ticketsByProject = useMemo(() => {
-    const counts = new Map<string, { open: number; closed: number | null }>();
-    for (const ticket of myTickets.data ?? []) {
-      const key = (ticket as TicketRow & { project?: { id?: string } }).project?.id;
-      if (key) counts.set(key, { open: (counts.get(key)?.open ?? 0) + 1, closed: counts.get(key)?.closed ?? null });
-    }
-    for (const row of ticketCounts.data ?? []) {
-      counts.set(row.projectId, { open: row.open, closed: row.closed });
-    }
-    return counts;
-  }, [myTickets.data, ticketCounts.data]);
 
   const adminStats: Array<{ label: string; value: string | number; tone?: "success" | "warning" | "destructive"; trend?: Trend | null }> = [
     { label: "Users", value: admin.data?.users ?? 0, trend: computeTrend(admin.data?.users ?? 0, admin.data?.usersYesterday ?? 0, true) },
@@ -342,7 +327,9 @@ export function Dashboard() {
             loading={timesheets.isLoading}
             weekHours={derived.weekHours}
             byStatus={derived.weekByStatus}
+            projects={derived.weekProjects}
             pendingCount={derived.pendingCount}
+            trend={derived.trend}
           />
         </HeroCard>
         <HeroCard delay={0.05}>
@@ -354,6 +341,8 @@ export function Dashboard() {
             weekHours={derived.weekHours}
             monthByStatus={derived.monthByStatus}
             monthHours={derived.monthHours}
+            completion={myMonth.data?.completion}
+            totals={myMonth.data?.totals}
           />
         </HeroCard>
       </div>
@@ -434,7 +423,7 @@ export function Dashboard() {
       </div>
 
       {/* ---- Per-project rollup — the Trackline "Project List", from data already loaded ---- */}
-      <ProjectRollup rows={derived.projectRows} ticketsByProject={ticketsByProject} loading={timesheets.isLoading} />
+      <ProjectRollup rollup={myMonth.data} loading={myMonth.isLoading} />
     </div>
   );
 }
@@ -456,6 +445,20 @@ const WEEK_SEGMENTS = [
   { key: "DRAFT", label: "Draft", bar: "bg-muted-foreground/40", dot: "bg-muted-foreground/40" }
 ] as const;
 
+/**
+ * One honest sentence about where the week's hours actually sit — computed, never invented, the
+ * same rule the rhythm card's insight strip follows. Extracted from the component so the branching
+ * lives in a plain function instead of a nested ternary inside JSX.
+ */
+function weekNote(weekHours: number, pendingCount: number, byStatus: Record<string, number>): string {
+  if (weekHours === 0) return "No hours logged yet this week — your entries will show up here as you add them.";
+  if (pendingCount > 0) return `${pendingCount} ${pendingCount === 1 ? "entry is" : "entries are"} waiting on a reviewer.`;
+  if ((byStatus.DRAFT ?? 0) === weekHours) return "Everything so far is still a draft — submit it to start the review clock.";
+  const approvedShare = Math.round(((byStatus.APPROVED ?? 0) / weekHours) * 100);
+  if (approvedShare >= 100) return "Every hour this week is approved. Nothing outstanding.";
+  return `${approvedShare}% of this week's hours are approved.`;
+}
+
 /** Trackline's "Overall Tasks" card, for hours: headline number + a segmented STATUS bar.
  *  Every segment also gets a labeled value row below — state is never color-alone (the
  *  green↔amber pair sits in the CVD warn band, which is only acceptable with exactly this
@@ -464,16 +467,39 @@ function WeekAtAGlance({
   loading,
   weekHours,
   byStatus,
-  pendingCount
+  pendingCount,
+  trend,
+  projects
 }: {
   loading: boolean;
   weekHours: number;
+  projects: Array<{ label: string; hours: number }>;
   byStatus: Record<string, number>;
   pendingCount: number;
+  /** The same per-weekday series the rhythm chart uses — read here for the insight rows so this
+   *  card fills its height with computed facts rather than empty space. Never a second query. */
+  trend: Array<{ day: string; hours: number }>;
 }) {
   if (loading) return <Skeleton className="h-full min-h-56 w-full" />;
   const total = weekHours || 1;
   const segments = WEEK_SEGMENTS.map((s) => ({ ...s, hours: byStatus[s.key] ?? 0 })).filter((s) => s.hours > 0);
+
+  // ── Insights, all derived from data already on this card — nothing invented, nothing fetched.
+  // This block exists because the card is the shortest of the three in its row and stretched to a
+  // tall empty gap; filling it with real facts is better than padding it with whitespace.
+  const daysLogged = trend.filter((d) => d.hours > 0).length;
+  const busiest = trend.reduce((best, d) => (d.hours > best.hours ? d : best), { day: "—", hours: 0 });
+  const dailyAvg = daysLogged > 0 ? weekHours / daysLogged : 0;
+  const note = weekNote(weekHours, pendingCount, byStatus);
+
+  // Three rows keeps the card the same height as its neighbours without scrolling; anything
+  // beyond that is summed into one honest "+Nh across M more" line rather than truncated silently.
+  const topProjects = projects.slice(0, 3);
+  const restProjects = projects.slice(3).reduce((sum, p) => sum + p.hours, 0);
+  // Bars are scaled against the BIGGEST project, not against the week total: with one project at
+  // 0.5h of a 40h week every bar would round to an invisible sliver and the comparison — which is
+  // the only thing a bar is for — would be lost.
+  const topShare = topProjects[0]?.hours || 1;
 
   return (
     <Card className="h-full">
@@ -484,7 +510,7 @@ function WeekAtAGlance({
         </CardTitle>
         <CardDescription>Your logged hours by state, Monday to today.</CardDescription>
       </CardHeader>
-      <CardContent className="grid gap-4">
+      <CardContent className="flex flex-col gap-4">
         <div className="flex items-baseline justify-between">
           <p className="text-3xl font-black tabular-nums tracking-tight">{weekHours.toFixed(1)}h</p>
           {pendingCount > 0 && <Badge variant="warning">{pendingCount} awaiting review</Badge>}
@@ -513,7 +539,56 @@ function WeekAtAGlance({
           ))}
         </div>
 
-        <Link to="/app/history" className="mt-auto inline-flex items-center gap-1 text-sm font-semibold text-primary hover:underline">
+        {/* Insight band — fills the height the card was padding with blank space, and gives the
+            headline number some context (a busiest day and a daily average) it lacked. */}
+        <div className="mt-1 grid grid-cols-3 gap-2 border-t border-border pt-4">
+          <div>
+            <p className="text-lg font-bold tabular-nums leading-none">{daysLogged}<span className="text-sm font-medium text-muted-foreground">/5</span></p>
+            <p className="mt-1 text-xs text-muted-foreground">weekdays logged</p>
+          </div>
+          <div>
+            <p className="text-lg font-bold tabular-nums leading-none">{dailyAvg.toFixed(1)}h</p>
+            <p className="mt-1 text-xs text-muted-foreground">avg / logged day</p>
+          </div>
+          <div>
+            <p className="text-lg font-bold tabular-nums leading-none">{busiest.hours > 0 ? busiest.day : "—"}</p>
+            <p className="mt-1 text-xs text-muted-foreground">busiest{busiest.hours > 0 ? ` · ${busiest.hours.toFixed(1)}h` : ""}</p>
+          </div>
+        </div>
+
+        {/* WHERE the hours went, which is the question the status split and the rhythm chart next
+            to it both leave unanswered — one says what STATE the time is in, the other says WHICH
+            DAY it landed on, and neither says what it was spent on. It is also the fact the weekly
+            digest email leads with, so the two now agree.
+
+            Deliberately not another chart: the card beside this one is already a chart, and a third
+            visual in the same row reads as decoration. Bars-in-a-row is enough to compare four
+            numbers, and the labels stay readable at a phone width. */}
+        {projects.length > 0 && (
+          <div className="grid gap-2 border-t border-border pt-3">
+            <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Where your hours went</p>
+            {topProjects.map((p) => (
+              <div key={p.label} className="grid gap-1">
+                <div className="flex items-baseline justify-between gap-2 text-sm">
+                  <span className="min-w-0 truncate" title={p.label}>{p.label}</span>
+                  <span className="shrink-0 font-semibold tabular-nums">{p.hours.toFixed(1)}h</span>
+                </div>
+                <div className="h-1.5 w-full overflow-hidden rounded-full bg-muted">
+                  <div className="h-full rounded-full bg-primary" style={{ width: `${Math.max(2, (p.hours / topShare) * 100)}%` }} />
+                </div>
+              </div>
+            ))}
+            {restProjects > 0 && (
+              <p className="text-xs text-muted-foreground">
+                +{restProjects.toFixed(1)}h across {projects.length - topProjects.length} more
+              </p>
+            )}
+          </div>
+        )}
+
+        <p className="text-sm text-muted-foreground">{note}</p>
+
+        <Link to="/app/history" className="mt-auto inline-flex items-center gap-1 pt-1 text-sm font-semibold text-primary hover:underline">
           View history <ArrowRight className="h-3.5 w-3.5" />
         </Link>
       </CardContent>
@@ -596,17 +671,22 @@ function ProgressCard({
   loading,
   weekHours,
   monthByStatus,
-  monthHours
+  monthHours,
+  completion,
+  totals
 }: {
   loading: boolean;
   weekHours: number;
   monthByStatus: Record<string, number>;
   monthHours: number;
+  /** The three completion shares, counted server-side. Undefined while the rollup is in flight. */
+  completion?: MyMonthRollup["completion"];
+  totals?: MyMonthRollup["totals"];
 }) {
   if (loading) return <Skeleton className="h-full min-h-56 w-full" />;
   const weekTarget = 40;
   const weekPct = Math.min(100, Math.round((weekHours / weekTarget) * 100));
-  const approvalPct = monthHours > 0 ? Math.round(((monthByStatus.APPROVED ?? 0) / monthHours) * 100) : 0;
+  const approvedHours = monthByStatus.APPROVED ?? 0;
 
   return (
     <Card className="h-full">
@@ -615,18 +695,42 @@ function ProgressCard({
           <Gauge className="h-4 w-4 text-primary" />
           Progress
         </CardTitle>
-        <CardDescription>Week target and month approval rate.</CardDescription>
+        <CardDescription>Week target, then how much of each kind of work is finished.</CardDescription>
       </CardHeader>
       <CardContent className="grid gap-5">
         <TickMeter label={`Week target (${weekTarget}h)`} percent={weekPct} detail={`${weekHours.toFixed(1)}h logged`} tone="primary" />
+
+        {/* THREE BARS, ONE DEFINITION. Each is "done ÷ total" for its own kind of work, so they can
+            be read against each other — hours approved, tickets closed, changes closed. A single
+            combined number would hide which of the three is actually stuck. */}
         <TickMeter
-          label="Approved this month"
-          percent={approvalPct}
-          detail={`${(monthByStatus.APPROVED ?? 0).toFixed(1)}h of ${monthHours.toFixed(1)}h`}
+          label="Timesheets approved"
+          percent={completion?.timesheetPct ?? null}
+          detail={`${approvedHours.toFixed(1)}h of ${monthHours.toFixed(1)}h this month`}
           tone="success"
         />
+        <TickMeter
+          label="Tickets closed"
+          percent={completion?.ticketPct ?? null}
+          detail={
+            totals ? `${totals.tickets.closed} of ${totals.tickets.total} on your projects` : "Counting…"
+          }
+          tone="info"
+        />
+        {/* Absent, not zeroed, when change management is off — a bar reading 0% would claim a
+            measurement of something the workspace does not do. */}
+        {totals?.changes && (
+          <TickMeter
+            label="Changes closed"
+            percent={completion?.changePct ?? null}
+            detail={`${totals.changes.closed} of ${totals.changes.raised} raised on your projects`}
+            tone="warning"
+          />
+        )}
+
         <p className="text-xs text-muted-foreground">
-          Approval rate counts hours a manager has signed off. Pending hours move here once reviewed.
+          Each bar is finished work over total work of that kind. A dash means there is nothing of that kind yet —
+          which is not the same as none of it being done.
         </p>
       </CardContent>
     </Card>
@@ -635,18 +739,30 @@ function ProgressCard({
 
 /** The Trackline dotted meter: ~36 thin ticks, filled left-to-right. Sequential (one hue) —
  *  magnitude, not identity — with the number said in text right beside it. */
-function TickMeter({ label, percent, detail, tone }: { label: string; percent: number; detail: string; tone: "primary" | "success" }) {
+function TickMeter({
+  label,
+  percent,
+  detail,
+  tone
+}: {
+  label: string;
+  /** Null when there is nothing to divide by. Rendered as a dash, never as 0% — "no tickets yet"
+   *  and "no tickets done" are different claims and only one of them is a measurement. */
+  percent: number | null;
+  detail: string;
+  tone: "primary" | "success" | "info" | "warning";
+}) {
   const TICKS = 36;
-  const filled = Math.round((percent / 100) * TICKS);
-  const fill = tone === "primary" ? "bg-primary" : "bg-success";
+  const filled = percent === null ? 0 : Math.round((percent / 100) * TICKS);
+  const fill = { primary: "bg-primary", success: "bg-success", info: "bg-info", warning: "bg-warning" }[tone];
 
   return (
     <div className="grid gap-1.5">
       <div className="flex items-baseline justify-between gap-2">
         <p className="text-sm font-medium">{label}</p>
-        <p className="text-lg font-black tabular-nums">{percent}%</p>
+        <p className="text-lg font-black tabular-nums">{percent === null ? <span className="text-muted-foreground">—</span> : `${percent}%`}</p>
       </div>
-      <div className="flex items-end gap-[3px]" role="img" aria-label={`${label}: ${percent}%`}>
+      <div className="flex items-end gap-[3px]" role="img" aria-label={`${label}: ${percent === null ? "not measurable yet" : `${percent}%`}`}>
         {Array.from({ length: TICKS }, (_, i) => (
           <span key={i} className={`h-4 w-1 rounded-full ${i < filled ? fill : "bg-muted"}`} />
         ))}
@@ -1113,23 +1229,10 @@ const ROLLUP_PAGE_SIZE = 10;
  * yet. "None of your tickets here are done" and "you have no tickets here" are different facts, and a
  * dashboard that renders both as 0% is the kind that gets quoted in a meeting.
  */
-function closedShare(open: number, closed: number | null): number | null {
-  if (closed === null) return null;
-  const total = open + closed;
-  return total > 0 ? Math.round((closed / total) * 100) : null;
-}
-
-function ProjectRollup({
-  rows,
-  ticketsByProject,
-  loading
-}: {
-  rows: Array<{ id: string; name: string; code?: string; monthHours: number; approvedHours: number; entries: number; lastDate: string }>;
-  /** Per project: open now, and closed — null while the server's counts have not arrived. */
-  ticketsByProject: Map<string, { open: number; closed: number | null }>;
-  loading: boolean;
-}) {
+function ProjectRollup({ rollup, loading }: { rollup: MyMonthRollup | undefined; loading: boolean }) {
   const [page, setPage] = useState(1);
+  const rows = rollup?.projects ?? [];
+  const showChanges = Boolean(rollup?.totals.changes);
   const pageCount = Math.max(1, Math.ceil(rows.length / ROLLUP_PAGE_SIZE));
   const safePage = Math.min(page, pageCount);
   const pageRows = rows.slice((safePage - 1) * ROLLUP_PAGE_SIZE, safePage * ROLLUP_PAGE_SIZE);
@@ -1144,8 +1247,10 @@ function ProjectRollup({
           My projects this month
         </CardTitle>
         <CardDescription>
-          Hours, approval progress, and how your tickets stand per project you&apos;ve logged against. Ticket counts are a
-          snapshot of now, not of the month, so the completion share divides two figures measured the same way.
+          Every project you are assigned to or have logged against this month — hours, approval progress, how each
+          project&apos;s tickets stand{showChanges ? ", and the changes raised against it" : ""}. Counted server-side over
+          the whole month, so a busy month cannot push a project off the list. Ticket
+          {showChanges ? " and change" : ""} counts are a snapshot of now, not of the month.
         </CardDescription>
       </CardHeader>
       <CardContent>
@@ -1153,7 +1258,7 @@ function ProjectRollup({
           <Skeleton className="h-32 w-full" />
         ) : rows.length === 0 ? (
           <div className="py-8 text-center text-sm text-muted-foreground">
-            No entries this month yet.{" "}
+            No projects assigned, and nothing logged this month.{" "}
             <Link to="/app/timesheet" className="font-semibold text-primary hover:underline">
               Log your first entry →
             </Link>
@@ -1171,51 +1276,79 @@ function ProjectRollup({
                     <th className="p-2 text-right font-medium">Open</th>
                     <th className="p-2 text-right font-medium">Closed</th>
                     <th className="p-2 text-right font-medium">Done</th>
+                    {showChanges && <th className="p-2 text-right font-medium">Changes</th>}
+                    {showChanges && <th className="p-2 text-right font-medium">CM done</th>}
                     <th className="p-2 font-medium">Last entry</th>
-                    <th className="w-[26%] p-2 font-medium">Approved</th>
+                    <th className="w-[20%] p-2 font-medium">Approved</th>
                   </tr>
                 </thead>
                 <tbody>
                   {pageRows.map((row) => {
-                    const approvedPct = row.monthHours > 0 ? Math.round((row.approvedHours / row.monthHours) * 100) : 0;
-                    const tickets = ticketsByProject.get(row.id);
-                    const open = tickets?.open ?? 0;
-                    const closed = tickets?.closed ?? null;
-                    const donePct = closedShare(open, closed);
+                    const approvedPct = row.monthHours > 0 ? Math.round((row.approvedHours / row.monthHours) * 100) : null;
+                    const ticketTotal = row.tickets.open + row.tickets.closed;
+                    const donePct = ticketTotal > 0 ? Math.round((row.tickets.closed / ticketTotal) * 100) : null;
+                    const cmDonePct = row.changes && row.changes.raised > 0 ? Math.round((row.changes.closed / row.changes.raised) * 100) : null;
                     return (
                       <tr key={row.id} className="border-t border-border">
                         <td className="p-2">
                           <span className="font-medium">{row.name}</span>
                           {row.code && <span className="ml-2 font-mono text-xs text-muted-foreground">{row.code}</span>}
+                          {/* Says why a zero-hour row is here at all — without it an untouched project
+                              reads as a bug rather than as something you are responsible for. */}
+                          {row.entries === 0 && <Badge variant="muted" className="ml-2">assigned</Badge>}
                         </td>
                         <td className="p-2 text-right font-semibold tabular-nums">{row.monthHours.toFixed(1)}</td>
                         <td className="p-2 text-right tabular-nums text-muted-foreground">{row.entries}</td>
                         <td className="p-2 text-right" data-testid="rollup-open">
-                          {open > 0 ? (
-                            <Badge variant="info"><TicketIcon className="mr-1 h-3 w-3" />{open}</Badge>
-                          ) : (
-                            <span className="text-muted-foreground">—</span>
-                          )}
-                        </td>
-                        <td className="p-2 text-right" data-testid="rollup-closed">
-                          {closed === null ? (
-                            <span className="text-muted-foreground">—</span>
-                          ) : closed > 0 ? (
-                            <Badge variant="success"><CheckCircle2 className="mr-1 h-3 w-3" />{closed}</Badge>
+                          {row.tickets.open > 0 ? (
+                            <HoverTip>
+                              <HoverTipTrigger asChild>
+                                <Badge variant="info"><TicketIcon className="mr-1 h-3 w-3" />{row.tickets.open}</Badge>
+                              </HoverTipTrigger>
+                              <HoverTipContent>{row.tickets.mineOpen} of these are assigned to you</HoverTipContent>
+                            </HoverTip>
                           ) : (
                             <span className="text-muted-foreground">0</span>
                           )}
                         </td>
-                        {/* An em dash rather than 0% when there is nothing to divide: "none of your
-                            tickets here are done" and "you have no tickets here" are different facts. */}
+                        <td className="p-2 text-right" data-testid="rollup-closed">
+                          {row.tickets.closed > 0 ? (
+                            <HoverTip>
+                              <HoverTipTrigger asChild>
+                                <Badge variant="success"><CheckCircle2 className="mr-1 h-3 w-3" />{row.tickets.closed}</Badge>
+                              </HoverTipTrigger>
+                              <HoverTipContent>{row.tickets.mineClosed} of these are assigned to you</HoverTipContent>
+                            </HoverTip>
+                          ) : (
+                            <span className="text-muted-foreground">0</span>
+                          )}
+                        </td>
+                        {/* An em dash rather than 0% when there is nothing to divide: "none of these
+                            tickets are done" and "there are no tickets here" are different facts. */}
                         <td className="p-2 text-right text-xs font-semibold tabular-nums" data-testid="rollup-done">
                           {donePct === null ? <span className="font-normal text-muted-foreground">—</span> : `${donePct}%`}
                         </td>
-                        <td className="p-2 text-muted-foreground">{row.lastDate}</td>
+                        {showChanges && (
+                          <td className="p-2 text-right" data-testid="rollup-changes">
+                            {row.changes && row.changes.raised > 0 ? (
+                              <Badge variant="warning"><GitPullRequestArrow className="mr-1 h-3 w-3" />{row.changes.raised}</Badge>
+                            ) : (
+                              <span className="text-muted-foreground">0</span>
+                            )}
+                          </td>
+                        )}
+                        {showChanges && (
+                          <td className="p-2 text-right text-xs font-semibold tabular-nums">
+                            {cmDonePct === null ? <span className="font-normal text-muted-foreground">—</span> : `${cmDonePct}%`}
+                          </td>
+                        )}
+                        <td className="p-2 text-muted-foreground">{row.lastDate ?? "—"}</td>
                         <td className="p-2">
                           <div className="flex items-center gap-2">
-                            <Progress value={approvedPct} className="h-1.5" />
-                            <span className="w-9 text-right text-xs font-semibold tabular-nums">{approvedPct}%</span>
+                            <Progress value={approvedPct ?? 0} className="h-1.5" />
+                            <span className="w-9 text-right text-xs font-semibold tabular-nums">
+                              {approvedPct === null ? <span className="font-normal text-muted-foreground">—</span> : `${approvedPct}%`}
+                            </span>
                           </div>
                         </td>
                       </tr>
@@ -1227,11 +1360,9 @@ function ProjectRollup({
 
             <div className="grid gap-2 sm:hidden">
               {pageRows.map((row) => {
-                const approvedPct = row.monthHours > 0 ? Math.round((row.approvedHours / row.monthHours) * 100) : 0;
-                const tickets = ticketsByProject.get(row.id);
-                const open = tickets?.open ?? 0;
-                const closed = tickets?.closed ?? null;
-                const donePct = closedShare(open, closed);
+                const approvedPct = row.monthHours > 0 ? Math.round((row.approvedHours / row.monthHours) * 100) : null;
+                const ticketTotal = row.tickets.open + row.tickets.closed;
+                const donePct = ticketTotal > 0 ? Math.round((row.tickets.closed / ticketTotal) * 100) : null;
                 return (
                   <div key={row.id} className="rounded-lg border border-border p-3">
                     <div className="flex items-center justify-between gap-2">
@@ -1239,14 +1370,15 @@ function ProjectRollup({
                       <span className="font-semibold tabular-nums">{row.monthHours.toFixed(1)}h</span>
                     </div>
                     <div className="mt-2 flex items-center gap-2">
-                      <Progress value={approvedPct} className="h-1.5" />
-                      <span className="text-xs font-semibold tabular-nums">{approvedPct}%</span>
+                      <Progress value={approvedPct ?? 0} className="h-1.5" />
+                      <span className="text-xs font-semibold tabular-nums">{approvedPct === null ? "—" : `${approvedPct}%`}</span>
                     </div>
                     <div className="mt-2 flex items-center justify-between text-xs text-muted-foreground">
-                      <span>{row.entries} entries · last {row.lastDate}</span>
+                      <span>{row.entries} entries · last {row.lastDate ?? "—"}</span>
                       <span className="flex items-center gap-1.5">
-                        {open > 0 && <Badge variant="info">{open} open</Badge>}
-                        {closed !== null && closed > 0 && <Badge variant="success">{closed} closed</Badge>}
+                        {row.tickets.open > 0 && <Badge variant="info">{row.tickets.open} open</Badge>}
+                        {row.tickets.closed > 0 && <Badge variant="success">{row.tickets.closed} closed</Badge>}
+                        {row.changes && row.changes.raised > 0 && <Badge variant="warning">{row.changes.raised} CM</Badge>}
                         {donePct !== null && <span className="font-semibold tabular-nums">{donePct}% done</span>}
                       </span>
                     </div>
@@ -1254,6 +1386,14 @@ function ProjectRollup({
                 );
               })}
             </div>
+
+            {/* Stated rather than silent — the server caps the list, and a card that quietly drops
+                projects is the bug this whole route was written to fix. */}
+            {rollup?.truncated && (
+              <p className="mt-3 text-xs text-muted-foreground">
+                Showing the busiest projects only — this account is on more than the card can list.
+              </p>
+            )}
 
             {/* Only surfaces once there's more than one page — a footer under three rows is
                 noise. Same visual shape as DataTable's footer for consistency. */}
@@ -1290,6 +1430,14 @@ function ProjectRollup({
 
 /* ============================== Banners (unchanged behavior) ============================== */
 
+/** Which of the three things the banner is currently saying — the half of its dismissal
+ *  signature that is not the date, so moving between these states brings the banner back. */
+function describeDailyState(status?: { hours: number; escalated: boolean }): string {
+  if (!status) return "none";
+  if (status.escalated) return "escalated";
+  return status.hours > 0 ? "logged" : "empty";
+}
+
 function DailyStatusBanner({
   status,
   loading
@@ -1297,13 +1445,26 @@ function DailyStatusBanner({
   status?: { hours: number; entries: number; reminderReceived: boolean; escalated: boolean; date: string };
   loading: boolean;
 }) {
-  if (loading || !status) return null;
+  /**
+   * The signature is the DAY plus the state being reported, so closing this is consent to hide
+   * today's message and nothing more. Miss a different day, or move from "not logged" to
+   * "escalated", and the banner returns on its own — which is the whole point, because this is the
+   * notice that says an SLA is running.
+   *
+   * Hooks run before the early returns below, because they must: React requires an unconditional
+   * hook order, and `loading` flips on the first render.
+   */
+  const dailyState = describeDailyState(status);
+  const signature = status ? `${status.date}:${dailyState}` : null;
+  const { dismissed, dismiss } = useDismissed("dashboard.daily-status", signature);
+
+  if (loading || !status || dismissed) return null;
 
   const logged = status.hours > 0;
 
   if (status.escalated) {
     return (
-      <Alert variant="destructive">
+      <Alert variant="destructive" onDismiss={dismiss} dismissLabel="Dismiss this escalation notice for today">
         <AlertTriangle />
         <AlertTitle>Action required — yesterday's log was escalated</AlertTitle>
         <AlertDescription className="flex flex-wrap items-center gap-3">
@@ -1318,7 +1479,7 @@ function DailyStatusBanner({
 
   if (!logged) {
     return (
-      <Alert variant={status.reminderReceived ? "warning" : "info"}>
+      <Alert variant={status.reminderReceived ? "warning" : "info"} onDismiss={dismiss} dismissLabel="Dismiss today's reminder">
         <Clock />
         <AlertTitle>
           {status.reminderReceived
@@ -1340,7 +1501,7 @@ function DailyStatusBanner({
   }
 
   return (
-    <Alert variant="success">
+    <Alert variant="success" onDismiss={dismiss} dismissLabel="Dismiss this confirmation">
       <CheckCircle2 />
       <AlertTitle>Today's timesheet is logged</AlertTitle>
       <AlertDescription>
@@ -1351,11 +1512,19 @@ function DailyStatusBanner({
 }
 
 function MyTicketsBanner({ tickets, loading }: { tickets?: TicketRow[]; loading: boolean }) {
-  if (loading || !tickets || tickets.length === 0) return null;
-  const overdue = tickets.filter((t) => t.slaBreachAt).length;
+  const overdue = tickets?.filter((t) => t.slaBreachAt).length ?? 0;
+  /**
+   * Keyed on the COUNTS rather than on the day: a ticket banner that came back every morning would
+   * be nagging, but one that stayed hidden after a sixth ticket landed — or after one of them went
+   * overdue — would be hiding new information. Counts change, the banner returns.
+   */
+  const signature = tickets ? `${tickets.length}:${overdue}` : null;
+  const { dismissed, dismiss } = useDismissed("dashboard.my-tickets", signature);
+
+  if (loading || !tickets || tickets.length === 0 || dismissed) return null;
 
   return (
-    <Alert variant={overdue > 0 ? "destructive" : "info"}>
+    <Alert variant={overdue > 0 ? "destructive" : "info"} onDismiss={dismiss} dismissLabel="Dismiss this ticket notice">
       <TicketIcon />
       <AlertTitle>
         {tickets.length} open ticket{tickets.length === 1 ? "" : "s"} assigned to you
@@ -1388,6 +1557,19 @@ function WorkforceSnapshot({ data, loading }: { data?: any; loading: boolean }) 
   const remindersTrend = computeTrend(reminders, Number(data.todayDailyRemindersSentYesterday ?? 0), false);
   const escalationsTrend = computeTrend(escalations, Number(data.todayEscalationsSentYesterday ?? 0), false);
 
+  const ticketsRaised = Number(data.ticketsRaisedToday ?? 0);
+  const ticketsClosed = Number(data.ticketsClosedToday ?? 0);
+  // Null passes straight through, so "change management is off" stays distinguishable from "none
+  // raised today" — the same rule the rest of this page follows.
+  const changesRaised = data.changesRaisedToday ?? null;
+  const changesClosed = data.changesClosedToday ?? null;
+  // More tickets raised is not good news and not bad news on its own, so it carries no colour;
+  // closing more is good, and both change figures follow the same reading.
+  const ticketsRaisedTrend = computeTrend(ticketsRaised, Number(data.ticketsRaisedYesterday ?? 0), null);
+  const ticketsClosedTrend = computeTrend(ticketsClosed, Number(data.ticketsClosedYesterday ?? 0), true);
+  const changesRaisedTrend = computeTrend(Number(changesRaised ?? 0), Number(data.changesRaisedYesterday ?? 0), null);
+  const changesClosedTrend = computeTrend(Number(changesClosed ?? 0), Number(data.changesClosedYesterday ?? 0), true);
+
   return (
     <Card>
       <CardHeader className="flex flex-row flex-wrap items-center justify-between gap-3 space-y-0 pb-3">
@@ -1408,6 +1590,21 @@ function WorkforceSnapshot({ data, loading }: { data?: any; loading: boolean }) 
           <SnapshotStat label="Reminders sent" value={reminders} trend={remindersTrend} trendLabel="vs yesterday" />
           <SnapshotStat label="Escalations" value={escalations} trend={escalationsTrend} trendLabel="vs yesterday" />
           <SnapshotStat label="vs YTD avg/day" value={`${ytdAvgLoggedPerDay.toFixed(1)}`} trend={vsYtdAvg} trendLabel="today vs avg" />
+        </div>
+
+        {/* The other two kinds of work the workforce did today. Same day boundary and same
+            vs-yesterday comparison as the row above, so the three read as one picture rather than
+            three widgets that happen to share a card. */}
+        <div className="grid grid-cols-2 gap-2.5 text-sm sm:grid-cols-4">
+          <SnapshotStat label="Tickets raised" value={ticketsRaised} trend={ticketsRaisedTrend} trendLabel="vs yesterday" />
+          <SnapshotStat label="Tickets closed" value={ticketsClosed} trend={ticketsClosedTrend} trendLabel="vs yesterday" />
+          {/* Absent, not zeroed, when change management is off. */}
+          {changesRaised !== null && (
+            <SnapshotStat label="Changes raised" value={changesRaised} trend={changesRaisedTrend} trendLabel="vs yesterday" />
+          )}
+          {changesClosed !== null && (
+            <SnapshotStat label="Changes closed" value={changesClosed} trend={changesClosedTrend} trendLabel="vs yesterday" />
+          )}
         </div>
       </CardContent>
     </Card>

@@ -3,6 +3,15 @@ import { env } from "../config/env.js";
 import { prisma } from "../config/prisma.js";
 import { dispatchNotification, getGlobalNotificationSettings } from "../services/notify.service.js";
 import { runForEveryOrg } from "./run-for-every-org.js";
+import {
+  dateKeyToUtc,
+  isWeekendDay,
+  previousBusinessDayKey,
+  startOfZonedDayUtc,
+  zonedParts,
+  type ZonedParts
+} from "../utils/recipient-time.js";
+import { serverTimezone } from "../config/env.js";
 
 /**
  * Daily reminder + next-day escalation worker.
@@ -20,6 +29,23 @@ import { runForEveryOrg } from "./run-for-every-org.js";
  *
  * Idempotent: we check the Notification table to avoid double-firing
  * within the same calendar day (even if the worker re-runs).
+ *
+ * ── EVERY CLOCK QUESTION HERE IS ASKED IN THE RECIPIENT'S TIMEZONE ────────────────────────────
+ *
+ * "Is it a weekday?" and "is it their reminder hour?" used to be answered with `now.getDay()` and
+ * `now.getHours()` — the SERVER's answers. The server defaults to Asia/Kolkata (config/env.ts)
+ * while `User.timezone` is populated per person, so for anyone west of the server the two
+ * disagree by enough to matter:
+ *
+ *     New York Fri 15:00  ->  IST Sat 00:30
+ *
+ * From about 2:30pm on Friday, a New York user's reminder was dropped by a weekend check about
+ * somebody else's weekend — and the next tick that is not a weekend on the server is MONDAY. That
+ * is the "no mail on Friday, it arrives Monday morning" report, and it is why the hour/weekday
+ * gate now lives INSIDE the per-user loop instead of guarding the whole tick.
+ *
+ * See utils/recipient-time.ts. If you add a scheduled email: the recipient's clock is the one
+ * that decides.
  */
 
 let started = false;
@@ -30,26 +56,33 @@ let started = false;
 // suspenders.
 let running = false;
 
-function startOfLocalDay(date: Date): Date {
-  const result = new Date(date);
-  result.setHours(0, 0, 0, 0);
-  return result;
+/**
+ * The workspace's own zone, used when a person has not set one. Falls back to the server's, which
+ * reproduces the historical behaviour exactly for a single-timezone deployment.
+ */
+function workspaceZone(): string {
+  return serverTimezone;
 }
 
-function toUtcDateOnly(date: Date): Date {
-  return new Date(Date.UTC(date.getFullYear(), date.getMonth(), date.getDate()));
+/** Where this person's clock currently stands. */
+function recipientNow(now: Date, timezone: string | null | undefined): ZonedParts {
+  return zonedParts(now, timezone, workspaceZone());
 }
 
 /**
- * "Yesterday" in business terms: Mon→Fri, Tue→Mon, ..., Fri→Thu.
- * (Saturday/Sunday don't run; the cron filter handles that upstream.)
+ * Should this person hear from us at all right now?
+ *
+ * Returns the reason when not, because "nothing was sent" is the hardest state to diagnose in a
+ * scheduled job and the caller logs a per-reason tally.
  */
-function previousBusinessDay(now: Date): Date {
-  const day = now.getDay(); // 0 Sun, 1 Mon, ... 6 Sat
-  const offset = day === 1 ? 3 : day === 0 ? 2 : 1;
-  const result = startOfLocalDay(now);
-  result.setDate(result.getDate() - offset);
-  return result;
+function reminderWindow(
+  parts: ZonedParts,
+  targetHour: number,
+  weekdaysOnly: boolean
+): { send: true } | { send: false; reason: "weekend" | "wrong-hour" } {
+  if (weekdaysOnly && isWeekendDay(parts.weekday)) return { send: false, reason: "weekend" };
+  if (parts.hour !== targetHour) return { send: false, reason: "wrong-hour" };
+  return { send: true };
 }
 
 async function getTargetUsers() {
@@ -59,6 +92,8 @@ async function getTargetUsers() {
       deletedAt: null,
       role: { name: { in: ["EMPLOYEE", "TEAM_LEAD"] } }
     },
+    // `timezone` is the whole point of this worker's scheduling — see the header. It is nullable,
+    // and a null follows the workspace zone rather than being skipped.
     include: { manager: true }
   });
 }
@@ -70,8 +105,14 @@ async function userLoggedOn(userId: string, dateUtc: Date): Promise<boolean> {
   return count > 0;
 }
 
-async function alreadyNotifiedToday(userId: string, category: string): Promise<boolean> {
-  const since = startOfLocalDay(new Date());
+/**
+ * "Have we already told this person today?", where TODAY is their own calendar day.
+ *
+ * Measured from the start of the recipient's local day, not the server's. A recipient far enough
+ * west otherwise shares one server-day with two of their own, and the second is silently swallowed
+ * as a duplicate.
+ */
+async function alreadyNotifiedToday(userId: string, category: string, since: Date): Promise<boolean> {
   const count = await prisma.notification.count({
     where: { userId, category, createdAt: { gte: since } }
   });
@@ -81,8 +122,6 @@ async function alreadyNotifiedToday(userId: string, category: string): Promise<b
 /* ============================== 4 PM reminder ============================== */
 
 export async function runDailyReminders(now: Date = new Date()): Promise<{ sent: number }> {
-  const todayUtc = toUtcDateOnly(now);
-  const dateLabel = todayUtc.toISOString().slice(0, 10);
   const settings = await getGlobalNotificationSettings();
   const deadlineHour = String(Math.max(0, Math.min(23, settings.dailyReminderHour + 1)));
 
@@ -90,8 +129,17 @@ export async function runDailyReminders(now: Date = new Date()): Promise<{ sent:
   let sent = 0;
 
   for (const user of users) {
+    // Their clock, not ours. A user whose local Friday is already the server's Saturday used to be
+    // dropped here for the next three days — see the file header.
+    const parts = recipientNow(now, user.timezone);
+    if (!reminderWindow(parts, settings.dailyReminderHour, settings.remindOnWeekdaysOnly).send) continue;
+
+    // "Today" is the recipient's today, which is the day their timesheet is actually about.
+    const dateLabel = parts.dateKey;
+    const todayUtc = dateKeyToUtc(dateLabel);
+
     if (await userLoggedOn(user.id, todayUtc)) continue;
-    if (await alreadyNotifiedToday(user.id, "reminder.daily")) continue;
+    if (await alreadyNotifiedToday(user.id, "reminder.daily", startOfZonedDayUtc(now, user.timezone, workspaceZone()))) continue;
 
     await dispatchNotification({
       userId: user.id,
@@ -121,17 +169,23 @@ export async function runDailyReminders(now: Date = new Date()): Promise<{ sent:
 /* ===================== 9 AM next-day escalation ============================ */
 
 export async function runEscalationReminders(now: Date = new Date()): Promise<{ employees: number; managers: number }> {
-  const missedLocalDay = previousBusinessDay(now);
-  const missedUtc = toUtcDateOnly(missedLocalDay);
-  const missedLabel = missedUtc.toISOString().slice(0, 10);
-
+  const settings = await getGlobalNotificationSettings();
   const users = await getTargetUsers();
   let employees = 0;
   let managers = 0;
 
   for (const user of users) {
+    const parts = recipientNow(now, user.timezone);
+    if (!reminderWindow(parts, settings.escalationReminderHour, settings.remindOnWeekdaysOnly).send) continue;
+
+    // The business day BEFORE theirs — so a Monday-morning escalation asks about their Friday,
+    // even when the server has not reached Monday yet.
+    const missedLabel = previousBusinessDayKey(parts);
+    const missedUtc = dateKeyToUtc(missedLabel);
+    const dayStart = startOfZonedDayUtc(now, user.timezone, workspaceZone());
+
     if (await userLoggedOn(user.id, missedUtc)) continue;
-    if (await alreadyNotifiedToday(user.id, "reminder.escalation")) continue;
+    if (await alreadyNotifiedToday(user.id, "reminder.escalation", dayStart)) continue;
 
     // Employee escalation reminder
     await dispatchNotification({
@@ -167,7 +221,9 @@ export async function runEscalationReminders(now: Date = new Date()): Promise<{ 
         where: {
           userId: user.manager.id,
           category: "reminder.escalation",
-          createdAt: { gte: startOfLocalDay(now) },
+          // Same recipient-day window as the employee check above, so the two cannot disagree
+          // about which day it is for a report in another timezone.
+          createdAt: { gte: dayStart },
           body: { contains: employeeMarker }
         }
       });
@@ -203,38 +259,36 @@ export async function runEscalationReminders(now: Date = new Date()): Promise<{ 
 
 /* ================================ scheduler =============================== */
 
-let lastFiredHour: { reminder?: string; escalation?: string } = {};
-
+/**
+ * WHY THERE IS NO LONGER A MODULE-LEVEL "already fired this hour" FLAG.
+ *
+ * There was one, and it was a second bug sitting on top of the timezone one. `tick()` is invoked
+ * through `runForEveryOrg`, which loops the tenants SEQUENTIALLY in one process — so the first
+ * org's tick set the flag and every org after it returned immediately. In a multi-tenant
+ * deployment exactly one workspace received daily reminders and the rest silently received none.
+ *
+ * It is safe to delete rather than make per-org because the real guard was always the database:
+ * `alreadyNotifiedToday` counts Notification rows for that user, that category, since the start of
+ * that user's own day. That is per-recipient, survives a restart, and cannot be confused by two
+ * tenants sharing a process — none of which was true of the in-memory flag.
+ */
 async function tick(now: Date = new Date()) {
-  const settings = await getGlobalNotificationSettings();
-
-  // Weekend filter (server-local). 0 = Sunday, 6 = Saturday.
-  const day = now.getDay();
-  if (settings.remindOnWeekdaysOnly && (day === 0 || day === 6)) return;
-
-  const hour = now.getHours();
-  const todayKey = startOfLocalDay(now).toISOString();
-
-  if (hour === settings.dailyReminderHour && lastFiredHour.reminder !== todayKey) {
-    lastFiredHour.reminder = todayKey;
-    try {
-      const result = await runDailyReminders(now);
-      if (result.sent > 0) console.info(`[reminder.daily] sent ${result.sent}`);
-    } catch (error) {
-      console.error("[reminder.daily] failed:", (error as Error).message);
-    }
+  // No global hour or weekday gate: both are per-recipient questions now, asked inside the loops
+  // below. This runs every :00 and :30 and is a no-op for anyone whose local hour does not match.
+  try {
+    const result = await runDailyReminders(now);
+    if (result.sent > 0) console.info(`[reminder.daily] sent ${result.sent}`);
+  } catch (error) {
+    console.error("[reminder.daily] failed:", (error as Error).message);
   }
 
-  if (hour === settings.escalationReminderHour && lastFiredHour.escalation !== todayKey) {
-    lastFiredHour.escalation = todayKey;
-    try {
-      const result = await runEscalationReminders(now);
-      if (result.employees > 0 || result.managers > 0) {
-        console.info(`[reminder.escalation] ${result.employees} employees, ${result.managers} managers`);
-      }
-    } catch (error) {
-      console.error("[reminder.escalation] failed:", (error as Error).message);
+  try {
+    const result = await runEscalationReminders(now);
+    if (result.employees > 0 || result.managers > 0) {
+      console.info(`[reminder.escalation] ${result.employees} employees, ${result.managers} managers`);
     }
+  } catch (error) {
+    console.error("[reminder.escalation] failed:", (error as Error).message);
   }
 }
 
@@ -243,9 +297,12 @@ export async function runRemindersNow(now: Date = new Date()) {
   await tick(now);
 }
 
-/** Reset the in-memory fired-flag so manual triggers don't double-skip. */
+/**
+ * Kept as a no-op for callers that still invoke it. There is no in-memory fired-flag any more —
+ * idempotency is the Notification table, per recipient per local day. See `tick`.
+ */
 export function resetReminderFlags() {
-  lastFiredHour = {};
+  /* intentionally empty — see the note above */
 }
 
 export function startDailyReminderWorker() {

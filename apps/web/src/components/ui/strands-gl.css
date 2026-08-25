@@ -1,0 +1,13 @@
+/* The GL strands canvas fills whatever box its caller gives it — the caller owns the height, the
+   canvas owns nothing but its pixels. Same containment pattern as border-glow.css. */
+.strands-gl {
+  position: relative;
+  width: 100%;
+  overflow: hidden;
+}
+
+.strands-gl canvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+}

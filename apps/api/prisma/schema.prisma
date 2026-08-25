@@ -219,6 +219,27 @@ model User {
   assignedTickets           Ticket[]                  @relation("TicketAssignee")
   ticketComments            TicketComment[]
   ticketWatches             TicketWatcher[]
+  ticketCollaborations      TicketCollaborator[]      @relation("TicketCollaboratorUser")
+  ticketCollaboratorsAdded  TicketCollaborator[]      @relation("TicketCollaboratorAddedBy")
+
+  /// --- Change management (V8 phase 11). Every one of these is a NAMED relation because a User can
+  /// stand in a dozen different places on one change, and Prisma cannot tell them apart otherwise.
+  changeApplicationsOwned   ChangeApplication[]       @relation("ChangeApplicationOwner")
+  changeStepsOwned          ChangeImplementationStep[] @relation("ChangeStepOwner")
+  changeTestsRun            ChangeTestCase[]          @relation("ChangeTestTester")
+  changeDependenciesOwned   ChangeDependency[]        @relation("ChangeDependencyOwnerUser")
+  changeCollaborations      ChangeCollaborator[]      @relation("ChangeCollaboratorUser")
+  changeCollaboratorsAdded  ChangeCollaborator[]      @relation("ChangeCollaboratorAddedBy")
+  changeApprovals           ChangeApproval[]          @relation("ChangeApprover")
+  changesAsBusinessOwner    ChangeRequest[]           @relation("ChangeBusinessOwner")
+  changesAsTechnicalOwner   ChangeRequest[]           @relation("ChangeTechnicalOwner")
+  changesAsPrimaryEngineer  ChangeRequest[]           @relation("ChangePrimaryEngineer")
+  changesAsBackupEngineer   ChangeRequest[]           @relation("ChangeBackupEngineer")
+  changesAsRollbackOwner    ChangeRequest[]           @relation("ChangeRollbackOwner")
+  changesAsCommsOwner       ChangeRequest[]           @relation("ChangeCommsOwner")
+  changesAsValidationOwner  ChangeRequest[]           @relation("ChangeValidationOwner")
+  changesAsFollowUpOwner    ChangeRequest[]           @relation("ChangeFollowUpOwner")
+  changesClosed             ChangeRequest[]           @relation("ChangeClosedBy")
   uploadedTicketAttachments TicketAttachment[]
   ticketEscalationsFrom     TicketEscalation[]        @relation("TicketEscalationFrom")
   ticketEscalationsTo       TicketEscalation[]        @relation("TicketEscalationTo")
@@ -266,6 +287,7 @@ model User {
   proofAnnotations       ProofAnnotation[]
   dashboards             Dashboard[]
   reportSubscriptions    ReportSubscription[]
+  aiAskExchanges         AiAskExchange[]
   aiProposalsRequested   AiProposal[]           @relation("AiProposalRequester")
   aiProposalsReviewed    AiProposal[]           @relation("AiProposalReviewer")
   aiCapabilityPolicies   AiCapabilityPolicy[]   @relation("AiCapabilityPolicyEditor")
@@ -913,6 +935,13 @@ model Ticket {
   comments         TicketComment[]
   attachments      TicketAttachment[]
   watchers         TicketWatcher[]
+  collaborators    TicketCollaborator[]
+  /// Present only on tickets that ARE change requests. See ChangeRequest's own comment for why an
+  /// extension table beat both a separate entity and a pile of custom fields.
+  changeRequest    ChangeRequest?
+  /// Changes that CITE this ticket as work they deliver. Distinct from `changeRequest` above,
+  /// which is this ticket BEING a change.
+  citedByChanges   ChangeTicketLink[]   @relation("ChangeLinkedTicket")
   escalations      TicketEscalation[]
   timesheets       Timesheet[]
   labels           TicketLabel[]
@@ -996,6 +1025,32 @@ model TicketWatcher {
   createdAt DateTime @default(now())
 
   @@unique([ticketId, userId])
+}
+
+/// Extra people who may WORK ON a ticket, alongside its reporter and assignee.
+///
+/// WHY THIS IS NOT `TicketWatcher`: a watcher is a notification subscription that anybody holding
+/// `tickets:view` adds to themselves, and it deliberately grants nothing. A collaborator is an
+/// authority — `canWorkOnTicket()` treats one exactly like the assignee — so it may only be granted
+/// by the same people who may reassign the ticket (see `canReassignTicket`). Folding the two
+/// together would have let any viewer self-grant edit rights on any ticket they can see.
+///
+/// `addedById` is kept rather than derived from the audit log because the roster is read on every
+/// detail open and "who put me on this" should not require a second query into audit history.
+model TicketCollaborator {
+  id         String   @id @default(uuid())
+  ticketId   String
+  ticket     Ticket   @relation(fields: [ticketId], references: [id], onDelete: Cascade)
+  userId     String
+  user       User     @relation("TicketCollaboratorUser", fields: [userId], references: [id], onDelete: Cascade)
+  /// Who granted the access. SetNull rather than Cascade: removing the granter must not silently
+  /// revoke the grant — that would drop people off tickets when an admin leaves the company.
+  addedById  String?
+  addedBy    User?    @relation("TicketCollaboratorAddedBy", fields: [addedById], references: [id], onDelete: SetNull)
+  createdAt  DateTime @default(now())
+
+  @@unique([ticketId, userId])
+  @@index([userId])
 }
 
 /// Mirrors Escalation's shape exactly; kept separate because Escalation is hard-FK'd to Timesheet.
@@ -1152,6 +1207,24 @@ model GlobalAISettings {
   /// same reason: a score a model invented is not reproducible and not defensible in the meeting
   /// where someone asks why their project is red.
   projectRiskAgentEnabled     Boolean @default(false)
+  /// Gates ai.service.ts#narrateChangeRisk — the same division of labour one module over. A change's
+  /// risk score is computed from weighted parameters and STORED; this only turns it into a sentence
+  /// an approver can act on. It never scores, and it never approves: see
+  /// docs/AI_AND_AUTOMATION_FOR_CHANGE.md §1.3 for why approving is excluded at every level.
+  changeRiskNarrativeEnabled  Boolean @default(false)
+  /// Gates ai.service.ts#draftChangeSections — drafts the prose sections that BLOCK a change's
+  /// submission. Never writes them: it emits an AiProposal whose rows a human accepts or rejects
+  /// individually, and a row whose underlying value moved since is refused rather than clobbering
+  /// somebody's edit. Capped at SUGGEST in the registry, permanently.
+  changeDraftAssistEnabled    Boolean @default(false)
+  /// Gates ai.service.ts#briefChangeConflicts — reads the calendar around a change's window and says
+  /// what else is booked on the same application, and whether it lands in a freeze. Reports; moves
+  /// nothing. The conflicts themselves are computed by findScheduleConflicts, not by the model.
+  changeConflictBriefEnabled  Boolean @default(false)
+  /// Gates ai.service.ts#draftPostImplementationReview — drafts the PIR from what actually happened:
+  /// which steps failed, which tests did not pass, the recorded outcome. A proposal, never a write —
+  /// the PIR is the record of a failure and its author should be the person accountable for it.
+  changePirAssistEnabled      Boolean @default(false)
   /// Gates ai.service.ts#proposePlanBreakdown — turns a goal or an epic into a PROPOSED tree of
   /// child work items. Never writes: it emits an AiProposal whose rows a human accepts or
   /// rejects individually. See ai-proposal.service.ts for why that envelope exists.
@@ -1789,6 +1862,29 @@ model GlobalNotificationSettings {
   /// not a send every workspace inherits.
   emailGoalDigest Boolean @default(false)
 
+  /// --- Change management (V8 phase 11) -----------------------------------------------------
+  /// Every column here except the digest defaults ON. The test this codebase applies is whether a
+  /// message is the direct consequence of an action somebody took — all of these are, and a change
+  /// approval that arrives only in a bell nobody opened is a governance hole rather than a quiet
+  /// inbox. The digest defaults OFF like every other digest.
+  ///
+  /// Muting any of them suppresses only the EMAIL leg; the in-app notification always fires.
+  emailChangeSubmitted             Boolean @default(true)
+  emailChangeApprovalRequested     Boolean @default(true)
+  emailChangeApproved              Boolean @default(true)
+  emailChangeRejected              Boolean @default(true)
+  emailChangeScheduled             Boolean @default(true)
+  emailChangeWindowReminder        Boolean @default(true)
+  /// The one transactional exception: "somebody has started work" is news, and the people who need
+  /// it are already watching the change. Default OFF keeps a busy change from mailing twice.
+  emailChangeImplementationStarted Boolean @default(false)
+  emailChangeCompleted             Boolean @default(true)
+  emailChangeFailed                Boolean @default(true)
+  emailChangePirDue                Boolean @default(true)
+  emailChangeFreezeConflict        Boolean @default(true)
+  emailChangeOverdueApproval       Boolean @default(true)
+  emailChangeWeeklyDigest          Boolean @default(false)
+
   /// "A workflow is waiting for you to approve a step."
   ///
   /// Default ON, and for the same reason `emailAiAutonomyApplied` is: a gate BLOCKS everything after
@@ -2407,6 +2503,17 @@ model ApiKey {
   createdBy   User?     @relation(fields: [createdById], references: [id], onDelete: SetNull)
   createdAt   DateTime  @default(now())
   revokedAt   DateTime?
+  /// When this key stops working on its own.
+  ///
+  /// NULL means it never expires, which is what every key issued before this column existed
+  /// does — expiring them retroactively would break working integrations on upgrade with no
+  /// warning at all. New keys are offered an expiry at creation.
+  ///
+  /// WHY IT MATTERS MORE THAN revokedAt: revoking requires somebody to remember. A long-lived
+  /// bearer token pasted into a customer's Zapier account or a cron script is precisely the
+  /// credential nobody revisits, and `lastUsedAt` is the only signal it is still out there.
+  /// Same argument (and the same nullable shape) as McpCredential.expiresAt.
+  expiresAt   DateTime?
 
   @@index([keyHash])
 }
@@ -3269,6 +3376,13 @@ model ApprovalRequest {
   /// move the requester originally attempted.
   pendingTransitionStatusId String? @db.VarChar(36)
 
+  /// How many APPROVED steps settle the request. NULL = every step must approve, which is the
+  /// behaviour every existing row had before this column and therefore the only safe default:
+  /// backfilling a number onto live chains would have completed somebody's half-decided request.
+  /// Set to 1 for an emergency "any one of the on-call group can sign this off" chain. Rejection
+  /// stays terminal regardless — one "no" settles the request however high the quorum.
+  quorum Int?
+
   steps ApprovalStep[]
 
   createdAt   DateTime  @default(now())
@@ -3425,6 +3539,11 @@ enum AiProposalKind {
   ASSIGNMENT_REBALANCE
   RISK_MITIGATION
   BLUEPRINT_SUGGESTION
+  /// Drafted prose for a change request's blocking sections — justification, implementation,
+  /// backout, test and communication plans. A proposal rather than field writes because these are
+  /// the sections an approver relies on, and a draft nobody wrote is worse than a blank field: a
+  /// blank field is honest about not having been thought about.
+  CHANGE_DRAFT
 }
 
 enum AiProposalStatus {
@@ -3461,6 +3580,49 @@ enum AiProposalChangeOp {
 /// It also gives the existing AI quality loop something to learn from: accept/reject per row is a
 /// far richer signal than the thumbs-up/down on AIInteraction, and it is generated as a
 /// by-product of people doing their normal work.
+/// One question-and-answer on the Ask AI page — the page's memory.
+///
+/// A row per EXCHANGE rather than per message: the page renders question-answer cards, follow-ups
+/// are given to the model as recent history, and a chat-log-of-roles would be a second shape for
+/// the same fact. Everything the meta strip shows is stored at answer time — model, provider,
+/// tokens, cost, duration — because the settings can change tomorrow and the history must keep
+/// saying what THIS answer actually cost.
+model AiAskExchange {
+  id     String @id @default(uuid())
+  userId String
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  prompt String  @db.Text
+  /// Markdown, possibly carrying ```chart fences the page renders as real charts. Null when the
+  /// attempt failed — the row is still kept, because "it failed at 14:02" is part of the history.
+  answer String? @db.Text
+  error  String? @db.VarChar(500)
+
+  /// Which tools the answer actually consulted, [{ tool, detail }] — the transparency strip.
+  toolCalls Json @default("[]")
+
+  model        String?  @db.VarChar(120)
+  provider     String?  @db.VarChar(40)
+  inputTokens  Int      @default(0)
+  outputTokens Int      @default(0)
+  costUsd      Decimal? @db.Decimal(10, 6)
+  durationMs   Int      @default(0)
+
+  /// 1 = up, -1 = down, null = unrated. An Int rather than a Boolean so "rated down" and "not
+  /// rated" cannot be confused.
+  feedback Int?
+
+  /// The captured AIInteraction this answer became, when capture is on. Deliberately NOT a foreign
+  /// key — interactions are pruned on a retention schedule and the exchange must outlive its
+  /// capture. This is what lets a thumb here flow into the same quality loop and golden datasets
+  /// every other capability's ratings feed.
+  interactionId String? @db.VarChar(64)
+
+  createdAt DateTime @default(now())
+
+  @@index([userId, createdAt])
+}
+
 model AiProposal {
   id   String         @id @default(uuid())
   kind AiProposalKind
@@ -4204,4 +4366,628 @@ model ApiRequestSample {
   @@index([statusCode, createdAt])
   @@index([hostname, createdAt])
   @@index([apiResponseTime, createdAt])
+}
+
+/* ------------------------------------------------------------------ *
+ * CHANGE MANAGEMENT
+ *
+ * A change request IS a ticket, plus this extension row. That choice is the whole reason this
+ * module is small: comments, attachments, watchers, collaborators, links, the audit trail, SLA,
+ * search, the public API and the MCP tools all attach to the ticket and needed no work. The
+ * columns that make a change a CHANGE — risk, windows, the plans, the outcome — live here, typed,
+ * indexed and reportable, which they could never be as CustomFieldValue rows.
+ *
+ * WHY `state` IS ITS OWN ENUM RATHER THAN A `Workflow`: `resolveWorkflowForTicketType()` returns
+ * the SYSTEM workflow whenever custom workflows are off, and custom workflows are Enterprise-only.
+ * Building the change lifecycle on that machinery would have silently collapsed eleven change
+ * states into six ticket statuses for every Team-tier workspace. The lifecycle is a domain rule,
+ * not an admin preference, so it is enforced in code — and `Ticket.status` is written in the same
+ * update from CHANGE_STATE_TO_TICKET_STATUS, the same compatibility hinge WorkflowStatus uses, so
+ * every existing reader of `Ticket.status` stays correct without knowing this enum exists.
+ * ------------------------------------------------------------------ */
+
+enum ChangeKind {
+  /// Pre-approved and repeatable. Skips assessment and approval entirely.
+  STANDARD
+  NORMAL
+  EMERGENCY
+  MAJOR
+}
+
+/// Shared by impact, likelihood and the derived risk level so the matrix has one vocabulary.
+enum ChangeBand {
+  LOW
+  MEDIUM
+  HIGH
+}
+
+enum ChangeState {
+  DRAFT
+  SUBMITTED
+  RISK_ASSESSMENT
+  AWAITING_APPROVAL
+  APPROVED
+  SCHEDULED
+  IMPLEMENTING
+  /// Spec §25: implementation is finished, but somebody still has to confirm it actually worked.
+  /// Distinct from PIR — validation asks "did it do what it said", the review asks "what did we
+  /// learn". Collapsing them would lose the first question, which is the one with a pass/fail.
+  VALIDATION
+  PIR
+  CLOSED
+  REJECTED
+  CANCELLED
+}
+
+/// How it actually went. Deliberately NOT a state: "failed" is a fact about an implementation that
+/// still has to be reviewed and closed, so treating it as terminal would strand the change before
+/// its post-implementation review — the one record an auditor asks for first.
+enum ChangeOutcome {
+  SUCCESSFUL
+  SUCCESSFUL_WITH_ISSUES
+  FAILED
+  ROLLED_BACK
+}
+
+model ChangeRequest {
+  id       String @id @default(uuid())
+  ticketId String @unique
+  ticket   Ticket @relation(fields: [ticketId], references: [id], onDelete: Cascade)
+
+  /// Why now, and what happens if it does not go ahead. The first thing an approver reads.
+  justification String          @db.Text
+  changeKind    ChangeKind      @default(NORMAL)
+  categoryId    String?
+  category      ChangeCategory? @relation(fields: [categoryId], references: [id], onDelete: SetNull)
+
+  state ChangeState @default(DRAFT)
+
+  /// --- Risk ------------------------------------------------------------------------------
+  impact     ChangeBand @default(LOW)
+  likelihood ChangeBand @default(LOW)
+  /// DERIVED from impact x likelihood, never typed by a human — but STORED rather than computed on
+  /// read. An admin who retunes the matrix next quarter must not silently rewrite the risk level a
+  /// board actually approved against.
+  riskLevel  ChangeBand @default(LOW)
+  /// When the stored risk was last computed, so a stale score is visible rather than assumed fresh.
+  riskScoredAt DateTime?
+
+  /// Free-text service names. A real service catalogue (owners, dependencies, blast radius) is its
+  /// own module; half-building one here would have produced a registry nobody maintains.
+  affectedServices       Json    @default("[]")
+  affectedUserCount      Int?
+  requiresDowntime       Boolean @default(false)
+  downtimeMinutes        Int?
+  securityReviewRequired Boolean @default(false)
+  dataMigration          Boolean @default(false)
+  /// SOX / ISO27001 / GDPR / PCI — what an evidence export filters on.
+  complianceTags         Json    @default("[]")
+
+  /// --- The plans -------------------------------------------------------------------------
+  /// All nullable in the SCHEMA and conditionally required at the TRANSITION. A draft you cannot
+  /// save until it is complete is a draft nobody starts; the rules bite on submit instead. See
+  /// change.service.ts#assertReadyFor.
+  implementationPlan String? @db.Text
+  backoutPlan        String? @db.Text
+  testPlan           String? @db.Text
+  communicationPlan  String? @db.Text
+
+  /// --- Scheduling ------------------------------------------------------------------------
+  plannedStart DateTime?
+  plannedEnd   DateTime?
+  actualStart  DateTime?
+  actualEnd    DateTime?
+  /// A freeze collision is reported, never silently blocked — overriding it costs a reason and an
+  /// audit row, which is the difference between a control and an obstacle.
+  freezeOverrideReason String? @db.Text
+
+  /// --- Outcome ---------------------------------------------------------------------------
+  outcome      ChangeOutcome?
+  pirNotes     String?        @db.Text
+  closureNotes String?        @db.Text
+
+  /// The chain currently gating APPROVED. Cleared when the change leaves approval, so "is this
+  /// waiting on somebody" is one nullable column rather than a query.
+  approvalRequestId String? @db.VarChar(36)
+
+  submittedAt DateTime?
+  approvedAt  DateTime?
+  closedAt    DateTime?
+
+
+  /// --- Identity ---------------------------------------------------------------------------
+  /// The number people quote: `HICS-TS-20260812-0001`. Project code, the date it was raised, and a
+  /// per-project-per-day sequence. Generated, never accepted from a client, and distinct from the
+  /// underlying ticket's key — a change record is cited in audits and mail, and inheriting a key
+  /// from a bug tracker would read as one.
+  changeKey String @unique @db.VarChar(64)
+
+  /// --- Classification (spec §10) -----------------------------------------------------------
+  sourceId        String?
+  source          ChangeSource?      @relation(fields: [sourceId], references: [id], onDelete: SetNull)
+  applicationId   String?
+  application     ChangeApplication? @relation(fields: [applicationId], references: [id], onDelete: SetNull)
+  environment     ChangeEnvironment  @default(PRODUCTION)
+  businessUnit    String?            @db.VarChar(120)
+  department      String?            @db.VarChar(120)
+  serviceName     String?            @db.VarChar(120)
+  productName     String?            @db.VarChar(120)
+  businessOwnerId String?
+  businessOwner   User?              @relation("ChangeBusinessOwner", fields: [businessOwnerId], references: [id], onDelete: SetNull)
+  technicalOwnerId String?
+  technicalOwner  User?              @relation("ChangeTechnicalOwner", fields: [technicalOwnerId], references: [id], onDelete: SetNull)
+
+  /// --- Business justification (spec §11) ---------------------------------------------------
+  problemStatement       String? @db.Text
+  currentSituation       String? @db.Text
+  reasonForChange        String? @db.Text
+  expectedOutcome        String? @db.Text
+  businessBenefits       String? @db.Text
+  costOfNotImplementing  String? @db.Text
+  revenueImpact          String? @db.Text
+  customerImpactNotes    String? @db.Text
+  slaImpactNotes         String? @db.Text
+  regulatoryRequirement  Boolean @default(false)
+  complianceReference    String? @db.VarChar(200)
+  projectReference       String? @db.VarChar(200)
+
+  /// --- Impact assessment (spec §12) --------------------------------------------------------
+  /// The lists are JSON arrays of free text. They are read by people and filtered on rarely, and a
+  /// join table per list would be eleven tables nobody maintains.
+  affectedApplications  Json    @default("[]")
+  affectedCustomers     Json    @default("[]")
+  affectedLocations     Json    @default("[]")
+  affectedDepartments   Json    @default("[]")
+  affectedInfrastructure Json   @default("[]")
+  affectedApis          Json    @default("[]")
+  affectedDatabases     Json    @default("[]")
+  affectedIntegrations  Json    @default("[]")
+
+  productionAffected        Boolean @default(false)
+  customerAffected          Boolean @default(false)
+  serviceInterruption       Boolean @default(false)
+  dataModified              Boolean @default(false)
+  appRestartRequired        Boolean @default(false)
+  serverRestartRequired     Boolean @default(false)
+  dbRestartRequired         Boolean @default(false)
+  securityImpact            Boolean @default(false)
+  complianceImpact          Boolean @default(false)
+  slaImpact                 Boolean @default(false)
+  externalIntegrationImpact Boolean @default(false)
+
+  downtimeStart               DateTime?
+  downtimeEnd                 DateTime?
+  customerNotificationRequired Boolean  @default(false)
+
+  /// --- Risk (spec §13) ----------------------------------------------------------------------
+  /// The per-parameter bands the score was computed from, keyed by ChangeRiskParameter.key. Stored
+  /// alongside the score so a retuned matrix cannot rewrite what a board actually approved.
+  riskInputs Json @default("{}")
+  /// 0-100. Derived from riskInputs and the active parameter weights; `riskLevel` is its band.
+  riskScore  Int  @default(0)
+
+  /// --- Implementation (spec §14) ------------------------------------------------------------
+  implementationSummary   String? @db.Text
+  implementationObjective String? @db.Text
+  prerequisites           String? @db.Text
+  requiredAccess          String? @db.Text
+  requiredTools           String? @db.Text
+  requiredResources       String? @db.Text
+  primaryEngineerId       String?
+  primaryEngineer         User?   @relation("ChangePrimaryEngineer", fields: [primaryEngineerId], references: [id], onDelete: SetNull)
+  backupEngineerId        String?
+  backupEngineer          User?   @relation("ChangeBackupEngineer", fields: [backupEngineerId], references: [id], onDelete: SetNull)
+  expectedDurationMinutes Int?
+  implementationNotes     String? @db.Text
+  implementationIssues    String? @db.Text
+
+  /// --- Testing (spec §15) ---------------------------------------------------------------------
+  testEnvironment            ChangeEnvironment?
+  testingTeam                String?            @db.VarChar(200)
+  uatRequired                Boolean            @default(false)
+  businessValidationRequired Boolean            @default(false)
+  testingStart               DateTime?
+  testingEnd                 DateTime?
+  validationCriteria         String?            @db.Text
+
+  /// --- Rollback (spec §16, §24) ---------------------------------------------------------------
+  rollbackRequired          Boolean   @default(true)
+  rollbackCriteria          String?   @db.Text
+  rollbackProcedure         String?   @db.Text
+  rollbackOwnerId           String?
+  rollbackOwner             User?     @relation("ChangeRollbackOwner", fields: [rollbackOwnerId], references: [id], onDelete: SetNull)
+  estimatedRollbackMinutes  Int?
+  backupRequired            Boolean   @default(false)
+  backupLocation            String?   @db.VarChar(400)
+  backupVerified            Boolean   @default(false)
+  restoreProcedure          String?   @db.Text
+  /// NOT_REQUIRED | INITIATED | IN_PROGRESS | COMPLETED | FAILED
+  rollbackStatus            String    @default("NOT_REQUIRED") @db.VarChar(20)
+  rollbackStartedAt         DateTime?
+  rollbackEndedAt           DateTime?
+  rollbackReason            String?   @db.Text
+  rollbackResult            String?   @db.Text
+
+  /// --- Release (spec §17) ---------------------------------------------------------------------
+  releaseVersion       String? @db.VarChar(80)
+  buildNumber          String? @db.VarChar(80)
+  deploymentPackage    String? @db.VarChar(400)
+  repository           String? @db.VarChar(400)
+  branch               String? @db.VarChar(200)
+  cicdPipeline         String? @db.VarChar(400)
+  releaseTicket        String? @db.VarChar(120)
+  deploymentTool       String? @db.VarChar(120)
+  deploymentMethod     String? @db.VarChar(120)
+  configurationChanges Boolean @default(false)
+  databaseChanges      Boolean @default(false)
+  apiChanges           Boolean @default(false)
+  infrastructureChanges Boolean @default(false)
+
+  /// --- Communication (spec §20) ---------------------------------------------------------------
+  internalCommRequired        Boolean   @default(false)
+  stakeholderNotifyRequired   Boolean   @default(false)
+  communicationChannel        String?   @db.VarChar(80)
+  notificationAudience        String?   @db.Text
+  communicationOwnerId        String?
+  communicationOwner          User?     @relation("ChangeCommsOwner", fields: [communicationOwnerId], references: [id], onDelete: SetNull)
+  notificationDate            DateTime?
+
+  /// --- Schedule (spec §18) --------------------------------------------------------------------
+  maintenanceWindowId String?
+  /// Written when somebody schedules over a blackout or a clashing change. Never empty when
+  /// `conflictOverridden` is true — an override without a reason is not a decision anybody can audit.
+  conflictOverridden  Boolean @default(false)
+  conflictOverrideReason String? @db.Text
+
+  /// --- Validation (spec §25) ------------------------------------------------------------------
+  validationOwnerId       String?
+  validationOwner         User?     @relation("ChangeValidationOwner", fields: [validationOwnerId], references: [id], onDelete: SetNull)
+  validationDate          DateTime?
+  /// PENDING | PASSED | FAILED
+  validationResult        String?   @db.VarChar(20)
+  businessConfirmation    Boolean   @default(false)
+  technicalConfirmation   Boolean   @default(false)
+  validationIssues        String?   @db.Text
+
+  /// --- Post-implementation review (spec §26) --------------------------------------------------
+  implementationSuccessful Boolean?
+  expectedResultAchieved   Boolean?
+  actualResult             String?   @db.Text
+  issuesEncountered        String?   @db.Text
+  incidentCreated          Boolean   @default(false)
+  incidentReference        String?   @db.VarChar(120)
+  actualDowntimeMinutes    Int?
+  lessonsLearned           String?   @db.Text
+  recommendations          String?   @db.Text
+  followUpActions          String?   @db.Text
+  followUpOwnerId          String?
+  followUpOwner            User?     @relation("ChangeFollowUpOwner", fields: [followUpOwnerId], references: [id], onDelete: SetNull)
+  followUpTargetDate       DateTime?
+
+  /// --- Closure (spec §27) ---------------------------------------------------------------------
+  /// SUCCESSFUL | SUCCESSFUL_WITH_ISSUES | FAILED | ROLLED_BACK | CANCELLED
+  closureStatus       String? @db.VarChar(30)
+  documentationUpdated Boolean @default(false)
+  monitoringCompleted Boolean @default(false)
+  closedById          String?
+  closedBy            User?   @relation("ChangeClosedBy", fields: [closedById], references: [id], onDelete: SetNull)
+
+  /// --- Children -------------------------------------------------------------------------------
+  implementationSteps ChangeImplementationStep[]
+  testCases           ChangeTestCase[]
+  dependencies        ChangeDependency[]         @relation("ChangeDependencyOwner")
+  collaborators       ChangeCollaborator[]
+  linkedTickets       ChangeTicketLink[]
+  approvals           ChangeApproval[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([state, plannedStart])
+  @@index([riskLevel, state])
+  @@index([changeKind])
+  @@index([environment, state])
+}
+
+/// Admin-editable, exactly like TicketType — an organisation's change taxonomy is theirs, and a
+/// hard-coded enum would be wrong for the first customer who runs a Facilities change board.
+model ChangeCategory {
+  id                     String  @id @default(uuid())
+  name                   String  @unique @db.VarChar(80)
+  color                  String? @db.VarChar(20)
+  /// Adds a security approver to any chain this category matches.
+  requiresSecurityReview Boolean @default(false)
+  isActive               Boolean @default(true)
+  order                  Int     @default(0)
+
+  changes ChangeRequest[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([isActive, order])
+}
+
+/// Workspace switches for the module. Singleton (`id = "global"`), upserted on read, mirroring
+/// GlobalTicketSettings and GlobalPlanningSettings.
+model GlobalChangeSettings {
+  id String @id
+
+  /// The admin half of the gate. The other half is PlanTierLimit.changeManagementEnabled, and both
+  /// must be true — the same toggle-AND-entitlement rule every optional module here follows.
+  enableChangeManagement Boolean @default(false)
+  /// Hold an approval this many hours before nudging the approver, then their manager.
+  approvalSlaHours       Int     @default(48)
+  /// Send the window reminder this far ahead. Two entries: a day out and an hour out.
+  remindHoursBefore      Json    @default("[24, 1]")
+  /// Demand a face check on an approval decision. Enterprise + face entitlement only; ignored
+  /// without both, and ignored for guest approvers who have no enrolled face by definition.
+  requireFaceOnApproval  Boolean @default(false)
+
+  updatedById String?
+  updatedAt   DateTime @updatedAt
+}
+
+/* ------------------------------------------------------------------ *
+ * CHANGE MANAGEMENT — master data
+ *
+ * Everything an administrator may need to change lives in a table, never an enum, per the module
+ * brief's rule that configuration is database driven. The exceptions are the two vocabularies the
+ * CODE branches on — `ChangeState` and `ChangeEnvironment` — because a status somebody can invent
+ * is a status the state machine cannot reason about.
+ * ------------------------------------------------------------------ */
+
+/// Where a change lands. Fixed rather than admin-editable: the scheduling rules, the rollback
+/// requirement and the approval gate all branch on "is this production", and an admin-invented
+/// environment would have no defined answer.
+enum ChangeEnvironment {
+  DEVELOPMENT
+  QA
+  UAT
+  STAGING
+  PRODUCTION
+  DR
+}
+
+/// Where the change came from — an incident, a project, routine maintenance. Reported on, never
+/// branched on, so it is admin-editable.
+model ChangeSource {
+  id       String  @id @default(uuid())
+  name     String  @unique @db.VarChar(80)
+  isActive Boolean @default(true)
+  order    Int     @default(0)
+
+  changes ChangeRequest[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([isActive, order])
+}
+
+/// The systems a change can touch. Deliberately flat: a real CMDB with dependencies and blast
+/// radius is its own module, and half-building one here would produce a registry nobody maintains.
+model ChangeApplication {
+  id       String  @id @default(uuid())
+  name     String  @unique @db.VarChar(120)
+  code     String? @db.VarChar(40)
+  /// Who answers for it. Used to suggest a technical owner, never to gate anything.
+  ownerId  String?
+  owner    User?   @relation("ChangeApplicationOwner", fields: [ownerId], references: [id], onDelete: SetNull)
+  isActive Boolean @default(true)
+
+  changes ChangeRequest[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([isActive, name])
+}
+
+/// A recurring window when changes are welcome. Weekly by day-of-week because that is how every
+/// operations team actually states one ("Saturdays 22:00–02:00"), and a date-by-date table would
+/// need maintaining forever.
+model MaintenanceWindow {
+  id          String            @id @default(uuid())
+  name        String            @db.VarChar(120)
+  environment ChangeEnvironment @default(PRODUCTION)
+  /// 0 = Sunday, matching GlobalPlanningSettings.workingDays' convention.
+  dayOfWeek   Int
+  /// Minutes past midnight UTC. An integer rather than a TIME column so "22:00–02:00" can be
+  /// expressed as a window that crosses midnight without a second row.
+  startMinute Int
+  endMinute   Int
+  isActive    Boolean           @default(true)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([isActive, environment, dayOfWeek])
+}
+
+/// A period when changes are refused — quarter close, peak trading, an audit. Reported as a
+/// conflict, never as a hard block: overriding one costs a written reason and an audit row, which
+/// is the difference between a control and an obstacle.
+model BlackoutPeriod {
+  id          String             @id @default(uuid())
+  name        String             @db.VarChar(120)
+  reason      String?            @db.Text
+  environment ChangeEnvironment?
+  startsAt    DateTime
+  endsAt      DateTime
+  isActive    Boolean            @default(true)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([isActive, startsAt, endsAt])
+}
+
+/// One weighted input to the risk score. Admin-tunable, which is why the score a change was
+/// approved against is STORED on the change rather than recomputed on read.
+model ChangeRiskParameter {
+  id       String  @id @default(uuid())
+  /// Stable identifier the scoring engine reads — `businessImpact`, `rollbackComplexity`, …
+  key      String  @unique @db.VarChar(60)
+  label    String  @db.VarChar(120)
+  /// Contribution at the highest band. The engine normalises against the sum of active weights, so
+  /// adding a parameter does not silently deflate every existing score's scale.
+  weight   Int     @default(10)
+  isActive Boolean @default(true)
+  order    Int     @default(0)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([isActive, order])
+}
+
+/// How long each stage may sit before it is late. One row per stage, admin-editable.
+model ChangeSlaConfig {
+  id        String @id @default(uuid())
+  /// `APPROVAL`, `IMPLEMENTATION`, `VALIDATION`, `PIR`, `CLOSURE`.
+  stage     String @unique @db.VarChar(40)
+  hours     Int    @default(48)
+  /// Fraction of `hours` at which the stage starts warning rather than breaching, 1-99.
+  warnAtPct Int    @default(75)
+  isActive  Boolean @default(true)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+/* ------------------------------------------------------------------ *
+ * CHANGE MANAGEMENT — the child records
+ * ------------------------------------------------------------------ */
+
+/// An ordered step in the implementation runbook, with its own status so a partially-completed
+/// change reports where it actually stopped rather than just "failed".
+model ChangeImplementationStep {
+  id           String    @id @default(uuid())
+  changeId     String
+  change       ChangeRequest @relation(fields: [changeId], references: [id], onDelete: Cascade)
+  stepNumber   Int
+  description  String    @db.Text
+  ownerId      String?
+  owner        User?     @relation("ChangeStepOwner", fields: [ownerId], references: [id], onDelete: SetNull)
+  plannedStart DateTime?
+  plannedEnd   DateTime?
+  /// NOT_STARTED | IN_PROGRESS | COMPLETED | FAILED | SKIPPED
+  status       String    @default("NOT_STARTED") @db.VarChar(20)
+  comments     String?   @db.Text
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([changeId, stepNumber])
+}
+
+model ChangeTestCase {
+  id             String  @id @default(uuid())
+  changeId       String
+  change         ChangeRequest @relation(fields: [changeId], references: [id], onDelete: Cascade)
+  reference      String  @db.VarChar(40)
+  description    String  @db.Text
+  expectedResult String? @db.Text
+  actualResult   String? @db.Text
+  /// NOT_STARTED | PASSED | FAILED | BLOCKED
+  status         String  @default("NOT_STARTED") @db.VarChar(20)
+  testerId       String?
+  tester         User?   @relation("ChangeTestTester", fields: [testerId], references: [id], onDelete: SetNull)
+  comments       String? @db.Text
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([changeId])
+}
+
+/// Something that must be true before this change may be implemented. `relatedChangeId` is a soft
+/// reference rather than an FK so a dependency can name a change in another workspace, a vendor
+/// task, or a ticket, without inventing a row for it.
+model ChangeDependency {
+  id              String  @id @default(uuid())
+  changeId        String
+  change          ChangeRequest @relation("ChangeDependencyOwner", fields: [changeId], references: [id], onDelete: Cascade)
+  /// PREDECESSOR | SUCCESSOR | RELATED | BLOCKS
+  dependencyType  String  @default("PREDECESSOR") @db.VarChar(20)
+  description     String  @db.Text
+  relatedChangeId String? @db.VarChar(64)
+  application     String? @db.VarChar(120)
+  team            String? @db.VarChar(120)
+  ownerId         String?
+  owner           User?   @relation("ChangeDependencyOwnerUser", fields: [ownerId], references: [id], onDelete: SetNull)
+  /// OPEN | COMPLETED | WAIVED — implementation is refused while a PREDECESSOR is still OPEN,
+  /// unless somebody with the authority overrides it in writing.
+  status          String  @default("OPEN") @db.VarChar(20)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([changeId, status])
+}
+
+/// The people working on this change alongside its requester and implementer. Individuals, not a
+/// Team entity: TimeSphere has no team concept beyond the reporting line, and inventing one here
+/// would be a second org chart to keep in step with the first.
+model ChangeCollaborator {
+  id        String   @id @default(uuid())
+  changeId  String
+  change    ChangeRequest @relation(fields: [changeId], references: [id], onDelete: Cascade)
+  userId    String
+  user      User     @relation("ChangeCollaboratorUser", fields: [userId], references: [id], onDelete: Cascade)
+  /// Free text — "DBA", "Network", "QA". What they are here to do, not an authority.
+  roleLabel String?  @db.VarChar(80)
+  addedById String?
+  addedBy   User?    @relation("ChangeCollaboratorAddedBy", fields: [addedById], references: [id], onDelete: SetNull)
+  createdAt DateTime @default(now())
+
+  @@unique([changeId, userId])
+  @@index([userId])
+}
+
+/// Work this change delivers. Restricted at the API layer to tickets that have reached a closed
+/// state — a change is a record of shipping finished work, and offering open tickets would invite
+/// people to promise things that are not done.
+model ChangeTicketLink {
+  id        String   @id @default(uuid())
+  changeId  String
+  change    ChangeRequest @relation(fields: [changeId], references: [id], onDelete: Cascade)
+  ticketId  String
+  ticket    Ticket   @relation("ChangeLinkedTicket", fields: [ticketId], references: [id], onDelete: Cascade)
+  addedById String?
+  createdAt DateTime @default(now())
+
+  @@unique([changeId, ticketId])
+  @@index([ticketId])
+}
+
+/// One decision on a change. A single row today — the requester's manager, or a super admin — but
+/// modelled as a list because the audit answer to "who signed this off" must survive the day the
+/// approval model gains a second level, and because a re-submission after rejection has to leave
+/// the first decision standing rather than overwriting it.
+model ChangeApproval {
+  id         String    @id @default(uuid())
+  changeId   String
+  change     ChangeRequest @relation(fields: [changeId], references: [id], onDelete: Cascade)
+  /// Which pass this belongs to. Incremented on every re-submission, so the history reads as
+  /// rounds rather than as one contradictory list.
+  round      Int       @default(1)
+  approverId String
+  approver   User      @relation("ChangeApprover", fields: [approverId], references: [id])
+  /// Why this person was asked — `MANAGER_OF_REQUESTER` or `SUPER_ADMIN`. Recorded because the
+  /// reporting line moves, and an audit read a year later must not have to guess.
+  reason     String    @db.VarChar(40)
+  /// PENDING | APPROVED | REJECTED | RETURNED | CANCELLED
+  status     String    @default("PENDING") @db.VarChar(20)
+  comments   String?   @db.Text
+  decidedAt  DateTime?
+  /// When this decision became late, from ChangeSlaConfig. Stored so the SLA a decision was judged
+  /// against cannot be rewritten by an admin retuning the config afterwards.
+  dueAt      DateTime?
+
+  createdAt DateTime @default(now())
+
+  @@index([changeId, round])
+  @@index([approverId, status])
 }

@@ -131,6 +131,16 @@ const GROUPS: Array<{ group: string; rows: Row[] }> = [
         starter: PLAN_TIER_LIMITS.STARTER.goalsEnabled,
         team: `${PLAN_TIER_LIMITS.TEAM.maxGoals} active`,
         enterprise: PLAN_TIER_LIMITS.ENTERPRISE.goalsEnabled
+      },
+      {
+        // Derived like the rows above. Stated as a policy count on Team because that is the only
+        // thing the tier caps — the module itself is included, and a table cell reading "limited"
+        // would undersell it.
+        label: "Change management",
+        hint: "Raise, risk-assess, approve, schedule and review changes before they ship — with a backout plan the workspace can require rather than hope for.",
+        starter: PLAN_TIER_LIMITS.STARTER.changeManagementEnabled,
+        team: `${PLAN_TIER_LIMITS.TEAM.maxChangePolicies} approval policies`,
+        enterprise: PLAN_TIER_LIMITS.ENTERPRISE.changeManagementEnabled
       }
     ]
   },

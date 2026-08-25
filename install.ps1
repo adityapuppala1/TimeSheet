@@ -106,6 +106,16 @@ if (Test-Path $EnvFile) {
     Write-Warn "  Add to .env and re-run:  TRUST_PROXY_HOPS=1   (2 with docker-compose.https.yml's Caddy;"
     Write-Warn "  add one more for anything else in front, e.g. Cloudflare). See docs/DEPLOYMENT.md."
   }
+  # Same "has a default, so a missing one starts fine" reasoning as TRUST_PROXY_HOPS above, except
+  # the default here is the SAFE value. The notice exists because an .env predating this key gets
+  # the secure behaviour silently, and an on-prem operator with internal webhook receivers needs to
+  # know why their deliveries started reporting "blocked".
+  if ($envText -notmatch "(?m)^ALLOW_PRIVATE_NETWORK_EGRESS=") {
+    Write-Step "ALLOW_PRIVATE_NETWORK_EGRESS is not set in .env - defaulting to false (private and"
+    Write-Step "  loopback targets are refused for outbound webhooks and the AI base URL). That is safe."
+    Write-Step "  If this box's webhook receivers genuinely live on a private address, add:"
+    Write-Step "    ALLOW_PRIVATE_NETWORK_EGRESS=true      (see docs/DEPLOYMENT.md)"
+  }
   # MYSQL_ROOT_PASSWORD only ever gets written when a previous run chose the bundled-Docker-MySQL
   # path (see the else branch below) - its absence is exactly how a re-run recognizes "this
   # deployment uses its own external MySQL server" without asking again.
@@ -143,6 +153,26 @@ if (Test-Path $EnvFile) {
   if ($TrustProxyHops -notmatch '^\d+$') {
     Write-Warn "'$TrustProxyHops' isn't a number - using 1 (this stack's shipped topology)."
     $TrustProxyHops = "1"
+  }
+
+  # The other setting whose wrong value is silent, and the mirror image of the one above: safe by
+  # DEFAULT, needing a deliberate opt-in. Four features let a workspace admin type a URL the API
+  # then fetches, so with private egress allowed an admin can aim one at cloud instance metadata
+  # (169.254.169.254, which hands out IAM credentials) or an internal service - and the request
+  # originates inside the network. Phrased as the question an operator can answer without having
+  # read utils/egress.ts.
+  Write-Host ""
+  Write-Host "Will this deployment send webhooks to servers on your PRIVATE network"
+  Write-Host "(an internal ticketing system on 10.x/192.168.x, or a local AI model on localhost)?"
+  Write-Host "  Answer no if this box is reachable from the internet - it keeps the API from being"
+  Write-Host "  used to reach your internal services. See docs/DEPLOYMENT.md."
+  $AllowPrivateEgressAnswer = Ask "Allow private-network outbound requests? [y/N]" "N"
+  if ($AllowPrivateEgressAnswer -match "^[Yy]") {
+    $AllowPrivateEgress = "true"
+    Write-Warn "Private-network egress ENABLED. Turn it off (ALLOW_PRIVATE_NETWORK_EGRESS=false) if"
+    Write-Warn "  this box is ever exposed to the internet."
+  } else {
+    $AllowPrivateEgress = "false"
   }
 
   Write-Host ""
@@ -246,6 +276,12 @@ APP_BASE_URL=$AppBaseUrl
 # Reverse-proxy hops in front of the API. Every per-IP rate limit reads req.ip, which Express
 # derives from X-Forwarded-For only when this is set. See docs/DEPLOYMENT.md.
 TRUST_PROXY_HOPS=$TrustProxyHops
+# May the API fetch private/loopback addresses? Four features let a workspace admin type a URL the
+# SERVER then requests (outbound webhooks, the Google Chat webhook, Bot Framework replies, the BYOK
+# AI base URL), so leaving this open lets an admin aim one at cloud instance metadata
+# (169.254.169.254 - IAM credentials) or an internal host FROM INSIDE your network. Written
+# explicitly rather than left to the code default so the value is visible and reviewable in .env.
+ALLOW_PRIVATE_NETWORK_EGRESS=$AllowPrivateEgress
 ANTHROPIC_API_KEY=
 MAIL_FROM=$MailFrom
 SMTP_HOST=$SmtpHost

@@ -288,7 +288,15 @@ describe("the catalogue carries what the pickers need", () => {
     expect(res.status).toBe(200);
     for (const action of res.body.actions) {
       expect(typeof action.target).toBe("string");
-      expect(res.body[action.options]).toBeInstanceOf(Array);
+      // An action either draws from a named list on this same response, or takes free text — the
+      // same two ways a branch field can offer a value. `change_comment` is the free-text one: the
+      // body of the comment is written, not picked. What must never happen is naming a list the
+      // response does not carry, which is a dropdown with nothing in it.
+      if (action.freeText) {
+        expect(action.options, `${action.key} is free text and must not also name a list`).toBeUndefined();
+      } else {
+        expect(res.body[action.options], `${action.key} names a list the catalogue does not carry`).toBeInstanceOf(Array);
+      }
     }
     for (const field of res.body.branchFields) {
       // Every branch field must offer SOME way to state a value, or the condition cannot be written.

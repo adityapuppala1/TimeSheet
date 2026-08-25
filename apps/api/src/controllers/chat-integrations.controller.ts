@@ -17,6 +17,7 @@ import { validate } from "../middleware/validate.js";
 import { audit } from "../services/audit.service.js";
 import { getAllowedChatPlatforms } from "../services/plan-limits.service.js";
 import { encryptSecret } from "../utils/encryption.js";
+import { egressUrl } from "../utils/egress.js";
 
 export const chatIntegrationsRouter = Router();
 chatIntegrationsRouter.use(requireAuth, requireSuperAdmin);
@@ -70,7 +71,9 @@ const settingsSchema = z.object({
       signingSecret: z.string().max(2000).optional(),
       teamsAppId: z.string().max(255).optional().nullable(),
       teamsAppPassword: z.string().max(2000).optional(),
-      googleChatWebhookUrl: z.string().max(500).url().optional().nullable(),
+      // `egressUrl`, not `.url()` — see utils/egress.ts. This value is fetched by the server
+      // with the org's reply text, so an internal address here is an SSRF primitive.
+      googleChatWebhookUrl: egressUrl(500).or(z.literal("")).optional().nullable(),
       defaultProjectId: z.string().uuid().optional().nullable()
     })
     .strict()

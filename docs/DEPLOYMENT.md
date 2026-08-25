@@ -649,6 +649,81 @@ Where it goes:
 The valid range is `0`–`10`; anything else fails Zod validation at boot with a message naming the
 variable.
 
+## Outbound request restrictions (`ALLOW_PRIVATE_NETWORK_EGRESS`)
+
+Four features let a **workspace admin** type a URL that the **API server** then fetches:
+
+| Feature | Where it is set | Fetched by |
+| --- | --- | --- |
+| Outbound webhooks | Workspace Settings → Webhooks | `services/webhook-dispatch.service.ts` |
+| Google Chat incoming webhook | Workspace Settings → Integrations | `services/chat-outbound.service.ts` |
+| Bot Framework reply endpoint | the inbound Teams activity itself | `services/chat-outbound.service.ts` |
+| BYOK OpenAI-compatible base URL | Workspace Settings → AI | `services/ai.service.ts` |
+
+The API runs *inside* your trusted network, so an unrestricted URL in any of those is
+server-side request forgery: a workspace admin could aim it at the cloud instance-metadata
+service (`169.254.169.254`, which issues IAM credentials to anything that asks), a database on
+`localhost`, or an internal admin panel — none of which they could reach directly. Two of the
+four make it worse by handing the result back (`POST /settings/ai/available-models` returns the
+fetched model list or the remote error text; the webhook test/retry routes return
+`http_<status>`), which turns a blind request into an internal port scan with a readable answer.
+
+`apps/api/src/utils/egress.ts` is the single choke point all four now pass through. It refuses
+non-`http(s)` schemes, URLs with embedded credentials, and any target that resolves to a private,
+loopback, link-local, CGNAT or reserved address. It **resolves DNS** and requires *every* returned
+address to be public, because a hostname's text proves nothing — `internal.attacker.com` with an
+`A` record of `127.0.0.1` passes any string check.
+
+- **Default is `false` (closed).** Same posture as `TRUST_PROXY_HOPS`: the safe value ships and a
+  deployment whose topology needs the other one opts in.
+- **Set it `true` only** for a self-hosted install whose webhook receivers genuinely live on the
+  LAN. That is a normal on-prem setup, which is why this is a switch and not a hard block.
+- **Development ignores it** and permits private targets regardless, so testing against a local
+  receiver — or running Ollama / LM Studio on `localhost` as the BYOK endpoint — keeps working
+  with no configuration.
+
+Set it via the root `.env` (Compose forwards `ALLOW_PRIVATE_NETWORK_EGRESS`), `env.allowPrivateNetworkEgress`
+in `values.yaml` (Helm), or `apps/api/.env` for a manual/systemd install. Read once at boot, so
+changing it needs an api restart.
+
+> A rejected target surfaces as a readable 422 on the settings form, and for a live webhook as
+> `blocked` in that webhook's delivery status with the reason attached — not a silent failure.
+
+## Browser security headers
+
+The **SPA** is served by the web container's nginx (`apps/web/nginx.conf.template`), not by the
+API — so `helmet()` in `apps/api/src/app.ts` decorates JSON responses only, and cannot protect the
+HTML document that actually runs the bundle. The document headers therefore live in the nginx
+`location /` block, deliberately scoped there so they do not collide with helmet's own headers on
+the proxied `/api/` and `/uploads/` responses (two `Content-Security-Policy` headers on one
+response is not additive — the browser enforces the *intersection*).
+
+What is set, and the two entries that are not boilerplate:
+
+- `Content-Security-Policy` with `frame-ancestors 'none'` (plus `X-Frame-Options: DENY` for
+  pre-CSP2 browsers) — this product's approve/reject/decide controls are one-click and
+  irreversible, which is exactly what a clickjacking overlay aims at.
+- `script-src 'self' 'wasm-unsafe-eval'` — **the `wasm-unsafe-eval` is required**: face
+  verification runs `@vladmandic/human` in the browser to help the user aim the camera, and
+  instantiating WebAssembly counts as script evaluation. It permits WASM compilation only; it does
+  *not* re-enable `eval()`.
+- `Permissions-Policy: camera=(self), …` — **removing `camera=(self)` disables face verification
+  entirely.** Everything else is denied.
+- `X-Content-Type-Options`, `Referrer-Policy: strict-origin-when-cross-origin` (which protects the
+  signed, expiring `/uploads` capability URLs from leaking through a Referer), and
+  `Cross-Origin-Opener-Policy: same-origin`.
+
+`connect-src` is templated as `${CSP_CONNECT_SRC}` and empty by default, which is correct for every
+topology this repo ships (nginx fronts the API, so `'self'` covers it). A **split** deployment — SPA
+on a CDN or a different hostname from the API — must set it to the same origin passed as
+`VITE_API_URL`, e.g. `CSP_CONNECT_SRC="https://api.example.com"`, or the browser will block every
+API call.
+
+There is deliberately **no `upgrade-insecure-requests`** and no HSTS in nginx: this repo supports
+plain-http LAN deployments on purpose (`APP_BASE_URL="auto"`), and both would break them. HSTS
+belongs on the TLS terminator and is set in `deploy/caddy/Caddyfile.domain`, the only file here
+guaranteed to be serving over TLS.
+
 ## CI/CD
 
 `.github/workflows/ci.yml` runs on every push/PR: typecheck + build both packages, then (on
@@ -870,6 +945,35 @@ neither a re-run nor a rollback can free.
 | `./install.sh` | Same check in the first-boot retry path — a restart alone can never clear a stranded migration |
 | Helm | The migration hook Job runs `migrate deploy` first, then `doctor:heal` as a recovery fallback; a still-failing Job blocks the rollout rather than letting pods onto a half-migrated schema |
 | `npm run setup` (dev) | `doctor:heal` is already part of the sequence |
+
+### Two more things that heal themselves
+
+Both exist because they were real, repeatable ways for a routine command to stop on a machine where
+nothing was actually wrong.
+
+**Dependencies after a pull.** `npm run dev` and `npm run build` compare `node_modules` against
+`package-lock.json` first (`scripts/ensure-deps.mjs`, on npm's own `predev`/`prebuild` hooks) and
+run `npm install` when the lockfile has moved. Pulling a release that added a dependency previously
+failed with `Cannot find package '…'`, a stack trace deep inside Vite naming a package the reader
+had never heard of and never suggesting `npm install`. Silent when the tree is healthy; never fails
+the command, so an offline machine gets a warning and still starts.
+
+**A locked Prisma engine on Windows.** `prisma generate` writes the TypeScript client, then copies
+the native `query_engine-windows.dll.node` into place — and Windows refuses to replace a file a
+running process has mapped, which the API dev server does for as long as it runs. `npm run setup`
+therefore aborted at step three of six for anyone whose dev server was up:
+
+```
+EPERM: operation not permitted, rename '…query_engine-windows.dll.node.tmp52360' -> '…node'
+```
+
+`apps/api/scripts/prisma-generate.mjs` now recognises that exact signature and continues with an
+explanation. This is narrow on purpose: the types are written *before* the engine copy and had
+already succeeded, and the engine is pinned to the installed Prisma version so a schema change never
+changes it. **Only** an `EPERM`/`EBUSY` on a `query_engine*` path is tolerated — a schema error, a
+bad datasource or a missing generator still exits non-zero and stops the chain. If you have just
+changed the Prisma *version*, stop the dev server and re-run `npm run db:generate` so the new engine
+can actually be copied.
 
 The repair itself is `prisma migrate resolve --rolled-back <name>` followed by `migrate deploy`, and
 it is applied **only** to a migration whose SQL carries the `@rerunnable` marker — replaying

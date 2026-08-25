@@ -83,13 +83,25 @@ export function canDecide(step: ApprovalStepState, steps: ApprovalStepState[], i
 /**
  * The request's status after a decision lands.
  *
- * Returns PENDING while any step is still outstanding, APPROVED once every step has said yes, and
- * REJECTED the moment any step says no.
+ * Returns PENDING while the request is still short of what settles it, APPROVED once it is there,
+ * and REJECTED the moment any step says no.
+ *
+ * `quorum` is how many approvals are enough. OMITTED OR NULL MEANS "ALL", which is what every
+ * caller did before this parameter existed and therefore the only safe default — the column it
+ * comes from is nullable for exactly the same reason. A quorum of 1 is what makes an emergency
+ * chain work: any one of the on-call group can sign off without the others being kept waiting.
+ *
+ * Rejection stays terminal at any quorum. One "no" is a decision about the thing itself, not a
+ * vote to be outnumbered — the asymmetry this service is built around.
  */
-export function requestStatusAfter(steps: ApprovalStepState[]): Decision {
+export function requestStatusAfter(steps: ApprovalStepState[], quorum?: number | null): Decision {
   if (steps.some((s) => s.decision === "REJECTED")) return "REJECTED";
-  if (steps.length > 0 && steps.every((s) => s.decision === "APPROVED")) return "APPROVED";
-  return "PENDING";
+  if (steps.length === 0) return "PENDING";
+  const approved = steps.filter((s) => s.decision === "APPROVED").length;
+  // Clamped to the step count: a policy asking for three approvals on a two-person chain must
+  // still be able to complete, rather than stranding the request forever.
+  const needed = quorum && quorum > 0 ? Math.min(quorum, steps.length) : steps.length;
+  return approved >= needed ? "APPROVED" : "PENDING";
 }
 
 export interface DecisionOutcome {
@@ -115,8 +127,10 @@ export function applyDecision(params: {
   stepId: string;
   decision: "APPROVED" | "REJECTED";
   isSequential: boolean;
+  /** See requestStatusAfter — omitted or null means every step must approve. */
+  quorum?: number | null;
 }): DecisionOutcome {
-  const { steps, stepId, decision, isSequential } = params;
+  const { steps, stepId, decision, isSequential, quorum } = params;
   const step = steps.find((s) => s.id === stepId);
   if (!step) throw new AppError(404, "That approval step no longer exists.");
 
@@ -131,14 +145,17 @@ export function applyDecision(params: {
   }
 
   const updated = steps.map((s) => (s.id === stepId ? { ...s, decision } : s));
-  const status = requestStatusAfter(updated);
+  const status = requestStatusAfter(updated, quorum);
   const completed = status !== "PENDING";
 
   return {
     status,
     completed,
     nextSteps: completed ? [] : activeSteps(updated, isSequential),
-    supersededSteps: status === "REJECTED" ? updated.filter((s) => s.decision === "PENDING") : []
+    // Anyone still pending when the request settles is superseded, whether it settled by rejection
+    // or by a quorum being reached — in both cases nobody should keep being chased for a decision
+    // that no longer changes anything.
+    supersededSteps: completed ? updated.filter((s) => s.decision === "PENDING") : []
   };
 }
 
