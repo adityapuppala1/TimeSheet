@@ -946,6 +946,35 @@ neither a re-run nor a rollback can free.
 | Helm | The migration hook Job runs `migrate deploy` first, then `doctor:heal` as a recovery fallback; a still-failing Job blocks the rollout rather than letting pods onto a half-migrated schema |
 | `npm run setup` (dev) | `doctor:heal` is already part of the sequence |
 
+### Two more things that heal themselves
+
+Both exist because they were real, repeatable ways for a routine command to stop on a machine where
+nothing was actually wrong.
+
+**Dependencies after a pull.** `npm run dev` and `npm run build` compare `node_modules` against
+`package-lock.json` first (`scripts/ensure-deps.mjs`, on npm's own `predev`/`prebuild` hooks) and
+run `npm install` when the lockfile has moved. Pulling a release that added a dependency previously
+failed with `Cannot find package '…'`, a stack trace deep inside Vite naming a package the reader
+had never heard of and never suggesting `npm install`. Silent when the tree is healthy; never fails
+the command, so an offline machine gets a warning and still starts.
+
+**A locked Prisma engine on Windows.** `prisma generate` writes the TypeScript client, then copies
+the native `query_engine-windows.dll.node` into place — and Windows refuses to replace a file a
+running process has mapped, which the API dev server does for as long as it runs. `npm run setup`
+therefore aborted at step three of six for anyone whose dev server was up:
+
+```
+EPERM: operation not permitted, rename '…query_engine-windows.dll.node.tmp52360' -> '…node'
+```
+
+`apps/api/scripts/prisma-generate.mjs` now recognises that exact signature and continues with an
+explanation. This is narrow on purpose: the types are written *before* the engine copy and had
+already succeeded, and the engine is pinned to the installed Prisma version so a schema change never
+changes it. **Only** an `EPERM`/`EBUSY` on a `query_engine*` path is tolerated — a schema error, a
+bad datasource or a missing generator still exits non-zero and stops the chain. If you have just
+changed the Prisma *version*, stop the dev server and re-run `npm run db:generate` so the new engine
+can actually be copied.
+
 The repair itself is `prisma migrate resolve --rolled-back <name>` followed by `migrate deploy`, and
 it is applied **only** to a migration whose SQL carries the `@rerunnable` marker — replaying
 arbitrary half-applied DDL is how data gets lost, so anything unmarked is reported to a human

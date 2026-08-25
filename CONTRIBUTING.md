@@ -13,6 +13,14 @@ first**: it validates `.env`, scans the machine for running MySQL servers (ident
 actual handshake, not just an open port), and tells you the specific fix. `npm run doctor:fix-env
 -w apps/api` will correct a wrong host/port in `.env` for you.
 
+**After a `git pull` you do not need to remember `npm install`.** `npm run dev` and `npm run build`
+compare `node_modules` against `package-lock.json` first (`scripts/ensure-deps.mjs`, wired to npm's
+own `predev`/`prebuild` hooks) and install when the lockfile has moved. Before that, pulling a
+release which added a dependency failed with `Cannot find package '…'` — a stack trace deep inside
+Vite naming a package you had never heard of, which never says "run npm install". It is silent when
+the tree is healthy, and it never fails the command: offline, you get a warning and the app still
+starts.
+
 Demo logins after seeding: `superadmin@timesheet.local` / `Admin@12345` (also `manager@…`,
 `employee@…`).
 

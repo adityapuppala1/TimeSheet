@@ -11,6 +11,154 @@ Nothing yet. The parser that feeds the in-app What's-new page ignores this secti
 version number, on purpose — an installation must never render history for a version that does not
 exist yet.
 
+## 3.3.0 — the week you can read, and a workspace that installs itself — 2026-08-25
+
+Scheduled email that reaches the people it is about, a dashboard that answers rather than pads, and
+an upgrade that no longer needs you to remember a command.
+
+### 🐛 Friday's reminder arrived on Monday
+
+Reported as "some users are not receiving mails on Friday — they arrive Monday morning instead." It
+was not the mail queue and not a failed send.
+
+`daily-reminder.worker.ts` asked two questions with `now.getDay()` and `now.getHours()` — **the
+server's** clock. The server defaults to `Asia/Kolkata` while `User.timezone` is populated per
+person, and IST is far enough ahead that the two disagree for most of a western Friday afternoon:
+
+| New York | on an IST server |
+| --- | --- |
+| Fri 14:00 | Fri 23:30 — sent |
+| Fri 15:00 | **Sat 00:30** — dropped by the weekend filter |
+| Fri 17:00 | **Sat 02:30** — dropped |
+
+`remindOnWeekdaysOnly` then suppressed the whole tick, and the next tick that is not a weekend *on
+the server* is Monday. The escalation notice the dashboard shows — "file today's entry before 5 PM"
+— sits squarely inside that dead zone, which is why it was the one people noticed.
+
+Every clock question is now asked in the **recipient's** timezone (`utils/recipient-time.ts`, using
+the platform's own IANA data), and the hour and weekday gates moved inside the per-user loop.
+"Already told them today" is measured from the start of *their* day, because a recipient far enough
+west shares one server-day with two of their own and the second was being swallowed as a duplicate.
+The mirror case is fixed too: Auckland is 6.5h ahead, so their Saturday 06:00 is still Friday to the
+server and a reminder would have landed in their weekend.
+
+**A second bug found while in there:** `lastFiredHour` was module state, and the reminder tick runs
+through `runForEveryOrg`, which loops tenants sequentially in one process. The first org set the
+flag and every org after it returned immediately — in a multi-tenant deployment exactly one
+workspace received daily reminders and the rest silently received none. Deleted rather than made
+per-org, because the real guard was always the database.
+
+### 📊 The weekly digest now reaches managers and admins
+
+"The weekly dashboard is not going to Super Admin and Manager." Two separate causes.
+
+**The activity gate excluded the people it exists to inform.** The digest skipped any recipient with
+no tickets and no hours *of their own* — right for an employee, since a recap of nothing reads as
+spam, but a super admin or a line manager who manages rather than logs time has no personal activity
+by definition. They were filtered out before the workspace and team tables were ever built.
+
+**There was no manager view at all.** Scope was binary: hold `reports:view` and see every person, or
+hold nothing and see only yourself. A line manager with five reports got a personal recap and no way
+to answer "did my team file their time?".
+
+Scope is now **SELF / TEAM / WORKSPACE**, and the levels accumulate — a super admin who also
+line-manages gets their own week, then their team, then the workspace, because a twelve-row
+workspace table does not answer "did *my* people file". Resolved from what somebody holds and what
+they manage, never from a role name.
+
+The team section leads with the number a manager acts on: how many reports filed at all, as a ratio
+rather than a percentage (with five people a percentage is false precision), and a report who logged
+nothing is marked on its row rather than left as a `0.0h` to be scanned past.
+
+**Change-management figures** join hours and tickets throughout — raised and closed, per person and
+workspace-wide. `CANCELLED` and `REJECTED` do **not** count as closed: a change that never happened
+is not delivered work, and rolling them in would flatter the number every time a plan is abandoned.
+
+Both Monday digests moved to **10:00** and **10:30**.
+
+### 🔐 The security digest no longer depends on an LLM to send at all
+
+The whole send was gated on the model: if `generateSecurityWeeklyDigest` threw or came back empty
+the worker returned early, so an unconfigured, slow or too-small model produced **no security
+digest** — not a degraded one. No open-finding count, no risk score, no SLA breaches, nothing. The
+per-user digest had this corrected long ago; the security one kept it, on the report where a silent
+week is most expensive, because silence is indistinguishable from a clean week.
+
+The figures are counted from the workspace's own findings and always send; the summary is a
+paragraph on top of them. It also gains the table it never had — severity mix in fixed
+CRITICAL-first order (sorting by count buries CRITICAL under LOW), week-over-week movement with the
+risk delta explicitly signed, the repositories carrying the most open findings, and SLA breaches
+named for what they are.
+
+### 🎨 A loader, and a dashboard that fills its own space
+
+- **The app has a loading state.** Lazy routes fell back to grey skeleton bars matching no page, so
+  every transition flashed one layout on its way to a different one. It is now the React Bits
+  **Strands** animation with a line of text — one loader, shown both while the session hydrates and
+  while a route resolves, so a refresh no longer shows two different things in a row.
+- **"This week" no longer pads itself with 200px of nothing.** It is the shortest of the three hero
+  cards and stretched to fill the row. It now carries weekdays logged, average per logged day,
+  busiest day, and a project breakdown — the question neither neighbour answers (the status list
+  says what *state* the time is in, the chart says which *day*, neither says what it was spent
+  *on*). All computed from rows already on the client.
+- **Every notice on the dashboard can be closed**, and the close button is now visible — at
+  `opacity-60` with no background it was a pale-blue X on a pale-blue banner. A dismissal is consent
+  to hide *this* message, not this *kind* of message: it lapses when the situation changes, so the
+  escalation notice cleared on Tuesday returns on Friday when a different day has been missed.
+
+### 🔀 The Workflow Studio canvas, rebuilt around n8n's shape
+
+A trigger start node, left-to-right flow, curved connectors between input and output handles, node
+cards with a coloured icon per kind, and wheel zoom. Both authoring experiences stay and the choice
+now sticks — the toggle is labelled **Form / Canvas** with a hint on each, and the last pick becomes
+the default next time.
+
+Dragging still **reorders** rather than drawing an edge: the steps *are* the sequence and the
+authority calculation depends on their order, so storing edges as well would give two sources of
+truth for one fact. That is the one place the metaphor bends to this engine, and it bends
+deliberately.
+
+### 🩹 Smaller fixes
+
+- **Clicking an existing change on the calendar opened the new-entry dialog.** The day lane is a
+  button that raises a change for that day, and the bars sit on top of it without stopping their
+  click from bubbling — so both handlers fired and "new change" won. Both features now work: click
+  empty space to raise one, click a bar to open it. The calendar also gains **Back to changes** and
+  **New change**, and a day can be clicked to raise a change already scheduled for it.
+- **The org chart reaches everyone**, without a second page. `/app/team` is now open to all: an
+  approver gets the queue, SLA metrics and reports roll-up; everybody else gets the org chart alone,
+  and the nav item names itself accordingly. The endpoint already self-scoped to the caller's own
+  reporting subtree.
+- **Insights and Security insights are open to every member**, front end and API. Stated plainly
+  because it is a data-governance choice: the workspace's security findings, SBOM and cost figures
+  are now visible to all staff. Each broadened endpoint carries a comment, so dialling any of them
+  back is a one-line change.
+- **A guaranteed-401 request on every page load is gone.** `POST /platform-admin/auth/refresh` fired
+  for every visitor; a tenant user has no such cookie, so it could only ever fail. It is now
+  attempted only when this browser has held a platform-admin session or the visitor deep-linked into
+  the console.
+- **The loader no longer takes the page down on a machine with no WebGL.** Its own header claimed
+  "it never throws" while nothing caught anything — and on a GPU-less CI runner the WebGL request
+  threw straight through React Router's error boundary, so `/login` never rendered. Guarded, and the
+  animation now waits 250ms before starting, so a fast route transition never touches the GPU.
+
+### 🔧 Pull, run, and it fixes itself
+
+`npm run dev` and `npm run build` now check that `node_modules` matches `package-lock.json` first,
+and install automatically when it does not. Pulling a release that added a dependency used to fail
+with `Cannot find package '…'` — a stack trace deep inside Vite naming a package the reader never
+heard of, which never says "run npm install". This release adds `ogl` (the loader animation), so it
+would have reproduced it.
+
+Silent when the tree is healthy (one `stat`, no output), and it never fails the command — offline or
+behind a registry that is briefly down, you get a warning and the app still starts. `npm ci` is
+deliberately not used: CI calls that itself, and it would delete and rebuild `node_modules` for a
+developer who pulled one new package.
+
+**Nothing else changes about installing or upgrading.** `npm run setup`, `install.sh` /
+`install.ps1`, `update.sh` / `update.ps1`, the Compose files and the Helm chart are unchanged and
+need no new step.
+
 ## 3.2.0 — the requests this server makes on your behalf — 2026-08-24
 
 A security pass over the places where TimeSphere acts as a *client* rather than a server, plus the

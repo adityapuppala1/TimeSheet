@@ -57,7 +57,19 @@ CAB tool holds none of that.
 > one has been sitting on its old schema without any update saying so. After upgrading:
 > `docker compose exec api npm run migrate:tenants -w apps/api`.
 >
-> **v3.2.0 — the requests this server makes on your behalf.** A security pass over the places where
+> **v3.3.0 — the week you can read, and a workspace that installs itself.** Scheduled email now
+> answers to the RECIPIENT's clock: reminders were being judged against the server's timezone, so
+> anything after ~2:30pm on a New York Friday looked like Saturday to an IST server and was dropped
+> until Monday. The Monday digest reaches managers and admins for the first time (the activity gate
+> was filtering out exactly the people it exists to inform), gains a manager's team view and
+> change-management figures, and the security digest no longer refuses to send when the AI is
+> unavailable. Both moved to 10:00 / 10:30. Plus: an app loader, a dashboard "This week" card that
+> fills its own space, closable notices, an n8n-style Workflow canvas, and the org chart for
+> everyone. **Nothing to configure** — and `npm run dev` / `npm run build` now install new
+> dependencies for you after a pull, so a release that adds one no longer greets you with
+> `Cannot find package`.
+>
+> > **v3.2.0 — the requests this server makes on your behalf.** A security pass over the places where
 > TimeSphere acts as a *client*: the four admin-typed URLs the server fetches (outbound webhooks, the
 > Google Chat webhook, Bot Framework replies, the BYOK AI base URL) now go through one guard that
 > resolves DNS and refuses private, loopback and cloud-metadata targets. The SPA finally carries its
