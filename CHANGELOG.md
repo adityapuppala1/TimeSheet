@@ -10,6 +10,58 @@ user of a running installation.
 The parser that feeds the in-app What's-new page ignores this section until it gains a version
 number, on purpose — an installation must never render history for a version that does not exist yet.
 
+### 🔀 A ranked list of AI providers, tried in order, with a fallback that actually works
+
+- **Workspace Settings → AI now manages a LIST of providers, not one.** Add as many as you like —
+  Anthropic, Groq, Mistral, a self-hosted Ollama, any OpenAI-compatible endpoint — each with its
+  own key, model, and on/off switch, reordered with simple ↑/↓ controls. Every AI feature calls the
+  top ENABLED provider; on a rejected key, a rate limit, or an empty answer, it falls through to
+  the next one automatically, using that provider's own configured model (a fallback is unlikely to
+  serve a model by the primary's name at all, so only the primary's requested model is ever
+  honored). An existing single-provider setup is carried forward unchanged as priority 0 on
+  upgrade — nothing about how AI features behave changes until a second provider is actually added.
+- **Fixed along the way: an Anthropic key rejection failed as a bare, unexplained 500** — the same
+  bug already fixed for OpenAI-compatible providers below, but the native Anthropic path had never
+  been covered. Both providers' SDK errors now translate into the same clear, actionable message,
+  which is also what makes the fallback above possible: the dispatcher needs to tell "this
+  provider is unavailable, try the next one" apart from "this is a real bug" for both providers, not
+  just one.
+
+### 🎯 A data-driven "Suggest order" for the AI provider list, and the failure data it needs to work
+
+- **A rejected call is now logged too, not just a successful one.** `callChat`'s fallback loop used
+  to release its budget reservation and rethrow silently on every failed attempt — a provider that
+  was down, rate-limited, or holding a bad key left no trace at all, so there was no way to answer
+  "which provider actually performs best" from the data. Every attempt is now written to
+  `AIUsageLog` (`success`, `errorReason`), whether it succeeded or not.
+- **The usage table and Excel export both gained a Success rate column**, and the AI tab's stat
+  tiles gained a Success rate tile (with a failed-attempts count when there are any) — visible
+  right alongside cost and tokens, not a separate report.
+- **"Suggest order" in Workspace Settings → AI** ranks the current provider list by its own last-30-
+  day performance — success rate first, then latency, then cost — and shows the reasoning behind
+  the ranking inline, never applying it on its own. Reviewing and pressing Apply reorders the list
+  exactly like a manual ↑/↓ would; a provider with no calls yet is placed last rather than
+  competing on no evidence.
+- **New Playwright coverage for the provider list** (add / reorder / remove), the first e2e test
+  for this V9 feature — it had zero UI coverage until now.
+
+### 📊 The AI usage panel is one sortable table now, not four disconnected charts
+
+- **A single filterable, sortable table** — Provider, Model, Calls, Input/Output/Total tokens, Avg
+  latency, Cost, % of total — replaces what used to be four separate "Spend by model" / "Spend by
+  provider" / "Provider × model" / "By feature" blocks that could never be sorted, filtered, or
+  compared against each other. A date-range picker (default: this month) and a feature filter sit
+  above it; the trend chart below is now stacked by provider instead of a flat cost line.
+- **Every AI call's provider and duration are now recorded** (`AIUsageLog.provider`,
+  `AIUsageLog.durationMs`) — a workspace on BYOK with several vendors configured over time
+  previously had no way to see which provider actually served a call, or how fast it was. Calls
+  logged before this shipped show **Unknown** / "not measured" rather than a guess — guessing the
+  current provider onto historical rows would misattribute past spend the first time a workspace
+  ever switches.
+- **Export to Excel**, from the same table's toolbar — a Summary sheet, a provider×model Usage
+  sheet, and a day×feature×provider×model Daily detail sheet, all three built from one query so
+  they can never disagree about what's included.
+
 ### 🩹 Fixes
 
 - **The setup checklist stopped asking about goals it already knew were off.** Its "write your first
@@ -19,6 +71,20 @@ number, on purpose — an installation must never render history for a version t
   appeared, but it put a 403 in the console on most dashboards. It now checks the same
   `effective.goals` flag the sidebar already reads before deciding what to show, and only asks when
   the answer isn't already known to be no.
+- **A rejected AI provider key failed as a bare, unexplained 500.** `callOpenAICompatible` let the
+  OpenAI SDK's own error (401/403/429, whatever the vendor answered) fall straight through as an
+  uncaught exception, so a revoked or scoped-wrong key surfaced as an opaque server error with
+  nothing to act on. Now translated into a clear message naming the status and pointing at
+  Workspace Settings → AI.
+- **Switching the AI provider dropdown silently kept using the previous provider's key**, since
+  changing providers only ever updated `provider`/`baseUrl` — the stored key never moved with it,
+  so every call after a switch 403'd until someone noticed and re-entered a key by hand with no clue
+  why. Moot now that each provider in the new ranked list carries its own key.
+- **The Workflow Studio canvas's dot-grid background was rendering as a flat fill.** Its
+  `theme(colors.muted-foreground/0.18)` arbitrary value asked Tailwind for an opacity modifier on a
+  color the config never gave one — silently dropped, with a build-time warning nobody was
+  watching for. Written as raw `hsl(var(--muted-foreground)/0.18)` instead, matching how the rest
+  of this codebase already applies opacity to that token.
 
 ## 3.3.0 — the week you can read, and a workspace that installs itself — 2026-08-25
 
