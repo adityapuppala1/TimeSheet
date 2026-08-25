@@ -63,7 +63,6 @@ const AIActivityLog = lazy(() => import("./pages/AIActivityLog").then((m) => ({ 
 const Insights = lazy(() => import("./pages/Insights").then((m) => ({ default: m.Insights })));
 const SecurityInsightsPage = lazy(() => import("./pages/SecurityInsights").then((m) => ({ default: m.SecurityInsightsPage })));
 const Team = lazy(() => import("./pages/Team").then((m) => ({ default: m.Team })));
-const OrgChartPage = lazy(() => import("./pages/OrgChart").then((m) => ({ default: m.OrgChartPage })));
 const WorkspaceSettingsPage = lazy(() =>
   import("./pages/WorkspaceSettings").then((m) => ({ default: m.WorkspaceSettingsPage }))
 );
@@ -172,15 +171,16 @@ const router = createBrowserRouter([
       // Version details + release notes. No permission gate: notes describe features people use,
       // and the page itself hides the admin-only update card from non-admins.
       { path: "whats-new", element: <PageShell><WhatsNewPage /></PageShell> },
-      { path: "team", element: <RequirePermission permission={permissions.TIMESHEETS_APPROVE}><PageShell><Team /></PageShell></RequirePermission> },
+      // Open to everyone: the page shows the org chart to all, and reveals the approval queue, SLA
+      // metrics and direct-reports roll-up only to an approver (see pages/Team.tsx). One page
+      // rather than a second, employee-facing copy of the same chart.
+      { path: "team", element: <PageShell><Team /></PageShell> },
       { path: "approvals", element: <RequirePermission permission={permissions.TIMESHEETS_APPROVE}><PageShell><ApprovalsPage /></PageShell></RequirePermission> },
       { path: "users", element: <RequirePermission permission={permissions.USERS_MANAGE}><PageShell><UsersPage /></PageShell></RequirePermission> },
       { path: "projects", element: <RequirePermission permission={permissions.PROJECTS_MANAGE}><PageShell><ProjectsPage /></PageShell></RequirePermission> },
       { path: "reports", element: <RequirePermission permission={permissions.REPORTS_VIEW}><PageShell><ReportsPage /></PageShell></RequirePermission> },
-      // Org chart, insights and security insights are open to every authenticated member (team
-      // leads and employees included), and the matching server endpoints were broadened to match.
-      // The org-chart endpoint self-scopes to the caller's own reporting subtree.
-      { path: "org-chart", element: <PageShell><OrgChartPage /></PageShell> },
+      // Insights and security insights are open to every authenticated member (team leads and
+      // employees included), and the matching server endpoints were broadened to match.
       { path: "insights", element: <PageShell><Insights /></PageShell> },
       { path: "security-insights", element: <PageShell><SecurityInsightsPage /></PageShell> },
       { path: "audit", element: <RequirePermission permission={permissions.AUDIT_VIEW}><PageShell><AuditLog /></PageShell></RequirePermission> },

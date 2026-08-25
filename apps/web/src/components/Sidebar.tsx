@@ -43,7 +43,7 @@ import {
 import { useQuery } from "@tanstack/react-query";
 import { useState } from "react";
 import { NavLink } from "react-router";
-import { permissions } from "@timesheet/shared";
+import { permissions, type Permission } from "@timesheet/shared";
 import { cn } from "../lib/utils";
 import { usePlanningFeatures } from "../lib/use-planning";
 import type { PlanningEffective } from "../services/api";
@@ -79,6 +79,10 @@ export interface NavItem {
   icon: any;
   end?: boolean;
   permission?: string;
+  /** An alternative label for viewers who LACK this permission — used where one route serves two
+   *  audiences and calling it the same thing for both would misdescribe what they actually get.
+   *  Typed as `Permission` to match `user.permissions`, so a typo is a compile error. */
+  labelWithout?: { permission: Permission; label: string };
   role?: "SUPER_ADMIN";
   /** Omit for the ungrouped lead item (Dashboard). */
   section?: NavSection;
@@ -135,10 +139,16 @@ export const nav: NavItem[] = [
   { to: "/app/ai", label: "AI overview", icon: Sparkles, role: "SUPER_ADMIN", section: "Plan" },
 
   { to: "/app/approvals", label: "Approvals", icon: Shield, permission: permissions.TIMESHEETS_APPROVE, section: "Team" },
-  { to: "/app/team", label: "My team", icon: Users2, permission: permissions.TIMESHEETS_APPROVE, section: "Team" },
-  // No permission: the org chart is open to everyone (the endpoint self-scopes to the viewer's
-  // own reporting subtree), so team leads and employees get it too.
-  { to: "/app/org-chart", label: "Org chart", icon: Users2, section: "Team" },
+  // ONE entry, no permission gate — the page adapts instead of there being two of it. An approver
+  // gets the queue, SLA metrics and reports roll-up; everybody else gets the org chart alone, which
+  // is why the label follows the permission rather than the route.
+  {
+    to: "/app/team",
+    label: "My team",
+    labelWithout: { permission: permissions.TIMESHEETS_APPROVE, label: "Org chart" },
+    icon: Users2,
+    section: "Team"
+  },
 
   { to: "/app/dashboards", label: "Custom Dashboards", icon: LayoutDashboard, section: "Analytics", feature: "planning" },
   { to: "/app/reports", label: "Reports", icon: BarChart3, permission: permissions.REPORTS_VIEW, section: "Analytics" },
@@ -194,6 +204,14 @@ export function isVisible(
 }
 
 function NavLinkRow({ item, onNavigate, slim = false }: { item: NavItem; onNavigate?: () => void; slim?: boolean }) {
+  const user = useAuthStore((s) => s.user);
+  // One route, two audiences: /app/team is "My team" to an approver and "Org chart" to everybody
+  // else, because that is what each of them actually gets when they open it.
+  const label =
+    item.labelWithout && !user?.permissions.includes(item.labelWithout.permission)
+      ? item.labelWithout.label
+      : item.label;
+
   const link = (
     <NavLink
       to={item.to}
@@ -214,7 +232,7 @@ function NavLinkRow({ item, onNavigate, slim = false }: { item: NavItem; onNavig
           </span>
           {/* The label leaves the layout in slim mode rather than being clipped — a truncated
               "Wor…" next to an icon reads as broken, an icon with a tooltip reads as designed. */}
-          {!slim && item.label}
+          {!slim && label}
         </>
       )}
     </NavLink>
@@ -224,7 +242,7 @@ function NavLinkRow({ item, onNavigate, slim = false }: { item: NavItem; onNavig
   return (
     <Tooltip>
       <TooltipTrigger asChild>{link}</TooltipTrigger>
-      <TooltipContent side="right" sideOffset={8}>{item.label}</TooltipContent>
+      <TooltipContent side="right" sideOffset={8}>{label}</TooltipContent>
     </Tooltip>
   );
 }
