@@ -20,7 +20,7 @@ import { PlatformAdminLayout } from "./layouts/PlatformAdminLayout";
 import { authApi } from "./services/api";
 import { platformAdminAuthApi } from "./services/platform-admin-api";
 import { useAuthStore } from "./store/auth";
-import { usePlatformAdminAuthStore } from "./store/platform-admin-auth";
+import { hasSeenPlatformAdminSession, usePlatformAdminAuthStore } from "./store/platform-admin-auth";
 import { Toaster } from "./components/ui/toaster";
 import { TooltipProvider } from "./components/ui/tooltip";
 import { BackendHealthGate } from "./components/BackendHealthGate";
@@ -63,6 +63,7 @@ const AIActivityLog = lazy(() => import("./pages/AIActivityLog").then((m) => ({ 
 const Insights = lazy(() => import("./pages/Insights").then((m) => ({ default: m.Insights })));
 const SecurityInsightsPage = lazy(() => import("./pages/SecurityInsights").then((m) => ({ default: m.SecurityInsightsPage })));
 const Team = lazy(() => import("./pages/Team").then((m) => ({ default: m.Team })));
+const OrgChartPage = lazy(() => import("./pages/OrgChart").then((m) => ({ default: m.OrgChartPage })));
 const WorkspaceSettingsPage = lazy(() =>
   import("./pages/WorkspaceSettings").then((m) => ({ default: m.WorkspaceSettingsPage }))
 );
@@ -176,8 +177,12 @@ const router = createBrowserRouter([
       { path: "users", element: <RequirePermission permission={permissions.USERS_MANAGE}><PageShell><UsersPage /></PageShell></RequirePermission> },
       { path: "projects", element: <RequirePermission permission={permissions.PROJECTS_MANAGE}><PageShell><ProjectsPage /></PageShell></RequirePermission> },
       { path: "reports", element: <RequirePermission permission={permissions.REPORTS_VIEW}><PageShell><ReportsPage /></PageShell></RequirePermission> },
-      { path: "insights", element: <RequirePermission permission={permissions.REPORTS_VIEW}><PageShell><Insights /></PageShell></RequirePermission> },
-      { path: "security-insights", element: <RequirePermission permission={permissions.REPORTS_VIEW}><PageShell><SecurityInsightsPage /></PageShell></RequirePermission> },
+      // Org chart, insights and security insights are open to every authenticated member (team
+      // leads and employees included), and the matching server endpoints were broadened to match.
+      // The org-chart endpoint self-scopes to the caller's own reporting subtree.
+      { path: "org-chart", element: <PageShell><OrgChartPage /></PageShell> },
+      { path: "insights", element: <PageShell><Insights /></PageShell> },
+      { path: "security-insights", element: <PageShell><SecurityInsightsPage /></PageShell> },
       { path: "audit", element: <RequirePermission permission={permissions.AUDIT_VIEW}><PageShell><AuditLog /></PageShell></RequirePermission> },
       { path: "ai-activity", element: <RequirePermission permission={permissions.TICKETS_ASSIGN}><PageShell><AIActivityLog /></PageShell></RequirePermission> },
       { path: "settings", element: <RequireRole role="SUPER_ADMIN"><PageShell><WorkspaceSettingsPage /></PageShell></RequireRole> },
@@ -239,6 +244,15 @@ function AuthBootstrap() {
 function PlatformAdminAuthBootstrap() {
   const setAdmin = usePlatformAdminAuthStore((s) => s.setAdmin);
   useEffect(() => {
+    // Only try to restore a platform-admin session when there is plausibly one to restore: this
+    // browser has held one before (the marker), or the visitor deep-linked into the console. A
+    // tenant user on /app has neither, so we skip the request entirely rather than firing a
+    // guaranteed-401 `POST /platform-admin/auth/refresh` into their console on every load.
+    const onConsole = window.location.pathname.startsWith("/platform-admin");
+    if (!onConsole && !hasSeenPlatformAdminSession()) {
+      setAdmin(undefined);
+      return;
+    }
     platformAdminAuthApi
       .refresh()
       .then(() => platformAdminAuthApi.me())
