@@ -17,6 +17,7 @@ import { FaceModelUpgradePrompt } from "../components/FaceModelUpgradePrompt";
 import { SessionEndedDialog } from "../components/SessionEndedDialog";
 import { MobileNav, Sidebar } from "../components/Sidebar";
 import { Topbar } from "../components/Topbar";
+import { AppLoader } from "../components/ui/app-loader";
 import { useAuthStore } from "../store/auth";
 
 export function AppLayout() {
@@ -40,7 +41,10 @@ export function AppLayout() {
       });
     // eslint-disable-next-line react-hooks/exhaustive-deps -- run once per signed-in user
   }, [user?.id]);
-  if (!hydrated) return <div className="grid min-h-screen place-items-center bg-background text-sm text-foreground/60">Loading secure workspace...</div>;
+  // The SAME loader the route-level Suspense fallback uses (App.tsx's PageShell). A page refresh
+  // crosses both gates in turn — session hydration first, then the lazy route chunk — and when the
+  // two looked different that read as the app loading twice. One loader, one message.
+  if (!hydrated) return <AppLoader variant="screen" label="Loading secure workspace…" />;
   if (!user) return <Navigate to="/login" replace />;
 
   return (

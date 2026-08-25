@@ -4,13 +4,15 @@ import { cn } from "../../lib/utils";
 import { Strands } from "./strands";
 
 /**
- * WHAT: the application's loading state — a CONTAINED panel with the Strands animation and a line
- * of text, centred in whatever space it is given.
+ * WHAT: the application's loading state — the Strands animation with a line of text under it,
+ * centred in whatever space it is given. THE loader: `layouts/AppLayout.tsx` shows it while the
+ * session hydrates and `App.tsx`'s PageShell shows it while a lazy route resolves, so a refresh
+ * that crosses both gates shows one consistent thing rather than two different ones.
  *
- * WHY CONTAINED, NOT FULL-BLEED: an earlier version washed the whole viewport in strands, which
- * read as a background effect rather than a loader and swamped the page. This draws the animation
- * inside a bounded card — a thing that is recognisably "the app is loading", the same shape and
- * footprint whether it stands in for a route or covers first paint.
+ * WHY NO CARD AND NO SCRIM: it went through both and neither was right. Full-bleed strands read as
+ * a background effect rather than a loader; a bordered panel on a blurred backdrop read as a modal
+ * that had lost its buttons. An application loader is a mark and a label on the page background,
+ * which is what this is.
  *
  * WHAT IT DELIBERATELY DOES NOT REPLACE: the in-card `<Skeleton>`s. A skeleton is right when the
  * PAGE is already on screen and one card is filling in — it holds the layout. This is for the
@@ -85,21 +87,20 @@ export function AppLoader({ label = "Loading…", variant = "page", className }:
       aria-live="polite"
       className={cn(
         "grid place-items-center",
-        variant === "screen" ? "fixed inset-0 z-50 bg-background/80 backdrop-blur-sm" : "min-h-[50vh] w-full",
+        // Solid page background, not a translucent scrim. A backdrop-blur veil belongs to a modal
+        // over content the user was already looking at; a loader has nothing behind it to veil, and
+        // the frosted panel made it read as an overlay stuck on top of the app.
+        variant === "screen" ? "fixed inset-0 z-50 bg-background" : "min-h-[50vh] w-full",
         className
       )}
     >
-      {/* THE LOADER ITSELF: a bounded card, not a full-bleed background. */}
-      <div className="relative isolate flex h-56 w-full max-w-md flex-col items-center justify-center overflow-hidden rounded-2xl border border-border bg-card shadow-lg">
-        {/* A themed gradient under the canvas so the panel still reads as deliberate when WebGL is
-            unavailable or the context is refused — Strands returns quietly rather than throwing. */}
-        <div
-          aria-hidden
-          className="pointer-events-none absolute inset-0 -z-10 [background:radial-gradient(70%_60%_at_50%_45%,hsl(var(--primary)/0.14),transparent_75%)]"
-        />
+      {/* The animation sits directly on the page — no card, no border, no shadow. An application
+          loader is a mark and a line of text, the way this one is now; the bounded panel looked
+          like a dialog that had lost its buttons. */}
+      <div className="relative isolate flex h-40 w-full max-w-sm flex-col items-center justify-center">
 
         {/* Mounted only once the load has proven slow enough to be worth animating — see
-            ANIMATE_AFTER_MS. Until then the card, its gradient and its label carry the loader. */}
+            ANIMATE_AFTER_MS. Until then the label alone carries the loader. */}
         <div aria-hidden className="pointer-events-none absolute inset-0 -z-10">
           {animate && (
           <Strands
@@ -121,10 +122,10 @@ export function AppLoader({ label = "Loading…", variant = "page", className }:
           )}
         </div>
 
-        {/* The strands concentrate in the vertical centre, so the label sits at the BOTTOM of the
-            panel with a small scrim behind it — otherwise "Loading…" is drawn straight over the
-            brightest part of the animation and cannot be read. */}
-        <p className="absolute inset-x-0 bottom-4 z-10 mx-auto w-fit max-w-[90%] rounded-full bg-card/80 px-3 py-1 text-center text-sm font-semibold text-foreground/80 backdrop-blur-sm">
+        {/* The strands concentrate in the vertical middle, so the label sits below them rather than
+            on top — no scrim needed once it is out of the bright band, and a plain line of text is
+            what an app loader looks like. */}
+        <p className="absolute inset-x-0 -bottom-2 z-10 text-center text-sm font-medium text-muted-foreground">
           {label}
         </p>
       </div>
