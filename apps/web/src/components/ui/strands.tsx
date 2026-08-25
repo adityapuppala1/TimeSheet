@@ -261,7 +261,28 @@ export function Strands({
     const ctn = ctnDom.current;
     if (!ctn) return;
 
-    const renderer = new Renderer({ alpha: true, premultipliedAlpha: true, antialias: true });
+    /**
+     * WEBGL IS OPTIONAL, AND THIS IS WHERE THAT IS MADE TRUE.
+     *
+     * An earlier version of this file's header claimed "it never throws" while nothing actually
+     * caught anything — and that gap was not theoretical. `new Renderer()` asks for a WebGL
+     * context, and on a machine without a GPU (a headless CI runner, a locked-down VM, a browser
+     * with WebGL disabled) that can throw or return a context every later call fails on. Because
+     * this component renders inside the route-level Suspense fallback, a throw here would take
+     * down EVERY page rather than just losing a decoration.
+     *
+     * So the whole setup is guarded, and a failure returns quietly: `AppLoader` paints a themed
+     * gradient beneath this canvas, so the loader still reads as deliberate with no animation on
+     * top of it.
+     */
+    let renderer: Renderer;
+    try {
+      renderer = new Renderer({ alpha: true, premultipliedAlpha: true, antialias: true });
+      if (!renderer.gl) return;
+    } catch {
+      return;
+    }
+
     const gl = renderer.gl;
     gl.clearColor(0, 0, 0, 0);
     gl.enable(gl.BLEND);

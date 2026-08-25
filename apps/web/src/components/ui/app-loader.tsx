@@ -57,8 +57,25 @@ export interface AppLoaderProps {
   className?: string;
 }
 
+/**
+ * How long a load must last before the animation is worth starting.
+ *
+ * Most route transitions in this app resolve in well under this, and for those the loader shows
+ * its card and its label and never touches WebGL at all. That matters for three reasons: a GL
+ * context spun up and torn down inside 100ms is pure cost, a flash of animation on a fast
+ * navigation is worse UX than a still card, and it keeps the app off the GPU entirely on machines
+ * that do not have one — headless CI included, where every page renders through this fallback.
+ */
+const ANIMATE_AFTER_MS = 250;
+
 export function AppLoader({ label = "Loading…", variant = "page", className }: AppLoaderProps) {
   const theme = useResolvedTheme();
+  const [animate, setAnimate] = useState(false);
+
+  useEffect(() => {
+    const timer = window.setTimeout(() => setAnimate(true), ANIMATE_AFTER_MS);
+    return () => window.clearTimeout(timer);
+  }, []);
 
   return (
     <div
@@ -81,7 +98,10 @@ export function AppLoader({ label = "Loading…", variant = "page", className }:
           className="pointer-events-none absolute inset-0 -z-10 [background:radial-gradient(70%_60%_at_50%_45%,hsl(var(--primary)/0.14),transparent_75%)]"
         />
 
+        {/* Mounted only once the load has proven slow enough to be worth animating — see
+            ANIMATE_AFTER_MS. Until then the card, its gradient and its label carry the loader. */}
         <div aria-hidden className="pointer-events-none absolute inset-0 -z-10">
+          {animate && (
           <Strands
             colors={[...PALETTES[theme]]}
             count={3}
@@ -98,6 +118,7 @@ export function AppLoader({ label = "Loading…", variant = "page", className }:
             opacity={theme === "dark" ? 1 : 0.9}
             scale={1.5}
           />
+          )}
         </div>
 
         {/* The strands concentrate in the vertical centre, so the label sits at the BOTTOM of the
