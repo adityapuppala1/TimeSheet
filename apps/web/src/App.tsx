@@ -12,6 +12,7 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { ReactNode } from "react";
 import { lazy, Suspense, useEffect } from "react";
+import { AppLoader } from "./components/ui/app-loader";
 import { createBrowserRouter, Navigate, RouterProvider } from "react-router";
 import { permissions, type Permission } from "@timesheet/shared";
 import { AppLayout } from "./layouts/AppLayout";
@@ -22,7 +23,6 @@ import { useAuthStore } from "./store/auth";
 import { usePlatformAdminAuthStore } from "./store/platform-admin-auth";
 import { Toaster } from "./components/ui/toaster";
 import { TooltipProvider } from "./components/ui/tooltip";
-import { Skeleton } from "./components/ui/skeleton";
 import { BackendHealthGate } from "./components/BackendHealthGate";
 import { ErrorBoundary } from "./components/ErrorBoundary";
 
@@ -289,17 +289,13 @@ function RequirePlatformAdmin({ children }: { children: ReactNode }) {
 function PageShell({ children }: { children: ReactNode }) {
   return (
     <Suspense
+      // The generic skeleton this replaced was a stack of grey bars matching no page in the app,
+      // so every lazy route flashed one layout on its way to a different one. A loader that does
+      // not pretend to be the page is more honest than a placeholder shaped like the wrong one.
+      // In-card <Skeleton>s are unaffected and still correct — see components/ui/app-loader.tsx.
       fallback={
-        <div className="mx-auto grid w-full max-w-5xl gap-4 p-4 sm:p-6">
-          <Skeleton className="h-8 w-1/3" />
-          <Skeleton className="h-4 w-1/2" />
-          <div className="grid gap-3 sm:grid-cols-2 md:grid-cols-4">
-            <Skeleton className="h-24" />
-            <Skeleton className="h-24" />
-            <Skeleton className="h-24" />
-            <Skeleton className="h-24" />
-          </div>
-          <Skeleton className="h-64" />
+        <div className="mx-auto w-full max-w-5xl p-4 sm:p-6">
+          <AppLoader label="Loading…" />
         </div>
       }
     >
