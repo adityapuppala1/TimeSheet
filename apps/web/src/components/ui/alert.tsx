@@ -1,5 +1,6 @@
 import * as React from "react";
 import { cva, type VariantProps } from "class-variance-authority";
+import { X } from "lucide-react";
 import { cn } from "../../lib/utils";
 
 // `min-w-0 break-words` is load-bearing, not tidying. An alert is almost always a grid/flex item,
@@ -25,12 +26,50 @@ const alertVariants = cva(
   }
 );
 
-export const Alert = React.forwardRef<
-  HTMLDivElement,
-  React.HTMLAttributes<HTMLDivElement> & VariantProps<typeof alertVariants>
->(({ className, variant, ...props }, ref) => (
-  <div ref={ref} role="alert" className={cn(alertVariants({ variant }), className)} {...props} />
-));
+export interface AlertProps extends React.HTMLAttributes<HTMLDivElement>, VariantProps<typeof alertVariants> {
+  /**
+   * Pass a handler to make the alert closable. The button inherits the variant's colour through
+   * `currentColor`, so a destructive alert gets a red X and an info alert a blue one without any
+   * per-variant styling here.
+   *
+   * WHY THE CALLER OWNS THE STATE rather than the alert hiding itself: whether a dismissal should
+   * last a session, a day, or until the underlying situation changes is a question about the
+   * MESSAGE, not about the box it is drawn in. The daily-log banner should return tomorrow; a
+   * banner about a specific set of tickets should return when that set changes. An alert that
+   * unmounted itself would force every caller into the same answer. See `useDismissed`.
+   */
+  onDismiss?: () => void;
+  /** Announced to screen readers; defaults to something sensible for a notice. */
+  dismissLabel?: string;
+}
+
+export const Alert = React.forwardRef<HTMLDivElement, AlertProps>(
+  ({ className, variant, onDismiss, dismissLabel = "Dismiss this notice", children, ...props }, ref) => (
+    <div
+      ref={ref}
+      role="alert"
+      // Extra right padding ONLY when the button is there, so a non-dismissible alert is not
+      // silently narrowed by space reserved for a control it does not have.
+      className={cn(alertVariants({ variant }), onDismiss && "pr-11", className)}
+      {...props}
+    >
+      {children}
+      {onDismiss && (
+        <button
+          type="button"
+          onClick={onDismiss}
+          aria-label={dismissLabel}
+          // `absolute` matches how the leading icon is positioned by alertVariants, so the button
+          // sits on the alert rather than in the text flow and cannot be pushed around by a long
+          // title wrapping onto a second line.
+          className="absolute right-2 top-2 inline-flex h-7 w-7 items-center justify-center rounded-md opacity-60 transition-opacity hover:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-current focus-visible:ring-offset-1"
+        >
+          <X className="h-4 w-4" aria-hidden />
+        </button>
+      )}
+    </div>
+  )
+);
 Alert.displayName = "Alert";
 
 export const AlertTitle = React.forwardRef<HTMLParagraphElement, React.HTMLAttributes<HTMLHeadingElement>>(

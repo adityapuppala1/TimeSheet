@@ -52,6 +52,7 @@ import {
   TooltipTrigger as HoverTipTrigger
 } from "../components/ui/tooltip";
 import { Alert, AlertDescription, AlertTitle } from "../components/ui/alert";
+import { useDismissed } from "../hooks/use-dismissed";
 import { GoalsGlanceCard } from "../components/GoalsGlanceCard";
 import { SetupChecklistCard } from "../components/SetupChecklistCard";
 import { Badge } from "../components/ui/badge";
@@ -165,6 +166,10 @@ export function Dashboard() {
     let monthH = 0;
     let pendingCount = 0;
     const weekByStatus = { APPROVED: 0, SUBMITTED: 0, REJECTED: 0, DRAFT: 0 } as Record<string, number>;
+    /** This week's hours per project — the "where did it go" half of the week card. Keyed by the
+     *  display label rather than the id, so entries whose project was removed still collapse into
+     *  one honest "No project" row instead of one row per orphaned id. */
+    const weekByProject = new Map<string, number>();
     const monthByStatus = { APPROVED: 0, SUBMITTED: 0, REJECTED: 0, DRAFT: 0 } as Record<string, number>;
     /** Every loaded entry grouped by calendar day — the timeline's date picker reads this. */
     const entriesByDate = new Map<string, TimesheetRowLite[]>();
@@ -196,6 +201,8 @@ export function Dashboard() {
         weekByStatus[row.status] = (weekByStatus[row.status] ?? 0) + hours;
         const label = dayLabels[(workDay.getDay() + 6) % 7];
         buckets.set(label, (buckets.get(label) ?? 0) + hours);
+        const projectLabel = row.project?.code ?? row.project?.name ?? "No project";
+        weekByProject.set(projectLabel, (weekByProject.get(projectLabel) ?? 0) + hours);
       }
       if (workDay >= lastWeekStart && workDay < weekStart) lastWeekH += hours;
       if (workDay >= monthStart && workDay <= today) {
@@ -231,6 +238,10 @@ export function Dashboard() {
       monthHours: monthH,
       pendingCount,
       weekByStatus,
+      // Biggest first, so the card can take the top few and total the rest.
+      weekProjects: [...weekByProject.entries()]
+        .map(([label, hours]) => ({ label, hours }))
+        .sort((a, b) => b.hours - a.hours),
       monthByStatus,
       entriesByDate,
       projectRows: [...projects.values()].sort((a, b) => b.monthHours - a.monthHours),
@@ -316,6 +327,7 @@ export function Dashboard() {
             loading={timesheets.isLoading}
             weekHours={derived.weekHours}
             byStatus={derived.weekByStatus}
+            projects={derived.weekProjects}
             pendingCount={derived.pendingCount}
             trend={derived.trend}
           />
@@ -456,10 +468,12 @@ function WeekAtAGlance({
   weekHours,
   byStatus,
   pendingCount,
-  trend
+  trend,
+  projects
 }: {
   loading: boolean;
   weekHours: number;
+  projects: Array<{ label: string; hours: number }>;
   byStatus: Record<string, number>;
   pendingCount: number;
   /** The same per-weekday series the rhythm chart uses — read here for the insight rows so this
@@ -477,6 +491,15 @@ function WeekAtAGlance({
   const busiest = trend.reduce((best, d) => (d.hours > best.hours ? d : best), { day: "—", hours: 0 });
   const dailyAvg = daysLogged > 0 ? weekHours / daysLogged : 0;
   const note = weekNote(weekHours, pendingCount, byStatus);
+
+  // Three rows keeps the card the same height as its neighbours without scrolling; anything
+  // beyond that is summed into one honest "+Nh across M more" line rather than truncated silently.
+  const topProjects = projects.slice(0, 3);
+  const restProjects = projects.slice(3).reduce((sum, p) => sum + p.hours, 0);
+  // Bars are scaled against the BIGGEST project, not against the week total: with one project at
+  // 0.5h of a 40h week every bar would round to an invisible sliver and the comparison — which is
+  // the only thing a bar is for — would be lost.
+  const topShare = topProjects[0]?.hours || 1;
 
   return (
     <Card className="h-full">
@@ -532,6 +555,36 @@ function WeekAtAGlance({
             <p className="mt-1 text-xs text-muted-foreground">busiest{busiest.hours > 0 ? ` · ${busiest.hours.toFixed(1)}h` : ""}</p>
           </div>
         </div>
+
+        {/* WHERE the hours went, which is the question the status split and the rhythm chart next
+            to it both leave unanswered — one says what STATE the time is in, the other says WHICH
+            DAY it landed on, and neither says what it was spent on. It is also the fact the weekly
+            digest email leads with, so the two now agree.
+
+            Deliberately not another chart: the card beside this one is already a chart, and a third
+            visual in the same row reads as decoration. Bars-in-a-row is enough to compare four
+            numbers, and the labels stay readable at a phone width. */}
+        {projects.length > 0 && (
+          <div className="grid gap-2 border-t border-border pt-3">
+            <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Where your hours went</p>
+            {topProjects.map((p) => (
+              <div key={p.label} className="grid gap-1">
+                <div className="flex items-baseline justify-between gap-2 text-sm">
+                  <span className="min-w-0 truncate" title={p.label}>{p.label}</span>
+                  <span className="shrink-0 font-semibold tabular-nums">{p.hours.toFixed(1)}h</span>
+                </div>
+                <div className="h-1.5 w-full overflow-hidden rounded-full bg-muted">
+                  <div className="h-full rounded-full bg-primary" style={{ width: `${Math.max(2, (p.hours / topShare) * 100)}%` }} />
+                </div>
+              </div>
+            ))}
+            {restProjects > 0 && (
+              <p className="text-xs text-muted-foreground">
+                +{restProjects.toFixed(1)}h across {projects.length - topProjects.length} more
+              </p>
+            )}
+          </div>
+        )}
 
         <p className="text-sm text-muted-foreground">{note}</p>
 
@@ -1377,6 +1430,14 @@ function ProjectRollup({ rollup, loading }: { rollup: MyMonthRollup | undefined;
 
 /* ============================== Banners (unchanged behavior) ============================== */
 
+/** Which of the three things the banner is currently saying — the half of its dismissal
+ *  signature that is not the date, so moving between these states brings the banner back. */
+function describeDailyState(status?: { hours: number; escalated: boolean }): string {
+  if (!status) return "none";
+  if (status.escalated) return "escalated";
+  return status.hours > 0 ? "logged" : "empty";
+}
+
 function DailyStatusBanner({
   status,
   loading
@@ -1384,13 +1445,26 @@ function DailyStatusBanner({
   status?: { hours: number; entries: number; reminderReceived: boolean; escalated: boolean; date: string };
   loading: boolean;
 }) {
-  if (loading || !status) return null;
+  /**
+   * The signature is the DAY plus the state being reported, so closing this is consent to hide
+   * today's message and nothing more. Miss a different day, or move from "not logged" to
+   * "escalated", and the banner returns on its own — which is the whole point, because this is the
+   * notice that says an SLA is running.
+   *
+   * Hooks run before the early returns below, because they must: React requires an unconditional
+   * hook order, and `loading` flips on the first render.
+   */
+  const dailyState = describeDailyState(status);
+  const signature = status ? `${status.date}:${dailyState}` : null;
+  const { dismissed, dismiss } = useDismissed("dashboard.daily-status", signature);
+
+  if (loading || !status || dismissed) return null;
 
   const logged = status.hours > 0;
 
   if (status.escalated) {
     return (
-      <Alert variant="destructive">
+      <Alert variant="destructive" onDismiss={dismiss} dismissLabel="Dismiss this escalation notice for today">
         <AlertTriangle />
         <AlertTitle>Action required — yesterday's log was escalated</AlertTitle>
         <AlertDescription className="flex flex-wrap items-center gap-3">
@@ -1405,7 +1479,7 @@ function DailyStatusBanner({
 
   if (!logged) {
     return (
-      <Alert variant={status.reminderReceived ? "warning" : "info"}>
+      <Alert variant={status.reminderReceived ? "warning" : "info"} onDismiss={dismiss} dismissLabel="Dismiss today's reminder">
         <Clock />
         <AlertTitle>
           {status.reminderReceived
@@ -1438,11 +1512,19 @@ function DailyStatusBanner({
 }
 
 function MyTicketsBanner({ tickets, loading }: { tickets?: TicketRow[]; loading: boolean }) {
-  if (loading || !tickets || tickets.length === 0) return null;
-  const overdue = tickets.filter((t) => t.slaBreachAt).length;
+  const overdue = tickets?.filter((t) => t.slaBreachAt).length ?? 0;
+  /**
+   * Keyed on the COUNTS rather than on the day: a ticket banner that came back every morning would
+   * be nagging, but one that stayed hidden after a sixth ticket landed — or after one of them went
+   * overdue — would be hiding new information. Counts change, the banner returns.
+   */
+  const signature = tickets ? `${tickets.length}:${overdue}` : null;
+  const { dismissed, dismiss } = useDismissed("dashboard.my-tickets", signature);
+
+  if (loading || !tickets || tickets.length === 0 || dismissed) return null;
 
   return (
-    <Alert variant={overdue > 0 ? "destructive" : "info"}>
+    <Alert variant={overdue > 0 ? "destructive" : "info"} onDismiss={dismiss} dismissLabel="Dismiss this ticket notice">
       <TicketIcon />
       <AlertTitle>
         {tickets.length} open ticket{tickets.length === 1 ? "" : "s"} assigned to you
