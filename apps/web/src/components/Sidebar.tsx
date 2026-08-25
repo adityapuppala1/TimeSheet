@@ -136,11 +136,16 @@ export const nav: NavItem[] = [
 
   { to: "/app/approvals", label: "Approvals", icon: Shield, permission: permissions.TIMESHEETS_APPROVE, section: "Team" },
   { to: "/app/team", label: "My team", icon: Users2, permission: permissions.TIMESHEETS_APPROVE, section: "Team" },
+  // No permission: the org chart is open to everyone (the endpoint self-scopes to the viewer's
+  // own reporting subtree), so team leads and employees get it too.
+  { to: "/app/org-chart", label: "Org chart", icon: Users2, section: "Team" },
 
   { to: "/app/dashboards", label: "Custom Dashboards", icon: LayoutDashboard, section: "Analytics", feature: "planning" },
   { to: "/app/reports", label: "Reports", icon: BarChart3, permission: permissions.REPORTS_VIEW, section: "Analytics" },
-  { to: "/app/insights", label: "Insights", icon: TrendingUp, permission: permissions.REPORTS_VIEW, section: "Analytics" },
-  { to: "/app/security-insights", label: "Security insights", icon: ShieldAlert, permission: permissions.REPORTS_VIEW, section: "Analytics" },
+  // Insights and security insights are open to everyone (team leads and employees included) — the
+  // matching server endpoints were broadened to match. "Reports" above keeps its reports:view gate.
+  { to: "/app/insights", label: "Insights", icon: TrendingUp, section: "Analytics" },
+  { to: "/app/security-insights", label: "Security insights", icon: ShieldAlert, section: "Analytics" },
 
   { to: "/app/users", label: "Users", icon: Users, permission: permissions.USERS_MANAGE, section: "Administration" },
   { to: "/app/projects", label: "Projects", icon: FolderKanban, permission: permissions.PROJECTS_MANAGE, section: "Administration" },

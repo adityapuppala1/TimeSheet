@@ -282,7 +282,8 @@ reportRouter.get("/admin-summary", requirePermission(permissions.REPORTS_VIEW), 
  * Ticket metrics for the Reports page — kept separate from /admin-summary
  * (already a large batched payload) for cleaner separation of concerns.
  */
-reportRouter.get("/ticket-summary", requirePermission(permissions.REPORTS_VIEW), async (_req, res) => {
+// Broadened to every authenticated member (was reports:view). Team leads and employees can now see workspace productivity — see docs note on the org-visibility change.
+reportRouter.get("/ticket-summary", async (_req, res) => {
   const weekAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
   const twoWeeksAgo = new Date(Date.now() - 14 * 24 * 60 * 60 * 1000);
   const sinceLocal = startOfLocalDay();
@@ -400,7 +401,8 @@ const CYCLE_TIME_BUCKETS = [
  * and estimate-vs-actual variance. Kept as one batched call (Promise.all), same style as
  * /admin-summary and /ticket-summary, since the Insights page loads all of it together.
  */
-reportRouter.get("/ticket-insights", requirePermission(permissions.REPORTS_VIEW), async (_req, res) => {
+// Broadened to every authenticated member (was reports:view). Team leads and employees can now see workspace productivity — see docs note on the org-visibility change.
+reportRouter.get("/ticket-insights", async (_req, res) => {
   const velocityWeeks = recentWeekStarts(8);
   const heatmapWeeks = recentWeekStarts(6);
   const rangeStart = velocityWeeks[0];
@@ -625,7 +627,8 @@ function computeRiskScore(openFindings: Array<{ severity: (typeof SECURITY_SEVER
  * not an exact remediation-time measurement. Documented here rather than silently treated as
  * precise; a dedicated `resolvedAt` column is a reasonable follow-up if this proves too noisy.
  */
-reportRouter.get("/security-insights", requirePermission(permissions.REPORTS_VIEW), async (_req, res) => {
+// Broadened to every authenticated member (was reports:view). NOTE: this deliberately exposes the workspace's security findings / SBOM to all staff — an internal-transparency decision, reversible by restoring requirePermission(REPORTS_VIEW).
+reportRouter.get("/security-insights", async (_req, res) => {
   const weeks = recentWeekStarts(8);
   const rangeStart = weeks[0];
   const sinceLocal = startOfLocalDay();
@@ -699,7 +702,8 @@ reportRouter.get("/security-insights", requirePermission(permissions.REPORTS_VIE
  * /sbom route). Deliberately not attempting Black Duck's full license-obligation-text depth —
  * see docs/ROADMAP.md's "Competitive parity" Phase 3.
  */
-reportRouter.get("/sbom-inventory", requirePermission(permissions.REPORTS_VIEW), async (_req, res) => {
+// Broadened to every authenticated member (was reports:view). NOTE: this deliberately exposes the workspace's security findings / SBOM to all staff — an internal-transparency decision, reversible by restoring requirePermission(REPORTS_VIEW).
+reportRouter.get("/sbom-inventory", async (_req, res) => {
   const [totalComponents, vulnerableComponents, byEcosystem, byRepository] = await Promise.all([
     prisma.sbomComponent.count(),
     prisma.sbomComponent.findMany({
@@ -747,7 +751,8 @@ reportRouter.get("/sbom-inventory", requirePermission(permissions.REPORTS_VIEW),
  *
  * The response is strictly additive — existing consumers (Insights.tsx) keep working unchanged.
  */
-reportRouter.get("/cost-insights", requirePermission(permissions.REPORTS_VIEW), async (_req, res) => {
+// Broadened to every authenticated member (was reports:view). NOTE: exposes workspace cost figures to all staff — reversible by restoring requirePermission(REPORTS_VIEW).
+reportRouter.get("/cost-insights", async (_req, res) => {
   const settings = await prisma.globalTicketSettings.findUnique({ where: { id: "global" } });
   if (!settings?.enableCostAnalytics) throw new AppError(403, "Cost analytics is disabled for this workspace.");
 
@@ -824,7 +829,8 @@ reportRouter.get("/cost-insights", requirePermission(permissions.REPORTS_VIEW), 
 });
 
 /** Opt-in team leaderboard — gated behind GlobalTicketSettings.enableLeaderboard. Framed as recognition, not surveillance. */
-reportRouter.get("/leaderboard", requirePermission(permissions.REPORTS_VIEW), async (_req, res) => {
+// Broadened to every authenticated member (was reports:view). Team leads and employees can now see workspace productivity — see docs note on the org-visibility change.
+reportRouter.get("/leaderboard", async (_req, res) => {
   const settings = await prisma.globalTicketSettings.findUnique({ where: { id: "global" } });
   if (!settings?.enableLeaderboard) throw new AppError(403, "The team leaderboard is disabled for this workspace.");
 
