@@ -231,6 +231,9 @@ function formatLoginTime(iso: string | null): string {
 export function UsersPage() {
   const queryClient = useQueryClient();
   const currentUserId = useAuthStore((s) => s.user?.id);
+  // Granting more than one held role is super-admin-only — an ADMIN sees exactly today's
+  // single-role controls, unchanged.
+  const viewerIsSuperAdmin = useAuthStore((s) => s.user?.role) === "SUPER_ADMIN";
   // 30s refetch keeps the presence dots honest — the server's picture itself moves in 5-minute
   // lastSeenAt increments, so polling faster would only pretend to more precision.
   // Server-side filtering, sorting and pagination. The old call fetched the first 50 users and
@@ -329,6 +332,10 @@ export function UsersPage() {
     githubUsername: "",
     faceVerificationRequired: false
   });
+  // Extra roles to ALSO grant, beyond draft.role (the active one) — super-admin-only, see
+  // viewerIsSuperAdmin above. Never includes draft.role itself; the final `roles` payload is
+  // always draft.role plus this set, deduped.
+  const [createExtraRoles, setCreateExtraRoles] = useState<string[]>([]);
   const [editing, setEditing] = useState<UserRow | null>(null);
   const [pendingDelete, setPendingDelete] = useState<{ id: string; name: string } | null>(null);
   const [pendingReset, setPendingReset] = useState<{ id: string; name: string } | null>(null);
@@ -368,6 +375,7 @@ export function UsersPage() {
         });
       }
       setDraft({ name: "", email: "", role: "EMPLOYEE", password: "", managerId: "none", designation: "", githubUsername: "", faceVerificationRequired: false });
+      setCreateExtraRoles([]);
       queryClient.invalidateQueries({ queryKey: ["users"] });
     },
     onError: (err: any) => toast.error("Unable to create user", { description: serverMessage(err, "Try again.") })
@@ -441,6 +449,10 @@ export function UsersPage() {
       name: draft.name,
       email: draft.email,
       role: draft.role,
+      // Omitted unless a super admin actually checked an extra role — sending a single-entry
+      // array behaves identically to omitting it server-side, but omitting it here keeps an
+      // ADMIN's payload shape exactly what it always was.
+      roles: viewerIsSuperAdmin && createExtraRoles.length > 0 ? [draft.role, ...createExtraRoles] : undefined,
       // Omitted when blank — the server then generates a one-time password. Sending "" would fail
       // the min(8) check instead.
       password: draft.password.trim() || undefined,
@@ -708,6 +720,28 @@ export function UsersPage() {
               </Button>
             </div>
           </div>
+          {viewerIsSuperAdmin && (
+            <div className="mt-3 grid gap-1.5 border-t border-border pt-3">
+              <Label className="text-xs text-muted-foreground">
+                Also grant (optional) — this account can switch between every role checked here
+              </Label>
+              <div className="flex flex-wrap gap-4">
+                {roles
+                  .filter((role) => role !== draft.role)
+                  .map((role) => (
+                    <label key={role} className="flex items-center gap-1.5 text-sm">
+                      <Checkbox
+                        checked={createExtraRoles.includes(role)}
+                        onCheckedChange={(v) =>
+                          setCreateExtraRoles((prev) => (v ? [...prev, role] : prev.filter((r) => r !== role)))
+                        }
+                      />
+                      {role.replace("_", " ")}
+                    </label>
+                  ))}
+              </div>
+            </div>
+          )}
         </CardContent>
       </Card>
 
@@ -935,6 +969,7 @@ function UserEditDialog({
   eligibleManagers: any[];
   onSubmit: (payload: any) => void;
 }) {
+  const viewerIsSuperAdmin = useAuthStore((s) => s.user?.role) === "SUPER_ADMIN";
   const [form, setForm] = useState({
     name: "",
     email: "",
@@ -945,6 +980,9 @@ function UserEditDialog({
     githubUsername: "",
     faceVerificationRequired: false
   });
+  // Extra roles ALSO granted, beyond form.role (the active one) — never includes form.role
+  // itself. Super-admin-only; an ADMIN never sees or sends this.
+  const [extraRoles, setExtraRoles] = useState<string[]>([]);
   // Key the form re-initialization on the user's stable id, not the whole
   // user object. This way a background refetch of the users list (which
   // produces a new object reference for the same record) does NOT clobber
@@ -961,6 +999,7 @@ function UserEditDialog({
         githubUsername: user.githubUsername ?? "",
         faceVerificationRequired: user.faceVerificationRequired ?? false
       });
+      setExtraRoles(user.heldRoles.filter((r) => r !== user.role.name));
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [user?.id]);
@@ -1057,6 +1096,26 @@ function UserEditDialog({
                   </SelectContent>
                 </Select>
               </div>
+              {viewerIsSuperAdmin && (
+                <div className="grid gap-1.5 border-t border-border pt-3">
+                  <Label className="text-xs text-muted-foreground">
+                    Also grant (optional) — this account can switch between every role checked here
+                  </Label>
+                  <div className="flex flex-wrap gap-4">
+                    {roles
+                      .filter((role) => role !== form.role)
+                      .map((role) => (
+                        <label key={role} className="flex items-center gap-1.5 text-sm">
+                          <Checkbox
+                            checked={extraRoles.includes(role)}
+                            onCheckedChange={(v) => setExtraRoles((prev) => (v ? [...prev, role] : prev.filter((r) => r !== role)))}
+                          />
+                          {role.replace("_", " ")}
+                        </label>
+                      ))}
+                  </div>
+                </div>
+              )}
             </div>
             <DialogFooter>
               <Button variant="outline" onClick={onClose}>Cancel</Button>
@@ -1066,6 +1125,15 @@ function UserEditDialog({
                     name: form.name.trim(),
                     email: form.email.trim(),
                     role: form.role,
+                    // Sent whenever there's an extra role checked NOW, or the account already
+                    // held more than one when the dialog opened — the second half matters so
+                    // unchecking every extra role (reducing a multi-role account back to one)
+                    // actually reaches the server instead of silently being a no-op, since an
+                    // empty extraRoles alone can't be told apart from "nothing to change" otherwise.
+                    roles:
+                      viewerIsSuperAdmin && (extraRoles.length > 0 || (user?.heldRoles.length ?? 0) > 1)
+                        ? [form.role, ...extraRoles]
+                        : undefined,
                     status: form.status,
                     managerId: form.managerId === "none" ? null : form.managerId,
                     designation: form.designation.trim() || null,

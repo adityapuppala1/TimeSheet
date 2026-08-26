@@ -44,7 +44,8 @@ function userRow() {
     timezone: null,
     managerId: null,
     manager: null,
-    role: { name: "EMPLOYEE", permissions: [] }
+    role: { name: "EMPLOYEE", permissions: [] },
+    userRoles: []
   };
 }
 

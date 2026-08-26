@@ -10,6 +10,31 @@ user of a running installation.
 The parser that feeds the in-app What's-new page ignores this section until it gains a version
 number, on purpose — an installation must never render history for a version that does not exist yet.
 
+### 👥 An account can hold more than one role, and switch between them without re-logging in
+
+- **Multi-role accounts.** A super admin can now grant an account several roles at once (Workspace
+  Settings → User Management → create or edit a user) instead of exactly one — a "Held roles"
+  checklist alongside the existing role picker, super-admin-only. Everyone else's account is
+  completely unaffected: one role in, one role out, exactly as before.
+- **Switch role, right from the profile menu.** Anyone holding more than one role gets a "Switch
+  role" list in their avatar dropdown — picking a different held role takes effect immediately,
+  no re-login, and genuinely narrows or widens what's available: which pages render, which actions
+  are allowed, all re-checked server-side on the very next request. Reversible any time — switching
+  back is always available among roles you already hold.
+- **🐛 Fixed the bug that motivated this:** a manager-relationship email (an escalation, an
+  approval nudge) is addressed to a *specific person* because they manage that employee — not
+  because of which account role they happen to hold. But the per-role "Email channels" mute grid
+  was checking the recipient's account role regardless, so muting a broadcast-heavy role like
+  Super Admin to cut noise could silently swallow a real manager's mail too, with no fallback. A
+  recipient's email is now suppressed only if **every** role they hold is muted for that category
+  — grant them the Manager role alongside Super Admin and the manager mail gets through even while
+  Super Admin stays muted.
+- A few guardrails ship alongside this: granting multiple roles is refused unless the requester is
+  a super admin (an admin's existing single-role capability is untouched); a change that would
+  leave the workspace with zero active super admins is refused outright, the same way this app
+  already refuses to let someone lock themselves out; and acting on an existing super admin's role
+  now consistently requires being one, closing a gap where an admin could quietly demote one.
+
 ### 📝 Requirements Studio can start from a document you already have
 
 - **Optional "import an existing PRD/BRD" path**, right in the New document dialog — upload a PDF,

@@ -88,6 +88,10 @@ export interface AuthUser {
   name: string;
   email: string;
   role: RoleName;
+  /** Every role this account may switch into — always includes `role` itself. Length 1 for the
+   *  common case (nobody has granted a second role); a "Switch role" control only makes sense to
+   *  show when this has more than one entry. See UserRole in schema.prisma. */
+  heldRoles: RoleName[];
   /** True while this person is using a password an admin set — drives a "choose your own
    *  password" prompt in the web app; cleared when they change it. */
   mustChangePassword?: boolean;
@@ -98,6 +102,19 @@ export interface AuthUser {
   timezone?: string | null;
   managerId?: string | null;
   manager?: { id: string; name: string; email: string } | null;
+}
+
+/**
+ * A user's real held-role set is the union of their active `role` plus every `UserRole` row —
+ * never just the join table alone. Several account-creation paths (SSO first login, SCIM
+ * provisioning, the agent service identity, bulk CSV import) write `roleId` directly and never
+ * touch `UserRole`, so an account created through any of them must still report its one real role
+ * correctly rather than an empty set. Sorted in `roles`' fixed order so a "Switch role" list never
+ * reshuffles between renders.
+ */
+export function resolveHeldRoles(primaryRole: RoleName, extraRoleNames: RoleName[]): RoleName[] {
+  const held = new Set<RoleName>([primaryRole, ...extraRoleNames]);
+  return roles.filter((r) => held.has(r));
 }
 
 export interface TimesheetInput {

@@ -12,6 +12,7 @@
  */
 import {
   isEmailRoleMuted,
+  resolveHeldRoles,
   type EmailRoleMutes,
   type NotificationPreferences,
   type RoleName
@@ -183,7 +184,14 @@ export async function getGlobalNotificationSettings() {
 export async function dispatchNotification(args: DispatchArgs) {
   const recipient = await prisma.user.findUnique({
     where: { id: args.userId },
-    select: { id: true, email: true, status: true, deletedAt: true, role: { select: { name: true } } }
+    select: {
+      id: true,
+      email: true,
+      status: true,
+      deletedAt: true,
+      role: { select: { name: true } },
+      userRoles: { select: { role: { select: { name: true } } } }
+    }
   });
   if (!recipient || recipient.deletedAt || recipient.status !== "ACTIVE") return;
 
@@ -207,7 +215,18 @@ export async function dispatchNotification(args: DispatchArgs) {
   // in-app Notification row is already written, so a muted role still sees the alert in the
   // bell menu — we are only declining to also put it in their inbox. Managers/super admins
   // who don't log time but do approve it are the motivating case.
-  if (field && isEmailRoleMuted(settings.emailRoleMutes as EmailRoleMutes | null, field as keyof NotificationPreferences, recipient.role?.name as RoleName | undefined)) {
+  //
+  // A recipient can hold MORE than one role (see UserRole in schema.prisma) — suppress the email
+  // only if EVERY held role is muted for this category, not just their primary one. Without this,
+  // muting a broadcast-noise role like SUPER_ADMIN for a category would also silently kill mail
+  // that reached this person for an unrelated, targeted reason (e.g. they are also someone's real
+  // manager, resolved via managerId, and hold the MANAGER role too) — this was a real reported bug.
+  const heldRoleNames = resolveHeldRoles(
+    recipient.role.name as RoleName,
+    recipient.userRoles.map((ur) => ur.role.name as RoleName)
+  );
+  const mutes = settings.emailRoleMutes as EmailRoleMutes | null;
+  if (field && heldRoleNames.every((name) => isEmailRoleMuted(mutes, field as keyof NotificationPreferences, name))) {
     return;
   }
 

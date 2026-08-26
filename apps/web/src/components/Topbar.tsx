@@ -6,10 +6,11 @@
  * palette open" and "which theme is active" live here instead of being duplicated per page.
  * WHO renders this: `layouts/AppLayout.tsx`.
  */
-import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { Command, Compass, LogOut, Menu, Moon, Search, Sparkles, Sun, UserRound, FileClock } from "lucide-react";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { Command, Compass, LogOut, Menu, Moon, Repeat, Search, Sparkles, Sun, UserRound, FileClock } from "lucide-react";
 import { useEffect, useState } from "react";
 import { Link, useNavigate } from "react-router";
+import type { RoleName } from "@timesheet/shared";
 import { MobileDrawerNav } from "./Sidebar";
 import { Avatar, AvatarFallback, AvatarImage } from "./ui/avatar";
 import { Button } from "./ui/button";
@@ -18,6 +19,8 @@ import {
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuLabel,
+  DropdownMenuRadioGroup,
+  DropdownMenuRadioItem,
   DropdownMenuSeparator,
   DropdownMenuTrigger
 } from "./ui/dropdown-menu";
@@ -45,6 +48,7 @@ function initialsFor(name?: string) {
 export function Topbar() {
   const navigate = useNavigate();
   const user = useAuthStore((s) => s.user);
+  const setUser = useAuthStore((s) => s.setUser);
   const logoutStore = useAuthStore((s) => s.logout);
   const [dark, setDark] = useState(() => {
     if (typeof window === "undefined") return false;
@@ -103,6 +107,20 @@ export function Topbar() {
   }
 
   const avatarSrc = fileUrl(user?.avatarUrl);
+
+  // Only ever non-empty when a super admin has explicitly granted this account more than one
+  // role (Workspace Settings → User Management) — the common case renders nothing here at all.
+  const switchRole = useMutation({
+    mutationFn: (role: RoleName) => authApi.switchRole(role),
+    onSuccess: (updated) => {
+      setUser(updated);
+      // Every permission check in the app re-derives from this cached response, so cached pages
+      // built under the old role (e.g. an admin-only list) must not be shown stale.
+      queryClient.invalidateQueries();
+      toast.success(`Switched to ${updated.role.replace("_", " ")}`);
+    },
+    onError: (err: any) => toast.error("Could not switch role", { description: err?.response?.data?.message ?? "Try again." })
+  });
 
   return (
     <>
@@ -175,6 +193,26 @@ export function Topbar() {
                   </div>
                 </div>
               </DropdownMenuLabel>
+              {user && user.heldRoles.length > 1 && (
+                <>
+                  <DropdownMenuSeparator />
+                  <DropdownMenuLabel className="flex items-center gap-1.5 text-xs font-normal text-muted-foreground">
+                    <Repeat className="h-3 w-3" /> Switch role
+                  </DropdownMenuLabel>
+                  <DropdownMenuRadioGroup
+                    value={user.role}
+                    onValueChange={(value) => {
+                      if (value !== user.role) switchRole.mutate(value as RoleName);
+                    }}
+                  >
+                    {user.heldRoles.map((role) => (
+                      <DropdownMenuRadioItem key={role} value={role} disabled={switchRole.isPending}>
+                        {role.replace("_", " ")}
+                      </DropdownMenuRadioItem>
+                    ))}
+                  </DropdownMenuRadioGroup>
+                </>
+              )}
               <DropdownMenuSeparator />
               <DropdownMenuItem asChild>
                 <Link to="/app/profile"><UserRound /> Profile</Link>

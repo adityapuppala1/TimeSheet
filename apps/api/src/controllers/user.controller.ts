@@ -9,7 +9,7 @@
  */
 import { Router } from "express";
 import { z } from "zod";
-import { permissions, roles } from "@timesheet/shared";
+import { permissions, resolveHeldRoles, roles, type RoleName } from "@timesheet/shared";
 import { env } from "../config/env.js";
 import { prisma } from "../config/prisma.js";
 import { requireTenantContext } from "../config/tenant-context.js";
@@ -41,6 +41,40 @@ async function sendWelcomeEmail(user: { id: string; name: string; email: string 
     console.warn(`[user.welcome] NOT sent to ${user.email}: ${result.errorMessage}`);
   }
   return result;
+}
+
+/**
+ * True only when a role-affecting write would leave zero ACTIVE accounts holding SUPER_ADMIN.
+ * Unlike a role SWITCH (always reversible — the account still holds the role), this is not: once
+ * nobody holds SUPER_ADMIN, nobody can use the SUPER_ADMIN-only path to grant it back. Same
+ * "refused rather than confirmed, there is no version of this the operator meant" reasoning the
+ * bulk self-target guard below already uses.
+ */
+async function wouldLockOutSuperAdmin(targetUserId: string, newHeldRoles: RoleName[]): Promise<boolean> {
+  if (newHeldRoles.includes("SUPER_ADMIN")) return false;
+  const superAdminRole = await prisma.role.findUniqueOrThrow({ where: { name: "SUPER_ADMIN" } });
+  // Nothing is actually being removed unless the target currently holds it — otherwise this
+  // would refuse an unrelated role change any time some OTHER account happens to be the sole
+  // super admin, which has nothing to do with the user being edited here.
+  const targetHoldsIt = await prisma.userRole.count({ where: { userId: targetUserId, roleId: superAdminRole.id } });
+  if (targetHoldsIt === 0) return false;
+  const otherHolders = await prisma.userRole.count({
+    where: { roleId: superAdminRole.id, userId: { not: targetUserId }, user: { status: "ACTIVE", deletedAt: null } }
+  });
+  return otherHolders === 0;
+}
+
+/**
+ * Writes a user's held-role set to exactly `roleNames` — a full replace, not an incremental add.
+ * Deliberately not additive: the plain single-`role` field (available to ADMIN too) means "this
+ * account now has exactly one role", matching its exact pre-multi-role behavior; only the
+ * SUPER_ADMIN-only `roles` array can produce more than one held role. Run after the `roleId`
+ * write so the caller's transaction (if any) covers both.
+ */
+async function replaceHeldRoles(userId: string, roleNames: RoleName[]) {
+  const roleRows = await prisma.role.findMany({ where: { name: { in: roleNames } }, select: { id: true } });
+  await prisma.userRole.deleteMany({ where: { userId } });
+  await prisma.userRole.createMany({ data: roleRows.map((r) => ({ userId, roleId: r.id })) });
 }
 
 userRouter.get("/roles", async (_req, res) => {
@@ -167,7 +201,8 @@ userRouter.get("/paged", validate(pagedQuerySchema), async (req, res) => {
       include: {
         role: true,
         manager: { select: { id: true, name: true, email: true } },
-        _count: { select: { projectAssignments: true } }
+        _count: { select: { projectAssignments: true } },
+        userRoles: { select: { role: { select: { name: true } } } }
       },
       orderBy,
       skip: (page - 1) * pageSize,
@@ -184,10 +219,11 @@ userRouter.get("/paged", validate(pagedQuerySchema), async (req, res) => {
     })
   ]);
 
-  let items = rows.map(({ passwordHash: _passwordHash, ...user }) => ({
+  let items = rows.map(({ passwordHash: _passwordHash, userRoles, ...user }) => ({
     ...user,
     online: onlineSeen.has(user.id),
-    lastSeenAt: onlineSeen.get(user.id) ?? null
+    lastSeenAt: onlineSeen.get(user.id) ?? null,
+    heldRoles: resolveHeldRoles(user.role.name as RoleName, userRoles.map((ur) => ur.role.name as RoleName))
   }));
   if (q.online === "online") items = items.filter((u) => u.online);
   if (q.online === "offline") items = items.filter((u) => !u.online);
@@ -382,6 +418,11 @@ userRouter.post(
         name: z.string().min(2),
         email: z.string().email(),
         role: z.string(),
+        // Every role this account may hold/switch into — SUPER_ADMIN-only (checked in the
+        // handler, since USERS_MANAGE alone also covers ADMIN). Omitted (the common case): the
+        // account gets exactly the one `role` above, matching this route's pre-multi-role
+        // behavior exactly.
+        roles: z.array(z.enum(roles)).min(1).optional(),
         // OPTIONAL, and normally omitted. Every other password path in this file — bulk reset, CSV
         // import, /:id/reset-password — generates a random one-time password rather than accepting
         // a default, for the reason written on `generateTempPassword`: the fixed "Admin@12345" this
@@ -397,6 +438,13 @@ userRouter.post(
     })
   ),
   async (req, res) => {
+    const actorIsSuperAdmin = req.user!.role === "SUPER_ADMIN";
+    if (req.body.roles && !actorIsSuperAdmin) {
+      throw new AppError(403, "Only a super admin can grant more than one role.");
+    }
+    if (req.body.roles && !req.body.roles.includes(req.body.role)) {
+      throw new AppError(422, "The active role must be one of the granted roles.");
+    }
     // Plan-tier seat enforcement — re-checked on every creation (not cached) so a platform
     // admin lowering a tier's seat limit, or an org outgrowing its plan, takes effect
     // immediately rather than after some reconciliation job. Counts the same population
@@ -449,6 +497,7 @@ userRouter.post(
         notificationPreference: { create: {} }
       }
     });
+    await replaceHeldRoles(user.id, req.body.roles ?? [req.body.role as RoleName]);
     await audit(req.user!.id, "user.created", "User", user.id);
 
     const welcomeResult = await sendWelcomeEmail(user);
@@ -600,6 +649,10 @@ const patchSchema = z.object({
     email: z.string().email().optional(),
     status: z.enum(["ACTIVE", "INACTIVE", "PENDING_VERIFICATION"]).optional(),
     role: z.string().optional(),
+    // SUPER_ADMIN-only (checked in the handler) — every role this account may hold/switch into.
+    // Omitted: the plain `role` field above means "exactly this one role", same as before this
+    // existed — only this array can produce more than one held role.
+    roles: z.array(z.enum(roles)).min(1).optional(),
     managerId: z.string().uuid().nullable().optional(),
     designation: z.string().max(120).nullable().optional(),
     faceVerificationRequired: z.boolean().optional(),
@@ -608,6 +661,62 @@ const patchSchema = z.object({
 });
 
 userRouter.patch("/:id", validate(patchSchema), async (req, res) => {
+  const targetId = String(req.params.id);
+  const actorIsSuperAdmin = req.user!.role === "SUPER_ADMIN";
+
+  if (req.body.roles && !actorIsSuperAdmin) {
+    throw new AppError(403, "Only a super admin can grant more than one role.");
+  }
+  if (req.body.roles && !req.body.role) {
+    throw new AppError(422, "An active role is required when granting a set of roles.");
+  }
+  if (req.body.roles && req.body.role && !req.body.roles.includes(req.body.role)) {
+    throw new AppError(422, "The active role must be one of the granted roles.");
+  }
+
+  // null means this call isn't touching roles at all — the held-role set is left exactly as-is.
+  let newHeldRoleNames: RoleName[] | null = null;
+
+  if (req.body.role || req.body.roles) {
+    const target = await prisma.user.findUnique({
+      where: { id: targetId },
+      select: { role: { select: { name: true } }, userRoles: { select: { role: { select: { name: true } } } } }
+    });
+    if (!target) throw new AppError(404, "User not found");
+    // Adjacent to the multi-role work but not caused by it: the plain single-`role` field had no
+    // "only a super admin may act on a super admin" guard, unlike bulk-action and force-logout
+    // just above — an ADMIN could demote an existing SUPER_ADMIN unguarded. Same wording as those.
+    if (target.role.name === "SUPER_ADMIN" && !actorIsSuperAdmin) {
+      throw new AppError(403, "Only a super admin can act on a super admin");
+    }
+
+    const currentHeld = resolveHeldRoles(target.role.name as RoleName, target.userRoles.map((ur) => ur.role.name as RoleName));
+
+    if (req.body.roles) {
+      // The SUPER_ADMIN-only path above already validated this — full replace.
+      newHeldRoleNames = req.body.roles as RoleName[];
+    } else if (req.body.role) {
+      if (currentHeld.length > 1) {
+        // A genuinely multi-role account: the plain field can only switch which already-granted
+        // role is active — it can never silently grant or revoke a role on the side. Granting a
+        // NEW role onto a multi-role account requires the explicit, SUPER_ADMIN-only `roles` array.
+        if (!currentHeld.includes(req.body.role as RoleName)) {
+          throw new AppError(422, "This account holds multiple roles — use the roles field to grant a new one.");
+        }
+        // Held set untouched; newHeldRoleNames stays null.
+      } else {
+        // The common case (one held role, true for every account before this feature and for
+        // every account nobody has explicitly granted a second role to): the plain field means
+        // exactly what it always has — this is now the account's one and only role.
+        newHeldRoleNames = [req.body.role as RoleName];
+      }
+    }
+
+    if (newHeldRoleNames && (await wouldLockOutSuperAdmin(targetId, newHeldRoleNames))) {
+      throw new AppError(422, "This would leave no super admin able to manage the workspace — grant super admin to someone else first.");
+    }
+  }
+
   const data: {
     name?: string;
     email?: string;
@@ -629,7 +738,7 @@ userRouter.patch("/:id", validate(patchSchema), async (req, res) => {
     data.roleId = role.id;
   }
   if ("managerId" in req.body) {
-    if (req.body.managerId && req.body.managerId === String(req.params.id)) {
+    if (req.body.managerId && req.body.managerId === targetId) {
       throw new AppError(422, "A user cannot be their own manager");
     }
     data.managerId = req.body.managerId ?? null;
@@ -639,10 +748,11 @@ userRouter.patch("/:id", validate(patchSchema), async (req, res) => {
   // false→true transition — not on every unrelated PATCH that happens to echo the field back.
   const previous =
     data.faceVerificationRequired === true
-      ? await prisma.user.findUnique({ where: { id: String(req.params.id) }, select: { faceVerificationRequired: true } })
+      ? await prisma.user.findUnique({ where: { id: targetId }, select: { faceVerificationRequired: true } })
       : null;
 
-  const user = await prisma.user.update({ where: { id: String(req.params.id) }, data, include: { role: true } });
+  const user = await prisma.user.update({ where: { id: targetId }, data, include: { role: true } });
+  if (newHeldRoleNames) await replaceHeldRoles(user.id, newHeldRoleNames);
   await audit(req.user!.id, "user.updated", "User", user.id, req.body);
 
   // The person just became individually covered by the face policy — tell them now, not at

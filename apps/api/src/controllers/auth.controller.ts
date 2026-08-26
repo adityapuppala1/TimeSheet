@@ -11,6 +11,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { Router } from "express";
 import { z } from "zod";
+import { roles } from "@timesheet/shared";
 import { env } from "../config/env.js";
 import { avatarsDir, resolveWithin } from "../config/storage-paths.js";
 import { prisma } from "../config/prisma.js";
@@ -21,7 +22,7 @@ import { AppError } from "../middleware/error.js";
 import { avatarUpload, preserveTenantContext } from "../middleware/upload.js";
 import { validate } from "../middleware/validate.js";
 import { audit } from "../services/audit.service.js";
-import { buildProfilePayload, changePassword, completeSsoLogin, login, refresh, requestPasswordReset, resetPassword } from "../services/auth.service.js";
+import { buildProfilePayload, changePassword, completeSsoLogin, login, refresh, requestPasswordReset, resetPassword, switchActiveRole } from "../services/auth.service.js";
 import { getOnboardingStatus } from "../services/onboarding.service.js";
 import { authenticateLdap } from "../services/sso.service.js";
 import { dispatchTransactional } from "../services/notify.service.js";
@@ -196,6 +197,20 @@ authRouter.get("/heartbeat", requireAuth, async (_req, res) => {
 authRouter.get("/me", requireAuth, async (req, res) => {
   res.json(await buildProfilePayload(req.user!.id));
 });
+
+/**
+ * Self-service switch among roles you already hold — granting a NEW role is SUPER_ADMIN-only,
+ * from User Management (see user.controller.ts). No JWT re-issue: the access token carries no
+ * role claims, so the next request under the existing token is already governed by the new role.
+ */
+authRouter.post(
+  "/switch-role",
+  requireAuth,
+  validate(z.object({ body: z.object({ role: z.enum(roles) }).strict() })),
+  async (req, res) => {
+    res.json(await switchActiveRole(req.user!.id, req.body.role));
+  }
+);
 
 /**
  * Whether first-run setup still blocks this person.

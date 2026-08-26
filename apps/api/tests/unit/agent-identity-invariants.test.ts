@@ -103,6 +103,7 @@ describe("an agent can never authenticate", () => {
     deletedAt: null,
     isAgent: true,
     role: { name: "EMPLOYEE", permissions: [] },
+    userRoles: [],
     firstLoginAt: null
   };
 

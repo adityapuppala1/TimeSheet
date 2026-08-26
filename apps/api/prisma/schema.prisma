@@ -97,6 +97,8 @@ model Role {
   description String?
   users       User[]
   permissions RolePermission[]
+  /// Every account currently ALLOWED to hold/switch into this role — see UserRole's own comment.
+  heldByUsers UserRole[]       @relation("HeldByUser")
 }
 
 model Permission {
@@ -113,6 +115,22 @@ model RolePermission {
   permission   Permission @relation(fields: [permissionId], references: [id], onDelete: Cascade)
 
   @@id([roleId, permissionId])
+}
+
+/// Multi-role accounts: a role an account is ALLOWED to switch into, distinct from `User.roleId`
+/// (the role currently ACTIVE — which permission check everywhere else in the app already reads).
+/// Assigned only by a super admin (user.controller.ts); switching which held role is active is
+/// self-service (POST /api/auth/switch-role). Every existing account gets exactly one row here,
+/// matching its one pre-existing role, via this feature's own migration's backfill.
+model UserRole {
+  id     String @id @default(uuid())
+  userId String
+  roleId String
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  role   Role   @relation("HeldByUser", fields: [roleId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, roleId])
+  @@index([userId])
 }
 
 model User {
@@ -140,6 +158,9 @@ model User {
   status                   UserStatus @default(PENDING_VERIFICATION)
   roleId                   String
   role                     Role       @relation(fields: [roleId], references: [id])
+  /// Roles this account is allowed to switch into — see UserRole's own comment. `role` above is
+  /// always the currently ACTIVE one; every account holds at least one row here matching it.
+  userRoles                UserRole[]
   avatarUrl                String?    @db.VarChar(500)
   bio                      String?    @db.Text
   phoneNumber              String?    @db.VarChar(40)

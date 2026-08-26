@@ -76,7 +76,7 @@ const signIn = (deviceId?: string, userAgent = CHROME) =>
 function userExists() {
   (client.user.findUnique as ReturnType<typeof vi.fn>).mockImplementation((args: any) =>
     args?.where?.email
-      ? Promise.resolve({ id: USER_ID, email: "someone@x.io", status: "ACTIVE", deletedAt: null, role: { name: "EMPLOYEE", permissions: [] } })
+      ? Promise.resolve({ id: USER_ID, email: "someone@x.io", status: "ACTIVE", deletedAt: null, role: { name: "EMPLOYEE", permissions: [] }, userRoles: [] })
       : Promise.resolve({ firstLoginAt: new Date(), role: { name: "EMPLOYEE" } })
   );
 }

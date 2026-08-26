@@ -19,6 +19,7 @@ import type {
   GlobalTicketSettings,
   ModuleAssigneeRuleRow,
   OutboundWebhookEvent,
+  RoleName,
   SecurityFindingSeverity,
   SecurityFindingStatus,
   SecurityFindingType,
@@ -440,6 +441,9 @@ export const authApi = {
   refresh: refreshAccessToken,
   ssoMethods: async () => (await api.get<SsoMethods>("/auth/sso-methods")).data,
   me: async () => (await api.get<AuthUser>("/auth/me")).data,
+  /** Self-service switch among roles the account already holds — granting a NEW role is
+   *  SUPER_ADMIN-only, from User Management (userApi.create/update's `roles` field below). */
+  switchRole: async (role: RoleName) => (await api.post<AuthUser>("/auth/switch-role", { role })).data,
   logout: async () => api.post("/auth/logout"),
   logoutAll: async () => api.post("/auth/logout-all"),
   sessions: async () => (await api.get<SessionRow[]>("/auth/sessions")).data,
@@ -1057,6 +1061,9 @@ export interface UserRow {
   managerId: string | null;
   manager?: { id: string; name: string; email: string } | null;
   role: { name: string };
+  /// Every role this account may hold/switch into — always includes role.name. Length 1 unless a
+  /// super admin has explicitly granted more (see UserRole in schema.prisma).
+  heldRoles: RoleName[];
   /// Live presence — same 15-minute lastSeenAt definition as the Maintenance tab's online panel.
   online: boolean;
   lastSeenAt: string | null;

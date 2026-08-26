@@ -10,11 +10,13 @@
  * WHO calls this: `controllers/auth.controller.ts` (password + LDAP), `controllers/sso.controller.ts`
  * (Google/Microsoft/SAML).
  */
+import { resolveHeldRoles, type RoleName } from "@timesheet/shared";
 import { prisma } from "../config/prisma.js";
 import { controlPrisma } from "../config/control-prisma.js";
 import { requireTenantContext } from "../config/tenant-context.js";
 import { env } from "../config/env.js";
 import { AppError } from "../middleware/error.js";
+import { audit } from "./audit.service.js";
 import { getEffectiveSeatLimit } from "./plan-limits.service.js";
 import { countActiveSeats } from "./seat-count.service.js";
 import { isMaintenanceActive } from "./maintenance.service.js";
@@ -32,7 +34,8 @@ import {
 
 const PROFILE_INCLUDE = {
   role: { include: { permissions: { include: { permission: true } } } },
-  manager: { select: { id: true, name: true, email: true } }
+  manager: { select: { id: true, name: true, email: true } },
+  userRoles: { select: { role: { select: { name: true } } } }
 } as const;
 
 export type ProfilePayload = {
@@ -40,6 +43,7 @@ export type ProfilePayload = {
   name: string;
   email: string;
   role: string;
+  heldRoles: RoleName[];
   mustChangePassword: boolean;
   permissions: string[];
   avatarUrl: string | null;
@@ -60,6 +64,7 @@ export async function buildProfilePayload(userId: string): Promise<ProfilePayloa
     name: user.name,
     email: user.email,
     role: user.role.name,
+    heldRoles: resolveHeldRoles(user.role.name as RoleName, user.userRoles.map((ur) => ur.role.name as RoleName)),
     // Drives the web's "choose your own password" prompt after an admin created or reset the
     // account. A prompt, never a gate — see the schema comment on User.mustChangePassword.
     mustChangePassword: user.mustChangePassword,
@@ -71,6 +76,26 @@ export async function buildProfilePayload(userId: string): Promise<ProfilePayloa
     managerId: user.managerId,
     manager: user.manager ?? null
   };
+}
+
+/**
+ * Self-service — switching among roles you already hold, never granting a new one (granting is
+ * SUPER_ADMIN-only, from User Management: see user.controller.ts). `User.roleId` is the currently
+ * ACTIVE role everywhere it's read (every permission check in the app), so this is a one-column
+ * write — no JWT re-issue needed, the access token carries no role claims at all.
+ */
+export async function switchActiveRole(userId: string, targetRole: RoleName) {
+  const held = await prisma.userRole.findFirst({
+    where: { userId, role: { name: targetRole } },
+    select: { roleId: true }
+  });
+  if (!held) throw new AppError(403, "You don't hold that role.");
+
+  const before = await prisma.user.findUniqueOrThrow({ where: { id: userId }, select: { role: { select: { name: true } } } });
+  await prisma.user.update({ where: { id: userId }, data: { roleId: held.roleId } });
+  await audit(userId, "user.role_switched", "User", userId, { from: before.role.name, to: targetRole });
+
+  return buildProfilePayload(userId);
 }
 
 /* ============================== Login lockout ============================== */
@@ -398,6 +423,7 @@ export async function login(
       name: user.name,
       email: user.email,
       role: user.role.name,
+      heldRoles: resolveHeldRoles(user.role.name as RoleName, user.userRoles.map((ur) => ur.role.name as RoleName)),
       mustChangePassword: user.mustChangePassword,
       permissions: user.role.permissions.map((p) => p.permission.key),
       avatarUrl: user.avatarUrl,
@@ -472,6 +498,7 @@ export async function completeSsoLogin(
       name: user.name,
       email: user.email,
       role: user.role.name,
+      heldRoles: resolveHeldRoles(user.role.name as RoleName, user.userRoles.map((ur) => ur.role.name as RoleName)),
       mustChangePassword: user.mustChangePassword,
       permissions: user.role.permissions.map((p) => p.permission.key),
       avatarUrl: user.avatarUrl,

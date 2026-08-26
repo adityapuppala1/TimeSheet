@@ -62,19 +62,32 @@ export function createFakeTenantClient(): PrismaClient {
     faceEnrollmentTemplate: { findMany: vi.fn(), createMany: vi.fn(), deleteMany: vi.fn(), groupBy: vi.fn() },
     faceChallenge: { create: vi.fn(), findUnique: vi.fn(), updateMany: vi.fn(), deleteMany: vi.fn() },
     notification: { create: vi.fn(), createMany: vi.fn(), findFirst: vi.fn(), count: vi.fn(), groupBy: vi.fn() },
+    // getGlobalNotificationSettings() upserts a singleton row — dispatchNotification's per-role
+    // email-mute check reads emailRoleMutes off whatever this resolves to.
+    globalNotificationSettings: { upsert: vi.fn() },
+    // Multi-role accounts (schema.prisma's UserRole) — the roles an account may hold/switch into,
+    // distinct from User.roleId (the currently active one). Defaults to no rows, matching an
+    // account nobody has granted a second role to.
+    userRole: {
+      findFirst: vi.fn(),
+      count: vi.fn().mockResolvedValue(0),
+      deleteMany: vi.fn().mockResolvedValue({ count: 0 }),
+      createMany: vi.fn().mockResolvedValue({ count: 0 })
+    },
     // Maintenance mode (services/maintenance.service.ts) + server health pings
     maintenanceSettings: { upsert: vi.fn() },
     session: { findMany: vi.fn(), findUnique: vi.fn(), create: vi.fn(), update: vi.fn(), updateMany: vi.fn(), count: vi.fn() },
     $queryRaw: vi.fn(),
     user: {
       findUnique: vi.fn(),
+      findUniqueOrThrow: vi.fn(),
       findFirst: vi.fn(),
       findMany: vi.fn(),
       create: vi.fn(),
       update: vi.fn(),
       count: vi.fn()
     },
-    role: { findUniqueOrThrow: vi.fn() },
+    role: { findUniqueOrThrow: vi.fn(), findMany: vi.fn().mockResolvedValue([]) },
     // Billing / attestation (services/billing-rate.service.ts, attestation.service.ts)
     project: { findUnique: vi.fn(), findFirst: vi.fn(), findMany: vi.fn(), update: vi.fn() },
     ticket: { findUnique: vi.fn(), findFirst: vi.fn(), findMany: vi.fn(), count: vi.fn(), update: vi.fn(), groupBy: vi.fn() },

@@ -80,7 +80,11 @@ beforeEach(() => {
       create: vi.fn().mockResolvedValue(NEW_USER),
       count: vi.fn().mockResolvedValue(3)
     },
-    role: { findUniqueOrThrow: vi.fn().mockResolvedValue({ id: "role-emp", name: "EMPLOYEE" }) }
+    role: {
+      findUniqueOrThrow: vi.fn().mockResolvedValue({ id: "role-emp", name: "EMPLOYEE" }),
+      findMany: vi.fn().mockResolvedValue([{ id: "role-emp" }])
+    },
+    userRole: { deleteMany: vi.fn().mockResolvedValue({ count: 0 }), createMany: vi.fn().mockResolvedValue({ count: 1 }) }
   } as unknown as PrismaClient;
 });
 
