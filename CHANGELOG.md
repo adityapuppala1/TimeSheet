@@ -12,6 +12,10 @@ number, on purpose — an installation must never render history for a version t
 
 ## 3.4.0 — providers that route around each other, and an idea that becomes a document — 2026-08-26
 
+### 📦 Dependencies
+
+- **`deepmerge-ts` stack-exhaustion advisory ([GHSA-ggr8-5vv4-36mx](https://github.com/advisories/GHSA-ggr8-5vv4-36mx)) — partially resolved.** `npm audit fix` picked up a patched `deepmerge-ts` through `mailparser` → `html-to-text`'s own updated range, no code or manifest changes needed. The other pull-in, through `prisma` → `@prisma/config`, has no fix on the 6.x line we're pinned to (`6.19.3`, the newest 6.x release) — only Prisma 7 carries it, and a Prisma major-version upgrade is its own evaluated change, not a release-day dependency bump. That path is build/CLI-tooling only, not exercised by request input at runtime.
+
 ### 🐛 A bad AI-generated architecture diagram left a stray error graphic stuck on the page
 
 - Requirements Studio renders the AI's architecture diagram with Mermaid, and already fell back to
