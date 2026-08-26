@@ -1760,6 +1760,11 @@ export const aiPromptApi = {
 };
 
 
+/** The 4-tier scale reused for a ticket's priority, a VAPT finding's severity, and a Requirements
+ *  Studio feature's priority — one alias rather than the same four literals repeated per call
+ *  site (sonarjs/use-type-alias). */
+export type PriorityLevel = "LOW" | "MEDIUM" | "HIGH" | "CRITICAL";
+
 /// General-purpose if/then automation on manually-created tickets — see
 /// prisma/schema.prisma's TicketRule doc comment (apps/api) for the full evaluation model.
 export interface TicketRuleRow {
@@ -1769,7 +1774,7 @@ export interface TicketRuleRow {
   order: number;
   conditionProjectId: string | null;
   conditionProject: { id: string; name: string; code: string } | null;
-  conditionPriority: "LOW" | "MEDIUM" | "HIGH" | "CRITICAL" | null;
+  conditionPriority: PriorityLevel | null;
   conditionSource: "MANUAL" | "EMAIL" | "API" | "CHAT" | null;
   conditionSenderDomain: string | null;
   actionAssigneeId: string | null;
@@ -1785,7 +1790,7 @@ export interface TicketRuleInput {
   isActive?: boolean;
   order?: number;
   conditionProjectId?: string | null;
-  conditionPriority?: "LOW" | "MEDIUM" | "HIGH" | "CRITICAL" | null;
+  conditionPriority?: PriorityLevel | null;
   conditionSource?: "MANUAL" | "EMAIL" | "API" | "CHAT" | null;
   conditionSenderDomain?: string | null;
   actionAssigneeId?: string | null;
@@ -1996,7 +2001,7 @@ export const settingsApi = {
     assessor: string;
     findings: Array<{
       title: string;
-      severity: "LOW" | "MEDIUM" | "HIGH" | "CRITICAL";
+      severity: PriorityLevel;
       description?: string;
       cwe?: string;
       filePath?: string;
@@ -4214,6 +4219,93 @@ export const blueprintApi = {
     (await api.post<BlueprintRow>("/blueprints/derive", { projectId, name })).data
 };
 
+/* ---------------------------------- Requirements Studio ---------------------------------- */
+
+export interface RequirementsInterviewTurnRow {
+  question: string;
+  answer: string | null;
+  skipped: boolean;
+  sectionTag: string | null;
+}
+
+export interface RequirementsDocFeatureRow {
+  title: string;
+  description: string;
+  priority: PriorityLevel;
+  estimatedHours: number | null;
+  moduleName: string | null;
+  dependsOnIndex: number;
+}
+
+export interface RequirementsDocSuccessMetricRow {
+  title: string;
+  description?: string;
+  targetValue?: number;
+  unit?: string;
+}
+
+export interface RequirementsDocSectionsRow {
+  problem: string;
+  goals: string;
+  targetUsers: string;
+  scopeIn: string[];
+  scopeOut: string[];
+  features: RequirementsDocFeatureRow[];
+  techStack: string[];
+  dependencies: string[];
+  uiUx: string;
+  architecture: { description: string; diagramMermaid: string };
+  modules: Array<{ name: string; description: string }>;
+  nfr: { performance?: string; security?: string; compliance?: string; scalability?: string };
+  timeline: Array<{ label: string; description: string; isMilestone: boolean }>;
+  risks: string[];
+  assumptions: string[];
+  successMetrics: RequirementsDocSuccessMetricRow[];
+  procedures: string[];
+}
+
+export interface RequirementsDocRow {
+  id: string;
+  title: string;
+  docType: "PRD" | "BRD" | "BOTH";
+  status: "DRAFTING" | "READY" | "ARCHIVED";
+  projectId: string | null;
+  sections: RequirementsDocSectionsRow | null;
+  interviewTranscript: RequirementsInterviewTurnRow[];
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface RequirementsInterviewTurnResult {
+  done: boolean;
+  question?: string;
+  quickReplies?: string[];
+  sectionTag?: string;
+  progress: { section: string; answered: number; total: number };
+}
+
+export const requirementsDocApi = {
+  list: async () => (await api.get<RequirementsDocRow[]>("/requirements-docs")).data,
+  get: async (id: string) => (await api.get<RequirementsDocRow>(`/requirements-docs/${id}`)).data,
+  create: async (payload: { title: string; docType: "PRD" | "BRD" | "BOTH" }) =>
+    (await api.post<RequirementsDocRow>("/requirements-docs", payload)).data,
+  archive: async (id: string) => (await api.patch<RequirementsDocRow>(`/requirements-docs/${id}`, { status: "ARCHIVED" })).data,
+  /** `{}` (both fields omitted) asks for the opening question. */
+  interviewTurn: async (id: string, payload: { answer?: string; skip?: boolean }) =>
+    (await api.post<RequirementsInterviewTurnResult>(`/requirements-docs/${id}/interview/turn`, payload)).data,
+  generate: async (id: string) => (await api.post<RequirementsDocRow>(`/requirements-docs/${id}/generate`, {})).data,
+  // Authenticated blob downloads — same reasoning as attestationApi.downloadPdf: the access token
+  // lives in memory only, so a bare <a href> would hit these routes unauthenticated.
+  downloadPdf: async (id: string) => (await api.get(`/requirements-docs/${id}/export.pdf`, { responseType: "blob" })).data as Blob,
+  downloadMarkdown: async (id: string) => (await api.get(`/requirements-docs/${id}/export.md`, { responseType: "blob" })).data as Blob,
+  materializeTickets: async (id: string, payload: { projectId: string; moduleIndexes?: number[] }) =>
+    (await api.post<AiProposalRow>(`/requirements-docs/${id}/materialize-tickets`, payload)).data,
+  materializeGoals: async (
+    id: string,
+    payload: { projectId?: string; items: Array<{ title: string; description?: string; targetValue?: number; unit?: string; startDate?: string; endDate?: string }> }
+  ) => (await api.post<{ created: Array<{ id: string; title: string }> }>(`/requirements-docs/${id}/materialize-goals`, payload)).data
+};
+
 /* ---------------------------------- Agent runs ---------------------------------- */
 
 export interface AgentRunStepRow {
@@ -4610,7 +4702,7 @@ export interface AiProposalChangeRow {
 
 export interface AiProposalRow {
   id: string;
-  kind: "PLAN_BREAKDOWN" | "SCHEDULE_ADJUSTMENT" | "ASSIGNMENT_REBALANCE" | "RISK_MITIGATION" | "BLUEPRINT_SUGGESTION";
+  kind: "PLAN_BREAKDOWN" | "SCHEDULE_ADJUSTMENT" | "ASSIGNMENT_REBALANCE" | "RISK_MITIGATION" | "BLUEPRINT_SUGGESTION" | "CHANGE_DRAFT" | "REQUIREMENTS_DOC";
   title: string;
   rationale: string | null;
   confidence: number | null;

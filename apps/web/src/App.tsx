@@ -50,6 +50,8 @@ const InboxPage = lazy(() => import("./pages/Inbox").then((m) => ({ default: m.I
 const AgentsPage = lazy(() => import("./pages/Agents").then((m) => ({ default: m.AgentsPage })));
 const StudioPage = lazy(() => import("./pages/Studio").then((m) => ({ default: m.StudioPage })));
 const BlueprintsPage = lazy(() => import("./pages/Blueprints").then((m) => ({ default: m.BlueprintsPage })));
+const RequirementsStudioPage = lazy(() => import("./pages/RequirementsStudio").then((m) => ({ default: m.RequirementsStudioPage })));
+const RequirementsDocViewPage = lazy(() => import("./pages/RequirementsDocView").then((m) => ({ default: m.RequirementsDocViewPage })));
 const WorkloadPage = lazy(() => import("./pages/Workload").then((m) => ({ default: m.WorkloadPage })));
 const RequestsPage = lazy(() => import("./pages/Requests").then((m) => ({ default: m.RequestsPage })));
 const ProposalsPage = lazy(() => import("./pages/Proposals").then((m) => ({ default: m.ProposalsPage })));
@@ -151,6 +153,11 @@ const router = createBrowserRouter([
       // Readable with tickets:view (the API lists blueprints at that level); using one needs
       // plan:write, checked inside the page so a viewer sees the shapes without dead buttons.
       { path: "blueprints", element: <RequirePermission permission={permissions.TICKETS_VIEW}><PageShell><BlueprintsPage /></PageShell></RequirePermission> },
+      // Same read/write split as Blueprints above: listing and reading a document needs
+      // tickets:view, every write (interview turns, generate, materialize) needs plan:write,
+      // checked inside the page.
+      { path: "requirements", element: <RequirePermission permission={permissions.TICKETS_VIEW}><PageShell><RequirementsStudioPage /></PageShell></RequirePermission> },
+      { path: "requirements/:id", element: <RequirePermission permission={permissions.TICKETS_VIEW}><PageShell><RequirementsDocViewPage /></PageShell></RequirePermission> },
       // Shows every person's capacity and hours, so it needs the resource right rather than a
       // reporting one — this is people data, not project data.
       { path: "workload", element: <RequirePermission permission={permissions.RESOURCES_MANAGE}><PageShell><WorkloadPage /></PageShell></RequirePermission> },

@@ -16,6 +16,7 @@ import {
   ClipboardList,
   FileClock,
   FileStack,
+  FileText,
   FolderKanban,
   GanttChartSquare,
   Gauge,
@@ -127,6 +128,7 @@ export const nav: NavItem[] = [
   { to: "/app/portfolio", label: "Portfolio", icon: Briefcase, permission: permissions.REPORTS_VIEW, section: "Plan", feature: "planning" },
   { to: "/app/workload", label: "Workload", icon: Gauge, permission: permissions.RESOURCES_MANAGE, section: "Plan", feature: "resourceManagement" },
   { to: "/app/blueprints", label: "Blueprints", icon: FileStack, permission: permissions.TICKETS_VIEW, section: "Plan", feature: "planning" },
+  { to: "/app/requirements", label: "Requirements Studio", icon: FileText, permission: permissions.TICKETS_VIEW, section: "Plan", feature: "planning" },
   { to: "/app/proposals", label: "AI suggestions", icon: Sparkles, permission: permissions.TICKETS_VIEW, section: "Plan", feature: "planning" },
   // The roster carries no `feature`: its gate is the AI copilot ENTITLEMENT, which the planning
   // `effective` object does not model, and the page renders its own upgrade state on a 403. Hiding

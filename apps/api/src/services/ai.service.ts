@@ -483,7 +483,8 @@ export type AIFeatureToggle =
   | "changeConflictBriefEnabled"
   | "changePirAssistEnabled"
   | "planBreakdownEnabled"
-  | "emailFailureTriageEnabled";
+  | "emailFailureTriageEnabled"
+  | "requirementsStudioEnabled";
 
 /** Throws a 403 unless AI is enabled workspace-wide AND the specific feature's toggle is on. */
 export async function assertAIFeatureEnabled(feature: AIFeatureToggle): Promise<Awaited<ReturnType<typeof getGlobalAISettings>>> {
@@ -4198,6 +4199,423 @@ export async function proposePlanBreakdown(input: {
   }));
 
   return { ...parsed, items, model: chat.model, interactionId };
+}
+
+/* ================================================================== *
+ * AI Requirements Studio — an interview that produces a structured PRD/BRD.
+ * ================================================================== */
+
+export type RequirementsDocType = "PRD" | "BRD" | "BOTH";
+
+export interface RequirementsInterviewTurn {
+  question: string;
+  answer: string | null;
+  skipped: boolean;
+  sectionTag: string | null;
+}
+
+const RequirementsInterviewTurnResponseSchema = z
+  .object({
+    done: z.boolean(),
+    question: z.string().min(1).max(400).optional(),
+    quickReplies: z.array(z.string().min(1).max(80)).max(4).optional(),
+    sectionTag: z.string().min(1).max(60).optional(),
+    progress: z.object({
+      section: z.string().max(60),
+      answered: z.number().int().min(0),
+      total: z.number().int().min(1)
+    })
+  })
+  // A model that says "not done" without asking anything would strand the interview — better to
+  // treat that shape as a parse failure than hand the caller a dead end.
+  .refine((v) => v.done || Boolean(v.question), { message: "question is required unless done" });
+
+export type RequirementsInterviewTurnResult = z.infer<typeof RequirementsInterviewTurnResponseSchema>;
+
+const REQUIREMENTS_SECTIONS = [
+  "problem",
+  "goals",
+  "targetUsers",
+  "scope",
+  "features",
+  "techStack",
+  "dependencies",
+  "uiUx",
+  "architecture",
+  "modules",
+  "nfr",
+  "timeline",
+  "risks",
+  "successMetrics"
+] as const;
+
+function formatTranscript(transcript: RequirementsInterviewTurn[]): string {
+  if (transcript.length === 0) return "(nothing asked yet — this is the opening question)";
+  return transcript
+    .map((turn, i) => {
+      const answer = turn.skipped ? "(skipped — make your best assumption and flag it)" : turn.answer ?? "(no answer yet)";
+      return `${i + 1}. Q: ${turn.question}\n   A: ${answer}`;
+    })
+    .join("\n");
+}
+
+/**
+ * Decides the next best interview question, or signals the interview has covered enough ground.
+ * Asks ONE question per call rather than a fixed list, so an answer can steer what gets asked
+ * next (a "no mobile app" answer means the UI/UX question never needs to mention one).
+ *
+ * `quickReplies` are optional pick-list suggestions the model proposes for its own question — a
+ * person can still type a free-text answer instead. Kept to at most 4 so this stays a shortcut,
+ * not a forced-choice form.
+ *
+ * Never writes anything. The caller (requirements-doc.service.ts) is the one that appends this
+ * question onto the document's own transcript.
+ */
+export async function conductRequirementsInterviewTurn(input: {
+  transcript: RequirementsInterviewTurn[];
+  docType: RequirementsDocType;
+  projectContext?: string;
+  userId?: string;
+}): Promise<(RequirementsInterviewTurnResult & { model: string; interactionId: string | null }) | null> {
+  const { settings } = await preflight("requirementsStudioEnabled");
+
+  const prompt = [
+    `You are interviewing someone to write a ${input.docType === "BOTH" ? "PRD and BRD" : input.docType} for a software project idea.`,
+    input.projectContext ? `Known context so far: ${input.projectContext}` : "",
+    "",
+    `A complete document needs real signal across these areas: ${REQUIREMENTS_SECTIONS.join(", ")}.`,
+    "",
+    "Interview so far:",
+    formatTranscript(input.transcript),
+    "",
+    "Ask ONE more question — the single most useful thing to learn next given what is already",
+    "known. Prefer concrete, answerable questions over abstract ones. When the natural answer is a",
+    "short pick from a small set of options, offer up to 4 as quickReplies — but the question must",
+    "still make sense answered in free text too.",
+    "",
+    "Set `sectionTag` to whichever of the areas above this question is gathering signal for.",
+    "",
+    "Set `done: true` (and omit `question`) once every area above has at least one real answer or",
+    "an explicit skip — do not keep asking once that is true, and do not stop earlier than that.",
+    "",
+    "Return JSON only."
+  ]
+    .filter(Boolean)
+    .join("\n");
+
+  const chat = await callChat(settings, {
+    feature: "requirements_interview",
+    model: settings.model,
+    maxTokens: 600,
+    prompt,
+    jsonSchema: {
+      name: "requirements_interview_turn",
+      schema: {
+        type: "object",
+        properties: {
+          done: { type: "boolean" },
+          question: { type: "string" },
+          quickReplies: { type: "array", items: { type: "string" }, maxItems: 4 },
+          sectionTag: { type: "string" },
+          progress: {
+            type: "object",
+            properties: {
+              section: { type: "string" },
+              answered: { type: "integer" },
+              total: { type: "integer" }
+            },
+            required: ["section", "answered", "total"],
+            additionalProperties: false
+          }
+        },
+        required: ["done", "progress"],
+        additionalProperties: false
+      }
+    }
+  });
+
+  const parsed = parseJsonResponse(chat.text, RequirementsInterviewTurnResponseSchema);
+
+  const { interactionId } = await logAIUsage({
+    feature: "requirements_interview",
+    params: { docType: input.docType, turnCount: input.transcript.length },
+    prompt,
+    output: chat.text,
+    parseOk: parsed !== null,
+    model: chat.model,
+    provider: chat.provider,
+    inputTokens: chat.usage.inputTokens,
+    outputTokens: chat.usage.outputTokens,
+    userId: input.userId
+  });
+
+  if (!parsed) return null;
+  return { ...parsed, model: chat.model, interactionId };
+}
+
+export interface RequirementsDocFeature {
+  title: string;
+  description: string;
+  priority: "LOW" | "MEDIUM" | "HIGH" | "CRITICAL";
+  estimatedHours: number | null;
+  moduleName: string | null;
+  /** Index of an earlier feature in this same array, or -1 for none — same backwards-only
+   *  convention as PlanBreakdownItem.dependsOnIndex, for the same reason: it makes a dependency
+   *  cycle impossible by construction. */
+  dependsOnIndex: number;
+}
+
+export interface RequirementsDocSuccessMetric {
+  title: string;
+  description?: string;
+  targetValue?: number;
+  unit?: string;
+}
+
+export interface RequirementsDocSections {
+  problem: string;
+  goals: string;
+  targetUsers: string;
+  scopeIn: string[];
+  scopeOut: string[];
+  features: RequirementsDocFeature[];
+  techStack: string[];
+  dependencies: string[];
+  uiUx: string;
+  architecture: { description: string; diagramMermaid: string };
+  modules: Array<{ name: string; description: string }>;
+  nfr: { performance?: string; security?: string; compliance?: string; scalability?: string };
+  timeline: Array<{ label: string; description: string; isMilestone: boolean }>;
+  risks: string[];
+  /** Every gap the interview did not cover, and the assumption made to fill it — never a silent
+   *  guess. See this function's own header. */
+  assumptions: string[];
+  successMetrics: RequirementsDocSuccessMetric[];
+  /** Operational how-to steps a team following this document needs — how to run it locally, how a
+   *  release goes out, how an incident gets handled. Distinct from `timeline` (when things happen)
+   *  and `modules` (what the system is made of). */
+  procedures: string[];
+}
+
+const RequirementsDocFeatureSchema = z.object({
+  title: z.string().min(1).max(200),
+  description: z.string().max(1500),
+  priority: z.enum(["LOW", "MEDIUM", "HIGH", "CRITICAL"]),
+  estimatedHours: z.number().min(0).max(1000).nullable(),
+  moduleName: z.string().max(120).nullable(),
+  dependsOnIndex: z.number().int().min(-1).max(200)
+});
+
+const RequirementsDocSectionsSchema = z.object({
+  problem: z.string().max(3000),
+  goals: z.string().max(2000),
+  targetUsers: z.string().max(2000),
+  scopeIn: z.array(z.string().max(300)).max(40),
+  scopeOut: z.array(z.string().max(300)).max(40),
+  features: z.array(RequirementsDocFeatureSchema).min(1).max(60),
+  techStack: z.array(z.string().max(120)).max(40),
+  dependencies: z.array(z.string().max(200)).max(40),
+  uiUx: z.string().max(3000),
+  architecture: z.object({ description: z.string().max(3000), diagramMermaid: z.string().max(4000) }),
+  modules: z.array(z.object({ name: z.string().max(120), description: z.string().max(1000) })).max(40),
+  nfr: z.object({
+    performance: z.string().max(1000).optional(),
+    security: z.string().max(1000).optional(),
+    compliance: z.string().max(1000).optional(),
+    scalability: z.string().max(1000).optional()
+  }),
+  timeline: z
+    .array(z.object({ label: z.string().max(160), description: z.string().max(1000), isMilestone: z.boolean() }))
+    .max(40),
+  risks: z.array(z.string().max(500)).max(30),
+  assumptions: z.array(z.string().max(500)).max(40),
+  successMetrics: z
+    .array(
+      z.object({
+        title: z.string().max(200),
+        description: z.string().max(500).optional(),
+        targetValue: z.number().optional(),
+        unit: z.string().max(40).optional()
+      })
+    )
+    .max(20),
+  procedures: z.array(z.string().max(500)).max(30)
+});
+
+/**
+ * Turns a finished interview transcript into a full structured PRD/BRD. Explicitly instructed to
+ * record every area the interview did not really cover in `assumptions[]` rather than silently
+ * inventing an answer — a document that looks complete but quietly guessed at the tech stack is
+ * worse than one that says plainly "no tech stack preference was given; assumed a Node/React
+ * stack matching this codebase's own conventions."
+ *
+ * Writes nothing itself — requirements-doc.service.ts writes the returned `sections` onto the
+ * document row and flips it to READY. Materializing the document into a Project, Tickets or Goals
+ * is always a separate, later, human-reviewed step (see that file's header).
+ */
+export async function generateRequirementsDocument(input: {
+  transcript: RequirementsInterviewTurn[];
+  docType: RequirementsDocType;
+  userId?: string;
+}): Promise<{ sections: RequirementsDocSections; model: string; interactionId: string | null } | null> {
+  const { settings } = await preflight("requirementsStudioEnabled");
+
+  const prompt = [
+    `Write a structured ${input.docType === "BOTH" ? "PRD and BRD" : input.docType} for a software project from this interview.`,
+    "",
+    "Interview transcript:",
+    formatTranscript(input.transcript),
+    "",
+    "Fill every field. For anything the interview did not really cover, make the single most",
+    "reasonable assumption a competent engineer would make and record it — with what you assumed",
+    "and why — in `assumptions`. Never leave a gap silently guessed at elsewhere in the document.",
+    "",
+    "`features` become real tickets later: give each one a clear, actionable title, a `moduleName`",
+    "grouping it with related features, and a `dependsOnIndex` referencing an EARLIER feature in",
+    "this same list that must land first, or -1 when it has no dependency. Never reference a later",
+    "index.",
+    "",
+    "`architecture.diagramMermaid` must be valid Mermaid syntax (a `flowchart TD` or `sequenceDiagram`)",
+    "showing the major components and how they interact — this is the only wireframe/architecture",
+    "visual the document gets, so make it real rather than decorative.",
+    "",
+    "`successMetrics` become goals later — phrase each as something measurable, with a `targetValue`",
+    "and `unit` when the interview gives you a real number to work with.",
+    "",
+    "Return JSON only."
+  ].join("\n");
+
+  const chat = await callChat(settings, {
+    feature: "requirements_doc_generate",
+    model: settings.model,
+    maxTokens: 4000,
+    prompt,
+    jsonSchema: {
+      name: "requirements_document",
+      schema: {
+        type: "object",
+        properties: {
+          problem: { type: "string" },
+          goals: { type: "string" },
+          targetUsers: { type: "string" },
+          scopeIn: { type: "array", items: { type: "string" } },
+          scopeOut: { type: "array", items: { type: "string" } },
+          features: {
+            type: "array",
+            items: {
+              type: "object",
+              properties: {
+                title: { type: "string" },
+                description: { type: "string" },
+                priority: { type: "string", enum: ["LOW", "MEDIUM", "HIGH", "CRITICAL"] },
+                estimatedHours: { type: ["number", "null"] },
+                moduleName: { type: ["string", "null"] },
+                dependsOnIndex: { type: "integer" }
+              },
+              required: ["title", "description", "priority", "estimatedHours", "moduleName", "dependsOnIndex"],
+              additionalProperties: false
+            }
+          },
+          techStack: { type: "array", items: { type: "string" } },
+          dependencies: { type: "array", items: { type: "string" } },
+          uiUx: { type: "string" },
+          architecture: {
+            type: "object",
+            properties: { description: { type: "string" }, diagramMermaid: { type: "string" } },
+            required: ["description", "diagramMermaid"],
+            additionalProperties: false
+          },
+          modules: {
+            type: "array",
+            items: {
+              type: "object",
+              properties: { name: { type: "string" }, description: { type: "string" } },
+              required: ["name", "description"],
+              additionalProperties: false
+            }
+          },
+          nfr: {
+            type: "object",
+            properties: {
+              performance: { type: "string" },
+              security: { type: "string" },
+              compliance: { type: "string" },
+              scalability: { type: "string" }
+            },
+            additionalProperties: false
+          },
+          timeline: {
+            type: "array",
+            items: {
+              type: "object",
+              properties: {
+                label: { type: "string" },
+                description: { type: "string" },
+                isMilestone: { type: "boolean" }
+              },
+              required: ["label", "description", "isMilestone"],
+              additionalProperties: false
+            }
+          },
+          risks: { type: "array", items: { type: "string" } },
+          assumptions: { type: "array", items: { type: "string" } },
+          successMetrics: {
+            type: "array",
+            items: {
+              type: "object",
+              properties: {
+                title: { type: "string" },
+                description: { type: "string" },
+                targetValue: { type: "number" },
+                unit: { type: "string" }
+              },
+              required: ["title"],
+              additionalProperties: false
+            }
+          },
+          procedures: { type: "array", items: { type: "string" } }
+        },
+        required: [
+          "problem",
+          "goals",
+          "targetUsers",
+          "scopeIn",
+          "scopeOut",
+          "features",
+          "techStack",
+          "dependencies",
+          "uiUx",
+          "architecture",
+          "modules",
+          "nfr",
+          "timeline",
+          "risks",
+          "assumptions",
+          "successMetrics",
+          "procedures"
+        ],
+        additionalProperties: false
+      }
+    }
+  });
+
+  const parsed = parseJsonResponse(chat.text, RequirementsDocSectionsSchema);
+
+  const { interactionId } = await logAIUsage({
+    feature: "requirements_doc_generate",
+    params: { docType: input.docType, turnCount: input.transcript.length },
+    prompt,
+    output: chat.text,
+    parseOk: parsed !== null,
+    model: chat.model,
+    provider: chat.provider,
+    inputTokens: chat.usage.inputTokens,
+    outputTokens: chat.usage.outputTokens,
+    userId: input.userId
+  });
+
+  if (!parsed) return null;
+  return { sections: parsed, model: chat.model, interactionId };
 }
 
 /* ================================================================== *

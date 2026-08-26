@@ -106,6 +106,9 @@ export function createFakeTenantClient(): PrismaClient {
     blueprint: { findFirst: vi.fn() },
     aiProposalChange: { update: vi.fn(), findMany: vi.fn(), groupBy: vi.fn() },
     ticketLink: { deleteMany: vi.fn(), upsert: vi.fn(), findMany: vi.fn() },
-    resourceBooking: { findUnique: vi.fn(), findMany: vi.fn(), create: vi.fn(), update: vi.fn(), deleteMany: vi.fn() }
+    resourceBooking: { findUnique: vi.fn(), findMany: vi.fn(), create: vi.fn(), update: vi.fn(), deleteMany: vi.fn() },
+    requirementsDocument: { create: vi.fn(), findUnique: vi.fn(), findMany: vi.fn(), update: vi.fn() },
+    goal: { create: vi.fn() },
+    goalLink: { create: vi.fn() }
   } as unknown as PrismaClient;
 }

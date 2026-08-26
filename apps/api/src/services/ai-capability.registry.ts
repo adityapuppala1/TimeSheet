@@ -258,6 +258,33 @@ const CAPABILITIES: ReadonlyArray<AiCapabilitySpec> = [
     tools: []
   },
   {
+    id: "requirements_interview",
+    title: "Requirements interview",
+    description: "Asks the next best question while gathering a project idea's requirements, one turn at a time.",
+    featureToggle: "requirementsStudioEnabled",
+    // Same rung as Ask AI, and the same reason: it asks questions and records answers on a
+    // document that is still a draft. There is nothing above this rung for it to do.
+    maxLevel: "SUGGEST",
+    ceilingReason: "It only asks questions and records answers on a document still being drafted, so there is nothing above this rung for it to do.",
+    actsOnUntrustedInput: false,
+    tools: []
+  },
+  {
+    id: "requirements_doc_generate",
+    title: "Generate requirements document",
+    description: "Turns an interview transcript into a structured PRD/BRD.",
+    featureToggle: "requirementsStudioEnabled",
+    // Same reasoning as Draft a change's blocking sections: this becomes the document a project's
+    // tickets, goals and timeline get seeded from. Words a person is going to rely on for real
+    // planning should not be written unreviewed, however the interview transcript that produced
+    // them was gathered.
+    maxLevel: "SUGGEST",
+    ceilingReason:
+      "This becomes the document a project's tickets, goals and timeline get seeded from — the same reason a change's draft sections are capped here.",
+    actsOnUntrustedInput: false,
+    tools: []
+  },
+  {
     id: "duplicate_detection",
     title: "Duplicate detection",
     description: "Flags tickets that look like ones already open.",

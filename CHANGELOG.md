@@ -10,6 +10,25 @@ user of a running installation.
 The parser that feeds the in-app What's-new page ignores this section until it gains a version
 number, on purpose — an installation must never render history for a version that does not exist yet.
 
+### 📝 Requirements Studio — an AI interview that turns an idea into a PRD/BRD, then real work
+
+- **A new AI-guided interview** (Workspace nav → Plan → Requirements Studio) asks one question at
+  a time about a project idea — problem, users, scope, features, tech stack, dependencies, UI/UX,
+  architecture, modules, non-functional requirements, timeline, risks, success metrics — with
+  quick-reply suggestions and a "skip — assume and flag it" option so the interview never stalls.
+  Anything left uncovered becomes a stated **assumption** in the finished document, never a silent
+  guess.
+- **Generates a real structured document**, not just prose: a navigable section-by-section view,
+  including an AI-drawn architecture diagram (rendered live via Mermaid) — and exports to **PDF**
+  and **Markdown**.
+- **Turns the document into real work, reviewed at every step**: "Create project from this
+  document" prefills the existing New Project form; "Propose tickets" turns every feature into a
+  draft change set reviewed and accepted row-by-row in Proposals — the same trusted pipeline
+  `plan_breakdown` already uses; "Create goals" turns success metrics into goals after a one-screen
+  confirm. Nothing is ever created silently.
+- A document can exist before any project does — start from just an idea, and decide what becomes
+  real afterward.
+
 ### 🔀 A ranked list of AI providers, tried in order, with a fallback that actually works
 
 - **Workspace Settings → AI now manages a LIST of providers, not one.** Add as many as you like —

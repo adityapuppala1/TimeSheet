@@ -293,6 +293,7 @@ model User {
   aiCapabilityPolicies   AiCapabilityPolicy[]   @relation("AiCapabilityPolicyEditor")
   aiProposalsUndone      AiProposal[]           @relation("AiProposalUndoer")
   agentRuns              AgentRun[]             @relation("AgentRunActor")
+  requirementsDocs       RequirementsDocument[]
 
   createdAt DateTime  @default(now())
   updatedAt DateTime  @updatedAt
@@ -451,6 +452,7 @@ model Project {
   requestForms              RequestForm[]
   riskSnapshots             ProjectRiskSnapshot[]
   aiProposals               AiProposal[]            @relation("AiProposalProjectScope")
+  requirementsDocs          RequirementsDocument[]
   createdAt                 DateTime                @default(now())
   updatedAt                 DateTime                @updatedAt
   deletedAt                 DateTime?
@@ -1229,6 +1231,12 @@ model GlobalAISettings {
   /// child work items. Never writes: it emits an AiProposal whose rows a human accepts or
   /// rejects individually. See ai-proposal.service.ts for why that envelope exists.
   planBreakdownEnabled        Boolean @default(false)
+  /// Gates ai.service.ts#conductRequirementsInterviewTurn and #generateRequirementsDocument — the
+  /// AI-guided PRD/BRD interview and the document it produces from the transcript. One toggle for
+  /// both: they are two steps of the same flow and a workspace either wants the Requirements
+  /// Studio or doesn't. Never writes a Project/Ticket/Goal itself — see requirements-doc.service.ts
+  /// for the three separate, human-reviewed materialization paths.
+  requirementsStudioEnabled   Boolean @default(false)
 
   /// Separate from aiPrReviewSummaryEnabled on purpose — deeper, per-line review comments on a
   /// PR's actual diff carry real false-positive risk (an AI comment that's wrong or noisy erodes
@@ -3403,6 +3411,55 @@ model Blueprint {
   @@index([kind, isActive])
 }
 
+enum RequirementsDocType {
+  PRD
+  BRD
+  BOTH
+}
+
+enum RequirementsDocStatus {
+  DRAFTING
+  READY
+  ARCHIVED
+}
+
+/// A structured PRD/BRD produced by an AI-guided interview (see
+/// ai.service.ts#conductRequirementsInterviewTurn/#generateRequirementsDocument), then optionally
+/// materialized into a Project, Tickets and Goals (requirements-doc.service.ts). The interview's
+/// own state lives entirely in `interviewTranscript` on this one row — no separate message/session
+/// table, because an interview is naturally bounded (~15-30 turns) and a full chat-thread table is
+/// infrastructure this feature doesn't need.
+model RequirementsDocument {
+  id      String                 @id @default(uuid())
+  title   String                 @db.VarChar(200)
+  docType RequirementsDocType    @default(PRD)
+  status  RequirementsDocStatus  @default(DRAFTING)
+
+  /// Nullable: a document can exist before any project does — that is the point of "idea first,
+  /// project second". Set once "Create project from this document" is used.
+  projectId String?
+  project   Project? @relation(fields: [projectId], references: [id], onDelete: SetNull)
+
+  /// Null until generateRequirementsDocument() runs. Shape: { problem, goals, targetUsers,
+  /// scopeIn[], scopeOut[], features[] (user stories), techStack[], dependencies[], uiUx,
+  /// architecture{ diagramMermaid, description }, modules[], nfr{}, timeline[], risks[],
+  /// assumptions[], successMetrics[] }. `assumptions[]` holds every gap the model filled itself
+  /// rather than silently guessing.
+  sections Json?
+
+  /// Ordered interview turns: [{ question, answer, skipped, sectionTag }].
+  interviewTranscript Json @default("[]")
+
+  createdById String?
+  createdBy   User?    @relation(fields: [createdById], references: [id], onDelete: SetNull)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([projectId])
+  @@index([status, createdAt])
+}
+
 enum ApprovalDecision {
   PENDING
   APPROVED
@@ -3600,6 +3657,9 @@ enum AiProposalKind {
   /// the sections an approver relies on, and a draft nobody wrote is worse than a blank field: a
   /// blank field is honest about not having been thought about.
   CHANGE_DRAFT
+  /// A requirements document's modules/features turned into a reviewed ticket change set — see
+  /// requirements-doc.controller.ts's materialize-tickets route.
+  REQUIREMENTS_DOC
 }
 
 enum AiProposalStatus {

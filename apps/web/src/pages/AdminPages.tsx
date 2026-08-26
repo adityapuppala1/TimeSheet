@@ -47,6 +47,7 @@ import {
 } from "lucide-react";
 import type { ReactNode } from "react";
 import { useEffect, useMemo, useState } from "react";
+import { useLocation } from "react-router";
 import { Bar, BarChart, CartesianGrid, LabelList, ResponsiveContainer, Tooltip as RTooltip, XAxis, YAxis } from "recharts";
 import {
   AlertDialog,
@@ -1100,6 +1101,16 @@ export function ProjectsPage() {
   // ["projects"] prefix, which matches both.
   const projects = useQuery({ queryKey: ["projects", "admin"], queryFn: () => projectApi.list({ includeArchived: true }) });
   const [draft, setDraft] = useState({ code: "", name: "", description: "" });
+  // Requirements Studio's "Create project from this document" hands off here rather than adding
+  // a second project-creation endpoint — it just seeds this same form's own draft, once, from
+  // whatever the caller navigated with. Read on mount only: this page's own state owns `draft`
+  // from then on, so a later re-render (e.g. after creating one project) never re-applies it.
+  const location = useLocation();
+  useEffect(() => {
+    const prefill = (location.state as { prefillProject?: { code?: string; name?: string; description?: string } } | null)?.prefillProject;
+    if (prefill) setDraft((d) => ({ ...d, ...prefill }));
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- intentionally mount-only, see comment above
+  }, []);
   const [moduleDraft, setModuleDraft] = useState({ projectId: "", name: "" });
   const [submoduleDraft, setSubmoduleDraft] = useState({ moduleId: "", name: "" });
   const [pendingArchive, setPendingArchive] = useState<{ id: string; name: string } | null>(null);

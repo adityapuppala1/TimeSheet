@@ -404,6 +404,7 @@ export const aiSettingsSchema = z.object({
       changeConflictBriefEnabled: z.boolean().optional(),
       changePirAssistEnabled: z.boolean().optional(),
       planBreakdownEnabled: z.boolean().optional(),
+      requirementsStudioEnabled: z.boolean().optional(),
       duplicateDetectionEnabled: z.boolean().optional(),
       writingAssistantEnabled: z.boolean().optional(),
       commentSummaryEnabled: z.boolean().optional(),

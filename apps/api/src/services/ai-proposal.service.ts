@@ -42,7 +42,8 @@ export type ProposalKind =
   | "ASSIGNMENT_REBALANCE"
   | "RISK_MITIGATION"
   | "BLUEPRINT_SUGGESTION"
-  | "CHANGE_DRAFT";
+  | "CHANGE_DRAFT"
+  | "REQUIREMENTS_DOC";
 export type ChangeOp = "CREATE" | "UPDATE" | "LINK";
 export type ChangeTarget = "TICKET" | "PROJECT" | "BOOKING" | "LINK" | "TICKET_LABEL" | "CHANGE";
 
