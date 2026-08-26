@@ -24,12 +24,15 @@ import { aiRateLimit } from "../middleware/ai-rate-limit.js";
 import { requireAuth, requirePermission } from "../middleware/auth.js";
 import { AppError } from "../middleware/error.js";
 import { validate } from "../middleware/validate.js";
+import { preserveTenantContext, requirementsImportUpload } from "../middleware/upload.js";
 import { assertGoalsEnabled, assertPlanningEnabled } from "../services/planning.service.js";
 import { getPlanningEntitlements } from "../services/plan-limits.service.js";
 import { requireTenantContext } from "../config/tenant-context.js";
 import { audit } from "../services/audit.service.js";
 import { createProposal, type DraftChange } from "../services/ai-proposal.service.js";
 import {
+  analyzeImportedDocument,
+  applyImportedAnswers,
   buildTicketMaterializationChanges,
   createRequirementsDocument,
   generateDocument,
@@ -41,7 +44,7 @@ import {
 } from "../services/requirements-doc.service.js";
 import { renderRequirementsDocPdf } from "../services/requirements-doc-pdf.service.js";
 import { renderRequirementsDocMarkdown } from "../services/requirements-doc-markdown.service.js";
-import type { RequirementsDocSections } from "../services/ai.service.js";
+import { REQUIREMENTS_SECTIONS, type RequirementsDocSections } from "../services/ai.service.js";
 
 export const requirementsDocRouter = Router();
 requirementsDocRouter.use(requireAuth);
@@ -138,6 +141,62 @@ requirementsDocRouter.post(
     await assertPlanningEnabled();
     await assertCopilotAllowed();
     const doc = await generateDocument(String(req.params.id), req.user!.id);
+    res.json(doc);
+  }
+);
+
+// Optional import: read an existing PRD/BRD and propose which interview areas it already answers.
+// Writes nothing — see requirements-doc.service.ts's analyzeImportedDocument.
+requirementsDocRouter.post(
+  "/:id/import/analyze",
+  requirePermission(permissions.PLAN_WRITE),
+  // preserveTenantContext MUST wrap the multer middleware: multer parses off the request stream
+  // in a context where the tenant AsyncLocalStorage store does not reliably propagate, and the
+  // failure is size-dependent (see middleware/upload.ts's own comment on preserveTenantContext —
+  // a previously-shipped bug, do not repeat it). validate() below only declares a `params`
+  // schema, so running it after multer is safe: req.params comes from Express's router, not from
+  // anything multer parses.
+  preserveTenantContext(requirementsImportUpload.single("file")),
+  validate(z.object({ params: z.object({ id: z.string().uuid() }) })),
+  async (req, res) => {
+    await assertPlanningEnabled();
+    await assertCopilotAllowed();
+    const file = req.file;
+    if (!file?.buffer) throw new AppError(422, "No file provided");
+    const result = await analyzeImportedDocument(String(req.params.id), file, req.user!.id);
+    res.json(result);
+  }
+);
+
+// The human-in-the-loop gate: writes a person-reviewed set of imported answers onto the
+// document's transcript. Nothing from /import/analyze above is ever treated as a real answer
+// until it comes back through here.
+requirementsDocRouter.post(
+  "/:id/import/apply",
+  requirePermission(permissions.PLAN_WRITE),
+  validate(
+    z.object({
+      params: z.object({ id: z.string().uuid() }),
+      body: z
+        .object({
+          turns: z
+            .array(
+              z.object({
+                question: z.string().min(1).max(400),
+                answer: z.string().min(1).max(4000),
+                sectionTag: z.enum(REQUIREMENTS_SECTIONS)
+              })
+            )
+            .min(1)
+            .max(40)
+        })
+        .strict()
+    })
+  ),
+  async (req, res) => {
+    await assertPlanningEnabled();
+    await assertCopilotAllowed();
+    const doc = await applyImportedAnswers(String(req.params.id), req.body, req.user!.id);
     res.json(doc);
   }
 );

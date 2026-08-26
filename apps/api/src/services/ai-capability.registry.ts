@@ -285,6 +285,22 @@ const CAPABILITIES: ReadonlyArray<AiCapabilitySpec> = [
     tools: []
   },
   {
+    id: "requirements_import_analyze",
+    title: "Import existing requirements doc",
+    description: "Reads an uploaded PRD/BRD and proposes which interview answers it already covers.",
+    featureToggle: "requirementsStudioEnabled",
+    // Same reasoning as the interview and doc-generate capabilities above: nothing it proposes is
+    // written to the document until a person reviews and confirms it.
+    maxLevel: "SUGGEST",
+    ceilingReason:
+      "Nothing it proposes is written to the document until a person reviews and confirms it — same reason the interview itself is capped here.",
+    // Unlike its two siblings above, this one reads an arbitrary uploaded file's contents rather
+    // than only authenticated-user-typed interview answers — the same threat class as duplicate
+    // detection below.
+    actsOnUntrustedInput: true,
+    tools: []
+  },
+  {
     id: "duplicate_detection",
     title: "Duplicate detection",
     description: "Flags tickets that look like ones already open.",

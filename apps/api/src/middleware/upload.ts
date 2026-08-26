@@ -97,6 +97,27 @@ export const avatarUpload = multer({
   }
 });
 
+const allowedImportExtensions = new Set([".pdf", ".docx", ".txt"]);
+
+/**
+ * Requirements Studio's optional "import an existing PRD/BRD" upload (requirements-doc.controller.ts).
+ * Memory storage, same reasoning as avatarUpload above: the buffer is read once by
+ * pdf-parse/mammoth in-process (requirements-doc-import.service.ts) and the bytes are discarded —
+ * the raw file is deliberately never persisted to disk. Narrower extension set than
+ * allowedAttachmentExtensions on purpose: no good pure-JS parser exists for legacy binary .doc.
+ */
+export const requirementsImportUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 15 * 1024 * 1024, files: 1 },
+  fileFilter: (_req, file, cb) => {
+    const ext = path.extname(file.originalname).toLowerCase();
+    if (!allowedImportExtensions.has(ext)) {
+      return cb(new AppError(422, `Unsupported file type: ${ext}. Upload a PDF, Word (.docx), or plain text file.`));
+    }
+    cb(null, true);
+  }
+});
+
 /**
  * Webcam captures for face (identity) verification — memory storage, because the buffer goes
  * straight into `face.service.ts#analyzeFace` and is only written to disk (re-encoded, in a

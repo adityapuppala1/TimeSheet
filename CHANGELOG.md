@@ -10,6 +10,29 @@ user of a running installation.
 The parser that feeds the in-app What's-new page ignores this section until it gains a version
 number, on purpose — an installation must never render history for a version that does not exist yet.
 
+### 📝 Requirements Studio can start from a document you already have
+
+- **Optional "import an existing PRD/BRD" path**, right in the New document dialog — upload a PDF,
+  Word (.docx), or plain text file instead of starting the interview cold. The AI reads it and
+  proposes which interview questions it already answers, in the same shape the interview itself
+  would have asked them, plus a short list of what's still genuinely missing or unclear.
+- **Nothing is saved until you review it.** Every proposed answer is editable and removable before
+  confirming — this is a preview, not an import in the destructive sense. Only what you confirm
+  becomes a real, answered interview turn; everything else becomes the interview's next questions,
+  same as if you'd never uploaded anything.
+- **The interview itself needed zero changes.** A confirmed import just pre-fills the transcript
+  the interview already reads from, so it naturally asks only about what's left — the same
+  document, ticket, and goal materialization, exports, and generation all work identically whether
+  a document started blank or from an upload.
+- Guards against the two obvious failure modes: a file with almost no readable text (a scanned
+  PDF with no text layer) is rejected up front with a clear message rather than handed to the AI
+  half-empty, and a very long document is truncated with a stated cap rather than silently cut off
+  — the interview simply asks about whatever the truncated portion didn't cover.
+- The uploaded file's content is treated as untrusted, exactly like this app's existing email-intake
+  pipeline treats inbound mail — delimited and instructed as data to analyze, never as instructions
+  to follow, so a document that happened to contain something instruction-shaped can't talk its way
+  past review.
+
 ## 3.4.0 — providers that route around each other, and an idea that becomes a document — 2026-08-26
 
 ### 📦 Dependencies

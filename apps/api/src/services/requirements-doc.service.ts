@@ -22,13 +22,22 @@ import { prisma } from "../config/prisma.js";
 import { AppError } from "../middleware/error.js";
 import { audit } from "./audit.service.js";
 import {
+  analyzeRequirementsImport,
   conductRequirementsInterviewTurn,
   generateRequirementsDocument,
   type RequirementsDocSections,
   type RequirementsDocType,
+  type RequirementsImportAnalysisResult,
   type RequirementsInterviewTurn
 } from "./ai.service.js";
+import { extractRequirementsImportText } from "./requirements-doc-import.service.js";
 import type { DraftChange } from "./ai-proposal.service.js";
+
+/** ~6k tokens — generous for a real PRD, bounded for prompt cost. */
+const MAX_IMPORT_DOC_CHARS = 24_000;
+/** Below this, an uploaded PDF is probably a scanned image with no real text layer — better to
+ *  say so plainly than hand the AI (and the person reviewing its output) a near-empty document. */
+const MIN_IMPORT_DOC_CHARS = 200;
 
 export async function createRequirementsDocument(input: { title: string; docType: RequirementsDocType }, actorId: string) {
   const doc = await prisma.requirementsDocument.create({
@@ -115,6 +124,87 @@ export async function recordInterviewTurn(id: string, input: { answer?: string; 
   });
 
   return result;
+}
+
+/**
+ * Extracts text from an uploaded PDF/DOCX/TXT and asks the AI which interview areas it already
+ * answers. Writes NOTHING to the document — this is a preview only. Nothing here becomes a real
+ * transcript answer until a person reviews it and calls applyImportedAnswers below; that's the
+ * human-in-the-loop gate this feature is built around.
+ *
+ * Only offered before the interview has started (empty transcript) — merging an upload into a
+ * partially-answered interview is a harder problem this deliberately does not attempt yet.
+ */
+export async function analyzeImportedDocument(
+  id: string,
+  file: { buffer: Buffer; originalname: string },
+  actorId: string
+): Promise<RequirementsImportAnalysisResult & { truncated: boolean }> {
+  const doc = await getRequirementsDocument(id);
+  if (doc.status !== "DRAFTING") throw new AppError(422, "This document's interview is already finished.");
+  const transcript = (doc.interviewTranscript as unknown as RequirementsInterviewTurn[]) ?? [];
+  if (transcript.length > 0) {
+    throw new AppError(422, "Importing an existing document is only available before the interview has started.");
+  }
+
+  const extracted = await extractRequirementsImportText(file);
+  if (extracted.text.trim().length < MIN_IMPORT_DOC_CHARS) {
+    throw new AppError(
+      422,
+      "Could not find enough readable text in that file — if it's a scanned PDF with no text layer, try pasting the content instead or continue with the blank interview."
+    );
+  }
+
+  const truncated = extracted.text.length > MAX_IMPORT_DOC_CHARS;
+  const documentText = truncated ? extracted.text.slice(0, MAX_IMPORT_DOC_CHARS) : extracted.text;
+
+  const result = await analyzeRequirementsImport({ documentText, truncated, docType: doc.docType, userId: actorId });
+  if (!result) throw new AppError(502, "The assistant could not read that document. Try again.");
+
+  await audit(actorId, "requirements_doc.import_analyzed", "RequirementsDocument", id, {
+    fileName: file.originalname,
+    proposedTurns: result.proposedTurns.length,
+    openQuestions: result.openQuestions.length,
+    truncated
+  });
+
+  return { ...result, truncated };
+}
+
+/**
+ * Writes a person-reviewed set of imported answers onto the document's transcript, in one shot,
+ * as already-answered turns. This is the ONLY function that turns an import proposal into real
+ * interview state — analyzeImportedDocument above never writes anything.
+ *
+ * Deliberately does not call recordInterviewTurn itself: the caller (the frontend) calls the
+ * existing interview-turn endpoint with an empty body right after this succeeds, exactly like
+ * starting a fresh interview — so the interview engine (conductRequirementsInterviewTurn) needs
+ * no changes at all to pick up wherever the import left off.
+ */
+export async function applyImportedAnswers(id: string, input: { turns: Array<{ question: string; answer: string; sectionTag: string }> }, actorId: string) {
+  const doc = await getRequirementsDocument(id);
+  if (doc.status !== "DRAFTING") throw new AppError(422, "This document's interview is already finished.");
+  const transcript = (doc.interviewTranscript as unknown as RequirementsInterviewTurn[]) ?? [];
+  // Re-checked here, not just in analyzeImportedDocument: guards a race where the interview was
+  // started in a second tab between the analyze call and this one.
+  if (transcript.length > 0) {
+    throw new AppError(422, "This document's interview has already started.");
+  }
+  if (input.turns.length === 0) throw new AppError(422, "No reviewed answers to save.");
+
+  const seeded: RequirementsInterviewTurn[] = input.turns.map((t) => ({
+    question: t.question,
+    answer: t.answer,
+    skipped: false,
+    sectionTag: t.sectionTag
+  }));
+
+  await prisma.requirementsDocument.update({
+    where: { id },
+    data: { interviewTranscript: seeded as unknown as Prisma.InputJsonValue }
+  });
+  await audit(actorId, "requirements_doc.import_applied", "RequirementsDocument", id, { turns: seeded.length });
+  return getRequirementsDocument(id);
 }
 
 export async function generateDocument(id: string, actorId: string) {

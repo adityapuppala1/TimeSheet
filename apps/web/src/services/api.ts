@@ -4296,6 +4296,20 @@ export interface RequirementsInterviewTurnResult {
   progress: { section: string; answered: number; total: number };
 }
 
+export interface RequirementsImportProposedTurnRow {
+  question: string;
+  answer: string;
+  sectionTag: string;
+  confidence: "HIGH" | "MEDIUM" | "LOW";
+}
+
+export interface RequirementsImportAnalysisRow {
+  proposedTurns: RequirementsImportProposedTurnRow[];
+  openQuestions: string[];
+  documentSummary: string;
+  truncated: boolean;
+}
+
 export const requirementsDocApi = {
   list: async () => (await api.get<RequirementsDocRow[]>("/requirements-docs")).data,
   get: async (id: string) => (await api.get<RequirementsDocRow>(`/requirements-docs/${id}`)).data,
@@ -4306,6 +4320,19 @@ export const requirementsDocApi = {
   interviewTurn: async (id: string, payload: { answer?: string; skip?: boolean }) =>
     (await api.post<RequirementsInterviewTurnResult>(`/requirements-docs/${id}/interview/turn`, payload)).data,
   generate: async (id: string) => (await api.post<RequirementsDocRow>(`/requirements-docs/${id}/generate`, {})).data,
+  /** Optional "import an existing PRD/BRD" path — analyze writes nothing, only proposes. */
+  importAnalyze: async (id: string, file: File) => {
+    const form = new FormData();
+    form.append("file", file);
+    return (
+      await api.post<RequirementsImportAnalysisRow>(`/requirements-docs/${id}/import/analyze`, form, {
+        headers: { "Content-Type": "multipart/form-data" }
+      })
+    ).data;
+  },
+  /** The human-in-the-loop gate — writes the reviewed/edited turns onto the document. */
+  importApply: async (id: string, payload: { turns: Array<{ question: string; answer: string; sectionTag: string }> }) =>
+    (await api.post<RequirementsDocRow>(`/requirements-docs/${id}/import/apply`, payload)).data,
   // Authenticated blob downloads — same reasoning as attestationApi.downloadPdf: the access token
   // lives in memory only, so a bare <a href> would hit these routes unauthenticated.
   downloadPdf: async (id: string) => (await api.get(`/requirements-docs/${id}/export.pdf`, { responseType: "blob" })).data as Blob,
