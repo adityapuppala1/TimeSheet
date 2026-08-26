@@ -341,8 +341,16 @@ async function callOpenAICompatible(settings: { baseUrl: string | null }, apiKey
   // Local providers (Ollama, LM Studio) don't require a real key, but the SDK still wants a non-empty string.
   const client = new OpenAI({ apiKey: apiKey || "not-needed", baseURL: settings.baseUrl, timeout: MODEL_CALL_TIMEOUT_MS, maxRetries: 0 });
 
+  // A smaller/local model reading "matching this shape: {schema}" sometimes echoes the SCHEMA
+  // OBJECT itself back as its answer — a JSON Schema document and a real answer are both JSON
+  // objects with property definitions, and a weak model conflates "here is the shape" with "here
+  // is the data". Caught live: llama3.1:8b and mistral:latest (via Ollama) both returned the
+  // literal `{"type":"object","properties":{...}}` schema verbatim instead of an actual answer.
+  // Anthropic's native structured-output mode (callAnthropic, output_config.format) doesn't have
+  // this problem — the schema constrains generation at the API level there, not just a prompt
+  // instruction a model has to interpret — so this wording only matters for this function.
   const promptText = params.jsonSchema
-    ? `${params.prompt}\n\nRespond with ONLY a single valid JSON object (no markdown fences, no commentary) matching this shape:\n${JSON.stringify(params.jsonSchema.schema)}`
+    ? `${params.prompt}\n\nRespond with ONLY your actual answer as a single valid JSON object — no markdown fences, no commentary, and do NOT return the schema definition itself. The JSON Schema below describes the SHAPE your answer must have; it is not the answer:\n${JSON.stringify(params.jsonSchema.schema)}`
     : params.prompt;
 
   const content: OpenAI.Chat.ChatCompletionContentPart[] | string = params.images?.length

@@ -10,6 +10,17 @@ user of a running installation.
 The parser that feeds the in-app What's-new page ignores this section until it gains a version
 number, on purpose — an installation must never render history for a version that does not exist yet.
 
+### 🐛 A small/local model could answer a structured-JSON request with the schema itself
+
+- Caught live in Requirements Studio, but affected every AI-compatible-endpoint feature that asks
+  for structured JSON (triage, duplicate detection, plan breakdown, and more): a weaker or local
+  model (reproduced with Ollama's llama3.1:8b and mistral:latest) sometimes returned the literal
+  JSON Schema object it was given as an instruction — `{"type":"object","properties":{...}}` — as
+  if that were the answer, instead of data matching that shape. Both are JSON objects with
+  property definitions, and a small model can conflate "here is the shape" with "here is the
+  data." Reworded the instruction to explicitly rule that out. Confirmed fixed live against the
+  exact model and prompt that failed.
+
 ### 🩺 AI providers now show whether they're actually working, and can route around each other
 
 - **A live status dot on every configured provider** — Healthy, Degraded, Down, or "no recent
