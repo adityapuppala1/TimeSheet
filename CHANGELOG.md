@@ -10,6 +10,17 @@ user of a running installation.
 The parser that feeds the in-app What's-new page ignores this section until it gains a version
 number, on purpose — an installation must never render history for a version that does not exist yet.
 
+### 🐛 A bad AI-generated architecture diagram left a stray error graphic stuck on the page
+
+- Requirements Studio renders the AI's architecture diagram with Mermaid, and already fell back to
+  showing the raw diagram source when Mermaid couldn't parse it. But Mermaid also has its own
+  default behavior on a parse failure: it appends a "Syntax error in text" error graphic straight
+  to `document.body`, outside our fallback UI entirely — so the page showed the intended fallback
+  *and* a stray bomb-icon graphic stuck in the corner that our code had no handle on and never
+  cleaned up.
+- Fixed by initializing Mermaid with `suppressErrorRendering: true`, so a bad diagram now only ever
+  shows our own fallback, nothing else.
+
 ### 🐛 A small/local model could answer a structured-JSON request with the schema itself
 
 - Caught live in Requirements Studio, but affected every AI-compatible-endpoint feature that asks

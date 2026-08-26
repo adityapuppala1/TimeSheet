@@ -25,7 +25,11 @@ import { toast } from "../components/ui/toaster";
 import { useAuthStore } from "../store/auth";
 import { projectApi, requirementsDocApi, type RequirementsDocSuccessMetricRow, type RequirementsInterviewTurnResult } from "../services/api";
 
-mermaid.initialize({ startOnLoad: false, theme: "neutral", securityLevel: "strict" });
+// suppressErrorRendering: without it, a parse failure makes mermaid append its own "bomb" error
+// graphic straight to document.body (outside our component tree) *in addition to* rejecting the
+// render() promise below — so our try/catch fallback rendered fine, but the bomb graphic stayed
+// stuck in the corner of the page regardless. This stops mermaid from touching the DOM on error at all.
+mermaid.initialize({ startOnLoad: false, theme: "neutral", securityLevel: "strict", suppressErrorRendering: true });
 
 const STATUS_DESCRIPTION: Record<string, string> = { DRAFTING: "Interview in progress", READY: "Ready", ARCHIVED: "Archived" };
 
