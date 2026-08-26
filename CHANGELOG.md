@@ -10,6 +10,8 @@ user of a running installation.
 The parser that feeds the in-app What's-new page ignores this section until it gains a version
 number, on purpose — an installation must never render history for a version that does not exist yet.
 
+## 3.4.0 — providers that route around each other, and an idea that becomes a document — 2026-08-26
+
 ### 🐛 A bad AI-generated architecture diagram left a stray error graphic stuck on the page
 
 - Requirements Studio renders the AI's architecture diagram with Mermaid, and already fell back to
