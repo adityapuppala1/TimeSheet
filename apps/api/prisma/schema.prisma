@@ -315,6 +315,7 @@ model User {
   aiProposalsUndone      AiProposal[]           @relation("AiProposalUndoer")
   agentRuns              AgentRun[]             @relation("AgentRunActor")
   requirementsDocs       RequirementsDocument[]
+  requirementsDocsSourceUploaded RequirementsDocument[] @relation("RequirementsDocSourceUploader")
 
   createdAt DateTime  @default(now())
   updatedAt DateTime  @updatedAt
@@ -3488,6 +3489,18 @@ model RequirementsDocument {
 
   /// Ordered interview turns: [{ question, answer, skipped, sectionTag }].
   interviewTranscript Json @default("[]")
+
+  /// --- Optional "imported from an existing PRD/BRD" provenance ------------------------------
+  /// All five null together means "created manually" (the common case, and the default) — set
+  /// together by applyImportedAnswers when an upload is confirmed. `sourceDocumentText` holds the
+  /// EXTRACTED TEXT, never the raw uploaded bytes (same "don't hoard data you don't need" instinct
+  /// the rest of this feature already follows) — long enough for the 24,000-char extraction cap.
+  sourceDocumentName         String?   @db.VarChar(255)
+  sourceDocumentSize         Int?
+  sourceDocumentText         String?   @db.Text
+  sourceDocumentUploadedById String?
+  sourceDocumentUploadedBy   User?     @relation("RequirementsDocSourceUploader", fields: [sourceDocumentUploadedById], references: [id], onDelete: SetNull)
+  sourceDocumentUploadedAt  DateTime?
 
   createdById String?
   createdBy   User?    @relation(fields: [createdById], references: [id], onDelete: SetNull)

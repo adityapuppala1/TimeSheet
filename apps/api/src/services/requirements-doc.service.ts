@@ -58,7 +58,10 @@ export async function listRequirementsDocuments() {
 }
 
 export async function getRequirementsDocument(id: string) {
-  const doc = await prisma.requirementsDocument.findUnique({ where: { id } });
+  const doc = await prisma.requirementsDocument.findUnique({
+    where: { id },
+    include: { sourceDocumentUploadedBy: { select: { id: true, name: true } } }
+  });
   if (!doc) throw new AppError(404, "That requirements document no longer exists — refresh and retry.");
   return doc;
 }
@@ -132,20 +135,17 @@ export async function recordInterviewTurn(id: string, input: { answer?: string; 
  * transcript answer until a person reviews it and calls applyImportedAnswers below; that's the
  * human-in-the-loop gate this feature is built around.
  *
- * Only offered before the interview has started (empty transcript) — merging an upload into a
- * partially-answered interview is a harder problem this deliberately does not attempt yet.
+ * Available any time the document is still DRAFTING, not just before the interview has started —
+ * a re-upload replaces the transcript wholesale (see applyImportedAnswers), so there is no merge
+ * case to worry about here.
  */
 export async function analyzeImportedDocument(
   id: string,
   file: { buffer: Buffer; originalname: string },
   actorId: string
-): Promise<RequirementsImportAnalysisResult & { truncated: boolean }> {
+): Promise<RequirementsImportAnalysisResult & { truncated: boolean; documentText: string }> {
   const doc = await getRequirementsDocument(id);
   if (doc.status !== "DRAFTING") throw new AppError(422, "This document's interview is already finished.");
-  const transcript = (doc.interviewTranscript as unknown as RequirementsInterviewTurn[]) ?? [];
-  if (transcript.length > 0) {
-    throw new AppError(422, "Importing an existing document is only available before the interview has started.");
-  }
 
   const extracted = await extractRequirementsImportText(file);
   if (extracted.text.trim().length < MIN_IMPORT_DOC_CHARS) {
@@ -168,28 +168,58 @@ export async function analyzeImportedDocument(
     truncated
   });
 
+  return { ...result, truncated, documentText };
+}
+
+/**
+ * Re-runs the AI analysis against the document's ALREADY-STORED extracted text — no new upload.
+ * Same preview-only contract as analyzeImportedDocument: writes nothing.
+ */
+export async function regenerateFromStoredDocument(id: string, actorId: string): Promise<RequirementsImportAnalysisResult & { truncated: boolean }> {
+  const doc = await getRequirementsDocument(id);
+  if (doc.status !== "DRAFTING") throw new AppError(422, "This document's interview is already finished.");
+  if (!doc.sourceDocumentText) throw new AppError(422, "No supporting document to regenerate from.");
+
+  const truncated = doc.sourceDocumentText.length > MAX_IMPORT_DOC_CHARS;
+  const documentText = truncated ? doc.sourceDocumentText.slice(0, MAX_IMPORT_DOC_CHARS) : doc.sourceDocumentText;
+
+  const result = await analyzeRequirementsImport({ documentText, truncated, docType: doc.docType, userId: actorId });
+  if (!result) throw new AppError(502, "The assistant could not read that document. Try again.");
+
+  await audit(actorId, "requirements_doc.import_regenerated", "RequirementsDocument", id, {
+    proposedTurns: result.proposedTurns.length,
+    openQuestions: result.openQuestions.length
+  });
+
   return { ...result, truncated };
 }
 
 /**
- * Writes a person-reviewed set of imported answers onto the document's transcript, in one shot,
- * as already-answered turns. This is the ONLY function that turns an import proposal into real
- * interview state — analyzeImportedDocument above never writes anything.
+ * Writes a person-reviewed set of imported answers onto the document's transcript — a full
+ * REPLACE, not a merge, whether this is the first import or a re-upload/regenerate over existing
+ * progress (the frontend confirms with the person before calling this when there's something to
+ * lose). This is the ONLY function that turns an import proposal into real interview state —
+ * analyzeImportedDocument/regenerateFromStoredDocument above never write anything.
+ *
+ * `sourceDocument` is provided only for a genuine (re-)upload — it persists the file's provenance
+ * (name, size, extracted text, uploader, timestamp). Omitted for a regenerate-from-stored-text or
+ * a plain manual edit of the reviewed answers, so those never touch who-uploaded-what-when.
  *
  * Deliberately does not call recordInterviewTurn itself: the caller (the frontend) calls the
  * existing interview-turn endpoint with an empty body right after this succeeds, exactly like
  * starting a fresh interview — so the interview engine (conductRequirementsInterviewTurn) needs
  * no changes at all to pick up wherever the import left off.
  */
-export async function applyImportedAnswers(id: string, input: { turns: Array<{ question: string; answer: string; sectionTag: string }> }, actorId: string) {
+export async function applyImportedAnswers(
+  id: string,
+  input: {
+    turns: Array<{ question: string; answer: string; sectionTag: string }>;
+    sourceDocument?: { fileName: string; fileSize: number; text: string };
+  },
+  actorId: string
+) {
   const doc = await getRequirementsDocument(id);
   if (doc.status !== "DRAFTING") throw new AppError(422, "This document's interview is already finished.");
-  const transcript = (doc.interviewTranscript as unknown as RequirementsInterviewTurn[]) ?? [];
-  // Re-checked here, not just in analyzeImportedDocument: guards a race where the interview was
-  // started in a second tab between the analyze call and this one.
-  if (transcript.length > 0) {
-    throw new AppError(422, "This document's interview has already started.");
-  }
   if (input.turns.length === 0) throw new AppError(422, "No reviewed answers to save.");
 
   const seeded: RequirementsInterviewTurn[] = input.turns.map((t) => ({
@@ -201,10 +231,44 @@ export async function applyImportedAnswers(id: string, input: { turns: Array<{ q
 
   await prisma.requirementsDocument.update({
     where: { id },
-    data: { interviewTranscript: seeded as unknown as Prisma.InputJsonValue }
+    data: {
+      interviewTranscript: seeded as unknown as Prisma.InputJsonValue,
+      ...(input.sourceDocument
+        ? {
+            sourceDocumentName: input.sourceDocument.fileName,
+            sourceDocumentSize: input.sourceDocument.fileSize,
+            sourceDocumentText: input.sourceDocument.text,
+            sourceDocumentUploadedById: actorId,
+            sourceDocumentUploadedAt: new Date()
+          }
+        : {})
+    }
   });
-  await audit(actorId, "requirements_doc.import_applied", "RequirementsDocument", id, { turns: seeded.length });
+  await audit(actorId, "requirements_doc.import_applied", "RequirementsDocument", id, {
+    turns: seeded.length,
+    fromUpload: Boolean(input.sourceDocument)
+  });
   return getRequirementsDocument(id);
+}
+
+/** Un-links the supporting document — clears the five provenance fields only. The transcript
+ *  (whatever answers exist) is untouched: "forget where this came from" and "discard my answers"
+ *  are different actions, and only the first was asked for. */
+export async function clearSourceDocument(id: string, actorId: string) {
+  await getRequirementsDocument(id);
+  const updated = await prisma.requirementsDocument.update({
+    where: { id },
+    data: {
+      sourceDocumentName: null,
+      sourceDocumentSize: null,
+      sourceDocumentText: null,
+      sourceDocumentUploadedById: null,
+      sourceDocumentUploadedAt: null
+    },
+    include: { sourceDocumentUploadedBy: { select: { id: true, name: true } } }
+  });
+  await audit(actorId, "requirements_doc.source_cleared", "RequirementsDocument", id);
+  return updated;
 }
 
 export async function generateDocument(id: string, actorId: string) {

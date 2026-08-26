@@ -34,16 +34,19 @@ import {
   analyzeImportedDocument,
   applyImportedAnswers,
   buildTicketMaterializationChanges,
+  clearSourceDocument,
   createRequirementsDocument,
   generateDocument,
   getRequirementsDocument,
   listRequirementsDocuments,
   materializeGoals,
   recordInterviewTurn,
+  regenerateFromStoredDocument,
   updateRequirementsDocument
 } from "../services/requirements-doc.service.js";
 import { renderRequirementsDocPdf } from "../services/requirements-doc-pdf.service.js";
 import { renderRequirementsDocMarkdown } from "../services/requirements-doc-markdown.service.js";
+import { renderRequirementsDocTemplate } from "../services/requirements-doc-template.service.js";
 import { REQUIREMENTS_SECTIONS, type RequirementsDocSections } from "../services/ai.service.js";
 
 export const requirementsDocRouter = Router();
@@ -77,6 +80,16 @@ requirementsDocRouter.post(
 requirementsDocRouter.get("/", requirePermission(permissions.TICKETS_VIEW), async (_req, res) => {
   await assertPlanningEnabled();
   res.json(await listRequirementsDocuments());
+});
+
+// A fill-in-the-blank starting point for someone with no PRD/BRD to upload yet — plain text so it
+// round-trips reliably through this app's own import path (see the template service's header for
+// why not PDF/Word). Registered before "/:id" so "template.txt" is never matched as an id.
+requirementsDocRouter.get("/template.txt", requirePermission(permissions.TICKETS_VIEW), async (_req, res) => {
+  await assertPlanningEnabled();
+  res.setHeader("Content-Type", "text/plain; charset=utf-8");
+  res.setHeader("Content-Disposition", 'attachment; filename="prd-brd-template.txt"');
+  res.send(renderRequirementsDocTemplate());
 });
 
 requirementsDocRouter.get(
@@ -188,7 +201,16 @@ requirementsDocRouter.post(
               })
             )
             .min(1)
-            .max(40)
+            .max(40),
+          // Present only for a genuine (re-)upload — persists the file's provenance. Omitted for a
+          // regenerate-from-stored-text or a plain edit of the reviewed answers.
+          sourceDocument: z
+            .object({
+              fileName: z.string().min(1).max(255),
+              fileSize: z.number().int().min(0),
+              text: z.string().min(1)
+            })
+            .optional()
         })
         .strict()
     })
@@ -197,6 +219,33 @@ requirementsDocRouter.post(
     await assertPlanningEnabled();
     await assertCopilotAllowed();
     const doc = await applyImportedAnswers(String(req.params.id), req.body, req.user!.id);
+    res.json(doc);
+  }
+);
+
+// Re-runs the AI analysis against the document's already-stored extracted text — no new upload.
+// Same preview-only contract as /import/analyze: writes nothing until /import/apply is called.
+requirementsDocRouter.post(
+  "/:id/import/regenerate",
+  requirePermission(permissions.PLAN_WRITE),
+  validate(z.object({ params: z.object({ id: z.string().uuid() }), body: z.object({}).strict() })),
+  async (req, res) => {
+    await assertPlanningEnabled();
+    await assertCopilotAllowed();
+    const result = await regenerateFromStoredDocument(String(req.params.id), req.user!.id);
+    res.json(result);
+  }
+);
+
+// Un-links the supporting document (filename/size/text/uploader/date) without touching the
+// transcript — "forget where this came from" is a different action from "discard my answers".
+requirementsDocRouter.post(
+  "/:id/import/clear-source",
+  requirePermission(permissions.PLAN_WRITE),
+  validate(z.object({ params: z.object({ id: z.string().uuid() }), body: z.object({}).strict() })),
+  async (req, res) => {
+    await assertPlanningEnabled();
+    const doc = await clearSourceDocument(String(req.params.id), req.user!.id);
     res.json(doc);
   }
 );

@@ -4291,6 +4291,13 @@ export interface RequirementsDocRow {
   projectId: string | null;
   sections: RequirementsDocSectionsRow | null;
   interviewTranscript: RequirementsInterviewTurnRow[];
+  /** All null together = created manually (the default). Set when an uploaded PRD/BRD was
+   *  imported — see UserRole's sibling comment in schema.prisma for why the extracted text is
+   *  kept but the raw file never is. */
+  sourceDocumentName: string | null;
+  sourceDocumentSize: number | null;
+  sourceDocumentUploadedAt: string | null;
+  sourceDocumentUploadedBy: { id: string; name: string } | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -4315,6 +4322,9 @@ export interface RequirementsImportAnalysisRow {
   openQuestions: string[];
   documentSummary: string;
   truncated: boolean;
+  /** The text the AI actually read — sent back on `importApply` so a confirmed upload can persist
+   *  its provenance. Absent on a regenerate (that ran against already-stored text). */
+  documentText?: string;
 }
 
 export const requirementsDocApi = {
@@ -4337,13 +4347,29 @@ export const requirementsDocApi = {
       })
     ).data;
   },
-  /** The human-in-the-loop gate — writes the reviewed/edited turns onto the document. */
-  importApply: async (id: string, payload: { turns: Array<{ question: string; answer: string; sectionTag: string }> }) =>
-    (await api.post<RequirementsDocRow>(`/requirements-docs/${id}/import/apply`, payload)).data,
+  /** Re-runs the analysis against the document's already-stored text — no upload. Preview only. */
+  importRegenerate: async (id: string) =>
+    (await api.post<RequirementsImportAnalysisRow>(`/requirements-docs/${id}/import/regenerate`, {})).data,
+  /** Un-links the supporting document. The transcript (the answers) is left alone. */
+  importClearSource: async (id: string) =>
+    (await api.post<RequirementsDocRow>(`/requirements-docs/${id}/import/clear-source`, {})).data,
+  /**
+   * The human-in-the-loop gate — writes the reviewed/edited turns onto the document. A full
+   * replace, not a merge. `sourceDocument` is sent only for a genuine (re-)upload.
+   */
+  importApply: async (
+    id: string,
+    payload: {
+      turns: Array<{ question: string; answer: string; sectionTag: string }>;
+      sourceDocument?: { fileName: string; fileSize: number; text: string };
+    }
+  ) => (await api.post<RequirementsDocRow>(`/requirements-docs/${id}/import/apply`, payload)).data,
   // Authenticated blob downloads — same reasoning as attestationApi.downloadPdf: the access token
   // lives in memory only, so a bare <a href> would hit these routes unauthenticated.
   downloadPdf: async (id: string) => (await api.get(`/requirements-docs/${id}/export.pdf`, { responseType: "blob" })).data as Blob,
   downloadMarkdown: async (id: string) => (await api.get(`/requirements-docs/${id}/export.md`, { responseType: "blob" })).data as Blob,
+  /** The fill-in-the-blank starting point for someone with no PRD/BRD yet. */
+  downloadTemplate: async () => (await api.get(`/requirements-docs/template.txt`, { responseType: "blob" })).data as Blob,
   materializeTickets: async (id: string, payload: { projectId: string; moduleIndexes?: number[] }) =>
     (await api.post<AiProposalRow>(`/requirements-docs/${id}/materialize-tickets`, payload)).data,
   materializeGoals: async (

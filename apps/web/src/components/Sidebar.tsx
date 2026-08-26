@@ -49,7 +49,9 @@ import { cn } from "../lib/utils";
 import { usePlanningFeatures } from "../lib/use-planning";
 import type { PlanningEffective } from "../services/api";
 import { useAuthStore } from "../store/auth";
+import { AccountMenuContent, initialsFor } from "./AccountMenu";
 import { Avatar, AvatarFallback, AvatarImage } from "./ui/avatar";
+import { DropdownMenu, DropdownMenuTrigger } from "./ui/dropdown-menu";
 import { Sheet, SheetContent, SheetDescription, SheetTitle } from "./ui/sheet";
 import { Tooltip, TooltipContent, TooltipTrigger } from "./ui/tooltip";
 import { brandingApi, brandingLogoUrl, fileUrl } from "../services/api";
@@ -180,16 +182,6 @@ export const nav: NavItem[] = [
  * settings/i })`, and having it visible in both the bottom bar and an open drawer at the same
  * viewport would break strict-mode with a duplicate match.
  */
-
-function initialsFor(name?: string) {
-  if (!name) return "?";
-  return name
-    .split(/\s+/)
-    .filter(Boolean)
-    .slice(0, 2)
-    .map((part) => part[0]?.toUpperCase() ?? "")
-    .join("");
-}
 
 export function isVisible(
   item: NavItem,
@@ -385,34 +377,42 @@ export function Sidebar() {
         <NavList items={visible} slim={collapsed} />
       </div>
 
-      <div className={cn("mt-2 shrink-0 rounded-lg border border-border bg-background", collapsed ? "p-1.5" : "p-3")}>
-        {collapsed ? (
-          <Tooltip>
-            <TooltipTrigger asChild>
+      {/* An account CARD, not a read-out: it opens the same menu the top bar's avatar does — one
+          shared definition in AccountMenu.tsx, so the two can never drift. modal={false} for the
+          same reason Topbar's does: a menu shouldn't freeze page scroll. */}
+      <DropdownMenu modal={false}>
+        <DropdownMenuTrigger asChild>
+          <button
+            type="button"
+            aria-label="Account menu"
+            className={cn(
+              "focus-ring mt-2 w-full shrink-0 rounded-lg border border-border bg-background text-left transition hover:bg-muted",
+              collapsed ? "p-1.5" : "p-3"
+            )}
+          >
+            {collapsed ? (
               <div className="flex justify-center">
                 <Avatar>
                   {avatarSrc ? <AvatarImage src={avatarSrc} alt={user?.name ?? "Profile photo"} /> : null}
                   <AvatarFallback>{initialsFor(user?.name)}</AvatarFallback>
                 </Avatar>
               </div>
-            </TooltipTrigger>
-            <TooltipContent side="right" sideOffset={8}>
-              {user?.name ?? "Guest"} · {user?.role?.replace("_", " ").toLowerCase()}
-            </TooltipContent>
-          </Tooltip>
-        ) : (
-          <div className="flex items-center gap-3">
-            <Avatar>
-              {avatarSrc ? <AvatarImage src={avatarSrc} alt={user?.name ?? "Profile photo"} /> : null}
-              <AvatarFallback>{initialsFor(user?.name)}</AvatarFallback>
-            </Avatar>
-            <div className="min-w-0">
-              <p className="truncate text-sm font-semibold">{user?.name ?? "Guest"}</p>
-              <p className="truncate text-xs text-muted-foreground">{user?.role?.replace("_", " ")}</p>
-            </div>
-          </div>
-        )}
-      </div>
+            ) : (
+              <div className="flex items-center gap-3">
+                <Avatar>
+                  {avatarSrc ? <AvatarImage src={avatarSrc} alt={user?.name ?? "Profile photo"} /> : null}
+                  <AvatarFallback>{initialsFor(user?.name)}</AvatarFallback>
+                </Avatar>
+                <div className="min-w-0">
+                  <p className="truncate text-sm font-semibold">{user?.name ?? "Guest"}</p>
+                  <p className="truncate text-xs text-muted-foreground">{user?.role?.replace("_", " ")}</p>
+                </div>
+              </div>
+            )}
+          </button>
+        </DropdownMenuTrigger>
+        <AccountMenuContent />
+      </DropdownMenu>
     </aside>
   );
 }

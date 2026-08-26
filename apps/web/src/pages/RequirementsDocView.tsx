@@ -8,22 +8,45 @@
  */
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import mermaid from "mermaid";
-import { ArrowLeft, Archive, Download, FileDown, Loader2, SkipForward, Sparkles, Target, Ticket } from "lucide-react";
+import { ArrowLeft, Archive, Download, FileDown, FileUp, Loader2, PenLine, RefreshCw, SkipForward, Sparkles, Target, Ticket, Trash2 } from "lucide-react";
 import { useEffect, useId, useState } from "react";
 import { useNavigate, useParams } from "react-router";
 import { permissions } from "@timesheet/shared";
+import { ImportReviewPanel, SectionTagBadge } from "../components/requirements/ImportReviewPanel";
 import { AiStrands } from "../components/ui/ai-strands";
 import { Badge } from "../components/ui/badge";
 import { BorderGlow } from "../components/ui/border-glow";
 import { Button } from "../components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../components/ui/card";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "../components/ui/dialog";
+import { FileDropzone } from "../components/ui/file-dropzone";
+import { Progress } from "../components/ui/progress";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../components/ui/select";
 import { Skeleton } from "../components/ui/skeleton";
 import { Textarea } from "../components/ui/textarea";
 import { toast } from "../components/ui/toaster";
 import { useAuthStore } from "../store/auth";
-import { projectApi, requirementsDocApi, type RequirementsDocSuccessMetricRow, type RequirementsInterviewTurnResult } from "../services/api";
+import { useIndeterminateProgress } from "./RequirementsStudio";
+import {
+  projectApi,
+  requirementsDocApi,
+  type RequirementsDocRow,
+  type RequirementsDocSuccessMetricRow,
+  type RequirementsImportProposedTurnRow,
+  type RequirementsInterviewTurnResult
+} from "../services/api";
+
+const IMPORT_ACCEPT = {
+  "application/pdf": [".pdf"],
+  "application/vnd.openxmlformats-officedocument.wordprocessingml.document": [".docx"],
+  "text/plain": [".txt"]
+};
+
+function formatBytes(bytes: number) {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
+}
 
 // suppressErrorRendering: without it, a parse failure makes mermaid append its own "bomb" error
 // graphic straight to document.body (outside our component tree) *in addition to* rejecting the
@@ -168,6 +191,8 @@ export function RequirementsDocViewPage() {
         )}
       </div>
 
+      {data.status === "DRAFTING" && <SourceDocumentCard doc={data} canWrite={canWrite} onChanged={invalidate} />}
+
       {data.status === "DRAFTING" && (
         <InterviewPanel
           data={data}
@@ -246,7 +271,10 @@ function InterviewPanel({
               <div className="grid gap-3 border-b border-border pb-4">
                 {answered.map((t, i) => (
                   <div key={i} className="text-sm">
-                    <p className="font-medium">{t.question}</p>
+                    <div className="flex flex-wrap items-baseline gap-2">
+                      <p className="font-medium">{t.question}</p>
+                      <SectionTagBadge tag={t.sectionTag} className="text-[10px] font-normal" />
+                    </div>
                     <p className="text-muted-foreground">{t.skipped ? "(skipped — the assistant will assume)" : t.answer}</p>
                   </div>
                 ))}
@@ -259,7 +287,10 @@ function InterviewPanel({
 
             {hasOpenQuestion && pendingQuestion && !turnPending && (
               <div className="grid gap-3">
-                <p className="text-sm font-medium">{pendingQuestion.question}</p>
+                <div className="flex flex-wrap items-baseline gap-2">
+                  <p className="text-sm font-medium">{pendingQuestion.question}</p>
+                  <SectionTagBadge tag={pendingQuestion.sectionTag} className="text-[10px] font-normal" />
+                </div>
                 {lastTurn?.quickReplies && lastTurn.quickReplies.length > 0 && (
                   <div className="flex flex-wrap gap-2">
                     {lastTurn.quickReplies.map((reply) => (
@@ -309,6 +340,346 @@ function InterviewPanel({
         </BorderGlow>
       </CardContent>
     </Card>
+  );
+}
+
+/** The dialog's review half — shared review panel plus the confirm/cancel framing around it. The
+ *  confirm button changes wording when there are answers to lose, since that's the moment worth
+ *  being explicit about. */
+function ImportReviewStep({
+  rows,
+  openQuestions,
+  summary,
+  truncated,
+  hasAnswers,
+  applying,
+  onChangeAnswer,
+  onRemoveRow,
+  onCancel,
+  onConfirm
+}: {
+  rows: RequirementsImportProposedTurnRow[];
+  openQuestions: string[];
+  summary: string | null;
+  truncated: boolean;
+  hasAnswers: boolean;
+  applying: boolean;
+  onChangeAnswer: (index: number, answer: string) => void;
+  onRemoveRow: (index: number) => void;
+  onCancel: () => void;
+  onConfirm: () => void;
+}) {
+  return (
+    <>
+      <DialogHeader>
+        <DialogTitle>Review what we found</DialogTitle>
+        <DialogDescription>
+          {hasAnswers
+            ? "Confirming REPLACES every existing answer on this document with these. Edit or remove anything first."
+            : "Edit or remove anything before it's saved — only what you confirm here becomes an answered interview question."}
+        </DialogDescription>
+      </DialogHeader>
+
+      <ImportReviewPanel
+        rows={rows}
+        openQuestions={openQuestions}
+        summary={summary}
+        truncated={truncated}
+        onChangeAnswer={onChangeAnswer}
+        onRemoveRow={onRemoveRow}
+      />
+
+      <DialogFooter>
+        <Button variant="ghost" onClick={onCancel}>
+          Cancel
+        </Button>
+        <Button variant="ai" disabled={rows.length === 0 || applying} onClick={onConfirm}>
+          {applying ? <Loader2 className="mr-2 h-3.5 w-3.5 animate-spin" /> : <Sparkles className="mr-2 h-3.5 w-3.5" />}
+          {hasAnswers ? "Replace my answers" : "Confirm"}
+        </Button>
+      </DialogFooter>
+    </>
+  );
+}
+
+/** The dialog's pick-a-file half, which doubles as the "reading it" state — a regenerate skips
+ *  straight to that state, since it has no file to pick. */
+function FilePickerStep({
+  title,
+  mode,
+  analyzing,
+  progress,
+  file,
+  onFileChange,
+  onCancel,
+  onAnalyze,
+  analyzePending
+}: {
+  title: string;
+  mode: "upload" | "regenerate";
+  analyzing: boolean;
+  progress: number;
+  file: File | null;
+  onFileChange: (file: File | null) => void;
+  onCancel: () => void;
+  onAnalyze: () => void;
+  analyzePending: boolean;
+}) {
+  return (
+    <>
+      <DialogHeader>
+        <DialogTitle>{title}</DialogTitle>
+        <DialogDescription>
+          {mode === "upload"
+            ? "The AI reads it and proposes answers — you review everything before anything is saved."
+            : "Re-reading the document already attached to this project. Nothing is saved until you confirm."}
+        </DialogDescription>
+      </DialogHeader>
+
+      {analyzing ? (
+        <div className="grid gap-2 py-2">
+          <AiStrands label="Reading your document and matching it to the interview…" />
+          <Progress value={progress} className="h-1.5" />
+        </div>
+      ) : (
+        <>
+          <FileDropzone
+            files={file ? [file] : []}
+            onChange={(files) => onFileChange(files[0] ?? null)}
+            maxFiles={1}
+            maxSizeMb={15}
+            accept={IMPORT_ACCEPT}
+            hint="PDF, Word (.docx), or plain text · 15 MB max"
+          />
+          <DialogFooter>
+            <Button variant="ghost" onClick={onCancel}>
+              Cancel
+            </Button>
+            <Button disabled={!file || analyzePending} onClick={onAnalyze}>
+              <Sparkles className="mr-2 h-3.5 w-3.5" />
+              Analyze document
+            </Button>
+          </DialogFooter>
+        </>
+      )}
+    </>
+  );
+}
+
+/** The card's identity line — the uploaded file's details, or a plain statement that there wasn't
+ *  one. Split out so SourceDocumentCard below stays about the ACTIONS. */
+function SourceDocumentSummary({ doc }: { doc: RequirementsDocRow }) {
+  if (!doc.sourceDocumentName) {
+    return (
+      <>
+        <p className="text-sm font-medium">Created manually</p>
+        <p className="text-xs text-muted-foreground">Built from the interview alone — no document was uploaded.</p>
+      </>
+    );
+  }
+  const size = doc.sourceDocumentSize != null ? `${formatBytes(doc.sourceDocumentSize)} · ` : "";
+  const uploadedOn = doc.sourceDocumentUploadedAt ? ` on ${new Date(doc.sourceDocumentUploadedAt).toLocaleDateString()}` : "";
+  return (
+    <>
+      <p className="truncate text-sm font-medium">{doc.sourceDocumentName}</p>
+      <p className="truncate text-xs text-muted-foreground">
+        {size}Uploaded by {doc.sourceDocumentUploadedBy?.name ?? "someone since removed"}
+        {uploadedOn}
+      </p>
+    </>
+  );
+}
+
+/**
+ * Where this document's answers came from — an uploaded PRD/BRD, or the interview alone. Always
+ * rendered while DRAFTING (as "Created manually" when there's no file), because "was this built
+ * from a document?" is a question with two real answers and silence isn't one of them.
+ *
+ * Re-upload and Regenerate both REPLACE every existing answer (the backend does a full transcript
+ * replace, never a merge), so both go through the same review screen a first import does, and the
+ * confirm button says so when there is something to lose.
+ */
+function SourceDocumentCard({ doc, canWrite, onChanged }: { doc: RequirementsDocRow; canWrite: boolean; onChanged: () => void }) {
+  const [dialogOpen, setDialogOpen] = useState(false);
+  const [mode, setMode] = useState<"upload" | "regenerate">("upload");
+  const [file, setFile] = useState<File | null>(null);
+  const [stage, setStage] = useState<"picking" | "analyzing" | "reviewing" | "applying">("picking");
+  const [rows, setRows] = useState<RequirementsImportProposedTurnRow[]>([]);
+  const [openQuestions, setOpenQuestions] = useState<string[]>([]);
+  const [summary, setSummary] = useState<string | null>(null);
+  const [truncated, setTruncated] = useState(false);
+  const [documentText, setDocumentText] = useState<string | null>(null);
+  const progress = useIndeterminateProgress(stage === "analyzing");
+
+  const hasSource = Boolean(doc.sourceDocumentName);
+  const hasAnswers = doc.interviewTranscript.some((t) => t.answer !== null || t.skipped);
+  let pickerTitle = "Regenerate from the document";
+  if (mode === "upload") pickerTitle = hasSource ? "Replace the supporting document" : "Upload a supporting document";
+
+  function closeDialog() {
+    setDialogOpen(false);
+    setFile(null);
+    setStage("picking");
+    setRows([]);
+    setOpenQuestions([]);
+    setSummary(null);
+    setTruncated(false);
+    setDocumentText(null);
+  }
+
+  function receiveAnalysis(result: { proposedTurns: RequirementsImportProposedTurnRow[]; openQuestions: string[]; documentSummary: string; truncated: boolean; documentText?: string }) {
+    setRows(result.proposedTurns);
+    setOpenQuestions(result.openQuestions);
+    setSummary(result.documentSummary);
+    setTruncated(result.truncated);
+    setDocumentText(result.documentText ?? null);
+    setStage("reviewing");
+  }
+
+  const analyze = useMutation({
+    mutationFn: async () => {
+      if (!file) throw new Error("No file selected");
+      setStage("analyzing");
+      return requirementsDocApi.importAnalyze(doc.id, file);
+    },
+    onSuccess: receiveAnalysis,
+    onError: (err: any) => {
+      setStage("picking");
+      toast.error("Could not read that document", { description: err?.response?.data?.message ?? "Try a different file." });
+    }
+  });
+
+  const regenerate = useMutation({
+    mutationFn: async () => {
+      setMode("regenerate");
+      setDialogOpen(true);
+      setStage("analyzing");
+      return requirementsDocApi.importRegenerate(doc.id);
+    },
+    onSuccess: receiveAnalysis,
+    onError: (err: any) => {
+      closeDialog();
+      toast.error("Could not regenerate", { description: err?.response?.data?.message ?? "Try again." });
+    }
+  });
+
+  const apply = useMutation({
+    mutationFn: async () => {
+      setStage("applying");
+      await requirementsDocApi.importApply(doc.id, {
+        turns: rows.map(({ question, answer, sectionTag }) => ({ question, answer, sectionTag })),
+        // Only a real upload re-stamps the provenance — a regenerate ran against the stored text,
+        // so who uploaded it and when are unchanged.
+        ...(mode === "upload" && file && documentText
+          ? { sourceDocument: { fileName: file.name, fileSize: file.size, text: documentText } }
+          : {})
+      });
+      await requirementsDocApi.interviewTurn(doc.id, {});
+    },
+    onSuccess: () => {
+      toast.success(mode === "upload" ? "Document replaced" : "Answers regenerated");
+      closeDialog();
+      onChanged();
+    },
+    onError: (err: any) => {
+      setStage("reviewing");
+      toast.error("Could not save those answers", { description: err?.response?.data?.message ?? "Try again." });
+    }
+  });
+
+  const clearSource = useMutation({
+    mutationFn: () => requirementsDocApi.importClearSource(doc.id),
+    onSuccess: () => {
+      toast.success("Supporting document removed", { description: "Your answers were kept." });
+      onChanged();
+    },
+    onError: (err: any) => toast.error("Could not remove it", { description: err?.response?.data?.message ?? "Try again." })
+  });
+
+  return (
+    <>
+      <Card>
+        <CardContent className="flex flex-wrap items-center justify-between gap-3 py-3">
+          <div className="flex min-w-0 items-center gap-3">
+            <span className="grid h-9 w-9 shrink-0 place-items-center rounded-md bg-muted text-muted-foreground">
+              {hasSource ? <FileUp className="h-4 w-4" /> : <PenLine className="h-4 w-4" />}
+            </span>
+            <div className="min-w-0">
+              <SourceDocumentSummary doc={doc} />
+            </div>
+          </div>
+
+          {canWrite && doc.status === "DRAFTING" && (
+            <div className="flex flex-wrap items-center gap-2">
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => {
+                  setMode("upload");
+                  setDialogOpen(true);
+                }}
+              >
+                <FileUp className="mr-2 h-3.5 w-3.5" />
+                {hasSource ? "Re-upload" : "Upload a document"}
+              </Button>
+              {hasSource && (
+                <>
+                  <Button variant="outline" size="sm" onClick={() => regenerate.mutate()} disabled={regenerate.isPending}>
+                    <RefreshCw className="mr-2 h-3.5 w-3.5" />
+                    Regenerate
+                  </Button>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    className="text-destructive hover:bg-destructive/10 hover:text-destructive"
+                    disabled={clearSource.isPending}
+                    onClick={() => {
+                      if (window.confirm("Remove the link to this document? Your answers are kept — only the file details are forgotten.")) {
+                        clearSource.mutate();
+                      }
+                    }}
+                  >
+                    <Trash2 className="mr-2 h-3.5 w-3.5" />
+                    Remove
+                  </Button>
+                </>
+              )}
+            </div>
+          )}
+        </CardContent>
+      </Card>
+
+      <Dialog open={dialogOpen} onOpenChange={(open) => !open && closeDialog()}>
+        <DialogContent className={stage === "reviewing" ? "sm:max-w-xl" : undefined}>
+          {stage === "reviewing" ? (
+            <ImportReviewStep
+              rows={rows}
+              openQuestions={openQuestions}
+              summary={summary}
+              truncated={truncated}
+              hasAnswers={hasAnswers}
+              applying={apply.isPending}
+              onChangeAnswer={(index, answer) => setRows((prev) => prev.map((r, i) => (i === index ? { ...r, answer } : r)))}
+              onRemoveRow={(index) => setRows((prev) => prev.filter((_, i) => i !== index))}
+              onCancel={closeDialog}
+              onConfirm={() => apply.mutate()}
+            />
+          ) : (
+            <FilePickerStep
+              title={pickerTitle}
+              mode={mode}
+              analyzing={stage === "analyzing"}
+              progress={progress}
+              file={file}
+              onFileChange={setFile}
+              onCancel={closeDialog}
+              onAnalyze={() => analyze.mutate()}
+              analyzePending={analyze.isPending}
+            />
+          )}
+        </DialogContent>
+      </Dialog>
+    </>
   );
 }
 

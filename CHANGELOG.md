@@ -10,6 +10,35 @@ user of a running installation.
 The parser that feeds the in-app What's-new page ignores this section until it gains a version
 number, on purpose — an installation must never render history for a version that does not exist yet.
 
+### 📋 Requirements Studio: a starter template, and the imported document is now a real thing you can manage
+
+- **A downloadable fill-in template**, linked right beside the upload box — one guidance prompt per
+  area the interview asks about ("What's broken or missing today?"), so someone who has never
+  written a PRD or BRD has a starting point they can fill in offline, hand around, and upload back
+  in. Plain text on purpose: it round-trips through this app's own import path with no risk of a
+  format the reader rejects.
+- **The uploaded document is now shown, and manageable.** A card on the document page names the
+  file, its size, who uploaded it and when — or says plainly that the document was **created
+  manually**, so there's never ambiguity about where a set of answers came from. Alongside it:
+  **Re-upload** a corrected file, **Regenerate** to have the AI re-read the document already
+  attached (no re-upload needed), and **Remove** to forget the file while keeping every answer.
+  Re-upload and Regenerate both go through the same review-and-edit screen a first import does, and
+  say clearly when confirming will replace answers you already have.
+- **A progress bar during "reading your document"**, alongside the existing AI animation — reading
+  a real PRD takes a few seconds, and a bar that's visibly moving reads as working rather than
+  stuck.
+- **Every interview question now shows which area it belongs to** — Problem, Scope, Tech stack,
+  Non-functional, and so on — as a small tag beside the question, both while answering and in the
+  import review screen. The categorisation was always there in the data; now you can see it.
+
+### 🧭 The sidebar's account card is a real menu now
+
+- The name and role at the bottom of the sidebar used to be a read-out you couldn't click. It now
+  opens the same account menu as the avatar in the top bar — Profile, My history, What's new, Take
+  the tour, Switch role (when you hold more than one), Sign out — from one shared definition, so
+  the two can't drift apart. Works collapsed too, where the sidebar previously offered only a
+  hover tooltip.
+
 ### 👥 An account can hold more than one role, and switch between them without re-logging in
 
 - **Multi-role accounts.** A super admin can now grant an account several roles at once (Workspace

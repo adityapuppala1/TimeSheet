@@ -6,50 +6,24 @@
  * palette open" and "which theme is active" live here instead of being duplicated per page.
  * WHO renders this: `layouts/AppLayout.tsx`.
  */
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Command, Compass, LogOut, Menu, Moon, Repeat, Search, Sparkles, Sun, UserRound, FileClock } from "lucide-react";
+import { useQuery } from "@tanstack/react-query";
+import { Command, Menu, Moon, Search, Sun } from "lucide-react";
 import { useEffect, useState } from "react";
-import { Link, useNavigate } from "react-router";
-import type { RoleName } from "@timesheet/shared";
+import { AccountMenuContent, initialsFor } from "./AccountMenu";
 import { MobileDrawerNav } from "./Sidebar";
 import { Avatar, AvatarFallback, AvatarImage } from "./ui/avatar";
 import { Button } from "./ui/button";
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuLabel,
-  DropdownMenuRadioGroup,
-  DropdownMenuRadioItem,
-  DropdownMenuSeparator,
-  DropdownMenuTrigger
-} from "./ui/dropdown-menu";
-import { Badge } from "./ui/badge";
-import { toast } from "./ui/toaster";
+import { DropdownMenu, DropdownMenuTrigger } from "./ui/dropdown-menu";
 import { NotificationsBell } from "./NotificationsBell";
 import { CommandPalette, useCommandPaletteHotkey } from "./command-palette";
 import { ProductTour, shouldAutoStartTour, useTourController } from "./ProductTour";
-import { authApi, fileUrl, systemApi } from "../services/api";
-import { hasUnseenRelease } from "../lib/whats-new-seen";
+import { authApi, fileUrl } from "../services/api";
 import { useAuthStore } from "../store/auth";
 
 const THEME_KEY = "timesheet:theme";
 
-function initialsFor(name?: string) {
-  if (!name) return "?";
-  return name
-    .split(/\s+/)
-    .filter(Boolean)
-    .slice(0, 2)
-    .map((part) => part[0]?.toUpperCase() ?? "")
-    .join("");
-}
-
 export function Topbar() {
-  const navigate = useNavigate();
   const user = useAuthStore((s) => s.user);
-  const setUser = useAuthStore((s) => s.setUser);
-  const logoutStore = useAuthStore((s) => s.logout);
   const [dark, setDark] = useState(() => {
     if (typeof window === "undefined") return false;
     return document.documentElement.classList.contains("dark");
@@ -75,15 +49,10 @@ export function Topbar() {
     enabled: Boolean(user),
     staleTime: 5_000
   });
+  // The tour's state is a shared store (see ProductTour.tsx) precisely because the account menu
+  // that offers "Take the tour" now renders in two places while only this one renders the tour.
   const { running: tourRunning, start: startTour, stop: stopTour } = useTourController();
 
-  // Drives the "What's new" dot. Cheap by construction: the server answers from an hourly cache,
-  // and staleTime keeps this tab from asking more than once per session anyway.
-  const updates = useQuery({ queryKey: ["system", "updates"], queryFn: systemApi.updates, staleTime: 60 * 60 * 1000, enabled: Boolean(user) });
-  // Keyed on the version this workspace is RUNNING, not the newest one GitHub knows about. Those
-  // differ for days after a release — the tag is pushed later — and keying on the remote value
-  // meant the dot stayed dark through exactly the upgrade it exists to announce.
-  const unseenRelease = hasUnseenRelease(updates.data?.currentVersion);
   useEffect(() => {
     if (!user || !shouldAutoStartTour(onboarding.data?.completedAt)) return;
     // Deferred so it measures a settled layout rather than a half-rendered dashboard.
@@ -91,36 +60,7 @@ export function Topbar() {
     return () => window.clearTimeout(timer);
   }, [user, onboarding.data?.completedAt, startTour]);
 
-  const queryClient = useQueryClient();
-  async function handleLogout() {
-    try {
-      await authApi.logout();
-    } catch {
-      // ignore — we still want local cleanup
-    }
-    logoutStore();
-    // Drop every cached server response so the next sign-in starts clean and
-    // we don't briefly flash the previous user's data.
-    queryClient.clear();
-    toast.success("Signed out");
-    navigate("/login");
-  }
-
   const avatarSrc = fileUrl(user?.avatarUrl);
-
-  // Only ever non-empty when a super admin has explicitly granted this account more than one
-  // role (Workspace Settings → User Management) — the common case renders nothing here at all.
-  const switchRole = useMutation({
-    mutationFn: (role: RoleName) => authApi.switchRole(role),
-    onSuccess: (updated) => {
-      setUser(updated);
-      // Every permission check in the app re-derives from this cached response, so cached pages
-      // built under the old role (e.g. an admin-only list) must not be shown stale.
-      queryClient.invalidateQueries();
-      toast.success(`Switched to ${updated.role.replace("_", " ")}`);
-    },
-    onError: (err: any) => toast.error("Could not switch role", { description: err?.response?.data?.message ?? "Try again." })
-  });
 
   return (
     <>
@@ -179,66 +119,7 @@ export function Topbar() {
                 <span className="hidden text-sm font-semibold sm:inline">{user?.name?.split(" ")[0] ?? "Account"}</span>
               </Button>
             </DropdownMenuTrigger>
-            <DropdownMenuContent className="w-64" align="end">
-              <DropdownMenuLabel>
-                <div className="flex items-center gap-3 normal-case">
-                  <Avatar className="h-10 w-10">
-                    {avatarSrc ? <AvatarImage src={avatarSrc} alt={user?.name ?? "Profile photo"} /> : null}
-                    <AvatarFallback>{initialsFor(user?.name)}</AvatarFallback>
-                  </Avatar>
-                  <div className="min-w-0">
-                    <p className="text-sm font-bold tracking-tight">{user?.name}</p>
-                    <p className="truncate text-xs font-normal text-muted-foreground">{user?.email}</p>
-                    <Badge variant="info" className="mt-1 w-fit">{user?.role}</Badge>
-                  </div>
-                </div>
-              </DropdownMenuLabel>
-              {user && user.heldRoles.length > 1 && (
-                <>
-                  <DropdownMenuSeparator />
-                  <DropdownMenuLabel className="flex items-center gap-1.5 text-xs font-normal text-muted-foreground">
-                    <Repeat className="h-3 w-3" /> Switch role
-                  </DropdownMenuLabel>
-                  <DropdownMenuRadioGroup
-                    value={user.role}
-                    onValueChange={(value) => {
-                      if (value !== user.role) switchRole.mutate(value as RoleName);
-                    }}
-                  >
-                    {user.heldRoles.map((role) => (
-                      <DropdownMenuRadioItem key={role} value={role} disabled={switchRole.isPending}>
-                        {role.replace("_", " ")}
-                      </DropdownMenuRadioItem>
-                    ))}
-                  </DropdownMenuRadioGroup>
-                </>
-              )}
-              <DropdownMenuSeparator />
-              <DropdownMenuItem asChild>
-                <Link to="/app/profile"><UserRound /> Profile</Link>
-              </DropdownMenuItem>
-              <DropdownMenuItem asChild>
-                <Link to="/app/history"><FileClock /> My history</Link>
-              </DropdownMenuItem>
-              <DropdownMenuItem asChild>
-                <Link to="/app/whats-new" className="relative">
-                  <Sparkles /> What's new
-                  {/* Re-arms once per release (keyed by version, see lib/whats-new-seen.ts) —
-                      a dot that never clears trains people to ignore it. */}
-                  {unseenRelease && <span aria-hidden className="absolute right-2 top-1/2 h-2 w-2 -translate-y-1/2 rounded-full bg-primary" />}
-                </Link>
-              </DropdownMenuItem>
-              {/* Sits with Profile and My history because that's where people look for "things
-                  about me and how I use this", and because the tour is the one feature someone
-                  goes hunting for AFTER dismissing it. */}
-              <DropdownMenuItem onSelect={() => startTour()}>
-                <Compass /> Take the tour
-              </DropdownMenuItem>
-              <DropdownMenuSeparator />
-              <DropdownMenuItem onSelect={handleLogout} className="text-destructive focus:bg-destructive/10 focus:text-destructive">
-                <LogOut /> Sign out
-              </DropdownMenuItem>
-            </DropdownMenuContent>
+            <AccountMenuContent />
           </DropdownMenu>
         </div>
       </header>

@@ -7,10 +7,11 @@
  * WHO renders this: `App.tsx` at `/app/requirements`.
  */
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { FileText, FileUp, Loader2, Plus, Sparkles, X } from "lucide-react";
-import { useState } from "react";
+import { Download, FileText, FileUp, Loader2, Plus, Sparkles } from "lucide-react";
+import { useEffect, useState } from "react";
 import { useNavigate } from "react-router";
 import { permissions } from "@timesheet/shared";
+import { ImportReviewPanel } from "../components/requirements/ImportReviewPanel";
 import { AiStrands } from "../components/ui/ai-strands";
 import { Badge } from "../components/ui/badge";
 import { Button } from "../components/ui/button";
@@ -19,9 +20,9 @@ import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, D
 import { FileDropzone } from "../components/ui/file-dropzone";
 import { Input } from "../components/ui/input";
 import { Label } from "../components/ui/label";
+import { Progress } from "../components/ui/progress";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../components/ui/select";
 import { Skeleton } from "../components/ui/skeleton";
-import { Textarea } from "../components/ui/textarea";
 import { toast } from "../components/ui/toaster";
 import { useAuthStore } from "../store/auth";
 import { requirementsDocApi, type RequirementsDocRow, type RequirementsImportProposedTurnRow } from "../services/api";
@@ -32,13 +33,40 @@ const IMPORT_ACCEPT = {
   "text/plain": [".txt"]
 };
 
-const CONFIDENCE_VARIANT: Record<RequirementsImportProposedTurnRow["confidence"], "default" | "secondary" | "outline"> = {
-  HIGH: "default",
-  MEDIUM: "secondary",
-  LOW: "outline"
-};
-
 type ImportStage = "idle" | "analyzing" | "reviewing" | "applying";
+
+/**
+ * Eases toward `ceiling` while `active`, never reaching it — one request/response, so there is no
+ * real progress to report, and a bar that sits at 100% while still working reads as broken. The
+ * decreasing step is what makes it feel like it's still going without ever promising a finish.
+ */
+export function useIndeterminateProgress(active: boolean, ceiling = 92) {
+  const [value, setValue] = useState(0);
+
+  useEffect(() => {
+    if (!active) {
+      setValue(0);
+      return;
+    }
+    const timer = window.setInterval(() => {
+      setValue((current) => (current >= ceiling ? current : current + Math.max(1, (ceiling - current) * 0.08)));
+    }, 220);
+    return () => window.clearInterval(timer);
+  }, [active, ceiling]);
+
+  return value;
+}
+
+/** Same "authenticated blob, not a bare <a href>" pattern the document exports already use — the
+ *  access token lives in memory, so a plain link would hit the route unauthenticated. */
+export async function downloadBlobAs(blob: Blob, filename: string) {
+  const url = URL.createObjectURL(blob);
+  const anchor = document.createElement("a");
+  anchor.href = url;
+  anchor.download = filename;
+  anchor.click();
+  URL.revokeObjectURL(url);
+}
 
 const STATUS_LABEL: Record<RequirementsDocRow["status"], string> = { DRAFTING: "Drafting", READY: "Ready", ARCHIVED: "Archived" };
 const STATUS_VARIANT: Record<RequirementsDocRow["status"], "outline" | "default" | "secondary"> = {
@@ -68,9 +96,12 @@ export function RequirementsStudioPage() {
   const [importOpenQuestions, setImportOpenQuestions] = useState<string[]>([]);
   const [importTruncated, setImportTruncated] = useState(false);
   const [importRows, setImportRows] = useState<RequirementsImportProposedTurnRow[]>([]);
+  /** Kept so a confirmed upload can persist its provenance — see importApply's `sourceDocument`. */
+  const [importDocumentText, setImportDocumentText] = useState<string | null>(null);
 
   const docs = useQuery({ queryKey: ["requirements-docs"], queryFn: requirementsDocApi.list });
   const rows = (docs.data ?? []).filter((d) => d.status !== "ARCHIVED");
+  const analyzeProgress = useIndeterminateProgress(importStage === "analyzing");
 
   function resetDialog() {
     setCreateOpen(false);
@@ -83,7 +114,13 @@ export function RequirementsStudioPage() {
     setImportOpenQuestions([]);
     setImportTruncated(false);
     setImportRows([]);
+    setImportDocumentText(null);
   }
+
+  const downloadTemplate = useMutation({
+    mutationFn: async () => downloadBlobAs(await requirementsDocApi.downloadTemplate(), "prd-brd-template.txt"),
+    onError: (err: any) => toast.error("Could not download the template", { description: err?.response?.data?.message ?? "Try again." })
+  });
 
   const create = useMutation({
     mutationFn: () => requirementsDocApi.create({ title: title.trim(), docType }),
@@ -111,6 +148,7 @@ export function RequirementsStudioPage() {
       setImportOpenQuestions(result.openQuestions);
       setImportTruncated(result.truncated);
       setImportRows(result.proposedTurns);
+      setImportDocumentText(result.documentText ?? null);
       setImportStage("reviewing");
     },
     onError: (err: any) => {
@@ -124,7 +162,11 @@ export function RequirementsStudioPage() {
       if (!importDocId) throw new Error("No document to apply to");
       setImportStage("applying");
       await requirementsDocApi.importApply(importDocId, {
-        turns: importRows.map(({ question, answer, sectionTag }) => ({ question, answer, sectionTag }))
+        turns: importRows.map(({ question, answer, sectionTag }) => ({ question, answer, sectionTag })),
+        // Records where these answers came from — filename, size, extracted text, uploader, date.
+        ...(importFile && importDocumentText
+          ? { sourceDocument: { fileName: importFile.name, fileSize: importFile.size, text: importDocumentText } }
+          : {})
       });
       // Fires the opening question exactly like a fresh document would on its own — the
       // interview engine has no idea these answers came from an import.
@@ -256,12 +298,24 @@ export function RequirementsStudioPage() {
                     The AI proposes which answers your document already covers — you review and edit everything before it's saved, and it
                     only asks follow-up questions for what's still missing.
                   </p>
+                  {/* For people who don't have a PRD/BRD yet — a text link, not a button, so it
+                      never competes with the two real actions in the footer. */}
+                  <button
+                    type="button"
+                    onClick={() => downloadTemplate.mutate()}
+                    disabled={downloadTemplate.isPending}
+                    className="focus-ring flex w-fit items-center gap-1.5 rounded-sm text-xs font-medium text-primary underline-offset-4 hover:underline disabled:opacity-60"
+                  >
+                    {downloadTemplate.isPending ? <Loader2 className="h-3 w-3 animate-spin" /> : <Download className="h-3 w-3" />}
+                    Don't have one? Download a fill-in template
+                  </button>
                 </div>
               </div>
 
               {importStage === "analyzing" ? (
-                <div className="py-2">
+                <div className="grid gap-2 py-2">
                   <AiStrands label="Reading your document and matching it to the interview…" />
+                  <Progress value={analyzeProgress} className="h-1.5" />
                 </div>
               ) : (
                 <DialogFooter>
@@ -293,43 +347,14 @@ export function RequirementsStudioPage() {
                 </DialogDescription>
               </DialogHeader>
 
-              <div className="grid max-h-[60vh] gap-4 overflow-y-auto pr-1">
-                {importSummary && <p className="text-sm text-muted-foreground">{importSummary}</p>}
-                {importTruncated && (
-                  <p className="rounded-md bg-warning/10 px-3 py-2 text-xs text-warning-foreground">
-                    We could only read part of this file — the rest will be covered by follow-up questions.
-                  </p>
-                )}
-
-                {importRows.length === 0 && <p className="text-sm text-muted-foreground">Nothing left to save — remove was used on every row.</p>}
-                {importRows.map((row, index) => (
-                  <div key={`${row.sectionTag}-${index}`} className="grid gap-1.5 rounded-md border border-border p-3">
-                    <div className="flex items-start justify-between gap-2">
-                      <p className="text-sm font-medium">{row.question}</p>
-                      <div className="flex shrink-0 items-center gap-1.5">
-                        <Badge variant={CONFIDENCE_VARIANT[row.confidence]} className="text-[10px]">
-                          {row.confidence.toLowerCase()} confidence
-                        </Badge>
-                        <Button variant="ghost" size="icon" className="h-6 w-6" onClick={() => removeImportRow(index)} aria-label="Remove this answer">
-                          <X className="h-3.5 w-3.5" />
-                        </Button>
-                      </div>
-                    </div>
-                    <Textarea value={row.answer} onChange={(e) => updateImportRowAnswer(index, e.target.value)} rows={2} maxLength={4000} />
-                  </div>
-                ))}
-
-                {importOpenQuestions.length > 0 && (
-                  <div className="grid gap-1.5">
-                    <p className="text-xs font-medium text-muted-foreground">The interview will ask about these next:</p>
-                    <ul className="grid gap-1 text-xs text-muted-foreground">
-                      {importOpenQuestions.map((q) => (
-                        <li key={q}>• {q}</li>
-                      ))}
-                    </ul>
-                  </div>
-                )}
-              </div>
+              <ImportReviewPanel
+                rows={importRows}
+                openQuestions={importOpenQuestions}
+                summary={importSummary}
+                truncated={importTruncated}
+                onChangeAnswer={updateImportRowAnswer}
+                onRemoveRow={removeImportRow}
+              />
 
               <DialogFooter>
                 <Button variant="ghost" onClick={skipImportAndContinueBlank}>

@@ -5,7 +5,7 @@
  * the SDK level, so these tests never reach `callChat`/a real provider (mirrors this session's own
  * `ai-provider-config.test.ts` pattern of testing the orchestration layer, not the model call).
  */
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createFakeTenantClient } from "../helpers/fake-prisma-client.js";
 import { runInTenant } from "../helpers/tenant-context.js";
 
@@ -30,6 +30,8 @@ const {
   generateDocument,
   analyzeImportedDocument,
   applyImportedAnswers,
+  regenerateFromStoredDocument,
+  clearSourceDocument,
   buildTicketMaterializationChanges,
   materializeGoals
 } = await import("../../src/services/requirements-doc.service.js");
@@ -42,9 +44,20 @@ const BASE_DOC = {
   projectId: null,
   sections: null,
   createdById: "user-1",
+  sourceDocumentName: null,
+  sourceDocumentSize: null,
+  sourceDocumentText: null,
+  sourceDocumentUploadedById: null,
+  sourceDocumentUploadedAt: null,
   createdAt: new Date(),
   updatedAt: new Date()
 };
+
+// The module-level AI/extraction mocks are shared across every test in this file — without this,
+// a "was this called?" assertion sees calls another test made.
+beforeEach(() => {
+  vi.clearAllMocks();
+});
 
 describe("recordInterviewTurn", () => {
   it("appends the prior answer to the open question, then the new pending question", async () => {
@@ -118,15 +131,51 @@ describe("generateDocument", () => {
 const FAKE_FILE = { buffer: Buffer.from("irrelevant"), originalname: "existing-prd.pdf" };
 
 describe("analyzeImportedDocument", () => {
-  it("refuses when the interview has already started", async () => {
+  it("refuses once the document is no longer DRAFTING", async () => {
+    const client = createFakeTenantClient();
+    vi.mocked(client.requirementsDocument.findUnique).mockResolvedValue({ ...BASE_DOC, status: "READY", interviewTranscript: [] } as never);
+
+    await expect(runInTenant(client, () => analyzeImportedDocument("doc-1", FAKE_FILE, "user-1"))).rejects.toMatchObject({ statusCode: 422 });
+    expect(extractRequirementsImportText).not.toHaveBeenCalled();
+  });
+
+  it("ALLOWS a re-upload over an interview already in progress — a re-upload replaces, it doesn't merge", async () => {
     const client = createFakeTenantClient();
     vi.mocked(client.requirementsDocument.findUnique).mockResolvedValue({
       ...BASE_DOC,
       interviewTranscript: [{ question: "Q1", answer: "already answered", skipped: false, sectionTag: "problem" }]
     } as never);
+    vi.mocked(extractRequirementsImportText).mockResolvedValue({ text: "A real document with real, meaningful content in it.".repeat(10) });
+    vi.mocked(analyzeRequirementsImport).mockResolvedValue({
+      proposedTurns: [{ question: "What problem are you solving?", answer: "Scheduling field techs", sectionTag: "problem", confidence: "HIGH" }],
+      openQuestions: [],
+      documentSummary: "A short PRD.",
+      model: "test-model",
+      interactionId: null
+    } as never);
 
-    await expect(runInTenant(client, () => analyzeImportedDocument("doc-1", FAKE_FILE, "user-1"))).rejects.toMatchObject({ statusCode: 422 });
-    expect(extractRequirementsImportText).not.toHaveBeenCalled();
+    const result = await runInTenant(client, () => analyzeImportedDocument("doc-1", FAKE_FILE, "user-1"));
+
+    expect(result.proposedTurns).toHaveLength(1);
+    expect(client.requirementsDocument.update).not.toHaveBeenCalled();
+  });
+
+  it("returns the extracted text so a confirmed upload can persist its provenance", async () => {
+    const client = createFakeTenantClient();
+    vi.mocked(client.requirementsDocument.findUnique).mockResolvedValue({ ...BASE_DOC, interviewTranscript: [] } as never);
+    const text = "A real document with real, meaningful content in it.".repeat(10);
+    vi.mocked(extractRequirementsImportText).mockResolvedValue({ text });
+    vi.mocked(analyzeRequirementsImport).mockResolvedValue({
+      proposedTurns: [],
+      openQuestions: [],
+      documentSummary: "",
+      model: "test-model",
+      interactionId: null
+    } as never);
+
+    const result = await runInTenant(client, () => analyzeImportedDocument("doc-1", FAKE_FILE, "user-1"));
+
+    expect(result.documentText).toBe(text);
   });
 
   it("refuses when the extracted text is too short to be a real document", async () => {
@@ -208,15 +257,56 @@ describe("applyImportedAnswers", () => {
     ]);
   });
 
-  it("refuses when the interview has already started — the race guard", async () => {
+  it("REPLACES an interview already in progress rather than merging into it", async () => {
     const client = createFakeTenantClient();
     vi.mocked(client.requirementsDocument.findUnique).mockResolvedValue({
       ...BASE_DOC,
-      interviewTranscript: [{ question: "Q1", answer: "already answered", skipped: false, sectionTag: "problem" }]
+      interviewTranscript: [{ question: "Old question", answer: "old answer", skipped: false, sectionTag: "goals" }]
     } as never);
+    vi.mocked(client.requirementsDocument.update).mockResolvedValue({} as never);
+
+    await runInTenant(client, () => applyImportedAnswers("doc-1", { turns: TURNS }, "user-1"));
+
+    const written = vi.mocked(client.requirementsDocument.update).mock.calls[0][0] as any;
+    expect(written.data.interviewTranscript).toHaveLength(2);
+    expect(JSON.stringify(written.data.interviewTranscript)).not.toContain("Old question");
+  });
+
+  it("refuses once the document is no longer DRAFTING", async () => {
+    const client = createFakeTenantClient();
+    vi.mocked(client.requirementsDocument.findUnique).mockResolvedValue({ ...BASE_DOC, status: "READY", interviewTranscript: [] } as never);
 
     await expect(runInTenant(client, () => applyImportedAnswers("doc-1", { turns: TURNS }, "user-1"))).rejects.toMatchObject({ statusCode: 422 });
     expect(client.requirementsDocument.update).not.toHaveBeenCalled();
+  });
+
+  it("persists the file's provenance when a sourceDocument is supplied (a real upload)", async () => {
+    const client = createFakeTenantClient();
+    vi.mocked(client.requirementsDocument.findUnique).mockResolvedValue({ ...BASE_DOC, interviewTranscript: [] } as never);
+    vi.mocked(client.requirementsDocument.update).mockResolvedValue({} as never);
+
+    await runInTenant(client, () =>
+      applyImportedAnswers("doc-1", { turns: TURNS, sourceDocument: { fileName: "prd.pdf", fileSize: 2048, text: "extracted" } }, "user-1")
+    );
+
+    const written = vi.mocked(client.requirementsDocument.update).mock.calls[0][0] as any;
+    expect(written.data.sourceDocumentName).toBe("prd.pdf");
+    expect(written.data.sourceDocumentSize).toBe(2048);
+    expect(written.data.sourceDocumentText).toBe("extracted");
+    expect(written.data.sourceDocumentUploadedById).toBe("user-1");
+    expect(written.data.sourceDocumentUploadedAt).toBeInstanceOf(Date);
+  });
+
+  it("leaves provenance untouched when no sourceDocument is supplied (a regenerate or a plain edit)", async () => {
+    const client = createFakeTenantClient();
+    vi.mocked(client.requirementsDocument.findUnique).mockResolvedValue({ ...BASE_DOC, interviewTranscript: [] } as never);
+    vi.mocked(client.requirementsDocument.update).mockResolvedValue({} as never);
+
+    await runInTenant(client, () => applyImportedAnswers("doc-1", { turns: TURNS }, "user-1"));
+
+    const written = vi.mocked(client.requirementsDocument.update).mock.calls[0][0] as any;
+    expect(written.data).not.toHaveProperty("sourceDocumentName");
+    expect(written.data).not.toHaveProperty("sourceDocumentUploadedById");
   });
 
   it("refuses an empty turns array", async () => {
@@ -225,6 +315,58 @@ describe("applyImportedAnswers", () => {
 
     await expect(runInTenant(client, () => applyImportedAnswers("doc-1", { turns: [] }, "user-1"))).rejects.toMatchObject({ statusCode: 422 });
     expect(client.requirementsDocument.update).not.toHaveBeenCalled();
+  });
+});
+
+describe("regenerateFromStoredDocument", () => {
+  it("refuses when there is no stored supporting document", async () => {
+    const client = createFakeTenantClient();
+    vi.mocked(client.requirementsDocument.findUnique).mockResolvedValue({ ...BASE_DOC, sourceDocumentText: null } as never);
+
+    await expect(runInTenant(client, () => regenerateFromStoredDocument("doc-1", "user-1"))).rejects.toMatchObject({ statusCode: 422 });
+    expect(analyzeRequirementsImport).not.toHaveBeenCalled();
+  });
+
+  it("re-runs the analysis against the STORED text — no upload, and still writes nothing", async () => {
+    const client = createFakeTenantClient();
+    vi.mocked(client.requirementsDocument.findUnique).mockResolvedValue({
+      ...BASE_DOC,
+      sourceDocumentText: "the previously extracted document text"
+    } as never);
+    vi.mocked(analyzeRequirementsImport).mockResolvedValue({
+      proposedTurns: [{ question: "Q", answer: "A", sectionTag: "problem", confidence: "HIGH" }],
+      openQuestions: [],
+      documentSummary: "",
+      model: "test-model",
+      interactionId: null
+    } as never);
+
+    const result = await runInTenant(client, () => regenerateFromStoredDocument("doc-1", "user-1"));
+
+    expect(vi.mocked(analyzeRequirementsImport).mock.calls[0][0].documentText).toBe("the previously extracted document text");
+    expect(extractRequirementsImportText).not.toHaveBeenCalled();
+    expect(result.proposedTurns).toHaveLength(1);
+    expect(client.requirementsDocument.update).not.toHaveBeenCalled();
+  });
+});
+
+describe("clearSourceDocument", () => {
+  it("nulls only the five provenance fields, leaving the transcript alone", async () => {
+    const client = createFakeTenantClient();
+    vi.mocked(client.requirementsDocument.findUnique).mockResolvedValue({ ...BASE_DOC, sourceDocumentName: "prd.pdf" } as never);
+    vi.mocked(client.requirementsDocument.update).mockResolvedValue({} as never);
+
+    await runInTenant(client, () => clearSourceDocument("doc-1", "user-1"));
+
+    const written = vi.mocked(client.requirementsDocument.update).mock.calls[0][0] as any;
+    expect(written.data).toEqual({
+      sourceDocumentName: null,
+      sourceDocumentSize: null,
+      sourceDocumentText: null,
+      sourceDocumentUploadedById: null,
+      sourceDocumentUploadedAt: null
+    });
+    expect(written.data).not.toHaveProperty("interviewTranscript");
   });
 });
 

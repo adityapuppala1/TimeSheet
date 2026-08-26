@@ -24,6 +24,7 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { useLocation, useNavigate } from "react-router";
+import { create } from "zustand";
 import { ChevronLeft, ChevronRight, X } from "lucide-react";
 import { usePlanningFeatures } from "../lib/use-planning";
 import { buildTourSteps, type TourStep } from "../lib/tour-steps";
@@ -65,14 +66,29 @@ function waitForElement(selector: string, timeoutMs: number): Promise<HTMLElemen
   });
 }
 
-export function useTourController() {
-  const [running, setRunning] = useState(false);
-  const start = useCallback(() => {
+/**
+ * SHARED, not per-hook local state. Two separate places offer "Take the tour" (the top bar's
+ * account menu and the sidebar's, both via AccountMenu.tsx) while only ONE place renders
+ * `<ProductTour>`. With `useState` here, each caller got its own disconnected `running` flag and
+ * the menu's Start silently did nothing from anywhere but the component holding the renderer.
+ */
+interface TourState {
+  running: boolean;
+  start: () => void;
+  stop: () => void;
+}
+
+const useTourStore = create<TourState>((set) => ({
+  running: false,
+  start: () => {
     sessionStorage.setItem(SESSION_KEY, "1");
-    setRunning(true);
-  }, []);
-  const stop = useCallback(() => setRunning(false), []);
-  return { running, start, stop };
+    set({ running: true });
+  },
+  stop: () => set({ running: false })
+}));
+
+export function useTourController() {
+  return useTourStore();
 }
 
 export function ProductTour({ running, onClose }: { running: boolean; onClose: () => void }) {
