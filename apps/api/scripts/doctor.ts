@@ -385,6 +385,35 @@ function runMigrations(label: string, schema: string): void {
   }
 }
 
+/**
+ * Fans a pending migration out to every registered tenant database — the gap that let
+ * `RequirementsDocument`'s migration land on the default DATABASE_URL while `acme_corp` and
+ * `ci_probe` (real registered tenants) silently fell behind, only surfacing as a runtime
+ * "column does not exist" error days later. `runMigrations` above only ever touches DATABASE_URL
+ * and CONTROL_DATABASE_URL; this is the third leg.
+ *
+ * Never fatal — unlike `runMigrations`, this calls `warn`, not `fail`. A multi-tenant fan-out
+ * failing (an unreachable tenant host, a stranded control-plane connection) must not block
+ * healing the ONE database `npm run dev` actually needs to boot; `migrate-all-tenants.ts` already
+ * isolates per-org failures internally; this wrapper isolates the WHOLE fan-out from the rest of
+ * doctor's heal.
+ */
+function runTenantMigrations(): void {
+  try {
+    const output = execSync("npx tsx scripts/migrate-all-tenants.ts", { cwd: apiCwd, stdio: ["pipe", "pipe", "pipe"] }).toString();
+    const migrated = (output.match(/^\S+: migrated$/gm) ?? []).length;
+    if (migrated > 0) {
+      ok(`Tenant databases — ${migrated} organization(s) migrated to the latest schema.`);
+    } else {
+      ok("Tenant databases — already at the latest schema.");
+    }
+  } catch (error) {
+    warn(
+      `Tenant databases — the fan-out did not complete cleanly. Run \`npm run migrate:tenants -w apps/api\` by hand to see which:\n\n${childOutput(error)}\n`
+    );
+  }
+}
+
 /** Surgically swaps the host:port of one env var's DSN inside .env, leaving the rest of the file
  *  (comments, ordering, quoting style, every other value) untouched.
  *  WHY the explicit `(\r?)` capture instead of a trailing `\s*`: `\s` matches `\r`, so on a
@@ -556,6 +585,7 @@ async function main(): Promise<void> {
   if (HEAL) {
     runMigrations("DATABASE_URL", "prisma/schema.prisma");
     runMigrations("CONTROL_DATABASE_URL", "prisma/control/schema.prisma");
+    runTenantMigrations();
     console.log("\n[doctor] Healed — databases created and migrated. Next: `npm run seed -w apps/api` (first run only), then `npm run dev`.\n");
     return;
   }

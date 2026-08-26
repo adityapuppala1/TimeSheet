@@ -7,7 +7,7 @@
   ],
   "scripts": {
     "postinstall": "node -e \"const{existsSync}=require('fs');if(existsSync('packages/shared/tsconfig.json')){require('child_process').execSync('npm run build -w packages/shared',{stdio:'inherit'})}else{console.log('postinstall: packages/shared sources absent (manifest-only install layer) - skipping build')}\"",
-    "predev": "node scripts/ensure-deps.mjs",
+    "predev": "node scripts/ensure-deps.mjs && node scripts/ensure-migrations.mjs",
     "dev": "concurrently \"npm run dev -w apps/api\" \"npm run dev -w apps/web\"",
     "prebuild": "node scripts/ensure-deps.mjs",
     "build": "npm run build -w packages/shared && npm run build -w apps/api && npm run build -w apps/web",
