@@ -496,6 +496,13 @@ export interface GlobalAISettings {
    *  Orthogonal to the toggles above: those answer "does this run", this answers "how much
    *  authority does it have when it does". */
   aiAutonomyEnabled: boolean;
+  /** The provider circuit breaker (apps/api/src/services/ai.service.ts#callChat) — off by
+   *  default, same as every other automation here. 3 consecutive failures against one configured
+   *  provider moves it to the back of the priority order with no human click; never promotes a
+   *  demoted row back automatically. Toggled from the AI providers list itself
+   *  (AIProviderListCard.tsx), not this general settings surface — it's a property of the
+   *  provider list, not a feature switch. */
+  aiAutoFailoverEnabled: boolean;
   model: string;
   confidenceThreshold: number;
   monthlyBudgetUsd: number | null;

@@ -1292,6 +1292,13 @@ model GlobalAISettings {
   /// run at all", this answers "how much authority does it have when it runs". Collapsing the two
   /// would mean turning a feature off and on again silently restored its autonomy.
   aiAutonomyEnabled   Boolean    @default(false)
+  /// The provider circuit breaker (ai.service.ts#callChat): off by default, same as every other
+  /// automation in this file — 3 consecutive failures against one AIProviderConfig row moves it
+  /// to the back of the priority order with no human click, so a flaky primary stops costing every
+  /// call a full timeout before falling through. Never promotes a demoted row back automatically;
+  /// that stays a manual reorder (or a fresh Suggest order), on purpose — auto-promotion between
+  /// two flaky providers risks flapping, which is worse than "stable, once demoted."
+  aiAutoFailoverEnabled Boolean  @default(false)
   updatedAt           DateTime   @updatedAt
   updatedById         String?
 }
@@ -1328,6 +1335,17 @@ model AIProviderConfig {
   /// Ascending — 0 is tried first. Not `@unique`: a tie is resolved by insertion order (id), which
   /// only matters for the instant between two rows momentarily sharing a value during a reorder.
   priority Int        @default(0)
+
+  /// The circuit breaker's own counter (ai.service.ts#callChat) — every failed attempt against
+  /// this row increments it, every successful one resets it to 0. Read only when
+  /// GlobalAISettings.aiAutoFailoverEnabled is on; reaching 3 auto-demotes the row to the back of
+  /// the enabled priority order. Not exposed for manual editing — it only ever moves by one call
+  /// succeeding or failing.
+  consecutiveFailures Int @default(0)
+  /// Set the moment the breaker demotes this row, cleared by any human write to it (edit or a
+  /// manual reorder) — the UI shows an "auto-demoted" tag exactly while this is non-null, so an
+  /// admin can always tell an automatic move from one they made themselves.
+  autoDemotedAt DateTime?
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt

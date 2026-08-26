@@ -10,6 +10,29 @@ user of a running installation.
 The parser that feeds the in-app What's-new page ignores this section until it gains a version
 number, on purpose — an installation must never render history for a version that does not exist yet.
 
+### 🩺 AI providers now show whether they're actually working, and can route around each other
+
+- **A live status dot on every configured provider** — Healthy, Degraded, Down, or "no recent
+  data" — derived from its real traffic over the last 15 minutes, refreshed every time the AI
+  settings tab loads. Plus a **Test** button per row for an on-demand, free connectivity check
+  (a models-list call, no completion tokens) that answers in seconds instead of waiting on a real
+  generation call.
+- **An opt-in circuit breaker.** Turn on "Automatically move a failing provider to the back of the
+  line" and three failed calls in a row demote that provider on their own — no downtime waiting
+  for someone to notice and reorder it by hand. It only ever demotes, never auto-promotes back up
+  (that stays a manual reorder, or a fresh Suggest order) — no flapping between two flaky
+  providers. Every automatic move is logged in the audit trail and marked "Auto-demoted" in the
+  list, so it's never mistaken for a choice an admin made.
+- **Mechanical AI tasks now prefer the cheapest healthy provider**, not just the admin's fixed
+  first choice — triage, duplicate detection, and the other tasks that already downgrade to a
+  cheaper model do the same across providers now, while narrative/judgment features keep the
+  admin's exact order untouched. Reuses the cost and health data the app already tracks; nothing
+  new to configure.
+- Fixed along the way: a stale legacy field could leak into a live call's requested model whenever
+  the top-priority provider changed — reordering or adding a provider could 404 the very next call
+  by asking the new primary for a model name from a different vendor's catalogue. Every capability
+  now sees the provider that will actually run, not the frozen field the ranked list replaced.
+
 ### 📝 Requirements Studio — an AI interview that turns an idea into a PRD/BRD, then real work
 
 - **A new AI-guided interview** (Workspace nav → Plan → Requirements Studio) asks one question at

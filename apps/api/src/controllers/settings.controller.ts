@@ -30,7 +30,7 @@ import {
   notifyEnrollmentRequired
 } from "../services/face.service.js";
 import { getGlobalNotificationSettings } from "../services/notify.service.js";
-import { getGlobalAISettings, getEnabledProviderConfigs, getAIUsageBreakdown, getAIUsageDailyDetail, getWeeklyAIUsageTrend, getAIFeatureUsage, listAvailableOpenAICompatibleModels, resolveApiKey } from "../services/ai.service.js";
+import { getGlobalAISettings, getEnabledProviderConfigs, getAIUsageBreakdown, getAIUsageDailyDetail, getWeeklyAIUsageTrend, getAIFeatureUsage, listAvailableOpenAICompatibleModels, resolveApiKey, testProviderConnectivity } from "../services/ai.service.js";
 import { buildAiUsageWorkbook } from "../services/ai-usage-export.service.js";
 import {
   listProviderConfigs,
@@ -421,6 +421,7 @@ export const aiSettingsSchema = z.object({
       changePirAssistEnabled: z.boolean().optional(),
       planBreakdownEnabled: z.boolean().optional(),
       requirementsStudioEnabled: z.boolean().optional(),
+      aiAutoFailoverEnabled: z.boolean().optional(),
       duplicateDetectionEnabled: z.boolean().optional(),
       writingAssistantEnabled: z.boolean().optional(),
       commentSummaryEnabled: z.boolean().optional(),
@@ -544,6 +545,21 @@ settingsRouter.post("/ai/providers/reorder", requireSuperAdmin, validate(reorder
 settingsRouter.get("/ai/providers/suggested-order", requireSuperAdmin, async (_req, res) => {
   res.json(await getSuggestedProviderOrder());
 });
+
+/** The "Test" button — a real, on-demand connectivity probe, separate from the passive status
+ *  badge `GET /ai/providers` already returns (derived from actual recent traffic). Never writes
+ *  consecutiveFailures/autoDemotedAt — that's the circuit breaker's own concern, reacting only to
+ *  real feature calls, not a manual check a person ran out of curiosity. */
+settingsRouter.post(
+  "/ai/providers/:id/test",
+  requireSuperAdmin,
+  validate(z.object({ params: z.object({ id: z.string().uuid() }) })),
+  async (req, res) => {
+    const config = await prisma.aIProviderConfig.findUnique({ where: { id: String(req.params.id) } });
+    if (!config) throw new AppError(404, "That provider configuration no longer exists — refresh and retry.");
+    res.json(await testProviderConnectivity({ provider: config.provider, baseUrl: config.baseUrl, apiKey: resolveApiKey(config) }));
+  }
+);
 
 /**
  * AUTONOMY — how much authority each AI capability has, as opposed to whether it runs at all.

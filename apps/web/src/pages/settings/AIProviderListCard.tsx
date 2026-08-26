@@ -23,8 +23,14 @@
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { aiModels, aiProviderPresets, resolveProviderLabel } from "@timesheet/shared";
-import { ArrowDown, ArrowUp, KeyRound, Loader2, Pencil, Plus, RefreshCw, Sparkles, Trash2 } from "lucide-react";
-import { settingsApi, type AIProviderConfigInput, type AIProviderConfigRow, type SuggestedProviderOrderEntry } from "../../services/api";
+import { ArrowDown, ArrowUp, Bolt, KeyRound, Loader2, Pencil, Plus, RefreshCw, Sparkles, Trash2 } from "lucide-react";
+import {
+  settingsApi,
+  type AIProviderConfigInput,
+  type AIProviderConfigRow,
+  type ProviderHealthStatus,
+  type SuggestedProviderOrderEntry
+} from "../../services/api";
 import { Badge } from "../../components/ui/badge";
 import { Button } from "../../components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../../components/ui/card";
@@ -36,6 +42,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from ".
 import { Skeleton } from "../../components/ui/skeleton";
 import { Switch } from "../../components/ui/switch";
 import { toast } from "../../components/ui/toaster";
+import { cn } from "../../lib/utils";
 
 function providerDisplayName(row: Pick<AIProviderConfigRow, "provider" | "baseUrl" | "label">): string {
   return row.label?.trim() || resolveProviderLabel(row.provider, row.baseUrl);
@@ -45,10 +52,35 @@ function callSuffix(calls: number): string {
   return calls === 1 ? "" : "s";
 }
 
+/** "Is it working right now" — derived from the last 15 minutes of real traffic
+ *  (computeRecentStatusByLabel, ai-provider-config.service.ts), refreshed every time this list
+ *  loads. `unknown` isn't a problem: a freshly-added row, or one low enough in priority not to
+ *  have been tried recently. */
+const STATUS_CONFIG: Record<ProviderHealthStatus, { label: string; dotClassName: string }> = {
+  healthy: { label: "Healthy", dotClassName: "bg-success" },
+  degraded: { label: "Degraded", dotClassName: "bg-warning" },
+  down: { label: "Down", dotClassName: "bg-destructive" },
+  unknown: { label: "No recent data", dotClassName: "bg-muted-foreground/40" }
+};
+
+function StatusDot({ status }: { status: ProviderHealthStatus }) {
+  const config = STATUS_CONFIG[status];
+  return (
+    <span className="inline-flex items-center gap-1.5 text-xs text-muted-foreground">
+      <span className={cn("h-1.5 w-1.5 shrink-0 rounded-full", config.dotClassName)} aria-hidden />
+      {config.label}
+    </span>
+  );
+}
+
 export function AIProviderListCard({ readOnly }: { readOnly: boolean }) {
   const queryClient = useQueryClient();
   const providers = useQuery({ queryKey: ["settings", "ai", "providers"], queryFn: settingsApi.listAiProviders });
+  // Same query key WorkspaceSettings.tsx's own AI tab already fetches under — shares its cache
+  // rather than re-fetching, and this card is only ever mounted inside that tab.
+  const globalSettings = useQuery({ queryKey: ["settings", "ai"], queryFn: settingsApi.getAI });
   const [editing, setEditing] = useState<AIProviderConfigRow | "new" | null>(null);
+  const [testingId, setTestingId] = useState<string | null>(null);
 
   const invalidate = () => queryClient.invalidateQueries({ queryKey: ["settings", "ai", "providers"] });
 
@@ -77,6 +109,25 @@ export function AIProviderListCard({ readOnly }: { readOnly: boolean }) {
   const suggestion = useMutation({
     mutationFn: () => settingsApi.getSuggestedAiProviderOrder(),
     onError: (err: any) => toast.error("Could not compute a suggestion", { description: err?.response?.data?.message ?? "Try again." })
+  });
+  // A real, on-demand connectivity check, separate from the passive status dot — never writes
+  // consecutiveFailures/autoDemotedAt, that's the circuit breaker's own concern reacting to real
+  // feature calls, not a manual check run out of curiosity.
+  const testProvider = useMutation({
+    mutationFn: (id: string) => settingsApi.testAiProvider(id),
+    onMutate: (id) => setTestingId(id),
+    onSuccess: (result, id) => {
+      const label = providerDisplayName(rows.find((r) => r.id === id) ?? { provider: "ANTHROPIC", baseUrl: null, label: null });
+      if (result.ok) toast.success(`${label} is reachable`, { description: `${result.message} (${result.latencyMs}ms)` });
+      else toast.error(`${label} did not respond`, { description: result.message });
+    },
+    onError: (err: any) => toast.error("Could not test the provider", { description: err?.response?.data?.message ?? "Try again." }),
+    onSettled: () => setTestingId(null)
+  });
+  const autoFailover = useMutation({
+    mutationFn: (enabled: boolean) => settingsApi.updateAI({ aiAutoFailoverEnabled: enabled }),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["settings", "ai"] }),
+    onError: (err: any) => toast.error("Could not update", { description: err?.response?.data?.message ?? "Try again." })
   });
 
   const rows = providers.data ?? [];
@@ -134,7 +185,7 @@ export function AIProviderListCard({ readOnly }: { readOnly: boolean }) {
                 </button>
               </div>
               <div className="min-w-0">
-                <p className="flex items-center gap-2 truncate text-sm font-medium">
+                <p className="flex flex-wrap items-center gap-2 truncate text-sm font-medium">
                   {providerDisplayName(row)}
                   {index === 0 && row.enabled && (
                     <Badge variant="outline" className="text-xs">
@@ -146,13 +197,35 @@ export function AIProviderListCard({ readOnly }: { readOnly: boolean }) {
                       Disabled
                     </Badge>
                   )}
+                  {row.autoDemotedAt && (
+                    <Badge
+                      variant="outline"
+                      className="text-xs text-muted-foreground"
+                      title="The circuit breaker moved this to the back of the line after repeated failures — reorder it yourself to clear this."
+                    >
+                      Auto-demoted
+                    </Badge>
+                  )}
                 </p>
-                <p className="truncate text-xs text-muted-foreground">
-                  {row.model} · {row.apiKeySet ? "key saved" : "no key"}
+                <p className="flex flex-wrap items-center gap-x-2 gap-y-0.5 truncate text-xs text-muted-foreground">
+                  <span>
+                    {row.model} · {row.apiKeySet ? "key saved" : "no key"}
+                  </span>
+                  <StatusDot status={row.status} />
                 </p>
               </div>
             </div>
             <div className="flex items-center gap-2">
+              <Button
+                size="sm"
+                variant="ghost"
+                disabled={testingId === row.id}
+                onClick={() => testProvider.mutate(row.id)}
+                aria-label={`Test ${providerDisplayName(row)}`}
+                title="Check connectivity right now"
+              >
+                {testingId === row.id ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Bolt className="h-3.5 w-3.5" />}
+              </Button>
               <Switch
                 checked={row.enabled}
                 disabled={readOnly || toggleEnabled.isPending}
@@ -201,6 +274,25 @@ export function AIProviderListCard({ readOnly }: { readOnly: boolean }) {
             Suggest order
           </Button>
         </div>
+
+        {globalSettings.data && (
+          <div className="flex items-start justify-between gap-3 rounded-lg border border-border p-3">
+            <div className="min-w-0">
+              <p className="text-sm font-medium">Automatically move a failing provider to the back of the line</p>
+              <p className="text-xs text-muted-foreground">
+                After 3 failed calls in a row, that provider drops to the bottom of the list on its own — no downtime waiting
+                for someone to notice and reorder it by hand. Never promotes one back up automatically; that stays a manual
+                reorder (or a fresh Suggest order).
+              </p>
+            </div>
+            <Switch
+              checked={globalSettings.data.aiAutoFailoverEnabled}
+              disabled={readOnly || autoFailover.isPending}
+              onCheckedChange={(checked) => autoFailover.mutate(checked)}
+              aria-label="Automatically move a failing provider to the back of the line"
+            />
+          </div>
+        )}
 
         {suggestion.data && (
           <SuggestedOrderPanel

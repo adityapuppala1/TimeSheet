@@ -20,12 +20,17 @@ export function createFakeTenantClient(): PrismaClient {
       findUnique: vi.fn(),
       create: vi.fn(),
       update: vi.fn(),
+      updateMany: vi.fn().mockResolvedValue({ count: 0 }),
       delete: vi.fn()
     },
     // Only ever called with an ARRAY of already-invoked operation promises in this codebase
     // (reorderProviderConfigs) — never the callback form — so resolving them is the whole stub.
     $transaction: vi.fn((ops: Promise<unknown>[]) => Promise.all(ops)),
-    aIUsageLog: { create: vi.fn(), aggregate: vi.fn(), groupBy: vi.fn(), findMany: vi.fn() },
+    // findMany/groupBy default to no rows so computeRecentStatusByLabel/computeRecentAvgCostByLabel
+    // (ai-provider-config.service.ts, read by every callChat dispatch and by listProviderConfigs)
+    // don't need every test that reaches them to know about the status/cost-routing features — a
+    // suite that cares about either overrides this explicitly.
+    aIUsageLog: { create: vi.fn(), aggregate: vi.fn(), groupBy: vi.fn().mockResolvedValue([]), findMany: vi.fn().mockResolvedValue([]) },
     aIInteraction: {
       create: vi.fn(),
       findMany: vi.fn(),

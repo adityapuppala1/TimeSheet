@@ -40,6 +40,7 @@ import type { TicketPriority } from "@prisma/client";
 import { resolveProviderLabel } from "@timesheet/shared";
 import { env } from "../config/env.js";
 import { prisma } from "../config/prisma.js";
+import { computeRecentAvgCostByLabel, computeRecentStatusByLabel, recordProviderAttemptOutcome } from "./ai-provider-config.service.js";
 import { AI_CHAT_TOOLS, findAiChatTool, type AiChatToolContext } from "./ai-chat-tools.js";
 import { AI_CHAT_ACTIONS, findAiChatAction } from "./ai-chat-actions.js";
 import { assertToolAllowed, sanitiseToolResult, visibleTools, type AccessibleTool, type ChatActor } from "./ai-chat-guardrails.js";
@@ -163,6 +164,42 @@ export async function getEnabledProviderConfigs(): Promise<ProviderConfigRow[]> 
   return [{ id: null, provider: settings.provider, label: null, baseUrl: settings.baseUrl, apiKey: settings.apiKey, model: settings.model }];
 }
 
+/** `"judgment"` (the default — narrative, review, and reasoning capabilities) vs `"economy"` (the
+ *  handful of mechanical capabilities that already downgrade to a cheaper MODEL via
+ *  `economyModelFor`) — see {@link getEnabledProviderConfigsForTask}. */
+export type TaskTier = "economy" | "judgment";
+
+/**
+ * The dispatch-time provider list for one call. `"judgment"` returns the admin's own enabled
+ * list untouched — exactly what `getEnabledProviderConfigs` has always returned, quality and the
+ * admin's own trust ordering over cost. `"economy"` additionally re-sorts it: HEALTHY providers
+ * (last-15-minutes status, {@link computeRecentStatusByLabel}) first, cheapest-average-cost first
+ * within that group ({@link computeRecentAvgCostByLabel}, 30-day, success-only) — then
+ * degraded/down/unknown providers appended afterward in their existing relative order. A
+ * cost-sensitive task never gets routed to a provider that's already failing just because it's
+ * cheap, and never displaces the admin's order for anything rated above `healthy` — this only
+ * ever reshuffles among providers already known to be working.
+ */
+export async function getEnabledProviderConfigsForTask(tier: TaskTier): Promise<ProviderConfigRow[]> {
+  const configs = await getEnabledProviderConfigs();
+  if (tier === "judgment" || configs.length <= 1) return configs;
+
+  const [statusByLabel, costByLabel] = await Promise.all([computeRecentStatusByLabel(), computeRecentAvgCostByLabel()]);
+  const withRank = configs.map((config, index) => {
+    const label = resolveProviderLabel(config.provider, config.baseUrl);
+    const status = statusByLabel.get(label) ?? "unknown";
+    return { config, index, healthy: status === "healthy", cost: costByLabel.get(label) ?? Infinity };
+  });
+
+  withRank.sort((a, b) => {
+    if (a.healthy !== b.healthy) return a.healthy ? -1 : 1;
+    if (a.healthy && b.healthy && a.cost !== b.cost) return a.cost - b.cost;
+    // Not both healthy, or a cost tie: fall back to the admin's own relative order.
+    return a.index - b.index;
+  });
+  return withRank.map((r) => r.config);
+}
+
 interface CallChatParams {
   /** Which capability is calling — unused by either provider client (callAnthropic /
    *  callOpenAICompatible just ignore it), but `callChat`'s dispatcher needs it to attribute a
@@ -175,6 +212,10 @@ interface CallChatParams {
   images?: Array<{ mediaType: string; base64: string }>;
   /** Presence alone signals "ask for structured JSON matching this schema". */
   jsonSchema?: { name: string; schema: Record<string, unknown> };
+  /** Which provider list to dispatch against — see {@link getEnabledProviderConfigsForTask}.
+   *  Defaults to `"judgment"` in `callChat` itself, so the ~27 call sites that never think about
+   *  this at all keep today's exact behavior. */
+  tier?: TaskTier;
 }
 
 interface CallChatResult {
@@ -386,6 +427,46 @@ export async function listAvailableOpenAICompatibleModels(baseUrl: string, apiKe
   return response.data.map((m) => m.id).sort();
 }
 
+/** Timeout for the "Test" button's live connectivity probe — short and separate from
+ *  MODEL_CALL_TIMEOUT_MS on purpose: a human is watching this one synchronously, so "is it up"
+ *  needs an answer in seconds, not the 90s a real generation call is allowed to take. */
+const PROVIDER_TEST_TIMEOUT_MS = 15_000;
+
+/**
+ * The "Test" button's real, free connectivity check (Workspace Settings → AI) — `models.list()`
+ * again, the same metadata call `listAvailableOpenAICompatibleModels` already uses, but built
+ * separately here with its own short timeout rather than reused directly (that function inherits
+ * the SDK's own multi-minute default, fine for a one-off "fetch models to populate a dropdown"
+ * click, wrong for a probe a person is watching for "is it up right now"). Works for BOTH provider
+ * families — the Anthropic SDK exposes the identical `client.models.list()` method. Never writes
+ * anything: the passive status badge derived from actual traffic
+ * ({@link computeRecentStatusByLabel}) is a separate signal from this on-demand one.
+ */
+export async function testProviderConnectivity(config: {
+  provider: "ANTHROPIC" | "OPENAI_COMPATIBLE";
+  baseUrl: string | null;
+  apiKey: string;
+}): Promise<{ ok: boolean; latencyMs: number; message: string }> {
+  const startedAt = Date.now();
+  try {
+    let modelCount: number;
+    if (config.provider === "OPENAI_COMPATIBLE") {
+      if (!config.baseUrl) throw new AppError(503, "No base URL configured.");
+      await assertPublicEgressTarget(config.baseUrl, "The AI provider base URL");
+      const client = new OpenAI({ apiKey: config.apiKey || "not-needed", baseURL: config.baseUrl, timeout: PROVIDER_TEST_TIMEOUT_MS, maxRetries: 0 });
+      modelCount = (await client.models.list()).data.length;
+    } else {
+      if (!config.apiKey) throw new AppError(503, "No API key configured.");
+      const client = new Anthropic({ apiKey: config.apiKey, timeout: PROVIDER_TEST_TIMEOUT_MS, maxRetries: 0 });
+      modelCount = (await client.models.list()).data.length;
+    }
+    return { ok: true, latencyMs: Date.now() - startedAt, message: `Reachable — ${modelCount} model${modelCount === 1 ? "" : "s"} available.` };
+  } catch (error) {
+    const translated = translateProviderError(error);
+    return { ok: false, latencyMs: Date.now() - startedAt, message: translated instanceof Error ? translated.message : String(translated) };
+  }
+}
+
 /**
  * THE ONE DOOR TO A MODEL, and since the spend ledger landed it interrogates the budget itself.
  *
@@ -419,7 +500,7 @@ export async function listAvailableOpenAICompatibleModels(baseUrl: string, apiKe
  * consumed or billed for a rejected attempt.
  */
 async function callChat(settings: AISettingsRow, params: CallChatParams): Promise<CallChatOutcome> {
-  const configs = await getEnabledProviderConfigs();
+  const configs = await getEnabledProviderConfigsForTask(params.tier ?? "judgment");
   const settle = await reserveAiSpend(await effectiveMonthlyBudgetUsd(settings));
   let lastError: unknown;
   try {
@@ -434,9 +515,13 @@ async function callChat(settings: AISettingsRow, params: CallChatParams): Promis
             ? await callOpenAICompatible(config, apiKey, { ...params, model })
             : await callAnthropic(apiKey, { ...params, model });
         await settle(estimateCostUsd(model, result.usage.inputTokens, result.usage.outputTokens));
+        // Best-effort, same reasoning as the failure branch below — the circuit breaker's own
+        // bookkeeping must never mask a real answer that already arrived.
+        await recordProviderAttemptOutcome(config.id, true).catch(() => {});
         return { ...result, model, provider: providerLabel };
       } catch (error) {
         lastError = error;
+        const isAvailabilityFailure = error instanceof AppError && error.statusCode === 502;
         // Every failed ATTEMPT is worth recording, not just the ones that trigger a fallthrough —
         // "which provider actually gets the job done" needs the failures a real bug produced too,
         // not only the availability kind. Best-effort: a broken audit write must never mask the
@@ -450,7 +535,14 @@ async function callChat(settings: AISettingsRow, params: CallChatParams): Promis
           success: false,
           errorReason: (error instanceof Error ? error.message : String(error)).slice(0, 300)
         }).catch(() => {});
-        if (!(error instanceof AppError) || error.statusCode !== 502) throw error;
+        if (isAvailabilityFailure) {
+          // Only availability failures feed the circuit breaker — a malformed request would fail
+          // identically against every provider and is never this ONE provider's fault, so it must
+          // not count toward demoting it.
+          await recordProviderAttemptOutcome(config.id, false).catch(() => {});
+        } else {
+          throw error;
+        }
         // else: an availability failure — the loop tries the next configured provider, if any.
       }
     }
@@ -1622,6 +1714,7 @@ export async function classifyTicket(params: {
   const startedAt = Date.now();
   const result = await callChat(settings, { feature: "triage",
     model,
+    tier: "economy",
     maxTokens: 1024,
     prompt,
     images: params.images,
@@ -2225,6 +2318,7 @@ export async function findDuplicateTickets(params: {
   const startedAt = Date.now();
   const result = await callChat(settings, { feature: "duplicate_detection",
     model,
+    tier: "economy",
     maxTokens: 1024,
     prompt,
     jsonSchema: {
@@ -2425,7 +2519,7 @@ export async function refineText(params: { text: string; field: RefineField; use
 
   const model = economyModelFor(settings);
   const startedAt = Date.now();
-  const result = await callChat(settings, { feature: "text_refine", model, maxTokens: spec.maxTokens, prompt: p.text });
+  const result = await callChat(settings, { feature: "text_refine", model, tier: "economy", maxTokens: spec.maxTokens, prompt: p.text });
 
   const refined = spec.format === "plain"
     ? stripWrappingQuotes(result.text).replace(/\s*\n+\s*/g, " ").slice(0, 255)
@@ -2934,7 +3028,7 @@ export async function explainAssigneeSuggestion(params: {
 
   const model = economyModelFor(settings);
   const startedAt = Date.now();
-  const result = await callChat(settings, { feature: "assignee_suggestion_explanation", model, maxTokens: 150, prompt: p.text });
+  const result = await callChat(settings, { feature: "assignee_suggestion_explanation", model, tier: "economy", maxTokens: 150, prompt: p.text });
   await logAIUsage({
     feature: "assignee_suggestion_explanation",
     params: { candidates: params.candidates, ticketTitle: params.ticketTitle },
@@ -2979,7 +3073,7 @@ export async function suggestStaleTicketNextAction(params: {
 
   const model = economyModelFor(settings);
   const startedAt = Date.now();
-  const result = await callChat(settings, { feature: "stale_ticket_nudge", model, maxTokens: 150, prompt: p.text });
+  const result = await callChat(settings, { feature: "stale_ticket_nudge", model, tier: "economy", maxTokens: 150, prompt: p.text });
   await logAIUsage({
     feature: "stale_ticket_nudge",
     params: { ticketTitle: params.ticketTitle, ticketType: params.ticketType, priority: params.priority, hoursOverdue: params.hoursOverdue, commentCount: params.commentCount, hasLinkedBranch: params.hasLinkedBranch },

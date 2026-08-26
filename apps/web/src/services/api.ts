@@ -1447,6 +1447,11 @@ export interface AutonomyCatalogue {
  *  ascending `priority` order; only the top one ever honors a feature's requested model — every
  *  row after it uses its own `model`, since a fallback was chosen for a different vendor's
  *  catalogue and is unlikely to serve a model by the primary's name at all. */
+/** "Is it working right now" — derived from the last 15 minutes of real traffic, not the 30-day
+ *  history the "Suggest order" reasoning uses. `"unknown"` means no attempts in that window, not a
+ *  problem: a freshly-added row, or one sitting low-priority long enough not to have been tried. */
+export type ProviderHealthStatus = "healthy" | "degraded" | "down" | "unknown";
+
 export interface AIProviderConfigRow {
   id: string;
   provider: "ANTHROPIC" | "OPENAI_COMPATIBLE";
@@ -1456,6 +1461,9 @@ export interface AIProviderConfigRow {
   enabled: boolean;
   priority: number;
   apiKeySet: boolean;
+  status: ProviderHealthStatus;
+  /** Set the moment the circuit breaker demoted this row; cleared by any human edit or reorder. */
+  autoDemotedAt: string | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -1899,6 +1907,10 @@ export const settingsApi = {
    *  reorderAiProviders yourself with `suggestedOrderIds` once the admin accepts it. */
   getSuggestedAiProviderOrder: async () =>
     (await api.get<{ suggestedOrderIds: string[]; reasoning: SuggestedProviderOrderEntry[] }>("/settings/ai/providers/suggested-order")).data,
+  /** A real, on-demand connectivity check — separate from the passive `status` field, which is
+   *  derived from actual traffic. Costs nothing (a models-list metadata call, no completion). */
+  testAiProvider: async (id: string) =>
+    (await api.post<{ ok: boolean; latencyMs: number; message: string }>(`/settings/ai/providers/${id}/test`)).data,
   /** How much authority each AI capability holds, as opposed to whether it runs at all.
    *  The server returns BOTH `requestedLevel` and `effectiveLevel`; the UI must render the
    *  second and never re-derive it, or the screen will eventually disagree with the server. */

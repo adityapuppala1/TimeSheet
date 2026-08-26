@@ -23,19 +23,75 @@ const SELECT_PUBLIC = {
   model: true,
   enabled: true,
   priority: true,
+  consecutiveFailures: true,
+  autoDemotedAt: true,
   createdAt: true,
   updatedAt: true
 } as const;
 
+/** "is it working RIGHT NOW", derived from the most recent real traffic — not the 30-day history
+ *  {@link getSuggestedProviderOrder} ranks on. `unknown` means no attempts in the window, not a
+ *  problem: a freshly-added row, or one sitting disabled/low-priority long enough not to have been
+ *  tried recently. */
+export type ProviderHealthStatus = "healthy" | "degraded" | "down" | "unknown";
+
+const STATUS_WINDOW_MINUTES = 15;
+/** Per-label cap on how many recent attempts feed the status, not a query LIMIT — a provider
+ *  taking 200 calls in the window should be judged on its last 20, not diluted by the other 180. */
+const STATUS_WINDOW_MAX_CALLS_PER_LABEL = 20;
+
+/**
+ * Buckets the last {@link STATUS_WINDOW_MINUTES} of `AIUsageLog` by resolved provider label (the
+ * same join key {@link getSuggestedProviderOrder} uses, and the same limitation: two configs
+ * sharing one label are indistinguishable) and scores each: `healthy` at ≥80% success,
+ * `degraded` above 0%, `down` at exactly 0% with at least one attempt. A single flat query rather
+ * than a groupBy, because "last N per group" isn't expressible as one — acceptable here since a
+ * 15-minute window at real AI call volumes is a small row count, not a hot path.
+ */
+export async function computeRecentStatusByLabel(): Promise<Map<string, ProviderHealthStatus>> {
+  const since = new Date(Date.now() - STATUS_WINDOW_MINUTES * 60_000);
+  const rows = await prisma.aIUsageLog.findMany({
+    where: { createdAt: { gte: since } },
+    select: { provider: true, success: true },
+    orderBy: { createdAt: "desc" },
+    take: 500
+  });
+
+  const outcomesByLabel = new Map<string, boolean[]>();
+  for (const row of rows) {
+    const label = row.provider ?? "Unknown";
+    const outcomes = outcomesByLabel.get(label) ?? [];
+    if (outcomes.length < STATUS_WINDOW_MAX_CALLS_PER_LABEL) {
+      outcomes.push(row.success);
+      outcomesByLabel.set(label, outcomes);
+    }
+  }
+
+  const statusByLabel = new Map<string, ProviderHealthStatus>();
+  for (const [label, outcomes] of outcomesByLabel) {
+    const successRate = outcomes.filter(Boolean).length / outcomes.length;
+    let status: ProviderHealthStatus = "down";
+    if (successRate >= 0.8) status = "healthy";
+    else if (successRate > 0) status = "degraded";
+    statusByLabel.set(label, status);
+  }
+  return statusByLabel;
+}
+
 /** Never returns the key itself — same masking convention as GlobalAISettings.apiKey and every
  *  other BYOK-shaped secret in this app: the client sees `apiKeySet`, never the ciphertext or the
- *  plaintext. */
+ *  plaintext. Adds the derived `status` (see {@link computeRecentStatusByLabel}) so the settings
+ *  UI can show it without a second round trip. */
 export async function listProviderConfigs() {
-  const rows = await prisma.aIProviderConfig.findMany({
-    orderBy: { priority: "asc" },
-    select: { ...SELECT_PUBLIC, apiKey: true }
-  });
-  return rows.map(({ apiKey, ...rest }) => ({ ...rest, apiKeySet: Boolean(apiKey) }));
+  const [rows, statusByLabel] = await Promise.all([
+    prisma.aIProviderConfig.findMany({ orderBy: { priority: "asc" }, select: { ...SELECT_PUBLIC, apiKey: true } }),
+    computeRecentStatusByLabel()
+  ]);
+  return rows.map(({ apiKey, ...rest }) => ({
+    ...rest,
+    apiKeySet: Boolean(apiKey),
+    status: statusByLabel.get(resolveProviderLabel(rest.provider, rest.baseUrl)) ?? ("unknown" as ProviderHealthStatus)
+  }));
 }
 
 export interface ProviderConfigInput {
@@ -80,6 +136,8 @@ export async function updateProviderConfig(id: string, input: Partial<ProviderCo
   // Write-only, same convention as GlobalAISettings.apiKey: absent = leave the stored key
   // untouched, "" clears it, anything else replaces it.
   if (typeof input.apiKey === "string") data.apiKey = input.apiKey.length > 0 ? encryptSecret(input.apiKey) : null;
+  // A human just touched this row — whatever the breaker did to it stops being the last word.
+  data.autoDemotedAt = null;
 
   const updated = await prisma.aIProviderConfig.update({ where: { id }, data, select: { ...SELECT_PUBLIC, apiKey: true } });
   await audit(actorId, "settings.ai_provider_updated", "AIProviderConfig", id, { fields: Object.keys(input) });
@@ -108,7 +166,11 @@ export async function reorderProviderConfigs(orderedIds: string[], actorId: stri
   if (orderedIds.length !== existing.length || orderedIds.some((id) => !existingIds.has(id))) {
     throw new AppError(422, "That reorder doesn't match the current provider list — refresh and retry.");
   }
-  await prisma.$transaction(orderedIds.map((id, index) => prisma.aIProviderConfig.update({ where: { id }, data: { priority: index } })));
+  // A human just chose this order — any position the breaker set automatically stops being the
+  // last word the moment a person picks one instead, applied or not.
+  await prisma.$transaction(
+    orderedIds.map((id, index) => prisma.aIProviderConfig.update({ where: { id }, data: { priority: index, autoDemotedAt: null } }))
+  );
   await audit(actorId, "settings.ai_providers_reordered", "AIProviderConfig", undefined, { order: orderedIds });
   return listProviderConfigs();
 }
@@ -207,4 +269,100 @@ export async function getSuggestedProviderOrder(): Promise<{ suggestedOrderIds: 
   });
 
   return { suggestedOrderIds: ranked.map((r) => r.id), reasoning };
+}
+
+/** 30-day avg cost per successful call, by resolved provider label — the same stat
+ *  {@link getSuggestedProviderOrder} computes for its own reasoning, factored out so
+ *  `getEnabledProviderConfigsForTask`'s economy-tier ordering (ai.service.ts) can reuse it
+ *  without a second, subtly-different query. Success-only for the same reason as there: a failed
+ *  attempt costs nothing, and its 0 would drag the average toward "cheap" for exactly the
+ *  providers that are actually failing. */
+export async function computeRecentAvgCostByLabel(): Promise<Map<string, number>> {
+  const since = new Date();
+  since.setDate(since.getDate() - SUGGESTION_LOOKBACK_DAYS);
+  const stats = await prisma.aIUsageLog.groupBy({
+    by: ["provider"],
+    where: { createdAt: { gte: since }, success: true },
+    _avg: { costUsdEstimate: true }
+  });
+  const costByLabel = new Map<string, number>();
+  for (const row of stats) {
+    if (row._avg.costUsdEstimate != null) costByLabel.set(row.provider ?? "Unknown", Number(row._avg.costUsdEstimate));
+  }
+  return costByLabel;
+}
+
+/** Consecutive-failure threshold that trips the circuit breaker. Small and fixed rather than
+ *  admin-tunable: this exists to react fast to a genuinely broken provider, and a knob invites
+ *  tuning it into uselessness the first time a normally-fine provider has one bad afternoon. */
+const AUTO_FAILOVER_THRESHOLD = 3;
+
+/**
+ * The circuit breaker's only entry point — called once per attempt from `callChat`'s dispatch
+ * loop (ai.service.ts), for every real config it tries. A success always resets the counter to 0;
+ * a failure increments it and, once it reaches {@link AUTO_FAILOVER_THRESHOLD} AND
+ * `GlobalAISettings.aiAutoFailoverEnabled` is on, demotes the row to the back of the ENABLED
+ * priority order with no human involved — see the schema comment on `aiAutoFailoverEnabled` for
+ * why this never promotes a row back automatically afterward.
+ *
+ * `configId` is null for the synthesized implicit default (no real `AIProviderConfig` row exists,
+ * see `getEnabledProviderConfigs`) — nothing to track for a row that isn't real, so this is a
+ * no-op in that case.
+ */
+export async function recordProviderAttemptOutcome(configId: string | null, success: boolean): Promise<void> {
+  if (!configId) return;
+
+  if (success) {
+    // Only write when there's actually something to reset — the overwhelming majority of calls
+    // succeed, and bumping updatedAt on every one of them for a no-op reset is pure waste.
+    await prisma.aIProviderConfig.updateMany({ where: { id: configId, consecutiveFailures: { gt: 0 } }, data: { consecutiveFailures: 0 } });
+    return;
+  }
+
+  let updated;
+  try {
+    updated = await prisma.aIProviderConfig.update({
+      where: { id: configId },
+      data: { consecutiveFailures: { increment: 1 } },
+      select: { consecutiveFailures: true }
+    });
+  } catch {
+    // Deleted between the failed attempt and this write (an admin removing a provider mid-flight)
+    // — nothing left to track.
+    return;
+  }
+  if (updated.consecutiveFailures < AUTO_FAILOVER_THRESHOLD) return;
+
+  const settings = await prisma.globalAISettings.findUnique({ where: { id: "global" }, select: { aiAutoFailoverEnabled: true } });
+  if (!settings?.aiAutoFailoverEnabled) return;
+
+  await demoteToBackOfEnabledOrder(configId);
+}
+
+/** Moves one row to the end of the currently ENABLED priority order, leaving disabled rows'
+ *  priority untouched — dispatch only ever reads the enabled subset, so this is correct for
+ *  behavior even though it can leave priority numbers non-contiguous across the full (enabled +
+ *  disabled) list. Self-heals the next time a human reorders: `reorderProviderConfigs` always
+ *  renumbers everything it's given from scratch. */
+async function demoteToBackOfEnabledOrder(configId: string): Promise<void> {
+  const enabled = await prisma.aIProviderConfig.findMany({ where: { enabled: true }, orderBy: { priority: "asc" }, select: { id: true } });
+  const index = enabled.findIndex((row) => row.id === configId);
+  // Not found (disabled or deleted since the failure), or already last: nothing to move.
+  if (index === -1 || index === enabled.length - 1) return;
+
+  const reordered = [...enabled.slice(0, index), ...enabled.slice(index + 1), enabled[index]];
+  await prisma.$transaction([
+    ...reordered.map((row, i) => prisma.aIProviderConfig.update({ where: { id: row.id }, data: { priority: i } })),
+    prisma.aIProviderConfig.update({ where: { id: configId }, data: { consecutiveFailures: 0, autoDemotedAt: new Date() } })
+  ]);
+  // No actorId — this is the one write in this file a human didn't make. actorType: SYSTEM (not
+  // the default USER) records that on the row itself, same convention as the SLA sweeps; the
+  // "auto-demoted" tag in the UI reads autoDemotedAt to say so explicitly too, rather than looking
+  // like a silent manual reorder.
+  await audit(undefined, "settings.ai_provider_auto_demoted", "AIProviderConfig", configId, {
+    reason: `${AUTO_FAILOVER_THRESHOLD} consecutive failures`
+  }, {
+    actorType: "SYSTEM",
+    actorLabel: "ai-provider-circuit-breaker"
+  });
 }
