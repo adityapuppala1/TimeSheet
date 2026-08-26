@@ -35,7 +35,11 @@ describe("getEnabledProviderConfigs", () => {
 
     const configs = await runInTenant(client, () => getEnabledProviderConfigs());
 
-    expect(configs).toEqual([{ id: null, provider: "ANTHROPIC", label: null, baseUrl: null, apiKey: null, model: "claude-haiku-4-5" }]);
+    // maxConcurrent comes along at the column's own default — the synthesised provider is bounded
+    // by the concurrency gate like any configured one, never silently unlimited.
+    expect(configs).toEqual([
+      { id: null, provider: "ANTHROPIC", label: null, baseUrl: null, apiKey: null, model: "claude-haiku-4-5", maxConcurrent: 2 }
+    ]);
   });
 
   it("returns real rows ascending by priority when the list is non-empty, ignoring GlobalAISettings entirely", async () => {

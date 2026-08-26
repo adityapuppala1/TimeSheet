@@ -25,6 +25,7 @@ const SELECT_PUBLIC = {
   priority: true,
   consecutiveFailures: true,
   autoDemotedAt: true,
+  maxConcurrent: true,
   createdAt: true,
   updatedAt: true
 } as const;
@@ -101,6 +102,8 @@ export interface ProviderConfigInput {
   apiKey?: string;
   model: string;
   enabled?: boolean;
+  /** Calls allowed in flight at once — see the column's comment in schema.prisma. */
+  maxConcurrent?: number;
 }
 
 /** New rows append to the end of the priority order — an admin adding a provider is adding a
@@ -115,6 +118,7 @@ export async function createProviderConfig(input: ProviderConfigInput, actorId: 
       apiKey: input.apiKey ? encryptSecret(input.apiKey) : null,
       model: input.model,
       enabled: input.enabled ?? true,
+      ...(input.maxConcurrent !== undefined ? { maxConcurrent: input.maxConcurrent } : {}),
       priority: (last?.priority ?? -1) + 1
     },
     select: SELECT_PUBLIC
@@ -133,6 +137,7 @@ export async function updateProviderConfig(id: string, input: Partial<ProviderCo
   if (input.baseUrl !== undefined) data.baseUrl = input.baseUrl;
   if (input.model !== undefined) data.model = input.model;
   if (input.enabled !== undefined) data.enabled = input.enabled;
+  if (input.maxConcurrent !== undefined) data.maxConcurrent = input.maxConcurrent;
   // Write-only, same convention as GlobalAISettings.apiKey: absent = leave the stored key
   // untouched, "" clears it, anything else replaces it.
   if (typeof input.apiKey === "string") data.apiKey = input.apiKey.length > 0 ? encryptSecret(input.apiKey) : null;

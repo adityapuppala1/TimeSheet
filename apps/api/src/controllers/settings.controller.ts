@@ -508,7 +508,11 @@ const providerConfigBodySchema = z.object({
   // (legal for a local Ollama/LM Studio, which needs none); omitted on UPDATE leaves the stored
   // key untouched, same convention as GlobalAISettings.apiKey.
   apiKey: z.string().max(2000).optional(),
-  enabled: z.boolean().optional()
+  enabled: z.boolean().optional(),
+  // How many calls may run at once against this provider (ai-concurrency.service.ts). Capped at 64
+  // rather than left open: a number far above the provider's real parallelism just recreates the
+  // unbounded behaviour this exists to prevent.
+  maxConcurrent: z.number().int().min(1).max(64).optional()
 });
 
 const createProviderConfigSchema = z.object({ body: providerConfigBodySchema.strict() });

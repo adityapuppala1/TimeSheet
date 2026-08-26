@@ -1369,6 +1369,14 @@ model AIProviderConfig {
   /// admin can always tell an automatic move from one they made themselves.
   autoDemotedAt DateTime?
 
+  /// How many calls this provider may run AT ONCE (ai-concurrency.service.ts). The default of 2 is
+  /// deliberately conservative because the motivating case is a self-hosted Ollama, which serves
+  /// 1-4 concurrently (OLLAMA_NUM_PARALLEL) and simply QUEUES the rest — so a dozen unbounded
+  /// callers don't fail fast, they all sit until the 90s timeout. A hosted API can take far more;
+  /// set this to roughly the provider's real parallelism so the app queues where it can still make
+  /// a routing decision, rather than inside the provider where it can only wait.
+  maxConcurrent Int @default(2)
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 

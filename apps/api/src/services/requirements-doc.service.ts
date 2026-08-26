@@ -145,7 +145,7 @@ export async function analyzeImportedDocument(
   actorId: string
 ): Promise<RequirementsImportAnalysisResult & { truncated: boolean; documentText: string }> {
   const doc = await getRequirementsDocument(id);
-  if (doc.status !== "DRAFTING") throw new AppError(422, "This document's interview is already finished.");
+  if (doc.status === "ARCHIVED") throw new AppError(422, "This document is archived.");
 
   const extracted = await extractRequirementsImportText(file);
   if (extracted.text.trim().length < MIN_IMPORT_DOC_CHARS) {
@@ -177,7 +177,7 @@ export async function analyzeImportedDocument(
  */
 export async function regenerateFromStoredDocument(id: string, actorId: string): Promise<RequirementsImportAnalysisResult & { truncated: boolean }> {
   const doc = await getRequirementsDocument(id);
-  if (doc.status !== "DRAFTING") throw new AppError(422, "This document's interview is already finished.");
+  if (doc.status === "ARCHIVED") throw new AppError(422, "This document is archived.");
   if (!doc.sourceDocumentText) throw new AppError(422, "No supporting document to regenerate from.");
 
   const truncated = doc.sourceDocumentText.length > MAX_IMPORT_DOC_CHARS;
@@ -219,7 +219,7 @@ export async function applyImportedAnswers(
   actorId: string
 ) {
   const doc = await getRequirementsDocument(id);
-  if (doc.status !== "DRAFTING") throw new AppError(422, "This document's interview is already finished.");
+  if (doc.status === "ARCHIVED") throw new AppError(422, "This document is archived.");
   if (input.turns.length === 0) throw new AppError(422, "No reviewed answers to save.");
 
   const seeded: RequirementsInterviewTurn[] = input.turns.map((t) => ({
@@ -233,6 +233,11 @@ export async function applyImportedAnswers(
     where: { id },
     data: {
       interviewTranscript: seeded as unknown as Prisma.InputJsonValue,
+      // Replacing the transcript makes an already-generated document stale — it no longer reflects
+      // its own answers. Reopening the interview is the honest outcome; leaving a READY badge over
+      // a document that contradicts its transcript is the worse of the two failures. The frontend
+      // warns before confirming, so this is never a surprise.
+      ...(doc.status === "READY" ? { status: "DRAFTING" as const } : {}),
       ...(input.sourceDocument
         ? {
             sourceDocumentName: input.sourceDocument.fileName,
@@ -246,9 +251,31 @@ export async function applyImportedAnswers(
   });
   await audit(actorId, "requirements_doc.import_applied", "RequirementsDocument", id, {
     turns: seeded.length,
-    fromUpload: Boolean(input.sourceDocument)
+    fromUpload: Boolean(input.sourceDocument),
+    reopenedInterview: doc.status === "READY"
   });
   return getRequirementsDocument(id);
+}
+
+/**
+ * The extracted text of the supporting document, for the in-app viewer. Deliberately its own
+ * endpoint rather than a field on `GET /:id`: a long PRD's text is far too much to ship on every
+ * page load of a document nobody is inspecting.
+ *
+ * This is the text the AI actually read — NOT a copy of the original file. The raw bytes were
+ * never persisted (see this feature's import service), and the viewer's copy says so plainly
+ * rather than implying it's showing the PDF.
+ */
+export async function getSourceDocumentText(id: string) {
+  const doc = await getRequirementsDocument(id);
+  if (!doc.sourceDocumentText) throw new AppError(404, "This document has no supporting document.");
+  return {
+    fileName: doc.sourceDocumentName,
+    size: doc.sourceDocumentSize,
+    uploadedAt: doc.sourceDocumentUploadedAt,
+    uploadedBy: doc.sourceDocumentUploadedBy,
+    text: doc.sourceDocumentText
+  };
 }
 
 /** Un-links the supporting document — clears the five provenance fields only. The transcript

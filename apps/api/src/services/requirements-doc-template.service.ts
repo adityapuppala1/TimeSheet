@@ -34,6 +34,18 @@ const SECTION_GUIDANCE: Record<(typeof REQUIREMENTS_SECTIONS)[number], { heading
     heading: "Features",
     prompt: "List the main features/capabilities. One line each is fine — the interview will ask for detail on anything unclear."
   },
+  stakeholders: {
+    heading: "Stakeholders",
+    prompt: "Who is involved and how? Name the person or team and their part — who signs off, who does the work, who needs to be consulted, who just needs telling."
+  },
+  constraints: {
+    heading: "Constraints",
+    prompt: "Hard limits this has to live inside — regulations, existing systems you must use, fixed deadlines, team size."
+  },
+  budget: {
+    heading: "Budget",
+    prompt: "What budget or cost ceiling exists, if any? Rough is fine — \"under 50k\", \"existing team only, no new hires\"."
+  },
   techStack: {
     heading: "Tech stack",
     prompt: "Any known or preferred technologies (languages, frameworks, cloud provider)? Leave blank if undecided."

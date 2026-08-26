@@ -41,6 +41,7 @@ import { resolveProviderLabel } from "@timesheet/shared";
 import { env } from "../config/env.js";
 import { prisma } from "../config/prisma.js";
 import { computeRecentAvgCostByLabel, computeRecentStatusByLabel, recordProviderAttemptOutcome } from "./ai-provider-config.service.js";
+import { acquireAiSlot } from "./ai-concurrency.service.js";
 import { AI_CHAT_TOOLS, findAiChatTool, type AiChatToolContext } from "./ai-chat-tools.js";
 import { AI_CHAT_ACTIONS, findAiChatAction } from "./ai-chat-actions.js";
 import { assertToolAllowed, sanitiseToolResult, visibleTools, type AccessibleTool, type ChatActor } from "./ai-chat-guardrails.js";
@@ -143,6 +144,9 @@ export interface ProviderConfigRow {
   baseUrl: string | null;
   apiKey: string | null;
   model: string;
+  /** How many calls may run at once against this provider — see the column's own comment in
+   *  schema.prisma and ai-concurrency.service.ts for why this is bounded outside the provider. */
+  maxConcurrent: number;
 }
 
 /**
@@ -161,7 +165,19 @@ export async function getEnabledProviderConfigs(): Promise<ProviderConfigRow[]> 
   });
   if (rows.length > 0) return rows;
   const settings = await getGlobalAISettings();
-  return [{ id: null, provider: settings.provider, label: null, baseUrl: settings.baseUrl, apiKey: settings.apiKey, model: settings.model }];
+  return [
+    {
+      id: null,
+      provider: settings.provider,
+      label: null,
+      baseUrl: settings.baseUrl,
+      apiKey: settings.apiKey,
+      model: settings.model,
+      // The synthesised default has no row to carry a ceiling, so it takes the column's own
+      // default — bounded like everything else rather than silently unlimited.
+      maxConcurrent: 2
+    }
+  ];
 }
 
 /** `"judgment"` (the default — narrative, review, and reasoning capabilities) vs `"economy"` (the
@@ -311,7 +327,7 @@ const MODEL_CALL_TIMEOUT_MS = 90_000;
  * structurally identical to OpenAI's (same base class shape, same 401/403/429 subclasses) but is a
  * different class from a different package, so `instanceof` has to check both.
  */
-function translateProviderError(error: unknown): unknown {
+export function translateProviderError(error: unknown): unknown {
   if (!(error instanceof OpenAI.APIError) && !(error instanceof Anthropic.APIError)) return error;
   // Several providers (Mistral among them) answer 403 with an empty body, so the SDK's own
   // message is just "403 status code (no body)" — worth omitting rather than echoing back.
@@ -325,7 +341,28 @@ function translateProviderError(error: unknown): unknown {
   if (error.status === 429) {
     return new AppError(502, `The AI provider is rate-limiting this key${detail}. Wait a moment and try again, or pick a different model in Workspace Settings → AI.`);
   }
+  // BUSY IS NOT BROKEN — 503 and the SDKs' status-less connection/timeout errors both mean
+  // "saturated", and they are translated to 503 rather than 502 SO THAT THE DISTINCTION SURVIVES
+  // TRANSLATION. The dispatch loop reads that difference: both fall through to the next provider,
+  // but only 502 counts against the provider's reliability. Counting saturation as failure is what
+  // previously let the circuit breaker demote a perfectly healthy provider for being popular —
+  // backwards, since demotion shifts the load onto whatever is next while the busy provider
+  // recovers on its own the moment the burst passes. See `isBusyFailure` below.
+  if (error.status === 503 || error.status === undefined) {
+    return new AppError(503, `The AI provider is busy or unreachable right now${detail}.`);
+  }
   return new AppError(502, `The AI provider returned an error (${error.status})${detail}.`);
+}
+
+/** A 502 from `translateProviderError` is a real fault; a 503 is saturation. Both are worth trying
+ *  the next provider for — only the first is worth holding against this one. */
+export function isBusyFailure(error: unknown): boolean {
+  return error instanceof AppError && error.statusCode === 503;
+}
+
+/** Either flavour of "this provider didn't answer" — the condition for falling through. */
+export function isAvailabilityFailure(error: unknown): boolean {
+  return error instanceof AppError && (error.statusCode === 502 || error.statusCode === 503);
 }
 
 async function callOpenAICompatible(settings: { baseUrl: string | null }, apiKey: string, params: CallChatParams): Promise<CallChatResult> {
@@ -545,16 +582,37 @@ export async function testProviderConnectivity(config: {
  * question the cost-only ledger could never answer on its own. 0 tokens/cost, since nothing was
  * consumed or billed for a rejected attempt.
  */
+/**
+ * How long a caller waits for a busy provider to free a slot before moving to the next one.
+ * Short on purpose: long enough to absorb an ordinary burst (a provider finishing one call frees a
+ * slot in seconds), short enough that falling over to another provider still beats waiting.
+ */
+const SLOT_WAIT_MS = 10_000;
+
 async function callChat(settings: AISettingsRow, params: CallChatParams): Promise<CallChatOutcome> {
   const configs = await getEnabledProviderConfigsForTask(params.tier ?? "judgment");
   const settle = await reserveAiSpend(await effectiveMonthlyBudgetUsd(settings));
   let lastError: unknown;
   try {
+    let everySaturated = configs.length > 0;
     for (let i = 0; i < configs.length; i++) {
       const config = configs[i];
       const apiKey = resolveApiKey(config);
       const model = i === 0 ? params.model : config.model;
       const providerLabel = resolveProviderLabel(config.provider, config.baseUrl);
+
+      // ADMISSION CONTROL, before a socket is opened. A provider already running its ceiling gets
+      // a short wait rather than an instant refusal (a burst usually clears in a second or two);
+      // if the slot never frees, we move to the NEXT provider without ever queueing inside this
+      // one — which is the whole point, since a queue inside Ollama is a queue we can't route
+      // around. See ai-concurrency.service.ts.
+      const slot = await acquireAiSlot(config.id ?? "default", config.maxConcurrent ?? 2, SLOT_WAIT_MS);
+      if (!slot.ok) {
+        lastError = new AppError(503, "The AI is busy right now — try again in a moment.");
+        await recordProviderAttemptOutcome(config.id, true).catch(() => {});
+        continue;
+      }
+
       try {
         const result =
           config.provider === "OPENAI_COMPATIBLE"
@@ -567,7 +625,9 @@ async function callChat(settings: AISettingsRow, params: CallChatParams): Promis
         return { ...result, model, provider: providerLabel };
       } catch (error) {
         lastError = error;
-        const isAvailabilityFailure = error instanceof AppError && error.statusCode === 502;
+        const availability = isAvailabilityFailure(error);
+        const busy = isBusyFailure(error);
+        if (!busy) everySaturated = false;
         // Every failed ATTEMPT is worth recording, not just the ones that trigger a fallthrough —
         // "which provider actually gets the job done" needs the failures a real bug produced too,
         // not only the availability kind. Best-effort: a broken audit write must never mask the
@@ -581,18 +641,28 @@ async function callChat(settings: AISettingsRow, params: CallChatParams): Promis
           success: false,
           errorReason: (error instanceof Error ? error.message : String(error)).slice(0, 300)
         }).catch(() => {});
-        if (isAvailabilityFailure) {
+        if (availability) {
           // Only availability failures feed the circuit breaker — a malformed request would fail
           // identically against every provider and is never this ONE provider's fault, so it must
-          // not count toward demoting it.
-          await recordProviderAttemptOutcome(config.id, false).catch(() => {});
+          // not count toward demoting it. And of those, only genuine faults count: `busy` means
+          // the provider was saturated, which is not a reliability problem and must not demote it.
+          await recordProviderAttemptOutcome(config.id, busy ? true : false).catch(() => {});
         } else {
           throw error;
         }
         // else: an availability failure — the loop tries the next configured provider, if any.
+      } finally {
+        // ALWAYS, on every path including the rethrow above: a leaked permit would wedge this
+        // provider for the lifetime of the process.
+        slot.release();
       }
     }
-    // Every configured provider was tried and every one failed availability-wise.
+    // Every configured provider was tried and every one failed availability-wise. When they were
+    // all merely SATURATED, say so plainly rather than surfacing whichever timeout happened last —
+    // "busy, try again" is actionable in a way "the provider returned an error" is not.
+    if (everySaturated) {
+      throw new AppError(503, "The AI is busy right now — every configured provider is at capacity. Try again in a moment.");
+    }
     throw lastError;
   } catch (error) {
     // The call spent nothing that reached a ledger-worthy invoice (or failed on the way there) —
@@ -4394,12 +4464,23 @@ const RequirementsInterviewTurnResponseSchema = z
 
 export type RequirementsInterviewTurnResult = z.infer<typeof RequirementsInterviewTurnResponseSchema>;
 
+/**
+ * The areas the INTERVIEW asks about. Deliberately smaller than the set of sections the finished
+ * document contains: `stakeholders`, `constraints` and `budget` are here because they are things
+ * the model genuinely cannot infer (who signs off, what the hard limits are, what money exists),
+ * while personas, functional requirements, acceptance criteria, cost/benefit and the executive
+ * summary are DERIVED at generation time from everything else — and, per this feature's standing
+ * contract, listed under `assumptions` when the interview didn't really cover them.
+ */
 export const REQUIREMENTS_SECTIONS = [
   "problem",
   "goals",
   "targetUsers",
   "scope",
   "features",
+  "stakeholders",
+  "constraints",
+  "budget",
   "techStack",
   "dependencies",
   "uiUx",
@@ -4652,6 +4733,30 @@ export interface RequirementsDocSuccessMetric {
   unit?: string;
 }
 
+/** One numbered, testable requirement, in the IEEE 29148 sense the generation prompt spells out:
+ *  one requirement per entry, one possible interpretation, verifiable. */
+export interface RequirementsDocFunctionalRequirement {
+  /** "FR-1", "FR-2", … — stable within one generated document, referenced by acceptance criteria. */
+  id: string;
+  requirement: string;
+  priority: "LOW" | "MEDIUM" | "HIGH" | "CRITICAL";
+  acceptanceCriteria: string;
+}
+
+export interface RequirementsDocPersona {
+  name: string;
+  role: string;
+  needs: string;
+  painPoints: string;
+}
+
+/** RACI: Responsible (does it), Accountable (owns it), Consulted (asked), Informed (told). */
+export interface RequirementsDocStakeholder {
+  name: string;
+  role: string;
+  raci: "R" | "A" | "C" | "I";
+}
+
 export interface RequirementsDocSections {
   problem: string;
   goals: string;
@@ -4675,6 +4780,21 @@ export interface RequirementsDocSections {
    *  release goes out, how an incident gets handled. Distinct from `timeline` (when things happen)
    *  and `modules` (what the system is made of). */
   procedures: string[];
+
+  /* --- Industry-standard sections (added after the first release) ---------------------------
+   * EVERY ONE OF THESE IS OPTIONAL, and must stay that way: documents generated before they
+   * existed have a `sections` JSON without these keys, and those documents still have to render
+   * and export rather than throwing. The renderers all guard accordingly. */
+  /** The one-paragraph version, for a reader who will not read the rest. */
+  executiveSummary?: string;
+  personas?: RequirementsDocPersona[];
+  stakeholders?: RequirementsDocStakeholder[];
+  /** Hard limits the project operates inside — budget, regulation, technology, deadlines. */
+  constraints?: string[];
+  functionalRequirements?: RequirementsDocFunctionalRequirement[];
+  costBenefit?: { costs: string; benefits: string; notes?: string };
+  /** Known unknowns — the things still to be decided, stated rather than quietly omitted. */
+  openQuestions?: string[];
 }
 
 const RequirementsDocFeatureSchema = z.object({
@@ -4719,7 +4839,40 @@ const RequirementsDocSectionsSchema = z.object({
       })
     )
     .max(20),
-  procedures: z.array(z.string().max(500)).max(30)
+  procedures: z.array(z.string().max(500)).max(30),
+  // Optional so a document generated before these sections existed still parses on re-read.
+  executiveSummary: z.string().max(3000).optional(),
+  personas: z
+    .array(
+      z.object({
+        name: z.string().max(120),
+        role: z.string().max(160),
+        needs: z.string().max(800),
+        painPoints: z.string().max(800)
+      })
+    )
+    .max(10)
+    .optional(),
+  stakeholders: z
+    .array(z.object({ name: z.string().max(160), role: z.string().max(160), raci: z.enum(["R", "A", "C", "I"]) }))
+    .max(30)
+    .optional(),
+  constraints: z.array(z.string().max(500)).max(30).optional(),
+  functionalRequirements: z
+    .array(
+      z.object({
+        id: z.string().max(20),
+        requirement: z.string().max(1000),
+        priority: z.enum(["LOW", "MEDIUM", "HIGH", "CRITICAL"]),
+        acceptanceCriteria: z.string().max(1000)
+      })
+    )
+    .max(80)
+    .optional(),
+  costBenefit: z
+    .object({ costs: z.string().max(2000), benefits: z.string().max(2000), notes: z.string().max(1000).optional() })
+    .optional(),
+  openQuestions: z.array(z.string().max(500)).max(30).optional()
 });
 
 /**
@@ -4762,13 +4915,35 @@ export async function generateRequirementsDocument(input: {
     "`successMetrics` become goals later — phrase each as something measurable, with a `targetValue`",
     "and `unit` when the interview gives you a real number to work with.",
     "",
+    "`functionalRequirements` is the implementable heart of the document. Derive it from the",
+    "features and everything else the interview covered, and follow IEEE 29148's rule for each",
+    "entry: state exactly ONE requirement, phrased so it has only ONE possible interpretation, and",
+    "so that it is TESTABLE. Id them FR-1, FR-2, … in order. Give each one `acceptanceCriteria`",
+    "that a tester could actually check — a condition with an observable outcome, not a restatement",
+    "of the requirement.",
+    "",
+    "`executiveSummary` is one paragraph for someone who will read nothing else: what is being",
+    "built, for whom, and why it matters.",
+    "",
+    "`personas` are the 2-4 real user archetypes implied by the target users, each with concrete",
+    "needs and pain points rather than demographics.",
+    "",
+    "`stakeholders` uses RACI — exactly one 'A' (Accountable) across the whole list, since one",
+    "person owns an outcome; 'R' for who does the work, 'C' for who is consulted, 'I' for who is",
+    "kept informed.",
+    "",
+    "`constraints` are the hard limits the project runs inside — budget, regulation, technology,",
+    "deadlines. `costBenefit` weighs the investment against the return in plain business language.",
+    "`openQuestions` lists what is genuinely still undecided — an honest short list beats a",
+    "confident empty one.",
+    "",
     "Return JSON only."
   ].join("\n");
 
   const chat = await callChat(settings, {
     feature: "requirements_doc_generate",
     model: settings.model,
-    maxTokens: 4000,
+    maxTokens: 8000,
     prompt,
     jsonSchema: {
       name: "requirements_document",
@@ -4853,7 +5028,57 @@ export async function generateRequirementsDocument(input: {
               additionalProperties: false
             }
           },
-          procedures: { type: "array", items: { type: "string" } }
+          procedures: { type: "array", items: { type: "string" } },
+          executiveSummary: { type: "string" },
+          personas: {
+            type: "array",
+            items: {
+              type: "object",
+              properties: {
+                name: { type: "string" },
+                role: { type: "string" },
+                needs: { type: "string" },
+                painPoints: { type: "string" }
+              },
+              required: ["name", "role", "needs", "painPoints"],
+              additionalProperties: false
+            }
+          },
+          stakeholders: {
+            type: "array",
+            items: {
+              type: "object",
+              properties: {
+                name: { type: "string" },
+                role: { type: "string" },
+                raci: { type: "string", enum: ["R", "A", "C", "I"] }
+              },
+              required: ["name", "role", "raci"],
+              additionalProperties: false
+            }
+          },
+          constraints: { type: "array", items: { type: "string" } },
+          functionalRequirements: {
+            type: "array",
+            items: {
+              type: "object",
+              properties: {
+                id: { type: "string" },
+                requirement: { type: "string" },
+                priority: { type: "string", enum: ["LOW", "MEDIUM", "HIGH", "CRITICAL"] },
+                acceptanceCriteria: { type: "string" }
+              },
+              required: ["id", "requirement", "priority", "acceptanceCriteria"],
+              additionalProperties: false
+            }
+          },
+          costBenefit: {
+            type: "object",
+            properties: { costs: { type: "string" }, benefits: { type: "string" }, notes: { type: "string" } },
+            required: ["costs", "benefits"],
+            additionalProperties: false
+          },
+          openQuestions: { type: "array", items: { type: "string" } }
         },
         required: [
           "problem",

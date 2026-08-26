@@ -38,6 +38,7 @@ import {
   createRequirementsDocument,
   generateDocument,
   getRequirementsDocument,
+  getSourceDocumentText,
   listRequirementsDocuments,
   materializeGoals,
   recordInterviewTurn,
@@ -223,6 +224,18 @@ requirementsDocRouter.post(
   }
 );
 
+// The extracted text of the supporting document, for the in-app viewer. Its own route rather than
+// a field on GET /:id — see the service function's header for why.
+requirementsDocRouter.get(
+  "/:id/source-text",
+  requirePermission(permissions.TICKETS_VIEW),
+  validate(z.object({ params: z.object({ id: z.string().uuid() }) })),
+  async (req, res) => {
+    await assertPlanningEnabled();
+    res.json(await getSourceDocumentText(String(req.params.id)));
+  }
+);
+
 // Re-runs the AI analysis against the document's already-stored extracted text — no new upload.
 // Same preview-only contract as /import/analyze: writes nothing until /import/apply is called.
 requirementsDocRouter.post(
@@ -250,10 +263,23 @@ requirementsDocRouter.post(
   }
 );
 
-requirementsDocRouter.get(
+/**
+ * POST rather than GET because of the diagram: PDFKit cannot render Mermaid, but the browser
+ * already has the diagram on screen, so the frontend rasterises it and posts the PNG along. A
+ * caller that doesn't (a direct API call, or a diagram Mermaid couldn't parse) still gets a
+ * complete PDF — the renderer falls back to the Mermaid source. See the PDF service's header.
+ */
+requirementsDocRouter.post(
   "/:id/export.pdf",
   requirePermission(permissions.TICKETS_VIEW),
-  validate(z.object({ params: z.object({ id: z.string().uuid() }) })),
+  validate(
+    z.object({
+      params: z.object({ id: z.string().uuid() }),
+      // ~4MB of base64 ≈ a 3MB PNG: comfortably more than any flowchart needs, and a bound so a
+      // caller can't push arbitrary megabytes through an authenticated endpoint.
+      body: z.object({ diagramPng: z.string().max(4_000_000).optional() }).strict()
+    })
+  ),
   async (req, res) => {
     await assertPlanningEnabled();
     const doc = await getRequirementsDocument(String(req.params.id));
@@ -262,9 +288,17 @@ requirementsDocRouter.get(
     res.setHeader("Content-Type", "application/pdf");
     res.setHeader("Content-Disposition", `attachment; filename="${doc.title.replace(/[^\w -]/g, "").slice(0, 80) || "requirements"}.pdf"`);
 
-    const pdf = new PDFDocument({ size: "A4", margin: 36, bufferPages: true });
+    const pdf = new PDFDocument({ size: "A4", margin: 48, bufferPages: true });
     pdf.pipe(res);
-    renderRequirementsDocPdf(pdf, { title: doc.title, docType: doc.docType, createdAt: doc.createdAt, sections: doc.sections as unknown as RequirementsDocSections });
+    renderRequirementsDocPdf(pdf, {
+      title: doc.title,
+      docType: doc.docType,
+      createdAt: doc.createdAt,
+      sections: doc.sections as unknown as RequirementsDocSections,
+      diagramPng: req.body.diagramPng ?? null,
+      preparedBy: doc.sourceDocumentUploadedBy?.name ?? null,
+      status: doc.status === "READY" ? "Final" : "Draft"
+    });
     pdf.end();
   }
 );

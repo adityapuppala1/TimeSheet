@@ -8,7 +8,7 @@
  */
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import mermaid from "mermaid";
-import { ArrowLeft, Archive, Download, FileDown, FileUp, Loader2, PenLine, RefreshCw, SkipForward, Sparkles, Target, Ticket, Trash2 } from "lucide-react";
+import { ArrowLeft, Archive, Download, Eye, FileDown, FileUp, Loader2, PenLine, RefreshCw, SkipForward, Sparkles, Target, Ticket, Trash2 } from "lucide-react";
 import { useEffect, useId, useState } from "react";
 import { useNavigate, useParams } from "react-router";
 import { permissions } from "@timesheet/shared";
@@ -31,6 +31,7 @@ import {
   projectApi,
   requirementsDocApi,
   type RequirementsDocRow,
+  type RequirementsDocSectionsRow,
   type RequirementsDocSuccessMetricRow,
   type RequirementsImportProposedTurnRow,
   type RequirementsInterviewTurnResult
@@ -52,7 +53,55 @@ function formatBytes(bytes: number) {
 // graphic straight to document.body (outside our component tree) *in addition to* rejecting the
 // render() promise below — so our try/catch fallback rendered fine, but the bomb graphic stayed
 // stuck in the corner of the page regardless. This stops mermaid from touching the DOM on error at all.
-mermaid.initialize({ startOnLoad: false, theme: "neutral", securityLevel: "strict", suppressErrorRendering: true });
+//
+// flowchart.htmlLabels: false is load-bearing for the PDF export, not a style choice. Mermaid's
+// default emits node labels inside <foreignObject>, which a <canvas> refuses to rasterise — the
+// diagram would silently come out blank or label-less in the exported PDF. Plain <text> nodes
+// rasterise correctly. See svgToPng below.
+mermaid.initialize({
+  startOnLoad: false,
+  theme: "neutral",
+  securityLevel: "strict",
+  suppressErrorRendering: true,
+  flowchart: { htmlLabels: false }
+});
+
+/**
+ * Rasterises a rendered Mermaid SVG to a base64 PNG so the server can embed it in the PDF —
+ * PDFKit has no Mermaid renderer, and the browser has already done the work.
+ *
+ * Returns null on any failure rather than throwing: a missing diagram picture degrades the export
+ * to the Mermaid source block, which is exactly what the PDF service falls back to. Losing the
+ * whole export over a diagram would be the wrong trade.
+ */
+async function svgToPng(svg: string, scale = 2): Promise<string | null> {
+  try {
+    const sized = /<svg[^>]*\swidth="/.test(svg) ? svg : svg.replace("<svg", '<svg width="900"');
+    const blobUrl = URL.createObjectURL(new Blob([sized], { type: "image/svg+xml;charset=utf-8" }));
+    try {
+      const image = await new Promise<HTMLImageElement>((resolve, reject) => {
+        const img = new Image();
+        img.onload = () => resolve(img);
+        img.onerror = () => reject(new Error("svg failed to load"));
+        img.src = blobUrl;
+      });
+      const canvas = document.createElement("canvas");
+      canvas.width = (image.naturalWidth || 900) * scale;
+      canvas.height = (image.naturalHeight || 400) * scale;
+      const ctx = canvas.getContext("2d");
+      if (!ctx) return null;
+      // Mermaid SVGs are transparent; without this the diagram lands as dark-on-dark in the PDF.
+      ctx.fillStyle = "#FFFFFF";
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+      ctx.drawImage(image, 0, 0, canvas.width, canvas.height);
+      return canvas.toDataURL("image/png");
+    } finally {
+      URL.revokeObjectURL(blobUrl);
+    }
+  } catch {
+    return null;
+  }
+}
 
 const STATUS_DESCRIPTION: Record<string, string> = { DRAFTING: "Interview in progress", READY: "Ready", ARCHIVED: "Archived" };
 
@@ -191,7 +240,9 @@ export function RequirementsDocViewPage() {
         )}
       </div>
 
-      {data.status === "DRAFTING" && <SourceDocumentCard doc={data} canWrite={canWrite} onChanged={invalidate} />}
+      {/* Every status, not just DRAFTING — "where did this come from, and who uploaded it" stays a
+          real question after the document is generated, which is exactly when people ask it. */}
+      {data.status !== "ARCHIVED" && <SourceDocumentCard doc={data} canWrite={canWrite} onChanged={invalidate} />}
 
       {data.status === "DRAFTING" && (
         <InterviewPanel
@@ -211,7 +262,16 @@ export function RequirementsDocViewPage() {
         />
       )}
 
-      {data.sections && <DocumentViewer docId={docId} title={data.title} sections={data.sections} canWrite={canWrite} />}
+      {data.sections && (
+        <DocumentViewer
+          docId={docId}
+          title={data.title}
+          sections={data.sections}
+          canWrite={canWrite}
+          onRegenerate={() => generate.mutate()}
+          regenerating={generate.isPending}
+        />
+      )}
     </div>
   );
 }
@@ -352,6 +412,7 @@ function ImportReviewStep({
   summary,
   truncated,
   hasAnswers,
+  reopensInterview,
   applying,
   onChangeAnswer,
   onRemoveRow,
@@ -363,21 +424,28 @@ function ImportReviewStep({
   summary: string | null;
   truncated: boolean;
   hasAnswers: boolean;
+  /** True on an already-generated document: confirming makes the generated document stale, so the
+   *  interview reopens and it has to be generated again. Said before confirming, never after. */
+  reopensInterview: boolean;
   applying: boolean;
   onChangeAnswer: (index: number, answer: string) => void;
   onRemoveRow: (index: number) => void;
   onCancel: () => void;
   onConfirm: () => void;
 }) {
+  let description = "Edit or remove anything before it's saved — only what you confirm here becomes an answered interview question.";
+  if (reopensInterview) {
+    description =
+      "Confirming REPLACES every existing answer AND reopens the interview — the document you already generated will need generating again.";
+  } else if (hasAnswers) {
+    description = "Confirming REPLACES every existing answer on this document with these. Edit or remove anything first.";
+  }
+
   return (
     <>
       <DialogHeader>
         <DialogTitle>Review what we found</DialogTitle>
-        <DialogDescription>
-          {hasAnswers
-            ? "Confirming REPLACES every existing answer on this document with these. Edit or remove anything first."
-            : "Edit or remove anything before it's saved — only what you confirm here becomes an answered interview question."}
-        </DialogDescription>
+        <DialogDescription>{description}</DialogDescription>
       </DialogHeader>
 
       <ImportReviewPanel
@@ -491,16 +559,18 @@ function SourceDocumentSummary({ doc }: { doc: RequirementsDocRow }) {
 }
 
 /**
- * Where this document's answers came from — an uploaded PRD/BRD, or the interview alone. Always
- * rendered while DRAFTING (as "Created manually" when there's no file), because "was this built
- * from a document?" is a question with two real answers and silence isn't one of them.
+ * Where this document's answers came from — an uploaded PRD/BRD, or the interview alone. Rendered
+ * at EVERY non-archived status, not just while drafting: "who uploaded this, and when" is a
+ * question people ask most often AFTER the document is finished, and hiding it then was a real bug.
  *
  * Re-upload and Regenerate both REPLACE every existing answer (the backend does a full transcript
  * replace, never a merge), so both go through the same review screen a first import does, and the
- * confirm button says so when there is something to lose.
+ * confirm button says so when there is something to lose — including, on a finished document, that
+ * confirming reopens the interview.
  */
 function SourceDocumentCard({ doc, canWrite, onChanged }: { doc: RequirementsDocRow; canWrite: boolean; onChanged: () => void }) {
   const [dialogOpen, setDialogOpen] = useState(false);
+  const [viewerOpen, setViewerOpen] = useState(false);
   const [mode, setMode] = useState<"upload" | "regenerate">("upload");
   const [file, setFile] = useState<File | null>(null);
   const [stage, setStage] = useState<"picking" | "analyzing" | "reviewing" | "applying">("picking");
@@ -513,6 +583,15 @@ function SourceDocumentCard({ doc, canWrite, onChanged }: { doc: RequirementsDoc
 
   const hasSource = Boolean(doc.sourceDocumentName);
   const hasAnswers = doc.interviewTranscript.some((t) => t.answer !== null || t.skipped);
+  const isReady = doc.status === "READY";
+
+  // Only fetched when the viewer is actually opened — the extracted text of a long PRD is a lot to
+  // ship with every page load of a document nobody is inspecting.
+  const sourceText = useQuery({
+    queryKey: ["requirements-docs", doc.id, "source-text"],
+    queryFn: () => requirementsDocApi.sourceText(doc.id),
+    enabled: viewerOpen
+  });
   let pickerTitle = "Regenerate from the document";
   if (mode === "upload") pickerTitle = hasSource ? "Replace the supporting document" : "Upload a supporting document";
 
@@ -609,45 +688,77 @@ function SourceDocumentCard({ doc, canWrite, onChanged }: { doc: RequirementsDoc
             </div>
           </div>
 
-          {canWrite && doc.status === "DRAFTING" && (
-            <div className="flex flex-wrap items-center gap-2">
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={() => {
-                  setMode("upload");
-                  setDialogOpen(true);
-                }}
-              >
-                <FileUp className="mr-2 h-3.5 w-3.5" />
-                {hasSource ? "Re-upload" : "Upload a document"}
+          <div className="flex flex-wrap items-center gap-2">
+            {/* Viewing is read-only, so it needs no write permission and no particular status. */}
+            {hasSource && (
+              <Button variant="outline" size="sm" onClick={() => setViewerOpen(true)}>
+                <Eye className="mr-2 h-3.5 w-3.5" />
+                View
               </Button>
-              {hasSource && (
-                <>
-                  <Button variant="outline" size="sm" onClick={() => regenerate.mutate()} disabled={regenerate.isPending}>
-                    <RefreshCw className="mr-2 h-3.5 w-3.5" />
-                    Regenerate
-                  </Button>
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    className="text-destructive hover:bg-destructive/10 hover:text-destructive"
-                    disabled={clearSource.isPending}
-                    onClick={() => {
-                      if (window.confirm("Remove the link to this document? Your answers are kept — only the file details are forgotten.")) {
-                        clearSource.mutate();
-                      }
-                    }}
-                  >
-                    <Trash2 className="mr-2 h-3.5 w-3.5" />
-                    Remove
-                  </Button>
-                </>
-              )}
-            </div>
-          )}
+            )}
+            {canWrite && (
+              <>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => {
+                    setMode("upload");
+                    setDialogOpen(true);
+                  }}
+                >
+                  <FileUp className="mr-2 h-3.5 w-3.5" />
+                  {hasSource ? "Re-upload" : "Upload a document"}
+                </Button>
+                {hasSource && (
+                  <>
+                    <Button variant="outline" size="sm" onClick={() => regenerate.mutate()} disabled={regenerate.isPending}>
+                      <RefreshCw className="mr-2 h-3.5 w-3.5" />
+                      Regenerate answers
+                    </Button>
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      className="text-destructive hover:bg-destructive/10 hover:text-destructive"
+                      disabled={clearSource.isPending}
+                      onClick={() => {
+                        if (window.confirm("Remove the link to this document? Your answers are kept — only the file details are forgotten.")) {
+                          clearSource.mutate();
+                        }
+                      }}
+                    >
+                      <Trash2 className="mr-2 h-3.5 w-3.5" />
+                      Remove
+                    </Button>
+                  </>
+                )}
+              </>
+            )}
+          </div>
         </CardContent>
       </Card>
+
+      <Dialog open={viewerOpen} onOpenChange={setViewerOpen}>
+        <DialogContent className="sm:max-w-2xl">
+          <DialogHeader>
+            <DialogTitle className="truncate">{doc.sourceDocumentName}</DialogTitle>
+            <DialogDescription>
+              The text the AI read from this file. Formatting, images and layout aren&rsquo;t shown — the original file
+              itself isn&rsquo;t stored, only the text extracted from it.
+            </DialogDescription>
+          </DialogHeader>
+          {sourceText.isLoading && <Skeleton className="h-64 w-full" />}
+          {sourceText.data && (
+            <pre className="max-h-[60vh] overflow-auto whitespace-pre-wrap rounded-md border border-border bg-muted/40 p-3 text-xs leading-relaxed">
+              {sourceText.data.text}
+            </pre>
+          )}
+          <DialogFooter>
+            <Button variant="ghost" onClick={() => setViewerOpen(false)}>
+              Close
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       <Dialog open={dialogOpen} onOpenChange={(open) => !open && closeDialog()}>
         <DialogContent className={stage === "reviewing" ? "sm:max-w-xl" : undefined}>
@@ -658,6 +769,7 @@ function SourceDocumentCard({ doc, canWrite, onChanged }: { doc: RequirementsDoc
               summary={summary}
               truncated={truncated}
               hasAnswers={hasAnswers}
+              reopensInterview={isReady}
               applying={apply.isPending}
               onChangeAnswer={(index, answer) => setRows((prev) => prev.map((r, i) => (i === index ? { ...r, answer } : r)))}
               onRemoveRow={(index) => setRows((prev) => prev.filter((_, i) => i !== index))}
@@ -683,35 +795,83 @@ function SourceDocumentCard({ doc, canWrite, onChanged }: { doc: RequirementsDoc
   );
 }
 
-const SECTION_ORDER: Array<{ key: string; label: string }> = [
+/** Document order, following the shape an industry PRD/BRD is expected in: summary first for the
+ *  reader who stops there, then the business framing, then the implementable detail, then the
+ *  caveats. Sections marked `optional` were added after the first release — a document generated
+ *  before them simply has no such key, and its heading is skipped rather than rendered empty. */
+const SECTION_ORDER: Array<{ key: string; label: string; optional?: boolean }> = [
+  { key: "executiveSummary", label: "Executive summary", optional: true },
   { key: "problem", label: "Problem" },
   { key: "goals", label: "Goals" },
   { key: "targetUsers", label: "Target users" },
+  { key: "personas", label: "User personas", optional: true },
+  { key: "stakeholders", label: "Stakeholders (RACI)", optional: true },
   { key: "scope", label: "Scope" },
   { key: "features", label: "Features" },
+  { key: "functionalRequirements", label: "Functional requirements", optional: true },
   { key: "techStack", label: "Tech stack" },
   { key: "dependencies", label: "Dependencies" },
+  { key: "constraints", label: "Constraints", optional: true },
   { key: "uiUx", label: "UI/UX" },
   { key: "architecture", label: "Architecture" },
   { key: "modules", label: "Modules" },
   { key: "nfr", label: "Non-functional requirements" },
   { key: "timeline", label: "Timeline" },
   { key: "procedures", label: "Procedures" },
+  { key: "costBenefit", label: "Cost & benefit", optional: true },
   { key: "risks", label: "Risks" },
   { key: "successMetrics", label: "Success metrics" },
+  { key: "openQuestions", label: "Open questions", optional: true },
   { key: "assumptions", label: "Assumptions" }
 ];
+
+/** True when an optional section has nothing worth a heading. Legacy documents have `undefined`
+ *  for every one of these; a freshly generated one may still legitimately have an empty list. */
+function hasOptionalSection(key: string, s: RequirementsDocSectionsRow): boolean {
+  switch (key) {
+    case "executiveSummary":
+      return Boolean(s.executiveSummary?.trim());
+    case "personas":
+      return (s.personas?.length ?? 0) > 0;
+    case "stakeholders":
+      return (s.stakeholders?.length ?? 0) > 0;
+    case "constraints":
+      return (s.constraints?.length ?? 0) > 0;
+    case "functionalRequirements":
+      return (s.functionalRequirements?.length ?? 0) > 0;
+    case "costBenefit":
+      return Boolean(s.costBenefit?.costs?.trim() || s.costBenefit?.benefits?.trim());
+    case "openQuestions":
+      return (s.openQuestions?.length ?? 0) > 0;
+    default:
+      return true;
+  }
+}
+
+const RACI_LABEL: Record<string, string> = {
+  R: "Responsible",
+  A: "Accountable",
+  C: "Consulted",
+  I: "Informed"
+};
 
 function DocumentViewer({
   docId,
   title,
   sections,
-  canWrite
+  canWrite,
+  onRegenerate,
+  regenerating
 }: {
   docId: string;
   title: string;
   sections: NonNullable<ReturnType<typeof requirementsDocApi.get> extends Promise<infer T> ? T : never>["sections"];
   canWrite: boolean;
+  /** Re-runs generation from the CURRENT transcript — distinct from the source card's "regenerate
+   *  answers", which re-reads the uploaded file. Both are things people call "regenerate", so both
+   *  exist and are labelled for what they actually do. */
+  onRegenerate: () => void;
+  regenerating: boolean;
 }) {
   const s = sections!;
   const [ticketsOpen, setTicketsOpen] = useState(false);
@@ -721,7 +881,26 @@ function DocumentViewer({
   const exportFile = async (kind: "pdf" | "md") => {
     setExporting(kind);
     try {
-      const blob = kind === "pdf" ? await requirementsDocApi.downloadPdf(docId) : await requirementsDocApi.downloadMarkdown(docId);
+      let blob: Blob;
+      if (kind === "pdf") {
+        // Render the diagram here rather than reading it out of the on-screen component: this
+        // works whether or not that section is mounted/visible, and keeps the picture-for-the-PDF
+        // concern in the place that needs it. Any failure just means no picture — the server
+        // falls back to the Mermaid source, so the export still succeeds.
+        let diagramPng: string | null = null;
+        const source = s.architecture?.diagramMermaid;
+        if (source?.trim()) {
+          try {
+            const { svg } = await mermaid.render(`pdf-diagram-${Date.now()}`, source);
+            diagramPng = await svgToPng(svg);
+          } catch {
+            diagramPng = null;
+          }
+        }
+        blob = await requirementsDocApi.downloadPdf(docId, diagramPng);
+      } else {
+        blob = await requirementsDocApi.downloadMarkdown(docId);
+      }
       downloadBlob(blob, `${title.replace(/[^\w -]/g, "") || "requirements"}.${kind}`);
     } catch (err: any) {
       toast.error("Export failed", { description: err?.response?.data?.message ?? "Try again." });
@@ -736,6 +915,21 @@ function DocumentViewer({
         <CardHeader className="flex-row flex-wrap items-center justify-between gap-2 space-y-0">
           <CardTitle className="text-base">Document</CardTitle>
           <div className="flex flex-wrap gap-2">
+            {canWrite && (
+              <Button
+                size="sm"
+                variant="outline"
+                disabled={regenerating}
+                onClick={() => {
+                  if (window.confirm("Rewrite this document from the current interview answers? The existing text is replaced.")) {
+                    onRegenerate();
+                  }
+                }}
+              >
+                {regenerating ? <Loader2 className="mr-2 h-3.5 w-3.5 animate-spin" /> : <RefreshCw className="mr-2 h-3.5 w-3.5" />}
+                Regenerate document
+              </Button>
+            )}
             <Button size="sm" variant="outline" disabled={exporting !== null} onClick={() => exportFile("pdf")}>
               {exporting === "pdf" ? <Loader2 className="mr-2 h-3.5 w-3.5 animate-spin" /> : <FileDown className="mr-2 h-3.5 w-3.5" />}
               Export PDF
@@ -765,7 +959,7 @@ function DocumentViewer({
               frame the interview form above wears while it's asking. */}
           <BorderGlow animated>
             <div className="grid gap-6 p-3">
-              {SECTION_ORDER.map(({ key, label }) => (
+              {SECTION_ORDER.filter(({ key, optional }) => !optional || hasOptionalSection(key, s)).map(({ key, label }) => (
                 <div key={key}>
                   <h3 className="mb-2 text-sm font-semibold">{label}</h3>
                   {renderSection(key, s)}
@@ -826,6 +1020,94 @@ function renderSection(key: string, s: NonNullable<ReturnType<typeof requirement
           ))}
         </div>
       );
+    case "executiveSummary":
+      return <p className="text-sm text-muted-foreground">{sec.executiveSummary || "—"}</p>;
+    case "personas":
+      return (
+        <div className="grid gap-2 sm:grid-cols-2">
+          {(sec.personas ?? []).map((p, i) => (
+            <div key={i} className="rounded-md border border-border p-2.5">
+              <p className="text-sm font-medium">{p.name}</p>
+              <p className="text-xs text-muted-foreground">{p.role}</p>
+              <p className="mt-1.5 text-xs">
+                <span className="font-medium">Needs: </span>
+                <span className="text-muted-foreground">{p.needs}</span>
+              </p>
+              <p className="text-xs">
+                <span className="font-medium">Pain points: </span>
+                <span className="text-muted-foreground">{p.painPoints}</span>
+              </p>
+            </div>
+          ))}
+        </div>
+      );
+    case "stakeholders":
+      return (
+        <div className="overflow-x-auto">
+          <table className="w-full min-w-[28rem] text-sm">
+            <thead>
+              <tr className="border-b border-border text-left text-xs text-muted-foreground">
+                <th className="pb-1.5 pr-3 font-medium">Name</th>
+                <th className="pb-1.5 pr-3 font-medium">Role</th>
+                <th className="pb-1.5 font-medium">RACI</th>
+              </tr>
+            </thead>
+            <tbody>
+              {(sec.stakeholders ?? []).map((st, i) => (
+                <tr key={i} className="border-b border-border/50 last:border-0">
+                  <td className="py-1.5 pr-3">{st.name}</td>
+                  <td className="py-1.5 pr-3 text-muted-foreground">{st.role}</td>
+                  <td className="py-1.5">
+                    <Badge variant={st.raci === "A" ? "default" : "outline"} className="text-xs">
+                      {st.raci} · {RACI_LABEL[st.raci] ?? st.raci}
+                    </Badge>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      );
+    case "functionalRequirements":
+      return (
+        <div className="grid gap-2">
+          {(sec.functionalRequirements ?? []).map((fr) => (
+            <div key={fr.id} className="rounded-md border border-border p-2.5">
+              <div className="flex flex-wrap items-center gap-2">
+                <Badge variant="secondary" className="font-mono text-xs">
+                  {fr.id}
+                </Badge>
+                <Badge variant="outline" className="text-xs">
+                  {fr.priority}
+                </Badge>
+              </div>
+              <p className="mt-1.5 text-sm">{fr.requirement}</p>
+              <p className="mt-1 text-xs">
+                <span className="font-medium">Accepted when: </span>
+                <span className="text-muted-foreground">{fr.acceptanceCriteria}</span>
+              </p>
+            </div>
+          ))}
+        </div>
+      );
+    case "constraints":
+      return <BulletList items={sec.constraints ?? []} />;
+    case "costBenefit":
+      return (
+        <div className="grid gap-2 sm:grid-cols-2">
+          <div>
+            <p className="text-xs font-medium text-muted-foreground">Costs</p>
+            <p className="text-sm text-muted-foreground">{sec.costBenefit?.costs || "—"}</p>
+          </div>
+          <div>
+            <p className="text-xs font-medium text-muted-foreground">Benefits</p>
+            <p className="text-sm text-muted-foreground">{sec.costBenefit?.benefits || "—"}</p>
+          </div>
+          {sec.costBenefit?.notes && <p className="text-xs text-muted-foreground sm:col-span-2">{sec.costBenefit.notes}</p>}
+        </div>
+      );
+    case "openQuestions":
+      return <BulletList items={sec.openQuestions ?? []} />;
     case "techStack":
       return <BulletList items={sec.techStack} />;
     case "dependencies":

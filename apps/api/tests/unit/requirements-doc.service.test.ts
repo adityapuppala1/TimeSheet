@@ -131,12 +131,28 @@ describe("generateDocument", () => {
 const FAKE_FILE = { buffer: Buffer.from("irrelevant"), originalname: "existing-prd.pdf" };
 
 describe("analyzeImportedDocument", () => {
-  it("refuses once the document is no longer DRAFTING", async () => {
+  it("refuses on an ARCHIVED document", async () => {
     const client = createFakeTenantClient();
-    vi.mocked(client.requirementsDocument.findUnique).mockResolvedValue({ ...BASE_DOC, status: "READY", interviewTranscript: [] } as never);
+    vi.mocked(client.requirementsDocument.findUnique).mockResolvedValue({ ...BASE_DOC, status: "ARCHIVED", interviewTranscript: [] } as never);
 
     await expect(runInTenant(client, () => analyzeImportedDocument("doc-1", FAKE_FILE, "user-1"))).rejects.toMatchObject({ statusCode: 422 });
     expect(extractRequirementsImportText).not.toHaveBeenCalled();
+  });
+
+  it("ALLOWS a re-upload on an already-generated (READY) document — the source card lives there too", async () => {
+    const client = createFakeTenantClient();
+    vi.mocked(client.requirementsDocument.findUnique).mockResolvedValue({ ...BASE_DOC, status: "READY", interviewTranscript: [] } as never);
+    vi.mocked(extractRequirementsImportText).mockResolvedValue({ text: "A real document with real, meaningful content in it.".repeat(10) });
+    vi.mocked(analyzeRequirementsImport).mockResolvedValue({
+      proposedTurns: [{ question: "Q", answer: "A", sectionTag: "problem", confidence: "HIGH" }],
+      openQuestions: [],
+      documentSummary: "",
+      model: "test-model",
+      interactionId: null
+    } as never);
+
+    const result = await runInTenant(client, () => analyzeImportedDocument("doc-1", FAKE_FILE, "user-1"));
+    expect(result.proposedTurns).toHaveLength(1);
   });
 
   it("ALLOWS a re-upload over an interview already in progress — a re-upload replaces, it doesn't merge", async () => {
@@ -272,12 +288,36 @@ describe("applyImportedAnswers", () => {
     expect(JSON.stringify(written.data.interviewTranscript)).not.toContain("Old question");
   });
 
-  it("refuses once the document is no longer DRAFTING", async () => {
+  it("refuses on an ARCHIVED document", async () => {
     const client = createFakeTenantClient();
-    vi.mocked(client.requirementsDocument.findUnique).mockResolvedValue({ ...BASE_DOC, status: "READY", interviewTranscript: [] } as never);
+    vi.mocked(client.requirementsDocument.findUnique).mockResolvedValue({ ...BASE_DOC, status: "ARCHIVED", interviewTranscript: [] } as never);
 
     await expect(runInTenant(client, () => applyImportedAnswers("doc-1", { turns: TURNS }, "user-1"))).rejects.toMatchObject({ statusCode: 422 });
     expect(client.requirementsDocument.update).not.toHaveBeenCalled();
+  });
+
+  it("reopens the interview when replacing answers on an already-generated document", async () => {
+    // The generated document no longer reflects its own transcript, so leaving it READY would be
+    // a lie. Reopening is the honest outcome, and the UI warns before confirming.
+    const client = createFakeTenantClient();
+    vi.mocked(client.requirementsDocument.findUnique).mockResolvedValue({ ...BASE_DOC, status: "READY", interviewTranscript: [] } as never);
+    vi.mocked(client.requirementsDocument.update).mockResolvedValue({} as never);
+
+    await runInTenant(client, () => applyImportedAnswers("doc-1", { turns: TURNS }, "user-1"));
+
+    const written = vi.mocked(client.requirementsDocument.update).mock.calls[0][0] as any;
+    expect(written.data.status).toBe("DRAFTING");
+  });
+
+  it("leaves status alone when the document was already DRAFTING", async () => {
+    const client = createFakeTenantClient();
+    vi.mocked(client.requirementsDocument.findUnique).mockResolvedValue({ ...BASE_DOC, interviewTranscript: [] } as never);
+    vi.mocked(client.requirementsDocument.update).mockResolvedValue({} as never);
+
+    await runInTenant(client, () => applyImportedAnswers("doc-1", { turns: TURNS }, "user-1"));
+
+    const written = vi.mocked(client.requirementsDocument.update).mock.calls[0][0] as any;
+    expect(written.data).not.toHaveProperty("status");
   });
 
   it("persists the file's provenance when a sourceDocument is supplied (a real upload)", async () => {

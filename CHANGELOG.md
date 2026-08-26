@@ -10,6 +10,51 @@ user of a running installation.
 The parser that feeds the in-app What's-new page ignores this section until it gains a version
 number, on purpose — an installation must never render history for a version that does not exist yet.
 
+### 📄 PRD/BRD exports you'd actually hand to a client
+
+- **The PDF is a real document now.** A branded cover page with a document-control block (version,
+  status, generated date, prepared by, classification), a **table of contents with real page
+  numbers** and dotted leaders, numbered sections, a diagonal **TimeSphere watermark** on every
+  page, running headers, and proper **tables** — colour-coded priority pills, zebra striping, and
+  headers that repeat when a table crosses a page.
+- **The architecture diagram exports as a picture**, not as Mermaid source code. PDF libraries
+  can't draw Mermaid and a headless browser is a heavy dependency for one image — so the app hands
+  over the diagram it has already rendered on screen. If that isn't possible (a direct API call, or
+  a diagram the AI wrote incorrectly) it falls back to the source text exactly as before, so an
+  export never fails over a picture.
+- **Markdown gained YAML front-matter** (title, type, version, date) so Confluence/Notion/Obsidian
+  import it as real metadata, GFM tables mirroring the PDF's, and a live ```mermaid fence that
+  GitHub, GitLab and Notion render natively.
+
+### 📐 Documents now follow what the industry actually expects of a PRD/BRD
+
+- Added the sections a reviewer looks for and previously wouldn't find: an **executive summary**,
+  **user personas**, **stakeholders with RACI**, **constraints**, **cost & benefit**, **open
+  questions**, and numbered **functional requirements** written to IEEE 29148's rule — one
+  requirement each, one possible interpretation, testable, with its own acceptance criteria.
+- The interview only got **three** new questions (stakeholders, constraints, budget) — the things
+  the AI genuinely cannot know. Everything else is derived from what you already answered and, as
+  always, listed under Assumptions when it wasn't really covered.
+- Documents generated before these sections existed still open and export exactly as they did;
+  sections they don't have are simply omitted rather than showing as empty headings.
+
+### ⚡ AI features hold up when the whole team uses them at once
+
+- **The real problem:** nothing bounded how many AI calls ran at once. A self-hosted Ollama doesn't
+  refuse extra load, it *queues* it — so a dozen people asking at the same time meant a dozen
+  requests sitting inside Ollama until each gave up 90 seconds later. Worse, those timeouts counted
+  as provider *failures*, so the circuit breaker would demote a perfectly healthy provider for the
+  crime of being popular.
+- **Each provider now has a concurrency limit** (Workspace Settings → AI, default 2 — match it to
+  your provider's real parallelism; for Ollama that's `OLLAMA_NUM_PARALLEL`). Calls beyond it wait
+  briefly for a slot, and if none frees up they move on to the next configured provider instead of
+  queueing somewhere nothing can route around them. If every provider is genuinely at capacity you
+  get a clear "the AI is busy, try again in a moment" in seconds rather than a 90-second hang.
+- **Busy is no longer treated as broken.** Saturation (a 503, or a timeout while queued) still
+  fails over to the next provider, but no longer counts against a provider's reliability — so a
+  popular provider stops getting auto-demoted for working hard. A rejected key or a bad model name
+  still counts, exactly as before.
+
 ### 📋 Requirements Studio: a starter template, and the imported document is now a real thing you can manage
 
 - **A downloadable fill-in template**, linked right beside the upload box — one guidance prompt per
@@ -17,6 +62,13 @@ number, on purpose — an installation must never render history for a version t
   written a PRD or BRD has a starting point they can fill in offline, hand around, and upload back
   in. Plain text on purpose: it round-trips through this app's own import path with no risk of a
   format the reader rejects.
+- **🐛 The document card no longer vanishes once the document is generated.** It was only rendered
+  while a document was still drafting — so filename, size, uploader, date, re-upload and regenerate
+  all disappeared at exactly the moment people go looking for them. It now shows at every stage,
+  gained a **View** action for reading the extracted text, and replacing the document on a finished
+  PRD/BRD now says up front that doing so reopens the interview. A separate **Regenerate document**
+  button rewrites the document from the current answers — previously impossible without starting
+  over.
 - **The uploaded document is now shown, and manageable.** A card on the document page names the
   file, its size, who uploaded it and when — or says plainly that the document was **created
   manually**, so there's never ambiguity about where a set of answers came from. Alongside it:

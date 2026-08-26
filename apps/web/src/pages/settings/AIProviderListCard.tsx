@@ -398,6 +398,7 @@ function ProviderConfigDialog({
   const [baseUrl, setBaseUrl] = useState(config?.baseUrl ?? "");
   const [model, setModel] = useState(config?.model ?? "");
   const [apiKeyDraft, setApiKeyDraft] = useState("");
+  const [maxConcurrent, setMaxConcurrent] = useState(String(config?.maxConcurrent ?? 2));
   const [manualModelEntry, setManualModelEntry] = useState(true);
 
   function selectPreset(key: string) {
@@ -434,7 +435,10 @@ function ProviderConfigDialog({
         provider,
         label: label.trim() || null,
         baseUrl: provider === "OPENAI_COMPATIBLE" ? baseUrl : null,
-        model
+        model,
+        // Clamped to the same 1-64 the API enforces, so a typo can't send an obviously-wrong
+        // ceiling and get a 422 back instead of a saved provider.
+        maxConcurrent: Math.min(64, Math.max(1, Number(maxConcurrent) || 2))
       };
       if (apiKeyDraft) payload.apiKey = apiKeyDraft;
       return isNew ? settingsApi.createAiProvider(payload as AIProviderConfigInput) : settingsApi.updateAiProvider(config!.id, payload);
@@ -495,6 +499,22 @@ function ProviderConfigDialog({
               value={apiKeyDraft}
               onChange={(e) => setApiKeyDraft(e.target.value)}
             />
+          </div>
+          <div className="grid gap-1.5">
+            <Label htmlFor="provider-max-concurrent">Concurrent calls</Label>
+            <Input
+              id="provider-max-concurrent"
+              type="number"
+              min={1}
+              max={64}
+              value={maxConcurrent}
+              onChange={(e) => setMaxConcurrent(e.target.value)}
+            />
+            <p className="text-xs text-muted-foreground">
+              How many requests may run against this provider at once. Anything beyond it waits briefly, then falls over to the next
+              provider — which is what stops a busy provider from silently queueing everyone. For a self-hosted Ollama, match{" "}
+              <code className="rounded bg-muted px-1 py-0.5 text-[11px]">OLLAMA_NUM_PARALLEL</code>; a hosted API can go much higher.
+            </p>
           </div>
           <div className="grid gap-1.5">
             <div className="flex items-center justify-between gap-2">

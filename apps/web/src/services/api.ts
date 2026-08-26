@@ -1471,6 +1471,9 @@ export interface AIProviderConfigRow {
   status: ProviderHealthStatus;
   /** Set the moment the circuit breaker demoted this row; cleared by any human edit or reorder. */
   autoDemotedAt: string | null;
+  /** How many calls may run at once against this provider before the rest queue or fall over to
+   *  the next one. Match it to the provider's real parallelism (for Ollama, OLLAMA_NUM_PARALLEL). */
+  maxConcurrent: number;
   createdAt: string;
   updatedAt: string;
 }
@@ -1482,6 +1485,7 @@ export interface AIProviderConfigInput {
   model: string;
   apiKey?: string;
   enabled?: boolean;
+  maxConcurrent?: number;
 }
 
 /** One provider's real 30-day track record, behind the "Suggest order" recommendation. */
@@ -4281,6 +4285,15 @@ export interface RequirementsDocSectionsRow {
   assumptions: string[];
   successMetrics: RequirementsDocSuccessMetricRow[];
   procedures: string[];
+  /* Industry-standard sections added after the first release. ALL OPTIONAL and must stay that way
+   * — a document generated before they existed has none of these keys, and still has to render. */
+  executiveSummary?: string;
+  personas?: Array<{ name: string; role: string; needs: string; painPoints: string }>;
+  stakeholders?: Array<{ name: string; role: string; raci: "R" | "A" | "C" | "I" }>;
+  constraints?: string[];
+  functionalRequirements?: Array<{ id: string; requirement: string; priority: "LOW" | "MEDIUM" | "HIGH" | "CRITICAL"; acceptanceCriteria: string }>;
+  costBenefit?: { costs: string; benefits: string; notes?: string };
+  openQuestions?: string[];
 }
 
 export interface RequirementsDocRow {
@@ -4347,6 +4360,18 @@ export const requirementsDocApi = {
       })
     ).data;
   },
+  /** The extracted text the AI read — NOT a copy of the original file (the bytes were never
+   *  stored). Its own request so a long PRD's text isn't shipped on every page load. */
+  sourceText: async (id: string) =>
+    (
+      await api.get<{
+        fileName: string | null;
+        size: number | null;
+        uploadedAt: string | null;
+        uploadedBy: { id: string; name: string } | null;
+        text: string;
+      }>(`/requirements-docs/${id}/source-text`)
+    ).data,
   /** Re-runs the analysis against the document's already-stored text — no upload. Preview only. */
   importRegenerate: async (id: string) =>
     (await api.post<RequirementsImportAnalysisRow>(`/requirements-docs/${id}/import/regenerate`, {})).data,
@@ -4366,7 +4391,10 @@ export const requirementsDocApi = {
   ) => (await api.post<RequirementsDocRow>(`/requirements-docs/${id}/import/apply`, payload)).data,
   // Authenticated blob downloads — same reasoning as attestationApi.downloadPdf: the access token
   // lives in memory only, so a bare <a href> would hit these routes unauthenticated.
-  downloadPdf: async (id: string) => (await api.get(`/requirements-docs/${id}/export.pdf`, { responseType: "blob" })).data as Blob,
+  /** POST, not GET: `diagramPng` carries the browser-rendered Mermaid diagram so the PDF can embed
+   *  a real picture instead of the diagram's source text. Omitting it still produces a valid PDF. */
+  downloadPdf: async (id: string, diagramPng?: string | null) =>
+    (await api.post(`/requirements-docs/${id}/export.pdf`, { diagramPng: diagramPng ?? undefined }, { responseType: "blob" })).data as Blob,
   downloadMarkdown: async (id: string) => (await api.get(`/requirements-docs/${id}/export.md`, { responseType: "blob" })).data as Blob,
   /** The fill-in-the-blank starting point for someone with no PRD/BRD yet. */
   downloadTemplate: async () => (await api.get(`/requirements-docs/template.txt`, { responseType: "blob" })).data as Blob,
