@@ -31,6 +31,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../..
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "../../components/ui/dialog";
 import { Input } from "../../components/ui/input";
 import { Label } from "../../components/ui/label";
+import { SearchableSelect } from "../../components/ui/searchable-select";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../../components/ui/select";
 import { Skeleton } from "../../components/ui/skeleton";
 import { Switch } from "../../components/ui/switch";
@@ -278,6 +279,13 @@ function SuggestedOrderPanel({
   );
 }
 
+/** Keeps the currently-set model selectable even if the live fetched list doesn't include it
+ *  (e.g. switched endpoints since it was saved) — never silently drops what's set. */
+function fetchedModelOptions(models: string[], currentModel: string): Array<{ id: string; name: string }> {
+  const current = currentModel && !models.includes(currentModel) ? [{ id: currentModel, name: `${currentModel} (current)` }] : [];
+  return [...current, ...models.map((m) => ({ id: m, name: m }))];
+}
+
 function ProviderConfigDialog({
   config,
   onClose,
@@ -413,37 +421,27 @@ function ProviderConfigDialog({
               )}
             </div>
             {provider === "ANTHROPIC" ? (
-              <Select value={model} onValueChange={setModel}>
-                <SelectTrigger>
-                  <SelectValue placeholder="Pick a model" />
-                </SelectTrigger>
-                <SelectContent>
-                  {aiModels.map((m) => (
-                    <SelectItem key={m.id} value={m.id}>
-                      {m.label}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
+              <SearchableSelect
+                options={aiModels.map((m) => ({ id: m.id, name: m.label }))}
+                value={model}
+                onChange={setModel}
+                placeholder="Pick a model"
+                searchPlaceholder="Search models…"
+                aria-label="Model"
+              />
             ) : fetchModels.data?.ok && fetchModels.data.models.length > 0 && !manualModelEntry ? (
               <>
-                <Select value={model} onValueChange={setModel}>
-                  <SelectTrigger>
-                    <SelectValue placeholder="Pick a model" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {/* Keeps the currently-set model selectable even if the live list doesn't
-                        include it (e.g. switched endpoints) — never silently drops what's set. */}
-                    {model && !fetchModels.data.models.includes(model) && (
-                      <SelectItem value={model}>{model} (current)</SelectItem>
-                    )}
-                    {fetchModels.data.models.map((m) => (
-                      <SelectItem key={m} value={m}>
-                        {m}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
+                <SearchableSelect
+                  // A provider like OpenRouter can list hundreds of models — the plain dropdown
+                  // this replaced made every one of them a scroll-and-squint exercise with no way
+                  // to type a name.
+                  options={fetchedModelOptions(fetchModels.data.models, model)}
+                  value={model}
+                  onChange={setModel}
+                  placeholder="Pick a model"
+                  searchPlaceholder="Search models…"
+                  aria-label="Model"
+                />
                 <button
                   type="button"
                   className="justify-self-start text-xs text-muted-foreground underline-offset-2 hover:underline"
