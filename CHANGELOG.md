@@ -14,9 +14,10 @@ number, on purpose — an installation must never render history for a version t
 
 - **A live status dot on every configured provider** — Healthy, Degraded, Down, or "no recent
   data" — derived from its real traffic over the last 15 minutes, refreshed every time the AI
-  settings tab loads. Plus a **Test** button per row for an on-demand, free connectivity check
-  (a models-list call, no completion tokens) that answers in seconds instead of waiting on a real
-  generation call.
+  settings tab loads. Plus a **Test** button per row that sends the row's own configured model a
+  real, tiny request (5 tokens) right now — not just a reachability ping, since a model can be
+  listed as available and still be broken or misspelled — and answers in seconds instead of
+  waiting on a full generation call.
 - **An opt-in circuit breaker.** Turn on "Automatically move a failing provider to the back of the
   line" and three failed calls in a row demote that provider on their own — no downtime waiting
   for someone to notice and reorder it by hand. It only ever demotes, never auto-promotes back up

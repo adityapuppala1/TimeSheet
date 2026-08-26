@@ -110,16 +110,17 @@ export function AIProviderListCard({ readOnly }: { readOnly: boolean }) {
     mutationFn: () => settingsApi.getSuggestedAiProviderOrder(),
     onError: (err: any) => toast.error("Could not compute a suggestion", { description: err?.response?.data?.message ?? "Try again." })
   });
-  // A real, on-demand connectivity check, separate from the passive status dot — never writes
-  // consecutiveFailures/autoDemotedAt, that's the circuit breaker's own concern reacting to real
-  // feature calls, not a manual check run out of curiosity.
+  // A real, on-demand test of the row's OWN configured model — not just reachability, a tiny real
+  // completion — separate from the passive status dot. Never writes consecutiveFailures/
+  // autoDemotedAt, that's the circuit breaker's own concern reacting to real feature calls, not a
+  // manual check run out of curiosity.
   const testProvider = useMutation({
     mutationFn: (id: string) => settingsApi.testAiProvider(id),
     onMutate: (id) => setTestingId(id),
     onSuccess: (result, id) => {
       const label = providerDisplayName(rows.find((r) => r.id === id) ?? { provider: "ANTHROPIC", baseUrl: null, label: null });
-      if (result.ok) toast.success(`${label} is reachable`, { description: `${result.message} (${result.latencyMs}ms)` });
-      else toast.error(`${label} did not respond`, { description: result.message });
+      if (result.ok) toast.success(`${label} answered`, { description: `${result.message} (${result.latencyMs}ms)` });
+      else toast.error(`${label} did not answer`, { description: result.message });
     },
     onError: (err: any) => toast.error("Could not test the provider", { description: err?.response?.data?.message ?? "Try again." }),
     onSettled: () => setTestingId(null)
@@ -222,7 +223,7 @@ export function AIProviderListCard({ readOnly }: { readOnly: boolean }) {
                 disabled={testingId === row.id}
                 onClick={() => testProvider.mutate(row.id)}
                 aria-label={`Test ${providerDisplayName(row)}`}
-                title="Check connectivity right now"
+                title="Send this model a real, tiny test request right now"
               >
                 {testingId === row.id ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Bolt className="h-3.5 w-3.5" />}
               </Button>

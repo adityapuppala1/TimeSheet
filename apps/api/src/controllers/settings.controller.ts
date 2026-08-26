@@ -546,10 +546,12 @@ settingsRouter.get("/ai/providers/suggested-order", requireSuperAdmin, async (_r
   res.json(await getSuggestedProviderOrder());
 });
 
-/** The "Test" button — a real, on-demand connectivity probe, separate from the passive status
- *  badge `GET /ai/providers` already returns (derived from actual recent traffic). Never writes
- *  consecutiveFailures/autoDemotedAt — that's the circuit breaker's own concern, reacting only to
- *  real feature calls, not a manual check a person ran out of curiosity. */
+/** The "Test" button — a real, on-demand check of THIS ROW'S OWN configured model, not just
+ *  reachability, separate from the passive status badge `GET /ai/providers` already returns
+ *  (derived from actual recent traffic). Never writes consecutiveFailures/autoDemotedAt — that's
+ *  the circuit breaker's own concern, reacting only to real feature calls, not a manual check a
+ *  person ran out of curiosity. See testProviderConnectivity's own header for why this spends a
+ *  tiny amount of real tokens rather than staying free. */
 settingsRouter.post(
   "/ai/providers/:id/test",
   requireSuperAdmin,
@@ -557,7 +559,7 @@ settingsRouter.post(
   async (req, res) => {
     const config = await prisma.aIProviderConfig.findUnique({ where: { id: String(req.params.id) } });
     if (!config) throw new AppError(404, "That provider configuration no longer exists — refresh and retry.");
-    res.json(await testProviderConnectivity({ provider: config.provider, baseUrl: config.baseUrl, apiKey: resolveApiKey(config) }));
+    res.json(await testProviderConnectivity({ provider: config.provider, baseUrl: config.baseUrl, apiKey: resolveApiKey(config), model: config.model }));
   }
 );
 

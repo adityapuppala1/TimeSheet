@@ -427,27 +427,37 @@ export async function listAvailableOpenAICompatibleModels(baseUrl: string, apiKe
   return response.data.map((m) => m.id).sort();
 }
 
-/** Timeout for the "Test" button's live connectivity probe — short and separate from
- *  MODEL_CALL_TIMEOUT_MS on purpose: a human is watching this one synchronously, so "is it up"
- *  needs an answer in seconds, not the 90s a real generation call is allowed to take. */
+/** Timeout for the "Test" button's live probe — short and separate from MODEL_CALL_TIMEOUT_MS on
+ *  purpose: a human is watching this one synchronously, so "is it up" needs an answer in seconds,
+ *  not the 90s a real generation call is allowed to take. Comfortably covers a 5-token completion,
+ *  which is fast even on a slow provider — this isn't waiting on a real generation's full length. */
 const PROVIDER_TEST_TIMEOUT_MS = 15_000;
 
 /**
- * The "Test" button's real, free connectivity check (Workspace Settings → AI) — `models.list()`
- * again, the same metadata call `listAvailableOpenAICompatibleModels` already uses, but built
- * separately here with its own short timeout rather than reused directly (that function inherits
- * the SDK's own multi-minute default, fine for a one-off "fetch models to populate a dropdown"
- * click, wrong for a probe a person is watching for "is it up right now"). Works for BOTH provider
- * families — the Anthropic SDK exposes the identical `client.models.list()` method. Never writes
- * anything: the passive status badge derived from actual traffic
- * ({@link computeRecentStatusByLabel}) is a separate signal from this on-demand one.
+ * The "Test" button's live probe (Workspace Settings → AI) — two steps, both against the SAME
+ * client instance: `models.list()` first (fast, free, distinguishes "can't even reach this
+ * endpoint" from "reachable, but this model doesn't work"), then a REAL, minimal completion
+ * (`max_tokens: 5`) against the row's OWN configured model — because a model can be listed as
+ * available and still be broken, overloaded, or misspelled in a way the list alone won't catch
+ * (see ai-provider-config.service.ts's own header: this was live-caught reproducing a 404 for a
+ * model name that WAS in the provider's own listing). This is the one place in the app that
+ * deliberately spends real, tiny tokens on a manual click — logged to AIUsageLog (feature
+ * "provider_test") so the spend is visible and so a successful test can feed the SAME passive
+ * status badge ({@link computeRecentStatusByLabel}) real feature traffic already feeds. Never
+ * gated on the monthly budget: an admin diagnosing a broken provider must be able to test a NEW
+ * one even while AI spend is paused, and never touches `consecutiveFailures` — the circuit
+ * breaker reacts only to real feature calls, not a manual check run out of curiosity.
  */
 export async function testProviderConnectivity(config: {
   provider: "ANTHROPIC" | "OPENAI_COMPATIBLE";
   baseUrl: string | null;
   apiKey: string;
+  model: string;
 }): Promise<{ ok: boolean; latencyMs: number; message: string }> {
   const startedAt = Date.now();
+  const providerLabel = resolveProviderLabel(config.provider, config.baseUrl);
+  let inputTokens = 0;
+  let outputTokens = 0;
   try {
     let modelCount: number;
     if (config.provider === "OPENAI_COMPATIBLE") {
@@ -455,15 +465,43 @@ export async function testProviderConnectivity(config: {
       await assertPublicEgressTarget(config.baseUrl, "The AI provider base URL");
       const client = new OpenAI({ apiKey: config.apiKey || "not-needed", baseURL: config.baseUrl, timeout: PROVIDER_TEST_TIMEOUT_MS, maxRetries: 0 });
       modelCount = (await client.models.list()).data.length;
+      const completion = await client.chat.completions.create({ model: config.model, max_tokens: 5, messages: [{ role: "user", content: "Reply with OK." }] });
+      if (!completion.choices?.[0]) throw new AppError(502, `The model answered with no content — free-tier models sometimes drop requests under load.`);
+      inputTokens = completion.usage?.prompt_tokens ?? 0;
+      outputTokens = completion.usage?.completion_tokens ?? 0;
     } else {
       if (!config.apiKey) throw new AppError(503, "No API key configured.");
       const client = new Anthropic({ apiKey: config.apiKey, timeout: PROVIDER_TEST_TIMEOUT_MS, maxRetries: 0 });
       modelCount = (await client.models.list()).data.length;
+      const completion = await client.messages.create({ model: config.model, max_tokens: 5, messages: [{ role: "user", content: "Reply with OK." }] });
+      inputTokens = completion.usage.input_tokens;
+      outputTokens = completion.usage.output_tokens;
     }
-    return { ok: true, latencyMs: Date.now() - startedAt, message: `Reachable — ${modelCount} model${modelCount === 1 ? "" : "s"} available.` };
+
+    const latencyMs = Date.now() - startedAt;
+    await logAIUsage({ feature: "provider_test", model: config.model, provider: providerLabel, inputTokens, outputTokens, success: true, latencyMs }).catch(
+      () => {}
+    );
+    return {
+      ok: true,
+      latencyMs,
+      message: `"${config.model}" answered a real request (${modelCount} model${modelCount === 1 ? "" : "s"} listed on this endpoint).`
+    };
   } catch (error) {
+    const latencyMs = Date.now() - startedAt;
     const translated = translateProviderError(error);
-    return { ok: false, latencyMs: Date.now() - startedAt, message: translated instanceof Error ? translated.message : String(translated) };
+    const message = translated instanceof Error ? translated.message : String(translated);
+    await logAIUsage({
+      feature: "provider_test",
+      model: config.model,
+      provider: providerLabel,
+      inputTokens,
+      outputTokens,
+      success: false,
+      errorReason: message.slice(0, 300),
+      latencyMs
+    }).catch(() => {});
+    return { ok: false, latencyMs, message };
   }
 }
 
