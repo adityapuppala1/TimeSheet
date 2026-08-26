@@ -195,7 +195,7 @@ async function callAnthropic(apiKey: string, params: CallChatParams): Promise<Ca
   if (!apiKey) {
     throw new AppError(503, "AI features are not configured — set an Anthropic API key (ANTHROPIC_API_KEY, or the workspace AI settings).");
   }
-  const client = new Anthropic({ apiKey, timeout: MODEL_CALL_TIMEOUT_MS, maxRetries: 1 });
+  const client = new Anthropic({ apiKey, timeout: MODEL_CALL_TIMEOUT_MS, maxRetries: 0 });
 
   const content: Anthropic.MessageParam["content"] = params.images?.length
     ? [
@@ -239,6 +239,14 @@ async function callAnthropic(apiKey: string, params: CallChatParams): Promise<Ca
  * app span for as long as the person kept the page open, with nothing to say. Ninety seconds is
  * beyond any healthy completion at these token budgets; past it, a clear "the provider did not
  * answer" beats a spinner, and the person can simply press the button again.
+ *
+ * Both clients also set `maxRetries: 0` — deliberately, not an oversight. `callChat`'s own
+ * priority-fallback loop is ALREADY the retry: on any availability failure it moves to the NEXT
+ * configured provider. Letting the SDK ALSO retry the SAME provider internally means a slow/
+ * overloaded free-tier endpoint burns this whole timeout TWICE before the second provider even
+ * gets a turn — measured at 180s (90s × 2) hung on one provider alone, worse the more providers
+ * are configured. One attempt per provider, then move on; the fallback chain is what provides
+ * resilience, not a same-provider retry.
  */
 const MODEL_CALL_TIMEOUT_MS = 90_000;
 
@@ -290,7 +298,7 @@ async function callOpenAICompatible(settings: { baseUrl: string | null }, apiKey
   // hosted tenant reaching the platform's internal network, not to break on-prem local models.
   await assertPublicEgressTarget(settings.baseUrl, "The AI provider base URL");
   // Local providers (Ollama, LM Studio) don't require a real key, but the SDK still wants a non-empty string.
-  const client = new OpenAI({ apiKey: apiKey || "not-needed", baseURL: settings.baseUrl, timeout: MODEL_CALL_TIMEOUT_MS, maxRetries: 1 });
+  const client = new OpenAI({ apiKey: apiKey || "not-needed", baseURL: settings.baseUrl, timeout: MODEL_CALL_TIMEOUT_MS, maxRetries: 0 });
 
   const promptText = params.jsonSchema
     ? `${params.prompt}\n\nRespond with ONLY a single valid JSON object (no markdown fences, no commentary) matching this shape:\n${JSON.stringify(params.jsonSchema.schema)}`
@@ -1437,6 +1445,18 @@ function startOfWeek(date: Date): Date {
  * Runs a preflight (feature toggle + budget) and returns the settings row every capability
  * function below needs to pass into `callChat()`. Centralizing this means every AI capability
  * obeys the admin toggles and budget cap the same way regardless of which provider is active.
+ *
+ * `settings.provider`/`.model` are OVERLAID with the top ENABLED AIProviderConfig's own values
+ * before being handed back — not the raw GlobalAISettings row's. Those two deprecated fields
+ * exist only as the synthesized-default SOURCE inside `getEnabledProviderConfigs` for a workspace
+ * that has never added a provider; every capability function below still reads `settings.model`
+ * directly (as `params.model`, or through `economyModelFor`), and `callChat`'s dispatch loop
+ * privileges exactly that value for the top slot. Without this overlay, reordering or adding
+ * providers through Workspace Settings → AI leaves the legacy singleton pointing at whatever
+ * vendor/model was configured there LAST — and the very next call asks the new primary provider
+ * for a model name from a different vendor's catalogue entirely, a 404 dressed up as "the AI
+ * feature is broken" (see the incident this comment was added for: Groq promoted to priority 0,
+ * asked for "google/gemma-4-31b-it" — Nvidia's model name, still sitting in the legacy field).
  */
 async function preflight(feature: AIFeatureToggle) {
   const settings = await assertAIFeatureEnabled(feature);
@@ -1451,7 +1471,9 @@ async function preflight(feature: AIFeatureToggle) {
   const effectiveBudget = ownBudget != null && ownBudget >= 0 ? Math.min(ownBudget, ceiling) : ceiling;
 
   await assertWithinBudget(effectiveBudget);
-  return { settings };
+
+  const [primary] = await getEnabledProviderConfigs();
+  return { settings: { ...settings, provider: primary.provider, model: primary.model, baseUrl: primary.baseUrl, apiKey: primary.apiKey } };
 }
 
 function firstTextBlock(content: Anthropic.ContentBlock[]): string {
