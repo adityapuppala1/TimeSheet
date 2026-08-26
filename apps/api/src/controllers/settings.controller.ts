@@ -303,6 +303,22 @@ settingsRouter.delete("/ticket-rules/:id", requireSuperAdmin, async (req, res) =
   res.status(204).send();
 });
 
+/** Loopback = the provider runs on this same machine — a self-hosted Ollama/LM Studio, the
+ *  FIRST-CLASS local-model case `assertPublicEgressTarget` already carves out for exactly this
+ *  reason (see its own comment). Those genuinely don't check a key, so `resolveApiKey` returning
+ *  "" for them is correct at CALL time — but wrong to read as "not configured" here, which is
+ *  what caused the bug this function exists to fix: a correctly-set-up, enabled Ollama primary
+ *  still showed "No API key configured" because empty string is exactly what a keyless
+ *  OPENAI_COMPATIBLE provider resolves to. */
+function isLikelyKeylessLocalProvider(baseUrl: string | null): boolean {
+  if (!baseUrl) return false;
+  try {
+    return ["localhost", "127.0.0.1", "::1"].includes(new URL(baseUrl).hostname);
+  } catch {
+    return false;
+  }
+}
+
 /**
  * BYOK: `apiKey` is write-only — a saved key is never returned, only `apiKeySet: boolean` (same
  * masking convention as EmailIntakeSettings.imapPassword) — describes the DEPRECATED singleton
@@ -310,15 +326,15 @@ settingsRouter.delete("/ticket-rules/:id", requireSuperAdmin, async (req, res) =
  *
  * `apiKeyConfigured` answers a different, still-live question — "would an AI call actually work
  * right now" — so it is computed from the PRIMARY entry in the ranked provider list (V9,
- * provider-priority) instead: `resolveApiKey` already encodes the one exception that matters,
- * ANTHROPIC with no stored key still counts as configured when the server's own
- * ANTHROPIC_API_KEY is set.
+ * provider-priority) instead: `resolveApiKey` already encodes the one exception that matters for
+ * ANTHROPIC (no stored key still counts as configured when the server's own ANTHROPIC_API_KEY is
+ * set), and `isLikelyKeylessLocalProvider` above covers the symmetric case for OPENAI_COMPATIBLE.
  */
 settingsRouter.get("/ai", requireSuperAdmin, async (_req, res) => {
   const { apiKey, ...settings } = await getGlobalAISettings();
   const apiKeySet = Boolean(apiKey);
   const [primary] = await getEnabledProviderConfigs();
-  const apiKeyConfigured = Boolean(resolveApiKey(primary));
+  const apiKeyConfigured = Boolean(resolveApiKey(primary)) || isLikelyKeylessLocalProvider(primary.baseUrl);
   res.json({ ...settings, apiKeySet, apiKeyConfigured });
 });
 
