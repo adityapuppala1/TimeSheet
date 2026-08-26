@@ -12,7 +12,9 @@ import { ArrowLeft, Archive, Download, FileDown, Loader2, SkipForward, Sparkles,
 import { useEffect, useId, useState } from "react";
 import { useNavigate, useParams } from "react-router";
 import { permissions } from "@timesheet/shared";
+import { AiStrands } from "../components/ui/ai-strands";
 import { Badge } from "../components/ui/badge";
+import { BorderGlow } from "../components/ui/border-glow";
 import { Button } from "../components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../components/ui/card";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "../components/ui/dialog";
@@ -215,6 +217,7 @@ function InterviewPanel({
   interviewDone: boolean;
 }) {
   const answered = data.interviewTranscript.filter((t) => t.answer !== null || t.skipped);
+  const busy = turnPending || generatePending;
 
   return (
     <Card>
@@ -229,71 +232,77 @@ function InterviewPanel({
           </CardDescription>
         )}
       </CardHeader>
-      <CardContent className="grid gap-4">
-        {answered.length > 0 && (
-          <div className="grid gap-3 border-b border-border pb-4">
-            {answered.map((t, i) => (
-              <div key={i} className="text-sm">
-                <p className="font-medium">{t.question}</p>
-                <p className="text-muted-foreground">{t.skipped ? "(skipped — the assistant will assume)" : t.answer}</p>
-              </div>
-            ))}
-          </div>
-        )}
-
-        {turnPending && !hasOpenQuestion && (
-          <div className="flex items-center gap-2 text-sm text-muted-foreground">
-            <Loader2 className="h-4 w-4 animate-spin" />
-            Thinking of the next question…
-          </div>
-        )}
-
-        {hasOpenQuestion && pendingQuestion && (
-          <div className="grid gap-3">
-            <p className="text-sm font-medium">{pendingQuestion.question}</p>
-            {lastTurn?.quickReplies && lastTurn.quickReplies.length > 0 && (
-              <div className="flex flex-wrap gap-2">
-                {lastTurn.quickReplies.map((reply) => (
-                  <Button key={reply} type="button" variant="outline" size="sm" disabled={!canWrite || turnPending} onClick={() => onAnswer(reply)}>
-                    {reply}
-                  </Button>
+      <CardContent>
+        {/* The BorderGlow frame is the app-wide "this surface talks to the model" marker — same
+            treatment PlanBreakdownDialog gives its own goal form. Re-keyed per turn so the sweep
+            plays again each time a fresh question lands, not just once on mount. */}
+        <BorderGlow key={data.interviewTranscript.length} animated={!busy}>
+          <div className="grid gap-4 p-3">
+            {answered.length > 0 && (
+              <div className="grid gap-3 border-b border-border pb-4">
+                {answered.map((t, i) => (
+                  <div key={i} className="text-sm">
+                    <p className="font-medium">{t.question}</p>
+                    <p className="text-muted-foreground">{t.skipped ? "(skipped — the assistant will assume)" : t.answer}</p>
+                  </div>
                 ))}
               </div>
             )}
-            <Textarea
-              value={answer}
-              onChange={(e) => setAnswer(e.target.value)}
-              placeholder="Type your answer…"
-              rows={2}
-              maxLength={4000}
-              disabled={!canWrite || turnPending}
-            />
-            <div className="flex flex-wrap gap-2">
-              <Button size="sm" disabled={!canWrite || turnPending || answer.trim().length === 0} onClick={() => onAnswer(answer.trim())}>
-                {turnPending ? <Loader2 className="mr-2 h-3.5 w-3.5 animate-spin" /> : null}
-                Answer
-              </Button>
-              <Button size="sm" variant="ghost" disabled={!canWrite || turnPending} onClick={onSkip}>
-                <SkipForward className="mr-2 h-3.5 w-3.5" />
-                Skip — make your best assumption
-              </Button>
-            </div>
-          </div>
-        )}
 
-        {(interviewDone || answered.length > 0) && canWrite && (
-          <div className="border-t border-border pt-4">
-            <Button onClick={onGenerate} disabled={generatePending}>
-              {generatePending ? <Loader2 className="mr-2 h-3.5 w-3.5 animate-spin" /> : <Sparkles className="mr-2 h-3.5 w-3.5" />}
-              Generate document
-            </Button>
-            {!interviewDone && (
-              <p className="mt-1.5 text-xs text-muted-foreground">
-                The interview isn't finished — generating now fills any gaps as stated assumptions instead of asking more questions.
-              </p>
+            {turnPending && (
+              <AiStrands label={hasOpenQuestion ? "Reading your answer and thinking of the next question…" : "Thinking of the opening question…"} />
+            )}
+
+            {hasOpenQuestion && pendingQuestion && !turnPending && (
+              <div className="grid gap-3">
+                <p className="text-sm font-medium">{pendingQuestion.question}</p>
+                {lastTurn?.quickReplies && lastTurn.quickReplies.length > 0 && (
+                  <div className="flex flex-wrap gap-2">
+                    {lastTurn.quickReplies.map((reply) => (
+                      <Button key={reply} type="button" variant="outline" size="sm" disabled={!canWrite} onClick={() => onAnswer(reply)}>
+                        {reply}
+                      </Button>
+                    ))}
+                  </div>
+                )}
+                <Textarea
+                  value={answer}
+                  onChange={(e) => setAnswer(e.target.value)}
+                  placeholder="Type your answer…"
+                  rows={2}
+                  maxLength={4000}
+                  disabled={!canWrite}
+                />
+                <div className="flex flex-wrap gap-2">
+                  <Button variant="ai" size="sm" disabled={!canWrite || answer.trim().length === 0} onClick={() => onAnswer(answer.trim())}>
+                    <Sparkles className="mr-2 h-3.5 w-3.5" />
+                    Answer
+                  </Button>
+                  <Button size="sm" variant="ghost" disabled={!canWrite} onClick={onSkip}>
+                    <SkipForward className="mr-2 h-3.5 w-3.5" />
+                    Skip — make your best assumption
+                  </Button>
+                </div>
+              </div>
+            )}
+
+            {generatePending && <AiStrands label="Writing the document from your answers…" />}
+
+            {(interviewDone || answered.length > 0) && canWrite && !generatePending && (
+              <div className="border-t border-border pt-4">
+                <Button variant="ai" onClick={onGenerate} disabled={busy}>
+                  <Sparkles className="mr-2 h-3.5 w-3.5" />
+                  Generate document
+                </Button>
+                {!interviewDone && (
+                  <p className="mt-1.5 text-xs text-muted-foreground">
+                    The interview isn't finished — generating now fills any gaps as stated assumptions instead of asking more questions.
+                  </p>
+                )}
+              </div>
             )}
           </div>
-        )}
+        </BorderGlow>
       </CardContent>
     </Card>
   );
@@ -377,12 +386,18 @@ function DocumentViewer({
             </div>
           )}
 
-          {SECTION_ORDER.map(({ key, label }) => (
-            <div key={key}>
-              <h3 className="mb-2 text-sm font-semibold">{label}</h3>
-              {renderSection(key, s)}
+          {/* This whole panel is the model's own output — the same "where AI's answer is shown"
+              frame the interview form above wears while it's asking. */}
+          <BorderGlow animated>
+            <div className="grid gap-6 p-3">
+              {SECTION_ORDER.map(({ key, label }) => (
+                <div key={key}>
+                  <h3 className="mb-2 text-sm font-semibold">{label}</h3>
+                  {renderSection(key, s)}
+                </div>
+              ))}
             </div>
-          ))}
+          </BorderGlow>
         </CardContent>
       </Card>
 
