@@ -316,6 +316,8 @@ model User {
   agentRuns                      AgentRun[]             @relation("AgentRunActor")
   requirementsDocs               RequirementsDocument[]
   requirementsDocsSourceUploaded RequirementsDocument[] @relation("RequirementsDocSourceUploader")
+  practiceUpdatesGenerated       PracticeUpdateRecord[] @relation("PracticeUpdateGeneratedBy")
+  practiceUpdatesSent            PracticeUpdateRecord[] @relation("PracticeUpdateSentBy")
 
   createdAt DateTime  @default(now())
   updatedAt DateTime  @updatedAt
@@ -1923,6 +1925,66 @@ model AIEvalResult {
 /// Singleton (id = "global") row that controls which notification categories
 /// are allowed to dispatch email across the workspace, plus reminder timings
 /// and BCC behavior. Only SUPER_ADMIN edits this.
+/// A generated Weekly AI/ML Practice Update — the working draft, and every one that was sent.
+///
+/// WHY IT IS PERSISTED AT ALL. The draft used to live in React state and nowhere else, so a page
+/// refresh, a tab close, or a walk to a different screen threw away a document that had just cost a
+/// full model run to produce — and the only way back was to spend those tokens again. That is the
+/// whole reason this table exists.
+///
+/// ONE TABLE FOR THE DRAFT AND THE ARCHIVE, distinguished by `status`, because they are the same
+/// document at two points in its life. A sent update is a draft that was mailed; splitting them
+/// would mean copying every column across at send time and keeping two shapes in step forever.
+///
+/// AT MOST ONE DRAFT per workspace, enforced by the partial-unique index below rather than by
+/// convention — "Regenerate" replaces it and "Discard" removes it, and two concurrent generates
+/// must not leave a workspace with two documents claiming to be the current one.
+model PracticeUpdateRecord {
+  id     String                     @id @default(uuid())
+  status PracticeUpdateRecordStatus @default(DRAFT)
+
+  /// The window the figures were counted over. Stored rather than recomputed so a record in the
+  /// archive keeps meaning after projects are renamed or entries are edited — it is a snapshot of
+  /// what was true when it was sent, which is the only thing an archive is for.
+  periodFrom  DateTime
+  periodTo    DateTime
+  periodLabel String   @db.VarChar(120)
+
+  /// The counted half: metrics and initiative tables, exactly as generated.
+  data Json
+  /// The written half: the editable prose. Null while a generate produced figures but no narrative.
+  narrative Json?
+  /// Which of "switched off", "unreachable" or "wrong shape" happened, when the model didn't write.
+  /// Kept so reopening a restored draft explains itself instead of looking silently incomplete.
+  aiFailed String? @db.Text
+
+  /// What was actually mailed, captured at send time. The archive renders THIS rather than
+  /// re-deriving from `data`, so a change to the email template can never rewrite history.
+  sentSubject String? @db.VarChar(400)
+  sentHtml    String? @db.LongText
+  sentAt      DateTime?
+  /// The addresses it went to, as they were then — a distribution list edited later must not
+  /// change who a past update says it reached.
+  sentTo      Json?
+
+  generatedById String?
+  generatedBy   User?   @relation("PracticeUpdateGeneratedBy", fields: [generatedById], references: [id], onDelete: SetNull)
+  sentById      String?
+  sentBy        User?   @relation("PracticeUpdateSentBy", fields: [sentById], references: [id], onDelete: SetNull)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([status, sentAt])
+  @@index([generatedById])
+  @@index([sentById])
+}
+
+enum PracticeUpdateRecordStatus {
+  DRAFT
+  SENT
+}
+
 model GlobalNotificationSettings {
   id                        String  @id
   emailTimesheetSubmitted   Boolean @default(true)

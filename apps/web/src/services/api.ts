@@ -2599,6 +2599,12 @@ export interface PracticeDraft {
    *  when the prose was written — the three are different things to tell a reviewer. */
   aiFailed: string | null;
   preview: { subject: string; headline: string; sectionsHtml: string };
+  /** Set on a stored draft — absent only on the immediate response to a fresh generate, which the
+   *  page already knows the timing of. Used to tell a reviewer how old the thing they're looking at
+   *  is, which is the first question anybody asks about a restored document. */
+  id?: string;
+  generatedAt?: string;
+  generatedByName?: string | null;
 }
 
 export interface PracticeSettings {
@@ -2615,8 +2621,19 @@ export const practiceUpdateApi = {
   settings: async () => (await api.get<PracticeSettings>("/practice-update/settings")).data,
   saveSettings: async (payload: { recipients: string[]; weekly?: boolean }) =>
     (await api.put<{ recipients: string[]; weekly: boolean }>("/practice-update/settings", payload)).data,
+  /** Generates a NEW update, replacing whatever draft is stored. Costs a model run — the page
+   *  calls this only from Generate/Regenerate, never on load. */
   draft: async (period?: { from: string; to: string }) =>
     (await api.post<PracticeDraft>("/practice-update/draft", period ?? {})).data,
+  /** The stored draft, if any. This is what a page load calls, so a refresh restores what was
+   *  already generated instead of spending tokens again. `{ draft: null }` is a normal answer. */
+  storedDraft: async () => (await api.get<{ draft: PracticeDraft | null }>("/practice-update/draft")).data,
+  /** Saves the edited prose. Only the narrative — the figures are never accepted from the client. */
+  saveDraft: async (narrative: PracticeNarrative) =>
+    (await api.patch<{ saved: boolean }>("/practice-update/draft", { narrative })).data,
+  discardDraft: async () => (await api.delete<{ discarded: number }>("/practice-update/draft")).data,
+  history: async () => (await api.get<{ records: PracticeHistoryRow[] }>("/practice-update/history")).data,
+  historyItem: async (id: string) => (await api.get<PracticeHistoryDetail>(`/practice-update/history/${id}`)).data,
   send: async (payload: { from?: string; to?: string; narrative?: PracticeNarrative }) =>
     (await api.post<{ status: string; recipients: number; subject: string; emailLogId?: string }>("/practice-update/send", payload)).data
 };
@@ -6026,3 +6043,29 @@ export const changeApi = {
     update: async (payload: Record<string, unknown>) => (await api.patch("/changes/config/settings", payload)).data
   }
 };
+
+export interface PracticeHistoryRow {
+  id: string;
+  periodLabel: string;
+  periodFrom: string;
+  periodTo: string;
+  sentAt: string | null;
+  subject: string | null;
+  recipientCount: number;
+  sentByName: string | null;
+  metrics: { ticketsClosed: number; hours: number; overdue: number; slaBreaches: number } | null;
+  initiativeCount: number;
+}
+
+export interface PracticeHistoryDetail {
+  id: string;
+  periodLabel: string;
+  sentAt: string | null;
+  subject: string | null;
+  /** What was ACTUALLY mailed, stored at send time — not re-rendered, so improving the email
+   *  template can never rewrite what a past update says it contained. */
+  html: string | null;
+  recipients: string[];
+  sentByName: string | null;
+  generatedByName: string | null;
+}

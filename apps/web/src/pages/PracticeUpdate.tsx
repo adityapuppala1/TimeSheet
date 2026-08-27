@@ -11,7 +11,7 @@
  * security finding into one document and then mails it to an arbitrary address list. The recipient
  * list in particular is the requirement's own line — only a super admin decides who this reaches.
  */
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { AlertTriangle, CheckCircle2, Mail, Plus, Send, Settings2, Sparkles, Trash2, Users } from "lucide-react";
 
@@ -23,6 +23,7 @@ import {
   type PracticeNarrative
 } from "../services/api";
 import { AiRefinePanel, AiRefineTrigger, useAiRefine } from "../components/AiRefine";
+import { PracticeUpdateHistory } from "../components/PracticeUpdateHistory";
 import { AiStrands } from "../components/ui/ai-strands";
 import { Badge } from "../components/ui/badge";
 import { BorderGlow } from "../components/ui/border-glow";
@@ -332,10 +333,42 @@ function RecipientsCard() {
   );
 }
 
+const EMPTY_NARRATIVE: PracticeNarrative = {
+  executiveSummary: "",
+  risks: [],
+  nextWeekPriorities: [],
+  decisionsRequired: [],
+  nextSteps: []
+};
+
 export function PracticeUpdatePage() {
   const [draft, setDraft] = useState<PracticeDraft | null>(null);
   const [narrative, setNarrative] = useState<PracticeNarrative | null>(null);
   const [period, setPeriod] = useState<{ from: string; to: string } | null>(null);
+  const queryClient = useQueryClient();
+
+  /*
+   * RESTORE, DON'T REGENERATE. This document costs a full model run, and it used to live only in
+   * component state — so a refresh, a tab close, or a walk to another screen threw it away and the
+   * only way back was to spend those tokens again.
+   *
+   * A GET on mount, never a POST: the page must not be able to bill somebody a model run just by
+   * being opened. Generating is always an explicit act, from Generate or Regenerate.
+   */
+  const stored = useQuery({
+    queryKey: ["practice-update", "draft"],
+    queryFn: practiceUpdateApi.storedDraft,
+    staleTime: 0
+  });
+
+  useEffect(() => {
+    const restored = stored.data?.draft;
+    if (!restored) return;
+    // Only seeds an EMPTY editor. Once a reviewer is editing, a refetch must not overwrite what
+    // they have typed — the server copy is behind by design, since it is saved on a debounce.
+    setDraft((current) => current ?? restored);
+    setNarrative((current) => current ?? restored.narrative ?? EMPTY_NARRATIVE);
+  }, [stored.data]);
 
   const generate = useMutation({
     mutationFn: () => practiceUpdateApi.draft(period ?? undefined),
@@ -343,12 +376,39 @@ export function PracticeUpdatePage() {
       setDraft(data);
       // Seeded from the model, then owned by the reviewer. Every later edit lives here, and this is
       // what `send` posts back — regenerating on send would throw the review away.
-      setNarrative(
-        data.narrative ?? { executiveSummary: "", risks: [], nextWeekPriorities: [], decisionsRequired: [], nextSteps: [] }
-      );
+      setNarrative(data.narrative ?? EMPTY_NARRATIVE);
+      void queryClient.invalidateQueries({ queryKey: ["practice-update", "draft"] });
     },
     onError: (error: unknown) => toast.error("Couldn't build the update", { description: serverMessage(error, "Try again.") })
   });
+
+  const discard = useMutation({
+    mutationFn: () => practiceUpdateApi.discardDraft(),
+    onSuccess: () => {
+      setDraft(null);
+      setNarrative(null);
+      void queryClient.invalidateQueries({ queryKey: ["practice-update", "draft"] });
+      toast.success("Draft discarded");
+    },
+    onError: (error: unknown) => toast.error("Couldn't discard", { description: serverMessage(error, "Try again.") })
+  });
+
+  /*
+   * AUTOSAVE, DEBOUNCED. Without it the persistence above would only cover the model's own words —
+   * a reviewer's edits would still evaporate on refresh, which is most of what is worth keeping.
+   *
+   * Debounced at 1.5s rather than saved per keystroke: this writes a JSON column, and a PATCH per
+   * character would be both wasteful and a worse experience than the one it replaces. Failures are
+   * deliberately silent — the draft is still in the editor, and a toast on every transient network
+   * blip while somebody is typing is its own problem.
+   */
+  useEffect(() => {
+    if (!draft || !narrative) return;
+    const timer = setTimeout(() => {
+      void practiceUpdateApi.saveDraft(narrative).catch(() => undefined);
+    }, 1500);
+    return () => clearTimeout(timer);
+  }, [narrative, draft]);
 
   const send = useMutation({
     mutationFn: () => practiceUpdateApi.send({ ...(period ?? {}), narrative: narrative ?? undefined }),
@@ -356,6 +416,12 @@ export function PracticeUpdatePage() {
       toast.success(`Sent to ${result.recipients} recipient${result.recipients === 1 ? "" : "s"}`, {
         description: result.subject
       });
+      // The draft is now an archive entry, not work in progress. Clearing it locally matches what
+      // the server did, so a refresh does not restore a document that has already gone out.
+      setDraft(null);
+      setNarrative(null);
+      void queryClient.invalidateQueries({ queryKey: ["practice-update", "draft"] });
+      void queryClient.invalidateQueries({ queryKey: ["practice-update", "history"] });
     },
     onError: (error: unknown) => toast.error("Couldn't send", { description: serverMessage(error, "Try again.") })
   });
@@ -381,16 +447,42 @@ export function PracticeUpdatePage() {
           </p>
         </div>
         <div className="flex flex-wrap items-center gap-2">
+          {/* The label changes with the consequence. With nothing in progress this is free; with a
+              draft open it REPLACES it and spends another model run, and a button that says the
+              same thing in both cases is how somebody loses an hour of edits. */}
           <Button variant="ai" disabled={generate.isPending} onClick={() => generate.mutate()}>
             <Sparkles className="mr-1.5 h-4 w-4" />
-            {generate.isPending ? "Generating…" : "Generate update"}
+            {generate.isPending ? "Generating…" : draft ? "Regenerate" : "Generate update"}
           </Button>
+          {draft && (
+            <Button
+              variant="ghost"
+              disabled={discard.isPending}
+              onClick={() => discard.mutate()}
+              className="text-muted-foreground hover:text-destructive"
+            >
+              <Trash2 className="h-4 w-4" />
+              Discard
+            </Button>
+          )}
           <Button disabled={!draft || send.isPending} onClick={() => send.mutate()}>
             <Send className="h-4 w-4" />
             {send.isPending ? "Sending…" : "Send"}
           </Button>
         </div>
       </div>
+
+      {/* HOW OLD IS THIS? The first question anybody asks about a document that was already on
+          screen when they arrived. Only shown for a RESTORED draft — `generatedAt` is absent on the
+          response to a fresh generate, where the answer is obviously "just now". */}
+      {draft?.generatedAt && !generate.isPending && (
+        <p className="flex flex-wrap items-center gap-1.5 rounded-lg border border-border bg-muted/40 px-3 py-2 text-xs text-muted-foreground">
+          <Sparkles className="h-3.5 w-3.5 text-primary" />
+          Picked up where you left off — generated {new Date(draft.generatedAt).toLocaleString()}
+          {draft.generatedByName ? ` by ${draft.generatedByName}` : ""}. Your edits are saved as you type.
+          Regenerate replaces it; Discard clears it.
+        </p>
+      )}
 
       <RecipientsCard />
 
@@ -528,6 +620,7 @@ export function PracticeUpdatePage() {
           </div>
         </BorderGlow>
       )}
+      <PracticeUpdateHistory />
     </div>
   );
 }
