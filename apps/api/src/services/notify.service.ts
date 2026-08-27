@@ -39,6 +39,7 @@ export type NotificationCategory =
   | "ticket.escalation"
   | "ticket.needs_review"
   | "digest.weekly"
+  | "digest.practice_update"
   | "ticket.closed_digest"
   | "digest.security_weekly"
   | "face.enrollment_required"
@@ -138,6 +139,7 @@ const SETTINGS_FIELD: Record<NotificationCategory, string | null> = {
   "ticket.escalation": "emailTicketEscalation",
   "ticket.needs_review": "emailTicketNeedsReview",
   "digest.weekly": "emailWeeklyDigest",
+  "digest.practice_update": "emailPracticeUpdate",
   "ticket.closed_digest": "emailTicketClosedDigest",
   "digest.security_weekly": "emailSecurityWeeklyDigest",
   "face.enrollment_required": "emailFaceEnrollmentRequired",

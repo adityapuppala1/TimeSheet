@@ -110,6 +110,7 @@ const navRoutes: NavRoute[] = [
   { label: "Audit Log", to: "/app/audit", icon: ScrollText, permission: permissions.AUDIT_VIEW },
   { label: "AI Activity Log", to: "/app/ai-activity", icon: Sparkles, permission: permissions.TICKETS_ASSIGN, hint: "AI-created tickets" },
   { label: "Email templates", to: "/app/email-templates", icon: Mail, role: "SUPER_ADMIN", hint: "Edit & test" },
+  { label: "Practice update", to: "/app/practice-update", icon: Mail, role: "SUPER_ADMIN", hint: "Weekly AI/ML leadership digest" },
   // SUPER_ADMIN-only — must stay in sync with the same entry in Sidebar.tsx and the RequireRole
   // gate on the route in App.tsx. Gating only the sidebar would still leave it reachable here.
   { label: "Workspace settings", to: "/app/settings", icon: Settings, role: "SUPER_ADMIN" }

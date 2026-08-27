@@ -68,6 +68,9 @@ const Team = lazy(() => import("./pages/Team").then((m) => ({ default: m.Team })
 const WorkspaceSettingsPage = lazy(() =>
   import("./pages/WorkspaceSettings").then((m) => ({ default: m.WorkspaceSettingsPage }))
 );
+const PracticeUpdatePage = lazy(() =>
+  import("./pages/PracticeUpdate").then((m) => ({ default: m.PracticeUpdatePage }))
+);
 const EmailTemplatesPage = lazy(() =>
   import("./pages/EmailTemplates").then((m) => ({ default: m.EmailTemplatesPage }))
 );
@@ -193,7 +196,8 @@ const router = createBrowserRouter([
       { path: "audit", element: <RequirePermission permission={permissions.AUDIT_VIEW}><PageShell><AuditLog /></PageShell></RequirePermission> },
       { path: "ai-activity", element: <RequirePermission permission={permissions.TICKETS_ASSIGN}><PageShell><AIActivityLog /></PageShell></RequirePermission> },
       { path: "settings", element: <RequireRole role="SUPER_ADMIN"><PageShell><WorkspaceSettingsPage /></PageShell></RequireRole> },
-      { path: "email-templates", element: <RequireRole role="SUPER_ADMIN"><PageShell><EmailTemplatesPage /></PageShell></RequireRole> }
+      { path: "email-templates", element: <RequireRole role="SUPER_ADMIN"><PageShell><EmailTemplatesPage /></PageShell></RequireRole> },
+      { path: "practice-update", element: <RequireRole role="SUPER_ADMIN"><PageShell><PracticeUpdatePage /></PageShell></RequireRole> }
     ]
   },
   { path: "/platform-admin/login", element: <PageShell><PlatformAdminLogin /></PageShell> },

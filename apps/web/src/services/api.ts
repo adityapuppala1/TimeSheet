@@ -2456,6 +2456,88 @@ export interface EmailDomainStats {
   daily: EmailVolumeBucket[];
 }
 
+export type PracticeCategory = "PRODUCT" | "POC" | "BUGS" | "SECURITY" | "TRAINING";
+export type RagStatus = "GREEN" | "AMBER" | "RED";
+
+export interface PracticeInitiative {
+  id: string;
+  name: string;
+  code: string | null;
+  category: PracticeCategory;
+  owner: string | null;
+  status: RagStatus;
+  ticketsCreated: number;
+  ticketsClosed: number;
+  openCount: number;
+  overdueCount: number;
+  hours: number;
+  progress: string;
+  risks: string;
+}
+
+export interface PracticeMetrics {
+  ticketsCreated: number;
+  ticketsClosed: number;
+  hours: number;
+  billableHours: number;
+  contributors: number;
+  overdue: number;
+  slaBreaches: number;
+  openEscalations: number;
+  changesRaised: number;
+  changesImplemented: number;
+  releases: number;
+  securityOpenCritical: number;
+  securityOpenHigh: number;
+  securityNewFindings: number;
+  trainingHours: number;
+}
+
+export interface PracticeNarrative {
+  executiveSummary: string;
+  risks: string[];
+  nextWeekPriorities: string[];
+  decisionsRequired: string[];
+  nextSteps: Array<{ id: string; text: string }>;
+}
+
+export interface PracticeDraft {
+  data: {
+    period: { from: string; to: string; label: string };
+    previous: { from: string; to: string };
+    metrics: PracticeMetrics;
+    previousMetrics: PracticeMetrics;
+    initiatives: PracticeInitiative[];
+    releases: Array<{ version: string; product: string | null; closedAt: string | null; state: string }>;
+    isEmpty: boolean;
+  };
+  narrative: PracticeNarrative | null;
+  /** Why there is no narrative: switched off, unreachable, or answered in the wrong shape. Null
+   *  when the prose was written — the three are different things to tell a reviewer. */
+  aiFailed: string | null;
+  preview: { subject: string; headline: string; sectionsHtml: string };
+}
+
+export interface PracticeSettings {
+  recipients: string[];
+  configured: boolean;
+  weekly: boolean;
+  emailEnabled: boolean;
+  aiNarrativeEnabled: boolean;
+  maxRecipients: number;
+}
+
+/** SUPER_ADMIN only, every route — see the controller's header for why both halves are privileged. */
+export const practiceUpdateApi = {
+  settings: async () => (await api.get<PracticeSettings>("/practice-update/settings")).data,
+  saveSettings: async (payload: { recipients: string[]; weekly?: boolean }) =>
+    (await api.put<{ recipients: string[]; weekly: boolean }>("/practice-update/settings", payload)).data,
+  draft: async (period?: { from: string; to: string }) =>
+    (await api.post<PracticeDraft>("/practice-update/draft", period ?? {})).data,
+  send: async (payload: { from?: string; to?: string; narrative?: PracticeNarrative }) =>
+    (await api.post<{ status: string; recipients: number; subject: string; emailLogId?: string }>("/practice-update/send", payload)).data
+};
+
 export const emailTemplateApi = {
   list: async () => (await api.get<EmailTemplateRow[]>("/email-templates")).data,
   analytics: async () => (await api.get<EmailAnalytics>("/email-templates/analytics")).data,

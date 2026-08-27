@@ -34,6 +34,7 @@ export const TEMPLATE_VARIABLES: Record<string, string[]> = {
   "ticket.received_via_email": ["senderName", "ticketKey", "title", "priority", "appUrl"],
   "ticket.needs_review": ["targetName", "ticketKey", "title", "senderEmail", "confidence", "appUrl"],
   "digest.weekly": ["name", "weekLabel", "summary", "tablesHtml", "appUrl"],
+  "digest.practice_update": ["periodLabel", "headline", "sectionsHtml", "appUrl"],
   "ticket.closed_digest": ["ticketKey", "title", "closedBy", "riskVerdict", "findingsText", "testStatus", "appUrl"],
   "digest.security_weekly": ["weekLabel", "summary", "riskScore", "appUrl"],
   // Both of these were being SENT and were missing from this registry, so the editor did not list
@@ -79,6 +80,8 @@ export const TEMPLATE_DESCRIPTIONS: Record<string, string> = {
   "ticket.received_via_email": "Confirmation sent to an external sender whose email was auto-converted into a ticket.",
   "ticket.needs_review": "Sent to project admins/managers when an email-sourced ticket's AI confidence is below the threshold.",
   "digest.weekly": "Monday-morning AI-authored recap of a person's ticket + timesheet activity for the past week.",
+  "digest.practice_update":
+    "The consolidated Weekly AI/ML Practice Update sent to a leadership distribution list — products, POCs, bugs, security, training, metrics, risks and the decisions being asked for. Sent on demand by a SUPER_ADMIN, and optionally every Monday.",
   "digest.bug_pattern": "Periodic AI-authored correlation of what keeps breaking, to whoever opted in.",
   "ticket.stale_nudge": "Nudge to a ticket's assignee when it has gone quiet, with an AI-suggested next step.",
   "goal.digest": "Weekly, to a goal's OWNER: which of their goals are off track and which periods close soon. Off by default.",
@@ -231,6 +234,13 @@ export function sampleVariables(key: string): Record<string, string> {
     "ticket.stale_nudge": {
       assigneeName: "Dev Patel", ticketKey: "HICS-OPS-88", title: "Invoice PDF renders blank for one client",
       suggestion: "Nobody has commented in 9 days. Either ask the reporter for the failing invoice id, or close it as cannot-reproduce.",
+      appUrl: "https://timesphere.local"
+    },
+    "digest.practice_update": {
+      periodLabel: "17 Aug – 23 Aug 2026",
+      headline: "47 tickets closed and 128 hours logged across 6 initiatives; two are red.",
+      sectionsHtml:
+        "<p style=\"color:#64748B;font-size:13px;\">(the ten sections — executive summary, the five practice areas, releases, metrics, risks, priorities and decisions — render here)</p>",
       appUrl: "https://timesphere.local"
     },
     "digest.weekly": {
@@ -454,6 +464,10 @@ export const TEMPLATE_DEFAULTS: Record<string, { subject: string; html: string }
     })
   },
 
+  "digest.practice_update": {
+    subject: "Weekly AI/ML Practice Update - {{periodLabel}}",
+    html: compiledTemplates.practiceUpdate({ periodLabel: V("periodLabel"), headline: V("headline"), sectionsHtml: V("sectionsHtml") })
+  },
   "digest.weekly": {
     subject: "Your week in review - {{weekLabel}}",
     html: compiledTemplates.weeklyDigest({ name: V("name"), weekLabel: V("weekLabel"), summary: V("summary"), tablesHtml: V("tablesHtml") })

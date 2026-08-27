@@ -47,6 +47,7 @@ import { scimRouter } from "./controllers/scim.controller.js";
 import { emailIntakeRouter } from "./controllers/email-intake.controller.js";
 import { faceRouter } from "./controllers/face.controller.js";
 import { emailTemplatesRouter } from "./controllers/email-templates.controller.js";
+import { practiceUpdateRouter } from "./controllers/practice-update.controller.js";
 import { labelRouter } from "./controllers/label.controller.js";
 import { notificationRouter } from "./controllers/notification.controller.js";
 import { planRouter } from "./controllers/plan.controller.js";
@@ -529,6 +530,7 @@ app.use("/api/maintenance", rateLimit({ windowMs: 60_000, limit: 240, standardHe
 // well under a core.
 app.use("/api/face", rateLimit({ windowMs: 60_000, limit: 60, standardHeaders: true }), faceRouter);
 app.use("/api/email-templates", emailTemplatesRouter);
+  app.use("/api/practice-update", practiceUpdateRouter);
 // Bearer-API-key auth, not JWT — see middleware/public-api-auth.ts's header for why this is
 // still mounted after resolveTenant (unlike the CI/chat webhook receivers above) rather than
 // before it. Its own lighter rate limit reflects "external integration polling," not "human

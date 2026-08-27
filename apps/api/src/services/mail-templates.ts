@@ -647,6 +647,30 @@ export const templates = {
         )
     ),
 
+  /**
+   * The Weekly AI/ML Practice Update — the consolidated leadership view.
+   *
+   * ONE ARGUMENT, `sectionsHtml`, rather than ten. The ten sections are assembled by
+   * `practice-update-mail.service.ts` from counted figures plus an optionally AI-written narrative,
+   * and several of them are tables whose shape depends on what actually happened. Passing ten
+   * strings through here would give the admin editor ten placeholders it could reorder into
+   * nonsense, and would still not let it change a table's columns.
+   */
+  practiceUpdate: (params: { periodLabel: string; headline: string; sectionsHtml: string }) =>
+    shell(
+      {
+        title: `Weekly AI/ML Practice Update — ${params.periodLabel}`,
+        preheader: params.headline || `Products, POCs, bugs, security, training and metrics for ${params.periodLabel}.`
+      },
+      heading(`Weekly AI/ML Practice Update`) +
+        `<div style="font-size:13px;color:${MUTED};margin:-6px 0 4px;">${escape(params.periodLabel)}</div>` +
+        params.sectionsHtml +
+        paragraph(button("Open TimeSphere", appUrl("/app"))) +
+        paragraph(
+          `<span style="color:${MUTED};">Every figure above is counted from this workspace's own records for the stated period. Status colours are computed from overdue and SLA counts, not chosen. Narrative sections are drafted from those same numbers and reviewed before sending.</span>`
+        )
+    ),
+
   /** One email per PERSON listing their goals, never one per goal — a send per goal is the send
    *  people filter, and filtering it costs them the one that mattered. */
   goalDigest: (params: { name: string; weekLabel: string; summary: string; lines: string[] }) =>

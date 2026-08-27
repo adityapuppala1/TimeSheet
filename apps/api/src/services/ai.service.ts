@@ -724,6 +724,7 @@ export type AIFeatureToggle =
   | "findingTriageEnabled"
   | "securityWeeklyDigestEnabled"
   | "statusReportEnabled"
+  | "practiceUpdateEnabled"
   | "faceReviewSummaryEnabled"
   | "facePolicyCopilotEnabled"
   | "bugPatternDigestEnabled"
@@ -3040,6 +3041,113 @@ ${params.projectBreakdown}` : "",
   });
 
   return { report: result.text };
+}
+
+/* --------------------------- Weekly AI/ML practice update --------------------------------- */
+
+export interface PracticeUpdateNarrative {
+  executiveSummary: string;
+  /** Bullets, as an ARRAY — see the schema below for why that is not a stylistic choice. */
+  risks: string[];
+  nextWeekPriorities: string[];
+  decisionsRequired: string[];
+  /** Keyed by initiative id, so a renamed project cannot silently attach its next step to another. */
+  nextSteps: Array<{ id: string; text: string }>;
+}
+
+/** A field that should be a list, however the model chose to express it. */
+const bullets = z.union([z.string(), z.array(z.string())]).optional();
+
+/** Newline-separated text to a list, so a model that sends one string still lands in the right shape. */
+function toBullets(value: string | string[] | undefined): string[] {
+  if (Array.isArray(value)) return value.map((v) => v.trim()).filter(Boolean);
+  return (value ?? "")
+    .split("\n")
+    .map((line) => line.replace(/^[-*•]\s*/, "").trim())
+    .filter(Boolean);
+}
+
+/**
+ * Every field optional, then normalised below.
+ *
+ * NOT `.default("")` — a zod default makes the field optional in the type the parser is generic
+ * over, so the parsed value stops matching `PracticeUpdateNarrative` and the normalisation has to
+ * happen anyway. Being explicit about it here is shorter than fighting the inference, and it makes
+ * the real behaviour obvious: a model that omits a section leaves it empty rather than failing the
+ * whole parse and losing the three sections it did write.
+ */
+const practiceNarrativeSchema = z.object({
+  executiveSummary: z.string().optional(),
+  risks: bullets,
+  nextWeekPriorities: bullets,
+  decisionsRequired: bullets,
+  nextSteps: z.array(z.object({ id: z.string(), text: z.string() })).optional()
+});
+
+/**
+ * Writes the four narrative sections of the Weekly AI/ML Practice Update, plus one next step per
+ * initiative.
+ *
+ * IT IS ALLOWED TO FAIL, and the caller is built for that. Every figure in the update is counted
+ * from the database by `practice-update.service.ts` and goes out either way; this only writes the
+ * prose around them. Gating the whole update on a model answering is the mistake
+ * `weekly-digest.worker.ts` records in its own header — an unconfigured or slow one sent nothing at
+ * all — so callers here treat a null as "no narrative this week", never as "no update this week".
+ */
+export async function generatePracticeUpdate(params: {
+  periodLabel: string;
+  metrics: string;
+  initiatives: string;
+  releases: string;
+  userId?: string;
+}): Promise<PracticeUpdateNarrative | null> {
+  const { settings } = await preflight("practiceUpdateEnabled");
+
+  const p = await resolvePrompt("practice_update", {
+    periodLabel: params.periodLabel,
+    metrics: params.metrics,
+    initiatives: params.initiatives,
+    releases: params.releases || "(none this period)"
+  });
+
+  const startedAt = Date.now();
+  // Generous: ten sections across up to a dozen initiatives, and a truncated JSON object parses to
+  // nothing at all rather than to a shorter answer.
+  const result = await callChat(settings, { feature: "practice_update", model: settings.model, maxTokens: 2600, prompt: p.text });
+
+  await logAIUsage({
+    feature: "practice_update",
+    params: { periodLabel: params.periodLabel },
+    model: result.model,
+    provider: result.provider,
+    inputTokens: result.usage.inputTokens,
+    outputTokens: result.usage.outputTokens,
+    latencyMs: Date.now() - startedAt,
+    userId: params.userId,
+    promptVersionId: p.promptVersionId,
+    promptFallbackReason: p.fallbackReason
+  });
+
+  const parsed = parseJsonResponse(result.text, practiceNarrativeSchema);
+  if (!parsed) {
+    // A model that answered but not in the shape asked for is a DIFFERENT failure from one that
+    // is switched off or unreachable, and the two were indistinguishable to the caller. Logged
+    // with a sample because the fix is nearly always a prompt or a model choice, and neither is
+    // diagnosable from "it returned nothing".
+    console.warn(
+      `[ai] practice_update: ${result.model} answered ${result.text.length} chars that did not parse as the requested JSON. Sample: ${result.text
+        .slice(0, 240)
+        .replace(/\s+/g, " ")}`
+    );
+    return null;
+  }
+  return {
+    executiveSummary: parsed.executiveSummary ?? "",
+    risks: toBullets(parsed.risks),
+    nextWeekPriorities: toBullets(parsed.nextWeekPriorities),
+    decisionsRequired: toBullets(parsed.decisionsRequired),
+    nextSteps: parsed.nextSteps ?? []
+  };
 }
 
 /* ------------------------------- Face policy copilot ------------------------------------- */

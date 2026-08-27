@@ -213,6 +213,7 @@ export interface NotificationPreferences {
   emailDeadlineReminder: boolean;
   emailEscalation: boolean;
   emailWeeklyDigest: boolean;
+  emailPracticeUpdate: boolean;
   emailDailyReminder: boolean;
   emailDailyEscalation: boolean;
   emailTicketAssigned: boolean;
@@ -281,6 +282,7 @@ export const notificationPreferenceKeys: ReadonlyArray<keyof NotificationPrefere
   "emailDeadlineReminder",
   "emailEscalation",
   "emailWeeklyDigest",
+  "emailPracticeUpdate",
   "emailDailyReminder",
   "emailDailyEscalation",
   "emailTicketAssigned",

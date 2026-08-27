@@ -219,6 +219,44 @@ Call out the clearest recurring pattern first (a specific branch, ticket, or rep
 Respond with ONLY the recap paragraph — no preamble, no subject line.`
   },
   {
+    feature: "practice_update",
+    label: "Weekly AI/ML practice update",
+    description: "The narrative half of the consolidated weekly leadership update. The figures around it are counted from the database and go out whether or not this runs.",
+    placeholders: [
+      { name: "periodLabel", description: "The week being reported on.", sample: "17 Aug – 23 Aug 2026" },
+      { name: "metrics", description: "The week's counted figures, one per line, each with its change on the previous week.", sample: "Tickets closed: 47 (up from 35)" },
+      { name: "initiatives", description: "Every active initiative with its category, owner, RAG status, progress and risks.", sample: "[Products] Apollo — owner Mira Kapoor — GREEN — 12 closed · 38 h" },
+      { name: "releases", description: "Releases that shipped in the week.", sample: "v2.4.0 — TimeSphere — closed 2026-08-21" }
+    ],
+    required: ["metrics", "initiatives"],
+    defaultTemplate: `You are writing the narrative sections of a Weekly AI/ML Practice Update for {{periodLabel}}, read by a CEO and a practice head. They want to know what happened, what changed, what is at risk, and where they are being asked to help.
+
+THE WEEK'S FIGURES (counted — never contradict these, never invent one that is not here):
+{{metrics}}
+
+INITIATIVES:
+{{initiatives}}
+
+RELEASES:
+{{releases}}
+
+Reply with ONLY a JSON object, no preamble and no code fence:
+{
+  "executiveSummary": "3-5 sentences on ONE line. What actually happened and what changed. Lead with the thing a busy reader must not miss.",
+  "risks": ["one short sentence per real blocker, drawn from the RED and AMBER initiatives and the overdue/SLA figures above"],
+  "nextWeekPriorities": ["one short sentence per focus area for the coming week"],
+  "decisionsRequired": ["one short sentence per decision or support being asked for, naming who it is being asked of"],
+  "nextSteps": [{ "id": "<the initiative id, copied exactly>", "text": "One short sentence of what happens next on it." }]
+}
+
+EVERY bullet list above is a JSON ARRAY OF STRINGS. Do not write markdown bullets, do not put
+newlines inside a string, and quote every value. An empty array is the correct way to say "nothing
+here" — for risks that means nothing is at risk, and for decisions it means leadership needs to
+do nothing this week. An invented item wastes the one section they will definitely read.
+
+Write plainly, for someone outside the team. No jargon, no filler, no congratulation. Be specific: name the initiative, quote the number. Where a figure got worse, say so — an update that only reports good news stops being read.`
+  },
+  {
     feature: "status_report",
     label: "Project status report",
     description: "The on-demand stakeholder update generated from a project page.",

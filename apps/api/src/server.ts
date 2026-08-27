@@ -29,6 +29,7 @@ import { startInboundEmailWorker } from "./workers/inbound-email.worker.js";
 import { startMailQueueWorker } from "./workers/mail-queue.worker.js";
 import { startTicketEscalationWorker } from "./workers/ticket-escalation.worker.js";
 import { startWeeklyDigestWorker } from "./workers/weekly-digest.worker.js";
+import { startPracticeUpdateWorker } from "./workers/practice-update.worker.js";
 import { startSecurityWeeklyDigestWorker } from "./workers/security-weekly-digest.worker.js";
 import { startFaceRetentionWorker } from "./workers/face-retention.worker.js";
 import { startWebhookRetryWorker } from "./workers/webhook-retry.worker.js";
@@ -223,6 +224,7 @@ server.on("listening", async () => {
   startInboundEmailWorker();
   startChatTelegramWorker();
   startWeeklyDigestWorker();
+  startPracticeUpdateWorker();
   startSecurityWeeklyDigestWorker();
   startFaceRetentionWorker();
   startIdentityWeeklyDigestWorker();
