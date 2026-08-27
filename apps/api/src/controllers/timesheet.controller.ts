@@ -30,6 +30,7 @@ import { emitDomainEvent } from "../services/domain-events.js";
 import { processUpload } from "../services/attachment-storage.service.js";
 import { sanitizeRichText } from "../utils/sanitize.js";
 import { bindVerificationToRecord, consumeVerification, getTimesheetVerificationBadges, isFaceVerificationRequired } from "../services/face.service.js";
+import { parseDayWindow, workDateFilter } from "../utils/date-window.js";
 
 const inputSchema = z.object({
   body: z.object({
@@ -64,12 +65,26 @@ function entryText(entry: { taskDescription?: string | null; notes?: string | nu
 export const timesheetRouter = Router();
 timesheetRouter.use(requireAuth);
 
+/**
+ * Rows one page may return.
+ *
+ * WHY THE UNBOUNDED CAP IS 100 AND A BOUNDED RANGE GETS MORE — this is the reason the home page's
+ * date filter could not be done in the browser. The default is newest-first and capped, so
+ * filtering a range client-side silently under-reports any period that falls outside the newest
+ * 100 entries: it looks right in development, where nobody has 100 entries, and is wrong in
+ * production. Filtering server-side is the fix, and a range is self-limiting in a way "everything"
+ * is not, so it can afford a higher ceiling.
+ */
+const PAGE_LIMIT = 100;
+const RANGE_LIMIT = 2_000;
+
 timesheetRouter.get("/", async (req, res) => {
   const canViewAll = req.user!.permissions.includes(permissions.REPORTS_VIEW);
   const requestedUserId = typeof req.query.userId === "string" && req.query.userId ? req.query.userId : undefined;
   const status = typeof req.query.status === "string" && req.query.status ? (req.query.status as any) : undefined;
+  const workDate = workDateFilter(parseDayWindow(req.query));
   const timesheets = await prisma.timesheet.findMany({
-    where: { userId: canViewAll ? requestedUserId : req.user!.id, status, deletedAt: null },
+    where: { userId: canViewAll ? requestedUserId : req.user!.id, status, deletedAt: null, workDate },
     include: {
       project: true,
       module: true,
@@ -81,7 +96,7 @@ timesheetRouter.get("/", async (req, res) => {
       user: { select: { id: true, name: true, email: true, avatarUrl: true } }
     },
     orderBy: [{ workDate: "desc" }, { startTime: "desc" }],
-    take: 100
+    take: workDate ? RANGE_LIMIT : PAGE_LIMIT
   });
 
   // Verified-badge decoration: which rows carry a spent PASSED identity check, and whose

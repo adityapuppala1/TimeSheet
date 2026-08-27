@@ -16,6 +16,7 @@ import PDFDocument from "pdfkit";
 import { permissions } from "@timesheet/shared";
 import type { Prisma, TicketStatus } from "@prisma/client";
 import { prisma } from "../config/prisma.js";
+import { DAY_MS, parseDayWindow, resolveTimestampWindow, windowDays } from "../utils/date-window.js";
 import { isChangeManagementOn } from "../services/change.service.js";
 import { controlPrisma } from "../config/control-prisma.js";
 import { tenantContext } from "../config/tenant-context.js";
@@ -66,18 +67,29 @@ reportRouter.get("/employee-summary", async (req, res) => {
 });
 
 /**
- * Personal daily status: hours logged today + whether a reminder/escalation
- * has been raised against the calling user. Used by the dashboard hero card.
+ * Personal status for a period: hours logged + whether a reminder/escalation has been raised
+ * against the calling user. Used by the dashboard hero card.
+ *
+ * Takes `from`/`to`; with neither it answers for today exactly as it always did. The card's copy
+ * follows the period rather than saying "today" over a month of data, which is why `days` is
+ * returned — the caller cannot infer it from the numbers alone.
  */
 reportRouter.get("/daily-status", async (req, res) => {
   const today = todayUtcDate();
   const sinceLocal = startOfLocalDay();
+  const window = parseDayWindow(req.query);
+  const from = window.from ?? today;
+  const to = window.to ?? today;
+  const days = windowDays(from, to);
   const [aggregate, reminded, escalated] = await Promise.all([
     prisma.timesheet.aggregate({
-      where: { userId: req.user!.id, workDate: today, deletedAt: null },
+      where: { userId: req.user!.id, workDate: { gte: from, lte: to }, deletedAt: null },
       _sum: { totalHours: true },
       _count: true
     }),
+    // Reminders stay scoped to TODAY even over a longer range: "were you nudged" is a live fact
+    // about right now, and answering "yes, at some point in the last 30 days" would turn a
+    // prompt-to-act into background noise.
     prisma.notification.count({
       where: { userId: req.user!.id, category: "reminder.daily", createdAt: { gte: sinceLocal } }
     }),
@@ -86,7 +98,10 @@ reportRouter.get("/daily-status", async (req, res) => {
     })
   ]);
   res.json({
-    date: today.toISOString().slice(0, 10),
+    date: to.toISOString().slice(0, 10),
+    from: from.toISOString().slice(0, 10),
+    to: to.toISOString().slice(0, 10),
+    days,
     entries: aggregate._count,
     hours: Number(aggregate._sum.totalHours ?? 0),
     reminderReceived: reminded > 0,
@@ -94,7 +109,21 @@ reportRouter.get("/daily-status", async (req, res) => {
   });
 });
 
-reportRouter.get("/admin-summary", requirePermission(permissions.REPORTS_VIEW), async (_req, res) => {
+/**
+ * The workspace summary behind the home page's cards.
+ *
+ * IT USED TO IGNORE THE REQUEST ENTIRELY and hardcode today / yesterday / 7d / year-to-date. With a
+ * date filter on the page that is no longer good enough, so it takes `from`/`to` — and with neither,
+ * it computes exactly the windows it always did, so every other caller is unaffected.
+ *
+ * "vs YESTERDAY" BECOMES "vs THE PREVIOUS EQUAL-LENGTH PERIOD" once a range is given, because that
+ * is the only thing a delta can honestly mean for an arbitrary span: comparing a fortnight against
+ * one day would read as a collapse every time.
+ *
+ * The project/status/activity breakdowns gain the filter too. They were ALL-TIME, which was its own
+ * quiet bug — "Project utilization" on a page showing one week silently answered for all history.
+ */
+reportRouter.get("/admin-summary", requirePermission(permissions.REPORTS_VIEW), async (req, res) => {
   const weekAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
   const today = todayUtcDate();
   const yesterday = new Date(today);
@@ -104,6 +133,27 @@ reportRouter.get("/admin-summary", requirePermission(permissions.REPORTS_VIEW), 
 
   const sinceYesterdayLocal = new Date(sinceLocal);
   sinceYesterdayLocal.setDate(sinceYesterdayLocal.getDate() - 1);
+
+  const window = parseDayWindow(req.query);
+  const { from: rangeFrom, to: rangeTo, ranged } = window;
+
+  // Timestamp windows for the "raised / closed / reminded" counts, which filter on createdAt.
+  // See utils/date-window.ts for why `end` is exclusive and where the comparison period comes from.
+  const { start: winStart, end: winEnd, prevStart } = resolveTimestampWindow(window, sinceLocal, new Date());
+
+  const inWindow = { gte: winStart, ...(winEnd ? { lt: winEnd } : {}) };
+  const inPrevWindow = { gte: prevStart, lt: winStart };
+
+  // Day windows for the counts that filter on `workDate`, which is a date column, not a timestamp.
+  const dayFrom = rangeFrom ?? today;
+  const dayTo = rangeTo ?? today;
+  const dayLength = Math.max(DAY_MS, dayTo.getTime() - dayFrom.getTime() + DAY_MS);
+  const inDays = { gte: dayFrom, lte: dayTo };
+  const inPrevDays = { gte: new Date(dayFrom.getTime() - dayLength), lte: new Date(dayFrom.getTime() - DAY_MS) };
+
+  /** Hours/status/activity breakdowns are scoped to the range when there is one, and left
+   *  unfiltered when there is not — which is what they have always done. */
+  const breakdownWhere = ranged ? { deletedAt: null, workDate: inDays } : { deletedAt: null };
 
   const [
     users,
@@ -133,48 +183,48 @@ reportRouter.get("/admin-summary", requirePermission(permissions.REPORTS_VIEW), 
     byActivity
   ] = await Promise.all([
     prisma.user.count({ where: { deletedAt: null } }),
-    prisma.user.count({ where: { deletedAt: null, createdAt: { lt: sinceLocal } } }),
+    prisma.user.count({ where: { deletedAt: null, createdAt: { lt: winStart } } }),
     prisma.user.count({
       where: { deletedAt: null, status: "ACTIVE", role: { name: { in: ["EMPLOYEE", "TEAM_LEAD"] } } }
     }),
     prisma.project.count({ where: { deletedAt: null } }),
-    prisma.project.count({ where: { deletedAt: null, createdAt: { lt: sinceLocal } } }),
+    prisma.project.count({ where: { deletedAt: null, createdAt: { lt: winStart } } }),
     prisma.timesheet.aggregate({ where: { status: "APPROVED", deletedAt: null }, _sum: { totalHours: true } }),
     prisma.timesheet.aggregate({
-      where: { status: "APPROVED", deletedAt: null, reviewedAt: { lt: sinceLocal } },
+      where: { status: "APPROVED", deletedAt: null, reviewedAt: { lt: winStart } },
       _sum: { totalHours: true }
     }),
     prisma.timesheet.count({ where: { status: "SUBMITTED", deletedAt: null } }),
-    prisma.timesheet.count({ where: { status: "SUBMITTED", deletedAt: null, createdAt: { lt: sinceLocal } } }),
+    prisma.timesheet.count({ where: { status: "SUBMITTED", deletedAt: null, createdAt: { lt: winStart } } }),
     prisma.timesheet.count({ where: { slaBreachAt: { not: null }, deletedAt: null } }),
-    prisma.timesheet.count({ where: { deletedAt: null, slaBreachAt: { not: null, lt: sinceLocal } } }),
+    prisma.timesheet.count({ where: { deletedAt: null, slaBreachAt: { not: null, lt: winStart } } }),
     prisma.escalation.count({ where: { resolvedAt: null } }),
-    prisma.escalation.count({ where: { resolvedAt: null, createdAt: { lt: sinceLocal } } }),
+    prisma.escalation.count({ where: { resolvedAt: null, createdAt: { lt: winStart } } }),
     prisma.timesheet.count({ where: { status: "APPROVED", reviewedAt: { gte: weekAgo }, deletedAt: null } }),
     prisma.timesheet.count({
       where: { status: "APPROVED", reviewedAt: { gte: new Date(weekAgo.getTime() - WEEK_MS), lt: weekAgo }, deletedAt: null }
     }),
     prisma.timesheet.findMany({
-      where: { workDate: today, deletedAt: null },
+      where: { workDate: inDays, deletedAt: null },
       select: { userId: true },
       distinct: ["userId"]
     }),
     prisma.timesheet.findMany({
-      where: { workDate: yesterday, deletedAt: null },
+      where: { workDate: inPrevDays, deletedAt: null },
       select: { userId: true },
       distinct: ["userId"]
     }),
     prisma.notification.count({
-      where: { category: "reminder.daily", createdAt: { gte: sinceLocal } }
+      where: { category: "reminder.daily", createdAt: inWindow }
     }),
     prisma.notification.count({
-      where: { category: "reminder.daily", createdAt: { gte: sinceYesterdayLocal, lt: sinceLocal } }
+      where: { category: "reminder.daily", createdAt: inPrevWindow }
     }),
     prisma.notification.count({
-      where: { category: "reminder.escalation", createdAt: { gte: sinceLocal } }
+      where: { category: "reminder.escalation", createdAt: inWindow }
     }),
     prisma.notification.count({
-      where: { category: "reminder.escalation", createdAt: { gte: sinceYesterdayLocal, lt: sinceLocal } }
+      where: { category: "reminder.escalation", createdAt: inPrevWindow }
     }),
     // Year-to-date average — the baseline "today vs typical day" is measured against, not just
     // yesterday (a single prior day is noisy; e.g. a Monday after a weekend always looks like a
@@ -186,9 +236,9 @@ reportRouter.get("/admin-summary", requirePermission(permissions.REPORTS_VIEW), 
       select: { userId: true, workDate: true },
       distinct: ["userId", "workDate"]
     }),
-    prisma.timesheet.groupBy({ by: ["projectId"], where: { deletedAt: null }, _sum: { totalHours: true }, _count: true }),
-    prisma.timesheet.groupBy({ by: ["status"], where: { deletedAt: null }, _sum: { totalHours: true }, _count: true }),
-    prisma.timesheet.groupBy({ by: ["activityType"], where: { deletedAt: null }, _sum: { totalHours: true }, _count: true })
+    prisma.timesheet.groupBy({ by: ["projectId"], where: breakdownWhere, _sum: { totalHours: true }, _count: true }),
+    prisma.timesheet.groupBy({ by: ["status"], where: breakdownWhere, _sum: { totalHours: true }, _count: true }),
+    prisma.timesheet.groupBy({ by: ["activityType"], where: breakdownWhere, _sum: { totalHours: true }, _count: true })
   ]);
 
   const projectNames = await prisma.project.findMany({
@@ -216,14 +266,14 @@ reportRouter.get("/admin-summary", requirePermission(permissions.REPORTS_VIEW), 
     changesClosedToday,
     changesClosedYesterday
   ] = await Promise.all([
-    prisma.ticket.count({ where: { deletedAt: null, createdAt: { gte: sinceLocal } } }),
-    prisma.ticket.count({ where: { deletedAt: null, createdAt: { gte: sinceYesterdayLocal, lt: sinceLocal } } }),
-    prisma.ticket.count({ where: { deletedAt: null, status: { in: CLOSED_TICKET }, updatedAt: { gte: sinceLocal } } }),
-    prisma.ticket.count({ where: { deletedAt: null, status: { in: CLOSED_TICKET }, updatedAt: { gte: sinceYesterdayLocal, lt: sinceLocal } } }),
-    changesOn ? prisma.changeRequest.count({ where: { createdAt: { gte: sinceLocal } } }) : Promise.resolve(0),
-    changesOn ? prisma.changeRequest.count({ where: { createdAt: { gte: sinceYesterdayLocal, lt: sinceLocal } } }) : Promise.resolve(0),
-    changesOn ? prisma.changeRequest.count({ where: { closedAt: { gte: sinceLocal } } }) : Promise.resolve(0),
-    changesOn ? prisma.changeRequest.count({ where: { closedAt: { gte: sinceYesterdayLocal, lt: sinceLocal } } }) : Promise.resolve(0)
+    prisma.ticket.count({ where: { deletedAt: null, createdAt: inWindow } }),
+    prisma.ticket.count({ where: { deletedAt: null, createdAt: inPrevWindow } }),
+    prisma.ticket.count({ where: { deletedAt: null, status: { in: CLOSED_TICKET }, updatedAt: inWindow } }),
+    prisma.ticket.count({ where: { deletedAt: null, status: { in: CLOSED_TICKET }, updatedAt: inPrevWindow } }),
+    changesOn ? prisma.changeRequest.count({ where: { createdAt: inWindow } }) : Promise.resolve(0),
+    changesOn ? prisma.changeRequest.count({ where: { createdAt: inPrevWindow } }) : Promise.resolve(0),
+    changesOn ? prisma.changeRequest.count({ where: { closedAt: inWindow } }) : Promise.resolve(0),
+    changesOn ? prisma.changeRequest.count({ where: { closedAt: inPrevWindow } }) : Promise.resolve(0)
   ]);
 
   const loggedToday = loggedTodayDistinct.length;

@@ -2285,7 +2285,7 @@ const APPROVAL_STATUS_VARIANT: Record<string, "success" | "warning" | "destructi
 
 export function ApprovalsPage() {
   const queryClient = useQueryClient();
-  const timesheets = useQuery({ queryKey: ["timesheets"], queryFn: timesheetApi.list });
+  const timesheets = useQuery({ queryKey: ["timesheets"], queryFn: () => timesheetApi.list() });
   const [rejectTarget, setRejectTarget] = useState<{ id: string; user: string } | null>(null);
   const [rejectReason, setRejectReason] = useState("");
   /** The entry whose full detail is open. On a phone the table collapses to cards and the
@@ -2941,7 +2941,7 @@ export function ApprovalsPage() {
 
 /* ============================== REPORTS ============================== */
 export function ReportsPage() {
-  const analytics = useQuery({ queryKey: ["admin-summary"], queryFn: reportApi.admin, refetchInterval: 30_000 });
+  const analytics = useQuery({ queryKey: ["admin-summary"], queryFn: () => reportApi.admin(), refetchInterval: 30_000 });
   const ticketAnalytics = useQuery({ queryKey: ["ticket-summary"], queryFn: reportApi.tickets, refetchInterval: 30_000 });
   // Codes on the axis, full names in the tooltip — same convention as the Dashboard utilization
   // chart, for the same reason: long names starved the axis of labels.

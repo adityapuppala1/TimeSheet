@@ -205,7 +205,7 @@ export function Timesheet() {
   const queryClient = useQueryClient();
   const [files, setFiles] = useState<File[]>([]);
   const projects = useQuery({ queryKey: ["projects"], queryFn: () => projectApi.list() });
-  const timesheets = useQuery({ queryKey: ["timesheets"], queryFn: timesheetApi.list });
+  const timesheets = useQuery({ queryKey: ["timesheets"], queryFn: () => timesheetApi.list() });
   /**
    * The activity list, from the workspace's own catalog rather than the frozen twelve-item array
    * in `@timesheet/shared`. A super admin edits it on the Projects screen; this picker is what

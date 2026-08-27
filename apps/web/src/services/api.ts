@@ -670,8 +670,17 @@ export interface TimesheetEntryPatch {
   notes?: string;
 }
 
+/** The date window the dashboard endpoints accept, as ISO `yyyy-mm-dd`. Omitted entirely, each one
+ *  falls back to the window it used before the home page had a filter. */
+export interface DateWindow {
+  from?: string;
+  to?: string;
+}
+
 export const timesheetApi = {
-  list: async () => (await api.get("/timesheets")).data,
+  /** With a window, the server filters AND raises its row cap. Without one it returns the newest
+   *  page, as before — which is why a range must never be filtered in the browser instead. */
+  list: async (params?: DateWindow) => (await api.get("/timesheets", { params })).data,
   /** One entry by id, with attachments, reviewer and identity badge. Used by the entry dialog
    *  rather than a lookup in the list cache: the list is capped at 100 rows, so an older entry
    *  reached by deep link simply is not in it. */
@@ -723,6 +732,11 @@ export const timesheetApi = {
 
 export interface DailyStatus {
   date: string;
+  /** The window this answers for. Echoed back so the card can label itself — it cannot infer the
+   *  period from the numbers, and a card reading "today" over a month of data is simply wrong. */
+  from?: string;
+  to?: string;
+  days?: number;
   entries: number;
   hours: number;
   reminderReceived: boolean;
@@ -921,9 +935,9 @@ export interface AttestationShareLinkRow {
 }
 
 export const reportApi = {
-  admin: async () => (await api.get("/reports/admin-summary")).data,
+  admin: async (params?: DateWindow) => (await api.get("/reports/admin-summary", { params })).data,
   employee: async () => (await api.get("/reports/employee-summary")).data,
-  dailyStatus: async () => (await api.get<DailyStatus>("/reports/daily-status")).data,
+  dailyStatus: async (params?: DateWindow) => (await api.get<DailyStatus>("/reports/daily-status", { params })).data,
   tickets: async () => (await api.get<TicketSummary>("/reports/ticket-summary")).data,
   ticketInsights: async () => (await api.get<TicketInsights>("/reports/ticket-insights")).data,
   securityInsights: async () => (await api.get<SecurityInsights>("/reports/security-insights")).data,
@@ -5094,7 +5108,7 @@ export const dashboardApi = {
    * busy account the older half of the month falls off the end and the projects only worked on early
    * in the month disappear from the card. It looked right in development and wrong in production.
    */
-  myMonth: async () => (await api.get<MyMonthRollup>("/dashboards/my-month")).data,
+  myMonth: async (params?: DateWindow) => (await api.get<MyMonthRollup>("/dashboards/my-month", { params })).data,
   list: async () => (await api.get<DashboardRow[]>("/dashboards")).data,
   /** Layout plus resolved data in one request — a grid of eight tiles fetched separately would be
    *  eight round trips on every page load. */

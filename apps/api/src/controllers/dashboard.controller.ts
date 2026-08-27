@@ -15,6 +15,7 @@
  * WHO MOUNTS THIS: `app.ts`, after the blanket `resolveTenant`.
  */
 import { Router } from "express";
+import { DAY_MS, parseDayWindow } from "../utils/date-window.js";
 import { z } from "zod";
 import { permissions } from "@timesheet/shared";
 import { prisma } from "../config/prisma.js";
@@ -281,11 +282,23 @@ interface ProjectRollupRow {
 
 const pct = (part: number, whole: number): number | null => (whole > 0 ? Math.round((part / whole) * 100) : null);
 
+/**
+ * The caller's own work over a period, per project.
+ *
+ * Takes `from`/`to`; with neither it answers for the current calendar month exactly as it always
+ * did, which is what the card said before the home page had a date filter. The response echoes the
+ * window back so the card can label itself honestly rather than always claiming "this month".
+ */
 dashboardRouter.get("/my-month", async (req, res) => {
   const userId = req.user!.id;
   const now = new Date();
-  const monthStart = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1));
-  const monthEnd = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() + 1, 1));
+  const window = parseDayWindow(req.query);
+  const monthStart = window.from ?? new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1));
+  // Exclusive end: the day AFTER `to`, so the range's own last day is included — see
+  // utils/date-window.ts. A `lt: to` here would silently drop it.
+  const monthEnd = window.to
+    ? new Date(window.to.getTime() + DAY_MS)
+    : new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() + 1, 1));
 
   // Whether change management is even on decides whether the card gets a third bar or two. Read
   // rather than assumed, and a failure here must not take the whole home page down with it.

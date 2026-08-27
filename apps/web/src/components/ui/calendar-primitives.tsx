@@ -119,7 +119,15 @@ const gridHeaderClass = "pb-1 text-xs font-medium text-muted-foreground";
 export interface CalendarDayAnnotation {
   /** Headline of the hover card, e.g. "4 entries". */
   title: string;
-  rows: Array<{ label: string; count: number; dotClassName: string }>;
+  rows: Array<{
+    label: string;
+    count: number;
+    dotClassName: string;
+    /** Draw a rule above this row. Groups rows that count DIFFERENT things — timesheet entries,
+     *  tickets and change requests all land on the same day and were previously an undifferentiated
+     *  list, so "3, 2, 1" read as one total split three ways rather than three separate tallies. */
+    separatorBefore?: boolean;
+  }>;
 }
 
 /** Keyed by ISO `yyyy-mm-dd`. Sparse: only dates that have something to say appear. */
@@ -149,7 +157,13 @@ function DayAnnotationOverlay({ annotation }: { annotation: CalendarDayAnnotatio
         <p className="text-[11px] font-semibold text-popover-foreground">{annotation.title}</p>
         <div className="mt-1 space-y-0.5">
           {annotation.rows.map((row) => (
-            <p key={row.label} className="flex items-center gap-1.5 text-[11px] font-normal text-muted-foreground">
+            <p
+              key={row.label}
+              className={cn(
+                "flex items-center gap-1.5 text-[11px] font-normal text-muted-foreground",
+                row.separatorBefore && "mt-1 border-t border-border/70 pt-1"
+              )}
+            >
               <span className={cn("h-1.5 w-1.5 shrink-0 rounded-full", row.dotClassName)} aria-hidden />
               {row.label}
               <span className="ml-auto pl-3 font-semibold tabular-nums text-popover-foreground">{row.count}</span>

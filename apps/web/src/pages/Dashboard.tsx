@@ -67,10 +67,23 @@ import { StatCard, TrendBadge } from "../components/ui/stat-card";
 import { ProjectUtilizationChart } from "../components/ProjectUtilizationChart";
 import { TimesheetEntryDialog } from "../components/TimesheetEntryDialog";
 import { computeTrend, type Trend } from "../lib/trend";
-import { dashboardApi, reportApi, ticketApi, timesheetApi, type MyMonthRollup, type TicketRow } from "../services/api";
+import { changeApi, dashboardApi, reportApi, ticketApi, timesheetApi, type MyMonthRollup, type TicketRow } from "../services/api";
+import { DateRangePicker, type DateRangeValue } from "../components/ui/date-range-picker";
+import type { CalendarDayAnnotations } from "../components/ui/calendar-primitives";
 import { useAuthStore } from "../store/auth";
 import { DatePicker } from "../components/ui/date-picker";
-import type { CalendarDayAnnotations } from "../components/ui/calendar-primitives";
+
+/** Mon–Fri days in an inclusive range. The week target scales against this rather than staying
+ *  pinned to 40h: a one-day range against a 40h bar reads as a 5% week, and a month reads as 400%,
+ *  so the bar stops meaning anything the moment the page can show something other than a week. */
+function countWorkingDays(from: Date, to: Date): number {
+  let count = 0;
+  for (const day = new Date(from); day <= to; day.setDate(day.getDate() + 1)) {
+    const weekday = day.getDay();
+    if (weekday !== 0 && weekday !== 6) count += 1;
+  }
+  return count;
+}
 
 function startOfWeek(date: Date) {
   const d = new Date(date);
@@ -121,12 +134,80 @@ interface TimesheetRowLite {
   userId?: string;
 }
 
+function isoToLocalDate(iso: string): Date | null {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(iso)) return null;
+  const [y, m, d] = iso.split("-").map(Number);
+  return new Date(y, (m || 1) - 1, d || 1);
+}
+
+/** Monday-to-today, as ISO. The page's default window — it is what every card showed before there
+ *  was anything to choose. */
+function thisWeekRange(): DateRangeValue {
+  const now = new Date();
+  const monday = startOfWeek(new Date(now.getFullYear(), now.getMonth(), now.getDate()));
+  return { from: localDateKey(monday), to: localDateKey(now) };
+}
+
+/** "today" / "this week" / "1 – 27 Aug" — what the selected window is actually called, so a card can
+ *  say what it is showing instead of a hardcoded period it may not be showing at all. */
+function describeRange(range: DateRangeValue): string {
+  const from = isoToLocalDate(range.from);
+  const to = isoToLocalDate(range.to);
+  if (!from || !to) return "the selected period";
+
+  if (range.from === range.to) {
+    return range.from === localDateKey(new Date())
+      ? "today"
+      : from.toLocaleDateString(undefined, { day: "numeric", month: "short" });
+  }
+
+  const week = thisWeekRange();
+  if (range.from === week.from && range.to === week.to) return "this week";
+
+  const sameMonth = from.getMonth() === to.getMonth() && from.getFullYear() === to.getFullYear();
+  const fmt = (d: Date, withMonth: boolean) =>
+    d.toLocaleDateString(undefined, withMonth ? { day: "numeric", month: "short" } : { day: "numeric" });
+  return `${fmt(from, !sameMonth)} – ${fmt(to, true)}`;
+}
+
+/**
+ * The same label with a preposition when it needs one.
+ *
+ * "logged something this week" reads; "logged something 1 – 27 Aug" does not. Relative labels
+ * ("today", "this week") are already adverbial and take nothing; an explicit date range needs "in".
+ * Kept separate from `describeRange` because roughly half the call sites want the bare noun for a
+ * heading and the other half want the phrase mid-sentence.
+ */
+function periodPhrase(label: string): string {
+  if (/^(today|this )/.test(label)) return label;
+  const span = label.split(" – ");
+  return span.length === 2 ? `between ${span[0]} and ${span[1]}` : `on ${label}`;
+}
+
 export function Dashboard() {
   const user = useAuthStore((s) => s.user);
   const isAdmin = user?.permissions.includes("reports:view");
+
+  /**
+   * ONE range drives the whole page. Every card used to hardcode its own window — this week, this
+   * month, today — so the page could not answer "what did last month look like" at all.
+   *
+   * It is a QUERY PARAMETER, not a client-side filter, and that distinction is the important one:
+   * `GET /timesheets` is capped at the newest rows, so filtering a range in the browser silently
+   * under-reports any period that falls outside them. It looks correct in development, where nobody
+   * has that many entries, and is wrong in production.
+   */
+  const [range, setRange] = useState<DateRangeValue>(thisWeekRange);
+  const periodLabel = describeRange(range);
+  const rangeParams = { from: range.from, to: range.to };
+  /** What the stat deltas are measured against. "vs yesterday" is only true for a single day; over
+   *  any span the server compares the equal-length window before it, and the label has to say so. */
+  const comparisonLabel = range.from === range.to ? "vs the day before" : "vs the previous period";
+  const periodIn = periodPhrase(periodLabel);
+
   const admin = useQuery({
-    queryKey: ["admin-summary"],
-    queryFn: reportApi.admin,
+    queryKey: ["admin-summary", range.from, range.to],
+    queryFn: () => reportApi.admin(rangeParams),
     enabled: isAdmin,
     refetchInterval: 30_000
   });
@@ -136,43 +217,101 @@ export function Dashboard() {
     enabled: isAdmin,
     refetchInterval: 60_000
   });
-  const timesheets = useQuery({ queryKey: ["timesheets"], queryFn: timesheetApi.list });
-  // Counted server-side and UNCAPPED. The list above is capped at 100 rows, which silently dropped
-  // projects from the month rollup on any busy account — see dashboardApi.myMonth.
-  const myMonth = useQuery({ queryKey: ["dashboard", "my-month"], queryFn: dashboardApi.myMonth });
-  const daily = useQuery({ queryKey: ["daily-status"], queryFn: reportApi.dailyStatus });
+  // The range is in the KEY as well as the request: without it React Query serves the previous
+  // window's rows from cache and the page shows one period's numbers under another's label.
+  const timesheets = useQuery({ queryKey: ["timesheets", range.from, range.to], queryFn: () => timesheetApi.list(rangeParams) });
+  // Counted server-side and UNCAPPED. The list above is capped, which silently dropped projects
+  // from the rollup on any busy account — see dashboardApi.myMonth.
+  const myMonth = useQuery({ queryKey: ["dashboard", "my-month", range.from, range.to], queryFn: () => dashboardApi.myMonth(rangeParams) });
+  const daily = useQuery({ queryKey: ["daily-status", range.from, range.to], queryFn: () => reportApi.dailyStatus(rangeParams) });
+  /**
+   * The unbounded newest-entries page, used ONLY to annotate the two calendars.
+   *
+   * Without it the dots would only mark days inside the current range — so opening the picker to
+   * choose a different period could not tell you which days outside it have anything on them,
+   * which is precisely when you need that. This is the same request the page made before it had a
+   * filter, so it restores that reach rather than adding a new cost, and React Query shares the
+   * one cache entry with History and Timesheet.
+   */
+  const recent = useQuery({ queryKey: ["timesheets"], queryFn: () => timesheetApi.list() });
   const myTickets = useQuery({
     queryKey: ["tickets", "for-dashboard", user?.id],
     queryFn: () => ticketApi.list({ assigneeId: user!.id, status: "OPEN,IN_PROGRESS,IN_REVIEW,REOPENED" }),
     enabled: Boolean(user?.id && user.permissions.includes("tickets:view"))
   });
+  /**
+   * Only for the calendar's hover counts, which is why it asks for `mine` rather than the whole
+   * workspace.
+   *
+   * There is no `changes:view` permission to gate on — change management is a workspace FEATURE
+   * that may be off entirely, and the read is authorised by the route itself. So this asks once,
+   * does not retry, and a workspace without it simply contributes no change rows to the hover card
+   * instead of erroring. A calendar tooltip is not worth a failed request the user can see.
+   */
+  const changes = useQuery({
+    queryKey: ["changes", "for-dashboard", user?.id],
+    queryFn: () => changeApi.list({ mine: true }),
+    enabled: Boolean(user?.id),
+    retry: false
+  });
 
   const all: TimesheetRowLite[] = Array.isArray(timesheets.data) ? timesheets.data : [];
+  /** The ranged rows plus the unbounded page, de-duplicated by id. Only the day GROUPING reads
+   *  this — every total below still counts rows inside the range, so a wider source cannot inflate
+   *  a figure; it only lets the calendars mark days the range does not cover. */
+  const allForCalendar: TimesheetRowLite[] = useMemo(() => {
+    const byId = new Map<string, TimesheetRowLite>();
+    for (const row of all) byId.set(row.id, row);
+    for (const row of Array.isArray(recent.data) ? (recent.data as TimesheetRowLite[]) : []) {
+      if (!byId.has(row.id)) byId.set(row.id, row);
+    }
+    return [...byId.values()];
+  }, [all, recent.data]);
 
-  /** One pass over the (max 100-row) timesheet list feeds every personal surface below. */
+  /**
+   * One pass over the fetched entries feeds every personal surface below.
+   *
+   * It takes the SELECTED RANGE rather than computing this-week/this-month from the clock, which is
+   * what made the whole page filterable from one control. The previous-period comparison is the
+   * equal-length window immediately before the range — the only thing a delta can honestly mean for
+   * an arbitrary span. That window is not in `all` (the request only asked for the range), so it is
+   * computed from whatever of it happens to be loaded and reported as null when none of it is.
+   */
   const derived = useMemo(() => {
-    const now = new Date();
-    const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-    const todayKey = localDateKey(today);
-    const weekStart = startOfWeek(today);
-    const lastWeekStart = new Date(weekStart.getTime() - 7 * 24 * 60 * 60 * 1000);
-    const monthStart = new Date(now.getFullYear(), now.getMonth(), 1);
+    const rangeStart = isoToLocalDate(range.from) ?? new Date();
+    const rangeEnd = isoToLocalDate(range.to) ?? rangeStart;
+    const dayCount = Math.max(1, Math.round((rangeEnd.getTime() - rangeStart.getTime()) / 86_400_000) + 1);
+    const prevStart = new Date(rangeStart.getTime() - dayCount * 86_400_000);
+    const todayKey = localDateKey(new Date());
 
-    const dayLabels = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
-    const buckets = new Map<string, number>(dayLabels.map((l) => [l, 0]));
+    // The rhythm chart's x-axis. Up to a fortnight it is one bucket per day; beyond that the labels
+    // collide, so days collapse into buckets — a 90-day range drawn as 90 unreadable ticks is worse
+    // than the same shape drawn as twelve.
+    const bucketDays = dayCount <= 14 ? 1 : Math.ceil(dayCount / 12);
+    const bucketCount = Math.ceil(dayCount / bucketDays);
+    const bucketLabel = (index: number) => {
+      const day = new Date(rangeStart.getTime() + index * bucketDays * 86_400_000);
+      if (dayCount <= 7) return ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"][(day.getDay() + 6) % 7];
+      return day.toLocaleDateString(undefined, { day: "numeric", month: dayCount > 31 ? "short" : undefined });
+    };
+    const buckets: Array<{ day: string; hours: number }> = Array.from({ length: bucketCount }, (_, i) => ({
+      day: bucketLabel(i),
+      hours: 0
+    }));
 
-    let weekH = 0;
-    let lastWeekH = 0;
-    let monthH = 0;
+    let rangeH = 0;
+    let prevH = 0;
+    let prevSeen = 0;
     let pendingCount = 0;
-    const weekByStatus = { APPROVED: 0, SUBMITTED: 0, REJECTED: 0, DRAFT: 0 } as Record<string, number>;
-    /** This week's hours per project — the "where did it go" half of the week card. Keyed by the
-     *  display label rather than the id, so entries whose project was removed still collapse into
-     *  one honest "No project" row instead of one row per orphaned id. */
-    const weekByProject = new Map<string, number>();
-    const monthByStatus = { APPROVED: 0, SUBMITTED: 0, REJECTED: 0, DRAFT: 0 } as Record<string, number>;
+    const byStatus = { APPROVED: 0, SUBMITTED: 0, REJECTED: 0, DRAFT: 0 } as Record<string, number>;
+    /** Hours per project in the range. Keyed by the DISPLAY LABEL rather than the id, so entries
+     *  whose project was removed collapse into one honest "No project" row instead of one row per
+     *  orphaned id. */
+    const byProjectLabel = new Map<string, number>();
     /** Every loaded entry grouped by calendar day — the timeline's date picker reads this. */
     const entriesByDate = new Map<string, TimesheetRowLite[]>();
+    /** Distinct days that carry at least one entry — the denominator for "average per day logged". */
+    const daysWithEntries = new Set<string>();
 
     interface ProjectRoll {
       id: string;
@@ -185,29 +324,29 @@ export function Dashboard() {
     }
     const projects = new Map<string, ProjectRoll>();
 
-    for (const row of all) {
+    for (const row of allForCalendar) {
       const hours = Number(row.totalHours ?? 0);
       const { key: dateKey, local: workDay } = workDateParts(String(row.workDate));
       if (Number.isNaN(workDay.getTime())) continue;
-
-      if (row.status === "SUBMITTED") pendingCount += 1;
 
       const dayList = entriesByDate.get(dateKey) ?? [];
       dayList.push(row);
       entriesByDate.set(dateKey, dayList);
 
-      if (workDay >= weekStart && workDay <= today) {
-        weekH += hours;
-        weekByStatus[row.status] = (weekByStatus[row.status] ?? 0) + hours;
-        const label = dayLabels[(workDay.getDay() + 6) % 7];
-        buckets.set(label, (buckets.get(label) ?? 0) + hours);
+      if (workDay >= rangeStart && workDay <= rangeEnd) {
+        // INSIDE the range guard, deliberately. The loop now walks a wider set than the range (see
+        // `allForCalendar`), and a card headed "this week" reporting entries awaiting review from
+        // three months ago would be counting something it does not claim to be showing.
+        if (row.status === "SUBMITTED") pendingCount += 1;
+        rangeH += hours;
+        daysWithEntries.add(dateKey);
+        byStatus[row.status] = (byStatus[row.status] ?? 0) + hours;
+
+        const bucket = buckets[Math.min(bucketCount - 1, Math.floor((workDay.getTime() - rangeStart.getTime()) / 86_400_000 / bucketDays))];
+        if (bucket) bucket.hours += hours;
+
         const projectLabel = row.project?.code ?? row.project?.name ?? "No project";
-        weekByProject.set(projectLabel, (weekByProject.get(projectLabel) ?? 0) + hours);
-      }
-      if (workDay >= lastWeekStart && workDay < weekStart) lastWeekH += hours;
-      if (workDay >= monthStart && workDay <= today) {
-        monthH += hours;
-        monthByStatus[row.status] = (monthByStatus[row.status] ?? 0) + hours;
+        byProjectLabel.set(projectLabel, (byProjectLabel.get(projectLabel) ?? 0) + hours);
 
         const key = row.project?.id ?? row.project?.name ?? "unknown";
         const roll = projects.get(key) ?? {
@@ -225,29 +364,95 @@ export function Dashboard() {
         if (dateKey > roll.lastDate) roll.lastDate = dateKey;
         projects.set(key, roll);
       }
+      if (workDay >= prevStart && workDay < rangeStart) {
+        prevH += hours;
+        prevSeen += 1;
+      }
     }
 
     for (const list of entriesByDate.values()) list.sort((a, b) => toMinutes(a.startTime) - toMinutes(b.startTime));
 
-    const todayEntries = entriesByDate.get(todayKey) ?? [];
     return {
       todayKey,
-      todayHours: todayEntries.reduce((sum, e) => sum + Number(e.totalHours ?? 0), 0),
-      weekHours: weekH,
-      lastWeekHours: lastWeekH,
-      monthHours: monthH,
+      dayCount,
+      /** Weekdays in the range — what a 40h-per-week target scales against. A target pinned to 40
+       *  would call a single day a 5% week and a month a 400% one. */
+      workingDays: countWorkingDays(rangeStart, rangeEnd),
+      daysLogged: daysWithEntries.size,
+      rangeHours: rangeH,
+      /** Null, not zero, when none of the previous period was fetched: "no comparison available"
+       *  and "they logged nothing" are different statements and must not look alike. */
+      prevRangeHours: prevSeen > 0 ? prevH : null,
       pendingCount,
-      weekByStatus,
+      byStatus,
       // Biggest first, so the card can take the top few and total the rest.
-      weekProjects: [...weekByProject.entries()]
+      rangeProjects: [...byProjectLabel.entries()]
         .map(([label, hours]) => ({ label, hours }))
         .sort((a, b) => b.hours - a.hours),
-      monthByStatus,
       entriesByDate,
       projectRows: [...projects.values()].sort((a, b) => b.monthHours - a.monthHours),
-      trend: dayLabels.map((day) => ({ day, hours: Number((buckets.get(day) ?? 0).toFixed(2)) }))
+      trend: buckets.map((b) => ({ day: b.day, hours: Number(b.hours.toFixed(2)) }))
     };
-  }, [all]);
+  }, [allForCalendar, range.from, range.to]);
+
+  /**
+   * Hover counts for the header calendar: a dot on every day that has something on it, and a card
+   * grouping the THREE kinds of thing a day can carry — timesheet entries, tickets raised, and
+   * change requests raised. They were previously one undifferentiated list of numbers, so "3, 2, 1"
+   * read as one total split three ways rather than three separate tallies.
+   *
+   * The timesheet rows keep their existing per-status breakdown exactly as it was; the separators
+   * only add grouping to what is already there.
+   */
+  const dayAnnotations = useMemo<CalendarDayAnnotations>(() => {
+    const map: CalendarDayAnnotations = {};
+    const dayOf = (value: unknown) => (typeof value === "string" ? value.slice(0, 10) : null);
+
+    const ticketsByDay = new Map<string, number>();
+    for (const ticket of myTickets.data ?? []) {
+      const key = dayOf((ticket as { createdAt?: string }).createdAt);
+      if (key) ticketsByDay.set(key, (ticketsByDay.get(key) ?? 0) + 1);
+    }
+    const changesByDay = new Map<string, number>();
+    for (const change of changes.data ?? []) {
+      const key = dayOf((change as { createdAt?: string }).createdAt);
+      if (key) changesByDay.set(key, (changesByDay.get(key) ?? 0) + 1);
+    }
+
+    for (const key of new Set([...derived.entriesByDate.keys(), ...ticketsByDay.keys(), ...changesByDay.keys()])) {
+      const list = derived.entriesByDate.get(key) ?? [];
+      const tickets = ticketsByDay.get(key) ?? 0;
+      const changeCount = changesByDay.get(key) ?? 0;
+      if (list.length === 0 && tickets === 0 && changeCount === 0) continue;
+
+      const byStatus: Record<string, number> = {};
+      for (const entry of list) byStatus[entry.status] = (byStatus[entry.status] ?? 0) + 1;
+
+      const logRows = [
+        { label: "Log entries", count: list.length, dotClassName: "bg-primary" },
+        { label: "Approved", count: byStatus.APPROVED ?? 0, dotClassName: "bg-success" },
+        { label: "Submitted", count: byStatus.SUBMITTED ?? 0, dotClassName: "bg-warning" },
+        { label: "Draft", count: byStatus.DRAFT ?? 0, dotClassName: "bg-muted-foreground" },
+        { label: "Rejected", count: byStatus.REJECTED ?? 0, dotClassName: "bg-destructive" }
+      ].filter((row) => row.count > 0);
+
+      const otherRows = [
+        { label: "Ticket entries", count: tickets, dotClassName: "bg-info" },
+        { label: "Change entries", count: changeCount, dotClassName: "bg-[hsl(262_83%_58%)]" }
+      ].filter((row) => row.count > 0);
+
+      map[key] = {
+        title: `${list.length + tickets + changeCount} on this day`,
+        rows: [
+          ...logRows,
+          // The rule goes above the FIRST non-timesheet row, so the groups read apart whether or
+          // not the day happens to have both tickets and changes.
+          ...otherRows.map((row, index) => (index === 0 && logRows.length > 0 ? { ...row, separatorBefore: true } : row))
+        ]
+      };
+    }
+    return map;
+  }, [derived.entriesByDate, myTickets.data, changes.data]);
 
   const projectTrend = useMemo(() => {
     const rows = admin.data?.byProject ?? [];
@@ -297,7 +502,17 @@ export function Dashboard() {
             {todayLabel} — role-aware productivity, submissions, and operational signals.
           </p>
         </div>
-        <div className="flex gap-2">
+        <div className="flex flex-wrap items-center gap-2">
+          {/* Governs EVERY card below, which is why it sits in the page header rather than on one
+              of them. The same calendar the day timeline uses, so between-dates selection behaves
+              identically in both places. */}
+          <DateRangePicker
+            value={range}
+            onChange={setRange}
+            allowAllTime={false}
+            className="w-full sm:w-[15rem]"
+            dayAnnotations={dayAnnotations}
+          />
           {isAdmin && (
             <Button asChild variant="outline">
               <Link to="/app/approvals"><CheckCircle2 className="h-4 w-4" />Approvals</Link>
@@ -325,22 +540,32 @@ export function Dashboard() {
         <HeroCard delay={0}>
           <WeekAtAGlance
             loading={timesheets.isLoading}
-            weekHours={derived.weekHours}
-            byStatus={derived.weekByStatus}
-            projects={derived.weekProjects}
+            hours={derived.rangeHours}
+            byStatus={derived.byStatus}
+            projects={derived.rangeProjects}
             pendingCount={derived.pendingCount}
+            daysLogged={derived.daysLogged}
             trend={derived.trend}
+            periodLabel={periodLabel}
+            periodIn={periodIn}
           />
         </HeroCard>
         <HeroCard delay={0.05}>
-          <ActivityCard loading={timesheets.isLoading} trend={derived.trend} weekHours={derived.weekHours} lastWeekHours={derived.lastWeekHours} />
+          <ActivityCard
+            loading={timesheets.isLoading}
+            trend={derived.trend}
+            hours={derived.rangeHours}
+            prevHours={derived.prevRangeHours}
+            periodLabel={periodLabel}
+          />
         </HeroCard>
         <HeroCard delay={0.1} className="md:col-span-2 xl:col-span-1">
           <ProgressCard
             loading={timesheets.isLoading}
-            weekHours={derived.weekHours}
-            monthByStatus={derived.monthByStatus}
-            monthHours={derived.monthHours}
+            hours={derived.rangeHours}
+            byStatus={derived.byStatus}
+            workingDays={derived.workingDays}
+            periodLabel={periodIn}
             completion={myMonth.data?.completion}
             totals={myMonth.data?.totals}
           />
@@ -348,10 +573,10 @@ export function Dashboard() {
       </div>
 
       {/* ---- Day timeline — real entries on a real clock, any loaded date ---- */}
-      <DayTimeline entriesByDate={derived.entriesByDate} todayKey={derived.todayKey} loading={timesheets.isLoading} />
+      <DayTimeline entriesByDate={derived.entriesByDate} todayKey={derived.todayKey} focusKey={range.to} loading={timesheets.isLoading} />
 
       {/* Admin / manager: workforce daily logging snapshot */}
-      {isAdmin && <WorkforceSnapshot data={admin.data} loading={admin.isLoading} />}
+      {isAdmin && <WorkforceSnapshot data={admin.data} loading={admin.isLoading} periodLabel={periodLabel} periodIn={periodIn} comparisonLabel={comparisonLabel} />}
 
       {isAdmin && (
         <div className="grid grid-cols-2 gap-2.5 sm:gap-3 md:grid-cols-5">
@@ -362,7 +587,7 @@ export function Dashboard() {
               animate={{ opacity: 1, y: 0 }}
               transition={{ duration: 0.25, delay: index * 0.05 }}
             >
-              <StatCard label={stat.label} value={String(stat.value)} tone={stat.tone} trend={stat.trend} trendLabel="vs yesterday" />
+              <StatCard label={stat.label} value={String(stat.value)} tone={stat.tone} trend={stat.trend} trendLabel={comparisonLabel} />
             </motion.div>
           ))}
         </div>
@@ -379,9 +604,9 @@ export function Dashboard() {
         <Card>
           <CardHeader>
             <CardTitle className="flex items-center gap-2 text-base">
-              <TrendingUp className="h-4 w-4 text-primary" /> Weekly productivity
+              <TrendingUp className="h-4 w-4 text-primary" /> Productivity
             </CardTitle>
-            <CardDescription>Your logged hours, Mon–Sun.</CardDescription>
+            <CardDescription>Your logged hours, {periodLabel}.</CardDescription>
           </CardHeader>
           <CardContent>
             <div className="h-64">
@@ -409,7 +634,7 @@ export function Dashboard() {
             <CardTitle className="text-base">Project utilization</CardTitle>
             <CardDescription>
               {isAdmin
-                ? "Hours logged per project across the workspace, largest first."
+                ? `Hours logged per project across the workspace ${periodLabel}, largest first.`
                 : "Sign in as an admin for the full breakdown."}
             </CardDescription>
           </CardHeader>
@@ -423,7 +648,7 @@ export function Dashboard() {
       </div>
 
       {/* ---- Per-project rollup — the Trackline "Project List", from data already loaded ---- */}
-      <ProjectRollup rollup={myMonth.data} loading={myMonth.isLoading} />
+      <ProjectRollup rollup={myMonth.data} loading={myMonth.isLoading} periodLabel={periodLabel} />
     </div>
   );
 }
@@ -450,13 +675,13 @@ const WEEK_SEGMENTS = [
  * same rule the rhythm card's insight strip follows. Extracted from the component so the branching
  * lives in a plain function instead of a nested ternary inside JSX.
  */
-function weekNote(weekHours: number, pendingCount: number, byStatus: Record<string, number>): string {
-  if (weekHours === 0) return "No hours logged yet this week — your entries will show up here as you add them.";
+function weekNote(hours: number, pendingCount: number, byStatus: Record<string, number>, periodLabel: string): string {
+  if (hours === 0) return `No hours logged ${periodLabel} — your entries will show up here as you add them.`;
   if (pendingCount > 0) return `${pendingCount} ${pendingCount === 1 ? "entry is" : "entries are"} waiting on a reviewer.`;
-  if ((byStatus.DRAFT ?? 0) === weekHours) return "Everything so far is still a draft — submit it to start the review clock.";
-  const approvedShare = Math.round(((byStatus.APPROVED ?? 0) / weekHours) * 100);
-  if (approvedShare >= 100) return "Every hour this week is approved. Nothing outstanding.";
-  return `${approvedShare}% of this week's hours are approved.`;
+  if ((byStatus.DRAFT ?? 0) === hours) return "Everything so far is still a draft — submit it to start the review clock.";
+  const approvedShare = Math.round(((byStatus.APPROVED ?? 0) / hours) * 100);
+  if (approvedShare >= 100) return `Every hour ${periodLabel} is approved. Nothing outstanding.`;
+  return `${approvedShare}% of these hours are approved.`;
 }
 
 /** Trackline's "Overall Tasks" card, for hours: headline number + a segmented STATUS bar.
@@ -465,32 +690,40 @@ function weekNote(weekHours: number, pendingCount: number, byStatus: Record<stri
  *  kind of secondary encoding). */
 function WeekAtAGlance({
   loading,
-  weekHours,
+  hours,
   byStatus,
   pendingCount,
+  daysLogged,
   trend,
-  projects
+  projects,
+  periodLabel,
+  periodIn
 }: {
   loading: boolean;
-  weekHours: number;
+  hours: number;
   projects: Array<{ label: string; hours: number }>;
   byStatus: Record<string, number>;
   pendingCount: number;
-  /** The same per-weekday series the rhythm chart uses — read here for the insight rows so this
-   *  card fills its height with computed facts rather than empty space. Never a second query. */
+  /** Distinct days in the range that carry an entry — the denominator for the daily average.
+   *  Counted over the whole range rather than off `trend`, whose buckets group days once the range
+   *  is longer than a fortnight and would otherwise flatter the average. */
+  daysLogged: number;
+  /** The same series the rhythm chart uses — read here for the insight rows so this card fills its
+   *  height with computed facts rather than empty space. Never a second query. */
   trend: Array<{ day: string; hours: number }>;
+  periodLabel: string;
+  periodIn: string;
 }) {
   if (loading) return <Skeleton className="h-full min-h-56 w-full" />;
-  const total = weekHours || 1;
+  const total = hours || 1;
   const segments = WEEK_SEGMENTS.map((s) => ({ ...s, hours: byStatus[s.key] ?? 0 })).filter((s) => s.hours > 0);
 
   // ── Insights, all derived from data already on this card — nothing invented, nothing fetched.
   // This block exists because the card is the shortest of the three in its row and stretched to a
   // tall empty gap; filling it with real facts is better than padding it with whitespace.
-  const daysLogged = trend.filter((d) => d.hours > 0).length;
   const busiest = trend.reduce((best, d) => (d.hours > best.hours ? d : best), { day: "—", hours: 0 });
-  const dailyAvg = daysLogged > 0 ? weekHours / daysLogged : 0;
-  const note = weekNote(weekHours, pendingCount, byStatus);
+  const dailyAvg = daysLogged > 0 ? hours / daysLogged : 0;
+  const note = weekNote(hours, pendingCount, byStatus, periodIn);
 
   // Three rows keeps the card the same height as its neighbours without scrolling; anything
   // beyond that is summed into one honest "+Nh across M more" line rather than truncated silently.
@@ -506,13 +739,13 @@ function WeekAtAGlance({
       <CardHeader className="pb-3">
         <CardTitle className="flex items-center gap-2 text-base">
           <Clock className="h-4 w-4 text-primary" />
-          This week
+          <span className="first-letter:uppercase">{periodLabel}</span>
         </CardTitle>
-        <CardDescription>Your logged hours by state, Monday to today.</CardDescription>
+        <CardDescription>Your logged hours by state, {periodLabel}.</CardDescription>
       </CardHeader>
       <CardContent className="flex flex-col gap-4">
         <div className="flex items-baseline justify-between">
-          <p className="text-3xl font-black tabular-nums tracking-tight">{weekHours.toFixed(1)}h</p>
+          <p className="text-3xl font-black tabular-nums tracking-tight">{hours.toFixed(1)}h</p>
           {pendingCount > 0 && <Badge variant="warning">{pendingCount} awaiting review</Badge>}
         </div>
 
@@ -596,22 +829,28 @@ function WeekAtAGlance({
   );
 }
 
-/** Trackline's "Project Track": a compact single-series weekday chart + the week-over-week
- *  insight strip. Single series → the title names it, no legend. */
+/** Trackline's "Project Track": a compact single-series chart plus a period-over-period insight
+ *  strip. Single series → the title names it, no legend. */
 function ActivityCard({
   loading,
   trend,
-  weekHours,
-  lastWeekHours
+  hours,
+  prevHours,
+  periodLabel
 }: {
   loading: boolean;
   trend: Array<{ day: string; hours: number }>;
-  weekHours: number;
-  lastWeekHours: number;
+  hours: number;
+  /** Null when none of the previous period was loaded. Distinct from 0 on purpose: "nothing to
+   *  compare against" and "they logged nothing" must not render as the same claim. */
+  prevHours: number | null;
+  periodLabel: string;
 }) {
   if (loading) return <Skeleton className="h-full min-h-56 w-full" />;
-  const delta = computeTrend(weekHours, lastWeekHours, true);
-  const up = weekHours >= lastWeekHours;
+  const comparable = prevHours != null;
+  const previous = prevHours ?? 0;
+  const delta = comparable ? computeTrend(hours, previous, true) : null;
+  const up = hours >= previous;
 
   return (
     <Card className="flex h-full flex-col">
@@ -622,9 +861,9 @@ function ActivityCard({
               <TrendingUp className="h-4 w-4 text-primary" />
               Daily rhythm
             </CardTitle>
-            <CardDescription>Hours logged per weekday, this week.</CardDescription>
+            <CardDescription>Hours logged per day, {periodLabel}.</CardDescription>
           </div>
-          {delta && <TrendBadge trend={delta} label="vs last week" />}
+          {delta && <TrendBadge trend={delta} label="vs the previous period" />}
         </div>
       </CardHeader>
       <CardContent className="flex flex-1 flex-col gap-3">
@@ -644,7 +883,7 @@ function ActivityCard({
         </div>
 
         {/* The Trackline-style insight strip — computed, never invented. */}
-        {(weekHours > 0 || lastWeekHours > 0) && (
+        {comparable && (hours > 0 || previous > 0) && (
           <div
             className={`flex items-center justify-between gap-2 rounded-lg px-3 py-2 text-sm ${
               up ? "bg-success/10 text-success" : "bg-warning/10 text-warning"
@@ -652,10 +891,10 @@ function ActivityCard({
           >
             <span>
               {up
-                ? lastWeekHours === 0
-                  ? "First hours of a fresh week — nice start!"
-                  : `Up ${(weekHours - lastWeekHours).toFixed(1)}h on last week — great momentum!`
-                : `${(lastWeekHours - weekHours).toFixed(1)}h behind last week's pace so far.`}
+                ? previous === 0
+                  ? "First hours of a fresh period — nice start!"
+                  : `Up ${(hours - previous).toFixed(1)}h on the previous period — great momentum!`
+                : `${(previous - hours).toFixed(1)}h behind the previous period's pace so far.`}
             </span>
             <ArrowRight className="h-4 w-4 shrink-0" />
           </div>
@@ -669,24 +908,29 @@ function ActivityCard({
  *  toward a 40h logged week, and how much of this month's logged time has been approved. */
 function ProgressCard({
   loading,
-  weekHours,
-  monthByStatus,
-  monthHours,
+  hours,
+  byStatus,
+  workingDays,
+  periodLabel,
   completion,
   totals
 }: {
   loading: boolean;
-  weekHours: number;
-  monthByStatus: Record<string, number>;
-  monthHours: number;
+  hours: number;
+  byStatus: Record<string, number>;
+  /** Mon–Fri days in the selected range. The target scales against this rather than a fixed 40h —
+   *  a one-day range read as a 5% week and a month as 400%, so the bar stopped meaning anything the
+   *  moment the page could show something other than a week. */
+  workingDays: number;
+  periodLabel: string;
   /** The three completion shares, counted server-side. Undefined while the rollup is in flight. */
   completion?: MyMonthRollup["completion"];
   totals?: MyMonthRollup["totals"];
 }) {
   if (loading) return <Skeleton className="h-full min-h-56 w-full" />;
-  const weekTarget = 40;
-  const weekPct = Math.min(100, Math.round((weekHours / weekTarget) * 100));
-  const approvedHours = monthByStatus.APPROVED ?? 0;
+  const target = Math.max(8, workingDays * 8);
+  const targetPct = Math.min(100, Math.round((hours / target) * 100));
+  const approvedHours = byStatus.APPROVED ?? 0;
 
   return (
     <Card className="h-full">
@@ -695,10 +939,15 @@ function ProgressCard({
           <Gauge className="h-4 w-4 text-primary" />
           Progress
         </CardTitle>
-        <CardDescription>Week target, then how much of each kind of work is finished.</CardDescription>
+        <CardDescription>Hours target, then how much of each kind of work is finished.</CardDescription>
       </CardHeader>
       <CardContent className="grid gap-5">
-        <TickMeter label={`Week target (${weekTarget}h)`} percent={weekPct} detail={`${weekHours.toFixed(1)}h logged`} tone="primary" />
+        <TickMeter
+          label={`Target (${target}h · ${workingDays} working ${workingDays === 1 ? "day" : "days"})`}
+          percent={targetPct}
+          detail={`${hours.toFixed(1)}h logged ${periodLabel}`}
+          tone="primary"
+        />
 
         {/* THREE BARS, ONE DEFINITION. Each is "done ÷ total" for its own kind of work, so they can
             be read against each other — hours approved, tickets closed, changes closed. A single
@@ -706,7 +955,7 @@ function ProgressCard({
         <TickMeter
           label="Timesheets approved"
           percent={completion?.timesheetPct ?? null}
-          detail={`${approvedHours.toFixed(1)}h of ${monthHours.toFixed(1)}h this month`}
+          detail={`${approvedHours.toFixed(1)}h of ${hours.toFixed(1)}h ${periodLabel}`}
           tone="success"
         />
         <TickMeter
@@ -878,13 +1127,26 @@ function TimelineLane({
 function DayTimeline({
   entriesByDate,
   todayKey,
+  focusKey,
   loading
 }: {
   entriesByDate: Map<string, TimesheetRowLite[]>;
   todayKey: string;
+  /** The last day of the page's selected range. The timeline follows it: with the page showing
+   *  last month, opening on "today" would show an empty track for a day the request never even
+   *  asked about, which reads as "you logged nothing" rather than "you are looking elsewhere". */
+  focusKey: string;
   loading: boolean;
 }) {
-  const [selectedKey, setSelectedKey] = useState(todayKey);
+  const initialKey = focusKey && focusKey <= todayKey ? focusKey : todayKey;
+  const [selectedKey, setSelectedKey] = useState(initialKey);
+  // Re-anchor when the page's range moves. Keyed on the value rather than an effect so there is no
+  // frame where the track shows one period's day under another period's heading.
+  const [lastFocus, setLastFocus] = useState(initialKey);
+  if (lastFocus !== initialKey) {
+    setLastFocus(initialKey);
+    setSelectedKey(initialKey);
+  }
   const [expanded, setExpanded] = useState(false);
   const [laneSearch, setLaneSearch] = useState("");
   const [laneSort, setLaneSort] = useState<"name" | "hours">("name");
@@ -1229,7 +1491,7 @@ const ROLLUP_PAGE_SIZE = 10;
  * yet. "None of your tickets here are done" and "you have no tickets here" are different facts, and a
  * dashboard that renders both as 0% is the kind that gets quoted in a meeting.
  */
-function ProjectRollup({ rollup, loading }: { rollup: MyMonthRollup | undefined; loading: boolean }) {
+function ProjectRollup({ rollup, loading, periodLabel }: { rollup: MyMonthRollup | undefined; loading: boolean; periodLabel: string }) {
   const [page, setPage] = useState(1);
   const rows = rollup?.projects ?? [];
   const showChanges = Boolean(rollup?.totals.changes);
@@ -1244,13 +1506,13 @@ function ProjectRollup({ rollup, loading }: { rollup: MyMonthRollup | undefined;
       <CardHeader className="pb-3">
         <CardTitle className="flex items-center gap-2 text-base">
           <FolderKanban className="h-4 w-4 text-primary" />
-          My projects this month
+          My projects, <span className="lowercase">{periodLabel}</span>
         </CardTitle>
         <CardDescription>
-          Every project you are assigned to or have logged against this month — hours, approval progress, how each
+          Every project you are assigned to or have logged against {periodPhrase(periodLabel)} — hours, approval progress, how each
           project&apos;s tickets stand{showChanges ? ", and the changes raised against it" : ""}. Counted server-side over
-          the whole month, so a busy month cannot push a project off the list. Ticket
-          {showChanges ? " and change" : ""} counts are a snapshot of now, not of the month.
+          the whole period, so a busy one cannot push a project off the list. Ticket
+          {showChanges ? " and change" : ""} counts are a snapshot of now, not of the period.
         </CardDescription>
       </CardHeader>
       <CardContent>
@@ -1540,7 +1802,19 @@ function MyTicketsBanner({ tickets, loading }: { tickets?: TicketRow[]; loading:
   );
 }
 
-function WorkforceSnapshot({ data, loading }: { data?: any; loading: boolean }) {
+function WorkforceSnapshot({
+  data,
+  loading,
+  periodLabel,
+  periodIn,
+  comparisonLabel
+}: {
+  data?: any;
+  loading: boolean;
+  periodLabel: string;
+  periodIn: string;
+  comparisonLabel: string;
+}) {
   if (loading || !data) return null;
   const active = Number(data.activeWorkforce ?? 0);
   const logged = Number(data.loggedToday ?? 0);
@@ -1576,34 +1850,36 @@ function WorkforceSnapshot({ data, loading }: { data?: any; loading: boolean }) 
         <div className="min-w-0">
           <CardTitle className="flex items-center gap-2 text-base">
             <Users2 className="h-4 w-4 text-primary" />
-            Today across the workforce
+            <span className="first-letter:uppercase">{periodLabel}</span> across the workforce
           </CardTitle>
-          <CardDescription>{logged} of {active} active employees & team leads have logged something today.</CardDescription>
+          <CardDescription>
+            {logged} of {active} active employees &amp; team leads have logged something {periodIn}.
+          </CardDescription>
         </div>
         <Badge variant={percent >= 80 ? "success" : percent >= 50 ? "warning" : "destructive"}>{percent}%</Badge>
       </CardHeader>
       <CardContent className="grid gap-4">
         <Progress value={percent} className={percent < 50 ? "[&>div]:bg-destructive" : percent < 80 ? "[&>div]:bg-warning" : ""} />
         <div className="grid grid-cols-2 gap-2.5 text-sm sm:grid-cols-5">
-          <SnapshotStat label="Logged today" value={logged} trend={vsYesterday} trendLabel="vs yesterday" />
-          <SnapshotStat label="Not yet filled" value={notLogged} trend={notFilledTrend} trendLabel="vs yesterday" />
-          <SnapshotStat label="Reminders sent" value={reminders} trend={remindersTrend} trendLabel="vs yesterday" />
-          <SnapshotStat label="Escalations" value={escalations} trend={escalationsTrend} trendLabel="vs yesterday" />
-          <SnapshotStat label="vs YTD avg/day" value={`${ytdAvgLoggedPerDay.toFixed(1)}`} trend={vsYtdAvg} trendLabel="today vs avg" />
+          <SnapshotStat label="Logged" value={logged} trend={vsYesterday} trendLabel="vs the previous period" />
+          <SnapshotStat label="Not yet filled" value={notLogged} trend={notFilledTrend} trendLabel={comparisonLabel} />
+          <SnapshotStat label="Reminders sent" value={reminders} trend={remindersTrend} trendLabel={comparisonLabel} />
+          <SnapshotStat label="Escalations" value={escalations} trend={escalationsTrend} trendLabel={comparisonLabel} />
+          <SnapshotStat label="vs YTD avg/day" value={`${ytdAvgLoggedPerDay.toFixed(1)}`} trend={vsYtdAvg} trendLabel="vs avg" />
         </div>
 
-        {/* The other two kinds of work the workforce did today. Same day boundary and same
-            vs-yesterday comparison as the row above, so the three read as one picture rather than
-            three widgets that happen to share a card. */}
+        {/* The other two kinds of work the workforce did in this period. Same boundary and same
+            previous-period comparison as the row above, so the three read as one picture rather
+            than three widgets that happen to share a card. */}
         <div className="grid grid-cols-2 gap-2.5 text-sm sm:grid-cols-4">
-          <SnapshotStat label="Tickets raised" value={ticketsRaised} trend={ticketsRaisedTrend} trendLabel="vs yesterday" />
-          <SnapshotStat label="Tickets closed" value={ticketsClosed} trend={ticketsClosedTrend} trendLabel="vs yesterday" />
+          <SnapshotStat label="Tickets raised" value={ticketsRaised} trend={ticketsRaisedTrend} trendLabel={comparisonLabel} />
+          <SnapshotStat label="Tickets closed" value={ticketsClosed} trend={ticketsClosedTrend} trendLabel={comparisonLabel} />
           {/* Absent, not zeroed, when change management is off. */}
           {changesRaised !== null && (
-            <SnapshotStat label="Changes raised" value={changesRaised} trend={changesRaisedTrend} trendLabel="vs yesterday" />
+            <SnapshotStat label="Changes raised" value={changesRaised} trend={changesRaisedTrend} trendLabel={comparisonLabel} />
           )}
           {changesClosed !== null && (
-            <SnapshotStat label="Changes closed" value={changesClosed} trend={changesClosedTrend} trendLabel="vs yesterday" />
+            <SnapshotStat label="Changes closed" value={changesClosed} trend={changesClosedTrend} trendLabel={comparisonLabel} />
           )}
         </div>
       </CardContent>
