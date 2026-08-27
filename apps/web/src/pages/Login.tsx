@@ -269,10 +269,18 @@ export function Login() {
     // via `order` so that on a narrow screen — where it's hidden anyway — the form is what a
     // keyboard or screen-reader user reaches first, with no skip-link needed.
     <div className="grid min-h-screen lg:grid-cols-2">
-      <main className="relative flex items-center justify-center overflow-hidden px-4 py-10 sm:px-6 lg:order-2">
-        <div className="pointer-events-none absolute inset-0 -z-10 lg:hidden">
-          <div className="absolute -left-32 -top-32 h-96 w-96 rounded-full bg-primary/20 blur-3xl" />
-          <div className="absolute -right-24 bottom-0 h-[28rem] w-[28rem] rounded-full bg-accent/25 blur-3xl" />
+      {/* `bg-background` is OPAQUE here on purpose, and it is a fix rather than a default.
+          `index.css` paints an app-wide ambient on `body::before` — a primary glow top-left and an
+          ACCENT glow at 92% 10%. That amber lands precisely on this half of the screen, which was
+          invisible while both halves were light and became obvious the moment the brand panel went
+          dark: a warm cream corner butted against a cool near-black. Covering it here keeps the
+          global ambient exactly as it is for every other page. */}
+      <main className="relative flex items-center justify-center overflow-hidden bg-background px-4 py-10 sm:px-6 lg:order-2">
+        <div className="pointer-events-none absolute inset-0 -z-10">
+          {/* Below lg this half IS the page, so it keeps a visible pair of orbs. At lg and up only
+              the faint cool wash survives, echoing the panel rather than competing with it. */}
+          <div className="absolute -left-32 -top-32 h-96 w-96 rounded-full bg-primary/20 blur-3xl lg:opacity-40" />
+          <div className="absolute -right-24 bottom-0 h-[28rem] w-[28rem] rounded-full bg-info/20 blur-3xl lg:opacity-40" />
         </div>
 
         <div className="w-full max-w-md motion-safe:animate-in motion-safe:fade-in motion-safe:slide-in-from-bottom-3 motion-safe:duration-500">
