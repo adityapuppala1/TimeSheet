@@ -34,7 +34,11 @@ const PROJECTS = [
 
 async function openDashboardWithProjects(page: Page, width: number, height = 1400) {
   await signIn(page, "superadmin");
-  await page.route("**/api/reports/admin-summary", async (route) => {
+  // The trailing `*` is load-bearing: as of 3.5.0 the home page sends `?from=&to=` on this
+  // request, and a glob without it stops matching the moment a query string appears — the
+  // interception silently does nothing and the chart renders the real workspace instead of
+  // these eight projects. `my-month` in dashboard-project-tickets.spec.ts already had it.
+  await page.route("**/api/reports/admin-summary*", async (route) => {
     const response = await route.fetch();
     const body = await response.json();
     body.byProject = PROJECTS.map(([project, projectCode, hours]) => ({
