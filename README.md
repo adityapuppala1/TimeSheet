@@ -136,14 +136,14 @@ CAB tool holds none of that.
 
 ## By the numbers
 
-Counted from the tree at v3.5.0, not estimated — regenerate any of these with the one-liners in
+Counted from the tree at v3.5.1, not estimated — regenerate any of these with the one-liners in
 [CONTRIBUTING.md](CONTRIBUTING.md#regenerating-readmes-by-the-numbers) rather than trusting a figure
 that looks stale.
 
 | | |
 |---|---|
 | REST routes | **433** across 52 controllers |
-| Prisma models / enums | **126** / 43, plus **107** tenant migrations and 7 control-plane migrations |
+| Prisma models / enums | **126** / 43, plus **107** tenant migrations and 8 control-plane migrations |
 | Services / cron workers | **108** / 24 |
 | Web pages | **67** |
 | Unit tests | **1,704** across 146 files (`npm test -w apps/api`) |

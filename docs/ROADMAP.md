@@ -4769,6 +4769,56 @@ the answer at the time was 31/17/13. All three were corrected before being super
   seed step would light all fourteen up — deliberately not done in the same change as the fix, since
   it will surface failures that deserve their own pass.
 
+## v3.5.1 — the plan tiers can actually be edited, and the landing page comes alive (2026-08-27)
+
+### The entitlement that a fresh install got wrong, and why nobody had seen it
+
+Goals and change management were both absent from the control-plane seed's `create` block. Their
+`*_entitlements` migrations carry a guarded `UPDATE`, which is correct for an **upgrade** and
+useless for a **fresh install**: migrations run before the seed, so on a new database they match
+zero rows and the seed's `create` is what the `PlanTierLimit` row ends up being. A brand-new Team
+or Enterprise customer opened Goals and was told it was not in their plan.
+
+The shape of the bug is worth keeping, because it will recur: a feature lands, its migration is
+written for the installs that already exist, and the path that has no rows yet is the one nobody
+tests. Every entitlement now goes in both places, and this was reproduced before it was fixed —
+the TEAM row was deleted and the seed re-run, producing the wrong row exactly.
+
+### A control surface that lagged its own schema
+
+The Plan tiers page edited five capabilities of ten and five quotas of seven. The others existed in
+the model and were enforced at runtime with no way to change them, so a platform admin could watch
+an entitlement take effect and not touch it. Both the form and the request schema are generated
+from one list per kind now, which converts "remember to add a checkbox" into "it is already there".
+
+The weekly practice update became the tenth capability. It is gated for what it **aggregates** —
+one document holding every project, everyone's hours and every open security finding, mailed to
+addresses with no account here — not for what it costs to run. That distinction matters when
+someone asks why a free tier cannot have it.
+
+### three.js was asked for, and `ogl` was used
+
+The request for the landing page named three.js. It was not used, and the substitution is recorded
+here rather than only in a code comment because it is the second time this decision has been made:
+`docs/MARKETING_PAGES.md` already rejected three.js for the login panel at ~600KB for what is
+decoratively a moving gradient. The hero's aurora is a sub-2KB fragment shader on `ogl`, already a
+dependency, and it does the two things a CSS gradient cannot — domain-warped noise that folds, and
+a field that leans toward the pointer.
+
+### A decoration that found a real bug
+
+Mounting the aurora in the hero's existing `-z-10` layer showed nothing. Neither did the two
+blurred orbs that had shipped in that layer for months: a negative `z-index` paints inside its
+nearest ancestor **stacking context**, the section was not one, so the browser resolved it against
+`<html>` and painted the page wrapper's background over the lot. Nothing about it looked broken —
+the hero simply had a flat background and always had.
+
+Two smaller things fell out of the same pass. The amber orb, visible for the first time, turned out
+to be khaki over a near-white page and was retired. And the screenshot anonymiser was found to miss
+`<textarea>` values entirely — a `TreeWalker` sees only the default text, so anything React set as
+a property was invisible to it, and the first capture of the practice update anonymised a real
+company name in a table and published it verbatim in the paragraph below.
+
 ## v3.5.0 — the week your leadership can read, and one calendar that means it (2026-08-27)
 
 ### The Weekly AI/ML Practice Update

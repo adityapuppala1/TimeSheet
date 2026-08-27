@@ -12,6 +12,79 @@ number, on purpose — an installation must never render history for a version t
 
 _Nothing yet._
 
+## 3.5.1 — the plan tiers can actually be edited, and the landing page comes alive — 2026-08-27
+
+### 🐛 A fresh install told new Team and Enterprise customers they had no goals and no change management
+
+- **Only on a brand-new install**, and it had been shipping since each of those features landed.
+  The guarded `UPDATE`s in the `*_entitlements` migrations run *before* the control-plane seed, so
+  on a fresh database they match zero rows and the seed's `create` is what the `PlanTierLimit` row
+  ends up being — and `goalsEnabled` / `changeManagementEnabled` were never added to that `create`.
+  A new customer on Team or Enterprise opened Goals or Change Management and was told the module
+  was not in their plan. An existing install upgrading through the migrations was never affected,
+  which is why this went unseen.
+- Reproduced before it was fixed, not deduced: deleting the TEAM row and re-running the seed
+  produced the wrong row exactly, and the same steps after the fix produced the right one.
+
+### 🎛 Every plan-tier entitlement is editable from the platform admin
+
+- **The Plan tiers page was editing five capabilities out of ten and five quotas out of seven.**
+  The rest existed in the schema, were enforced at runtime, and had no control — so a platform
+  admin could see the effect of an entitlement they could not change. Both the form and the
+  server-side schema are now generated from one list per kind, so a capability added to the
+  control-plane model is editable the moment it exists rather than the next time someone remembers
+  this page.
+- **The weekly practice update is now a plan capability** — `practiceUpdateEnabled`, off on
+  Starter, on from Team up. It is gated for what one document *aggregates*: every project,
+  everyone's hours and every open security finding, mailed to addresses that need no account here.
+  The figures stay visible on the pages they come from; what a downgrade removes is the packaged,
+  mailable roll-up. It fails closed like every other capability.
+
+### 📊 Platform analytics shows outbound mail health and practice-update adoption
+
+- Two columns per organization: **mail sent / failed this month**, with the failure count picked out
+  only when it is non-zero, and **practice updates sent this month**. Deliverability was previously
+  invisible from the control plane — an organization whose SMTP credentials had expired looked
+  identical to one that simply sends no mail.
+- Counts only, like every other column here. No subject, no recipient, no body ever leaves the
+  tenant database.
+
+### ✉️ The SMTP smoke test works again, and stops miscounting templates
+
+- `npm run send-test` **could not complete at all**: `sendMail` writes an `EmailLog` row through the
+  tenant-scoped Prisma proxy, and the script established no tenant context, so every run threw "No
+  tenant context is active". It now runs inside `runForEveryOrg`, which also means a multi-org
+  install smoke-tests each workspace's own mail settings rather than only the first.
+- Its `--all` flag sent **8 of 35 templates** while reporting it had sent every one: the samples
+  were a hand-written map with a `satisfies` assertion that nothing typechecked. Samples are now
+  read from the same registry the in-app Email templates editor uses, so a template added there is
+  in `--all` immediately, with no second list to remember.
+- `--list` prints every key, and a partial name resolves if it is unambiguous. The docs' template
+  count now comes from asking the script rather than from a regex over the source — the previous
+  regex matched only the quoted keys and undercounted for exactly the reason the comment beside
+  them warned about.
+
+### 🎨 The landing page and pitch deck show the new work, and feel like it
+
+- **A living hero.** A WebGL aurora drifts behind the headline and leans toward the pointer, in the
+  brand's two stops, reading its colours from the live theme tokens so it follows dark mode. It
+  does not mount at all under reduced motion, stops rendering when scrolled past, and the page is
+  fully readable if it never mounts.
+- **A trust strip of the 18 systems that actually connect**, and a band of four figures that count
+  up on first sight — three of them derived from the arrays the page already renders, so they
+  cannot drift into a lie. Neither device carries the customer logos or traction numbers it usually
+  would, because there are none to cite.
+- **Tour tabs and pitch-deck surfaces** for the weekly practice update, Requirements Studio and
+  change management, with new generated screenshots.
+- **The hero's two blurred orbs had never once been visible.** A negative `z-index` paints inside
+  its nearest ancestor stacking context, and the section was not one, so the page wrapper's own
+  background covered the whole layer. Fixed, and the amber orb retired with it — the accent at 20%
+  over a near-white page is khaki.
+- **The screenshot anonymiser now covers form values.** A `TreeWalker` sees only a textarea's
+  default text, so everything React set as a property was invisible to it: the first capture of the
+  practice update anonymised a real company name in a table and published it verbatim in the
+  AI-drafted paragraph directly below.
+
 ## 3.5.0 — the week your leadership can read, and one calendar that means it — 2026-08-27
 
 ### ✨ A Weekly AI/ML Practice Update for leadership
