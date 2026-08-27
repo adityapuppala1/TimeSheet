@@ -35,7 +35,6 @@ import {
   ArrowRight,
   Eye,
   EyeOff,
-  KeyRound,
   Lock,
   Mail,
   Network,
@@ -43,7 +42,7 @@ import {
   ShieldCheck,
   Sparkles
 } from "lucide-react";
-import { useState, type KeyboardEvent } from "react";
+import { useEffect, useState, type KeyboardEvent } from "react";
 import { useForm } from "react-hook-form";
 import { Link, useNavigate, useSearchParams } from "react-router";
 import { z } from "zod";
@@ -59,13 +58,15 @@ import { apiUrl, authApi, brandingApi, brandingLogoUrl, isMaintenanceLockoutErro
 import { useAuthStore } from "../store/auth";
 import { safeReturnTo } from "../utils/return-to";
 import { AuthBrandPanel } from "../components/marketing/AuthBrandPanel";
+import { BiometricSeal, type SealState } from "../components/auth/BiometricSeal";
+import { GoogleMark, LdapMark, MicrosoftMark, SamlMark } from "../components/ui/provider-marks";
 
 // LDAP has no entry here — it's a direct bind, not a redirect, so it gets its own inline form
 // (see LdapLoginForm below) instead of a "Continue with…" button.
 const SSO_PROVIDER_META = {
-  GOOGLE: { label: "Continue with Google", path: "google" },
-  MICROSOFT: { label: "Continue with Microsoft", path: "microsoft" },
-  SAML: { label: "Continue with single sign-on", path: "saml" }
+  GOOGLE: { label: "Continue with Google", path: "google", Mark: GoogleMark },
+  MICROSOFT: { label: "Continue with Microsoft", path: "microsoft", Mark: MicrosoftMark },
+  SAML: { label: "Continue with single sign-on", path: "saml", Mark: SamlMark }
 } as const;
 
 const schema = z.object({
@@ -115,7 +116,7 @@ function messageFor(error: any): string {
  *  /auth/login/ldap (a direct bind, see auth.controller.ts) instead of /auth/login. Kept
  *  separate rather than reusing the password form's react-hook-form instance since the two
  *  can be shown side by side (a workspace may allow both password and LDAP sign-in). */
-function LdapLoginForm({ onSuccess }: { onSuccess: (data: LoginResponse) => void }) {
+function LdapLoginForm({ onSuccess, onStatus }: { onSuccess: (data: LoginResponse) => void; onStatus?: (state: SealState) => void }) {
   const [showPassword, setShowPassword] = useState(false);
   const [capsLock, setCapsLock] = useState(false);
   const [failure, setFailure] = useState<string | undefined>(undefined);
@@ -131,6 +132,16 @@ function LdapLoginForm({ onSuccess }: { onSuccess: (data: LoginResponse) => void
       toast.error("Sign-in failed", { description: message });
     }
   });
+
+  /* Reported from an effect rather than from the mutation callbacks: `isPending` flips on the
+     render that starts the request, and a parent setState called during this component's render
+     would be a React warning at best and a loop at worst. */
+  useEffect(() => {
+    if (!onStatus) return;
+    if (mutation.isPending) onStatus("scanning");
+    else if (mutation.isSuccess) onStatus("success");
+    else onStatus(failure ? "error" : "idle");
+  }, [mutation.isPending, mutation.isSuccess, failure, onStatus]);
 
   return (
     <Form {...form}>
@@ -242,6 +253,18 @@ export function Login() {
   const ssoProviders = allProviders.filter((p): p is "GOOGLE" | "MICROSOFT" | "SAML" => p !== "LDAP");
   const ldapEnabled = allProviders.includes("LDAP");
 
+  /* A workspace can enable BOTH password and LDAP sign-in, and until now both forms rendered one
+     under the other — two "email" fields and two "password" fields on one page. That is ambiguous
+     to anyone reading the page and genuinely ambiguous to a screen reader (the LDAP labels were
+     already prefixed "Directory" to work around it), and it is the kind of thing that makes a
+     sign-in page feel unfinished. A picker shows one at a time. Neither FORM changed — only which
+     of them is on screen — and when just one method is enabled there is no picker at all. */
+  const bothLocalMethods = passwordEnabled && ldapEnabled;
+  const [localMethod, setLocalMethod] = useState<"password" | "ldap">("password");
+  const showPasswordForm = passwordEnabled && (!bothLocalMethods || localMethod === "password");
+  const showLdapForm = ldapEnabled && (!bothLocalMethods || localMethod === "ldap");
+  const [ldapStatus, setLdapStatus] = useState<SealState>("idle");
+
   const handleLoginSuccess = (data: LoginResponse) => {
     setSession(data.user, data.accessToken);
     toast.success(`Welcome back, ${data.user.name?.split(" ")[0] ?? "there"}!`, {
@@ -263,6 +286,14 @@ export function Login() {
       toast.error("Sign-in failed", { description: message });
     }
   });
+
+  /* The seal shows whichever local form is actually in play; the password mutation wins because
+     the LDAP form is unmounted whenever the password one is showing, so the two can never be
+     mid-flight at the same time. */
+  let sealState: SealState = ldapStatus;
+  if (mutation.isPending) sealState = "scanning";
+  else if (mutation.isSuccess) sealState = "success";
+  else if (failure) sealState = "error";
 
   return (
     // Two panels at lg and up, one below it. The brand side is second in the DOM but painted first
@@ -307,27 +338,44 @@ export function Login() {
                   className="mb-6 hidden h-11 max-w-[13rem] object-contain object-left lg:block"
                 />
               )}
-              <h1 className="text-2xl font-black tracking-tight">Welcome back</h1>
-              <p className="mt-2 text-sm text-muted-foreground">
-                Sign in to log time, approve work, and review utilization.
-              </p>
+              {/* The seal is a STATUS light for the attempt in progress, not a biometric button —
+                  see BiometricSeal.tsx. It sits beside the heading rather than above the form so
+                  it never occupies a row of its own on a phone. */}
+              <div className="flex items-center gap-4">
+                <div className="min-w-0 flex-1">
+                  <h1 className="text-2xl font-black tracking-tight">Welcome back</h1>
+                  <p className="mt-2 text-sm text-muted-foreground">
+                    Sign in to log time, approve work, and review utilization.
+                  </p>
+                </div>
+                <BiometricSeal state={sealState} />
+              </div>
 
               {ssoMethods.isLoading && <Skeleton className="mt-7 h-10 w-full" />}
 
               {ssoProviders.length > 0 && (
                 <div className="mt-7 grid gap-2.5">
-                  {ssoProviders.map((provider) => (
-                    <Button key={provider} asChild variant="outline" size="lg">
-                      <a href={apiUrl(`/auth/sso/${SSO_PROVIDER_META[provider].path}/start`)}>
-                        <KeyRound className="h-4 w-4" aria-hidden />
-                        {SSO_PROVIDER_META[provider].label}
-                      </a>
-                    </Button>
-                  ))}
+                  {ssoProviders.map((provider) => {
+                    const meta = SSO_PROVIDER_META[provider];
+                    return (
+                      /* `justify-start` with a fixed-width mark slot, not the Button's default
+                         centring: centred content puts each provider's logo at a different x, so a
+                         stack of two or three buttons reads as a ragged column. Left-aligned, the
+                         marks form a rail and the labels all start together at every width. */
+                      <Button key={provider} asChild variant="outline" size="lg" className="justify-start gap-3">
+                        <a href={apiUrl(`/auth/sso/${meta.path}/start`)}>
+                          <span className="grid w-5 shrink-0 place-items-center">
+                            <meta.Mark className="h-[18px] w-[18px]" />
+                          </span>
+                          <span className="truncate">{meta.label}</span>
+                        </a>
+                      </Button>
+                    );
+                  })}
                 </div>
               )}
 
-              {ssoProviders.length > 0 && passwordEnabled && (
+              {ssoProviders.length > 0 && (passwordEnabled || ldapEnabled) && (
                 <div className="my-5 flex items-center gap-3 text-xs uppercase tracking-wide text-muted-foreground">
                   <span className="h-px flex-1 bg-border" />
                   or
@@ -335,10 +383,49 @@ export function Login() {
                 </div>
               )}
 
-              {passwordEnabled && (
+              {bothLocalMethods && (
+                <div
+                  role="tablist"
+                  aria-label="Sign-in method"
+                  className={`grid grid-cols-2 gap-1 rounded-lg bg-muted p-1 ${ssoProviders.length > 0 ? "" : "mt-7"}`}
+                >
+                  {(
+                    [
+                      { id: "password", label: "Password", Mark: Lock },
+                      { id: "ldap", label: "Directory", Mark: LdapMark }
+                    ] as const
+                  ).map((option) => (
+                    <button
+                      key={option.id}
+                      type="button"
+                      role="tab"
+                      aria-selected={localMethod === option.id}
+                      /* Clearing BOTH failure states matters: the seal and the inline error belong
+                         to whichever form is on screen, and a person who switches methods after a
+                         rejected password would otherwise land on the directory form already
+                         showing a red fingerprint for an attempt they have not made here. */
+                      onClick={() => {
+                        setLocalMethod(option.id);
+                        setLdapStatus("idle");
+                        setFailure(undefined);
+                      }}
+                      className={`focus-ring inline-flex items-center justify-center gap-2 rounded-md px-3 py-2 text-sm font-semibold transition-all duration-200 ${
+                        localMethod === option.id
+                          ? "bg-card text-foreground shadow-sm"
+                          : "text-muted-foreground hover:text-foreground"
+                      }`}
+                    >
+                      <option.Mark className="h-4 w-4 shrink-0" aria-hidden />
+                      {option.label}
+                    </button>
+                  ))}
+                </div>
+              )}
+
+              {showPasswordForm && (
                 <Form {...form}>
                   <form
-                    className={ssoProviders.length > 0 ? "grid gap-4" : "mt-7 grid gap-4"}
+                    className={ssoProviders.length > 0 || bothLocalMethods ? "mt-4 grid gap-4" : "mt-7 grid gap-4"}
                     onSubmit={form.handleSubmit((values) => {
                       setFailure(undefined);
                       mutation.mutate(values);
@@ -445,15 +532,19 @@ export function Login() {
                 </Form>
               )}
 
-              {ldapEnabled && (
-                <div className={passwordEnabled || ssoProviders.length > 0 ? "mt-6 border-t border-border pt-6" : "mt-7"}>
-                  {(passwordEnabled || ssoProviders.length > 0) && (
+              {showLdapForm && (
+                /* Three layouts, because this block sits in three different places. Under the
+                   picker it needs no heading of its own — the picker already named it. Under the
+                   SSO buttons with no password form it needs the heading and a rule. Alone on the
+                   page it needs neither. */
+                <div className={bothLocalMethods ? "mt-4" : ssoProviders.length > 0 ? "mt-6 border-t border-border pt-6" : "mt-7"}>
+                  {!bothLocalMethods && ssoProviders.length > 0 && (
                     <p className="mb-3 flex items-center gap-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
                       <Network className="h-3.5 w-3.5 shrink-0" aria-hidden />
                       Directory (LDAP) sign-in
                     </p>
                   )}
-                  <LdapLoginForm onSuccess={handleLoginSuccess} />
+                  <LdapLoginForm onSuccess={handleLoginSuccess} onStatus={setLdapStatus} />
                 </div>
               )}
 

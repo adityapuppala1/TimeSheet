@@ -696,3 +696,58 @@
 .spotlight-card:focus-within::before {
   opacity: 1;
 }
+
+/* ── The sign-in seal ───────────────────────────────────────────────────────────────────────────
+   The fingerprint on the login page is a STATUS INDICATOR, not a biometric login button. There is
+   no WebAuthn in this product, so anything that looked tappable would be a promise the app cannot
+   keep — it is `role="img"`, never focusable, and it reports the state of the sign-in attempt the
+   person has already started.
+
+   Three motions, each tied to one state. The sweep runs only while credentials are in flight, so a
+   moving scanner always means "something is happening" rather than being ambient decoration. */
+@keyframes seal-sweep {
+  0% { transform: translateY(-120%); }
+  100% { transform: translateY(220%); }
+}
+
+@keyframes seal-ring {
+  to { transform: rotate(360deg); }
+}
+
+/* A short, decaying shake. Long enough to notice, short enough not to delay a retry — the field is
+   already focusable again while this finishes. */
+@keyframes seal-shake {
+  0%, 100% { transform: translateX(0); }
+  15% { transform: translateX(-5px); }
+  30% { transform: translateX(4px); }
+  45% { transform: translateX(-3px); }
+  60% { transform: translateX(2px); }
+  75% { transform: translateX(-1px); }
+}
+
+.seal-sweep {
+  animation: seal-sweep 1.15s cubic-bezier(0.4, 0, 0.2, 1) infinite;
+}
+
+.seal-ring {
+  animation: seal-ring 2.4s linear infinite;
+}
+
+.seal-shake {
+  animation: seal-shake 0.45s ease-in-out 1;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  /* The states still have to be DISTINGUISHABLE without motion — colour and the badge carry them,
+     so the animations simply stop rather than being replaced with something else. */
+  .seal-sweep,
+  .seal-ring,
+  .seal-shake {
+    animation: none;
+  }
+  /* Without its sweep the scanning state would be a still frame with the bar parked off-screen;
+     centring it reads as "held", which is the truth. */
+  .seal-sweep {
+    transform: translateY(50%);
+  }
+}
