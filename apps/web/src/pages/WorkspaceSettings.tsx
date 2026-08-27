@@ -41,15 +41,12 @@ import {
   BellRing,
   CalendarClock,
   ChevronRight,
-  AlertTriangle,
   Check,
-  Circle,
   Clock,
   FileStack,
   Hourglass,
   Inbox,
   Loader2,
-  LogIn,
   Mail,
   MailCheck,
   Pencil,
@@ -86,10 +83,8 @@ import { Separator } from "../components/ui/separator";
 import { Skeleton } from "../components/ui/skeleton";
 import { Switch } from "../components/ui/switch";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "../components/ui/tabs";
-import { Textarea } from "../components/ui/textarea";
 import { toast } from "../components/ui/toaster";
 import {
-  apiUrl,
   emailIntakeApi,
   labelApi,
   projectApi,
@@ -97,8 +92,6 @@ import {
   ticketTypeApi,
   userApi,
   type AIUsageRow,
-  type SsoProviderConfig,
-  type SsoTestResult,
   type TicketRuleInput
 } from "../services/api";
 import { useAuthStore } from "../store/auth";
@@ -108,6 +101,7 @@ import { PublicApiSettingsCard } from "./settings/PublicApiSettingsCard";
 import { McpServerSettingsCard } from "./settings/McpServerSettingsCard";
 import { BillingSettingsCard } from "./settings/BillingSettingsCard";
 import { IntegrationsSettingsCard } from "./settings/IntegrationsSettingsCard";
+import { SsoSettingsCard } from "./settings/SsoSettingsCard";
 import { AIDatasetsCard } from "./settings/AIDatasetsCard";
 import { AIEvalsCard } from "./settings/AIEvalsCard";
 import { AIPromptsCard } from "./settings/AIPromptsCard";
@@ -309,6 +303,10 @@ export function WorkspaceSettingsPage() {
   // that if the route gate is ever loosened, every control stays disabled rather than silently
   // becoming editable. See this file's header comment.
   const isSuperAdmin = user?.role === "SUPER_ADMIN";
+  /* Controlled rather than `defaultValue` so one panel can send an admin to another — the
+     Integrations tab points at Single sign-on now that SCIM lives there, and a pointer nobody can
+     follow is just an apology. */
+  const [tab, setTab] = useState("reminders");
 
   return (
     <div className="grid min-w-0 gap-5">
@@ -337,7 +335,7 @@ export function WorkspaceSettingsPage() {
           390px phone while the page-level overflow test stayed green. An explicit `minmax(0,1fr)`
           track lets the column shrink below min-content, making each panel responsible for its
           own overflow instead of exporting it to the page. */}
-      <Tabs defaultValue="reminders" className="grid min-w-0 grid-cols-[minmax(0,1fr)] gap-4">
+      <Tabs value={tab} onValueChange={setTab} className="grid min-w-0 grid-cols-[minmax(0,1fr)] gap-4">
         <TabsList data-tour="settings-tabs" className="w-full justify-start sm:w-auto">
           {/* First: it is the one tab about what the product LOOKS like rather than what it does,
               and it is the first thing a new workspace personalises. */}
@@ -420,7 +418,7 @@ export function WorkspaceSettingsPage() {
         </TabsContent>
 
         <TabsContent value="integrations">
-          <IntegrationsSettingsCard readOnly={!isSuperAdmin} />
+          <IntegrationsSettingsCard readOnly={!isSuperAdmin} onGoToSso={() => setTab("sso")} />
         </TabsContent>
 
         <TabsContent value="billing">
@@ -2465,118 +2463,6 @@ function EmailIntakeSettingsCard({ readOnly }: { readOnly: boolean }) {
 }
 
 /**
- * The verification strip every SSO provider card carries.
- *
- * IT SHOWS TWO DIFFERENT THINGS AND KEEPS THEM APART, which is the entire point.
- *
- *  - "Signed in" is the EVIDENCE: a real person completed a real sign-in through this provider.
- *    It is what unlocks Require SSO, and nothing else does.
- *  - "Connection test" is a DIAGNOSTIC: it tells an admin why a sign-in is failing. A green test
- *    is genuinely conclusive for Google, LDAP and a SAML certificate, and genuinely cannot be for
- *    Microsoft — Azure answers a credential probe before it looks at the credentials. Showing them
- *    as one status would put that Microsoft caveat behind a green tick.
- *
- * Presenting them as one row of two facts is deliberate: an admin looking at a card should be able
- * to see at a glance which of "it is configured", "it answers", and "somebody has actually got in"
- * are true, because those are three different problems with three different fixes.
- */
-function SsoVerification({
-  provider,
-  config,
-  readOnly
-}: {
-  provider: "google" | "microsoft" | "saml" | "ldap";
-  config: SsoProviderConfig | undefined;
-  readOnly: boolean;
-}) {
-  const queryClient = useQueryClient();
-  const [probeEmail, setProbeEmail] = useState("");
-  const [result, setResult] = useState<SsoTestResult | null>(null);
-
-  const test = useMutation({
-    mutationFn: () => settingsApi.testSso(provider, provider === "ldap" && probeEmail ? { probeEmail } : {}),
-    onSuccess: (data) => {
-      setResult(data);
-      queryClient.invalidateQueries({ queryKey: ["settings", "sso"] });
-    },
-    onError: (err: any) => {
-      // A 422 here is "there is nothing saved to test yet", which is guidance rather than a fault.
-      setResult({ ok: false, message: err?.response?.data?.message ?? "The test couldn't run.", testedAt: new Date().toISOString() });
-    }
-  });
-
-  const shown = result ?? (config?.lastTestStatus ? { ok: config.lastTestStatus === "PASS", message: config.lastTestMessage ?? "", testedAt: config.lastTestedAt ?? "" } : null);
-  const signedIn = config?.lastSuccessfulLoginAt ?? null;
-  const cert = config?.certificate ?? null;
-
-  return (
-    <div className="grid gap-3 rounded-lg border border-border p-4">
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <div className="grid gap-1.5">
-          <Label>Is this actually working?</Label>
-          <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs">
-            <span className={`inline-flex items-center gap-1.5 font-medium ${signedIn ? "text-success" : "text-muted-foreground"}`}>
-              {signedIn ? <Check className="h-3.5 w-3.5" /> : <Circle className="h-3 w-3" />}
-              {signedIn ? `Someone signed in ${new Date(signedIn).toLocaleDateString()}` : "Nobody has signed in with this yet"}
-            </span>
-            {shown && (
-              <span className={`inline-flex items-center gap-1.5 ${shown.ok ? "text-muted-foreground" : "text-destructive"}`}>
-                {shown.ok ? <Check className="h-3.5 w-3.5" /> : <AlertTriangle className="h-3.5 w-3.5" />}
-                Last test {shown.ok ? "passed" : "failed"}
-                {shown.testedAt ? ` · ${new Date(shown.testedAt).toLocaleDateString()}` : ""}
-              </span>
-            )}
-          </div>
-        </div>
-        <Button variant="outline" size="sm" disabled={readOnly || test.isPending} onClick={() => test.mutate()}>
-          {test.isPending ? "Testing…" : "Test connection"}
-        </Button>
-      </div>
-
-      {provider === "ldap" && (
-        <div className="grid gap-1.5">
-          <Label htmlFor={`probe-${provider}`} className="text-xs font-normal text-muted-foreground">
-            Optional — an address to run your user filter against, so the test checks the filter and not just the bind
-          </Label>
-          <Input
-            id={`probe-${provider}`}
-            value={probeEmail}
-            onChange={(e) => setProbeEmail(e.target.value)}
-            placeholder="someone@yourcompany.com"
-            disabled={readOnly}
-          />
-        </div>
-      )}
-
-      {shown?.message && (
-        <p className={`text-xs leading-5 ${shown.ok ? "text-muted-foreground" : "text-destructive"}`}>{shown.message}</p>
-      )}
-
-      {cert && (
-        <div className="grid gap-0.5 rounded-md bg-muted/50 p-2.5 text-xs text-muted-foreground">
-          <span className="font-medium text-foreground">Signing certificate</span>
-          <span className="break-all">{cert.subject}</span>
-          {/* An expiry an admin cannot see is an outage with a date on it — which is why this is
-              rendered even when everything is fine, and coloured only when it is not. */}
-          <span className={cert.expired ? "font-semibold text-destructive" : cert.expiringSoon ? "font-semibold text-warning" : ""}>
-            {cert.expired ? "Expired" : "Valid until"} {new Date(cert.validTo).toLocaleDateString()}
-            {cert.expiringSoon && !cert.expired ? " — renew this soon" : ""}
-          </span>
-        </div>
-      )}
-
-      {!signedIn && config?.isEnabled && (
-        <p className="text-xs leading-5 text-muted-foreground">
-          Requiring SSO stays locked until someone signs in this way. Open this workspace in a private window, use the
-          sign-in button, and come back — that is the only check that proves people will still be able to get in after
-          password sign-in is switched off.
-        </p>
-      )}
-    </div>
-  );
-}
-
-/**
  * The malware-scanning switch, with its own connectivity check beside it.
  *
  * THE TEST BUTTON IS NOT A CONVENIENCE. This setting fails CLOSED: with it on and no clamd
@@ -2633,489 +2519,5 @@ function VirusScanToggle({
         the extension allow-list and by serving every download as an attachment rather than as a page.
       </p>
     </div>
-  );
-}
-
-const SSO_PROVIDER_LABEL: Record<"GOOGLE" | "MICROSOFT", string> = { GOOGLE: "Google", MICROSOFT: "Microsoft / Azure AD" };
-
-/**
- * Phase B4 — per-org SSO configuration. Each org registers its OWN OAuth app with Google/
- * Microsoft (there's no shared client id/secret this app provides), so every field here is
- * that org's own credentials. `clientSecret` is write-only (never echoed back), same masking
- * convention as the AI tab's BYOK API key and the email-intake IMAP password.
- */
-function SsoSettingsCard({ readOnly }: { readOnly: boolean }) {
-  const queryClient = useQueryClient();
-  const settings = useQuery({ queryKey: ["settings", "sso"], queryFn: settingsApi.getSso });
-
-  const authMethod = useMutation({
-    mutationFn: (payload: { passwordLoginEnabled?: boolean; requireSsoOnly?: boolean }) => settingsApi.updateAuthMethod(payload),
-    onSuccess: () => {
-      toast.success("Saved");
-      queryClient.invalidateQueries({ queryKey: ["settings", "sso"] });
-    },
-    onError: (err: any) => toast.error("Could not save", { description: err?.response?.data?.message ?? "Try again." })
-  });
-
-  const anyProviderConfigured = (settings.data?.providers ?? []).some((p) => {
-    if (!p.isEnabled) return false;
-    if (p.provider === "SAML") return Boolean(p.idpEntityId && p.idpSsoUrl && p.idpCertificateSet);
-    if (p.provider === "LDAP") return Boolean(p.ldapUrl && p.ldapBindDn && p.ldapBindCredentialSet && p.ldapSearchBase);
-    return Boolean(p.clientId && p.clientSecretSet);
-  });
-
-  return (
-    <div className="grid gap-5">
-      <Card>
-        <CardHeader>
-          <CardTitle className="flex items-center gap-2 text-base">
-            <LogIn className="h-4 w-4 text-primary" />
-            Sign-in methods
-          </CardTitle>
-          <CardDescription>Control whether people can sign in with a password, SSO, or both — for this workspace only.</CardDescription>
-        </CardHeader>
-        <CardContent className="grid gap-4">
-          {settings.isLoading && <Skeleton className="h-20 w-full" />}
-          {!settings.isLoading && settings.data && (
-            <>
-              <div className="flex items-start gap-4 rounded-lg border border-border p-4">
-                <div className="flex-1">
-                  <Label>Allow password sign-in</Label>
-                  <p className="mt-0.5 text-xs text-muted-foreground">Turn off to force everyone through SSO — do this only after confirming at least one provider below works.</p>
-                </div>
-                <Switch
-                  checked={settings.data.passwordLoginEnabled}
-                  disabled={readOnly}
-                  onCheckedChange={(v) => authMethod.mutate({ passwordLoginEnabled: v })}
-                />
-              </div>
-              <div className="flex items-start gap-4 rounded-lg border border-border p-4">
-                <div className="flex-1">
-                  <Label>Require SSO only</Label>
-                  <p className="mt-0.5 text-xs text-muted-foreground">
-                    When on, password sign-in is disabled regardless of the toggle above.
-                  </p>
-                </div>
-                <Switch
-                  checked={settings.data.requireSsoOnly}
-                  disabled={readOnly || !anyProviderConfigured}
-                  onCheckedChange={(v) => authMethod.mutate({ requireSsoOnly: v })}
-                />
-              </div>
-              {settings.data.requireSsoOnly && !anyProviderConfigured && (
-                <Alert variant="warning">
-                  <ShieldAlert />
-                  <AlertTitle>No SSO provider is fully configured</AlertTitle>
-                  <AlertDescription>Configure and enable at least one provider below before requiring SSO-only sign-in.</AlertDescription>
-                </Alert>
-              )}
-            </>
-          )}
-        </CardContent>
-      </Card>
-
-      {(["GOOGLE", "MICROSOFT"] as const).map((provider) => (
-        <SsoProviderCard
-          key={provider}
-          provider={provider}
-          config={settings.data?.providers.find((p) => p.provider === provider)}
-          readOnly={readOnly}
-          isLoading={settings.isLoading}
-        />
-      ))}
-
-      <SamlProviderCard
-        config={settings.data?.providers.find((p) => p.provider === "SAML")}
-        readOnly={readOnly}
-        isLoading={settings.isLoading}
-      />
-
-      <LdapProviderCard
-        config={settings.data?.providers.find((p) => p.provider === "LDAP")}
-        readOnly={readOnly}
-        isLoading={settings.isLoading}
-      />
-    </div>
-  );
-}
-
-function SsoProviderCard({
-  provider,
-  config,
-  readOnly,
-  isLoading
-}: {
-  provider: "GOOGLE" | "MICROSOFT";
-  config?: SsoProviderConfig;
-  readOnly: boolean;
-  isLoading: boolean;
-}) {
-  const queryClient = useQueryClient();
-  const [clientId, setClientId] = useState(config?.clientId ?? "");
-  const [clientSecret, setClientSecret] = useState("");
-  const [tenantHint, setTenantHint] = useState(config?.tenantHint ?? "");
-
-  useEffect(() => {
-    setClientId(config?.clientId ?? "");
-    setTenantHint(config?.tenantHint ?? "");
-  }, [config?.clientId, config?.tenantHint]);
-
-  const save = useMutation({
-    mutationFn: (payload: Partial<SsoProviderConfig> & { clientSecret?: string }) =>
-      settingsApi.updateSso(provider.toLowerCase() as "google" | "microsoft", payload),
-    onSuccess: () => {
-      toast.success("Saved");
-      setClientSecret("");
-      queryClient.invalidateQueries({ queryKey: ["settings", "sso"] });
-    },
-    onError: (err: any) => toast.error("Could not save", { description: err?.response?.data?.message ?? "Try again." })
-  });
-
-  return (
-    <Card>
-      <CardHeader>
-        <div className="flex items-center justify-between gap-3">
-          <div>
-            <CardTitle className="text-base">{SSO_PROVIDER_LABEL[provider]}</CardTitle>
-            <CardDescription>
-              {provider === "GOOGLE"
-                ? "Register an OAuth client in Google Cloud Console; the redirect URI is fixed regardless of which org configures it."
-                : "Register an app registration in Azure AD; set the tenant ID below (or leave blank for multi-tenant \"common\")."}
-            </CardDescription>
-          </div>
-          {config?.isEnabled && config.clientId && config.clientSecretSet && (
-            <span className="inline-flex shrink-0 items-center gap-1 rounded-full bg-success/10 px-2.5 py-1 text-xs font-semibold text-success">
-              <Check className="h-3 w-3" />Configured
-            </span>
-          )}
-        </div>
-      </CardHeader>
-      <CardContent className="grid gap-4">
-        {isLoading && <Skeleton className="h-32 w-full" />}
-        {!isLoading && (
-          <>
-            <div className="flex items-start gap-4 rounded-lg border border-border p-4">
-              <div className="flex-1">
-                <Label>Enabled</Label>
-                <p className="mt-0.5 text-xs text-muted-foreground">Show a "{`Continue with ${SSO_PROVIDER_LABEL[provider]}`}" button on the login page.</p>
-              </div>
-              <Switch
-                checked={config?.isEnabled ?? false}
-                disabled={readOnly || !config?.clientId || !config.clientSecretSet}
-                onCheckedChange={(v) => save.mutate({ isEnabled: v })}
-              />
-            </div>
-
-            <div className="grid gap-4 sm:grid-cols-2">
-              <div className="grid gap-1.5">
-                <Label>Client ID</Label>
-                <Input value={clientId} disabled={readOnly} onChange={(e) => setClientId(e.target.value)} placeholder="Your OAuth client ID" />
-              </div>
-              <div className="grid gap-1.5">
-                <Label>Client secret {config?.clientSecretSet && <span className="font-normal text-muted-foreground">(saved)</span>}</Label>
-                <Input
-                  type="password"
-                  value={clientSecret}
-                  disabled={readOnly}
-                  onChange={(e) => setClientSecret(e.target.value)}
-                  placeholder={config?.clientSecretSet ? "•••••••••••••••• (unchanged)" : "Not set"}
-                />
-              </div>
-            </div>
-
-            {provider === "MICROSOFT" && (
-              <div className="grid gap-1.5 sm:w-1/2">
-                <Label>Azure AD tenant ID (optional)</Label>
-                <Input value={tenantHint} disabled={readOnly} onChange={(e) => setTenantHint(e.target.value)} placeholder='Leave blank for multi-tenant "common"' />
-              </div>
-            )}
-
-            <Button
-              size="sm"
-              className="w-fit"
-              disabled={readOnly}
-              onClick={() =>
-                save.mutate({
-                  clientId: clientId || null,
-                  tenantHint: tenantHint || null,
-                  ...(clientSecret ? { clientSecret } : {})
-                })
-              }
-            >
-              <Save className="h-4 w-4" />Save
-            </Button>
-
-            <SsoVerification provider={provider.toLowerCase() as "google" | "microsoft"} config={config} readOnly={readOnly} />
-          </>
-        )}
-      </CardContent>
-    </Card>
-  );
-}
-
-function SamlProviderCard({
-  config,
-  readOnly,
-  isLoading
-}: {
-  config?: SsoProviderConfig;
-  readOnly: boolean;
-  isLoading: boolean;
-}) {
-  const queryClient = useQueryClient();
-  const [idpEntityId, setIdpEntityId] = useState(config?.idpEntityId ?? "");
-  const [idpSsoUrl, setIdpSsoUrl] = useState(config?.idpSsoUrl ?? "");
-  const [idpCertificate, setIdpCertificate] = useState("");
-  const [spEntityId, setSpEntityId] = useState(config?.spEntityId ?? "");
-
-  useEffect(() => {
-    setIdpEntityId(config?.idpEntityId ?? "");
-    setIdpSsoUrl(config?.idpSsoUrl ?? "");
-    setSpEntityId(config?.spEntityId ?? "");
-  }, [config?.idpEntityId, config?.idpSsoUrl, config?.spEntityId]);
-
-  const save = useMutation({
-    mutationFn: (payload: Partial<SsoProviderConfig> & { idpCertificate?: string }) => settingsApi.updateSso("saml", payload),
-    onSuccess: () => {
-      toast.success("Saved");
-      setIdpCertificate("");
-      queryClient.invalidateQueries({ queryKey: ["settings", "sso"] });
-    },
-    onError: (err: any) => toast.error("Could not save", { description: err?.response?.data?.message ?? "Try again." })
-  });
-
-  const acsUrl = apiUrl("/auth/sso/saml/acs");
-  const fullyConfigured = Boolean(config?.idpEntityId && config?.idpSsoUrl && config?.idpCertificateSet);
-
-  return (
-    <Card>
-      <CardHeader>
-        <div className="flex items-center justify-between gap-3">
-          <div>
-            <CardTitle className="text-base">SAML</CardTitle>
-            <CardDescription>
-              Connect any SAML 2.0 identity provider (Okta, OneLogin, ADFS, ...). Give your IdP admin the ACS URL below and paste
-              their IdP's entity ID, SSO URL, and public signing certificate here.
-            </CardDescription>
-          </div>
-          {fullyConfigured && config?.isEnabled && (
-            <span className="inline-flex shrink-0 items-center gap-1 rounded-full bg-success/10 px-2.5 py-1 text-xs font-semibold text-success">
-              <Check className="h-3 w-3" />Configured
-            </span>
-          )}
-        </div>
-      </CardHeader>
-      <CardContent className="grid gap-4">
-        {isLoading && <Skeleton className="h-32 w-full" />}
-        {!isLoading && (
-          <>
-            <div className="grid gap-1.5">
-              <Label>ACS URL (give this to your IdP admin)</Label>
-              <Input readOnly value={acsUrl} className="font-mono text-xs" onFocus={(e) => e.target.select()} />
-            </div>
-
-            <div className="flex items-start gap-4 rounded-lg border border-border p-4">
-              <div className="flex-1">
-                <Label>Enabled</Label>
-                <p className="mt-0.5 text-xs text-muted-foreground">Show a "Continue with single sign-on" button on the login page.</p>
-              </div>
-              <Switch
-                checked={config?.isEnabled ?? false}
-                disabled={readOnly || !fullyConfigured}
-                onCheckedChange={(v) => save.mutate({ isEnabled: v })}
-              />
-            </div>
-
-            <div className="grid gap-4 sm:grid-cols-2">
-              <div className="grid gap-1.5">
-                <Label>IdP entity ID</Label>
-                <Input value={idpEntityId} disabled={readOnly} onChange={(e) => setIdpEntityId(e.target.value)} placeholder="https://idp.example.com/entity" />
-              </div>
-              <div className="grid gap-1.5">
-                <Label>IdP SSO URL</Label>
-                <Input value={idpSsoUrl} disabled={readOnly} onChange={(e) => setIdpSsoUrl(e.target.value)} placeholder="https://idp.example.com/sso" />
-              </div>
-            </div>
-
-            <div className="grid gap-1.5">
-              <Label>IdP signing certificate {config?.idpCertificateSet && <span className="font-normal text-muted-foreground">(saved)</span>}</Label>
-              <Textarea
-                value={idpCertificate}
-                disabled={readOnly}
-                onChange={(e) => setIdpCertificate(e.target.value)}
-                rows={4}
-                className="font-mono text-xs"
-                placeholder={config?.idpCertificateSet ? "•••••••••••••••• (unchanged) — paste a new PEM certificate to replace it" : "-----BEGIN CERTIFICATE-----..."}
-              />
-            </div>
-
-            <div className="grid gap-1.5 sm:w-1/2">
-              <Label>SP entity ID (optional)</Label>
-              <Input value={spEntityId} disabled={readOnly} onChange={(e) => setSpEntityId(e.target.value)} placeholder="Defaults to this workspace's metadata URL" />
-            </div>
-
-            <Button
-              size="sm"
-              className="w-fit"
-              disabled={readOnly}
-              onClick={() =>
-                save.mutate({
-                  idpEntityId: idpEntityId || null,
-                  idpSsoUrl: idpSsoUrl || null,
-                  spEntityId: spEntityId || null,
-                  ...(idpCertificate ? { idpCertificate } : {})
-                })
-              }
-            >
-              <Save className="h-4 w-4" />Save
-            </Button>
-
-            <SsoVerification provider="saml" config={config} readOnly={readOnly} />
-          </>
-        )}
-      </CardContent>
-    </Card>
-  );
-}
-
-/** LDAP/Active Directory — a direct bind rather than a redirect, so the org admin provides a
- *  service-account bind DN/credential this app uses to look up + verify end users, not an
- *  OAuth app registration. Same write-only-credential masking convention as the other cards. */
-function LdapProviderCard({
-  config,
-  readOnly,
-  isLoading
-}: {
-  config?: SsoProviderConfig;
-  readOnly: boolean;
-  isLoading: boolean;
-}) {
-  const queryClient = useQueryClient();
-  const [ldapUrl, setLdapUrl] = useState(config?.ldapUrl ?? "");
-  const [ldapBindDn, setLdapBindDn] = useState(config?.ldapBindDn ?? "");
-  const [ldapBindCredential, setLdapBindCredential] = useState("");
-  const [ldapSearchBase, setLdapSearchBase] = useState(config?.ldapSearchBase ?? "");
-  const [ldapUserFilter, setLdapUserFilter] = useState(config?.ldapUserFilter ?? "");
-
-  useEffect(() => {
-    setLdapUrl(config?.ldapUrl ?? "");
-    setLdapBindDn(config?.ldapBindDn ?? "");
-    setLdapSearchBase(config?.ldapSearchBase ?? "");
-    setLdapUserFilter(config?.ldapUserFilter ?? "");
-  }, [config?.ldapUrl, config?.ldapBindDn, config?.ldapSearchBase, config?.ldapUserFilter]);
-
-  const save = useMutation({
-    mutationFn: (payload: Partial<SsoProviderConfig> & { ldapBindCredential?: string }) => settingsApi.updateSso("ldap", payload),
-    onSuccess: () => {
-      toast.success("Saved");
-      setLdapBindCredential("");
-      queryClient.invalidateQueries({ queryKey: ["settings", "sso"] });
-    },
-    onError: (err: any) => toast.error("Could not save", { description: err?.response?.data?.message ?? "Try again." })
-  });
-
-  const fullyConfigured = Boolean(config?.ldapUrl && config?.ldapBindDn && config?.ldapBindCredentialSet && config?.ldapSearchBase);
-
-  return (
-    <Card>
-      <CardHeader>
-        <div className="flex items-center justify-between gap-3">
-          <div>
-            <CardTitle className="text-base">LDAP / Active Directory</CardTitle>
-            <CardDescription>
-              Connect any LDAP directory (Active Directory, OpenLDAP, ...). This app binds as a service account to look up the
-              signing-in user, then rebinds as that user to verify their password.
-            </CardDescription>
-          </div>
-          {fullyConfigured && config?.isEnabled && (
-            <span className="inline-flex shrink-0 items-center gap-1 rounded-full bg-success/10 px-2.5 py-1 text-xs font-semibold text-success">
-              <Check className="h-3 w-3" />Configured
-            </span>
-          )}
-        </div>
-      </CardHeader>
-      <CardContent className="grid gap-4">
-        {isLoading && <Skeleton className="h-32 w-full" />}
-        {!isLoading && (
-          <>
-            <div className="flex items-start gap-4 rounded-lg border border-border p-4">
-              <div className="flex-1">
-                <Label>Enabled</Label>
-                <p className="mt-0.5 text-xs text-muted-foreground">Show a username/password LDAP sign-in form on the login page.</p>
-              </div>
-              <Switch
-                checked={config?.isEnabled ?? false}
-                disabled={readOnly || !fullyConfigured}
-                onCheckedChange={(v) => save.mutate({ isEnabled: v })}
-              />
-            </div>
-
-            <div className="grid gap-4 sm:grid-cols-2">
-              <div className="grid gap-1.5">
-                <Label>Server URL</Label>
-                <Input value={ldapUrl} disabled={readOnly} onChange={(e) => setLdapUrl(e.target.value)} placeholder="ldaps://dc.example.com:636" />
-              </div>
-              <div className="grid gap-1.5">
-                <Label>Search base</Label>
-                <Input value={ldapSearchBase} disabled={readOnly} onChange={(e) => setLdapSearchBase(e.target.value)} placeholder="dc=example,dc=com" />
-              </div>
-            </div>
-
-            <div className="grid gap-4 sm:grid-cols-2">
-              <div className="grid gap-1.5">
-                <Label>Bind DN (service account)</Label>
-                <Input
-                  value={ldapBindDn}
-                  disabled={readOnly}
-                  onChange={(e) => setLdapBindDn(e.target.value)}
-                  placeholder="cn=svc-timesphere,dc=example,dc=com"
-                />
-              </div>
-              <div className="grid gap-1.5">
-                <Label>Bind credential {config?.ldapBindCredentialSet && <span className="font-normal text-muted-foreground">(saved)</span>}</Label>
-                <Input
-                  type="password"
-                  value={ldapBindCredential}
-                  disabled={readOnly}
-                  onChange={(e) => setLdapBindCredential(e.target.value)}
-                  placeholder={config?.ldapBindCredentialSet ? "•••••••••••••••• (unchanged)" : "Not set"}
-                />
-              </div>
-            </div>
-
-            <div className="grid gap-1.5 sm:w-1/2">
-              <Label>User filter</Label>
-              <Input
-                value={ldapUserFilter}
-                disabled={readOnly}
-                onChange={(e) => setLdapUserFilter(e.target.value)}
-                placeholder="(mail={{email}})"
-                className="font-mono text-xs"
-              />
-              <p className="text-xs text-muted-foreground">{"{{email}}"} is replaced with the email the person types in at login.</p>
-            </div>
-
-            <Button
-              size="sm"
-              className="w-fit"
-              disabled={readOnly}
-              onClick={() =>
-                save.mutate({
-                  ldapUrl: ldapUrl || null,
-                  ldapBindDn: ldapBindDn || null,
-                  ldapSearchBase: ldapSearchBase || null,
-                  ldapUserFilter: ldapUserFilter || null,
-                  ...(ldapBindCredential ? { ldapBindCredential } : {})
-                })
-              }
-            >
-              <Save className="h-4 w-4" />Save
-            </Button>
-
-            <SsoVerification provider="ldap" config={config} readOnly={readOnly} />
-          </>
-        )}
-      </CardContent>
-    </Card>
   );
 }
