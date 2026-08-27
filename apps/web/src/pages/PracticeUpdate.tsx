@@ -17,10 +17,12 @@ import { AlertTriangle, CheckCircle2, Mail, Plus, Send, Settings2, Sparkles, Tra
 
 import {
   practiceUpdateApi,
+  type AIRefineField,
   type PracticeDraft,
   type PracticeInitiative,
   type PracticeNarrative
 } from "../services/api";
+import { AiRefinePanel, AiRefineTrigger, useAiRefine } from "../components/AiRefine";
 import { AiStrands } from "../components/ui/ai-strands";
 import { Badge } from "../components/ui/badge";
 import { BorderGlow } from "../components/ui/border-glow";
@@ -56,10 +58,66 @@ const RAG: Record<PracticeInitiative["status"], { emoji: string; className: stri
   RED: { emoji: "🔴", className: "text-destructive" }
 };
 
+/**
+ * A textarea with "Refine with AI" beside its label — the same affordance, hook and promise as the
+ * timesheet fields: the suggestion is shown next to the original, accepting it is a separate click,
+ * and Undo restores what was there. Nothing is ever silently replaced.
+ *
+ * Its own component because `useAiRefine` is a hook and several of these are rendered from a list;
+ * calling the hook inside a `.map()` callback would break the rules of hooks the moment a bullet is
+ * added or removed.
+ */
+function RefinableText({
+  label,
+  refineField,
+  refineLabel,
+  value,
+  onChange,
+  rows = 3,
+  placeholder,
+  id
+}: {
+  label?: React.ReactNode;
+  refineField: AIRefineField;
+  refineLabel: string;
+  value: string;
+  onChange: (next: string) => void;
+  rows?: number;
+  placeholder?: string;
+  id?: string;
+}) {
+  const refine = useAiRefine({ field: refineField, value, onChange, label: refineLabel });
+
+  return (
+    <div className="grid flex-1 gap-1.5">
+      {/* The trigger sits BESIDE the label, never inside it: a button inside a `<label>` is a click
+          that can activate the labelled control instead of itself. */}
+      <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1">
+        {label ? <Label htmlFor={id}>{label}</Label> : <span />}
+        <AiRefineTrigger state={refine} />
+      </div>
+      <Textarea id={id} rows={rows} value={value} placeholder={placeholder} onChange={(event) => onChange(event.target.value)} />
+      <AiRefinePanel state={refine} />
+    </div>
+  );
+}
+
 /** A list the reviewer can edit line by line. One textarea per bullet would be unusable at ten
  *  bullets, and one textarea for the whole list re-introduces the newline-parsing the API
  *  deliberately got rid of. */
-function BulletEditor({ label, items, onChange }: { label: string; items: string[]; onChange: (next: string[]) => void }) {
+function BulletEditor({
+  label,
+  items,
+  onChange,
+  refineField,
+  refineLabel
+}: {
+  label: string;
+  items: string[];
+  onChange: (next: string[]) => void;
+  refineField: AIRefineField;
+  refineLabel: string;
+}) {
   return (
     <div className="grid gap-2">
       <div className="flex items-center justify-between">
@@ -76,16 +134,21 @@ function BulletEditor({ label, items, onChange }: { label: string; items: string
         </p>
       )}
       {items.map((item, index) => (
+        // Keyed by POSITION on purpose. The value is what the user is editing, so a value-based key
+        // would remount the field on every keystroke and lose the caret; the list is only ever
+        // appended to or spliced, never reordered.
         <div key={index} className="flex items-start gap-2">
-          <Textarea
+          <RefinableText
+            refineField={refineField}
+            refineLabel={refineLabel}
             value={item}
             rows={2}
-            onChange={(event) => onChange(items.map((v, i) => (i === index ? event.target.value : v)))}
-            className="min-h-0 text-sm"
+            onChange={(next) => onChange(items.map((v, i) => (i === index ? next : v)))}
           />
           <Button
             variant="ghost"
             size="icon"
+            className="mt-7"
             aria-label={`Remove item ${index + 1}`}
             onClick={() => onChange(items.filter((_, i) => i !== index))}
           >
@@ -422,25 +485,35 @@ export function PracticeUpdatePage() {
                 Written sections — edit before sending
               </p>
 
-              <div className="grid gap-1.5">
-                <Label htmlFor="practice-summary">Executive summary</Label>
-                <Textarea
-                  id="practice-summary"
-                  rows={4}
-                  value={narrative?.executiveSummary ?? ""}
-                  placeholder="Left blank, the email falls back to the counted figures."
-                  onChange={(event) => patch({ executiveSummary: event.target.value })}
-                />
-              </div>
+              <RefinableText
+                id="practice-summary"
+                label="Executive summary"
+                refineField="practice_summary"
+                refineLabel="executive summary"
+                rows={4}
+                value={narrative?.executiveSummary ?? ""}
+                placeholder="Left blank, the email falls back to the counted figures."
+                onChange={(executiveSummary) => patch({ executiveSummary })}
+              />
 
-              <BulletEditor label="Risks / blockers" items={narrative?.risks ?? []} onChange={(risks) => patch({ risks })} />
+              <BulletEditor
+                label="Risks / blockers"
+                refineField="practice_risk"
+                refineLabel="risk"
+                items={narrative?.risks ?? []}
+                onChange={(risks) => patch({ risks })}
+              />
               <BulletEditor
                 label="Next week priorities"
+                refineField="practice_priority"
+                refineLabel="priority"
                 items={narrative?.nextWeekPriorities ?? []}
                 onChange={(nextWeekPriorities) => patch({ nextWeekPriorities })}
               />
               <BulletEditor
                 label="Decisions / support required"
+                refineField="practice_decision"
+                refineLabel="decision"
                 items={narrative?.decisionsRequired ?? []}
                 onChange={(decisionsRequired) => patch({ decisionsRequired })}
               />

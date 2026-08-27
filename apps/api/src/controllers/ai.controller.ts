@@ -22,6 +22,7 @@ import {
   getTextRefineAvailability,
   improveText,
   refineText,
+  REFINE_FIELD_KEYS,
   summarizeComments,
   type RefineField
 } from "../services/ai.service.js";
@@ -146,7 +147,9 @@ aiRouter.post("/text/improve", requirePermission(permissions.TICKETS_WRITE), val
 const refineSchema = z.object({
   body: z.object({
     text: z.string().min(1).max(20000),
-    field: z.enum(["ticket_title", "ticket_description", "ticket_comment", "timesheet_description", "timesheet_notes"])
+    // Derived, never re-typed: a hardcoded copy of this list is what rejected every practice-update
+    // refine with a 422 while the service and the client both already knew the field.
+    field: z.enum(REFINE_FIELD_KEYS)
   })
 });
 
@@ -161,7 +164,15 @@ const REFINE_FIELD_PERMISSION: Record<RefineField, string> = {
   ticket_description: permissions.TICKETS_WRITE,
   ticket_comment: permissions.TICKETS_WRITE,
   timesheet_description: permissions.TIMESHEETS_WRITE,
-  timesheet_notes: permissions.TIMESHEETS_WRITE
+  timesheet_notes: permissions.TIMESHEETS_WRITE,
+  // The practice update is a SUPER_ADMIN surface end to end (see practice-update.controller.ts),
+  // and SUPER_ADMIN holds every permission — so `users:manage` is the honest gate here: it is the
+  // one nobody below admin tier has, which keeps "can you edit this text at all" and "can you have
+  // the AI tidy it" the same answer, exactly as the map's header requires.
+  practice_summary: permissions.USERS_MANAGE,
+  practice_risk: permissions.USERS_MANAGE,
+  practice_priority: permissions.USERS_MANAGE,
+  practice_decision: permissions.USERS_MANAGE
 };
 
 // `validate` runs first so `field` is a known value by the time the permission is looked up.

@@ -3092,7 +3092,11 @@ export type AIRefineField =
   | "ticket_description"
   | "ticket_comment"
   | "timesheet_description"
-  | "timesheet_notes";
+  | "timesheet_notes"
+  | "practice_summary"
+  | "practice_risk"
+  | "practice_priority"
+  | "practice_decision";
 
 export interface AIRefineResult {
   /** Plain text — what a plain input takes, and what the compare view shows. */

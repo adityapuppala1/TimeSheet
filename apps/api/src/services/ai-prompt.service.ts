@@ -249,6 +249,10 @@ Reply with ONLY a JSON object, no preamble and no code fence:
   "nextSteps": [{ "id": "<the initiative id, copied exactly>", "text": "One short sentence of what happens next on it." }]
 }
 
+The initiative ids exist ONLY so "nextSteps" can be keyed to the right initiative. Never write an
+id into any prose — name the initiative, not its id. A CEO reading
+"Archive Drill (c7ad3ce5-e9c5-407d-bc9a-a0926eeb4367) is at risk" learns nothing from the second half.
+
 EVERY bullet list above is a JSON ARRAY OF STRINGS. Do not write markdown bullets, do not put
 newlines inside a string, and quote every value. An empty array is the correct way to say "nothing
 here" — for risks that means nothing is at risk, and for decisions it means leadership needs to

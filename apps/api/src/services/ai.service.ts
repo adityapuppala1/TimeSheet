@@ -2578,7 +2578,11 @@ export type RefineField =
   | "ticket_description"
   | "ticket_comment"
   | "timesheet_description"
-  | "timesheet_notes";
+  | "timesheet_notes"
+  | "practice_summary"
+  | "practice_risk"
+  | "practice_priority"
+  | "practice_decision";
 
 interface RefineFieldSpec {
   label: string;
@@ -2621,8 +2625,52 @@ const REFINE_FIELDS: Record<RefineField, RefineFieldSpec> = {
       "These are side notes on a record of work — blockers, dependencies, follow-ups. Never upgrade a tentative note into a commitment, and never drop a caveat because it reads awkwardly.",
     format: "html",
     maxTokens: 400
+  },
+
+  // ── Weekly AI/ML Practice Update ──────────────────────────────────────────────────────────
+  // Four fields rather than one shared "bullet", because the guidance is the whole value here and
+  // it genuinely differs: a risk must not be talked down, a priority must not become a promise,
+  // and an ask of a CEO must stay an ask. `plain` throughout — these render as escaped text in the
+  // email, so an HTML round-trip would be a sanitization surface bought for nothing.
+  practice_summary: {
+    label: "executive summary",
+    guidance:
+      "This opens a weekly update read by a CEO. Keep it to a few sentences on one line. Never change a number, never add one the author did not write, and do not soften a bad week into a good one — an update that only reports good news stops being read.",
+    format: "plain",
+    maxTokens: 400
+  },
+  practice_risk: {
+    label: "risk or blocker",
+    guidance:
+      "This names something that is going wrong, for leadership. One or two sentences. Never downgrade the severity the author gave it, never turn a stated blocker into a vague concern, and keep any figure exactly as written.",
+    format: "plain",
+    maxTokens: 200
+  },
+  practice_priority: {
+    label: "next week priority",
+    guidance:
+      "This is an intention for the coming week, not a commitment made to anyone. One sentence. Do not add a deadline, an owner or a guarantee the author did not write.",
+    format: "plain",
+    maxTokens: 200
+  },
+  practice_decision: {
+    label: "decision or support request",
+    guidance:
+      "This asks leadership for a specific decision or for help. One sentence. Keep it a request — never rewrite it into a statement of what will happen, and never drop who is being asked.",
+    format: "plain",
+    maxTokens: 200
   }
 };
+
+/**
+ * The allow-list as a value, so callers validate against the SAME list this file dispatches on.
+ *
+ * There used to be three copies of it: this record, a `z.enum([...])` in ai.controller.ts, and the
+ * client union. Adding four fields updated two of them, and every refine request for the new
+ * fields was rejected with a 422 by the third. One source removes the class of bug, not just that
+ * instance — the client copy stays, but it is a compile error there rather than a runtime refusal.
+ */
+export const REFINE_FIELD_KEYS = Object.keys(REFINE_FIELDS) as [RefineField, ...RefineField[]];
 
 /** Some models wrap a rewrite in quotes despite being told not to; that would otherwise land in
  *  the user's field verbatim the moment they accept it. */
@@ -3058,6 +3106,22 @@ export interface PracticeUpdateNarrative {
 /** A field that should be a list, however the model chose to express it. */
 const bullets = z.union([z.string(), z.array(z.string())]).optional();
 
+/**
+ * Strips an initiative id that leaked into prose.
+ *
+ * The ids are handed to the model so `nextSteps` can be keyed to the right initiative, and a small
+ * model duly wrote "Archive Drill (c7ad3ce5-e9c5-407d-bc9a-a0926eeb4367) is at risk" into a
+ * sentence bound for a CEO. The prompt now says not to; this makes sure. Bounded and anchored on
+ * the UUID shape, so ordinary prose has nothing for it to match.
+ */
+function stripIds(text: string): string {
+  return text
+    .replace(/\s*\(\s*[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\s*\)/gi, "")
+    .replace(/\s*\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b/gi, "")
+    .replace(/[ \t]{2,}/g, " ")
+    .trim();
+}
+
 /** Newline-separated text to a list, so a model that sends one string still lands in the right shape. */
 function toBullets(value: string | string[] | undefined): string[] {
   if (Array.isArray(value)) return value.map((v) => v.trim()).filter(Boolean);
@@ -3142,7 +3206,7 @@ export async function generatePracticeUpdate(params: {
     return null;
   }
   return {
-    executiveSummary: parsed.executiveSummary ?? "",
+    executiveSummary: stripIds(parsed.executiveSummary ?? ""),
     risks: toBullets(parsed.risks),
     nextWeekPriorities: toBullets(parsed.nextWeekPriorities),
     decisionsRequired: toBullets(parsed.decisionsRequired),

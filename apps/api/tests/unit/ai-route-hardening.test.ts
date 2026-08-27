@@ -65,6 +65,11 @@ vi.mock("../../src/services/ticket.service.js", async () => {
 
 vi.mock("../../src/services/ai.service.js", () => ({
   answerWorkspaceQuestion: vi.fn(),
+  // A VALUE, not a stub: `ai.controller.ts` builds its `z.enum` from this at module scope, so a
+  // `vi.fn()` here would make every refine request 422 inside the test — the same three-copies
+  // failure the real code was just fixed for, reproduced in the mock. Kept in step with the real
+  // list by refine-fields.test.ts, which asserts against the actual export.
+  REFINE_FIELD_KEYS: ["ticket_title", "ticket_description", "ticket_comment", "timesheet_description", "timesheet_notes"],
   classifyTicket,
   findDuplicateTickets,
   getTextRefineAvailability: vi.fn().mockResolvedValue({ available: true, reason: "ok", message: "" }),
