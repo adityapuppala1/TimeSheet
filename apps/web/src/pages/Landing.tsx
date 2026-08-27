@@ -572,6 +572,10 @@ const PRICING = [
       "AI quality loop: golden sets, prompt versions, evals",
       "Email, Slack and Telegram intake + Kanban board",
       "Insights, attestations, PDF/CSV/Excel exports + report analytics",
+      // Both of these are TEAM-gated in PLAN_TIER_LIMITS and neither was listed here, which is the
+      // quieter half of the accuracy rule: a card that under-sells a tier costs the same deal as
+      // one that over-sells it, and nothing on this page was checking for the omission.
+      "Change management + the weekly leadership update",
       "Audit log + role-based access"
     ]
   },
