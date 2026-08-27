@@ -17,30 +17,36 @@
  *   4. Methodology appendix — what each assessment type actually covers, because this document
  *      travels to people who don't know the acronyms.
  *
- * House style shared with attestation-pdf.service.ts and the timesheet export: A4, 36pt
- * margins, #0F9AA8 brand, #0F172A ink, #64748B muted, #E2E8F0 rules, #94A3B8 footer,
- * Helvetica-Bold headings, page-break guards with re-drawn table headers, Page N of M.
+ * House style comes from `pdf-kit.ts`, shared with the attestation, timesheet and requirements
+ * exports — including the watermark and running header this document did not have.
  */
 import type { TicketSecurityReport } from "./security-report.service.js";
+import {
+  AMBER,
+  BOLD,
+  BRAND,
+  DANGER,
+  FOOTER,
+  INK,
+  MUTED,
+  PRIORITY_COLOR,
+  REGULAR,
+  REPORT_GEOMETRY,
+  SUCCESS,
+  createPdfKit
+} from "./pdf-kit.js";
 
-const BRAND = "#0F9AA8";
-const INK = "#0F172A";
-const MUTED = "#64748B";
-const RULE = "#E2E8F0";
-const FOOTER = "#94A3B8";
-const DANGER = "#DC2626";
-const SUCCESS = "#16A34A";
-const AMBER = "#D97706";
-
-const LEFT = 36;
-const RIGHT = 560;
+const { left: LEFT, right: RIGHT, pageBreakY: PAGE_BREAK_Y } = REPORT_GEOMETRY;
 const WIDTH = RIGHT - LEFT;
-const PAGE_BREAK_Y = 720;
 
-const BOLD = "Helvetica-Bold";
-const REGULAR = "Helvetica";
+/** Findings are not a grid — each one carries a location line, its own description and an optional
+ *  AI triage line — so the finding rows stay hand-rolled. The rest is the shared style. */
+const kit = createPdfKit(REPORT_GEOMETRY);
+const { breakIfNeeded, pill, rule, sectionHeading } = kit;
 
-const SEVERITY_COLOR: Record<string, string> = { CRITICAL: DANGER, HIGH: AMBER, MEDIUM: BRAND, LOW: MUTED };
+/** Severity IS priority here: the same four levels, the same meaning to a reader, so it uses the
+ *  shared palette rather than a fifth private copy of the same four colours. */
+const SEVERITY_COLOR = PRIORITY_COLOR;
 
 const TYPE_LABEL: Record<string, string> = {
   SAST: "Static analysis (SAST)",
@@ -61,27 +67,6 @@ const TYPE_EXPLAINER: Record<string, string> = {
 
 function truncate(input: string, max: number): string {
   return input.length > max ? `${input.slice(0, max - 1)}…` : input;
-}
-
-function rule(doc: PDFKit.PDFDocument, color = RULE, lineWidth = 0.5) {
-  doc.strokeColor(color).lineWidth(lineWidth).moveTo(LEFT, doc.y).lineTo(RIGHT, doc.y).stroke();
-}
-
-function breakIfNeeded(doc: PDFKit.PDFDocument, threshold = PAGE_BREAK_Y): boolean {
-  if (doc.y > threshold) {
-    doc.addPage();
-    return true;
-  }
-  return false;
-}
-
-function sectionHeading(doc: PDFKit.PDFDocument, label: string) {
-  breakIfNeeded(doc, PAGE_BREAK_Y - 40);
-  doc.moveDown(0.8);
-  doc.font(BOLD).fontSize(12).fillColor(INK).text(label, LEFT, doc.y);
-  doc.moveDown(0.3);
-  rule(doc);
-  doc.moveDown(0.4);
 }
 
 /** Filled banner whose COLOR is the answer — red "needs attention", amber "minor items",
@@ -165,9 +150,9 @@ export function renderSecurityReportPdf(doc: PDFKit.PDFDocument, report: TicketS
       breakIfNeeded(doc, PAGE_BREAK_Y - 50);
 
       const rowY = doc.y;
-      // Severity chip column (fixed), then the title taking the rest of the width.
-      doc.font(BOLD).fontSize(9).fillColor(SEVERITY_COLOR[finding.severity] ?? INK);
-      doc.text(finding.severity, LEFT, rowY, { width: 62, lineBreak: false });
+      // Severity chip column (fixed), then the title taking the rest of the width. A real pill, the
+      // same one priorities get in the requirements document — "chip" was previously just bold text.
+      pill(doc, finding.severity, LEFT, rowY + 1, SEVERITY_COLOR[finding.severity] ?? MUTED);
       doc.font(BOLD).fontSize(9.5).fillColor(INK);
       doc.text(truncate(finding.title, 170), LEFT + 66, rowY, { width: WIDTH - 66 - 120 });
       // Right-aligned meta on the first line: tool + non-OPEN status.
@@ -235,12 +220,11 @@ export function renderSecurityReportPdf(doc: PDFKit.PDFDocument, report: TicketS
       { width: WIDTH }
     );
 
-  // ---- Page numbers (bufferPages: true on the document) -------------------------------------
-  const range = doc.bufferedPageRange();
-  for (let i = range.start; i < range.start + range.count; i++) {
-    doc.switchToPage(i);
-    doc.font(REGULAR).fontSize(7.5).fillColor(FOOTER);
-    doc.text(`${report.ticket.key} · Security Assessment Report`, LEFT, 790, { width: 260, lineBreak: false });
-    doc.text(`Page ${i - range.start + 1} of ${range.count}`, RIGHT - 80, 790, { width: 80, align: "right", lineBreak: false });
-  }
+  // ---- Page furniture (bufferPages: true on the document) -----------------------------------
+  kit.decoratePages(doc, {
+    headerText: `${report.ticket.key} · Security Assessment Report`,
+    footer: (page, total) => [
+      { left: `${report.ticket.key} · Security Assessment Report`, right: `Page ${page} of ${total}` }
+    ]
+  });
 }

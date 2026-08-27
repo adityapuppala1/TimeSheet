@@ -16,29 +16,21 @@
  *  - **Grouped money.** `toFixed(2)` alone prints "1234567.00"; thousands separators are the
  *    difference between a document that looks issued and one that looks dumped.
  *
- * House style is shared with the ticket security report and the timesheet export: A4, 36pt
- * margins, `#0F9AA8` brand, `#0F172A` headings, `#64748B` meta, `#E2E8F0` rules, `#94A3B8` footer.
+ * House style comes from `pdf-kit.ts`, shared with the security report, the timesheet export and
+ * the requirements document — including the watermark and running header this document did not have.
+ * A document produced in a billing dispute should be visibly the same product as the timesheet
+ * report filed beside it.
  */
 import type { AttestationPayload } from "./attestation.service.js";
+import { BOLD, BRAND, DANGER, INK, MUTED, REGULAR, REPORT_GEOMETRY, RULE_LIGHT, SUCCESS, createPdfKit } from "./pdf-kit.js";
 
-const BRAND = "#0F9AA8";
-const INK = "#0F172A";
-const MUTED = "#64748B";
-const RULE = "#E2E8F0";
-const RULE_LIGHT = "#F1F5F9";
-const FOOTER = "#94A3B8";
-const DANGER = "#DC2626";
-const SUCCESS = "#16A34A";
-
-/** Page geometry — A4 at 36pt margins. `RIGHT` is where rules stop; `WIDTH` is usable text width. */
-const LEFT = 36;
-const RIGHT = 560;
+const { left: LEFT, right: RIGHT, pageBreakY: PAGE_BREAK_Y } = REPORT_GEOMETRY;
 const WIDTH = RIGHT - LEFT;
-/** Start a new page past this y. A4 is 842pt tall; 36pt bottom margin plus footer room. */
-const PAGE_BREAK_Y = 720;
 
-const BOLD = "Helvetica-Bold";
-const REGULAR = "Helvetica";
+/** The work table stays hand-rolled: its rows are grouped under a per-ticket heading with its own
+ *  totals, which the shared grid has no notion of. Everything else is the shared style. */
+const kit = createPdfKit(REPORT_GEOMETRY);
+const { breakIfNeeded, pill, rule, sectionHeading } = kit;
 
 function money(value: number, currency: string): string {
   // Intl gives thousands separators; the currency code is appended rather than symbolised because
@@ -48,28 +40,6 @@ function money(value: number, currency: string): string {
 
 function truncate(input: string, max: number): string {
   return input.length > max ? `${input.slice(0, max - 1)}…` : input;
-}
-
-function rule(doc: PDFKit.PDFDocument, color = RULE, lineWidth = 0.5) {
-  doc.strokeColor(color).lineWidth(lineWidth).moveTo(LEFT, doc.y).lineTo(RIGHT, doc.y).stroke();
-}
-
-/** Page break helper — returns true if a break happened, so callers can redraw table headers. */
-function breakIfNeeded(doc: PDFKit.PDFDocument, threshold = PAGE_BREAK_Y): boolean {
-  if (doc.y > threshold) {
-    doc.addPage();
-    return true;
-  }
-  return false;
-}
-
-function sectionHeading(doc: PDFKit.PDFDocument, label: string) {
-  breakIfNeeded(doc, PAGE_BREAK_Y - 40);
-  doc.moveDown(0.8);
-  doc.font(BOLD).fontSize(12).fillColor(INK).text(label, LEFT, doc.y);
-  doc.moveDown(0.3);
-  rule(doc);
-  doc.moveDown(0.4);
 }
 
 export function renderAttestationPdf(
@@ -187,9 +157,11 @@ export function renderAttestationPdf(
         doc.text(entry.amount != null ? money(entry.amount, currency) : "—", colX.amount, rowY, { width: RIGHT - colX.amount });
 
         if (entry.identityVerified) {
-          doc.font(BOLD).fontSize(7).fillColor(SUCCESS).text("IDENTITY VERIFIED", colX.person, rowY + 11);
+          // A pill rather than coloured text — this is the single most consequential claim on the
+          // page, and it should read as a stamp, the way statuses do on the timesheet report.
+          pill(doc, "IDENTITY VERIFIED", colX.person, rowY + 12, SUCCESS);
           doc.font(REGULAR).fontSize(8.5).fillColor(INK);
-          doc.y = rowY + 22;
+          doc.y = rowY + 24;
         } else {
           doc.y = rowY + 13;
         }
@@ -241,14 +213,13 @@ export function renderAttestationPdf(
     }
   }
 
-  // ---- Footer on every page ---------------------------------------------------------------
-  // Written after all content so the page count is final. `bufferedPageRange` covers pages added
-  // by the break logic above, which is why the document is created with `bufferPages: true`.
-  const range = doc.bufferedPageRange();
-  for (let i = range.start; i < range.start + range.count; i++) {
-    doc.switchToPage(i);
-    doc.font(REGULAR).fontSize(7).fillColor(FOOTER);
-    doc.text(`${a.reference}  ·  integrity SHA-256 ${payloadHash.slice(0, 32)}…`, LEFT, 790, { width: WIDTH - 80, lineBreak: false });
-    doc.text(`Page ${i - range.start + 1} of ${range.count}`, RIGHT - 80, 790, { width: 80, align: "right", lineBreak: false });
-  }
+  // ---- Page furniture on every page --------------------------------------------------------
+  // Written after all content so the page count is final. `bufferedPageRange` covers pages added by
+  // the break logic above, which is why the document is created with `bufferPages: true`.
+  kit.decoratePages(doc, {
+    headerText: `Verified Work Attestation · ${a.reference}`,
+    footer: (page, total) => [
+      { left: `${a.reference}  ·  integrity SHA-256 ${payloadHash.slice(0, 32)}…`, right: `Page ${page} of ${total}` }
+    ]
+  });
 }

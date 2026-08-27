@@ -66,6 +66,22 @@ node .claude/skills/run-timesphere/driver.mjs bell
 | `eval <route> <expr>` | Evaluates a JS expression in the page and prints the JSON result. |
 | `bell` | Opens the notification bell and prints the panel's contents plus the rows the app's own API call returned. |
 
+### Looking at a PDF
+
+```powershell
+node .claude/skills/run-timesphere/pdf-shot.mjs c:/tmp/report.pdf report 3
+```
+
+Renders pages of a PDF to `test-results/run-shots/report-p1.png`… so an export can be **looked at**
+rather than assumed correct. There is no poppler/ghostscript/ImageMagick on this machine, and
+`pdf-parse` cannot read PDFKit's own output here, so this is the way to check a layout change.
+
+Two traps it already works around, both of which silently produce a wrong screenshot rather than an
+error: bundled headless Chromium **downloads** a PDF instead of rendering it (the viewer is a plugin
+headless does not load — it uses real Chrome via `channel: "chrome"`), and `PageDown` never reaches
+the embedded viewer, so every page came out as page 1 until it switched to the `#page=N` fragment
+with an `about:blank` between loads.
+
 It signs in automatically for `/app/*` routes and skips sign-in for public ones (`/login`,
 `/shared/*`). Every command ends with a list of failed requests, or states there were none.
 

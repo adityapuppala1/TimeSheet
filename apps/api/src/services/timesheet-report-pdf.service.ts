@@ -19,9 +19,11 @@
  *  - **Rows that ran off the bottom.** The break guard fired AFTER the row was drawn, so a tall
  *    row (long description) hung past the margin. Every row is measured before it is placed.
  *
- * House style shared with attestation-pdf.service.ts and security-report-pdf.service.ts: A4, 36pt
- * margins, #0F9AA8 brand (`--primary` in apps/web/src/index.css), #0F172A ink, #64748B muted,
- * #E2E8F0 rules, #94A3B8 footer, Helvetica-Bold headings, re-drawn table headers, Page N of M.
+ * House style comes from `pdf-kit.ts`, shared with the attestation, security and requirements
+ * exports — including the watermark and running header this report did not have. The entry table
+ * below stays hand-rolled on purpose: its rows carry a wrapped description and a provenance trail
+ * UNDER the columns, which the shared grid cannot express. The breakdown grid, which is a plain
+ * table, uses the shared one.
  *
  * The document is created with `bufferPages: true` by the caller — the footer pass needs the final
  * page count, which does not exist until the last row is drawn.
@@ -35,27 +37,34 @@ import {
   type TimesheetExportDocument
 } from "./timesheet-report.service.js";
 
-const BRAND = "#0F9AA8";
-const BRAND_TINT = "#E6F5F7";
-const INK = "#0F172A";
-const MUTED = "#64748B";
-const RULE = "#E2E8F0";
-const RULE_LIGHT = "#F1F5F9";
-const FOOTER = "#94A3B8";
-const DANGER = "#DC2626";
-const SUCCESS = "#16A34A";
-const AMBER = "#D97706";
+import {
+  AMBER,
+  BOLD,
+  BRAND,
+  BRAND_TINT,
+  DANGER,
+  FOOTER,
+  INK,
+  MUTED,
+  REGULAR,
+  REPORT_GEOMETRY,
+  RULE_LIGHT,
+  SUCCESS,
+  createPdfKit
+} from "./pdf-kit.js";
 
-const LEFT = 36;
-const RIGHT = 560;
+const { left: LEFT, right: RIGHT, contentBottom: CONTENT_BOTTOM } = REPORT_GEOMETRY;
 const WIDTH = RIGHT - LEFT;
-const PAGE_BREAK_Y = 720;
-/** The last y a row may still OCCUPY. A4 is 842pt; the two footer lines sit at 782/792, so
- *  anything drawn past this collides with them. */
-const CONTENT_BOTTOM = 756;
 
-const BOLD = "Helvetica-Bold";
-const REGULAR = "Helvetica";
+/** The shared house style. This document keeps its own entry table — the rows carry a wrapped
+ *  description and a provenance trail underneath the columns, which a plain grid cannot express —
+ *  but everything else (page furniture, the breakdown grid, status pills) now comes from one place. */
+const kit = createPdfKit(REPORT_GEOMETRY);
+const { breakIfNeeded, pill, rule, sectionHeading } = kit;
+
+/** Column proportions for the breakdown grid. Shared by the table and by the GRAND TOTAL band
+ *  drawn under it, so the two can never drift out of alignment. */
+const BREAKDOWN_WIDTHS = [0.44, 0.14, 0.13, 0.145, 0.145];
 
 const STATUS_COLOR: Record<string, string> = {
   APPROVED: SUCCESS,
@@ -82,31 +91,6 @@ const PROSE_WIDTH = RIGHT - PROSE_X;
 
 function truncate(input: string, max: number): string {
   return input.length > max ? `${input.slice(0, max - 1)}…` : input;
-}
-
-function rule(doc: PDFKit.PDFDocument, color = RULE, lineWidth = 0.5) {
-  doc.strokeColor(color).lineWidth(lineWidth).moveTo(LEFT, doc.y).lineTo(RIGHT, doc.y).stroke();
-}
-
-function breakIfNeeded(doc: PDFKit.PDFDocument, threshold = PAGE_BREAK_Y): boolean {
-  if (doc.y > threshold) {
-    doc.addPage();
-    return true;
-  }
-  return false;
-}
-
-function sectionHeading(doc: PDFKit.PDFDocument, label: string, right?: string) {
-  breakIfNeeded(doc, PAGE_BREAK_Y - 60);
-  doc.moveDown(0.7);
-  const y = doc.y;
-  doc.font(BOLD).fontSize(11).fillColor(INK).text(truncate(label, 70), LEFT, y, { width: WIDTH - 190, lineBreak: false });
-  if (right) {
-    doc.font(REGULAR).fontSize(9).fillColor(MUTED).text(right, RIGHT - 190, y + 1, { width: 190, align: "right", lineBreak: false });
-  }
-  doc.y = y + 14;
-  rule(doc);
-  doc.moveDown(0.3);
 }
 
 /** One line of the header block: a fixed label column, then the value. Two independent `text`
@@ -189,8 +173,11 @@ function drawEntry(doc: PDFKit.PDFDocument, exportDoc: TimesheetExportDocument, 
     align: "right",
     lineBreak: false
   });
-  doc.font(BOLD).fontSize(7).fillColor(STATUS_COLOR[row.status] ?? MUTED);
-  doc.text(row.status, COL.status, y + 1, { width: COL_WIDTH.status, align: "right", lineBreak: false });
+  // A pill, not coloured text: the same treatment priorities get in the requirements document, and
+  // right-aligned by measuring it first so the column edge stays true whatever the status is.
+  doc.font(BOLD).fontSize(7);
+  const statusWidth = doc.widthOfString(row.status) + 10;
+  pill(doc, row.status, RIGHT - statusWidth, y + 1, STATUS_COLOR[row.status] ?? MUTED);
 
   doc.y = y + 11;
   if (task) {
@@ -274,36 +261,44 @@ export function renderTimesheetReportPdf(doc: PDFKit.PDFDocument, report: Timesh
 
   // ---- 3. Breakdown, before the detail ------------------------------------------------------
   sectionHeading(doc, `Breakdown by ${report.groupBy}`);
-  const headY = doc.y;
-  doc.font(BOLD).fontSize(7.5).fillColor(MUTED);
-  doc.text("GROUP", LEFT, headY, { width: 240, lineBreak: false });
-  doc.text("ENTRIES", 300, headY, { width: 60, align: "right", lineBreak: false });
-  doc.text("PEOPLE", 366, headY, { width: 60, align: "right", lineBreak: false });
-  doc.text("BILLABLE", 432, headY, { width: 60, align: "right", lineBreak: false });
-  doc.text("HOURS", 498, headY, { width: 62, align: "right", lineBreak: false });
-  doc.y = headY + 11;
-  rule(doc);
-  doc.moveDown(0.25);
-
-  for (const { summary } of report.sections) {
-    breakIfNeeded(doc);
-    const y = doc.y;
-    doc.font(REGULAR).fontSize(8.5).fillColor(INK).text(truncate(summary.label, 46), LEFT, y, { width: 240, lineBreak: false });
-    doc.fillColor(MUTED).text(String(summary.entries), 300, y, { width: 60, align: "right", lineBreak: false });
-    doc.text(String(summary.people), 366, y, { width: 60, align: "right", lineBreak: false });
-    doc.text(summary.billableHours.toFixed(2), 432, y, { width: 60, align: "right", lineBreak: false });
-    doc.font(BOLD).fillColor(INK).text(summary.hours.toFixed(2), 498, y, { width: 62, align: "right", lineBreak: false });
-    doc.y = y + 13;
-  }
+  // The shared table: brand header band, zebra striping, and a header that repeats after a page
+  // break. The hand-rolled version this replaces had none of those and, with fixed x-positions and
+  // `lineBreak: false`, silently clipped a long group name rather than wrapping it.
+  kit.table(
+    doc,
+    ["Group", "Entries", "People", "Billable", "Hours"],
+    report.sections.map(({ summary }) => [
+      summary.label,
+      String(summary.entries),
+      String(summary.people),
+      summary.billableHours.toFixed(2),
+      summary.hours.toFixed(2)
+    ]),
+    BREAKDOWN_WIDTHS,
+    { alignRight: [1, 2, 3, 4] }
+  );
 
   breakIfNeeded(doc);
   const totalY = doc.y;
   doc.rect(LEFT, totalY - 2, WIDTH, 18).fillColor(BRAND_TINT).fill();
-  doc.font(BOLD).fontSize(9).fillColor(INK).text("GRAND TOTAL", LEFT + 6, totalY + 3, { width: 240, lineBreak: false });
-  doc.text(String(report.totals.entries), 300, totalY + 3, { width: 60, align: "right", lineBreak: false });
-  doc.text(String(report.totals.people), 366, totalY + 3, { width: 60, align: "right", lineBreak: false });
-  doc.text(report.totals.billableHours.toFixed(2), 432, totalY + 3, { width: 60, align: "right", lineBreak: false });
-  doc.text(report.totals.hours.toFixed(2), 498, totalY + 3, { width: 62, align: "right", lineBreak: false });
+  doc.font(BOLD).fontSize(9).fillColor(INK);
+  // Derived from the SAME fractions the table above uses, not re-typed as absolute x positions.
+  // The previous version hardcoded 300/366/432/498, so the totals row and the rows it totals could
+  // drift apart the moment either was touched — and a total that does not sit under its column is
+  // a total the reader has to guess at.
+  const totals = [
+    "GRAND TOTAL",
+    String(report.totals.entries),
+    String(report.totals.people),
+    report.totals.billableHours.toFixed(2),
+    report.totals.hours.toFixed(2)
+  ];
+  let totalX = LEFT;
+  BREAKDOWN_WIDTHS.forEach((fraction, i) => {
+    const colWidth = fraction * WIDTH;
+    doc.text(totals[i], totalX + 6, totalY + 3, { width: colWidth - 12, align: i === 0 ? "left" : "right", lineBreak: false });
+    totalX += colWidth;
+  });
   doc.y = totalY + 22;
 
   // ---- 4. Detail, one section per group -----------------------------------------------------
@@ -329,25 +324,26 @@ export function renderTimesheetReportPdf(doc: PDFKit.PDFDocument, report: Timesh
   paginate(doc, report);
 }
 
-/** Footer pass — written last, because the page count does not exist until the last row is drawn.
- *  `bufferedPageRange` covers the pages the break logic added, which is why the caller creates the
- *  document with `bufferPages: true`. */
+/**
+ * Page furniture — written last, because the page count does not exist until the last row is drawn.
+ * `bufferedPageRange` covers the pages the break logic added, which is why the caller creates the
+ * document with `bufferPages: true`.
+ *
+ * The watermark and running header come from the shared kit; this report had neither, while the
+ * requirements document had both. Both leave the building, so both are marked.
+ */
 function paginate(doc: PDFKit.PDFDocument, report: TimesheetExportDocument) {
-  const range = doc.bufferedPageRange();
-  for (let i = range.start; i < range.start + range.count; i++) {
-    doc.switchToPage(i);
-    doc.font(REGULAR).fontSize(7).fillColor(FOOTER);
-    doc.text(`${report.workspace} · ${report.title} · ${report.periodLabel}`, LEFT, 782, { width: WIDTH - 90, lineBreak: false });
-    doc.text(`Page ${i - range.start + 1} of ${range.count}`, RIGHT - 80, 782, { width: 80, align: "right", lineBreak: false });
-    doc.text("Confidential — for internal operational review.", LEFT, 792, { width: WIDTH - 90, lineBreak: false });
-    if (report.truncated) {
-      // Repeated on every page because a long report is read from wherever it was opened, and the
-      // caveat has to be where the reader is.
-      doc.fillColor(DANGER).text(`Partial: ${report.rowsIncluded} of ${report.totalMatching} entries`, RIGHT - 200, 792, {
-        width: 200,
-        align: "right",
-        lineBreak: false
-      });
-    }
-  }
+  kit.decoratePages(doc, {
+    headerText: `${report.workspace} · ${report.title}`,
+    footer: (page, total) => [
+      { left: `${report.workspace} · ${report.title} · ${report.periodLabel}`, right: `Page ${page} of ${total}` },
+      {
+        left: "Confidential — for internal operational review.",
+        // Repeated on every page because a long report is read from wherever it was opened, and the
+        // caveat has to be where the reader is.
+        right: report.truncated ? `Partial: ${report.rowsIncluded} of ${report.totalMatching} entries` : undefined,
+        rightColor: DANGER
+      }
+    ]
+  });
 }

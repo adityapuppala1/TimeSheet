@@ -4,9 +4,15 @@
  * numbers, numbered sections, tables, colour-coded priorities, a diagonal TimeSphere watermark on
  * every page, and running headers/footers.
  *
- * House style shared with security-report-pdf.service.ts and the timesheet/attestation exports:
- * A4, #0F9AA8 brand, #0F172A ink, Helvetica only — copied here rather than imported, since that
- * file's helpers are module-local.
+ * House style comes from `pdf-kit.ts`, shared with the timesheet, attestation and security
+ * exports. What stays here is this document's own structure: the cover, the contents page with
+ * real page numbers, and the numbered-section scheme.
+ *
+ * ── NARRATIVE FIELDS ARE MARKDOWN ───────────────────────────────────────────────────────────
+ * The generation prompt tells the model these fields may contain markdown, and the on-screen
+ * document renders it. This drew them with a plain paragraph call, so anyone who exported the
+ * document got `### Heading` and raw `| pipe | tables |` printed literally — the artifact people
+ * actually circulate disagreed with the one on screen. They go through `kit.markdown` now.
  *
  * ── THE ARCHITECTURE DIAGRAM ────────────────────────────────────────────────────────────────
  * PDFKit cannot render Mermaid, and pulling a headless browser into the API for one diagram is a
@@ -22,24 +28,20 @@
  * rather than rendering an empty heading or throwing.
  */
 import type { RequirementsDocSections } from "./ai.service.js";
-
-const BRAND = "#0F9AA8";
-const BRAND_DARK = "#0B7683";
-const INK = "#0F172A";
-const MUTED = "#64748B";
-const RULE = "#E2E8F0";
-const FOOTER = "#94A3B8";
-const ZEBRA = "#F8FAFC";
-const WATERMARK = "#0F9AA8";
-
-/** Priority pill fills — the app's own semantic palette, so a CRITICAL row reads the same here as
- *  it does on screen. */
-const PRIORITY_COLOR: Record<string, string> = {
-  CRITICAL: "#DC2626",
-  HIGH: "#EA580C",
-  MEDIUM: "#0F9AA8",
-  LOW: "#64748B"
-};
+import {
+  BOLD,
+  BRAND,
+  BRAND_DARK,
+  DOCUMENT_GEOMETRY,
+  FOOTER,
+  INK,
+  MONO,
+  MUTED,
+  PRIORITY_COLOR,
+  REGULAR,
+  RULE,
+  createPdfKit
+} from "./pdf-kit.js";
 
 const DOC_TYPE_SUBTITLE: Record<string, string> = {
   PRD: "Product Requirements Document",
@@ -47,15 +49,13 @@ const DOC_TYPE_SUBTITLE: Record<string, string> = {
   BOTH: "Product & Business Requirements Document"
 };
 
-const LEFT = 48;
-const RIGHT = 548;
+const { left: LEFT, right: RIGHT, top: TOP, pageBreakY: PAGE_BREAK_Y } = DOCUMENT_GEOMETRY;
 const WIDTH = RIGHT - LEFT;
-const TOP = 64;
-const PAGE_BREAK_Y = 730;
 
-const BOLD = "Helvetica-Bold";
-const REGULAR = "Helvetica";
-const MONO = "Courier";
+/** The house style, bound to this document's inset geometry. The cover page, the contents page and
+ *  the numbered-section scheme below stay here — they are this document's structure, not style. */
+const kit = createPdfKit(DOCUMENT_GEOMETRY);
+const { breakIfNeeded, bulletList, markdown, pill, rule, table } = kit;
 
 /** Where each numbered section landed, filled in as we render and replayed onto the reserved
  *  contents page at the end — PDFKit can only know a page number after the content is on it. */
@@ -81,119 +81,6 @@ export interface RequirementsPdfInput {
 function formatTarget(value: number | undefined, unit: string | undefined): string {
   if (value == null) return "—";
   return unit ? `${value} ${unit}` : String(value);
-}
-
-function rule(doc: PDFKit.PDFDocument, color = RULE, lineWidth = 0.5) {
-  doc.strokeColor(color).lineWidth(lineWidth).moveTo(LEFT, doc.y).lineTo(RIGHT, doc.y).stroke();
-}
-
-function breakIfNeeded(doc: PDFKit.PDFDocument, threshold = PAGE_BREAK_Y): boolean {
-  if (doc.y > threshold) {
-    doc.addPage();
-    doc.y = TOP;
-    return true;
-  }
-  return false;
-}
-
-function paragraph(doc: PDFKit.PDFDocument, text: string) {
-  breakIfNeeded(doc);
-  doc.font(REGULAR).fontSize(10).fillColor(INK).text(text || "—", LEFT, doc.y, { width: WIDTH, align: "left" });
-  doc.moveDown(0.5);
-}
-
-function bulletList(doc: PDFKit.PDFDocument, items: string[] | undefined) {
-  if (!items || items.length === 0) {
-    paragraph(doc, "—");
-    return;
-  }
-  for (const item of items) {
-    breakIfNeeded(doc);
-    doc.font(REGULAR).fontSize(10).fillColor(BRAND).text("•", LEFT, doc.y, { width: 10, continued: false });
-    const bulletY = doc.y;
-    doc.y = bulletY - doc.currentLineHeight();
-    doc.fillColor(INK).text(item, LEFT + 14, doc.y, { width: WIDTH - 14 });
-    doc.moveDown(0.2);
-  }
-  doc.moveDown(0.3);
-}
-
-/** A coloured pill, used for priorities and RACI codes. Returns the width it consumed. */
-function pill(doc: PDFKit.PDFDocument, text: string, x: number, y: number, color: string): number {
-  doc.font(BOLD).fontSize(7);
-  const textWidth = doc.widthOfString(text);
-  const w = textWidth + 10;
-  doc.roundedRect(x, y - 1, w, 12, 3).fillColor(color).fill();
-  doc.fillColor("#FFFFFF").text(text, x + 5, y + 1.5, { width: textWidth, lineBreak: false });
-  return w;
-}
-
-/**
- * A real table with a header row, zebra striping and page breaks that repeat the header.
- *
- * `widths` are fractions of the content width so callers describe proportion rather than points.
- * Cell heights are measured before drawing so a wrapping cell doesn't overlap the row below — the
- * single hardest thing about hand-rolled PDF tables, and the reason this helper exists at all.
- */
-function table(
-  doc: PDFKit.PDFDocument,
-  headers: string[],
-  rows: string[][],
-  widths: number[],
-  options: { pillColumn?: number; pillColors?: Record<string, string> } = {}
-) {
-  if (rows.length === 0) {
-    paragraph(doc, "—");
-    return;
-  }
-  const cols = widths.map((fraction) => fraction * WIDTH);
-  const padding = 6;
-
-  const drawHeader = () => {
-    const y = doc.y;
-    doc.rect(LEFT, y, WIDTH, 20).fillColor(BRAND).fill();
-    doc.font(BOLD).fontSize(8).fillColor("#FFFFFF");
-    let x = LEFT;
-    headers.forEach((header, i) => {
-      doc.text(header.toUpperCase(), x + padding, y + 6, { width: cols[i] - padding * 2, lineBreak: false });
-      x += cols[i];
-    });
-    doc.y = y + 20;
-  };
-
-  breakIfNeeded(doc, PAGE_BREAK_Y - 60);
-  drawHeader();
-
-  rows.forEach((row, rowIndex) => {
-    doc.font(REGULAR).fontSize(8.5);
-    // Measure first: the tallest cell decides the row height, so nothing overlaps.
-    const heights = row.map((value, i) => doc.heightOfString(value || "—", { width: cols[i] - padding * 2 }));
-    const rowHeight = Math.max(...heights, 12) + padding * 2;
-
-    if (doc.y + rowHeight > PAGE_BREAK_Y) {
-      doc.addPage();
-      doc.y = TOP;
-      drawHeader();
-    }
-
-    const y = doc.y;
-    if (rowIndex % 2 === 1) doc.rect(LEFT, y, WIDTH, rowHeight).fillColor(ZEBRA).fill();
-
-    let x = LEFT;
-    row.forEach((value, i) => {
-      if (options.pillColumn === i && options.pillColors?.[value]) {
-        pill(doc, value, x + padding, y + padding + 1, options.pillColors[value]);
-      } else {
-        doc.font(REGULAR).fontSize(8.5).fillColor(INK).text(value || "—", x + padding, y + padding, { width: cols[i] - padding * 2 });
-      }
-      x += cols[i];
-    });
-
-    doc.strokeColor(RULE).lineWidth(0.4).moveTo(LEFT, y + rowHeight).lineTo(RIGHT, y + rowHeight).stroke();
-    doc.y = y + rowHeight;
-  });
-
-  doc.moveDown(0.6);
 }
 
 /** The Mermaid diagram: the browser-rasterised PNG when we have one, its source otherwise. */
@@ -252,34 +139,6 @@ function coverPage(doc: PDFKit.PDFDocument, input: RequirementsPdfInput) {
   }
 }
 
-/**
- * Draws the diagonal watermark, the running header and the page footer on every page.
- *
- * Runs LAST, over the buffered page range, for two reasons: the total page count isn't knowable
- * until the content is laid out, and `save()`/`restore()` around the rotation guarantees the
- * transform can't leak into content that was already drawn.
- */
-function decoratePages(doc: PDFKit.PDFDocument, title: string, skipFirst: number) {
-  const range = doc.bufferedPageRange();
-  for (let i = 0; i < range.count; i++) {
-    doc.switchToPage(range.start + i);
-
-    if (i >= skipFirst) {
-      doc.save();
-      doc.rotate(-45, { origin: [297, 420] });
-      doc.font(BOLD).fontSize(64).fillColor(WATERMARK).fillOpacity(0.05).text("TimeSphere", 0, 390, { width: 595, align: "center" });
-      doc.restore();
-
-      doc.font(REGULAR).fontSize(8).fillColor(FOOTER).text(title, LEFT, 32, { width: WIDTH - 100, lineBreak: false });
-      doc.strokeColor(RULE).lineWidth(0.5).moveTo(LEFT, 46).lineTo(RIGHT, 46).stroke();
-    }
-
-    doc.font(REGULAR).fontSize(8).fillColor(FOOTER);
-    doc.text("TimeSphere · Confidential", LEFT, 792, { width: WIDTH / 2, lineBreak: false });
-    doc.text(`Page ${i + 1} of ${range.count}`, LEFT + WIDTH / 2, 792, { width: WIDTH / 2, align: "right", lineBreak: false });
-  }
-}
-
 export function renderRequirementsDocPdf(doc: PDFKit.PDFDocument, input: RequirementsPdfInput) {
   const s = input.sections;
   const toc: TocEntry[] = [];
@@ -310,17 +169,17 @@ export function renderRequirementsDocPdf(doc: PDFKit.PDFDocument, input: Require
 
   if (s.executiveSummary?.trim()) {
     heading("Executive summary");
-    paragraph(doc, s.executiveSummary);
+    markdown(doc, s.executiveSummary);
   }
 
   heading("Problem");
-  paragraph(doc, s.problem);
+  markdown(doc, s.problem);
 
   heading("Goals");
-  paragraph(doc, s.goals);
+  markdown(doc, s.goals);
 
   heading("Target users");
-  paragraph(doc, s.targetUsers);
+  markdown(doc, s.targetUsers);
 
   if (s.personas?.length) {
     heading("User personas");
@@ -383,10 +242,10 @@ export function renderRequirementsDocPdf(doc: PDFKit.PDFDocument, input: Require
   }
 
   heading("UI/UX");
-  paragraph(doc, s.uiUx);
+  markdown(doc, s.uiUx);
 
   heading("Architecture");
-  paragraph(doc, s.architecture.description);
+  markdown(doc, s.architecture.description);
   architectureDiagram(doc, s.architecture.diagramMermaid, input.diagramPng);
 
   heading("Modules");
@@ -415,10 +274,10 @@ export function renderRequirementsDocPdf(doc: PDFKit.PDFDocument, input: Require
   if (s.costBenefit?.costs?.trim() || s.costBenefit?.benefits?.trim()) {
     heading("Cost & benefit");
     doc.font(BOLD).fontSize(10).fillColor(INK).text("Costs", LEFT, doc.y);
-    paragraph(doc, s.costBenefit.costs);
+    markdown(doc, s.costBenefit.costs);
     doc.font(BOLD).fontSize(10).fillColor(INK).text("Benefits", LEFT, doc.y);
-    paragraph(doc, s.costBenefit.benefits);
-    if (s.costBenefit.notes) paragraph(doc, s.costBenefit.notes);
+    markdown(doc, s.costBenefit.benefits);
+    if (s.costBenefit.notes) markdown(doc, s.costBenefit.notes);
   }
 
   heading("Risks");
@@ -460,5 +319,11 @@ export function renderRequirementsDocPdf(doc: PDFKit.PDFDocument, input: Require
     doc.y = y + 18;
   }
 
-  decoratePages(doc, input.title, 1);
+  // Skip the cover: it carries its own full-bleed branding and a watermark over it reads as a
+  // printing fault rather than a mark.
+  kit.decoratePages(doc, {
+    headerText: input.title,
+    skipFirst: 1,
+    footer: (page, total) => [{ left: "TimeSphere · Confidential", right: `Page ${page} of ${total}` }]
+  });
 }
