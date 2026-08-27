@@ -4,10 +4,14 @@
  * midnight to the PREVIOUS day — so the banner said hours were logged while the timeline
  * rendered empty. These tests pin the fix with real data: create an entry for today through
  * the API, then assert the dashboard actually draws it.
+ *
+ * The timeline is also driven by the PAGE's date range now rather than by a second date picker of
+ * its own, so the walk-to-an-empty-day assertion goes through the header control — the one that
+ * looked like it drove the page and, until 3.5.0, did not drive this card.
  */
 import { test, expect } from "@playwright/test";
 import { suspendFaceGate, type FaceGateSnapshot } from "./helpers/face-gate";
-import { accessToken, pickDate, signIn } from "./helpers/sign-in";
+import { accessToken, signIn } from "./helpers/sign-in";
 
 // Own snapshot, not shared with timesheet.spec.ts's "employee.json" — both specs rotate their
 // session's refresh secret via POST /auth/refresh, and two specs sharing one snapshot race to
@@ -36,7 +40,7 @@ function localDateKey(d: Date): string {
 }
 
 test.describe("Dashboard day timeline", () => {
-  test("shows an entry logged today, and the date picker walks to an empty day", async ({ page }) => {
+  test("shows an entry logged today, and the page's date range drives it", async ({ page }) => {
     await signIn(page, "employee");
     await page.goto("/app");
     const headers = await accessToken(page);
@@ -75,16 +79,27 @@ test.describe("Dashboard day timeline", () => {
       await expect(page.getByTestId("timeline-entry").first()).toBeVisible({ timeout: 10_000 });
       await expect(track).not.toContainText("Nothing logged yet today");
 
-      // Date picker: walk far into the past (before any seeded data) and expect the empty state.
-      const past = new Date();
-      past.setFullYear(past.getFullYear() - 2);
-      await pickDate(page, "dashboard-date", past);
+      // The card follows the PAGE's date range. It used to carry a date picker of its own, which
+      // meant the control that looked like it drove the page did not drive the card most obviously
+      // about days — so what is asserted here is that the header range reaches it.
+      const openRange = async () => {
+        await page.locator("button").filter({ hasText: /^(This week|Today|Last year)$/ }).first().click();
+      };
+      const applyPreset = async (preset: string) => {
+        await openRange();
+        await page.getByRole("button", { name: preset, exact: true }).click();
+        await page.getByRole("button", { name: "Apply", exact: true }).click();
+      };
+
+      // Last year is before any seeded data (the seed reaches ~9 days back), so this is empty
+      // deterministically rather than by luck.
+      await applyPreset("Last year");
       await expect(page.getByTestId("timeline-entry")).toHaveCount(0);
       await expect(track).toContainText(/Nothing logged on/);
 
-      // "Today" button returns to a populated view.
-      await page.getByRole("button", { name: "Today", exact: true }).click();
-      await expect(page.getByTestId("timeline-entry").first()).toBeVisible();
+      // ...and coming back repopulates it, from the same one control.
+      await applyPreset("Today");
+      await expect(page.getByTestId("timeline-entry").first()).toBeVisible({ timeout: 10_000 });
     } finally {
       if (created?.id) {
         await page.request.delete(`/api/timesheets/${created.id}`, { headers }).catch(() => undefined);

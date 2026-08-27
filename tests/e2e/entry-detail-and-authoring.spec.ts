@@ -12,9 +12,34 @@
  * cleans up after itself.
  */
 import { expect, request, test, type Locator, type Page } from "@playwright/test";
-import { pickDate, signIn } from "./helpers/sign-in";
+import { signIn } from "./helpers/sign-in";
 import { withAdminRequest } from "./helpers/admin-request";
 import { E2E_BASE_URL } from "./helpers/base-url";
+
+/**
+ * Puts the dashboard's day timeline on a specific day.
+ *
+ * The card used to carry a date picker of its own; as of 3.5.0 the page has ONE calendar, in the
+ * header, and the timeline follows it — so a day is reached by moving the page's range to the month
+ * containing it and then clicking that day in the timeline's day strip. The strip only renders when
+ * more than one day in the range has entries, and the timeline auto-anchors to the most recent
+ * populated day otherwise, which is why the chip click is conditional rather than required.
+ */
+async function focusTimelineDay(page: Page, isoDay: string): Promise<void> {
+  const [year, month, day] = isoDay.split("-").map(Number);
+  const now = new Date();
+  const preset = year === now.getFullYear() && month === now.getMonth() + 1 ? "This month" : "Last month";
+
+  // The trigger's label is the committed range, so match any of the presets it might currently show.
+  await page.locator("button").filter({ hasText: /^(Today|Yesterday|This week|Last week|This month|Last month|This year|Last year)$/ }).first().click();
+  await page.getByRole("button", { name: preset, exact: true }).click();
+  await page.getByRole("button", { name: "Apply", exact: true }).click();
+
+  const label = new Date(year, month - 1, day).toLocaleDateString("en-GB", { day: "numeric", month: "short" });
+  const chip = page.getByRole("button", { name: new RegExp(`${label}`, "i") }).first();
+  if (await chip.count()) await chip.click().catch(() => undefined);
+}
+
 
 test.use({ storageState: { cookies: [], origins: [] } });
 
@@ -247,8 +272,7 @@ test.describe("dashboard day timeline", () => {
 
     await signIn(page, "superadmin");
     await page.goto("/app");
-    const [year, month, day] = busiestDay!.split("-").map(Number);
-    await pickDate(page, "dashboard-date", new Date(year, month - 1, day));
+    await focusTimelineDay(page, busiestDay!);
 
     const block = page.getByTestId("timeline-entry").filter({ visible: true }).first();
     await expect(block).toBeVisible({ timeout: 15_000 });
@@ -733,9 +757,7 @@ test.describe("acting on an entry from any screen", () => {
 
     await signIn(page, "superadmin");
     await page.goto("/app");
-    const day = String(submitted!.workDate).slice(0, 10);
-    const [year, month, dayOfMonth] = day.split("-").map(Number);
-    await pickDate(page, "dashboard-date", new Date(year, month - 1, dayOfMonth));
+    await focusTimelineDay(page, String(submitted!.workDate).slice(0, 10));
 
     const block = page.getByTestId("timeline-entry").filter({ visible: true }).first();
     await expect(block).toBeVisible({ timeout: 15_000 });
