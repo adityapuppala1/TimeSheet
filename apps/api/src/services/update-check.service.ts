@@ -34,8 +34,19 @@ const TOKEN = process.env.UPDATE_CHECK_TOKEN?.trim() || null;
 
 /** An hour. Releases happen weekly at most; checking faster only spends rate limit. */
 const CHECK_INTERVAL_MS = 60 * 60 * 1000;
-/** How many releases of history the What's-new page gets. */
-const RELEASE_HISTORY_LIMIT = 15;
+/**
+ * How many releases of history the What's-new page gets.
+ *
+ * RAISED FROM 15, which the 3.6.0 release crossed — and the way it announced itself is the reason
+ * this comment exists: the page silently stopped showing v1.0.0. Nothing broke, no error appeared,
+ * and a "Release history" that quietly drops its oldest entry is the kind of small dishonesty this
+ * product is otherwise careful about. A test comparing the page against CHANGELOG.md caught it.
+ *
+ * 40 rather than "no limit": the cap exists so a decade-old install does not ship a thousand-entry
+ * payload to every page load, and that reasoning is still sound. 40 is roughly four years at this
+ * release cadence, and the same test will fail again before anyone is misled.
+ */
+const RELEASE_HISTORY_LIMIT = 40;
 
 export interface ReleaseInfo {
   version: string;

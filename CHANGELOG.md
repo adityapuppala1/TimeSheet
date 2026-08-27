@@ -12,6 +12,95 @@ number, on purpose — an installation must never render history for a version t
 
 _Nothing yet._
 
+## 3.6.0 — the three boundaries a SaaS actually has — 2026-08-27
+
+Billing, workspace routing and identity, taken one at a time. The short version: seat and AI
+limits were always enforced correctly, subdomain routing was always correct, and SSO credentials
+were never checked at all.
+
+### 🔐 An SSO configuration now has to prove itself
+
+- **Dummy values used to save cleanly.** `idpCertificate` was a 10,000-character string that was
+  never parsed; `ldapUrl` was not checked for a scheme; `idpSsoUrl` accepted `http://`, which makes
+  a SAML assertion interceptable. All three are validated now, and the certificate's subject,
+  issuer and **expiry** are shown on the card — an expiry an admin cannot see is an outage with a
+  date on it.
+- **A provider could be switched on with every credential field empty.** Enabling now requires what
+  that provider actually needs, checked against the merged row so the existing "save credentials,
+  then flip the switch" sequence still works, and so an incomplete draft still saves.
+- **A per-provider Test connection**, which mail and AI have had for a while. Google is verified
+  properly: a token exchange with a deliberately invalid code distinguishes a wrong client secret
+  from a wrong code, with no user and no browser involved. LDAP binds for real and runs your real
+  filter. SAML parses the certificate and reaches the endpoint.
+- **Microsoft cannot be verified this way, and now says so.** Azure validates the authorization
+  code's shape before it looks at the credentials, so the same probe returns a confident pass for
+  two junk strings — measured against the live endpoint, not assumed. Every other unauthenticated
+  probe was tried too; Azure deliberately does not tell an anonymous caller whether an app
+  registration exists. The Microsoft test reports the tenant resolving and states plainly what it
+  could not prove.
+
+### 🚪 Requiring SSO can no longer lock a workspace out of itself
+
+- **"Require SSO only" turns off password sign-in for everyone, including the admin who sets it.**
+  Combined with a configuration full of placeholder values, one checkbox locked a workspace out
+  with no way back except a manual database edit.
+- It is now gated on **a real, completed sign-in** through an enabled provider — not on a passing
+  connection test, because the Microsoft case above proves a test cannot carry that weight. A
+  passing test is also cleared whenever a field it exercised is edited, or the gate would be
+  defeated by testing first and pasting the wrong secret afterwards.
+- Turning the switch **off** is never gated. A recovery path must not depend on the thing that is
+  broken. There is also a support-side break-glass in the platform console — deliberately not a
+  super-admin password bypass, which would be a permanent hole in the exact guarantee an
+  organisation turns SSO-only on for.
+
+### 🧭 Find your workspace
+
+- Every workspace lives on its own subdomain, which resolves to its own database before any
+  credential is exchanged. That is what makes per-workspace branding and sign-in methods work — and
+  it is the one thing a returning user can forget, with nowhere to go when they do.
+- **Enter an email, get a code, see your workspaces.** Verify-first on purpose: an endpoint that
+  simply answered "which workspaces is this address in" would confirm the address exists and name
+  the employer. A known and an unknown address receive identical responses, and a wrong code is
+  indistinguishable from an address that matched nothing.
+- The index behind it stores a **keyed hash, never the address**. The control plane already holds
+  every tenant's database credentials; a plaintext list of every customer's users would make one
+  dump of it a customer list and a marketing list at the same time.
+
+### 🌐 The bare domain stopped serving one customer's login page
+
+- Workspace slugs were derived by counting DNS labels, which sent the apex domain to whichever
+  organisation `DEFAULT_ORG_SLUG` names, and read `example.co.uk` as a workspace called "example".
+  A domain's real root is not derivable from how many dots it has. Setting `ROOT_DOMAIN` makes it
+  explicit; **left unset, every existing deployment behaves exactly as before**.
+- **Custom domains**, verified by a DNS TXT record, resolve ahead of the subdomain rule — so an
+  enterprise customer can put their workspace on their own hostname.
+
+### ⏳ A 15-day trial, and a lapse you can recover from
+
+- **Self-serve signup**, which the landing page has been advertising while its button pointed at a
+  sign-in form. It provisions a real workspace on a 15-day Team trial: verified email first, no
+  free-mail domains, and a workspace address that refuses a collision rather than quietly appending
+  a number to it.
+- **Entitlements lapse on the clock**, resolved inside the one function every entitlement check
+  already goes through — so all fifteen capabilities and quotas inherit trials with nothing else
+  changed.
+- **When the trial ends, the workspace pauses — it does not vanish.** Everyone is signed out of the
+  app and sees a short notice; a workspace admin can still reach Billing *and* export their data.
+  Getting your own data out must never depend on an invoice. Full suspension follows 14 days later,
+  and nothing is deleted at any point. Warnings go out 7, 3 and 1 days before.
+
+### 💳 Billing that follows what actually happened
+
+- **Checkout billed one seat.** The pricing page sells "$8 per seat / month", and a fifty-person
+  workspace upgrading through the self-serve flow was charged for a single seat. Checkout now bills
+  the real headcount, and the subscription quantity follows it as people are added and removed.
+- **A failed renewal used to do nothing** until Stripe eventually cancelled — at which point the
+  workspace silently dropped to Starter, losing timeline, goals, change management and AI with no
+  warning to anybody. It now pauses with the same grace window and an email that says which card
+  failed, and resumes the moment payment succeeds.
+- **Paying ends the trial.** Without that, buying on day 12 of a 15-day trial meant being locked out
+  on day 15 for non-payment.
+
 ## 3.5.1 — the plan tiers can actually be edited, and the landing page comes alive — 2026-08-27
 
 ### 🐛 A fresh install told new Team and Enterprise customers they had no goals and no change management

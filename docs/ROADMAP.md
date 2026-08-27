@@ -4769,6 +4769,76 @@ the answer at the time was 31/17/13. All three were corrected before being super
   seed step would light all fourteen up — deliberately not done in the same change as the fix, since
   it will surface failures that deserve their own pass.
 
+## v3.6.0 — the three boundaries a SaaS actually has (2026-08-27)
+
+Three questions, asked together because they turn out to be one: what does a SaaS actually have to
+separate? Who has paid, whose database a request reaches, and who a person really is. The middle one
+was already right. The other two were partly assumed.
+
+### The probe that lied, and what replaced it
+
+The SSO test-connection endpoint was built on a real technique: send a token request with a
+deliberately invalid authorization code, and read which error comes back. A wrong client secret
+answers `invalid_client`; a correct one answers `invalid_grant`, complaining about the code we made
+bad on purpose. It verifies a credential with no user, no browser and no redirect, and it works
+perfectly on Google.
+
+It does not work on Azure AD, which validates the code's SHAPE first and answers `invalid_grant`
+either way. The first version of this feature therefore reported a confident PASS for a Microsoft
+configuration whose client ID was the literal string `staged-ahead-of-upgrade` — a green tick on
+exactly the failure the whole feature was written to catch. It was caught by running it against the
+live endpoint rather than by reasoning about it, which is the only way it could have been caught.
+
+`client_credentials` and `/authorize?prompt=none` were both measured next; neither discloses
+anything either, because Azure deliberately refuses to tell an unauthenticated caller whether an app
+registration exists. That is a correct decision on Microsoft's part and it means **no probe can fill
+this role**.
+
+So the gate moved. `requireSsoOnly` — the switch that turns off password sign-in for an entire
+workspace — is gated on a *completed sign-in*, which no provider can answer ambiguously. The
+connection test remains, downgraded to what it honestly is: a diagnostic that tells an admin why a
+sign-in is failing. The lesson worth keeping is that a green result which proves nothing is worse
+than no result at all, because it is acted upon.
+
+### Discovery is an enumeration oracle unless you build it as one that isn't
+
+`middleware/tenant.ts` already goes to real lengths to avoid leaking workspace lifecycle state: it
+collapses unknown, suspended and provisioning into a single 404 so an anonymous caller cannot walk a
+wordlist and learn which competitors are in billing trouble. A naive "which workspaces is this
+address in?" endpoint hands all of that back one route over, plus the address's existence and its
+owner's employer.
+
+Verify-first is the answer, and the shape of it is not negotiable: identical responses for a hit and
+a miss, a code that must come back before anything is revealed, and an indistinguishable failure for
+a wrong code versus an address that matched nothing. The index is a keyed hash rather than the
+address, because the control plane already holds every tenant's database credentials and a plaintext
+user list would make one dump of it materially worse.
+
+### Two bugs that only a live run could find
+
+**`req.path` is not the path.** The GRACE billing gate allowed a super admin through on
+`/billing/*`. Express strips the mount point before per-router middleware sees it, so `req.path` for
+`GET /api/billing/status` is `/status` — the check never fired, and the first live run refused an
+admin access to the billing page, which is the one door the entire GRACE design exists to keep open.
+No unit test would have caught it; the bug is in Express's path semantics, not in the logic.
+
+**A worker that warns once and then goes quiet.** `NOTICE_DAYS` was written `[7, 3, 1]` because that
+reads the way the sequence arrives. The lookup is `find(left <= d)`, which matches 7 for every
+value — so a trial recorded the seven-day notice as sent and then skipped the three-day and one-day
+warnings forever as already-sent. One email, a week out, and silence through the day the trial
+expired. Caught by a test that drove the tick at each boundary.
+
+### Why an expired trial does not simply suspend
+
+The obvious implementation moves an expired workspace to `SUSPENDED`, which `resolveActiveOrgBySlug`
+refuses outright — including sign-in, including the one person who can pay, on the day they decided
+to. `GRACE` sits between: requests resolve, everyone can still sign in and see a notice rather than
+a broken login, and only a super admin reaches Billing and Export.
+
+Export in particular is not a courtesy. Getting your own data out must never depend on an invoice —
+it is the difference between a lapsed trial and a hostage situation, and it is the first thing an
+enterprise procurement review asks about.
+
 ## v3.5.1 — the plan tiers can actually be edited, and the landing page comes alive (2026-08-27)
 
 ### The entitlement that a fresh install got wrong, and why nobody had seen it

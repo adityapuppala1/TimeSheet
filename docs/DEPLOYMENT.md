@@ -1437,6 +1437,7 @@ summarized:
 |---|---|---|
 | `CONTROL_DATABASE_URL` | Both shapes | The control-plane database (org registry, SSO config, plan tiers, platform-admin accounts) |
 | `DEFAULT_ORG_SLUG` | Both shapes | Which org a request with no real subdomain resolves to (default: `default`) |
+| `ROOT_DOMAIN` | Multi-org only | The domain subdomains hang off (`timesphere.app`). Setting it derives the slug by stripping this suffix instead of counting DNS labels, and makes the bare domain serve the workspace finder instead of `DEFAULT_ORG_SLUG`. **Unset = today's behaviour**, which is what every single-org install wants. |
 | `PLATFORM_ADMIN_JWT_SECRET` | Both shapes | Signs `/platform-admin` tokens — must differ from `JWT_ACCESS_SECRET`/`JWT_REFRESH_SECRET` |
 | `TENANT_DB_PROVISION_BASE_URL` | SaaS shape, only if using in-console provisioning | The MySQL server new tenant databases get created on |
 | `APP_BASE_URL` | Both shapes | Also doubles as the one fixed OIDC/SAML callback URL for every org's SSO |
