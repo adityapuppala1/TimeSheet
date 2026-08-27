@@ -2975,12 +2975,21 @@ export async function generateBugPatternDigest(params: {
 }
 
 /**
- * On-demand "generate a stakeholder update" for one project — reuses generateWeeklyDigest's
- * prompt shape (given numbers only, no invented analysis) but is triggered synchronously from
- * the Project page rather than a cron worker, and scoped to a project instead of a person.
+ * On-demand "generate a stakeholder update" — reuses generateWeeklyDigest's prompt shape (given
+ * numbers only, no invented analysis) but is triggered synchronously from the Reports page rather
+ * than a cron worker.
+ *
+ * Covers ONE project or the whole portfolio. The difference lives entirely in the values handed to
+ * the prompt: `scopeLabel` says what is being reported on, and `projectBreakdown` carries the
+ * per-project figures. The template asks for the by-project section only when that breakdown is
+ * present, so a single-project report is shaped exactly as it was.
  */
 export async function generateStatusReport(params: {
   projectName: string;
+  /** e.g. `the project "Acme Web"`, or `all 6 active projects`. Defaults to the project name. */
+  scopeLabel?: string;
+  /** Per-project figures, one line each. Absent for a single-project report. */
+  projectBreakdown?: string;
   periodLabel: string;
   ticketsCreated: number;
   ticketsResolved: number;
@@ -2994,7 +3003,14 @@ export async function generateStatusReport(params: {
 
   const ticketLines = params.notableTickets.map((t) => `- [${t.key}] ${t.title} (${t.status})`).join("\n") || "(none)";
   const p = await resolvePrompt("status_report", {
+    // Still passed even though the built-in template no longer names it: a workspace that
+    // customised this prompt before the portfolio mode existed still references {{projectName}},
+    // and an unknown placeholder renders as empty — their report would silently lose its subject.
     projectName: params.projectName,
+    scopeLabel: params.scopeLabel ?? `the project "${params.projectName}"`,
+    projectBreakdown: params.projectBreakdown ? `
+Per-project figures:
+${params.projectBreakdown}` : "",
     periodLabel: params.periodLabel,
     ticketsCreated: String(params.ticketsCreated),
     ticketsResolved: String(params.ticketsResolved),
@@ -3005,7 +3021,10 @@ export async function generateStatusReport(params: {
   });
 
   const startedAt = Date.now();
-  const result = await callChat(settings, { feature: "status_report", model: settings.model, maxTokens: 500, prompt: p.text });
+  // 500 could not hold the structured shape the template now asks for, let alone a section per
+  // project — the report simply stopped mid-table. Sized to the scope rather than raised globally.
+  const maxTokens = params.projectBreakdown ? 2400 : 1200;
+  const result = await callChat(settings, { feature: "status_report", model: settings.model, maxTokens, prompt: p.text });
 
   await logAIUsage({
     feature: "status_report",

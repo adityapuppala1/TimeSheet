@@ -14,7 +14,7 @@
 import { Router, type Request } from "express";
 import PDFDocument from "pdfkit";
 import { permissions } from "@timesheet/shared";
-import type { TicketStatus } from "@prisma/client";
+import type { Prisma, TicketStatus } from "@prisma/client";
 import { prisma } from "../config/prisma.js";
 import { isChangeManagementOn } from "../services/change.service.js";
 import { controlPrisma } from "../config/control-prisma.js";
@@ -866,59 +866,127 @@ reportRouter.get("/leaderboard", async (_req, res) => {
 });
 
 /**
- * On-demand "generate a stakeholder update" for one project. Synchronous (no worker/cron
- * involved) — the numbers are cheap to compute and the AI call is a single short completion,
- * so this runs inline within the request like /export.pdf does. Gated by
+ * On-demand "generate a stakeholder update", for ONE project or for every active project.
+ *
+ * Synchronous (no worker/cron involved) — the numbers are cheap to compute and the AI call is a
+ * single completion, so this runs inline within the request like /export.pdf does. Gated by
  * GlobalAISettings.statusReportEnabled via ai.service.ts#generateStatusReport's own preflight.
+ *
+ * THE PORTFOLIO PATH USES GROUPED QUERIES, not a loop. Five aggregates per project across twenty
+ * projects is a hundred round trips on a request someone is waiting on; `groupBy` makes it five
+ * regardless of how many projects there are.
  */
+
+/** How many projects one report may cover. When more exist the report SAYS so — a portfolio update
+ *  that silently covers 12 of 30 projects is worse than one that admits its scope. */
+const STATUS_REPORT_PROJECT_LIMIT = 12;
+
 reportRouter.post("/status-report", requirePermission(permissions.REPORTS_VIEW), async (req, res) => {
   const projectId = String(req.body?.projectId ?? "");
   const periodDays = Math.min(Math.max(Number(req.body?.periodDays) || 7, 1), 90);
-  if (!projectId) throw new AppError(422, "projectId is required");
-
-  const project = await prisma.project.findUnique({ where: { id: projectId }, select: { id: true, name: true } });
-  if (!project) throw new AppError(404, "Project not found");
 
   const periodStart = new Date(Date.now() - periodDays * 24 * 60 * 60 * 1000);
   const periodLabel =
     periodDays === 7 ? "the past week" : periodDays === 30 ? "the past month" : `the past ${periodDays} days`;
   const sinceLocal = startOfLocalDay();
+  const hoursSince = new Date(Date.UTC(periodStart.getFullYear(), periodStart.getMonth(), periodStart.getDate()));
 
-  const [ticketsCreated, resolvedTickets, openTickets, overdueCount, hoursAgg] = await Promise.all([
-    prisma.ticket.count({ where: { projectId, deletedAt: null, createdAt: { gte: periodStart } } }),
+  // An empty projectId is the ALL-PROJECTS request, not a validation failure — the picker offers
+  // "All projects" as a first-class choice.
+  const scopedProjects = projectId
+    ? await prisma.project.findMany({ where: { id: projectId }, select: { id: true, name: true } })
+    : await prisma.project.findMany({
+        // `status` is a plain string column on Project, not an enum — ACTIVE is the default.
+        where: { deletedAt: null, status: "ACTIVE" },
+        select: { id: true, name: true },
+        orderBy: { name: "asc" },
+        take: STATUS_REPORT_PROJECT_LIMIT + 1
+      });
+
+  if (scopedProjects.length === 0) {
+    throw new AppError(projectId ? 404 : 422, projectId ? "Project not found" : "No active projects to report on.");
+  }
+
+  const truncated = !projectId && scopedProjects.length > STATUS_REPORT_PROJECT_LIMIT;
+  const projects = truncated ? scopedProjects.slice(0, STATUS_REPORT_PROJECT_LIMIT) : scopedProjects;
+  const ids = projects.map((p) => p.id);
+
+  // Typed through Prisma's own input type rather than inferred: a bare object literal widens the
+  // status array to string[], which the generated enum filter rejects.
+  const openWhere: Prisma.TicketWhereInput = {
+    projectId: { in: ids },
+    deletedAt: null,
+    status: { notIn: ["RESOLVED", "CLOSED"] }
+  };
+
+  const [createdRows, resolvedRows, openRows, overdueRows, hoursRows, resolvedNotable] = await Promise.all([
+    prisma.ticket.groupBy({ by: ["projectId"], where: { projectId: { in: ids }, deletedAt: null, createdAt: { gte: periodStart } }, _count: { _all: true } }),
+    prisma.ticket.groupBy({ by: ["projectId"], where: { projectId: { in: ids }, deletedAt: null, resolvedAt: { gte: periodStart } }, _count: { _all: true } }),
+    prisma.ticket.groupBy({ by: ["projectId"], where: openWhere, _count: { _all: true } }),
+    prisma.ticket.groupBy({ by: ["projectId"], where: { ...openWhere, slaBreachAt: { not: null, lt: sinceLocal } }, _count: { _all: true } }),
+    prisma.timesheet.groupBy({ by: ["projectId"], where: { projectId: { in: ids }, deletedAt: null, workDate: { gte: hoursSince } }, _sum: { totalHours: true } }),
+    // Resolved-in-period first; a period that resolved nothing falls back to what is still open
+    // below, so the model always has concrete tickets to name rather than only counts.
     prisma.ticket.findMany({
-      where: { projectId, deletedAt: null, resolvedAt: { gte: periodStart } },
+      where: { projectId: { in: ids }, deletedAt: null, resolvedAt: { gte: periodStart } },
       select: { key: true, title: true, status: true },
-      take: 5
-    }),
-    prisma.ticket.findMany({
-      where: { projectId, deletedAt: null, status: { notIn: ["RESOLVED", "CLOSED"] } },
-      select: { key: true, title: true, status: true }
-    }),
-    prisma.ticket.count({
-      where: { projectId, deletedAt: null, status: { notIn: ["RESOLVED", "CLOSED"] }, slaBreachAt: { not: null, lt: sinceLocal } }
-    }),
-    prisma.timesheet.aggregate({
-      where: { projectId, deletedAt: null, workDate: { gte: new Date(Date.UTC(periodStart.getFullYear(), periodStart.getMonth(), periodStart.getDate())) } },
-      _sum: { totalHours: true }
+      take: projectId ? 5 : 12
     })
   ]);
 
-  const notableTickets = resolvedTickets.length > 0 ? resolvedTickets : openTickets.slice(0, 5);
+  const countOf = (rows: Array<{ projectId: string; _count: { _all: number } }>, id: string) =>
+    rows.find((r) => r.projectId === id)?._count._all ?? 0;
+
+  const per = projects.map((p) => ({
+    name: p.name,
+    created: countOf(createdRows, p.id),
+    resolved: countOf(resolvedRows, p.id),
+    open: countOf(openRows, p.id),
+    overdue: countOf(overdueRows, p.id),
+    hours: Number(Number(hoursRows.find((r) => r.projectId === p.id)?._sum.totalHours ?? 0).toFixed(1))
+  }));
+  const sum = (pick: (row: (typeof per)[number]) => number) => per.reduce((total, row) => total + pick(row), 0);
+
+  const notableTickets =
+    resolvedNotable.length > 0
+      ? resolvedNotable
+      : await prisma.ticket.findMany({
+          where: openWhere,
+          select: { key: true, title: true, status: true },
+          take: projectId ? 5 : 12
+        });
+
+  const scopeLabel = projectId
+    ? `the project "${projects[0].name}"`
+    : `all ${projects.length} active project${projects.length === 1 ? "" : "s"} in this workspace${
+        truncated ? ` (these are the first ${STATUS_REPORT_PROJECT_LIMIT} of more than that — say so in the summary)` : ""
+      }`;
 
   const { report } = await generateStatusReport({
-    projectName: project.name,
+    projectName: projects[0].name,
+    scopeLabel,
+    projectBreakdown: projectId
+      ? undefined
+      : per.map((r) => `- ${r.name} — ${r.created} created, ${r.resolved} resolved, ${r.open} open, ${r.overdue} overdue, ${r.hours} h`).join("\n"),
     periodLabel,
-    ticketsCreated,
-    ticketsResolved: resolvedTickets.length,
-    openCount: openTickets.length,
-    overdueCount,
-    hoursLogged: Number(Number(hoursAgg._sum.totalHours ?? 0).toFixed(1)),
+    ticketsCreated: sum((r) => r.created),
+    ticketsResolved: sum((r) => r.resolved),
+    openCount: sum((r) => r.open),
+    overdueCount: sum((r) => r.overdue),
+    hoursLogged: Number(sum((r) => r.hours).toFixed(1)),
     notableTickets,
     userId: req.user!.id
   });
 
-  res.json({ report, projectName: project.name, periodLabel });
+  res.json({
+    report,
+    projectName: projectId ? projects[0].name : `All projects (${projects.length})`,
+    periodLabel,
+    // Surfaced rather than left to the prose: the UI states the cap plainly instead of relying on
+    // the model to have mentioned it.
+    truncated,
+    projectCount: projects.length
+  });
 });
 
 

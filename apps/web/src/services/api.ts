@@ -930,8 +930,18 @@ export const reportApi = {
   sbomInventory: async () => (await api.get<SbomInventory>("/reports/sbom-inventory")).data,
   costInsights: async () => (await api.get<CostInsights>("/reports/cost-insights")).data,
   leaderboard: async () => (await api.get<{ rows: LeaderboardRow[] }>("/reports/leaderboard")).data,
+  /** An empty `projectId` is the ALL-PROJECTS request, not a missing argument — the server reads it
+   *  as "the whole portfolio" and answers with a summary plus a section per project. */
   statusReport: async (projectId: string, periodDays = 7) =>
-    (await api.post<{ report: string; projectName: string; periodLabel: string }>("/reports/status-report", { projectId, periodDays })).data,
+    (
+      await api.post<{
+        report: string;
+        projectName: string;
+        periodLabel: string;
+        truncated: boolean;
+        projectCount: number;
+      }>("/reports/status-report", { projectId, periodDays })
+    ).data,
   /** Filters shared by both exports and the grouped report — one shape, so a CSV and a PDF asked
    *  for the same thing can never disagree about what "the same thing" means. */
   download: async (type: "csv" | "pdf" | "xlsx", filters: TimesheetReportFilters & { groupBy?: GroupByKey } = {}) => {

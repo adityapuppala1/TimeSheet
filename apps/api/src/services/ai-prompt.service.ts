@@ -223,17 +223,23 @@ Respond with ONLY the recap paragraph — no preamble, no subject line.`
     label: "Project status report",
     description: "The on-demand stakeholder update generated from a project page.",
     placeholders: [
-      { name: "projectName", description: "The project.", sample: "Acme Web" },
+      { name: "projectName", description: "The project. Empty when the report covers every project.", sample: "Acme Web" },
+      { name: "scopeLabel", description: "What the report covers — one project, or the whole portfolio.", sample: 'the project "Acme Web"' },
       { name: "periodLabel", description: "The period being covered.", sample: "July 2026" },
       { name: "ticketsCreated", description: "Tickets created.", sample: "22" },
       { name: "ticketsResolved", description: "Tickets resolved.", sample: "19" },
       { name: "openCount", description: "Currently open.", sample: "14" },
       { name: "overdueCount", description: "Currently overdue.", sample: "3" },
       { name: "hoursLogged", description: "Hours logged.", sample: "410.5" },
-      { name: "notableTickets", description: "Notable tickets, bulleted.", sample: "- [WEB-12] Login fails on Safari (RESOLVED)" }
+      { name: "notableTickets", description: "Notable tickets, bulleted.", sample: "- [WEB-12] Login fails on Safari (RESOLVED)" },
+      {
+        name: "projectBreakdown",
+        description: "Per-project figures. Empty for a single-project report — the template asks for the by-project section only when this is present.",
+        sample: "- Acme Web — 22 created, 19 resolved, 14 open, 3 overdue, 410.5 h"
+      }
     ],
     required: [],
-    defaultTemplate: `Write a short stakeholder status update (4-7 sentences, plain prose, no headings/bullets in the output) for the project "{{projectName}}" covering {{periodLabel}}.
+    defaultTemplate: `Write a stakeholder status update for {{scopeLabel}} covering {{periodLabel}}.
 
 Tickets created: {{ticketsCreated}}
 Tickets resolved: {{ticketsResolved}}
@@ -242,10 +248,19 @@ Overdue: {{overdueCount}}
 Hours logged: {{hoursLogged}}
 Notable tickets:
 {{notableTickets}}
+{{projectBreakdown}}
 
-Write for a non-technical stakeholder reading this outside the team — plain language, no jargon. Be factual, don't invent numbers beyond what's given, and call out overdue items if any exist rather than glossing over them.
+Write it as markdown, in this order:
 
-Respond with ONLY the status update paragraph(s) — no preamble, no subject line.`
+1. One short paragraph, 2-4 sentences. Someone who reads only this must still have the truth.
+2. \`## Highlights\` — 2 to 4 bullets covering what actually moved.
+3. \`## Risks and overdue work\` — bullets. If nothing is overdue, say so in one line rather than inventing risks to fill the section.
+4. \`## By the numbers\` — a markdown table with "Measure" and "Value" columns, one row per figure above.
+5. Only if a per-project breakdown appears above: \`## By project\`, then one \`###\` sub-heading per project with a single sentence under each.
+
+Write for a non-technical stakeholder reading this outside the team — plain language, no jargon. Be factual, never invent a number beyond what is given here, and call out overdue items rather than glossing over them.
+
+Respond with ONLY the update — no preamble, no subject line, no sign-off.`
   },
   {
     feature: "assignee_suggestion_explanation",

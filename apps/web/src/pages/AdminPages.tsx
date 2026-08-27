@@ -63,6 +63,7 @@ import { ProjectBudgetPanel } from "../components/ProjectBudgetPanel";
 import { Avatar, AvatarFallback, AvatarImage } from "../components/ui/avatar";
 import { Badge } from "../components/ui/badge";
 import { Checkbox } from "../components/ui/checkbox";
+import { AiRichContent } from "../components/ui/ai-rich-content";
 import { AiStrands } from "../components/ui/ai-strands";
 import { BorderGlow } from "../components/ui/border-glow";
 import { Button } from "../components/ui/button";
@@ -3120,7 +3121,11 @@ function defaultPeriod(): { start: string; end: string } {
 function AttestationsCard() {
   const queryClient = useQueryClient();
   const projects = useQuery({ queryKey: ["projects"], queryFn: () => projectApi.list() });
-  const [projectId, setProjectId] = useState("");
+  // Radix's Select reserves the empty string for "nothing selected", so all-projects needs a real
+  // sentinel value; it is translated back to "" at the API boundary, where the server reads an
+  // empty projectId as the portfolio request.
+  const ALL_PROJECTS = "__all__";
+  const [projectId, setProjectId] = useState(ALL_PROJECTS);
   const [period, setPeriod] = useState(defaultPeriod);
   const [preview, setPreview] = useState<AttestationPayload | null>(null);
   const [disabled, setDisabled] = useState(false);
@@ -3527,13 +3532,23 @@ function AttestationShareDialog({ attestation, onClose }: { attestation: Attesta
 
 function StatusReportCard() {
   const projects = useQuery({ queryKey: ["projects"], queryFn: () => projectApi.list() });
-  const [projectId, setProjectId] = useState("");
+  // Radix's Select reserves the empty string for "nothing selected", so all-projects needs a real
+  // sentinel value; it is translated back to "" at the API boundary, where the server reads an
+  // empty projectId as the portfolio request.
+  const ALL_PROJECTS = "__all__";
+  const [projectId, setProjectId] = useState(ALL_PROJECTS);
   const [periodDays, setPeriodDays] = useState("7");
-  const [result, setResult] = useState<{ report: string; projectName: string; periodLabel: string } | null>(null);
+  const [result, setResult] = useState<{
+    report: string;
+    projectName: string;
+    periodLabel: string;
+    truncated: boolean;
+    projectCount: number;
+  } | null>(null);
   const [disabled, setDisabled] = useState(false);
 
   const generate = useMutation({
-    mutationFn: () => reportApi.statusReport(projectId, Number(periodDays)),
+    mutationFn: () => reportApi.statusReport(projectId === ALL_PROJECTS ? "" : projectId, Number(periodDays)),
     onSuccess: (data) => {
       setResult(data);
       setDisabled(false);
@@ -3554,7 +3569,9 @@ function StatusReportCard() {
           <Sparkles className="h-4 w-4 text-primary" />
           AI-drafted status report
         </CardTitle>
-        <CardDescription>Generate a plain-language stakeholder update for one project on demand.</CardDescription>
+        <CardDescription>
+          Generate a structured stakeholder update — for one project, or across every active project — on demand.
+        </CardDescription>
       </CardHeader>
       <CardContent className="grid gap-3">
         {disabled && (
@@ -3570,6 +3587,7 @@ function StatusReportCard() {
                 <SelectValue placeholder="Select a project" />
               </SelectTrigger>
               <SelectContent>
+                <SelectItem value={ALL_PROJECTS}>All projects</SelectItem>
                 {(projects.data ?? []).map((p: any) => (
                   <SelectItem key={p.id} value={p.id}>
                     {p.name}
@@ -3591,8 +3609,9 @@ function StatusReportCard() {
               </SelectContent>
             </Select>
           </div>
-          <Button disabled={!projectId || generate.isPending} onClick={() => generate.mutate()}>
-            {generate.isPending ? "Generating..." : "Generate update"}
+          <Button variant="ai" disabled={!projectId || generate.isPending} onClick={() => generate.mutate()}>
+            <Sparkles className="mr-1.5 h-4 w-4" />
+            {generate.isPending ? "Generating…" : "AI Generate report"}
           </Button>
         </div>
         {generate.isPending && <AiStrands label="Reading the period's tickets, hours and risks…" />}
@@ -3603,7 +3622,15 @@ function StatusReportCard() {
               <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-primary">
                 {result.projectName} — {result.periodLabel}
               </p>
-              <p className="whitespace-pre-wrap">{result.report}</p>
+              {result.truncated && (
+                <p className="mb-3 rounded-md border border-warning/40 bg-warning/10 p-2.5 text-xs text-foreground">
+                  This workspace has more active projects than one report covers. The update below is the first{" "}
+                  {result.projectCount}, in name order — not the whole portfolio.
+                </p>
+              )}
+              {/* The same renderer Ask AI uses, so the headings, table and callouts the prompt now
+                  asks for actually render. `whitespace-pre-wrap` printed them as literal ## and pipes. */}
+              <AiRichContent content={result.report} />
             </div>
           </BorderGlow>
         )}
