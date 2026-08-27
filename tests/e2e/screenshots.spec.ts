@@ -29,7 +29,7 @@ test.use({ storageState: "tests/e2e/.auth/superadmin-settings.json" });
 test.describe.configure({ mode: "serial" });
 
 /** Screens worth showing a prospect, in the order the marketing pages use them. */
-const SHOTS: { slug: string; url: string; label: string; focus?: string; tab?: string }[] = [
+const SHOTS: { slug: string; url: string; label: string; focus?: string; tab?: string; press?: string }[] = [
   { slug: "dashboard", url: "/app", label: "Dashboard" },
   { slug: "tickets", url: "/app/tickets", label: "Tickets" },
   { slug: "insights", url: "/app/insights", label: "Insights" },
@@ -44,7 +44,24 @@ const SHOTS: { slug: string; url: string; label: string; focus?: string; tab?: s
   // which is exactly the claim the marketing copy makes about it.
   { slug: "goals", url: "/app/goals", label: "Goals" },
   { slug: "agents", url: "/app/agents", label: "AI teammates" },
-  { slug: "studio", url: "/app/studio", label: "Workflow Studio" }
+  { slug: "studio", url: "/app/studio", label: "Workflow Studio" },
+  // The V10 surfaces. All three are captured as the super admin the rest of this spec signs in as:
+  // the practice update is SUPER_ADMIN-only by route, and the other two are simply richer with an
+  // admin's visibility — a screenshot of an empty-for-this-role page sells nothing.
+  // `press` because this page holds no saved draft — the update is generated on demand into
+  // component state. Captured without it, the "screenshot" was an empty form with two date inputs,
+  // which shows a prospect nothing about the one thing the feature does.
+  {
+    slug: "practice-update",
+    url: "/app/practice-update",
+    label: "Weekly practice update",
+    press: "Generate update",
+    // Past the recipient and period cards, to the counted figures and the initiative tables —
+    // the half of the page that is the actual document.
+    focus: "Tickets closed"
+  },
+  { slug: "requirements", url: "/app/requirements", label: "Requirements Studio" },
+  { slug: "changes", url: "/app/changes", label: "Change management" }
 ];
 
 test.describe("product screenshots", () => {
@@ -105,6 +122,28 @@ test.describe("product screenshots", () => {
         await page.waitForTimeout(600); // NOSONAR — S2925: same Recharts/entry-animation reasoning as above.
       }
 
+      if (shot.press) {
+        // Clicking a button and waiting for the RESULT, not for a fixed delay. The button relabels
+        // itself while the work is in flight ("Generating…"), so waiting for its original name to
+        // come back is a real completion signal rather than a guess at how long a model takes.
+        //
+        // The timeout is deliberately long: this is a live AI call against whatever provider the
+        // workspace is configured with, and a local model on a loaded machine is minutes, not
+        // seconds. This spec is opt-in and run by a person, so waiting is free; capturing a
+        // half-rendered page is not.
+        const trigger = page.getByRole("button", { name: shot.press, exact: true });
+        await trigger.click();
+        // Wait for the button to LEAVE the busy state, which means waiting for it to enter one
+        // first. Asserting "enabled" straight after the click passed on the frame before React had
+        // re-rendered the label, and the first capture of this page came out mid-generation with
+        // the spinner still in shot. `press` therefore only works on a button that relabels while
+        // it works — which is the app's convention for every long-running action.
+        await expect(trigger, `${shot.press} should enter a busy state`).toBeHidden({ timeout: 30_000 });
+        await expect(trigger, `${shot.press} should finish`).toBeVisible({ timeout: 300_000 });
+        await page.waitForLoadState("networkidle");
+        await page.waitForTimeout(1200); // NOSONAR — S2925: same Recharts/entry-animation reasoning as above.
+      }
+
       if (shot.focus) {
         // Plain DOM scroll rather than a locator: the text also appears in run-history rows, and
         // Playwright's strict/stability checks have nothing useful to add to "scroll a card into
@@ -133,11 +172,32 @@ test.describe("product screenshots", () => {
       if (fs.existsSync(anonPath)) {
         const map: Record<string, string> = JSON.parse(fs.readFileSync(anonPath, "utf8"));
         await page.evaluate((entries) => {
+          const swap = (text: string) => {
+            let out = text;
+            for (const [find, replace] of entries) out = out.split(find).join(replace);
+            return out;
+          };
+
           const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
           for (let node = walker.nextNode(); node; node = walker.nextNode()) {
-            let text = node.nodeValue ?? "";
-            for (const [find, replace] of entries) text = text.split(find).join(replace);
+            const text = swap(node.nodeValue ?? "");
             if (text !== node.nodeValue) node.nodeValue = text;
+          }
+
+          // FORM VALUES TOO. A TreeWalker sees the text nodes inside a <textarea>, which are its
+          // DEFAULT value — React sets the live one as a property, so everything a user (or a
+          // model) typed was invisible to the pass above. That is not a theoretical gap: the first
+          // capture of the practice update anonymised a real company name in the table above the
+          // editor and published it verbatim in the AI-drafted paragraph below it.
+          //
+          // Writing `.value` directly is safe HERE and nowhere else: this is the last step before a
+          // photograph, and React only overwrites it on a re-render this page will not do.
+          for (const field of Array.from(document.querySelectorAll("input, textarea"))) {
+            const el = field as HTMLInputElement | HTMLTextAreaElement;
+            const next = swap(el.value);
+            if (next !== el.value) el.value = next;
+            const placeholder = swap(el.placeholder ?? "");
+            if (placeholder !== el.placeholder) el.placeholder = placeholder;
           }
         }, Object.entries(map));
       }

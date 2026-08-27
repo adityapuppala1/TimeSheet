@@ -589,3 +589,110 @@
 .prose-sm pre code {
   @apply block whitespace-pre bg-transparent p-0;
 }
+
+/* ============================================================================================
+   Marketing: the connector marquee
+   --------------------------------------------------------------------------------------------
+   A continuously scrolling strip of the systems this product connects to. CSS rather than a
+   library, for the reason Landing.tsx's header gives about its animation budget — an infinite
+   marquee is a translate on a duplicated track and nothing more.
+
+   The track holds two identical copies and the keyframe moves it by exactly -50%, so the second
+   copy lands where the first started and the loop has no visible seam. Change one and you must
+   change the other.
+   ============================================================================================ */
+.connector-marquee {
+  @apply relative overflow-hidden;
+  /* Fades both ends into the page instead of cutting items off at a hard edge. Two properties
+     because Firefox still wants the unprefixed one and WebKit the prefixed. */
+  -webkit-mask-image: linear-gradient(to right, transparent, black 8%, black 92%, transparent);
+  mask-image: linear-gradient(to right, transparent, black 8%, black 92%, transparent);
+}
+
+.connector-marquee__track {
+  @apply flex w-max;
+  animation: connector-marquee-scroll 48s linear infinite;
+}
+
+/* Pauses under the pointer so a name someone is reading holds still — the same courtesy
+   `.ai-gradient-text` extends, and for the same reason. */
+.connector-marquee:hover .connector-marquee__track,
+.connector-marquee:focus-within .connector-marquee__track {
+  animation-play-state: paused;
+}
+
+.connector-marquee__group {
+  @apply flex shrink-0 items-center gap-3 pr-3;
+}
+
+.connector-marquee__item {
+  @apply flex shrink-0 items-center gap-2 rounded-full border border-border/70 bg-card/60 px-3.5 py-1.5 text-sm text-muted-foreground backdrop-blur-sm transition-colors;
+}
+
+.connector-marquee__item:hover {
+  @apply border-primary/40 text-foreground;
+}
+
+.connector-marquee__dot {
+  @apply h-1.5 w-1.5 shrink-0 rounded-full bg-primary/60;
+}
+
+@keyframes connector-marquee-scroll {
+  from { transform: translateX(0); }
+  to { transform: translateX(-50%); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  /* Stop and WRAP rather than stop and clip. A frozen marquee that still overflows its container
+     hides most of its own content, which is worse than no marquee at all. */
+  .connector-marquee__track {
+    @apply w-full flex-wrap justify-center;
+    animation: none;
+  }
+  .connector-marquee__group:last-child {
+    @apply hidden;
+  }
+  .connector-marquee {
+    -webkit-mask-image: none;
+    mask-image: none;
+  }
+  .connector-marquee__group {
+    @apply flex-wrap justify-center;
+  }
+}
+
+/* ── Pointer spotlight on the feature grid ──────────────────────────────────────────────────────
+   A soft light that follows the cursor across a card, on top of the lift the cards already have.
+   The grid writes `--spot-x` / `--spot-y` onto the hovered card and this paints them; a card the
+   pointer has never touched keeps the variables' fallback and the highlight simply sits centred,
+   so nothing looks wrong for the split second before the first pointermove lands.
+
+   `::before` rather than a background, because the cards already own their background and border,
+   and an overlay is the only way to add light without fighting whatever a variant sets.
+
+   Reduced motion is NOT a media query here: a highlight that follows the cursor is not motion in
+   the vestibular sense — nothing travels on its own, it tracks a movement the reader is already
+   making. The same call the app's other hover affordances make. */
+.spotlight-card {
+  position: relative;
+}
+
+.spotlight-card::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 260ms ease;
+  background: radial-gradient(
+    18rem circle at var(--spot-x, 50%) var(--spot-y, 50%),
+    hsl(var(--primary) / 0.09),
+    transparent 62%
+  );
+}
+
+.spotlight-card:hover::before,
+.spotlight-card:focus-within::before {
+  opacity: 1;
+}

@@ -38,6 +38,7 @@ import {
   CalendarRange,
   CheckCircle2,
   ChevronDown,
+  ClipboardCheck,
   Clock,
   Coins,
   Eye,
@@ -81,6 +82,10 @@ import { PricingDialog } from "../components/marketing/PricingDialog";
 import { Reveal, useScrollProgress, useSectionSpy } from "../components/marketing/Reveal";
 import { ScreenshotFrame } from "../components/marketing/ScreenshotFrame";
 import { AuthorityLadder } from "../components/marketing/AuthorityLadder";
+import { AuroraBackdrop } from "../components/marketing/AuroraBackdrop";
+import { CONNECTOR_COUNT, ConnectorMarquee } from "../components/marketing/ConnectorMarquee";
+import { StatBand } from "../components/marketing/StatBand";
+import { handleSpotlight } from "../components/marketing/spotlight";
 
 /** Any lucide glyph. Typed off a concrete one so the icon fields stay checked without importing
  *  lucide's internal component type. */
@@ -179,6 +184,30 @@ const TOUR = [
     title: "Automation you can read",
     body: "A trigger, then steps, written as a list you can review — with a canvas beside it that can never disagree. Every flow states the authority it actually resolves to, you can replay it against your own recent triggers before it goes live, and a flow with a problem cannot be switched on: the reason is quoted on the card.",
     image: "/product/studio.png"
+  },
+  {
+    id: "practice-update",
+    label: "Weekly update",
+    icon: Presentation,
+    title: "The Monday email nobody has to write",
+    body: "Products, POCs, bug work, security and training — each initiative with an owner, a status colour and what actually moved, over figures counted from this workspace rather than typed into a form. The prose is drafted around those figures and every field is yours to edit before it sends; with AI off, the whole document still renders from the facts alone.",
+    image: "/product/practice-update.png"
+  },
+  {
+    id: "requirements",
+    label: "Requirements",
+    icon: FileText,
+    title: "A spec, then the tickets that build it",
+    body: "An AI interview turns an idea — or a PRD you already have — into a structured document: scope, features, architecture, timeline. It asks about what is missing rather than inventing it, exports as a client-grade PDF or Word file, and turns into real tickets and goals in the same workspace.",
+    image: "/product/requirements.png"
+  },
+  {
+    id: "changes",
+    label: "Changes",
+    icon: ClipboardCheck,
+    title: "Changes reviewed before they ship",
+    body: "Request, assess, approve and review. Risk is derived from impact × likelihood rather than typed by whoever raised it, the approval chain is the workspace's own, and the register reports its own change-failure rate, emergency rate and approval turnaround.",
+    image: "/product/changes.png"
   }
 ];
 
@@ -715,10 +744,29 @@ export function Landing() {
 
       <main>
         {/* ----------------------------------------------------------- Hero */}
-        <section className="relative overflow-hidden">
+        {/*
+          `isolate` is LOAD-BEARING, not decoration. The backdrop layer below is `-z-10`, and a
+          negative z-index paints inside its nearest ancestor STACKING CONTEXT — which, without
+          this, was `<html>`, three levels up. CSS paints negative-z descendants of the root before
+          the backgrounds of in-flow blocks, so `<div class="min-h-screen bg-background">` painted
+          straight over the whole layer. That is why the two blurred orbs this section has shipped
+          with were invisible on a rendered page: not too subtle, covered. `isolate` makes the
+          section its own stacking context, so `-z-10` now means "behind this section's content"
+          rather than "behind the page".
+        */}
+        <section className="relative isolate overflow-hidden">
           <div className="pointer-events-none absolute inset-0 -z-10">
-            <div className="absolute -left-32 -top-32 h-[28rem] w-[28rem] rounded-full bg-primary/15 blur-3xl" />
-            <div className="absolute -right-24 top-12 h-[28rem] w-[28rem] rounded-full bg-accent/20 blur-3xl" />
+            {/* The two blurred orbs stay UNDERNEATH the canvas deliberately: they are the floor for
+                anyone the aurora does not mount for — reduced motion, no WebGL, a blocked context —
+                so that case reads as a designed gradient rather than a flat band. */}
+            <div className="absolute -left-32 -top-32 h-[30rem] w-[30rem] rounded-full bg-primary/20 blur-3xl" />
+            {/* This was `bg-accent/20`. Nobody had ever seen it — see the stacking-context note above
+                — and the first render after the fix showed why it could not stay: the accent is
+                amber, and amber at 20% over a near-white page is khaki, which put a dirty smudge on
+                the right of the hero. Both orbs now sit on the same two stops as the aurora and the
+                gradient headline, which is the palette this page is documented to use. */}
+            <div className="absolute -right-24 top-12 h-[30rem] w-[30rem] rounded-full bg-info/15 blur-3xl" />
+            <AuroraBackdrop className="absolute inset-0" intensity={0.9} />
           </div>
           <div className="mx-auto max-w-6xl px-4 py-14 text-center sm:px-5 sm:py-20">
             <Badge
@@ -772,6 +820,16 @@ export function Landing() {
               </div>
             </Reveal>
           </div>
+
+          {/* A trust strip that carries what we can actually evidence. Every name on it is a
+              shipped connector with a controller and a settings surface behind it — the customer
+              logos this device usually holds are the one thing docs/MARKETING_PAGES.md forbids. */}
+          <div className="mx-auto max-w-6xl px-4 pb-14 sm:px-5">
+            <p className="mb-3 text-center text-xs uppercase tracking-[0.18em] text-muted-foreground">
+              Connects to what you already run
+            </p>
+            <ConnectorMarquee />
+          </div>
         </section>
 
         {/* ----------------------------------------------------------- Problem */}
@@ -811,6 +869,36 @@ export function Landing() {
               <FlowArrow />
               <FlowColumn title="What reads it" items={ONE_RECORD.readers} tone="primary" />
             </div>
+          </Reveal>
+
+          {/* Three of these four are derived from arrays on this page, so they cannot drift out of
+              step with what it claims — see the note at the top of StatBand for why they are facts
+              about the product rather than the usual traction figures. */}
+          <Reveal delay={140} className="mt-10">
+            <StatBand
+              stats={[
+                {
+                  value: FEATURES.length,
+                  label: "capabilities shipping today",
+                  hint: "Counted from the grid below. Nothing on this page is on a roadmap."
+                },
+                {
+                  value: CONNECTOR_COUNT,
+                  label: "systems it plugs into",
+                  hint: "Identity, chat, mail, source control, CI, billing and AI — every one a shipped connector."
+                },
+                {
+                  value: 1,
+                  label: "database per organisation",
+                  hint: "Not a tenant column. Your workspace is provisioned its own MySQL schema."
+                },
+                {
+                  value: 0,
+                  label: "shared application tables",
+                  hint: "The control plane holds the registry — organisations, plans, SSO — and no work data at all."
+                }
+              ]}
+            />
           </Reveal>
         </Section>
 
@@ -926,13 +1014,17 @@ export function Landing() {
           </div>
 
           {/* Re-keyed on the filter so the surviving cards re-enter as a set — without it, changing
-              the filter mutates a grid in place and reads as a glitch rather than a response. */}
-          <div key={group} className="mt-8 grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+              the filter mutates a grid in place and reads as a glitch rather than a response.
+
+              The pointer handler lives on the GRID, not on each of the cards. One listener that
+              finds the card under the pointer costs one subscription for the whole section instead
+              of one per card, and it keeps working when the filter re-keys the list underneath it. */}
+          <div key={group} onPointerMove={handleSpotlight} className="mt-8 grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
             {shownFeatures.map((feature, index) => (
               <Card
                 key={feature.title}
                 style={{ animationDelay: `${Math.min(index, 8) * 45}ms` }}
-                className="group h-full transition hover:border-primary/40 hover:shadow-lg motion-safe:animate-in motion-safe:fade-in motion-safe:slide-in-from-bottom-2 motion-safe:duration-500 motion-safe:fill-mode-backwards motion-safe:hover:-translate-y-1"
+                className="spotlight-card group h-full overflow-hidden transition hover:border-primary/40 hover:shadow-lg motion-safe:animate-in motion-safe:fade-in motion-safe:slide-in-from-bottom-2 motion-safe:duration-500 motion-safe:fill-mode-backwards motion-safe:hover:-translate-y-1"
               >
                 <CardHeader className="pb-3">
                   <div className="flex items-start justify-between gap-2">

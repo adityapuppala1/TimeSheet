@@ -45,6 +45,8 @@ import { Card, CardContent, CardHeader, CardTitle } from "../components/ui/card"
 import { Reveal, useScrollProgress, useSectionSpy } from "../components/marketing/Reveal";
 import { ScreenshotFrame } from "../components/marketing/ScreenshotFrame";
 import { AuthorityLadder } from "../components/marketing/AuthorityLadder";
+import { AuroraBackdrop } from "../components/marketing/AuroraBackdrop";
+import { handleSpotlight } from "../components/marketing/spotlight";
 
 /**
  * The running order. It drives the slide numbers, the jump-to navigation and the scroll-spy, so
@@ -160,8 +162,11 @@ const SURFACES = [
   { title: "Track", body: "Timesheets and Jira-style ticketing on the same rows, with saved views, custom fields and admin-defined workflows." },
   { title: "Intake", body: "Email, Slack, Teams, Google Chat, Telegram and public request forms — all landing as routed, prioritized tickets." },
   { title: "Connect", body: "GitHub repo, branch and PR pickers; webhooks from GitLab, Bitbucket, Gitea, Forgejo and Azure DevOps; an optional CI gate on Resolved." },
-  { title: "Report", body: "Insights, a 22-column CSV, a real Excel workbook, truncation-honest PDFs, and dashboards scheduled to people with no account." },
+  { title: "Report", body: "Insights, a 22-column CSV, a real Excel workbook, and dashboards scheduled to people with no account — with one date filter driving every card on the home page, compared against the previous equal-length period." },
   { title: "Prove", body: "Approved, identity-verified work as a signed attestation PDF, shareable by link, priced from the rate that applied at approval." },
+  { title: "Brief", body: "A weekly leadership update nobody fills in: products, POCs, bugs, security and training, each initiative carrying an owner, an arithmetic status colour and what moved — counted from this workspace, drafted around the figures, reviewed before it sends." },
+  { title: "Specify", body: "An AI interview turns an idea, or a PRD the client already wrote, into a structured requirements document — and then into the tickets and goals that build it." },
+  { title: "Govern", body: "Change management with risk derived from impact × likelihood, the workspace's own approval chain, and a register that reports its own change-failure rate and approval turnaround." },
   { title: "Automate", body: "Named AI teammates and reviewable flows — assembled from capabilities the workspace already runs, propose-by-default, priced per run on the same ledger as human work." }
 ];
 
@@ -261,7 +266,7 @@ export function PitchDeck() {
 
       <main>
         {/* -------------------------------------------------------- Cover */}
-        <Slide id="cover">
+        <Slide id="cover" backdrop>
           <div className="motion-safe:animate-in motion-safe:fade-in motion-safe:slide-in-from-bottom-3 motion-safe:duration-700">
             <Badge variant="info" className="w-fit">Enterprise timesheets, ticketing &amp; governed AI</Badge>
             <h1 className="mt-5 max-w-4xl text-3xl font-black leading-tight tracking-tight sm:text-5xl">
@@ -359,13 +364,16 @@ export function PitchDeck() {
           <Reveal>
             <SlideTitle icon={Workflow} title="Report → triage → approve → escalate → analyze → prove" />
             <p className="mt-3 max-w-2xl text-sm leading-7 text-muted-foreground">
-              Six stages, one dataset. The last one is the one competitors don't have.
+              Six stages, one dataset — and the last one is the one competitors don't have. Below is what ships in
+              the box today: {SURFACES.length} surfaces, all of them reading and writing the same rows.
             </p>
           </Reveal>
-          <div className="mt-8 grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+          {/* The count above is derived for the reason this file's header gives: a deck that claims
+              "we don't overstate" cannot afford a headline that miscounts the list under it. */}
+          <div onPointerMove={handleSpotlight} className="mt-8 grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
             {SURFACES.map((surface, index) => (
               <Reveal key={surface.title} delay={index * 60} className="h-full">
-                <div className="h-full rounded-xl border border-border bg-card p-4 transition hover:border-primary/40 motion-safe:hover:-translate-y-1">
+                <div className="spotlight-card h-full overflow-hidden rounded-xl border border-border bg-card p-4 transition hover:border-primary/40 motion-safe:hover:-translate-y-1">
                   <p className="text-xs font-bold uppercase tracking-wider text-primary">{surface.title}</p>
                   <p className="mt-2 text-sm leading-6 text-muted-foreground">{surface.body}</p>
                 </div>
@@ -378,6 +386,22 @@ export function PitchDeck() {
             </Reveal>
             <Reveal delay={90}>
               <ScreenshotFrame src="/product/dashboard.png" alt="The dashboard with weekly hours, daily rhythm and a day timeline." caption="A dashboard that changes shape by role." />
+            </Reveal>
+            {/* The last stage of the six, given its own row: it is the one the paragraph above
+                claims competitors do not have, and a claim like that is better shown than asserted. */}
+            <Reveal>
+              <ScreenshotFrame
+                src="/product/practice-update.png"
+                alt="The weekly practice update: counted figures for the week, then initiative tables for products, POCs and training with owners and status colours, over editable written sections."
+                caption="The weekly leadership update — counted, then drafted, then reviewed."
+              />
+            </Reveal>
+            <Reveal delay={90}>
+              <ScreenshotFrame
+                src="/product/changes.png"
+                alt="The change management register with in-flight and high-risk counts, change failure rate, approval turnaround, and a twelve-week raised-against-closed chart."
+                caption="A change register that reports on itself."
+              />
             </Reveal>
           </div>
         </Slide>
@@ -626,14 +650,44 @@ export function PitchDeck() {
  * specific to the deck and shouldn't leak into the app's design system.
  * ------------------------------------------------------------------ */
 
-function Slide({ id, tinted = false, children }: { id: SlideId; tinted?: boolean; children: ReactNode }) {
+function Slide({
+  id,
+  tinted = false,
+  backdrop = false,
+  children
+}: {
+  id: SlideId;
+  tinted?: boolean;
+  /**
+   * Mounts the animated aurora behind this slide. The COVER only, deliberately: this page is
+   * printed and screen-shared as often as it is scrolled, and a moving field behind twelve slides
+   * of dense argument is a distraction rather than a design. One at the top sets the tone.
+   */
+  backdrop?: boolean;
+  children: ReactNode;
+}) {
   const meta = SLIDES.find((slide) => slide.id === id);
   return (
     // break-inside-avoid keeps a slide from being split across two sheets when someone prints the
     // deck, which is the most likely way it reaches a meeting room. scroll-mt-32 clears BOTH sticky
     // rows of the header — the brand bar and the slide rail — so a jump link doesn't land with the
     // slide's own number hidden underneath them.
-    <section id={id} className={`scroll-mt-32 break-inside-avoid border-b border-border ${tinted ? "bg-muted/30" : ""}`}>
+    //
+    // `isolate` scopes the backdrop's negative z-index to this section. Without it the browser
+    // resolves `-z-10` against the ROOT stacking context and the page wrapper's own background
+    // paints straight over it — see the note in Landing.tsx's hero, where that cost two blurred
+    // orbs that had never once been visible.
+    <section
+      id={id}
+      className={`relative isolate scroll-mt-32 break-inside-avoid overflow-hidden border-b border-border ${tinted ? "bg-muted/30" : ""}`}
+    >
+      {backdrop && (
+        <div className="pointer-events-none absolute inset-0 -z-10">
+          <div className="absolute -left-32 -top-24 h-[26rem] w-[26rem] rounded-full bg-primary/15 blur-3xl" />
+          <div className="absolute -right-24 top-0 h-[26rem] w-[26rem] rounded-full bg-info/15 blur-3xl" />
+          <AuroraBackdrop className="absolute inset-0" intensity={0.75} />
+        </div>
+      )}
       <div className="mx-auto max-w-6xl px-4 py-14 sm:px-5 sm:py-20">
         <p className="mb-6 flex items-center gap-3 text-xs font-bold uppercase tracking-[0.2em] text-primary">
           <span className="tabular-nums">{slideNumber(id)}</span>
