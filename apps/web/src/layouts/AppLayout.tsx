@@ -8,7 +8,7 @@
  * WHO renders this: `App.tsx`, as the element for every `/app/*` route.
  */
 import { useEffect } from "react";
-import { Navigate, Outlet } from "react-router";
+import { Navigate, Outlet, useLocation } from "react-router";
 import { MaintenanceBanner } from "../components/MaintenanceBanner";
 import { authApi } from "../services/api";
 import { PasswordChangeBanner } from "../components/PasswordChangeBanner";
@@ -19,8 +19,10 @@ import { MobileNav, Sidebar } from "../components/Sidebar";
 import { Topbar } from "../components/Topbar";
 import { AppLoader } from "../components/ui/app-loader";
 import { useAuthStore } from "../store/auth";
+import { loginUrlFor } from "../utils/return-to";
 
 export function AppLayout() {
+  const location = useLocation();
   const user = useAuthStore((s) => s.user);
   const hydrated = useAuthStore((s) => s.hydrated);
   const setUser = useAuthStore((s) => s.setUser);
@@ -45,7 +47,8 @@ export function AppLayout() {
   // crosses both gates in turn — session hydration first, then the lazy route chunk — and when the
   // two looked different that read as the app loading twice. One loader, one message.
   if (!hydrated) return <AppLoader variant="screen" label="Loading secure workspace…" />;
-  if (!user) return <Navigate to="/login" replace />;
+  // Carries the destination so a deep link survives the round trip through sign-in.
+  if (!user) return <Navigate to={loginUrlFor(location)} replace />;
 
   return (
     <div className="min-h-screen bg-background">

@@ -13,13 +13,14 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { ReactNode } from "react";
 import { lazy, Suspense, useEffect } from "react";
 import { AppLoader } from "./components/ui/app-loader";
-import { createBrowserRouter, Navigate, RouterProvider } from "react-router";
+import { createBrowserRouter, Navigate, RouterProvider, useLocation, useSearchParams } from "react-router";
 import { permissions, type Permission } from "@timesheet/shared";
 import { AppLayout } from "./layouts/AppLayout";
 import { PlatformAdminLayout } from "./layouts/PlatformAdminLayout";
 import { authApi } from "./services/api";
 import { platformAdminAuthApi } from "./services/platform-admin-api";
 import { useAuthStore } from "./store/auth";
+import { loginUrlFor, safeReturnTo } from "./utils/return-to";
 import { hasSeenPlatformAdminSession, usePlatformAdminAuthStore } from "./store/platform-admin-auth";
 import { Toaster } from "./components/ui/toaster";
 import { TooltipProvider } from "./components/ui/tooltip";
@@ -103,12 +104,12 @@ const router = createBrowserRouter([
   // The pitch — a public, standalone explanation of the product for prospects and reviewers.
   // Separate from `/` on purpose: the landing page sells the features, this one sells the thesis.
   { path: "/pitch", element: <PageShell><PitchDeck /></PageShell> },
-  { path: "/login", element: <PageShell><Login /></PageShell> },
-  { path: "/forgot-password", element: <PageShell><ForgotPassword /></PageShell> },
+  { path: "/login", element: <PageShell><RedirectIfAuthenticated><Login /></RedirectIfAuthenticated></PageShell> },
+  { path: "/forgot-password", element: <PageShell><RedirectIfAuthenticated><ForgotPassword /></RedirectIfAuthenticated></PageShell> },
   // Public and unauthenticated, like the two beside it — a person who cannot remember their
   // workspace address has, by definition, no session anywhere to prove anything with.
-  { path: "/find-workspace", element: <PageShell><FindWorkspace /></PageShell> },
-  { path: "/signup", element: <PageShell><Signup /></PageShell> },
+  { path: "/find-workspace", element: <PageShell><RedirectIfAuthenticated><FindWorkspace /></RedirectIfAuthenticated></PageShell> },
+  { path: "/signup", element: <PageShell><RedirectIfAuthenticated><Signup /></RedirectIfAuthenticated></PageShell> },
   { path: "/reset-password", element: <PageShell><ResetPassword /></PageShell> },
   // Public, no-session attestation viewer. Deliberately OUTSIDE /app: the reader is a client
   // with no account, so it must never hit AppLayout (which assumes an authenticated user) or
@@ -211,7 +212,7 @@ const router = createBrowserRouter([
       { path: "practice-update", element: <RequireRole role="SUPER_ADMIN"><PageShell><PracticeUpdatePage /></PageShell></RequireRole> }
     ]
   },
-  { path: "/platform-admin/login", element: <PageShell><PlatformAdminLogin /></PageShell> },
+  { path: "/platform-admin/login", element: <PageShell><RedirectIfPlatformAdmin><PlatformAdminLogin /></RedirectIfPlatformAdmin></PageShell> },
   {
     path: "/platform-admin",
     element: <RequirePlatformAdmin><PlatformAdminLayout /></RequirePlatformAdmin>,
@@ -294,13 +295,46 @@ function ThemeBootstrap() {
   return null;
 }
 
+/**
+ * The inverse of `RequirePermission` below: keeps a signed-in person OFF the sign-in pages.
+ *
+ * The bug this fixes was reported plainly — "even though the session is logged in, the login page
+ * still comes and accepts the login again". It did, because nothing was checking. Every guard in
+ * this file pointed one way: into protected routes. The public auth pages had none at all, so a
+ * person with a perfectly good session was shown a password form and had to use it, and the only
+ * way out of the loop was to sign out first.
+ *
+ * WAITS FOR `hydrated`, for the same reason every guard below does. The session is restored by an
+ * async `/auth/refresh` on mount, so acting before it settles would show the login form for a beat
+ * to somebody who is signed in — which is the bug, just briefer.
+ *
+ * `?switch=1` DELIBERATELY BYPASSES IT. Somebody signing in as a different person on a shared
+ * machine has a legitimate reason to see the form while holding a session, and a redirect they
+ * cannot escape is its own trap. The normal path to it is "Sign out", which clears the store before
+ * navigating here; this is the explicit door for the case where they have not.
+ */
+function RedirectIfAuthenticated({ children }: { children: ReactNode }) {
+  const user = useAuthStore((s) => s.user);
+  const hydrated = useAuthStore((s) => s.hydrated);
+  const [params] = useSearchParams();
+
+  if (!hydrated) return null;
+  if (user && params.get("switch") !== "1") {
+    return <Navigate to={safeReturnTo(params.get("next"))} replace />;
+  }
+  return children;
+}
+
 function RequirePermission({ permission, children }: { permission: Permission; children: ReactNode }) {
   const user = useAuthStore((s) => s.user);
   const hydrated = useAuthStore((s) => s.hydrated);
+  const location = useLocation();
   // Wait for the AuthBootstrap fetch to settle so we don't redirect away
   // from a route the user actually has access to during the first paint.
   if (!hydrated) return null;
-  if (!user) return <Navigate to="/login" replace />;
+  // Carries the destination, so signing in returns them to the link they followed instead of
+  // dumping them on the dashboard — see utils/return-to.ts.
+  if (!user) return <Navigate to={loginUrlFor(location)} replace />;
   if (!user.permissions.includes(permission)) return <Navigate to="/app" replace />;
   return children;
 }
@@ -308,9 +342,28 @@ function RequirePermission({ permission, children }: { permission: Permission; c
 function RequireRole({ role, children }: { role: string; children: ReactNode }) {
   const user = useAuthStore((s) => s.user);
   const hydrated = useAuthStore((s) => s.hydrated);
+  const location = useLocation();
   if (!hydrated) return null;
-  if (!user) return <Navigate to="/login" replace />;
+  if (!user) return <Navigate to={loginUrlFor(location)} replace />;
   if (user.role !== role) return <Navigate to="/app" replace />;
+  return children;
+}
+
+/**
+ * `RedirectIfAuthenticated`'s counterpart for the platform console, which had the identical hole:
+ * a signed-in platform admin visiting `/platform-admin/login` was shown the form again.
+ *
+ * A SEPARATE COMPONENT RATHER THAN A PARAMETER, because the two auth planes share no state by
+ * design (see the store headers) and the one thing that must never happen is a guard reading the
+ * wrong store. Making it generic over "which store" is exactly how that mistake gets made.
+ */
+function RedirectIfPlatformAdmin({ children }: { children: ReactNode }) {
+  const admin = usePlatformAdminAuthStore((s) => s.admin);
+  const hydrated = usePlatformAdminAuthStore((s) => s.hydrated);
+  const [params] = useSearchParams();
+
+  if (!hydrated) return null;
+  if (admin && params.get("switch") !== "1") return <Navigate to="/platform-admin" replace />;
   return children;
 }
 

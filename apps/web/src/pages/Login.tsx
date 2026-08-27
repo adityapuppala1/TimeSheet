@@ -45,7 +45,7 @@ import {
 } from "lucide-react";
 import { useState, type KeyboardEvent } from "react";
 import { useForm } from "react-hook-form";
-import { Link, useNavigate } from "react-router";
+import { Link, useNavigate, useSearchParams } from "react-router";
 import { z } from "zod";
 import { Button } from "../components/ui/button";
 import { Card, CardContent } from "../components/ui/card";
@@ -57,6 +57,7 @@ import { Skeleton } from "../components/ui/skeleton";
 import { toast } from "../components/ui/toaster";
 import { apiUrl, authApi, brandingApi, brandingLogoUrl, isMaintenanceLockoutError, type LoginResponse } from "../services/api";
 import { useAuthStore } from "../store/auth";
+import { safeReturnTo } from "../utils/return-to";
 import { AuthBrandPanel } from "../components/marketing/AuthBrandPanel";
 
 // LDAP has no entry here — it's a direct bind, not a redirect, so it gets its own inline form
@@ -215,6 +216,7 @@ const MOBILE_PROOF = [
 
 export function Login() {
   const navigate = useNavigate();
+  const [params] = useSearchParams();
   const setSession = useAuthStore((s) => s.setSession);
   const [showPassword, setShowPassword] = useState(false);
   const [capsLock, setCapsLock] = useState(false);
@@ -245,7 +247,10 @@ export function Login() {
     toast.success(`Welcome back, ${data.user.name?.split(" ")[0] ?? "there"}!`, {
       description: "Your secure session is active."
     });
-    navigate("/app");
+    // Back to whatever they were trying to reach, not always the dashboard. `safeReturnTo` is an
+    // open-redirect guard, not a formality: `next` comes off the URL, so an unchecked value would
+    // send a person who has JUST authenticated to an attacker's page — see utils/return-to.ts.
+    navigate(safeReturnTo(params.get("next")), { replace: true });
   };
 
   const mutation = useMutation({
