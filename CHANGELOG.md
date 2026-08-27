@@ -12,6 +12,79 @@ number, on purpose — an installation must never render history for a version t
 
 _Nothing yet._
 
+## 3.8.0 — every upload gets scanned, and identity lives in one tab — 2026-08-28
+
+### 🔒 Files are scanned for malware before they are stored, not after
+
+- **Every upload path in the product** — ticket and change attachments, avatars, workspace branding,
+  email-intake attachments, imports — now goes through a ClamAV scan **before** a single byte is
+  written. Not upload-then-scan: a file that never lands cannot be served, cannot be linked, and
+  cannot be missed by a cleanup job that failed.
+- **The super admin decides.** It is a switch in Workspace settings → Security & DevOps, off by
+  default, so nothing changes for an installation that has no scanner. With it on, uploads are
+  scanned; with it off, they behave exactly as they did before.
+- **It fails CLOSED, and the switch says so before you flip it.** With scanning on and no scanner
+  reachable, uploads are refused rather than quietly waved through — which is the only safe answer,
+  but it is also an outage, so a **Test scanner** button sits directly beside the switch. Finding
+  out from a colleague's failed attachment is the wrong order.
+- An infected file is refused with the signature name, so an admin can tell a genuine detection from
+  a false positive without reading a log.
+
+### ✨ A generated practice update survives a page refresh
+
+- A draft you have not sent yet is **kept**. Navigate away, refresh, come back tomorrow — the
+  generated figures and the written prose are where you left them, with a note saying so. Previously
+  every refresh threw the whole thing away and the only way back was to generate it again, which
+  cost a fresh set of AI tokens for content that already existed.
+- Two explicit ways out, and only two: **Regenerate** replaces the draft, **Discard** clears it.
+  Nothing else touches it.
+
+### ✨ Every update you have sent is kept, with a preview
+
+- A history list under the composer shows every update generated and sent, who sent it and when.
+- **Preview shows what was actually sent** — the stored HTML of that email, not a re-render from
+  today's data. An update sent three weeks ago reads as it did three weeks ago, which is the only
+  version worth keeping.
+
+### ✨ The written sections are a real editor, and the email renders them
+
+- The prose sections of a practice update — executive summary, risks, priorities, decisions — are
+  now edited in the full rich-text editor: headings, bold, lists, quotes, links, alignment. Bullet
+  items get an inline-only toolbar, because a heading inside a list item is a broken list.
+- **Refine with AI writes rich text too**, so a refined section comes back formatted rather than as
+  one flat paragraph.
+- **The email renders it.** Every tag carries an inline style, because mail clients ignore
+  stylesheets to varying and unpredictable degrees — the same reason the PDF exports needed their
+  own pass. What a reviewer sees in the editor is what lands in the recipient's inbox.
+
+### 🎨 Single sign-on is one tab, and SCIM is in it
+
+- **SCIM provisioning moved out of Integrations and into Single sign-on**, because it is the same
+  job: connecting Okta means pointing sign-in at the IdP *and* letting the IdP open and close the
+  accounts that sign in. Split across two tabs, the second half kept getting missed. Nothing about
+  an existing configuration changed — the base URL and any token are exactly as they were, and the
+  Integrations tab points at the new home.
+- **A board of five connections** sits above the forms, so the questions an admin actually arrives
+  with — what is switched on, and is it working — are answered in one screen instead of two thousand
+  pixels of form belonging to providers this workspace will never use. A tile opens its card.
+- **Four states, not two.** "Ready" means every credential is saved and the switch is deliberately
+  off. "Half configured" means somebody started and stopped — the state that silently breaks a
+  sign-in button. Those are different problems and no longer share a label.
+- Google and Microsoft show their own marks instead of a shared key icon.
+
+### 🎨 The sign-in page, organised
+
+- **Each SSO button carries its provider's real mark**, left-aligned in a fixed slot so two or three
+  of them read as a column rather than a ragged stack, at every width from a phone to a wide desktop.
+- **A workspace with both password and directory sign-in showed both forms at once** — two email
+  fields and two password fields on one page, ambiguous to read and ambiguous to a screen reader. A
+  picker now shows one at a time. Neither form changed; only which one is on screen. With a single
+  method enabled there is no picker.
+- **A fingerprint seal reports the sign-in attempt**: scanning while credentials are checked, a green
+  check on success, red on failure. It is deliberately a status light and not a button — this product
+  has no passkey support, and a fingerprint that looks tappable and does nothing would be worse than
+  no fingerprint at all. Every state is readable with animations turned off.
+
 ## 3.7.0 — a sign-in that knows you're already signed in — 2026-08-27
 
 ### 🐛 Signing in when you already had a session asked for your password again

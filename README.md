@@ -136,23 +136,23 @@ CAB tool holds none of that.
 
 ## By the numbers
 
-Counted from the tree at v3.7.0, not estimated — regenerate any of these with the one-liners in
+Counted from the tree at v3.8.0, not estimated — regenerate any of these with the one-liners in
 [CONTRIBUTING.md](CONTRIBUTING.md#regenerating-readmes-by-the-numbers) rather than trusting a figure
 that looks stale.
 
 | | |
 |---|---|
-| REST routes | **439** across 53 controllers |
-| Prisma models / enums | **126** / 43, plus **107** tenant migrations and 12 control-plane migrations |
-| Services / cron workers | **115** / 25 |
-| Web pages | **71** |
-| Unit tests | **1,742** across 152 files (`npm test -w apps/api`), plus **53** in `apps/web` |
+| REST routes | **444** across 53 controllers |
+| Prisma models / enums | **127** / 44, plus **109** tenant migrations and 12 control-plane migrations |
+| Services / cron workers | **116** / 25 |
+| Web pages | **72** |
+| Unit tests | **1,758** across 153 files (`npm test -w apps/api`), plus **53** in `apps/web` |
 | End-to-end specs | **29** Playwright specs, run across desktop, phone, tablet, laptop, 4K, Firefox and WebKit |
 | Editable email templates | **39**, every one of them with preview, test send, revert and per-template delivery analytics |
 | RBAC permissions | **38**, over 5 roles |
 | Lint | **0 errors**, warnings tracked as a baseline rather than driven to zero — see below |
 
-**On the lint number.** The repo runs ESLint with `sonarjs` and sits at roughly 523 warnings and
+**On the lint number.** The repo runs ESLint with `sonarjs` and sits at roughly 531 warnings and
 zero errors. That is the healthy state, not a backlog: the warnings are overwhelmingly
 `no-nested-conditional` and `cognitive-complexity` on code where the nesting is the clearest form,
 and "fixing" the count by mechanically extracting ternaries has previously made the code worse.
@@ -622,7 +622,7 @@ failure points at a rule rather than a fixture. **End-to-end specs** drive a rea
 real seeded database, and are where anything needing one belongs.
 
 ```bash
-npm test -w apps/api         # the unit suite (~20s): 1,380 tests across 114 files
+npm test -w apps/api         # the unit suite (~35s): 1,758 tests across 153 files
 npm run test:coverage -w apps/api
 npm run lint                 # typecheck both apps + eslint/sonarjs across the monorepo
 ```

@@ -4769,6 +4769,99 @@ the answer at the time was 31/17/13. All three were corrected before being super
   seed step would light all fourteen up — deliberately not done in the same change as the fix, since
   it will surface failures that deserve their own pass.
 
+## v3.8.0 — scan before you store, and one tab for identity (2026-08-28)
+
+### The order of the two verbs is the whole feature
+
+The ask was a virus scanner on every upload, and the phrasing was precise: *scan and then upload, do
+not upload and scan*. That is not a preference. A file written to disk before it is judged is
+already reachable — by a link, by a preview, by a backup job, by the cleanup that failed — and
+"quarantine it afterwards" is a promise made by whoever is still awake. So `assertUploadIsClean`
+runs against the buffer, before storage, on every path: ticket and change attachments, avatars,
+branding, email intake, imports.
+
+It **throws** rather than returning a verdict, and that is deliberate: a caller who ignores a
+returned boolean writes an infected file, whereas a caller who ignores an exception does not exist.
+
+**It fails closed.** With scanning on and no clamd reachable, uploads are refused. That is the only
+defensible answer and it is also an outage, which is why the connectivity check sits next to the
+switch that causes it rather than in a docs page. The switch is off by default and belongs to the
+super admin, so an installation without a scanner behaves exactly as it did.
+
+### The bug that would have refused every clean file
+
+clamd's replies to `z`-prefixed commands are terminated with a NUL byte, and JavaScript's
+`String.trim()` does not strip NUL. So a reply reading `stream: OK` followed by that byte failed an
+"ends with OK" check, and **every clean upload in the product would have been rejected** — with the
+scanner working perfectly and its own logs saying OK.
+
+It was caught by a test that speaks the real protocol over a real socket instead of asserting
+against a hand-written fixture, which is the only reason it was caught at all: a fixture would have
+been written without the NUL, agreed with the parser, and been wrong in exactly the same way.
+
+Two neighbours turned up with it. The avatar and branding routes had a bare `catch {}` that rewrote
+every failure as "Could not decode image" — which would have swallowed both the scanner-unreachable
+503 and the infected-file message, leaving an admin staring at a file their browser opens fine.
+
+### A draft that costs tokens to make should not evaporate on refresh
+
+The practice update generated figures and prose, and a page refresh threw the lot away. The only
+recovery was to generate it again, which means paying for the same content twice. Drafts now
+persist, restore on mount with a `GET` (never a `POST` — restoring must not be able to *cause* a
+generation), and autosave edits after a pause. Exactly two things clear one: Regenerate and Discard.
+
+Sent updates are archived with **the HTML as it was sent**, not a re-render from today's data. An
+update from three weeks ago has to read the way it read three weeks ago or it is not a record.
+
+### A backslash escape inside a template literal is not an escape
+
+The written sections became rich text, so the email had to render them — every tag needing an inline
+style, because mail clients ignore stylesheets unpredictably. The styler built its tag pattern by
+interpolating the tag name into a JS template literal and writing the whitespace class as a single
+backslash-s. Inside a template literal that escape collapses before the regex ever sees it, so the
+pattern compiled to something that could only match a tag with no attributes at all.
+
+Nothing looked broken. Headings, paragraphs and lists were all styled — and every link silently was
+not. A link that is merely the wrong colour is the kind of defect that ships. Found by testing the
+one tag that arrives with attributes, which is now its own named test.
+
+### Two tabs for one job
+
+SCIM provisioning sat under Integrations while the SSO providers it feeds sat under Single sign-on.
+That is one workflow split in half — an admin connecting Okta points sign-in at the IdP *and* lets
+the IdP open and close the accounts that sign in — and the half that was one tab away kept getting
+missed, leaving workspaces with working SSO and joiners still added by hand.
+
+They are one tab now, fronted by a board of five connections that answers what an admin actually
+arrives asking. Status went from two states to four, because "credentials saved, switch deliberately
+off" and "somebody started and stopped" are different situations with different fixes, and only the
+second one silently breaks a sign-in button.
+
+### The sign-in page had two of everything
+
+A workspace with both password and LDAP enabled rendered both forms at once: two email fields, two
+password fields. The LDAP labels were already prefixed "Directory" to work around it, which is a
+comment admitting the layout is wrong rather than fixing it. This had already bitten the e2e suite —
+a label lookup for "Email" matched two elements the moment LDAP went on.
+
+A picker shows one at a time. Neither form changed.
+
+The fingerprint added beside the heading is a **status light, not a button**, and that distinction
+was checked before building it: `navigator.credentials` appears nowhere in this repo, so there is no
+passkey support to attach it to. A fingerprint that looks tappable and does nothing is worse than no
+fingerprint. If WebAuthn is ever added, `BiometricSeal.tsx` is where the affordance belongs — as a
+real `<button>`, at the same moment the backend can answer it and not before.
+
+### Still open
+
+- [ ] **Passkeys / WebAuthn.** The sign-in page now has the right place for it and none of the
+  mechanism. A platform authenticator would need credential registration, a challenge endpoint and
+  verification, plus a policy decision about whether it satisfies "Require SSO only".
+- [ ] **The virus scanner is clamd-only.** The service talks INSTREAM over a raw socket, which is
+  fine for a self-hosted deployment with ClamAV beside it, and useless for an operator who would
+  rather call a hosted scanning API. The seam exists (`assertUploadIsClean`); a second backend does
+  not.
+
 ## v3.7.0 — a sign-in that knows you're already signed in (2026-08-27)
 
 ### The guard that only pointed one way
