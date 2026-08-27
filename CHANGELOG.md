@@ -10,6 +10,141 @@ user of a running installation.
 The parser that feeds the in-app What's-new page ignores this section until it gains a version
 number, on purpose — an installation must never render history for a version that does not exist yet.
 
+_Nothing yet._
+
+## 3.5.0 — the week your leadership can read, and one calendar that means it — 2026-08-27
+
+### ✨ A Weekly AI/ML Practice Update for leadership
+
+- **One consolidated weekly view of what the practice is doing**, in the shape a leadership team
+  actually asks for: an executive summary, then Products / Features, POCs / Innovation,
+  Bugs / Stability, Security and Training / Capability Building — each with **Owner, a 🟢/🟡/🔴
+  status, this period's progress, next steps and risks** — followed by releases, key metrics with
+  week-on-week movement, risks and blockers, next week's priorities, and the decisions leadership
+  is being asked to make.
+- **Nobody fills in a form.** Initiatives are the workspace's own active projects, sorted into
+  those areas from the project's name and from what its people actually logged against it. The
+  owner is whoever logged the most hours, falling back to the largest open-ticket holder. What is
+  inferred is documented as inferred, and every guess is visible and correctable before sending.
+- **The status colour is arithmetic, never a model's opinion** — red means a breached SLA, or more
+  than a third of the open work already late. A red a model chose is not reproducible in the
+  meeting where somebody asks why their project is red.
+- **The figures are counted; the prose is drafted.** AI writes the summary, the risks, the
+  priorities and the asks — and is allowed to fail. With the model off, slow, or answering in the
+  wrong shape, every section still renders from the facts it would have been written from, so the
+  update goes out complete rather than apologetic. The reviewer is told which of those three
+  happened, because they are different things.
+- **Generate, review, then send.** The draft is editable before it leaves and the send posts the
+  reviewed text back, so an edit is never silently discarded. The counted figures are deliberately
+  read-only: a document whose numbers can be typed over is not a record of anything. The review
+  step earned itself immediately — in testing the model wrote "189 overdue tasks" against a
+  counted 166.
+- **Every written section has "Refine with AI"**, the same affordance the timesheet fields have:
+  your text beside the suggestion, accepting it is a separate click, and Undo is real.
+- **Only a super admin decides who receives it.** The whole surface is super-admin-only, and the
+  distribution list takes plain email addresses rather than user accounts — the people who most
+  need this update often do not have one. An optional Monday 07:30 send is available and **off by
+  default**; the button is the primary path.
+- It registers like every other email in the product, so it appears in **Email templates** with
+  preview, test send and revert, and in **Email analytics** with per-template delivery figures.
+  **No new environment variables.**
+
+### 📅 One date filter that drives the whole home page
+
+- **Every metric on the home page now moves together.** Pick today, a week, a month or any custom
+  range and the hero cards, the daily rhythm, progress, the workforce snapshot, productivity,
+  project utilization and the project rollup all answer for that period.
+- **It had to be server-side, and that is the point.** The timesheet list returns newest-first and
+  truncates, so filtering a range in the browser silently under-reports any period outside the
+  newest page — correct-looking in development and wrong in production. Four endpoints learned a
+  date window instead, each defaulting to exactly the window it used before.
+- **🐛 Project utilization was answering for all time.** It never had a date filter at all, so a
+  card sitting on a page showing one week was quietly reporting on the entire history.
+- **"vs yesterday" became "vs the previous period."** Comparing a fortnight against a single day
+  read as a collapse every time. Every card that names a period now takes that name from the
+  selection, so none of them can claim a period they are not showing, and the week target scales
+  by the working days in the range instead of staying pinned to 40 hours.
+- **Hovering a day in the calendar now separates what happened on it** — log entries with their
+  approval breakdown, then ticket entries, then change entries, with a rule between the groups.
+  Previously they were one undifferentiated list of numbers.
+
+### 🐛 The day timeline ignored the calendar above it, and showed a manager the whole company
+
+- **Two calendars became one.** The timeline carried its own date picker while the page header
+  carried another, and the header one did not drive it — so picking "last month" left the timeline
+  opened on today, rendering an empty track for a day the request had not even asked about. It now
+  follows the page range and offers a strip of the days in that range that actually have entries.
+- **A manager was shown every person in the workspace.** The route gated on `reports:view`, which
+  managers and team leads both hold, so "one lane per person" meant the entire company. It now
+  resolves the three tiers the reporting line already encodes: an admin sees everyone, anyone else
+  sees themselves plus their direct reports, and somebody who manages nobody sees only themselves.
+  History, the timesheet page and the approvals queue are untouched.
+
+### 📄 Every PDF export got the same house style, and markdown inside them renders
+
+- **One shared style for all four exports** — the requirements document, the timesheet report, the
+  verified work attestation and the security assessment report. Three of them had never had the
+  watermark or the running header the fourth did; a customer receiving two documents from the same
+  product got two visibly different documents.
+- **🐛 The requirements PDF printed `### Heading` and raw `| pipe | tables |` literally.**
+  Self-inflicted: the generation prompt tells the model those fields may contain markdown and the
+  on-screen document renders it, but the PDF drew them as plain paragraphs. Narrative fields now
+  render headings, lists, GFM tables, callouts, blockquotes, code and inline emphasis.
+- **Charts in a document now draw as charts** — bar, line and pie — instead of printing their raw
+  JSON. Mermaid still exports its source, because that one genuinely needs a renderer.
+- **🐛 Multi-word status pills lost every word after the first.** "IDENTITY VERIFIED" — the most
+  consequential claim on an attestation — printed as "IDENTITY", with the rest in white on white
+  below the pill. Found by rendering the pages and looking at them, which is also how three other
+  layout defects surfaced: list markers floating above their own text, a running header crossing
+  the first line of content, and a totals row whose columns could drift away from the rows it
+  totalled.
+- **🔒 A ~3000ms ReDoS, found by measuring rather than assuming.** The table-divider check in the
+  new markdown renderer had two overlapping whitespace quantifiers; it parses text a model wrote,
+  so it was reachable. Replaced with a linear character scan — 5ms on the same input, and stricter
+  for free. Five neighbouring patterns the linter also flagged measured at 0.1ms and were left
+  alone, with the numbers recorded beside them.
+
+### ✨ The AI status report is structured, and can cover every project
+
+- **Its own prompt was the reason it was a wall of text** — the template literally said "plain
+  prose, no headings, no bullets", and the page rendered the result as preformatted text. It now
+  asks for a shape: a short paragraph you can stop after, then highlights, risks and overdue work,
+  and a by-the-numbers table — rendered with the same renderer Ask AI uses. A workspace that has
+  customised this prompt keeps its own version; this changes the default, not their choice.
+- **"All projects" is now a first-class choice**, giving a portfolio summary followed by a section
+  per project. It uses grouped queries rather than a loop, caps the number of projects covered, and
+  **says so** rather than quietly reporting on some of them.
+- The button now looks like every other AI action in the app.
+
+### 🐛 A reasoning model's private thinking was being shown to users
+
+- **`<think>` blocks leaked into every text feature.** Nothing in the codebase stripped them. The
+  JSON features hid it because their parser walks past the block to find the object — which is
+  exactly why it went unnoticed — while every feature that prints text printed it verbatim. A
+  status report opened with a wall of "Thinking Process: 1. Deconstruct the Request".
+- Stripped centrally, at the single point every text-returning feature passes through, including
+  the unclosed-tag case a model produces when it runs out of tokens mid-thought. If stripping would
+  leave nothing, the original is kept — a blank panel tells a reader less than the reasoning does.
+
+### 🐛 Charts asked for in Ask AI were silently thrown away
+
+- The answer travels inside a JSON string, where a real code fence has to be escaped and a markdown
+  link does not — so the model wrote `[Bar chart of hours](  {…}  )` and the renderer, which only
+  accepted a fence, showed a broken link. The numbers were simply lost.
+- Fixed at both ends, because either alone is unreliable: the prompt now shows a literal, correctly
+  escaped fence to copy, and the renderer also recognises the link form. Widening what is
+  *recognised* is not widening what is trusted — the content still has to survive the same shape
+  check, so an ordinary link stays an ordinary link. An answer stored before this shipped now draws
+  as a chart without being regenerated.
+
+### 🐛 Refine could not be extended without a 422
+
+- The list of refinable fields lived in three places — the record that dispatches on it, a
+  hardcoded validation enum, and the client's copy. Adding fields updated two of them, and every
+  request for a new field was rejected by the third with a message that named nothing. The
+  validation enum is now derived from the one list, so the class of bug is gone rather than that
+  instance of it.
+
 ### 🎨 AI output now renders the way an AI answer should
 
 - **One renderer for everything a model writes** — Ask AI answers and the generated PRD/BRD's

@@ -145,9 +145,11 @@ echo "workers     $(ls apps/api/src/workers/*.ts | wc -l)"
 echo "web pages   $(find apps/web/src/pages -name '*.tsx' | wc -l)"
 echo "e2e specs   $(find tests -name '*.spec.ts' | wc -l)"
 echo "permissions $(grep -cE '^\s+[A-Z_]+:\s*\"' packages/shared/src/index.ts)"
-# Template keys are a mix of quoted ("ticket.assigned") and bare (welcome), so a pattern that only
-# matches one shape silently under-counts. This one drifted to 35-against-22 for exactly that reason.
-echo "email tmpl  $(awk '/^export const SEED_TEMPLATES/{f=1} f && (/^  "[a-zA-Z_.]+": \{$/ || /^  [a-zA-Z_]+: \{$/){c++} END{print c}' apps/api/prisma/email-templates-seed.ts)"
+# Counted from TEMPLATE_VARIABLES, which is what the editor actually lists (TEMPLATE_KEYS is
+# Object.keys of it) — NOT from email-templates-seed.ts, which only pre-populates the subset that
+# ships with a DB row. Counting the seed is why the README said 22 while the page offered 32: a
+# template with no override row is a normal state, and it is still editable.
+echo "email tmpl  $(node -e "const m=require('fs').readFileSync('apps/api/src/services/template-store.service.ts','utf8');const s=m.slice(m.indexOf('TEMPLATE_VARIABLES'));console.log((s.slice(0,s.indexOf('};')).match(/^\s{2}\"/gm)||[]).length)")"
 ```
 
 Test and lint counts come from the tools themselves — `npm test -w apps/api` prints the suite total,

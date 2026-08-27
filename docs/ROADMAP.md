@@ -4769,3 +4769,122 @@ the answer at the time was 31/17/13. All three were corrected before being super
   seed step would light all fourteen up — deliberately not done in the same change as the fix, since
   it will surface failures that deserve their own pass.
 
+## v3.5.0 — the week your leadership can read, and one calendar that means it (2026-08-27)
+
+### The Weekly AI/ML Practice Update
+
+A leadership ask, arriving as a document format rather than a feature request: executive summary,
+five practice areas, metrics, risks, next week, decisions required — with Owner / Status / progress /
+next steps / risks per initiative. Three decisions shaped the build.
+
+**Initiatives are projects, inferred, not a form.** The CEO's brief closed with "the objective is
+not to create another detailed status-reporting exercise", so a weekly list somebody fills in was
+ruled out by the requirement itself. A project already carries owner, progress, and risk in data the
+team produces by working. Category comes from the project's name, then from what its people logged
+against it; the owner is whoever logged the most hours, falling back to the largest open-ticket
+holder. All of that is **documented as inferred** in the service header, and every guess is visible
+and correctable in the draft — which is the only honest way to ship a heuristic.
+
+**The RAG status is arithmetic and a model never touches it.** Red is a breached SLA, or more than a
+third of open work already late; the thresholds live in one function. A red a model chose is not
+reproducible in the meeting where somebody asks why their project is red.
+
+**Figures counted, prose drafted, and the two kept apart.** This is `weekly-digest.worker.ts`'s
+lesson applied before it could be re-learned: that worker's header records that gating the whole
+digest on the model succeeding meant an unconfigured one sent nothing at all. Here every section
+falls back **per section** to the facts it would have been written from, so a missing model produces
+a shorter update rather than an empty one, and the reviewer is told which of "switched off",
+"unreachable" and "answered in the wrong shape" happened — three states that were initially one
+silent `null`.
+
+### The bug the review step caught on its first run
+
+Asked for markdown bullets inside a JSON string, `llama3.1:8b` emitted the bullets **unquoted** and
+broke the whole object — four good sections lost to a parse error. The contract became an array of
+short strings, which is the shape small models get right, and the parser accepts either form.
+
+Then, with it working, the model wrote *"The total of 189 overdue tasks"* against a counted **166**.
+That is the entire argument for the review step existing, arriving unprompted on the first real
+draft. It also leaked an initiative UUID into a sentence bound for a CEO — the ids are handed over
+only so next steps can be keyed correctly — so the prompt now forbids it and the narrative is
+stripped of them regardless. A prompt is advisory; this text goes out under somebody's name.
+
+### One calendar for the home page, and a card that was answering the wrong question
+
+Every metric on the home page hardcoded its own window, so the page could not answer "what did last
+month look like" at all. One range picker now drives all of them.
+
+**It could not be a client-side filter, and finding that out mattered more than the feature.**
+`GET /timesheets` returns newest-first and truncates, so filtering a range in the browser silently
+under-reports any period outside the newest page — right in development, where nobody has that many
+entries, and wrong in production. Four endpoints learned a date window instead, each defaulting to
+exactly the window it used before.
+
+**Project utilization had never had a date filter at all.** It was answering for all time on a page
+that said "this week". Nothing was broken, so nothing said so.
+
+**"vs yesterday" stopped being true.** Over a fortnight it read as a collapse every time. The
+comparison is now the previous equal-length period, every card takes its label from the selection so
+none can claim a period it is not showing, and the week target scales by working days in the range
+rather than staying pinned to 40 hours.
+
+### A manager was being shown the whole company
+
+The day timeline gated on `reports:view` — which MANAGER and TEAM_LEAD both hold — so "one lane per
+person" meant every person in the workspace. `?scope=team` resolves the three tiers `User.managerId`
+already encodes, and the employee case is not a separate branch: it is the manager branch with an
+empty team. Opt-in, so History, the timesheet page and the approvals queue keep the visibility they
+have — narrowing those would change who can approve what, which is a different decision.
+
+The same card also carried its own date picker while the page header carried another, and the header
+one did not drive it. Two calendars became one.
+
+### Four PDF exporters that had drifted apart
+
+`requirements-doc-pdf.service.ts` said it outright in its own header — "copied here rather than
+imported, since that file's helpers are module-local" — and by now only one of the four drew the
+watermark, only one had a running header, only one measured row heights before drawing a table.
+
+Consolidating them into `pdf-kit.ts` surfaced four defects that only a **rendered page** shows:
+multi-word status pills losing every word after the first (so "IDENTITY VERIFIED" — the most
+consequential claim on an attestation — printed as "IDENTITY"), list markers floating above their
+own text, a running header crossing the first line of content, and a totals row whose hardcoded
+columns could drift from the rows it totalled. None of them were visible in code or in a test.
+
+There is now a way to look: `pdf-shot.mjs` renders a PDF through Chrome, and its header records the
+two traps that silently produce a *wrong screenshot* rather than an error — headless Chromium
+downloads a PDF instead of rendering it, and `#page=N` only navigates on a fresh load.
+
+**A ~3000ms ReDoS, found by measuring rather than by assuming.** The linter flagged six regexes in
+the new markdown renderer; five measured at 0.1ms and were left alone with the numbers recorded
+beside them, and the sixth — the table-divider check, whose two whitespace quantifiers overlapped —
+took ~3000ms on 60k of adversarial input. It parses text a model wrote, so it was reachable.
+
+### Also
+
+- **`<think>` blocks had been leaking into every text feature.** Nothing stripped them; the JSON
+  features hid it because their parser walks past the block to find the object, which is exactly why
+  it went unnoticed. Two stored answers in the dev database prove it was live.
+- **Charts asked for in Ask AI were silently discarded.** The answer travels inside a JSON string
+  where a fence has to be escaped and a link does not, so the model wrote `[Bar chart](…)` and the
+  renderer showed a broken link. Fixed at both ends; an answer stored the day before now draws
+  without being regenerated.
+- **The refine allow-list lived in three places** and adding four fields updated two of them, so
+  every request for a new field was refused `422` by the third with a message that named nothing.
+  The validation enum is derived now.
+- **`Chart.yaml`'s `appVersion` drifted for the fourth release running** — 3.3.0 against a 3.4.0
+  repo. The CI gate caught it and failed the build on `main`; nobody looked at CI. The check is
+  doing its job and the release checklist still is not, so the chart's own comment now says to bump
+  it in the same commit as `VERSION`.
+- **README's "editable email templates" number was counted from the wrong file.** The one-liner in
+  CONTRIBUTING.md counted `email-templates-seed.ts` (22) while the editor lists `TEMPLATE_VARIABLES`
+  (32) — a template with no seeded override row is a normal state and is still editable. Both the
+  number and the one-liner are fixed.
+
+### Still open
+
+- [ ] **The hero cards on the home page aggregate the workspace for an admin.** `GET /timesheets`
+  returns everyone's rows to anyone with `reports:view`, so "This week — *your* logged hours" shows
+  the workspace total for an admin while "My projects" beside it is genuinely personal. Pre-existing,
+  and left alone deliberately: changing it alters what those cards mean for admins, which is a
+  product decision rather than a bug fix, and it was raised rather than quietly changed.

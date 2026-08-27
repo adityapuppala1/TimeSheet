@@ -450,6 +450,48 @@ covered-but-unverified rows distinctly from not-covered ones), and `GET /tickets
 
 ## Reports
 
+### The `from` / `to` date window
+
+Four endpoints accept an inclusive `from`/`to` pair as `YYYY-MM-DD`, which is what the home page's
+single date filter drives. **All four default to exactly the window they used before the filter
+existed**, so every other caller is unaffected by passing nothing:
+
+| Endpoint | With no window | With one |
+|---|---|---|
+| `GET /timesheets` | newest-first page, capped at 100 rows | filters `workDate`, and raises the cap to 2 000 |
+| `GET /reports/admin-summary` | today / yesterday / 7d / year-to-date, hardcoded | the window, compared against the equal-length window before it |
+| `GET /reports/daily-status` | today | the window, and returns `from`/`to`/`days` so the card can label itself |
+| `GET /dashboards/my-month` | the current calendar month | the window |
+
+**Why the timesheet filter is server-side and not a client concern.** That route returns newest
+first and truncates, so filtering a range in the browser silently under-reports any period that
+falls outside the newest page — correct-looking in development, where nobody has that many entries,
+and wrong in production. A bounded range is self-limiting in a way "everything" is not, which is
+why it can afford the higher cap.
+
+**Unparseable dates are DROPPED, not rejected.** These query strings get bookmarked, hand-edited and
+pasted between people; refusing a whole dashboard over one stale parameter is worse than answering
+the rest of it, and it degrades to the endpoint's original window. The shared implementation is
+`apps/api/src/utils/date-window.ts` (`parseDayWindow`, `workDateFilter`, `resolveTimestampWindow`,
+`windowDays`) — one definition, because three of these endpoints had grown their own copy of the
+same eight-line date parser and the off-by-one in an inclusive range (an exclusive end must sit at
+midnight on the day *after* `to`, or the window quietly drops its own last day) is exactly the kind
+of thing that should exist once.
+
+**"vs yesterday" becomes "vs the previous equal-length period"** on `admin-summary` once a window is
+given — it is the only thing a delta can honestly mean for an arbitrary span, since comparing a
+fortnight against a single day reads as a collapse every time. The project/status/activity
+breakdowns gain the filter too; they were previously **all-time**, which meant a "project
+utilization" card on a page showing one week was silently answering for the entire history.
+
+`GET /timesheets` additionally accepts `scope=team`, which resolves the three tiers the reporting
+line already encodes rather than the binary `reports:view` check: `users:manage` sees everyone,
+anyone else sees themselves plus their direct reports (`User.managerId`), and somebody who manages
+nobody sees only themselves — that last case is not a separate branch, it is the manager branch
+with an empty team. It is **opt-in**: History, the timesheet page and the approvals queue pass no
+scope and keep the visibility they have, because narrowing those would change who can approve what.
+
+
 - `GET /reports/employee-summary`
 - `GET /reports/admin-summary` — also returns a same-shaped `<metric>Yesterday`/`<metric>LastWeek`
   baseline field alongside every headline metric (e.g. `usersYesterday`, `approvedLastWeek`,
@@ -1481,9 +1523,11 @@ missing information, but asserted-wrong information.
 
 ## Notification settings
 
-- `GET /settings/notifications` *(SUPER_ADMIN)* — the workspace notification singleton: all 27
-  `email*` category booleans, the reminder schedule (`dailyReminderHour`,
+- `GET /settings/notifications` *(SUPER_ADMIN)* — the workspace notification singleton: all 44
+  `email*` category booleans (the authoritative list is `notificationPreferenceKeys` in
+  `packages/shared`, not this sentence), the reminder schedule (`dailyReminderHour`,
   `escalationReminderHour`, `remindOnWeekdaysOnly`), `bccSuperAdminOnAllEmails`, `emailRoleMutes`,
+  the practice-update distribution list (`practiceUpdateRecipients`, `practiceUpdateWeekly`),
   and read-only runtime meta (`serverTimezone`, `serverUtcOffset`, `serverNow`) so an hour picker
   can say which clock it is actually setting.
 - `PATCH /settings/notifications` *(SUPER_ADMIN)* — every field optional; the body is strict, so an
@@ -1664,7 +1708,8 @@ the IP) for everything that can reach a model.
   the real reason rather than failing when clicked.
 
 - `POST /ai/text/refine` — `{ text, field }`, where `field` is one of `ticket_title`,
-  `ticket_description`, `ticket_comment`, `timesheet_description`, `timesheet_notes`
+  `ticket_description`, `ticket_comment`, `timesheet_description`, `timesheet_notes`,
+  `practice_summary`, `practice_risk`, `practice_priority`, `practice_decision`
   (`text`: 1–20 000 chars). Returns:
 
   ```json
@@ -1678,10 +1723,19 @@ the IP) for everything that can reach a model.
   **Permission depends on the field, not on the route.** The rest of this router is ticket work and
   can hang one `requirePermission(tickets:write)` off each route; refine also covers timesheet
   fields, and an EMPLOYEE filling in a timesheet has no reason to hold `tickets:write`. So the
-  three `ticket_*` fields require `tickets:write` and the two `timesheet_*` fields require
-  `timesheets:write` — "can you edit this text at all" and "can you have the AI tidy it" give the
-  same answer. Validation runs first, so `field` is a known value before the permission is looked
-  up; a mismatch is `403`.
+  three `ticket_*` fields require `tickets:write`, the two `timesheet_*` fields require
+  `timesheets:write`, and the four `practice_*` fields require `users:manage` — the practice update
+  is a super-admin surface end to end, and `users:manage` is the permission nobody below admin tier
+  holds. "Can you edit this text at all" and "can you have the AI tidy it" give the same answer.
+  Validation runs first, so `field` is a known value before the permission is looked up; a mismatch
+  is `403`.
+
+  **The allow-list has ONE source.** The validation enum is derived from `REFINE_FIELD_KEYS`
+  (`Object.keys(REFINE_FIELDS)`) rather than re-typed. It used to be hand-maintained in three
+  places — the record that dispatches on it, the enum, and the client's copy — and adding the four
+  `practice_*` fields updated two of them, so every request for a new field was refused `422` by
+  the third with a message that named nothing. If you add a field, add it to `REFINE_FIELDS` and to
+  the client union in `apps/web/src/services/api.ts`; the enum follows on its own.
 
   Gated by the AI master switch **and** the `writingAssistantEnabled` toggle, and charged against
   the same monthly budget as every other capability (logged to `AIUsageLog`/`AIInteraction` under
@@ -1693,6 +1747,99 @@ the IP) for everything that can reach a model.
 - `POST /ai/text/improve` — `{ text, context }` — the older whole-field rewrite, still mounted and
   still gated on `tickets:write`. No longer surfaced in the UI: it replaced what the author had
   typed, with no preview and no way back.
+
+## Weekly AI/ML Practice Update
+
+The consolidated leadership digest — one weekly view of Products, POCs/Innovation, Bugs/Stability,
+Security and Training, plus metrics, risks, next week's priorities and the decisions leadership is
+being asked to make. Rendered by `services/practice-update-mail.service.ts` from figures counted by
+`services/practice-update.service.ts`, with an optional AI-written narrative around them.
+
+**Every route on this router is `requireAuth, requireSuperAdmin`.** The update aggregates every
+project, everyone's hours and every open security finding into one document and then mails it to an
+arbitrary address list — both halves of that are privileged, and "only a super admin decides who
+this goes to" is cheapest to keep true if nobody else can reach any of it.
+
+- `GET /practice-update/settings` — the distribution list and both gates:
+
+  ```json
+  {
+    "recipients": ["ceo@example.com"],
+    "configured": true,
+    "weekly": false,
+    "emailEnabled": true,
+    "aiNarrativeEnabled": true,
+    "maxRecipients": 50
+  }
+  ```
+
+  The two gates are reported **separately and named** because "nothing happened when I pressed
+  send" has two different causes and the page has to be able to say which. `emailEnabled` is
+  `GlobalNotificationSettings.emailPracticeUpdate` (the same category switch every other digest
+  has); `aiNarrativeEnabled` is `GlobalAISettings.practiceUpdateEnabled` and gates only the prose.
+  `configured` distinguishes "nobody has been chosen yet" (`null` column) from "an empty list was
+  saved deliberately" — the send refuses on both, only the UI tells them apart.
+
+- `PUT /practice-update/settings` — `{ recipients: string[], weekly?: boolean }`. Addresses are
+  lower-cased and de-duplicated, capped at 50 (a distribution list, not a mailshot), and validated
+  one at a time so a bad address **names itself** rather than failing the save with a field path.
+  Plain email addresses rather than user ids, on purpose: the people who most need this update — a
+  CEO, a practice head — often have no account in the workspace it is about, the same call
+  `ReportSubscription.recipients` already made. Audited as `practice_update.recipients_updated`.
+
+- `POST /practice-update/draft` — `{ from?, to? }` as `YYYY-MM-DD`; with neither, the last complete
+  Monday-to-Sunday week. Returns the counted `data`, the drafted `narrative`, an `aiFailed` reason,
+  and a rendered `preview`:
+
+  ```json
+  {
+    "data": { "period": {…}, "metrics": {…}, "previousMetrics": {…}, "initiatives": […], "releases": [], "isEmpty": false },
+    "narrative": { "executiveSummary": "…", "risks": […], "nextWeekPriorities": […], "decisionsRequired": […], "nextSteps": [{ "id": "…", "text": "…" }] },
+    "aiFailed": null,
+    "preview": { "subject": "…", "headline": "…", "sectionsHtml": "…" }
+  }
+  ```
+
+  **The narrative is best-effort and the figures are not.** `aiFailed` distinguishes three
+  outcomes a caller would otherwise see as one silent `null`: the capability is switched off, the
+  model was unreachable, or it answered in a shape the update could not use. Every section still
+  renders from the facts it would have been written from, so a draft is always complete.
+
+  `initiatives` are the workspace's active projects, each with `category` (`PRODUCT` | `POC` |
+  `BUGS` | `SECURITY` | `TRAINING`), `owner`, `status` (`GREEN` | `AMBER` | `RED`), the period's
+  counts and one-line `progress`/`risks` strings. Category and owner are **inferred** — from the
+  project's name then from what its people logged against it, and from who logged the most hours
+  falling back to the largest open-ticket holder. The status is **arithmetic**: `RED` on any SLA
+  breach or when more than a third of open work is already late, `AMBER` on anything overdue,
+  `GREEN` otherwise. A model never chooses it, because a red a model chose is not reproducible in
+  the meeting where somebody asks why.
+
+- `POST /practice-update/send` — `{ from?, to?, narrative? }`. Mails the **reviewed** update to the
+  configured list as one send with everyone on it (a circulated update whose recipients are meant
+  to see that they share it).
+
+  **The figures are rebuilt server-side from the period rather than trusted from the request.** The
+  client may edit the prose and only the prose; a caller who could post arbitrary numbers into a
+  document that looks like it came from this workspace's records could make it say anything. The
+  reviewed `narrative` IS taken from the body — regenerating it here would silently discard the
+  edits and send a document nobody had read.
+
+  `422` when the distribution list is empty or when `emailPracticeUpdate` is off, each with a
+  message naming the exact setting to change. `502` when SMTP rejects it outright. Otherwise
+  `{ status, recipients, subject, emailLogId }`, where `status` is the usual `SENT`/`QUEUED`.
+  Audited as `practice_update.sent`.
+
+**Cadence.** `workers/practice-update.worker.ts` sends the same update at 07:30 on Mondays when
+`practiceUpdateWeekly` is on — off by default, because the button is the primary path and an
+unreviewed digest reaching a CEO every week is not something to switch on for somebody. Three gates
+must all be open (the cadence flag, the email category, a non-empty list) and the run is idempotent
+by re-reading its own `EmailLog` rows rather than keeping state, so a restart cannot mail leadership
+twice. A period in which nothing at all was recorded is skipped: an update full of zeroes trains
+people to stop opening it.
+
+**Email registration.** The template key is `digest.practice_update`, so it appears in
+[Email templates](#email-templates) with preview, test send and revert, and in Email analytics with
+per-template delivery figures — no special-casing. **No new environment variables.**
 
 ## AI usage
 

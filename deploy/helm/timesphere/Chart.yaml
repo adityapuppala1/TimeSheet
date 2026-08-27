@@ -6,15 +6,19 @@ description: >-
   one ingress host, DEFAULT_ORG_SLUG resolves every request) or a multi-org SaaS install
   (external managed MySQL recommended, wildcard ingress host for subdomain-per-org routing).
 type: application
-version: 0.4.0
+version: 0.5.0
 # Tracks the repo-root VERSION file. Surfaces only as the `app.kubernetes.io/version` label and in
 # NOTES.txt — it does NOT select an image tag (that is `image.tag` in values.yaml, `latest` by
 # default), so bumping it cannot change what a cluster actually runs.
 #
-# It had drifted to 2.1.0 while the repo shipped 2.4.0, which is the failure mode a label like
-# this has: nothing breaks, so nothing tells you. `kubectl get deploy -L app.kubernetes.io/version`
-# is a normal way to ask a cluster what it runs, and a stale answer there is worse than none.
-appVersion: "3.3.0"
+# It has now drifted TWICE — 2.1.0 against a 2.4.0 repo, then 3.3.0 against 3.4.0 — which is the
+# failure mode a label like this has: nothing breaks, so nothing tells you.
+# `kubectl get deploy -L app.kubernetes.io/version` is a normal way to ask a cluster what it runs,
+# and a stale answer there is worse than none. CI now fails on the mismatch
+# (.github/workflows/ci.yml, "Chart appVersion must match the repo VERSION file"), so the second
+# drift was caught — by a red build on main that nobody had looked at. Bump this WITH the VERSION
+# file, in the same commit.
+appVersion: "3.5.0"
 keywords:
   - timesheet
   - ticketing

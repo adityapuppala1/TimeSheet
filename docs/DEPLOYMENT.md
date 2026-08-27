@@ -1387,8 +1387,9 @@ hook Job plays on Kubernetes.
 
 **Worker/background processing**: there is currently no separate worker process — scheduled jobs
 (daily reminder emails, deadline reminders, SLA escalation sweeps, inbound-email polling,
-Telegram polling, the AI weekly digest, the face lifecycle sweep — retention purge, downgrade
-grace/purge, enrollment reminders, overdue-review nudges — and the weekly identity digest) run
+Telegram polling, the AI weekly digest, the optional Monday Weekly AI/ML Practice Update, the face
+lifecycle sweep — retention purge, downgrade grace/purge, enrollment reminders, overdue-review
+nudges — and the weekly identity digest) run
 as in-process `node-cron` schedules inside the `api`
 container/pod itself (see `apps/api/src/workers/*.worker.ts`). This means **exactly one replica
 of `api` should run the cron
@@ -1397,6 +1398,12 @@ schedules** in a horizontally-scaled deployment, or jobs fire once per replica �
 the cron registration behind a leader-election/singleton lock if you need both HA and >1 replica
 (not implemented today — see [docs/ROADMAP.md](ROADMAP.md) for the relevant epic if you need this
 split into a dedicated worker process/pod).
+
+Every digest worker is nonetheless written to be **idempotent by re-reading what it already sent**
+rather than by keeping state — the weekly digest counts its own `Notification` rows, the practice
+update reads its own `EmailLog` rows for the period. That is a guard against a restart or a
+double-fire, not a licence to scale past one replica: two replicas firing simultaneously can still
+both pass the check before either writes.
 
 ## Sizing (measured, not guessed)
 
