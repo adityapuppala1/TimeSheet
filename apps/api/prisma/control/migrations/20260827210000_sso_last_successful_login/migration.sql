@@ -1,0 +1,22 @@
+-- 3.6.0: record when a real sign-in last succeeded through each SSO provider.
+--
+-- Separate from 20260827200000_sso_connection_test, which is already applied, because a Prisma
+-- migration is checksummed once it runs — editing an applied file is a broken deploy, not a tidier
+-- history.
+--
+-- WHY THIS COLUMN EXISTS AT ALL, given the test columns landed one migration earlier: the
+-- connection test was built to gate `requireSsoOnly` and cannot do it for every provider. Azure AD
+-- validates the authorization code's SHAPE before the client credentials, so a probe using a
+-- deliberately-invalid code comes back `invalid_grant` (AADSTS9002313) whether the client id and
+-- secret are real or two words of English — measured against the live endpoint, not assumed. The
+-- probe stays as a diagnostic, where it is genuinely useful for Google, SAML and LDAP. The gate
+-- moves here, to the one signal no provider can answer ambiguously.
+--
+-- NULL with no backfill is correct: no workspace has a recorded SSO sign-in yet, and pretending
+-- otherwise would hand `requireSsoOnly` to exactly the configurations this is meant to stop.
+--
+-- PORTABILITY NOTE: `prisma migrate diff` introspected off Windows MariaDB emits `orgssoconfig`;
+-- written in canonical casing by hand (the 2.4.0 lesson, docs/DATABASE.md).
+
+-- AlterTable
+ALTER TABLE `OrgSsoConfig` ADD COLUMN `lastSuccessfulLoginAt` DATETIME(3) NULL;

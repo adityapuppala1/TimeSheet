@@ -26,6 +26,8 @@ import {
   buildSamlAuthorizationRedirect,
   completeAuthorizationCodeGrant,
   completeSamlLogin,
+  recordSsoLoginSuccess,
+  verifySsoState,
   type OidcProviderType
 } from "../services/sso.service.js";
 import { decryptSecret } from "../utils/encryption.js";
@@ -54,7 +56,10 @@ async function finishSsoLogin(
   req: import("express").Request,
   res: import("express").Response,
   orgId: string,
-  identity: Parameters<typeof completeSsoLogin>[1]
+  identity: Parameters<typeof completeSsoLogin>[1],
+  /** Which provider got this person in — recorded so `requireSsoOnly` can tell a configuration
+   *  that demonstrably works from one that has merely been filled in. */
+  provider: "GOOGLE" | "MICROSOFT" | "SAML"
 ) {
   const org = await controlPrisma.organization.findUniqueOrThrow({ where: { id: orgId }, include: { database: true } });
   if (!org.database) throw new AppError(404, "Unknown workspace.");
@@ -67,6 +72,10 @@ async function finishSsoLogin(
   const result = await tenantContext.run({ orgId: org.id, orgSlug: org.slug, client: tenantClient }, () =>
     completeSsoLogin(org.id, identity, req.headers["user-agent"], req.ip, deviceId)
   );
+
+  // AFTER the session exists, never before: this stamp is evidence that a sign-in completed, and
+  // recording it for one that then failed is exactly the false assurance the gate exists to avoid.
+  await recordSsoLoginSuccess(org.id, provider);
 
   res.cookie(REFRESH_COOKIE, result.refreshToken, refreshCookieOptions(result.refreshTokenExpiresAt));
   res.redirect(`${env.WEB_ORIGIN.split(",")[0].trim()}/app`);
@@ -92,7 +101,7 @@ ssoRouter.get("/saml/start", async (req, res, next) => {
 ssoRouter.post("/saml/acs", express.urlencoded({ extended: false }), async (req, res, next) => {
   try {
     const { orgId, identity } = await completeSamlLogin(req.body as Record<string, string>);
-    await finishSsoLogin(req, res, orgId, identity);
+    await finishSsoLogin(req, res, orgId, identity, "SAML");
   } catch (error) {
     next(error);
   }
@@ -117,7 +126,10 @@ ssoRouter.get("/:provider/callback", async (req, res, next) => {
 
     const currentUrl = new URL(req.originalUrl, `${req.protocol}://${req.get("host")}`);
     const { orgId, identity } = await completeAuthorizationCodeGrant(currentUrl, state);
-    await finishSsoLogin(req, res, orgId, identity);
+    // The provider is read back out of the SIGNED state, deliberately, not from `req.params` —
+    // the param is attacker-controlled and this stamp decides whether a workspace may turn off
+    // password login. Same reason the comment above says the real provider comes from the state.
+    await finishSsoLogin(req, res, orgId, identity, verifySsoState(state).provider);
   } catch (error) {
     next(error);
   }

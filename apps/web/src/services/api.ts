@@ -1998,6 +1998,11 @@ export const settingsApi = {
     provider: "google" | "microsoft" | "saml" | "ldap",
     payload: Partial<SsoProviderConfig> & { clientSecret?: string; idpCertificate?: string; ldapBindCredential?: string }
   ) => (await api.patch<SsoProviderConfig>(`/settings/sso/${provider}`, payload)).data,
+  /** Tests the SAVED configuration, not what is in the form — see the route's own comment for why
+   *  a pass recorded against unsaved values would be exactly the false assurance to avoid. */
+  testSso: async (provider: "google" | "microsoft" | "saml" | "ldap", payload: { probeEmail?: string } = {}) =>
+    (await api.post<SsoTestResult>(`/settings/sso/${provider}/test-connection`, payload)).data,
+
   updateAuthMethod: async (payload: { passwordLoginEnabled?: boolean; requireSsoOnly?: boolean }) =>
     (await api.patch<{ passwordLoginEnabled: boolean; requireSsoOnly: boolean }>("/settings/auth-method", payload)).data,
   getSecurityIngestion: async () =>
@@ -2274,6 +2279,36 @@ export interface SsoProviderConfig {
   ldapSearchBase: string | null;
   ldapUserFilter: string | null;
   ldapTlsRejectUnauthorized: boolean;
+
+  /* --- Proof that this configuration works (3.6.0) --------------------------------------- */
+  /** Last connection test: a DIAGNOSTIC. Green here does not mean sign-in works — see below. */
+  lastTestedAt: string | null;
+  lastTestStatus: "PASS" | "FAIL" | null;
+  lastTestMessage: string | null;
+  /**
+   * When a real person last completed a sign-in through this provider, and the ONLY thing that
+   * unlocks "Require SSO". A connection test cannot fill that role: Azure AD answers a probe with
+   * `invalid_grant` before it looks at the client credentials, so a Microsoft config holding two
+   * junk strings tests green.
+   */
+  lastSuccessfulLoginAt: string | null;
+  /** Parsed facts about the SAML signing certificate. Null for every other provider. */
+  certificate: {
+    subject: string;
+    issuer: string;
+    validFrom: string;
+    validTo: string;
+    expired: boolean;
+    expiringSoon: boolean;
+    fingerprint: string;
+  } | null;
+}
+
+export interface SsoTestResult {
+  ok: boolean;
+  message: string;
+  detail?: Record<string, string | number | boolean>;
+  testedAt: string;
 }
 
 export interface SsoSettings {

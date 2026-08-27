@@ -41,7 +41,9 @@ import {
   BellRing,
   CalendarClock,
   ChevronRight,
+  AlertTriangle,
   Check,
+  Circle,
   Clock,
   FileStack,
   Hourglass,
@@ -96,6 +98,7 @@ import {
   userApi,
   type AIUsageRow,
   type SsoProviderConfig,
+  type SsoTestResult,
   type TicketRuleInput
 } from "../services/api";
 import { useAuthStore } from "../store/auth";
@@ -2446,6 +2449,118 @@ function EmailIntakeSettingsCard({ readOnly }: { readOnly: boolean }) {
   );
 }
 
+/**
+ * The verification strip every SSO provider card carries.
+ *
+ * IT SHOWS TWO DIFFERENT THINGS AND KEEPS THEM APART, which is the entire point.
+ *
+ *  - "Signed in" is the EVIDENCE: a real person completed a real sign-in through this provider.
+ *    It is what unlocks Require SSO, and nothing else does.
+ *  - "Connection test" is a DIAGNOSTIC: it tells an admin why a sign-in is failing. A green test
+ *    is genuinely conclusive for Google, LDAP and a SAML certificate, and genuinely cannot be for
+ *    Microsoft — Azure answers a credential probe before it looks at the credentials. Showing them
+ *    as one status would put that Microsoft caveat behind a green tick.
+ *
+ * Presenting them as one row of two facts is deliberate: an admin looking at a card should be able
+ * to see at a glance which of "it is configured", "it answers", and "somebody has actually got in"
+ * are true, because those are three different problems with three different fixes.
+ */
+function SsoVerification({
+  provider,
+  config,
+  readOnly
+}: {
+  provider: "google" | "microsoft" | "saml" | "ldap";
+  config: SsoProviderConfig | undefined;
+  readOnly: boolean;
+}) {
+  const queryClient = useQueryClient();
+  const [probeEmail, setProbeEmail] = useState("");
+  const [result, setResult] = useState<SsoTestResult | null>(null);
+
+  const test = useMutation({
+    mutationFn: () => settingsApi.testSso(provider, provider === "ldap" && probeEmail ? { probeEmail } : {}),
+    onSuccess: (data) => {
+      setResult(data);
+      queryClient.invalidateQueries({ queryKey: ["settings", "sso"] });
+    },
+    onError: (err: any) => {
+      // A 422 here is "there is nothing saved to test yet", which is guidance rather than a fault.
+      setResult({ ok: false, message: err?.response?.data?.message ?? "The test couldn't run.", testedAt: new Date().toISOString() });
+    }
+  });
+
+  const shown = result ?? (config?.lastTestStatus ? { ok: config.lastTestStatus === "PASS", message: config.lastTestMessage ?? "", testedAt: config.lastTestedAt ?? "" } : null);
+  const signedIn = config?.lastSuccessfulLoginAt ?? null;
+  const cert = config?.certificate ?? null;
+
+  return (
+    <div className="grid gap-3 rounded-lg border border-border p-4">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div className="grid gap-1.5">
+          <Label>Is this actually working?</Label>
+          <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs">
+            <span className={`inline-flex items-center gap-1.5 font-medium ${signedIn ? "text-success" : "text-muted-foreground"}`}>
+              {signedIn ? <Check className="h-3.5 w-3.5" /> : <Circle className="h-3 w-3" />}
+              {signedIn ? `Someone signed in ${new Date(signedIn).toLocaleDateString()}` : "Nobody has signed in with this yet"}
+            </span>
+            {shown && (
+              <span className={`inline-flex items-center gap-1.5 ${shown.ok ? "text-muted-foreground" : "text-destructive"}`}>
+                {shown.ok ? <Check className="h-3.5 w-3.5" /> : <AlertTriangle className="h-3.5 w-3.5" />}
+                Last test {shown.ok ? "passed" : "failed"}
+                {shown.testedAt ? ` · ${new Date(shown.testedAt).toLocaleDateString()}` : ""}
+              </span>
+            )}
+          </div>
+        </div>
+        <Button variant="outline" size="sm" disabled={readOnly || test.isPending} onClick={() => test.mutate()}>
+          {test.isPending ? "Testing…" : "Test connection"}
+        </Button>
+      </div>
+
+      {provider === "ldap" && (
+        <div className="grid gap-1.5">
+          <Label htmlFor={`probe-${provider}`} className="text-xs font-normal text-muted-foreground">
+            Optional — an address to run your user filter against, so the test checks the filter and not just the bind
+          </Label>
+          <Input
+            id={`probe-${provider}`}
+            value={probeEmail}
+            onChange={(e) => setProbeEmail(e.target.value)}
+            placeholder="someone@yourcompany.com"
+            disabled={readOnly}
+          />
+        </div>
+      )}
+
+      {shown?.message && (
+        <p className={`text-xs leading-5 ${shown.ok ? "text-muted-foreground" : "text-destructive"}`}>{shown.message}</p>
+      )}
+
+      {cert && (
+        <div className="grid gap-0.5 rounded-md bg-muted/50 p-2.5 text-xs text-muted-foreground">
+          <span className="font-medium text-foreground">Signing certificate</span>
+          <span className="break-all">{cert.subject}</span>
+          {/* An expiry an admin cannot see is an outage with a date on it — which is why this is
+              rendered even when everything is fine, and coloured only when it is not. */}
+          <span className={cert.expired ? "font-semibold text-destructive" : cert.expiringSoon ? "font-semibold text-warning" : ""}>
+            {cert.expired ? "Expired" : "Valid until"} {new Date(cert.validTo).toLocaleDateString()}
+            {cert.expiringSoon && !cert.expired ? " — renew this soon" : ""}
+          </span>
+        </div>
+      )}
+
+      {!signedIn && config?.isEnabled && (
+        <p className="text-xs leading-5 text-muted-foreground">
+          Requiring SSO stays locked until someone signs in this way. Open this workspace in a private window, use the
+          sign-in button, and come back — that is the only check that proves people will still be able to get in after
+          password sign-in is switched off.
+        </p>
+      )}
+    </div>
+  );
+}
+
 const SSO_PROVIDER_LABEL: Record<"GOOGLE" | "MICROSOFT", string> = { GOOGLE: "Google", MICROSOFT: "Microsoft / Azure AD" };
 
 /**
@@ -2595,7 +2710,7 @@ function SsoProviderCard({
           </div>
           {config?.isEnabled && config.clientId && config.clientSecretSet && (
             <span className="inline-flex shrink-0 items-center gap-1 rounded-full bg-success/10 px-2.5 py-1 text-xs font-semibold text-success">
-              <Check className="h-3 w-3" />Active
+              <Check className="h-3 w-3" />Configured
             </span>
           )}
         </div>
@@ -2654,6 +2769,8 @@ function SsoProviderCard({
             >
               <Save className="h-4 w-4" />Save
             </Button>
+
+            <SsoVerification provider={provider.toLowerCase() as "google" | "microsoft"} config={config} readOnly={readOnly} />
           </>
         )}
       </CardContent>
@@ -2708,7 +2825,7 @@ function SamlProviderCard({
           </div>
           {fullyConfigured && config?.isEnabled && (
             <span className="inline-flex shrink-0 items-center gap-1 rounded-full bg-success/10 px-2.5 py-1 text-xs font-semibold text-success">
-              <Check className="h-3 w-3" />Active
+              <Check className="h-3 w-3" />Configured
             </span>
           )}
         </div>
@@ -2777,6 +2894,8 @@ function SamlProviderCard({
             >
               <Save className="h-4 w-4" />Save
             </Button>
+
+            <SsoVerification provider="saml" config={config} readOnly={readOnly} />
           </>
         )}
       </CardContent>
@@ -2835,7 +2954,7 @@ function LdapProviderCard({
           </div>
           {fullyConfigured && config?.isEnabled && (
             <span className="inline-flex shrink-0 items-center gap-1 rounded-full bg-success/10 px-2.5 py-1 text-xs font-semibold text-success">
-              <Check className="h-3 w-3" />Active
+              <Check className="h-3 w-3" />Configured
             </span>
           )}
         </div>
@@ -2917,6 +3036,8 @@ function LdapProviderCard({
             >
               <Save className="h-4 w-4" />Save
             </Button>
+
+            <SsoVerification provider="ldap" config={config} readOnly={readOnly} />
           </>
         )}
       </CardContent>

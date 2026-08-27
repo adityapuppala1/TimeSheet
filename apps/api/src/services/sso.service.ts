@@ -38,7 +38,13 @@ const STATE_TTL_SECONDS = 10 * 60;
 
 interface SsoStatePayload {
   orgId: string;
-  provider: SsoProviderType;
+  /**
+   * Narrowed to the REDIRECT providers, which is all this state is ever minted for. LDAP is a
+   * direct bind with no round-trip and so no state, and typing this as the full `SsoProviderType`
+   * meant a caller reading the provider back out had to handle an "LDAP" case that cannot occur —
+   * exactly where a stray `as` would get written instead.
+   */
+  provider: Exclude<SsoProviderType, "LDAP">;
   /** PKCE verifier — OIDC (Google/Microsoft) only; SAML has no equivalent concept. */
   codeVerifier?: string;
 }
@@ -122,6 +128,28 @@ export async function buildAuthorizationRedirect(orgId: string, provider: OidcPr
   return redirectTo.href;
 }
 
+/**
+ * Stamps "a real person got in through this provider, just now".
+ *
+ * This is the signal `OrgAuthMethod.requireSsoOnly` is gated on, so it must be written on the
+ * SUCCESS path only and only after a session actually exists — see the column comment in
+ * prisma/control/schema.prisma for why a connection test could not do this job.
+ *
+ * Best-effort by design: a control-plane write must never be able to fail a sign-in that has
+ * already succeeded. Losing one stamp costs the admin one more sign-in before they can require
+ * SSO; throwing here would cost a user their session for a bookkeeping row.
+ */
+export async function recordSsoLoginSuccess(orgId: string, provider: SsoProviderType): Promise<void> {
+  try {
+    await controlPrisma.orgSsoConfig.updateMany({
+      where: { organizationId: orgId, providerType: provider },
+      data: { lastSuccessfulLoginAt: new Date() }
+    });
+  } catch {
+    /* see above — never fails the login it is recording */
+  }
+}
+
 export interface SsoIdentity {
   email: string;
   name: string | null;
@@ -133,7 +161,9 @@ export interface SsoIdentity {
  *  string) exactly as the provider redirected to it. */
 export async function completeAuthorizationCodeGrant(currentUrl: URL, expectedState: string): Promise<{ orgId: string; identity: SsoIdentity }> {
   const { orgId, provider, codeVerifier } = verifySsoState(expectedState);
-  if (provider === "SAML" || provider === "LDAP" || !codeVerifier) {
+  // "LDAP" was in this guard and is now unreachable by the type — the state payload is minted only
+  // for the redirect providers, so the compiler removes the case rather than the check being lost.
+  if (provider === "SAML" || !codeVerifier) {
     throw new AppError(400, "State/provider mismatch.");
   }
   const ssoConfig = await getEnabledSsoConfig(orgId, provider);

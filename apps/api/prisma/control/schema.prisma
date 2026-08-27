@@ -132,6 +132,27 @@ model OrgSsoConfig {
   ldapUserFilter              String?  @db.VarChar(255)
   ldapTlsRejectUnauthorized   Boolean  @default(true)
 
+  /// Result of the last connection test (see services/sso-validation.service.ts). Recorded, not
+  /// enforced: an IdP behind a corporate firewall can be unreachable from this server and still be
+  /// correctly configured, so a failing test must never block a save. What it DOES gate is
+  /// `OrgAuthMethod.requireSsoOnly` — turning off password login for a whole workspace on a
+  /// configuration nobody has ever proven works is how a workspace locks itself out.
+  lastTestedAt     DateTime?
+  /// "PASS" | "FAIL" — null means never tested, which is a state the settings card shows.
+  lastTestStatus   String?   @db.VarChar(16)
+  lastTestMessage  String?   @db.Text
+
+  /// When a real person last completed a sign-in through this provider.
+  ///
+  /// THIS, NOT THE CONNECTION TEST, IS WHAT GATES `OrgAuthMethod.requireSsoOnly`. The test was
+  /// built for that job first and could not do it: Azure AD answers a token-endpoint probe with
+  /// `invalid_grant` (AADSTS9002313) before it ever looks at the client credentials, so a
+  /// Microsoft config holding two junk strings tested green. A completed sign-in cannot be faked
+  /// by a misread error code — it means a human reached the IdP, authenticated, came back, and
+  /// got a session. That is the only evidence that actually predicts "will people still be able
+  /// to get in after I turn off passwords", which is the question the switch is asking.
+  lastSuccessfulLoginAt DateTime?
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 

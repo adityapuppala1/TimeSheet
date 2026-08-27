@@ -14,7 +14,7 @@ import { Prisma } from "@prisma/client";
 import { prisma } from "../config/prisma.js";
 import { controlPrisma } from "../config/control-prisma.js";
 import { requireTenantContext } from "../config/tenant-context.js";
-import { serverTimezone } from "../config/env.js";
+import { env, serverTimezone } from "../config/env.js";
 import { getLoggingStatus } from "../config/logger.js";
 import { describeStorageLayout, validateDirectory } from "../config/storage-paths.js";
 import { requireAuth, requirePermission, requireSuperAdmin } from "../middleware/auth.js";
@@ -41,6 +41,7 @@ import {
   getSuggestedProviderOrder
 } from "../services/ai-provider-config.service.js";
 import { getAIQualitySummary } from "../services/ai-quality.service.js";
+import { describeCertificate, testLdapConnection, testOidcConnection, testSamlConnection, type SsoTestResult } from "../services/sso-validation.service.js";
 import { getAllowedSsoProviders } from "../services/plan-limits.service.js";
 import { getGlobalTicketSettings } from "../services/ticket.service.js";
 import { describeMcpCatalogue, generateMcpToken, getGlobalMcpSettings, updateGlobalMcpSettings } from "../services/mcp.service.js";
@@ -693,7 +694,14 @@ settingsRouter.get("/sso", requireSuperAdmin, async (_req, res) => {
       ldapBindCredentialSet: Boolean(c.encryptedLdapBindCredential),
       ldapSearchBase: c.ldapSearchBase,
       ldapUserFilter: c.ldapUserFilter,
-      ldapTlsRejectUnauthorized: c.ldapTlsRejectUnauthorized
+      ldapTlsRejectUnauthorized: c.ldapTlsRejectUnauthorized,
+      lastTestedAt: c.lastTestedAt,
+      lastTestStatus: c.lastTestStatus,
+      lastTestMessage: c.lastTestMessage,
+      lastSuccessfulLoginAt: c.lastSuccessfulLoginAt,
+      // The certificate is public, so its facts can be read back in full — and an expiry an admin
+      // cannot see is an outage with a date on it. Null for every non-SAML provider.
+      certificate: describeCertificate(c.idpCertificate)
     })),
     passwordLoginEnabled: authMethod?.passwordLoginEnabled ?? true,
     requireSsoOnly: authMethod?.requireSsoOnly ?? false
@@ -714,12 +722,38 @@ const ssoConfigSchema = z.object({
       // SAML fields — idpCertificate is the IdP's PUBLIC signing cert, not a secret, so unlike
       // clientSecret it's stored (and can be read back as "set") without masking.
       idpEntityId: z.string().max(500).optional().nullable(),
-      idpSsoUrl: z.string().max(500).url().optional().nullable(),
-      idpCertificate: z.string().max(10_000).optional().nullable(),
+      // HTTPS, not merely "a URL". This was `.url()`, which accepts http:// — and a SAML assertion
+      // carried over plaintext http is interceptable and replayable, which is the whole trust model
+      // gone. No production IdP publishes a plaintext sign-on endpoint. Existing rows are left
+      // alone: this validates writes, so a workspace that somehow has one keeps working until
+      // somebody edits that field.
+      idpSsoUrl: z
+        .string()
+        .max(500)
+        .url()
+        .refine((value) => value.toLowerCase().startsWith("https://"), "must be an https:// URL")
+        .optional()
+        .nullable(),
+      // Parsed, not merely length-checked. This was `z.string().max(10_000)`, so any prose at all
+      // saved cleanly and the failure surfaced at a real user's first sign-in attempt instead.
+      // `describeCertificate` accepts the bare base64 an Okta metadata blob carries as well as
+      // PEM-armoured exports, because IdP consoles hand out both.
+      idpCertificate: z
+        .string()
+        .max(10_000)
+        .refine((value) => value.trim() === "" || describeCertificate(value) !== null, "isn't a readable X.509 certificate")
+        .optional()
+        .nullable(),
       spEntityId: z.string().max(500).optional().nullable(),
       // LDAP fields — ldapBindCredential follows the same empty-string-clears / omit-leaves
       // convention as clientSecret above.
-      ldapUrl: z.string().max(500).optional().nullable(),
+      // Scheme-checked: this was `z.string().max(500)`, so "not a url" saved without complaint.
+      ldapUrl: z
+        .string()
+        .max(500)
+        .refine((value) => value === "" || /^ldaps?:\/\//i.test(value), "must start with ldap:// or ldaps://")
+        .optional()
+        .nullable(),
       ldapBindDn: z.string().max(500).optional().nullable(),
       ldapBindCredential: z.string().max(2000).optional(),
       ldapSearchBase: z.string().max(500).optional().nullable(),
@@ -729,21 +763,69 @@ const ssoConfigSchema = z.object({
     .strict()
 });
 
-const SSO_PROVIDER_LABEL: Record<"GOOGLE" | "MICROSOFT" | "SAML" | "LDAP", string> = {
+/** The four providers this workspace can configure, as the control-plane column spells them.
+ *  Named once because five copies of the same union is what tripped `sonarjs/use-type-alias`,
+ *  and because the next provider should be one edit rather than five. */
+type SsoProviderKey = "GOOGLE" | "MICROSOFT" | "SAML" | "LDAP";
+
+const SSO_PROVIDER_LABEL: Record<SsoProviderKey, string> = {
   GOOGLE: "Google",
   MICROSOFT: "Microsoft",
   SAML: "SAML",
   LDAP: "LDAP"
 };
 
+/**
+ * What each provider actually needs before it can be switched on, in the words an admin sees.
+ *
+ * There was no such check at all: `isEnabled: true` saved happily on a row where every credential
+ * field was null, and the failure surfaced as an opaque error at a real user's first sign-in.
+ *
+ * Keyed on the COLUMN names, so the merged-row check below reads the same shape whether a value
+ * arrived in this request or was already stored. `tenantHint` is deliberately absent from
+ * MICROSOFT: Azure's `common` endpoint is a legitimate multi-tenant configuration.
+ */
+const SSO_REQUIRED_FIELDS: Record<SsoProviderKey, Array<[column: string, label: string]>> = {
+  GOOGLE: [
+    ["clientId", "the client ID"],
+    ["encryptedClientSecret", "the client secret"]
+  ],
+  MICROSOFT: [
+    ["clientId", "the client ID"],
+    ["encryptedClientSecret", "the client secret"]
+  ],
+  SAML: [
+    ["idpEntityId", "the IdP entity ID"],
+    ["idpSsoUrl", "the IdP sign-on URL"],
+    ["idpCertificate", "the signing certificate"]
+  ],
+  LDAP: [
+    ["ldapUrl", "the directory URL"],
+    ["ldapBindDn", "the bind DN"],
+    ["encryptedLdapBindCredential", "the bind password"],
+    ["ldapSearchBase", "the search base"]
+  ]
+};
+
+function missingSsoFields(providerType: SsoProviderKey, merged: Record<string, unknown>): string[] {
+  return SSO_REQUIRED_FIELDS[providerType]
+    .filter(([column]) => {
+      const value = merged[column];
+      return value === null || value === undefined || (typeof value === "string" && value.trim() === "");
+    })
+    .map(([, label]) => label);
+}
+
 settingsRouter.patch("/sso/:provider", requireSuperAdmin, validate(ssoConfigSchema), async (req, res) => {
   const { orgId } = requireTenantContext();
-  const providerType = String(req.params.provider).toUpperCase() as "GOOGLE" | "MICROSOFT" | "SAML" | "LDAP";
+  const providerType = String(req.params.provider).toUpperCase() as SsoProviderKey;
 
   // Plan-tier enforcement (Phase B7): an org can only ENABLE a provider its tier allows —
   // editing/saving credentials for a not-yet-enabled provider is still allowed (so an org
   // mid-upgrade can stage config ahead of time), only flipping isEnabled: true is gated.
-  if (req.body.isEnabled === true) {
+  const willBeEnabled = req.body.isEnabled === true;
+
+  if (willBeEnabled) {
     const allowed = await getAllowedSsoProviders(orgId);
     if (!allowed.includes(providerType)) {
       throw new AppError(403, `${SSO_PROVIDER_LABEL[providerType]} sign-in isn't available on this workspace's current plan.`);
@@ -757,6 +839,43 @@ settingsRouter.patch("/sso/:provider", requireSuperAdmin, validate(ssoConfigSche
   const data: Record<string, unknown> = { ...rest };
   if (typeof clientSecret === "string") data.encryptedClientSecret = clientSecret.length > 0 ? encryptSecret(clientSecret) : null;
   if (typeof ldapBindCredential === "string") data.encryptedLdapBindCredential = ldapBindCredential.length > 0 ? encryptSecret(ldapBindCredential) : null;
+
+  // COMPLETENESS IS CHECKED AGAINST THE MERGED ROW, not against `req.body`.
+  //
+  // This route is a PATCH and an upsert, so an admin who saved credentials last week and today
+  // sends only `{ isEnabled: true }` must pass — the credentials are in the database, not in this
+  // request. Validating the body alone would reject exactly the sequence the UI produces.
+  //
+  // Only ENABLING is gated. Saving an incomplete draft stays allowed, which is what preserves the
+  // documented "stage config ahead of an upgrade" behaviour the plan-tier check above relies on.
+  if (willBeEnabled) {
+    const existing = await controlPrisma.orgSsoConfig.findUnique({
+      where: { organizationId_providerType: { organizationId: orgId, providerType } }
+    });
+    const missing = missingSsoFields(providerType, { ...existing, ...data } as Record<string, unknown>);
+    if (missing.length > 0) {
+      throw new AppError(
+        422,
+        `${SSO_PROVIDER_LABEL[providerType]} sign-in can't be switched on yet — ${missing.join(", ")} ${missing.length === 1 ? "is" : "are"} still missing.`
+      );
+    }
+  }
+
+  // A PASS DOES NOT SURVIVE AN EDIT TO WHAT IT TESTED.
+  //
+  // Without this, the `requireSsoOnly` gate below is defeated by ordering: test a working config,
+  // then paste a wrong secret, and the stale PASS still satisfies the gate. Any change to a field
+  // the test actually exercises clears the result back to "never tested", so the admin has to
+  // prove the NEW value. `isEnabled` is excluded — flipping the switch changes nothing the test
+  // measured, and clearing on it would make the gate unsatisfiable (enabling would erase the very
+  // PASS that permitted it).
+  const testedFields = SSO_REQUIRED_FIELDS[providerType].map(([column]) => column);
+  const touchesTestedField = Object.keys(data).some((key) => testedFields.includes(key) || key === "tenantHint" || key === "ldapUserFilter");
+  if (touchesTestedField) {
+    data.lastTestStatus = null;
+    data.lastTestMessage = null;
+    data.lastTestedAt = null;
+  }
 
   const updated = await controlPrisma.orgSsoConfig.upsert({
     where: { organizationId_providerType: { organizationId: orgId, providerType } },
@@ -779,8 +898,96 @@ settingsRouter.patch("/sso/:provider", requireSuperAdmin, validate(ssoConfigSche
     ldapBindCredentialSet: Boolean(updated.encryptedLdapBindCredential),
     ldapSearchBase: updated.ldapSearchBase,
     ldapUserFilter: updated.ldapUserFilter,
-    ldapTlsRejectUnauthorized: updated.ldapTlsRejectUnauthorized
+    ldapTlsRejectUnauthorized: updated.ldapTlsRejectUnauthorized,
+    lastTestedAt: updated.lastTestedAt,
+    lastTestStatus: updated.lastTestStatus,
+    lastTestMessage: updated.lastTestMessage,
+    lastSuccessfulLoginAt: updated.lastSuccessfulLoginAt,
+    certificate: describeCertificate(updated.idpCertificate)
   });
+});
+
+/* ---------- SSO connection test ---------- */
+
+const ssoTestSchema = z.object({
+  params: z.object({ provider: z.enum(["google", "microsoft", "saml", "ldap"]) }),
+  body: z
+    .object({
+      /** Optional address to run the LDAP user filter against — proves the filter finds a real
+       *  person, not only that the directory answers a bind. */
+      probeEmail: z.string().email().max(255).optional()
+    })
+    .strict()
+});
+
+/**
+ * POST /sso/:provider/test-connection — proves the SAVED configuration works, right now.
+ *
+ * Deliberately tests what is IN THE DATABASE rather than what is in the form, unlike
+ * /mail/test-connection which merges unsaved fields. The difference matters here: the thing this
+ * result gates (`requireSsoOnly`, below) is a decision about the stored configuration, and a pass
+ * recorded against values that were never saved would be exactly the false assurance this whole
+ * change exists to remove. Save first, then test — the UI does that in one action.
+ *
+ * The result is RECORDED, and a failure is a 200 with `ok: false`, not an error status. "Your IdP
+ * is unreachable" is the answer to the admin's question, not a failure to handle it.
+ */
+settingsRouter.post("/sso/:provider/test-connection", requireSuperAdmin, validate(ssoTestSchema), async (req, res) => {
+  const { orgId } = requireTenantContext();
+  const providerType = String(req.params.provider).toUpperCase() as SsoProviderKey;
+
+  const config = await controlPrisma.orgSsoConfig.findUnique({
+    where: { organizationId_providerType: { organizationId: orgId, providerType } }
+  });
+  if (!config) throw new AppError(404, `No ${SSO_PROVIDER_LABEL[providerType]} configuration saved yet — save it first, then test.`);
+
+  const missing = missingSsoFields(providerType, config as unknown as Record<string, unknown>);
+  if (missing.length > 0) {
+    throw new AppError(422, `Nothing to test yet — ${missing.join(", ")} ${missing.length === 1 ? "is" : "are"} still missing.`);
+  }
+
+  let result: SsoTestResult;
+  if (providerType === "GOOGLE" || providerType === "MICROSOFT") {
+    result = await testOidcConnection({
+      provider: providerType,
+      clientId: config.clientId!,
+      clientSecret: decryptSecret(config.encryptedClientSecret!),
+      tenantHint: config.tenantHint,
+      // The exact redirect URI the login flow sends, so a mismatch shows up here rather than at a
+      // user's first sign-in — see sso.service.ts#callbackUrl, which builds it the same way.
+      redirectUri: `${env.APP_BASE_URL.replace(/\/$/, "")}/api/auth/sso/${providerType.toLowerCase()}/callback`
+    });
+  } else if (providerType === "SAML") {
+    result = await testSamlConnection({
+      idpEntityId: config.idpEntityId!,
+      idpSsoUrl: config.idpSsoUrl!,
+      idpCertificate: config.idpCertificate!
+    });
+  } else {
+    result = await testLdapConnection({
+      url: config.ldapUrl!,
+      bindDn: config.ldapBindDn!,
+      bindCredential: decryptSecret(config.encryptedLdapBindCredential!),
+      searchBase: config.ldapSearchBase!,
+      userFilter: config.ldapUserFilter || "(mail={{email}})",
+      tlsRejectUnauthorized: config.ldapTlsRejectUnauthorized,
+      probeEmail: req.body.probeEmail
+    });
+  }
+
+  await controlPrisma.orgSsoConfig.update({
+    where: { id: config.id },
+    data: {
+      lastTestedAt: new Date(),
+      lastTestStatus: result.ok ? "PASS" : "FAIL",
+      // Truncated: a bind failure from some directory servers carries a wall of LDAP result codes,
+      // and this column is read back onto a settings card, not into a log aggregator.
+      lastTestMessage: result.message.slice(0, 2000)
+    }
+  });
+  await audit(req.user!.id, "settings.sso_tested", "OrgSsoConfig", config.id, { provider: providerType, ok: result.ok });
+
+  res.json({ ...result, testedAt: new Date().toISOString() });
 });
 
 const authMethodSchema = z.object({
@@ -789,6 +996,40 @@ const authMethodSchema = z.object({
 
 settingsRouter.patch("/auth-method", requireSuperAdmin, validate(authMethodSchema), async (req, res) => {
   const { orgId } = requireTenantContext();
+
+  /*
+   * THE LOCKOUT GATE.
+   *
+   * `requireSsoOnly` force-disables password sign-in for everyone in the workspace, including the
+   * super admin who sets it (auth.service.ts#loginWithPassword refuses every password login while
+   * it is on). Combined with an SSO configuration that has never been proven to work — which,
+   * until this release, could be four dummy strings — one checkbox locked a workspace out of
+   * itself with no way back in short of a manual UPDATE against the control-plane database.
+   *
+   * So turning it on now requires at least one enabled provider whose last connection test PASSED.
+   * Not merely "configured": configured was the state that caused this.
+   *
+   * Turning it OFF is deliberately ungated. A recovery path must never depend on the thing that
+   * is broken.
+   */
+  if (req.body.requireSsoOnly === true) {
+    const configs = await controlPrisma.orgSsoConfig.findMany({ where: { organizationId: orgId, isEnabled: true } });
+    // A COMPLETED SIGN-IN, not a passing connection test. The test was tried in this role first and
+    // cannot fill it: Azure AD answers a token-endpoint probe with `invalid_grant` before it looks
+    // at the client credentials at all, so a Microsoft config holding two junk strings tested
+    // green — measured against the live endpoint. A sign-in that reached the IdP and came back
+    // with a session is the one piece of evidence no provider can answer ambiguously.
+    const proven = configs.filter((c) => c.lastSuccessfulLoginAt !== null);
+    if (proven.length === 0) {
+      throw new AppError(
+        422,
+        configs.length === 0
+          ? "Turn on at least one SSO provider before requiring SSO — otherwise nobody, including you, would be able to sign in."
+          : "Sign in through your SSO provider once before requiring it. Open this workspace in a private window, use the SSO button, and come back — turning off password sign-in on a configuration that has never actually let anyone in would lock this workspace out, including you."
+      );
+    }
+  }
+
   const updated = await controlPrisma.orgAuthMethod.upsert({
     where: { organizationId: orgId },
     update: req.body,

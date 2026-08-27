@@ -24,7 +24,7 @@ import { validate } from "../middleware/validate.js";
 import { audit } from "../services/audit.service.js";
 import { buildProfilePayload, changePassword, completeSsoLogin, login, refresh, requestPasswordReset, resetPassword, switchActiveRole } from "../services/auth.service.js";
 import { getOnboardingStatus } from "../services/onboarding.service.js";
-import { authenticateLdap } from "../services/sso.service.js";
+import { authenticateLdap, recordSsoLoginSuccess } from "../services/sso.service.js";
 import { dispatchTransactional } from "../services/notify.service.js";
 import { templates } from "../services/mail-templates.js";
 import { processAvatar } from "../utils/image.js";
@@ -97,6 +97,9 @@ authRouter.post(
     const identity = await authenticateLdap(orgId, req.body.email, req.body.password);
     const deviceId = attachDeviceId(req, res);
     const result = await completeSsoLogin(orgId, identity, req.headers["user-agent"], req.ip, deviceId);
+    // Same stamp the redirect-based providers get in sso.controller.ts#finishSsoLogin. LDAP has no
+    // callback to hang it on, so it goes here — and after the session exists, for the same reason.
+    await recordSsoLoginSuccess(orgId, "LDAP");
     res.cookie(REFRESH_COOKIE, result.refreshToken, refreshCookieOptions(result.refreshTokenExpiresAt));
     res.json({ accessToken: result.accessToken, user: result.user });
   }

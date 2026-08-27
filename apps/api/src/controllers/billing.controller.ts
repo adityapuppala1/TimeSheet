@@ -82,14 +82,24 @@ billingRouter.post("/checkout-session", requireSuperAdmin, validate(checkoutSche
     await controlPrisma.organization.update({ where: { id: org.id }, data: { stripeCustomerId: customerId } });
   }
 
+  // QUANTITY IS THE SEAT COUNT, not 1. It was 1, and the pricing page sells "$8 per seat / month"
+  // — so a fifty-person workspace that upgraded through this route was billed for a single seat.
+  // The same `countActiveSeats()` the seat LIMIT is checked against is what gets billed, so the
+  // number a customer is charged for and the number they are allowed can never disagree.
+  //
+  // This bills the seat count AT CHECKOUT. Keeping it in step as the workspace grows is the
+  // subscription-quantity sync in billing-sync.service.ts, called from the user lifecycle and
+  // reconciled nightly — an org that adds people mid-cycle is corrected there, not here.
+  const seats = Math.max(1, await countActiveSeats());
+
   const appOrigin = req.headers.origin || `${req.protocol}://${req.get("host")}`;
   const session = await stripe.checkout.sessions.create({
     mode: "subscription",
     customer: customerId,
-    line_items: [{ price: priceId, quantity: 1 }],
+    line_items: [{ price: priceId, quantity: seats }],
     success_url: `${appOrigin}/app/settings?billing=success`,
     cancel_url: `${appOrigin}/app/settings?billing=cancelled`,
-    metadata: { organizationId: org.id, tier: req.body.tier }
+    metadata: { organizationId: org.id, tier: req.body.tier, seatsAtCheckout: String(seats) }
   });
 
   if (!session.url) throw new AppError(502, "Stripe did not return a checkout URL.");

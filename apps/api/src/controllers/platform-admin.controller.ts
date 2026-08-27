@@ -142,6 +142,42 @@ platformAdminRouter.patch("/organizations/:id", requirePlatformAdmin, validate(u
   res.json(org);
 });
 
+/**
+ * POST /organizations/:id/restore-password-login — the break-glass for an SSO-only lockout.
+ *
+ * `OrgAuthMethod.requireSsoOnly` turns off password sign-in for a whole workspace, and an org whose
+ * SSO then breaks has nobody left who can sign in — not even the super admin who set it. Until this
+ * route existed, recovery was a hand-written UPDATE against the control-plane database.
+ *
+ * WHY IT LIVES HERE AND NOT AS A SUPER-ADMIN PASSWORD BYPASS. The obvious alternative is letting a
+ * SUPER_ADMIN always sign in with a password regardless of the policy. That is a permanent hole in
+ * the exact guarantee an org buys SSO-only for: a compliance-driven customer turns it on precisely
+ * so that no password reaches their most privileged account. Support-mediated recovery keeps the
+ * guarantee intact and still ends the outage — it is how Okta and Google Workspace handle the same
+ * situation.
+ *
+ * It writes the LEAST it can: password login back on, SSO-only off. It does not touch the SSO
+ * configuration, because the org's own admin needs to see what was broken in order to fix it.
+ */
+platformAdminRouter.post("/organizations/:id/restore-password-login", requirePlatformAdmin, async (req, res) => {
+  const orgId = String(req.params.id);
+  const org = await controlPrisma.organization.findUnique({ where: { id: orgId }, select: { id: true, slug: true } });
+  if (!org) throw new AppError(404, "Organization not found");
+
+  const updated = await controlPrisma.orgAuthMethod.upsert({
+    where: { organizationId: orgId },
+    update: { passwordLoginEnabled: true, requireSsoOnly: false },
+    create: { organizationId: orgId, passwordLoginEnabled: true, requireSsoOnly: false }
+  });
+
+  res.json({
+    orgSlug: org.slug,
+    passwordLoginEnabled: updated.passwordLoginEnabled,
+    requireSsoOnly: updated.requireSsoOnly,
+    message: `Password sign-in is back on for ${org.slug}. Their admin can sign in and fix the SSO configuration.`
+  });
+});
+
 const provisionOrgSchema = z.object({
   body: z.object({
     adminEmail: z.string().email(),
