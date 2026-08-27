@@ -14,6 +14,7 @@
  * model was down.
  */
 import { emailBlocks } from "./mail-templates.js";
+import { sanitizeRichText } from "../utils/sanitize.js";
 import {
   PRACTICE_CATEGORIES,
   RAG_EMOJI,
@@ -26,6 +27,9 @@ const { dataTable, periodStrip, escape } = emailBlocks;
 
 const MUTED = "#64748B";
 const FG = "#0F172A";
+/** The brand teal, for the two things rich text can carry that the rest of this file cannot:
+ *  a link, and a block quote's rule. Matches the header band in mail-templates.ts. */
+const ACCENT = "#0F8B96";
 
 /** "47 (up from 35)" / "47 (down from 60)" / "47 (unchanged)". A bare number cannot answer
  *  "is this week normal", which is the question the update exists to answer. */
@@ -46,8 +50,66 @@ function sectionHeading(text: string): string {
  * sent while the model is unavailable is still a complete update.
  */
 function prose(text: string | undefined, fallback: string): string {
-  const body = (text ?? "").trim() || fallback;
-  return `<p style="margin:6px 0 0;font-size:13px;line-height:1.6;color:${FG};">${escape(body)}</p>`;
+  const body = (text ?? "").trim();
+  // Nothing written: the fallback is PLAIN text this file composed, so it is escaped as before.
+  if (!body) return `<p style="margin:6px 0 0;font-size:13px;line-height:1.6;color:${FG};">${escape(fallback)}</p>`;
+  return richTextToEmailHtml(body);
+}
+
+/**
+ * Renders the reviewer's rich text into the email's house style.
+ *
+ * WHY THIS EXISTS AT ALL. The written sections used to be plain strings and this file `escape`d
+ * them. They are rich text now — the editor emits `<p>`, `<strong>`, `<ul>`, `<h3>`, `<blockquote>`
+ * — and escaping HTML prints the tags to the reader instead of rendering them, which is precisely
+ * the failure the PDF exports were fixed for. So: sanitise, then style.
+ *
+ * SANITISE FIRST, ALWAYS. This is prose a person typed, arriving from a browser, on its way into an
+ * email that leaves this workspace and lands in inboxes belonging to people who have no account
+ * here. `sanitizeRichText` reduces it to a known short tag list; everything below assumes that has
+ * already happened.
+ *
+ * WHY INLINE STYLES AND NOT A STYLESHEET. Mail clients ignore `<style>` blocks to varying and
+ * unpredictable degrees, and Outlook ignores most of one. Every other block in this file is inline-
+ * styled for that reason and this has to match, or the reviewer's paragraph renders in a different
+ * font from the paragraph above it.
+ *
+ * WHY A REGEX OVER HTML IS DEFENSIBLE HERE, given that it usually is not: the input has ALREADY
+ * been reduced to a closed set of tags with no attributes worth preserving except `href`, and the
+ * only edit being made is adding a `style` to an opening tag whose name is known. It is not parsing
+ * the document; it is decorating a whitelist.
+ */
+function richTextToEmailHtml(html: string): string {
+  const clean = sanitizeRichText(html);
+  if (!clean) return "";
+
+  const styles: Record<string, string> = {
+    p: `margin:6px 0 0;font-size:13px;line-height:1.6;color:${FG};`,
+    h1: `margin:16px 0 4px;font-size:16px;font-weight:800;color:${FG};`,
+    h2: `margin:14px 0 4px;font-size:15px;font-weight:800;color:${FG};`,
+    h3: `margin:12px 0 4px;font-size:14px;font-weight:700;color:${FG};`,
+    ul: `margin:6px 0 0;padding-left:18px;font-size:13px;line-height:1.6;color:${FG};`,
+    ol: `margin:6px 0 0;padding-left:18px;font-size:13px;line-height:1.6;color:${FG};`,
+    li: "margin:0 0 4px;",
+    blockquote: `margin:10px 0;padding:6px 0 6px 12px;border-left:3px solid ${ACCENT};color:${MUTED};font-size:13px;line-height:1.6;`,
+    pre: "margin:8px 0;padding:10px;background:#0F172A;color:#E2E8F0;border-radius:6px;font-size:12px;overflow-x:auto;",
+    code: "font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12px;",
+    a: `color:${ACCENT};text-decoration:underline;`
+  };
+
+  return Object.entries(styles).reduce(
+    // Opening tags only. The captured group carries whatever attributes were already there, so a
+    // link's href survives being styled.
+    //
+    // THE DOUBLE BACKSLASH IS LOAD-BEARING. Inside a template literal, a single `\s` is not a regex
+    // escape — JavaScript collapses it to a bare "s", so the pattern built was `<p(s[^>]*)?>`. That
+    // matched a bare `<p>` by skipping the optional group and silently failed to match any tag WITH
+    // attributes, which is every `<a href>` — links would have come out unstyled and nothing would
+    // have looked broken enough to notice. Verified by building both patterns and testing them.
+    (acc, [tag, style]) =>
+      acc.replace(new RegExp(`<${tag}(\\s[^>]*)?>`, "gi"), (_match, attrs: string | undefined) => `<${tag}${attrs ?? ""} style="${style}">`),
+    clean
+  );
 }
 
 /**
@@ -59,12 +121,40 @@ function prose(text: string | undefined, fallback: string): string {
  * error. Measured against llama3.1:8b, not guessed at. Lists of short strings are the shape models
  * get right, and they need no markdown parsing here either.
  */
+
+/**
+ * One list item's worth of rich text: sanitised, then flattened to inline markup.
+ *
+ * The block wrapper has to go. These fields are single items inside a `<ul>` this file builds, and
+ * a `<p>` nested in an `<li>` renders as an extra line break in several mail clients and as nothing
+ * in others — so the safest shape is the one with no block element in it at all. A model that
+ * ignores the "no bullets, no headings" guidance therefore degrades to a correctly-rendered
+ * sentence rather than to a broken list.
+ */
+function inlineRichText(value: string): string {
+  const clean = sanitizeRichText(value);
+  if (!clean) return "";
+  const inline = clean
+    .replace(/<\/(p|h[1-3]|blockquote|li)>/gi, " ")
+    .replace(/<(p|h[1-3]|blockquote|ul|ol|li)(\s[^>]*)?>/gi, "")
+    .replace(/<\/(ul|ol)>/gi, "")
+    .replace(/\s+/g, " ")
+    .trim();
+  // Escaped only if sanitising left nothing structural — i.e. it was plain text all along, which is
+  // what every pre-3.8 draft and every fallback in this file still is.
+  return inline || escape(value);
+}
+
 function bulletList(items: string[] | undefined, fallback: string[]): string {
   const rows = (items ?? []).map((v) => v.trim()).filter(Boolean);
   const use = rows.length > 0 ? rows : fallback;
   if (use.length === 0) return prose(undefined, "Nothing to report in this section.");
   return `<ul style="margin:6px 0 0;padding-left:18px;font-size:13px;line-height:1.6;color:${FG};">${use
-    .map((item) => `<li style="margin:0 0 4px;">${escape(item)}</li>`)
+    // Each item may now carry INLINE rich text (a bolded figure, a link) — the editor for these
+    // fields hides the block buttons, so what arrives is a phrase, not a document. `inlineRichText`
+    // sanitises it and strips any block wrapper the model added anyway, because a `<p>` inside an
+    // `<li>` renders as a line break in half the mail clients that exist.
+    .map((item) => `<li style="margin:0 0 4px;">${inlineRichText(item)}</li>`)
     .join("")}</ul>`;
 }
 

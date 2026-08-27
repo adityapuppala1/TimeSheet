@@ -45,6 +45,15 @@ interface RichTextEditorProps {
    */
   maxHeight?: string;
   ariaLabel?: string;
+  /**
+   * How much of the toolbar to show.
+   *
+   * `"inline"` keeps the marks that make sense inside ONE line — bold, italic, code, link — and
+   * drops headings, lists, blockquote and alignment. It exists for fields that are a single item in
+   * a list somebody else renders: a heading inside a bullet point is not a formatting choice, it is
+   * a broken document, and offering the button invites it.
+   */
+  toolbar?: "full" | "inline";
 }
 
 export function RichTextEditor({
@@ -54,7 +63,8 @@ export function RichTextEditor({
   className,
   minHeight = "min-h-32",
   maxHeight = "max-h-96",
-  ariaLabel
+  ariaLabel,
+  toolbar = "full"
 }: RichTextEditorProps) {
   /** `editorProps` is captured when the editor is constructed, at which point the `editor` const
    *  below is still being initialised — so the paste handler reaches the instance through a ref
@@ -95,7 +105,7 @@ export function RichTextEditor({
 
   return (
     <div className={cn("flex flex-col overflow-hidden rounded-md border border-input bg-background focus-within:ring-2 focus-within:ring-ring focus-within:ring-offset-2 focus-within:ring-offset-background", className)}>
-      <Toolbar editor={editor} />
+      <Toolbar editor={editor} variant={toolbar} />
       {/* The scroll lives HERE, not on the editor node, so the toolbar stays put while the text
           moves — a toolbar that scrolls away is a toolbar you have to scroll back to in order to
           make the next heading. `overscroll-contain` keeps a flick at the end of the text from
@@ -314,7 +324,7 @@ function escapeHtml(value: string): string {
   return value.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;");
 }
 
-function Toolbar({ editor }: { editor: Editor }) {
+function Toolbar({ editor, variant }: { editor: Editor; variant: "full" | "inline" }) {
   const promptLink = () => {
     const previous = editor.getAttributes("link").href as string | undefined;
     const url = window.prompt("Link URL (leave empty to remove)", previous ?? "https://");
@@ -351,6 +361,8 @@ function Toolbar({ editor }: { editor: Editor }) {
           <SquareCode className="h-3.5 w-3.5" />
         </Btn>
       </Group>
+      {variant === "full" && (
+        <>
       <Divider />
       <Group>
         <Btn onClick={() => editor.chain().focus().toggleHeading({ level: 1 }).run()} active={editor.isActive("heading", { level: 1 })} label="Heading 1">
@@ -387,6 +399,8 @@ function Toolbar({ editor }: { editor: Editor }) {
           <AlignRight className="h-3.5 w-3.5" />
         </Btn>
       </Group>
+        </>
+      )}
       <Divider />
       <Group>
         <Btn onClick={promptLink} active={editor.isActive("link")} label="Link">

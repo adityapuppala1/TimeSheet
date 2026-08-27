@@ -205,10 +205,23 @@ describe("buildPracticeUpdateEmail — with a narrative", () => {
     expect(email.sectionsHtml).toContain("Ship the reconciliation report.");
   });
 
-  it("escapes anything the model wrote", () => {
-    const email = buildPracticeUpdateEmail(data(), { ...narrative, executiveSummary: '<img src=x onerror="alert(1)">' });
+  it("strips anything the model wrote that isn't allowed rich text", () => {
+    /*
+     * This used to assert the summary was ESCAPED — `&lt;img` appearing in the output. That was
+     * right while the written sections were plain strings. They are rich text now (the reviewer
+     * edits them in a real editor and the email renders headings, bold and lists), so the summary
+     * is SANITISED instead: a disallowed tag is removed rather than shown to the reader as text.
+     *
+     * The guarantee is the same or stronger — nothing dangerous reaches the recipient either way —
+     * and the change is deliberate. What would be a regression is `<img` surviving, which is what
+     * the first assertion still pins.
+     */
+    const email = buildPracticeUpdateEmail(data(), { ...narrative, executiveSummary: '<p>Fine.</p><img src=x onerror="alert(1)">' });
     expect(email.sectionsHtml).not.toContain("<img");
-    expect(email.sectionsHtml).toContain("&lt;img");
+    expect(email.sectionsHtml).not.toContain("onerror");
+    // The legitimate prose beside it still arrives, rendered rather than escaped.
+    expect(email.sectionsHtml).toContain("Fine.");
+    expect(email.sectionsHtml).not.toContain("&lt;p&gt;");
   });
 });
 

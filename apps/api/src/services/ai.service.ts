@@ -2632,33 +2632,46 @@ const REFINE_FIELDS: Record<RefineField, RefineFieldSpec> = {
   // it genuinely differs: a risk must not be talked down, a priority must not become a promise,
   // and an ask of a CEO must stay an ask. `plain` throughout — these render as escaped text in the
   // email, so an HTML round-trip would be a sanitization surface bought for nothing.
+  /*
+   * THE PRACTICE-UPDATE FIELDS ARE `html`, AND ONE OF THEM IS RICH FOR A REASON.
+   *
+   * The executive summary is the only one that gets structure. It is read by people who will not
+   * open the tables underneath it, so a wall of six sentences is where an update stops being read —
+   * a short lead paragraph, a bolded number, a bulleted "what changed" is what gets scanned.
+   *
+   * The other three are ITEMS IN A LIST the email renders as `<ul>`. They are `html` so a name or a
+   * figure can be bolded, and their guidance forbids block structure outright: a heading inside a
+   * bullet point is not a formatting choice, it is a broken document. The editor those fields use
+   * hides the block buttons for the same reason (`toolbar="inline"`), so the model and the UI agree
+   * about what belongs there.
+   */
   practice_summary: {
     label: "executive summary",
     guidance:
-      "This opens a weekly update read by a CEO. Keep it to a few sentences on one line. Never change a number, never add one the author did not write, and do not soften a bad week into a good one — an update that only reports good news stops being read.",
-    format: "plain",
-    maxTokens: 400
+      "This opens a weekly update read by a CEO who may read nothing else. Structure it so it can be SCANNED: a short lead paragraph, then a handful of bullets for what actually moved, and **bold** on the figures that matter. Use a heading only if there is genuinely more than one theme. Never change a number, never add one the author did not write, and do not soften a bad week into a good one — an update that only reports good news stops being read.",
+    format: "html",
+    maxTokens: 700
   },
   practice_risk: {
     label: "risk or blocker",
     guidance:
-      "This names something that is going wrong, for leadership. One or two sentences. Never downgrade the severity the author gave it, never turn a stated blocker into a vague concern, and keep any figure exactly as written.",
-    format: "plain",
-    maxTokens: 200
+      "This is ONE ITEM in a bulleted list of risks, so return one or two sentences and no headings, no bullets and no block quotes — the list around it supplies the structure. **Bold** a figure or a name where it carries the point. Never downgrade the severity the author gave it, never turn a stated blocker into a vague concern, and keep any figure exactly as written.",
+    format: "html",
+    maxTokens: 250
   },
   practice_priority: {
     label: "next week priority",
     guidance:
-      "This is an intention for the coming week, not a commitment made to anyone. One sentence. Do not add a deadline, an owner or a guarantee the author did not write.",
-    format: "plain",
-    maxTokens: 200
+      "This is ONE ITEM in a bulleted list, so return a single sentence with no headings, bullets or block quotes. It is an intention for the coming week, not a commitment made to anyone: do not add a deadline, an owner or a guarantee the author did not write. **Bold** at most one phrase, and only where it is doing work.",
+    format: "html",
+    maxTokens: 250
   },
   practice_decision: {
     label: "decision or support request",
     guidance:
-      "This asks leadership for a specific decision or for help. One sentence. Keep it a request — never rewrite it into a statement of what will happen, and never drop who is being asked.",
-    format: "plain",
-    maxTokens: 200
+      "This is ONE ITEM in a bulleted list, so return a single sentence with no headings, bullets or block quotes. It asks leadership for a specific decision or for help: keep it a request — never rewrite it into a statement of what will happen, and never drop who is being asked.",
+    format: "html",
+    maxTokens: 250
   }
 };
 

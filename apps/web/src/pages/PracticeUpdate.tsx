@@ -23,6 +23,7 @@ import {
   type PracticeNarrative
 } from "../services/api";
 import { AiRefinePanel, AiRefineTrigger, useAiRefine } from "../components/AiRefine";
+import { RichTextEditor } from "../components/ui/rich-text-editor";
 import { PracticeUpdateHistory } from "../components/PracticeUpdateHistory";
 import { AiStrands } from "../components/ui/ai-strands";
 import { Badge } from "../components/ui/badge";
@@ -33,7 +34,6 @@ import { Input } from "../components/ui/input";
 import { Label } from "../components/ui/label";
 import { Skeleton } from "../components/ui/skeleton";
 import { Switch } from "../components/ui/switch";
-import { Textarea } from "../components/ui/textarea";
 import { toast } from "../components/ui/toaster";
 import { cn } from "../lib/utils";
 
@@ -76,7 +76,8 @@ function RefinableText({
   onChange,
   rows = 3,
   placeholder,
-  id
+  id,
+  variant = "full"
 }: {
   label?: React.ReactNode;
   refineField: AIRefineField;
@@ -86,6 +87,9 @@ function RefinableText({
   rows?: number;
   placeholder?: string;
   id?: string;
+  /** "full" for the executive summary — a document. "inline" for a single item in a bulleted
+   *  list, where headings and nested lists are not a formatting choice. */
+  variant?: "full" | "inline";
 }) {
   const refine = useAiRefine({ field: refineField, value, onChange, label: refineLabel });
 
@@ -97,7 +101,24 @@ function RefinableText({
         {label ? <Label htmlFor={id}>{label}</Label> : <span />}
         <AiRefineTrigger state={refine} />
       </div>
-      <Textarea id={id} rows={rows} value={value} placeholder={placeholder} onChange={(event) => onChange(event.target.value)} />
+      {/*
+        RICH TEXT, not a textarea. This is a document read by people who will open nothing else, and
+        a plain textarea could only produce a wall of prose — which is where a weekly update stops
+        being read. `variant` decides how much of the toolbar is offered, and the two cases are
+        genuinely different: the summary is a document, a risk is one line inside a list this email
+        builds, and a heading inside a bullet point is a broken document rather than a formatting
+        choice. The AI Refine guidance for each field says the same thing, so the model and the
+        toolbar cannot disagree about what belongs there.
+      */}
+      <RichTextEditor
+        value={value}
+        onChange={onChange}
+        placeholder={placeholder}
+        ariaLabel={refineLabel}
+        toolbar={variant}
+        minHeight={variant === "inline" ? "min-h-[2.75rem]" : `min-h-${Math.max(rows, 3) * 8}`}
+        maxHeight={variant === "inline" ? "max-h-32" : "max-h-96"}
+      />
       <AiRefinePanel state={refine} />
     </div>
   );
@@ -144,6 +165,7 @@ function BulletEditor({
             refineLabel={refineLabel}
             value={item}
             rows={2}
+            variant="inline"
             onChange={(next) => onChange(items.map((v, i) => (i === index ? next : v)))}
           />
           <Button
