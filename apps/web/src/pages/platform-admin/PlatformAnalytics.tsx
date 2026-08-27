@@ -4,7 +4,7 @@ import { AlertTriangle, Building2, DollarSign, Users } from "lucide-react";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../../components/ui/card";
 import { DataTable } from "../../components/ui/data-table";
 import { Skeleton } from "../../components/ui/skeleton";
-import { platformAdminAnalyticsApi } from "../../services/platform-admin-api";
+import { platformAdminAnalyticsApi, type OrgAnalyticsSummary } from "../../services/platform-admin-api";
 
 const currency = new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" });
 
@@ -12,15 +12,15 @@ const currency = new Intl.NumberFormat("en-US", { style: "currency", currency: "
 const DARK_TABLE_CLASSNAME = "[&_thead_tr]:border-slate-800 [&_th]:text-slate-400 [&>div]:border-slate-800";
 const DARK_ROW_CLASSNAME = "border-slate-800 hover:bg-slate-800/40";
 
-interface OrgAnalyticsRow {
-  orgId: string;
-  name: string;
-  reachable: boolean;
-  seatCount: number;
-  ticketCountsByStatus: Record<string, number>;
-  aiSpendThisMonthUsd: number;
-  lastActivityAt: string | null;
-}
+/**
+ * An ALIAS, not a second copy.
+ *
+ * This was a hand-maintained interface mirroring `OrgAnalyticsSummary` in the API client — which
+ * is a shape that drifts silently: the service can add a field, the client type can gain it, and
+ * this page still cannot see it. Aliasing means a new metric reaches the table's `accessorFn`
+ * the moment the service returns it.
+ */
+type OrgAnalyticsRow = OrgAnalyticsSummary;
 
 const columns: ColumnDef<OrgAnalyticsRow, any>[] = [
   {
@@ -56,6 +56,32 @@ const columns: ColumnDef<OrgAnalyticsRow, any>[] = [
     cell: (info) => <span className="text-slate-300">{currency.format(info.getValue() as number)}</span>
   },
   {
+    id: "mail",
+    accessorFn: (row) => row.emailsSentThisMonth,
+    header: "Mail (sent / failed)",
+    cell: ({ row }) => (
+      <span className="text-slate-300 tabular-nums">
+        {row.original.emailsSentThisMonth}
+        {" / "}
+        {/* Only a NON-ZERO failure count is coloured. A red 0 trains an operator to ignore the
+            column, which is the opposite of what a health signal is for. */}
+        <span className={row.original.emailsFailedThisMonth > 0 ? "text-amber-400" : "text-slate-500"}>
+          {row.original.emailsFailedThisMonth}
+        </span>
+      </span>
+    )
+  },
+  {
+    accessorKey: "practiceUpdatesSentThisMonth",
+    header: "Practice updates",
+    cell: (info) => {
+      const count = info.getValue() as number;
+      // An em dash, not a 0: zero sends and "the tier does not include it" look identical in a
+      // number, and this column exists to make "entitled but unused" visible.
+      return <span className="text-slate-300 tabular-nums">{count > 0 ? count : <span className="text-slate-600">—</span>}</span>;
+    }
+  },
+  {
     accessorKey: "lastActivityAt",
     header: "Last activity",
     cell: (info) => {
@@ -66,7 +92,8 @@ const columns: ColumnDef<OrgAnalyticsRow, any>[] = [
 ];
 
 /** The only screen in the console that surfaces cross-tenant NUMBERS (seat counts, ticket
- *  counts by status, AI spend) — never row-level content. Backed by the single
+ *  counts by status, AI spend, outbound mail health, practice-update adoption) — never row-level
+ *  content. Backed by the single
  *  cross-tenant-loop service (platform-admin-analytics.service.ts) by design. */
 export function PlatformAdminAnalytics() {
   const analytics = useQuery({ queryKey: ["platform-admin", "analytics"], queryFn: platformAdminAnalyticsApi.get });
@@ -75,7 +102,7 @@ export function PlatformAdminAnalytics() {
     <div className="grid gap-6">
       <div>
         <h1 className="text-2xl font-black tracking-tight">Analytics</h1>
-        <p className="mt-1 text-sm text-slate-400">Aggregate metrics across every organization — seat counts, ticket volume, and AI spend only. No ticket, comment, or timesheet content ever surfaces here.</p>
+        <p className="mt-1 text-sm text-slate-400">Aggregate metrics across every organization — seat counts, ticket volume, AI spend, outbound mail health and practice-update adoption. Counts only: no ticket, comment, timesheet or email content ever surfaces here.</p>
       </div>
 
       {analytics.isLoading && <Skeleton className="h-64 w-full bg-slate-800" />}

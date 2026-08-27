@@ -22,6 +22,18 @@ export interface OrgAnalyticsSummary {
   seatCount: number;
   ticketCountsByStatus: Record<string, number>;
   aiSpendThisMonthUsd: number;
+  /**
+   * Outbound mail this month, as a sent/failed pair.
+   *
+   * A platform operator's most common real question about an org is "is their mail getting out" —
+   * every workspace brings its own SMTP, so one org's credentials expiring is invisible from
+   * anywhere else. Counts only: no recipient, no subject, no body ever leaves the tenant.
+   */
+  emailsSentThisMonth: number;
+  emailsFailedThisMonth: number;
+  /** Adoption of the Weekly AI/ML practice update, the one plan-gated capability whose whole
+   *  output is an email — so "entitled but never used" is visible without reading anything. */
+  practiceUpdatesSentThisMonth: number;
   lastActivityAt: string | null;
   reachable: boolean;
 }
@@ -34,7 +46,7 @@ function startOfMonth(): Date {
 async function summarizeOrg(org: { id: string; slug: string; name: string; status: string; planTier: string }, dsn: string): Promise<OrgAnalyticsSummary> {
   const client = await getTenantClient(org.id, dsn);
   return tenantContext.run({ orgId: org.id, orgSlug: org.slug, client }, async () => {
-    const [seatCount, ticketGroups, aiSpend, lastLogin] = await Promise.all([
+    const [seatCount, ticketGroups, aiSpend, lastLogin, emailGroups, practiceUpdates] = await Promise.all([
       // `isAgent: false` for the same reason seat-count.service.ts excludes them: this figure is
       // what a platform admin reads as the org's seat usage, and counting automation identities
       // would inflate every roster-using org's apparent headcount. Written inline rather than
@@ -43,8 +55,16 @@ async function summarizeOrg(org: { id: string; slug: string; name: string; statu
       client.user.count({ where: { status: "ACTIVE", deletedAt: null, isAgent: false } }),
       client.ticket.groupBy({ by: ["status"], _count: { _all: true } }),
       client.aIUsageLog.aggregate({ _sum: { costUsdEstimate: true }, where: { createdAt: { gte: startOfMonth() } } }),
-      client.user.aggregate({ _max: { lastLoginAt: true } })
+      client.user.aggregate({ _max: { lastLoginAt: true } }),
+      // Grouped by status rather than two counts: SENT/FAILED/QUEUED come from one scan, and a
+      // queued row is neither a success nor a failure yet — collapsing it into either would make a
+      // provider outage look like a delivery problem, or hide one.
+      client.emailLog.groupBy({ by: ["status"], where: { createdAt: { gte: startOfMonth() } }, _count: { _all: true } }),
+      client.emailLog.count({ where: { template: "digest.practice_update", status: { in: ["SENT", "QUEUED"] }, createdAt: { gte: startOfMonth() } } })
     ]);
+
+    const emailByStatus = (status: string) =>
+      emailGroups.find((row) => row.status === status)?._count._all ?? 0;
 
     return {
       orgId: org.id,
@@ -55,6 +75,9 @@ async function summarizeOrg(org: { id: string; slug: string; name: string; statu
       seatCount,
       ticketCountsByStatus: Object.fromEntries(ticketGroups.map((g) => [g.status, g._count._all])),
       aiSpendThisMonthUsd: Number(aiSpend._sum.costUsdEstimate ?? 0),
+      emailsSentThisMonth: emailByStatus("SENT"),
+      emailsFailedThisMonth: emailByStatus("FAILED"),
+      practiceUpdatesSentThisMonth: practiceUpdates,
       lastActivityAt: lastLogin._max.lastLoginAt?.toISOString() ?? null,
       reachable: true
     };
@@ -78,6 +101,9 @@ export async function getPlatformAnalytics(): Promise<{ orgs: OrgAnalyticsSummar
         seatCount: 0,
         ticketCountsByStatus: {},
         aiSpendThisMonthUsd: 0,
+        emailsSentThisMonth: 0,
+        emailsFailedThisMonth: 0,
+        practiceUpdatesSentThisMonth: 0,
         lastActivityAt: null,
         reachable: false
       });
@@ -97,6 +123,9 @@ export async function getPlatformAnalytics(): Promise<{ orgs: OrgAnalyticsSummar
         seatCount: 0,
         ticketCountsByStatus: {},
         aiSpendThisMonthUsd: 0,
+        emailsSentThisMonth: 0,
+        emailsFailedThisMonth: 0,
+        practiceUpdatesSentThisMonth: 0,
         lastActivityAt: null,
         reachable: false
       });

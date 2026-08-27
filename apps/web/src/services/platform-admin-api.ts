@@ -138,6 +138,12 @@ export interface OrgAnalyticsSummary {
   seatCount: number;
   ticketCountsByStatus: Record<string, number>;
   aiSpendThisMonthUsd: number;
+  /** Outbound mail this month, counts only — every workspace brings its own SMTP, so one org's
+   *  credentials expiring is invisible from anywhere else. */
+  emailsSentThisMonth: number;
+  emailsFailedThisMonth: number;
+  /** Adoption of the plan-gated weekly practice update, whose entire output is an email. */
+  practiceUpdatesSentThisMonth: number;
   lastActivityAt: string | null;
   reachable: boolean;
 }
