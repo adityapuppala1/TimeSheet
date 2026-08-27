@@ -70,6 +70,8 @@ model Organization {
   database    OrgDatabase?
   ssoConfigs  OrgSsoConfig[]
   authMethod  OrgAuthMethod?
+  directory   OrgUserDirectory[]
+  domains     OrgDomain[]
 
   @@index([status])
 }
@@ -171,6 +173,64 @@ model OrgAuthMethod {
   /// can require SSO-only.
   requireSsoOnly       Boolean      @default(false)
   updatedAt            DateTime     @updatedAt
+}
+
+/// Which workspaces an email address can sign in to — the index behind "find my workspaces".
+///
+/// WHY IT HAS TO EXIST AT ALL. Every tenant's users live in a physically different database, so
+/// "which workspaces is this address in?" is a cross-tenant question that no tenant database can
+/// answer and the control plane previously had no way to. Without this table the only way to reach
+/// a workspace is to already know its subdomain.
+///
+/// WHY IT STORES A HASH AND NOT THE ADDRESS. The control plane holds the org registry, the plan
+/// matrix and every tenant's database credentials. Adding a plaintext list of every user's email
+/// across every customer would turn one dump of it into a customer list AND a marketing list — a
+/// materially worse breach than the one it already represents. An HMAC (keyed with the app's own
+/// secret, so it is not a rainbow-table lookup either) answers the only question this table is
+/// asked — "does the address someone just typed match this row?" — and answers nothing else. It
+/// deliberately cannot be enumerated, reversed, or exported as addresses.
+model OrgUserDirectory {
+  id             String       @id @default(uuid())
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  /// HMAC-SHA256 of the lowercased, trimmed address. See utils/directory-hash.ts.
+  emailHash String @db.Char(64)
+
+  /// Refreshed on each sign-in, so a workspace nobody has used in years can be aged out later
+  /// without guessing. Not shown to anyone.
+  lastSeenAt DateTime @default(now())
+  createdAt  DateTime @default(now())
+
+  @@unique([organizationId, emailHash])
+  /// The lookup this table exists for: one address, every workspace it belongs to.
+  @@index([emailHash])
+}
+
+/// A custom domain pointed at one workspace — `time.acme.com` instead of `acme.timesphere.app`.
+///
+/// Verification is a DNS TXT record rather than a file upload or an email click, because the
+/// question being answered is "does this person control this domain", and DNS is the only one of
+/// the three that actually asks it. An unverified row is inert: `resolveOrgSlug` ignores it, so
+/// claiming someone else's domain gains nothing while it stays unverified.
+model OrgDomain {
+  id             String       @id @default(uuid())
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  /// Lowercased hostname, no scheme, no port, no trailing dot.
+  domain String @unique @db.VarChar(253)
+
+  /// The value the customer publishes at `_timesphere-verify.<domain>`.
+  verificationToken String    @db.VarChar(64)
+  verifiedAt        DateTime?
+  lastCheckedAt     DateTime?
+  lastCheckError    String?   @db.Text
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([organizationId])
 }
 
 /// Platform-operator accounts — deliberately a completely separate table/auth path from any

@@ -14,9 +14,8 @@ import crypto from "node:crypto";
 import express, { Router } from "express";
 import jwt from "jsonwebtoken";
 import { JwksClient } from "jwks-rsa";
-import { getTenantClient, prisma } from "../config/prisma.js";
-import { tenantContext } from "../config/tenant-context.js";
-import { resolveActiveOrgBySlug } from "../middleware/tenant.js";
+import { prisma } from "../config/prisma.js";
+import { withOrgTenant } from "../config/with-org-tenant.js";
 import { AppError } from "../middleware/error.js";
 import { decryptSecret } from "../utils/encryption.js";
 import { constantTimeEqual } from "../utils/security.js";
@@ -31,16 +30,6 @@ export const chatWebhookRouter = Router();
  *  where the signature check rejects it as the 401 it is. Same guard as
  *  git-webhook.controller.ts's provider route. */
 const rawBodyText = (body: unknown): string => (Buffer.isBuffer(body) ? body.toString("utf8") : "");
-
-/** Resolves the org from its slug and runs `fn` inside that org's tenant context — the
- *  webhook equivalent of controllers/sso.controller.ts's finishSsoLogin tenant-resolution
- *  tail, just without a session/cookie at the end of it. */
-async function withOrgTenant<T>(orgSlug: string, fn: () => Promise<T>): Promise<T> {
-  const org = await resolveActiveOrgBySlug(orgSlug);
-  const dsn = decryptSecret(org.database!.encryptedDsn);
-  const client = await getTenantClient(org.id, dsn);
-  return tenantContext.run({ orgId: org.id, orgSlug: org.slug, client }, fn);
-}
 
 // ---------------------------------------------------------------------------------------------
 // Slack — Events API. Needs the RAW request body to verify the HMAC signature, so this route

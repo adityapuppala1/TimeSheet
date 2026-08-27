@@ -190,6 +190,12 @@ const authLimiter = rateLimit({ windowMs: 60_000, limit: 20, standardHeaders: tr
 app.use("/api/auth/login", authLimiter);
 app.use("/api/auth/forgot-password", authLimiter);
 app.use("/api/auth/reset-password", authLimiter);
+// Discovery is the same class of endpoint as forgot-password — an unauthenticated route that
+// sends mail to an address the caller supplies — so it gets the same limiter. `verify` is
+// included because the 6-digit code is guessable at scale if the only ceiling is the per-token
+// attempt counter: five guesses per token times unlimited tokens is not five guesses.
+app.use("/api/auth/workspaces/start", authLimiter);
+app.use("/api/auth/workspaces/verify", authLimiter);
 // Platform-admin login is the single highest-privilege account type in the system (cross-org
 // CRUD, plan-tier edits) — it must never be less protected than a regular tenant login, but
 // it's mounted after the blanket limiter below so it needs its own explicit guard here too.

@@ -449,6 +449,15 @@ export const authApi = {
   sessions: async () => (await api.get<SessionRow[]>("/auth/sessions")).data,
   revokeSession: async (id: string) => api.delete(`/auth/sessions/${id}`),
   forgotPassword: async (email: string) => (await api.post("/auth/forgot-password", { email })).data,
+
+  /* --- Workspace discovery (3.6.0) ---------------------------------------------------------
+     Two steps on purpose. `start` answers identically whether or not the address matched — the
+     list is only reachable by returning a code sent to that address, so the endpoint cannot be
+     used to ask "does bob@acme.com exist, and where does he work". */
+  findWorkspacesStart: async (email: string) =>
+    (await api.post<{ token: string; message: string }>("/auth/workspaces/start", { email })).data,
+  findWorkspacesVerify: async (token: string, code: string) =>
+    (await api.post<{ workspaces: Array<{ slug: string; name: string; url: string }> }>("/auth/workspaces/verify", { token, code })).data,
   resetPassword: async (token: string, password: string) => (await api.post("/auth/reset-password", { token, password })).data,
   changePassword: async (currentPassword: string, nextPassword: string) =>
     api.post("/auth/change-password", { currentPassword, nextPassword }),

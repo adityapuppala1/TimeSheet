@@ -26,20 +26,78 @@ import { AppError } from "./error.js";
 
 const IP_RE = /^\d{1,3}(\.\d{1,3}){3}$/;
 
+/** The hostname a request names, lowercased and without its port. */
+export function requestHostname(req: Request): string {
+  return (req.headers.host ?? "").split(":")[0]?.toLowerCase() ?? "";
+}
+
+/**
+ * True when this request is for the deployment's bare root domain rather than any workspace.
+ *
+ * Only meaningful in multi-org mode. It exists because that request used to resolve to
+ * `DEFAULT_ORG_SLUG` — so `timesphere.app` silently served one specific customer's branded login
+ * page to everybody who typed the domain without a subdomain. It should serve the workspace finder
+ * instead, and the routing layer needs to be able to tell.
+ */
+export function isRootDomainRequest(req: Request): boolean {
+  if (!env.ROOT_DOMAIN) return false;
+  const hostname = requestHostname(req);
+  return hostname === env.ROOT_DOMAIN.toLowerCase() || hostname === `www.${env.ROOT_DOMAIN.toLowerCase()}`;
+}
+
 /** Exported for the SSO start route (controllers/sso.controller.ts), which needs the same
  *  Host-header org resolution but runs outside this middleware (see that file's header
- *  comment for why the SSO routes are mounted before this one). */
+ *  comment for why the SSO routes are mounted before this one).
+ *
+ *  STRIPS `ROOT_DOMAIN` RATHER THAN COUNTING LABELS. The old rule was `labels.length < 3 →
+ *  DEFAULT_ORG_SLUG`, which is wrong in both directions and was wrong quietly: the apex
+ *  `timesphere.app` has two labels, so it fell through to one customer's workspace, and
+ *  `timesphere.co.uk` has three, so it read "timesphere" as a slug. A domain's real root is not
+ *  derivable from how many dots it has — the public suffix list exists because of exactly this.
+ *  With ROOT_DOMAIN configured the answer is unambiguous; without it, every deployment keeps the
+ *  behaviour it has today, which is what every current install runs on. */
 export function resolveOrgSlug(req: Request): string {
-  const hostHeader = req.headers.host ?? "";
-  const hostname = hostHeader.split(":")[0]?.toLowerCase() ?? "";
-  const labels = hostname.split(".").filter(Boolean);
+  const hostname = requestHostname(req);
 
-  // localhost / 127.0.0.1 / a bare IP / a domain with too few labels to carry a subdomain
-  // (e.g. just "timesphere.app") — none of these have a real subdomain to parse.
+  if (env.ROOT_DOMAIN) {
+    const root = env.ROOT_DOMAIN.toLowerCase();
+    const suffix = `.${root}`;
+    if (hostname.endsWith(suffix)) {
+      // Everything to the left of the root. `a.b.timesphere.app` yields "a.b" and will simply not
+      // match an org, which is the correct outcome for a hostname nothing was provisioned for.
+      const slug = hostname.slice(0, -suffix.length);
+      if (slug && slug !== "www") return slug;
+    }
+    // The apex, `www`, or an unrelated hostname (a custom domain — resolved by the caller before
+    // this point). Falls through to the default, and `isRootDomainRequest` is what lets the
+    // routing layer serve the finder instead of a tenant's login page.
+    return env.DEFAULT_ORG_SLUG;
+  }
+
+  // Single-org / on-prem: unchanged. localhost, a bare IP, or a domain with too few labels to
+  // carry a subdomain — none of these have a real subdomain to parse.
+  const labels = hostname.split(".").filter(Boolean);
   if (!hostname || hostname === "localhost" || IP_RE.test(hostname) || labels.length < 3) {
     return env.DEFAULT_ORG_SLUG;
   }
   return labels[0];
+}
+
+/**
+ * Resolves a verified CUSTOM domain to its org slug, or null.
+ *
+ * Checked before the subdomain rule by `resolveTenant`, so `time.acme.com` reaches Acme without any
+ * other code path knowing custom domains exist. Only `verifiedAt` rows are consulted: an
+ * unverified row is a claim, not a fact, and honouring one would let anybody point a hostname at
+ * somebody else's workspace.
+ */
+export async function resolveCustomDomainSlug(hostname: string): Promise<string | null> {
+  if (!hostname) return null;
+  const row = await controlPrisma.orgDomain.findUnique({
+    where: { domain: hostname },
+    select: { verifiedAt: true, organization: { select: { slug: true } } }
+  });
+  return row?.verifiedAt ? row.organization.slug : null;
 }
 
 /**
@@ -104,7 +162,14 @@ export async function resolveActiveOrgBySlug(slug: string, req?: Request) {
 
 export async function resolveTenant(req: Request, _res: Response, next: NextFunction): Promise<void> {
   try {
-    const org = await resolveActiveOrgBySlug(resolveOrgSlug(req), req);
+    // A verified custom domain wins over the subdomain rule — see resolveCustomDomainSlug. One
+    // extra indexed lookup per request only when ROOT_DOMAIN says this is a multi-org deployment
+    // AND the hostname is not already a subdomain of it, so a single-org install pays nothing.
+    const hostname = requestHostname(req);
+    const custom =
+      env.ROOT_DOMAIN && !hostname.endsWith(`.${env.ROOT_DOMAIN.toLowerCase()}`) ? await resolveCustomDomainSlug(hostname) : null;
+
+    const org = await resolveActiveOrgBySlug(custom ?? resolveOrgSlug(req), req);
     // Non-null assertion is genuinely needed here, not just IDE-lint noise: TS's control-flow
     // narrowing of `org.database` inside resolveActiveOrgBySlug doesn't propagate through that
     // function's inferred return type across this call boundary, even though the guard there

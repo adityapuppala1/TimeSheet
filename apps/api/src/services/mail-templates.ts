@@ -235,6 +235,17 @@ export const templates = {
         paragraph(button("Open your dashboard", appUrl("/app")))
     ),
 
+  /** The "find my workspace" verification code. Deliberately terse: the code IS the content, and a
+   *  wall of explanation around a six-digit number is how a phishing template reads. */
+  workspaceFind: (code: string) =>
+    shell(
+      { title: "Your verification code", preheader: "Enter this code to see your workspaces.", accentColor: ACCENT },
+      heading("Your verification code") +
+        paragraph("Enter this code to see the workspaces this address can sign in to. It expires in 10 minutes.") +
+        `<p style="margin:0 0 20px;font-size:32px;font-weight:700;letter-spacing:8px;text-align:center;color:${ACCENT};font-family:ui-monospace,SFMono-Regular,Menlo,monospace;">${code}</p>` +
+        paragraph(`<span style="color:${MUTED};">If you didn't ask to find your workspaces, you can safely ignore this email — nobody can use this code without your inbox.</span>`)
+    ),
+
   reset: (resetUrl: string) =>
     shell(
       { title: "Reset your password", preheader: "Reset link inside — expires in 30 minutes.", accentColor: ACCENT },

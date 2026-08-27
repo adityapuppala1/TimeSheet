@@ -13,6 +13,7 @@ import { templates as compiledTemplates } from "./mail-templates.js";
 export const TEMPLATE_VARIABLES: Record<string, string[]> = {
   welcome: ["name", "appUrl"],
   reset: ["resetUrl", "appUrl"],
+  "workspace.find": ["code", "appUrl"],
   "timesheet.submitted": ["name", "hours", "date", "project", "managerName", "module", "submodule", "activity", "description", "ticketRef", "appUrl"],
   "timesheet.approved": ["name", "hours", "date", "reviewer", "project", "module", "submodule", "activity", "description", "appUrl"],
   "timesheet.rejected": ["name", "date", "project", "reviewer", "reason", "module", "submodule", "activity", "description", "appUrl"],
@@ -62,6 +63,7 @@ export const TEMPLATE_VARIABLES: Record<string, string[]> = {
 export const TEMPLATE_DESCRIPTIONS: Record<string, string> = {
   welcome: "Sent the first time an account is created.",
   reset: "Password reset link with a 30-minute TTL.",
+  "workspace.find": "Verification code for \"find my workspaces\" — sent only when the address matches one, and expires in 10 minutes.",
   "timesheet.submitted": "Confirmation to the employee when a timesheet enters the approval queue.",
   "timesheet.approved": "Sent when a manager approves a timesheet.",
   "timesheet.rejected": "Sent when a manager rejects a timesheet — includes the reason.",
@@ -138,6 +140,7 @@ export function sampleVariables(key: string): Record<string, string> {
   const samples: Record<string, Record<string, string>> = {
     welcome: { name: "Aanya Sharma", appUrl: "https://timesphere.local" },
     reset: { resetUrl: "https://timesphere.local/reset-password?token=demo", appUrl: "https://timesphere.local" },
+    "workspace.find": { code: "418902", appUrl: "https://timesphere.local" },
     "timesheet.submitted": {
       module: "Payments", submodule: "Checkout", activity: "Development",
       description: "Reworked the retry path so a declined card no longer double-charges.\n\nBlocked for an hour on the sandbox being down.",
@@ -348,6 +351,16 @@ const V = (name: string) => `{{${name}}}`;
 export const TEMPLATE_DEFAULTS: Record<string, { subject: string; html: string }> = {
   welcome: { subject: "Welcome to TimeSphere", html: compiledTemplates.welcome(V("name")) },
   reset: { subject: "Reset your TimeSphere password", html: compiledTemplates.reset(V("resetUrl")) },
+  "workspace.find": {
+    // THE CODE IS NOT IN THE SUBJECT, deliberately. `sensitive: true` keeps the rendered BODY out
+    // of EmailLog, but the subject is always stored — and Workspace Settings → Email templates
+    // shows recent sends to any workspace admin. A code in the subject would therefore be a live,
+    // readable credential for ten minutes to an admin of an unrelated workspace, which is exactly
+    // the cross-workspace disclosure this whole flow is built to prevent. Caught by reading the
+    // EmailLog rows a real send produced.
+    subject: "Your TimeSphere verification code",
+    html: compiledTemplates.workspaceFind(V("code"))
+  },
 
   "timesheet.submitted": {
     subject: "Timesheet submitted - {{date}}",

@@ -450,6 +450,18 @@ export function Login() {
                 </p>
               )}
 
+              {/* The way OUT of the wrong workspace. Every workspace has its own subdomain, so a
+                  person who has landed on the wrong one — or who followed a stale bookmark — sees a
+                  sign-in form that will never accept them, with nothing else on the page to explain
+                  why. This is deliberately at the bottom and quiet: it matters enormously to the
+                  few people who need it and is noise to everyone who arrived correctly. */}
+              <p className="mt-7 text-center text-sm text-muted-foreground">
+                Not your workspace?{" "}
+                <Link to="/find-workspace" className="focus-ring rounded font-semibold text-primary hover:underline">
+                  Find yours
+                </Link>
+              </p>
+
               {/* Phone-only stand-in for the brand panel, which is `hidden` below lg. Three short
                   claims, not the panel's full copy — this sits under a form somebody is trying to
                   submit, not beside it. */}

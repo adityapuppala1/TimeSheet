@@ -91,6 +91,22 @@ const schema = z.object({
   // up). A single-tenant on-prem deployment only ever has this one org and never needs real
   // subdomain routing at all — see prisma/control/seed.ts, which seeds an org with this slug.
   DEFAULT_ORG_SLUG: z.string().min(1).default("default"),
+  /**
+   * The domain workspace subdomains hang off — `timesphere.app`, so `acme.timesphere.app` is org
+   * `acme`. Setting it turns this deployment into MULTI-ORG mode, which changes two things:
+   * `resolveOrgSlug` derives the slug by stripping this suffix instead of counting DNS labels, and
+   * a request to the bare domain serves the workspace finder instead of silently resolving to
+   * DEFAULT_ORG_SLUG.
+   *
+   * WHY IT REPLACES LABEL COUNTING. The old rule was `labels.length < 3 → DEFAULT_ORG_SLUG`, which
+   * is wrong in both directions: `timesphere.app` (the apex) fell through to one specific
+   * customer's login page, and `timesphere.co.uk` read "timesphere" as a workspace slug. Neither
+   * is guessable from label count; both are obvious once the real root is known.
+   *
+   * LEFT UNSET, NOTHING CHANGES. A single-org or on-prem install keeps the existing behaviour
+   * exactly, including the DEFAULT_ORG_SLUG fallback, which is what every current deployment runs.
+   */
+  ROOT_DOMAIN: z.string().optional(),
   // The MySQL server new tenant databases get physically created on when a platform admin
   // provisions an org through the console (Phase B8) — a DSN with credentials but no database
   // name, e.g. "mysql://root:@localhost:3306". Optional: a deployment that provisions tenant

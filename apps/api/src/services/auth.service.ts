@@ -19,6 +19,7 @@ import { AppError } from "../middleware/error.js";
 import { audit } from "./audit.service.js";
 import { getEffectiveSeatLimit } from "./plan-limits.service.js";
 import { countActiveSeats } from "./seat-count.service.js";
+import { rememberWorkspaceMembership } from "./workspace-directory.service.js";
 import { isMaintenanceActive } from "./maintenance.service.js";
 import {
   DUMMY_PASSWORD_HASH,
@@ -275,7 +276,7 @@ async function establishSession(
   // per request.
   const roleRow = await prisma.user.findUnique({
     where: { id: user.id },
-    select: { firstLoginAt: true, isAgent: true, role: { select: { name: true } } }
+    select: { firstLoginAt: true, isAgent: true, email: true, role: { select: { name: true } } }
   });
 
   /**
@@ -375,6 +376,12 @@ async function establishSession(
     where: { id: user.id },
     data: { lastLoginAt: new Date(), ...(roleRow?.firstLoginAt ? {} : { firstLoginAt: new Date() }) }
   });
+
+  // WORKSPACE DISCOVERY INDEX, written HERE for the same reason the maintenance and agent gates
+  // above are: this is the one function password, Google, Microsoft, SAML and LDAP all funnel
+  // through, so five login paths populate it without five call sites to keep in step. Any other
+  // placement would be one auth method away from a person's workspace being unfindable.
+  if (roleRow?.email) await rememberWorkspaceMembership(orgId, roleRow.email);
 
   return {
     accessToken: signAccessToken(user.id, session.id, orgId),

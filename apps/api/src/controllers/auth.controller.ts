@@ -25,6 +25,8 @@ import { audit } from "../services/audit.service.js";
 import { buildProfilePayload, changePassword, completeSsoLogin, login, refresh, requestPasswordReset, resetPassword, switchActiveRole } from "../services/auth.service.js";
 import { getOnboardingStatus } from "../services/onboarding.service.js";
 import { authenticateLdap, recordSsoLoginSuccess } from "../services/sso.service.js";
+import { checkVerificationCode, findWorkspacesForEmail, issueVerificationCode } from "../services/workspace-directory.service.js";
+import { withOrgTenant } from "../config/with-org-tenant.js";
 import { dispatchTransactional } from "../services/notify.service.js";
 import { templates } from "../services/mail-templates.js";
 import { processAvatar } from "../utils/image.js";
@@ -248,6 +250,75 @@ authRouter.post(
       });
     }
     res.status(202).json({ message: "If the account exists, reset instructions were sent." });
+  }
+);
+
+/* ─────────────────────────────────────────────────────────────────────────────────────────────
+ * Workspace discovery — "I don't remember my workspace address".
+ *
+ * TWO STEPS, AND THE SPLIT IS THE SECURITY PROPERTY. A single endpoint that answered "which
+ * workspaces is bob@acme.com in?" would tell anybody who asked that bob@acme.com exists and where
+ * he works — reintroducing, one route over, exactly the enumeration `resolveActiveOrgBySlug` goes
+ * out of its way to prevent. So `start` always answers 202 whether or not the address matched, and
+ * the list is only reachable by returning a code sent to that address.
+ *
+ * It is the same bar `/forgot-password` above already sets, and for the same reason: the cost of
+ * discovery should be an inbox the attacker does not control.
+ * ───────────────────────────────────────────────────────────────────────────────────────────── */
+
+authRouter.post(
+  "/workspaces/start",
+  validate(z.object({ body: z.object({ email: z.string().email() }) })),
+  async (req, res) => {
+    const workspaces = await findWorkspacesForEmail(req.body.email);
+    // The token is minted even for a miss, and is a real, unguessable token. Skipping it for
+    // unknown addresses would make the RESPONSE the oracle the 202 exists to close — a client
+    // could tell a hit from a miss by whether it got one.
+    const { token, code } = issueVerificationCode(req.body.email);
+
+    if (workspaces.length > 0) {
+      // Sent through the FIRST matched workspace's own tenant context, so it uses that workspace's
+      // configured SMTP and logs to its own EmailLog — a control-plane route has no mail settings
+      // of its own, and attributing the send to the workspace it is about is the honest place for
+      // it to appear in delivery analytics.
+      await withOrgTenant(workspaces[0].slug, async () => {
+        await dispatchTransactional({
+          to: req.body.email,
+          templateKey: "workspace.find",
+          vars: { code, appUrl: env.APP_BASE_URL },
+          fallback: {
+            // Not in the subject — see the same note on the registered template: EmailLog stores
+            // subjects even for `sensitive` mail, and workspace admins can read them.
+            subject: "Your TimeSphere verification code",
+            html: templates.workspaceFind(code)
+          },
+          // The body contains a LIVE code. Never persisted, therefore never retried — same
+          // reasoning as the password-reset mail above.
+          sensitive: true
+        });
+      });
+    }
+
+    res.status(202).json({ token, message: "If that address belongs to a workspace, a code is on its way." });
+  }
+);
+
+authRouter.post(
+  "/workspaces/verify",
+  validate(z.object({ body: z.object({ token: z.string().min(1).max(200), code: z.string().min(4).max(12) }) })),
+  async (req, res) => {
+    const check = checkVerificationCode(req.body.token, req.body.code);
+    if (!check.ok) {
+      // Deliberately does NOT distinguish "wrong code" from "this address matched nothing" — the
+      // two must look identical, or the failure message becomes the oracle again.
+      throw new AppError(
+        check.reason === "exhausted" ? 429 : 400,
+        check.reason === "exhausted"
+          ? "Too many attempts. Request a new code."
+          : "That code isn't right, or it has expired. Request a new one."
+      );
+    }
+    res.json({ workspaces: await findWorkspacesForEmail(check.email) });
   }
 );
 
