@@ -8,9 +8,26 @@
  */
 import { controlPrisma } from "../config/control-prisma.js";
 
+/**
+ * The tier a workspace is entitled to RIGHT NOW, which is not always what it has paid for.
+ *
+ * A trialling workspace is entitled to `trialTier` until `trialEndsAt`, and to `planTier` after.
+ * Resolved HERE, in the one function every entitlement read already goes through, so all fifteen
+ * capability and quota checks inherit trials without a single caller changing — the same reasoning
+ * that put the never-cache rule here rather than in each caller.
+ *
+ * The comparison is against the clock on every call, deliberately. A trial that expires at 09:00
+ * must stop granting Team features at 09:00, not whenever a nightly job next runs; the worker moves
+ * the org to GRACE and sends the mail, but it is not what makes the entitlement lapse.
+ */
+export function effectiveTier(org: { planTier: "STARTER" | "TEAM" | "ENTERPRISE"; trialTier: "STARTER" | "TEAM" | "ENTERPRISE" | null; trialEndsAt: Date | null }): "STARTER" | "TEAM" | "ENTERPRISE" {
+  if (org.trialTier && org.trialEndsAt && org.trialEndsAt.getTime() > Date.now()) return org.trialTier;
+  return org.planTier;
+}
+
 async function getOrgAndTierLimit(orgId: string) {
   const org = await controlPrisma.organization.findUniqueOrThrow({ where: { id: orgId } });
-  const tierLimit = await controlPrisma.planTierLimit.findUniqueOrThrow({ where: { tier: org.planTier } });
+  const tierLimit = await controlPrisma.planTierLimit.findUniqueOrThrow({ where: { tier: effectiveTier(org) } });
   return { org, tierLimit };
 }
 

@@ -23,6 +23,7 @@ import { findCoveredUnenrolledUserIds, notifyEnrollmentRequired } from "../servi
 import { getOnlineSeenByUser } from "../services/maintenance.service.js";
 import { getEffectiveSeatLimit } from "../services/plan-limits.service.js";
 import { countActiveSeats } from "../services/seat-count.service.js";
+import { syncSubscriptionSeats } from "../services/billing-sync.service.js";
 import { generateTempPassword, hashPassword } from "../utils/security.js";
 
 export const userRouter = Router();
@@ -499,6 +500,10 @@ userRouter.post(
     });
     await replaceHeldRoles(user.id, req.body.roles ?? [req.body.role as RoleName]);
     await audit(req.user!.id, "user.created", "User", user.id);
+    // The billed seat count follows the real one. Safe to await: syncSubscriptionSeats never
+    // throws and returns immediately on the common case of a workspace with no Stripe
+    // subscription at all (self-hosted, or a tier a platform admin assigned by hand).
+    await syncSubscriptionSeats(requireTenantContext().orgId);
 
     const welcomeResult = await sendWelcomeEmail(user);
     await audit(
@@ -770,6 +775,9 @@ userRouter.patch("/:id", validate(patchSchema), async (req, res) => {
 userRouter.delete("/:id", async (req, res) => {
   const id = String(req.params.id);
   await prisma.user.update({ where: { id }, data: { deletedAt: new Date(), status: "INACTIVE" } });
+  // Removing somebody frees a seat, and a customer who is billed for people who left will
+  // notice long before they mention it.
+  await syncSubscriptionSeats(requireTenantContext().orgId);
   // The bulk DELETE path (POST /bulk) already does this; the single-user route didn't, which
   // left the deleted person's Session rows alive and refreshable.
   await prisma.session.updateMany({ where: { userId: id, revokedAt: null }, data: { revokedAt: new Date() } });

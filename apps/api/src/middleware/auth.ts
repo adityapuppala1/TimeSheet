@@ -19,6 +19,7 @@ import { prisma } from "../config/prisma.js";
 import { requireTenantContext } from "../config/tenant-context.js";
 import { verifyAccessToken } from "../utils/security.js";
 import { isMaintenanceActive } from "../services/maintenance.service.js";
+import { getOrgStatus } from "../services/org-status.service.js";
 import { AppError } from "./error.js";
 
 /** Session-id -> last lastSeenAt write, for the liveness throttle below. In-memory is correct
@@ -79,6 +80,17 @@ declare global {
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
+/**
+ * What a super admin may still reach while the workspace is in GRACE, beyond billing.
+ *
+ * Getting your own data out must never depend on an invoice — that is the difference between a
+ * lapsed trial and a hostage situation, and it is the first thing an enterprise procurement review
+ * asks about. Deliberately a SHORT list of read/export routes rather than a pattern: every path
+ * added here is access granted to a workspace that has not paid, so it should be an explicit
+ * decision each time and not something a new route inherits by matching a prefix.
+ */
+const GRACE_EXPORT_PATHS = ["/api/reports/"] as const;
+
 export async function requireAuth(req: Request, _res: Response, next: NextFunction) {
   const header = req.headers.authorization ?? "";
   const token = header.startsWith("Bearer ") ? header.slice(7).trim() : "";
@@ -134,6 +146,44 @@ export async function requireAuth(req: Request, _res: Response, next: NextFuncti
   // lookup, not a query.
   if (user.role.name !== "SUPER_ADMIN" && (await isMaintenanceActive())) {
     throw new AppError(503, "This workspace is undergoing scheduled maintenance.", { code: "MAINTENANCE" });
+  }
+
+  /*
+   * BILLING GATE — a workspace in GRACE: the trial ended, or a renewal failed, and nobody has paid.
+   *
+   * Placed beside the maintenance gate for the same reason it is here: this is the one function
+   * every authenticated route funnels through, so a check here cannot be forgotten by the next
+   * controller somebody adds. It is the ONLY thing standing between a lapsed workspace and full
+   * access — `resolveActiveOrgBySlug` deliberately lets GRACE through so that sign-in still works.
+   *
+   * WHAT IT LEAVES OPEN, AND WHY EACH ONE:
+   *  - A SUPER_ADMIN, on `/billing/*`: the person who can pay must be able to reach the page that
+   *    takes payment. Refusing them is how a lapsed trial becomes a lost sale on the day the
+   *    customer decided to buy.
+   *  - A SUPER_ADMIN, on the report/export routes: getting your own data out must never depend on
+   *    an invoice. It is the difference between a lapsed trial and a hostage situation, and it is
+   *    what an enterprise procurement review asks about.
+   *  - `/auth/*` for everyone, because this runs after a session exists and refusing logout would
+   *    strand people in a session they cannot end.
+   *
+   * Everything else, for everyone including super admins, gets a machine-readable 402 so the client
+   * can render the "trial ended" screen rather than treating it as a broken session.
+   */
+  const orgStatus = await getOrgStatus(requireTenantContext().orgId);
+  if (orgStatus === "GRACE") {
+    // `req.originalUrl`, NOT `req.path`. This middleware is mounted per-router
+    // (`billingRouter.use(requireAuth)`), so by the time it runs Express has already stripped the
+    // mount point: `req.path` for GET /api/billing/status is "/status". Matching on "/billing/"
+    // therefore never fired, and the first live run of this gate refused a super admin access to
+    // the billing page — the exact door GRACE exists to keep open. Caught by driving a real
+    // workspace through it, not by any unit test, because the bug is in Express's path semantics
+    // rather than in the logic.
+    const path = req.originalUrl.split("?")[0];
+    const alwaysOpen = path.startsWith("/api/auth/");
+    const payOrExport = user.role.name === "SUPER_ADMIN" && (path.startsWith("/api/billing/") || GRACE_EXPORT_PATHS.some((p) => path.startsWith(p)));
+    if (!alwaysOpen && !payOrExport) {
+      throw new AppError(402, "This workspace's plan has lapsed. A workspace admin can restore access from Billing.", { code: "PLAN_LAPSED" });
+    }
   }
 
   // Throttled liveness stamp — what makes the admin's "who is online right now?" panel honest.

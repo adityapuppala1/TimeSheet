@@ -28,6 +28,14 @@ enum PlanTier {
 enum OrgStatus {
   PROVISIONING
   ACTIVE
+  /// The trial ended, or a renewal failed, and nobody has paid yet.
+  ///
+  /// DELIBERATELY BETWEEN ACTIVE AND SUSPENDED. A suspended workspace refuses every request at
+  /// `resolveActiveOrgBySlug`, including sign-in — which also refuses the one person who can pay,
+  /// on the day they decided to. GRACE keeps the door reachable and everything behind it shut:
+  /// requests resolve, a SUPER_ADMIN can still sign in, and `requireAuth` refuses everyone else
+  /// and every route except billing and export. The data is untouched throughout.
+  GRACE
   SUSPENDED
   ARCHIVED
 }
@@ -62,10 +70,30 @@ model Organization {
   stripeCustomerId     String? @unique @db.VarChar(255)
   stripeSubscriptionId String? @unique @db.VarChar(255)
 
+  /// Free-trial clock. Null on every workspace a platform admin provisioned by hand, which is how
+  /// every existing org was created — a null `trialEndsAt` means "no trial", never "expired".
+  trialStartedAt DateTime?
+  trialEndsAt    DateTime?
+  /// The tier a trialling workspace is ENTITLED to, which is not `planTier`.
+  ///
+  /// Kept separate on purpose: `planTier` is what the workspace has PAID for, and writing the trial
+  /// tier into it would mean an expiring trial has to guess what to downgrade to, and a Stripe
+  /// webhook arriving mid-trial has nothing to compare against. `plan-limits.service.ts` resolves
+  /// the effective tier from both, so every existing entitlement check inherits trials with no
+  /// caller changes at all.
+  trialTier PlanTier?
+
+  /// Which lifecycle warnings have already gone out, as days-before-expiry (`[7, 3, 1]`).
+  /// The worker runs daily and must be idempotent: without this it re-sends every warning on every
+  /// run, and a customer gets seven copies of "your trial ends in 7 days".
+  trialNoticesSent Json?
+
   createdAt       DateTime  @default(now())
   updatedAt       DateTime  @updatedAt
   suspendedAt     DateTime?
   suspendedReason String?   @db.Text
+  /// When the workspace entered GRACE — the clock the suspension deadline is measured from.
+  graceStartedAt  DateTime?
 
   database    OrgDatabase?
   ssoConfigs  OrgSsoConfig[]

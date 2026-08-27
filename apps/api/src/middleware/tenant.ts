@@ -153,7 +153,10 @@ function callerHoldsSessionForOrg(req: Request | undefined, orgId: string): bool
 export async function resolveActiveOrgBySlug(slug: string, req?: Request) {
   const org = await controlPrisma.organization.findUnique({ where: { slug }, include: { database: true } });
   if (!org?.database) throw new AppError(404, "Unknown workspace.");
-  if (org.status === "ACTIVE") return org;
+  // GRACE RESOLVES LIKE ACTIVE, and is shut everywhere past authentication instead — see the
+  // OrgStatus comment. Refusing it here would refuse sign-in, and sign-in is how the one person who
+  // can pay reaches the page that takes payment. `middleware/auth.ts` is what closes the door.
+  if (org.status === "ACTIVE" || org.status === "GRACE") return org;
 
   if (!callerHoldsSessionForOrg(req, org.id)) throw new AppError(404, "Unknown workspace.");
   if (org.status === "SUSPENDED") throw new AppError(403, "This workspace has been suspended.");

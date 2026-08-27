@@ -14,6 +14,9 @@ export const TEMPLATE_VARIABLES: Record<string, string[]> = {
   welcome: ["name", "appUrl"],
   reset: ["resetUrl", "appUrl"],
   "workspace.find": ["code", "appUrl"],
+  "billing.trial_ending": ["workspace", "billingUrl", "appUrl"],
+  "billing.trial_ended": ["workspace", "billingUrl", "appUrl"],
+  "billing.payment_failed": ["workspace", "billingUrl", "appUrl"],
   "timesheet.submitted": ["name", "hours", "date", "project", "managerName", "module", "submodule", "activity", "description", "ticketRef", "appUrl"],
   "timesheet.approved": ["name", "hours", "date", "reviewer", "project", "module", "submodule", "activity", "description", "appUrl"],
   "timesheet.rejected": ["name", "date", "project", "reviewer", "reason", "module", "submodule", "activity", "description", "appUrl"],
@@ -63,6 +66,9 @@ export const TEMPLATE_VARIABLES: Record<string, string[]> = {
 export const TEMPLATE_DESCRIPTIONS: Record<string, string> = {
   welcome: "Sent the first time an account is created.",
   reset: "Password reset link with a 30-minute TTL.",
+  "billing.trial_ending": "Sent 7, 3 and 1 days before a free trial ends, to the workspace's super admins.",
+  "billing.trial_ended": "Sent when a free trial expires and the workspace enters its grace window.",
+  "billing.payment_failed": "Sent when a renewal payment fails — the workspace is paused, not deleted.",
   "workspace.find": "Verification code for \"find my workspaces\" — sent only when the address matches one, and expires in 10 minutes.",
   "timesheet.submitted": "Confirmation to the employee when a timesheet enters the approval queue.",
   "timesheet.approved": "Sent when a manager approves a timesheet.",
@@ -141,6 +147,9 @@ export function sampleVariables(key: string): Record<string, string> {
     welcome: { name: "Aanya Sharma", appUrl: "https://timesphere.local" },
     reset: { resetUrl: "https://timesphere.local/reset-password?token=demo", appUrl: "https://timesphere.local" },
     "workspace.find": { code: "418902", appUrl: "https://timesphere.local" },
+    "billing.trial_ending": { workspace: "Acme", billingUrl: "https://timesphere.local/app/settings?tab=billing", appUrl: "https://timesphere.local" },
+    "billing.trial_ended": { workspace: "Acme", billingUrl: "https://timesphere.local/app/settings?tab=billing", appUrl: "https://timesphere.local" },
+    "billing.payment_failed": { workspace: "Acme", billingUrl: "https://timesphere.local/app/settings?tab=billing", appUrl: "https://timesphere.local" },
     "timesheet.submitted": {
       module: "Payments", submodule: "Checkout", activity: "Development",
       description: "Reworked the retry path so a declined card no longer double-charges.\n\nBlocked for an hour on the sandbox being down.",
@@ -361,6 +370,9 @@ export const TEMPLATE_DEFAULTS: Record<string, { subject: string; html: string }
     subject: "Your TimeSphere verification code",
     html: compiledTemplates.workspaceFind(V("code"))
   },
+  "billing.trial_ending": { subject: "Your TimeSphere trial ends soon", html: compiledTemplates.trialEnding(V("workspace"), 3, V("billingUrl")) },
+  "billing.trial_ended": { subject: "Your TimeSphere trial has ended", html: compiledTemplates.trialEnded(V("workspace"), 14, V("billingUrl")) },
+  "billing.payment_failed": { subject: "A payment for TimeSphere didn't go through", html: compiledTemplates.paymentFailed(V("workspace"), 14, V("billingUrl")) },
 
   "timesheet.submitted": {
     subject: "Timesheet submitted - {{date}}",

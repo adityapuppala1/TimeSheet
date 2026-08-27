@@ -235,6 +235,37 @@ export const templates = {
         paragraph(button("Open your dashboard", appUrl("/app")))
     ),
 
+  /** The trial is still running and ends soon. Names the deadline and the one action. */
+  trialEnding: (workspace: string, daysLeft: number, billingUrl: string) =>
+    shell(
+      { title: "Your trial ends soon", preheader: `${daysLeft} ${daysLeft === 1 ? "day" : "days"} left on ${workspace}.`, accentColor: ACCENT },
+      heading(`${daysLeft} ${daysLeft === 1 ? "day" : "days"} left on your trial`) +
+        paragraph(`Your <strong>${workspace}</strong> workspace is on a free trial that ends in ${daysLeft} ${daysLeft === 1 ? "day" : "days"}.`) +
+        paragraph("Add a plan before then and nothing changes — same workspace, same data, same people. Nothing is deleted if you don't.") +
+        paragraph(button("Choose a plan", billingUrl, ACCENT))
+    ),
+
+  /** The trial has ended. States plainly what still works, because the alternative reading is
+   *  "they deleted our data", and that is the one a customer assumes by default. */
+  trialEnded: (workspace: string, graceDays: number, billingUrl: string) =>
+    shell(
+      { title: "Your trial has ended", preheader: `${workspace} is paused — your data is intact.`, accentColor: ACCENT },
+      heading("Your trial has ended") +
+        paragraph(`<strong>${workspace}</strong> is paused. Everything in it is exactly where you left it — nothing has been deleted and nothing will be for at least ${graceDays} days.`) +
+        paragraph("A workspace admin can sign in to choose a plan, or to export your data. Everyone else will see a short notice instead of the app until a plan is active.") +
+        paragraph(button("Choose a plan", billingUrl, ACCENT))
+    ),
+
+  /** A renewal payment failed. Different from a trial ending: they already decided to buy. */
+  paymentFailed: (workspace: string, graceDays: number, billingUrl: string) =>
+    shell(
+      { title: "A payment didn't go through", preheader: `Update the card on ${workspace}.`, accentColor: ACCENT },
+      heading("A payment didn't go through") +
+        paragraph(`We couldn't take payment for <strong>${workspace}</strong>. This is usually an expired card.`) +
+        paragraph(`The workspace is paused for now and your data is untouched. Update the payment method within ${graceDays} days and everything resumes exactly as it was.`) +
+        paragraph(button("Update payment method", billingUrl, ACCENT))
+    ),
+
   /** The "find my workspace" verification code. Deliberately terse: the code IS the content, and a
    *  wall of explanation around a six-digit number is how a phishing template reads. */
   workspaceFind: (code: string) =>

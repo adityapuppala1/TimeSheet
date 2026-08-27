@@ -94,9 +94,20 @@ describe("POST /billing/webhook — event handling", () => {
     const res = await postWebhook(buildBillingWebhookApp(), payload, signWebhookPayload(payload, WEBHOOK_SECRET));
 
     expect(res.status).toBe(200);
+    // PAYING ALSO ENDS THE TRIAL AND ANY GRACE STATE, which is why this write carries more than the
+    // tier. Without those five fields a customer who buys on day 12 of a 15-day trial is moved to
+    // GRACE by the lifecycle worker on day 15 — locked out for non-payment three days after paying.
     expect(mockOrganizationUpdate).toHaveBeenCalledWith({
       where: { id: "org-1" },
-      data: { planTier: "TEAM", stripeSubscriptionId: "sub_123" }
+      data: {
+        planTier: "TEAM",
+        stripeSubscriptionId: "sub_123",
+        status: "ACTIVE",
+        graceStartedAt: null,
+        suspendedReason: null,
+        trialEndsAt: null,
+        trialTier: null
+      }
     });
   });
 

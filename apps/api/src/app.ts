@@ -84,6 +84,7 @@ import { userRouter } from "./controllers/user.controller.js";
 import { AppError, errorHandler, notFound } from "./middleware/error.js";
 import { recordApiRequest } from "./middleware/request-telemetry.js";
 import { resolveTenant } from "./middleware/tenant.js";
+import { signupRouter } from "./controllers/signup.controller.js";
 
 export const app = express();
 
@@ -409,6 +410,13 @@ app.use("/api/scim", scimLimiter, scimRouter);
 // why this needs the same pre-tenant-resolution mounting as SSO above (one fixed callback URL,
 // org identity carried in the signed `state` param instead of the Host header).
 app.use("/api/git", gitConnectionRouter);
+
+// Self-serve signup, mounted BEFORE tenant resolution for the obvious reason: it is the route that
+// creates the tenant, so there is nothing yet for `resolveTenant` to resolve. It is also the only
+// public route in the product that provisions infrastructure, hence its own tight limiter — the
+// auth limiter's twenty-per-minute is generous for something whose unit of work is a database.
+const signupLimiter = rateLimit({ windowMs: 60 * 60_000, limit: 5, standardHeaders: true });
+app.use("/api/signup", signupLimiter, signupRouter);
 
 // Every other /api/* route needs to know which tenant it's serving before it can touch
 // `prisma` — mounted after /health, /uploads, and the SSO routes (none of which need the
