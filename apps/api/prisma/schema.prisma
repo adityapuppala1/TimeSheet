@@ -3509,6 +3509,11 @@ model RequirementsDocument {
   sourceDocumentUploadedById String?
   sourceDocumentUploadedBy   User?     @relation("RequirementsDocSourceUploader", fields: [sourceDocumentUploadedById], references: [id], onDelete: SetNull)
   sourceDocumentUploadedAt  DateTime?
+  /// Filename of the ORIGINAL uploaded bytes inside this org's documents directory, so the in-app
+  /// viewer can show the real PDF/Word file rather than only the text extracted from it. Null for
+  /// documents imported before the file was kept — those still have `sourceDocumentText`, and the
+  /// viewer falls back to showing that.
+  sourceDocumentPath        String?   @db.VarChar(255)
 
   createdById String?
   createdBy   User?    @relation(fields: [createdById], references: [id], onDelete: SetNull)

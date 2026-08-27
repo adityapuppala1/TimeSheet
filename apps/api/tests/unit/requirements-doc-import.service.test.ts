@@ -33,7 +33,7 @@ describe("extractRequirementsImportText", () => {
   it("refuses an unsupported extension with a clear message", async () => {
     await expect(extractRequirementsImportText({ buffer: Buffer.from("binary"), originalname: "legacy.doc" })).rejects.toMatchObject({
       statusCode: 422,
-      message: expect.stringContaining("PDF, Word (.docx), or plain text")
+      message: expect.stringContaining("PDF, Word (.docx), Markdown (.md) or plain text")
     });
   });
 

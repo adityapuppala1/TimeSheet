@@ -4360,8 +4360,37 @@ export const requirementsDocApi = {
       })
     ).data;
   },
-  /** The extracted text the AI read — NOT a copy of the original file (the bytes were never
-   *  stored). Its own request so a long PRD's text isn't shipped on every page load. */
+  /** Which viewer suits the uploaded file, plus its content — a PDF says "pdf" and the bytes come
+   *  from sourceFileUrl below; a .docx arrives already converted to HTML; text/markdown arrive as
+   *  text. Its own request so a long document isn't shipped on every page load. */
+  sourceView: async (id: string) =>
+    (
+      await api.get<{
+        fileName: string | null;
+        size: number | null;
+        uploadedAt: string | null;
+        uploadedBy: { id: string; name: string } | null;
+        kind: "pdf" | "html" | "markdown" | "text";
+        html?: string;
+        text?: string;
+        /** False for documents imported before the original file was kept — only text survives. */
+        hasOriginalFile: boolean;
+      }>(`/requirements-docs/${id}/source-view`)
+    ).data,
+  /** The original bytes, as a blob the PDF viewer can point at. Fetched through the API client
+   *  rather than a bare URL because the access token lives in memory, not in a cookie. */
+  sourceFileBlob: async (id: string) =>
+    (await api.get(`/requirements-docs/${id}/source-file`, { responseType: "blob" })).data as Blob,
+  /** Uploads the original bytes after the reviewed answers are applied. */
+  storeSourceFile: async (id: string, file: File) => {
+    const form = new FormData();
+    form.append("file", file);
+    return (
+      await api.post<RequirementsDocRow>(`/requirements-docs/${id}/source-file`, form, {
+        headers: { "Content-Type": "multipart/form-data" }
+      })
+    ).data;
+  },
   sourceText: async (id: string) =>
     (
       await api.get<{

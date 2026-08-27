@@ -7,12 +7,13 @@
  * WHO renders this: `App.tsx` at `/app/requirements/:id`.
  */
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import mermaid from "mermaid";
 import { ArrowLeft, Archive, Download, Eye, FileDown, FileUp, Loader2, PenLine, RefreshCw, SkipForward, Sparkles, Target, Ticket, Trash2 } from "lucide-react";
-import { useEffect, useId, useState } from "react";
+import { useEffect, useState } from "react";
 import { useNavigate, useParams } from "react-router";
 import { permissions } from "@timesheet/shared";
 import { ImportReviewPanel, SectionTagBadge } from "../components/requirements/ImportReviewPanel";
+import { SourceDocumentViewer } from "../components/requirements/SourceDocumentViewer";
+import { AiRichContent } from "../components/ui/ai-rich-content";
 import { AiStrands } from "../components/ui/ai-strands";
 import { Badge } from "../components/ui/badge";
 import { BorderGlow } from "../components/ui/border-glow";
@@ -20,6 +21,7 @@ import { Button } from "../components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../components/ui/card";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "../components/ui/dialog";
 import { FileDropzone } from "../components/ui/file-dropzone";
+import { MermaidDiagram, renderMermaidSvg } from "../components/ui/mermaid-diagram";
 import { Progress } from "../components/ui/progress";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../components/ui/select";
 import { Skeleton } from "../components/ui/skeleton";
@@ -40,7 +42,8 @@ import {
 const IMPORT_ACCEPT = {
   "application/pdf": [".pdf"],
   "application/vnd.openxmlformats-officedocument.wordprocessingml.document": [".docx"],
-  "text/plain": [".txt"]
+  "text/plain": [".txt"],
+  "text/markdown": [".md"]
 };
 
 function formatBytes(bytes: number) {
@@ -48,23 +51,6 @@ function formatBytes(bytes: number) {
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
   return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
 }
-
-// suppressErrorRendering: without it, a parse failure makes mermaid append its own "bomb" error
-// graphic straight to document.body (outside our component tree) *in addition to* rejecting the
-// render() promise below — so our try/catch fallback rendered fine, but the bomb graphic stayed
-// stuck in the corner of the page regardless. This stops mermaid from touching the DOM on error at all.
-//
-// flowchart.htmlLabels: false is load-bearing for the PDF export, not a style choice. Mermaid's
-// default emits node labels inside <foreignObject>, which a <canvas> refuses to rasterise — the
-// diagram would silently come out blank or label-less in the exported PDF. Plain <text> nodes
-// rasterise correctly. See svgToPng below.
-mermaid.initialize({
-  startOnLoad: false,
-  theme: "neutral",
-  securityLevel: "strict",
-  suppressErrorRendering: true,
-  flowchart: { htmlLabels: false }
-});
 
 /**
  * Rasterises a rendered Mermaid SVG to a base64 PNG so the server can embed it in the PDF —
@@ -109,38 +95,6 @@ function formatSuccessMetric(m: RequirementsDocSuccessMetricRow): string {
   if (m.targetValue == null) return m.title;
   const unit = m.unit ? ` ${m.unit}` : "";
   return `${m.title} — target ${m.targetValue}${unit}`;
-}
-
-/** Renders Mermaid SOURCE TEXT to an inline SVG. Falls back to the raw source in a `<pre>` if the
- *  model produced something Mermaid can't parse — a document should never go blank over one bad
- *  diagram. */
-function MermaidDiagram({ source }: { source: string }) {
-  const id = useId().replace(/:/g, "-");
-  const [svg, setSvg] = useState<string | null>(null);
-  const [failed, setFailed] = useState(false);
-
-  useEffect(() => {
-    let cancelled = false;
-    if (!source.trim()) return;
-    mermaid
-      .render(`mermaid-${id}`, source)
-      .then(({ svg: rendered }) => {
-        if (!cancelled) setSvg(rendered);
-      })
-      .catch(() => {
-        if (!cancelled) setFailed(true);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [source, id]);
-
-  if (!source.trim()) return <p className="text-sm text-muted-foreground">No diagram generated.</p>;
-  if (failed) return <pre className="overflow-x-auto rounded-md bg-muted p-3 text-xs">{source}</pre>;
-  if (!svg) return <Skeleton className="h-40 w-full" />;
-  // Mermaid's own rendered SVG output, not user/model HTML — securityLevel: "strict" above is
-  // what actually guards this, the same role safeHtml() plays for AiRefine.tsx's sanitized preview.
-  return <div className="overflow-x-auto rounded-md border border-border bg-white p-3" dangerouslySetInnerHTML={{ __html: svg }} />;
 }
 
 function downloadBlob(blob: Blob, filename: string) {
@@ -517,7 +471,7 @@ function FilePickerStep({
             maxFiles={1}
             maxSizeMb={15}
             accept={IMPORT_ACCEPT}
-            hint="PDF, Word (.docx), or plain text · 15 MB max"
+            hint="PDF, Word (.docx), Markdown or plain text · 15 MB max"
           />
           <DialogFooter>
             <Button variant="ghost" onClick={onCancel}>
@@ -585,13 +539,6 @@ function SourceDocumentCard({ doc, canWrite, onChanged }: { doc: RequirementsDoc
   const hasAnswers = doc.interviewTranscript.some((t) => t.answer !== null || t.skipped);
   const isReady = doc.status === "READY";
 
-  // Only fetched when the viewer is actually opened — the extracted text of a long PRD is a lot to
-  // ship with every page load of a document nobody is inspecting.
-  const sourceText = useQuery({
-    queryKey: ["requirements-docs", doc.id, "source-text"],
-    queryFn: () => requirementsDocApi.sourceText(doc.id),
-    enabled: viewerOpen
-  });
   let pickerTitle = "Regenerate from the document";
   if (mode === "upload") pickerTitle = hasSource ? "Replace the supporting document" : "Upload a supporting document";
 
@@ -653,6 +600,12 @@ function SourceDocumentCard({ doc, canWrite, onChanged }: { doc: RequirementsDoc
           ? { sourceDocument: { fileName: file.name, fileSize: file.size, text: documentText } }
           : {})
       });
+      // The original bytes, so the viewer can show the real document rather than only the text the
+      // AI read. Deliberately best-effort: if this fails the import still succeeded and the preview
+      // falls back to the extracted text, which is a far better outcome than failing the whole apply.
+      if (mode === "upload" && file) {
+        await requirementsDocApi.storeSourceFile(doc.id, file).catch(() => undefined);
+      }
       await requirementsDocApi.interviewTurn(doc.id, {});
     },
     onSuccess: () => {
@@ -742,16 +695,12 @@ function SourceDocumentCard({ doc, canWrite, onChanged }: { doc: RequirementsDoc
           <DialogHeader>
             <DialogTitle className="truncate">{doc.sourceDocumentName}</DialogTitle>
             <DialogDescription>
-              The text the AI read from this file. Formatting, images and layout aren&rsquo;t shown — the original file
-              itself isn&rsquo;t stored, only the text extracted from it.
+              {doc.sourceDocumentSize != null && `${formatBytes(doc.sourceDocumentSize)} · `}
+              Uploaded by {doc.sourceDocumentUploadedBy?.name ?? "someone since removed"}
+              {doc.sourceDocumentUploadedAt && ` on ${new Date(doc.sourceDocumentUploadedAt).toLocaleDateString()}`}
             </DialogDescription>
           </DialogHeader>
-          {sourceText.isLoading && <Skeleton className="h-64 w-full" />}
-          {sourceText.data && (
-            <pre className="max-h-[60vh] overflow-auto whitespace-pre-wrap rounded-md border border-border bg-muted/40 p-3 text-xs leading-relaxed">
-              {sourceText.data.text}
-            </pre>
-          )}
+          <SourceDocumentViewer docId={doc.id} enabled={viewerOpen} />
           <DialogFooter>
             <Button variant="ghost" onClick={() => setViewerOpen(false)}>
               Close
@@ -891,8 +840,8 @@ function DocumentViewer({
         const source = s.architecture?.diagramMermaid;
         if (source?.trim()) {
           try {
-            const { svg } = await mermaid.render(`pdf-diagram-${Date.now()}`, source);
-            diagramPng = await svgToPng(svg);
+            const svg = await renderMermaidSvg(source, `pdf-diagram-${Date.now()}`);
+            diagramPng = svg ? await svgToPng(svg) : null;
           } catch {
             diagramPng = null;
           }
@@ -980,11 +929,11 @@ function renderSection(key: string, s: NonNullable<ReturnType<typeof requirement
   const sec = s!;
   switch (key) {
     case "problem":
-      return <p className="text-sm text-muted-foreground">{sec.problem || "—"}</p>;
+      return <AiRichContent content={sec.problem || "—"} />;
     case "goals":
-      return <p className="text-sm text-muted-foreground">{sec.goals || "—"}</p>;
+      return <AiRichContent content={sec.goals || "—"} />;
     case "targetUsers":
-      return <p className="text-sm text-muted-foreground">{sec.targetUsers || "—"}</p>;
+      return <AiRichContent content={sec.targetUsers || "—"} />;
     case "scope":
       return (
         <div className="grid gap-2 sm:grid-cols-2">
@@ -1021,7 +970,7 @@ function renderSection(key: string, s: NonNullable<ReturnType<typeof requirement
         </div>
       );
     case "executiveSummary":
-      return <p className="text-sm text-muted-foreground">{sec.executiveSummary || "—"}</p>;
+      return <AiRichContent content={sec.executiveSummary || "—"} />;
     case "personas":
       return (
         <div className="grid gap-2 sm:grid-cols-2">
@@ -1113,11 +1062,11 @@ function renderSection(key: string, s: NonNullable<ReturnType<typeof requirement
     case "dependencies":
       return <BulletList items={sec.dependencies} />;
     case "uiUx":
-      return <p className="text-sm text-muted-foreground">{sec.uiUx || "—"}</p>;
+      return <AiRichContent content={sec.uiUx || "—"} />;
     case "architecture":
       return (
         <div className="grid gap-2">
-          <p className="text-sm text-muted-foreground">{sec.architecture.description || "—"}</p>
+          <AiRichContent content={sec.architecture.description || "—"} />
           <MermaidDiagram source={sec.architecture.diagramMermaid} />
         </div>
       );

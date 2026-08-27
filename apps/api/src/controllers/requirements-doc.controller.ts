@@ -39,15 +39,18 @@ import {
   generateDocument,
   getRequirementsDocument,
   getSourceDocumentText,
+  getSourceDocumentView,
   listRequirementsDocuments,
   materializeGoals,
   recordInterviewTurn,
   regenerateFromStoredDocument,
+  storeSourceFile,
   updateRequirementsDocument
 } from "../services/requirements-doc.service.js";
 import { renderRequirementsDocPdf } from "../services/requirements-doc-pdf.service.js";
 import { renderRequirementsDocMarkdown } from "../services/requirements-doc-markdown.service.js";
 import { renderRequirementsDocTemplate } from "../services/requirements-doc-template.service.js";
+import { contentTypeFor, readSourceFile } from "../services/requirements-doc-viewer.service.js";
 import { REQUIREMENTS_SECTIONS, type RequirementsDocSections } from "../services/ai.service.js";
 
 export const requirementsDocRouter = Router();
@@ -233,6 +236,59 @@ requirementsDocRouter.get(
   async (req, res) => {
     await assertPlanningEnabled();
     res.json(await getSourceDocumentText(String(req.params.id)));
+  }
+);
+
+// The original bytes, uploaded right after the reviewed answers are applied. Separate from
+// /import/apply because that route takes JSON — see storeSourceFile's own header.
+requirementsDocRouter.post(
+  "/:id/source-file",
+  requirePermission(permissions.PLAN_WRITE),
+  // Same preserveTenantContext wrap every multer route in this app needs — multer parses off the
+  // request stream where the tenant AsyncLocalStorage store does not reliably propagate.
+  preserveTenantContext(requirementsImportUpload.single("file")),
+  validate(z.object({ params: z.object({ id: z.string().uuid() }) })),
+  async (req, res) => {
+    await assertPlanningEnabled();
+    const file = req.file;
+    if (!file?.buffer) throw new AppError(422, "No file provided");
+    res.json(await storeSourceFile(String(req.params.id), file, req.user!.id));
+  }
+);
+
+// The type-aware preview: says WHICH viewer suits this file (a PDF gets the browser's own viewer,
+// a .docx gets converted to HTML, text/markdown render as themselves) and carries the content for
+// everything except the PDF, whose bytes stream from the sibling route below.
+requirementsDocRouter.get(
+  "/:id/source-view",
+  requirePermission(permissions.TICKETS_VIEW),
+  validate(z.object({ params: z.object({ id: z.string().uuid() }) })),
+  async (req, res) => {
+    await assertPlanningEnabled();
+    res.json(await getSourceDocumentView(String(req.params.id)));
+  }
+);
+
+// The original bytes, for the PDF viewer. `inline` rather than `attachment` so the browser renders
+// it in place instead of downloading; the filename is still the one the uploader chose.
+requirementsDocRouter.get(
+  "/:id/source-file",
+  requirePermission(permissions.TICKETS_VIEW),
+  validate(z.object({ params: z.object({ id: z.string().uuid() }) })),
+  async (req, res) => {
+    await assertPlanningEnabled();
+    const doc = await getRequirementsDocument(String(req.params.id));
+    if (!doc.sourceDocumentPath) throw new AppError(404, "This document has no stored file.");
+
+    const bytes = await readSourceFile(doc.sourceDocumentPath);
+    const safeName = (doc.sourceDocumentName ?? "document").replace(/[^\w. -]/g, "").slice(0, 100);
+    res.setHeader("Content-Type", contentTypeFor(doc.sourceDocumentName ?? ""));
+    res.setHeader("Content-Disposition", `inline; filename="${safeName}"`);
+    // Belt-and-braces for a file somebody else authored: never let a browser second-guess the type
+    // we just declared, and never let it run as a document in this origin.
+    res.setHeader("X-Content-Type-Options", "nosniff");
+    res.setHeader("Content-Security-Policy", "sandbox; default-src 'none'");
+    res.send(bytes);
   }
 );
 

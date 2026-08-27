@@ -404,7 +404,8 @@ describe("clearSourceDocument", () => {
       sourceDocumentSize: null,
       sourceDocumentText: null,
       sourceDocumentUploadedById: null,
-      sourceDocumentUploadedAt: null
+      sourceDocumentUploadedAt: null,
+      sourceDocumentPath: null
     });
     expect(written.data).not.toHaveProperty("interviewTranscript");
   });

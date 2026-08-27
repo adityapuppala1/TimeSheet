@@ -261,7 +261,7 @@ function Exchange({ row }: { row: AiAskExchangeRow }) {
               {row.error}
             </p>
           ) : (
-            <AiMarkdown markdown={row.answer ?? ""} />
+            <AiMarkdown content={row.answer ?? ""} />
           )}
 
           {row.toolCalls.length > 0 && (

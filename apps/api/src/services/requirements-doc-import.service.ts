@@ -7,10 +7,9 @@
  * an OCR fallback for a scanned PDF) without touching the orchestration layer. Same split
  * requirements-doc.service.ts's own header draws between itself and ai.service.ts.
  *
- * The caller never persists the uploaded bytes to disk — the buffer is read once, synchronously,
- * in this module, and discarded when the request ends. Deliberate: this app already strips EXIF
- * from avatar uploads rather than keep the original, and there's no reason to keep a copy of a
- * requirements document that only ever needs to exist as extracted text.
+ * This module only EXTRACTS. Keeping the original bytes is a separate, later decision made once
+ * an import is confirmed (requirements-doc-viewer.service.ts) — extraction runs on every analyze,
+ * including ones nobody accepts, and those should leave nothing behind.
  */
 import path from "node:path";
 import mammoth from "mammoth";
@@ -22,12 +21,12 @@ import { AppError } from "../middleware/error.js";
  * allows legacy binary `.doc`): there is no good pure-JS parser for old `.doc`, so it is rejected
  * clearly here rather than silently mangled.
  */
-export const SUPPORTED_IMPORT_EXTENSIONS = new Set([".pdf", ".docx", ".txt"]);
+export const SUPPORTED_IMPORT_EXTENSIONS = new Set([".pdf", ".docx", ".txt", ".md"]);
 
 export async function extractRequirementsImportText(file: { buffer: Buffer; originalname: string }): Promise<{ text: string }> {
   const ext = path.extname(file.originalname).toLowerCase();
   if (!SUPPORTED_IMPORT_EXTENSIONS.has(ext)) {
-    throw new AppError(422, `Unsupported file type: ${ext || "(none)"}. Upload a PDF, Word (.docx), or plain text file.`);
+    throw new AppError(422, `Unsupported file type: ${ext || "(none)"}. Upload a PDF, Word (.docx), Markdown (.md) or plain text file.`);
   }
 
   try {

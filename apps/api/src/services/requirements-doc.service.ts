@@ -31,6 +31,7 @@ import {
   type RequirementsInterviewTurn
 } from "./ai.service.js";
 import { extractRequirementsImportText } from "./requirements-doc-import.service.js";
+import { buildSourceViewerPayload, deleteSourceFile, newSourceFileName, writeSourceFile } from "./requirements-doc-viewer.service.js";
 import type { DraftChange } from "./ai-proposal.service.js";
 
 /** ~6k tokens — generous for a real PRD, bounded for prompt cost. */
@@ -266,6 +267,38 @@ export async function applyImportedAnswers(
  * never persisted (see this feature's import service), and the viewer's copy says so plainly
  * rather than implying it's showing the PDF.
  */
+/**
+ * Stores the ORIGINAL uploaded bytes for a document whose answers have already been applied.
+ *
+ * Its own call rather than part of `applyImportedAnswers` for a plain reason: that endpoint takes
+ * JSON (a reviewed, possibly-edited list of answers), and threading a 15MB file through it would
+ * mean base64 in a JSON body. Splitting them also gives the better failure mode — if this fails,
+ * the import still succeeded and the document simply previews from its extracted text.
+ */
+export async function storeSourceFile(id: string, file: { buffer: Buffer; originalname: string }, actorId: string) {
+  const doc = await getRequirementsDocument(id);
+  const storedPath = newSourceFileName(file.originalname);
+  // Written BEFORE the row points at it, so a failed write can never leave a path in the database
+  // with nothing behind it.
+  await writeSourceFile(storedPath, file.buffer);
+  // Replacing a document would otherwise leave the previous file orphaned on disk.
+  await deleteSourceFile(doc.sourceDocumentPath);
+
+  const updated = await prisma.requirementsDocument.update({
+    where: { id },
+    data: { sourceDocumentPath: storedPath },
+    include: { sourceDocumentUploadedBy: { select: { id: true, name: true } } }
+  });
+  await audit(actorId, "requirements_doc.source_file_stored", "RequirementsDocument", id, { fileName: file.originalname });
+  return updated;
+}
+
+export async function getSourceDocumentView(id: string) {
+  const doc = await getRequirementsDocument(id);
+  if (!doc.sourceDocumentName) throw new AppError(404, "This document has no supporting document.");
+  return buildSourceViewerPayload(doc);
+}
+
 export async function getSourceDocumentText(id: string) {
   const doc = await getRequirementsDocument(id);
   if (!doc.sourceDocumentText) throw new AppError(404, "This document has no supporting document.");
@@ -282,7 +315,10 @@ export async function getSourceDocumentText(id: string) {
  *  (whatever answers exist) is untouched: "forget where this came from" and "discard my answers"
  *  are different actions, and only the first was asked for. */
 export async function clearSourceDocument(id: string, actorId: string) {
-  await getRequirementsDocument(id);
+  const existing = await getRequirementsDocument(id);
+  // The row stops pointing at the file either way; deleting the bytes is what makes "remove"
+  // actually remove rather than merely hide.
+  await deleteSourceFile(existing.sourceDocumentPath);
   const updated = await prisma.requirementsDocument.update({
     where: { id },
     data: {
@@ -290,7 +326,8 @@ export async function clearSourceDocument(id: string, actorId: string) {
       sourceDocumentSize: null,
       sourceDocumentText: null,
       sourceDocumentUploadedById: null,
-      sourceDocumentUploadedAt: null
+      sourceDocumentUploadedAt: null,
+      sourceDocumentPath: null
     },
     include: { sourceDocumentUploadedBy: { select: { id: true, name: true } } }
   });

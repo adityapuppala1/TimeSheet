@@ -97,14 +97,17 @@ export const avatarUpload = multer({
   }
 });
 
-const allowedImportExtensions = new Set([".pdf", ".docx", ".txt"]);
+const allowedImportExtensions = new Set([".pdf", ".docx", ".txt", ".md"]);
 
 /**
  * Requirements Studio's optional "import an existing PRD/BRD" upload (requirements-doc.controller.ts).
- * Memory storage, same reasoning as avatarUpload above: the buffer is read once by
- * pdf-parse/mammoth in-process (requirements-doc-import.service.ts) and the bytes are discarded —
- * the raw file is deliberately never persisted to disk. Narrower extension set than
+ * Memory storage so the buffer can be read in-process (requirements-doc-import.service.ts) and,
+ * once the import is confirmed, written to this org's documents directory by
+ * requirements-doc-viewer.service.ts — the original is kept now so the in-app preview can show the
+ * real document rather than only the text extracted from it. Narrower extension set than
  * allowedAttachmentExtensions on purpose: no good pure-JS parser exists for legacy binary .doc.
+ * `.md` is here because the preview renders markdown properly — a spec written in markdown is a
+ * very natural thing to upload, and accepting it in the viewer but not the picker was incoherent.
  */
 export const requirementsImportUpload = multer({
   storage: multer.memoryStorage(),
@@ -112,7 +115,7 @@ export const requirementsImportUpload = multer({
   fileFilter: (_req, file, cb) => {
     const ext = path.extname(file.originalname).toLowerCase();
     if (!allowedImportExtensions.has(ext)) {
-      return cb(new AppError(422, `Unsupported file type: ${ext}. Upload a PDF, Word (.docx), or plain text file.`));
+      return cb(new AppError(422, `Unsupported file type: ${ext}. Upload a PDF, Word (.docx), Markdown (.md) or plain text file.`));
     }
     cb(null, true);
   }

@@ -4,16 +4,24 @@ const ALLOWED_TAGS = [
   "p", "br", "hr",
   "strong", "em", "u", "s", "code", "pre",
   "blockquote",
-  "h1", "h2", "h3",
+  // h4-h6 alongside h1-h3: model-authored answers and generated PRD/BRD sections nest deeper than
+  // three levels, and a stripped <h4> silently collapsed a sub-heading into body text.
+  "h1", "h2", "h3", "h4", "h5", "h6",
   "ul", "ol", "li",
-  "a", "span",
+  // `del` for ~~strikethrough~~, sup/sub for footnote markers and units — all GFM-reachable, none
+  // able to carry behaviour.
+  "del", "sup", "sub",
+  "a", "span", "div",
   // Tables, for model-authored markdown (Ask AI answers render comparisons as GFM tables through
   // marked). Harmless to the rich-text surfaces sharing this list — the editor never emits them —
   // and without these DOMPurify silently flattened every table into one run of words.
   "table", "thead", "tbody", "tr", "th", "td"
 ];
 
-const ALLOWED_ATTR = ["href", "rel", "target", "style"];
+// `class` is allowed ONLY so the renderer's own wrapper markup (code-block chrome, callouts)
+// survives sanitisation. It cannot carry behaviour, and this app's CSS has no class that grants
+// any — the style allow-list below is what actually stops CSS-based UI redress.
+const ALLOWED_ATTR = ["href", "rel", "target", "style", "class"];
 
 /**
  * The ONLY CSS this renderer will honour, mirroring `allowedStyles` in

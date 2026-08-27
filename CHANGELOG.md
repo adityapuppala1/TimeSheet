@@ -10,6 +10,38 @@ user of a running installation.
 The parser that feeds the in-app What's-new page ignores this section until it gains a version
 number, on purpose — an installation must never render history for a version that does not exist yet.
 
+### 🎨 AI output now renders the way an AI answer should
+
+- **One renderer for everything a model writes** — Ask AI answers and the generated PRD/BRD's
+  narrative sections both go through it, so they look like the same product. It handles headings,
+  paragraphs, lists, **bold**, tables, links and inline code, plus **Mermaid diagrams**, **charts**,
+  pretty-printed **JSON**, labelled code blocks, and GitHub-style **callouts** (`> [!WARNING]`,
+  `> [!NOTE]`, …) with matching icons and colours. Where an answer used to show raw backticks, it
+  now shows the diagram, the chart, or the table.
+- **The models were told they can use all of it**, so this shows up in real answers rather than
+  waiting for someone to happen to paste markdown.
+- Security stayed the point: structured content comes out of fenced blocks that are parsed and
+  shape-checked rather than letting a model emit markup, and every textual path still runs through
+  the app's single sanitizer. Raw HTML from a model is still shown as text, deliberately.
+- **🔒 Found and fixed a real ReDoS while measuring this.** The pre-existing chart-repair pattern
+  took ~1900ms on a 60k-character adversarial input — quadratic backtracking on content nobody
+  vets. Bounded, and now 1.8ms with identical behaviour. Two neighbouring patterns the linter also
+  flagged were measured at 0.5ms and 0.8ms and left alone, with the numbers recorded next to them.
+
+### 👁 The uploaded document preview now suits the file
+
+- **A PDF opens in the browser's own PDF viewer**, a **Word document is converted** so its
+  headings, lists and tables survive, and **Markdown and text render as themselves**. Previously
+  everything was flattened to one wall of plain text.
+- To do that the **original file is now kept**, org-scoped, alongside the extracted text — a
+  deliberate reversal of the earlier "text only" decision, which was right while the AI was the
+  only reader and stopped being right the moment a person wanted to look at the thing. Removing the
+  supporting document deletes the stored file too, so "remove" really removes.
+- Documents imported before this shipped still preview from their extracted text, and say plainly
+  that's what you're looking at.
+- **Markdown (.md) is now an accepted upload.** The preview could already render it while the file
+  picker refused it, which was simply incoherent.
+
 ### 📄 PRD/BRD exports you'd actually hand to a client
 
 - **The PDF is a real document now.** A branded cover page with a document-control block (version,

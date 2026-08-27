@@ -30,7 +30,8 @@ import { requirementsDocApi, type RequirementsDocRow, type RequirementsImportPro
 const IMPORT_ACCEPT = {
   "application/pdf": [".pdf"],
   "application/vnd.openxmlformats-officedocument.wordprocessingml.document": [".docx"],
-  "text/plain": [".txt"]
+  "text/plain": [".txt"],
+  "text/markdown": [".md"]
 };
 
 type ImportStage = "idle" | "analyzing" | "reviewing" | "applying";
@@ -168,6 +169,12 @@ export function RequirementsStudioPage() {
           ? { sourceDocument: { fileName: importFile.name, fileSize: importFile.size, text: importDocumentText } }
           : {})
       });
+      // The original bytes, so the viewer can show the real document rather than only the text the
+      // AI read. Deliberately best-effort: if this fails the import still succeeded and the preview
+      // falls back to the extracted text, which is a far better outcome than failing the whole apply.
+      if (importFile) {
+        await requirementsDocApi.storeSourceFile(importDocId, importFile).catch(() => undefined);
+      }
       // Fires the opening question exactly like a fresh document would on its own — the
       // interview engine has no idea these answers came from an import.
       await requirementsDocApi.interviewTurn(importDocId, {});
@@ -292,7 +299,7 @@ export function RequirementsStudioPage() {
                     maxFiles={1}
                     maxSizeMb={15}
                     accept={IMPORT_ACCEPT}
-                    hint="PDF, Word (.docx), or plain text · 15 MB max"
+                    hint="PDF, Word (.docx), Markdown or plain text · 15 MB max"
                   />
                   <p className="text-xs text-muted-foreground">
                     The AI proposes which answers your document already covers — you review and edit everything before it's saved, and it
