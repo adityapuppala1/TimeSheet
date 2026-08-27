@@ -171,6 +171,15 @@ export function isMaintenanceLockoutError(error: unknown): boolean {
   return err?.response?.status === 503 && err.response.data?.code === "MAINTENANCE";
 }
 
+/** True when a failure is the server saying "this workspace's plan has lapsed" (402 + code
+ *  PLAN_LAPSED) rather than anything wrong with the request. Same contract, and the same reason,
+ *  as `isMaintenanceLockoutError` above: the interceptor is already navigating away, so a caller
+ *  that toasts on this would flash a misleading error on the way out. */
+export function isPlanLapsedError(error: unknown): boolean {
+  const err = error as { response?: { status?: number; data?: { code?: string } } } | undefined;
+  return err?.response?.status === 402 && err.response.data?.code === "PLAN_LAPSED";
+}
+
 api.interceptors.request.use((config) => {
   if (inMemoryAccessToken) config.headers.Authorization = `Bearer ${inMemoryAccessToken}`;
   return config;
@@ -204,6 +213,16 @@ api.interceptors.response.use(
     // endless chain of redirects to itself.
     if (isMaintenanceLockoutError(error) && window.location.pathname !== "/maintenance") {
       window.location.assign("/maintenance");
+      throw error;
+    }
+
+    // 402 + PLAN_LAPSED is the billing equivalent, and needs the same treatment for the same
+    // reasons: a full navigation, no token refresh (the session is fine — it is the plan that is
+    // not), and no retry. Without this the workspace does not look "locked", it looks BROKEN:
+    // every panel renders an error and nothing on screen says why. The pathname guard is what
+    // stops /plan-lapsed's own requests from redirecting to itself forever.
+    if (isPlanLapsedError(error) && window.location.pathname !== "/plan-lapsed") {
+      window.location.assign("/plan-lapsed");
       throw error;
     }
 
@@ -458,6 +477,20 @@ export const authApi = {
     (await api.post<{ token: string; message: string }>("/auth/workspaces/start", { email })).data,
   findWorkspacesVerify: async (token: string, code: string) =>
     (await api.post<{ workspaces: Array<{ slug: string; name: string; url: string }> }>("/auth/workspaces/verify", { token, code })).data,
+
+  /* --- Self-serve signup (3.6.0) ------------------------------------------------------------
+     Two steps for the same verify-first reason discovery has, and one more besides: `complete`
+     provisions a database, so nothing should reach it that has not proven an inbox first. */
+  signupStart: async (email: string) =>
+    (await api.post<{ token: string; message: string }>("/signup/start", { email })).data,
+  signupComplete: async (payload: {
+    token: string;
+    code: string;
+    workspaceName: string;
+    slug: string;
+    adminName: string;
+    adminPassword: string;
+  }) => (await api.post<{ slug: string; url: string; trialEndsAt: string; trialDays: number }>("/signup/complete", payload)).data,
   resetPassword: async (token: string, password: string) => (await api.post("/auth/reset-password", { token, password })).data,
   changePassword: async (currentPassword: string, nextPassword: string) =>
     api.post("/auth/change-password", { currentPassword, nextPassword }),

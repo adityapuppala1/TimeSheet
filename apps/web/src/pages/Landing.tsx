@@ -1177,7 +1177,9 @@ export function Landing() {
                       ))}
                     </ul>
                     <Button asChild className="mt-6 w-full" variant={tier.highlight ? "default" : "outline"}>
-                      <Link to="/login">{tier.cta}</Link>
+                      {/* The trial tiers point at /signup, which now exists. Enterprise keeps
+                          /login, because "Talk to sales" is not a self-serve flow. */}
+                      <Link to={tier.name === "Enterprise" ? "/login" : "/signup"}>{tier.cta}</Link>
                     </Button>
                   </CardContent>
                 </Card>

@@ -31,9 +31,11 @@ const PitchDeck = lazy(() => import("./pages/PitchDeck").then((m) => ({ default:
 const Login = lazy(() => import("./pages/Login").then((m) => ({ default: m.Login })));
 const ForgotPassword = lazy(() => import("./pages/ForgotPassword").then((m) => ({ default: m.ForgotPassword })));
 const FindWorkspace = lazy(() => import("./pages/FindWorkspace").then((m) => ({ default: m.FindWorkspace })));
+const Signup = lazy(() => import("./pages/Signup").then((m) => ({ default: m.Signup })));
 const ResetPassword = lazy(() => import("./pages/ResetPassword").then((m) => ({ default: m.ResetPassword })));
 const SharedAttestation = lazy(() => import("./pages/SharedAttestation").then((m) => ({ default: m.SharedAttestation })));
 const MaintenancePage = lazy(() => import("./pages/Maintenance").then((m) => ({ default: m.MaintenancePage })));
+const PlanLapsedPage = lazy(() => import("./pages/PlanLapsed").then((m) => ({ default: m.PlanLapsedPage })));
 const Dashboard = lazy(() => import("./pages/Dashboard").then((m) => ({ default: m.Dashboard })));
 const Timesheet = lazy(() => import("./pages/Timesheet").then((m) => ({ default: m.Timesheet })));
 const Tickets = lazy(() => import("./pages/Tickets").then((m) => ({ default: m.Tickets })));
@@ -106,6 +108,7 @@ const router = createBrowserRouter([
   // Public and unauthenticated, like the two beside it — a person who cannot remember their
   // workspace address has, by definition, no session anywhere to prove anything with.
   { path: "/find-workspace", element: <PageShell><FindWorkspace /></PageShell> },
+  { path: "/signup", element: <PageShell><Signup /></PageShell> },
   { path: "/reset-password", element: <PageShell><ResetPassword /></PageShell> },
   // Public, no-session attestation viewer. Deliberately OUTSIDE /app: the reader is a client
   // with no account, so it must never hit AppLayout (which assumes an authenticated user) or
@@ -118,6 +121,10 @@ const router = createBrowserRouter([
   // Public lockout screen for maintenance mode. Same outside-/app rule as the attestation
   // viewer: the people sent here have revoked sessions, so it must never assume auth.
   { path: "/maintenance", element: <PageShell><MaintenancePage /></PageShell> },
+  // Outside the app shell, like /maintenance beside it: the shell's own queries are exactly
+  // what the server is refusing, so rendering this inside it would fill the page with the
+  // errors it exists to explain.
+  { path: "/plan-lapsed", element: <PageShell><PlanLapsedPage /></PageShell> },
   {
     path: "/app",
     element: <AppLayout />,

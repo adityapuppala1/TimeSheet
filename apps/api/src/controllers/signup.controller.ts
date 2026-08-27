@@ -23,12 +23,12 @@
 import { Router } from "express";
 import { z } from "zod";
 import { controlPrisma } from "../config/control-prisma.js";
-import { env } from "../config/env.js";
 import { withOrgTenant } from "../config/with-org-tenant.js";
 import { AppError } from "../middleware/error.js";
 import { validate } from "../middleware/validate.js";
 import { templates } from "../services/mail-templates.js";
 import { dispatchTransactional } from "../services/notify.service.js";
+import { sendPlatformMail } from "../services/platform-mail.service.js";
 import { provisionOrganization } from "../services/provisioning.service.js";
 import {
   checkVerificationCode,
@@ -85,15 +85,15 @@ signupRouter.post(
     }
 
     const { token, code } = issueVerificationCode(email);
-    // No tenant exists yet, so this send has no workspace SMTP to use and falls back to the
-    // deployment's own transport. The one email in the product that legitimately has nowhere else
-    // to come from.
-    await dispatchTransactional({
+    // `sendPlatformMail`, NOT `dispatchTransactional`. There is no workspace yet — that is what
+    // this route is for — and the normal path resolves an SMTP transport per tenant and writes an
+    // EmailLog row through the tenant-scoped Prisma proxy. Using it here threw "No tenant context
+    // is active" on the very first live request, which is the same trap `send-test-email.ts` fell
+    // into. See platform-mail.service.ts for what this gives up in exchange.
+    await sendPlatformMail({
       to: email,
-      templateKey: "workspace.find",
-      vars: { code, appUrl: env.APP_BASE_URL },
-      fallback: { subject: "Your TimeSphere verification code", html: templates.workspaceFind(code) },
-      sensitive: true
+      subject: "Your TimeSphere verification code",
+      html: templates.workspaceFind(code)
     });
 
     res.status(202).json({ token, message: "Check your email for a 6-digit code." });
