@@ -37,46 +37,23 @@ async function main() {
       // column would otherwise keep the default (false) and silently lose a feature that worked
       // yesterday. Everything else is left alone so a platform admin's per-tier tuning survives.
       update: { faceVerificationEnabled: limits.faceVerificationEnabled },
-      create: {
-        tier,
-        seatLimit: limits.seatLimit,
-        aiMonthlyBudgetCeilingUsd: limits.aiMonthlyBudgetCeilingUsd,
-        allowedSsoProviders: limits.allowedSsoProviders,
-        allowedChatPlatforms: limits.allowedChatPlatforms,
-        faceVerificationEnabled: limits.faceVerificationEnabled,
-        // EVERY entitlement below is set here, not just the V6 block that used to be.
-        //
-        // The guarded UPDATEs in the *_entitlements migrations only fix an UPGRADE: they run before
-        // this seed, so on a FRESH install they match zero rows and this `create` is what the row
-        // ends up being. Goals and change management were never added here when they landed, so a
-        // fresh install produced `goalsEnabled: false` and `changeManagementEnabled: false` on
-        // every tier — a new customer on Team or Enterprise was told those modules were "not in
-        // your plan". Measured, not deduced: deleting the TEAM row and re-running this seed
-        // reproduced it exactly.
-        //
-        // Still NOT added to the `update` branch above, unlike faceVerificationEnabled — that
-        // would give a platform admin's per-tier tuning a second chance to be silently reverted by
-        // a re-seed. Create-only is the correct half of that trade.
-        ganttEnabled: limits.ganttEnabled,
-        resourceMgmtEnabled: limits.resourceMgmtEnabled,
-        approvalsEnabled: limits.approvalsEnabled,
-        proofingEnabled: limits.proofingEnabled,
-        customWorkflowsEnabled: limits.customWorkflowsEnabled,
-        aiPmCopilotEnabled: limits.aiPmCopilotEnabled,
-        maxPortfolios: limits.maxPortfolios,
-        maxRequestForms: limits.maxRequestForms,
-        maxBlueprints: limits.maxBlueprints,
-        maxCustomFields: limits.maxCustomFields,
-        maxDashboards: limits.maxDashboards,
-        // Goals / OKRs (V8 phase 1).
-        goalsEnabled: limits.goalsEnabled,
-        maxGoals: limits.maxGoals,
-        // Change management (V8 phase 11).
-        changeManagementEnabled: limits.changeManagementEnabled,
-        maxChangePolicies: limits.maxChangePolicies,
-        // Weekly AI/ML Practice Update (3.5.0).
-        practiceUpdateEnabled: limits.practiceUpdateEnabled
-      }
+      // SPREAD, NOT A HAND-WRITTEN FIELD LIST. The list that used to be here had fallen behind
+      // twice — goals and change management both landed with their column, their migration and
+      // their enforcement, and never reached this object. The guarded UPDATEs in the
+      // `*_entitlements` migrations hid it from every existing install: they run BEFORE this seed,
+      // so on an upgrade they fix the row and on a FRESH database they match zero rows and this
+      // `create` is what the row ends up being. A new customer on Team or Enterprise was therefore
+      // told goals and change management were not in their plan. Measured, not deduced — deleting
+      // the TEAM row and re-running this seed reproduced it exactly.
+      //
+      // `PlanTierLimits` and the `PlanTierLimit` model carry the same field names by design, and
+      // `plan-tier-limit-parity.test.ts` pins that. So the spread is exhaustive by construction,
+      // and if the two ever diverge this stops compiling instead of quietly dropping a column.
+      //
+      // Still NOT spread into the `update` branch above, unlike faceVerificationEnabled: that
+      // would give a platform admin's per-tier tuning a second chance to be silently reverted by a
+      // re-seed. Create-only is the correct half of that trade.
+      create: { tier, ...limits }
     });
   }
   console.log("Seeded PlanTierLimit rows (STARTER, TEAM, ENTERPRISE).");

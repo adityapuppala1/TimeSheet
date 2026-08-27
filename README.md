@@ -146,7 +146,7 @@ that looks stale.
 | Prisma models / enums | **126** / 43, plus **107** tenant migrations and 8 control-plane migrations |
 | Services / cron workers | **108** / 24 |
 | Web pages | **67** |
-| Unit tests | **1,704** across 146 files (`npm test -w apps/api`) |
+| Unit tests | **1,706** across 147 files (`npm test -w apps/api`) |
 | End-to-end specs | **29** Playwright specs, run across desktop, phone, tablet, laptop, 4K, Firefox and WebKit |
 | Editable email templates | **35**, every one of them with preview, test send, revert and per-template delivery analytics |
 | RBAC permissions | **38**, over 5 roles |
