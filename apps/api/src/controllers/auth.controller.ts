@@ -429,7 +429,13 @@ authRouter.post("/avatar", requireAuth, preserveTenantContext(avatarUpload.singl
   let processed;
   try {
     processed = await processAvatar(file.buffer, req.user!.id, destDir);
-  } catch {
+  } catch (error) {
+    // RE-THROW A DELIBERATE AppError. This catch was written for sharp failing on a corrupt file,
+    // and a bare `catch {}` rewrote EVERY error as "could not decode" — including, once the malware
+    // scan moved inside processAvatar, "the scanner is unreachable" and "this file is infected".
+    // Telling somebody their PNG is corrupt when it was actually refused by a virus scanner is the
+    // worst kind of wrong message: it sends them to re-export the image instead of to an admin.
+    if (error instanceof AppError) throw error;
     throw new AppError(422, "Could not decode image — corrupted or unsupported format");
   }
 

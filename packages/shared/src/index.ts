@@ -381,6 +381,13 @@ export interface GlobalTicketSettings {
   /** ISO-4217 fallback when a project sets no billingCurrency — see
    *  api/src/services/billing-rate.service.ts. */
   defaultCurrency: string;
+  /**
+   * Off by default. When on, every uploaded file is scanned by clamd BEFORE it is written anywhere
+   * reachable — and a file that CANNOT be scanned is refused rather than stored, so an unreachable
+   * daemon stops uploads instead of silently letting them through. See
+   * api/src/services/virus-scan.service.ts.
+   */
+  virusScanEnabled: boolean;
   /** Off by default. Gates the Verified Work Attestation endpoints entirely. */
   enableAttestations: boolean;
   /** Off by default, and separate from enableAttestations on purpose: publishing an attestation

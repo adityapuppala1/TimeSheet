@@ -1,3 +1,4 @@
+import { assertUploadIsClean } from "../services/virus-scan.service.js";
 /**
  * WHAT: `processAvatar()` and `processBrandingLogo()` — re-encode an uploaded image buffer
  * through `sharp` and write the result to disk.
@@ -36,6 +37,10 @@ export async function processAvatar(
   userId: string,
   destDir: string
 ): Promise<AvatarResult> {
+  // Avatars do not go through attachment-storage.ts's processUpload, so they need the scan on their
+  // own path. An image is a perfectly good malware carrier, and this one is served back to every
+  // colleague who sees the person's name.
+  await assertUploadIsClean(buffer, "avatar");
   const MAX_DIM = 512;
 
   const pipeline = sharp(buffer, { failOn: "error" })
@@ -78,6 +83,9 @@ export async function processAvatar(
  *    black background on a dark theme).
  */
 export async function processBrandingLogo(buffer: Buffer, destDir: string): Promise<AvatarResult> {
+  // Same reasoning as processAvatar, and one degree worse: a workspace logo is rendered on the
+  // SIGN-IN page, to people who have not authenticated yet.
+  await assertUploadIsClean(buffer, "logo");
   const output = await sharp(buffer, { failOn: "error" })
     .rotate()
     .resize({ width: 512, height: 160, fit: "inside", withoutEnlargement: true })

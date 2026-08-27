@@ -28,6 +28,7 @@ import { documentsDirForOrg } from "../config/storage-paths.js";
 import { prisma } from "../config/prisma.js";
 import { requireTenantContext } from "../config/tenant-context.js";
 import { allowedAttachmentExtensions } from "../middleware/upload.js";
+import { assertUploadIsClean } from "./virus-scan.service.js";
 import { audit } from "./audit.service.js";
 import { classifyTicket, getGlobalAISettings, EXTERNAL_INTAKE_CONFIDENCE_CEILING } from "./ai.service.js";
 import { dispatchNotification, dispatchTransactional, templates } from "./notify.service.js";
@@ -119,6 +120,18 @@ async function saveAttachment(ticketId: string, att: ParsedInboundEmail["attachm
   // file lands under the receiving org, and the unique part of its name is `crypto.randomBytes`
   // rather than a clock and `Math.random()` — an inbound email's arrival time and its attachment's
   // filename are both things the SENDER already knows.
+  // THE HIGHEST-RISK UPLOAD PATH IN THE PRODUCT, and the one nobody clicks: these bytes arrive
+  // from an arbitrary sender on the internet, not from a signed-in colleague. Scanned before the
+  // write like every other path — and a rejection SKIPS the attachment rather than failing the
+  // whole intake, because a malicious attachment must not stop the legitimate ticket beside it
+  // from being created.
+  try {
+    await assertUploadIsClean(att.content, att.filename || "attachment");
+  } catch (error) {
+    console.warn(`[email-intake] refused attachment "${att.filename}": ${(error as Error).message}`);
+    return;
+  }
+
   const { orgId } = requireTenantContext();
   const diskName = `${crypto.randomBytes(16).toString("hex")}-${safeBase}${ext}`;
   const orgDir = documentsDirForOrg(orgId);

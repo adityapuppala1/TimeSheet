@@ -107,6 +107,16 @@ const schema = z.object({
    * exactly, including the DEFAULT_ORG_SLUG fallback, which is what every current deployment runs.
    */
   ROOT_DOMAIN: z.string().optional(),
+
+  /**
+   * Where clamd is listening, for upload malware scanning (services/virus-scan.service.ts).
+   *
+   * Only consulted when a workspace has `GlobalTicketSettings.virusScanEnabled` on, so a
+   * deployment with no scanner needs neither of these set. The defaults describe the common
+   * case: clamd on the same host, on its own default port.
+   */
+  CLAMAV_HOST: z.string().optional(),
+  CLAMAV_PORT: z.coerce.number().int().positive().default(3310),
   // The MySQL server new tenant databases get physically created on when a platform admin
   // provisions an org through the console (Phase B8) — a DSN with credentials but no database
   // name, e.g. "mysql://root:@localhost:3306". Optional: a deployment that provisions tenant

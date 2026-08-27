@@ -41,6 +41,7 @@ import {
   getSuggestedProviderOrder
 } from "../services/ai-provider-config.service.js";
 import { getAIQualitySummary } from "../services/ai-quality.service.js";
+import { testVirusScanner } from "../services/virus-scan.service.js";
 import { describeCertificate, testLdapConnection, testOidcConnection, testSamlConnection, type SsoTestResult } from "../services/sso-validation.service.js";
 import { getAllowedSsoProviders } from "../services/plan-limits.service.js";
 import { getGlobalTicketSettings } from "../services/ticket.service.js";
@@ -227,9 +228,23 @@ const ticketingSchema = z.object({
       // `.strict()`, so a new GlobalTicketSettings field MUST be listed here or the PATCH 400s.
       defaultCurrency: z.string().length(3).optional(),
       enableAttestations: z.boolean().optional(),
-      enableAttestationSharing: z.boolean().optional()
+      enableAttestationSharing: z.boolean().optional(),
+      // Malware scanning on upload — see services/virus-scan.service.ts.
+      virusScanEnabled: z.boolean().optional()
     })
     .strict()
+});
+
+/**
+ * POST /security/virus-scan/test — is clamd actually there?
+ *
+ * Same contract as `/mail/test-connection`: a failure is a 200 with `ok: false`, because "the
+ * scanner is unreachable" is the ANSWER to the admin's question. It exists because the setting it
+ * validates fails CLOSED — switching scanning on with no daemon running would refuse every upload
+ * in the workspace, and finding that out from a user's failed attachment is the wrong order.
+ */
+settingsRouter.post("/security/virus-scan/test", requireSuperAdmin, async (_req, res) => {
+  res.json(await testVirusScanner());
 });
 
 settingsRouter.patch("/ticketing", requireSuperAdmin, validate(ticketingSchema), async (req, res) => {

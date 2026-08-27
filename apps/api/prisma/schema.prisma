@@ -1153,6 +1153,17 @@ model GlobalTicketSettings {
   /// have to make the second one deliberately.
   enableAttestationSharing Boolean @default(false)
 
+  /// --- Malware scanning on upload (see services/virus-scan.service.ts) --------------------
+  /// When true, every uploaded file is sent to clamd BEFORE it is written anywhere reachable —
+  /// attachments, avatars, and the files that arrive through email and chat intake alike.
+  ///
+  /// OFF BY DEFAULT because a deployment with no clamd running would otherwise be unable to
+  /// accept a single attachment the moment this shipped. When it is ON and the scanner cannot be
+  /// reached, the upload is REFUSED rather than passed through: an admin who switched this on has
+  /// been told files are scanned, and quietly storing an unscanned one makes that false at exactly
+  /// the moment it matters.
+  virusScanEnabled Boolean @default(false)
+
   updatedAt   DateTime @updatedAt
   updatedById String?
 }

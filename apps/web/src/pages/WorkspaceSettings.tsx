@@ -1122,6 +1122,21 @@ function TicketingSettingsCard({ readOnly }: { readOnly: boolean }) {
 
               <Separator />
               <div className="grid gap-1.5">
+                <Label className="text-sm font-semibold">Malware scanning on upload</Label>
+                <p className="text-xs text-muted-foreground">
+                  Every file is checked before it is stored — attachments, avatars, workspace logos, imported
+                  requirements documents, and the attachments that arrive by email. Nothing is written anywhere
+                  reachable until it comes back clean.
+                </p>
+              </div>
+              <VirusScanToggle
+                enabled={settings.data?.virusScanEnabled ?? false}
+                readOnly={readOnly}
+                onToggle={(v) => update.mutate({ virusScanEnabled: v })}
+              />
+
+              <Separator />
+              <div className="grid gap-1.5">
                 <Label className="text-sm font-semibold">Verified work attestations</Label>
                 <p className="text-xs text-muted-foreground">
                   A client-facing record that approved hours map to real tickets, done by identity-verified people and approved by a
@@ -2557,6 +2572,66 @@ function SsoVerification({
           password sign-in is switched off.
         </p>
       )}
+    </div>
+  );
+}
+
+/**
+ * The malware-scanning switch, with its own connectivity check beside it.
+ *
+ * THE TEST BUTTON IS NOT A CONVENIENCE. This setting fails CLOSED: with it on and no clamd
+ * reachable, every upload in the workspace is refused. Finding that out from a colleague's failed
+ * attachment is the wrong order, so the check sits next to the switch that causes it — and the
+ * copy says what happens when the scanner is down, before somebody flips it and discovers.
+ */
+function VirusScanToggle({
+  enabled,
+  readOnly,
+  onToggle
+}: {
+  enabled: boolean;
+  readOnly: boolean;
+  onToggle: (value: boolean) => void;
+}) {
+  const [result, setResult] = useState<{ ok: boolean; message: string; version?: string } | null>(null);
+  const test = useMutation({
+    mutationFn: () => settingsApi.testVirusScanner(),
+    onSuccess: setResult,
+    onError: () => setResult({ ok: false, message: "The check itself couldn't run. Try again." })
+  });
+
+  return (
+    <div className="grid gap-3 rounded-lg border border-border bg-muted/30 p-4">
+      <div className="flex items-start gap-4">
+        <div className="flex-1">
+          <Label>Scan uploads for malware</Label>
+          <p className="mt-0.5 text-xs leading-5 text-muted-foreground">
+            Off by default, because it needs a ClamAV daemon this deployment can reach. With it on, a file that
+            cannot be scanned is <strong>refused rather than stored</strong> — so check the connection below before
+            switching it on, or uploads will start failing.
+          </p>
+        </div>
+        <Switch checked={enabled} disabled={readOnly} onCheckedChange={onToggle} />
+      </div>
+
+      <div className="flex flex-wrap items-center gap-3">
+        <Button variant="outline" size="sm" disabled={readOnly || test.isPending} onClick={() => test.mutate()}>
+          <ShieldCheck className="h-3.5 w-3.5" />
+          {test.isPending ? "Checking…" : "Test scanner connection"}
+        </Button>
+        {result && (
+          <span className={`text-xs ${result.ok ? "text-success" : "text-destructive"}`}>
+            {result.message}
+            {result.version ? ` (${result.version})` : ""}
+          </span>
+        )}
+      </div>
+
+      {/* Said plainly, because "we scan uploads" is routinely over-read. */}
+      <p className="text-xs leading-5 text-muted-foreground">
+        A signature scanner catches known malware. It does not make an HTML file safe — that is handled separately by
+        the extension allow-list and by serving every download as an attachment rather than as a page.
+      </p>
     </div>
   );
 }

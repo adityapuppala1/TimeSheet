@@ -52,6 +52,7 @@ import zlib from "node:zlib";
 import { promisify } from "node:util";
 import sharp from "sharp";
 import { documentReadDirs, documentsDirForOrg, isOrgSegment, resolveWithin } from "../config/storage-paths.js";
+import { assertUploadIsClean } from "./virus-scan.service.js";
 import { requireTenantContext } from "../config/tenant-context.js";
 
 const gzip = promisify(zlib.gzip);
@@ -150,6 +151,25 @@ export async function processUpload(file: Express.Multer.File, owner: UploadOwne
   const originalExt = path.extname(file.originalname).toLowerCase();
   const originalBase = path.basename(file.originalname, originalExt);
   const input = file.buffer ?? (await fsp.readFile(file.path));
+
+  /*
+   * MALWARE SCAN, HERE, BEFORE ANYTHING IS WRITTEN.
+   *
+   * This function is the single point every attachment passes through — ticket attachments,
+   * timesheet attachments on create and on edit — so a check here cannot be bypassed by the next
+   * upload route somebody adds. Exactly the argument `auth.service.ts#establishSession` makes for
+   * its own gates.
+   *
+   * And it is genuinely BEFORE the upload rather than after it: multer's bytes are in the staging
+   * tree, which `storage-paths.ts` marks non-public so `/uploads` cannot name it, and the write
+   * into the documents tree is below. A file that fails this never becomes addressable.
+   *
+   * It THROWS rather than returning a verdict, so it cannot be forgotten by a caller — see
+   * virus-scan.service.ts. No-ops entirely when the workspace has scanning off, which is the
+   * default.
+   */
+  await assertUploadIsClean(input, file.originalname);
+
   const originalSizeBytes = input.length;
   // Hashed BEFORE any re-encoding, so the checksum identifies what the user actually uploaded and
   // stays comparable across a future change to the encoder settings.

@@ -2042,6 +2042,12 @@ export const settingsApi = {
   ) => (await api.patch<SsoProviderConfig>(`/settings/sso/${provider}`, payload)).data,
   /** Tests the SAVED configuration, not what is in the form — see the route's own comment for why
    *  a pass recorded against unsaved values would be exactly the false assurance to avoid. */
+  /** Is clamd actually reachable? Same contract as the mail and SSO testers: a failure is an
+   *  answer, not an exception. Worth checking BEFORE switching scanning on, because the setting
+   *  fails closed — an unreachable scanner refuses every upload in the workspace. */
+  testVirusScanner: async () =>
+    (await api.post<{ ok: boolean; message: string; version?: string }>("/settings/security/virus-scan/test")).data,
+
   testSso: async (provider: "google" | "microsoft" | "saml" | "ldap", payload: { probeEmail?: string } = {}) =>
     (await api.post<SsoTestResult>(`/settings/sso/${provider}/test-connection`, payload)).data,
 

@@ -11,10 +11,24 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterAll, describe, expect, it } from "vitest";
+import { afterAll, describe, expect, it, vi } from "vitest";
 import sharp from "sharp";
 import { brandingDir, isInsideNonPublicSubtree } from "../../src/config/storage-paths.js";
 import { processBrandingLogo } from "../../src/utils/image.js";
+
+/**
+ * The malware scan is stubbed: the write paths under test now call `assertUploadIsClean` first,
+ * which reads a workspace setting through the tenant Prisma proxy this spec does not provide.
+ * Without the stub every test here fails with "Reflect.get called on non-object", which is a
+ * confusing way to be told a dependency was added.
+ *
+ * Stubbed rather than configured, because the scan has its own spec (virus-scan.test.ts) that
+ * speaks the real clamd protocol to a real socket.
+ */
+vi.mock("../../src/services/virus-scan.service.js", () => ({
+  assertUploadIsClean: async () => ({ scanned: false, clean: true })
+}));
+
 
 const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "ts-branding-"));
 afterAll(() => fs.rmSync(tempDir, { recursive: true, force: true }));

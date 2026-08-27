@@ -25,6 +25,7 @@ import crypto from "node:crypto";
 import mammoth from "mammoth";
 import { documentsDirForOrg } from "../config/storage-paths.js";
 import { requireTenantContext } from "../config/tenant-context.js";
+import { assertUploadIsClean } from "./virus-scan.service.js";
 import { AppError } from "../middleware/error.js";
 
 /** What the frontend should mount for this file. */
@@ -57,6 +58,11 @@ function orgDir(): string {
 }
 
 export async function writeSourceFile(fileName: string, bytes: Buffer): Promise<void> {
+  // The Requirements Studio import path — a customer's own PRD or BRD, which is a Word document or
+  // a PDF from outside this workspace as often as not. Scanned before the write, same as every
+  // other path; the choke point here is this function rather than processUpload, because these
+  // bytes are parsed rather than stored as an attachment.
+  await assertUploadIsClean(bytes, fileName);
   const dir = orgDir();
   await fs.mkdir(dir, { recursive: true });
   await fs.writeFile(path.join(dir, fileName), bytes);

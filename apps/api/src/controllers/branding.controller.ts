@@ -83,7 +83,11 @@ brandingRouter.post(
     let processed;
     try {
       processed = await processBrandingLogo(file.buffer, dir);
-    } catch {
+    } catch (error) {
+      // Same reasoning as auth.controller.ts's avatar route: a bare catch here rewrote a malware
+      // rejection as "corrupted image", which sends an admin to re-export the file rather than to
+      // the person who can tell them why it was refused.
+      if (error instanceof AppError) throw error;
       throw new AppError(422, "Could not decode image — corrupted or unsupported format");
     }
 

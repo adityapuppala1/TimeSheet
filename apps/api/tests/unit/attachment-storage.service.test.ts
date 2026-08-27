@@ -6,7 +6,7 @@
  * hand back exactly what was uploaded for the formats it doesn't re-encode. Both are asserted
  * here against real bytes, not mocks — sharp and zlib are the things under test.
  */
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import crypto from "node:crypto";
 import fs from "node:fs";
 import fsp from "node:fs/promises";
@@ -18,6 +18,21 @@ import sharp from "sharp";
 const tempDir = await fsp.mkdtemp(path.join(os.tmpdir(), "ts-uploads-"));
 process.env.UPLOAD_DIR = tempDir;
 
+/**
+ * The malware scan is stubbed out, and that is what keeps the `null` Prisma client below honest.
+ *
+ * `processUpload` now calls `assertUploadIsClean` before it writes anything, which reads the
+ * workspace's `virusScanEnabled` setting — a real database read through the tenant proxy, which
+ * this spec deliberately does not provide. Without this mock every test here dies with
+ * "Reflect.get called on non-object", which is a confusing way to be told a dependency was added.
+ *
+ * Stubbed rather than configured, because this file is about IMAGE PROCESSING. The scan has its own
+ * spec (virus-scan.test.ts) that speaks the real clamd protocol to a real socket.
+ */
+vi.mock("../../src/services/virus-scan.service.js", () => ({
+  assertUploadIsClean: async () => ({ scanned: false, clean: true })
+}));
+
 const {
   categorize,
   processUpload: processUploadRaw,
@@ -27,7 +42,8 @@ const { tenantContext } = await import("../../src/config/tenant-context.js");
 
 /** Documents are written under the uploader's org, so the pipeline requires a tenant context and
  *  throws without one (deliberately — see processUpload). Only `orgId` is read; `prisma` is never
- *  touched here, which is why a null client is honest rather than a shortcut. */
+ *  touched here — which is true only because the malware scan is mocked above, and is why a null
+ *  client is honest rather than a shortcut. */
 const ORG_ID = "0d1b7e3a-1111-4111-8111-0d1b7e3a1111";
 const processUpload: typeof processUploadRaw = (file, owner) =>
   tenantContext.run({ orgId: ORG_ID, orgSlug: "test-org", client: null as never }, () => processUploadRaw(file, owner));

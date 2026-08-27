@@ -9,12 +9,26 @@
  * carry real entropy, an unsigned read fails, and — the constraint that shaped the design — the
  * UNAUTHENTICATED guest reviewer in approval.controller.ts still gets a link that works.
  */
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import fs from "node:fs";
 import fsp from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import request from "supertest";
+
+/**
+ * The malware scan is stubbed: the write paths under test now call `assertUploadIsClean` first,
+ * which reads a workspace setting through the tenant Prisma proxy this spec does not provide.
+ * Without the stub every test here fails with "Reflect.get called on non-object", which is a
+ * confusing way to be told a dependency was added.
+ *
+ * Stubbed rather than configured, because the scan has its own spec (virus-scan.test.ts) that
+ * speaks the real clamd protocol to a real socket.
+ */
+vi.mock("../../src/services/virus-scan.service.js", () => ({
+  assertUploadIsClean: async () => ({ scanned: false, clean: true })
+}));
+
 
 const tempRoot = await fsp.mkdtemp(path.join(os.tmpdir(), "ts-access-"));
 process.env.UPLOAD_DIR = tempRoot;
