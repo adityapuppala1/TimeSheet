@@ -67,11 +67,11 @@ import { StatCard, TrendBadge } from "../components/ui/stat-card";
 import { ProjectUtilizationChart } from "../components/ProjectUtilizationChart";
 import { TimesheetEntryDialog } from "../components/TimesheetEntryDialog";
 import { computeTrend, type Trend } from "../lib/trend";
+import { cn } from "../lib/utils";
 import { changeApi, dashboardApi, reportApi, ticketApi, timesheetApi, type MyMonthRollup, type TicketRow } from "../services/api";
 import { DateRangePicker, type DateRangeValue } from "../components/ui/date-range-picker";
 import type { CalendarDayAnnotations } from "../components/ui/calendar-primitives";
 import { useAuthStore } from "../store/auth";
-import { DatePicker } from "../components/ui/date-picker";
 
 /** Mon–Fri days in an inclusive range. The week target scales against this rather than staying
  *  pinned to 40h: a one-day range against a 40h bar reads as a 5% week, and a month reads as 400%,
@@ -1218,16 +1218,6 @@ function DayTimeline({
   const entries = entriesByDate.get(selectedKey) ?? [];
   const dayHours = entries.reduce((sum, e) => sum + Number(e.totalHours ?? 0), 0);
 
-  const shiftDay = (delta: number) => {
-    const [y, m, d] = selectedKey.split("-").map(Number);
-    const next = new Date(y, (m || 1) - 1, (d || 1) + delta);
-    const nextKey = localDateKey(next);
-    // Clamped to the page's window, not just to today: stepping past either end would land on a
-    // day this card holds no data for and render it as an empty track.
-    if (nextKey > maxKey || nextKey < minKey) return;
-    setSelectedKey(nextKey);
-  };
-
   const now = new Date();
   const nowMinutes = now.getHours() * 60 + now.getMinutes();
 
@@ -1270,42 +1260,28 @@ function DayTimeline({
 
   const statusesInDay = Object.keys(STATUS_GLYPH).filter((s) => entries.some((e) => e.status === s));
 
-  // Hover counts for the date picker: a dot on every day that has entries, and a status
-  // breakdown card on hover — built from the same map the timeline itself renders from, so the
-  // calendar can never advertise a day the track would then show empty.
-  const dayAnnotations = useMemo(() => {
-    const map: CalendarDayAnnotations = {};
-    for (const [key, list] of entriesByDate) {
-      if (list.length === 0) continue;
-      const byStatus: Record<string, number> = {};
-      for (const e of list) byStatus[e.status] = (byStatus[e.status] ?? 0) + 1;
-      map[key] = {
-        title: `${list.length} ${list.length === 1 ? "entry" : "entries"}`,
-        rows: [
-          { label: "Total", count: list.length, dotClassName: "bg-primary" },
-          { label: "Approved", count: byStatus.APPROVED ?? 0, dotClassName: "bg-success" },
-          { label: "Submitted", count: byStatus.SUBMITTED ?? 0, dotClassName: "bg-warning" },
-          { label: "Draft", count: byStatus.DRAFT ?? 0, dotClassName: "bg-muted-foreground" },
-          { label: "Rejected", count: byStatus.REJECTED ?? 0, dotClassName: "bg-destructive" }
-        ].filter((row) => row.count > 0)
-      };
-    }
-    return map;
-  }, [entriesByDate]);
-
-  /** What the whole window holds, so the card can say what it covers rather than only what one day
-   *  does — the previous copy claimed "the latest 100 entries", which stopped being true the moment
-   *  the request became range-bounded. */
-  const { entriesInWindow, daysWithWork } = useMemo(() => {
-    let entryCount = 0;
-    let dayCount = 0;
-    for (const [key, list] of entriesByDate) {
-      if (key < minKey || key > maxKey || list.length === 0) continue;
-      entryCount += list.length;
-      dayCount += 1;
-    }
-    return { entriesInWindow: entryCount, daysWithWork: dayCount };
+  /**
+   * Every day in the page's window that has something on it. This is what the day strip renders
+   * and what the description counts — one pass, so the two can never disagree.
+   */
+  const daysInWindow = useMemo(() => {
+    return [...entriesByDate.entries()]
+      .filter(([key, list]) => list.length > 0 && key >= minKey && key <= maxKey)
+      .map(([key, list]) => {
+        const [y, m, d] = key.split("-").map(Number);
+        const date = new Date(y, (m || 1) - 1, d || 1);
+        return {
+          key,
+          entries: list.length,
+          hours: list.reduce((sum, e) => sum + Number(e.totalHours ?? 0), 0),
+          weekday: date.toLocaleDateString(undefined, { weekday: "short" }),
+          label: date.toLocaleDateString(undefined, { day: "numeric", month: "short" })
+        };
+      })
+      .sort((a, b) => a.key.localeCompare(b.key));
   }, [entriesByDate, minKey, maxKey]);
+
+  const entriesInWindow = daysInWindow.reduce((sum, day) => sum + day.entries, 0);
 
   const [sy, sm, sd] = selectedKey.split("-").map(Number);
   const selectedLabel = new Date(sy, (sm || 1) - 1, sd || 1).toLocaleDateString(undefined, {
@@ -1319,68 +1295,33 @@ function DayTimeline({
       {/* Stacks title-over-controls on phones, splits left/right from lg up. Explicit flex-row
           on the wide branch — CardHeader's base is flex-col, and `flex` alone inherits that
           direction, which is what previously centered the whole header. */}
-      <CardHeader className="flex flex-col gap-3 space-y-0 pb-3 lg:flex-row lg:items-center lg:justify-between">
-        <div className="min-w-0">
+      <CardHeader className="flex flex-col gap-3 space-y-0 pb-3 lg:flex-row lg:items-start lg:justify-between">
+        <div className="min-w-0 lg:flex-1">
           <CardTitle className="flex items-center gap-2 text-base">
             <CalendarClock className="h-4 w-4 text-primary" />
             Day timeline
           </CardTitle>
           <CardDescription>
-            One lane per person, one color per person — status is the icon on each block. Covers{" "}
-            {periodLabel}, and only the people you are entitled to see: everyone for an admin, your
-            own team for a manager.
-            {daysWithWork > 0 && (
+            One lane per person, one color per person — status is the icon on each block. Follows the
+            date range at the top of the page, and shows only the people you are entitled to see.
+            {daysInWindow.length > 0 && (
               <>
                 {" "}
                 <span className="font-medium text-foreground">
-                  {entriesInWindow} {entriesInWindow === 1 ? "entry" : "entries"} across {daysWithWork}{" "}
-                  {daysWithWork === 1 ? "day" : "days"}
+                  {entriesInWindow} {entriesInWindow === 1 ? "entry" : "entries"} across{" "}
+                  {daysInWindow.length} {daysInWindow.length === 1 ? "day" : "days"}
                 </span>{" "}
                 in this period.
               </>
             )}
           </CardDescription>
         </div>
-        {/* lg:justify-end so that when the controls wrap to a second row on middling widths,
-            that row hugs the same right edge as the first instead of dangling at the left. */}
-        <div className="flex flex-wrap items-center gap-2 lg:justify-end">
+        {/* Three controls, one row. The prev/next stepper and the second date picker that used to
+            sit here are gone — the page has ONE calendar now, at the top, and this card follows it. */}
+        <div className="flex flex-wrap items-center gap-2 lg:shrink-0 lg:justify-end">
           <Badge variant={dayHours > 0 ? "success" : "muted"} className="whitespace-nowrap">
             {dayHours.toFixed(2)}h {isToday ? "today" : `on ${selectedLabel}`}
           </Badge>
-          <div className="flex items-center gap-1 rounded-lg border border-border p-0.5">
-            <Button variant="ghost" size="icon" className="h-7 w-7" aria-label="Previous day" onClick={() => shiftDay(-1)}>
-              <ChevronLeft className="h-4 w-4" />
-            </Button>
-            {/* Sits between the prev/next chevrons, so it stays borderless and compact — the
-                stepper is the primary control and the calendar is the jump-to. */}
-            <DatePicker
-              id="dashboard-date"
-              value={selectedKey}
-              minValue={minKey}
-              maxValue={maxKey}
-              dayAnnotations={dayAnnotations}
-              onChange={(iso) => {
-                if (iso && iso >= minKey && iso <= maxKey) setSelectedKey(iso);
-              }}
-              placeholder="Pick a day"
-              className="h-7 w-[9.5rem] border-0 bg-transparent px-1 text-sm tabular-nums hover:bg-muted"
-            />
-            <Button
-              variant="ghost"
-              size="icon"
-              className="h-7 w-7"
-              aria-label="Next day"
-              disabled={selectedKey >= maxKey}
-              onClick={() => shiftDay(1)}
-            >
-              <ChevronRight className="h-4 w-4" />
-            </Button>
-          </div>
-          {selectedKey !== anchorKey && (
-            <Button variant="outline" size="sm" onClick={() => setSelectedKey(anchorKey)}>
-              {anchorKey === todayKey ? "Today" : "Latest"}
-            </Button>
-          )}
           <Button asChild size="sm" variant="outline">
             <Link to="/app/timesheet"><CalendarPlus2 className="h-3.5 w-3.5" />Add</Link>
           </Button>
@@ -1398,7 +1339,44 @@ function DayTimeline({
           </Button>
         </div>
       </CardHeader>
-      <CardContent>
+      <CardContent className="grid gap-3">
+        {/*
+          THE DAY STRIP — which day inside the page's range this track is showing.
+          It replaces the second calendar this card used to carry. Every chip comes from the
+          selected range, so there is nothing here to pick that the range does not already cover,
+          and a day with no work never appears at all — the old picker would happily land you on
+          one and render an empty track that read as "nobody logged anything".
+        */}
+        {!loading && daysInWindow.length > 1 && (
+          <div className="-mx-1 flex gap-1.5 overflow-x-auto px-1 pb-1">
+            {daysInWindow.map((day) => {
+              const active = day.key === selectedKey;
+              return (
+                <button
+                  key={day.key}
+                  type="button"
+                  onClick={() => setSelectedKey(day.key)}
+                  aria-current={active ? "true" : undefined}
+                  className={cn(
+                    "shrink-0 rounded-lg border px-2.5 py-1.5 text-left transition-colors",
+                    active
+                      ? "border-primary bg-primary/10 text-foreground"
+                      : "border-border text-muted-foreground hover:bg-muted"
+                  )}
+                >
+                  <span className="block text-[10px] font-semibold uppercase tracking-wide">
+                    {day.weekday} {day.key === todayKey && "· today"}
+                  </span>
+                  <span className="block text-sm font-medium tabular-nums text-foreground">{day.label}</span>
+                  <span className="block text-[11px] tabular-nums">
+                    {day.hours.toFixed(1)}h · {day.entries}
+                  </span>
+                </button>
+              );
+            })}
+          </div>
+        )}
+
         {loading ? (
           <Skeleton className="h-24 w-full" />
         ) : (
