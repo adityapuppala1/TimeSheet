@@ -234,6 +234,19 @@ export function Dashboard() {
    * one cache entry with History and Timesheet.
    */
   const recent = useQuery({ queryKey: ["timesheets"], queryFn: () => timesheetApi.list() });
+  /**
+   * The day timeline's own data, and the reason it is a separate request from the cards above.
+   *
+   * Two things differ. It is SCOPED BY ROLE — everyone for an admin, self plus direct reports for a
+   * manager, just themselves otherwise — because the timeline draws one lane per person and a
+   * manager was being shown every person in the company. And it follows the page's range, which
+   * the cards' request already did but the timeline was reading out of a set assembled for the
+   * personal figures.
+   */
+  const timelineEntries = useQuery({
+    queryKey: ["timesheets", "timeline", range.from, range.to],
+    queryFn: () => timesheetApi.list({ ...rangeParams, scope: "team" })
+  });
   const myTickets = useQuery({
     queryKey: ["tickets", "for-dashboard", user?.id],
     queryFn: () => ticketApi.list({ assigneeId: user!.id, status: "OPEN,IN_PROGRESS,IN_REVIEW,REOPENED" }),
@@ -394,6 +407,21 @@ export function Dashboard() {
       trend: buckets.map((b) => ({ day: b.day, hours: Number(b.hours.toFixed(2)) }))
     };
   }, [allForCalendar, range.from, range.to]);
+
+  /** The timeline's rows grouped by calendar day, from its own role-scoped request. Kept separate
+   *  from `derived.entriesByDate` (which is deliberately wider, so the calendars can mark days
+   *  outside the range) — the timeline must show the selected period and nothing else. */
+  const timelineDays = useMemo(() => {
+    const map = new Map<string, TimesheetRowLite[]>();
+    for (const row of Array.isArray(timelineEntries.data) ? (timelineEntries.data as TimesheetRowLite[]) : []) {
+      const { key } = workDateParts(String(row.workDate));
+      const list = map.get(key) ?? [];
+      list.push(row);
+      map.set(key, list);
+    }
+    for (const list of map.values()) list.sort((a, b) => toMinutes(a.startTime) - toMinutes(b.startTime));
+    return map;
+  }, [timelineEntries.data]);
 
   /**
    * Hover counts for the header calendar: a dot on every day that has something on it, and a card
@@ -573,7 +601,14 @@ export function Dashboard() {
       </div>
 
       {/* ---- Day timeline — real entries on a real clock, any loaded date ---- */}
-      <DayTimeline entriesByDate={derived.entriesByDate} todayKey={derived.todayKey} focusKey={range.to} loading={timesheets.isLoading} />
+      <DayTimeline
+        entriesByDate={timelineDays}
+        todayKey={derived.todayKey}
+        rangeFrom={range.from}
+        rangeTo={range.to}
+        periodLabel={periodLabel}
+        loading={timelineEntries.isLoading}
+      />
 
       {/* Admin / manager: workforce daily logging snapshot */}
       {isAdmin && <WorkforceSnapshot data={admin.data} loading={admin.isLoading} periodLabel={periodLabel} periodIn={periodIn} comparisonLabel={comparisonLabel} />}
@@ -1127,25 +1162,46 @@ function TimelineLane({
 function DayTimeline({
   entriesByDate,
   todayKey,
-  focusKey,
+  rangeFrom,
+  rangeTo,
+  periodLabel,
   loading
 }: {
   entriesByDate: Map<string, TimesheetRowLite[]>;
   todayKey: string;
-  /** The last day of the page's selected range. The timeline follows it: with the page showing
-   *  last month, opening on "today" would show an empty track for a day the request never even
-   *  asked about, which reads as "you logged nothing" rather than "you are looking elsewhere". */
-  focusKey: string;
+  /** The page's selected window. The timeline lives INSIDE it: its stepper and calendar cannot
+   *  leave it, because the request that fed this map only asked for these days — a day outside the
+   *  window would render an empty track that reads as "nobody logged anything" rather than "you
+   *  are looking somewhere the page is not". */
+  rangeFrom: string;
+  rangeTo: string;
+  periodLabel: string;
   loading: boolean;
 }) {
-  const initialKey = focusKey && focusKey <= todayKey ? focusKey : todayKey;
-  const [selectedKey, setSelectedKey] = useState(initialKey);
-  // Re-anchor when the page's range moves. Keyed on the value rather than an effect so there is no
-  // frame where the track shows one period's day under another period's heading.
-  const [lastFocus, setLastFocus] = useState(initialKey);
-  if (lastFocus !== initialKey) {
-    setLastFocus(initialKey);
-    setSelectedKey(initialKey);
+  const maxKey = rangeTo < todayKey ? rangeTo : todayKey;
+  const minKey = rangeFrom > maxKey ? maxKey : rangeFrom;
+
+  /**
+   * Open on the most recent day in the window that ACTUALLY HAS ENTRIES, falling back to its last
+   * day. Anchoring blindly to the window's end was the visible half of this bug: pick "last month"
+   * and the timeline opened on the 31st, which was a Sunday nobody logged against, so a month of
+   * work looked like nothing at all.
+   */
+  const anchorKey = useMemo(() => {
+    const withEntries = [...entriesByDate.entries()]
+      .filter(([key, list]) => list.length > 0 && key >= minKey && key <= maxKey)
+      .map(([key]) => key)
+      .sort();
+    return withEntries.at(-1) ?? maxKey;
+  }, [entriesByDate, minKey, maxKey]);
+
+  const [selectedKey, setSelectedKey] = useState(anchorKey);
+  // Re-anchor when the page's range moves. Compared during render rather than in an effect so
+  // there is no frame where the track shows one period's day under another period's heading.
+  const [lastAnchor, setLastAnchor] = useState(anchorKey);
+  if (lastAnchor !== anchorKey) {
+    setLastAnchor(anchorKey);
+    setSelectedKey(anchorKey);
   }
   const [expanded, setExpanded] = useState(false);
   const [laneSearch, setLaneSearch] = useState("");
@@ -1166,7 +1222,9 @@ function DayTimeline({
     const [y, m, d] = selectedKey.split("-").map(Number);
     const next = new Date(y, (m || 1) - 1, (d || 1) + delta);
     const nextKey = localDateKey(next);
-    if (nextKey > todayKey) return; // no future days
+    // Clamped to the page's window, not just to today: stepping past either end would land on a
+    // day this card holds no data for and render it as an empty track.
+    if (nextKey > maxKey || nextKey < minKey) return;
     setSelectedKey(nextKey);
   };
 
@@ -1235,6 +1293,20 @@ function DayTimeline({
     return map;
   }, [entriesByDate]);
 
+  /** What the whole window holds, so the card can say what it covers rather than only what one day
+   *  does — the previous copy claimed "the latest 100 entries", which stopped being true the moment
+   *  the request became range-bounded. */
+  const { entriesInWindow, daysWithWork } = useMemo(() => {
+    let entryCount = 0;
+    let dayCount = 0;
+    for (const [key, list] of entriesByDate) {
+      if (key < minKey || key > maxKey || list.length === 0) continue;
+      entryCount += list.length;
+      dayCount += 1;
+    }
+    return { entriesInWindow: entryCount, daysWithWork: dayCount };
+  }, [entriesByDate, minKey, maxKey]);
+
   const [sy, sm, sd] = selectedKey.split("-").map(Number);
   const selectedLabel = new Date(sy, (sm || 1) - 1, sd || 1).toLocaleDateString(undefined, {
     weekday: "short",
@@ -1253,7 +1325,21 @@ function DayTimeline({
             <CalendarClock className="h-4 w-4 text-primary" />
             Day timeline
           </CardTitle>
-          <CardDescription>One lane per person, one color per person — status is the icon on each block. Covers the latest 100 entries.</CardDescription>
+          <CardDescription>
+            One lane per person, one color per person — status is the icon on each block. Covers{" "}
+            {periodLabel}, and only the people you are entitled to see: everyone for an admin, your
+            own team for a manager.
+            {daysWithWork > 0 && (
+              <>
+                {" "}
+                <span className="font-medium text-foreground">
+                  {entriesInWindow} {entriesInWindow === 1 ? "entry" : "entries"} across {daysWithWork}{" "}
+                  {daysWithWork === 1 ? "day" : "days"}
+                </span>{" "}
+                in this period.
+              </>
+            )}
+          </CardDescription>
         </div>
         {/* lg:justify-end so that when the controls wrap to a second row on middling widths,
             that row hugs the same right edge as the first instead of dangling at the left. */}
@@ -1270,10 +1356,11 @@ function DayTimeline({
             <DatePicker
               id="dashboard-date"
               value={selectedKey}
-              maxValue={todayKey}
+              minValue={minKey}
+              maxValue={maxKey}
               dayAnnotations={dayAnnotations}
               onChange={(iso) => {
-                if (iso && iso <= todayKey) setSelectedKey(iso);
+                if (iso && iso >= minKey && iso <= maxKey) setSelectedKey(iso);
               }}
               placeholder="Pick a day"
               className="h-7 w-[9.5rem] border-0 bg-transparent px-1 text-sm tabular-nums hover:bg-muted"
@@ -1283,15 +1370,15 @@ function DayTimeline({
               size="icon"
               className="h-7 w-7"
               aria-label="Next day"
-              disabled={isToday}
+              disabled={selectedKey >= maxKey}
               onClick={() => shiftDay(1)}
             >
               <ChevronRight className="h-4 w-4" />
             </Button>
           </div>
-          {!isToday && (
-            <Button variant="outline" size="sm" onClick={() => setSelectedKey(todayKey)}>
-              Today
+          {selectedKey !== anchorKey && (
+            <Button variant="outline" size="sm" onClick={() => setSelectedKey(anchorKey)}>
+              {anchorKey === todayKey ? "Today" : "Latest"}
             </Button>
           )}
           <Button asChild size="sm" variant="outline">

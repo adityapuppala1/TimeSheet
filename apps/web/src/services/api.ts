@@ -677,10 +677,19 @@ export interface DateWindow {
   to?: string;
 }
 
+export interface TimesheetListParams extends DateWindow {
+  /**
+   * `team` asks the server for the role-appropriate set rather than the caller's own guess:
+   * everyone for an admin, self plus direct reports for a manager, and just themselves for anyone
+   * who manages nobody. Omitted, the route returns exactly what it always did.
+   */
+  scope?: "team";
+}
+
 export const timesheetApi = {
   /** With a window, the server filters AND raises its row cap. Without one it returns the newest
    *  page, as before — which is why a range must never be filtered in the browser instead. */
-  list: async (params?: DateWindow) => (await api.get("/timesheets", { params })).data,
+  list: async (params?: TimesheetListParams) => (await api.get("/timesheets", { params })).data,
   /** One entry by id, with attachments, reviewer and identity badge. Used by the entry dialog
    *  rather than a lookup in the list cache: the list is capped at 100 rows, so an older entry
    *  reached by deep link simply is not in it. */
