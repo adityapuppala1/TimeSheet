@@ -141,6 +141,14 @@ const GROUPS: Array<{ group: string; rows: Row[] }> = [
         starter: PLAN_TIER_LIMITS.STARTER.changeManagementEnabled,
         team: `${PLAN_TIER_LIMITS.TEAM.maxChangePolicies} approval policies`,
         enterprise: PLAN_TIER_LIMITS.ENTERPRISE.changeManagementEnabled
+      },
+      {
+        // Derived, like every tier-varying row here.
+        label: "Weekly AI/ML practice update",
+        hint: "One consolidated leadership digest a week — products, POCs, bugs, security and training, each initiative with an owner, a RAG status and what moved. Drafted from your own figures, reviewed before it sends.",
+        starter: PLAN_TIER_LIMITS.STARTER.practiceUpdateEnabled,
+        team: PLAN_TIER_LIMITS.TEAM.practiceUpdateEnabled,
+        enterprise: PLAN_TIER_LIMITS.ENTERPRISE.practiceUpdateEnabled
       }
     ]
   },

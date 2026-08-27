@@ -85,15 +85,49 @@ export interface OrgDetail extends OrgListRow {
   authMethod: { passwordLoginEnabled: boolean; requireSsoOnly: boolean } | null;
 }
 
-export interface PlanTierLimitRow {
+/**
+ * The boolean entitlements a tier carries, in the order the console renders them.
+ *
+ * Exported as a value so the form is generated from it rather than hand-listed — the previous
+ * version typed five fields while the platform enforced twenty-one, and the fifteen it omitted
+ * were editable only by a database migration.
+ */
+export const PLAN_CAPABILITIES = [
+  { key: "faceVerificationEnabled", label: "Face (identity) verification", hint: "Enrolling and verifying fail closed without it; enforcement on submissions fails open, so a lapsed plan never locks a workforce out of logging time." },
+  { key: "ganttEnabled", label: "Planning & timeline", hint: "Gantt, dependencies, baselines, critical path. Also gates request forms." },
+  { key: "resourceMgmtEnabled", label: "Resource management", hint: "Capacity, bookings and the workload board — reads every person's rate and capacity." },
+  { key: "approvalsEnabled", label: "Approval chains", hint: "Sequential or parallel approvals on work items, including guest approvers." },
+  { key: "proofingEnabled", label: "Proofing", hint: "Pinned annotations on attached images and PDFs." },
+  { key: "customWorkflowsEnabled", label: "Custom workflows", hint: "Admin-defined statuses and transitions per ticket type." },
+  { key: "aiPmCopilotEnabled", label: "AI PM copilot", hint: "The proposal-based planning copilot. Spends AI budget." },
+  { key: "goalsEnabled", label: "Goals / OKRs", hint: "Measured goals with progress. Paired with the Max goals quota." },
+  { key: "changeManagementEnabled", label: "Change management", hint: "Raise, assess, approve, schedule and review changes. Paired with Max change policies." },
+  { key: "practiceUpdateEnabled", label: "Weekly AI/ML practice update", hint: "The consolidated leadership digest. Gated for what it aggregates — every project, everyone's hours, every open finding — not for what it costs." }
+] as const;
+
+/** The countable ceilings. `0` means the tier cannot use that resource at all; 1,000,000 is the
+ *  shared `UNLIMITED_PLAN_ITEMS` sentinel and renders as "Unlimited". */
+export const PLAN_QUOTAS = [
+  { key: "maxPortfolios", label: "Max portfolios" },
+  { key: "maxRequestForms", label: "Max request forms" },
+  { key: "maxBlueprints", label: "Max blueprints" },
+  { key: "maxCustomFields", label: "Max custom fields" },
+  { key: "maxDashboards", label: "Max dashboards" },
+  { key: "maxGoals", label: "Max goals" },
+  { key: "maxChangePolicies", label: "Max change policies" }
+] as const;
+
+export type PlanCapabilityKey = (typeof PLAN_CAPABILITIES)[number]["key"];
+export type PlanQuotaKey = (typeof PLAN_QUOTAS)[number]["key"];
+
+export type PlanTierLimitRow = {
   tier: PlanTier;
   seatLimit: number;
   aiMonthlyBudgetCeilingUsd: string;
   allowedSsoProviders: Array<SsoProvider>;
   allowedChatPlatforms: Array<ChatPlatform>;
-  /** Whether this tier includes face (identity) verification — Enterprise-only by seed default. */
-  faceVerificationEnabled: boolean;
-}
+} & Record<PlanCapabilityKey, boolean> &
+  Record<PlanQuotaKey, number>;
 
 export interface OrgAnalyticsSummary {
   orgId: string;
@@ -152,13 +186,15 @@ export const platformAdminPlanTierApi = {
   list: async () => (await platformAdminApi.get<PlanTierLimitRow[]>("/plan-tier-limits")).data,
   update: async (
     tier: PlanTier,
-    payload: Partial<{
-      seatLimit: number;
-      aiMonthlyBudgetCeilingUsd: number;
-      allowedSsoProviders: Array<SsoProvider>;
-      allowedChatPlatforms: Array<ChatPlatform>;
-      faceVerificationEnabled: boolean;
-    }>
+    payload: Partial<
+      {
+        seatLimit: number;
+        aiMonthlyBudgetCeilingUsd: number;
+        allowedSsoProviders: Array<SsoProvider>;
+        allowedChatPlatforms: Array<ChatPlatform>;
+      } & Record<PlanCapabilityKey, boolean> &
+        Record<PlanQuotaKey, number>
+    >
   ) => (await platformAdminApi.patch<PlanTierLimitRow>(`/plan-tier-limits/${tier}`, payload)).data
 };
 

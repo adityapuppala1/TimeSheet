@@ -33,11 +33,9 @@ import {
   BarChart3,
   Bell,
   Bot,
-  Scale,
-  Workflow,
-  Target,
   Building2,
   CalendarCheck,
+  CalendarRange,
   CheckCircle2,
   ChevronDown,
   Clock,
@@ -59,15 +57,19 @@ import {
   LogIn,
   Menu,
   MessagesSquare,
+  Presentation,
+  Scale,
   ScanFace,
   ShieldAlert,
   ShieldCheck,
   SlidersHorizontal,
   Sparkles,
+  Target,
   TrendingUp,
   Wallet,
   WifiOff,
-  X
+  Workflow,
+  X,
 } from "lucide-react";
 import type { ReactNode } from "react";
 import { useState } from "react";
@@ -405,6 +407,25 @@ const FEATURES: Feature[] = [
     group: "Platform & security",
     title: "Session security",
     body: "Rotating httpOnly sessions with reuse detection, an active-devices list you control, sign-out-everywhere, per-account lockout on top of per-IP limits, and AES-256 encrypted secrets at rest. File reads need a signed, expiring, organization-bound grant."
+  },
+  {
+    icon: Presentation,
+    group: "Report & prove",
+    gate: "practiceUpdateEnabled",
+    title: "A weekly update leadership actually reads",
+    body: "One consolidated view of the week: an executive summary, then products, POCs, bug work, security and training — each initiative with an owner, a 🟢/🟡/🔴 status and what actually moved. Nobody fills in a form; initiatives are your own active projects, sorted by what their people logged against them. The status colour is arithmetic, never a model's opinion, so a red is reproducible in the meeting where somebody asks why. The figures are counted and the prose is drafted around them — with AI off, every section still renders from the facts it would have been written from. You review and edit before it sends, and only a super admin sets who receives it."
+  },
+  {
+    icon: CalendarRange,
+    group: "Report & prove",
+    title: "One date filter, the whole home page",
+    body: "Pick today, a week, a month or any range: the hero cards, the daily rhythm, progress, the workforce snapshot, productivity, project utilisation and the day timeline all answer for that period, each naming the period it is showing. Comparisons are against the previous equal-length window, because a fortnight measured against yesterday reads as a collapse every time. Filtered server-side rather than in the browser — the entry list truncates, so a client-side range quietly under-reports anything older than the newest page."
+  },
+  {
+    icon: FileText,
+    group: "Report & prove",
+    title: "Documents you would hand to a client",
+    body: "The timesheet report, the requirements document, the verified work attestation and the security assessment all render through one house style: a watermark, a running header, tables that repeat their header across a page break and measure their own row heights, and colour-coded status pills. Markdown a model wrote inside a spec renders as headings, lists and real tables rather than printing its own syntax, and a chart in a document draws as a chart."
   },
   {
     icon: SlidersHorizontal,

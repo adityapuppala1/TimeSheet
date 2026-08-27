@@ -252,6 +252,12 @@ model PlanTierLimit {
   /// Ceiling on approval POLICIES, not on changes — a workspace should never be unable to record a
   /// change it actually made because it hit a plan limit. 0 = the tier cannot use the module.
   maxChangePolicies         Int     @default(0)
+
+  /// --- Weekly AI/ML Practice Update (3.5.0) -------------------------------------------------
+  /// Same restrictive-default rule as every block above. Gated for what the artefact CONTAINS —
+  /// one document rolling up every project, everyone's hours and every open security finding, then
+  /// mailed to addresses with no account here — rather than for what it costs to produce.
+  practiceUpdateEnabled     Boolean @default(false)
 }
 
 /// Platform-wide Stripe configuration (id = "global") — one Stripe account across every org on

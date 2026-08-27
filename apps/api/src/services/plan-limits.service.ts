@@ -76,7 +76,8 @@ export type PlanningCapability =
   | "customWorkflowsEnabled"
   | "aiPmCopilotEnabled"
   | "goalsEnabled"
-  | "changeManagementEnabled";
+  | "changeManagementEnabled"
+  | "practiceUpdateEnabled";
 
 export type PlanningQuota =
   | "maxPortfolios"
@@ -106,6 +107,7 @@ export async function getPlanningEntitlements(orgId: string): Promise<Record<Pla
     aiPmCopilotEnabled: Boolean(tierLimit.aiPmCopilotEnabled),
     goalsEnabled: Boolean(tierLimit.goalsEnabled),
     changeManagementEnabled: Boolean(tierLimit.changeManagementEnabled),
+    practiceUpdateEnabled: Boolean(tierLimit.practiceUpdateEnabled),
     maxPortfolios: tierLimit.maxPortfolios,
     maxRequestForms: tierLimit.maxRequestForms,
     maxBlueprints: tierLimit.maxBlueprints,

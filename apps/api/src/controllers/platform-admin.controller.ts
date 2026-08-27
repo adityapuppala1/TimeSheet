@@ -7,6 +7,7 @@
  */
 import { Router } from "express";
 import { z } from "zod";
+import { UNLIMITED_PLAN_ITEMS } from "@timesheet/shared";
 import { env } from "../config/env.js";
 import { controlPrisma } from "../config/control-prisma.js";
 import { AppError } from "../middleware/error.js";
@@ -164,6 +165,43 @@ platformAdminRouter.get("/plan-tier-limits", requirePlatformAdmin, async (_req, 
   res.json(limits);
 });
 
+/**
+ * What a platform admin may tune on a tier.
+ *
+ * IT USED TO BE FIVE KEYS. `.strict()` rejects anything else with a 400, and the schema was never
+ * widened when V6 added the planning layer, V8 added goals and change management, or 3.5.0 added
+ * the practice update — so those fifteen entitlements were reachable only by a migration or by
+ * hand-editing the control database. The console showed a "Features" section containing exactly
+ * one checkbox while enforcing twenty-one.
+ *
+ * Quotas are bounded rather than unbounded: `UNLIMITED_PLAN_ITEMS` (1,000,000) is the sentinel the
+ * shared constant uses for "no ceiling", so anything above it is meaningless and anything negative
+ * is a footgun. Zero is a REAL value on every quota here — it means the tier cannot use that
+ * resource at all — so `nonnegative`, never `positive`.
+ */
+const capabilityKeys = [
+  "faceVerificationEnabled",
+  "ganttEnabled",
+  "resourceMgmtEnabled",
+  "approvalsEnabled",
+  "proofingEnabled",
+  "customWorkflowsEnabled",
+  "aiPmCopilotEnabled",
+  "goalsEnabled",
+  "changeManagementEnabled",
+  "practiceUpdateEnabled"
+] as const;
+
+const quotaKeys = [
+  "maxPortfolios",
+  "maxRequestForms",
+  "maxBlueprints",
+  "maxCustomFields",
+  "maxDashboards",
+  "maxGoals",
+  "maxChangePolicies"
+] as const;
+
 const planTierLimitSchema = z.object({
   params: z.object({ tier: z.enum(["STARTER", "TEAM", "ENTERPRISE"]) }),
   body: z
@@ -172,7 +210,8 @@ const planTierLimitSchema = z.object({
       aiMonthlyBudgetCeilingUsd: z.number().nonnegative().optional(),
       allowedSsoProviders: z.array(z.enum(["GOOGLE", "MICROSOFT", "SAML", "LDAP"])).optional(),
       allowedChatPlatforms: z.array(z.enum(["SLACK", "MICROSOFT_TEAMS", "GOOGLE_CHAT", "TELEGRAM"])).optional(),
-      faceVerificationEnabled: z.boolean().optional()
+      ...Object.fromEntries(capabilityKeys.map((key) => [key, z.boolean().optional()])),
+      ...Object.fromEntries(quotaKeys.map((key) => [key, z.number().int().nonnegative().max(UNLIMITED_PLAN_ITEMS).optional()]))
     })
     .strict()
 });

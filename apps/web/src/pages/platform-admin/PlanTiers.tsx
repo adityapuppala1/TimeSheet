@@ -1,16 +1,28 @@
 /**
- * WHAT: the platform-admin console's plan-tier configuration screen — per-tier (STARTER/TEAM/
- * ENTERPRISE) seat limit, AI budget ceiling, and allow-lists for SSO providers and chat
- * platforms.
- * WHY these specific four knobs: they're exactly what `services/plan-limits.service.ts` reads
- * as tier *defaults* — an individual org can still override seat limit/AI budget on its own
- * record (see `Organizations.tsx`), but the allow-lists (which SSO/chat providers a tier may
- * even configure) are tier-only, no per-org override.
+ * WHAT: the platform-admin console's plan-tier configuration screen — everything
+ * `services/plan-limits.service.ts` reads as a tier DEFAULT: seat limit, AI budget ceiling, the
+ * SSO and chat allow-lists, ten boolean capabilities and seven quotas.
+ *
+ * WHY IT IS GENERATED RATHER THAN HAND-LISTED: this screen used to render four knobs and one
+ * feature checkbox while the platform enforced twenty-one entitlements. The gap was structural,
+ * not an oversight anyone could see — the PATCH body schema was `.strict()` and had never been
+ * widened either, so the fifteen missing ones returned 400 even if a client sent them. V6's
+ * planning layer, V8's goals and change management and 3.5.0's practice update were all
+ * reachable only through a database migration.
+ *
+ * The form now renders from `PLAN_CAPABILITIES` / `PLAN_QUOTAS` in `platform-admin-api.ts`, so
+ * adding an entitlement to that list is what puts it on this page. A per-field `useState` is
+ * exactly the shape that stopped anyone adding the sixteenth.
+ *
+ * SCOPE, unchanged: an individual org can still override seat limit and AI budget on its own
+ * record (see `Organizations.tsx`); everything else here is tier-only, with no per-org override.
+ *
  * WHO calls the backing API: `controllers/platform-admin.controller.ts`'s plan-tier-limits
  * routes, via `platformAdminPlanTierApi`.
  */
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useState } from "react";
+import { UNLIMITED_PLAN_ITEMS } from "@timesheet/shared";
 import { Badge } from "../../components/ui/badge";
 import { Button } from "../../components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../../components/ui/card";
@@ -19,7 +31,7 @@ import { Input } from "../../components/ui/input";
 import { Label } from "../../components/ui/label";
 import { Skeleton } from "../../components/ui/skeleton";
 import { toast } from "../../components/ui/toaster";
-import { platformAdminBillingApi, platformAdminPlanTierApi, type ChatPlatform, type PlanTierLimitRow, type SsoProvider } from "../../services/platform-admin-api";
+import { PLAN_CAPABILITIES, PLAN_QUOTAS, platformAdminBillingApi, platformAdminPlanTierApi, type ChatPlatform, type PlanCapabilityKey, type PlanQuotaKey, type PlanTierLimitRow, type SsoProvider } from "../../services/platform-admin-api";
 
 const TIER_LABEL: Record<PlanTierLimitRow["tier"], string> = { STARTER: "Starter", TEAM: "Team", ENTERPRISE: "Enterprise" };
 const ALL_PROVIDERS: SsoProvider[] = ["GOOGLE", "MICROSOFT", "SAML", "LDAP"];
@@ -39,7 +51,11 @@ export function PlatformAdminPlanTiers() {
     <div className="grid gap-6">
       <div>
         <h1 className="text-2xl font-black tracking-tight">Plan tiers</h1>
-        <p className="mt-1 text-sm text-slate-400">Default seat limits, AI budget ceilings, and allowed SSO providers per tier — an organization's own overrides (set on its record) take precedence over these.</p>
+        <p className="mt-1 text-sm text-slate-400">
+          Every entitlement the platform enforces, per tier — seats, AI budget, the SSO and chat
+          allow-lists, ten capabilities and seven quotas. Seat limit and AI budget can be overridden
+          per organization on its own record; everything else here is tier-only.
+        </p>
       </div>
 
       <StripeBillingCard />
@@ -152,15 +168,26 @@ function TierCard({ tier }: { tier: PlanTierLimitRow }) {
   const [budget, setBudget] = useState(tier.aiMonthlyBudgetCeilingUsd);
   const [providers, setProviders] = useState<SsoProvider[]>(tier.allowedSsoProviders);
   const [chatPlatforms, setChatPlatforms] = useState<ChatPlatform[]>(tier.allowedChatPlatforms);
-  const [faceVerification, setFaceVerification] = useState(tier.faceVerificationEnabled);
+  // Generated from the shared lists rather than one `useState` per entitlement. The previous
+  // version had a single `faceVerification` boolean while the platform enforced twenty-one, and a
+  // per-field state hook is exactly the shape that stops anyone adding the sixteenth.
+  const [capabilities, setCapabilities] = useState<Record<PlanCapabilityKey, boolean>>(() =>
+    Object.fromEntries(PLAN_CAPABILITIES.map((c) => [c.key, tier[c.key]])) as Record<PlanCapabilityKey, boolean>
+  );
+  const [quotas, setQuotas] = useState<Record<PlanQuotaKey, string>>(() =>
+    Object.fromEntries(PLAN_QUOTAS.map((q) => [q.key, String(tier[q.key] ?? 0)])) as Record<PlanQuotaKey, string>
+  );
 
+  // Re-sync when the row changes under us (another admin saved, or the query refetched). Keyed on
+  // the row itself rather than on each field, which is what a generated form can honestly depend on.
   useEffect(() => {
     setSeatLimit(tier.seatLimit.toString());
     setBudget(tier.aiMonthlyBudgetCeilingUsd);
     setProviders(tier.allowedSsoProviders);
     setChatPlatforms(tier.allowedChatPlatforms);
-    setFaceVerification(tier.faceVerificationEnabled);
-  }, [tier.seatLimit, tier.aiMonthlyBudgetCeilingUsd, tier.allowedSsoProviders, tier.allowedChatPlatforms, tier.faceVerificationEnabled]);
+    setCapabilities(Object.fromEntries(PLAN_CAPABILITIES.map((c) => [c.key, tier[c.key]])) as Record<PlanCapabilityKey, boolean>);
+    setQuotas(Object.fromEntries(PLAN_QUOTAS.map((q) => [q.key, String(tier[q.key] ?? 0)])) as Record<PlanQuotaKey, string>);
+  }, [tier]);
 
   const save = useMutation({
     mutationFn: () =>
@@ -169,7 +196,8 @@ function TierCard({ tier }: { tier: PlanTierLimitRow }) {
         aiMonthlyBudgetCeilingUsd: Number(budget),
         allowedSsoProviders: providers,
         allowedChatPlatforms: chatPlatforms,
-        faceVerificationEnabled: faceVerification
+        ...capabilities,
+        ...(Object.fromEntries(PLAN_QUOTAS.map((q) => [q.key, Number(quotas[q.key]) || 0])) as Record<PlanQuotaKey, number>)
       }),
     onSuccess: () => {
       toast.success("Saved");
@@ -231,13 +259,49 @@ function TierCard({ tier }: { tier: PlanTierLimitRow }) {
         </div>
         <div className="grid gap-1.5">
           <Label className="text-slate-300">Features</Label>
-          <label className="flex items-center gap-2 text-sm text-slate-300">
-            <Checkbox checked={faceVerification} onCheckedChange={(checked) => setFaceVerification(Boolean(checked))} />
-            Face (identity) verification
-          </label>
+          <div className="grid gap-2.5">
+            {PLAN_CAPABILITIES.map((capability) => (
+              <label key={capability.key} className="flex items-start gap-2 text-sm text-slate-300">
+                <Checkbox
+                  className="mt-0.5"
+                  checked={capabilities[capability.key]}
+                  onCheckedChange={(checked) => setCapabilities((prev) => ({ ...prev, [capability.key]: Boolean(checked) }))}
+                />
+                <span>
+                  {capability.label}
+                  <span className="block text-xs leading-snug text-slate-500">{capability.hint}</span>
+                </span>
+              </label>
+            ))}
+          </div>
+          <p className="mt-1 text-xs text-slate-500">
+            Every capability here <strong className="text-slate-400">fails closed</strong> except face verification's
+            enforcement leg, which fails open on purpose — a lapsed plan must stop demanding identity checks, never lock
+            a workforce out of logging their own time. Unchecking face verification also starts each affected org's
+            30-day biometric-data purge grace window.
+          </p>
+        </div>
+
+        <div className="grid gap-1.5">
+          <Label className="text-slate-300">Quotas</Label>
+          <div className="grid gap-2 sm:grid-cols-2">
+            {PLAN_QUOTAS.map((quota) => (
+              <div key={quota.key} className="grid gap-1">
+                <span className="text-xs text-slate-400">{quota.label}</span>
+                <Input
+                  className="border-slate-700 bg-slate-950 text-slate-100"
+                  type="number"
+                  min={0}
+                  max={UNLIMITED_PLAN_ITEMS}
+                  value={quotas[quota.key]}
+                  onChange={(e) => setQuotas((prev) => ({ ...prev, [quota.key]: e.target.value }))}
+                />
+              </div>
+            ))}
+          </div>
           <p className="text-xs text-slate-500">
-            Unchecking on a tier with live orgs stops enforcement immediately (fail-open) and starts each org's 30-day
-            biometric-data purge grace window.
+            <strong className="text-slate-400">0</strong> means the tier cannot use that resource at all —
+            it is a real ceiling, not "unlimited". {UNLIMITED_PLAN_ITEMS.toLocaleString()} is the sentinel for no limit.
           </p>
         </div>
         <Button size="sm" className="w-fit bg-amber-500 text-slate-950 hover:bg-amber-400" disabled={save.isPending} onClick={() => save.mutate()}>

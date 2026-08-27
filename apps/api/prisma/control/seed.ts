@@ -44,11 +44,19 @@ async function main() {
         allowedSsoProviders: limits.allowedSsoProviders,
         allowedChatPlatforms: limits.allowedChatPlatforms,
         faceVerificationEnabled: limits.faceVerificationEnabled,
-        // Planning layer (V6). NOT added to the `update` branch above, unlike
-        // faceVerificationEnabled: a deployment that predates these columns gets them from the
-        // guarded UPDATE in *_v6_phase1_plan_entitlements/migration.sql, which runs on upgrade,
-        // whereas this seed does not. Force-updating here as well would give a platform admin's
-        // per-tier tuning a second chance to be silently reverted by a re-seed.
+        // EVERY entitlement below is set here, not just the V6 block that used to be.
+        //
+        // The guarded UPDATEs in the *_entitlements migrations only fix an UPGRADE: they run before
+        // this seed, so on a FRESH install they match zero rows and this `create` is what the row
+        // ends up being. Goals and change management were never added here when they landed, so a
+        // fresh install produced `goalsEnabled: false` and `changeManagementEnabled: false` on
+        // every tier — a new customer on Team or Enterprise was told those modules were "not in
+        // your plan". Measured, not deduced: deleting the TEAM row and re-running this seed
+        // reproduced it exactly.
+        //
+        // Still NOT added to the `update` branch above, unlike faceVerificationEnabled — that
+        // would give a platform admin's per-tier tuning a second chance to be silently reverted by
+        // a re-seed. Create-only is the correct half of that trade.
         ganttEnabled: limits.ganttEnabled,
         resourceMgmtEnabled: limits.resourceMgmtEnabled,
         approvalsEnabled: limits.approvalsEnabled,
@@ -59,7 +67,15 @@ async function main() {
         maxRequestForms: limits.maxRequestForms,
         maxBlueprints: limits.maxBlueprints,
         maxCustomFields: limits.maxCustomFields,
-        maxDashboards: limits.maxDashboards
+        maxDashboards: limits.maxDashboards,
+        // Goals / OKRs (V8 phase 1).
+        goalsEnabled: limits.goalsEnabled,
+        maxGoals: limits.maxGoals,
+        // Change management (V8 phase 11).
+        changeManagementEnabled: limits.changeManagementEnabled,
+        maxChangePolicies: limits.maxChangePolicies,
+        // Weekly AI/ML Practice Update (3.5.0).
+        practiceUpdateEnabled: limits.practiceUpdateEnabled
       }
     });
   }

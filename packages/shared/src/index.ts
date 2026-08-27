@@ -696,6 +696,19 @@ export interface PlanTierLimits {
   /** Ceiling on approval POLICIES. Never on changes themselves — a workspace must always be able
    *  to record a change it actually made, whatever its plan says. */
   maxChangePolicies: number;
+
+  /* --- Weekly AI/ML Practice Update (3.5.0) ------------------------------------------------ */
+  /**
+   * The consolidated leadership digest — draft, review, send, and the Monday cadence.
+   *
+   * Gated because of what it reads, not because of what it costs: one document aggregates every
+   * project, everyone's hours and every open security finding, and then mails it to addresses that
+   * need no account here. Starter is a ten-seat workspace where that document is the workspace.
+   *
+   * Fails CLOSED like every capability on this interface. The figures are still visible on the
+   * pages they come from; what a downgrade removes is the packaged, mailable roll-up.
+   */
+  practiceUpdateEnabled: boolean;
 }
 
 export const PLAN_TIER_LIMITS: Record<PlanTier, PlanTierLimits> = {
@@ -719,7 +732,8 @@ export const PLAN_TIER_LIMITS: Record<PlanTier, PlanTierLimits> = {
     goalsEnabled: false,
     maxGoals: 0,
     changeManagementEnabled: false,
-    maxChangePolicies: 0
+    maxChangePolicies: 0,
+    practiceUpdateEnabled: false
   },
   TEAM: {
     seatLimit: UNLIMITED_SEATS,
@@ -749,7 +763,9 @@ export const PLAN_TIER_LIMITS: Record<PlanTier, PlanTierLimits> = {
     // a backout plan as much as a bank does. Team gets it with a policy ceiling; the ceiling is
     // what Enterprise buys off, not the capability.
     changeManagementEnabled: true,
-    maxChangePolicies: 5
+    maxChangePolicies: 5,
+    // A practice update is a management artefact, and Team is where a workspace has managers in it.
+    practiceUpdateEnabled: true
   },
   ENTERPRISE: {
     seatLimit: UNLIMITED_SEATS,
@@ -771,7 +787,8 @@ export const PLAN_TIER_LIMITS: Record<PlanTier, PlanTierLimits> = {
     goalsEnabled: true,
     maxGoals: UNLIMITED_PLAN_ITEMS,
     changeManagementEnabled: true,
-    maxChangePolicies: UNLIMITED_PLAN_ITEMS
+    maxChangePolicies: UNLIMITED_PLAN_ITEMS,
+    practiceUpdateEnabled: true
   }
 };
 

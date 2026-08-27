@@ -18,6 +18,8 @@ import { z } from "zod";
 
 import { prisma } from "../config/prisma.js";
 import { requireAuth, requireSuperAdmin } from "../middleware/auth.js";
+import { requireTenantContext } from "../config/tenant-context.js";
+import { isPlanningCapabilityAllowed } from "./../services/plan-limits.service.js";
 import { AppError } from "../middleware/error.js";
 import { validate } from "../middleware/validate.js";
 import { audit } from "../services/audit.service.js";
@@ -31,6 +33,22 @@ import { buildPracticeUpdateEmail, narrativeInputs } from "../services/practice-
 
 export const practiceUpdateRouter = Router();
 practiceUpdateRouter.use(requireAuth, requireSuperAdmin);
+
+/**
+ * The plan gate, on the whole router.
+ *
+ * FAILS CLOSED, like every other planning capability — and losing it is recoverable: the figures
+ * stay visible on the pages they come from, what a downgrade removes is the packaged, mailable
+ * roll-up. The message says "plan" rather than "setting" on purpose: an admin of this workspace
+ * cannot fix this one, so pointing them at a toggle would send them somewhere that cannot help.
+ */
+practiceUpdateRouter.use(async (_req, _res, next) => {
+  const allowed = await isPlanningCapabilityAllowed(requireTenantContext().orgId, "practiceUpdateEnabled");
+  if (!allowed) {
+    return next(new AppError(403, "The weekly practice update is not included in this plan."));
+  }
+  next();
+});
 
 /** At most this many addresses on one update. A distribution list, not a mailshot. */
 const MAX_RECIPIENTS = 50;

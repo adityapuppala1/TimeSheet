@@ -43,7 +43,8 @@ describe("plan tier limits", () => {
         goalsEnabled: false,
         maxGoals: 0,
         changeManagementEnabled: false,
-        maxChangePolicies: 0
+        maxChangePolicies: 0,
+        practiceUpdateEnabled: false
       },
       TEAM: {
         seatLimit: UNLIMITED_SEATS,
@@ -67,7 +68,8 @@ describe("plan tier limits", () => {
         goalsEnabled: true,
         maxGoals: 25,
         changeManagementEnabled: true,
-        maxChangePolicies: 5
+        maxChangePolicies: 5,
+        practiceUpdateEnabled: true
       },
       ENTERPRISE: {
         seatLimit: UNLIMITED_SEATS,
@@ -89,7 +91,8 @@ describe("plan tier limits", () => {
         goalsEnabled: true,
         maxGoals: UNLIMITED_PLAN_ITEMS,
         changeManagementEnabled: true,
-        maxChangePolicies: UNLIMITED_PLAN_ITEMS
+        maxChangePolicies: UNLIMITED_PLAN_ITEMS,
+        practiceUpdateEnabled: true
       }
     });
   });
