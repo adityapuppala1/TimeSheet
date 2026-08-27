@@ -145,11 +145,11 @@ echo "workers     $(ls apps/api/src/workers/*.ts | wc -l)"
 echo "web pages   $(find apps/web/src/pages -name '*.tsx' | wc -l)"
 echo "e2e specs   $(find tests -name '*.spec.ts' | wc -l)"
 echo "permissions $(grep -cE '^\s+[A-Z_]+:\s*\"' packages/shared/src/index.ts)"
-# Counted from TEMPLATE_VARIABLES, which is what the editor actually lists (TEMPLATE_KEYS is
-# Object.keys of it) — NOT from email-templates-seed.ts, which only pre-populates the subset that
-# ships with a DB row. Counting the seed is why the README said 22 while the page offered 32: a
-# template with no override row is a normal state, and it is still editable.
-echo "email tmpl  $(node -e "const m=require('fs').readFileSync('apps/api/src/services/template-store.service.ts','utf8');const s=m.slice(m.indexOf('TEMPLATE_VARIABLES'));console.log((s.slice(0,s.indexOf('};')).match(/^\s{2}\"/gm)||[]).length)")"
+# Ask the script that enumerates them, rather than pattern-matching the source. Two patterns have
+# already under-counted this: one that only matched the SEED file (22, while the editor lists every
+# registered key), and one that only matched QUOTED keys (32, missing the three bare ones like
+# `welcome:`). TEMPLATE_KEYS is what the editor renders, so it is the only honest answer.
+echo "email tmpl  $(cd apps/api && npx tsx scripts/send-test-email.ts --list 2>/dev/null | grep -cE '^  [a-z]')"
 ```
 
 Test and lint counts come from the tools themselves — `npm test -w apps/api` prints the suite total,

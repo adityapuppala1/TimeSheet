@@ -148,7 +148,7 @@ that looks stale.
 | Web pages | **67** |
 | Unit tests | **1,704** across 146 files (`npm test -w apps/api`) |
 | End-to-end specs | **29** Playwright specs, run across desktop, phone, tablet, laptop, 4K, Firefox and WebKit |
-| Editable email templates | **32**, every one of them with preview, test send, revert and per-template delivery analytics |
+| Editable email templates | **35**, every one of them with preview, test send, revert and per-template delivery analytics |
 | RBAC permissions | **38**, over 5 roles |
 | Lint | **0 errors**, warnings tracked as a baseline rather than driven to zero — see below |
 

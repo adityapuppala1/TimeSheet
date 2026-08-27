@@ -357,7 +357,7 @@ The essentials for a production go-live, roughly in the order a new customer wou
 
 1. **Change/verify the admin password** (Profile page) if you set a temporary one.
 2. **Mail server** (Workspace Settings → Mail server) — real SMTP, "Test connection" button.
-3. **Email templates** (sidebar) — brand the 32 built-in templates if needed, or leave defaults.
+3. **Email templates** (sidebar) — brand the 35 built-in templates if needed, or leave defaults.
 4. **Ticketing** (Workspace Settings → Ticketing) — ticket types, labels, SLA hours per priority.
 5. **Users** — invite the real team (or bulk-upload CSV), set roles/managers.
 6. **Single sign-on** (Workspace Settings → Single sign-on), if the customer wants

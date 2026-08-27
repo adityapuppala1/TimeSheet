@@ -1,23 +1,44 @@
 /**
  * SMTP smoke test.
  *
- *   npm run send-test                                    # one welcome to default
- *   npm run send-test -- aditya.puppala@hics.com.sg      # one welcome to custom
- *   npm run send-test -- --template=timesheetApproved    # different template
- *   npm run send-test -- --all aditya.puppala@hics.com.sg   # every template (welcome, reset, all daily/sla/timesheet variants)
+ *   npm run send-test                                       # one welcome to the default address
+ *   npm run send-test -- you@example.com                    # one welcome to a custom address
+ *   npm run send-test -- --template=timesheet.approved      # one named template
+ *   npm run send-test -- --template=approved                # substring match, if it is unambiguous
+ *   npm run send-test -- --list                             # print every template key and stop
+ *   npm run send-test -- --all you@example.com              # every template, in one run
  *
- * Prints the SMTP config and MAIL_FROM health-check before sending so deliverability
- * problems are obvious without having to read logs.
+ * Prints the SMTP config and MAIL_FROM health-check before sending so deliverability problems are
+ * obvious without having to read logs.
+ *
+ * ── WHY THIS DERIVES ITS SAMPLES RATHER THAN CARRYING ITS OWN ──────────────────────────────────
+ * It used to hold a hand-written `SAMPLES` map and assert `satisfies Record<keyof typeof templates,
+ * …>` over it. That assertion had been unmet for a long time: 8 fixtures against 32 templates, so
+ * `--all` sent a quarter of them while saying "every template". Nothing caught it, because
+ * `apps/api/tsconfig.json` covers only `src` and the seed, and `tsx` transpiles scripts without
+ * typechecking them.
+ *
+ * The registry that feeds the in-app Email templates editor already holds a sample-variable set for
+ * every key (`sampleVariables`) and the shipped default body (`templateDefault`) — the same pair
+ * `POST /email-templates/:key/test` renders. Reading from it means this script cannot drift again:
+ * a template added to `TEMPLATE_VARIABLES` is in `--all` the moment it is registered, with no
+ * second list to remember.
+ *
+ * Keys are the DOTTED ones (`digest.weekly`), not the camelCase names in `mail-templates.ts` —
+ * those are what `EmailLog.template` records and what the editor shows, so a smoke test that used
+ * different names would be one more thing to translate.
  */
 import { env } from "../src/config/env.js";
-import { prisma } from "../src/config/prisma.js";
 import { sendMail, getTransportStatus } from "../src/services/mail.service.js";
-import { templates } from "../src/services/mail-templates.js";
+import { requireTenantContext } from "../src/config/tenant-context.js";
+import { runForEveryOrg } from "../src/workers/run-for-every-org.js";
+import { TEMPLATE_KEYS, applyVars, sampleVariables, templateDefault } from "../src/services/template-store.service.js";
 
 interface Args {
   to: string;
-  templateName: keyof typeof templates;
+  templateName: string;
   all: boolean;
+  list: boolean;
 }
 
 function parseArgs(): Args {
@@ -31,60 +52,34 @@ function parseArgs(): Args {
       })
   );
   const to = positional[0] || flags.to || "aditya.puppala@hics.com.sg";
-  const templateName = (flags.template as keyof typeof templates) || "welcome";
+  const templateName = flags.template || "welcome";
   const all = flags.all === "true";
-  return { to, templateName, all };
+  const list = flags.list === "true";
+  return { to, templateName, all, list };
 }
 
-const SAMPLES = {
-  welcome: () => ({ subject: "Welcome to TimeSphere", html: templates.welcome("Aditya") }),
-  reset: () => ({
-    subject: "Reset your TimeSphere password",
-    html: templates.reset("https://timesphere.local/reset-password?token=smoke-test")
-  }),
-  timesheetSubmitted: () => ({
-    subject: "Timesheet submitted — 7.50h",
-    html: templates.timesheetSubmitted({
-      name: "Aditya", hours: 7.5, date: new Date().toISOString().slice(0, 10),
-      project: "HICS Operations Platform", managerName: "Mira Kapoor"
-    })
-  }),
-  timesheetApproved: () => ({
-    subject: "Approved: your 7.50h timesheet",
-    html: templates.timesheetApproved({
-      name: "Aditya", hours: 7.5, date: new Date().toISOString().slice(0, 10),
-      reviewer: "Mira Kapoor", project: "HICS Operations Platform"
-    })
-  }),
-  timesheetRejected: () => ({
-    subject: "Action required: timesheet rejected",
-    html: templates.timesheetRejected({
-      name: "Aditya", date: new Date().toISOString().slice(0, 10),
-      project: "HICS Operations Platform", reviewer: "Mira Kapoor",
-      reason: "Activity should be 'Bug Fixing'."
-    })
-  }),
-  slaBreach: () => ({
-    subject: "[SLA breach] Approve Aditya's timesheet",
-    html: templates.slaBreach({
-      managerName: "Mira Kapoor", employeeName: "Aditya",
-      date: new Date().toISOString().slice(0, 10),
-      project: "HICS Operations Platform",
-      deadline: new Date().toLocaleString(), hoursOverdue: 4.2
-    })
-  }),
-  escalation: () => ({
-    subject: "[Escalation] Approve Aditya's timesheet",
-    html: templates.escalation({
-      targetName: "Avery Stone", employeeName: "Aditya", managerName: "Mira Kapoor",
-      date: new Date().toISOString().slice(0, 10), project: "HICS Operations Platform"
-    })
-  }),
-  deadlineReminder: () => ({
-    subject: "3 days left to submit timesheets",
-    html: templates.deadlineReminder({ name: "Aditya", daysLeft: 3, deadlineDay: 5 })
-  })
-} satisfies Record<keyof typeof templates, () => { subject: string; html: string }>;
+/**
+ * Resolves what the user typed to a real key: an exact match first, then an unambiguous
+ * case-insensitive substring. An ambiguous or unknown name prints the candidates rather than
+ * silently sending the wrong template or a bare "not found".
+ */
+function resolveTemplateKey(input: string): string | { error: string } {
+  if (TEMPLATE_KEYS.includes(input)) return input;
+  const needle = input.toLowerCase();
+  const matches = TEMPLATE_KEYS.filter((key) => key.toLowerCase().includes(needle));
+  if (matches.length === 1) return matches[0];
+  if (matches.length === 0) return { error: `No template matches "${input}". Run with --list to see all ${TEMPLATE_KEYS.length}.` };
+  return { error: `"${input}" is ambiguous — it matches: ${matches.join(", ")}` };
+}
+
+/** The shipped default body with its sample variables filled in — exactly what the in-app
+ *  "send test" button renders, so the two cannot disagree about what a template looks like. */
+function renderSample(key: string): { subject: string; html: string } | null {
+  const shipped = templateDefault(key);
+  if (!shipped) return null;
+  const vars = sampleVariables(key);
+  return { subject: applyVars(shipped.subject, vars), html: applyVars(shipped.html, vars) };
+}
 
 function maskedUser(user: string | null) {
   if (!user) return "(none)";
@@ -92,8 +87,10 @@ function maskedUser(user: string | null) {
   return `${user.slice(0, 2)}***${user.slice(-2)}`;
 }
 
-function printConfig(to: string) {
-  const status = getTransportStatus();
+async function printConfig(to: string) {
+  // AWAITED. It was not, so `status` was a Promise and `status.fromIssues` was always undefined —
+  // the MAIL_FROM deliverability warning this function exists to print could never fire.
+  const status = await getTransportStatus();
   console.log("\n========================================");
   console.log("  TimeSphere SMTP smoke test");
   console.log("========================================");
@@ -116,8 +113,10 @@ function printConfig(to: string) {
   }
 }
 
-async function sendOne(templateName: keyof typeof templates, to: string) {
-  const { subject, html } = SAMPLES[templateName]();
+async function sendOne(templateName: string, to: string) {
+  const sample = renderSample(templateName);
+  if (!sample) throw new Error(`"${templateName}" has no shipped default to render.`);
+  const { subject, html } = sample;
   const result = await sendMail({
     to, subject, html,
     template: "smoke-test",
@@ -128,9 +127,10 @@ async function sendOne(templateName: keyof typeof templates, to: string) {
   return { templateName, ...result };
 }
 
-async function main() {
-  const { to, templateName, all } = parseArgs();
-  printConfig(to);
+
+/** Sends the resolved set to one address, inside whatever tenant context the caller established. */
+async function sendAll(to: string, targets: string[]): Promise<void> {
+  await printConfig(to);
 
   if (!env.SMTP_HOST) {
     console.error("❌  SMTP_HOST is empty. Set SMTP_HOST/PORT/USER/PASS in apps/api/.env and re-run.\n");
@@ -138,27 +138,21 @@ async function main() {
     return;
   }
 
-  const targets: Array<keyof typeof templates> = all
-    ? (Object.keys(SAMPLES) as Array<keyof typeof templates>)
-    : [templateName];
-
   console.log(`📧  Sending ${targets.length} ${targets.length === 1 ? "template" : "templates"} to ${to}\n`);
 
-  const results: Array<{ templateName: string; ok: boolean; errorMessage?: string; emailLogId?: string; messageId?: string }> = [];
+  const results: Array<{ templateName: string; ok: boolean; errorMessage?: string; messageId?: string }> = [];
   for (const name of targets) {
-    process.stdout.write(`   ${name.padEnd(28)} ... `);
+    process.stdout.write(`   ${name.padEnd(30)} ... `);
     try {
       const result = await sendOne(name, to);
       results.push(result);
-      if (result.ok) {
-        console.log(`✅ SENT (messageId=${result.messageId ?? "—"})`);
-      } else {
-        console.log(`❌ FAILED — ${result.errorMessage}`);
-      }
+      console.log(result.ok ? `✅ SENT (messageId=${result.messageId ?? "—"})` : `❌ FAILED — ${result.errorMessage}`);
     } catch (err) {
       console.log(`❌ CRASHED — ${(err as Error).message}`);
       results.push({ templateName: name, ok: false, errorMessage: (err as Error).message });
     }
+    // A courtesy gap between sends. The workspace's own SMTP throttle still applies underneath —
+    // this only stops a 32-template run opening the connection as fast as the loop can iterate.
     if (targets.length > 1) await new Promise((r) => setTimeout(r, 200));
   }
 
@@ -179,11 +173,48 @@ async function main() {
   }
 }
 
-main()
-  .catch((err) => {
-    console.error("\n❌  Smoke test crashed:", err);
-    process.exitCode = 1;
-  })
-  .finally(async () => {
-    await prisma.$disconnect();
+/**
+ * Runs the send inside a TENANT CONTEXT.
+ *
+ * `sendMail` writes an `EmailLog` row through the tenant-scoped `prisma` proxy, so without one this
+ * script threw "No tenant context is active" — on every run, because the `prisma.$disconnect()` in
+ * its old `finally` touched the same proxy even when nothing was sent. It was not a script with one
+ * stale type assertion; it could not complete at all.
+ *
+ * `runForEveryOrg` is the helper the cron workers already use, so a multi-org install smoke-tests
+ * each org's own SMTP configuration rather than only the first one found — which is the useful
+ * behaviour here anyway, since mail settings are per workspace.
+ */
+async function main(): Promise<void> {
+  const { to, templateName, all, list } = parseArgs();
+
+  if (list) {
+    console.log(`\n${TEMPLATE_KEYS.length} templates:\n`);
+    for (const key of [...TEMPLATE_KEYS].sort()) console.log(`  ${key}`);
+    console.log("");
+    return;
+  }
+
+  let targets: string[];
+  if (all) {
+    targets = [...TEMPLATE_KEYS].sort();
+  } else {
+    const resolved = resolveTemplateKey(templateName);
+    if (typeof resolved !== "string") {
+      console.error(`\n❌  ${resolved.error}\n`);
+      process.exitCode = 1;
+      return;
+    }
+    targets = [resolved];
+  }
+
+  await runForEveryOrg("send-test-email", async () => {
+    console.log(`\n[${requireTenantContext().orgSlug}]`);
+    await sendAll(to, targets);
   });
+}
+
+main().catch((error) => {
+  console.error("\n❌  Smoke test crashed:", error);
+  process.exitCode = 1;
+});
