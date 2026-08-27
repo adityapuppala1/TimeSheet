@@ -583,6 +583,41 @@ export async function testProviderConnectivity(config: {
  * consumed or billed for a rejected attempt.
  */
 /**
+ * Strips a reasoning model's own thinking out of its answer.
+ *
+ * WHY THIS IS NEEDED AT ALL: several models — reasoning-tuned ones especially, but also ordinary
+ * local models given a hard prompt — narrate their working inside `<think>…</think>` before
+ * answering. Nothing in this codebase removed it, so a status report opened with a wall of
+ * "Thinking Process: 1. Deconstruct the Request…". JSON features masked the bug because
+ * `parseJsonResponse` brace-walks past the block to find the object; every TEXT feature printed it.
+ *
+ * WHY IT HANDLES AN UNCLOSED TAG: a model that hits its token ceiling mid-thought never emits the
+ * closing tag, so matching only balanced pairs would leave the entire answer as visible reasoning —
+ * exactly the case that looks worst.
+ *
+ * WHY IT CAN DECIDE TO DO NOTHING: if removing the reasoning would leave nothing behind, the model
+ * produced only reasoning. Showing that is worse than showing nothing is not obviously true — but
+ * showing a BLANK panel tells the reader nothing at all, so the original is kept and the caller's
+ * own empty-answer handling stays in charge.
+ */
+export function stripReasoning(text: string): string {
+  if (!text || !text.includes("<")) return text;
+
+  const stripped = text
+    // Balanced blocks, including several in one answer. Non-greedy so two blocks don't merge into
+    // one match that swallows the real answer sitting between them.
+    .replace(/<(think|thinking|reasoning)\b[^>]*>[\s\S]*?<\/\1\s*>/gi, "")
+    // An opening tag with no close: everything after it was thinking that never finished. Bounded
+    // to the first 200 characters because reasoning always comes FIRST — without that bound, an
+    // answer that merely mentions `<think>` in a code sample two pages down would lose everything
+    // after it.
+    .replace(/^([\s\S]{0,200}?)<(think|thinking|reasoning)\b[^>]*>[\s\S]*$/i, "$1")
+    .trim();
+
+  return stripped.length > 0 ? stripped : text;
+}
+
+/**
  * How long a caller waits for a busy provider to free a slot before moving to the next one.
  * Short on purpose: long enough to absorb an ordinary burst (a provider finishing one call frees a
  * slot in seconds), short enough that falling over to another provider still beats waiting.
@@ -622,7 +657,9 @@ async function callChat(settings: AISettingsRow, params: CallChatParams): Promis
         // Best-effort, same reasoning as the failure branch below — the circuit breaker's own
         // bookkeeping must never mask a real answer that already arrived.
         await recordProviderAttemptOutcome(config.id, true).catch(() => {});
-        return { ...result, model, provider: providerLabel };
+        // The ONE place every text-returning AI feature funnels through, which is why the
+        // reasoning strip lives here rather than in each caller — see stripReasoning's header.
+        return { ...result, text: stripReasoning(result.text), model, provider: providerLabel };
       } catch (error) {
         lastError = error;
         const availability = isAvailabilityFailure(error);
@@ -4145,20 +4182,26 @@ export async function askWorkspaceChat(input: {
       '  { "action": "tool", "tool": "<name>", "args": { ... } }   — to consult a tool',
       '  { "action": "answer", "markdown": "..." }                 — when you can answer',
       "",
-      "The answer is markdown. Cite ticket and change keys like [HICS-TS-3]. Use tables for",
-      "comparisons. When numbers would read better drawn, you may include ONE chart as a fenced",
-      "block — three backticks, the word chart, then JSON on the next lines:",
-      '  { "type": "bar" | "line" | "pie", "title": "...", "data": [ { "label": "...", "value": 1 } ] }',
+      "The answer is markdown, carried inside that JSON string — so every newline in it is written",
+      "as \\n and every quote as \\\". Cite ticket and change keys like [HICS-TS-3]. Use tables for",
+      "comparisons.",
+      "",
+      "When numbers would read better drawn, include ONE chart. It has to be a REAL fenced block:",
+      "copy this shape exactly, fences and all.",
+      '  "markdown": "Hours by project:\\n\\n```chart\\n{\\"type\\": \\"bar\\", \\"title\\": \\"Hours by project\\", \\"data\\": [{\\"label\\": \\"Apollo\\", \\"value\\": 12}, {\\"label\\": \\"Borealis\\", \\"value\\": 7}]}\\n```\\n"',
+      '  type is "bar", "line" or "pie"; every point needs a "label" and a numeric "value".',
+      "  A markdown link such as [Bar chart of hours](...) is NOT a chart and draws nothing at all.",
       "Only chart numbers a tool actually returned. Every ticket, person and figure comes from a tool",
       "result; where a tool came back empty, say what it found rather than filling the gap.",
       "",
-      "The renderer also draws these, so reach for them when they genuinely help:",
-      "  - a fenced `mermaid` block for a flow, sequence or relationship worth seeing rather than",
-      "    reading (flowchart TD / sequenceDiagram). Do NOT mix arrow styles between diagram types.",
-      "  - a fenced `json` block for structured data — it is pretty-printed for the reader.",
-      "  - callouts for things worth flagging: a line starting `> [!NOTE]`, `> [!TIP]`,",
-      "    `> [!IMPORTANT]`, `> [!WARNING]` or `> [!CAUTION]`, with the body on following `>` lines.",
-      "  - headings (##, ###), lists and **bold** to give a longer answer structure.",
+      "The renderer draws these too, on the same terms — a real fence, never a link or a description",
+      "of one. Reach for them when they genuinely help:",
+      '  ```mermaid  a flow, sequence or relationship worth seeing rather than reading (flowchart TD /',
+      "              sequenceDiagram). Do NOT mix arrow styles between diagram types.",
+      '  ```json     structured data — it is pretty-printed for the reader.',
+      "  > [!NOTE], [!TIP], [!IMPORTANT], [!WARNING] or [!CAUTION] on its own line starts a callout,",
+      "              with the body on the following `>` lines.",
+      "  ## and ### headings, lists and **bold** give a longer answer structure.",
       "Prefer plain sentences for a short answer — structure earns its place, it is not decoration.",
       "The one thing to turn down is a genuine general-knowledge question — the weather, world news,",
       "another product. One sentence, then say what you can look up here.",
