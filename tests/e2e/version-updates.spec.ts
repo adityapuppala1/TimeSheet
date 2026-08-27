@@ -52,7 +52,7 @@ test.describe("what's-new page", () => {
     await page.goto("/login");
     await page.getByLabel("Email", { exact: true }).fill("employee@timesheet.local");
     await page.getByLabel("Password", { exact: true }).fill("Admin@12345");
-    await page.getByRole("button", { name: /sign in/i }).click();
+    await page.getByRole("button", { name: "Sign in", exact: true }).click();
     await expect(page).toHaveURL(/\/app/, { timeout: 15_000 });
 
     await page.goto("/app/whats-new");

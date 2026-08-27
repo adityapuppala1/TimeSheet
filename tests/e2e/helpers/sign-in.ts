@@ -33,10 +33,21 @@ export type DemoRole = keyof typeof DEMO_USERS;
 /** Signs in and waits for the app shell. Leaves the page on `/app`. */
 export async function signIn(page: Page, role: DemoRole = "superadmin"): Promise<void> {
   const submit = async () => {
-    await page.goto("/login");
+    // `?switch=1`, NOT a bare /login. As of 3.7.0 the sign-in page redirects anybody who already
+    // holds a session straight into the app — which is the fix for "signing in when you are already
+    // signed in asks for your password again", and which broke this helper the moment it shipped:
+    // a spec that signs in twice (to change role, or after its own navigation) found no Email field
+    // to fill and timed out. `switch=1` is the documented escape hatch for exactly this case —
+    // deliberately signing in as somebody else while a session exists — so the helper uses it
+    // unconditionally rather than trying to guess whether one is live.
+    await page.goto("/login?switch=1");
     await page.getByLabel("Email", { exact: true }).fill(DEMO_USERS[role]);
     await page.getByLabel("Password", { exact: true }).fill(DEMO_PASSWORD);
-    await page.getByRole("button", { name: /sign in/i }).click();
+    // EXACT, not /sign in/i. The loose regex also matches "Sign in with LDAP", so the moment an
+    // admin enables LDAP on the workspace this suite runs against, every sign-in in the suite fails
+    // with a strict-mode violation — which is what happened, and which reads as a broken test
+    // rather than as a workspace-configuration change.
+    await page.getByRole("button", { name: "Sign in", exact: true }).click();
   };
 
   await submit();

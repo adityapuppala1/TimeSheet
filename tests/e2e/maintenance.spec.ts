@@ -128,7 +128,7 @@ test.describe("maintenance mode", () => {
         await page.goto("/login");
         await page.getByLabel("Email", { exact: true }).fill("employee@timesheet.local");
         await page.getByLabel("Password", { exact: true }).fill("Admin@12345");
-        await page.getByRole("button", { name: /sign in/i }).click();
+        await page.getByRole("button", { name: "Sign in", exact: true }).click();
         await expect(page).toHaveURL(/\/maintenance/, { timeout: 15_000 });
         await expect(page.getByRole("heading", { name: /scheduled maintenance in progress/i })).toBeVisible();
         await expect(page.getByText(MAINTENANCE_MESSAGE)).toBeVisible();
@@ -154,7 +154,7 @@ test.describe("maintenance mode", () => {
       await page.goto("/login");
       await page.getByLabel("Email", { exact: true }).fill("employee@timesheet.local");
       await page.getByLabel("Password", { exact: true }).fill("Admin@12345");
-      await page.getByRole("button", { name: /sign in/i }).click();
+      await page.getByRole("button", { name: "Sign in", exact: true }).click();
       await expect(page).toHaveURL(/\/app/, { timeout: 15_000 });
 
       // The pop-up is the loud, one-time interruption (people tune out passive chrome — the

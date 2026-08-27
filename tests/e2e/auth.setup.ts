@@ -51,7 +51,7 @@ for (const [role, creds] of Object.entries(DEMO_USERS)) {
     await page.goto("/login");
     await page.getByLabel("Email", { exact: true }).fill(creds.email);
     await page.getByLabel("Password", { exact: true }).fill(creds.password);
-    await page.getByRole("button", { name: /sign in/i }).click();
+    await page.getByRole("button", { name: "Sign in", exact: true }).click();
     await expect(page).toHaveURL(/\/app/, { timeout: 10_000 });
     await page.context().storageState({ path: `tests/e2e/.auth/${role}.json` });
   });

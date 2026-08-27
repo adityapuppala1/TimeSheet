@@ -74,7 +74,7 @@ test.describe("first-run onboarding gate", () => {
     await page.goto("/login");
     await page.getByLabel("Email", { exact: true }).fill("employee@timesheet.local");
     await page.getByLabel("Password", { exact: true }).fill("Admin@12345");
-    await page.getByRole("button", { name: /sign in/i }).click();
+    await page.getByRole("button", { name: "Sign in", exact: true }).click();
     await expect(page).toHaveURL(/\/app/, { timeout: 15_000 });
 
     await expect(page.getByRole("heading", { level: 1 })).toBeVisible();
@@ -116,7 +116,7 @@ test.describe("the gate lifts by itself", () => {
         await page.goto("/login");
         await page.getByLabel("Email", { exact: true }).fill(email);
         await page.getByLabel("Password", { exact: true }).fill(password);
-        await page.getByRole("button", { name: /sign in/i }).click();
+        await page.getByRole("button", { name: "Sign in", exact: true }).click();
         await expect(page).toHaveURL(/\/app/, { timeout: 15_000 });
 
         const gate = page.getByRole("alertdialog", { name: /finish setting up your account/i });
@@ -186,7 +186,7 @@ test.describe("the gate lifts by itself", () => {
         await page.goto("/login");
         await page.getByLabel("Email", { exact: true }).fill(email);
         await page.getByLabel("Password", { exact: true }).fill(password);
-        await page.getByRole("button", { name: /sign in/i }).click();
+        await page.getByRole("button", { name: "Sign in", exact: true }).click();
         await expect(page).toHaveURL(/\/app/, { timeout: 15_000 });
 
         const gate = page.getByRole("alertdialog", { name: /finish setting up your account/i });
