@@ -136,23 +136,23 @@ CAB tool holds none of that.
 
 ## By the numbers
 
-Counted from the tree at v3.6.0, not estimated — regenerate any of these with the one-liners in
+Counted from the tree at v3.7.0, not estimated — regenerate any of these with the one-liners in
 [CONTRIBUTING.md](CONTRIBUTING.md#regenerating-readmes-by-the-numbers) rather than trusting a figure
 that looks stale.
 
 | | |
 |---|---|
-| REST routes | **435** across 53 controllers |
+| REST routes | **439** across 53 controllers |
 | Prisma models / enums | **126** / 43, plus **107** tenant migrations and 12 control-plane migrations |
-| Services / cron workers | **114** / 25 |
-| Web pages | **70** |
-| Unit tests | **1,735** across 150 files (`npm test -w apps/api`) |
+| Services / cron workers | **115** / 25 |
+| Web pages | **71** |
+| Unit tests | **1,742** across 152 files (`npm test -w apps/api`), plus **53** in `apps/web` |
 | End-to-end specs | **29** Playwright specs, run across desktop, phone, tablet, laptop, 4K, Firefox and WebKit |
 | Editable email templates | **39**, every one of them with preview, test send, revert and per-template delivery analytics |
 | RBAC permissions | **38**, over 5 roles |
 | Lint | **0 errors**, warnings tracked as a baseline rather than driven to zero — see below |
 
-**On the lint number.** The repo runs ESLint with `sonarjs` and sits at roughly 520 warnings and
+**On the lint number.** The repo runs ESLint with `sonarjs` and sits at roughly 523 warnings and
 zero errors. That is the healthy state, not a backlog: the warnings are overwhelmingly
 `no-nested-conditional` and `cognitive-complexity` on code where the nesting is the clearest form,
 and "fixing" the count by mechanically extracting ternaries has previously made the code worse.

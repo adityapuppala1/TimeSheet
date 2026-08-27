@@ -4769,6 +4769,60 @@ the answer at the time was 31/17/13. All three were corrected before being super
   seed step would light all fourteen up — deliberately not done in the same change as the fix, since
   it will surface failures that deserve their own pass.
 
+## v3.7.0 — a sign-in that knows you're already signed in (2026-08-27)
+
+### The guard that only pointed one way
+
+Every route guard in the app checked "is this person allowed in here" and not one checked "does this
+person need to be here at all". So `/login` rendered its form to somebody holding a valid session,
+accepted their password, and minted a second one. The report was blunt about it being basic, and it
+was: the fix is fifteen lines and an inverse guard.
+
+Reproducing it turned up two more in the same family, which is the useful part. A deep link bounced
+to a bare `/login` and threw away the destination — known at the moment of the redirect and simply
+not kept — so signing in dumped you on the dashboard. Carrying it fixes that and immediately opens
+an open-redirect hole, because `next` comes off the URL and is consumed at the exact moment somebody
+has proven they trust the site. All three are one change, and the third would not exist without the
+second.
+
+The shape worth remembering: a missing guard is invisible in code review because there is nothing to
+review. It only shows up if you ask what happens on the paths nobody designed for.
+
+### three.js, and the difference between "no" and "not like that"
+
+This is the third time the payload question has come up. The landing page got `ogl` instead, with
+the substitution stated. The login panel got a hand-rolled 2D canvas, with a header arguing the case
+at length. Asked a third time, the right answer was to notice that the objection was never to the
+library — it was to making every visitor pay for it.
+
+So three.js is imported dynamically, behind a desktop-width check and a reduced-motion check, and a
+phone requests nothing. Measured in a browser rather than assumed: the chunk is fetched on desktop
+and not fetched at 390px or under `prefers-reduced-motion`. The request was honoured and the concern
+was answered, which are not the same thing as either capitulating or refusing.
+
+### A feature that shipped for nobody
+
+3.6.0 added the `OrgDomain` table, DNS-verified resolution ahead of the subdomain rule, and a
+reserved-name guard. It did not add any way to create a row, prove it, or delete one — so the
+feature was complete, correct, and unreachable. Worth naming as a category: infrastructure without a
+surface is not a smaller version of a feature, it is zero of one.
+
+The management flow that closes it is mostly copy. The hard part happens in a DNS console the
+operator cannot see, usually by a different person, often a day later — so the two values that must
+be copied exactly get their own mono rows with their own copy buttons, and the last failure is shown
+verbatim, because "a record exists but doesn't match" and "no record found" send somebody to
+different places.
+
+### A dry run for a switch that cannot be flipped back quietly
+
+`ROOT_DOMAIN` changes two things at once, and both are correct and both surprise people: slugs stop
+being derived by counting DNS labels, and the bare domain stops serving one specific customer's login
+page. Neither is visible until traffic arrives.
+
+The readout on the Organizations page is a read-only preview — current mode, what the apex serves
+now, and the URL every workspace would have afterwards. It is not a feature so much as an admission
+that a boolean env var with deployment-wide consequences deserves a way to look before jumping.
+
 ## v3.6.0 — the three boundaries a SaaS actually has (2026-08-27)
 
 Three questions, asked together because they turn out to be one: what does a SaaS actually have to

@@ -16,6 +16,8 @@ import { validate } from "../middleware/validate.js";
 import { platformAdminLogin, platformAdminRefresh } from "../services/platform-admin-auth.service.js";
 import { getPlatformAnalytics } from "../services/platform-admin-analytics.service.js";
 import { provisionOrganization } from "../services/provisioning.service.js";
+import { addDomain, listDomains, removeDomain, verifyDomain } from "../services/org-domain.service.js";
+import { workspaceUrlForSlug } from "../services/workspace-directory.service.js";
 import { encryptSecret } from "../utils/encryption.js";
 
 export const platformAdminRouter = Router();
@@ -175,6 +177,76 @@ platformAdminRouter.post("/organizations/:id/restore-password-login", requirePla
     passwordLoginEnabled: updated.passwordLoginEnabled,
     requireSsoOnly: updated.requireSsoOnly,
     message: `Password sign-in is back on for ${org.slug}. Their admin can sign in and fix the SSO configuration.`
+  });
+});
+
+/* ---------- Custom domains ---------- */
+
+platformAdminRouter.get("/organizations/:id/domains", requirePlatformAdmin, async (req, res) => {
+  res.json({ domains: await listDomains(String(req.params.id)), rootDomain: env.ROOT_DOMAIN ?? null });
+});
+
+platformAdminRouter.post(
+  "/organizations/:id/domains",
+  requirePlatformAdmin,
+  validate(z.object({ body: z.object({ domain: z.string().min(3).max(253) }).strict() })),
+  async (req, res) => {
+    const org = await controlPrisma.organization.findUnique({ where: { id: String(req.params.id) }, select: { id: true } });
+    if (!org) throw new AppError(404, "Organization not found");
+    res.status(201).json(await addDomain(org.id, req.body.domain, env.ROOT_DOMAIN));
+  }
+);
+
+platformAdminRouter.post("/organizations/:id/domains/:domainId/verify", requirePlatformAdmin, async (req, res) => {
+  res.json(await verifyDomain(String(req.params.id), String(req.params.domainId)));
+});
+
+platformAdminRouter.delete("/organizations/:id/domains/:domainId", requirePlatformAdmin, async (req, res) => {
+  await removeDomain(String(req.params.id), String(req.params.domainId));
+  res.status(204).end();
+});
+
+/* ---------- Routing readout ---------- */
+
+/**
+ * GET /routing — what this deployment does with a hostname, and what would change if ROOT_DOMAIN
+ * were set.
+ *
+ * WHY IT EXISTS. `ROOT_DOMAIN` switches the deployment between two genuinely different routing
+ * behaviours, and there was no way to see which one is active short of reading env on the server.
+ * Worse, the consequences of setting it are invisible until traffic arrives: every workspace URL
+ * has to already resolve under that root, and the bare domain stops serving DEFAULT_ORG_SLUG and
+ * starts serving the workspace finder. Both are the right behaviours and both will surprise
+ * somebody who flips the variable without looking.
+ *
+ * So this reports the mode, the URL each workspace is reachable at under it, and — when it is NOT
+ * set — a preview of what each would become. It is a read-only dry run for a change that cannot be
+ * undone quietly.
+ */
+platformAdminRouter.get("/routing", requirePlatformAdmin, async (_req, res) => {
+  const orgs = await controlPrisma.organization.findMany({
+    where: { status: { not: "ARCHIVED" } },
+    select: { id: true, slug: true, name: true, status: true, domains: { where: { verifiedAt: { not: null } }, select: { domain: true } } },
+    orderBy: { slug: "asc" }
+  });
+
+  res.json({
+    mode: env.ROOT_DOMAIN ? "multi-org" : "single-org",
+    rootDomain: env.ROOT_DOMAIN ?? null,
+    defaultOrgSlug: env.DEFAULT_ORG_SLUG,
+    appBaseUrl: env.APP_BASE_URL,
+    /** What the bare domain currently serves, which is the surprising half of the switch. */
+    apexServes: env.ROOT_DOMAIN ? "the workspace finder" : `the "${env.DEFAULT_ORG_SLUG}" workspace`,
+    organizations: orgs.map((org) => ({
+      slug: org.slug,
+      name: org.name,
+      status: org.status,
+      customDomain: org.domains[0]?.domain ?? null,
+      /** Live under the current mode. */
+      url: org.domains[0] ? `https://${org.domains[0].domain}` : workspaceUrlForSlug(org.slug),
+      /** What it WOULD be if ROOT_DOMAIN were set — null when it already is. */
+      urlIfRootDomainSet: env.ROOT_DOMAIN ? null : `https://${org.slug}.<ROOT_DOMAIN>`
+    }))
   });
 });
 

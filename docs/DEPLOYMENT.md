@@ -129,6 +129,42 @@ specifically for "I want Docker for the app, but my own database."
    browsers refuse camera access on an insecure origin. See
    [docs/FACE_VERIFICATION.md](FACE_VERIFICATION.md).
 
+### Turning on multi-org routing (`ROOT_DOMAIN`)
+
+This is the one environment variable whose consequences are invisible until traffic arrives, so it
+has a read-only dry run: **Platform admin → Organizations** calls `GET /api/platform-admin/routing`,
+which reports the mode this deployment is in, what the bare domain currently serves, and the URL
+each workspace would be reachable at if `ROOT_DOMAIN` were set.
+
+Two things change the moment it is set, and both are correct and both surprise people:
+
+1. **The slug is derived by stripping the suffix**, not by counting DNS labels. This is the fix for
+   `example.co.uk` being read as a workspace called `example` — but it also means every workspace
+   must already resolve under that root. Check the readout before, not after.
+2. **The bare domain stops serving `DEFAULT_ORG_SLUG`** and starts serving the workspace finder.
+   Until now `timesphere.app` quietly served one specific customer's branded login page to anybody
+   who typed the domain without a subdomain; afterwards it serves a "find your workspace" screen.
+   If anyone has bookmarked the apex expecting a particular workspace, they will notice.
+
+Order of operations for an existing deployment:
+
+```bash
+# 1. Point DNS at this deployment first — a wildcard, so every existing slug resolves.
+#    *.timesphere.app  ->  <this deployment>
+# 2. Confirm the certificate covers the wildcard, or every workspace gets a TLS warning.
+# 3. Read the dry run: Platform admin -> Organizations, and check every listed
+#    `urlIfRootDomainSet` is a hostname that already answers.
+# 4. Only then:
+ROOT_DOMAIN="timesphere.app"
+# 5. Restart, and re-read the routing page — `mode` should now say multi-org.
+```
+
+**Custom domains** are managed per workspace from the same page (**Domains** on any active
+organization). Verification is a DNS TXT record at `_timesphere-verify.<domain>`; an unverified row
+routes nothing, so adding one is safe. Note what verification does and does not prove: it confirms
+the customer owns the domain. They still need a CNAME or A record pointing it at this deployment
+before traffic arrives.
+
 ### Why a control plane exists even in this single-org shape
 
 Every request still resolves "which organization" before touching `prisma` — see
@@ -1438,6 +1474,7 @@ summarized:
 | `CONTROL_DATABASE_URL` | Both shapes | The control-plane database (org registry, SSO config, plan tiers, platform-admin accounts) |
 | `DEFAULT_ORG_SLUG` | Both shapes | Which org a request with no real subdomain resolves to (default: `default`) |
 | `ROOT_DOMAIN` | Multi-org only | The domain subdomains hang off (`timesphere.app`). Setting it derives the slug by stripping this suffix instead of counting DNS labels, and makes the bare domain serve the workspace finder instead of `DEFAULT_ORG_SLUG`. **Unset = today's behaviour**, which is what every single-org install wants. |
+| `TENANT_DB_PROVISION_BASE_URL` | Multi-org only | Required for self-serve signup — it is what creates each new workspace's database. Without it, `/signup` returns a clear 400 rather than half-provisioning. |
 | `PLATFORM_ADMIN_JWT_SECRET` | Both shapes | Signs `/platform-admin` tokens — must differ from `JWT_ACCESS_SECRET`/`JWT_REFRESH_SECRET` |
 | `TENANT_DB_PROVISION_BASE_URL` | SaaS shape, only if using in-console provisioning | The MySQL server new tenant databases get created on |
 | `APP_BASE_URL` | Both shapes | Also doubles as the one fixed OIDC/SAML callback URL for every org's SSO |

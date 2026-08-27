@@ -12,6 +12,61 @@ number, on purpose — an installation must never render history for a version t
 
 _Nothing yet._
 
+## 3.7.0 — a sign-in that knows you're already signed in — 2026-08-27
+
+### 🐛 Signing in when you already had a session asked for your password again
+
+- **Reported, reproduced, fixed.** With a live session, `/login` rendered the form and accepted a
+  re-login; the only way out of the loop was to sign out first. Nothing was checking — every guard
+  in the app pointed one way, into protected routes, and the public sign-in pages had none at all.
+  Visiting any of them while signed in now goes straight into the app, and the platform console's
+  login had the identical hole and the identical fix.
+- **`?switch=1` still shows the form**, for signing in as somebody else on a shared machine — a
+  redirect you cannot escape is its own trap.
+- **A deep link now survives sign-in.** Opening a link to a specific ticket while signed out used to
+  bounce to a bare login and then land you on the dashboard, with the destination thrown away even
+  though it was known at the moment of the redirect. It comes back now, with its filters intact.
+- The `next` parameter that makes that work is **sanitised as an open-redirect guard**: absolute
+  URLs, protocol-relative `//host`, the `/\host` backslash variant, `javascript:` and malformed
+  encodings are all refused, because a value read off the URL is consumed at the exact moment
+  somebody has just proven they trust the site.
+
+### ✨ A new sign-in screen, on three.js
+
+- A slowly turning lattice of connected work items, leaning toward the pointer, on a dark panel —
+  the same metaphor the previous flat animation carried, with the depth that was the reason to want
+  it. Colours come from the workspace's own theme.
+- **It costs a phone nothing, literally.** three.js is imported dynamically and only after a
+  desktop-width check and a reduced-motion check both pass, so a phone and a reduced-motion visitor
+  never download the library at all. The form paints from the ordinary bundle and is typeable before
+  any of it exists.
+- Fixed while doing it: the app-wide ambient background put an amber glow over the right-hand half
+  of the sign-in screen, which nobody could see while both halves were light and which became a warm
+  smudge against cool near-black the moment the panel went dark.
+
+### 🌐 Custom domains are manageable now
+
+- The routing for `time.acme.com` shipped in 3.6.0 with no way to create, prove or remove one —
+  which made it real for nobody. **Platform admin → Organizations → Domains** does all three: add a
+  hostname, publish the TXT record it shows you, check it.
+- A pasted `https://Time.Acme.com/login` is normalised to a hostname, a second claim on the same one
+  is refused, and the deployment's own domain can't be claimed at all — that last one matters
+  because the operator *would* pass the DNS check.
+- **Verification is a one-way latch.** A verified domain is never re-checked, because a resolver
+  hiccup taking a live workspace off its own domain is a worse failure than a stale timestamp.
+  Removing it is the deliberate act.
+- Failure messages are shown verbatim: "a record exists but doesn't match" and "no record found"
+  send somebody to different places.
+
+### 🧭 A dry run for multi-org routing
+
+- `ROOT_DOMAIN` is the one setting whose consequences are invisible until traffic arrives — every
+  workspace has to already resolve under that root, and the bare domain stops serving one specific
+  customer's login page and starts serving the workspace finder. The Organizations page now reports
+  which mode the deployment is in, what the bare domain currently serves, and the URL each workspace
+  *would* have if it were set. See [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) for the order of
+  operations.
+
 ## 3.6.0 — the three boundaries a SaaS actually has — 2026-08-27
 
 Billing, workspace routing and identity, taken one at a time. The short version: seat and AI

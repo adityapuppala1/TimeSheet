@@ -6,7 +6,7 @@ description: >-
   one ingress host, DEFAULT_ORG_SLUG resolves every request) or a multi-org SaaS install
   (external managed MySQL recommended, wildcard ingress host for subdomain-per-org routing).
 type: application
-version: 0.6.0
+version: 0.7.0
 # Tracks the repo-root VERSION file. Surfaces only as the `app.kubernetes.io/version` label and in
 # NOTES.txt — it does NOT select an image tag (that is `image.tag` in values.yaml, `latest` by
 # default), so bumping it cannot change what a cluster actually runs.
@@ -18,7 +18,7 @@ version: 0.6.0
 # (.github/workflows/ci.yml, "Chart appVersion must match the repo VERSION file"), so the second
 # drift was caught — by a red build on main that nobody had looked at. Bump this WITH the VERSION
 # file, in the same commit.
-appVersion: "3.6.0"
+appVersion: "3.7.0"
 keywords:
   - timesheet
   - ticketing

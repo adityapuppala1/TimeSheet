@@ -185,7 +185,25 @@ export const platformAdminOrgApi = {
       seatLimitOverride: number | null;
       aiMonthlyBudgetCeilingOverride: number | null;
     }>
-  ) => (await platformAdminApi.patch<OrgListRow>(`/organizations/${id}`, payload)).data
+  ) => (await platformAdminApi.patch<OrgListRow>(`/organizations/${id}`, payload)).data,
+
+  /* --- Custom domains (3.6.1) ---------------------------------------------------------------
+     The table and the routing shipped with 3.6.0; this is the half that makes them reachable.
+     An unverified row is inert — `resolveCustomDomainSlug` only reads verified ones — so listing
+     and creating are safe operations and only `verify` changes what traffic does. */
+  listDomains: async (id: string) =>
+    (await platformAdminApi.get<{ domains: OrgDomainRow[]; rootDomain: string | null }>(`/organizations/${id}/domains`)).data,
+  addDomain: async (id: string, domain: string) =>
+    (await platformAdminApi.post<OrgDomainRow>(`/organizations/${id}/domains`, { domain })).data,
+  verifyDomain: async (id: string, domainId: string) =>
+    (await platformAdminApi.post<OrgDomainRow>(`/organizations/${id}/domains/${domainId}/verify`)).data,
+  removeDomain: async (id: string, domainId: string) => {
+    await platformAdminApi.delete(`/organizations/${id}/domains/${domainId}`);
+  },
+
+  /** How this deployment turns a hostname into a workspace, and what setting ROOT_DOMAIN would
+   *  change. A read-only dry run for a switch that cannot be flipped back quietly. */
+  routing: async () => (await platformAdminApi.get<RoutingReadout>("/routing")).data
 };
 
 export const platformAdminPlanTierApi = {
@@ -229,3 +247,31 @@ export const platformAdminBillingApi = {
       }>("/billing-settings", payload)
     ).data
 };
+
+export interface OrgDomainRow {
+  id: string;
+  domain: string;
+  verified: boolean;
+  verifiedAt: string | null;
+  lastCheckedAt: string | null;
+  lastCheckError: string | null;
+  /** The DNS record the customer publishes, spelled out so it can be shown verbatim. */
+  recordName: string;
+  recordValue: string;
+}
+
+export interface RoutingReadout {
+  mode: "single-org" | "multi-org";
+  rootDomain: string | null;
+  defaultOrgSlug: string;
+  appBaseUrl: string;
+  apexServes: string;
+  organizations: Array<{
+    slug: string;
+    name: string;
+    status: string;
+    customDomain: string | null;
+    url: string;
+    urlIfRootDomainSet: string | null;
+  }>;
+}

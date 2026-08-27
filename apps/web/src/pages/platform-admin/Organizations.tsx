@@ -17,6 +17,7 @@ import { Button } from "../../components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../../components/ui/card";
 import { DataTable } from "../../components/ui/data-table";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "../../components/ui/dialog";
+import { DomainsDialog } from "./DomainsDialog";
 import { Input } from "../../components/ui/input";
 import { Label } from "../../components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../../components/ui/select";
@@ -45,6 +46,7 @@ export function PlatformAdminOrganizations() {
   const [createOpen, setCreateOpen] = useState(false);
   const [editing, setEditing] = useState<OrgListRow | null>(null);
   const [provisioning, setProvisioning] = useState<OrgListRow | null>(null);
+  const [domainsFor, setDomainsFor] = useState<OrgListRow | null>(null);
 
   const columns: ColumnDef<OrgListRow, any>[] = [
     { accessorKey: "name", header: "Name", cell: (info) => <span className="font-medium text-slate-100">{info.getValue()}</span> },
@@ -70,6 +72,19 @@ export function PlatformAdminOrganizations() {
           {row.original.status === "PROVISIONING" && (
             <Button size="sm" className="bg-amber-500 text-slate-950 hover:bg-amber-400" onClick={() => setProvisioning(row.original)}>
               Provision
+            </Button>
+          )}
+          {/* Only for a workspace that is actually serving traffic. A custom domain on a
+              PROVISIONING or ARCHIVED org points at nothing, and offering it there invites
+              somebody to spend a DNS change on a workspace that cannot answer. */}
+          {row.original.status !== "PROVISIONING" && (
+            <Button
+              size="sm"
+              variant="outline"
+              className="border-slate-700 text-slate-300 hover:bg-slate-800 hover:text-slate-100"
+              onClick={() => setDomainsFor(row.original)}
+            >
+              Domains
             </Button>
           )}
           <Button size="sm" variant="outline" className="border-slate-700 text-slate-300 hover:bg-slate-800 hover:text-slate-100" onClick={() => setEditing(row.original)}>
@@ -122,6 +137,7 @@ export function PlatformAdminOrganizations() {
           queryClient.invalidateQueries({ queryKey: ["platform-admin", "organizations"] });
         }}
       />
+      <DomainsDialog org={domainsFor} onOpenChange={(open) => !open && setDomainsFor(null)} />
       <ProvisionOrgDialog
         org={provisioning}
         onOpenChange={(open) => !open && setProvisioning(null)}
