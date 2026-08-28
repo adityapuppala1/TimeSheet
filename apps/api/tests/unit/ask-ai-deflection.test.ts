@@ -21,7 +21,7 @@ import { describe, expect, it, vi } from "vitest";
 // predicate needs none of that, so the heavy edges are stubbed and only the pure function is read.
 vi.mock("../../src/config/prisma.js", () => ({ prisma: {} }));
 
-const { shouldPushBackForNoTools, looksLikeStall, ASK_OUT_OF_SCOPE, refusalLooksWrong } = await import("../../src/services/ai.service.js");
+const { shouldPushBackForNoTools, looksLikeStall, ASK_OUT_OF_SCOPE, refusalLooksWrong, looksLikeHowTo } = await import("../../src/services/ai.service.js");
 
 const MAX = 5;
 
@@ -150,4 +150,32 @@ describe("vetoing a refusal of a question that names workspace data", () => {
       expect(refusalLooksWrong(q)).toBe(false);
     }
   );
+});
+
+describe("spotting a how-to question, which pre-seeds the manual", () => {
+  /*
+   * The measured failure this feeds: "How do I raise a change request?" answered with an invented
+   * "Raise Change tab" and a "Draft Change Request" button, because the model never opened the
+   * manual. The regex decides; the model composes.
+   */
+  it.each([
+    "How do I raise a change request?",
+    "how can I approve a timesheet",
+    "where is the SSO configuration",
+    "how to set up SMTP",
+    "give me the steps to log time",
+    "installation SOP"
+  ])("matches %j", (q) => {
+    expect(looksLikeHowTo(q)).toBe(true);
+  });
+
+  it.each([
+    "How many tickets are open?",
+    "how much time did I log last week",
+    "break my tickets down by status",
+    "what is the capital of France?"
+  ])("leaves %j to the normal loop", (q) => {
+    // Counting questions and data questions must not pay the seed; "how many/much" is the carve-out.
+    expect(looksLikeHowTo(q)).toBe(false);
+  });
 });

@@ -1285,6 +1285,15 @@ one-shot `POST /ai/ask`. Same toggle (`workspaceSearchEnabled`), same capability
   That matters for the guardrails: a slash pick cannot reach a capability `visibleTools` would not
   already have shown the model.
 
+**The `help_articles` tool and the in-app manual.** `/app/help` renders the help articles from
+`@timesheet/shared` (help-articles.ts) — SOPs, flows and setup guides, filtered by the viewer's
+role. The assistant reads the SAME array through the SAME filter via the `help_articles` read tool,
+and a question that looks like a how-to ("how do I…", "where is…", "set up…") gets the matching
+articles PRE-SEEDED into its transcript before the model's first token — measured necessity, not
+decoration: without the seed the model invented a "Draft Change Request" button. Role filtering
+here is courtesy, not security (the pages those articles describe enforce their own access); it
+exists so the assistant never prescribes screens the asker's sidebar does not have.
+
 **Answers are stripped of this loop's own protocol before they are returned or persisted.** A small
 model will sometimes narrate the envelope it is speaking in — publishing fenced blocks containing
 `{"action": "tool" …}` or `{"action": "refuse"}` as if they were content, above an otherwise

@@ -76,6 +76,7 @@ const WorkspaceSettingsPage = lazy(() =>
 const PracticeUpdatePage = lazy(() =>
   import("./pages/PracticeUpdate").then((m) => ({ default: m.PracticeUpdatePage }))
 );
+const HelpPage = lazy(() => import("./pages/Help").then((m) => ({ default: m.HelpPage })));
 const EmailTemplatesPage = lazy(() =>
   import("./pages/EmailTemplates").then((m) => ({ default: m.EmailTemplatesPage }))
 );
@@ -210,7 +211,10 @@ const router = createBrowserRouter([
       { path: "ai-activity", element: <RequirePermission permission={permissions.TICKETS_ASSIGN}><PageShell><AIActivityLog /></PageShell></RequirePermission> },
       { path: "settings", element: <RequireRole role="SUPER_ADMIN"><PageShell><WorkspaceSettingsPage /></PageShell></RequireRole> },
       { path: "email-templates", element: <RequireRole role="SUPER_ADMIN"><PageShell><EmailTemplatesPage /></PageShell></RequireRole> },
-      { path: "practice-update", element: <RequireRole role="SUPER_ADMIN"><PageShell><PracticeUpdatePage /></PageShell></RequireRole> }
+      { path: "practice-update", element: <RequireRole role="SUPER_ADMIN"><PageShell><PracticeUpdatePage /></PageShell></RequireRole> },
+      /* No permission gate: the page filters its own articles by role, and the manual for what you
+         CAN do should never itself be a door you can't open. */
+      { path: "help", element: <PageShell><HelpPage /></PageShell> }
     ]
   },
   { path: "/platform-admin/login", element: <PageShell><RedirectIfPlatformAdmin><PlatformAdminLogin /></RedirectIfPlatformAdmin></PageShell> },

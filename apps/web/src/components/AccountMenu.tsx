@@ -9,7 +9,7 @@
  * them. This is the single definition; each caller supplies only its own trigger.
  */
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Compass, FileClock, LogOut, Repeat, Sparkles, UserRound } from "lucide-react";
+import { Compass, FileClock, LogOut, Repeat, Sparkles, UserRound, CircleHelp } from "lucide-react";
 import { Link, useNavigate } from "react-router";
 import type { RoleName } from "@timesheet/shared";
 import { Avatar, AvatarFallback, AvatarImage } from "./ui/avatar";
@@ -125,6 +125,9 @@ export function AccountMenuContent() {
       </DropdownMenuItem>
       <DropdownMenuItem asChild>
         <Link to="/app/history"><FileClock /> My history</Link>
+      </DropdownMenuItem>
+      <DropdownMenuItem asChild>
+        <Link to="/app/help"><CircleHelp /> Help &amp; how-to</Link>
       </DropdownMenuItem>
       <DropdownMenuItem asChild>
         <Link to="/app/whats-new" className="relative">

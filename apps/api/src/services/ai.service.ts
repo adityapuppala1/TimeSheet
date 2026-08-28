@@ -4240,6 +4240,21 @@ export function refusalLooksWrong(prompt: string): boolean {
   return IN_SCOPE_HINT.test(prompt);
 }
 
+/**
+ * Whether a question is asking HOW TO USE the product rather than asking about data in it.
+ *
+ * Drives the deterministic manual pre-seed in the ask loop, so it errs deliberately toward
+ * matching: a data question that also matches ("how many tickets...") costs one cheap in-memory
+ * search whose result the model is free to ignore, while a how-to question that fails to match
+ * leaves the model inventing buttons — the measured failure. "how many/much" is carved out because
+ * it is the one high-traffic counting shape that starts with "how".
+ */
+export function looksLikeHowTo(prompt: string): boolean {
+  const p = prompt.toLowerCase();
+  if (/^how (many|much)\b/.test(p)) return false;
+  return /\bhow (do|can|to|should)\b|where (is|do|can)\b|\bset ?up\b|\bconfigure\b|\bguide\b|\bsteps? (to|for)\b|\btutorial\b|\bfaq\b|\bsop\b/i.test(p);
+}
+
 function looksLikeToolAttempt(raw: string): boolean {
   const text = raw.trim();
   // Any bare JSON object: either a mangled action, or — measured — a hand-built blob of invented
@@ -4451,6 +4466,9 @@ export async function askWorkspaceChat(input: {
       "- change counts, risk spread, in flight -> change_metrics; specific changes -> list_changes",
       "- who someone is, who reports to whom -> find_people; projects, modules, SUBMODULES -> list_projects",
       "- OKRs, targets, how goals are tracking -> goals_overview",
+      "- HOW TO USE THE APP — 'how do I', 'where is', raise/approve/configure/set up anything ->",
+      "  help_articles. It returns the exact steps and a link to the manual; answer with those steps",
+      "  rather than inventing a path, and include the /app/help link it gives you.",
       // Only printed when the person actually holds these — otherwise it is a menu of refusals.
       allowedTools.some((t) => t.access)
         ? [
@@ -4567,6 +4585,40 @@ export async function askWorkspaceChat(input: {
   let nudgedForStall = false;
   /** And one for a refusal of a question that plainly names workspace data. */
   let nudgedForRefusal = false;
+
+  /*
+   * HOW-TO QUESTIONS GET THE MANUAL PRE-SEEDED, deterministically, before the model says a word.
+   *
+   * The routing hint alone was not enough, and this was watched happen: asked "How do I raise a
+   * change request?", the model consulted nothing and invented plausible UI — a "Raise Change tab"
+   * and a "Draft Change Request" button that do not exist — which is precisely the drift the shared
+   * help articles were built to prevent. An 8B model choosing whether to open the manual is a coin
+   * flip; a regex deciding "this is a how-to question" is not.
+   *
+   * So the help tool runs HERE, its result lands in the transcript as an already-consulted tool,
+   * and the model's first step becomes composition — the one thing it measured well at. Costs zero
+   * extra model calls (the seed replaces the lookup round-trip it should have made), and the
+   * no-tools guard naturally stands down because toolCalls is no longer empty. When the search
+   * matches nothing for this role, nothing is seeded and the loop proceeds exactly as before.
+   */
+  if (looksLikeHowTo(input.prompt)) {
+    const helpTool = findAiChatTool("help_articles");
+    if (helpTool) {
+      try {
+        assertToolAllowed(helpTool, actor);
+        const result = sanitiseToolResult(await helpTool.run({ query: input.prompt }, input.toolCtx));
+        if (!result.startsWith("No help articles matched")) {
+          toolCalls.push({ tool: "help_articles", detail: JSON.stringify({ query: input.prompt.slice(0, 120) }) });
+          transcript.push(`--- help_articles ---\n<tool_result>\n${result}\n</tool_result>`);
+          resultsBySignature.set(`help_articles:${JSON.stringify({ query: input.prompt })}`, result);
+          extra = `\nWhat the tools have returned so far:\n${transcript.join("\n\n")}\n\nThe manual above answers this question. Reply with those steps — the real ones, not paraphrased into different buttons — and include the /app/help link it gives.`;
+        }
+      } catch {
+        // A refused or failing help lookup must never break the question; the loop just starts cold.
+      }
+    }
+  }
+
   for (let step = 0; step < ASK_MAX_STEPS; step++) {
     const raw = await ask(extra);
     const parsed = parseJsonResponse(raw, AskActionSchema);

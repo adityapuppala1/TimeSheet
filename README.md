@@ -136,7 +136,7 @@ CAB tool holds none of that.
 
 ## By the numbers
 
-Counted from the tree at v3.9.1, not estimated — regenerate any of these with the one-liners in
+Counted from the tree at v3.10.0, not estimated — regenerate any of these with the one-liners in
 [CONTRIBUTING.md](CONTRIBUTING.md#regenerating-readmes-by-the-numbers) rather than trusting a figure
 that looks stale.
 
@@ -145,8 +145,8 @@ that looks stale.
 | REST routes | **444** across 53 controllers |
 | Prisma models / enums | **127** / 44, plus **109** tenant migrations and 12 control-plane migrations |
 | Services / cron workers | **116** / 25 |
-| Web pages | **72** |
-| Unit tests | **1,806** across 156 files (`npm test -w apps/api`), plus **67** in `apps/web` |
+| Web pages | **73** |
+| Unit tests | **1,822** across 157 files (`npm test -w apps/api`), plus **69** in `apps/web` |
 | End-to-end specs | **29** Playwright specs, run across desktop, phone, tablet, laptop, 4K, Firefox and WebKit |
 | Editable email templates | **39**, every one of them with preview, test send, revert and per-template delivery analytics |
 | RBAC permissions | **38**, over 5 roles |

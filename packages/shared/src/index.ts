@@ -1,3 +1,6 @@
+/* The in-app help articles — one source for the Help page AND Ask AI's help tool, so the two can
+   never tell a person different steps. See help-articles.ts for the writing rules. */
+export * from "./help-articles.js";
 /**
  * WHAT: the single `@timesheet/shared` package — every type/constant that both `apps/api` and
  * `apps/web` need to agree on: roles/permission keys, activity types, ticket status/priority

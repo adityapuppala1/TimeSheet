@@ -40,8 +40,7 @@ import {
   TrendingUp,
   UserRound,
   Users,
-  Users2
-} from "lucide-react";
+  Users2, CircleHelp } from "lucide-react";
 import { permissions } from "@timesheet/shared";
 import {
   CommandDialog,
@@ -84,6 +83,7 @@ interface NavRoute {
 
 const navRoutes: NavRoute[] = [
   { label: "Dashboard", to: "/app", icon: LayoutDashboard, hint: "Home" },
+  { label: "Help & how-to", to: "/app/help", icon: CircleHelp, hint: "The manual, searchable" },
   { label: "Log Timesheet", to: "/app/timesheet", icon: CalendarDays, permission: permissions.TIMESHEETS_WRITE, hint: "New entry" },
   { label: "Tickets", to: "/app/tickets", icon: Ticket, permission: permissions.TICKETS_VIEW, hint: "Bugs & tasks" },
   { label: "History", to: "/app/history", icon: FileClock },

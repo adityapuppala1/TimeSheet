@@ -23,7 +23,7 @@
  *
  * WHO CALLS THIS: `ai.service.ts#askWorkspaceChat`, one tool per loop step.
  */
-import { permissions } from "@timesheet/shared";
+import { permissions, searchHelpArticles, type RoleName } from "@timesheet/shared";
 import { prisma } from "../config/prisma.js";
 import { ticketProjectScope } from "./ticket.service.js";
 import { AI_CHAT_ADMIN_TOOLS } from "./ai-chat-admin-tools.js";
@@ -413,6 +413,47 @@ const EVERYDAY_TOOLS: ReadonlyArray<AiChatTool> = [
             return `${f.emoji} ${f.name} (${f.enabled ? "on" : "off"}) — ${trigger}`;
           })
           .join("\n")
+      );
+    }
+  },
+  {
+    name: "help_articles",
+    group: "Help",
+    description:
+      "How to USE this application — SOPs, flows and setup guides. The tool for 'how do I', 'where is', 'how to raise/approve/configure' questions. Returns steps and a link to the in-app manual.",
+    args: '{ "query": string, "limit"?: number }',
+    run: async (args, ctx) => {
+      /*
+       * THE SAME ARTICLES THE HELP PAGE RENDERS, through the same role filter — @timesheet/shared
+       * owns both, which is what makes the page and the assistant incapable of giving different
+       * steps. No Prisma here: the manual is data, not workspace rows.
+       *
+       * Role courtesy, not security: hiding the super-admin SOPs from an employee's answers keeps
+       * the assistant from prescribing screens their sidebar does not have. The screens themselves
+       * enforce access.
+       */
+      const role = ctx.req.user.role as RoleName;
+      const matches = searchHelpArticles(String(args.query ?? ""), role).slice(0, Math.min(Number(args.limit) || 3, 5));
+      if (matches.length === 0) {
+        return "No help articles matched for this person's role. Answer from what you know of the product, and say which role the task may need.";
+      }
+      return clip(
+        matches
+          .map((a) =>
+            [
+              `## ${a.title} (${a.category})`,
+              `Where: ${a.where}`,
+              `When: ${a.when}`,
+              `Steps:`,
+              ...a.steps.map((step, i) => `${i + 1}. ${step}`),
+              a.notes ? `Note: ${a.notes}` : "",
+              a.screenshot ? "Screenshot: shown on the manual page." : "",
+              `Full article: /app/help#${a.id}`
+            ]
+              .filter(Boolean)
+              .join("\n")
+          )
+          .join("\n\n")
       );
     }
   }

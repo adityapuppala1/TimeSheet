@@ -12,6 +12,29 @@ number, on purpose — an installation must never render history for a version t
 
 _Nothing yet._
 
+## 3.10.0 — the manual, in the app and in the assistant — 2026-08-28
+
+### ✨ Help & how-to: every flow, searchable, shown for your role
+
+- A new **Help & how-to** page — open it from the profile menu, the command palette, or /app/help.
+  Twenty-seven articles cover the whole application: signing in, logging time, raising and working
+  tickets, raising and approving changes, dashboards and reports, creating users and roles, every
+  AI feature, each workspace-settings area, and the install/update and platform-admin SOPs.
+- Every article says **where** it happens, **when** to reach for it and the **exact steps**, with
+  real screenshots from the running application — nothing mocked up.
+- **Search the manual** — "raise a ticket", "approve", "SSO", "install" — with category filters.
+  Articles are filtered to your role: the manual only shows what its reader can actually do, so an
+  employee is never handed a super-admin SOP for a page their sidebar doesn't have.
+
+### ✨ Ask AI answers "how do I…?" from that same manual
+
+- Ask the assistant how to do anything — raise a change, approve a timesheet, configure SMTP — and
+  it answers with the manual's own steps and a link straight to the article, filtered to your role.
+- **The page and the assistant cannot disagree**: both read one set of articles through one filter.
+  How-to questions hand the assistant the matching articles before it writes a word, so the steps
+  it gives are the documented ones rather than its best guess — a guess is exactly what it produced
+  before this, inventing buttons that don't exist.
+
 ## 3.9.1 — malformed answers are recovered, and a wrong refusal gets overruled — 2026-08-28
 
 ### 🐛 Answers that arrived broken are now repaired instead of shown broken

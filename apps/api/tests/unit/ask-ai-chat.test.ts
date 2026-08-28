@@ -40,6 +40,8 @@ describe("the Ask AI tool registry", () => {
         "change_metrics",
         "find_people",
         "get_ticket",
+        // The in-app manual — shared data, no Prisma, role-filtered inside its run.
+        "help_articles",
         "list_agents",
         "list_changes",
         "list_projects",
