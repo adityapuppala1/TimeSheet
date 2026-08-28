@@ -12,6 +12,25 @@ number, on purpose — an installation must never render history for a version t
 
 _Nothing yet._
 
+## 3.8.4 — the theme wipe you can actually see — 2026-08-28
+
+### 🎨 Switching theme now sweeps from the button instead of blinking
+
+- **Reported as abrupt, and it was — for a reason that wasn't obvious.** The circular sweep was
+  running correctly the whole time. What drowned it was the app's own colour fading: flipping the
+  theme starts a 150-millisecond fade on **461** separate elements — every card, border, chip and
+  label — and that finishes long before the circle has travelled anywhere. What you saw was the
+  fade, not the sweep.
+- Those fades are now held still for exactly the length of the sweep, so the circle is the only
+  thing moving. It opens from the control you pressed and crosses the screen, and anything already
+  spinning or pulsing keeps going.
+
+### 🎨 The directory sign-in gets the same fingerprint sensor
+
+- Switching to the **Directory** tab no longer swaps the round sensor for an ordinary rectangular
+  button halfway through signing in. Both tabs present the same control, in the same place; the
+  directory one says "Sign in with LDAP" so it is never mistaken for the password form.
+
 ## 3.8.3 — the tour stops stacking, and the sensor moves to the middle — 2026-08-28
 
 ### 🐛 The product tour piled every screen you clicked on top of the last
