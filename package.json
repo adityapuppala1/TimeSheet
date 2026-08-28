@@ -29,7 +29,10 @@
     "test:e2e:report": "playwright show-report",
     "bootstrap": "node scripts/bootstrap-dev.mjs",
     "bootstrap:sync": "node scripts/bootstrap-dev.mjs --sync",
-    "check:public": "npm run check:public -w apps/api"
+    "check:public": "npm run check:public -w apps/api",
+    "pitch:html": "node scripts/pitch-export/build-html.mjs",
+    "pitch:pptx": "node scripts/pitch-export/build-pptx.mjs",
+    "pitch": "npm run pitch:html && npm run pitch:pptx"
   },
   "devDependencies": {
     "@eslint/js": "^9.39.5",
@@ -39,6 +42,7 @@
     "eslint-plugin-react-hooks": "^5.2.0",
     "eslint-plugin-sonarjs": "^3.0.7",
     "globals": "^17.11.0",
+    "pptxgenjs": "^4.0.1",
     "typescript": "^5.8.3",
     "typescript-eslint": "^8.67.0"
   },

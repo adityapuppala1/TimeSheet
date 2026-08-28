@@ -51,3 +51,7 @@ deploy/caddy/certs/*
 tok*.txt
 *.bench.json
 tests/e2e/.screenshot-anonymise.json
+
+# Generated pitch exports — rebuilt on demand with `npm run pitch`, never committed.
+# They are 3MB of base64 screenshots and a zip; both regenerate byte-for-byte from source.
+dist-pitch/
