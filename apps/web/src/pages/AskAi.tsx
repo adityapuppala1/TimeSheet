@@ -22,6 +22,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { AlertTriangle, Check, Copy, Eraser, Loader2, MessagesSquare, Send, Sparkles, ThumbsDown, ThumbsUp, Wrench } from "lucide-react";
 import { askAiApi, type AiAskExchangeRow } from "../services/api";
 import { AskAiCapabilitiesButton, useAskAiSuggestions } from "../components/ai/ask-ai-capabilities";
+import { SlashMenu, useSlashMenu } from "../components/ai/slash-menu";
 import { copyText } from "../lib/clipboard";
 import { cn } from "../lib/utils";
 import { AiMarkdown } from "../components/ui/ai-markdown";
@@ -45,6 +46,26 @@ export function AskAi() {
   // actually reach, so an administrator is offered the spend and health questions and an engineer
   // is not offered a question that would only come back refused.
   const suggestions = useAskAiSuggestions();
+  const promptRef = useRef<HTMLTextAreaElement | null>(null);
+  /* The same capability list the "What can it do?" dialog shows, and the same one the server builds
+     the prompt from — so the menu can never offer something the assistant would refuse. Cached by
+     react-query, so opening the menu costs no request. */
+  const capabilities = useQuery({ queryKey: ["ask-ai", "capabilities"], queryFn: () => askAiApi.capabilities() });
+  const slash = useSlashMenu({
+    value: prompt,
+    capabilities: capabilities.data,
+    onPick: (next) => {
+      setPrompt(next);
+      // Focus back into the box with the caret at the end, so the pick reads as the START of a
+      // sentence somebody keeps typing rather than as a finished command.
+      requestAnimationFrame(() => {
+        const el = promptRef.current;
+        if (!el) return;
+        el.focus();
+        el.setSelectionRange(next.length, next.length);
+      });
+    }
+  });
 
   const ask = useMutation({
     mutationFn: (q: string) => askAiApi.ask(q),
@@ -146,18 +167,30 @@ export function AskAi() {
             ))}
           </div>
         )}
+        {/* `relative` is what the slash menu anchors to — it opens upward, because the composer is
+            pinned to the bottom of the page. */}
+        <div className="relative">
+        <SlashMenu menu={slash} />
         <BorderGlow>
           <div className="flex items-end gap-2 p-2">
             <Textarea
+              ref={promptRef}
               value={prompt}
               onChange={(e) => setPrompt(e.target.value)}
               onKeyDown={(e) => {
+                // The menu gets first refusal on the key: while it is open, Enter picks a
+                // capability rather than sending a half-typed "/tick".
+                if (slash.handleKey(e)) return;
+                if (e.key === "Escape" && slash.open) {
+                  setPrompt("");
+                  return;
+                }
                 if (e.key === "Enter" && !e.shiftKey) {
                   e.preventDefault();
                   submit();
                 }
               }}
-              placeholder="Ask about your tickets, timesheets or changes… (Enter to send, Shift+Enter for a new line)"
+              placeholder="Ask about your tickets, timesheets or changes… (/ for capabilities, Enter to send)"
               className="max-h-40 min-h-[2.75rem] flex-1 resize-none border-0 bg-transparent focus-visible:ring-0"
               aria-label="Ask AI"
             />
@@ -167,6 +200,7 @@ export function AskAi() {
             </Button>
           </div>
         </BorderGlow>
+        </div>
         <p className="mt-1.5 text-center text-[10px] text-muted-foreground">
           Answers show the tools consulted, the model, tokens, cost and time. Ratings feed the workspace's AI quality
           datasets.

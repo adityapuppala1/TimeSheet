@@ -1278,6 +1278,21 @@ one-shot `POST /ai/ask`. Same toggle (`workspaceSearchEnabled`), same capability
   hiding them would make the panel read as the product's whole surface, and somebody would
   reasonably conclude the workspace has no spend reporting because their role cannot see it.
 
+  This endpoint now backs TWO surfaces: the "What can it do?" panel and the `/` menu in the
+  composer. **The slash menu is entirely client-side** — there is no `/tool_name` syntax on the
+  server and no new endpoint. Picking an entry writes plain English into the box; the loop still
+  chooses its own tools, so a pick steers the question rather than bypassing the tool selection.
+  That matters for the guardrails: a slash pick cannot reach a capability `visibleTools` would not
+  already have shown the model.
+
+**Answers are stripped of this loop's own protocol before they are returned or persisted.** A small
+model will sometimes narrate the envelope it is speaking in — publishing fenced blocks containing
+`{"action": "tool" …}` or `{"action": "refuse"}` as if they were content, above an otherwise
+correct table and chart. `stripProtocolEcho` removes a fenced block or standalone line whose body
+carries our own `action` key, and the announcement line that introduced it. It matches the escaped
+form too (`{ \"action\": \"answer\" …}`), which is how it actually arrived. A `json` fence
+holding real workspace data does not match and is left alone.
+
 `POST /ai-chat/ask` carries `aiRateLimit` (20/min per user) like every other model-spending route:
 a chat box is the easiest place in the product to spend a budget by holding down Enter, and the
 monthly AI ceiling underneath it is too coarse to stop a minute of hammering before it lands.

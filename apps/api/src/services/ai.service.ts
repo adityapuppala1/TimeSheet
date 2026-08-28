@@ -4213,6 +4213,54 @@ export const ASK_OUT_OF_SCOPE = [
  * Deliberately loose. A false positive costs one extra correction round; a false negative puts
  * machine syntax in front of a person.
  */
+/**
+ * Strips this loop's own protocol out of an answer before a person ever sees it.
+ *
+ * THE BUG, from a real run and visible in a screenshot. Asked to break tickets down by status and
+ * priority, the model produced the right table and the right chart — underneath three paragraphs of
+ * narration ("First, I will use the search_tickets tool…") and three fenced JSON blocks showing
+ * `{"action": "answer"…}`, `{"action": "tool"…}` and `{"action": "refuse"}`. All of that is the
+ * envelope this loop speaks in, echoed back as content. The answer was correct and looked broken.
+ *
+ * It got worse when `refuse` was added: a third action is a third token for a small model to
+ * narrate, and `{"action": "refuse"}` started appearing as literal text inside answers to questions
+ * it had not refused.
+ *
+ * WHY STRIP RATHER THAN RETRY. The content around the echo is usually fine — the table and the
+ * chart in that run were both correct and both computed from real tool results. Throwing the answer
+ * away to re-roll a small model would trade a cosmetic fault for a coin flip, and cost a call.
+ *
+ * WHY THIS IS SAFE. It only removes text that IS this protocol: a fenced block or a standalone line
+ * whose body is an object carrying our own `"action": "tool" | "answer" | "refuse"` key. No genuine
+ * answer about tickets, hours or changes contains that envelope — it is ours, not the workspace's.
+ * A `json` fence holding real data is left alone, because it will not match.
+ */
+export function stripProtocolEcho(markdown: string): string {
+  // The backslashes are optional on BOTH quotes of both halves: the model escapes its own envelope
+  // when it echoes it, so the observed form was `{ \"action\": \"answer\", … }` with the key itself
+  // escaped. A pattern that only allowed an unescaped key matched none of the real cases.
+  const ACTION = /\\?"action\\?"\s*:\s*\\?"(tool|answer|refuse)\\?"/;
+
+  let out = markdown
+    // Fenced blocks whose body is our envelope, with or without a language tag.
+    .replace(/```[a-zA-Z]*\s*\n?\s*\{[\s\S]*?\}\s*\n?```/g, (block) => (ACTION.test(block) ? "" : block))
+    // A bare envelope on its own line — same object, no fence around it.
+    .split("\n")
+    .filter((line) => !(ACTION.test(line) && line.trim().startsWith("{")))
+    .join("\n");
+
+  // The narration that introduces one of those blocks reads as a stray fragment once the block is
+  // gone, so a line that only announces a tool call goes with it. Anchored and short-only, so a
+  // sentence that happens to mention a tool while reporting a finding survives.
+  out = out
+    .split("\n")
+    .filter((line) => !/^\s*(first,?\s+)?i (will|'ll|am going to) (use|call|consult|check)\b.{0,90}$/i.test(line))
+    .join("\n");
+
+  // Collapse the blank runs the removals leave behind, then trim.
+  return out.replace(/\n{3,}/g, "\n\n").trim();
+}
+
 function looksLikeToolAttempt(raw: string): boolean {
   const text = raw.trim();
   // Any bare JSON object: either a mangled action, or — measured — a hand-built blob of invented
@@ -4546,7 +4594,7 @@ export async function askWorkspaceChat(input: {
     if (!parsed) {
       const answer = looksLikeToolAttempt(raw)
         ? ASK_FAILURE_ANSWERS[0]
-        : raw.trim() || ASK_FAILURE_ANSWERS[1];
+        : stripProtocolEcho(raw) || ASK_FAILURE_ANSWERS[1];
       const { interactionId } = await logAIUsage({
         feature: "ask_ai",
         params: { steps: step + 1, freeform: true },
@@ -4630,6 +4678,8 @@ export async function askWorkspaceChat(input: {
     }
 
     if (parsed.action === "answer") {
+      // Its own protocol, removed before anybody reads it — see stripProtocolEcho.
+      const answerMarkdown = stripProtocolEcho(parsed.markdown) || parsed.markdown;
       const { interactionId } = await logAIUsage({
         feature: "ask_ai",
         params: { steps: step + 1, tools: toolCalls.map((t) => t.tool), nudged: nudgedForNoTools || nudgedForStall },
@@ -4639,9 +4689,9 @@ export async function askWorkspaceChat(input: {
         outputTokens,
         userId: input.userId,
         prompt: input.prompt,
-        output: parsed.markdown
+        output: answerMarkdown
       });
-      return { answer: parsed.markdown, toolCalls, model: lastModel, provider: lastProvider, inputTokens, outputTokens, costUsd, interactionId: interactionId ?? null };
+      return { answer: answerMarkdown, toolCalls, model: lastModel, provider: lastProvider, inputTokens, outputTokens, costUsd, interactionId: interactionId ?? null };
     }
 
     const signature = `${parsed.tool}:${JSON.stringify(parsed.args ?? {})}`;
@@ -4701,7 +4751,7 @@ export async function askWorkspaceChat(input: {
   const final = parseJsonResponse(finalRaw, AskActionSchema);
   const answer =
     final?.action === "answer"
-      ? final.markdown
+      ? stripProtocolEcho(final.markdown) || final.markdown
       : looksLikeToolAttempt(finalRaw)
         ? ASK_FAILURE_ANSWERS[2]
         : finalRaw.trim() || ASK_FAILURE_ANSWERS[3];

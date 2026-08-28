@@ -12,6 +12,32 @@ number, on purpose — an installation must never render history for a version t
 
 _Nothing yet._
 
+## 3.9.0 — Ask AI stops showing you its plumbing, and gains a `/` menu — 2026-08-28
+
+### 🐛 Answers were printing the assistant's own internal instructions
+
+- **Reported with a screenshot, reproduced, fixed.** Asked to break tickets down by status and
+  priority, the assistant produced the right table and the right chart — underneath three paragraphs
+  of narration ("First, I will use the search_tickets tool…") and three blocks of raw JSON showing
+  its own internal message format. The answer was correct and looked broken.
+- All of that is the private envelope the assistant and the server talk in. It is now removed before
+  anything reaches you, in whichever form it arrives. Tables, charts, JSON blocks holding real data,
+  headings and bold are untouched — those are content.
+- **Existing answers in your history are not rewritten.** They were stored as they were sent. Clear
+  history if you would rather not see the old ones.
+
+### ✨ Type `/` in the chat box to see everything the assistant can do
+
+- The composer now opens a menu on `/`, listing every capability available to you — timesheets,
+  tickets, changes, projects, goals, delivery, and the operational ones an administrator holds.
+  Keep typing to filter it, arrow keys to move, Enter to pick.
+- **It lists exactly what your role allows**, from the same source the "What can it do?" panel and
+  the assistant itself are built from — so the menu can never offer something the assistant would
+  then refuse. Capabilities your role cannot use are shown greyed with the permission they need,
+  rather than hidden, so it is clear they exist and why they are unavailable.
+- Picking one writes the start of a plain-English question. It steers the assistant rather than
+  bypassing it, so nothing about what may be read has changed.
+
 ## 3.8.9 — the pitch deck sizes its market, and shows its working — 2026-08-28
 
 ### 🎨 A TAM / SAM / SOM slide you can argue with
