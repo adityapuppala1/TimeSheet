@@ -18,7 +18,7 @@ version: 0.7.0
 # (.github/workflows/ci.yml, "Chart appVersion must match the repo VERSION file"), so the second
 # drift was caught — by a red build on main that nobody had looked at. Bump this WITH the VERSION
 # file, in the same commit.
-appVersion: "3.8.4"
+appVersion: "3.8.5"
 keywords:
   - timesheet
   - ticketing

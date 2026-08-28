@@ -12,6 +12,26 @@ number, on purpose — an installation must never render history for a version t
 
 _Nothing yet._
 
+## 3.8.5 — every connector shows its own logo — 2026-08-28
+
+### 🎨 The integrations diagram names each system with its mark
+
+- The landing page's **Connects to what you already run** panel showed each group's connectors as a
+  run of names separated by dots. Each now carries its own icon — Google, Microsoft, Slack, Teams,
+  Google Chat, Telegram, GitHub and Actions, GitLab, Jenkins, Anthropic, Stripe and the rest — in
+  the brand's own colours, because a logo is what people scan for when the question is "is my stack
+  in there".
+- The protocols in the list — SAML, LDAP, IMAP, SMTP, Model Context Protocol — get drawn glyphs
+  that say what they do, since a protocol has no logo to show.
+
+### 🎨 The theme sweep now reads as a sweep from the button
+
+- Reported as starting from the middle of the screen. It wasn't: it began at the toggle every time,
+  but it reached almost full size within a tenth of a second, so the moment where the circle is
+  small and visibly *on* the button was gone before anyone could see it.
+- The circle's edge now travels outward at a steady speed for a little over half a second, so where
+  it started is plain. Nothing else about it changed.
+
 ## 3.8.4 — the theme wipe you can actually see — 2026-08-28
 
 ### 🎨 Switching theme now sweeps from the button instead of blinking
