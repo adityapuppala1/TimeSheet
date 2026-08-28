@@ -58,15 +58,15 @@ import { apiUrl, authApi, brandingApi, brandingLogoUrl, isMaintenanceLockoutErro
 import { useAuthStore } from "../store/auth";
 import { safeReturnTo } from "../utils/return-to";
 import { AuthBrandPanel } from "../components/marketing/AuthBrandPanel";
-import { BiometricSeal, type SealState } from "../components/auth/BiometricSeal";
+import { FingerprintSignIn, type SealState } from "../components/auth/FingerprintSignIn";
 import { GoogleMark, LdapMark, MicrosoftMark, SamlMark } from "../components/ui/provider-marks";
 
 // LDAP has no entry here — it's a direct bind, not a redirect, so it gets its own inline form
 // (see LdapLoginForm below) instead of a "Continue with…" button.
 const SSO_PROVIDER_META = {
-  GOOGLE: { label: "Continue with Google", path: "google", Mark: GoogleMark },
-  MICROSOFT: { label: "Continue with Microsoft", path: "microsoft", Mark: MicrosoftMark },
-  SAML: { label: "Continue with single sign-on", path: "saml", Mark: SamlMark }
+  GOOGLE: { label: "Continue with Google", short: "Google", path: "google", Mark: GoogleMark },
+  MICROSOFT: { label: "Continue with Microsoft", short: "Microsoft", path: "microsoft", Mark: MicrosoftMark },
+  SAML: { label: "Continue with single sign-on", short: "Single sign-on", path: "saml", Mark: SamlMark }
 } as const;
 
 const schema = z.object({
@@ -338,36 +338,45 @@ export function Login() {
                   className="mb-6 hidden h-11 max-w-[13rem] object-contain object-left lg:block"
                 />
               )}
-              {/* The seal is a STATUS light for the attempt in progress, not a biometric button —
-                  see BiometricSeal.tsx. It sits beside the heading rather than above the form so
-                  it never occupies a row of its own on a phone. */}
-              <div className="flex items-center gap-4">
-                <div className="min-w-0 flex-1">
-                  <h1 className="text-2xl font-black tracking-tight">Welcome back</h1>
-                  <p className="mt-2 text-sm text-muted-foreground">
-                    Sign in to log time, approve work, and review utilization.
-                  </p>
-                </div>
-                <BiometricSeal state={sealState} />
-              </div>
+              <h1 className="text-2xl font-black tracking-tight">Welcome back</h1>
+              <p className="mt-2 text-sm text-muted-foreground">
+                Sign in to log time, approve work, and review utilization.
+              </p>
 
               {ssoMethods.isLoading && <Skeleton className="mt-7 h-10 w-full" />}
 
               {ssoProviders.length > 0 && (
-                <div className="mt-7 grid gap-2.5">
-                  {ssoProviders.map((provider) => {
+                /*
+                  TWO ACROSS WHEN THERE ARE TWO OR MORE, one full-width row when there is one.
+                  A column of full-width "Continue with ..." buttons is the shape most sign-in
+                  pages default to, and with two providers it wastes a third of the panel's height
+                  on two lines that say the same word twice. Side by side they read as a choice
+                  between peers, which is what they are, and the provider mark is doing the
+                  identifying rather than the repeated verb.
+
+                  An odd last button spans both columns rather than sitting half-width beside a
+                  gap — a lone 50% button under two others looks like a layout that broke.
+                */
+                <div className={`mt-7 grid gap-2.5 ${ssoProviders.length > 1 ? "grid-cols-2" : ""}`}>
+                  {ssoProviders.map((provider, index) => {
                     const meta = SSO_PROVIDER_META[provider];
+                    const compact = ssoProviders.length > 1;
+                    const spansRow = compact && ssoProviders.length % 2 === 1 && index === ssoProviders.length - 1;
                     return (
-                      /* `justify-start` with a fixed-width mark slot, not the Button's default
-                         centring: centred content puts each provider's logo at a different x, so a
-                         stack of two or three buttons reads as a ragged column. Left-aligned, the
-                         marks form a rail and the labels all start together at every width. */
-                      <Button key={provider} asChild variant="outline" size="lg" className="justify-start gap-3">
+                      <Button
+                        key={provider}
+                        asChild
+                        variant="outline"
+                        size="lg"
+                        className={`justify-center gap-2.5 ${spansRow ? "col-span-2" : ""}`}
+                      >
                         <a href={apiUrl(`/auth/sso/${meta.path}/start`)}>
-                          <span className="grid w-5 shrink-0 place-items-center">
-                            <meta.Mark className="h-[18px] w-[18px]" />
-                          </span>
-                          <span className="truncate">{meta.label}</span>
+                          <meta.Mark className="h-[18px] w-[18px] shrink-0" />
+                          {/* The short name once there is more than one: at half width "Continue
+                              with Microsoft" truncates to "Continue with Micro…", which identifies
+                              the provider worse than the four-square logo already sitting next to
+                              it. With a single provider there is room for the full sentence. */}
+                          <span className="truncate">{compact ? meta.short : meta.label}</span>
                         </a>
                       </Button>
                     );
@@ -514,15 +523,9 @@ export function Login() {
                       )}
                     />
 
-                    <Button disabled={mutation.isPending} size="lg" className="mt-1">
-                      {mutation.isPending ? (
-                        "Signing in..."
-                      ) : (
-                        <>
-                          Sign in <ArrowRight className="h-4 w-4" />
-                        </>
-                      )}
-                    </Button>
+                    {/* The scanner is the submit control — see FingerprintSignIn.tsx for why it is
+                        a real button rather than the status light it started as. */}
+                    <FingerprintSignIn state={sealState} disabled={mutation.isPending} className="mt-1" />
 
                     <p className="mt-2 inline-flex items-start gap-2 rounded-lg bg-muted px-3 py-2 text-xs text-muted-foreground">
                       <ShieldCheck className="mt-0.5 h-3.5 w-3.5 shrink-0 text-primary" aria-hidden />

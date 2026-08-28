@@ -21,6 +21,7 @@ import { authApi } from "./services/api";
 import { platformAdminAuthApi } from "./services/platform-admin-api";
 import { useAuthStore } from "./store/auth";
 import { loginUrlFor, safeReturnTo } from "./utils/return-to";
+import { applyTheme, resolveInitialTheme } from "./lib/theme";
 import { hasSeenPlatformAdminSession, usePlatformAdminAuthStore } from "./store/platform-admin-auth";
 import { Toaster } from "./components/ui/toaster";
 import { TooltipProvider } from "./components/ui/tooltip";
@@ -286,11 +287,10 @@ function PlatformAdminAuthBootstrap() {
 }
 
 function ThemeBootstrap() {
+  // The storage key and the class toggle both live in lib/theme.ts now — this used to be a third
+  // hand-written copy of them, alongside Topbar's and the command palette's.
   useEffect(() => {
-    const stored = localStorage.getItem("timesheet:theme");
-    const prefersDark = typeof window !== "undefined" && window.matchMedia?.("(prefers-color-scheme: dark)").matches;
-    const isDark = stored ? stored === "dark" : Boolean(prefersDark);
-    document.documentElement.classList.toggle("dark", isDark);
+    applyTheme(resolveInitialTheme());
   }, []);
   return null;
 }

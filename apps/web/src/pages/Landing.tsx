@@ -83,7 +83,8 @@ import { Reveal, useScrollProgress, useSectionSpy } from "../components/marketin
 import { ScreenshotFrame } from "../components/marketing/ScreenshotFrame";
 import { AuthorityLadder } from "../components/marketing/AuthorityLadder";
 import { AuroraBackdrop } from "../components/marketing/AuroraBackdrop";
-import { CONNECTOR_COUNT, ConnectorMarquee } from "../components/marketing/ConnectorMarquee";
+import { CONNECTOR_COUNT } from "../components/marketing/connectors";
+import { ConnectorConstellation } from "../components/marketing/ConnectorConstellation";
 import { StatBand } from "../components/marketing/StatBand";
 import { handleSpotlight } from "../components/marketing/spotlight";
 
@@ -832,7 +833,7 @@ export function Landing() {
             <p className="mb-3 text-center text-xs uppercase tracking-[0.18em] text-muted-foreground">
               Connects to what you already run
             </p>
-            <ConnectorMarquee />
+            <ConnectorConstellation />
           </div>
         </section>
 

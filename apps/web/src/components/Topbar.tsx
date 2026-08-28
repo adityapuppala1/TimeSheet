@@ -7,7 +7,7 @@
  * WHO renders this: `layouts/AppLayout.tsx`.
  */
 import { useQuery } from "@tanstack/react-query";
-import { Command, Menu, Moon, Search, Sun } from "lucide-react";
+import { Command, Menu, Search } from "lucide-react";
 import { useEffect, useState } from "react";
 import { AccountMenuContent, initialsFor } from "./AccountMenu";
 import { MobileDrawerNav } from "./Sidebar";
@@ -15,26 +15,16 @@ import { Avatar, AvatarFallback, AvatarImage } from "./ui/avatar";
 import { Button } from "./ui/button";
 import { DropdownMenu, DropdownMenuTrigger } from "./ui/dropdown-menu";
 import { NotificationsBell } from "./NotificationsBell";
+import { AnimatedThemeToggler } from "./ui/animated-theme-toggler";
 import { CommandPalette, useCommandPaletteHotkey } from "./command-palette";
 import { ProductTour, shouldAutoStartTour, useTourController } from "./ProductTour";
 import { authApi, fileUrl } from "../services/api";
 import { useAuthStore } from "../store/auth";
 
-const THEME_KEY = "timesheet:theme";
-
 export function Topbar() {
   const user = useAuthStore((s) => s.user);
-  const [dark, setDark] = useState(() => {
-    if (typeof window === "undefined") return false;
-    return document.documentElement.classList.contains("dark");
-  });
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [drawerOpen, setDrawerOpen] = useState(false);
-
-  useEffect(() => {
-    document.documentElement.classList.toggle("dark", dark);
-    localStorage.setItem(THEME_KEY, dark ? "dark" : "light");
-  }, [dark]);
 
   useCommandPaletteHotkey(() => setPaletteOpen(true));
 
@@ -97,15 +87,7 @@ export function Topbar() {
             <NotificationsBell />
           </span>
 
-          <Button
-            variant="ghost"
-            size="icon"
-            onClick={() => setDark((value) => !value)}
-            aria-label={dark ? "Switch to light mode" : "Switch to dark mode"}
-            title="Toggle theme"
-          >
-            {dark ? <Sun className="h-4 w-4" /> : <Moon className="h-4 w-4" />}
-          </Button>
+          <AnimatedThemeToggler />
 
           {/* modal={false}: a menu doesn't need to freeze page scroll, and the scroll lock is
               what interacted badly with sticky positioning (see index.css's html comment). */}

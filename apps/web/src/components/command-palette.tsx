@@ -63,12 +63,11 @@ import { useAuthStore } from "../store/auth";
 import { usePlanningFeatures } from "../lib/use-planning";
 import { aiApi, authApi, type PlanningEffective } from "../services/api";
 import { toast } from "./ui/toaster";
+import { toggleTheme as switchTheme } from "../lib/theme";
 
 function serverMessage(err: any, fallback: string) {
   return err?.response?.data?.message ?? fallback;
 }
-
-const THEME_KEY = "timesheet:theme";
 
 interface NavRoute {
   label: string;
@@ -146,12 +145,14 @@ export function CommandPalette({ open, onOpenChange }: Props) {
     navigate(to);
   }
 
-  function toggleTheme() {
-    const isDark = document.documentElement.classList.toggle("dark");
-    localStorage.setItem(THEME_KEY, isDark ? "dark" : "light");
+  /* No origin passed, and that is on purpose: this path is reached from a keyboard-driven palette,
+     where there is no click point for the wipe to spread from. `switchTheme` degrades to an instant
+     change rather than inventing a centre — see lib/theme.ts. */
+  function handleToggleTheme() {
+    const next = switchTheme();
     force((value) => value + 1);
     onOpenChange(false);
-    toast.success(`Switched to ${isDark ? "dark" : "light"} mode`);
+    toast.success(`Switched to ${next} mode`);
   }
 
   const queryClient = useQueryClient();
@@ -206,7 +207,7 @@ export function CommandPalette({ open, onOpenChange }: Props) {
               <span className="ai-gradient-text">Ask AI</span>
             </CommandItem>
           )}
-          <CommandItem value="toggle theme dark light" onSelect={toggleTheme}>
+          <CommandItem value="toggle theme dark light" onSelect={handleToggleTheme}>
             <Sun className="text-muted-foreground dark:hidden" />
             <Moon className="hidden text-muted-foreground dark:block" />
             <span>Toggle theme</span>
