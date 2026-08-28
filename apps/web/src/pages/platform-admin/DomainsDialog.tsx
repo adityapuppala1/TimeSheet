@@ -16,6 +16,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { AlertTriangle, Check, Copy, Globe, Loader2, Trash2 } from "lucide-react";
 import { useState } from "react";
+import { Badge } from "../../components/ui/badge";
 import { Button } from "../../components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "../../components/ui/dialog";
 import { Input } from "../../components/ui/input";
@@ -78,14 +79,12 @@ function DomainCard({ orgId, row, onChanged }: { orgId: string; row: OrgDomainRo
           <Globe className="h-4 w-4 text-muted-foreground" />
           {row.domain}
         </span>
-        <span
-          className={`inline-flex items-center gap-1.5 rounded-full px-2.5 py-0.5 text-[11px] font-semibold ${
-            row.verified ? "bg-emerald-500/15 text-emerald-300" : "bg-amber-500/15 text-accent"
-          }`}
-        >
+        {/* Tokens, not palette literals: `text-emerald-300` is a dark-mode foreground, and on the
+            15%-opacity wash it was unreadable in the light theme this console now follows. */}
+        <Badge variant={row.verified ? "success" : "warning"} className="gap-1.5">
           {row.verified ? <Check className="h-3 w-3" /> : <AlertTriangle className="h-3 w-3" />}
           {row.verified ? "Verified" : "Awaiting DNS"}
-        </span>
+        </Badge>
       </div>
 
       {!row.verified && (
@@ -98,7 +97,7 @@ function DomainCard({ orgId, row, onChanged }: { orgId: string; row: OrgDomainRo
           <CopyField label="Record value" value={row.recordValue} />
           {/* Verbatim, not summarised: "exists but doesn't match" and "not found" send somebody to
               two different places, and flattening them into one message costs a round trip. */}
-          {row.lastCheckError && <p className="text-xs leading-5 text-accent">{row.lastCheckError}</p>}
+          {row.lastCheckError && <p className="text-xs leading-5 text-warning">{row.lastCheckError}</p>}
         </>
       )}
 
@@ -119,7 +118,7 @@ function DomainCard({ orgId, row, onChanged }: { orgId: string; row: OrgDomainRo
         <Button
           size="sm"
           variant="ghost"
-          className="text-muted-foreground hover:bg-muted hover:text-red-300"
+          className="text-muted-foreground hover:bg-muted hover:text-destructive"
           disabled={remove.isPending}
           onClick={() => remove.mutate()}
         >

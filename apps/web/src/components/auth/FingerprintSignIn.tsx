@@ -45,24 +45,48 @@ const CAPTION: Record<Exclude<SealState, "idle">, string> = {
   error: "Try again"
 };
 
-const DISC: Record<SealState, string> = {
-  idle: "border-primary/30 bg-primary/5 text-primary group-hover:border-primary/60 group-hover:bg-primary/10",
-  scanning: "border-primary bg-primary/15 text-primary",
-  success: "border-success bg-success/15 text-success",
-  error: "border-destructive bg-destructive/10 text-destructive"
+/**
+ * The sensor's resting/working colour. The workspace app signs in with `primary` (teal); the
+ * platform-admin console signs in with `accent` (amber) — the one colour that tells an operator at
+ * a glance which of the two consoles they are looking at, and the reason its sign-in page must not
+ * simply be the tenant one re-skinned by accident.
+ *
+ * Only the IDLE and SCANNING states differ. Success is green and failure is red in both, because
+ * those are outcome semantics, not brand.
+ */
+export type SealTone = "primary" | "accent";
+
+const DISC: Record<SealTone, Record<SealState, string>> = {
+  primary: {
+    idle: "border-primary/30 bg-primary/5 text-primary group-hover:border-primary/60 group-hover:bg-primary/10",
+    scanning: "border-primary bg-primary/15 text-primary",
+    success: "border-success bg-success/15 text-success",
+    error: "border-destructive bg-destructive/10 text-destructive"
+  },
+  accent: {
+    idle: "border-accent/40 bg-accent/5 text-accent group-hover:border-accent/70 group-hover:bg-accent/10",
+    scanning: "border-accent bg-accent/15 text-accent",
+    success: "border-success bg-success/15 text-success",
+    error: "border-destructive bg-destructive/10 text-destructive"
+  }
 };
 
-const CAPTION_TONE: Record<SealState, string> = {
-  idle: "text-foreground",
-  scanning: "text-primary",
-  success: "text-success",
-  error: "text-destructive"
+const CAPTION_TONE: Record<SealTone, Record<SealState, string>> = {
+  primary: { idle: "text-foreground", scanning: "text-primary", success: "text-success", error: "text-destructive" },
+  accent: { idle: "text-foreground", scanning: "text-accent", success: "text-success", error: "text-destructive" }
+};
+
+/** The pulse rings and the scan line, which are the same hue as the disc at rest. */
+const RING: Record<SealTone, { busy: string; hover: string; sweep: string; arc: string }> = {
+  primary: { busy: "border-primary/40", hover: "border-primary/20", sweep: "via-primary/60", arc: "text-primary" },
+  accent: { busy: "border-accent/40", hover: "border-accent/20", sweep: "via-accent/60", arc: "text-accent" }
 };
 
 export function FingerprintSignIn({
   state,
   disabled,
   label = "Sign in",
+  tone = "primary",
   className
 }: {
   state: SealState;
@@ -71,6 +95,8 @@ export function FingerprintSignIn({
    *  LDAP", which is the name tests/e2e/helpers/sign-in.ts already warns is matched by a loose
    *  `/sign in/i` — so the two sensors stay tellable apart by an exact-name locator. */
   label?: string;
+  /** `accent` for the platform-admin console — see SealTone. */
+  tone?: SealTone;
   className?: string;
 }) {
   const busy = state === "scanning";
@@ -103,7 +129,7 @@ export function FingerprintSignIn({
             style={{ animationDelay: `${i * 700}ms` }}
             className={cn(
               "absolute inset-0 rounded-full border motion-reduce:hidden",
-              busy ? "animate-ping border-primary/40" : "border-primary/20 opacity-0 group-hover:animate-ping",
+              busy ? `animate-ping ${RING[tone].busy}` : `${RING[tone].hover} opacity-0 group-hover:animate-ping`,
               settled && "hidden"
             )}
           />
@@ -112,7 +138,7 @@ export function FingerprintSignIn({
         {/* The rotating arc. A quarter drawn, so it reads as motion rather than as a progress meter —
             nothing here knows a percentage. */}
         {busy && (
-          <svg className="seal-ring absolute inset-0 h-full w-full text-primary" viewBox="0 0 96 96" aria-hidden focusable="false">
+          <svg className={cn("seal-ring absolute inset-0 h-full w-full", RING[tone].arc)} viewBox="0 0 96 96" aria-hidden focusable="false">
             <circle cx="48" cy="48" r="45" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeDasharray="70 213" />
           </svg>
         )}
@@ -122,7 +148,7 @@ export function FingerprintSignIn({
         <span
           className={cn(
             "relative grid h-full w-full place-items-center overflow-hidden rounded-full border-2 transition-colors duration-300",
-            DISC[state]
+            DISC[tone][state]
           )}
         >
           <Fingerprint
@@ -134,7 +160,7 @@ export function FingerprintSignIn({
           {busy && (
             <span
               aria-hidden
-              className="seal-sweep pointer-events-none absolute inset-x-0 h-6 bg-gradient-to-b from-transparent via-primary/60 to-transparent"
+              className={cn("seal-sweep pointer-events-none absolute inset-x-0 h-6 bg-gradient-to-b from-transparent to-transparent", RING[tone].sweep)}
             />
           )}
         </span>
@@ -155,7 +181,7 @@ export function FingerprintSignIn({
       {/* The caption is OUTSIDE the button on purpose — inside, it would be part of the control's
           name and would be read out twice, once as the name and once as the status. Out here it is
           a plain live region that changes underneath a button whose name never does. */}
-      <span aria-live="polite" className={cn("text-sm font-semibold transition-colors duration-300", CAPTION_TONE[state])}>
+      <span aria-live="polite" className={cn("text-sm font-semibold transition-colors duration-300", CAPTION_TONE[tone][state])}>
         {state === "idle" ? label : CAPTION[state]}
       </span>
     </div>

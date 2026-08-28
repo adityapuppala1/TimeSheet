@@ -370,12 +370,28 @@ export interface PlatformEmailLogRow {
   organization: { name: string; slug: string } | null;
 }
 
+export interface PlatformRateRow {
+  sent: number;
+  failed: number;
+  skipped: number;
+  test: number;
+  /** sent / (sent + failed). Skipped is excluded — see the service. Null until something settles. */
+  successRate: number | null;
+  lastSentAt: string | null;
+}
+
 export interface PlatformEmailAnalytics {
+  /** Echo of the window that was MEASURED, not the one that was asked for. */
+  from: string;
+  to: string;
   windowDays: number;
-  totals: { sent: number; failed: number; skipped: number; test: number };
-  perTemplate: Array<{ key: string; group: string; sent: number; failed: number; skipped: number; test: number }>;
-  perDay: Array<{ day: string; sent: number; failed: number }>;
-  failureReasons: Array<{ reason: string; count: number }>;
+  totals: PlatformRateRow;
+  perDay: Array<{ day: string; sent: number; failed: number; skipped: number }>;
+  perTemplate: Array<PlatformRateRow & { key: string; group: string }>;
+  perDomain: Array<PlatformRateRow & { domain: string; topFailures: Array<{ reason: string; count: number }> }>;
+  perTenant: Array<PlatformRateRow & { organizationId: string | null; name: string; slug: string | null; status: OrgStatus | null; markers: string[] }>;
+  failureReasons: Array<{ reason: string; count: number; lastAt: string }>;
+  domainsTruncated: boolean;
 }
 
 export interface RetentionSettings {
@@ -450,6 +466,69 @@ export interface TrialFeedbackRow {
   organization: { name: string; slug: string; status: OrgStatus; planTier: PlanTier };
 }
 
+export interface TrialFeedbackAnalytics {
+  count: number;
+  avgRating: number | null;
+  /** How many answers carried WORDS, not only a score — the response rate on the part that matters. */
+  withWords: number;
+  distribution: Array<{ rating: number; count: number }>;
+  wouldReturn: Array<{ answer: string; count: number }>;
+  stages: Array<{ stage: string; count: number; avgRating: number | null; wouldReturn: number }>;
+  byStatus: Array<{ status: OrgStatus; count: number; avgRating: number | null }>;
+  byTier: Array<{ tier: PlanTier; count: number; avgRating: number | null }>;
+  monthly: Array<{ month: string; count: number; avgRating: number | null }>;
+  rows: TrialFeedbackRow[];
+}
+
+export interface PlatformAuditPage {
+  rows: PlatformAuditRow[];
+  total: number;
+  page: number;
+  limit: number;
+  pages: number;
+  entities: Array<{ entity: string; count: number }>;
+}
+
+export interface PlatformSessionRow {
+  id: string;
+  userAgent: string | null;
+  ipAddress: string | null;
+  createdAt: string;
+  expiresAt: string;
+  refreshRotatedAt: string | null;
+  current: boolean;
+}
+
+export interface PlatformSessionPage {
+  rows: PlatformSessionRow[];
+  total: number;
+  page: number;
+  limit: number;
+  pages: number;
+}
+
+export interface SnapshotFile {
+  /** The file name, which is also the API's id. Never a path. */
+  id: string;
+  slug: string | null;
+  organizationId: string | null;
+  organizationName: string | null;
+  /** True when that workspace exists and currently has NO database — i.e. this can be restored. */
+  restorable: boolean;
+  bytes: number;
+  createdAt: string;
+  modifiedAt: string;
+}
+
+export interface SnapshotListing {
+  configured: boolean;
+  directory: string | null;
+  problem: string | null;
+  totalBytes: number;
+  files: SnapshotFile[];
+  tools: { mysqldump: boolean; mysql: boolean; mysqldumpPath: string; mysqlPath: string };
+}
+
 export interface PlatformAdminAccountRow {
   id: string;
   email: string;
@@ -481,7 +560,8 @@ export const platformAdminConsoleApi = {
   emailLog: async (params?: { status?: string; orgId?: string; limit?: number }) => (await platformAdminApi.get<PlatformEmailLogRow[]>("/email-log", { params })).data,
   emailLogEntry: async (id: string) => (await platformAdminApi.get<PlatformEmailLogRow & { html: string | null; metadata: Record<string, unknown> | null }>(`/email-log/${id}`)).data,
   resendEmail: async (id: string) => (await platformAdminApi.post<{ sent: true; emailLogId: string | null }>(`/email-log/${id}/resend`)).data,
-  emailAnalytics: async () => (await platformAdminApi.get<PlatformEmailAnalytics>("/email-analytics")).data,
+  emailAnalytics: async (range?: { from?: string; to?: string }) =>
+    (await platformAdminApi.get<PlatformEmailAnalytics>("/email-analytics", { params: range })).data,
 
   retention: async () => (await platformAdminApi.get<{ settings: RetentionSettings; markers: string[]; queue: RetentionQueueRow[] }>("/retention")).data,
   updateRetentionSettings: async (patch: Partial<Omit<RetentionSettings, "updatedAt">>) => (await platformAdminApi.put<RetentionSettings>("/retention/settings", patch)).data,
@@ -492,16 +572,32 @@ export const platformAdminConsoleApi = {
   deleteUnderPolicy: async (orgId: string, confirmSlug: string) =>
     (await platformAdminApi.post<{ deleted: boolean; databaseName: string | null; snapshot?: { taken: boolean; path?: string; reason?: string }; confirmationSent?: boolean }>(`/retention/${orgId}/delete`, { confirmSlug })).data,
 
-  feedback: async () =>
-    (await platformAdminApi.get<{ count: number; avgRating: number | null; distribution: Array<{ rating: number; count: number }>; wouldReturn: Array<{ answer: string; count: number }>; rows: TrialFeedbackRow[] }>("/feedback")).data,
+  feedback: async () => (await platformAdminApi.get<TrialFeedbackAnalytics>("/feedback")).data,
 
-  audit: async (params?: { entity?: string; limit?: number }) => (await platformAdminApi.get<PlatformAuditRow[]>("/audit", { params })).data,
+  audit: async (params?: { entity?: string; actorType?: string; limit?: number; page?: number }) =>
+    (await platformAdminApi.get<PlatformAuditPage>("/audit", { params })).data,
 
   admins: async () => (await platformAdminApi.get<PlatformAdminAccountRow[]>("/admins")).data,
   createAdmin: async (payload: { email: string; name: string }) => (await platformAdminApi.post<{ id: string; email: string; name: string; temporaryPassword: string }>("/admins", payload)).data,
   setAdminStatus: async (id: string, status: "ACTIVE" | "INACTIVE") => (await platformAdminApi.patch<{ id: string; status: string }>(`/admins/${id}`, { status })).data,
-  sessions: async () => (await platformAdminApi.get<Array<{ id: string; userAgent: string | null; ipAddress: string | null; createdAt: string; expiresAt: string; current: boolean }>>("/auth/sessions")).data,
-  endSession: async (id: string) => platformAdminApi.delete(`/auth/sessions/${id}`)
+  sessions: async (params?: { page?: number; limit?: number }) => (await platformAdminApi.get<PlatformSessionPage>("/auth/sessions", { params })).data,
+  endSession: async (id: string) => platformAdminApi.delete(`/auth/sessions/${id}`),
+  /** Ends every session except the caller's own — the "a machine I no longer have" button. */
+  revokeOtherSessions: async () => (await platformAdminApi.post<{ revoked: number }>("/auth/sessions/revoke-others")).data,
+
+  backups: async () => (await platformAdminApi.get<SnapshotListing>("/backups")).data,
+  /**
+   * A BLOB, not an `<a href>`, for the reason written on `timesheetReportApi.download`: the route is
+   * authenticated with the in-memory bearer token, and a plain link carries no Authorization
+   * header — the console's refresh cookie is path-scoped to `/auth`, so it would not rescue it
+   * either. A link here downloads a 401 page named `<slug>.sql`, which is the worst possible
+   * failure: it looks like it worked.
+   */
+  downloadBackup: async (id: string) =>
+    (await platformAdminApi.get(`/backups/${encodeURIComponent(id)}/download`, { responseType: "blob" })).data as Blob,
+  restoreBackup: async (id: string, organizationId: string, confirmSlug: string) =>
+    (await platformAdminApi.post<{ restored: true; organizationId: string; slug: string; databaseName: string; status: string }>(`/backups/${encodeURIComponent(id)}/restore`, { organizationId, confirmSlug })).data,
+  deleteBackup: async (id: string) => (await platformAdminApi.delete<{ deleted: true; id: string }>(`/backups/${encodeURIComponent(id)}`)).data
 };
 
 /** The public doors a retention email opens. Cross-tenant; no auth; the token is the credential. */

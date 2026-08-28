@@ -2103,7 +2103,28 @@ Same prefix and auth, different router (`platform-admin-console.controller.ts`).
 - `GET /admins`, `POST /admins` `{ email, name }` (returns a generated one-time password, shown
   once), `PATCH /admins/:id` `{ status }` — the last active admin cannot be deactivated, and nobody
   can deactivate the account they are signed in with.
-- `GET /auth/sessions`, `DELETE /auth/sessions/:id` — this admin's own console sessions.
+- `GET /auth/sessions?page&limit`, `DELETE /auth/sessions/:id`, `POST /auth/sessions/revoke-others` —
+  this admin's own console sessions, paginated. `revoke-others` ends every session except the
+  caller's, deliberately keeping the caller signed in.
+- `GET /audit?page&limit&entity&actorType` — the control-plane audit trail, paginated, with the
+  entity filter's options returned alongside the rows (they come from the data, so a new entity type
+  appears the first time something writes one).
+- `GET /email-analytics?from&to` — delivery analytics over an inclusive calendar-date window
+  (default 90 days): totals with a success rate, a zero-filled daily series, and breakdowns per
+  template, per recipient **domain** (with that domain's top failure reasons) and per **workspace**
+  (with the retention stages that have reached it). Skipped is excluded from every rate — nothing
+  tried to deliver it — and test sends are excluded from every series.
+- `GET /feedback` — trial feedback plus its analytics: rating distribution, would-they-return split,
+  per-stage / per-tier / per-lifecycle means, a twelve-month trend, and how many answers carried
+  free text rather than only a score.
+- `GET /backups` — the retention snapshots on this host: each file's size, its workspace, whether it
+  is restorable, and whether `mysqldump`/`mysql` are actually present.
+  `GET /backups/:id/download` streams one (authenticated, so a client must send the bearer token —
+  a plain link downloads a 401 page named like a backup).
+  `POST /backups/:id/restore` `{ organizationId, confirmSlug }` recreates the workspace's database
+  from the dump and reopens it in `GRACE` with `retentionHold` set; it **refuses if the organization
+  still has a database**, so a live tenant can never be overwritten.
+  `DELETE /backups/:id` removes one from disk.
 
 ## Public retention doors
 

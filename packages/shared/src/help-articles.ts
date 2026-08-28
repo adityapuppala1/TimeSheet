@@ -583,6 +583,23 @@ export const HELP_ARTICLES: HelpArticle[] = [
       "Audit trail: every action taken on a tenant from outside it — provisioning, rescues, retention decisions, settings changes — plus what customers did through the retention emails."
     ],
     keywords: ["platform settings", "smtp", "mail server", "platform admins", "sessions", "audit trail", "control plane", "who did that"]
+  },
+  {
+    id: "platform-admin-backups",
+    category: "Platform & operations",
+    title: "Backups: what is kept, and how to restore one",
+    roles: SA,
+    where: "/platform-admin → Backups",
+    when: "A workspace was deleted under the retention policy and the customer wants it back, or you need to hand somebody their data.",
+    steps: [
+      "A snapshot is taken automatically, immediately before the retention programme drops a workspace — only if a Snapshot directory is set under Trial retention → The policy.",
+      "The page lists every snapshot with its size, its workspace and whether it can be restored. It also probes the host for mysqldump and mysql: if either is missing, that is why a directory is empty or a Restore is disabled.",
+      "Download hands you the .sql file. Restore recreates the database, imports the dump, and reopens the workspace in its grace state with the deletion held — it never signs anyone in or takes a payment.",
+      "A restore is refused if the workspace still has a database. Overwriting a live tenant is not reachable from this console.",
+      "Delete removes a snapshot from disk. If its workspace is already gone, that is the last copy — there is no undo."
+    ],
+    notes: "These are retention snapshots, not platform backups: they only ever cover customers who lapsed and were deleted. Backing up live workspaces is your database's job — see docs/NEW_ORGANIZATION_SETUP.md § 7. After a restore, run npm run db:migrate:tenants if the platform has moved on since the dump was taken.",
+    keywords: ["backup", "backups", "snapshot", "mysqldump", "restore", "recover", "deleted workspace", "download", "sql dump", "data recovery"]
   }
 ];
 

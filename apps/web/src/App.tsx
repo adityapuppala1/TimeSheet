@@ -95,6 +95,7 @@ const PlatformAdminRetention = lazy(() => import("./pages/platform-admin/Retenti
 const PlatformAdminEmails = lazy(() => import("./pages/platform-admin/Emails").then((m) => ({ default: m.PlatformAdminEmails })));
 const PlatformAdminFeedback = lazy(() => import("./pages/platform-admin/Feedback").then((m) => ({ default: m.PlatformAdminFeedback })));
 const PlatformAdminSettings = lazy(() => import("./pages/platform-admin/Settings").then((m) => ({ default: m.PlatformAdminSettings })));
+const PlatformAdminBackups = lazy(() => import("./pages/platform-admin/Backups").then((m) => ({ default: m.PlatformAdminBackups })));
 const TrialFeedbackPage = lazy(() => import("./pages/TrialFeedback").then((m) => ({ default: m.TrialFeedbackPage })));
 const ReactivatePage = lazy(() => import("./pages/Reactivate").then((m) => ({ default: m.ReactivatePage })));
 
@@ -236,6 +237,7 @@ const router = createBrowserRouter([
       { path: "retention", element: <PageShell><PlatformAdminRetention /></PageShell> },
       { path: "emails", element: <PageShell><PlatformAdminEmails /></PageShell> },
       { path: "feedback", element: <PageShell><PlatformAdminFeedback /></PageShell> },
+      { path: "backups", element: <PageShell><PlatformAdminBackups /></PageShell> },
       { path: "settings", element: <PageShell><PlatformAdminSettings /></PageShell> }
     ]
   },

@@ -73,7 +73,17 @@ function useMediaQuery(query: string): boolean {
   return matches;
 }
 
-export function AuthScene({ className }: { className?: string }) {
+/**
+ * Which theme token the lattice is lit with. The workspace sign-in uses the product's own
+ * `--primary`; the platform-admin console uses `--accent` — the amber that says "control plane"
+ * everywhere else in that console — against the same `--info` so the depth cue survives.
+ *
+ * A prop rather than a second copy of this file: the geometry, the teardown and the media-query
+ * gating are the hard parts and they are identical. Only one colour differs.
+ */
+export type AuthSceneTone = "primary" | "accent";
+
+export function AuthScene({ className, tone = "primary" }: { className?: string; tone?: AuthSceneTone }) {
   const hostRef = useRef<HTMLDivElement | null>(null);
   const isDesktop = useMediaQuery("(min-width: 1024px)");
   const prefersReducedMotion = useMediaQuery("(prefers-reduced-motion: reduce)");
@@ -120,7 +130,7 @@ export function AuthScene({ className }: { className?: string }) {
       const camera = new THREE.PerspectiveCamera(45, width / height, 0.1, 100);
       camera.position.set(0, 0, 5.4);
 
-      const primary = tokenHex("--primary", 0x0f9aa8);
+      const primary = tone === "accent" ? tokenHex("--accent", 0xf59e0b) : tokenHex("--primary", 0x0f9aa8);
       const info = tokenHex("--info", 0x2563eb);
 
       /* ---- The work items ------------------------------------------------------------------ */
@@ -261,7 +271,7 @@ export function AuthScene({ className }: { className?: string }) {
       cancelled = true;
       teardown?.();
     };
-  }, [shouldRun]);
+  }, [shouldRun, tone]);
 
   // `aria-hidden` and empty: it is decoration, and the panel beside it carries the words.
   return <div ref={hostRef} className={className} aria-hidden />;

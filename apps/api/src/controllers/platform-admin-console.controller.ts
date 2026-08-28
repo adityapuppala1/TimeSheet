@@ -8,6 +8,7 @@
  * Kept as its own router so the original file stays the org-lifecycle file it was; everything here
  * is about running the platform rather than one tenant.
  */
+import { createReadStream } from "node:fs";
 import { Router } from "express";
 import { z } from "zod";
 import { controlPrisma } from "../config/control-prisma.js";
@@ -37,6 +38,8 @@ import {
   updateRetentionSettings
 } from "../services/retention.service.js";
 import { getPlatformAnalytics } from "../services/platform-admin-analytics.service.js";
+import { getPlatformEmailAnalytics } from "../services/platform-email-analytics.service.js";
+import { deleteSnapshot, listSnapshots, restoreSnapshot, snapshotPath } from "../services/platform-backup.service.js";
 
 export const platformAdminConsoleRouter = Router();
 platformAdminConsoleRouter.use(requirePlatformAdmin);
@@ -283,59 +286,23 @@ platformAdminConsoleRouter.post("/email-log/:id/resend", async (req, res) => {
   res.json({ sent: true, emailLogId: result.emailLogId });
 });
 
-platformAdminConsoleRouter.get("/email-analytics", async (_req, res) => {
-  const now = Date.now();
-  const since90 = new Date(now - 90 * DAY_MS);
-  const rows = await controlPrisma.platformEmailLog.findMany({
-    where: { createdAt: { gte: since90 } },
-    select: { templateKey: true, status: true, isTest: true, createdAt: true, errorMessage: true, dayMarker: true }
-  });
-  const totals = { sent: 0, failed: 0, skipped: 0, test: 0 };
-  const perTemplate = new Map<string, { key: string; sent: number; failed: number; skipped: number; test: number }>();
-  const perDay = new Map<string, { day: string; sent: number; failed: number }>();
-  const failures = new Map<string, number>();
-  for (const r of rows) {
-    const t = perTemplate.get(r.templateKey) ?? { key: r.templateKey, sent: 0, failed: 0, skipped: 0, test: 0 };
-    perTemplate.set(r.templateKey, t);
-    if (r.isTest) {
-      totals.test += 1;
-      t.test += 1;
-      continue;
-    }
-    const day = r.createdAt.toISOString().slice(0, 10);
-    const d = perDay.get(day) ?? { day, sent: 0, failed: 0 };
-    perDay.set(day, d);
-    if (r.status === "SENT") {
-      totals.sent += 1;
-      t.sent += 1;
-      d.sent += 1;
-    } else if (r.status === "FAILED") {
-      totals.failed += 1;
-      t.failed += 1;
-      d.failed += 1;
-      const reason = (r.errorMessage ?? "Unknown").replace(/\d{3}-?\d\.\d\.\d/g, "").trim().slice(0, 120);
-      failures.set(reason, (failures.get(reason) ?? 0) + 1);
-    } else {
-      totals.skipped += 1;
-      t.skipped += 1;
-    }
+/**
+ * Delivery analytics for platform mail. The aggregation lives in
+ * `platform-email-analytics.service.ts` — this route only resolves the window.
+ *
+ * The window is a pair of inclusive calendar dates, the same contract the workspace-side email
+ * analytics uses, so an operator who has learned one date picker has learned both. Omitted bounds
+ * mean the last 90 days.
+ */
+platformAdminConsoleRouter.get(
+  "/email-analytics",
+  validate(z.object({ query: z.object({ from: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(), to: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional() }).partial() })),
+  async (req, res) => {
+    const from = typeof req.query.from === "string" ? req.query.from : undefined;
+    const to = typeof req.query.to === "string" ? req.query.to : undefined;
+    res.json(await getPlatformEmailAnalytics(from, to));
   }
-  // Every day in the window, zero-filled, so the chart's x-axis is time and not "days with mail".
-  const days = Array.from({ length: 90 }, (_, i) => {
-    const day = new Date(now - (89 - i) * DAY_MS).toISOString().slice(0, 10);
-    return perDay.get(day) ?? { day, sent: 0, failed: 0 };
-  });
-  res.json({
-    windowDays: 90,
-    totals,
-    perTemplate: PLATFORM_TEMPLATES.map((def) => {
-      const counts = perTemplate.get(def.key) ?? { key: def.key, sent: 0, failed: 0, skipped: 0, test: 0 };
-      return { key: def.key, group: def.group, sent: counts.sent, failed: counts.failed, skipped: counts.skipped, test: counts.test };
-    }),
-    perDay: days,
-    failureReasons: [...failures.entries()].map(([reason, count]) => ({ reason, count })).sort((a, b) => b.count - a.count).slice(0, 8)
-  });
-});
+);
 
 /* ================================ Trial retention =============================== */
 
@@ -393,24 +360,102 @@ platformAdminConsoleRouter.post("/retention/:orgId/delete", validate(z.object({ 
 
 /* =================================== Feedback ================================== */
 
+/**
+ * Customer feedback, with the analytics an operator actually asks of it: not only how many and how
+ * happy, but WHERE the answers came from (which retention stage), WHICH kind of workspace gave them
+ * (plan tier and lifecycle state), and whether the score is moving.
+ *
+ * WHY THE TREND IS BY MONTH AND NOT BY DAY. Feedback arrives in single figures a week even on a
+ * healthy platform; a daily series of a 1-to-5 rating is almost all noise and empty buckets. A
+ * monthly mean over twelve months is the shortest window in which a change in it means something.
+ */
 platformAdminConsoleRouter.get("/feedback", async (_req, res) => {
   const rows = await controlPrisma.trialFeedback.findMany({
     orderBy: { createdAt: "desc" },
-    take: 200,
-    include: { organization: { select: { name: true, slug: true, status: true, planTier: true } } }
+    take: 500,
+    include: { organization: { select: { name: true, slug: true, status: true, planTier: true, trialTier: true } } }
   });
+
   const distribution = [1, 2, 3, 4, 5].map((rating) => ({ rating, count: rows.filter((r) => r.rating === rating).length }));
   const wouldReturn = ["yes", "maybe", "no"].map((answer) => ({ answer, count: rows.filter((r) => r.wouldReturn === answer).length }));
-  const avg = rows.length ? Number((rows.reduce((s, r) => s + r.rating, 0) / rows.length).toFixed(2)) : null;
-  res.json({ count: rows.length, avgRating: avg, distribution, wouldReturn, rows });
+  const mean = (list: typeof rows) => (list.length ? Number((list.reduce((sum, r) => sum + r.rating, 0) / list.length).toFixed(2)) : null);
+
+  // Per stage: the day-10 check-in and the post-trial reminders are different questions asked of
+  // different moods, and averaging them together hides which one is bad.
+  const stages = [...new Set(rows.map((r) => r.stage))].map((stage) => {
+    const of = rows.filter((r) => r.stage === stage);
+    return { stage, count: of.length, avgRating: mean(of), wouldReturn: of.filter((r) => r.wouldReturn === "yes").length };
+  }).sort((a, b) => b.count - a.count);
+
+  const byStatus = [...new Set(rows.map((r) => r.organization.status))].map((status) => {
+    const of = rows.filter((r) => r.organization.status === status);
+    return { status, count: of.length, avgRating: mean(of) };
+  });
+
+  const byTier = [...new Set(rows.map((r) => r.organization.trialTier ?? r.organization.planTier))].map((tier) => {
+    const of = rows.filter((r) => (r.organization.trialTier ?? r.organization.planTier) === tier);
+    return { tier, count: of.length, avgRating: mean(of) };
+  });
+
+  const now = new Date();
+  const monthly = Array.from({ length: 12 }, (_, i) => {
+    const start = new Date(now.getFullYear(), now.getMonth() - (11 - i), 1);
+    const next = new Date(now.getFullYear(), now.getMonth() - (10 - i), 1);
+    const of = rows.filter((r) => r.createdAt >= start && r.createdAt < next);
+    return { month: start.toISOString().slice(0, 7), count: of.length, avgRating: mean(of) };
+  });
+
+  // The words, not only the scores: the two free-text fields are why this screen exists, so the
+  // response rate on them is worth stating — a wall of rating-only answers means the form is asking
+  // badly, not that customers have nothing to say.
+  const withWords = rows.filter((r) => (r.liked ?? "").trim() || (r.missing ?? "").trim() || (r.comment ?? "").trim()).length;
+
+  res.json({
+    count: rows.length,
+    avgRating: mean(rows),
+    withWords,
+    distribution,
+    wouldReturn,
+    stages,
+    byStatus,
+    byTier,
+    monthly,
+    rows
+  });
 });
 
 /* ================================= Audit trail ================================= */
 
+/**
+ * The control-plane audit trail, paginated. It only grows, so an un-paginated "last 80" answers
+ * "what happened recently" and nothing else — and "who deleted that workspace in June" is exactly
+ * the question this table exists for.
+ *
+ * Offset paging rather than a cursor: the rows are ordered by a timestamp that never changes, the
+ * volume is platform-scale, and an operator jumping to page 9 is a normal thing to want from an
+ * audit log in a way it is not from an activity feed.
+ */
 platformAdminConsoleRouter.get("/audit", async (req, res) => {
-  const limit = Math.min(300, Math.max(1, Number(req.query.limit) || 80));
-  const entity = typeof req.query.entity === "string" ? req.query.entity : undefined;
-  res.json(await controlPrisma.platformAuditLog.findMany({ where: entity ? { entity } : undefined, orderBy: { createdAt: "desc" }, take: limit }));
+  const limit = Math.min(200, Math.max(1, Number(req.query.limit) || 50));
+  const page = Math.max(1, Number(req.query.page) || 1);
+  const entity = typeof req.query.entity === "string" && req.query.entity !== "all" ? req.query.entity : undefined;
+  const actorType = typeof req.query.actorType === "string" && req.query.actorType !== "all" ? req.query.actorType : undefined;
+  const where = { ...(entity ? { entity } : {}), ...(actorType ? { actorType } : {}) };
+  const [rows, total, entities] = await Promise.all([
+    controlPrisma.platformAuditLog.findMany({ where, orderBy: { createdAt: "desc" }, skip: (page - 1) * limit, take: limit }),
+    controlPrisma.platformAuditLog.count({ where }),
+    // The filter's options come from the data, so a new entity type appears in the picker the first
+    // time something writes one — no hand-kept list to drift.
+    controlPrisma.platformAuditLog.groupBy({ by: ["entity"], _count: { _all: true } })
+  ]);
+  res.json({
+    rows,
+    total,
+    page,
+    limit,
+    pages: Math.max(1, Math.ceil(total / limit)),
+    entities: entities.map((e) => ({ entity: e.entity, count: e._count._all })).sort((a, b) => b.count - a.count)
+  });
 });
 
 /* ============================== Platform admin accounts ========================= */
@@ -447,13 +492,50 @@ platformAdminConsoleRouter.patch("/admins/:id", validate(z.object({ params: z.ob
   res.json({ id: row.id, status: row.status });
 });
 
+/**
+ * This admin's own live console sessions, paginated.
+ *
+ * PAGINATED BECAUSE THE LIST IS NOT SHORT. Every sign-in establishes a row and nothing collapses
+ * them, so an operator who has been testing — or any automation that signs in — accumulates dozens
+ * within a day. The tenant app hit exactly this and it is written up on `Session.deviceId` in the
+ * tenant schema: a list of seventy near-identical rows cannot answer "is there a session here that
+ * should not be?", which is the only question this screen is asked.
+ */
 platformAdminConsoleRouter.get("/auth/sessions", async (req, res) => {
-  const rows = await controlPrisma.platformAdminSession.findMany({
-    where: { adminUserId: req.platformAdmin!.id, revokedAt: null, expiresAt: { gt: new Date() } },
-    orderBy: { createdAt: "desc" },
-    select: { id: true, userAgent: true, ipAddress: true, createdAt: true, expiresAt: true, refreshRotatedAt: true }
+  const limit = Math.min(100, Math.max(1, Number(req.query.limit) || 10));
+  const page = Math.max(1, Number(req.query.page) || 1);
+  const where = { adminUserId: req.platformAdmin!.id, revokedAt: null, expiresAt: { gt: new Date() } };
+  const [rows, total] = await Promise.all([
+    controlPrisma.platformAdminSession.findMany({
+      where,
+      orderBy: { createdAt: "desc" },
+      skip: (page - 1) * limit,
+      take: limit,
+      select: { id: true, userAgent: true, ipAddress: true, createdAt: true, expiresAt: true, refreshRotatedAt: true }
+    }),
+    controlPrisma.platformAdminSession.count({ where })
+  ]);
+  res.json({
+    rows: rows.map((r) => ({ ...r, current: r.id === req.platformAdminSessionId })),
+    total,
+    page,
+    limit,
+    pages: Math.max(1, Math.ceil(total / limit))
   });
-  res.json(rows.map((r) => ({ ...r, current: r.id === req.platformAdminSessionId })));
+});
+
+/**
+ * End every session except the one making the request — the "I signed in on a machine I no longer
+ * have" button. Deliberately keeps the caller signed in: an operator who has to sign in again to
+ * see whether the revocation worked will not press it.
+ */
+platformAdminConsoleRouter.post("/auth/sessions/revoke-others", async (req, res) => {
+  const result = await controlPrisma.platformAdminSession.updateMany({
+    where: { adminUserId: req.platformAdmin!.id, revokedAt: null, id: { not: req.platformAdminSessionId! } },
+    data: { revokedAt: new Date() }
+  });
+  await platformAudit("PLATFORM_ADMIN", actorLabel(req), "platform_admin.sessions_revoked", "PlatformAdminUser", req.platformAdmin!.id, { count: result.count });
+  res.json({ revoked: result.count });
 });
 
 platformAdminConsoleRouter.delete("/auth/sessions/:id", async (req, res) => {
@@ -461,6 +543,43 @@ platformAdminConsoleRouter.delete("/auth/sessions/:id", async (req, res) => {
   if (id === req.platformAdminSessionId) throw new AppError(409, "Use Sign out to end this session.");
   await controlPrisma.platformAdminSession.updateMany({ where: { id, adminUserId: req.platformAdmin!.id, revokedAt: null }, data: { revokedAt: new Date() } });
   res.status(204).send();
+});
+
+/* ================================== Backups ==================================== */
+
+/**
+ * The snapshots the retention programme takes before it drops a workspace. See
+ * `services/platform-backup.service.ts` for the safety rules — in particular that a restore can
+ * never overwrite a workspace that still has a database.
+ */
+platformAdminConsoleRouter.get("/backups", async (_req, res) => {
+  res.json(await listSnapshots());
+});
+
+/** Streams one snapshot to the operator. `Content-Disposition: attachment` so a browser saves the
+ *  file rather than trying to render several hundred megabytes of SQL. */
+platformAdminConsoleRouter.get("/backups/:id/download", async (req, res) => {
+  const id = String(req.params.id);
+  const { full, bytes } = await snapshotPath(id);
+  await platformAudit("PLATFORM_ADMIN", actorLabel(req), "backup.snapshot_downloaded", "Snapshot", id, { bytes });
+  res.setHeader("Content-Type", "application/sql");
+  res.setHeader("Content-Length", String(bytes));
+  // The id is validated against the directory listing before it reaches here, so it cannot carry a
+  // path — but it is still quoted, because a filename is attacker-adjacent input by definition.
+  res.setHeader("Content-Disposition", `attachment; filename="${id.replace(/"/g, "")}"`);
+  createReadStream(full).pipe(res);
+});
+
+platformAdminConsoleRouter.post(
+  "/backups/:id/restore",
+  validate(z.object({ params: z.object({ id: z.string() }), body: z.object({ organizationId: z.string().min(1), confirmSlug: z.string().min(1) }).strict() })),
+  async (req, res) => {
+    res.json(await restoreSnapshot(String(req.params.id), req.body.organizationId, req.body.confirmSlug, actorLabel(req)));
+  }
+);
+
+platformAdminConsoleRouter.delete("/backups/:id", async (req, res) => {
+  res.json(await deleteSnapshot(String(req.params.id), actorLabel(req)));
 });
 
 /* Re-exported so the console's organizations page can show analytics for one org without a second loop. */

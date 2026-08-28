@@ -1,21 +1,37 @@
 /**
- * WHAT: the login form for the `/platform-admin` console — deliberately a completely separate
- * page/form from the tenant `Login.tsx`, never sharing a component.
- * WHY separate: authenticates against `PlatformAdminUser`/`platformAdminAuthApi`, a fully
- * distinct credential and token system from tenant auth (see `store/platform-admin-auth.ts`'s
- * header) — reusing the tenant login form here would risk the two auth flows accidentally
- * sharing state.
- * WHO renders this: `App.tsx`'s `/platform-admin/login` route.
+ * WHAT: the sign-in page for the `/platform-admin` console.
+ *
+ * WHY IT IS THE SAME SHAPE AS THE WORKSPACE SIGN-IN, AND WHY IT IS STILL NOT THE SAME PAGE.
+ * A person who signs into both should meet one product, not two — so this page now uses exactly the
+ * pieces `pages/Login.tsx` uses: the split brand panel with the three.js lattice (`AuthScene`), and
+ * the fingerprint sensor as the submit control (`FingerprintSignIn`). Both are shared components
+ * with a `tone` prop rather than copies, so a change to the sensor's semantics reaches both.
+ *
+ * What stays different is the one thing that must: the CONSOLE IS AMBER. `tone="accent"` lights the
+ * lattice and the sensor with `--accent`, the colour every other page of this console uses, so an
+ * operator can tell at a glance which door they are standing at. Getting this wrong in the other
+ * direction — a console that looks like a workspace — is how somebody types a tenant password into
+ * the control plane.
+ *
+ * IT REMAINS A COMPLETELY SEPARATE AUTH PATH. `platformAdminAuthApi` authenticates against
+ * `PlatformAdminUser` with its own JWT secret, its own cookie path and its own store; nothing here
+ * touches tenant auth (see `store/platform-admin-auth.ts`'s header). Sharing two presentational
+ * components is not sharing a session.
+ *
+ * THE THREE.JS COST IS THE SAME DEAL THE WORKSPACE PAGE STRUCK: `AuthScene` dynamically imports
+ * three.js inside an effect, only after a desktop width and a no-reduced-motion check both pass. A
+ * phone never downloads it; the form is typeable before any of it exists.
  */
 import { zodResolver } from "@hookform/resolvers/zod";
 import { useMutation } from "@tanstack/react-query";
-import { motion, useReducedMotion } from "framer-motion";
 import { Building2, HeartHandshake, Mails, ShieldCheck } from "lucide-react";
+import { useEffect, useState } from "react";
 import { useForm } from "react-hook-form";
 import { useNavigate } from "react-router";
 import { z } from "zod";
+import { FingerprintSignIn, type SealState } from "../../components/auth/FingerprintSignIn";
+import { AuthScene } from "../../components/marketing/AuthScene";
 import { AnimatedThemeToggler } from "../../components/ui/animated-theme-toggler";
-import { Button } from "../../components/ui/button";
 import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage } from "../../components/ui/form";
 import { Input } from "../../components/ui/input";
 import { toast } from "../../components/ui/toaster";
@@ -29,72 +45,114 @@ const schema = z.object({
 
 type FormData = z.infer<typeof schema>;
 
-const POINTS = [
+/** What this console is for, in the order an operator's day runs. Each line names a real screen. */
+const PROOF = [
   { icon: Building2, text: "Every tenant's lifecycle, plan and database — never their content." },
   { icon: HeartHandshake, text: "The trial retention programme: who is lapsing, what goes out, what gets deleted." },
   { icon: Mails, text: "Platform mail, templates, delivery analytics and the audit trail." }
 ];
 
+/** The brand half. Mirrors `marketing/AuthBrandPanel` deliberately — same lattice, same scrim, same
+ *  bottom-weighted copy — with the console's amber where the product's teal would be. */
+function ConsoleBrandPanel() {
+  return (
+    <aside className="relative hidden overflow-hidden bg-slate-950 lg:block">
+      {/* The floor, for when three.js does not load: no WebGL, a blocked context, a laptop that met
+          a monitor mid-session. The panel reads as a designed dark ground either way. */}
+      <div aria-hidden className="pointer-events-none absolute inset-0">
+        <div className="absolute -left-24 top-1/4 h-[32rem] w-[32rem] rounded-full bg-accent/25 blur-[100px]" />
+        <div className="absolute -right-20 bottom-0 h-[28rem] w-[28rem] rounded-full bg-info/15 blur-[100px]" />
+      </div>
+
+      <AuthScene className="absolute inset-0" tone="accent" />
+
+      {/* Bottom-weighted, so the lattice keeps its contrast where there is no text over it. */}
+      <div aria-hidden className="absolute inset-0 bg-gradient-to-t from-slate-950 via-slate-950/40 to-slate-950/10" />
+
+      <div className="relative flex h-full flex-col justify-between p-10 text-white xl:p-14">
+        <div className="flex items-center gap-3">
+          <span className="grid h-10 w-10 place-items-center rounded-xl bg-accent text-accent-foreground shadow-lg">
+            <ShieldCheck className="h-5 w-5" />
+          </span>
+          <div className="leading-tight">
+            <p className="font-black">Platform Admin</p>
+            <p className="font-mono text-[11px] uppercase tracking-[0.16em] text-white/55">TimeSphere control plane</p>
+          </div>
+        </div>
+
+        <div className="max-w-md">
+          <h2 className="text-3xl font-black leading-[1.1] tracking-tight xl:text-[2.6rem]">
+            Every workspace on this deployment — <span className="text-accent">from one place.</span>
+          </h2>
+          <p className="mt-5 text-sm leading-7 text-white/70">
+            Provision a customer, rescue a locked-out administrator, price a tier, and see what the platform is saying to
+            the people who have stopped using it.
+          </p>
+
+          <ul className="mt-8 grid gap-2.5">
+            {PROOF.map((item) => (
+              <li key={item.text} className="flex items-start gap-3 rounded-xl border border-white/10 bg-white/[0.04] p-3 text-sm text-white/80 backdrop-blur-sm">
+                <item.icon className="mt-0.5 h-4 w-4 shrink-0 text-accent" />
+                {item.text}
+              </li>
+            ))}
+          </ul>
+        </div>
+
+        <p className="text-xs text-white/45">This console is separate from the workspace sign-in and holds no tenant credentials.</p>
+      </div>
+    </aside>
+  );
+}
+
 export function PlatformAdminLogin() {
   const navigate = useNavigate();
-  const reduce = useReducedMotion();
   const setSession = usePlatformAdminAuthStore((s) => s.setSession);
   const form = useForm<FormData>({ resolver: zodResolver(schema), defaultValues: { email: "", password: "" } });
+  const [sealState, setSealState] = useState<SealState>("idle");
 
   const mutation = useMutation({
     mutationFn: (values: FormData) => platformAdminAuthApi.login(values.email, values.password),
+    onMutate: () => setSealState("scanning"),
     onSuccess: (data) => {
+      setSealState("success");
       setSession(data.admin, data.accessToken);
       navigate("/platform-admin");
     },
     onError: (error: any) => {
+      setSealState("error");
       toast.error("Sign-in failed", { description: error?.response?.data?.message ?? "Check your credentials." });
     }
   });
 
+  // The red sensor is a report on the attempt that just failed, not a state the form stays in — it
+  // clears itself so the next attempt does not start already looking wrong.
+  useEffect(() => {
+    if (sealState !== "error") return;
+    const timer = setTimeout(() => setSealState("idle"), 2200);
+    return () => clearTimeout(timer);
+  }, [sealState]);
+
   return (
-    <div className="relative grid min-h-screen bg-background text-foreground lg:grid-cols-[1.1fr_1fr]">
+    <div className="relative grid min-h-screen bg-background text-foreground lg:grid-cols-[1.05fr_1fr]">
       <div className="absolute right-4 top-4 z-10">
         <AnimatedThemeToggler />
       </div>
 
-      {/* The brand panel — amber, the console's colour, so even the sign-in page cannot be mistaken for a workspace. */}
-      <aside className="relative hidden overflow-hidden bg-card lg:flex lg:flex-col lg:justify-between lg:p-12">
-        <div className="pointer-events-none absolute -left-24 -top-24 h-96 w-96 rounded-full bg-accent/15 blur-3xl" aria-hidden />
-        <div className="pointer-events-none absolute -bottom-32 right-0 h-80 w-80 rounded-full bg-accent/10 blur-3xl" aria-hidden />
-        <div className="relative flex items-center gap-3">
-          <span className="grid h-10 w-10 place-items-center rounded-xl bg-accent text-accent-foreground shadow-md">
-            <ShieldCheck className="h-5 w-5" />
-          </span>
-          <div className="leading-tight">
-            <p className="text-lg font-black tracking-tight">Platform Admin</p>
-            <p className="font-mono text-[11px] uppercase tracking-[0.16em] text-muted-foreground">TimeSphere control plane</p>
-          </div>
-        </div>
-        <motion.ul initial={reduce ? false : "hidden"} animate="show" variants={{ show: { transition: { staggerChildren: 0.08 } } }} className="relative grid max-w-md gap-5">
-          {POINTS.map(({ icon: Icon, text }) => (
-            <motion.li key={text} variants={{ hidden: { opacity: 0, x: -10 }, show: { opacity: 1, x: 0 } }} className="flex items-start gap-3 text-sm text-muted-foreground">
-              <span className="grid h-8 w-8 shrink-0 place-items-center rounded-lg bg-accent/15 text-accent">
-                <Icon className="h-4 w-4" />
-              </span>
-              <span className="pt-1.5">{text}</span>
-            </motion.li>
-          ))}
-        </motion.ul>
-        <p className="relative text-xs text-muted-foreground">This console is separate from the workspace sign-in and holds no tenant credentials.</p>
-      </aside>
+      <ConsoleBrandPanel />
 
       <main className="grid place-items-center px-4 py-12">
-        <motion.div initial={reduce ? false : { opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.35, ease: "easeOut" }} className="w-full max-w-sm">
-          <div className="mb-6 flex items-center gap-3 lg:hidden">
+        <div className="w-full max-w-sm">
+          <div className="mb-8 flex items-center gap-3 lg:hidden">
             <span className="grid h-9 w-9 place-items-center rounded-lg bg-accent text-accent-foreground">
               <ShieldCheck className="h-5 w-5" />
             </span>
-            <div>
-              <p className="text-lg font-black tracking-tight">Platform Admin</p>
-              <p className="text-xs text-muted-foreground">TimeSphere control plane</p>
+            <div className="leading-tight">
+              <p className="font-black">Platform Admin</p>
+              <p className="font-mono text-[10px] uppercase tracking-[0.14em] text-muted-foreground">Control plane</p>
             </div>
           </div>
+
           <h1 className="text-2xl font-black tracking-tight">Sign in</h1>
           <p className="mb-6 mt-1 text-sm text-muted-foreground">With a platform-admin account — not a workspace account.</p>
 
@@ -126,13 +184,21 @@ export function PlatformAdminLogin() {
                   </FormItem>
                 )}
               />
-              <Button disabled={mutation.isPending} size="lg" className="mt-1 bg-accent text-accent-foreground hover:bg-accent/90">
-                {mutation.isPending ? "Signing in..." : "Sign in"}
-              </Button>
-              <p className="text-center text-xs text-muted-foreground">Forgotten it? There is deliberately no emailed reset for this account — see docs/INSTALLATION.md.</p>
+
+              {/* The sensor IS the submit button — same component and same semantics as the
+                  workspace sign-in, in the console's amber. See FingerprintSignIn.tsx for why it
+                  stays a real `type="submit"` with a fixed accessible name. */}
+              <FingerprintSignIn state={sealState} tone="accent" disabled={mutation.isPending} className="mt-1" />
+
+              {/* Kept, and it matters: there is deliberately no emailed reset for the
+                  highest-privilege account on the platform, and somebody staring at this form at
+                  2am needs to be told where the recovery procedure actually is. */}
+              <p className="text-center text-xs text-muted-foreground">
+                Forgotten it? There is deliberately no emailed reset for this account — see <span className="font-mono">docs/INSTALLATION.md</span>.
+              </p>
             </form>
           </Form>
-        </motion.div>
+        </div>
       </main>
     </div>
   );

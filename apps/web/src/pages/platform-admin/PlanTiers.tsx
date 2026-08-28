@@ -14,6 +14,21 @@
  * adding an entitlement to that list is what puts it on this page. A per-field `useState` is
  * exactly the shape that stopped anyone adding the sixteenth.
  *
+ * WHY IT IS A COMPARISON MATRIX (3.12.x): the previous layout was three independent long forms
+ * side by side. Every fact a reader wants here is a COMPARISON — "does Team get proofing, and how
+ * many dashboards more than Starter?" — and three separate forms answer it only by eye, across
+ * 600px of scroll, with the same ten hint paragraphs repeated three times. The entitlements now
+ * come from one `ENTITLEMENT_GROUPS` list and render as a matrix: one row per entitlement, one
+ * column per tier, the label and hint written ONCE per row. Rows cannot drift out of alignment
+ * because a row IS one row, and the hint cannot push one tier's controls below another's because
+ * no tier owns it. Each column still saves on its own, exactly as before.
+ *
+ * WHY THERE ARE TWO LAYOUTS: a four-column matrix needs ~900px to stay legible, so below `xl` it
+ * is replaced by one card per tier (the same rows, the same order, the same controls, generated
+ * from the same list) rather than by a matrix that has to be scrolled sideways to be edited on a
+ * phone. Both read from ONE draft per tier held here, so an edit survives a resize across the
+ * breakpoint instead of being stranded in whichever copy was visible when it was typed.
+ *
  * SCOPE, unchanged: an individual org can still override seat limit and AI budget on its own
  * record (see `Organizations.tsx`); everything else here is tier-only, with no per-org override.
  *
@@ -21,23 +36,25 @@
  * routes, via `platformAdminPlanTierApi`.
  */
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useEffect, useState } from "react";
+import { Fragment, useEffect, useState, type ReactNode } from "react";
 import { UNLIMITED_PLAN_ITEMS } from "@timesheet/shared";
 import { Badge } from "../../components/ui/badge";
 import { Button } from "../../components/ui/button";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../../components/ui/card";
 import { Checkbox } from "../../components/ui/checkbox";
 /* The same marks the tenant app uses, so a platform admin ticking "Slack" here sees the mark the
    workspace admin will see when they configure it. */
-import { CHAT_PLATFORM_MARKS, SSO_PROVIDER_MARKS } from "../../components/ui/connector-marks";
+import { CHAT_PLATFORM_MARKS, SSO_PROVIDER_MARKS, type Mark } from "../../components/ui/connector-marks";
 import { Input } from "../../components/ui/input";
-import { Label } from "../../components/ui/label";
 import { Skeleton } from "../../components/ui/skeleton";
+import { TableBody, TableCell, TableFooter, TableHead, TableHeader, TableRow } from "../../components/ui/table";
 import { toast } from "../../components/ui/toaster";
-import { ConsolePage } from "./console-ui";
+import { cn } from "../../lib/utils";
+import { ConsolePage, ConsoleSection, ConsoleTable, EmptyState, Field, FieldGrid, Num, PRIMARY_BTN, Toolbar } from "./console-ui";
 import { PLAN_CAPABILITIES, PLAN_QUOTAS, platformAdminBillingApi, platformAdminPlanTierApi, type ChatPlatform, type PlanCapabilityKey, type PlanQuotaKey, type PlanTierLimitRow, type SsoProvider } from "../../services/platform-admin-api";
 
-const TIER_LABEL: Record<PlanTierLimitRow["tier"], string> = { STARTER: "Starter", TEAM: "Team", ENTERPRISE: "Enterprise" };
+type PlanTier = PlanTierLimitRow["tier"];
+
+const TIER_LABEL: Record<PlanTier, string> = { STARTER: "Starter", TEAM: "Team", ENTERPRISE: "Enterprise" };
 const ALL_PROVIDERS: SsoProvider[] = ["GOOGLE", "MICROSOFT", "SAML", "LDAP"];
 const PROVIDER_LABEL: Record<SsoProvider, string> = { GOOGLE: "Google", MICROSOFT: "Microsoft / Azure AD", SAML: "SAML", LDAP: "LDAP / Active Directory" };
 const ALL_CHAT_PLATFORMS: ChatPlatform[] = ["SLACK", "MICROSOFT_TEAMS", "GOOGLE_CHAT", "TELEGRAM"];
@@ -48,8 +65,182 @@ const CHAT_PLATFORM_LABEL: Record<ChatPlatform, string> = {
   TELEGRAM: "Telegram"
 };
 
+/* ------------------------------------------------------------------------------------------- */
+/* One tier's unsaved edits                                                                     */
+/* ------------------------------------------------------------------------------------------- */
+
+/** Numbers are held as strings because they are held by `<input type="number">`; an empty box has
+ *  to survive being empty while it is being retyped, and `Number("")` is 0. */
+type TierDraft = {
+  seatLimit: string;
+  budget: string;
+  providers: SsoProvider[];
+  chatPlatforms: ChatPlatform[];
+  capabilities: Record<PlanCapabilityKey, boolean>;
+  quotas: Record<PlanQuotaKey, string>;
+};
+
+const draftFromRow = (row: PlanTierLimitRow): TierDraft => ({
+  seatLimit: row.seatLimit.toString(),
+  budget: row.aiMonthlyBudgetCeilingUsd,
+  providers: row.allowedSsoProviders,
+  chatPlatforms: row.allowedChatPlatforms,
+  capabilities: Object.fromEntries(PLAN_CAPABILITIES.map((c) => [c.key, row[c.key]])) as Record<PlanCapabilityKey, boolean>,
+  quotas: Object.fromEntries(PLAN_QUOTAS.map((q) => [q.key, String(row[q.key] ?? 0)])) as Record<PlanQuotaKey, string>
+});
+
+const payloadFromDraft = (draft: TierDraft) => ({
+  seatLimit: Number(draft.seatLimit),
+  aiMonthlyBudgetCeilingUsd: Number(draft.budget),
+  allowedSsoProviders: draft.providers,
+  allowedChatPlatforms: draft.chatPlatforms,
+  ...draft.capabilities,
+  ...(Object.fromEntries(PLAN_QUOTAS.map((q) => [q.key, Number(draft.quotas[q.key]) || 0])) as Record<PlanQuotaKey, number>)
+});
+
+/* ------------------------------------------------------------------------------------------- */
+/* The shared row list both layouts render                                                      */
+/* ------------------------------------------------------------------------------------------- */
+
+/**
+ * A row is a label plus a lens onto the draft, never a piece of JSX. That is what lets the matrix
+ * and the stacked cards render THE SAME rows in THE SAME order without either one being able to
+ * grow a control the other does not have.
+ */
+type NumberRow = {
+  kind: "number";
+  id: string;
+  label: string;
+  hint?: string;
+  min?: number;
+  max?: number;
+  get: (draft: TierDraft) => string;
+  set: (draft: TierDraft, value: string) => TierDraft;
+};
+type ToggleRow = {
+  kind: "toggle";
+  id: string;
+  label: string;
+  hint?: string;
+  icon?: Mark;
+  get: (draft: TierDraft) => boolean;
+  set: (draft: TierDraft, value: boolean) => TierDraft;
+};
+type EntitlementRow = NumberRow | ToggleRow;
+type EntitlementGroup = { id: string; title: string; note?: ReactNode; rows: EntitlementRow[] };
+
+/** How every control writes back: name the tier, hand over a pure draft transform. */
+type TierEdit = (tier: PlanTier, next: (draft: TierDraft) => TierDraft) => void;
+
+const isNumberRow = (row: EntitlementRow): row is NumberRow => row.kind === "number";
+const isToggleRow = (row: EntitlementRow): row is ToggleRow => row.kind === "toggle";
+
+const ENTITLEMENT_GROUPS: EntitlementGroup[] = [
+  {
+    id: "limits",
+    title: "Plan limits",
+    rows: [
+      { kind: "number", id: "seatLimit", label: "Seat limit", get: (d) => d.seatLimit, set: (d, v) => ({ ...d, seatLimit: v }) },
+      { kind: "number", id: "aiBudget", label: "AI budget ceiling ($/mo)", get: (d) => d.budget, set: (d, v) => ({ ...d, budget: v }) }
+    ]
+  },
+  {
+    id: "sso",
+    title: "Allowed SSO providers",
+    rows: ALL_PROVIDERS.map((provider) => ({
+      kind: "toggle" as const,
+      id: `sso-${provider}`,
+      label: PROVIDER_LABEL[provider],
+      icon: SSO_PROVIDER_MARKS[provider],
+      get: (d: TierDraft) => d.providers.includes(provider),
+      set: (d: TierDraft, v: boolean): TierDraft => ({ ...d, providers: v ? [...d.providers, provider] : d.providers.filter((p) => p !== provider) })
+    }))
+  },
+  {
+    id: "chat",
+    title: "Allowed chat platforms",
+    rows: ALL_CHAT_PLATFORMS.map((platform) => ({
+      kind: "toggle" as const,
+      id: `chat-${platform}`,
+      label: CHAT_PLATFORM_LABEL[platform],
+      icon: CHAT_PLATFORM_MARKS[platform],
+      get: (d: TierDraft) => d.chatPlatforms.includes(platform),
+      set: (d: TierDraft, v: boolean): TierDraft => ({ ...d, chatPlatforms: v ? [...d.chatPlatforms, platform] : d.chatPlatforms.filter((p) => p !== platform) })
+    }))
+  },
+  {
+    id: "features",
+    title: "Features",
+    note: (
+      <>
+        Every capability here <strong className="text-muted-foreground">fails closed</strong> except face verification's enforcement leg, which fails open on
+        purpose — a lapsed plan must stop demanding identity checks, never lock a workforce out of logging their own time. Unchecking face verification also
+        starts each affected org's 30-day biometric-data purge grace window.
+      </>
+    ),
+    rows: PLAN_CAPABILITIES.map((capability) => ({
+      kind: "toggle" as const,
+      id: capability.key,
+      label: capability.label,
+      hint: capability.hint,
+      get: (d: TierDraft) => d.capabilities[capability.key],
+      set: (d: TierDraft, v: boolean): TierDraft => ({ ...d, capabilities: { ...d.capabilities, [capability.key]: v } })
+    }))
+  },
+  {
+    id: "quotas",
+    title: "Quotas",
+    note: (
+      <>
+        <strong className="text-muted-foreground">0</strong> means the tier cannot use that resource at all — it is a real ceiling, not "unlimited".{" "}
+        {UNLIMITED_PLAN_ITEMS.toLocaleString()} is the sentinel for no limit.
+      </>
+    ),
+    rows: PLAN_QUOTAS.map((quota) => ({
+      kind: "number" as const,
+      id: quota.key,
+      label: quota.label,
+      min: 0,
+      max: UNLIMITED_PLAN_ITEMS,
+      get: (d: TierDraft) => d.quotas[quota.key],
+      set: (d: TierDraft, v: string): TierDraft => ({ ...d, quotas: { ...d.quotas, [quota.key]: v } })
+    }))
+  }
+];
+
+/* ------------------------------------------------------------------------------------------- */
+/* Page                                                                                         */
+/* ------------------------------------------------------------------------------------------- */
+
 export function PlatformAdminPlanTiers() {
+  const queryClient = useQueryClient();
   const limits = useQuery({ queryKey: ["platform-admin", "plan-tier-limits"], queryFn: platformAdminPlanTierApi.list });
+
+  // One draft per tier, held here rather than inside a per-tier card, because the matrix needs all
+  // three at once and because the two layouts must share a draft — see the file header.
+  const [drafts, setDrafts] = useState<Record<string, TierDraft>>({});
+  useEffect(() => {
+    // Re-sync when the list changes under us (another admin saved, or the query refetched). Same
+    // trade the per-card version made: a refetch wins over unsaved edits.
+    if (!limits.data) return;
+    setDrafts(Object.fromEntries(limits.data.map((row) => [row.tier, draftFromRow(row)])));
+  }, [limits.data]);
+
+  const save = useMutation({
+    mutationFn: (row: PlanTierLimitRow) => platformAdminPlanTierApi.update(row.tier, payloadFromDraft(drafts[row.tier] ?? draftFromRow(row))),
+    onSuccess: () => {
+      toast.success("Saved");
+      queryClient.invalidateQueries({ queryKey: ["platform-admin", "plan-tier-limits"] });
+    },
+    onError: (err: any) => toast.error("Could not save", { description: err?.response?.data?.message ?? "Try again." })
+  });
+  const savingTier = save.isPending ? (save.variables?.tier ?? null) : null;
+
+  const editRow = (tier: PlanTier, next: (draft: TierDraft) => TierDraft) =>
+    setDrafts((prev) => (prev[tier] ? { ...prev, [tier]: next(prev[tier]) } : prev));
+
+  const tiers = limits.data ?? [];
+  const ready = tiers.filter((row) => drafts[row.tier]);
 
   return (
     <ConsolePage
@@ -60,16 +251,278 @@ export function PlatformAdminPlanTiers() {
       <StripeBillingCard />
 
       {limits.isLoading && <Skeleton className="h-64 w-full" />}
-      {!limits.isLoading && limits.data && (
-        <div className="grid gap-5 lg:grid-cols-3">
-          {limits.data.map((tier) => (
-            <TierCard key={tier.tier} tier={tier} />
-          ))}
-        </div>
+      {!limits.isLoading && tiers.length === 0 && (
+        <ConsoleSection title="Entitlements by tier">
+          <EmptyState title="No plan tiers" description="The platform returned no tier rows, so there is nothing to configure yet." />
+        </ConsoleSection>
+      )}
+
+      {ready.length > 0 && (
+        <>
+          <TierMatrix rows={ready} drafts={drafts} onEdit={editRow} onSave={(row) => save.mutate(row)} savingTier={savingTier} />
+          {/* Below `xl` the matrix is too narrow to edit, so the same rows become one card per
+              tier. Only one of the two is ever in the layout (and in the a11y tree) at a time. */}
+          <div className="grid grid-cols-1 gap-6 xl:hidden">
+            {ready.map((row) => (
+              <TierCard key={row.tier} row={row} draft={drafts[row.tier]} onEdit={editRow} onSave={() => save.mutate(row)} saving={savingTier === row.tier} />
+            ))}
+          </div>
+        </>
       )}
     </ConsolePage>
   );
 }
+
+/* ------------------------------------------------------------------------------------------- */
+/* xl+ : the comparison matrix                                                                  */
+/* ------------------------------------------------------------------------------------------- */
+
+/** The label column of one matrix row: the mark (SSO/chat only), the entitlement, and the hint
+ *  written once for all three tiers. The hint is clamped with the full text on hover so one long
+ *  sentence cannot turn a scannable matrix into a wall of prose. */
+function RowLabel({ row }: { row: EntitlementRow }) {
+  const Icon = isToggleRow(row) ? row.icon : undefined;
+  return (
+    <span className="flex items-start gap-2">
+      {Icon && <Icon className="mt-0.5 h-4 w-4 shrink-0" />}
+      <span className="min-w-0">
+        <span className="block text-sm font-medium text-foreground">{row.label}</span>
+        {row.hint && (
+          <span className="line-clamp-2 text-xs leading-snug text-muted-foreground" title={row.hint}>
+            {row.hint}
+          </span>
+        )}
+      </span>
+    </span>
+  );
+}
+
+function TierMatrix({
+  rows,
+  drafts,
+  onEdit,
+  onSave,
+  savingTier
+}: {
+  rows: PlanTierLimitRow[];
+  drafts: Record<string, TierDraft>;
+  onEdit: TierEdit;
+  onSave: (row: PlanTierLimitRow) => void;
+  savingTier: PlanTier | null;
+}) {
+  const span = rows.length + 1;
+  return (
+    <ConsoleSection
+      className="hidden xl:block"
+      flush
+      title="Entitlements by tier"
+      description="One row per entitlement, one column per tier — read across to compare, edit in place. Each column saves on its own."
+    >
+      <ConsoleTable minWidth={940} className="rounded-none border-x-0 border-b-0">
+        <TableHeader>
+          <TableRow>
+            <TableHead className="w-[40%]">Entitlement</TableHead>
+            {rows.map((row) => (
+              <TableHead key={row.tier} className="w-[20%] text-right">
+                <span className="inline-flex items-center gap-2">
+                  {TIER_LABEL[row.tier]}
+                  {row.tier === "ENTERPRISE" && <Badge variant="info">Highest</Badge>}
+                </span>
+              </TableHead>
+            ))}
+          </TableRow>
+        </TableHeader>
+        <TableBody>
+          {ENTITLEMENT_GROUPS.map((group) => (
+            <Fragment key={group.id}>
+              <TableRow className="bg-muted/50 hover:bg-muted/50">
+                <TableCell colSpan={span} className="py-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                  {group.title}
+                </TableCell>
+              </TableRow>
+              {group.rows.map((row) => (
+                <TableRow key={row.id}>
+                  <TableCell className="align-top">
+                    <RowLabel row={row} />
+                  </TableCell>
+                  {rows.map((tierRow) => (
+                    <MatrixCell key={tierRow.tier} row={row} tier={tierRow.tier} draft={drafts[tierRow.tier]} onEdit={onEdit} />
+                  ))}
+                </TableRow>
+              ))}
+              {group.note && (
+                <TableRow className="hover:bg-transparent">
+                  <TableCell colSpan={span} className="pt-0 text-xs leading-relaxed text-muted-foreground">
+                    {group.note}
+                  </TableCell>
+                </TableRow>
+              )}
+            </Fragment>
+          ))}
+        </TableBody>
+        <TableFooter>
+          <TableRow className="hover:bg-transparent">
+            <TableCell className="text-xs font-normal text-muted-foreground">Defaults applied to every organization on that tier.</TableCell>
+            {rows.map((tierRow) => (
+              <TableCell key={tierRow.tier} className="text-right">
+                <Button
+                  size="sm"
+                  className={PRIMARY_BTN}
+                  aria-label={`Save ${TIER_LABEL[tierRow.tier]} tier`}
+                  disabled={savingTier === tierRow.tier}
+                  onClick={() => onSave(tierRow)}
+                >
+                  Save
+                </Button>
+              </TableCell>
+            ))}
+          </TableRow>
+        </TableFooter>
+      </ConsoleTable>
+    </ConsoleSection>
+  );
+}
+
+function MatrixCell({ row, tier, draft, onEdit }: { row: EntitlementRow; tier: PlanTier; draft: TierDraft; onEdit: TierEdit }) {
+  const tierLabel = TIER_LABEL[tier];
+  if (isNumberRow(row)) {
+    return (
+      <Num className="align-top">
+        <Input
+          type="number"
+          min={row.min}
+          max={row.max}
+          aria-label={`${row.label} — ${tierLabel}`}
+          value={row.get(draft)}
+          onChange={(e) => onEdit(tier, (d) => row.set(d, e.target.value))}
+          className="h-9 border-border bg-background text-right font-mono tabular-nums text-foreground"
+        />
+      </Num>
+    );
+  }
+  return (
+    /* `TableCell` drops its right padding when it contains a `[role=checkbox]` — the shadcn
+       select-column convention — which would shove the box against the card edge. The inner
+       `pr-3` puts it back, so a tick lines up with the right edge of the number inputs above it. */
+    <TableCell className="align-top">
+      <span className="flex justify-end pr-3">
+        <Checkbox
+          className="mt-0.5"
+          aria-label={`${row.label} — ${tierLabel}`}
+          checked={row.get(draft)}
+          onCheckedChange={(checked) => onEdit(tier, (d) => row.set(d, Boolean(checked)))}
+        />
+      </span>
+    </TableCell>
+  );
+}
+
+/* ------------------------------------------------------------------------------------------- */
+/* < xl : one card per tier, same rows                                                          */
+/* ------------------------------------------------------------------------------------------- */
+
+function TierCard({
+  row,
+  draft,
+  onEdit,
+  onSave,
+  saving
+}: {
+  row: PlanTierLimitRow;
+  draft: TierDraft;
+  onEdit: TierEdit;
+  onSave: () => void;
+  saving: boolean;
+}) {
+  return (
+    <ConsoleSection
+      bodyClassName="grid gap-6"
+      title={
+        <span className="flex items-center gap-2">
+          {TIER_LABEL[row.tier]}
+          {row.tier === "ENTERPRISE" && <Badge variant="info">Highest</Badge>}
+        </span>
+      }
+      description="Defaults applied to every organization on this tier."
+    >
+      {ENTITLEMENT_GROUPS.map((group) => {
+        const numbers = group.rows.filter(isNumberRow);
+        const toggles = group.rows.filter(isToggleRow);
+        // Ticks with a hint get a column to themselves; the bare allow-lists pair up at `sm+`.
+        const hinted = toggles.some((toggle) => toggle.hint);
+        return (
+          <div key={group.id} className="grid gap-3">
+            <h3 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">{group.title}</h3>
+            {numbers.length > 0 && (
+              <FieldGrid cols={2}>
+                {numbers.map((numberRow) => (
+                  <CardNumberField key={numberRow.id} row={numberRow} tier={row.tier} draft={draft} onEdit={onEdit} />
+                ))}
+              </FieldGrid>
+            )}
+            {toggles.length > 0 && (
+              <div className={cn("grid grid-cols-1 gap-2.5", !hinted && "sm:grid-cols-2")}>
+                {toggles.map((toggleRow) => (
+                  <CardToggle key={toggleRow.id} row={toggleRow} tier={row.tier} draft={draft} onEdit={onEdit} />
+                ))}
+              </div>
+            )}
+            {group.note && <p className="text-xs leading-relaxed text-muted-foreground">{group.note}</p>}
+          </div>
+        );
+      })}
+      {/* Same place on every card, and the same place as the matrix's footer row. */}
+      <div className="flex justify-end border-t border-border pt-4">
+        <Button size="sm" className={PRIMARY_BTN} aria-label={`Save ${TIER_LABEL[row.tier]} tier`} disabled={saving} onClick={onSave}>
+          Save
+        </Button>
+      </div>
+    </ConsoleSection>
+  );
+}
+
+/** One editable quota/limit inside a tier card. A component rather than an inline `.map` body so
+ *  the write-back closure is one level deep instead of four. */
+function CardNumberField({ row, tier, draft, onEdit }: { row: NumberRow; tier: PlanTier; draft: TierDraft; onEdit: TierEdit }) {
+  const id = `${tier}-${row.id}`;
+  return (
+    <Field label={row.label} htmlFor={id}>
+      <Input
+        id={id}
+        type="number"
+        min={row.min}
+        max={row.max}
+        value={row.get(draft)}
+        onChange={(e) => onEdit(tier, (d) => row.set(d, e.target.value))}
+        className="border-border bg-background text-right font-mono tabular-nums text-foreground"
+      />
+    </Field>
+  );
+}
+
+/** One capability/allow-list tick inside a tier card. The hint is clamped with the full sentence
+ *  on hover: a card is narrower than a matrix row, and three-line hints turn ten ticks into prose. */
+function CardToggle({ row, tier, draft, onEdit }: { row: ToggleRow; tier: PlanTier; draft: TierDraft; onEdit: TierEdit }) {
+  const Icon = row.icon;
+  return (
+    <label className="flex min-w-0 items-start gap-2 text-sm text-foreground">
+      <Checkbox className="mt-0.5" checked={row.get(draft)} onCheckedChange={(checked) => onEdit(tier, (d) => row.set(d, Boolean(checked)))} />
+      {Icon && <Icon className="mt-0.5 h-4 w-4 shrink-0" />}
+      <span className="min-w-0">
+        {row.label}
+        {row.hint && (
+          <span className="line-clamp-2 text-xs leading-snug text-muted-foreground" title={row.hint}>
+            {row.hint}
+          </span>
+        )}
+      </span>
+    </label>
+  );
+}
+
+/* ------------------------------------------------------------------------------------------- */
+/* Stripe                                                                                       */
+/* ------------------------------------------------------------------------------------------- */
 
 /** Platform-wide Stripe configuration — one merchant-of-record account across every org (see
  *  billing.controller.ts's header comment). Secret key/webhook signing secret are masked
@@ -107,214 +560,77 @@ function StripeBillingCard() {
   });
 
   return (
-    <Card className="border-border bg-card">
-      <CardHeader>
-        <CardTitle className="text-base text-foreground">Stripe billing</CardTitle>
-        <CardDescription className="text-muted-foreground">
-          One Stripe account across every org on this deployment — orgs never bring their own key. Create a Restricted API Key
-          (Checkout Sessions + Customers + Subscriptions, write) and a webhook endpoint pointed at{" "}
-          <code className="text-xs">/api/billing/webhook</code>, then paste both here alongside the two Price IDs created for the Team
-          and Enterprise tiers.
-        </CardDescription>
-      </CardHeader>
-      <CardContent className="grid gap-4">
-        {billing.isLoading && <Skeleton className="h-32 w-full" />}
-        {!billing.isLoading && billing.data && (
-          <>
-            <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
-              <Badge variant={billing.data.secretKeySet ? "success" : "muted"}>{billing.data.secretKeySet ? "Secret key set" : "No secret key"}</Badge>
-              <Badge variant={billing.data.webhookSigningSecretSet ? "success" : "muted"}>
-                {billing.data.webhookSigningSecretSet ? "Webhook secret set" : "No webhook secret"}
-              </Badge>
-            </div>
-            <div className="grid gap-3 sm:grid-cols-2">
-              <div className="grid gap-1.5">
-                <Label className="text-foreground">Secret key</Label>
-                <Input type="password" placeholder="sk_live_..." value={secretKey} onChange={(e) => setSecretKey(e.target.value)} className="bg-background" />
-              </div>
-              <div className="grid gap-1.5">
-                <Label className="text-foreground">Webhook signing secret</Label>
-                <Input
-                  type="password"
-                  placeholder="whsec_..."
-                  value={webhookSigningSecret}
-                  onChange={(e) => setWebhookSigningSecret(e.target.value)}
-                  className="bg-background"
-                />
-              </div>
-              <div className="grid gap-1.5">
-                <Label className="text-foreground">Team tier Price ID</Label>
-                <Input placeholder="price_..." value={priceIdTeam} onChange={(e) => setPriceIdTeam(e.target.value)} className="bg-background" />
-              </div>
-              <div className="grid gap-1.5">
-                <Label className="text-foreground">Enterprise tier Price ID</Label>
-                <Input placeholder="price_..." value={priceIdEnterprise} onChange={(e) => setPriceIdEnterprise(e.target.value)} className="bg-background" />
-              </div>
-            </div>
-            <Button size="sm" className="w-fit" onClick={() => save.mutate()} disabled={save.isPending}>
+    <ConsoleSection
+      title="Stripe billing"
+      description={
+        <>
+          One Stripe account across every org on this deployment — orgs never bring their own key. Create a Restricted API Key (Checkout Sessions + Customers +
+          Subscriptions, write) and a webhook endpoint pointed at <code className="text-xs">/api/billing/webhook</code>, then paste both here alongside the two
+          Price IDs created for the Team and Enterprise tiers.
+        </>
+      }
+      actions={
+        billing.data && (
+          <Toolbar>
+            <Badge variant={billing.data.secretKeySet ? "success" : "muted"}>{billing.data.secretKeySet ? "Secret key set" : "No secret key"}</Badge>
+            <Badge variant={billing.data.webhookSigningSecretSet ? "success" : "muted"}>
+              {billing.data.webhookSigningSecretSet ? "Webhook secret set" : "No webhook secret"}
+            </Badge>
+          </Toolbar>
+        )
+      }
+      bodyClassName="grid gap-4"
+    >
+      {billing.isLoading && <Skeleton className="h-32 w-full" />}
+      {!billing.isLoading && billing.data && (
+        <>
+          <FieldGrid cols={2}>
+            <Field label="Secret key" htmlFor="stripe-secret-key" hint="Write-only — the stored key is never sent back to this page.">
+              <Input
+                id="stripe-secret-key"
+                type="password"
+                placeholder="sk_live_..."
+                value={secretKey}
+                onChange={(e) => setSecretKey(e.target.value)}
+                className="border-border bg-background text-foreground"
+              />
+            </Field>
+            <Field label="Webhook signing secret" htmlFor="stripe-webhook-secret" hint="Write-only — leave blank to keep the current one.">
+              <Input
+                id="stripe-webhook-secret"
+                type="password"
+                placeholder="whsec_..."
+                value={webhookSigningSecret}
+                onChange={(e) => setWebhookSigningSecret(e.target.value)}
+                className="border-border bg-background text-foreground"
+              />
+            </Field>
+            <Field label="Team tier Price ID" htmlFor="stripe-price-team">
+              <Input
+                id="stripe-price-team"
+                placeholder="price_..."
+                value={priceIdTeam}
+                onChange={(e) => setPriceIdTeam(e.target.value)}
+                className="border-border bg-background text-foreground"
+              />
+            </Field>
+            <Field label="Enterprise tier Price ID" htmlFor="stripe-price-enterprise">
+              <Input
+                id="stripe-price-enterprise"
+                placeholder="price_..."
+                value={priceIdEnterprise}
+                onChange={(e) => setPriceIdEnterprise(e.target.value)}
+                className="border-border bg-background text-foreground"
+              />
+            </Field>
+          </FieldGrid>
+          <div className="flex justify-end border-t border-border pt-4">
+            <Button size="sm" className={PRIMARY_BTN} onClick={() => save.mutate()} disabled={save.isPending}>
               Save
             </Button>
-          </>
-        )}
-      </CardContent>
-    </Card>
-  );
-}
-
-function TierCard({ tier }: { tier: PlanTierLimitRow }) {
-  const queryClient = useQueryClient();
-  const [seatLimit, setSeatLimit] = useState(tier.seatLimit.toString());
-  const [budget, setBudget] = useState(tier.aiMonthlyBudgetCeilingUsd);
-  const [providers, setProviders] = useState<SsoProvider[]>(tier.allowedSsoProviders);
-  const [chatPlatforms, setChatPlatforms] = useState<ChatPlatform[]>(tier.allowedChatPlatforms);
-  // Generated from the shared lists rather than one `useState` per entitlement. The previous
-  // version had a single `faceVerification` boolean while the platform enforced twenty-one, and a
-  // per-field state hook is exactly the shape that stops anyone adding the sixteenth.
-  const [capabilities, setCapabilities] = useState<Record<PlanCapabilityKey, boolean>>(() =>
-    Object.fromEntries(PLAN_CAPABILITIES.map((c) => [c.key, tier[c.key]])) as Record<PlanCapabilityKey, boolean>
-  );
-  const [quotas, setQuotas] = useState<Record<PlanQuotaKey, string>>(() =>
-    Object.fromEntries(PLAN_QUOTAS.map((q) => [q.key, String(tier[q.key] ?? 0)])) as Record<PlanQuotaKey, string>
-  );
-
-  // Re-sync when the row changes under us (another admin saved, or the query refetched). Keyed on
-  // the row itself rather than on each field, which is what a generated form can honestly depend on.
-  useEffect(() => {
-    setSeatLimit(tier.seatLimit.toString());
-    setBudget(tier.aiMonthlyBudgetCeilingUsd);
-    setProviders(tier.allowedSsoProviders);
-    setChatPlatforms(tier.allowedChatPlatforms);
-    setCapabilities(Object.fromEntries(PLAN_CAPABILITIES.map((c) => [c.key, tier[c.key]])) as Record<PlanCapabilityKey, boolean>);
-    setQuotas(Object.fromEntries(PLAN_QUOTAS.map((q) => [q.key, String(tier[q.key] ?? 0)])) as Record<PlanQuotaKey, string>);
-  }, [tier]);
-
-  const save = useMutation({
-    mutationFn: () =>
-      platformAdminPlanTierApi.update(tier.tier, {
-        seatLimit: Number(seatLimit),
-        aiMonthlyBudgetCeilingUsd: Number(budget),
-        allowedSsoProviders: providers,
-        allowedChatPlatforms: chatPlatforms,
-        ...capabilities,
-        ...(Object.fromEntries(PLAN_QUOTAS.map((q) => [q.key, Number(quotas[q.key]) || 0])) as Record<PlanQuotaKey, number>)
-      }),
-    onSuccess: () => {
-      toast.success("Saved");
-      queryClient.invalidateQueries({ queryKey: ["platform-admin", "plan-tier-limits"] });
-    },
-    onError: (err: any) => toast.error("Could not save", { description: err?.response?.data?.message ?? "Try again." })
-  });
-
-  const toggleProvider = (provider: SsoProvider, checked: boolean) => {
-    setProviders((prev) => (checked ? [...prev, provider] : prev.filter((p) => p !== provider)));
-  };
-
-  const toggleChatPlatform = (platform: ChatPlatform, checked: boolean) => {
-    setChatPlatforms((prev) => (checked ? [...prev, platform] : prev.filter((p) => p !== platform)));
-  };
-
-  return (
-    <Card className="border-border bg-card">
-      <CardHeader>
-        <CardTitle className="flex items-center gap-2 text-base text-foreground">
-          {TIER_LABEL[tier.tier]}
-          {tier.tier === "ENTERPRISE" && <Badge variant="info">Highest</Badge>}
-        </CardTitle>
-        <CardDescription className="text-muted-foreground">Defaults applied to every organization on this tier.</CardDescription>
-      </CardHeader>
-      <CardContent className="grid gap-4">
-        <div className="grid gap-1.5">
-          <Label className="text-foreground">Seat limit</Label>
-          <Input className="border-border bg-background text-foreground" type="number" value={seatLimit} onChange={(e) => setSeatLimit(e.target.value)} />
-        </div>
-        <div className="grid gap-1.5">
-          <Label className="text-foreground">AI budget ceiling ($/mo)</Label>
-          <Input className="border-border bg-background text-foreground" type="number" value={budget} onChange={(e) => setBudget(e.target.value)} />
-        </div>
-        <div className="grid gap-1.5">
-          <Label className="text-foreground">Allowed SSO providers</Label>
-          <div className="grid gap-2">
-            {ALL_PROVIDERS.map((provider) => (
-              <label key={provider} className="flex items-center gap-2 text-sm text-foreground">
-                <Checkbox checked={providers.includes(provider)} onCheckedChange={(checked) => toggleProvider(provider, Boolean(checked))} />
-                {(() => {
-                  const Mark = SSO_PROVIDER_MARKS[provider];
-                  return <Mark className="h-4 w-4 shrink-0" />;
-                })()}
-                {PROVIDER_LABEL[provider]}
-              </label>
-            ))}
           </div>
-        </div>
-        <div className="grid gap-1.5">
-          <Label className="text-foreground">Allowed chat platforms</Label>
-          <div className="grid gap-2">
-            {ALL_CHAT_PLATFORMS.map((platform) => (
-              <label key={platform} className="flex items-center gap-2 text-sm text-foreground">
-                <Checkbox
-                  checked={chatPlatforms.includes(platform)}
-                  onCheckedChange={(checked) => toggleChatPlatform(platform, Boolean(checked))}
-                />
-                {(() => {
-                  const Mark = CHAT_PLATFORM_MARKS[platform];
-                  return <Mark className="h-4 w-4 shrink-0" />;
-                })()}
-                {CHAT_PLATFORM_LABEL[platform]}
-              </label>
-            ))}
-          </div>
-        </div>
-        <div className="grid gap-1.5">
-          <Label className="text-foreground">Features</Label>
-          <div className="grid gap-2.5">
-            {PLAN_CAPABILITIES.map((capability) => (
-              <label key={capability.key} className="flex items-start gap-2 text-sm text-foreground">
-                <Checkbox
-                  className="mt-0.5"
-                  checked={capabilities[capability.key]}
-                  onCheckedChange={(checked) => setCapabilities((prev) => ({ ...prev, [capability.key]: Boolean(checked) }))}
-                />
-                <span>
-                  {capability.label}
-                  <span className="block text-xs leading-snug text-muted-foreground">{capability.hint}</span>
-                </span>
-              </label>
-            ))}
-          </div>
-          <p className="mt-1 text-xs text-muted-foreground">
-            Every capability here <strong className="text-muted-foreground">fails closed</strong> except face verification's
-            enforcement leg, which fails open on purpose — a lapsed plan must stop demanding identity checks, never lock
-            a workforce out of logging their own time. Unchecking face verification also starts each affected org's
-            30-day biometric-data purge grace window.
-          </p>
-        </div>
-
-        <div className="grid gap-1.5">
-          <Label className="text-foreground">Quotas</Label>
-          <div className="grid gap-2 sm:grid-cols-2">
-            {PLAN_QUOTAS.map((quota) => (
-              <div key={quota.key} className="grid gap-1">
-                <span className="text-xs text-muted-foreground">{quota.label}</span>
-                <Input
-                  className="border-border bg-background text-foreground"
-                  type="number"
-                  min={0}
-                  max={UNLIMITED_PLAN_ITEMS}
-                  value={quotas[quota.key]}
-                  onChange={(e) => setQuotas((prev) => ({ ...prev, [quota.key]: e.target.value }))}
-                />
-              </div>
-            ))}
-          </div>
-          <p className="text-xs text-muted-foreground">
-            <strong className="text-muted-foreground">0</strong> means the tier cannot use that resource at all —
-            it is a real ceiling, not "unlimited". {UNLIMITED_PLAN_ITEMS.toLocaleString()} is the sentinel for no limit.
-          </p>
-        </div>
-        <Button size="sm" className="w-fit bg-accent text-accent-foreground hover:bg-accent/90" disabled={save.isPending} onClick={() => save.mutate()}>
-          Save
-        </Button>
-      </CardContent>
-    </Card>
+        </>
+      )}
+    </ConsoleSection>
   );
 }

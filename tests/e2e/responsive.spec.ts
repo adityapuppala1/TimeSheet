@@ -391,7 +391,26 @@ test.describe("platform-admin console", () => {
     });
   });
 
-  const PLATFORM_ADMIN_PAGES = ["/platform-admin", "/platform-admin/plan-tiers", "/platform-admin/analytics"];
+  // EIGHT routes, not the three this block shipped with: the console grew Organizations, Retention,
+  // Emails, Feedback and Settings, and each of those arrived without ever being viewport-swept — the
+  // same gap that put this block here in the first place. Keep the list in step with App.tsx's
+  // `/platform-admin` children; a route missing here is a route nothing measures.
+  //
+  // A failure means that page pushed the document wider than the viewport at the failing project's
+  // width, and the offender list in the assertion message names the widest elements. The bug this
+  // catches was real and NOT phone-only: at 1024 the emails page's two-column grid engaged before
+  // its content could fit, and the template list was clipped off the right edge.
+  const PLATFORM_ADMIN_PAGES = [
+    "/platform-admin",
+    "/platform-admin/organizations",
+    "/platform-admin/plan-tiers",
+    "/platform-admin/analytics",
+    "/platform-admin/retention",
+    "/platform-admin/emails",
+    "/platform-admin/feedback",
+    "/platform-admin/backups",
+    "/platform-admin/settings"
+  ];
 
   for (const path of PLATFORM_ADMIN_PAGES) {
     test(`no horizontal overflow at ${path}`, async ({ page }) => {

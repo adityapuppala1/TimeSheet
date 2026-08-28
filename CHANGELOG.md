@@ -12,6 +12,79 @@ number, on purpose — an installation must never render history for a version t
 
 _Nothing yet._
 
+## 3.13.0 — the console, straightened out — and backups you can actually restore — 2026-08-28
+
+### 🎨 Every console page rebuilt on one layout kit
+
+- The console had eight pages and eight private opinions about spacing, tables and forms. There is
+  now a shared kit — `ConsoleTable` (one scroll container, honest minimum widths, right-aligned
+  numerics), `Field`/`FieldGrid`/`SwitchField` (so labels and controls line up across columns),
+  `KpiGrid`, `Toolbar`, `SegmentedControl` — and all eight pages are built from it.
+- Fixed by that pass, each one visible in a screenshot: the **sidebar footer overflowed the sidebar**
+  and printed over the page; **Platform emails overflowed horizontally at 1024** because the
+  two-column split engaged before the content fitted; the retention policy card mixed switches and
+  inputs at different heights; the Organizations action column started at a different x on every
+  row; **every KPI tile was 1-up on a phone**; and Analytics left every number left-aligned as a
+  string.
+- **Plan tiers is a comparison again.** Three independent long forms meant the Features list, the
+  Quotas and the Save button all sat at different heights per tier, so the one thing the page is
+  for — reading across — did not work.
+- The responsive e2e sweep now covers all **nine** console routes instead of the original three.
+
+### ✨ The sign-in page is the same product as the workspace one
+
+- `/platform-admin/login` gets the three.js lattice and the fingerprint sensor the workspace sign-in
+  has — the same components, with a `tone` prop, not copies. The console's is **amber**, which is
+  the one thing that must differ: a control-plane door that looks like a workspace door is how
+  somebody types a tenant password into the platform.
+
+### ✨ Platform email analytics, at the depth the workspace ones have
+
+- Per **recipient domain** with a success rate and that domain's top failure reason; per **template**
+  with rates and last-sent; per **workspace**, showing which retention stages have actually reached
+  each tenant — a customer with failures there will not have heard the notice before their deletion
+  date. A 7/30/90-day window, a delivered/failed/skipped daily chart, and failure reasons grouped by
+  shape with their last occurrence.
+- Skipped is never counted as a failure (nothing tried to deliver it) and test sends never move a
+  rate — both stated on the screen rather than left for the reader to discover.
+
+### ✨ Backups: list, download, restore, delete
+
+- 3.12.0 wrote a `mysqldump` before deleting a workspace and then offered nothing else. A backup you
+  cannot list or restore is a file. **Platform → Backups** now shows every snapshot with its size,
+  its workspace and whether it is restorable, probes the host for `mysqldump`/`mysql` so an empty
+  directory explains itself, and offers Download, Restore and Delete.
+- **A restore refuses to overwrite a live workspace.** It only runs where the organization has no
+  database — recreating it, importing the dump, and reopening the workspace in grace with its
+  deletion held. The download goes through the bearer token, not an `<a href>` that would have
+  silently saved a 401 page named like a backup.
+
+### ✨ Sessions and the audit trail became usable
+
+- The console's session list printed the raw `User-Agent`, so nine identical-looking rows answered
+  neither question the screen exists for. Sessions now show a parsed browser, OS and device icon
+  (with the raw string on hover), flag automated clients, **paginate**, and offer **End all others**
+  — which deliberately keeps you signed in, because an operator who must sign in again to check it
+  worked will not press it.
+- The audit trail paginates and filters by actor and entity, with the entity options coming from the
+  data rather than a hand-kept list.
+
+### ✨ Feedback analytics
+
+- Average rating per month over a year against the number of answers behind each mean, a per-stage
+  split (the day-10 check-in and the post-trial reminders are different questions asked of different
+  moods), a per-tier and per-lifecycle split, and the share of answers that carried **words** rather
+  than only a score.
+
+### 🐛 Fixes found by reviewing the refactor
+
+- The one-time password in the rescue dialog was given `truncate` — an ellipsis through a credential
+  shown exactly once and stored only as a hash. It wraps.
+- `TierPill` matched tiers by exact string, so the retention queue's "TEAM trial" rendered grey.
+- The custom-domains dialog still painted its status pill `emerald-300`, a dark-mode-only foreground
+  that was unreadable in the light theme the console now follows.
+- `KpiGrid` hard-coded four columns, leaving an orphan tile on the two pages that have three.
+
 ## 3.12.0 — the console grows up, and a lapsed trial is a conversation instead of silence — 2026-08-28
 
 ### ✨ Trial retention: we miss you, your data is safe, and here is exactly when it goes

@@ -432,6 +432,16 @@ Run through this for the specific organization before calling it live:
     trusting it. A simulated date can never send or delete.
   - A paying customer is never deleted, whatever the clock says: converting nulls `trialTier`, and
     the schedule stops. Deletion also refuses any workspace that is not GRACE or SUSPENDED.
+- **Retention snapshots, and restoring one** (SaaS shape, 3.13.0) — `/platform-admin` → **Backups**.
+  Every snapshot the retention programme took before deleting a workspace, with its size, its
+  workspace and whether it can be restored; the page also probes the API host for `mysqldump` and
+  `mysql` and says so, because a snapshot is best-effort and an empty directory usually means a
+  missing binary rather than a quiet policy. **Download** hands over the `.sql`; **Restore**
+  recreates the database, imports the dump, re-registers an encrypted DSN and reopens the workspace
+  in `GRACE` with its deletion held. A restore is refused where the organization still has a
+  database, so a live tenant can never be overwritten. Run `npm run db:migrate:tenants` after a
+  restore if the platform has moved on since the dump was taken. Nothing prunes the directory:
+  deleting the last copy of a customer's data is never automatic.
 - **Rescuing a locked-out workspace administrator** (SaaS shape) — when a customer's only super
   admin cannot sign in and their `/forgot-password` is no use (their SMTP is broken, or the mailbox
   is what they lost): `/platform-admin` → Organizations → **Rescue admin** on the ACTIVE row →
