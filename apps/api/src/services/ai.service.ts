@@ -4176,8 +4176,28 @@ export async function draftPostImplementationReview(input: {
 
 const AskActionSchema = z.union([
   z.object({ action: z.literal("tool"), tool: z.string().min(1), args: z.record(z.unknown()).optional() }),
-  z.object({ action: z.literal("answer"), markdown: z.string().min(1) })
+  z.object({ action: z.literal("answer"), markdown: z.string().min(1) }),
+  // No payload on purpose — see ASK_OUT_OF_SCOPE below. The model decides THAT a question is out of
+  // scope; it never gets to decide what the refusal says.
+  z.object({ action: z.literal("refuse") })
 ]);
+
+/**
+ * The refusal, written once, here.
+ *
+ * WHY THE MODEL DOES NOT WRITE THIS. Asked "what is the capital of France?" the assistant declined —
+ * and offered, unprompted, to "look up the knowledge base or search the internet". It can do
+ * neither. A model improvising a refusal improvises the capabilities it is refusing on behalf of,
+ * and every one of those sentences is a promise this product then breaks.
+ *
+ * So `refuse` carries no text. The model classifies; the server speaks. That also makes the
+ * boundary testable, which prose from an 8B model never is.
+ */
+export const ASK_OUT_OF_SCOPE = [
+  "I only answer questions about this workspace — your tickets, timesheets, changes, projects, people and the settings behind them. I can't help with anything outside it, and I have no way to search the web or any outside source.",
+  "",
+  "Try asking about your own work: what you logged this week, which tickets are waiting on you, or how a project is tracking."
+].join("\n");
 
 /**
  * "The model tried to call a tool and did not use our format."
@@ -4435,6 +4455,7 @@ export async function askWorkspaceChat(input: {
       "syntax, function-call tags or special tokens — this loop reads plain JSON only:",
       '  { "action": "tool", "tool": "<name>", "args": { ... } }   — to consult a tool',
       '  { "action": "answer", "markdown": "..." }                 — when you can answer',
+      '  { "action": "refuse" }                                    — the question is not about this product',
       "",
       "The answer is markdown, carried inside that JSON string — so every newline in it is written",
       "as \\n and every quote as \\\". Cite ticket and change keys like [HICS-TS-3]. Use tables for",
@@ -4457,8 +4478,23 @@ export async function askWorkspaceChat(input: {
       "              with the body on the following `>` lines.",
       "  ## and ### headings, lists and **bold** give a longer answer structure.",
       "Prefer plain sentences for a short answer — structure earns its place, it is not decoration.",
-      "The one thing to turn down is a genuine general-knowledge question — the weather, world news,",
-      "another product. One sentence, then say what you can look up here.",
+      "SCOPE. Start from the assumption that the question IS in scope, because nearly every question",
+      "you receive is. In scope means: the person's tickets, hours, timesheets, changes, projects,",
+      "goals, colleagues and settings — AND how to do anything in this product, where a screen is,",
+      "what a feature does, what a term here means, and what you yourself can do. Answer all of",
+      "those. 'How do I transition a ticket', 'what does a blackout window mean', 'can you draft a",
+      "timesheet entry' are ordinary in-scope questions, not refusals.",
+      "",
+      "REFUSE ONLY when the question has nothing to do with this workspace or this product at all —",
+      "the weather, world news, trivia, general maths, code unrelated to this app, another company's",
+      "product, medical, legal or financial advice, or writing help for something outside work here.",
+      "Then, and only then, the whole reply is:",
+      '  { "action": "refuse" }',
+      "and nothing else — no markdown, no apology, no explanation. The wording is written for you.",
+      "Never compose your own refusal and never offer what you might otherwise look up: you cannot",
+      "search the web and there is no knowledge base beyond the tools above.",
+      "If you are unsure which side a question falls on, ANSWER IT. A refused product question is a",
+      "worse failure than an answered odd one.",
       "",
       historyLines
         ? `RECENT CONVERSATION (context only — the TOOLS list above is the current truth; decide
@@ -4487,6 +4523,8 @@ export async function askWorkspaceChat(input: {
   // not a design. An identical consecutive call is answered from memory instead of re-run.
   let lastCallSignature = "";
   let lastCallResult = "";
+  /** Every successful (tool, args) call in THIS question, so a repeat costs nothing. */
+  const resultsBySignature = new Map<string, string>();
   /** One push back per question when the first answer consulted nothing — see the guard below. */
   let nudgedForNoTools = false;
   /** And one for a reply that consulted a tool but only announced that it was going to. */
@@ -4521,6 +4559,33 @@ export async function askWorkspaceChat(input: {
         output: answer
       });
       return { answer, toolCalls, model: lastModel, provider: lastProvider, inputTokens, outputTokens, costUsd, interactionId: interactionId ?? null };
+    }
+
+    /* Out of scope: one call, one fixed sentence, no nudge. Placing this ABOVE the no-tools guard
+       is what stops an off-topic question costing a second round trip to be told the same thing —
+       a refusal consulting no tools is correct, not a deflection. */
+    if (parsed.action === "refuse") {
+      const { interactionId } = await logAIUsage({
+        feature: "ask_ai",
+        params: { steps: step + 1, tools: toolCalls.map((t) => t.tool), refused: true },
+        model: lastModel,
+        provider: lastProvider,
+        inputTokens,
+        outputTokens,
+        userId: input.userId,
+        prompt: input.prompt,
+        output: ASK_OUT_OF_SCOPE
+      });
+      return {
+        answer: ASK_OUT_OF_SCOPE,
+        toolCalls,
+        model: lastModel,
+        provider: lastProvider,
+        inputTokens,
+        outputTokens,
+        costUsd,
+        interactionId: interactionId ?? null
+      };
     }
 
     /*
@@ -4580,6 +4645,19 @@ export async function askWorkspaceChat(input: {
     }
 
     const signature = `${parsed.tool}:${JSON.stringify(parsed.args ?? {})}`;
+
+    /* A CALL ALREADY MADE IN THIS QUESTION IS ANSWERED FROM MEMORY, not re-run.
+       This used to compare against the PREVIOUS call only, which catches a model that repeats
+       itself immediately and misses the commoner shape: A, then B, then A again on the way to an
+       answer. Every such repeat was a second database round trip for rows already sitting in the
+       transcript. Keyed by tool AND arguments, so a genuinely different query still runs. */
+    const remembered = resultsBySignature.get(signature);
+    if (remembered !== undefined && signature !== lastCallSignature) {
+      transcript.push(`--- ${parsed.tool} (already fetched above - NOT re-run) ---\n<tool_result>\n${remembered}\n</tool_result>`);
+      extra = `\nWhat the tools have returned so far:\n${transcript.join("\n\n")}\n\nYou have already made that call in this answer. Use the result above and answer, or call something different.`;
+      continue;
+    }
+
     if (signature === lastCallSignature) {
       transcript.push(`--- ${parsed.tool} (repeat of the previous call - NOT re-run) ---\n<tool_result>\n${lastCallResult}\n</tool_result>`);
       extra = `\nWhat the tools have returned so far:\n${transcript.join("\n\n")}\n\nYou already made that exact call. Answer now, or call something different.`;
@@ -4609,6 +4687,9 @@ export async function askWorkspaceChat(input: {
     if (!result.startsWith("The tool failed:")) {
       lastCallSignature = signature;
       lastCallResult = result;
+      // A failure is deliberately NOT remembered: the next attempt should get a real chance rather
+      // than replaying a transient error for the rest of the question.
+      resultsBySignature.set(signature, result);
     }
     transcript.push(`--- ${parsed.tool} ---\n<tool_result>\n${result}\n</tool_result>`);
     extra = `\nWhat the tools have returned so far:\n${transcript.join("\n\n")}\n\nAnswer now if you can; use another tool only if something is still missing.`;

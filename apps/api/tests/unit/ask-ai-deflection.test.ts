@@ -21,7 +21,7 @@ import { describe, expect, it, vi } from "vitest";
 // predicate needs none of that, so the heavy edges are stubbed and only the pure function is read.
 vi.mock("../../src/config/prisma.js", () => ({ prisma: {} }));
 
-const { shouldPushBackForNoTools, looksLikeStall } = await import("../../src/services/ai.service.js");
+const { shouldPushBackForNoTools, looksLikeStall, ASK_OUT_OF_SCOPE } = await import("../../src/services/ai.service.js");
 
 const MAX = 5;
 
@@ -84,5 +84,45 @@ describe("spotting a reply that announces a lookup instead of reporting one", ()
 
   it("is not fooled by leading whitespace", () => {
     expect(looksLikeStall("   \n  Let me fetch that.")).toBe(true);
+  });
+});
+
+describe("the out-of-scope refusal", () => {
+  /*
+   * This string exists because the model wrote its own and got it wrong. Asked for the capital of
+   * France it declined politely and then offered to "look up the knowledge base or search the
+   * internet" — two capabilities this product does not have. A refusal that invents abilities is
+   * worse than no refusal, because the next question is the person trying to use one.
+   */
+  it("offers nothing the product cannot do", () => {
+    /*
+     * The banned strings are OFFERS, not topics. An earlier version of this test forbade the bare
+     * phrase "search the web", which also forbade the honest denial of it in the very next
+     * assertion — the two could not both pass. What matters is that nothing here reads as an
+     * ability: "I can search…", "let me look it up…", a knowledge base that does not exist.
+     */
+    const lowered = ASK_OUT_OF_SCOPE.toLowerCase();
+    for (const offer of [
+      "i can search",
+      "i could search",
+      "let me search",
+      "let me look it up",
+      "knowledge base",
+      "i can browse",
+      "on the internet for you"
+    ]) {
+      expect(lowered).not.toContain(offer);
+    }
+  });
+
+  it("says plainly that there is no outside source", () => {
+    expect(ASK_OUT_OF_SCOPE.toLowerCase()).toContain("no way to search the web");
+  });
+
+  it("names what IS in scope, so the refusal is a redirection rather than a dead end", () => {
+    const lowered = ASK_OUT_OF_SCOPE.toLowerCase();
+    for (const noun of ["tickets", "timesheets", "changes", "projects"]) {
+      expect(lowered).toContain(noun);
+    }
   });
 });
