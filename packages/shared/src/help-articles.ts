@@ -484,6 +484,55 @@ export const HELP_ARTICLES: HelpArticle[] = [
       "Analytics: aggregate numbers only — outbound mail health, adoption, never row-level tenant content."
     ],
     keywords: ["platform admin", "console", "organizations", "tenants", "plan tiers", "domains", "multi-tenant", "saas"]
+  },
+  {
+    id: "platform-admin-provision",
+    category: "Platform & operations",
+    title: "Bring a new customer workspace online",
+    roles: SA,
+    where: "/platform-admin → Organizations → New organization, then Provision",
+    when: "A customer has signed a contract (self-serve trials provision themselves at /signup).",
+    steps: [
+      "New organization: name, slug and plan tier. This is only a registry row — nothing exists yet.",
+      "Provision: enter the customer's first administrator — email, name and an initial password. This creates their physically separate database, migrates it and seeds that one super-admin account.",
+      "The confirmation shows their sign-in address (https://<slug>.<your root domain>) and whether the welcome email carrying it was sent.",
+      "Hand over the initial password out-of-band — it is never emailed. They are asked to replace it at first sign-in.",
+      "Tell them to create a second super admin on day one (Admin → Users) — you cannot add one for them later."
+    ],
+    notes: "If the confirmation says the welcome email could not be sent, outbound mail is not configured yet — pass the link on yourself. Subdomains only resolve when ROOT_DOMAIN is set on the deployment; without it every address serves the default workspace.",
+    keywords: ["provision", "new customer", "tenant", "workspace", "onboarding", "welcome email", "super admin", "sign-in url", "root domain"]
+  },
+  {
+    id: "platform-admin-rescue",
+    category: "Platform & operations",
+    title: "Rescue a locked-out workspace administrator",
+    roles: SA,
+    where: "/platform-admin → Organizations → Rescue admin (on an active workspace)",
+    when: "A customer's only administrator cannot sign in and Forgot password is no use — their outbound mail is broken, or the mailbox is what they lost.",
+    steps: [
+      "Confirm who is asking through a channel you trust — you are about to hand out access to their entire workspace.",
+      "Rescue admin: enter the administrator's email. Only an existing super admin of that workspace can be reset from here; everyone else is reset by their own admins.",
+      "Read the one-time password to them. It is shown once, stored only as a hash, and never emailed or logged.",
+      "They sign in with it and are prompted to choose their own password. Every previous session of that account is already signed out.",
+      "If the lockout is an SSO misconfiguration instead, use Restore password login — it turns password sign-in back on without touching anyone's password."
+    ],
+    notes: "The reset is written to the customer's own audit log, attributed to your platform-admin account — they can see it happened.",
+    keywords: ["locked out", "rescue", "reset password", "super admin", "forgot password", "sso lockout", "restore password login", "one-time password"]
+  },
+  {
+    id: "platform-admin-own-password",
+    category: "Platform & operations",
+    title: "Change the platform admin password (and why the console nags you)",
+    roles: SA,
+    where: "/platform-admin → Change password (sidebar), or the amber banner across the top",
+    when: "Immediately after a fresh install, and whenever an operator leaves.",
+    steps: [
+      "The console ships with a bootstrap sign-in whose password is printed in the repository. While that password is still in use, an amber banner stays across every console page.",
+      "Change password: enter the current one and a new one of at least 12 characters.",
+      "Every other console session is signed out at that moment; yours stays.",
+      "The banner disappears as soon as the change is accepted."
+    ],
+    keywords: ["platform admin password", "seeded password", "bootstrap", "rotate", "change password", "banner", "hardening"]
   }
 ];
 

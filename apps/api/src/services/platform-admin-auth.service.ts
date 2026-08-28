@@ -10,7 +10,7 @@
 import { controlPrisma } from "../config/control-prisma.js";
 import { env } from "../config/env.js";
 import { AppError } from "../middleware/error.js";
-import { hashToken, opaqueToken, verifyPassword, verifyTokenHash } from "../utils/security.js";
+import { hashPassword, hashToken, opaqueToken, verifyPassword, verifyTokenHash } from "../utils/security.js";
 import {
   signPlatformAdminAccessToken,
   signPlatformAdminRefreshToken,
@@ -33,6 +33,21 @@ async function establishSession(adminUserId: string, opts: { userAgent?: string;
   };
 }
 
+/**
+ * The password prisma/control/seed.ts gives the bootstrap platform admin. It is in the repository,
+ * so it is in every fork, every CI log and this README — knowing it here removes no secrecy that
+ * was ever there. It exists so the console can tell an operator "you are still on the seeded
+ * password" without a schema change: the check is one bcrypt compare at sign-in, not a column.
+ */
+// eslint-disable-next-line sonarjs/no-hardcoded-passwords -- the public bootstrap value, detected, never granted
+export const SEEDED_PLATFORM_ADMIN_PASSWORD = "PlatformAdmin@12345";
+
+/** True when this hash still verifies the seeded bootstrap password. Cheap (one compare) and
+ *  only ever evaluated for an already-authenticated admin, so it leaks nothing to a caller. */
+export async function usesSeededPassword(passwordHash: string): Promise<boolean> {
+  return verifyPassword(SEEDED_PLATFORM_ADMIN_PASSWORD, passwordHash);
+}
+
 export async function platformAdminLogin(email: string, password: string, userAgent?: string, ipAddress?: string) {
   const admin = await controlPrisma.platformAdminUser.findUnique({ where: { email } });
   if (!admin || admin.status !== "ACTIVE" || !(await verifyPassword(password, admin.passwordHash))) {
@@ -42,7 +57,35 @@ export async function platformAdminLogin(email: string, password: string, userAg
   const session = await establishSession(admin.id, { userAgent, ipAddress });
   await controlPrisma.platformAdminUser.update({ where: { id: admin.id }, data: { lastLoginAt: new Date() } });
 
-  return { ...session, admin: { id: admin.id, name: admin.name, email: admin.email } };
+  return {
+    ...session,
+    admin: { id: admin.id, name: admin.name, email: admin.email, usingSeededPassword: await usesSeededPassword(admin.passwordHash) }
+  };
+}
+
+/**
+ * A platform admin choosing their own password. Mirrors auth.service.ts#changePassword: the
+ * current password is re-verified even though the caller is already authenticated (a walked-away
+ * console must not be enough to lock its owner out), and every OTHER session is revoked so a
+ * rotation done because a credential leaked actually ends the leak. The session doing the
+ * changing survives — signing the operator out of the very console they are hardening would
+ * read as a failure.
+ */
+export async function changePlatformAdminPassword(adminId: string, currentSessionId: string, currentPassword: string, nextPassword: string) {
+  const admin = await controlPrisma.platformAdminUser.findUnique({ where: { id: adminId } });
+  if (!admin || admin.status !== "ACTIVE") throw new AppError(401, "Invalid session");
+  if (!(await verifyPassword(currentPassword, admin.passwordHash))) throw new AppError(400, "Current password is incorrect");
+  // Seeded check first: an operator still ON the seeded password who types it again would otherwise
+  // be told "same as current", which is true but not the reason that matters.
+  if (nextPassword === SEEDED_PLATFORM_ADMIN_PASSWORD) throw new AppError(400, "That is the seeded bootstrap password — choose your own");
+  if (currentPassword === nextPassword) throw new AppError(400, "Choose a password you have not used here before");
+
+  await controlPrisma.platformAdminUser.update({ where: { id: adminId }, data: { passwordHash: await hashPassword(nextPassword) } });
+  const revoked = await controlPrisma.platformAdminSession.updateMany({
+    where: { adminUserId: adminId, revokedAt: null, id: { not: currentSessionId } },
+    data: { revokedAt: new Date() }
+  });
+  return { otherSessionsRevoked: revoked.count };
 }
 
 export async function platformAdminRefresh(refreshToken: unknown) {

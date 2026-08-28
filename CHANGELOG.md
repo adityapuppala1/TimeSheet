@@ -12,6 +12,42 @@ number, on purpose — an installation must never render history for a version t
 
 _Nothing yet._
 
+## 3.11.0 — the platform console can rescue a locked-out customer, and nags you off the seeded password — 2026-08-28
+
+### ✨ Rescue admin: a one-time password for a workspace owner who cannot get back in
+
+- Until now, a customer whose only super administrator was locked out — and whose *Forgot
+  password* was no use because their outbound mail was broken, or the mailbox was the thing they
+  lost — had no way back that the platform could offer. **Rescue admin**, on every active
+  organization in the console, issues a one-time password for an existing super admin of that
+  workspace.
+- Deliberately narrow: it never creates an account and it never resets anyone who is not already a
+  super admin of that workspace — employees are reset by their own admins. The password is
+  generated, never chosen by the operator; shown **once**; stored only as a hash; never mailed or
+  logged. Every session of that account is signed out, and the tenant app asks them to choose their
+  own password at first sign-in.
+- The reset is written to the **customer's own audit log**, attributed to the platform-admin
+  account that did it. A rescue is visible to the people it was done for.
+
+### 🛡️ The console now says out loud when it is still on the seeded password
+
+- The bootstrap platform admin ships with a password that is printed in this repository. Nothing in
+  the product said so. Now, while that account still verifies against the seeded value, an amber
+  banner sits across every console page, and **Change password** in the sidebar rotates it —
+  current password re-verified, at least 12 characters, the seeded value refused as a new one,
+  every *other* console session signed out. The banner survives a reload and disappears the moment
+  the change is accepted. No schema change: it is one password compare at sign-in.
+
+### 📚 Three new help articles, and the assistant knows them
+
+- *Bring a new customer workspace online*, *Rescue a locked-out workspace administrator*, and
+  *Change the platform admin password* — in the Help page for super admins and, through the same
+  source, in Ask AI's how-to answers. `docs/API.md` gains the platform-admin console section it
+  never had; `docs/NEW_ORGANIZATION_SETUP.md` no longer says the rotation needs SQL.
+- A live verification script, `.claude/skills/run-timesphere/platform-admin-verify.mjs`, drives
+  the whole flow against a running stack — banner, refusal, rotation, rescue, tenant sign-in with
+  the one-time password, restore — and leaves no data changed behind it.
+
 ## 3.10.1 — a provisioned workspace now tells its owner where to sign in — 2026-08-28
 
 ### ✨ Provisioning hands over the sign-in address, and emails it

@@ -95,9 +95,14 @@ Migrating required, in order:
 ### 4. Rotate the seeded platform-admin credentials
 
 The control-plane seed creates `platform-admin@timesphere.local` / `PlatformAdmin@12345` — the
-single highest-privilege account on the platform (cross-org access). **Verified**: there is no
-self-serve/forced password-change flow for this account yet. Before any real organization is
-provisioned:
+single highest-privilege account on the platform (cross-org access), and its password is in this
+repository. Since 3.11.0 the console itself tells you: while that account still verifies against
+the seeded password, an amber **"seeded bootstrap password"** banner sits across every
+`/platform-admin` page, and **Change password** in the sidebar rotates it (current password
+re-verified, at least 12 characters, every *other* console session signed out). Do this before any
+real organization is provisioned; the banner disappears the moment the change is accepted.
+
+The SQL route still works if you would rather script it:
 
 ```sql
 -- Against the control-plane database, with a freshly bcrypt-hashed password:
@@ -106,7 +111,7 @@ UPDATE PlatformAdminUser SET passwordHash = '<bcrypt-hash>' WHERE email = 'platf
 
 Or re-run `npm run control:seed -w apps/api` against a still-empty control database before you
 register any real org, and change the email/password constants in
-`apps/api/prisma/control/seed.ts` first if you'd rather not touch SQL directly.
+`apps/api/prisma/control/seed.ts` first.
 
 ### 5. Harden the container images
 
@@ -410,3 +415,15 @@ Run through this for the specific organization before calling it live:
   note).
 - **Monitor MySQL `max_connections`** against `MAX_CACHED_CLIENTS × PER_TENANT_CONNECTION_LIMIT`
   as organization count grows (SaaS shape).
+- **Rescuing a locked-out workspace administrator** (SaaS shape) — when a customer's only super
+  admin cannot sign in and their `/forgot-password` is no use (their SMTP is broken, or the mailbox
+  is what they lost): `/platform-admin` → Organizations → **Rescue admin** on the ACTIVE row →
+  enter the super admin's email. A one-time password is generated (never chosen by you), shown
+  **once**, stored only as a hash, and never mailed or logged; every session of that account is
+  revoked and the tenant app asks them to choose their own password at sign-in. The reset is
+  written to the customer's own audit log attributed to your platform-admin account. Only an
+  existing `SUPER_ADMIN` of that workspace can be reset this way — employees are reset by their
+  own admins. Confirm who is asking through a channel you trust before you do it. If the lockout
+  is an SSO misconfiguration instead, **Restore password login** (`POST
+  /organizations/:id/restore-password-login`) turns password sign-in back on without touching
+  anyone's password.

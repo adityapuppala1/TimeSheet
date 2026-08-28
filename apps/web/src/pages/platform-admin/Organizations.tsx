@@ -11,7 +11,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import type { ColumnDef } from "@tanstack/react-table";
 import { useState } from "react";
-import { Plus } from "lucide-react";
+import { Check, Copy, LifeBuoy, Plus } from "lucide-react";
 import { Badge } from "../../components/ui/badge";
 import { Button } from "../../components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../../components/ui/card";
@@ -24,7 +24,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from ".
 import { Skeleton } from "../../components/ui/skeleton";
 import { Textarea } from "../../components/ui/textarea";
 import { toast } from "../../components/ui/toaster";
-import { platformAdminOrgApi, type OrgListRow, type OrgStatus, type PlanTier } from "../../services/platform-admin-api";
+import { platformAdminOrgApi, type OrgListRow, type OrgStatus, type PlanTier, type ResetAdminPasswordResult } from "../../services/platform-admin-api";
 
 // Dark slate/amber chrome, distinct from the app's normal theme (this console is always dark
 // regardless of the tenant app's light/dark toggle) — DataTable's default classes use the
@@ -47,6 +47,7 @@ export function PlatformAdminOrganizations() {
   const [editing, setEditing] = useState<OrgListRow | null>(null);
   const [provisioning, setProvisioning] = useState<OrgListRow | null>(null);
   const [domainsFor, setDomainsFor] = useState<OrgListRow | null>(null);
+  const [rescuing, setRescuing] = useState<OrgListRow | null>(null);
 
   const columns: ColumnDef<OrgListRow, any>[] = [
     { accessorKey: "name", header: "Name", cell: (info) => <span className="font-medium text-slate-100">{info.getValue()}</span> },
@@ -85,6 +86,18 @@ export function PlatformAdminOrganizations() {
               onClick={() => setDomainsFor(row.original)}
             >
               Domains
+            </Button>
+          )}
+          {/* Only an ACTIVE workspace has an administrator to rescue; a suspended one is a
+              billing conversation, not a password one, and the server refuses it anyway. */}
+          {row.original.status === "ACTIVE" && (
+            <Button
+              size="sm"
+              variant="outline"
+              className="gap-1.5 border-slate-700 text-slate-300 hover:bg-slate-800 hover:text-slate-100"
+              onClick={() => setRescuing(row.original)}
+            >
+              <LifeBuoy className="h-3.5 w-3.5" />Rescue admin
             </Button>
           )}
           <Button size="sm" variant="outline" className="border-slate-700 text-slate-300 hover:bg-slate-800 hover:text-slate-100" onClick={() => setEditing(row.original)}>
@@ -138,6 +151,7 @@ export function PlatformAdminOrganizations() {
         }}
       />
       <DomainsDialog org={domainsFor} onOpenChange={(open) => !open && setDomainsFor(null)} />
+      <RescueAdminDialog org={rescuing} onOpenChange={(open) => !open && setRescuing(null)} />
       <ProvisionOrgDialog
         org={provisioning}
         onOpenChange={(open) => !open && setProvisioning(null)}
@@ -219,6 +233,111 @@ function ProvisionOrgDialogInner({ org, onOpenChange, onProvisioned }: { org: Or
             {provision.isPending ? "Provisioning..." : "Provision"}
           </Button>
         </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+function RescueAdminDialog({ org, onOpenChange }: { org: OrgListRow | null; onOpenChange: (open: boolean) => void }) {
+  if (!org) return null;
+  return <RescueAdminDialogInner key={org.id} org={org} onOpenChange={onOpenChange} />;
+}
+
+/**
+ * The console-side rescue for a workspace whose only super admin is locked out. Two screens in one
+ * dialog: ask for the email, then show the one-time password — ONCE. It is not kept in any query
+ * cache or store; closing the dialog is the end of it, which is the point. The customer replaces
+ * it at first sign-in (the tenant app flags `mustChangePassword`).
+ */
+function RescueAdminDialogInner({ org, onOpenChange }: { org: OrgListRow; onOpenChange: (open: boolean) => void }) {
+  const [email, setEmail] = useState("");
+  const [result, setResult] = useState<ResetAdminPasswordResult | null>(null);
+  const [copied, setCopied] = useState(false);
+
+  const rescue = useMutation({
+    mutationFn: () => platformAdminOrgApi.resetAdminPassword(org.id, email),
+    onSuccess: (data) => setResult(data),
+    onError: (err: any) => toast.error("Could not reset that account", { description: err?.response?.data?.message ?? "Try again." })
+  });
+
+  const copy = async () => {
+    if (!result) return;
+    try {
+      await navigator.clipboard.writeText(result.temporaryPassword);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1800);
+    } catch {
+      toast.error("Clipboard unavailable - select the password and copy it by hand.");
+    }
+  };
+
+  return (
+    <Dialog open onOpenChange={onOpenChange}>
+      <DialogContent className="border-slate-800 bg-slate-900 text-slate-100">
+        <DialogHeader>
+          <DialogTitle>
+            Rescue an administrator of {org.name} <span className="font-mono text-sm font-normal text-slate-500">({org.slug})</span>
+          </DialogTitle>
+          <DialogDescription className="text-slate-400">
+            For a super admin who cannot sign in and cannot use Forgot password. Issues a one-time password and signs them out everywhere.
+          </DialogDescription>
+        </DialogHeader>
+
+        {!result && (
+          <>
+            <div className="grid gap-4">
+              <p className="text-xs text-slate-500">
+                Only an existing super admin of this workspace can be reset from here - this never creates an account. Confirm who is asking through a channel you
+                trust first: you are about to hand out access to their whole workspace.
+              </p>
+              <div className="grid gap-1.5">
+                <Label className="text-slate-300">Super admin email</Label>
+                <Input className="border-slate-700 bg-slate-950 text-slate-100" type="email" value={email} onChange={(e) => setEmail(e.target.value)} placeholder="owner@acme.com" />
+              </div>
+            </div>
+            <DialogFooter>
+              <Button
+                disabled={!email.includes("@") || rescue.isPending}
+                className="bg-amber-500 text-slate-950 hover:bg-amber-400"
+                onClick={() => rescue.mutate()}
+              >
+                {rescue.isPending ? "Issuing..." : "Issue one-time password"}
+              </Button>
+            </DialogFooter>
+          </>
+        )}
+
+        {result && (
+          <>
+            <div className="grid gap-4">
+              <p className="text-sm text-slate-300">
+                <span className="font-medium text-slate-100">{result.name}</span> ({result.email}) has been signed out everywhere and will be asked to choose a new
+                password at sign-in.
+              </p>
+              <div className="grid gap-1.5">
+                <Label className="text-slate-300">One-time password - shown once, never stored</Label>
+                <div className="flex items-center gap-2">
+                  <code className="flex-1 select-all rounded-md border border-amber-500/40 bg-slate-950 px-3 py-2 font-mono text-base tracking-wide text-amber-200">
+                    {result.temporaryPassword}
+                  </code>
+                  <Button size="sm" variant="outline" className="gap-1.5 border-slate-700 text-slate-300 hover:bg-slate-800 hover:text-slate-100" onClick={copy}>
+                    {copied ? <Check className="h-3.5 w-3.5" /> : <Copy className="h-3.5 w-3.5" />}
+                    {copied ? "Copied" : "Copy"}
+                  </Button>
+                </div>
+              </div>
+              <p className="text-xs text-slate-500">
+                Sign-in: <span className="font-mono text-slate-400">{result.url}</span>. Give both to the customer by whatever channel you trust - this dialog will not show
+                the password again.
+              </p>
+            </div>
+            <DialogFooter>
+              <Button className="bg-amber-500 text-slate-950 hover:bg-amber-400" onClick={() => onOpenChange(false)}>
+                Done
+              </Button>
+            </DialogFooter>
+          </>
+        )}
       </DialogContent>
     </Dialog>
   );

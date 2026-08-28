@@ -460,11 +460,14 @@ to know about your specific tool — translate its native output into the generi
 shape yourself (a `jq` one-liner in most cases) and `curl` it to the ingestion webhook. See
 [docs/SECURITY_DEVOPS_INTEGRATIONS.md § 3](SECURITY_DEVOPS_INTEGRATIONS.md#3-per-ci-system-examples).
 
-**How do I reset the platform-admin password?** There's no self-serve reset for that account
-yet (by design — it's the highest-privilege account in the system). Update it directly in the
-control-plane database (`PlatformAdminUser` table) with a freshly bcrypt-hashed password, or
-re-run `npm run control:seed -w apps/api` against a fresh control database if you haven't put
-real orgs on it yet.
+**How do I change the platform-admin password?** Signed in: **Change password** in the console
+sidebar (current password re-verified, 12+ characters, every other console session signed out).
+While the account is still on the seeded `PlatformAdmin@12345`, an amber banner across every
+console page reminds you. **Forgotten it entirely?** There is deliberately no emailed reset for
+the highest-privilege account in the system — update the `PlatformAdminUser` row in the
+control-plane database with a freshly bcrypt-hashed password, or re-run
+`npm run control:seed -w apps/api` against a fresh control database if you haven't put real orgs
+on it yet.
 
 **Where do I report a bug or request a feature?** See [docs/ROADMAP.md](ROADMAP.md) for what's
 already planned — check there before filing something that's already tracked.

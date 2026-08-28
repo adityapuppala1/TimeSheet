@@ -2036,6 +2036,43 @@ Expired, revoked, voided, and unknown tokens all return an identical **404** so 
 them apart. `SUMMARY` (the default) exposes totals and per-ticket rollups only — never per-entry
 rows, emails, user ids, or per-person rates.
 
+## Platform-admin console
+
+Base URL: `/api/platform-admin`. Mounted **before** tenant resolution — a platform admin operates
+across tenants, so nothing here depends on the `Host` header. Its own JWT secret, its own refresh
+cookie (`platformAdminRefreshToken`, path-scoped to `/api/platform-admin/auth`), zero shared client
+state with the tenant app.
+
+- `POST /auth/login` `{ email, password }` → `{ accessToken, admin }`. `admin.usingSeededPassword`
+  is `true` while the account still verifies against the password the control seed ships with —
+  the console shows a persistent banner until it is changed.
+- `POST /auth/refresh`, `POST /auth/logout`, `GET /auth/me` (also carries `usingSeededPassword`, so
+  the banner survives a reload).
+- `POST /auth/change-password` `{ currentPassword, newPassword }` — current password re-verified;
+  `newPassword` ≥ 12 chars, may not equal the current one or the seeded one. Revokes every **other**
+  console session and answers `{ otherSessionsRevoked, usingSeededPassword: false }`.
+- `GET /organizations`, `POST /organizations` `{ name, slug, planTier }` (registry row only, status
+  `PROVISIONING`), `GET /organizations/:id`, `PATCH /organizations/:id`.
+- `POST /organizations/:id/provision` `{ adminEmail, adminName, adminPassword }` — creates the
+  tenant database, migrates and seeds it with that one `SUPER_ADMIN`, flips the org `ACTIVE`, sends
+  the welcome email with the sign-in URL (never the password). Answers
+  `{ organizationId, databaseName, schemaVersion, url, welcomeSent }`. `409` on an already-active org.
+- `POST /organizations/:id/reset-admin-password` `{ email }` — the rescue for a locked-out
+  workspace owner. The target must already be a `SUPER_ADMIN` of an `ACTIVE` workspace (`409` if
+  the org is not active, `404` unknown address, `403` not a super admin). Generates a one-time
+  password, stores only its hash with `mustChangePassword`, revokes every session of that account,
+  writes `user.password_reset_by_platform` to the **tenant's** audit log, and returns
+  `{ orgSlug, email, name, temporaryPassword, url, message }` — the plaintext appears here once
+  and nowhere else.
+- `POST /organizations/:id/restore-password-login` — turns password sign-in back on for a
+  workspace that locked itself out with SSO-only. Touches no passwords.
+- `GET /organizations/:id/domains`, `POST …/domains` `{ domain }`, `POST …/domains/:domainId/verify`,
+  `DELETE …/domains/:domainId` — custom domains; only a verified row is ever routed.
+- `GET /routing` — what the current `ROOT_DOMAIN` / `DEFAULT_ORG_SLUG` make each workspace's URL,
+  and what it *would* be once `ROOT_DOMAIN` is set.
+- `GET /plan-tier-limits`, `PATCH /plan-tier-limits/:tier`, `GET /billing-settings`,
+  `PATCH /billing-settings`, `GET /analytics` (aggregate numbers only, never row-level tenant content).
+
 ## Public API
 
 Everything above requires the normal JWT session (a logged-in browser). The routes below are

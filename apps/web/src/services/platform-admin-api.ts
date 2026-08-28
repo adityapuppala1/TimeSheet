@@ -64,6 +64,8 @@ export interface PlatformAdminUser {
   id: string;
   name: string;
   email: string;
+  /** True while the account still verifies against the password the control seed ships with. Drives the console banner. */
+  usingSeededPassword?: boolean;
 }
 
 export interface OrgListRow {
@@ -158,7 +160,10 @@ export const platformAdminAuthApi = {
     (await platformAdminApi.post<{ accessToken: string; admin: PlatformAdminUser }>("/auth/login", { email, password })).data,
   refresh: refreshPlatformAdminAccessToken,
   me: async () => (await platformAdminApi.get<PlatformAdminUser>("/auth/me")).data,
-  logout: async () => platformAdminApi.post("/auth/logout")
+  logout: async () => platformAdminApi.post("/auth/logout"),
+  /** Re-verifies the current password server-side; every OTHER console session is revoked on success. */
+  changePassword: async (currentPassword: string, newPassword: string) =>
+    (await platformAdminApi.post<{ otherSessionsRevoked: number; usingSeededPassword: false }>("/auth/change-password", { currentPassword, newPassword })).data
 };
 
 export interface ProvisionOrgResult {
@@ -171,11 +176,25 @@ export interface ProvisionOrgResult {
   welcomeSent: boolean;
 }
 
+export interface ResetAdminPasswordResult {
+  orgSlug: string;
+  email: string;
+  name: string;
+  /** Shown once; the server keeps only a hash. */
+  temporaryPassword: string;
+  url: string;
+  message: string;
+}
+
 export const platformAdminOrgApi = {
   list: async () => (await platformAdminApi.get<OrgListRow[]>("/organizations")).data,
   get: async (id: string) => (await platformAdminApi.get<OrgDetail>(`/organizations/${id}`)).data,
   create: async (payload: { name: string; slug: string; planTier: PlanTier }) =>
     (await platformAdminApi.post<OrgListRow>("/organizations", payload)).data,
+  /** The rescue for a workspace whose only super admin is locked out — issues a one-time password
+   *  for an EXISTING super admin of that workspace. Never creates an account. */
+  resetAdminPassword: async (id: string, email: string) =>
+    (await platformAdminApi.post<ResetAdminPasswordResult>(`/organizations/${id}/reset-admin-password`, { email })).data,
   /** Physically provisions a PROVISIONING org's database — see provisioning.service.ts. */
   provision: async (id: string, payload: { adminEmail: string; adminName: string; adminPassword: string }) =>
     (await platformAdminApi.post<ProvisionOrgResult>(`/organizations/${id}/provision`, payload)).data,

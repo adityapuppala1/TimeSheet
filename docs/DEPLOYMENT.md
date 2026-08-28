@@ -283,7 +283,8 @@ provisioning of new organizations from that console.
    per-org DNS entry beyond a wildcard (`*.yourdomain.com`) is needed.
 5. Log into `https://yourdomain.com/platform-admin/login` with the seeded credentials printed by
    `control:seed` (`platform-admin@timesphere.local` / `PlatformAdmin@12345` in dev — **rotate
-   this immediately in any real deployment**, there's no forced-change flow yet).
+   this immediately in any real deployment**: the console shows an amber banner while that
+   password is still in use, and **Change password** in its sidebar rotates it).
 
 ### Provisioning a new organization
 

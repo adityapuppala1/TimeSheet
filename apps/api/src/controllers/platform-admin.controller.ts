@@ -13,7 +13,12 @@ import { controlPrisma } from "../config/control-prisma.js";
 import { AppError } from "../middleware/error.js";
 import { requirePlatformAdmin } from "../middleware/platform-admin-auth.js";
 import { validate } from "../middleware/validate.js";
-import { platformAdminLogin, platformAdminRefresh } from "../services/platform-admin-auth.service.js";
+import {
+  changePlatformAdminPassword,
+  platformAdminLogin,
+  platformAdminRefresh,
+  usesSeededPassword
+} from "../services/platform-admin-auth.service.js";
 import { getPlatformAnalytics } from "../services/platform-admin-analytics.service.js";
 import { provisionOrganization } from "../services/provisioning.service.js";
 import { addDomain, listDomains, removeDomain, verifyDomain } from "../services/org-domain.service.js";
@@ -22,6 +27,9 @@ import { withOrgTenant } from "../config/with-org-tenant.js";
 import { dispatchTransactional } from "../services/notify.service.js";
 import { templates } from "../services/mail-templates.js";
 import { encryptSecret } from "../utils/encryption.js";
+import { generateTempPassword, hashPassword } from "../utils/security.js";
+import { requireTenantContext } from "../config/tenant-context.js";
+import { audit } from "../services/audit.service.js";
 
 export const platformAdminRouter = Router();
 
@@ -66,7 +74,19 @@ platformAdminRouter.post("/auth/logout", requirePlatformAdmin, async (req, res) 
 });
 
 platformAdminRouter.get("/auth/me", requirePlatformAdmin, async (req, res) => {
-  res.json(req.platformAdmin);
+  // The seeded-password flag rides on the session-restore path too, so the banner survives a
+  // reload — a warning that only shows on the sign-in that just happened is easy to miss.
+  const admin = await controlPrisma.platformAdminUser.findUnique({ where: { id: req.platformAdmin!.id }, select: { passwordHash: true } });
+  res.json({ ...req.platformAdmin, usingSeededPassword: admin ? await usesSeededPassword(admin.passwordHash) : false });
+});
+
+const changePasswordSchema = z.object({
+  body: z.object({ currentPassword: z.string().min(8), newPassword: z.string().min(12).max(200) }).strict()
+});
+
+platformAdminRouter.post("/auth/change-password", requirePlatformAdmin, validate(changePasswordSchema), async (req, res) => {
+  const result = await changePlatformAdminPassword(req.platformAdmin!.id, req.platformAdminSessionId!, req.body.currentPassword, req.body.newPassword);
+  res.json({ ...result, usingSeededPassword: false });
 });
 
 /* ============================== Organizations ================================== */
@@ -182,6 +202,79 @@ platformAdminRouter.post("/organizations/:id/restore-password-login", requirePla
     message: `Password sign-in is back on for ${org.slug}. Their admin can sign in and fix the SSO configuration.`
   });
 });
+
+const resetAdminPasswordSchema = z.object({
+  body: z.object({ email: z.string().email() }).strict()
+});
+
+/**
+ * The rescue for a workspace whose only administrator is locked out and cannot use
+ * /forgot-password — their SMTP is misconfigured, or the mailbox is the thing they lost. The
+ * platform admin names the account; a one-time password is generated (never chosen — an operator
+ * should never know a customer's password of their own choosing), returned ONCE in this response
+ * and stored only as a hash, with `mustChangePassword` set so the tenant app prompts them to
+ * replace it on first sign-in.
+ *
+ * Deliberately narrow: the target must already be a SUPER_ADMIN in that workspace. This is a lock
+ * to be picked for the owner, not a way for the platform to mint itself a login inside a customer's
+ * data — the audit row is written inside the tenant's own log, where the customer can see it.
+ */
+platformAdminRouter.post(
+  "/organizations/:id/reset-admin-password",
+  requirePlatformAdmin,
+  validate(resetAdminPasswordSchema),
+  async (req, res) => {
+    const orgId = String(req.params.id);
+    const org = await controlPrisma.organization.findUnique({ where: { id: orgId }, select: { id: true, slug: true, status: true } });
+    if (!org) throw new AppError(404, "Organization not found");
+    if (org.status !== "ACTIVE") throw new AppError(409, `Workspace "${org.slug}" is ${org.status.toLowerCase()} — there is no administrator to reset yet.`);
+
+    const email = String(req.body.email).trim().toLowerCase();
+    const actor = req.platformAdmin!;
+
+    const result = await withOrgTenant(org.slug, async () => {
+      const client = requireTenantContext().client;
+      const user = await client.user.findFirst({
+        where: { email, deletedAt: null },
+        select: { id: true, name: true, status: true, role: { select: { name: true } } }
+      });
+      if (!user) throw new AppError(404, `No account with that email in "${org.slug}".`);
+      if (user.role.name !== "SUPER_ADMIN") {
+        throw new AppError(403, `${email} is not a super administrator of "${org.slug}" — only the workspace owner can be reset from here; their own admins reset everyone else.`);
+      }
+
+      const password = generateTempPassword();
+      await client.user.update({
+        where: { id: user.id },
+        data: { passwordHash: await hashPassword(password), mustChangePassword: true, status: user.status === "INACTIVE" ? "ACTIVE" : user.status }
+      });
+      // The same rule the tenant's own reset applies (user.controller.ts): a new hash evicts
+      // nobody by itself, so whoever holds the old sessions is signed out everywhere.
+      await client.session.updateMany({ where: { userId: user.id, revokedAt: null }, data: { revokedAt: new Date() } });
+      // GUEST, not USER: the actor is a real person but not a member of this workspace, so there is
+      // no tenant `actorId` to point at. The label carries who it was, in the customer's own log.
+      await audit(
+        undefined,
+        "user.password_reset_by_platform",
+        "User",
+        user.id,
+        { by: actor.email, reason: "platform-admin rescue" },
+        { actorType: "GUEST", actorLabel: `platform-admin:${actor.email}` }
+      );
+      return { userId: user.id, name: user.name, password };
+    });
+
+    res.json({
+      orgSlug: org.slug,
+      email,
+      name: result.name,
+      /** Shown once. Not stored, not logged, not mailed — it goes to the customer by whatever channel the operator trusts. */
+      temporaryPassword: result.password,
+      url: workspaceUrlForSlug(org.slug),
+      message: `One-time password issued for ${email}. They have been signed out everywhere and will be asked to choose their own password at sign-in.`
+    });
+  }
+);
 
 /* ---------- Custom domains ---------- */
 

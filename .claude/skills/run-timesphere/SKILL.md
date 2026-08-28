@@ -98,6 +98,24 @@ $env:TS_USER = "employee@timesheet.local"; node .claude/skills/run-timesphere/dr
 **Look at the PNG you took.** A blank frame or a `/login` screen means sign-in failed, not that the
 feature is broken.
 
+## Platform-admin console flows (agent path)
+
+```powershell
+node .claude/skills/run-timesphere/platform-admin-verify.mjs
+```
+
+Drives the console end to end against the running stack: creates a throwaway platform admin on
+the seeded password, proves the amber banner (and that it survives a reload), rotates the
+password (seeded value refused, other sessions revoked), runs **Rescue admin** on the default
+workspace, signs in on the tenant side with the one-time password, restores the owner's original
+password through the real change-password route, and deletes the throwaway. Nine numbered steps,
+`ok`/`FAIL` per assertion, screenshots `pa-*.png` under `test-results/run-shots/`.
+
+**It targets the default workspace by slug, deliberately.** Every ACTIVE org row has the Rescue
+button and the list is newest-first; a `.first()` here once reset a fixture super admin in
+`acme_corp` instead, which had to be repaired by SQL. If the script dies mid-way it prints the two
+recovery lines first.
+
 ## Human path
 
 `npm run dev`, then open `https://localhost:5173` and accept the self-signed certificate warning.
