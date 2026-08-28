@@ -533,6 +533,56 @@ export const HELP_ARTICLES: HelpArticle[] = [
       "The banner disappears as soon as the change is accepted."
     ],
     keywords: ["platform admin password", "seeded password", "bootstrap", "rotate", "change password", "banner", "hardening"]
+  },
+  {
+    id: "platform-admin-retention",
+    category: "Platform & operations",
+    title: "The trial retention programme",
+    roles: SA,
+    where: "/platform-admin → Trial retention",
+    when: "Running the commercial side of the SaaS: who is lapsing, what we say to them, and what happens to their data.",
+    steps: [
+      "The policy sets the sequence: a check-in on day 10 of the trial, 'your trial has ended' the day it ends, then reminders 30, 60, 80 and 90 days later. The last reminder is the final notice.",
+      "After the retention window (90 days by default) the workspace and its database are deleted permanently — unless the customer converted to a paid plan, restored it themselves, or you put it on hold.",
+      "Auto-delete after the window is a kill switch. Turn it off and the reminders still go while nothing is ever dropped automatically.",
+      "The queue shows every workspace that ever started as a trial, its six-dot sequence (filled = sent, hollow = skipped as stale, pulsing = due on the next pass), the deletion date, and the reason a deletion is or is not going to happen.",
+      "Dry run now shows what the daily 09:30 pass would do. A simulated date is always a dry run — it can never send or delete.",
+      "Per workspace you can send any stage now, hold the deletion while a conversation is in progress, or delete under the policy immediately — which asks you to type the slug."
+    ],
+    notes: "A paying customer is never deleted by this programme, whatever the clock says: converting nulls the trial and the schedule stops. Every send, hold, restore and deletion is written to the control-plane audit trail under Settings.",
+    keywords: ["retention", "trial", "lapsed", "churn", "delete", "90 days", "reminders", "we miss you", "hold", "dry run", "policy", "data deletion"]
+  },
+  {
+    id: "platform-admin-emails",
+    category: "Platform & operations",
+    title: "Platform emails: edit, preview, test and track",
+    roles: SA,
+    where: "/platform-admin → Platform emails",
+    when: "Changing what the platform says to customers, or working out why a message did not arrive.",
+    steps: [
+      "Templates: pick one, edit the subject and body, and watch the preview — it is rendered by the server with sample values, so it is exactly what a customer receives.",
+      "Send test mails the template to any address with the sample values. It is filed as a test and never counted as a delivery.",
+      "Revert puts a template back to the shipped version. A warning appears if your edited version stopped using a variable the shipped one uses.",
+      "Analytics: sent against failed per day over 90 days, per-template totals, and the grouped reasons deliveries failed.",
+      "Delivery log: every message, with the body as it went out, and a Resend button that sends that exact message again."
+    ],
+    notes: "These are the emails the DEPLOYMENT sends (retention, the signup code, the relay test), not the ones a workspace sends — those are in each workspace's own Settings → Email templates. Configure the relay under Platform → Settings → Mail server; without one, every platform email is recorded as skipped.",
+    keywords: ["platform emails", "email templates", "preview", "test send", "resend", "delivery log", "email analytics", "smtp", "relay", "bounce"]
+  },
+  {
+    id: "platform-admin-settings",
+    category: "Platform & operations",
+    title: "Platform settings: mail, admins, sessions and the audit trail",
+    roles: SA,
+    where: "/platform-admin → Settings",
+    when: "Setting up the deployment, adding a colleague to the console, or answering \"who did that?\".",
+    steps: [
+      "Mail server: the SMTP account the platform sends from. Falls back to the SMTP_* variables in apps/api/.env when left empty. Send test proves the relay, the From address and the reply-to.",
+      "Platform admins: add a colleague (they get a generated one-time password, shown once) or deactivate one. The last active admin cannot be deactivated, and you cannot deactivate yourself.",
+      "My sessions: everywhere your own account is signed in, with an End session for each.",
+      "Audit trail: every action taken on a tenant from outside it — provisioning, rescues, retention decisions, settings changes — plus what customers did through the retention emails."
+    ],
+    keywords: ["platform settings", "smtp", "mail server", "platform admins", "sessions", "audit trail", "control plane", "who did that"]
   }
 ];
 

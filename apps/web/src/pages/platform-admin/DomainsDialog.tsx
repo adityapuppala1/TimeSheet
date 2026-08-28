@@ -28,15 +28,15 @@ function CopyField({ label, value }: { label: string; value: string }) {
   const [copied, setCopied] = useState(false);
   return (
     <div className="grid gap-1">
-      <Label className="text-[11px] uppercase tracking-wide text-slate-400">{label}</Label>
+      <Label className="text-[11px] uppercase tracking-wide text-muted-foreground">{label}</Label>
       <div className="flex items-center gap-2">
-        <code className="min-w-0 flex-1 truncate rounded-md border border-slate-700 bg-slate-950 px-2.5 py-1.5 font-mono text-xs text-slate-200">
+        <code className="min-w-0 flex-1 truncate rounded-md border border-border bg-background px-2.5 py-1.5 font-mono text-xs text-foreground">
           {value}
         </code>
         <Button
           size="sm"
           variant="outline"
-          className="shrink-0 border-slate-700 text-slate-200 hover:bg-slate-800"
+          className="shrink-0 border-border text-foreground hover:bg-muted"
           onClick={() => {
             void navigator.clipboard.writeText(value).then(() => {
               setCopied(true);
@@ -72,15 +72,15 @@ function DomainCard({ orgId, row, onChanged }: { orgId: string; row: OrgDomainRo
   });
 
   return (
-    <div className="grid gap-3 rounded-lg border border-slate-800 bg-slate-950/60 p-3.5">
+    <div className="grid gap-3 rounded-lg border border-border bg-background/60 p-3.5">
       <div className="flex flex-wrap items-center justify-between gap-2">
-        <span className="inline-flex items-center gap-2 font-medium text-slate-100">
-          <Globe className="h-4 w-4 text-slate-400" />
+        <span className="inline-flex items-center gap-2 font-medium text-foreground">
+          <Globe className="h-4 w-4 text-muted-foreground" />
           {row.domain}
         </span>
         <span
           className={`inline-flex items-center gap-1.5 rounded-full px-2.5 py-0.5 text-[11px] font-semibold ${
-            row.verified ? "bg-emerald-500/15 text-emerald-300" : "bg-amber-500/15 text-amber-300"
+            row.verified ? "bg-emerald-500/15 text-emerald-300" : "bg-amber-500/15 text-accent"
           }`}
         >
           {row.verified ? <Check className="h-3 w-3" /> : <AlertTriangle className="h-3 w-3" />}
@@ -90,7 +90,7 @@ function DomainCard({ orgId, row, onChanged }: { orgId: string; row: OrgDomainRo
 
       {!row.verified && (
         <>
-          <p className="text-xs leading-5 text-slate-400">
+          <p className="text-xs leading-5 text-muted-foreground">
             Publish this TXT record on the customer's DNS, then check again. Records can take a few minutes to
             propagate — some providers take longer.
           </p>
@@ -98,13 +98,13 @@ function DomainCard({ orgId, row, onChanged }: { orgId: string; row: OrgDomainRo
           <CopyField label="Record value" value={row.recordValue} />
           {/* Verbatim, not summarised: "exists but doesn't match" and "not found" send somebody to
               two different places, and flattening them into one message costs a round trip. */}
-          {row.lastCheckError && <p className="text-xs leading-5 text-amber-300">{row.lastCheckError}</p>}
+          {row.lastCheckError && <p className="text-xs leading-5 text-accent">{row.lastCheckError}</p>}
         </>
       )}
 
       {row.verified && (
-        <p className="text-xs text-slate-400">
-          Sign-in at <span className="font-mono text-slate-300">https://{row.domain}/login</span> resolves to this
+        <p className="text-xs text-muted-foreground">
+          Sign-in at <span className="font-mono text-foreground">https://{row.domain}/login</span> resolves to this
           workspace, ahead of its subdomain.
         </p>
       )}
@@ -119,7 +119,7 @@ function DomainCard({ orgId, row, onChanged }: { orgId: string; row: OrgDomainRo
         <Button
           size="sm"
           variant="ghost"
-          className="text-slate-400 hover:bg-slate-800 hover:text-red-300"
+          className="text-muted-foreground hover:bg-muted hover:text-red-300"
           disabled={remove.isPending}
           onClick={() => remove.mutate()}
         >
@@ -161,12 +161,12 @@ export function DomainsDialog({
 
   return (
     <Dialog open onOpenChange={onOpenChange}>
-      <DialogContent className="max-h-[85vh] overflow-y-auto border-slate-800 bg-slate-900 text-slate-100 sm:max-w-lg">
+      <DialogContent className="max-h-[85vh] overflow-y-auto border-border bg-card text-foreground sm:max-w-lg">
         <DialogHeader>
           <DialogTitle>Custom domains — {org.name}</DialogTitle>
-          <DialogDescription className="text-slate-400">
+          <DialogDescription className="text-muted-foreground">
             A verified domain resolves to this workspace ahead of its{" "}
-            <span className="font-mono text-slate-300">{org.slug}</span> subdomain. Until it is verified it does
+            <span className="font-mono text-foreground">{org.slug}</span> subdomain. Until it is verified it does
             nothing at all.
           </DialogDescription>
         </DialogHeader>
@@ -180,7 +180,7 @@ export function DomainsDialog({
             }}
           >
             <div className="grid flex-1 gap-1.5">
-              <Label htmlFor="new-domain" className="text-slate-300">
+              <Label htmlFor="new-domain" className="text-foreground">
                 Add a domain
               </Label>
               <Input
@@ -188,7 +188,7 @@ export function DomainsDialog({
                 value={domain}
                 onChange={(e) => setDomain(e.target.value)}
                 placeholder="time.acme.com"
-                className="border-slate-700 bg-slate-950 text-slate-100 placeholder:text-slate-500"
+                className="border-border bg-background text-foreground placeholder:text-muted-foreground"
               />
             </div>
             <Button type="submit" disabled={add.isPending || !domain.trim()}>
@@ -196,10 +196,10 @@ export function DomainsDialog({
             </Button>
           </form>
 
-          {query.isLoading && <Skeleton className="h-24 w-full bg-slate-800" />}
+          {query.isLoading && <Skeleton className="h-24 w-full" />}
 
           {!query.isLoading && query.data?.domains.length === 0 && (
-            <p className="rounded-lg border border-dashed border-slate-800 p-4 text-center text-sm text-slate-400">
+            <p className="rounded-lg border border-dashed border-border p-4 text-center text-sm text-muted-foreground">
               No custom domains yet. This workspace is reachable at its subdomain.
             </p>
           )}
@@ -215,7 +215,7 @@ export function DomainsDialog({
 
           {/* Stated because it is the most common way this feature is misunderstood: verifying the
               TXT record proves ownership, and does not point the hostname at anything. */}
-          <p className="text-xs leading-5 text-slate-500">
+          <p className="text-xs leading-5 text-muted-foreground">
             Verification proves the customer owns the domain. They still need a CNAME or A record pointing it at this
             deployment for traffic to arrive.
           </p>

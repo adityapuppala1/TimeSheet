@@ -34,6 +34,7 @@ import { Input } from "../../components/ui/input";
 import { Label } from "../../components/ui/label";
 import { Skeleton } from "../../components/ui/skeleton";
 import { toast } from "../../components/ui/toaster";
+import { ConsolePage } from "./console-ui";
 import { PLAN_CAPABILITIES, PLAN_QUOTAS, platformAdminBillingApi, platformAdminPlanTierApi, type ChatPlatform, type PlanCapabilityKey, type PlanQuotaKey, type PlanTierLimitRow, type SsoProvider } from "../../services/platform-admin-api";
 
 const TIER_LABEL: Record<PlanTierLimitRow["tier"], string> = { STARTER: "Starter", TEAM: "Team", ENTERPRISE: "Enterprise" };
@@ -51,19 +52,14 @@ export function PlatformAdminPlanTiers() {
   const limits = useQuery({ queryKey: ["platform-admin", "plan-tier-limits"], queryFn: platformAdminPlanTierApi.list });
 
   return (
-    <div className="grid gap-6">
-      <div>
-        <h1 className="text-2xl font-black tracking-tight">Plan tiers</h1>
-        <p className="mt-1 text-sm text-slate-400">
-          Every entitlement the platform enforces, per tier — seats, AI budget, the SSO and chat
-          allow-lists, ten capabilities and seven quotas. Seat limit and AI budget can be overridden
-          per organization on its own record; everything else here is tier-only.
-        </p>
-      </div>
-
+    <ConsolePage
+      eyebrow="Tenants"
+      title="Plan tiers"
+      description="Every entitlement the platform enforces, per tier — seats, AI budget, the SSO and chat allow-lists, ten capabilities and seven quotas. Seat limit and AI budget can be overridden per organization on its own record; everything else here is tier-only."
+    >
       <StripeBillingCard />
 
-      {limits.isLoading && <Skeleton className="h-64 w-full bg-slate-800" />}
+      {limits.isLoading && <Skeleton className="h-64 w-full" />}
       {!limits.isLoading && limits.data && (
         <div className="grid gap-5 lg:grid-cols-3">
           {limits.data.map((tier) => (
@@ -71,7 +67,7 @@ export function PlatformAdminPlanTiers() {
           ))}
         </div>
       )}
-    </div>
+    </ConsolePage>
   );
 }
 
@@ -111,10 +107,10 @@ function StripeBillingCard() {
   });
 
   return (
-    <Card className="border-slate-800 bg-slate-900">
+    <Card className="border-border bg-card">
       <CardHeader>
-        <CardTitle className="text-base text-slate-100">Stripe billing</CardTitle>
-        <CardDescription className="text-slate-400">
+        <CardTitle className="text-base text-foreground">Stripe billing</CardTitle>
+        <CardDescription className="text-muted-foreground">
           One Stripe account across every org on this deployment — orgs never bring their own key. Create a Restricted API Key
           (Checkout Sessions + Customers + Subscriptions, write) and a webhook endpoint pointed at{" "}
           <code className="text-xs">/api/billing/webhook</code>, then paste both here alongside the two Price IDs created for the Team
@@ -122,10 +118,10 @@ function StripeBillingCard() {
         </CardDescription>
       </CardHeader>
       <CardContent className="grid gap-4">
-        {billing.isLoading && <Skeleton className="h-32 w-full bg-slate-800" />}
+        {billing.isLoading && <Skeleton className="h-32 w-full" />}
         {!billing.isLoading && billing.data && (
           <>
-            <div className="flex flex-wrap items-center gap-2 text-xs text-slate-400">
+            <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
               <Badge variant={billing.data.secretKeySet ? "success" : "muted"}>{billing.data.secretKeySet ? "Secret key set" : "No secret key"}</Badge>
               <Badge variant={billing.data.webhookSigningSecretSet ? "success" : "muted"}>
                 {billing.data.webhookSigningSecretSet ? "Webhook secret set" : "No webhook secret"}
@@ -133,26 +129,26 @@ function StripeBillingCard() {
             </div>
             <div className="grid gap-3 sm:grid-cols-2">
               <div className="grid gap-1.5">
-                <Label className="text-slate-300">Secret key</Label>
-                <Input type="password" placeholder="sk_live_..." value={secretKey} onChange={(e) => setSecretKey(e.target.value)} className="bg-slate-950" />
+                <Label className="text-foreground">Secret key</Label>
+                <Input type="password" placeholder="sk_live_..." value={secretKey} onChange={(e) => setSecretKey(e.target.value)} className="bg-background" />
               </div>
               <div className="grid gap-1.5">
-                <Label className="text-slate-300">Webhook signing secret</Label>
+                <Label className="text-foreground">Webhook signing secret</Label>
                 <Input
                   type="password"
                   placeholder="whsec_..."
                   value={webhookSigningSecret}
                   onChange={(e) => setWebhookSigningSecret(e.target.value)}
-                  className="bg-slate-950"
+                  className="bg-background"
                 />
               </div>
               <div className="grid gap-1.5">
-                <Label className="text-slate-300">Team tier Price ID</Label>
-                <Input placeholder="price_..." value={priceIdTeam} onChange={(e) => setPriceIdTeam(e.target.value)} className="bg-slate-950" />
+                <Label className="text-foreground">Team tier Price ID</Label>
+                <Input placeholder="price_..." value={priceIdTeam} onChange={(e) => setPriceIdTeam(e.target.value)} className="bg-background" />
               </div>
               <div className="grid gap-1.5">
-                <Label className="text-slate-300">Enterprise tier Price ID</Label>
-                <Input placeholder="price_..." value={priceIdEnterprise} onChange={(e) => setPriceIdEnterprise(e.target.value)} className="bg-slate-950" />
+                <Label className="text-foreground">Enterprise tier Price ID</Label>
+                <Input placeholder="price_..." value={priceIdEnterprise} onChange={(e) => setPriceIdEnterprise(e.target.value)} className="bg-background" />
               </div>
             </div>
             <Button size="sm" className="w-fit" onClick={() => save.mutate()} disabled={save.isPending}>
@@ -218,28 +214,28 @@ function TierCard({ tier }: { tier: PlanTierLimitRow }) {
   };
 
   return (
-    <Card className="border-slate-800 bg-slate-900/60">
+    <Card className="border-border bg-card">
       <CardHeader>
-        <CardTitle className="flex items-center gap-2 text-base text-slate-100">
+        <CardTitle className="flex items-center gap-2 text-base text-foreground">
           {TIER_LABEL[tier.tier]}
           {tier.tier === "ENTERPRISE" && <Badge variant="info">Highest</Badge>}
         </CardTitle>
-        <CardDescription className="text-slate-400">Defaults applied to every organization on this tier.</CardDescription>
+        <CardDescription className="text-muted-foreground">Defaults applied to every organization on this tier.</CardDescription>
       </CardHeader>
       <CardContent className="grid gap-4">
         <div className="grid gap-1.5">
-          <Label className="text-slate-300">Seat limit</Label>
-          <Input className="border-slate-700 bg-slate-950 text-slate-100" type="number" value={seatLimit} onChange={(e) => setSeatLimit(e.target.value)} />
+          <Label className="text-foreground">Seat limit</Label>
+          <Input className="border-border bg-background text-foreground" type="number" value={seatLimit} onChange={(e) => setSeatLimit(e.target.value)} />
         </div>
         <div className="grid gap-1.5">
-          <Label className="text-slate-300">AI budget ceiling ($/mo)</Label>
-          <Input className="border-slate-700 bg-slate-950 text-slate-100" type="number" value={budget} onChange={(e) => setBudget(e.target.value)} />
+          <Label className="text-foreground">AI budget ceiling ($/mo)</Label>
+          <Input className="border-border bg-background text-foreground" type="number" value={budget} onChange={(e) => setBudget(e.target.value)} />
         </div>
         <div className="grid gap-1.5">
-          <Label className="text-slate-300">Allowed SSO providers</Label>
+          <Label className="text-foreground">Allowed SSO providers</Label>
           <div className="grid gap-2">
             {ALL_PROVIDERS.map((provider) => (
-              <label key={provider} className="flex items-center gap-2 text-sm text-slate-300">
+              <label key={provider} className="flex items-center gap-2 text-sm text-foreground">
                 <Checkbox checked={providers.includes(provider)} onCheckedChange={(checked) => toggleProvider(provider, Boolean(checked))} />
                 {(() => {
                   const Mark = SSO_PROVIDER_MARKS[provider];
@@ -251,10 +247,10 @@ function TierCard({ tier }: { tier: PlanTierLimitRow }) {
           </div>
         </div>
         <div className="grid gap-1.5">
-          <Label className="text-slate-300">Allowed chat platforms</Label>
+          <Label className="text-foreground">Allowed chat platforms</Label>
           <div className="grid gap-2">
             {ALL_CHAT_PLATFORMS.map((platform) => (
-              <label key={platform} className="flex items-center gap-2 text-sm text-slate-300">
+              <label key={platform} className="flex items-center gap-2 text-sm text-foreground">
                 <Checkbox
                   checked={chatPlatforms.includes(platform)}
                   onCheckedChange={(checked) => toggleChatPlatform(platform, Boolean(checked))}
@@ -269,10 +265,10 @@ function TierCard({ tier }: { tier: PlanTierLimitRow }) {
           </div>
         </div>
         <div className="grid gap-1.5">
-          <Label className="text-slate-300">Features</Label>
+          <Label className="text-foreground">Features</Label>
           <div className="grid gap-2.5">
             {PLAN_CAPABILITIES.map((capability) => (
-              <label key={capability.key} className="flex items-start gap-2 text-sm text-slate-300">
+              <label key={capability.key} className="flex items-start gap-2 text-sm text-foreground">
                 <Checkbox
                   className="mt-0.5"
                   checked={capabilities[capability.key]}
@@ -280,13 +276,13 @@ function TierCard({ tier }: { tier: PlanTierLimitRow }) {
                 />
                 <span>
                   {capability.label}
-                  <span className="block text-xs leading-snug text-slate-500">{capability.hint}</span>
+                  <span className="block text-xs leading-snug text-muted-foreground">{capability.hint}</span>
                 </span>
               </label>
             ))}
           </div>
-          <p className="mt-1 text-xs text-slate-500">
-            Every capability here <strong className="text-slate-400">fails closed</strong> except face verification's
+          <p className="mt-1 text-xs text-muted-foreground">
+            Every capability here <strong className="text-muted-foreground">fails closed</strong> except face verification's
             enforcement leg, which fails open on purpose — a lapsed plan must stop demanding identity checks, never lock
             a workforce out of logging their own time. Unchecking face verification also starts each affected org's
             30-day biometric-data purge grace window.
@@ -294,13 +290,13 @@ function TierCard({ tier }: { tier: PlanTierLimitRow }) {
         </div>
 
         <div className="grid gap-1.5">
-          <Label className="text-slate-300">Quotas</Label>
+          <Label className="text-foreground">Quotas</Label>
           <div className="grid gap-2 sm:grid-cols-2">
             {PLAN_QUOTAS.map((quota) => (
               <div key={quota.key} className="grid gap-1">
-                <span className="text-xs text-slate-400">{quota.label}</span>
+                <span className="text-xs text-muted-foreground">{quota.label}</span>
                 <Input
-                  className="border-slate-700 bg-slate-950 text-slate-100"
+                  className="border-border bg-background text-foreground"
                   type="number"
                   min={0}
                   max={UNLIMITED_PLAN_ITEMS}
@@ -310,12 +306,12 @@ function TierCard({ tier }: { tier: PlanTierLimitRow }) {
               </div>
             ))}
           </div>
-          <p className="text-xs text-slate-500">
-            <strong className="text-slate-400">0</strong> means the tier cannot use that resource at all —
+          <p className="text-xs text-muted-foreground">
+            <strong className="text-muted-foreground">0</strong> means the tier cannot use that resource at all —
             it is a real ceiling, not "unlimited". {UNLIMITED_PLAN_ITEMS.toLocaleString()} is the sentinel for no limit.
           </p>
         </div>
-        <Button size="sm" className="w-fit bg-amber-500 text-slate-950 hover:bg-amber-400" disabled={save.isPending} onClick={() => save.mutate()}>
+        <Button size="sm" className="w-fit bg-accent text-accent-foreground hover:bg-accent/90" disabled={save.isPending} onClick={() => save.mutate()}>
           Save
         </Button>
       </CardContent>

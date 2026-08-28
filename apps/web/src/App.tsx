@@ -90,6 +90,13 @@ const PlatformAdminLogin = lazy(() => import("./pages/platform-admin/PlatformAdm
 const PlatformAdminOrganizations = lazy(() => import("./pages/platform-admin/Organizations").then((m) => ({ default: m.PlatformAdminOrganizations })));
 const PlatformAdminPlanTiers = lazy(() => import("./pages/platform-admin/PlanTiers").then((m) => ({ default: m.PlatformAdminPlanTiers })));
 const PlatformAdminAnalytics = lazy(() => import("./pages/platform-admin/PlatformAnalytics").then((m) => ({ default: m.PlatformAdminAnalytics })));
+const PlatformAdminOverview = lazy(() => import("./pages/platform-admin/Overview").then((m) => ({ default: m.PlatformAdminOverview })));
+const PlatformAdminRetention = lazy(() => import("./pages/platform-admin/Retention").then((m) => ({ default: m.PlatformAdminRetention })));
+const PlatformAdminEmails = lazy(() => import("./pages/platform-admin/Emails").then((m) => ({ default: m.PlatformAdminEmails })));
+const PlatformAdminFeedback = lazy(() => import("./pages/platform-admin/Feedback").then((m) => ({ default: m.PlatformAdminFeedback })));
+const PlatformAdminSettings = lazy(() => import("./pages/platform-admin/Settings").then((m) => ({ default: m.PlatformAdminSettings })));
+const TrialFeedbackPage = lazy(() => import("./pages/TrialFeedback").then((m) => ({ default: m.TrialFeedbackPage })));
+const ReactivatePage = lazy(() => import("./pages/Reactivate").then((m) => ({ default: m.ReactivatePage })));
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -222,11 +229,20 @@ const router = createBrowserRouter([
     path: "/platform-admin",
     element: <RequirePlatformAdmin><PlatformAdminLayout /></RequirePlatformAdmin>,
     children: [
-      { index: true, element: <PageShell><PlatformAdminOrganizations /></PageShell> },
+      { index: true, element: <PageShell><PlatformAdminOverview /></PageShell> },
+      { path: "organizations", element: <PageShell><PlatformAdminOrganizations /></PageShell> },
       { path: "plan-tiers", element: <PageShell><PlatformAdminPlanTiers /></PageShell> },
-      { path: "analytics", element: <PageShell><PlatformAdminAnalytics /></PageShell> }
+      { path: "analytics", element: <PageShell><PlatformAdminAnalytics /></PageShell> },
+      { path: "retention", element: <PageShell><PlatformAdminRetention /></PageShell> },
+      { path: "emails", element: <PageShell><PlatformAdminEmails /></PageShell> },
+      { path: "feedback", element: <PageShell><PlatformAdminFeedback /></PageShell> },
+      { path: "settings", element: <PageShell><PlatformAdminSettings /></PageShell> }
     ]
-  }
+  },
+  /* The two doors a retention email opens for a customer whose workspace is suspended or gone.
+     Public, token-addressed, cross-tenant — mounted at the root, outside every layout. */
+  { path: "/feedback/:token", element: <PageShell><TrialFeedbackPage /></PageShell> },
+  { path: "/reactivate/:token", element: <PageShell><ReactivatePage /></PageShell> }
 ]);
 
 export function App() {

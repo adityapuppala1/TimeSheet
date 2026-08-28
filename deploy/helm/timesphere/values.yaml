@@ -109,6 +109,10 @@ env:
   # ingress.wildcardHost "*.<rootDomain>" and a wildcard TLS certificate, or subdomains will never
   # reach the pods. Empty = single-org install.
   rootDomain: ""
+  # Only read when the retention programme's snapshot directory is set. The api image does not ship
+  # mysqldump, so leave this empty unless you have added the client to your own image — a snapshot
+  # that cannot be taken is recorded, and never blocks the deletion it was meant to precede.
+  mysqldumpPath: ""
   webOrigin: https://timesphere.example.com
   appBaseUrl: https://timesphere.example.com
   tz: Asia/Kolkata

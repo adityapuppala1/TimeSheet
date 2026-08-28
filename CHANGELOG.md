@@ -12,6 +12,67 @@ number, on purpose — an installation must never render history for a version t
 
 _Nothing yet._
 
+## 3.12.0 — the console grows up, and a lapsed trial is a conversation instead of silence — 2026-08-28
+
+### ✨ Trial retention: we miss you, your data is safe, and here is exactly when it goes
+
+- A workspace whose free trial ended used to hear one email and then nothing at all, while its
+  database sat there forever. There is now a **programme**, and a platform admin runs it from the
+  console: a friendly check-in with a feedback form on **day 10 of the trial**, "your trial has
+  ended — nothing is deleted" the day it ends, then **30, 60, 80 and 90 days** later, each one
+  naming the exact date the workspace will be removed and carrying one button that brings it back.
+- **The 90-day policy is stated in every message, as a date.** After the retention window the
+  workspace and its database are permanently deleted — unless the customer converted to a paid Team
+  or Enterprise plan, restored it themselves from any of those emails, or a platform admin put it on
+  hold. A paying customer is never deleted, whatever the clock says.
+- **Restore my workspace** is a real page: one click reopens a lapsed workspace with all its data
+  and holds the deletion while the owner decides. It signs nobody in, charges nothing and touches no
+  password — the owner still signs in and still chooses a plan.
+- **The feedback form** (five questions, two minutes) is linked from every message and its answers —
+  rating, what worked, what got in the way, would they come back — land in the console with the
+  distribution and the split. This is the first time the platform can hear *why* somebody left.
+- The whole schedule is idempotent by record: a tick that runs twice, or a relay that was down for a
+  week, never turns into three copies of "we miss you". A backlog is superseded, not replayed.
+- Deletion needs every reason to exist and none not to — the window passed, the final notice
+  actually went out on a **previous** day, nobody paid, nobody restored, nobody held it, and the kill
+  switch is on. Every missing one is a named reason in the queue, never a silent skip. Optional
+  `mysqldump` snapshot before each drop; the org row survives as ARCHIVED so a slug is never quietly
+  reissued.
+
+### ✨ Platform emails: edit, preview, test, resend, and see every delivery
+
+- The platform's own emails — the retention programme, the signup code, the relay test — now have
+  the same treatment a workspace's emails have had for versions: an editor with a **server-rendered
+  preview** (the same substitution and sanitiser a real send uses, so what you see is what arrives),
+  a test send, revert-to-shipped, a 90-day analytics tab (per day, per template, grouped failure
+  reasons) and a delivery log where any message can be opened as it was sent — or **resent**.
+- Its own **mail server settings**, so the deployment no longer has to borrow `SMTP_*` from
+  `apps/api/.env` (which it still falls back to). Password encrypted at rest, write-only, with a
+  Send test that proves the relay, the From address and the reply-to in one go.
+
+### 🎨 The platform-admin console, rebuilt
+
+- Eight pages instead of three, grouped into **Tenants / Growth / Platform**, opening on a new
+  **Overview**: tenants by state, signups over twelve weeks, what the retention pass will do next,
+  platform-mail health, what customers are saying, and the recent control-plane activity — every
+  number a link to the page that explains it.
+- **It follows your theme now.** The console was permanently dark; it is light or dark like the rest
+  of the app, with the theme toggle in its own sidebar. What keeps it unmistakable is the amber brand
+  band and mark, not a palette that ignored your choice.
+- Counting KPI tiles, a six-dot retention timeline per workspace, real charts, status pills that mean
+  the same thing on every screen, and a sign-in page that says what the console is for.
+- **Platform admin accounts** are manageable at last: add a colleague (generated one-time password,
+  shown once), deactivate one — never the last active one, never your own — see your own live
+  sessions and end them, and read the **control-plane audit trail**: every action taken on a tenant
+  from outside it, and everything customers did through the retention emails.
+
+### 🐛 GRACE was missing from the console's own vocabulary
+
+- The one status the trial worker actually sets could not be read or set from the platform console:
+  the org list rendered its badge with an undefined variant, the status picker did not offer it, and
+  the API's update schema rejected it. A workspace the scheduler had lapsed could only be moved by
+  SQL.
+
 ## 3.11.0 — the platform console can rescue a locked-out customer, and nags you off the seeded password — 2026-08-28
 
 ### ✨ Rescue admin: a one-time password for a workspace owner who cannot get back in

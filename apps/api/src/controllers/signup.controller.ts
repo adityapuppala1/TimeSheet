@@ -28,7 +28,7 @@ import { AppError } from "../middleware/error.js";
 import { validate } from "../middleware/validate.js";
 import { templates } from "../services/mail-templates.js";
 import { dispatchTransactional } from "../services/notify.service.js";
-import { sendPlatformMail } from "../services/platform-mail.service.js";
+import { sendPlatformTemplate } from "../services/platform-mail.service.js";
 import { provisionOrganization } from "../services/provisioning.service.js";
 import {
   checkVerificationCode,
@@ -90,11 +90,11 @@ signupRouter.post(
     // EmailLog row through the tenant-scoped Prisma proxy. Using it here threw "No tenant context
     // is active" on the very first live request, which is the same trap `send-test-email.ts` fell
     // into. See platform-mail.service.ts for what this gives up in exchange.
-    await sendPlatformMail({
-      to: email,
-      subject: "Your TimeSphere verification code",
-      html: templates.workspaceFind(code)
-    });
+    // The registered template rather than a raw body, so the code email is editable, previewable
+    // and counted in the console like every other platform email. `throwOnFailure` keeps the
+    // original contract: a person is watching this request, and "check your email" on a message
+    // that did not go is the worst answer.
+    await sendPlatformTemplate("signup.verify", { to: email, vars: { code }, throwOnFailure: true });
 
     res.status(202).json({ token, message: "Check your email for a 6-digit code." });
   }
@@ -139,6 +139,9 @@ signupRouter.post(
         // keeping the two apart is what lets the trial expire without guessing what to fall back to.
         planTier: "STARTER",
         trialTier: "TEAM",
+        // The retention programme writes to this address after the workspace is suspended, and
+        // after it is deleted — neither is a moment to go looking inside the tenant database.
+        ownerEmail: check.email,
         trialStartedAt: now,
         trialEndsAt: new Date(now.getTime() + TRIAL_DAYS * 24 * 60 * 60 * 1000)
       }

@@ -9,12 +9,13 @@
  */
 import { zodResolver } from "@hookform/resolvers/zod";
 import { useMutation } from "@tanstack/react-query";
-import { ShieldCheck } from "lucide-react";
+import { motion, useReducedMotion } from "framer-motion";
+import { Building2, HeartHandshake, Mails, ShieldCheck } from "lucide-react";
 import { useForm } from "react-hook-form";
 import { useNavigate } from "react-router";
 import { z } from "zod";
+import { AnimatedThemeToggler } from "../../components/ui/animated-theme-toggler";
 import { Button } from "../../components/ui/button";
-import { Card, CardContent } from "../../components/ui/card";
 import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage } from "../../components/ui/form";
 import { Input } from "../../components/ui/input";
 import { toast } from "../../components/ui/toaster";
@@ -28,8 +29,15 @@ const schema = z.object({
 
 type FormData = z.infer<typeof schema>;
 
+const POINTS = [
+  { icon: Building2, text: "Every tenant's lifecycle, plan and database — never their content." },
+  { icon: HeartHandshake, text: "The trial retention programme: who is lapsing, what goes out, what gets deleted." },
+  { icon: Mails, text: "Platform mail, templates, delivery analytics and the audit trail." }
+];
+
 export function PlatformAdminLogin() {
   const navigate = useNavigate();
+  const reduce = useReducedMotion();
   const setSession = usePlatformAdminAuthStore((s) => s.setSession);
   const form = useForm<FormData>({ resolver: zodResolver(schema), defaultValues: { email: "", password: "" } });
 
@@ -45,18 +53,50 @@ export function PlatformAdminLogin() {
   });
 
   return (
-    <div className="grid min-h-screen place-items-center bg-slate-950 px-4">
-      <Card className="w-full max-w-sm border-slate-800 bg-slate-900 text-slate-100">
-        <CardContent className="pt-6">
-          <div className="mb-6 flex items-center gap-3">
-            <span className="grid h-9 w-9 place-items-center rounded-lg bg-amber-500 text-slate-950">
+    <div className="relative grid min-h-screen bg-background text-foreground lg:grid-cols-[1.1fr_1fr]">
+      <div className="absolute right-4 top-4 z-10">
+        <AnimatedThemeToggler />
+      </div>
+
+      {/* The brand panel — amber, the console's colour, so even the sign-in page cannot be mistaken for a workspace. */}
+      <aside className="relative hidden overflow-hidden bg-card lg:flex lg:flex-col lg:justify-between lg:p-12">
+        <div className="pointer-events-none absolute -left-24 -top-24 h-96 w-96 rounded-full bg-accent/15 blur-3xl" aria-hidden />
+        <div className="pointer-events-none absolute -bottom-32 right-0 h-80 w-80 rounded-full bg-accent/10 blur-3xl" aria-hidden />
+        <div className="relative flex items-center gap-3">
+          <span className="grid h-10 w-10 place-items-center rounded-xl bg-accent text-accent-foreground shadow-md">
+            <ShieldCheck className="h-5 w-5" />
+          </span>
+          <div className="leading-tight">
+            <p className="text-lg font-black tracking-tight">Platform Admin</p>
+            <p className="font-mono text-[11px] uppercase tracking-[0.16em] text-muted-foreground">TimeSphere control plane</p>
+          </div>
+        </div>
+        <motion.ul initial={reduce ? false : "hidden"} animate="show" variants={{ show: { transition: { staggerChildren: 0.08 } } }} className="relative grid max-w-md gap-5">
+          {POINTS.map(({ icon: Icon, text }) => (
+            <motion.li key={text} variants={{ hidden: { opacity: 0, x: -10 }, show: { opacity: 1, x: 0 } }} className="flex items-start gap-3 text-sm text-muted-foreground">
+              <span className="grid h-8 w-8 shrink-0 place-items-center rounded-lg bg-accent/15 text-accent">
+                <Icon className="h-4 w-4" />
+              </span>
+              <span className="pt-1.5">{text}</span>
+            </motion.li>
+          ))}
+        </motion.ul>
+        <p className="relative text-xs text-muted-foreground">This console is separate from the workspace sign-in and holds no tenant credentials.</p>
+      </aside>
+
+      <main className="grid place-items-center px-4 py-12">
+        <motion.div initial={reduce ? false : { opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.35, ease: "easeOut" }} className="w-full max-w-sm">
+          <div className="mb-6 flex items-center gap-3 lg:hidden">
+            <span className="grid h-9 w-9 place-items-center rounded-lg bg-accent text-accent-foreground">
               <ShieldCheck className="h-5 w-5" />
             </span>
             <div>
               <p className="text-lg font-black tracking-tight">Platform Admin</p>
-              <p className="text-xs text-slate-400">TimeSphere control plane</p>
+              <p className="text-xs text-muted-foreground">TimeSphere control plane</p>
             </div>
           </div>
+          <h1 className="text-2xl font-black tracking-tight">Sign in</h1>
+          <p className="mb-6 mt-1 text-sm text-muted-foreground">With a platform-admin account — not a workspace account.</p>
 
           <Form {...form}>
             <form className="grid gap-4" onSubmit={form.handleSubmit((values) => mutation.mutate(values))}>
@@ -65,9 +105,9 @@ export function PlatformAdminLogin() {
                 name="email"
                 render={({ field }) => (
                   <FormItem>
-                    <FormLabel className="text-slate-300">Email</FormLabel>
+                    <FormLabel>Email</FormLabel>
                     <FormControl>
-                      <Input className="border-slate-700 bg-slate-950 text-slate-100" placeholder="platform-admin@timesphere.local" {...field} />
+                      <Input placeholder="platform-admin@timesphere.local" autoComplete="username" {...field} />
                     </FormControl>
                     <FormMessage />
                   </FormItem>
@@ -78,22 +118,22 @@ export function PlatformAdminLogin() {
                 name="password"
                 render={({ field }) => (
                   <FormItem>
-                    <FormLabel className="text-slate-300">Password</FormLabel>
+                    <FormLabel>Password</FormLabel>
                     <FormControl>
-                      <Input type="password" className="border-slate-700 bg-slate-950 text-slate-100" placeholder="••••••••" {...field} />
+                      <Input type="password" placeholder="••••••••" autoComplete="current-password" {...field} />
                     </FormControl>
                     <FormMessage />
                   </FormItem>
                 )}
               />
-              <Button disabled={mutation.isPending} size="lg" className="mt-1 bg-amber-500 text-slate-950 hover:bg-amber-400">
+              <Button disabled={mutation.isPending} size="lg" className="mt-1 bg-accent text-accent-foreground hover:bg-accent/90">
                 {mutation.isPending ? "Signing in..." : "Sign in"}
               </Button>
-              <p className="text-center text-xs text-slate-500">This console is separate from the workspace login and has no connection to any tenant's data or credentials.</p>
+              <p className="text-center text-xs text-muted-foreground">Forgotten it? There is deliberately no emailed reset for this account — see docs/INSTALLATION.md.</p>
             </form>
           </Form>
-        </CardContent>
-      </Card>
+        </motion.div>
+      </main>
     </div>
   );
 }

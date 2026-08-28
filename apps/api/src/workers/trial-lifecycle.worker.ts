@@ -26,6 +26,7 @@ import { prisma } from "../config/prisma.js";
 import { templates } from "../services/mail-templates.js";
 import { dispatchTransactional } from "../services/notify.service.js";
 import { forgetOrgStatus } from "../services/org-status.service.js";
+import { isRetentionProgrammeEnabled } from "../services/retention.service.js";
 import { env } from "../config/env.js";
 
 let started = false;
@@ -139,18 +140,26 @@ export async function runTrialLifecycleTick(now = Date.now()): Promise<{ warned:
     select: { id: true, slug: true, name: true }
   });
 
+  // When the platform's retention programme is on, ITS "your trial has ended" message goes out
+  // instead of this one — same day, half an hour later, from the platform's own relay, and it
+  // carries the 90-day policy this template does not. Two emails on the same morning saying
+  // overlapping things is exactly the noise that gets a sender marked as spam.
+  const programmeOwnsTrialEnded = expired.length > 0 && (await isRetentionProgrammeEnabled());
+
   for (const org of expired) {
     await controlPrisma.organization.update({
       where: { id: org.id },
       data: { status: "GRACE", graceStartedAt: new Date(now), suspendedReason: "Free trial ended without a subscription." }
     });
     forgetOrgStatus(org.id);
-    await mailSuperAdmins(
-      org.slug,
-      "billing.trial_ended",
-      "Your TimeSphere trial has ended",
-      templates.trialEnded(org.name, GRACE_DAYS, `${env.APP_BASE_URL.replace(/\/$/, "")}/app/settings?tab=billing`)
-    );
+    if (!programmeOwnsTrialEnded) {
+      await mailSuperAdmins(
+        org.slug,
+        "billing.trial_ended",
+        "Your TimeSphere trial has ended",
+        templates.trialEnded(org.name, GRACE_DAYS, `${env.APP_BASE_URL.replace(/\/$/, "")}/app/settings?tab=billing`)
+      );
+    }
     lapsed += 1;
   }
 

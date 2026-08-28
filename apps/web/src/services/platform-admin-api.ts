@@ -56,7 +56,7 @@ platformAdminApi.interceptors.response.use(
 );
 
 export type PlanTier = "STARTER" | "TEAM" | "ENTERPRISE";
-export type OrgStatus = "PROVISIONING" | "ACTIVE" | "SUSPENDED" | "ARCHIVED";
+export type OrgStatus = "PROVISIONING" | "ACTIVE" | "GRACE" | "SUSPENDED" | "ARCHIVED";
 export type SsoProvider = "GOOGLE" | "MICROSOFT" | "SAML" | "LDAP";
 export type ChatPlatform = "SLACK" | "MICROSOFT_TEAMS" | "GOOGLE_CHAT" | "TELEGRAM";
 
@@ -298,3 +298,218 @@ export interface RoutingReadout {
     urlIfRootDomainSet: string | null;
   }>;
 }
+
+
+/* ================================================================================================
+ * 3.12.0 — the console's second half: overview, platform mail, platform email templates, the
+ * trial retention programme, customer feedback, the control-plane audit trail and platform-admin
+ * accounts. Backed by controllers/platform-admin-console.controller.ts.
+ * ============================================================================================== */
+
+export interface PlatformOverview {
+  orgs: { total: number; byStatus: Record<string, number>; byTier: Record<string, number>; trialsActive: number; signups30: number; deletedUnderPolicy: number };
+  retention: { enabled: boolean; autoDeleteEnabled: boolean; inProgramme: number; dueSoon: number; held: number };
+  email: { sent30: number; failed30: number; skipped30: number; configured: boolean; source: "database" | "env" };
+  feedback: { count: number; avgRating: number | null };
+  signupsByWeek: Array<{ week: string; signups: number }>;
+  recentActivity: PlatformAuditRow[];
+}
+
+export interface PlatformAuditRow {
+  id: string;
+  actorType: string;
+  actorLabel: string | null;
+  action: string;
+  entity: string;
+  entityId: string | null;
+  metadata: Record<string, unknown> | null;
+  createdAt: string;
+}
+
+export interface PlatformMailSettings {
+  host: string;
+  port: number;
+  secure: boolean;
+  user: string;
+  passwordSet: boolean;
+  fromAddress: string;
+  replyTo: string;
+  updatedAt: string | null;
+  effective: { configured: boolean; source: "database" | "env"; host: string | null; port: number; secure: boolean; user: string | null; from: string; replyTo: string | null };
+}
+
+export interface PlatformEmailTemplateRow {
+  key: string;
+  group: string;
+  description: string;
+  variables: string[];
+  hasOverride: boolean;
+  enabled: boolean;
+  subject: string | null;
+  bodyHtml: string | null;
+  defaultSubject: string;
+  defaultHtml: string;
+  missingVariables: string[];
+  sent30: number;
+  failed30: number;
+  updatedAt: string | null;
+  updatedById: string | null;
+}
+
+export interface PlatformEmailLogRow {
+  id: string;
+  to: string;
+  subject: string;
+  templateKey: string;
+  status: "SENT" | "FAILED" | "SKIPPED";
+  errorMessage: string | null;
+  dayMarker: string | null;
+  isTest: boolean;
+  createdAt: string;
+  organizationId: string | null;
+  organization: { name: string; slug: string } | null;
+}
+
+export interface PlatformEmailAnalytics {
+  windowDays: number;
+  totals: { sent: number; failed: number; skipped: number; test: number };
+  perTemplate: Array<{ key: string; group: string; sent: number; failed: number; skipped: number; test: number }>;
+  perDay: Array<{ day: string; sent: number; failed: number }>;
+  failureReasons: Array<{ reason: string; count: number }>;
+}
+
+export interface RetentionSettings {
+  enabled: boolean;
+  feedbackDay: number;
+  reminderDays: number[];
+  retentionDays: number;
+  autoDeleteEnabled: boolean;
+  snapshotDir: string | null;
+  updatedAt: string | null;
+}
+
+export type DeletionBlocker = "not-in-programme" | "converted" | "status" | "not-yet" | "hold" | "auto-delete-off" | "final-notice-pending" | "final-notice-today";
+
+export interface RetentionPlan {
+  inProgramme: boolean;
+  converted: boolean;
+  stage: "none" | "trial" | "lapsed" | "converted" | "deleted";
+  daysIntoTrial: number | null;
+  daysSinceTrialEnd: number | null;
+  deleteAt: string | null;
+  daysUntilDeletion: number | null;
+  sent: Record<string, string>;
+  due: string[];
+  superseded: string[];
+  finalMarker: string;
+  nextMarker: { marker: string; at: string } | null;
+  deletionDue: boolean;
+  deletionBlockedBy: DeletionBlocker | null;
+}
+
+export interface RetentionQueueRow {
+  id: string;
+  name: string;
+  slug: string;
+  status: OrgStatus;
+  planTier: PlanTier;
+  trialTier: PlanTier | null;
+  ownerEmail: string | null;
+  trialStartedAt: string | null;
+  trialEndsAt: string | null;
+  retentionHold: boolean;
+  retentionDeletedAt: string | null;
+  feedbackCount: number;
+  lastEmail: { organizationId: string; templateKey: string; status: string; createdAt: string; dayMarker: string | null } | null;
+  plan: RetentionPlan;
+}
+
+export interface RetentionTickResult {
+  enabled: boolean;
+  dryRun: boolean;
+  now: string;
+  sent: Array<{ org: string; marker: string; to: string | null }>;
+  failed: Array<{ org: string; marker: string; error: string }>;
+  superseded: Array<{ org: string; marker: string }>;
+  deleted: Array<{ org: string; databaseName: string | null }>;
+  held: Array<{ org: string; blockedBy: DeletionBlocker | null }>;
+  wouldSend: Array<{ org: string; marker: string }>;
+  wouldDelete: Array<{ org: string }>;
+}
+
+export interface TrialFeedbackRow {
+  id: string;
+  organizationId: string;
+  stage: string;
+  rating: number;
+  liked: string | null;
+  missing: string | null;
+  wouldReturn: string | null;
+  comment: string | null;
+  createdAt: string;
+  organization: { name: string; slug: string; status: OrgStatus; planTier: PlanTier };
+}
+
+export interface PlatformAdminAccountRow {
+  id: string;
+  email: string;
+  name: string;
+  status: "ACTIVE" | "INACTIVE";
+  createdAt: string;
+  lastLoginAt: string | null;
+  liveSessions: number;
+}
+
+export const platformAdminConsoleApi = {
+  overview: async () => (await platformAdminApi.get<PlatformOverview>("/overview")).data,
+
+  mailSettings: async () => (await platformAdminApi.get<PlatformMailSettings>("/mail-settings")).data,
+  updateMailSettings: async (payload: { host: string; port: number; secure: boolean; user?: string; password?: string; clearPassword?: boolean; fromAddress?: string; replyTo?: string }) =>
+    (await platformAdminApi.put<{ ok: true; updatedAt: string; effective: PlatformMailSettings["effective"] }>("/mail-settings", payload)).data,
+  testMail: async (to: string) => (await platformAdminApi.post<{ sent: true; to: string; emailLogId: string | null }>("/mail-settings/test", { to })).data,
+
+  emailTemplates: async () => (await platformAdminApi.get<PlatformEmailTemplateRow[]>("/email-templates")).data,
+  saveEmailTemplate: async (key: string, payload: { subject: string; bodyHtml: string; enabled?: boolean }) =>
+    (await platformAdminApi.put(`/email-templates/${encodeURIComponent(key)}`, payload)).data,
+  revertEmailTemplate: async (key: string) => platformAdminApi.delete(`/email-templates/${encodeURIComponent(key)}`),
+  previewEmailTemplate: async (key: string, draft?: { subject?: string; bodyHtml?: string; vars?: Record<string, string> }) =>
+    (await platformAdminApi.post<{ subject: string; html: string; sample: Record<string, string> }>(`/email-templates/${encodeURIComponent(key)}/preview`, draft ?? {})).data,
+  testEmailTemplate: async (key: string, to: string) =>
+    (await platformAdminApi.post<{ sent: true; to: string; subject: string; emailLogId: string | null }>(`/email-templates/${encodeURIComponent(key)}/test`, { to })).data,
+  emailTemplateLog: async (key: string) => (await platformAdminApi.get<PlatformEmailLogRow[]>(`/email-templates/${encodeURIComponent(key)}/log`)).data,
+
+  emailLog: async (params?: { status?: string; orgId?: string; limit?: number }) => (await platformAdminApi.get<PlatformEmailLogRow[]>("/email-log", { params })).data,
+  emailLogEntry: async (id: string) => (await platformAdminApi.get<PlatformEmailLogRow & { html: string | null; metadata: Record<string, unknown> | null }>(`/email-log/${id}`)).data,
+  resendEmail: async (id: string) => (await platformAdminApi.post<{ sent: true; emailLogId: string | null }>(`/email-log/${id}/resend`)).data,
+  emailAnalytics: async () => (await platformAdminApi.get<PlatformEmailAnalytics>("/email-analytics")).data,
+
+  retention: async () => (await platformAdminApi.get<{ settings: RetentionSettings; markers: string[]; queue: RetentionQueueRow[] }>("/retention")).data,
+  updateRetentionSettings: async (patch: Partial<Omit<RetentionSettings, "updatedAt">>) => (await platformAdminApi.put<RetentionSettings>("/retention/settings", patch)).data,
+  runRetention: async (body: { dryRun?: boolean; simulateNow?: string }) => (await platformAdminApi.post<RetentionTickResult>("/retention/run", body)).data,
+  setRetentionHold: async (orgId: string, hold: boolean) => (await platformAdminApi.post<{ id: string; slug: string; retentionHold: boolean }>(`/retention/${orgId}/hold`, { hold })).data,
+  sendRetentionMarker: async (orgId: string, marker: string) =>
+    (await platformAdminApi.post<{ ok: boolean; status: string; marker: string; to: string | null; subject?: string }>(`/retention/${orgId}/send/${encodeURIComponent(marker)}`)).data,
+  deleteUnderPolicy: async (orgId: string, confirmSlug: string) =>
+    (await platformAdminApi.post<{ deleted: boolean; databaseName: string | null; snapshot?: { taken: boolean; path?: string; reason?: string }; confirmationSent?: boolean }>(`/retention/${orgId}/delete`, { confirmSlug })).data,
+
+  feedback: async () =>
+    (await platformAdminApi.get<{ count: number; avgRating: number | null; distribution: Array<{ rating: number; count: number }>; wouldReturn: Array<{ answer: string; count: number }>; rows: TrialFeedbackRow[] }>("/feedback")).data,
+
+  audit: async (params?: { entity?: string; limit?: number }) => (await platformAdminApi.get<PlatformAuditRow[]>("/audit", { params })).data,
+
+  admins: async () => (await platformAdminApi.get<PlatformAdminAccountRow[]>("/admins")).data,
+  createAdmin: async (payload: { email: string; name: string }) => (await platformAdminApi.post<{ id: string; email: string; name: string; temporaryPassword: string }>("/admins", payload)).data,
+  setAdminStatus: async (id: string, status: "ACTIVE" | "INACTIVE") => (await platformAdminApi.patch<{ id: string; status: string }>(`/admins/${id}`, { status })).data,
+  sessions: async () => (await platformAdminApi.get<Array<{ id: string; userAgent: string | null; ipAddress: string | null; createdAt: string; expiresAt: string; current: boolean }>>("/auth/sessions")).data,
+  endSession: async (id: string) => platformAdminApi.delete(`/auth/sessions/${id}`)
+};
+
+/** The public doors a retention email opens. Cross-tenant; no auth; the token is the credential. */
+export const platformPublicApi = {
+  feedbackInfo: async (token: string) => (await axios.get<{ workspace: string; stage: string; alreadySubmitted: boolean }>(`${API_BASE_URL.replace(/\/$/, "")}/public/trial-feedback/${encodeURIComponent(token)}`)).data,
+  submitFeedback: async (token: string, body: { rating: number; liked?: string; missing?: string; wouldReturn?: "yes" | "maybe" | "no"; comment?: string }) =>
+    (await axios.post<{ ok: true }>(`${API_BASE_URL.replace(/\/$/, "")}/public/trial-feedback/${encodeURIComponent(token)}`, body)).data,
+  reactivateInfo: async (token: string) =>
+    (await axios.get<{ workspace: string; slug: string; url: string; status: OrgStatus; alreadyActive: boolean; eligible: boolean; deleteDate: string | null }>(`${API_BASE_URL.replace(/\/$/, "")}/public/reactivate/${encodeURIComponent(token)}`)).data,
+  reactivate: async (token: string) => (await axios.post<{ restored: boolean; alreadyActive: boolean; url: string }>(`${API_BASE_URL.replace(/\/$/, "")}/public/reactivate/${encodeURIComponent(token)}`)).data
+};

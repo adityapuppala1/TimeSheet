@@ -415,6 +415,23 @@ Run through this for the specific organization before calling it live:
   note).
 - **Monitor MySQL `max_connections`** against `MAX_CACHED_CLIENTS × PER_TENANT_CONNECTION_LIMIT`
   as organization count grows (SaaS shape).
+- **The trial retention programme** (SaaS shape, 3.12.0) — `/platform-admin` → **Trial retention**.
+  A self-serve trial that lapses is written to on day 10 of the trial (a check-in with a feedback
+  form), the day it ends, and then 30, 60, 80 and 90 days later; after the retention window
+  (90 days by default) the workspace and its database are **deleted permanently** unless the
+  customer converted, restored it from one of those emails, or a platform admin put it on hold.
+  Before you let it run against real customers:
+  - Configure the platform relay under **Settings → Mail server** (or `SMTP_*` in `apps/api/.env`).
+    Without one, every retention email is recorded as SKIPPED and nobody is warned before deletion.
+  - Decide the window and set **Snapshot directory** if you want a `mysqldump` taken before each
+    drop. It is best-effort: a missing `mysqldump` binary is recorded, never fatal, and never blocks
+    the deletion. Set `MYSQLDUMP_PATH` if the binary is not on the API host's `PATH`.
+  - **Auto-delete after the window** is the kill switch. Off means reminders still go and nothing is
+    ever dropped automatically — a reasonable first posture for a new deployment.
+  - Use **Dry run now** and the simulated-date control to see what the 09:30 pass would do before
+    trusting it. A simulated date can never send or delete.
+  - A paying customer is never deleted, whatever the clock says: converting nulls `trialTier`, and
+    the schedule stops. Deletion also refuses any workspace that is not GRACE or SUSPENDED.
 - **Rescuing a locked-out workspace administrator** (SaaS shape) — when a customer's only super
   admin cannot sign in and their `/forgot-password` is no use (their SMTP is broken, or the mailbox
   is what they lost): `/platform-admin` → Organizations → **Rescue admin** on the ACTIVE row →

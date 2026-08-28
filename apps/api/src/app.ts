@@ -53,6 +53,8 @@ import { notificationRouter } from "./controllers/notification.controller.js";
 import { planRouter } from "./controllers/plan.controller.js";
 import { planningRouter } from "./controllers/planning.controller.js";
 import { platformAdminRouter } from "./controllers/platform-admin.controller.js";
+import { platformAdminConsoleRouter } from "./controllers/platform-admin-console.controller.js";
+import { platformPublicRouter } from "./controllers/platform-public.controller.js";
 import { aiProposalRouter } from "./controllers/ai-proposal.controller.js";
 import { requirementsDocRouter } from "./controllers/requirements-doc.controller.js";
 import { agentRunRouter } from "./controllers/agent-run.controller.js";
@@ -392,6 +394,13 @@ app.use("/api/auth/sso", ssoRouter);
 // cross-org analytics), so mounted before tenant resolution for the same reason as SSO above.
 // Its own auth entirely (middleware/platform-admin-auth.ts), never the tenant requireAuth.
 app.use("/api/platform-admin", platformAdminRouter);
+app.use("/api/platform-admin", platformAdminConsoleRouter);
+
+// The two doors a lapsed customer opens from a retention email — feedback and "restore my
+// workspace". Cross-tenant by construction (the workspace is suspended or gone), so mounted here,
+// before tenant resolution, and rate-limited because the token in the URL is the only credential.
+const platformPublicLimiter = rateLimit({ windowMs: 60_000, limit: 30, standardHeaders: true });
+app.use("/api/public", platformPublicLimiter, platformPublicRouter);
 
 // Ingest-only security/CI webhook receiver (SAST/DAST/SSAT/SSCT findings, test runs) — see
 // controllers/devops-webhook.controller.ts's header comment. Same "external caller has no

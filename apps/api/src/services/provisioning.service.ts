@@ -143,7 +143,9 @@ export async function provisionOrganization(orgId: string, input: ProvisionOrgIn
     update: { encryptedDsn: encryptSecret(dsn), host, databaseName, migratedAt: new Date(), schemaVersion },
     create: { organizationId: org.id, encryptedDsn: encryptSecret(dsn), host, databaseName, migratedAt: new Date(), schemaVersion }
   });
-  await controlPrisma.organization.update({ where: { id: org.id }, data: { status: "ACTIVE" } });
+  // `ownerEmail` is where the retention programme writes once this workspace can no longer be
+  // opened — recorded at the one moment the platform reliably knows it.
+  await controlPrisma.organization.update({ where: { id: org.id }, data: { status: "ACTIVE", ownerEmail: input.adminEmail.trim().toLowerCase() } });
 
   return { organizationId: org.id, databaseName, schemaVersion };
 }

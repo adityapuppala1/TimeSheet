@@ -95,13 +95,145 @@ model Organization {
   /// When the workspace entered GRACE — the clock the suspension deadline is measured from.
   graceStartedAt  DateTime?
 
+  /// --- Trial retention programme (3.12.0) ---------------------------------------------------
+  /// The address the workspace was signed up (or provisioned) with. Kept HERE, in the control
+  /// plane, because the retention emails have to reach somebody after the workspace is suspended
+  /// — and after it is deleted, for the confirmation. Reading super admins out of a tenant
+  /// database that is about to be dropped is the wrong dependency direction. Null on every org
+  /// created before this column existed; the worker falls back to the tenant's super admins then.
+  ownerEmail             String?   @db.VarChar(255)
+  /// Day markers already sent — `["feedback10", "ended", "30", "60", "80", "90"]`. Same
+  /// idempotence rule as `trialNoticesSent`: recorded even when the mail failed, so a broken
+  /// relay does not turn into a daily copy of the same reminder.
+  retentionNoticesSent   Json?
+  /// A platform admin's "do not delete this one" — set while a conversation is in progress. The
+  /// reminders still go; only the deletion is held.
+  retentionHold          Boolean   @default(false)
+  /// When the physical database was dropped under the policy. The org row stays, ARCHIVED, so the
+  /// slug is not silently re-issued and the audit trail survives its subject.
+  retentionDeletedAt     DateTime?
+
   database    OrgDatabase?
   ssoConfigs  OrgSsoConfig[]
   authMethod  OrgAuthMethod?
   directory   OrgUserDirectory[]
   domains     OrgDomain[]
+  feedback    TrialFeedback[]
+  platformEmails PlatformEmailLog[]
 
   @@index([status])
+}
+
+/// Platform-level SMTP — the account the DEPLOYMENT sends from, as opposed to the per-workspace
+/// `GlobalMailSettings` every tenant carries. Signup codes, the trial retention programme and
+/// anything else sent to somebody whose workspace is suspended or gone all use this. Same
+/// "database row, else `SMTP_*` env" resolution as the tenant transport, so an env-only install
+/// keeps working untouched. `id` is always "global".
+model PlatformMailSettings {
+  id                String   @id
+  host              String?  @db.VarChar(255)
+  port              Int      @default(587)
+  secure            Boolean  @default(false)
+  user              String?  @db.VarChar(255)
+  encryptedPassword String?  @db.Text
+  fromAddress       String?  @db.VarChar(255)
+  replyTo           String?  @db.VarChar(255)
+  updatedAt         DateTime @updatedAt
+}
+
+/// A platform admin's override of one shipped platform email (subject + body with `{{vars}}`).
+/// No row means "send the shipped default" — exactly the tenant `EmailTemplate` contract, so the
+/// console editor can be the same shape as the workspace one.
+model PlatformEmailTemplate {
+  key         String   @id @db.VarChar(80)
+  subject     String   @db.VarChar(255)
+  bodyHtml    String   @db.Text
+  enabled     Boolean  @default(true)
+  updatedAt   DateTime @updatedAt
+  updatedById String?
+}
+
+enum PlatformEmailStatus {
+  SENT
+  FAILED
+  SKIPPED
+}
+
+/// Every platform-level email, one row each — the analytics, the per-template log and the resend
+/// button all read this. `dayMarker` is the retention stage ("feedback10", "30", …) so the queue
+/// can show which reminders a workspace has had; `isTest` keeps operator test sends out of the
+/// delivery numbers without hiding them from the log.
+model PlatformEmailLog {
+  id             String              @id @default(uuid())
+  organizationId String?
+  organization   Organization?       @relation(fields: [organizationId], references: [id], onDelete: SetNull)
+  templateKey    String              @db.VarChar(80)
+  to             String              @db.VarChar(255)
+  subject        String              @db.VarChar(255)
+  status         PlatformEmailStatus
+  errorMessage   String?             @db.Text
+  dayMarker      String?             @db.VarChar(24)
+  isTest         Boolean             @default(false)
+  /// The rendered message, kept so a FAILED row can be resent exactly as it was.
+  payload        Json?
+  metadata       Json?
+  createdAt      DateTime            @default(now())
+
+  @@index([templateKey, createdAt])
+  @@index([organizationId, createdAt])
+  @@index([status, createdAt])
+}
+
+/// The retention policy a platform admin controls. `id` is always "global". Defaults mirror the
+/// programme as specified: feedback on day 10 of the trial, reminders 30/60/80/90 days after it
+/// ends, deletion after 90 days. `autoDeleteEnabled` is the kill switch; `enabled` silences the
+/// whole programme (the tenant-side trial emails then carry on exactly as before 3.12.0).
+model PlatformRetentionSettings {
+  id                String   @id
+  enabled           Boolean  @default(true)
+  feedbackDay       Int      @default(10)
+  reminderDays      Json     @default("[30, 60, 80, 90]")
+  retentionDays     Int      @default(90)
+  autoDeleteEnabled Boolean  @default(true)
+  /// Where a best-effort `mysqldump` of a workspace is written before it is dropped. Null means
+  /// "do not snapshot". A missing `mysqldump` binary is recorded, never fatal.
+  snapshotDir       String?  @db.VarChar(500)
+  updatedAt         DateTime @updatedAt
+}
+
+/// What a trialling (or lapsed) customer told us through the feedback form the programme mails.
+/// `stage` is the marker that produced the link, so day-10 impressions and post-trial reasons can
+/// be read apart.
+model TrialFeedback {
+  id             String       @id @default(uuid())
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  stage          String       @db.VarChar(24)
+  rating         Int
+  liked          String?      @db.Text
+  missing        String?      @db.Text
+  wouldReturn    String?      @db.VarChar(16)
+  comment        String?      @db.Text
+  createdAt      DateTime     @default(now())
+
+  @@index([organizationId, createdAt])
+}
+
+/// The control plane's own audit trail — who provisioned, rescued, held, deleted, changed a tier.
+/// Tenant audit logs live in tenant databases and cannot record an action taken ON the tenant
+/// from outside it; this is where those go. Never contains tenant content.
+model PlatformAuditLog {
+  id         String   @id @default(uuid())
+  actorType  String   @db.VarChar(24)
+  actorLabel String?  @db.VarChar(255)
+  action     String   @db.VarChar(80)
+  entity     String   @db.VarChar(40)
+  entityId   String?  @db.VarChar(64)
+  metadata   Json?
+  createdAt  DateTime @default(now())
+
+  @@index([createdAt])
+  @@index([entity, entityId])
 }
 
 /// The physical database a tenant's data lives in. `encryptedDsn` uses the same AES-256-GCM

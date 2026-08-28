@@ -2073,6 +2073,54 @@ state with the tenant app.
 - `GET /plan-tier-limits`, `PATCH /plan-tier-limits/:tier`, `GET /billing-settings`,
   `PATCH /billing-settings`, `GET /analytics` (aggregate numbers only, never row-level tenant content).
 
+### Console (3.12.0)
+
+Same prefix and auth, different router (`platform-admin-console.controller.ts`).
+
+- `GET /overview` — tenants by status and tier, trials running, signups per week for twelve weeks,
+  retention counts, 30-day platform-mail health, feedback totals, and the last twelve audit rows.
+- `GET /mail-settings`, `PUT /mail-settings`, `POST /mail-settings/test` `{ to }` — the platform's
+  own SMTP account (`PlatformMailSettings`, `SMTP_*` in `.env` as the fallback). The password is
+  write-only and encrypted at rest; `passwordSet` reports whether one exists.
+- `GET /email-templates` — every platform template with its shipped default, the operator's
+  override if any, the variables it may use, and 30-day sent/failed counts.
+  `PUT|DELETE /email-templates/:key` edit and revert; `POST /email-templates/:key/preview`
+  server-renders a draft with sample values (the editor's preview — never a second client-side
+  renderer); `POST /email-templates/:key/test` `{ to }` sends one, filed as a test;
+  `GET /email-templates/:key/log` is that template's last 40 sends.
+- `GET /email-log`, `GET /email-log/:id` (returns the body as it was sent),
+  `POST /email-log/:id/resend`, `GET /email-analytics` (90 days: totals, per template, per day,
+  grouped failure reasons).
+- `GET /retention` — the policy, the stage markers, and the queue: every workspace that ever
+  started as a trial with its computed plan (stage, what is due, what was superseded, the deletion
+  date and the named reason a deletion is or is not going to happen).
+  `PUT /retention/settings`; `POST /retention/run` `{ dryRun?, simulateNow? }` (a simulated clock is
+  forced to a dry run); `POST /retention/:orgId/hold` `{ hold }`;
+  `POST /retention/:orgId/send/:marker`; `POST /retention/:orgId/delete` `{ confirmSlug }` — which
+  refuses a paying customer and a workspace that is not lapsed, whatever is typed.
+- `GET /feedback` — trial feedback with the rating distribution and the would-you-return split.
+- `GET /audit` — the control-plane audit trail (`PlatformAuditLog`).
+- `GET /admins`, `POST /admins` `{ email, name }` (returns a generated one-time password, shown
+  once), `PATCH /admins/:id` `{ status }` — the last active admin cannot be deactivated, and nobody
+  can deactivate the account they are signed in with.
+- `GET /auth/sessions`, `DELETE /auth/sessions/:id` — this admin's own console sessions.
+
+## Public retention doors
+
+Base URL `/api/public`. No authentication: a signed token in the URL is the credential, and the
+person clicking has a workspace that is suspended or already deleted, so these are mounted before
+tenant resolution and rate-limited at 30/minute. Every failure — bad signature, expired, wrong
+purpose, ineligible — is the same `404`.
+
+- `GET /trial-feedback/:token` → `{ workspace, stage, alreadySubmitted }`;
+  `POST /trial-feedback/:token` `{ rating 1-5, liked?, missing?, wouldReturn?, comment? }` stores a
+  `TrialFeedback` row. Plain text, length-capped, control-plane only — it never enters a tenant
+  database.
+- `GET /reactivate/:token` → `{ workspace, slug, url, status, alreadyActive, eligible, deleteDate }`;
+  `POST /reactivate/:token` moves a lapsed workspace back to `GRACE` with a fresh window and sets
+  `retentionHold`, then returns the sign-in URL. It signs nobody in, restores no plan and touches no
+  password — the owner still signs in and still chooses a plan.
+
 ## Public API
 
 Everything above requires the normal JWT session (a logged-in browser). The routes below are

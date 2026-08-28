@@ -14,7 +14,6 @@ import { useState } from "react";
 import { Check, Copy, LifeBuoy, Plus } from "lucide-react";
 import { Badge } from "../../components/ui/badge";
 import { Button } from "../../components/ui/button";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../../components/ui/card";
 import { DataTable } from "../../components/ui/data-table";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "../../components/ui/dialog";
 import { DomainsDialog } from "./DomainsDialog";
@@ -25,20 +24,11 @@ import { Skeleton } from "../../components/ui/skeleton";
 import { Textarea } from "../../components/ui/textarea";
 import { toast } from "../../components/ui/toaster";
 import { platformAdminOrgApi, type OrgListRow, type OrgStatus, type PlanTier, type ResetAdminPasswordResult } from "../../services/platform-admin-api";
+import { ConsolePage, ConsoleSection, OrgStatusPill } from "./console-ui";
 
-// Dark slate/amber chrome, distinct from the app's normal theme (this console is always dark
-// regardless of the tenant app's light/dark toggle) — DataTable's default classes use the
-// semantic border-border/text-muted-foreground tokens, so this page overrides them via
-// className/rowClassName to keep the same visual language the rest of this file already uses.
-const DARK_TABLE_CLASSNAME = "[&_thead_tr]:border-slate-800 [&_th]:text-slate-400 [&>div]:border-slate-800";
-const DARK_ROW_CLASSNAME = "border-slate-800 hover:bg-slate-800/40";
-
-const STATUS_VARIANT: Record<OrgStatus, "success" | "warning" | "destructive" | "muted"> = {
-  ACTIVE: "success",
-  PROVISIONING: "warning",
-  SUSPENDED: "destructive",
-  ARCHIVED: "muted"
-};
+/* The status pill is `console-ui.tsx`'s `OrgStatusPill` now — one map for the whole console. The
+   local copy here was missing GRACE entirely (it renders `undefined` as a variant), which is
+   exactly the drift a shared component removes. */
 
 export function PlatformAdminOrganizations() {
   const queryClient = useQueryClient();
@@ -50,16 +40,16 @@ export function PlatformAdminOrganizations() {
   const [rescuing, setRescuing] = useState<OrgListRow | null>(null);
 
   const columns: ColumnDef<OrgListRow, any>[] = [
-    { accessorKey: "name", header: "Name", cell: (info) => <span className="font-medium text-slate-100">{info.getValue()}</span> },
-    { accessorKey: "slug", header: "Slug", cell: (info) => <span className="font-mono text-xs text-slate-400">{info.getValue()}</span> },
-    { accessorKey: "status", header: "Status", cell: (info) => <Badge variant={STATUS_VARIANT[info.getValue() as OrgStatus]}>{info.getValue() as string}</Badge> },
+    { accessorKey: "name", header: "Name", cell: (info) => <span className="font-medium text-foreground">{info.getValue()}</span> },
+    { accessorKey: "slug", header: "Slug", cell: (info) => <span className="font-mono text-xs text-muted-foreground">{info.getValue()}</span> },
+    { accessorKey: "status", header: "Status", cell: (info) => <OrgStatusPill status={info.getValue() as OrgStatus} /> },
     { accessorKey: "planTier", header: "Plan", cell: (info) => <Badge variant="info">{info.getValue() as string}</Badge> },
     {
       id: "database",
       accessorFn: (row) => (row.database ? `${row.database.host} / ${row.database.databaseName}` : "Not provisioned"),
       header: "Database",
       cell: ({ row }) => (
-        <span className="text-xs text-slate-400">
+        <span className="text-xs text-muted-foreground">
           {row.original.database ? `${row.original.database.host} / ${row.original.database.databaseName}` : "Not provisioned"}
         </span>
       )
@@ -71,7 +61,7 @@ export function PlatformAdminOrganizations() {
       cell: ({ row }) => (
         <div className="flex justify-end gap-2">
           {row.original.status === "PROVISIONING" && (
-            <Button size="sm" className="bg-amber-500 text-slate-950 hover:bg-amber-400" onClick={() => setProvisioning(row.original)}>
+            <Button size="sm" className="bg-accent text-accent-foreground hover:bg-accent/90" onClick={() => setProvisioning(row.original)}>
               Provision
             </Button>
           )}
@@ -82,7 +72,7 @@ export function PlatformAdminOrganizations() {
             <Button
               size="sm"
               variant="outline"
-              className="border-slate-700 text-slate-300 hover:bg-slate-800 hover:text-slate-100"
+              className="border-border text-foreground hover:bg-muted hover:text-foreground"
               onClick={() => setDomainsFor(row.original)}
             >
               Domains
@@ -94,13 +84,13 @@ export function PlatformAdminOrganizations() {
             <Button
               size="sm"
               variant="outline"
-              className="gap-1.5 border-slate-700 text-slate-300 hover:bg-slate-800 hover:text-slate-100"
+              className="gap-1.5 border-border text-foreground hover:bg-muted hover:text-foreground"
               onClick={() => setRescuing(row.original)}
             >
               <LifeBuoy className="h-3.5 w-3.5" />Rescue admin
             </Button>
           )}
-          <Button size="sm" variant="outline" className="border-slate-700 text-slate-300 hover:bg-slate-800 hover:text-slate-100" onClick={() => setEditing(row.original)}>
+          <Button size="sm" variant="outline" className="border-border text-foreground hover:bg-muted hover:text-foreground" onClick={() => setEditing(row.original)}>
             Manage
           </Button>
         </div>
@@ -109,37 +99,22 @@ export function PlatformAdminOrganizations() {
   ];
 
   return (
-    <div className="grid gap-6">
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <div>
-          <h1 className="text-2xl font-black tracking-tight">Organizations</h1>
-          <p className="mt-1 text-sm text-slate-400">Every tenant on the platform — lifecycle, plan tier, and database registration.</p>
-        </div>
-        <Button className="gap-2 bg-amber-500 text-slate-950 hover:bg-amber-400" onClick={() => setCreateOpen(true)}>
+    <ConsolePage
+      eyebrow="Tenants"
+      title="Organizations"
+      description="Every tenant on the platform — lifecycle, plan tier, database registration, custom domains, and the rescue for a locked-out administrator."
+      actions={
+        <Button className="gap-2 bg-accent text-accent-foreground hover:bg-accent/90" onClick={() => setCreateOpen(true)}>
           <Plus className="h-4 w-4" />New organization
         </Button>
-      </div>
-
-      <Card className="border-slate-800 bg-slate-900/60">
-        <CardHeader>
-          <CardTitle className="text-base text-slate-100">All organizations</CardTitle>
-          <CardDescription className="text-slate-400">{orgs.data?.length ?? 0} total</CardDescription>
-        </CardHeader>
-        <CardContent>
-          {orgs.isLoading && <Skeleton className="h-40 w-full bg-slate-800" />}
-          {!orgs.isLoading && orgs.data && (
-            <DataTable
-              columns={columns}
-              data={orgs.data}
-              className={DARK_TABLE_CLASSNAME}
-              rowClassName={DARK_ROW_CLASSNAME}
-              searchPlaceholder="Search organizations..."
-              emptyMessage="No organizations yet."
-              pageSize={20}
-            />
-          )}
-        </CardContent>
-      </Card>
+      }
+    >
+      <ConsoleSection title="All organizations" description={`${orgs.data?.length ?? 0} total`}>
+        {orgs.isLoading && <Skeleton className="h-40 w-full" />}
+        {!orgs.isLoading && orgs.data && (
+          <DataTable columns={columns} data={orgs.data} searchPlaceholder="Search organizations..." emptyMessage="No organizations yet." pageSize={20} />
+        )}
+      </ConsoleSection>
 
       <CreateOrgDialog open={createOpen} onOpenChange={setCreateOpen} onCreated={() => queryClient.invalidateQueries({ queryKey: ["platform-admin", "organizations"] })} />
       <EditOrgDialog
@@ -160,7 +135,7 @@ export function PlatformAdminOrganizations() {
           queryClient.invalidateQueries({ queryKey: ["platform-admin", "organizations"] });
         }}
       />
-    </div>
+    </ConsolePage>
   );
 }
 
@@ -197,37 +172,37 @@ function ProvisionOrgDialogInner({ org, onOpenChange, onProvisioned }: { org: Or
 
   return (
     <Dialog open onOpenChange={onOpenChange}>
-      <DialogContent className="border-slate-800 bg-slate-900 text-slate-100">
+      <DialogContent className="border-border bg-card text-foreground">
         <DialogHeader>
           <DialogTitle>
-            Provision {org.name} <span className="font-mono text-sm font-normal text-slate-500">({org.slug})</span>
+            Provision {org.name} <span className="font-mono text-sm font-normal text-muted-foreground">({org.slug})</span>
           </DialogTitle>
-          <DialogDescription className="text-slate-400">
+          <DialogDescription className="text-muted-foreground">
             Creates this organization's own database and runs every migration against it. Safe to re-run.
           </DialogDescription>
         </DialogHeader>
         <div className="grid gap-4">
-          <p className="text-xs text-slate-500">
+          <p className="text-xs text-muted-foreground">
             This physically creates the tenant database, runs every migration against it, seeds baseline roles/settings, and creates the one admin account below — then flips this
             organization ACTIVE. No demo data is included.
           </p>
           <div className="grid gap-1.5">
-            <Label className="text-slate-300">First admin name</Label>
-            <Input className="border-slate-700 bg-slate-950 text-slate-100" value={adminName} onChange={(e) => setAdminName(e.target.value)} placeholder="Jane Doe" />
+            <Label className="text-foreground">First admin name</Label>
+            <Input className="border-border bg-background text-foreground" value={adminName} onChange={(e) => setAdminName(e.target.value)} placeholder="Jane Doe" />
           </div>
           <div className="grid gap-1.5">
-            <Label className="text-slate-300">First admin email</Label>
-            <Input className="border-slate-700 bg-slate-950 text-slate-100" value={adminEmail} onChange={(e) => setAdminEmail(e.target.value)} placeholder="jane@acme.com" />
+            <Label className="text-foreground">First admin email</Label>
+            <Input className="border-border bg-background text-foreground" value={adminEmail} onChange={(e) => setAdminEmail(e.target.value)} placeholder="jane@acme.com" />
           </div>
           <div className="grid gap-1.5">
-            <Label className="text-slate-300">First admin password</Label>
-            <Input type="password" className="border-slate-700 bg-slate-950 text-slate-100" value={adminPassword} onChange={(e) => setAdminPassword(e.target.value)} placeholder="At least 8 characters" />
+            <Label className="text-foreground">First admin password</Label>
+            <Input type="password" className="border-border bg-background text-foreground" value={adminPassword} onChange={(e) => setAdminPassword(e.target.value)} placeholder="At least 8 characters" />
           </div>
         </div>
         <DialogFooter>
           <Button
             disabled={!adminEmail || !adminName || adminPassword.length < 8 || provision.isPending}
-            className="bg-amber-500 text-slate-950 hover:bg-amber-400"
+            className="bg-accent text-accent-foreground hover:bg-accent/90"
             onClick={() => provision.mutate()}
           >
             {provision.isPending ? "Provisioning..." : "Provision"}
@@ -273,12 +248,12 @@ function RescueAdminDialogInner({ org, onOpenChange }: { org: OrgListRow; onOpen
 
   return (
     <Dialog open onOpenChange={onOpenChange}>
-      <DialogContent className="border-slate-800 bg-slate-900 text-slate-100">
+      <DialogContent className="border-border bg-card text-foreground">
         <DialogHeader>
           <DialogTitle>
-            Rescue an administrator of {org.name} <span className="font-mono text-sm font-normal text-slate-500">({org.slug})</span>
+            Rescue an administrator of {org.name} <span className="font-mono text-sm font-normal text-muted-foreground">({org.slug})</span>
           </DialogTitle>
-          <DialogDescription className="text-slate-400">
+          <DialogDescription className="text-muted-foreground">
             For a super admin who cannot sign in and cannot use Forgot password. Issues a one-time password and signs them out everywhere.
           </DialogDescription>
         </DialogHeader>
@@ -286,19 +261,19 @@ function RescueAdminDialogInner({ org, onOpenChange }: { org: OrgListRow; onOpen
         {!result && (
           <>
             <div className="grid gap-4">
-              <p className="text-xs text-slate-500">
+              <p className="text-xs text-muted-foreground">
                 Only an existing super admin of this workspace can be reset from here - this never creates an account. Confirm who is asking through a channel you
                 trust first: you are about to hand out access to their whole workspace.
               </p>
               <div className="grid gap-1.5">
-                <Label className="text-slate-300">Super admin email</Label>
-                <Input className="border-slate-700 bg-slate-950 text-slate-100" type="email" value={email} onChange={(e) => setEmail(e.target.value)} placeholder="owner@acme.com" />
+                <Label className="text-foreground">Super admin email</Label>
+                <Input className="border-border bg-background text-foreground" type="email" value={email} onChange={(e) => setEmail(e.target.value)} placeholder="owner@acme.com" />
               </div>
             </div>
             <DialogFooter>
               <Button
                 disabled={!email.includes("@") || rescue.isPending}
-                className="bg-amber-500 text-slate-950 hover:bg-amber-400"
+                className="bg-accent text-accent-foreground hover:bg-accent/90"
                 onClick={() => rescue.mutate()}
               >
                 {rescue.isPending ? "Issuing..." : "Issue one-time password"}
@@ -310,29 +285,29 @@ function RescueAdminDialogInner({ org, onOpenChange }: { org: OrgListRow; onOpen
         {result && (
           <>
             <div className="grid gap-4">
-              <p className="text-sm text-slate-300">
-                <span className="font-medium text-slate-100">{result.name}</span> ({result.email}) has been signed out everywhere and will be asked to choose a new
+              <p className="text-sm text-foreground">
+                <span className="font-medium text-foreground">{result.name}</span> ({result.email}) has been signed out everywhere and will be asked to choose a new
                 password at sign-in.
               </p>
               <div className="grid gap-1.5">
-                <Label className="text-slate-300">One-time password - shown once, never stored</Label>
+                <Label className="text-foreground">One-time password - shown once, never stored</Label>
                 <div className="flex items-center gap-2">
-                  <code className="flex-1 select-all rounded-md border border-amber-500/40 bg-slate-950 px-3 py-2 font-mono text-base tracking-wide text-amber-200">
+                  <code className="flex-1 select-all rounded-md border border-accent/40 bg-background px-3 py-2 font-mono text-base tracking-wide text-accent">
                     {result.temporaryPassword}
                   </code>
-                  <Button size="sm" variant="outline" className="gap-1.5 border-slate-700 text-slate-300 hover:bg-slate-800 hover:text-slate-100" onClick={copy}>
+                  <Button size="sm" variant="outline" className="gap-1.5 border-border text-foreground hover:bg-muted hover:text-foreground" onClick={copy}>
                     {copied ? <Check className="h-3.5 w-3.5" /> : <Copy className="h-3.5 w-3.5" />}
                     {copied ? "Copied" : "Copy"}
                   </Button>
                 </div>
               </div>
-              <p className="text-xs text-slate-500">
-                Sign-in: <span className="font-mono text-slate-400">{result.url}</span>. Give both to the customer by whatever channel you trust - this dialog will not show
+              <p className="text-xs text-muted-foreground">
+                Sign-in: <span className="font-mono text-muted-foreground">{result.url}</span>. Give both to the customer by whatever channel you trust - this dialog will not show
                 the password again.
               </p>
             </div>
             <DialogFooter>
-              <Button className="bg-amber-500 text-slate-950 hover:bg-amber-400" onClick={() => onOpenChange(false)}>
+              <Button className="bg-accent text-accent-foreground hover:bg-accent/90" onClick={() => onOpenChange(false)}>
                 Done
               </Button>
             </DialogFooter>
@@ -363,26 +338,26 @@ function CreateOrgDialog({ open, onOpenChange, onCreated }: { open: boolean; onO
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="border-slate-800 bg-slate-900 text-slate-100">
+      <DialogContent className="border-border bg-card text-foreground">
         <DialogHeader>
           <DialogTitle>New organization</DialogTitle>
-          <DialogDescription className="text-slate-400">
+          <DialogDescription className="text-muted-foreground">
             Registers a new tenant. It won't have a database until you provision one.
           </DialogDescription>
         </DialogHeader>
         <div className="grid gap-4">
           <div className="grid gap-1.5">
-            <Label className="text-slate-300">Name</Label>
-            <Input className="border-slate-700 bg-slate-950 text-slate-100" value={name} onChange={(e) => setName(e.target.value)} placeholder="Acme Corporation" />
+            <Label className="text-foreground">Name</Label>
+            <Input className="border-border bg-background text-foreground" value={name} onChange={(e) => setName(e.target.value)} placeholder="Acme Corporation" />
           </div>
           <div className="grid gap-1.5">
-            <Label className="text-slate-300">Slug (subdomain)</Label>
-            <Input className="border-slate-700 bg-slate-950 text-slate-100 font-mono" value={slug} onChange={(e) => setSlug(e.target.value.toLowerCase())} placeholder="acme" />
+            <Label className="text-foreground">Slug (subdomain)</Label>
+            <Input className="border-border bg-background text-foreground font-mono" value={slug} onChange={(e) => setSlug(e.target.value.toLowerCase())} placeholder="acme" />
           </div>
           <div className="grid gap-1.5">
-            <Label className="text-slate-300">Plan tier</Label>
+            <Label className="text-foreground">Plan tier</Label>
             <Select value={planTier} onValueChange={(v) => setPlanTier(v as PlanTier)}>
-              <SelectTrigger className="border-slate-700 bg-slate-950 text-slate-100"><SelectValue /></SelectTrigger>
+              <SelectTrigger className="border-border bg-background text-foreground"><SelectValue /></SelectTrigger>
               <SelectContent>
                 <SelectItem value="STARTER">Starter</SelectItem>
                 <SelectItem value="TEAM">Team</SelectItem>
@@ -390,13 +365,13 @@ function CreateOrgDialog({ open, onOpenChange, onCreated }: { open: boolean; onO
               </SelectContent>
             </Select>
           </div>
-          <p className="text-xs text-slate-500">
+          <p className="text-xs text-muted-foreground">
             This registers the organization in the control plane only. A platform operator still needs to provision its physical database, run tenant migrations, and seed an initial admin
             user before it can go ACTIVE.
           </p>
         </div>
         <DialogFooter>
-          <Button disabled={!name || !slug || create.isPending} className="bg-amber-500 text-slate-950 hover:bg-amber-400" onClick={() => create.mutate()}>
+          <Button disabled={!name || !slug || create.isPending} className="bg-accent text-accent-foreground hover:bg-accent/90" onClick={() => create.mutate()}>
             Create
           </Button>
         </DialogFooter>
@@ -435,33 +410,37 @@ function EditOrgDialogInner({ org, onOpenChange, onSaved }: { org: OrgListRow; o
 
   return (
     <Dialog open onOpenChange={onOpenChange}>
-      <DialogContent className="border-slate-800 bg-slate-900 text-slate-100">
+      <DialogContent className="border-border bg-card text-foreground">
         <DialogHeader>
           <DialogTitle>
-            {org.name} <span className="font-mono text-sm font-normal text-slate-500">({org.slug})</span>
+            {org.name} <span className="font-mono text-sm font-normal text-muted-foreground">({org.slug})</span>
           </DialogTitle>
-          <DialogDescription className="text-slate-400">
+          <DialogDescription className="text-muted-foreground">
             Plan tier, status and per-organization limits for this tenant.
           </DialogDescription>
         </DialogHeader>
         <div className="grid gap-4">
           <div className="grid gap-4 sm:grid-cols-2">
             <div className="grid gap-1.5">
-              <Label className="text-slate-300">Status</Label>
+              <Label className="text-foreground">Status</Label>
               <Select value={status} onValueChange={(v) => setStatus(v as OrgStatus)}>
-                <SelectTrigger className="border-slate-700 bg-slate-950 text-slate-100"><SelectValue /></SelectTrigger>
+                <SelectTrigger className="border-border bg-background text-foreground"><SelectValue /></SelectTrigger>
                 <SelectContent>
                   <SelectItem value="PROVISIONING">Provisioning</SelectItem>
                   <SelectItem value="ACTIVE">Active</SelectItem>
+                  {/* GRACE resolves like ACTIVE and is shut everywhere past authentication — the
+                      state a lapsed trial or a failed renewal sits in. It was missing here, so an
+                      org the lifecycle worker had put in grace could not be read or set back. */}
+                  <SelectItem value="GRACE">Grace (lapsed, billing still reachable)</SelectItem>
                   <SelectItem value="SUSPENDED">Suspended</SelectItem>
                   <SelectItem value="ARCHIVED">Archived</SelectItem>
                 </SelectContent>
               </Select>
             </div>
             <div className="grid gap-1.5">
-              <Label className="text-slate-300">Plan tier</Label>
+              <Label className="text-foreground">Plan tier</Label>
               <Select value={planTier} onValueChange={(v) => setPlanTier(v as PlanTier)}>
-                <SelectTrigger className="border-slate-700 bg-slate-950 text-slate-100"><SelectValue /></SelectTrigger>
+                <SelectTrigger className="border-border bg-background text-foreground"><SelectValue /></SelectTrigger>
                 <SelectContent>
                   <SelectItem value="STARTER">Starter</SelectItem>
                   <SelectItem value="TEAM">Team</SelectItem>
@@ -473,16 +452,16 @@ function EditOrgDialogInner({ org, onOpenChange, onSaved }: { org: OrgListRow; o
 
           {status === "SUSPENDED" && (
             <div className="grid gap-1.5">
-              <Label className="text-slate-300">Suspension reason</Label>
-              <Textarea className="border-slate-700 bg-slate-950 text-slate-100" rows={2} value={suspendedReason} onChange={(e) => setSuspendedReason(e.target.value)} />
+              <Label className="text-foreground">Suspension reason</Label>
+              <Textarea className="border-border bg-background text-foreground" rows={2} value={suspendedReason} onChange={(e) => setSuspendedReason(e.target.value)} />
             </div>
           )}
 
           <div className="grid gap-4 sm:grid-cols-2">
             <div className="grid gap-1.5">
-              <Label className="text-slate-300">Seat limit override</Label>
+              <Label className="text-foreground">Seat limit override</Label>
               <Input
-                className="border-slate-700 bg-slate-950 text-slate-100"
+                className="border-border bg-background text-foreground"
                 type="number"
                 value={seatLimitOverride}
                 onChange={(e) => setSeatLimitOverride(e.target.value)}
@@ -490,9 +469,9 @@ function EditOrgDialogInner({ org, onOpenChange, onSaved }: { org: OrgListRow; o
               />
             </div>
             <div className="grid gap-1.5">
-              <Label className="text-slate-300">AI budget override ($/mo)</Label>
+              <Label className="text-foreground">AI budget override ($/mo)</Label>
               <Input
-                className="border-slate-700 bg-slate-950 text-slate-100"
+                className="border-border bg-background text-foreground"
                 type="number"
                 value={aiBudgetOverride}
                 onChange={(e) => setAiBudgetOverride(e.target.value)}
@@ -502,14 +481,14 @@ function EditOrgDialogInner({ org, onOpenChange, onSaved }: { org: OrgListRow; o
           </div>
 
           {org.database && (
-            <p className="text-xs text-slate-500">
+            <p className="text-xs text-muted-foreground">
               Database: <span className="font-mono">{org.database.host} / {org.database.databaseName}</span>
               {org.database.schemaVersion ? ` — schema ${org.database.schemaVersion}` : " — not yet migrated"}
             </p>
           )}
         </div>
         <DialogFooter>
-          <Button disabled={save.isPending} className="bg-amber-500 text-slate-950 hover:bg-amber-400" onClick={() => save.mutate()}>
+          <Button disabled={save.isPending} className="bg-accent text-accent-foreground hover:bg-accent/90" onClick={() => save.mutate()}>
             Save
           </Button>
         </DialogFooter>

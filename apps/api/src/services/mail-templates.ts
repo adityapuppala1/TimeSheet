@@ -894,3 +894,10 @@ export type TemplateName = keyof typeof templates;
  *  primitives live here with the rest of the email design rather than being reinvented beside the
  *  queries. */
 export const emailBlocks = { dataTable, periodStrip, share, escape };
+
+/**
+ * The house email chrome, for the platform-level templates in `platform-mail-templates.ts`.
+ * Exported rather than copied so a retention reminder and a timesheet approval look like they
+ * came from the same product — they did.
+ */
+export const emailShell = { shell, heading, paragraph, button, escape, ACCENT, PRIMARY, MUTED };

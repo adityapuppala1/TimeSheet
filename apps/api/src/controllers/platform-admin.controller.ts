@@ -147,7 +147,9 @@ const updateOrgSchema = z.object({
     .object({
       name: z.string().min(2).max(200).optional(),
       planTier: z.enum(["STARTER", "TEAM", "ENTERPRISE"]).optional(),
-      status: z.enum(["PROVISIONING", "ACTIVE", "SUSPENDED", "ARCHIVED"]).optional(),
+      // GRACE was missing, so the one status the lifecycle worker actually sets could never be set
+      // or cleared from the console — an org it had lapsed could only be moved by SQL.
+      status: z.enum(["PROVISIONING", "ACTIVE", "GRACE", "SUSPENDED", "ARCHIVED"]).optional(),
       suspendedReason: z.string().max(500).optional().nullable(),
       seatLimitOverride: z.number().int().positive().optional().nullable(),
       aiMonthlyBudgetCeilingOverride: z.number().nonnegative().optional().nullable()

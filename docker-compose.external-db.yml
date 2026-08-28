@@ -29,6 +29,10 @@ services:
       # inside the container, and a missing ROOT_DOMAIN silently turns every subdomain into the
       # default org, which looks like "login is broken for the new customer".
       ROOT_DOMAIN: ${ROOT_DOMAIN:-}
+      # Only read when the trial retention programme's "Snapshot directory" is set (platform-admin
+      # console -> Trial retention). Point it at a mysqldump binary if one is not on PATH inside the
+      # container; without it a snapshot is recorded as "not taken", which never blocks the deletion.
+      MYSQLDUMP_PATH: ${MYSQLDUMP_PATH:-}
       # Tenant-database provisioning target — see docker-compose.yml's block of the same name.
       # Unset disables the /platform-admin console's Provision button rather than guessing a server.
       TENANT_DB_PROVISION_BASE_URL: ${TENANT_DB_PROVISION_BASE_URL:-}

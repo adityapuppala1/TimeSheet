@@ -116,6 +116,23 @@ button and the list is newest-first; a `.first()` here once reset a fixture supe
 `acme_corp` instead, which had to be repaired by SQL. If the script dies mid-way it prints the two
 recovery lines first.
 
+```powershell
+node .claude/skills/run-timesphere/retention-verify.mjs
+node .claude/skills/run-timesphere/console-shots.mjs
+```
+
+`retention-verify.mjs` drives the whole trial retention programme — queue placement, dry run,
+simulated dates, sending a stage, the feedback and restore links lifted out of the sent body, the
+deletion guards, and a real deletion — against a **throwaway control-plane org that has no tenant
+database**, so nothing real can be dropped. 39 assertions, `ok`/`FAIL` each, everything it created
+removed in the `finally`.
+
+`console-shots.mjs` seeds three throwaway trial orgs (again, no databases) so the queue and the
+feedback list have something to draw, screenshots all eight console pages in **both themes** to
+`test-results/run-shots/console-*.png`, and deletes them again. Use it after any console change —
+the console follows the theme now, and a page that only looks right in one of them is the bug this
+catches.
+
 ## Human path
 
 `npm run dev`, then open `https://localhost:5173` and accept the self-signed certificate warning.
