@@ -100,6 +100,7 @@ import { MailServerSettingsCard } from "./settings/MailServerSettingsCard";
 import { PublicApiSettingsCard } from "./settings/PublicApiSettingsCard";
 import { McpServerSettingsCard } from "./settings/McpServerSettingsCard";
 import { BillingSettingsCard } from "./settings/BillingSettingsCard";
+import { ImapMark } from "../components/ui/connector-marks";
 import { IntegrationsSettingsCard } from "./settings/IntegrationsSettingsCard";
 import { SsoSettingsCard } from "./settings/SsoSettingsCard";
 import { AIDatasetsCard } from "./settings/AIDatasetsCard";
@@ -2176,7 +2177,9 @@ function EmailIntakeSettingsCard({ readOnly }: { readOnly: boolean }) {
       <Card>
         <CardHeader>
           <CardTitle className="flex items-center gap-2 text-base">
-            <Inbox className="h-4 w-4 text-primary" />
+            {/* The IMAP mark, which is the inbound half of the pair whose outbound half sits on
+                the Mail server tab — see connector-marks.tsx. */}
+            <ImapMark className="h-4 w-4 text-primary" />
             Mailbox connection
           </CardTitle>
           <CardDescription>

@@ -189,3 +189,40 @@ export function StripeMark({ className = "h-4 w-4" }: MarkProps) {
     </svg>
   );
 }
+
+/* ── Lookups ──────────────────────────────────────────────────────────────────────────────────
+   The app stores these systems as enum strings, and before this the marks were only reachable by
+   importing a specific component and remembering which one went with which value. That is how the
+   same platform ends up with a Slack logo in settings and a generic speech bubble in the platform
+   admin — so the mapping lives here, once, keyed by the enums in @timesheet/shared.
+
+   Each map is `Record<Enum, Mark>` rather than a partial lookup with a fallback: adding a chat
+   platform or an AI provider to the shared union then fails to compile until somebody chooses its
+   mark, which is the same reason `destinationFor` in utils/proposal-links.ts has a `never` floor. */
+
+import type { ComponentType } from "react";
+import type { AIProvider, ChatPlatform, SsoProvider } from "@timesheet/shared";
+import { GoogleMark, LdapMark, MicrosoftMark, SamlMark } from "./provider-marks";
+
+export type Mark = ComponentType<{ className?: string }>;
+
+export const CHAT_PLATFORM_MARKS: Record<ChatPlatform, Mark> = {
+  SLACK: SlackMark,
+  MICROSOFT_TEAMS: TeamsMark,
+  GOOGLE_CHAT: GoogleChatMark,
+  TELEGRAM: TelegramMark
+};
+
+export const SSO_PROVIDER_MARKS: Record<SsoProvider, Mark> = {
+  GOOGLE: GoogleMark,
+  MICROSOFT: MicrosoftMark,
+  SAML: SamlMark,
+  LDAP: LdapMark
+};
+
+/** OPENAI_COMPATIBLE covers Groq, Mistral, DeepSeek, OpenRouter, Gemini and Ollama as well, which
+ *  is why its mark is the generic knot rather than any one vendor's — see the component. */
+export const AI_PROVIDER_MARKS: Record<AIProvider, Mark> = {
+  ANTHROPIC: AnthropicMark,
+  OPENAI_COMPATIBLE: OpenAiMark
+};

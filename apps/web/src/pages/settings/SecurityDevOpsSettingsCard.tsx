@@ -17,6 +17,7 @@ import { Alert, AlertDescription, AlertTitle } from "../../components/ui/alert";
 import { Badge } from "../../components/ui/badge";
 import { Button } from "../../components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../../components/ui/card";
+import { GitHubMark } from "../../components/ui/connector-marks";
 import { Input } from "../../components/ui/input";
 import { Label } from "../../components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../../components/ui/select";
@@ -569,7 +570,7 @@ export function SecurityDevOpsSettingsCard({ readOnly }: { readOnly: boolean }) 
       <Card>
         <CardHeader>
           <CardTitle className="flex items-center gap-2 text-base">
-            <GitBranch className="h-4 w-4 text-primary" />
+            <GitHubMark className="h-4 w-4 text-primary" />
             Git provider (GitHub)
           </CardTitle>
           <CardDescription>

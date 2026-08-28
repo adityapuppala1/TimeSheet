@@ -32,6 +32,7 @@ import {
   type SuggestedProviderOrderEntry
 } from "../../services/api";
 import { Badge } from "../../components/ui/badge";
+import { AI_PROVIDER_MARKS } from "../../components/ui/connector-marks";
 import { Button } from "../../components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../../components/ui/card";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "../../components/ui/dialog";
@@ -187,6 +188,14 @@ export function AIProviderListCard({ readOnly }: { readOnly: boolean }) {
               </div>
               <div className="min-w-0">
                 <p className="flex flex-wrap items-center gap-2 truncate text-sm font-medium">
+                  {/* Which vendor this row calls, at a glance. The list is ordered by priority and
+                      every row otherwise looks the same, so with a workspace running Anthropic
+                      first and three OpenAI-compatible endpoints behind it, the mark is what makes
+                      the order readable without parsing four hostnames. */}
+                  {(() => {
+                    const Mark = AI_PROVIDER_MARKS[row.provider];
+                    return <Mark className="h-4 w-4 shrink-0" />;
+                  })()}
                   {providerDisplayName(row)}
                   {index === 0 && row.enabled && (
                     <Badge variant="outline" className="text-xs">

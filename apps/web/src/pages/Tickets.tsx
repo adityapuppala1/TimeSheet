@@ -106,6 +106,7 @@ import { aiApi, fileUrl, labelApi, planApi, projectApi, settingsApi, ticketApi, 
 import { FaceVerificationDialog } from "../components/FaceVerificationDialog";
 import { useFaceStatus } from "../lib/use-face-status";
 import { usePlanningFeatures } from "../lib/use-planning";
+import { GitHubMark } from "../components/ui/connector-marks";
 import { useAuthStore } from "../store/auth";
 
 /** Icon for the 3 seeded defaults; any admin-added custom type falls back to a generic tag. */
@@ -2068,7 +2069,10 @@ function BranchesPanel({
       </div>
       {gitStatus.data?.connected && (
         <div className="grid gap-2 rounded-md border border-dashed border-border p-3">
-          <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Pick from GitHub ({gitStatus.data.accountLogin})</p>
+          <p className="flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+            <GitHubMark className="h-3.5 w-3.5 shrink-0" />
+            Pick from GitHub ({gitStatus.data.accountLogin})
+          </p>
           <div className="flex gap-2">
             <Select value={pickerRepo} onValueChange={setPickerRepo}>
               <SelectTrigger className="flex-1"><SelectValue placeholder={repos.isLoading ? "Loading repos…" : "Choose a repository"} /></SelectTrigger>

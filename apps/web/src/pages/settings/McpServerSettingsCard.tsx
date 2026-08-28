@@ -12,11 +12,12 @@
  * not buried in documentation.
  */
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { AlertTriangle, Check, Copy, Eye, KeyRound, Plug, Plus, ShieldAlert, Trash2 } from "lucide-react";
+import { AlertTriangle, Check, Copy, Eye, KeyRound, Plus, ShieldAlert, Trash2 } from "lucide-react";
 import { useState } from "react";
 import { Badge } from "../../components/ui/badge";
 import { Button } from "../../components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../../components/ui/card";
+import { McpMark } from "../../components/ui/connector-marks";
 import { Input } from "../../components/ui/input";
 import { Label } from "../../components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../../components/ui/select";
@@ -171,7 +172,9 @@ export function McpServerSettingsCard({ readOnly }: { readOnly: boolean }) {
       <Card>
         <CardHeader>
           <CardTitle className="flex items-center gap-2 text-base">
-            <Plug className="h-4 w-4 text-primary" />
+            {/* The same MCP mark the landing page's connector diagram uses — this workspace
+                exposed as tools, drawn as a plug going into a socket. */}
+            <McpMark className="h-4 w-4 text-primary" />
             MCP server
           </CardTitle>
           <CardDescription>

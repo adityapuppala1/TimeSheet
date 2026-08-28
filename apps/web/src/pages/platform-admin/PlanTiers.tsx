@@ -27,6 +27,9 @@ import { Badge } from "../../components/ui/badge";
 import { Button } from "../../components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../../components/ui/card";
 import { Checkbox } from "../../components/ui/checkbox";
+/* The same marks the tenant app uses, so a platform admin ticking "Slack" here sees the mark the
+   workspace admin will see when they configure it. */
+import { CHAT_PLATFORM_MARKS, SSO_PROVIDER_MARKS } from "../../components/ui/connector-marks";
 import { Input } from "../../components/ui/input";
 import { Label } from "../../components/ui/label";
 import { Skeleton } from "../../components/ui/skeleton";
@@ -238,6 +241,10 @@ function TierCard({ tier }: { tier: PlanTierLimitRow }) {
             {ALL_PROVIDERS.map((provider) => (
               <label key={provider} className="flex items-center gap-2 text-sm text-slate-300">
                 <Checkbox checked={providers.includes(provider)} onCheckedChange={(checked) => toggleProvider(provider, Boolean(checked))} />
+                {(() => {
+                  const Mark = SSO_PROVIDER_MARKS[provider];
+                  return <Mark className="h-4 w-4 shrink-0" />;
+                })()}
                 {PROVIDER_LABEL[provider]}
               </label>
             ))}
@@ -252,6 +259,10 @@ function TierCard({ tier }: { tier: PlanTierLimitRow }) {
                   checked={chatPlatforms.includes(platform)}
                   onCheckedChange={(checked) => toggleChatPlatform(platform, Boolean(checked))}
                 />
+                {(() => {
+                  const Mark = CHAT_PLATFORM_MARKS[platform];
+                  return <Mark className="h-4 w-4 shrink-0" />;
+                })()}
                 {CHAT_PLATFORM_LABEL[platform]}
               </label>
             ))}

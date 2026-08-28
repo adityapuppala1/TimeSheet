@@ -33,7 +33,7 @@ import {
   StripeMark,
   TeamsMark,
   TelegramMark
-} from "./connector-marks";
+} from "../ui/connector-marks";
 
 /** Which family a connector belongs to in the constellation diagram. */
 export type ConnectorGroup = "identity" | "chat" | "code" | "mail" | "ai" | "billing";

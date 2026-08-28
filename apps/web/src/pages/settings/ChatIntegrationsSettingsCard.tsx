@@ -9,10 +9,11 @@
  * WHO calls the backing API: `controllers/chat-integrations.controller.ts`, via `chatIntegrationsApi`.
  */
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Check, MessageSquare, Plus, Trash2 } from "lucide-react";
+import { Check, Plus, Trash2 } from "lucide-react";
 import { useEffect, useState } from "react";
 import type { ChatIntegrationRow, ChatMatchType, ChatPlatform } from "@timesheet/shared";
 import { Badge } from "../../components/ui/badge";
+import { CHAT_PLATFORM_MARKS } from "../../components/ui/connector-marks";
 import { Button } from "../../components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../../components/ui/card";
 import { Input } from "../../components/ui/input";
@@ -131,7 +132,14 @@ function PlatformCard({
         <div className="flex items-center justify-between gap-3">
           <div>
             <CardTitle className="flex items-center gap-2 text-base">
-              <MessageSquare className="h-4 w-4 text-primary" />
+              {/* The platform's own mark, not a shared speech bubble — with four of these cards on
+                  screen the icon was the one thing that could tell them apart at a glance and it
+                  was identical on all four. CHAT_PLATFORM_MARKS is keyed by the same enum the row
+                  carries, so the card, the picker and the rule badge below cannot disagree. */}
+              {(() => {
+                const Mark = CHAT_PLATFORM_MARKS[row.platform];
+                return <Mark className="h-4 w-4" />;
+              })()}
               {PLATFORM_LABEL[row.platform]}
             </CardTitle>
             <CardDescription>
@@ -301,7 +309,15 @@ function NewRoutingRuleRow({ projects }: { projects: Array<{ id: string; name: s
           <SelectTrigger><SelectValue /></SelectTrigger>
           <SelectContent>
             {(["SLACK", "MICROSOFT_TEAMS", "GOOGLE_CHAT", "TELEGRAM"] as ChatPlatform[]).map((p) => (
-              <SelectItem key={p} value={p}>{PLATFORM_LABEL[p]}</SelectItem>
+              <SelectItem key={p} value={p}>
+                    <span className="inline-flex items-center gap-2">
+                      {(() => {
+                        const Mark = CHAT_PLATFORM_MARKS[p];
+                        return <Mark className="h-4 w-4 shrink-0" />;
+                      })()}
+                      {PLATFORM_LABEL[p]}
+                    </span>
+                  </SelectItem>
             ))}
           </SelectContent>
         </Select>
@@ -369,7 +385,13 @@ function RoutingRuleRow({
 
   return (
     <div className="flex flex-wrap items-center gap-3 p-3 text-sm">
-      <Badge variant="muted">{PLATFORM_LABEL[rule.platform]}</Badge>
+      <Badge variant="muted" className="gap-1.5">
+        {(() => {
+          const Mark = CHAT_PLATFORM_MARKS[rule.platform];
+          return <Mark className="h-3.5 w-3.5 shrink-0" />;
+        })()}
+        {PLATFORM_LABEL[rule.platform]}
+      </Badge>
       <Badge variant="muted">{rule.matchType.replace(/_/g, " ")}</Badge>
       <span className="font-mono text-xs">{rule.matchValue}</span>
       <span className="flex-1 text-muted-foreground">

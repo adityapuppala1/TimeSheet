@@ -12,6 +12,7 @@ import { CreditCard } from "lucide-react";
 import { Badge } from "../../components/ui/badge";
 import { Button } from "../../components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../../components/ui/card";
+import { StripeMark } from "../../components/ui/connector-marks";
 import { Skeleton } from "../../components/ui/skeleton";
 import { toast } from "../../components/ui/toaster";
 import { billingApi } from "../../services/api";
@@ -53,7 +54,15 @@ export function BillingSettingsCard({ readOnly }: { readOnly: boolean }) {
             </div>
 
             {!readOnly && status.data.planTier !== "ENTERPRISE" && (
-              <div className="flex flex-wrap gap-2">
+              /* The Stripe mark sits with the UPGRADE buttons, not on the card header. The header is
+                 "Plan & billing", which is this product's own concept; pressing one of these leaves
+                 for Stripe Checkout, and saying so before the click is the honest place for it. */
+              <div className="grid gap-2">
+                <p className="flex items-center gap-1.5 text-xs text-muted-foreground">
+                  <StripeMark className="h-3.5 w-3.5 shrink-0" />
+                  Payment is handled by Stripe — these open a Stripe Checkout page.
+                </p>
+                <div className="flex flex-wrap gap-2">
                 {status.data.planTier === "STARTER" && (
                   <Button
                     size="sm"
@@ -71,6 +80,7 @@ export function BillingSettingsCard({ readOnly }: { readOnly: boolean }) {
                 >
                   Upgrade to Enterprise
                 </Button>
+                </div>
               </div>
             )}
 
