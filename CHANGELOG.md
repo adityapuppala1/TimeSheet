@@ -12,6 +12,27 @@ number, on purpose — an installation must never render history for a version t
 
 _Nothing yet._
 
+## 3.8.9 — the pitch deck sizes its market, and shows its working — 2026-08-28
+
+### 🎨 A TAM / SAM / SOM slide you can argue with
+
+- The pitch deck now sizes the opportunity, across the three software categories the product
+  genuinely spans: professional services automation, IT service management and time tracking.
+- **Every figure is labelled as one of two things.** Sourced numbers carry a link to the market
+  research firm that published them — Grand View Research, Fortune Business Insights, Mordor
+  Intelligence and Research and Markets — so any of them can be checked. Everything else is marked
+  as an assumption.
+- **The assumptions are sliders.** Category overlap, the seat band served, the regions reachable and
+  the share of the market captured — move any of them and the whole model recomputes in front of
+  you, with the full arithmetic printed underneath. A sizing slide is worth more when it survives
+  someone disagreeing with it than when it hides what it assumed.
+- **The published estimates disagree, and the slide says so.** Time tracking alone is put anywhere
+  between $3.9B and $18.3B for the same year depending on where each firm draws the category's
+  edges. The low end of every range is what feeds the arithmetic, and the ranges are shown so the
+  choice is visible.
+- No customers, revenue or pipeline are claimed anywhere on it — this sizes the market, not the
+  business.
+
 ## 3.8.8 — Ask AI stays inside this product — 2026-08-28
 
 ### 🔒 Questions that have nothing to do with your workspace are turned down, in our words
