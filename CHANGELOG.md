@@ -12,6 +12,23 @@ number, on purpose — an installation must never render history for a version t
 
 _Nothing yet._
 
+## 3.8.7 — Ask AI answers from your workspace instead of pointing at it — 2026-08-28
+
+### 🐛 Ask AI told you where to look instead of looking
+
+- **Reported, reproduced, fixed.** Asked "where did my hours go over the last two weeks?", the
+  assistant replied that you could open the Timesheets tab, select your name and use the date
+  filters — all true, and none of it an answer. It had a tool that reads exactly those entries and
+  simply did not use it. The same question now returns your actual hours.
+- The cause was that the assistant was allowed to finish without consulting anything. It now gets
+  one chance to reconsider when a reply about your own data was written without reading any, and a
+  second when it consults a tool and then answers with "let me look that up" rather than with what
+  the tool returned. A question that genuinely has nothing to do with this workspace is still
+  answered in a sentence, without a pointless lookup.
+- **Nothing about what it may read has changed.** The assistant still sees only the tools your role
+  allows, and every one of them is re-checked before it runs. Being firmer about answering cannot
+  reach anything you could not already open yourself.
+
 ## 3.8.6 — the integration logos, everywhere they belong — 2026-08-28
 
 ### 🎨 Every screen that names a connected system now shows its logo
