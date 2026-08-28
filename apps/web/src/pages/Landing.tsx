@@ -73,7 +73,7 @@ import {
   X,
 } from "lucide-react";
 import type { ReactNode } from "react";
-import { useState } from "react";
+import { useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from "react";
 import { Link } from "react-router";
 import { Badge } from "../components/ui/badge";
 import { Button } from "../components/ui/button";
@@ -83,6 +83,7 @@ import { Reveal, useScrollProgress, useSectionSpy } from "../components/marketin
 import { ScreenshotFrame } from "../components/marketing/ScreenshotFrame";
 import { AuthorityLadder } from "../components/marketing/AuthorityLadder";
 import { AuroraBackdrop } from "../components/marketing/AuroraBackdrop";
+import { MarketingBackdrop } from "../components/marketing/MarketingBackdrop";
 import { CONNECTOR_COUNT } from "../components/marketing/connectors";
 import { ConnectorConstellation } from "../components/marketing/ConnectorConstellation";
 import { StatBand } from "../components/marketing/StatBand";
@@ -647,12 +648,33 @@ export function Landing() {
   const [menuOpen, setMenuOpen] = useState(false);
 
   const activeTour = TOUR.find((t) => t.id === tourId) ?? TOUR[0];
+  const tabRefs = useRef<Array<HTMLButtonElement | null>>([]);
+
+  /** Arrow/Home/End across the tour tabs, wrapping at both ends. Selection follows focus, which is
+   *  the expected behaviour for a tablist whose panels are already loaded — there is nothing
+   *  expensive behind a tab here, so making somebody press Enter as well would be friction with no
+   *  purpose. */
+  function onTourKeyDown(event: ReactKeyboardEvent<HTMLButtonElement>, index: number) {
+    const last = TOUR.length - 1;
+    let next: number | null = null;
+    if (event.key === "ArrowRight" || event.key === "ArrowDown") next = index === last ? 0 : index + 1;
+    else if (event.key === "ArrowLeft" || event.key === "ArrowUp") next = index === 0 ? last : index - 1;
+    else if (event.key === "Home") next = 0;
+    else if (event.key === "End") next = last;
+    if (next === null) return;
+    event.preventDefault();
+    setTourId(TOUR[next].id);
+    tabRefs.current[next]?.focus();
+  }
   const activeSection = useSectionSpy(NAV_SECTIONS.map((s) => s.id));
   const progress = useScrollProgress();
   const shownFeatures = group === "all" ? FEATURES : FEATURES.filter((f) => f.group === group);
 
   return (
-    <div className="min-h-screen overflow-x-clip bg-background">
+    <div className="relative min-h-screen overflow-x-clip bg-background">
+      {/* The three.js lattice, standing behind the whole page. z-0 and not a negative index — see
+          MarketingBackdrop.tsx for why that distinction has already cost this repo a day. */}
+      <MarketingBackdrop />
       <header className="sticky top-0 z-30 border-b border-border bg-background/80 backdrop-blur-xl">
         <nav aria-label="Primary" className="mx-auto max-w-7xl px-4 sm:px-5">
           <div className="flex items-center justify-between gap-3 py-3 sm:py-4">
@@ -747,7 +769,7 @@ export function Landing() {
         </div>
       </header>
 
-      <main>
+      <main className="relative z-10">
         {/* ----------------------------------------------------------- Hero */}
         {/*
           `isolate` is LOAD-BEARING, not decoration. The backdrop layer below is `-z-10`, and a
@@ -917,46 +939,84 @@ export function Landing() {
               subtitle="Captured from the running application, not mocked up."
             />
           </Reveal>
-          <div className="mt-8 flex flex-wrap justify-center gap-2">
-            {TOUR.map((item) => (
-              <button
-                key={item.id}
-                type="button"
-                onClick={() => setTourId(item.id)}
-                aria-pressed={tourId === item.id}
-                aria-controls="tour-panel"
-                className={`focus-ring inline-flex items-center gap-2 rounded-full border px-4 py-1.5 text-sm font-semibold transition ${
-                  tourId === item.id
-                    ? "border-primary bg-primary text-primary-foreground shadow-glow"
-                    : "border-border text-muted-foreground hover:border-primary/50 hover:text-foreground motion-safe:hover:-translate-y-0.5"
-                }`}
-              >
-                {/* aria-hidden matters here: these buttons are matched by accessible name in
-                    tests/e2e/marketing.spec.ts, and an icon must not contribute to it. */}
-                <item.icon className="h-4 w-4" aria-hidden />
-                {item.label}
-              </button>
-            ))}
+          {/*
+            A REAL TABLIST, and one panel with ONE key.
+
+            The bug this replaces: the copy block and the screenshot were siblings that BOTH carried
+            `key={activeTour.id}`. Two children of the same parent sharing a key is undefined
+            territory for React's reconciler — it logged "Encountered two children with the same
+            key... may cause children to be duplicated" and then did exactly that, appending a fresh
+            copy block on every tab press while the screenshot swapped correctly. Four tabs in, the
+            page showed four stacked descriptions against one image.
+
+            The structural fix is that the panel is now a SINGLE keyed child containing both
+            columns, so there is nothing to collide with. Splitting the key strings would also have
+            silenced the warning, but it would have left the same shape one careless edit away.
+
+            The rest is the interaction: roving tabindex with arrow keys, because tabbing through
+            twelve pills to reach the thirteenth control is not navigation, it is an obstacle.
+          */}
+          <div
+            role="tablist"
+            aria-label="Product tour"
+            aria-orientation="horizontal"
+            className="mt-8 flex flex-wrap justify-center gap-2"
+          >
+            {TOUR.map((item, index) => {
+              const selected = tourId === item.id;
+              return (
+                <button
+                  key={item.id}
+                  ref={(el) => {
+                    tabRefs.current[index] = el;
+                  }}
+                  type="button"
+                  role="tab"
+                  id={`tour-tab-${item.id}`}
+                  aria-selected={selected}
+                  aria-controls="tour-panel"
+                  /* Roving: exactly one tab is in the page's tab order at a time, and the arrows
+                     move between them. That is the whole reason this is a tablist rather than a row
+                     of toggle buttons. */
+                  tabIndex={selected ? 0 : -1}
+                  onClick={() => setTourId(item.id)}
+                  onKeyDown={(event) => onTourKeyDown(event, index)}
+                  className={`focus-ring inline-flex items-center gap-2 rounded-full border px-4 py-1.5 text-sm font-semibold transition-all duration-200 ${
+                    selected
+                      ? "border-primary bg-primary text-primary-foreground shadow-glow motion-safe:scale-105"
+                      : "border-border text-muted-foreground hover:border-primary/50 hover:text-foreground motion-safe:hover:-translate-y-0.5"
+                  }`}
+                >
+                  {/* aria-hidden matters here: these tabs are matched by accessible name in
+                      tests/e2e/marketing.spec.ts, and an icon must not contribute to it. */}
+                  <item.icon className="h-4 w-4" aria-hidden />
+                  {item.label}
+                </button>
+              );
+            })}
           </div>
-          <div id="tour-panel" className="mt-8 grid gap-8 lg:grid-cols-[1fr_1.35fr] lg:items-center">
-            {/* Keyed on the tab so the copy re-enters with the screenshot instead of swapping
-                underneath a shot that is still decoding. */}
-            <div key={activeTour.id} className="motion-safe:animate-in motion-safe:fade-in motion-safe:slide-in-from-bottom-2 motion-safe:duration-500">
-              <p className="text-xs font-bold uppercase tracking-wider text-primary">{activeTour.label}</p>
-              <h3 className="mt-2 text-xl font-black tracking-tight sm:text-2xl">{activeTour.title}</h3>
-              <p className="mt-3 text-sm leading-7 text-muted-foreground">{activeTour.body}</p>
-              <Button asChild variant="outline" size="sm" className="mt-5">
-                <Link to="/login">See it with your data <ArrowRight className="h-4 w-4" /></Link>
-              </Button>
+
+          <div id="tour-panel" role="tabpanel" aria-labelledby={`tour-tab-${activeTour.id}`} className="mt-8">
+            {/* ONE key on ONE element. Both columns live inside it, so the old panel is torn down
+                whole before the new one mounts and nothing can accumulate. */}
+            <div key={activeTour.id} className="grid gap-8 lg:grid-cols-[1fr_1.35fr] lg:items-center">
+              <div className="motion-safe:animate-in motion-safe:fade-in motion-safe:slide-in-from-left-4 motion-safe:duration-500">
+                <p className="text-xs font-bold uppercase tracking-wider text-primary">{activeTour.label}</p>
+                <h3 className="mt-2 text-xl font-black tracking-tight sm:text-2xl">{activeTour.title}</h3>
+                <p className="mt-3 text-sm leading-7 text-muted-foreground">{activeTour.body}</p>
+                <Button asChild variant="outline" size="sm" className="mt-5">
+                  <Link to="/login">See it with your data <ArrowRight className="h-4 w-4" /></Link>
+                </Button>
+              </div>
+              {/* A beat behind the copy, and scaling rather than sliding — the two arriving on
+                  exactly the same curve reads as one block moving, which is what made the old
+                  version feel like a page jump rather than a swap. */}
+              <ScreenshotFrame
+                className="motion-safe:animate-in motion-safe:fade-in motion-safe:zoom-in-95 motion-safe:duration-500 motion-safe:delay-100 motion-safe:fill-mode-backwards"
+                src={activeTour.image}
+                alt={`${activeTour.label} — ${activeTour.title}`}
+              />
             </div>
-            {/* Keyed so React swaps the <img> rather than mutating one in place — otherwise the
-                previous screenshot lingers on screen until the new file finishes decoding. */}
-            <ScreenshotFrame
-              key={activeTour.id}
-              className="motion-safe:animate-in motion-safe:fade-in motion-safe:duration-500"
-              src={activeTour.image}
-              alt={`${activeTour.label} — ${activeTour.title}`}
-            />
           </div>
         </Section>
 
@@ -1255,7 +1315,7 @@ export function Landing() {
         </section>
       </main>
 
-      <footer className="border-t border-border bg-background">
+      <footer className="relative z-10 border-t border-border bg-background">
         <div className="mx-auto flex max-w-7xl flex-col items-center justify-between gap-4 px-4 py-8 text-sm text-muted-foreground sm:flex-row sm:px-5">
           <div className="flex items-center gap-2 font-bold text-foreground">
             <span className="grid h-7 w-7 place-items-center rounded-md bg-primary text-xs text-primary-foreground">T</span>

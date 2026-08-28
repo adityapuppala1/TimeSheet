@@ -75,11 +75,51 @@ test.describe("marketing pages", () => {
   });
 
   test("the product tour swaps the screenshot when a tab is chosen", async ({ page }) => {
+    /*
+     * `getByRole("tab")` and `aria-selected`, not `button` and `aria-pressed`. The strip became a
+     * real tablist with roving tabindex, which is a deliberate change and not an incidental one —
+     * so this assertion moved with it rather than the markup being bent to keep the old test green.
+     */
     await page.goto("/#tour");
-    const insightsTab = page.getByRole("button", { name: "Insights", exact: true });
+    const insightsTab = page.getByRole("tab", { name: "Insights", exact: true });
     await insightsTab.click();
-    await expect(insightsTab).toHaveAttribute("aria-pressed", "true");
+    await expect(insightsTab).toHaveAttribute("aria-selected", "true");
     await expect(page.locator('img[src="/product/insights.png"]')).toBeVisible();
+  });
+
+  test("the tour panel REPLACES its contents rather than stacking them", async ({ page }) => {
+    /*
+     * A regression test for a real bug, and one that was invisible until somebody clicked a third
+     * tab. The copy block and the screenshot were siblings that both carried `key={activeTour.id}`;
+     * duplicate keys among siblings are undefined territory for React's reconciler, and it appended
+     * a fresh copy block on every press while the image swapped correctly. Four tabs in, the page
+     * showed four stacked descriptions against one screenshot.
+     *
+     * Counting headings is the assertion because it is what a reader actually sees go wrong. The
+     * console warning ("Encountered two children with the same key") existed the whole time and
+     * nobody was reading it.
+     */
+    await page.goto("/#tour");
+    const panel = page.locator("#tour-panel");
+    for (const label of ["Timesheet", "Insights", "Security", "Goals"]) {
+      await page.getByRole("tab", { name: label, exact: true }).click();
+      await expect(panel.locator("h3")).toHaveCount(1);
+      await expect(panel.locator("img")).toHaveCount(1);
+    }
+  });
+
+  test("the tour tabs are one tab stop, then arrow keys", async ({ page }) => {
+    // Twelve pills that each take a Tab press is an obstacle between a keyboard user and the rest
+    // of the page, which is the reason for the roving tabindex this asserts.
+    await page.goto("/#tour");
+    await expect(page.locator('[role="tab"][tabindex="0"]')).toHaveCount(1);
+    await page.getByRole("tab", { selected: true }).focus();
+    await page.keyboard.press("ArrowRight");
+    await expect(page.getByRole("tab", { name: "Tickets", exact: true })).toHaveAttribute("aria-selected", "true");
+    await page.keyboard.press("End");
+    await expect(page.getByRole("tab", { selected: true })).toHaveAttribute("aria-selected", "true");
+    await page.keyboard.press("Home");
+    await expect(page.getByRole("tab", { name: "Dashboard", exact: true })).toHaveAttribute("aria-selected", "true");
   });
 
   test("the pricing comparison modal opens and closes", async ({ page }) => {

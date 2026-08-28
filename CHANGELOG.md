@@ -12,6 +12,38 @@ number, on purpose — an installation must never render history for a version t
 
 _Nothing yet._
 
+## 3.8.3 — the tour stops stacking, and the sensor moves to the middle — 2026-08-28
+
+### 🐛 The product tour piled every screen you clicked on top of the last
+
+- **Reported, reproduced, fixed.** On the landing page, choosing a second tab left the first one's
+  description on the page and added the new one underneath it. Four tabs in, four stacked
+  descriptions sat beside a single screenshot. The picture swapped correctly the whole time, which
+  is what made it look like a styling problem rather than the duplication it was.
+- The panel now replaces its contents, and each screen fades in with its screenshot a beat behind
+  its description.
+- **The tabs are properly keyboard-operable too.** One Tab press reaches the strip; arrow keys move
+  through all twelve and wrap at both ends, with Home and End jumping to either end. Previously
+  every pill was its own tab stop — twelve presses between the section above and the section below.
+
+### 🎨 The fingerprint is a scanner in the middle, not a bar
+
+- It sits centred beneath the form now, as a round sensor with rings that pulse out of it while
+  your details are checked — the way a phone presents one — rather than as a wide button with a
+  small icon on the left. It still signs you in, and the keyboard still works exactly as before.
+- The caption underneath says what is happening: *Sign in*, *Checking your credentials*, *Signed
+  in*, *Try again*. It deliberately doesn't repeat "sign-in failed", which the message above it is
+  already telling you along with the reason.
+
+### 🎨 The landing page and the pitch deck have the sign-in screen's backdrop
+
+- The slowly turning lattice from the sign-in screen now stands behind both pages, faint enough to
+  stay out of the way of the reading and picked up in whichever theme you are using.
+- **It costs a phone nothing.** As on the sign-in screen, the 3D library is only fetched after a
+  desktop-width check and a reduced-motion check both pass — a phone, and anyone who has asked
+  their system for less motion, never downloads it at all. It is also left out of printed copies of
+  the deck.
+
 ## 3.8.2 — a sign-in you press with a fingerprint, and a theme that spreads — 2026-08-28
 
 ### 🎨 The fingerprint on the sign-in page is the sign-in button

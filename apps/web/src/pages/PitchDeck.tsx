@@ -43,6 +43,7 @@ import { Badge } from "../components/ui/badge";
 import { Button } from "../components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "../components/ui/card";
 import { Reveal, useScrollProgress, useSectionSpy } from "../components/marketing/Reveal";
+import { MarketingBackdrop } from "../components/marketing/MarketingBackdrop";
 import { ScreenshotFrame } from "../components/marketing/ScreenshotFrame";
 import { AuthorityLadder } from "../components/marketing/AuthorityLadder";
 import { AuroraBackdrop } from "../components/marketing/AuroraBackdrop";
@@ -215,7 +216,10 @@ export function PitchDeck() {
   const progress = useScrollProgress();
 
   return (
-    <div className="min-h-screen overflow-x-clip bg-background">
+    <div className="relative min-h-screen overflow-x-clip bg-background">
+      {/* The three.js lattice, standing behind the whole page. z-0 and not a negative index — see
+          MarketingBackdrop.tsx for why that distinction has already cost this repo a day. */}
+      <MarketingBackdrop />
       <header className="sticky top-0 z-30 border-b border-border bg-background/85 backdrop-blur-xl print:hidden">
         <nav aria-label="Primary" className="mx-auto flex max-w-6xl items-center justify-between gap-3 px-4 py-3 sm:px-5 sm:py-4">
           <Link to="/" className="focus-ring flex min-w-0 items-center gap-3 rounded-md font-bold">
@@ -264,7 +268,7 @@ export function PitchDeck() {
         </div>
       </header>
 
-      <main>
+      <main className="relative z-10">
         {/* -------------------------------------------------------- Cover */}
         <Slide id="cover" backdrop>
           <div className="motion-safe:animate-in motion-safe:fade-in motion-safe:slide-in-from-bottom-3 motion-safe:duration-700">
@@ -630,7 +634,7 @@ export function PitchDeck() {
         </section>
       </main>
 
-      <footer className="border-t border-border bg-background">
+      <footer className="relative z-10 border-t border-border bg-background">
         <div className="mx-auto flex max-w-6xl flex-col items-center justify-between gap-3 px-4 py-8 text-sm text-muted-foreground sm:flex-row sm:px-5">
           <div className="flex items-center gap-2 font-bold text-foreground">
             <span className="grid h-7 w-7 place-items-center rounded-md bg-primary text-xs text-primary-foreground">T</span>

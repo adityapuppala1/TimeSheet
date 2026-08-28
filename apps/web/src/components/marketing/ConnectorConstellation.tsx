@@ -51,7 +51,7 @@ function NodeCircle({ nodeRef, children, className = "" }: { nodeRef: RefObject<
   return (
     <div
       ref={nodeRef}
-      className={`z-10 grid size-12 place-items-center rounded-full border border-border bg-card text-primary shadow-soft transition-colors duration-200 ${className}`}
+      className={`z-10 grid h-12 w-12 place-items-center rounded-full border border-border bg-card text-primary shadow-soft transition-colors duration-200 ${className}`}
     >
       {children}
     </div>
@@ -89,7 +89,7 @@ export function ConnectorConstellation() {
             className={`flex items-center gap-3 ${side === "left" ? "flex-row-reverse text-right" : ""}`}
           >
             <NodeCircle nodeRef={refs[index]}>
-              <node.Icon className="size-5" aria-hidden />
+              <node.Icon className="h-5 w-5" aria-hidden />
             </NodeCircle>
             <div className="min-w-0">
               <p className="text-sm font-semibold">{node.label}</p>
@@ -114,7 +114,7 @@ export function ConnectorConstellation() {
 
       <div
         ref={hub}
-        className="z-10 grid size-16 shrink-0 place-items-center rounded-2xl bg-primary text-lg font-black text-primary-foreground shadow-glow"
+        className="z-10 grid h-16 w-16 shrink-0 place-items-center rounded-2xl bg-primary text-lg font-black text-primary-foreground shadow-glow"
       >
         T
       </div>
