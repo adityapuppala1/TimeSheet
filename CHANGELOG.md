@@ -12,6 +12,42 @@ number, on purpose — an installation must never render history for a version t
 
 _Nothing yet._
 
+## 3.8.2 — a sign-in you press with a fingerprint, and a theme that spreads — 2026-08-28
+
+### 🎨 The fingerprint on the sign-in page is the sign-in button
+
+- Press it and it signs you in. It scans while your credentials are checked, turns green when
+  you're through, and goes red with a shake when something's wrong — and the keyboard still works
+  exactly as before, because it's a real submit button rather than a decoration beside one.
+- **It isn't a fingerprint reader**, and nothing about it claims to be. It reports the sign-in
+  you started. Passkey support is the thing that would make it read your actual fingerprint, and
+  that isn't built yet — when it is, this is where it will live.
+
+### 🎨 The single sign-on buttons sit two across
+
+- Two providers now share a row with their own logos, instead of stacking into two full-width
+  lines that both begin "Continue with". The logo does the identifying; the repeated words were
+  costing a third of the panel. A third provider takes a full row of its own rather than sitting
+  half-width beside a gap, and a lone provider keeps the full wording, since there's room for it.
+
+### 🎨 Switching theme now spreads from the button you pressed
+
+- Light and dark change with a circle that opens from the control you clicked and sweeps across
+  the screen, rather than the whole page blinking at once.
+- Sized to reach the furthest corner, so it never leaves a ring of the old theme on a wide
+  display — and it steps aside completely for anyone whose system asks for reduced motion, or
+  whose browser doesn't support it, or who changed theme from the keyboard, where there's no
+  button to spread from. In all of those the theme still changes; only the flourish is absent.
+
+### 🎨 The landing page shows how the integrations actually fit together
+
+- The scrolling strip of connector names is now a diagram: everything meets in one place, with
+  light travelling each connection — inward for the systems that feed TimeSphere (identity, chat,
+  code and CI) and outward for the ones it drives (mail, AI, billing).
+- All **18** connectors are named, grouped by what they do. The count beside it is now counted
+  from the same list the picture is drawn from, so the number and the diagram can't disagree —
+  which they briefly did while this was being built.
+
 ## 3.8.1 — three reported bugs, and the type that hid one of them — 2026-08-28
 
 ### 🐛 Opening a ticket from AI suggestions showed a blank panel
