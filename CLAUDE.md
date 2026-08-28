@@ -31,3 +31,11 @@ Known quality caveats for this graph (be aware when reading `GRAPH_REPORT.md`):
 - ~700 of 6352 raw edges were dropped at build time as dangling endpoints — semantic edges from
   one doc chunk referencing a node defined in another. The graph is usable; it just isn't
   exhaustive on doc-to-doc links.
+
+## Shipping a feature
+
+Before landing or releasing ANY feature, read `.claude/skills/ship-feature/SKILL.md`. It lists every
+surface that must move together (landing page, web deck, PPTX/HTML exports, the Help manual that
+also feeds Ask AI, changelog/version/Helm/README, compose/Helm env) and the test that fails when one
+is forgotten. Most of those surfaces are derived from a single source on purpose — touch the source,
+not a copy.

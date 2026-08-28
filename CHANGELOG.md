@@ -12,6 +12,36 @@ number, on purpose — an installation must never render history for a version t
 
 _Nothing yet._
 
+## 3.10.1 — a provisioned workspace now tells its owner where to sign in — 2026-08-28
+
+### ✨ Provisioning hands over the sign-in address, and emails it
+
+- Creating a workspace from the platform-admin console used to end quietly: the database was built
+  and its first super administrator existed, but nobody was told which address to sign in at.
+  Provisioning now returns the workspace URL, the console shows it in the confirmation, and the new
+  administrator receives the welcome email carrying that link — the same email a self-serve trial
+  has always sent.
+- The initial password still travels out of band, deliberately — it is never put in an email.
+- If that mail cannot be sent (a fresh install with no SMTP configured yet), the console says so and
+  shows the link to pass on by hand, rather than reporting success and leaving the customer stranded.
+
+### 🐛 ROOT_DOMAIN existed in the code and in `.env`, but never reached a container
+
+- Workspaces are resolved per subdomain (`<workspace>.<your-domain>`), and that resolution reads
+  `ROOT_DOMAIN`. Neither compose file nor the Helm chart forwarded it, so a containerised deployment
+  quietly fell back to the default organisation for *every* subdomain — which presents as "the new
+  customer signs in and lands in somebody else's workspace". Both compose files, the Helm values and
+  the ConfigMap now carry it.
+- `docs/NEW_ORGANIZATION_SETUP.md` now states the wildcard DNS and wildcard TLS a multi-tenant
+  installation needs, and what the console shows once a workspace is provisioned.
+
+### 📚 A ship-feature checklist, so the pitch, the manual and the assistant stop drifting
+
+- `.claude/skills/ship-feature/SKILL.md` (contributor-facing) lists every surface that must move when
+  a feature lands — landing page, web pitch deck, PPTX/HTML exports, the Help manual that also feeds
+  Ask AI, docs, compose/Helm environment, the release ritual — each with the single file it is fed
+  from and the test that fails when it is forgotten.
+
 ## 3.10.0 — the manual, in the app and in the assistant — 2026-08-28
 
 ### ✨ Help & how-to: every flow, searchable, shown for your role

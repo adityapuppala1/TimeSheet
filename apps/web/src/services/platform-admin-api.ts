@@ -165,6 +165,10 @@ export interface ProvisionOrgResult {
   organizationId: string;
   databaseName: string;
   schemaVersion: string;
+  /** The sign-in address the welcome email carries — null only if the org row vanished mid-flight. */
+  url: string | null;
+  /** False when provisioning succeeded but the welcome mail did not send — hand the link over by hand. */
+  welcomeSent: boolean;
 }
 
 export const platformAdminOrgApi = {

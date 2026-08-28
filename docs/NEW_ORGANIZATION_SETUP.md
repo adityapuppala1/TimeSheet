@@ -331,9 +331,15 @@ if you want in-console automation.
    Every step is safe to retry — if it fails partway (bad DSN, transient connection issue), fix
    the underlying problem and click Provision again; the org stays visibly `PROVISIONING` until
    every step succeeds.
-4. The org is immediately reachable at `<slug>.yourdomain.com`. Hand the admin credentials to the
-   customer's admin (out-of-band, not over an insecure channel) and have them change the password
-   on first login.
+4. The org is immediately reachable at `<slug>.<ROOT_DOMAIN>` — **provided `ROOT_DOMAIN` is set**
+   (forwarded by both compose files and the Helm chart's `env.rootDomain`) and DNS has a wildcard
+   `*.<ROOT_DOMAIN>` record pointing at the platform with a wildcard TLS certificate. Without
+   `ROOT_DOMAIN`, every subdomain resolves to `DEFAULT_ORG_SLUG` and the new customer sees the
+   wrong workspace's login page. On success the console shows the workspace URL and **the new
+   admin receives the welcome email** (the same one self-serve signup sends) with that link — so
+   hand over only the initial password, out-of-band, and have them change it on first login.
+   Outbound mail must be working for that email to arrive (Part 1 step 6); the tenant's own
+   Forgot-password flow depends on the same SMTP.
 5. If `TENANT_DB_PROVISION_BASE_URL` isn't configured (deliberate for infra that provisions tenant
    databases via a separate ops process — e.g. per-customer servers for data residency), follow
    [docs/DEPLOYMENT.md § Provisioning without the automation](DEPLOYMENT.md#provisioning-without-the-automation)

@@ -18,6 +18,9 @@ import { getPlatformAnalytics } from "../services/platform-admin-analytics.servi
 import { provisionOrganization } from "../services/provisioning.service.js";
 import { addDomain, listDomains, removeDomain, verifyDomain } from "../services/org-domain.service.js";
 import { workspaceUrlForSlug } from "../services/workspace-directory.service.js";
+import { withOrgTenant } from "../config/with-org-tenant.js";
+import { dispatchTransactional } from "../services/notify.service.js";
+import { templates } from "../services/mail-templates.js";
 import { encryptSecret } from "../utils/encryption.js";
 
 export const platformAdminRouter = Router();
@@ -263,7 +266,40 @@ const provisionOrgSchema = z.object({
 // services/provisioning.service.ts for the full flow and its retry-safety guarantees.
 platformAdminRouter.post("/organizations/:id/provision", requirePlatformAdmin, validate(provisionOrgSchema), async (req, res) => {
   const result = await provisionOrganization(String(req.params.id), req.body);
-  res.json(result);
+
+  /*
+   * THE NEW ADMIN LEARNS WHERE TO SIGN IN FROM THE PRODUCT, NOT FROM A HANDOVER NOTE.
+   *
+   * Self-serve signup has always sent the welcome email with the workspace URL; this path — the one
+   * a platform admin uses to onboard a customer — sent nothing, and the ops guide compensated with
+   * "hand the credentials over out-of-band". Half of that is right: the PASSWORD must travel
+   * out-of-band and never in mail. The URL and the welcome are not secrets, and an admin who has to
+   * guess `<slug>.<root domain>` from a Slack message is how "login is broken" tickets start.
+   *
+   * Sent through the tenant's own transactional path (same template, same per-org channel gating,
+   * same delivery analytics) so it behaves exactly like every other mail this workspace sends.
+   * Failure to send is reported in the response, not thrown: the org IS provisioned at this point,
+   * and a mail hiccup must not read as a failed provision.
+   */
+  const org = await controlPrisma.organization.findUnique({ where: { id: result.organizationId }, select: { slug: true } });
+  const url = org ? workspaceUrlForSlug(org.slug) : null;
+  let welcomeSent = false;
+  if (org) {
+    try {
+      await withOrgTenant(org.slug, async () => {
+        await dispatchTransactional({
+          to: req.body.adminEmail,
+          templateKey: "welcome",
+          vars: { name: req.body.adminName, appUrl: url ?? "" },
+          fallback: { subject: "Welcome to TimeSphere", html: templates.welcome(req.body.adminName) }
+        });
+      });
+      welcomeSent = true;
+    } catch {
+      welcomeSent = false;
+    }
+  }
+  res.json({ ...result, url, welcomeSent });
 });
 
 /* ============================== Plan tier limits ================================== */

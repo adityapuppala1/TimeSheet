@@ -105,6 +105,10 @@ ingress:
 env:
   nodeEnv: production
   defaultOrgSlug: default
+  # Shape 2 only. The apex every workspace hangs off (acme.<rootDomain>); pair it with
+  # ingress.wildcardHost "*.<rootDomain>" and a wildcard TLS certificate, or subdomains will never
+  # reach the pods. Empty = single-org install.
+  rootDomain: ""
   webOrigin: https://timesphere.example.com
   appBaseUrl: https://timesphere.example.com
   tz: Asia/Kolkata

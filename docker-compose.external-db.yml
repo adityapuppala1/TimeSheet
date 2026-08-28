@@ -22,6 +22,13 @@ services:
       DATABASE_URL: ${DATABASE_URL:?DATABASE_URL must be set}
       CONTROL_DATABASE_URL: ${CONTROL_DATABASE_URL:?CONTROL_DATABASE_URL must be set}
       DEFAULT_ORG_SLUG: ${DEFAULT_ORG_SLUG:-default}
+      # Shape 2 (SaaS) only: the apex under which every workspace is a subdomain — ROOT_DOMAIN=app.example.com
+      # makes acme.app.example.com resolve to org "acme", and is what the sign-in/welcome links are
+      # built from. Leave unset for a single-org install. Forwarded for the same reason as
+      # TENANT_DB_PROVISION_BASE_URL below: a variable set only in the host .env does not exist
+      # inside the container, and a missing ROOT_DOMAIN silently turns every subdomain into the
+      # default org, which looks like "login is broken for the new customer".
+      ROOT_DOMAIN: ${ROOT_DOMAIN:-}
       # Tenant-database provisioning target — see docker-compose.yml's block of the same name.
       # Unset disables the /platform-admin console's Provision button rather than guessing a server.
       TENANT_DB_PROVISION_BASE_URL: ${TENANT_DB_PROVISION_BASE_URL:-}

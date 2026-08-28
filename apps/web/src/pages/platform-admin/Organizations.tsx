@@ -163,7 +163,19 @@ function ProvisionOrgDialogInner({ org, onOpenChange, onProvisioned }: { org: Or
   const provision = useMutation({
     mutationFn: () => platformAdminOrgApi.provision(org.id, { adminEmail, adminName, adminPassword }),
     onSuccess: (result) => {
-      toast.success("Organization provisioned", { description: `Database "${result.databaseName}" created, migrated, and seeded — the org is now ACTIVE.` });
+      toast.success("Organization provisioned", {
+        description: [
+          `Database "${result.databaseName}" created, migrated, and seeded — the org is now ACTIVE.`,
+          result.url ? `Sign-in: ${result.url}` : null,
+          // The URL and the welcome are mailed; the password never is — that still travels out-of-band.
+          result.welcomeSent
+            ? `${adminEmail} has been sent the welcome email with that link. Hand over the initial password separately.`
+            : `The welcome email could not be sent — check outbound mail, then give ${adminEmail} the link and initial password out-of-band.`
+        ]
+          .filter(Boolean)
+          .join(" "),
+        duration: 12000
+      });
       onProvisioned();
     },
     onError: (err: any) => toast.error("Provisioning failed", { description: err?.response?.data?.message ?? "Try again — every step here is safe to retry." })
