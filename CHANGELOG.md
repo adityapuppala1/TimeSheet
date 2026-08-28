@@ -12,6 +12,25 @@ number, on purpose — an installation must never render history for a version t
 
 _Nothing yet._
 
+## 3.8.6 — the integration logos, everywhere they belong — 2026-08-28
+
+### 🎨 Every screen that names a connected system now shows its logo
+
+- The marks introduced on the landing page now appear wherever the app talks about one of these
+  systems, instead of only in marketing.
+- **Chat integrations** — Slack, Microsoft Teams, Google Chat and Telegram each carry their own
+  logo on their card, in the platform picker, and on every routing rule. The four cards used to be
+  identical apart from their heading, all fronted by the same speech bubble.
+- **AI providers** — each entry in the priority list shows whether it is Anthropic or an
+  OpenAI-compatible endpoint, so the order reads at a glance instead of by comparing hostnames.
+- **Mail server and Email intake** — SMTP and IMAP had the same envelope between them; they are now
+  distinguishable at the top of their cards.
+- **Git provider** and **Pick from GitHub** on a ticket, the **MCP server** card, and the
+  **plan-tier editor** in the platform console — where an administrator picks which sign-in methods
+  and chat platforms a plan may use, each choice now shows the logo the workspace admin will see.
+- **Billing** names Stripe beside the upgrade buttons rather than in the heading, since that is the
+  point at which you leave for Stripe's checkout page.
+
 ## 3.8.5 — every connector shows its own logo — 2026-08-28
 
 ### 🎨 The integrations diagram names each system with its mark
