@@ -12,6 +12,29 @@ number, on purpose — an installation must never render history for a version t
 
 _Nothing yet._
 
+## 3.8.8 — Ask AI stays inside this product — 2026-08-28
+
+### 🔒 Questions that have nothing to do with your workspace are turned down, in our words
+
+- Ask AI was already declining general-knowledge questions, but writing the refusal itself — and
+  getting it wrong. Asked for the capital of France it apologised and then offered to "search the
+  internet", which it cannot do and never could. Every improvised refusal invents an ability
+  somebody then tries to use.
+- The refusal is now fixed text: it says what the assistant covers, says plainly that there is no
+  web search and no outside source behind it, and points you back at something it can actually
+  answer.
+- **What counts as in scope is unchanged and deliberately generous**: your tickets, hours, changes,
+  projects, goals, colleagues and settings, *and* how to do things in the product — where a screen
+  is, what a feature does, what the assistant itself can do. Only questions with nothing to do with
+  this product at all are declined.
+
+### ⚡ Off-topic questions and repeated lookups stopped costing extra
+
+- A declined question now finishes in a single model call instead of two.
+- Asking for the same thing twice while working out one answer no longer queries the database
+  twice — the result already gathered is reused. Failures are never reused, so a passing hiccup
+  doesn't get replayed for the rest of the answer.
+
 ## 3.8.7 — Ask AI answers from your workspace instead of pointing at it — 2026-08-28
 
 ### 🐛 Ask AI told you where to look instead of looking
