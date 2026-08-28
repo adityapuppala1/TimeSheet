@@ -42,11 +42,35 @@ function slideIdsFromExport(): string[] {
   return [...block![1].matchAll(/id:\s*"([^"]+)"/g)].map((m) => m[1]);
 }
 
+/**
+ * Slides that exist ONLY in the exports, never on the public page — each with the reason, because
+ * an unexplained allowlist is just drift with permission:
+ *  - "ask":  an equity ask has no business on a public marketing page; investors get the deck.
+ *  - "team": the committed deck ships placeholder cards ("Add name") for the owner to fill in, and
+ *            publishing placeholder people to the website would be worse than no team slide.
+ */
+const EXPORT_ONLY = ["ask", "team"];
+
 describe("the exported deck covers the deck on the page", () => {
-  it("has a section for every slide, in the same order", () => {
+  it("has a section for every page slide, in the same order", () => {
     // Order matters as much as membership: a deck that argues the market before the problem is a
     // different pitch, and an exporter silently reordering it would be worse than omitting a slide.
-    expect(slideIdsFromExport()).toEqual(slideIdsFromPage());
+    // Export-only slides are removed before comparing, so the page still cannot gain a slide the
+    // exports lack — the drift this guard exists for — while the deck may carry investor-only ones.
+    expect(slideIdsFromExport().filter((id) => !EXPORT_ONLY.includes(id))).toEqual(slideIdsFromPage());
+  });
+
+  it("actually carries the export-only slides it claims", () => {
+    // Without this, deleting "ask" from the exports would still pass the filtered check above.
+    const ids = slideIdsFromExport();
+    for (const id of EXPORT_ONLY) expect(ids, `missing export-only slide: ${id}`).toContain(id);
+  });
+
+  it("keeps the export-only slides OFF the public page", () => {
+    // The other direction: somebody pasting the ask slide into PitchDeck.tsx should hear about it
+    // from a test naming the policy, not from a review comment after it shipped.
+    const pageIds = slideIdsFromPage();
+    for (const id of EXPORT_ONLY) expect(pageIds, `"${id}" belongs to the exports only`).not.toContain(id);
   });
 
   it("names every screenshot it embeds, and every one exists on disk", () => {

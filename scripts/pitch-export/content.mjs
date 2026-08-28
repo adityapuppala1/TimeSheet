@@ -154,6 +154,24 @@ export const SLIDES = [
       ["Not charged: AI usage (Deliberate)", "Customers bring their own provider key and pay that provider directly. Refusing the inference markup removes the objection that kills most AI upsells, and keeps our margin independent of token prices."]
     ]
   },
+  /*
+   * EXPORT-ONLY, both of these, and the reason is written into the drift-guard test too: an equity
+   * ask has no business on a public marketing page, and a team slide holding "add name here"
+   * placeholders published to the website would be worse than no team slide. Investors get the
+   * deck; the site keeps selling the product.
+   */
+  {
+    id: "ask",
+    label: "The ask",
+    title: "$1M, and what it buys",
+    kind: "ask"
+  },
+  {
+    id: "team",
+    label: "The team",
+    title: "The people behind it",
+    kind: "team"
+  },
   {
     id: "next",
     label: "What's next",
@@ -213,4 +231,63 @@ export const GALLERY = [
   ["studio.png", "Requirements Studio — an interview that becomes tickets"],
   ["requirements.png", "Requirements — the structured document it produces"],
   ["practice-update.png", "Weekly practice update — counted, drafted, reviewed"]
+];
+
+/**
+ * The funding ask, with the market context that makes it defensible — or shows where it isn't.
+ *
+ * THE HONEST PART, stated the way the market-sizing slide states it: the round terms are OURS, the
+ * benchmarks are SOURCED, and the two disagree. $1M for 5% implies a $20M post-money; Carta's 2025
+ * pre-seed data puts the median SAFE cap at $10–15M and median dilution on a $1–2.4M round at
+ * 19–20%. A deck that presents 5% as normal walks into the first partner meeting already caught,
+ * so the slide shows the sensitivity table and lets the terms argue for themselves.
+ */
+export const ASK = {
+  amount: "$1,000,000",
+  equity: "5%",
+  impliedPost: "$20M post-money ($19M pre)",
+  context: [
+    ["Median pre-seed SAFE cap, 2025", "$10M – $15M", "Carta, State of Pre-Seed Q1 2025"],
+    ["Median dilution, $1–2.4M pre-seed round", "19 – 20%", "Carta pre-seed SAFE data"],
+    ["Median priced seed, 2025–26", "≈ $16M pre · $3.2M round · 12–20% dilution", "Carta / SaaS seed benchmarks"]
+  ],
+  contextNote:
+    "At $1M for 5%, this round prices in the top decile of pre-seed terms — the territory of hot AI rounds with exceptional leverage. The table below is the same raise at market-normal dilution, so the conversation starts from numbers rather than positions.",
+  sensitivity: [
+    { equity: "5%", post: 20.0, note: "the current ask — top decile" },
+    { equity: "7.5%", post: 13.3, note: "aggressive but arguable" },
+    { equity: "10%", post: 10.0, note: "upper edge of the Carta median band" },
+    { equity: "15%", post: 6.7, note: "middle of the market" },
+    { equity: "20%", post: 5.0, note: "median pre-seed dilution" }
+  ],
+  useOfFunds: [
+    { label: "Engineering", pct: 45, note: "2–3 engineers, 18–24 months" },
+    { label: "Go-to-market", pct: 25, note: "first sales hire, content, pilots" },
+    { label: "Infra & compliance", pct: 15, note: "hosting, SOC 2 Type II" },
+    { label: "Operations & legal", pct: 10, note: "" },
+    { label: "Buffer", pct: 5, note: "" }
+  ],
+  milestones: [
+    ["Month 3", "SOC 2 Type I underway; first 3 design partners live"],
+    ["Month 9", "10 paying workspaces; retrieval shipped for Ask AI"],
+    ["Month 15", "SOC 2 Type II; evaluation-gated prompt rollout"],
+    ["Month 24", "Repeatable sales motion; Series A metrics or default-alive"]
+  ],
+  sources: [
+    { firm: "Carta — State of Pre-Seed Q1 2025", href: "https://carta.com/data/state-of-pre-seed-q1-2025/" },
+    { firm: "US SaaS seed benchmarks 2025", href: "https://www.metal.so/collections/us-saas-seed-round-benchmarks-2025-average-round-size-valuations-dilution" }
+  ]
+};
+
+/**
+ * Placeholders ON PURPOSE. Nobody's name goes in a repo-committed deck without them putting it
+ * there — every card below is an editable slot in the PPTX and an obvious to-fill in the HTML.
+ */
+export const TEAM = [
+  { name: "Add name", role: "Founder — Product & Engineering", note: "Built the platform end to end" },
+  { name: "Add name", role: "Engineering", note: "Contribution area" },
+  { name: "Add name", role: "Design / UX", note: "Contribution area" },
+  { name: "Add name", role: "Go-to-market", note: "Contribution area" },
+  { name: "Add name", role: "Advisor", note: "Domain" },
+  { name: "Add name", role: "Advisor", note: "Domain" }
 ];

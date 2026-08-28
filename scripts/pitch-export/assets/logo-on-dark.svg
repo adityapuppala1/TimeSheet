@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="1290" height="330" viewBox="0 0 1290 330">
+  
+  <g transform="translate(15 15) scale(1)">
+    <rect x="10" y="10" width="280" height="280" rx="64" fill="#22B5C4" stroke="#0E1526" stroke-width="14"/>
+    <path d="M88 96 h124 v44 h-40 v118 h-44 V140 h-40 z" fill="#0E1526"/>
+  </g>
+  <text x="375" y="160" font-family="Segoe UI, Arial, sans-serif" font-size="118" font-weight="800" fill="#F3F6FB">TimeSphere</text>
+  <text x="378" y="272" font-family="Segoe UI, Arial, sans-serif" font-size="86" font-weight="400" fill="#94A3B8">Enterprise Timesheets</text>
+</svg>

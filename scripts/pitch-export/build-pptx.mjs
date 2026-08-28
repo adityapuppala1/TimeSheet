@@ -21,7 +21,7 @@ import { mkdirSync, existsSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
 import PptxGenJS from "pptxgenjs";
-import { DECK, SLIDES, MARKET, GALLERY } from "./content.mjs";
+import { ASK, DECK, GALLERY, MARKET, SLIDES, TEAM } from "./content.mjs";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(HERE, "../..");
@@ -84,6 +84,12 @@ function bullets(s, items, { x = M, y = 1.7, w = W - M * 2, max = 6, size = 11 }
   });
 }
 
+const logo = (name) => {
+  const full = path.join(HERE, "assets", `${name}.png`);
+  if (!existsSync(full)) throw new Error(`Missing ${full} — run scripts/pitch-export/make-logo.mjs first`);
+  return full;
+};
+
 const shot = (file) => {
   const full = path.join(IMAGES, file);
   if (!existsSync(full)) throw new Error(`Missing screenshot: ${full}`);
@@ -94,15 +100,17 @@ const shot = (file) => {
 {
   const s = pptx.addSlide();
   s.background = { color: BG };
-  s.addText(DECK.tagline.toUpperCase(), { x: M, y: 1.0, w: W - M * 2, h: 0.3, fontSize: 11, bold: true, color: PRIMARY, charSpacing: 2 });
+  // The lockup, PNG at 4x density. 5160x1320 source → 2.6in wide keeps it crisp on a projector.
+  s.addImage({ path: logo("logo-on-dark"), x: M, y: 0.45, w: 2.6, h: 0.665 });
+  s.addText(DECK.tagline.toUpperCase(), { x: M, y: 1.25, w: W - M * 2, h: 0.3, fontSize: 11, bold: true, color: PRIMARY, charSpacing: 2 });
   s.addText(
     [
       { text: "The work happened. ", options: { color: INK } },
       { text: "Prove it.", options: { color: PRIMARY } }
     ],
-    { x: M, y: 1.4, w: W - M * 2, h: 0.9, fontSize: 40, bold: true }
+    { x: M, y: 1.62, w: W - M * 2, h: 0.9, fontSize: 38, bold: true }
   );
-  s.addText(DECK.standfirst, { x: M, y: 2.4, w: 8.2, h: 1.1, fontSize: 12, color: MUTED, lineSpacingMultiple: 1.18 });
+  s.addText(DECK.standfirst, { x: M, y: 2.58, w: 8.2, h: 1.0, fontSize: 11.5, color: MUTED, lineSpacingMultiple: 1.15 });
   DECK.pillars.forEach(([t, b], i) => {
     const x = M + i * 3.02;
     s.addShape(pptx.ShapeType.roundRect, { x, y: 3.75, w: 2.85, h: 1.15, fill: { color: PANEL }, line: { color: "22304A" }, rectRadius: 0.06 });
@@ -170,6 +178,83 @@ SLIDES.forEach((slide, index) => {
       lineSpacingMultiple: 1.1
     });
     s.addText(MARKET.caveat, { x: M, y: 4.7, w: 8.9, h: 0.6, fontSize: 8, color: MUTED, lineSpacingMultiple: 1.05 });
+    return;
+  }
+
+  if (slide.kind === "ask") {
+    const s = newSlide(n, slide.label);
+    title(s, slide.title);
+    s.addText(
+      [
+        { text: `Raising ${ASK.amount} for ${ASK.equity}`, options: { bold: true, color: INK, fontSize: 13 } },
+        { text: `  —  implied ${ASK.impliedPost}`, options: { color: MUTED, fontSize: 12 } }
+      ],
+      { x: M, y: 1.5, w: W - M * 2, h: 0.3 }
+    );
+
+    /* NATIVE charts, not screenshots of charts — the whole reason this file exists is that a
+       partner can double-click and fix a number in the room. */
+    s.addChart(pptx.ChartType.doughnut, [{ name: "Use of funds", labels: ASK.useOfFunds.map((u) => `${u.label} ${u.pct}%`), values: ASK.useOfFunds.map((u) => u.pct) }], {
+      x: 5.35, y: 1.85, w: 4.1, h: 2.35,
+      holeSize: 62,
+      showLegend: true, legendPos: "r", legendColor: MUTED, legendFontSize: 8.5,
+      chartColors: ["14B8C4", "3B82F6", "8B5CF6", "F59E0B", "64748B"],
+      dataLabelColor: "FFFFFF", showValue: false,
+      title: "Use of funds", showTitle: true, titleColor: INK, titleFontSize: 11
+    });
+
+    s.addChart(pptx.ChartType.bar, [{ name: "Post-money $M", labels: ASK.sensitivity.map((r) => r.equity), values: ASK.sensitivity.map((r) => r.post) }], {
+      x: M, y: 1.85, w: 4.55, h: 2.0,
+      barDir: "bar",
+      chartColors: ["14B8C4"],
+      catAxisLabelColor: MUTED, valAxisLabelColor: MUTED, catAxisLabelFontSize: 9, valAxisLabelFontSize: 8,
+      showValue: true, dataLabelColor: INK, dataLabelFontSize: 8.5, dataLabelFormatCode: "$#,##0.0,,\"M\"",
+      valGridLine: { style: "none" },
+      title: "The same $1M at different dilution (post-money)", showTitle: true, titleColor: INK, titleFontSize: 11
+    });
+
+    s.addTable(
+      [
+        [
+          { text: "Market benchmark", options: { bold: true, color: MUTED, fontSize: 8.5 } },
+          { text: "Value", options: { bold: true, color: MUTED, fontSize: 8.5 } }
+        ],
+        ...ASK.context.map((c) => [
+          { text: `${c[0]}  (${c[2]})`, options: { color: INK, fontSize: 8.5 } },
+          { text: c[1], options: { color: INK, bold: true, fontSize: 8.5 } }
+        ])
+      ],
+      { x: M, y: 4.0, w: 4.55, colW: [3.2, 1.35], border: { pt: 0.5, color: "22304A" }, fill: { color: PANEL } }
+    );
+    s.addText(ASK.contextNote, { x: 5.35, y: 4.28, w: 4.1, h: 1.1, fontSize: 8, color: MUTED, lineSpacingMultiple: 1.05 });
+    return;
+  }
+
+  if (slide.kind === "team") {
+    const s = newSlide(n, slide.label);
+    title(s, slide.title);
+    s.addText("Every box is an editable placeholder — put real names in before this deck leaves the building.", {
+      x: M, y: 1.5, w: W - M * 2, h: 0.3, fontSize: 10.5, color: MUTED, italic: true
+    });
+    TEAM.forEach((t, i) => {
+      const col = i % 3;
+      const row = Math.floor(i / 3);
+      const x = M + col * 3.04;
+      const y = 2.0 + row * 1.62;
+      s.addShape(pptx.ShapeType.roundRect, { x, y, w: 2.85, h: 1.45, fill: { color: PANEL }, line: { color: "22304A" }, rectRadius: 0.05 });
+      s.addShape(pptx.ShapeType.ellipse, { x: x + 0.18, y: y + 0.18, w: 0.5, h: 0.5, fill: { color: "153B41" }, line: { color: PRIMARY, dashType: "dash" } });
+      s.addText("+", { x: x + 0.18, y: y + 0.18, w: 0.5, h: 0.5, align: "center", fontSize: 18, bold: true, color: PRIMARY });
+      s.addText(
+        [
+          { text: `${t.name}
+`, options: { bold: true, fontSize: 11, color: INK } },
+          { text: `${t.role}
+`, options: { fontSize: 9, color: PRIMARY } },
+          { text: t.note, options: { fontSize: 8, color: MUTED } }
+        ],
+        { x: x + 0.78, y: y + 0.14, w: 2.0, h: 1.25, valign: "top", lineSpacingMultiple: 1.0 }
+      );
+    });
     return;
   }
 
