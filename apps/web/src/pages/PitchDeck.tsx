@@ -32,6 +32,7 @@ import {
   Layers,
   Lock,
   ServerCog,
+  PieChart,
   Target,
   TrendingUp,
   Users,
@@ -44,6 +45,7 @@ import { Button } from "../components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "../components/ui/card";
 import { Reveal, useScrollProgress, useSectionSpy } from "../components/marketing/Reveal";
 import { MarketingBackdrop } from "../components/marketing/MarketingBackdrop";
+import { MarketSizing } from "../components/marketing/MarketSizing";
 import { ScreenshotFrame } from "../components/marketing/ScreenshotFrame";
 import { AuthorityLadder } from "../components/marketing/AuthorityLadder";
 import { AuroraBackdrop } from "../components/marketing/AuroraBackdrop";
@@ -61,6 +63,7 @@ const SLIDES = [
   { id: "cover", label: "The pitch", nav: "Pitch" },
   { id: "problem", label: "The problem", nav: "Problem" },
   { id: "audience", label: "Who it's for", nav: "Audience" },
+  { id: "market", label: "How big it is", nav: "Market" },
   { id: "product", label: "The product", nav: "Product" },
   { id: "deployment", label: "Where it runs", nav: "Hosting" },
   { id: "moat", label: "Why it's hard to copy", nav: "Moat" },
@@ -360,6 +363,27 @@ export function PitchDeck() {
                 </Card>
               </Reveal>
             ))}
+          </div>
+        </Slide>
+
+        {/* --------------------------------------------------------- Market */}
+        <Slide id="market" tinted>
+          <Reveal>
+            <SlideTitle icon={PieChart} title="A $30B envelope, sized down to something defensible" />
+          </Reveal>
+          <Reveal delay={80}>
+            {/* Two sentences, because the slide's credibility rests on the reader knowing which
+                numbers came from a report and which are ours BEFORE they read any of them. */}
+            <p className="mt-3 max-w-3xl text-sm leading-7 text-muted-foreground">
+              Every figure below is either sourced from a published market report — linked, so it can be checked — or an
+              assumption we made, marked as one and left adjustable. Move the sliders and the whole model recomputes; the
+              point of this slide is that it holds up when somebody disagrees with it.
+            </p>
+          </Reveal>
+          <div className="mt-6">
+            <Reveal delay={120}>
+              <MarketSizing />
+            </Reveal>
           </div>
         </Slide>
 
