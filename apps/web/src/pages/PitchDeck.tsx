@@ -122,6 +122,12 @@ const MOATS = [
     why: "This is infrastructure, not a feature. It's the difference between an AI that's demoed once and one that measurably improves in production."
   },
   {
+    icon: Building2,
+    title: "The operator's console is part of the product",
+    body: "Whoever runs the deployment gets a real control plane, not a spreadsheet and a shell: one maintenance window armed across every workspace — which the workspaces themselves cannot switch off — plus per-tenant database monitoring, a year of growth history, and two guarded operations where a rebuild is refused outside a maintenance window.",
+    why: "Every multi-tenant product eventually needs this and most build it privately, badly, after the first incident. Shipping it means the same install runs as somebody's own on-premise deployment, as our SaaS, and as a partner's — because operating it is a product surface rather than tribal knowledge."
+  },
+  {
     icon: Lock,
     title: "Bring-your-own-key as the default",
     body: "Every AI capability is off until switched on, and all of them run against the customer's own provider key under a budget the product enforces per call. We never resell inference.",
@@ -171,7 +177,8 @@ const SURFACES = [
   { title: "Brief", body: "A weekly leadership update nobody fills in: products, POCs, bugs, security and training, each initiative carrying an owner, an arithmetic status colour and what moved — counted from this workspace, drafted around the figures, reviewed before it sends." },
   { title: "Specify", body: "An AI interview turns an idea, or a PRD the client already wrote, into a structured requirements document — and then into the tickets and goals that build it." },
   { title: "Govern", body: "Change management with risk derived from impact × likelihood, the workspace's own approval chain, and a register that reports its own change-failure rate and approval turnaround." },
-  { title: "Automate", body: "Named AI teammates and reviewable flows — assembled from capabilities the workspace already runs, propose-by-default, priced per run on the same ledger as human work." }
+  { title: "Automate", body: "Named AI teammates and reviewable flows — assembled from capabilities the workspace already runs, propose-by-default, priced per run on the same ledger as human work." },
+  { title: "Operate", body: "A control plane for whoever runs the deployment: one maintenance window armed across every workspace and read-only inside them, per-tenant database monitoring with a year of growth history, and an AI advisor that reads the metrics and proposes — never executes." }
 ];
 
 /** Deployment posture. All of it is a property of the repository, not a plan. */

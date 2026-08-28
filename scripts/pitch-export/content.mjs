@@ -92,7 +92,8 @@ export const SLIDES = [
       ["Brief", "A weekly leadership update nobody fills in — counted from this workspace, drafted around the figures, reviewed before it sends."],
       ["Specify", "An AI interview turns an idea, or a PRD the client already wrote, into a structured requirements document — and then into tickets and goals."],
       ["Govern", "Change management with risk from impact × likelihood, the workspace's own approval chain, and a register reporting its own change-failure rate."],
-      ["Automate", "Named AI teammates and reviewable flows — propose-by-default, priced per run on the same ledger as human work."]
+      ["Automate", "Named AI teammates and reviewable flows — propose-by-default, priced per run on the same ledger as human work."],
+      ["Operate", "A control plane for whoever runs the deployment: one maintenance window armed across every workspace and read-only inside them, per-tenant database monitoring with a year of growth history, and an AI advisor that proposes rather than executes."]
     ]
   },
   {
@@ -108,13 +109,14 @@ export const SLIDES = [
   {
     id: "moat",
     label: "Why it's hard to copy",
-    title: "Six things that aren't a weekend's work",
+    title: "Seven things that aren't a weekend's work",
     image: "studio.png",
     imageCaption: "Requirements Studio — an interview that becomes tickets and goals.",
     points: [
       ["The only planner that can measure itself", "Every project tool compares a plan against another plan, because estimates are all it holds. This one owns the approved, rate-snapshotted timesheet too. A planning vendor cannot bolt this on; a timesheet vendor has the data and no plan to compare it against."],
       ["Proof as a first-class output", "A signed, page-numbered attestation of approved, identity-verified work, with the rate that applied at approval frozen into the record. Competitors need identity verification, approval workflow and rate history to exist together before they can ship the artefact at all."],
       ["An AI loop that closes", "Capture what the model was asked and answered, correct real failures into a golden set, version prompts without a deploy, then replay and score. This is infrastructure, not a feature."],
+      ["The operator's console is part of the product", "Whoever runs the deployment gets one maintenance window armed across every workspace — which the workspaces cannot switch off — plus per-tenant database monitoring, a year of growth history, and guarded operations where a rebuild is refused outside a maintenance window. Most products build this privately, badly, after the first incident."],
       ["Bring-your-own-key as the default", "Every AI capability is off until switched on, and runs against the customer's own provider key under a budget the product enforces per call. We never resell inference."],
       ["Isolation you can point at", "A database per organization, not a shared table with a tenant column. There is no query to get wrong, because there is no shared connection for one to cross."],
       ["An agentic layer that adds no new power", "Teammates and flows compose capabilities that already exist, under the same review, undo and audit path. Switching one on grants nothing new — it only names who runs what, at what budget, with what authority."]

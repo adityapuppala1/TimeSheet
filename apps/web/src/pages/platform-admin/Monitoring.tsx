@@ -33,7 +33,9 @@ import {
   Database,
   Gauge,
   HardDrive,
+  Brain,
   Info,
+  Layers,
   LineChart as LineChartIcon,
   MemoryStick,
   Network,
@@ -43,6 +45,7 @@ import {
   ShieldCheck,
   Table2,
   Timer,
+  TrendingUp,
   TriangleAlert
 } from "lucide-react";
 import { useMemo, useState } from "react";
@@ -55,25 +58,13 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "../../components/ui/ta
 import { TableBody, TableCell, TableHead, TableHeader, TableRow } from "../../components/ui/table";
 import type { ServiceStatusValue, StatusPageService } from "../../services/api";
 import { platformOpsApi, type FleetHealthRow, type HealthAlert, type TenantDatabaseMetrics } from "../../services/platform-admin-api";
-import { ConsolePage, ConsoleSection, ConsoleTable, EmptyState, KpiCard, KpiGrid, Num, OrgStatusPill, SegmentedControl, TierPill, Toolbar, shortDateTime } from "./console-ui";
+import { ConsolePage, ConsoleSection, ConsoleTable, EmptyState, formatBytes, KpiCard, KpiGrid, Num, OrgStatusPill, SegmentedControl, TierPill, Toolbar, shortDateTime } from "./console-ui";
+import { AdvisorPanel, SchemaPanel, TrendPanel } from "./MonitoringPanels";
 import type { OrgStatus } from "../../services/platform-admin-api";
 
 /* ------------------------------------------------------------------------------------------- */
 /* Formatting                                                                                   */
 /* ------------------------------------------------------------------------------------------- */
-
-function formatBytes(bytes: number | null | undefined): string {
-  if (bytes === null || bytes === undefined) return "—";
-  if (bytes < 1024) return `${bytes} B`;
-  const units = ["KB", "MB", "GB", "TB"];
-  let value = bytes / 1024;
-  let unit = 0;
-  while (value >= 1024 && unit < units.length - 1) {
-    value /= 1024;
-    unit += 1;
-  }
-  return `${value < 10 ? value.toFixed(1) : Math.round(value)} ${units[unit]}`;
-}
 
 const formatCount = (value: number | null | undefined) => (value === null || value === undefined ? "—" : value.toLocaleString());
 const formatMs = (value: number | null | undefined) => (value === null || value === undefined ? "—" : `${Math.round(value)} ms`);
@@ -620,6 +611,18 @@ function TenantView({ orgId, onBack }: { orgId: string; onBack: () => void }) {
             <Database className="h-4 w-4" />
             Database
           </TabsTrigger>
+          <TabsTrigger value="schema" className="gap-1.5">
+            <Layers className="h-4 w-4" />
+            Schema
+          </TabsTrigger>
+          <TabsTrigger value="trend" className="gap-1.5">
+            <TrendingUp className="h-4 w-4" />
+            Growth
+          </TabsTrigger>
+          <TabsTrigger value="advisor" className="gap-1.5">
+            <Brain className="h-4 w-4" />
+            Advisor
+          </TabsTrigger>
           <TabsTrigger value="server" className="gap-1.5">
             <Cpu className="h-4 w-4" />
             Server health
@@ -670,6 +673,24 @@ function TenantView({ orgId, onBack }: { orgId: string; onBack: () => void }) {
           <ConsoleSection title="Database" description="Read through this workspace's own connection string, per schema.">
             {database.error || !database.data ? <PanelError message={database.error ?? "No metrics."} /> : <DatabasePanel metrics={database.data} />}
           </ConsoleSection>
+        </TabsContent>
+
+        <TabsContent value="schema" className="mt-4">
+          {database.error || !database.data ? (
+            <ConsoleSection title="Schema">
+              <PanelError message={database.error ?? "No metrics."} />
+            </ConsoleSection>
+          ) : (
+            <SchemaPanel orgId={orgId} metrics={database.data} />
+          )}
+        </TabsContent>
+
+        <TabsContent value="trend" className="mt-4">
+          <TrendPanel orgId={orgId} />
+        </TabsContent>
+
+        <TabsContent value="advisor" className="mt-4">
+          <AdvisorPanel orgId={orgId} days={Number(days)} />
         </TabsContent>
 
         <TabsContent value="server" className="mt-4">

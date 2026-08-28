@@ -24,6 +24,7 @@ import {
   Network,
   RefreshCw,
   Save,
+  ShieldAlert,
   Smartphone,
   Tablet,
   Users,
@@ -225,6 +226,17 @@ export function MaintenanceSettingsCard({ readOnly }: { readOnly: boolean }) {
     refetchInterval: 30_000
   });
 
+  /*
+   * PLATFORM-MANAGED WINDOWS ARE READ-ONLY HERE, and the server enforces it (409
+   * `MAINTENANCE_PLATFORM_MANAGED`) — these disabled controls are the courtesy, not the control.
+   * The reason it has to be a lock rather than a convention: a deployment-wide window that any one
+   * workspace can switch off is not a window. The tenant that clears it takes a live database into
+   * the migration the window existed to protect, and nobody finds out until the restore.
+   */
+  const settings = adminView.data?.settings;
+  const platformManaged = settings?.managedByPlatform === true && settings.enabled;
+  const locked = readOnly || platformManaged;
+
   const [draft, setDraft] = useState<Draft | null>(null);
   useEffect(() => {
     if (adminView.data && !draft) {
@@ -353,6 +365,25 @@ export function MaintenanceSettingsCard({ readOnly }: { readOnly: boolean }) {
           </CardDescription>
         </CardHeader>
         <CardContent className="grid gap-4">
+          {platformManaged && (
+            <div role="status" className="flex min-w-0 items-start gap-3 rounded-lg border border-warning/40 bg-warning/10 p-4">
+              <ShieldAlert className="mt-0.5 h-5 w-5 shrink-0 text-warning" />
+              <div className="min-w-0 space-y-1">
+                <p className="text-sm font-semibold text-foreground">
+                  Scheduled by {settings?.managedByLabel ?? "platform operations"} — this window is managed for you
+                </p>
+                <p className="text-sm text-muted-foreground">
+                  Planned maintenance for the whole deployment is co-ordinated centrally, so the schedule below is read-only until it lifts. It
+                  clears automatically the moment platform operations release it — there is nothing to do here, and nothing to switch back on
+                  afterwards. Super administrators keep full access throughout; everyone else sees the maintenance page.
+                </p>
+                <p className="text-sm text-muted-foreground">
+                  Need it moved? Reply to the notice your administrators were emailed, quoting reference{" "}
+                  <span className="font-mono text-xs text-foreground">{settings?.managedReference ?? "—"}</span>.
+                </p>
+              </div>
+            </div>
+          )}
           <div className="flex items-start justify-between gap-4 rounded-lg border p-4">
             <div>
               <p className="font-medium">Enable maintenance window</p>
@@ -364,7 +395,7 @@ export function MaintenanceSettingsCard({ readOnly }: { readOnly: boolean }) {
             <Switch
               checked={draft.enabled}
               onCheckedChange={(checked) => setDraft({ ...draft, enabled: checked })}
-              disabled={readOnly}
+              disabled={locked}
               aria-label="Enable maintenance window"
             />
           </div>
@@ -379,7 +410,7 @@ export function MaintenanceSettingsCard({ readOnly }: { readOnly: boolean }) {
                 onChange={({ date, time }) => setDraft({ ...draft, scheduledStartAt: date && time ? `${date}T${time}` : "" })}
                 slots={MAINTENANCE_SLOTS}
                 placeholder="Not scheduled"
-                disabled={readOnly}
+                disabled={locked}
                 minValue={todayLocal}
                 // The calendar already refuses earlier DAYS; this refuses earlier times on today,
                 // which is the same rule the server applies and the form previously let you break.
@@ -401,7 +432,7 @@ export function MaintenanceSettingsCard({ readOnly }: { readOnly: boolean }) {
                 onChange={({ date, time }) => setDraft({ ...draft, scheduledEndAt: date && time ? `${date}T${time}` : "" })}
                 slots={MAINTENANCE_SLOTS}
                 placeholder="Not scheduled"
-                disabled={readOnly}
+                disabled={locked}
                 // The end's floor is the START, not the clock — "must end after it starts" is the
                 // server's other rule, and on the start's own day that makes every earlier slot
                 // wrong. `oneMinuteAfter` makes the floor exclusive so the start's own slot is
@@ -421,7 +452,7 @@ export function MaintenanceSettingsCard({ readOnly }: { readOnly: boolean }) {
               maxLength={500}
               rows={3}
               onChange={(event) => setDraft({ ...draft, message: event.target.value })}
-              disabled={readOnly}
+              disabled={locked}
             />
             <p className="text-xs text-muted-foreground">
               Shown on the maintenance page and quoted in the warning email. {500 - draft.message.length}{" "}
@@ -438,7 +469,7 @@ export function MaintenanceSettingsCard({ readOnly }: { readOnly: boolean }) {
                 managed to arm a window mid-test-suite. */}
             <Button
               onClick={() => save.mutate()}
-              disabled={readOnly || save.isPending || startInPast || (draft.enabled && (!draft.scheduledStartAt || !draft.scheduledEndAt))}
+              disabled={locked || save.isPending || startInPast || (draft.enabled && (!draft.scheduledStartAt || !draft.scheduledEndAt))}
               title={
                 startInPast
                   ? "The window can't start in the past"

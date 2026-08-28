@@ -12,6 +12,87 @@ number, on purpose — an installation must never render history for a version t
 
 _Nothing yet._
 
+## 4.0.0 — the control plane becomes a product surface — 2026-08-29
+
+**Why this is a major.** One behaviour a customer already relied on has changed: a workspace can no
+longer switch off a maintenance window that platform operations armed. That is deliberate, it is
+the point of the release, and it is the kind of change a minor version has no business making.
+Everything else is additive, no environment variable moved, and the upgrade path is the ordinary
+one — `update.ps1` / `update.sh` already run `migrate:tenants`, which is what carries the new tenant
+column to existing workspaces.
+
+### 💥 A maintenance window a workspace cannot switch off
+
+- A window armed from the platform console is now **read-only inside the workspace**. Its
+  administrators can see the schedule and who set it; the switch, the pickers, the message and Save
+  are all disabled, and the server refuses the write as well as the screen
+  (`409 MAINTENANCE_PLATFORM_MANAGED`).
+- Why it had to become a lock rather than a convention: a deployment-wide window any one tenant can
+  clear is not a window. The tenant that clears it takes a live database into the migration the
+  window existed to protect, and nobody finds out until the restore.
+- **It explains itself everywhere it bites.** The workspace's card names who holds the window and
+  quotes a reference to reply with; the lockout page tells a locked-out employee that their own
+  administrators cannot bring it forward, which saves a support round-trip that ends in "we can't".
+  The refusal is checked before validation, so an administrator who cannot change the window at all
+  is told that rather than told their dates are wrong.
+- The flag rides with the window rather than outliving it: the platform's own clear releases it, and
+  a workspace arming its own window afterwards owns it completely.
+
+### ✨ Per-workspace database monitoring, with a time dimension
+
+- **The shape of the schema, not just its size**: fragmentation and the space a rebuild would hand
+  back, index count and the widest composite indexes, average row size, engine and collation, tables
+  with no primary key, and how much of an integer auto-increment has been consumed.
+- **What is running right now**, as statement *shapes* — every literal stripped before it leaves the
+  API, because a workspace's SQL carries a workspace's data. The monitor filters itself out of its
+  own list.
+- **A year of hourly samples**, so the questions an operator actually has become answerable: is it
+  growing, how fast, and when does it cross the size where a nightly dump stops being a backup
+  strategy. The rate is measured from the ends of the series rather than fitted, and refuses to
+  extrapolate from less than a day — a confident number that describes nothing is worse than none.
+- **Six new alerts**, each stating the threshold it crossed: fragmentation worth reclaiming, tables
+  without a primary key, an auto-increment running out, index-heavy tables, temporary tables
+  spilling to disk, and a query that has been running long enough to be stuck rather than slow.
+
+### ✨ Two operations, and one of them is gated
+
+- **Refresh statistics** (`ANALYZE`) is online, cheap and available at any time.
+- **Reclaim space** (`OPTIMIZE`) rebuilds a table and blocks writes to it while it runs, so it is
+  **refused unless that workspace is inside an active maintenance window**. The two features were
+  built to fit each other: the fix for the one finding an operator could not otherwise act on is
+  reachable exactly when it is safe.
+- The caller names an operation from an enum and a list of tables; it never sends SQL. A table name
+  reaches a statement only if it matches a plain identifier **and** appears in the schema just read.
+
+### ✨ An AI advisor that proposes and never executes
+
+- It reads the aggregate metrics the console already shows for one workspace and ranks what is worth
+  doing, in the operator's language rather than as another table of numbers.
+- **What it is shown**: sizes, counts, rates, growth, the thresholds already crossed, and statement
+  shapes. **What it is never shown**: a row, a column value, a person, an address, or anything a
+  workspace's administrator typed. A unit test plants identifying strings in the input and fails if
+  any reach the model — and that test was watched failing before it was trusted.
+- **Nothing executes.** A finding may name an action only from a closed allowlist; an invented one
+  is dropped rather than shown. The two that run anything go through the same guarded endpoint an
+  operator uses by hand, including its refusal to rebuild a table outside a maintenance window.
+- **A person closes every advisory**, and a dismissal takes a reason. The dismissals are kept beside
+  the ones that were right: the value of an advisor is not the sentence it produced today but
+  whether its sentences were right, and that is only answerable if the wrong ones are still there.
+- **The platform's own key, off by default**, with no fallback to a workspace's provider — that
+  would spend a customer's money on somebody else's problem. A self-hosted OpenAI-compatible
+  endpoint is a first-class choice for an operator who will not send fleet metrics anywhere. There
+  is a daily ceiling, because an advisor that can be re-run in a loop is a bill with a UI.
+
+### 🐛 Fixed
+
+- `formatBytes` existed three times across the console and two copies disagreed about when to drop a
+  decimal, so the same figure rendered differently depending on the page. One copy now, in the kit.
+- A token-tampering test flipped the last character of a signature to a literal `"0"` — and about
+  one run in sixty-four already ended in `"0"`, where the "tampered" token was byte-for-byte the
+  original and verified correctly. An intermittent failure with no bug behind it.
+- The pitch-deck checker looked for a `#counter` element the export stopped emitting; it now reports
+  the section ids it actually found, which is the thing worth checking after editing the deck.
+
 ## 3.15.0 — one maintenance window for the whole fleet, and per-workspace monitoring — 2026-08-29
 
 ### ✨ Maintenance, across every workspace at once

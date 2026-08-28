@@ -25,6 +25,7 @@
  * stop the other thirty-nine from entering maintenance; each result is recorded per workspace and
  * the console shows exactly which ones did not take.
  */
+import { randomUUID } from "node:crypto";
 import { controlPrisma } from "../config/control-prisma.js";
 import { withOrgTenant } from "../config/with-org-tenant.js";
 import { AppError } from "../middleware/error.js";
@@ -106,6 +107,8 @@ export interface BroadcastInput {
   /** Email each workspace's super admins from the PLATFORM relay. */
   emailSuperAdmins: boolean;
   actorLabel: string;
+  /** What the workspace's read-only notice names as the owner of the window. */
+  managedByLabel?: string | null;
 }
 
 /**
@@ -130,6 +133,11 @@ export async function broadcastMaintenance(input: BroadcastInput): Promise<{ bro
   });
   if (orgs.length === 0) throw new AppError(404, "No reachable workspaces matched.");
 
+  // The id is minted BEFORE the first tenant write, not taken from the record afterwards, so the
+  // same reference is stamped into every workspace's row and onto the broadcast. One incident, one
+  // reference — a customer quoting it and an operator searching for it land in the same place.
+  const reference = randomUUID();
+
   const outcomes: BroadcastOutcome[] = [];
 
   for (const org of orgs) {
@@ -148,7 +156,13 @@ export async function broadcastMaintenance(input: BroadcastInput): Promise<{ bro
           message: input.message,
           // The actor is a platform admin with no user row in this tenant. `updatedById` is a
           // free-text column, so the label goes in rather than a fabricated user id.
-          userId: input.actorLabel
+          userId: input.actorLabel,
+          // `source: "platform"` is what makes the window READ-ONLY inside the workspace. Without
+          // it a single tenant could switch off a deployment-wide window and take a live database
+          // into the migration it was there to protect.
+          source: "platform",
+          managedByLabel: input.managedByLabel ?? "Platform operations",
+          managedReference: reference
         });
         if (!input.enabled || !input.notifyUsers) return 0;
         const result = await notifyUsersOfMaintenance();
@@ -185,6 +199,7 @@ export async function broadcastMaintenance(input: BroadcastInput): Promise<{ bro
 
   const record = await controlPrisma.platformMaintenanceBroadcast.create({
     data: {
+      id: reference,
       enabled: input.enabled,
       scheduledStartAt: input.scheduledStartAt,
       scheduledEndAt: input.scheduledEndAt,

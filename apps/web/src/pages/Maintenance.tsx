@@ -218,6 +218,17 @@ export function MaintenancePage() {
               </motion.p>
             )}
 
+            {/* WHO armed it, when it was platform operations rather than this workspace. A person
+                locked out of their own workspace asks their own administrator first; if the window
+                is a deployment-wide one, that administrator cannot lift it either, and saying so
+                here saves a support round-trip that ends in "we can't". A role, never a person. */}
+            {!reopened && status?.managedByPlatform && (
+              <motion.p {...enter(0.4)} className="mt-4 text-sm text-muted-foreground">
+                Scheduled by {status.managedByLabel ?? "platform operations"} as part of planned maintenance across the service — your own
+                administrators cannot bring this forward.
+              </motion.p>
+            )}
+
             {/* The admin's own words, if they left any — plain text rendering, React escapes it. */}
             {!reopened && status?.message && (
               <motion.div

@@ -45,7 +45,11 @@ maintenanceRouter.get("/status", async (_req, res) => {
     // indistinguishable from "never configured" to an anonymous caller.
     scheduledStartAt: settings.enabled ? settings.scheduledStartAt : null,
     scheduledEndAt: settings.enabled ? settings.scheduledEndAt : null,
-    message: settings.enabled ? settings.message : null
+    message: settings.enabled ? settings.message : null,
+    // Named on the lockout page so a locked-out employee is not sent to a workspace admin who
+    // cannot lift it either. Nothing identifying — a role, not a person.
+    managedByPlatform: settings.enabled ? settings.managedByPlatform : false,
+    managedByLabel: settings.enabled && settings.managedByPlatform ? settings.managedByLabel : null
   });
 });
 

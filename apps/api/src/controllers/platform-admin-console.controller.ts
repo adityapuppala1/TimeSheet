@@ -42,6 +42,8 @@ import { getPlatformEmailAnalytics } from "../services/platform-email-analytics.
 import { deleteSnapshot, listSnapshots, restoreSnapshot, snapshotPath } from "../services/platform-backup.service.js";
 import { broadcastMaintenance, getFleetMaintenance, listBroadcasts } from "../services/platform-maintenance.service.js";
 import { getDatabaseMetrics, getFleetHealth, getTenantHealth } from "../services/platform-tenant-health.service.js";
+import { getTenantDbTrend, runMaintenanceOperation, sampleAllTenantDatabases } from "../services/tenant-db-metrics.service.js";
+import { adviseWorkspace, decideAdvice, getPlatformAiSettings, listAdvice, updatePlatformAiSettings, ADVISOR_ACTIONS } from "../services/platform-ai.service.js";
 import { DESTINATION_FIELDS, describeSecret, encryptDestinationSecret, testDestination, type BackupDestinationKind, type DestinationRecord } from "../services/backup-destination.service.js";
 import { backupEntitlement, nextRunAt, planRetention, runBackup, runBackupTick, sweepRetention, testRestore } from "../services/backup.service.js";
 import { allowedBackupFrequencies, BACKUP_FREQUENCY_LABEL, backupFrequencyAllowed, type BackupFrequency } from "@timesheet/shared";
@@ -612,6 +614,120 @@ platformAdminConsoleRouter.get("/monitoring/:orgId", async (req, res) => {
 /** The database panel alone, for the poll that keeps it fresh without re-reading the whole page. */
 platformAdminConsoleRouter.get("/monitoring/:orgId/database", async (req, res) => {
   res.json(await getDatabaseMetrics(String(req.params.orgId)));
+});
+
+/** The size/row/latency series behind the trend charts, plus the growth summary derived from it. */
+platformAdminConsoleRouter.get("/monitoring/:orgId/trend", async (req, res) => {
+  const days = Math.min(365, Math.max(1, Number(req.query.days) || 30));
+  res.json(await getTenantDbTrend(String(req.params.orgId), days));
+});
+
+/**
+ * Take a reading of the whole fleet NOW, rather than waiting for the :25 worker.
+ *
+ * Useful exactly twice: on a fresh install, where an empty chart is indistinguishable from a broken
+ * one, and right after a migration, where the interesting comparison is before-and-after rather
+ * than this-hour-and-last.
+ */
+platformAdminConsoleRouter.post("/monitoring/sample", async (req, res) => {
+  const result = await sampleAllTenantDatabases();
+  // `platformAudit`, not the tenant `audit`: this touched every workspace and belongs to none of
+  // them, so it goes in the control plane's own trail where the operator's other actions are.
+  await platformAudit("PLATFORM_ADMIN", actorLabel(req), "tenant_db.sampled", "Organization", undefined, {
+    sampled: result.sampled,
+    failed: result.failed.length,
+    prunedRows: result.prunedRows
+  });
+  res.json(result);
+});
+
+const operationSchema = z.object({
+  body: z
+    .object({
+      operation: z.enum(["ANALYZE", "OPTIMIZE"]),
+      /** Empty means every table in the schema. Names are checked against the LIVE schema. */
+      tables: z.array(z.string().max(64)).max(200).default([])
+    })
+    .strict()
+});
+
+/**
+ * The two maintenance operations, and they are the only two.
+ *
+ * The caller names an operation from an enum and a list of tables; it never supplies SQL. OPTIMIZE
+ * is refused unless the workspace is inside an ACTIVE maintenance window, because it rebuilds each
+ * table and blocks writes while it runs — see the service.
+ */
+platformAdminConsoleRouter.post("/monitoring/:orgId/operation", validate(operationSchema), async (req, res) => {
+  const result = await runMaintenanceOperation({
+    orgId: String(req.params.orgId),
+    operation: req.body.operation,
+    tables: req.body.tables ?? [],
+    actorLabel: actorLabel(req)
+  });
+  res.json(result);
+});
+
+/* ================================ The AI advisor ================================ */
+
+/** The advisor's own configuration, and the catalogue of actions a finding may name. */
+platformAdminConsoleRouter.get("/ai/settings", async (_req, res) => {
+  res.json({ settings: await getPlatformAiSettings(), actions: ADVISOR_ACTIONS });
+});
+
+const aiSettingsSchema = z.object({
+  body: z
+    .object({
+      enabled: z.boolean(),
+      provider: z.enum(["ANTHROPIC", "OPENAI_COMPATIBLE"]),
+      baseUrl: z.string().url().max(500).nullable().optional(),
+      model: z.string().min(1).max(120),
+      /** Omitted keeps the stored key; "" clears it. It is never returned. */
+      apiKey: z.string().max(500).optional(),
+      dailyCallLimit: z.number().int().min(1).max(1000)
+    })
+    .strict()
+});
+
+platformAdminConsoleRouter.put("/ai/settings", validate(aiSettingsSchema), async (req, res) => {
+  res.json(
+    await updatePlatformAiSettings({
+      enabled: req.body.enabled,
+      provider: req.body.provider,
+      baseUrl: req.body.baseUrl ?? null,
+      model: req.body.model,
+      apiKey: req.body.apiKey,
+      dailyCallLimit: Number(req.body.dailyCallLimit),
+      actorLabel: actorLabel(req)
+    })
+  );
+});
+
+/**
+ * Generate one advisory for one workspace. Always operator-initiated — nothing here is on a timer,
+ * because an advisor that runs on its own produces a queue nobody reads and a bill somebody pays.
+ */
+platformAdminConsoleRouter.post("/ai/advise/:orgId", async (req, res) => {
+  const days = Math.min(365, Math.max(1, Number(req.body?.days) || 30));
+  res.json(await adviseWorkspace(String(req.params.orgId), actorLabel(req), days));
+});
+
+platformAdminConsoleRouter.get("/ai/advice/:orgId", async (req, res) => {
+  res.json({ advice: await listAdvice(String(req.params.orgId), 10) });
+});
+
+const decisionSchema = z.object({
+  body: z
+    .object({
+      status: z.enum(["APPLIED", "DISMISSED"]),
+      /** Required for a dismissal — the service enforces it, this only shapes the payload. */
+      note: z.string().max(1000).nullable().optional()
+    })
+    .strict()
+});
+
+platformAdminConsoleRouter.post("/ai/advice/:adviceId/decision", validate(decisionSchema), async (req, res) => {
+  res.json(await decideAdvice({ adviceId: String(req.params.adviceId), status: req.body.status, note: req.body.note ?? null, actorLabel: actorLabel(req) }));
 });
 
 /* ============================== Managed backups ================================= */

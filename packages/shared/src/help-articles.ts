@@ -632,9 +632,10 @@ export const HELP_ARTICLES: HelpArticle[] = [
       "Notify people in-app writes the notification everyone currently online already receives. Email each workspace’s super admins sends the notice from the PLATFORM relay, because a workspace going offline may take its own mail with it.",
       "Every workspace lists the live state read from each tenant database — in maintenance, scheduled, open, or unreachable with the reason.",
       "Lift on N clears the window everywhere it is armed, in one action. A single workspace can also be armed or lifted from its own row.",
-      "Broadcast history records who armed what, over how many workspaces, and which ones did not take it. Open a row for the per-workspace outcome."
+      "Broadcast history records who armed what, over how many workspaces, and which ones did not take it. Open a row for the per-workspace outcome.",
+      "While a platform window holds, the workspace's OWN maintenance controls are read-only: their administrators can see the schedule and who set it, but cannot move or cancel it. The server refuses the write as well as the screen, and it releases itself the moment you clear it."
     ],
-    notes: "A workspace whose database is unreachable never stops the rest of the fleet — it is reported by name with its error instead of being counted as a success. Super admins are not locked out of their own workspace during a window, so a customer can still work while their people cannot.",
+    notes: "A workspace whose database is unreachable never stops the rest of the fleet — it is reported by name with its error instead of being counted as a success. Super admins are not locked out of their own workspace during a window, so a customer can still work while their people cannot. The read-only lock exists because a deployment-wide window any one tenant could switch off is not a window: the tenant that clears it takes a live database into the migration the window was protecting.",
     keywords: ["maintenance", "maintenance window", "downtime", "lockout", "outage", "broadcast", "fleet", "redirect", "heartbeat", "notify", "planned maintenance", "all organizations"]
   },
   {
@@ -649,10 +650,30 @@ export const HELP_ARTICLES: HelpArticle[] = [
       "Inspect opens one workspace. Overview lists what needs attention — alerts are derived from the numbers on the page, and each one states the threshold it crossed.",
       "Database: schema size split into data and indexes, the largest tables, and the MySQL server’s own counters. Anything labelled server-wide belongs to the box, which other workspaces may share — do not read it as this customer’s fault.",
       "Server health, Service status, Past incidents and API performance are the SAME figures the customer sees in their own Maintenance tab, so a support call has one set of numbers rather than two.",
-      "The window control (7 / 30 / 90 days) applies to the status page, its incidents and the API charts together."
+      "The window control (7 / 30 / 90 days) applies to the status page, its incidents and the API charts together.",
+      "Schema: every table with its size, rows, fragmentation and index count, the widest composite indexes, and the statements running right now — as shapes, with every literal stripped before it left the API. Two operations live here: Refresh statistics (ANALYZE) is online and safe at any time; Reclaim space (OPTIMIZE) rebuilds a table and is refused unless that workspace is inside an ACTIVE maintenance window, because a rebuild blocks writes to it while it runs.",
+      "Growth: hourly samples kept for a bit over a year — data and index size, rows, and how long the probe took — with a rate, a percentage change and a projection. Sample now takes a reading immediately, which is what to press on a fresh install where an empty chart looks exactly like a broken one."
     ],
     notes: "Row counts are InnoDB estimates, not exact counts — an exact count needs a full table scan, which is not worth doing to draw a chart. The fleet is read one workspace at a time on purpose: opening forty database connections at once is a self-inflicted outage on the server the whole platform runs on.",
-    keywords: ["monitoring", "grafana", "database performance", "slow", "metrics", "alerts", "server health", "status page", "incidents", "api performance", "p95", "error rate", "buffer pool", "connections", "tenant health"]
+    keywords: ["monitoring", "grafana", "database performance", "slow", "metrics", "alerts", "server health", "status page", "incidents", "api performance", "p95", "error rate", "buffer pool", "connections", "tenant health", "fragmentation", "optimize", "analyze", "growth", "capacity"]
+  },
+  {
+    id: "platform-admin-advisor",
+    category: "Platform & operations",
+    title: "The AI advisor, and what it is allowed to do",
+    roles: SA,
+    where: "/platform-admin → Settings → AI advisor to set it up; → Monitoring → a workspace → Advisor to use it",
+    when: "You have forty workspaces of numbers and want the reading rather than the readings.",
+    steps: [
+      "Set it up with the PLATFORM's own provider and key — never a workspace's. Borrowing a customer's would spend their money on somebody else's problem and route one tenant's operational detail through another tenant's vendor. A self-hosted OpenAI-compatible endpoint (Ollama, LM Studio) is a first-class choice if fleet metrics must not leave your network.",
+      "The key is write-only: the console is told whether one is set, never what it is, and leaving the field blank on an edit keeps the stored one.",
+      "Ask the advisor from a workspace's Advisor tab. It is never triggered on a timer — an advisor that runs on its own produces a queue nobody reads and a bill somebody pays. There is a daily ceiling, shown next to the number used today.",
+      "What it is shown: sizes, counts, rates, growth, the thresholds already crossed, and statement SHAPES with every literal stripped. What it is never shown: a row, a column value, a person, an address, or anything a workspace's administrator typed.",
+      "What it may propose: actions from a fixed list. Two of them run something — Refresh statistics and Reclaim space — and both go through the same guarded endpoint you would use by hand, including its refusal to rebuild a table outside a maintenance window. Anything else it invents is dropped rather than shown.",
+      "Close every advisory: Acted on it, or Dismiss with a reason. The reason is required, and it is the point."
+    ],
+    notes: "Dismissals are kept alongside the ones that were right, because the value of an advisor is not the sentence it produced today but whether its sentences were right — which is only answerable if the wrong ones are still sitting next to them. A malformed or refusing answer produces no advice rather than an error: \"nothing worth flagging\" is a legitimate result.",
+    keywords: ["ai advisor", "advisor", "suggestions", "recommendations", "guardrails", "human in the loop", "ollama", "byok", "platform ai", "dismiss", "findings"]
   }
 ];
 

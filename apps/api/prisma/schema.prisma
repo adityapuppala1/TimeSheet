@@ -391,6 +391,20 @@ model MaintenanceSettings {
   message          String?   @db.VarChar(500)
   updatedById      String?
   updatedAt        DateTime  @updatedAt
+
+  /// True while the window in this row was armed by the PLATFORM operator across the fleet rather
+  /// than by this workspace's own administrators. It makes the window READ-ONLY to the workspace:
+  /// a deployment-wide window that any one tenant could switch off is not a maintenance window,
+  /// it is a suggestion — and the migration it protects would then run against a live database.
+  /// `updateMaintenanceSettings` refuses a tenant-sourced write while this holds; the platform's
+  /// own clear is what releases it.
+  managedByPlatform Boolean  @default(false)
+  /// Who to name in the workspace's read-only notice ("TimeSphere platform operations"). Free
+  /// text, because the actor has no user row in this database.
+  managedByLabel    String?  @db.VarChar(255)
+  /// The broadcast this window came from, so a support conversation can join the workspace's side
+  /// of the story to the platform's without guessing from timestamps.
+  managedReference  String?  @db.VarChar(64)
 }
 
 model PasswordResetToken {

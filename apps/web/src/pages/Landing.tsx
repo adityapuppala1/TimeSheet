@@ -28,6 +28,7 @@
  */
 import { PLAN_TIER_LIMITS, type PlanTier, type PlanTierLimits } from "@timesheet/shared";
 import {
+  Brain,
   Activity,
   ArrowRight,
   BarChart3,
@@ -464,6 +465,18 @@ const FEATURES: Feature[] = [
     group: "Platform & security",
     title: "Run it where you want",
     body: "One codebase, two shapes: a single-organization on-premise install or the multi-organization SaaS path. A one-command installer, Docker Compose overlays for an external database and HTTPS, and a Helm chart with autoscaling. The What's-new page falls back to the bundled changelog, so an air-gapped install still knows what it's running."
+  },
+  {
+    icon: Activity,
+    group: "Platform & security",
+    title: "A control plane for whoever runs it",
+    body: "One maintenance window armed across every workspace at once — it writes each workspace's own maintenance row, so people get the lockout, the notice and the heartbeat redirect their own administrator would have produced, and the workspace cannot switch it off while it holds. Alongside it, every tenant database at a glance: size, fragmentation, index count, the statements running right now as shapes with the literals stripped, a year of hourly growth history, and two operations you can run — where reclaiming space is refused outside a maintenance window, because rebuilding a table blocks writes to it."
+  },
+  {
+    icon: Brain,
+    group: "AI, governed",
+    title: "An advisor that proposes, never executes",
+    body: "The operator's console can ask a model to read one workspace's metrics and rank what is worth doing. It is shown sizes, rates, growth and statement shapes — never a row, a name or an address, and a test plants identifying strings in the input and fails if any reach the model. Findings may only name actions from a fixed list, the two that run anything go through the same guarded endpoint you would use by hand, and every advisory is closed by a person with a note. The dismissals are kept too: an advisor whose failures are not written down cannot be evaluated, only believed."
   }
 ];
 

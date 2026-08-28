@@ -217,7 +217,7 @@ export async function getEnabledProviderConfigsForTask(tier: TaskTier): Promise<
   return withRank.map((r) => r.config);
 }
 
-interface CallChatParams {
+export interface CallChatParams {
   /** Which capability is calling — unused by either provider client (callAnthropic /
    *  callOpenAICompatible just ignore it), but `callChat`'s dispatcher needs it to attribute a
    *  FAILED attempt to the right feature when it logs one itself (see callChat's header). */
@@ -235,7 +235,7 @@ interface CallChatParams {
   tier?: TaskTier;
 }
 
-interface CallChatResult {
+export interface CallChatResult {
   text: string;
   usage: { inputTokens: number; outputTokens: number };
 }
@@ -249,7 +249,15 @@ interface CallChatOutcome extends CallChatResult {
   provider: string;
 }
 
-async function callAnthropic(apiKey: string, params: CallChatParams): Promise<CallChatResult> {
+/*
+ * EXPORTED for exactly one caller outside this file: `platform-ai.service.ts`, the operator's own
+ * advisor. It cannot go through `callChat` — that resolves a WORKSPACE's provider list, reserves
+ * against a WORKSPACE's monthly budget and writes to a workspace's usage ledger, none of which
+ * exist for a screen that reasons about the fleet. What it does need is this file's provider
+ * plumbing: the timeout, the SSRF gate on a BYOK base URL, the JSON-schema request shape. Copying
+ * those into a second file is how one of the two copies eventually loses the SSRF check.
+ */
+export async function callAnthropic(apiKey: string, params: CallChatParams): Promise<CallChatResult> {
   if (!apiKey) {
     throw new AppError(503, "AI features are not configured — set an Anthropic API key (ANTHROPIC_API_KEY, or the workspace AI settings).");
   }
@@ -366,7 +374,8 @@ export function isAvailabilityFailure(error: unknown): boolean {
   return error instanceof AppError && (error.statusCode === 502 || error.statusCode === 503);
 }
 
-async function callOpenAICompatible(settings: { baseUrl: string | null }, apiKey: string, params: CallChatParams): Promise<CallChatResult> {
+/** Exported for the platform advisor — see the note on `callAnthropic` above. */
+export async function callOpenAICompatible(settings: { baseUrl: string | null }, apiKey: string, params: CallChatParams): Promise<CallChatResult> {
   if (!settings.baseUrl) {
     throw new AppError(503, "AI features are not configured — set a base URL for the selected provider in workspace AI settings.");
   }

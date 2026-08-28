@@ -134,6 +134,27 @@ the console follows the theme now, and a page that only looks right in one of th
 catches.
 
 ```powershell
+node .claude/skills/run-timesphere/platform-ops-verify.mjs
+node .claude/skills/run-timesphere/advisor-verify.mjs
+```
+
+`platform-ops-verify.mjs` drives the 4.0.0 operator surfaces against the running stack, as BOTH a
+platform admin and a workspace super admin — which is the only way to check the half that matters:
+that a platform-armed maintenance window is genuinely read-only inside the workspace (409
+`MAINTENANCE_PLATFORM_MANAGED`), that the lockout page names who holds it, that `OPTIMIZE` is
+refused outside a window and runs inside one, and that a table name which is not a plain identifier
+in the live schema is rejected. Every window it arms is lifted in the `finally`.
+
+`advisor-verify.mjs` runs the AI advisor end to end against a **stub OpenAI-compatible endpoint it
+starts itself**, so it needs no model and no key. The stub answers with a deliberately hostile
+payload — an action that does not exist, a table that does not exist, forty findings and a wall of
+prose — and the script asserts what survived: the invented action dropped, the invented table
+dropped, eight findings kept, the summary clamped, the advisory stored `PENDING`, a dismissal
+without a reason refused, and the daily ceiling enforced. It also reads back the prompt the stub
+received and asserts no quoted SQL literal reached it. It restores the advisor's previous settings
+in the `finally`.
+
+```powershell
 node .claude/skills/run-timesphere/overflow-probe.mjs /platform-admin/backups 390
 ```
 

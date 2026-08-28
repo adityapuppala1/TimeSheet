@@ -23,6 +23,7 @@
  */
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
+  Brain,
   Check,
   ChevronLeft,
   ChevronRight,
@@ -56,6 +57,7 @@ import { parseUserAgent, type ParsedUserAgent } from "../../lib/user-agent";
 import { platformAdminConsoleApi, type PlatformMailSettings } from "../../services/platform-admin-api";
 import { usePlatformAdminAuthStore } from "../../store/platform-admin-auth";
 import { ConsolePage, ConsoleSection, ConsoleTable, EmptyState, Field, FieldGrid, Num, PRIMARY_BTN, SwitchField, Toolbar, shortDateTime } from "./console-ui";
+import { AiAdvisorCard } from "./AiAdvisorCard";
 
 const errorMessageOf = (error: unknown) => (error as { response?: { data?: { message?: string } } })?.response?.data?.message;
 
@@ -586,14 +588,17 @@ function AuditCard() {
 export function PlatformAdminSettings() {
   const mail = useQuery({ queryKey: ["platform-admin", "mail-settings"], queryFn: platformAdminConsoleApi.mailSettings });
   return (
-    <ConsolePage eyebrow="Platform" title="Settings" description="The relay the platform sends from, who can open this console, your other sessions, and everything the control plane has recorded.">
+    <ConsolePage eyebrow="Platform" title="Settings" description="The relay the platform sends from, the advisor's own model, who can open this console, your other sessions, and everything the control plane has recorded.">
       {/* `mt-0` on every panel: `TabsContent` ships its own `mt-3`, which on top of this grid's
           `gap-4` made the gap between the tab strip and the card different from the gap the rest of
           the console uses. One gap, owned by the grid. */}
       <Tabs defaultValue="mail" className="grid min-w-0 grid-cols-1 gap-4">
-        <TabsList className="w-fit">
+        <TabsList className="flex w-full min-w-0 justify-start overflow-x-auto sm:w-fit">
           <TabsTrigger value="mail" className="gap-1.5">
             <ServerCog className="h-3.5 w-3.5" />Mail server
+          </TabsTrigger>
+          <TabsTrigger value="advisor" className="gap-1.5">
+            <Brain className="h-3.5 w-3.5" />AI advisor
           </TabsTrigger>
           <TabsTrigger value="admins" className="gap-1.5">
             <KeyRound className="h-3.5 w-3.5" />Platform admins
@@ -612,6 +617,9 @@ export function PlatformAdminSettings() {
             </ConsoleSection>
           )}
           {mail.data && <MailServerCard key={mail.data.updatedAt ?? "initial"} settings={mail.data} />}
+        </TabsContent>
+        <TabsContent value="advisor" className="mt-0">
+          <AiAdvisorCard />
         </TabsContent>
         <TabsContent value="admins" className="mt-0">
           <AdminsCard />

@@ -48,6 +48,9 @@ function settingsRow(over: Partial<Record<string, unknown>> = {}) {
     message: null,
     updatedById: null,
     updatedAt: new Date(),
+    managedByPlatform: false,
+    managedByLabel: null,
+    managedReference: null,
     ...over
   };
 }
@@ -55,6 +58,11 @@ function settingsRow(over: Partial<Record<string, unknown>> = {}) {
 beforeEach(() => {
   client = createFakeTenantClient();
   vi.mocked(dispatchNotification).mockClear();
+  // A default row, because `getMaintenanceSettings` upserts and therefore ALWAYS has one in
+  // production — `updateMaintenanceSettings` now reads it before validating anything, to answer
+  // "you may not change this at all" ahead of "your dates are wrong". A stub that returns
+  // undefined would be testing a state the database cannot be in.
+  vi.mocked(client.maintenanceSettings.upsert).mockResolvedValue(settingsRow({ enabled: false }) as never);
 });
 
 describe("phaseOf", () => {
@@ -168,6 +176,95 @@ describe("updateMaintenanceSettings validation", () => {
   it("disabling never validates the window — clearing a stale schedule must always work", async () => {
     vi.mocked(client.maintenanceSettings.upsert).mockResolvedValue(settingsRow({ enabled: false }) as never);
     await expect(attempt({ enabled: false, scheduledStartAt: null, scheduledEndAt: null })).resolves.toBeTruthy();
+  });
+});
+
+/**
+ * THE PLATFORM LOCK.
+ *
+ * A deployment-wide maintenance window that any single workspace can switch off is not a window,
+ * it is a suggestion: the tenant that clears it takes a live database into the migration the
+ * window existed to protect, and nobody finds out until the restore. So a platform-armed window is
+ * refused to tenant-sourced writes — including the "just turn it off" write, which is the one
+ * somebody actually reaches for.
+ *
+ * The default matters as much as the rule: a caller that passes no `source` is treated as the
+ * LESS privileged one. A future endpoint that forgets the parameter fails closed.
+ */
+describe("platform-managed windows", () => {
+  const armedByPlatform = () => settingsRow({ enabled: true, managedByPlatform: true, managedByLabel: "Platform operations", managedReference: "bc-1" });
+
+  const tenantWrite = (over: Partial<Parameters<typeof updateMaintenanceSettings>[0]> = {}) =>
+    runInTenant(
+      client,
+      () =>
+        updateMaintenanceSettings({
+          enabled: false,
+          scheduledStartAt: null,
+          scheduledEndAt: null,
+          message: null,
+          userId: "workspace-admin",
+          ...over
+        }),
+      freshOrg()
+    );
+
+  it("refuses a workspace admin who tries to cancel it", async () => {
+    vi.mocked(client.maintenanceSettings.upsert).mockResolvedValue(armedByPlatform() as never);
+    await expect(tenantWrite()).rejects.toMatchObject({ statusCode: 409, code: "MAINTENANCE_PLATFORM_MANAGED" });
+  });
+
+  it("refuses a workspace admin who tries to move it, before complaining about the dates", async () => {
+    vi.mocked(client.maintenanceSettings.upsert).mockResolvedValue(armedByPlatform() as never);
+    // Deliberately an INVALID window as well: the lock must be reported, not the date error. An
+    // admin told "your end time is wrong" will fix the end time and try again, forever.
+    await expect(
+      tenantWrite({ enabled: true, scheduledStartAt: new Date(Date.now() + 2 * HOUR), scheduledEndAt: new Date(Date.now() + HOUR) })
+    ).rejects.toMatchObject({ statusCode: 409, code: "MAINTENANCE_PLATFORM_MANAGED" });
+  });
+
+  it("treats a caller that forgot to say who it is as the workspace — the lock fails closed", async () => {
+    vi.mocked(client.maintenanceSettings.upsert).mockResolvedValue(armedByPlatform() as never);
+    await expect(tenantWrite({ source: undefined })).rejects.toMatchObject({ statusCode: 409 });
+  });
+
+  it("lets the platform change and clear its own window", async () => {
+    vi.mocked(client.maintenanceSettings.upsert).mockResolvedValue(armedByPlatform() as never);
+    await expect(tenantWrite({ source: "platform", userId: "platform-admin@x.io" })).resolves.toBeTruthy();
+  });
+
+  it("hands control back when the platform clears it — the flag rides with the window", async () => {
+    vi.mocked(client.maintenanceSettings.upsert).mockResolvedValue(armedByPlatform() as never);
+    await tenantWrite({ source: "platform", userId: "platform-admin@x.io" });
+    const update = vi.mocked(client.maintenanceSettings.upsert).mock.calls.at(-1)?.[0]?.update as Record<string, unknown>;
+    expect(update).toMatchObject({ enabled: false, managedByPlatform: false, managedByLabel: null, managedReference: null });
+  });
+
+  it("stamps the label and reference a workspace quotes back to support", async () => {
+    await runInTenant(
+      client,
+      () =>
+        updateMaintenanceSettings({
+          enabled: true,
+          scheduledStartAt: new Date(Date.now() + HOUR),
+          scheduledEndAt: new Date(Date.now() + 2 * HOUR),
+          message: "Database maintenance.",
+          userId: "platform-admin@x.io",
+          source: "platform",
+          managedByLabel: "TimeSphere platform operations",
+          managedReference: "bc-42"
+        }),
+      freshOrg()
+    );
+    const update = vi.mocked(client.maintenanceSettings.upsert).mock.calls.at(-1)?.[0]?.update as Record<string, unknown>;
+    expect(update).toMatchObject({ managedByPlatform: true, managedByLabel: "TimeSphere platform operations", managedReference: "bc-42" });
+  });
+
+  it("leaves a workspace's OWN window entirely theirs", async () => {
+    // The lock must not leak into the ordinary case: a window this workspace armed for itself is
+    // still theirs to cancel, which is most windows.
+    vi.mocked(client.maintenanceSettings.upsert).mockResolvedValue(settingsRow({ enabled: true, managedByPlatform: false }) as never);
+    await expect(tenantWrite()).resolves.toBeTruthy();
   });
 });
 

@@ -510,6 +510,29 @@ export function EmptyState({ title, description, icon: Icon = Inbox, action }: {
   );
 }
 
+/**
+ * Bytes as a person reads them.
+ *
+ * IN THE KIT because three console pages had grown their own copy — Backups, Monitoring and the
+ * schema panel — and two of them disagreed about when to switch from one decimal to none, so the
+ * same figure rendered differently depending on which page you were looking at. Signed, because a
+ * reclaimed-space delta is legitimately negative.
+ */
+export function formatBytes(bytes: number | null | undefined): string {
+  if (bytes === null || bytes === undefined) return "—";
+  const sign = bytes < 0 ? "-" : "";
+  const magnitude = Math.abs(bytes);
+  if (magnitude < 1024) return `${sign}${Math.round(magnitude)} B`;
+  const units = ["KB", "MB", "GB", "TB"];
+  let value = magnitude / 1024;
+  let unit = 0;
+  while (value >= 1024 && unit < units.length - 1) {
+    value /= 1024;
+    unit += 1;
+  }
+  return `${sign}${value < 10 ? value.toFixed(1) : Math.round(value)} ${units[unit]}`;
+}
+
 export const relativeDay = (iso: string | null | undefined) => {
   if (!iso) return "—";
   const d = new Date(iso);

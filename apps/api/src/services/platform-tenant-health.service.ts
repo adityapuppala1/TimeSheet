@@ -43,6 +43,42 @@ export interface TableRow {
   dataBytes: number;
   indexBytes: number;
   totalBytes: number;
+  /** Space the engine has allocated and no longer uses. Reclaimed by OPTIMIZE, which locks. */
+  freeBytes: number;
+  /** freeBytes / (total + free). Above ~30% on a large table is a real reason to rebuild. */
+  fragmentation: number | null;
+  engine: string | null;
+  collation: string | null;
+  /** Average bytes per row — a sudden jump usually means a blob column nobody meant to add. */
+  avgRowBytes: number;
+  /** How many indexes the table carries, and how far its AUTO_INCREMENT is through its type. */
+  indexCount: number;
+  /** Percent of the signed range consumed. NULL when the column is not an integer AUTO_INCREMENT. */
+  autoIncrementUsePercent: number | null;
+  /** A table with no primary key cannot be replicated row-based and cannot be chunk-migrated. */
+  hasPrimaryKey: boolean;
+}
+
+/** One index, as the schema describes it — never its contents. */
+export interface IndexRow {
+  table: string;
+  name: string;
+  columns: string[];
+  unique: boolean;
+  /** Distinct values the optimiser believes it has. Zero on a non-empty table = stale statistics. */
+  cardinality: number;
+}
+
+/** A query running right now, from SHOW PROCESSLIST, with its text redacted to its shape. */
+export interface ProcessRow {
+  id: number;
+  user: string;
+  host: string | null;
+  command: string;
+  seconds: number;
+  state: string | null;
+  /** Statement shape only — literals are stripped before this leaves the service. */
+  digest: string | null;
 }
 
 export interface DatabaseMetrics {
@@ -59,6 +95,17 @@ export interface DatabaseMetrics {
     /** index / (data + index). A very low share on a large schema is a missing-index smell. */
     indexShare: number | null;
     largestTables: TableRow[];
+    /** Sum of DATA_FREE across the schema — how much a rebuild would hand back. */
+    freeBytes: number;
+    /** Tables with no primary key, named. Empty is the healthy answer. */
+    tablesWithoutPrimaryKey: string[];
+    /** Tables whose indexes outweigh their data 2:1 — usually an index nobody uses. */
+    indexHeavyTables: string[];
+    /** The engines in use. More than one in a schema is worth knowing about. */
+    engines: Array<{ engine: string; tables: number }>;
+    /** Total indexes across the schema, and the widest ones. */
+    indexCount: number;
+    widestIndexes: IndexRow[];
   };
   /** Everything below describes the SERVER, which other workspaces may share. */
   server: {
@@ -73,12 +120,56 @@ export interface DatabaseMetrics {
     /** Reads served from memory, as a percentage of all reads. Below ~99% is worth a look. */
     bufferPoolHitRate: number | null;
     abortedConnects: number | null;
+    /** Rows the storage engine actually read to answer queries, as a ratio of rows returned.
+     *  A large number means full scans: the optimiser is reading far more than it hands back. */
+    rowsExaminedPerReturned: number | null;
+    /** Temporary tables spilled to disk, as a share of all temporary tables created. */
+    tmpDiskTablePercent: number | null;
+    /** Open tables against the table_open_cache ceiling. */
+    openTables: number | null;
+    tableOpenCache: number | null;
+    /** InnoDB buffer pool size, so "hit rate is low" has a next question attached. */
+    bufferPoolBytes: number | null;
   };
+  /** Statements running right now against THIS schema, shape-only. Empty on a quiet workspace. */
+  activeQueries: ProcessRow[];
   /** How long the metrics query itself took — a slow answer here IS a finding. */
   queryMs: number;
 }
 
 const bigintToNumber = (value: unknown): number => (typeof value === "bigint" ? Number(value) : Number(value ?? 0));
+
+const percentOf = (part: number | null, whole: number | null): number | null => (whole && whole > 0 && part !== null ? (part / whole) * 100 : null);
+
+/** Rows the engine read per SELECT. Crude by construction — server-wide counters cannot be
+ *  attributed to one query — but a jump from tens to millions is the tell for a lost index. */
+const rowsExaminedRatio = (rowsRead: number | null, selects: number | null): number | null =>
+  selects && selects > 0 && rowsRead !== null ? rowsRead / selects : null;
+
+/**
+ * A running statement, reduced to its SHAPE.
+ *
+ * PROCESSLIST hands back the literal SQL, and a tenant's SQL carries a tenant's data — an email
+ * address in a WHERE clause, a person's name in an INSERT. The platform console is aggregate-only
+ * by policy, so every literal is replaced before the text leaves this service: quoted strings,
+ * numbers and long IN-lists all collapse to a placeholder. What survives is enough to say "this is
+ * the timesheet-approval query and it has been running for 40 seconds", which is the whole job.
+ */
+export function redactStatement(sql: string | null): string | null {
+  if (!sql) return null;
+  const shape = sql
+    .replace(/\s+/g, " ")
+    // Quoted literals first, escapes included, so a string that itself contains a quote cannot end
+    // the match early and leak its own tail.
+    .replace(/'(?:[^'\\]|\\.)*'/g, "?")
+    .replace(/"(?:[^"\\]|\\.)*"/g, "?")
+    .replace(/\b0x[0-9a-fA-F]+\b/g, "?")
+    .replace(/\b\d+(?:\.\d+)?\b/g, "?")
+    // A 500-id IN-list is noise once every id is already a placeholder.
+    .replace(/\(\s*\?(?:\s*,\s*\?)+\s*\)/g, "(?)")
+    .trim();
+  return shape.length > 300 ? `${shape.slice(0, 300)}…` : shape;
+}
 
 /**
  * Read one workspace's database metrics through its OWN connection string.
@@ -97,9 +188,22 @@ export async function getDatabaseMetrics(orgId: string): Promise<DatabaseMetrics
   const started = Date.now();
 
   try {
-    const [tables, status, variables] = await Promise.all([
-      client.$queryRawUnsafe<Array<{ TABLE_NAME: string; TABLE_ROWS: bigint | null; DATA_LENGTH: bigint | null; INDEX_LENGTH: bigint | null }>>(
-        `SELECT TABLE_NAME, TABLE_ROWS, DATA_LENGTH, INDEX_LENGTH
+    const [tables, status, variables, indexes, processes] = await Promise.all([
+      client.$queryRawUnsafe<
+        Array<{
+          TABLE_NAME: string;
+          TABLE_ROWS: bigint | null;
+          DATA_LENGTH: bigint | null;
+          INDEX_LENGTH: bigint | null;
+          DATA_FREE: bigint | null;
+          AVG_ROW_LENGTH: bigint | null;
+          ENGINE: string | null;
+          TABLE_COLLATION: string | null;
+          AUTO_INCREMENT: bigint | null;
+        }>
+      >(
+        `SELECT TABLE_NAME, TABLE_ROWS, DATA_LENGTH, INDEX_LENGTH, DATA_FREE, AVG_ROW_LENGTH,
+                ENGINE, TABLE_COLLATION, AUTO_INCREMENT
            FROM information_schema.TABLES
           WHERE TABLE_SCHEMA = ? AND TABLE_TYPE = 'BASE TABLE'`,
         org.database.databaseName
@@ -110,10 +214,45 @@ export async function getDatabaseMetrics(orgId: string): Promise<DatabaseMetrics
         .$queryRawUnsafe<Array<{ Variable_name: string; Value: string }>>(
           `SHOW GLOBAL STATUS WHERE Variable_name IN
            ('Uptime','Threads_connected','Threads_running','Slow_queries','Questions','Aborted_connects',
-            'Innodb_buffer_pool_read_requests','Innodb_buffer_pool_reads')`
+            'Innodb_buffer_pool_read_requests','Innodb_buffer_pool_reads',
+            'Handler_read_rnd_next','Handler_read_next','Innodb_rows_read','Com_select',
+            'Created_tmp_disk_tables','Created_tmp_tables','Open_tables')`
         )
         .catch(() => []),
-      client.$queryRawUnsafe<Array<{ Variable_name: string; Value: string }>>(`SHOW GLOBAL VARIABLES WHERE Variable_name IN ('max_connections','version')`).catch(() => [])
+      client
+        .$queryRawUnsafe<Array<{ Variable_name: string; Value: string }>>(
+          `SHOW GLOBAL VARIABLES WHERE Variable_name IN ('max_connections','version','table_open_cache','innodb_buffer_pool_size')`
+        )
+        .catch(() => []),
+      // The SCHEMA, never the contents. Index names and column lists describe the shape of the
+      // database, which is the platform's own product; a workspace's DATA is never read here and
+      // no query in this service selects from a tenant table.
+      client
+        .$queryRawUnsafe<Array<{ TABLE_NAME: string; INDEX_NAME: string; COLUMN_NAME: string; NON_UNIQUE: number | bigint; CARDINALITY: bigint | null; SEQ_IN_INDEX: number | bigint }>>(
+          `SELECT TABLE_NAME, INDEX_NAME, COLUMN_NAME, NON_UNIQUE, CARDINALITY, SEQ_IN_INDEX
+             FROM information_schema.STATISTICS
+            WHERE TABLE_SCHEMA = ?
+            ORDER BY TABLE_NAME, INDEX_NAME, SEQ_IN_INDEX`,
+          org.database.databaseName
+        )
+        .catch(() => []),
+      // Requires PROCESS privilege. A deployment whose API user does not have it gets an empty
+      // panel that says so rather than a failed page — this is a nice-to-have, not the point.
+      client
+        .$queryRawUnsafe<Array<{ ID: bigint; USER: string; HOST: string | null; COMMAND: string; TIME: bigint | number; STATE: string | null; INFO: string | null }>>(
+          // `INFO NOT LIKE '%information_schema%'` keeps this panel from showing the monitor
+          // watching itself: the three queries above are running on this very connection while it
+          // executes, and an operator scanning for a stuck statement should not have to skip past
+          // the tool they are scanning with.
+          `SELECT ID, USER, HOST, COMMAND, TIME, STATE, INFO
+             FROM information_schema.PROCESSLIST
+            WHERE DB = ? AND COMMAND <> 'Sleep'
+              AND (INFO IS NULL OR INFO NOT LIKE '%information_schema%')
+            ORDER BY TIME DESC
+            LIMIT 25`,
+          org.database.databaseName
+        )
+        .catch(() => [])
     ]);
 
     const statusOf = (name: string) => {
@@ -122,14 +261,61 @@ export async function getDatabaseMetrics(orgId: string): Promise<DatabaseMetrics
     };
     const variableOf = (name: string) => variables.find((r) => r.Variable_name === name)?.Value ?? null;
 
-    const rows: TableRow[] = tables.map((t) => {
-      const dataBytes = bigintToNumber(t.DATA_LENGTH);
-      const indexBytes = bigintToNumber(t.INDEX_LENGTH);
-      return { name: t.TABLE_NAME, estimatedRows: bigintToNumber(t.TABLE_ROWS), dataBytes, indexBytes, totalBytes: dataBytes + indexBytes };
+    /* Index metadata, folded from one row per COLUMN into one row per INDEX. */
+    const indexByKey = new Map<string, IndexRow>();
+    const indexNamesByTable = new Map<string, Set<string>>();
+    for (const row of indexes) {
+      const key = `${row.TABLE_NAME}.${row.INDEX_NAME}`;
+      const existing = indexByKey.get(key);
+      if (existing) {
+        existing.columns.push(row.COLUMN_NAME);
+      } else {
+        indexByKey.set(key, {
+          table: row.TABLE_NAME,
+          name: row.INDEX_NAME,
+          columns: [row.COLUMN_NAME],
+          unique: Number(row.NON_UNIQUE) === 0,
+          cardinality: bigintToNumber(row.CARDINALITY)
+        });
+      }
+      const names = indexNamesByTable.get(row.TABLE_NAME) ?? new Set<string>();
+      names.add(row.INDEX_NAME);
+      indexNamesByTable.set(row.TABLE_NAME, names);
+    }
+    const allIndexes = [...indexByKey.values()];
+    const primaryKeyTables = new Set(allIndexes.filter((i) => i.name === "PRIMARY").map((i) => i.table));
+
+    const rows: TableRow[] = tables.map((table) => {
+      const dataBytes = bigintToNumber(table.DATA_LENGTH);
+      const indexBytes = bigintToNumber(table.INDEX_LENGTH);
+      const freeBytes = bigintToNumber(table.DATA_FREE);
+      const totalBytes = dataBytes + indexBytes;
+      const autoIncrement = table.AUTO_INCREMENT === null ? null : bigintToNumber(table.AUTO_INCREMENT);
+      return {
+        name: table.TABLE_NAME,
+        estimatedRows: bigintToNumber(table.TABLE_ROWS),
+        dataBytes,
+        indexBytes,
+        totalBytes,
+        freeBytes,
+        fragmentation: totalBytes + freeBytes > 0 ? freeBytes / (totalBytes + freeBytes) : null,
+        engine: table.ENGINE,
+        collation: table.TABLE_COLLATION,
+        avgRowBytes: bigintToNumber(table.AVG_ROW_LENGTH),
+        indexCount: indexNamesByTable.get(table.TABLE_NAME)?.size ?? 0,
+        // Against signed INT, which is what this schema's auto-increment columns are. A BIGINT key
+        // would report a nonsense fraction of a percent, which is the honest answer for a BIGINT.
+        autoIncrementUsePercent: autoIncrement === null ? null : (autoIncrement / 2_147_483_647) * 100,
+        hasPrimaryKey: primaryKeyTables.has(table.TABLE_NAME)
+      };
     });
 
     const dataBytes = rows.reduce((sum, r) => sum + r.dataBytes, 0);
     const indexBytes = rows.reduce((sum, r) => sum + r.indexBytes, 0);
+    const freeBytes = rows.reduce((sum, r) => sum + r.freeBytes, 0);
+
+    const engineCounts = new Map<string, number>();
+    for (const row of rows) engineCounts.set(row.engine ?? "unknown", (engineCounts.get(row.engine ?? "unknown") ?? 0) + 1);
     const readRequests = statusOf("Innodb_buffer_pool_read_requests");
     const diskReads = statusOf("Innodb_buffer_pool_reads");
     const maxConnections = Number(variableOf("max_connections")) || null;
@@ -146,7 +332,15 @@ export async function getDatabaseMetrics(orgId: string): Promise<DatabaseMetrics
         indexBytes,
         totalBytes: dataBytes + indexBytes,
         indexShare: dataBytes + indexBytes > 0 ? indexBytes / (dataBytes + indexBytes) : null,
-        largestTables: [...rows].sort((a, b) => b.totalBytes - a.totalBytes).slice(0, 12)
+        largestTables: [...rows].sort((a, b) => b.totalBytes - a.totalBytes).slice(0, 12),
+        freeBytes,
+        tablesWithoutPrimaryKey: rows.filter((r) => !r.hasPrimaryKey).map((r) => r.name),
+        // 2:1 index-to-data, and only once the table is big enough for the ratio to mean anything —
+        // a 16KB lookup table is all index by definition and is not a finding.
+        indexHeavyTables: rows.filter((r) => r.dataBytes > 1_000_000 && r.indexBytes > r.dataBytes * 2).map((r) => r.name),
+        engines: [...engineCounts.entries()].map(([engine, count]) => ({ engine, tables: count })).sort((a, b) => b.tables - a.tables),
+        indexCount: allIndexes.length,
+        widestIndexes: [...allIndexes].sort((a, b) => b.columns.length - a.columns.length || b.cardinality - a.cardinality).slice(0, 10)
       },
       server: {
         scope: "server",
@@ -158,8 +352,22 @@ export async function getDatabaseMetrics(orgId: string): Promise<DatabaseMetrics
         slowQueries: statusOf("Slow_queries"),
         questions: statusOf("Questions"),
         bufferPoolHitRate: readRequests && readRequests > 0 && diskReads !== null ? ((readRequests - diskReads) / readRequests) * 100 : null,
-        abortedConnects: statusOf("Aborted_connects")
+        abortedConnects: statusOf("Aborted_connects"),
+        rowsExaminedPerReturned: rowsExaminedRatio(statusOf("Innodb_rows_read"), statusOf("Com_select")),
+        tmpDiskTablePercent: percentOf(statusOf("Created_tmp_disk_tables"), statusOf("Created_tmp_tables")),
+        openTables: statusOf("Open_tables"),
+        tableOpenCache: Number(variableOf("table_open_cache")) || null,
+        bufferPoolBytes: Number(variableOf("innodb_buffer_pool_size")) || null
       },
+      activeQueries: processes.map((process) => ({
+        id: Number(process.ID),
+        user: process.USER,
+        host: process.HOST,
+        command: process.COMMAND,
+        seconds: Number(process.TIME),
+        state: process.STATE,
+        digest: redactStatement(process.INFO)
+      })),
       queryMs: Date.now() - started
     };
   } finally {
@@ -231,6 +439,71 @@ export function deriveAlerts(input: {
     }
     if (db.queryMs > 2000) {
       alerts.push({ severity: "warning", title: "Slow metadata query", detail: `information_schema took ${db.queryMs} ms to answer — the server is busy or the schema is very large. Threshold: 2000 ms.`, area: "database" });
+    }
+
+    /* ---- schema-shape findings, all of them things a rebuild or an index would fix ---- */
+
+    // Fragmentation is only worth an operator's attention once the space is worth reclaiming: a
+    // 60%-fragmented 200KB table is arithmetic, not a problem.
+    const fragmented = db.schema.largestTables.filter((table) => (table.fragmentation ?? 0) >= 0.3 && table.freeBytes > 50 * 1024 ** 2);
+    if (fragmented.length) {
+      alerts.push({
+        severity: "info",
+        title: `${fragmented.length} fragmented table${fragmented.length === 1 ? "" : "s"}`,
+        detail: `${fragmented.map((table) => table.name).join(", ")} — ${(db.schema.freeBytes / 1024 ** 3).toFixed(2)} GB is allocated and unused across the schema. Reclaiming it rebuilds the table, which locks it, so run it inside a maintenance window. Threshold: 30% free and over 50 MB.`,
+        area: "database"
+      });
+    }
+
+    if (db.schema.tablesWithoutPrimaryKey.length) {
+      alerts.push({
+        severity: "warning",
+        title: `${db.schema.tablesWithoutPrimaryKey.length} table${db.schema.tablesWithoutPrimaryKey.length === 1 ? "" : "s"} without a primary key`,
+        detail: `${db.schema.tablesWithoutPrimaryKey.slice(0, 6).join(", ")}. Row-based replication and chunked migrations both need one; without it a large table can only be copied whole.`,
+        area: "database"
+      });
+    }
+
+    // The one that ends a workspace's day without warning: an INT auto-increment that runs out.
+    const nearlyFull = db.schema.largestTables.filter((table) => (table.autoIncrementUsePercent ?? 0) >= 70);
+    if (nearlyFull.length) {
+      const worst = Math.max(...nearlyFull.map((table) => table.autoIncrementUsePercent ?? 0));
+      alerts.push({
+        severity: worst >= 90 ? "critical" : "warning",
+        title: `Auto-increment ${worst.toFixed(0)}% consumed`,
+        detail: `${nearlyFull.map((table) => table.name).join(", ")} — against a signed INT key. At 100% every insert fails, and the fix (widening to BIGINT) is a full table rebuild that wants planning, not an outage. Threshold: 70%.`,
+        area: "database"
+      });
+    }
+
+    if (db.schema.indexHeavyTables.length) {
+      alerts.push({
+        severity: "info",
+        title: `${db.schema.indexHeavyTables.length} index-heavy table${db.schema.indexHeavyTables.length === 1 ? "" : "s"}`,
+        detail: `${db.schema.indexHeavyTables.join(", ")} carry more than twice as much index as data. Usually an index nobody queries — each one costs on every write. Threshold: 2:1 on tables over 1 MB.`,
+        area: "database"
+      });
+    }
+
+    if (db.server.tmpDiskTablePercent !== null && db.server.tmpDiskTablePercent >= 25) {
+      alerts.push({
+        severity: "info",
+        title: `${db.server.tmpDiskTablePercent.toFixed(0)}% of temporary tables spill to disk`,
+        detail: "Sorts and group-bys are exceeding the in-memory limit. Server-wide. Threshold: 25%.",
+        area: "database"
+      });
+    }
+
+    // A statement running longer than a minute inside a request-shaped application is almost always
+    // stuck rather than slow.
+    const stuck = db.activeQueries.filter((query) => query.seconds >= 60);
+    if (stuck.length) {
+      alerts.push({
+        severity: stuck.some((query) => query.seconds >= 300) ? "critical" : "warning",
+        title: `${stuck.length} long-running quer${stuck.length === 1 ? "y" : "ies"}`,
+        detail: `Longest ${Math.max(...stuck.map((query) => query.seconds))}s: ${stuck[0].digest ?? stuck[0].command}. Threshold: 60s.`,
+        area: "database"
+      });
     }
   }
 

@@ -16,5 +16,9 @@ for (const stop of stops) {
   await page.screenshot({ path: `test-results/deck-check/slide-${stop}.png` });
 }
 console.log("pageerrors:", errors.length ? errors : "none");
-console.log("counter:", await page.locator("#counter").innerText());
+// The deck has no `#counter` element any more (it did in an earlier export). Report what the
+// file actually contains instead: the section ids, in order, which is the thing worth checking
+// after editing content.mjs — a slide silently missing from the export is the failure mode.
+const sections = await page.$$eval("section[id]", (nodes) => nodes.map((n) => n.id));
+console.log(`sections (${sections.length}):`, sections.join(", "));
 await browser.close();

@@ -360,6 +360,11 @@ export interface MaintenanceStatus {
   scheduledStartAt: string | null;
   scheduledEndAt: string | null;
   message: string | null;
+  /** True when platform operations armed this window across the deployment rather than this
+   *  workspace arming it for itself — the lockout page names who, so nobody chases their own
+   *  admin for an answer their admin does not have. */
+  managedByPlatform?: boolean;
+  managedByLabel?: string | null;
 }
 
 export interface MaintenanceSettingsRow {
@@ -368,6 +373,13 @@ export interface MaintenanceSettingsRow {
   scheduledEndAt: string | null;
   message: string | null;
   updatedAt: string;
+  /** While true the window belongs to platform operations and every control on this card is
+   *  read-only. The server refuses the write as well (409 `MAINTENANCE_PLATFORM_MANAGED`) — the
+   *  disabled controls are the courtesy, not the control. */
+  managedByPlatform?: boolean;
+  managedByLabel?: string | null;
+  /** The platform's broadcast id, quoted to support so one incident has one reference. */
+  managedReference?: string | null;
 }
 
 /** One live session, already decoded server-side (api/src/utils/user-agent.ts) — the browser never

@@ -16,7 +16,7 @@
  * states, not intentions.
  */
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { AlertTriangle, BellRing, CalendarClock, CheckCircle2, Clock, Mail, PlayCircle, Radio, ShieldCheck, StopCircle, XCircle } from "lucide-react";
+import { AlertTriangle, BellRing, CalendarClock, CheckCircle2, Clock, Lock, Mail, PlayCircle, Radio, ShieldCheck, StopCircle, XCircle } from "lucide-react";
 import { useMemo, useState } from "react";
 import { Badge } from "../../components/ui/badge";
 import { Button } from "../../components/ui/button";
@@ -125,7 +125,8 @@ function BroadcastDialog({
           <DialogTitle>Arm a maintenance window</DialogTitle>
           <DialogDescription>
             Everyone below super administrator is signed out of the chosen workspaces for the window and sees the maintenance page. Open tabs redirect within about fifteen
-            seconds — the app's own heartbeat does it, nobody has to refresh.
+            seconds — the app's own heartbeat does it, nobody has to refresh. While it holds, the workspace's own administrators can see the window but cannot move or cancel
+            it: a deployment-wide window any one tenant could switch off is not a window.
           </DialogDescription>
         </DialogHeader>
 
@@ -314,7 +315,7 @@ export function PlatformAdminMaintenance() {
     <ConsolePage
       eyebrow="Operations"
       title="Maintenance windows"
-      description="One window, applied across the fleet. It writes each workspace's own maintenance row, so customers get exactly the lockout, redirect, notice and heartbeat their own administrator would have produced."
+      description="One window, applied across the fleet. It writes each workspace's own maintenance row — so customers get exactly the lockout, redirect, notice and heartbeat their own administrator would have produced, and cannot switch it off from inside."
       actions={
         <Toolbar>
           {armedIds.length > 0 && (
@@ -430,7 +431,15 @@ export function PlatformAdminMaintenance() {
                     <p className="truncate font-mono text-[11px] text-muted-foreground">{workspace.slug}</p>
                   </TableCell>
                   <TableCell>
-                    <PhasePill state={workspace} />
+                    <div className="flex min-w-0 flex-wrap items-center gap-1.5">
+                      <PhasePill state={workspace} />
+                      {workspace.settings?.managedByPlatform && (
+                        <Badge variant="info" className="gap-1" title="Read-only inside the workspace until the platform clears it.">
+                          <Lock className="h-3 w-3" />
+                          Platform-held
+                        </Badge>
+                      )}
+                    </div>
                   </TableCell>
                   <TableCell className="whitespace-nowrap text-sm text-muted-foreground">
                     {workspace.settings?.scheduledStartAt

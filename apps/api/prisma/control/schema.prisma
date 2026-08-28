@@ -123,6 +123,8 @@ model Organization {
   backupPolicy       OrgBackupPolicy?
   backupDestinations BackupDestination[]
   backupRuns         BackupRun[]
+  dbSamples          TenantDbSample[]
+  aiAdvice           PlatformAiAdvice[]
 
   @@index([status])
 }
@@ -724,5 +726,111 @@ model PlatformMaintenanceBroadcast {
   outcomes         Json?
   createdAt        DateTime  @default(now())
 
+  @@index([createdAt])
+}
+
+/// One hourly reading of one workspace's database, kept so the console can draw a TREND rather
+/// than a number. A single measurement answers "how big is it"; a series answers the questions an
+/// operator actually has — "is it growing", "when does it cross the plan's ceiling", "did that
+/// index we added on Tuesday change anything".
+///
+/// WHY THE SIZES ARE Float AND NOT BigInt: Prisma maps BigInt to a JS BigInt, which `JSON.stringify`
+/// throws on — so every route returning one needs a bespoke serialiser, and the one that forgets
+/// fails in production rather than in tests. A double is exact for integers up to 2^53, which is
+/// nine petabytes; the precision that buys us nothing costs a whole class of runtime error.
+///
+/// AGGREGATE ONLY. Sizes, counts and server counters. No table names, no row contents — the same
+/// line the rest of the platform console holds.
+model TenantDbSample {
+  id             String   @id @default(uuid())
+  organizationId String
+  sampledAt      DateTime @default(now())
+
+  totalBytes    Float
+  dataBytes     Float
+  indexBytes    Float
+  /// Allocated and unused — the space an OPTIMIZE would hand back.
+  freeBytes     Float
+  tableCount    Int
+  estimatedRows Float
+  /// How long the metadata query took. A trend here is the earliest warning of a struggling box.
+  queryMs       Int
+
+  /// Server-wide at the moment of sampling, so a spike in the size series can be read against
+  /// whether the machine was under load when it was taken.
+  connectionUsePercent Float?
+  bufferPoolHitRate    Float?
+  slowQueries          Float?
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@index([organizationId, sampledAt])
+  @@index([sampledAt])
+}
+
+/// The platform operator's OWN model configuration, entirely separate from any workspace's.
+///
+/// WHY SEPARATE. A workspace's AI settings are its own: its key, its budget, its data-residency
+/// choice. Borrowing one to reason about the fleet would spend a customer's money on somebody
+/// else's problem and put one tenant's operational detail through another tenant's provider. This
+/// row is the platform's own key, used only for the platform's own screens.
+///
+/// The advisor is OFF until an operator configures it. There is no default provider, no fallback to
+/// a tenant's settings, and nothing is sent anywhere while `enabled` is false.
+model PlatformAiSettings {
+  id       String  @id @default("global")
+  enabled  Boolean @default(false)
+  /// "ANTHROPIC" or "OPENAI_COMPATIBLE" — the same two shapes the tenant side supports, so a
+  /// self-hosted Ollama is a first-class choice for an operator who will not send fleet metrics to
+  /// a third party at all.
+  provider String  @default("ANTHROPIC") @db.VarChar(32)
+  /// Required for OPENAI_COMPATIBLE; ignored for Anthropic.
+  baseUrl  String? @db.VarChar(500)
+  model    String  @default("claude-sonnet-5") @db.VarChar(120)
+  /// AES-256-GCM, write-only. The console is told whether a key is set, never what it is.
+  encryptedApiKey String? @db.Text
+
+  /// A hard ceiling on generations per UTC day across the whole console. An advisor that can be
+  /// re-run in a loop is a bill with a UI.
+  dailyCallLimit Int @default(50)
+
+  updatedAt   DateTime @updatedAt
+  updatedBy   String?  @db.VarChar(255)
+}
+
+/// One generated advisory, kept whether or not anybody acted on it.
+///
+/// KEPT ON PURPOSE, all of them. The value of an advisor is not the sentence it produced today, it
+/// is whether its sentences were right — which is only answerable if the wrong ones are still there
+/// next to the right ones. Dismissals are as interesting as applications.
+///
+/// NOTHING HERE EXECUTES. A finding names an action from a closed allowlist; running it is a
+/// separate, human-initiated call to the same guarded endpoint the operator could have used
+/// directly. The model proposes; a person disposes.
+model PlatformAiAdvice {
+  id             String   @id @default(uuid())
+  organizationId String
+  createdAt      DateTime @default(now())
+  /// Who asked for it. The advisor is never self-triggered.
+  actorLabel     String   @db.VarChar(255)
+  model          String   @db.VarChar(120)
+  /// One-paragraph summary, already length-clamped by the sanitiser.
+  summary        String   @db.Text
+  /// The validated findings: severity, title, why, and an allowlisted action id.
+  findings       Json?
+  /// What the model was shown, so a wrong answer can be diagnosed rather than argued about.
+  factsDigest    Json?
+  inputTokens    Int      @default(0)
+  outputTokens   Int      @default(0)
+  /// "PENDING" until a human acts: "APPLIED", "DISMISSED".
+  status         String   @default("PENDING") @db.VarChar(24)
+  decidedAt      DateTime?
+  decidedBy      String?  @db.VarChar(255)
+  /// Free text from the operator when they dismissed it — the training signal that matters most.
+  decisionNote   String?  @db.Text
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@index([organizationId, createdAt])
   @@index([createdAt])
 }

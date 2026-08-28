@@ -104,6 +104,14 @@ halves of that (`tests/unit/branding-storage.test.ts`).
 - `PATCH /maintenance/settings` `{ enabled, scheduledStartAt, scheduledEndAt, message }` —
   SUPER_ADMIN. Enabling requires a coherent window (start, end, end > start, end in the future);
   disabling never validates, so a stale schedule can always be cleared. Audited.
+  **Refused with `409 MAINTENANCE_PLATFORM_MANAGED` while the current window was armed by the
+  platform across the fleet** (4.0.0). The check runs BEFORE validation, so an administrator who
+  cannot change the window at all is told that rather than told their dates are wrong. `GET
+  /maintenance/admin` and the public `GET /maintenance/status` both carry `managedByPlatform`
+  and `managedByLabel` so the card can go read-only and the lockout page can name who holds it —
+  a locked-out employee otherwise chases their own admin for an answer that admin does not have.
+  Only the platform's own clear releases it; the flag rides with the window rather than
+  outliving it, so a workspace arming its own window afterwards owns it completely.
 - `POST /maintenance/force-logout` — SUPER_ADMIN. Revokes every non-SUPER_ADMIN session
   server-side. Audited; returns `{ revokedSessions }`.
 - `POST /maintenance/notify` — SUPER_ADMIN. In-app + email warning to online non-admins quoting
@@ -2182,6 +2190,56 @@ Same prefix and auth, different router (`platform-admin-console.controller.ts`).
   `server` and tagged `scope: "server"`: on a shared box they belong to every workspace, and reading
   them as one tenant's fault sends somebody to debug the wrong customer. Row counts are InnoDB
   estimates and are labelled as such.
+
+### Trends and the two guarded operations (4.0.0)
+
+- `GET /monitoring/:orgId/trend?days=1..365` — the hourly size/row/latency series and the growth it
+  makes: bytes and rows per day, percentage change, and days until the database reaches 50 GB at the
+  current rate. Measured from the FIRST and LAST sample rather than fitted — a least-squares slope
+  across a series with one migration-shaped step reports a confident number that describes nothing —
+  and it refuses to extrapolate from under a day of span.
+- `POST /monitoring/sample` — take a reading of the whole fleet now instead of waiting for the
+  worker at `:25`. Useful on a fresh install (an empty chart looks exactly like a broken one) and
+  either side of a migration. A workspace that cannot be read is recorded and skipped; it never
+  writes a zero, because a gap in a chart is honest and a false zero is a fake recovery.
+- `POST /monitoring/:orgId/operation` `{ operation: "ANALYZE" | "OPTIMIZE", tables[] }` — the only
+  two operations this console can run against a customer's database, and the caller names one from
+  an enum rather than supplying SQL. A table name reaches a statement only if it matches a plain
+  identifier **and** appears in the schema just read — both, because the pattern stops injection and
+  the membership check stops a valid identifier pointing somewhere else. Empty `tables` means the
+  whole schema.
+  **`OPTIMIZE` is refused with `409 MAINTENANCE_WINDOW_REQUIRED` unless that workspace is inside an
+  ACTIVE maintenance window**: on InnoDB it rebuilds each table and blocks writes to it for the
+  duration, so running one on a live workspace is an outage the operator chose without meaning to.
+  `ANALYZE` is online and is not gated.
+
+### The AI advisor (4.0.0)
+
+Guardrails first, because they are the design rather than a precaution. **Aggregate facts only** —
+`buildAdvisorFacts` assembles sizes, counts, rates and table names, and running statements arrive
+already reduced to their shape by `redactStatement`; a unit test plants identifying strings in the
+input and fails if any reach the model. **Nothing executes** — a finding may name an action only
+from a closed allowlist compiled into the service, and `sanitiseAdvice` drops any id it does not
+recognise along with any table the facts never mentioned. **Human in the loop, recorded** — every
+advisory is stored `PENDING` until a person marks it applied or dismissed, and a dismissal requires
+a note. **The output is parsed, not trusted** — malformed JSON, forty findings or a three-page
+summary are clamped or dropped, never surfaced raw and never thrown. **The platform's own key** —
+there is no fallback to a workspace's provider, and a self-hosted OpenAI-compatible endpoint is a
+first-class choice. **A daily ceiling**, because an advisor that can be re-run in a loop is a bill
+with a user interface.
+
+- `GET /ai/settings` — the advisor's configuration plus the action catalogue (`label`, `executable`,
+  `description` per id). `apiKeySet` reports whether a key exists; the key is never returned.
+- `PUT /ai/settings` `{ enabled, provider, baseUrl?, model, apiKey?, dailyCallLimit }` — omitting
+  `apiKey` keeps the stored one, `""` clears it. The audit entry records that a key changed, never
+  the key.
+- `POST /ai/advise/:orgId` `{ days? }` — one generation, always operator-initiated. `409` when the
+  advisor is off or has no key, `429` at the daily ceiling.
+- `GET /ai/advice/:orgId` — the last ten advisories, including dismissed ones. They are kept on
+  purpose: the value of an advisor is not the sentence it produced today but whether its sentences
+  were right, which is only answerable if the wrong ones are still there.
+- `POST /ai/advice/:adviceId/decision` `{ status: "APPLIED" | "DISMISSED", note? }` — `422` on a
+  dismissal with no reason.
 
 ## Public retention doors
 

@@ -777,6 +777,12 @@ export interface WorkspaceMaintenanceState {
     scheduledStartAt: string | null;
     scheduledEndAt: string | null;
     message: string | null;
+    /** True while THIS window belongs to the platform, which makes it read-only inside the
+     *  workspace. The server refuses a tenant-sourced write; the disabled controls over there are
+     *  the courtesy, not the control. */
+    managedByPlatform?: boolean;
+    managedByLabel?: string | null;
+    managedReference?: string | null;
   } | null;
   /** Set when the workspace's database could not be read — stated rather than guessed at. */
   error: string | null;
@@ -820,7 +826,14 @@ export interface TenantDatabaseMetrics {
     indexBytes: number;
     totalBytes: number;
     indexShare: number | null;
-    largestTables: Array<{ name: string; estimatedRows: number; dataBytes: number; indexBytes: number; totalBytes: number }>;
+    largestTables: TenantTableRow[];
+    /** Allocated and unused — what a rebuild would hand back. */
+    freeBytes: number;
+    tablesWithoutPrimaryKey: string[];
+    indexHeavyTables: string[];
+    engines: Array<{ engine: string; tables: number }>;
+    indexCount: number;
+    widestIndexes: Array<{ table: string; name: string; columns: string[]; unique: boolean; cardinality: number }>;
   };
   /** Everything here describes the SERVER, which other workspaces may share. */
   server: {
@@ -834,8 +847,34 @@ export interface TenantDatabaseMetrics {
     questions: number | null;
     bufferPoolHitRate: number | null;
     abortedConnects: number | null;
+    rowsExaminedPerReturned: number | null;
+    tmpDiskTablePercent: number | null;
+    openTables: number | null;
+    tableOpenCache: number | null;
+    bufferPoolBytes: number | null;
   };
+  /** Statements running right now against this schema, reduced to their SHAPE — literals were
+   *  stripped server-side before this left the API, because a tenant's SQL carries a tenant's
+   *  data. */
+  activeQueries: Array<{ id: number; user: string; host: string | null; command: string; seconds: number; state: string | null; digest: string | null }>;
   queryMs: number;
+}
+
+export interface TenantTableRow {
+  name: string;
+  estimatedRows: number;
+  dataBytes: number;
+  indexBytes: number;
+  totalBytes: number;
+  freeBytes: number;
+  fragmentation: number | null;
+  engine: string | null;
+  collation: string | null;
+  avgRowBytes: number;
+  indexCount: number;
+  /** Percent of a signed INT consumed. At 100% every insert fails. */
+  autoIncrementUsePercent: number | null;
+  hasPrimaryKey: boolean;
 }
 
 export interface HealthAlert {
@@ -900,4 +939,105 @@ export const platformOpsApi = {
     ).data,
 
   tenantDatabase: async (orgId: string) => (await platformAdminApi.get<TenantDatabaseMetrics>(`/monitoring/${orgId}/database`)).data
+};
+
+
+/* ============================ Trends, operations, advisor =========================== */
+
+export interface DbTrendPoint {
+  at: string;
+  totalBytes: number;
+  dataBytes: number;
+  indexBytes: number;
+  freeBytes: number;
+  estimatedRows: number;
+  tableCount: number;
+  queryMs: number;
+  connectionUsePercent: number | null;
+  bufferPoolHitRate: number | null;
+}
+
+export interface DbGrowth {
+  bytesPerDay: number | null;
+  percentChange: number | null;
+  rowsPerDay: number | null;
+  /** Days until the database reaches `projectionTargetBytes` at the current rate. Null when it is
+   *  flat or shrinking — a projection off a negative slope is arithmetic, not information. */
+  daysToTarget: number | null;
+  projectionTargetBytes: number;
+  firstSampleAt: string | null;
+  lastSampleAt: string | null;
+  samples: number;
+}
+
+export interface MaintenanceOperationResult {
+  operation: "ANALYZE" | "OPTIMIZE";
+  tables: string[];
+  ms: number;
+  messages: Array<{ table: string; type: string; text: string }>;
+  /** Bytes handed back by an OPTIMIZE. Null for ANALYZE, which reclaims nothing. */
+  freedBytes: number | null;
+}
+
+/** The closed set of actions an advisory finding may name. `executable` marks the two the console
+ *  can actually run — both through the same guarded endpoint an operator reaches by hand. */
+export type AdvisorActionId = "ANALYZE_TABLES" | "OPTIMIZE_TABLES" | "ARM_MAINTENANCE_WINDOW" | "REVIEW_BACKUP_POLICY" | "REVIEW_INDEXES" | "CONTACT_WORKSPACE" | "MONITOR";
+
+export type AdvisorActionCatalogue = Record<AdvisorActionId, { label: string; executable: boolean; description: string }>;
+
+export interface AdvisorFinding {
+  severity: "critical" | "warning" | "info";
+  title: string;
+  rationale: string;
+  action: AdvisorActionId;
+  tables: string[];
+  confidence: "high" | "medium" | "low";
+}
+
+export interface AdviceRow {
+  id: string;
+  organizationId: string;
+  createdAt: string;
+  actorLabel: string;
+  model: string;
+  summary: string;
+  findings: AdvisorFinding[] | null;
+  inputTokens: number;
+  outputTokens: number;
+  status: "PENDING" | "APPLIED" | "DISMISSED";
+  decidedAt: string | null;
+  decidedBy: string | null;
+  decisionNote: string | null;
+}
+
+export interface PlatformAiSettings {
+  enabled: boolean;
+  provider: "ANTHROPIC" | "OPENAI_COMPATIBLE" | string;
+  baseUrl: string | null;
+  model: string;
+  /** Whether a key is stored — never the key itself. */
+  apiKeySet: boolean;
+  dailyCallLimit: number;
+  updatedAt: string | null;
+  updatedBy: string | null;
+  usedToday: number;
+}
+
+export const platformOpsExtrasApi = {
+  trend: async (orgId: string, days = 30) =>
+    (await platformAdminApi.get<{ points: DbTrendPoint[]; growth: DbGrowth }>(`/monitoring/${orgId}/trend`, { params: { days } })).data,
+  /** Take a reading of the whole fleet now rather than waiting for the hourly worker. */
+  sampleNow: async () => (await platformAdminApi.post<{ sampled: number; failed: Array<{ slug: string; error: string }>; prunedRows: number }>("/monitoring/sample")).data,
+  /** The caller names an operation and a table list; it never sends SQL. */
+  runOperation: async (orgId: string, operation: "ANALYZE" | "OPTIMIZE", tables: string[]) =>
+    (await platformAdminApi.post<MaintenanceOperationResult>(`/monitoring/${orgId}/operation`, { operation, tables })).data,
+
+  aiSettings: async () => (await platformAdminApi.get<{ settings: PlatformAiSettings; actions: AdvisorActionCatalogue }>("/ai/settings")).data,
+  saveAiSettings: async (payload: { enabled: boolean; provider: string; baseUrl: string | null; model: string; apiKey?: string; dailyCallLimit: number }) =>
+    (await platformAdminApi.put<PlatformAiSettings>("/ai/settings", payload)).data,
+  advise: async (orgId: string, days = 30) =>
+    (await platformAdminApi.post<{ id: string; summary: string; findings: AdvisorFinding[]; model: string }>(`/ai/advise/${orgId}`, { days })).data,
+  advice: async (orgId: string) => (await platformAdminApi.get<{ advice: AdviceRow[] }>(`/ai/advice/${orgId}`)).data,
+  decideAdvice: async (adviceId: string, status: "APPLIED" | "DISMISSED", note: string | null) =>
+    (await platformAdminApi.post<AdviceRow>(`/ai/advice/${adviceId}/decision`, { status, note })).data
 };

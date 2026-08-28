@@ -38,7 +38,27 @@ export interface MaintenanceSettingsShape {
   scheduledEndAt: Date | null;
   message: string | null;
   updatedAt: Date;
+  /** True while the PLATFORM armed this window across the fleet. See `assertNotPlatformManaged`. */
+  managedByPlatform: boolean;
+  /** Who to name in the workspace's read-only notice. Free text — the actor has no user row here. */
+  managedByLabel: string | null;
+  /** The broadcast id, so support can join the workspace's story to the platform's. */
+  managedReference: string | null;
 }
+
+/** Who is asking to change the window. The default is the workspace, because that is who almost
+ *  always is; the platform passes its own source explicitly. */
+export type MaintenanceSource = "tenant" | "platform";
+
+/**
+ * The sentence a workspace administrator reads when they try to change a platform-armed window.
+ *
+ * Exported because it is asserted by a test and reused by the UI: a control that is disabled
+ * without saying why reads as a bug, and the first thing an admin does with an unexplained
+ * disabled switch is raise a ticket.
+ */
+export const PLATFORM_MANAGED_MESSAGE =
+  "This maintenance window was scheduled by platform operations for the whole deployment, so it cannot be changed or cancelled from inside the workspace. It lifts automatically when the platform clears it. Super administrators keep full access throughout — everything is read-only for everyone else.";
 
 export async function getMaintenanceSettings(): Promise<MaintenanceSettingsShape> {
   const row = await prisma.maintenanceSettings.upsert({
@@ -97,7 +117,23 @@ export async function updateMaintenanceSettings(params: {
   scheduledEndAt: Date | null;
   message: string | null;
   userId: string;
+  /** Defaults to "tenant" so a caller that forgets is treated as the LESS privileged one. */
+  source?: MaintenanceSource;
+  /** Platform only: who to name in the workspace's notice, and which broadcast this came from. */
+  managedByLabel?: string | null;
+  managedReference?: string | null;
 }): Promise<MaintenanceSettingsShape> {
+  const source: MaintenanceSource = params.source ?? "tenant";
+
+  // THE LOCK, and it is checked before validation on purpose: a workspace admin who cannot change
+  // the window at all should be told that, not told their dates are wrong.
+  if (source === "tenant") {
+    const current = await getMaintenanceSettings();
+    if (current.managedByPlatform && current.enabled) {
+      throw new AppError(409, PLATFORM_MANAGED_MESSAGE, { code: "MAINTENANCE_PLATFORM_MANAGED" });
+    }
+  }
+
   if (params.enabled) {
     // Enabling requires a coherent window — an armed maintenance mode with no start would either
     // never fire (surprising) or fire instantly (more surprising). Both rejected loudly instead.
@@ -120,6 +156,15 @@ export async function updateMaintenanceSettings(params: {
     }
   }
 
+  // The flag rides with the window rather than persisting past it: a platform window that is
+  // cleared hands the control back, and a workspace arming its own window afterwards owns it.
+  const managed = source === "platform" && params.enabled;
+  const provenance = {
+    managedByPlatform: managed,
+    managedByLabel: managed ? (params.managedByLabel ?? "Platform operations") : null,
+    managedReference: managed ? (params.managedReference ?? null) : null
+  };
+
   const row = await prisma.maintenanceSettings.upsert({
     where: { id: GLOBAL_ID },
     update: {
@@ -127,7 +172,8 @@ export async function updateMaintenanceSettings(params: {
       scheduledStartAt: params.scheduledStartAt,
       scheduledEndAt: params.scheduledEndAt,
       message: params.message?.trim() || null,
-      updatedById: params.userId
+      updatedById: params.userId,
+      ...provenance
     },
     create: {
       id: GLOBAL_ID,
@@ -135,7 +181,8 @@ export async function updateMaintenanceSettings(params: {
       scheduledStartAt: params.scheduledStartAt,
       scheduledEndAt: params.scheduledEndAt,
       message: params.message?.trim() || null,
-      updatedById: params.userId
+      updatedById: params.userId,
+      ...provenance
     }
   });
   invalidateCache();

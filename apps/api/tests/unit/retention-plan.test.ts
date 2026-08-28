@@ -164,7 +164,12 @@ describe("public tokens", () => {
     const token = signPublicToken({ o: "org-1", p: "feedback", s: "30", e: Date.now() + DAY });
     expect(verifyPublicToken(token, "feedback")?.o).toBe("org-1");
     expect(verifyPublicToken(token, "reactivate")).toBeNull();
-    expect(verifyPublicToken(`${token.slice(0, -1)}0`, "feedback")).toBeNull();
+    // Flip the last character to a DIFFERENT one rather than to a fixed "0". The token carries
+    // `Date.now()`, so its signature is different on every run — and roughly one run in sixty-four
+    // already ended in "0", where the "tampered" token was byte-for-byte the original and verified
+    // correctly. That is a real intermittent failure this line caused, not a real bug in the token.
+    const lastChar = token.slice(-1);
+    expect(verifyPublicToken(`${token.slice(0, -1)}${lastChar === "0" ? "1" : "0"}`, "feedback")).toBeNull();
     expect(verifyPublicToken(token, "feedback", Date.now() + 2 * DAY)).toBeNull();
     expect(verifyPublicToken("garbage", "feedback")).toBeNull();
   });

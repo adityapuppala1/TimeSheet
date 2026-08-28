@@ -30,23 +30,9 @@ import { TableBody, TableCell, TableHead, TableHeader, TableRow } from "../../co
 import { toast } from "../../components/ui/toaster";
 import { platformAdminConsoleApi, type SnapshotFile } from "../../services/platform-admin-api";
 import { BackupSchedulesTab } from "./BackupSchedules";
-import { ConsolePage, ConsoleSection, ConsoleTable, EmptyState, Field, KpiCard, KpiGrid, Num, PRIMARY_BTN, shortDateTime } from "./console-ui";
+import { ConsolePage, ConsoleSection, ConsoleTable, EmptyState, Field, formatBytes, KpiCard, KpiGrid, Num, PRIMARY_BTN, shortDateTime } from "./console-ui";
 
 const errorMessageOf = (error: unknown) => (error as { response?: { data?: { message?: string } } })?.response?.data?.message;
-
-/** Bytes as a person reads them. Snapshots run from kilobytes to gigabytes, so a fixed unit is
- *  useless in one direction or the other. */
-function formatBytes(bytes: number): string {
-  if (bytes < 1024) return `${bytes} B`;
-  const units = ["KB", "MB", "GB", "TB"];
-  let value = bytes / 1024;
-  let unit = 0;
-  while (value >= 1024 && unit < units.length - 1) {
-    value /= 1024;
-    unit += 1;
-  }
-  return `${value < 10 ? value.toFixed(1) : Math.round(value)} ${units[unit]}`;
-}
 
 function ToolBadge({ ok, name, path }: { ok: boolean; name: string; path: string }) {
   return (
