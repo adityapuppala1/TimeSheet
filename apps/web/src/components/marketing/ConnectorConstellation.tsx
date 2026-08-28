@@ -45,7 +45,7 @@ const NODE_SPECS: NodeSpec[] = [
   { group: "billing", label: "Billing", Icon: CreditCard, direction: "out" }
 ];
 
-const NODES = NODE_SPECS.map((spec) => ({ ...spec, members: connectorsIn(spec.group).map((c) => c.name) }));
+const NODES = NODE_SPECS.map((spec) => ({ ...spec, members: connectorsIn(spec.group) }));
 
 function NodeCircle({ nodeRef, children, className = "" }: { nodeRef: RefObject<HTMLDivElement | null>; children: ReactNode; className?: string }) {
   return (
@@ -93,9 +93,22 @@ export function ConnectorConstellation() {
             </NodeCircle>
             <div className="min-w-0">
               <p className="text-sm font-semibold">{node.label}</p>
-              {/* Hidden below sm — at phone width the names wrap into three lines each and the
+              {/* Each connector with its own mark rather than a dot-separated list of words — the
+                  logos are what people scan for, and "is my stack in there" is the only question
+                  this strip exists to answer.
+
+                  Hidden below sm: at phone width these wrap into several lines per group and the
                   diagram stops being a diagram. The circles and the beams still carry the idea. */}
-              <p className="hidden text-xs leading-5 text-muted-foreground sm:block">{node.members.join(" · ")}</p>
+              <ul
+                className={`mt-1 hidden flex-wrap gap-x-3 gap-y-1 sm:flex ${side === "left" ? "justify-end" : ""}`}
+              >
+                {node.members.map((member) => (
+                  <li key={member.name} className="inline-flex items-center gap-1.5 text-xs leading-5 text-muted-foreground">
+                    <member.Mark className="h-3.5 w-3.5 shrink-0" />
+                    {member.name}
+                  </li>
+                ))}
+              </ul>
             </div>
           </div>
         );
@@ -108,7 +121,7 @@ export function ConnectorConstellation() {
       ref={container}
       className="relative mx-auto flex w-full max-w-4xl items-center justify-between gap-4 overflow-hidden px-2 py-8 sm:gap-10 sm:px-6"
       role="img"
-      aria-label={`TimeSphere connects to ${CONNECTOR_COUNT} systems: ${NODES.map((n) => `${n.label} — ${n.members.join(", ")}`).join("; ")}`}
+      aria-label={`TimeSphere connects to ${CONNECTOR_COUNT} systems: ${NODES.map((n) => `${n.label} — ${n.members.map((m) => m.name).join(", ")}`).join("; ")}`}
     >
       {column(left, 0, "left")}
 

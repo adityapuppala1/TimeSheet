@@ -118,10 +118,21 @@ export function toggleTheme(origin?: { x: number; y: number }): Theme {
           clipPath: [`circle(0px at ${x}px ${y}px)`, `circle(${radius}px at ${x}px ${y}px)`]
         },
         {
-          duration: 520,
-          // Fast out of the gate and settling at the edge — a linear wipe reads mechanical, and
-          // the whole point of this is that it should feel like the theme is spreading.
-          easing: "cubic-bezier(0.22, 1, 0.36, 1)",
+          duration: 620,
+          /*
+           * LINEAR, AND THAT IS THE WHOLE POINT — this was `cubic-bezier(0.22, 1, 0.36, 1)`, an
+           * aggressive ease-out, and it was why the sweep read as coming from the middle of the
+           * screen rather than from the button. That curve is at ~93% of its travel by 25% of the
+           * duration: the circle went from nothing to nearly full-screen inside about 80ms, so the
+           * moment where it is small and visibly ON the control never lasted long enough to see.
+           * The geometry was right the whole time; the timing hid it.
+           *
+           * A radial wipe wants its EDGE moving at a constant speed, because that is what makes an
+           * origin readable — the eye tracks the boundary travelling outward from a point. Radius
+           * growing linearly does exactly that. (Area still accelerates, since area goes as r², so
+           * it does not feel mechanical the way a linear fade would.)
+           */
+          easing: "linear",
           // Only the INCOMING snapshot is clipped. The outgoing one is left alone underneath, so
           // the effect is the new theme spreading over the old rather than a hole opening in it.
           pseudoElement: "::view-transition-new(root)"
