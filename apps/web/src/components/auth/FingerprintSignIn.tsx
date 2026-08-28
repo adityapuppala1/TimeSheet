@@ -39,8 +39,7 @@ export type SealState = "idle" | "scanning" | "success" | "error";
  * So the caption does the job the other two cannot: it labels the SENSOR's state, and says what to
  * do next. The reason lives in the panel; this is the prompt.
  */
-const CAPTION: Record<SealState, string> = {
-  idle: "Sign in",
+const CAPTION: Record<Exclude<SealState, "idle">, string> = {
   scanning: "Checking your credentials…",
   success: "Signed in",
   error: "Try again"
@@ -63,10 +62,15 @@ const CAPTION_TONE: Record<SealState, string> = {
 export function FingerprintSignIn({
   state,
   disabled,
+  label = "Sign in",
   className
 }: {
   state: SealState;
   disabled?: boolean;
+  /** The control's accessible name AND its resting caption. The directory form passes "Sign in with
+   *  LDAP", which is the name tests/e2e/helpers/sign-in.ts already warns is matched by a loose
+   *  `/sign in/i` — so the two sensors stay tellable apart by an exact-name locator. */
+  label?: string;
   className?: string;
 }) {
   const busy = state === "scanning";
@@ -81,7 +85,7 @@ export function FingerprintSignIn({
         /* EXPLICIT. Without it the accessible name is computed from the caption below, so the
            control would rename itself mid-request — "Checking your credentials…" is a status, not
            a thing you press. */
-        aria-label="Sign in"
+        aria-label={label}
         className={cn(
           "group relative grid h-24 w-24 shrink-0 place-items-center rounded-full",
           "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-4 focus-visible:ring-offset-background",
@@ -152,7 +156,7 @@ export function FingerprintSignIn({
           name and would be read out twice, once as the name and once as the status. Out here it is
           a plain live region that changes underneath a button whose name never does. */}
       <span aria-live="polite" className={cn("text-sm font-semibold transition-colors duration-300", CAPTION_TONE[state])}>
-        {CAPTION[state]}
+        {state === "idle" ? label : CAPTION[state]}
       </span>
     </div>
   );

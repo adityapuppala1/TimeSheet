@@ -725,6 +725,21 @@
 
    `z-index` puts the new theme on top, so the circle is the new theme arriving rather than a hole
    punched in the old one. */
+/* Everything the app would otherwise fade on its own, held still while the wipe runs. lib/theme.ts
+   adds this class for exactly the length of the transition and removes it on `finished`.
+
+   `!important` and the universal selector are both load-bearing here — the transitions being
+   cancelled are Tailwind utilities on hundreds of individual elements, and there is no narrower
+   selector that reaches them. This is the one place in the stylesheet where that is the right tool.
+
+   `animation` is left alone deliberately: a spinner or a pulsing dot mid-flight should keep running.
+   It is the COLOUR transitions that fight the wipe. */
+html.theme-switching *,
+html.theme-switching *::before,
+html.theme-switching *::after {
+  transition: none !important;
+}
+
 ::view-transition-old(root),
 ::view-transition-new(root) {
   animation: none;

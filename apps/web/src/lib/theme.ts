@@ -86,8 +86,29 @@ export function toggleTheme(origin?: { x: number; y: number }): Theme {
   const { x, y } = origin;
   const radius = radiusToFurthestCorner(x, y);
 
+  /*
+   * SUPPRESS THE APP'S OWN COLOUR TRANSITIONS FOR THE DURATION, and this is the difference between
+   * the effect working and the effect being invisible.
+   *
+   * Measured: flipping the `dark` class starts 461 CSS transitions of 150 ms each — every card,
+   * border, chip and label carrying `transition-colors`. Those run on the LIVE DOM underneath the
+   * view transition's snapshots, so what a person actually perceives is a fast global cross-fade
+   * that is over before the circle has travelled anywhere. The wipe was running correctly the whole
+   * time; it was simply the quieter of two things happening at once.
+   *
+   * With them off, the live DOM changes instantly, the two snapshots are clean, and the circle is
+   * the only thing moving — which is the entire point of taking the snapshots.
+   */
+  document.documentElement.classList.add("theme-switching");
+
   const transition = doc.startViewTransition(() => {
     applyTheme(next);
+  });
+
+  // Removed on `finished`, not on a timer: a transition that is skipped or interrupted still
+  // settles that promise, so the class can never be left behind freezing every transition in the app.
+  void transition.finished.finally(() => {
+    document.documentElement.classList.remove("theme-switching");
   });
 
   void transition.ready

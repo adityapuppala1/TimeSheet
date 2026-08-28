@@ -32,7 +32,6 @@ import { useMutation, useQuery } from "@tanstack/react-query";
 import {
   AlertCircle,
   ArrowLeft,
-  ArrowRight,
   Eye,
   EyeOff,
   Lock,
@@ -136,12 +135,16 @@ function LdapLoginForm({ onSuccess, onStatus }: { onSuccess: (data: LoginRespons
   /* Reported from an effect rather than from the mutation callbacks: `isPending` flips on the
      render that starts the request, and a parent setState called during this component's render
      would be a React warning at best and a loop at worst. */
+  /* One derivation, used twice: for this form's own sensor and for the status it reports upward.
+     Computing it in two places is how the two would eventually disagree. */
+  let ldapSeal: SealState = "idle";
+  if (mutation.isPending) ldapSeal = "scanning";
+  else if (mutation.isSuccess) ldapSeal = "success";
+  else if (failure) ldapSeal = "error";
+
   useEffect(() => {
-    if (!onStatus) return;
-    if (mutation.isPending) onStatus("scanning");
-    else if (mutation.isSuccess) onStatus("success");
-    else onStatus(failure ? "error" : "idle");
-  }, [mutation.isPending, mutation.isSuccess, failure, onStatus]);
+    onStatus?.(ldapSeal);
+  }, [ldapSeal, onStatus]);
 
   return (
     <Form {...form}>
@@ -210,9 +213,9 @@ function LdapLoginForm({ onSuccess, onStatus }: { onSuccess: (data: LoginRespons
             </FormItem>
           )}
         />
-        <Button disabled={mutation.isPending} size="lg" className="mt-1" variant="outline">
-          {mutation.isPending ? "Signing in..." : <>Sign in with LDAP <ArrowRight className="h-4 w-4" /></>}
-        </Button>
+        {/* The same sensor as the password form, so switching tabs does not switch metaphors
+            halfway through signing in. Its own state, because this form owns its own mutation. */}
+        <FingerprintSignIn state={ldapSeal} disabled={mutation.isPending} label="Sign in with LDAP" />
       </form>
     </Form>
   );
