@@ -128,10 +128,24 @@ database**, so nothing real can be dropped. 39 assertions, `ok`/`FAIL` each, eve
 removed in the `finally`.
 
 `console-shots.mjs` seeds three throwaway trial orgs (again, no databases) so the queue and the
-feedback list have something to draw, screenshots all eight console pages in **both themes** to
+feedback list have something to draw, screenshots all eleven console pages in **both themes** to
 `test-results/run-shots/console-*.png`, and deletes them again. Use it after any console change —
 the console follows the theme now, and a page that only looks right in one of them is the bug this
 catches.
+
+```powershell
+node .claude/skills/run-timesphere/overflow-probe.mjs /platform-admin/backups 390
+```
+
+`overflow-probe.mjs` answers **why** a page scrolls sideways, which the responsive spec cannot. That
+spec names the widest elements, and on a console page most of them are innocent — a table inside an
+`overflow-x-auto` box is legitimately wider than the phone. This one walks each wide element's
+ancestors and reports only those with no scrolling ancestor between them and the document, which is
+the set that actually stretches `scrollWidth`. It found the 3.14.0 CI failure in one run: a
+`sr-only` label inside a button in a table's last column is absolutely positioned, its containing
+block was the document rather than the scroller, and one hidden word pushed the page to 967px on a
+390px screen. Route arguments must go through the **PowerShell** tool — Git Bash rewrites a leading
+`/platform-admin/...` into a Windows path.
 
 ## Human path
 

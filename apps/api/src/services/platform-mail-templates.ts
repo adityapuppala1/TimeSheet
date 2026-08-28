@@ -202,6 +202,51 @@ export const PLATFORM_TEMPLATES: PlatformTemplateDef[] = [
     )
   },
   {
+    key: "maintenance.scheduled",
+    group: "Operator",
+    description: "Sent to a workspace's super admins when the platform schedules maintenance across the fleet.",
+    variables: ["workspace", "slug", "workspaceUrl", "startsAt", "endsAt", "note", "appUrl"],
+    sample: {
+      workspace: "Acme Corp",
+      slug: "acme",
+      workspaceUrl: "https://acme.timesphere.app",
+      startsAt: "Sat, 06 Sep 2026 22:00:00 GMT",
+      endsAt: "Sat, 06 Sep 2026 23:30:00 GMT",
+      note: "Database maintenance. Timesheets already submitted are unaffected.",
+      appUrl: "https://timesphere.app"
+    },
+    subject: "Scheduled maintenance for {{workspace}}",
+    html: shell(
+      { title: "Scheduled maintenance", preheader: "{{startsAt}} — what happens and what to do.", accentColor: ACCENT },
+      heading("Scheduled maintenance for {{workspace}}") +
+        paragraph("We will be carrying out maintenance on your workspace <strong>{{workspace}}</strong>.") +
+        paragraph("<strong>From:</strong> {{startsAt}}<br /><strong>Until:</strong> {{endsAt}}") +
+        paragraph("{{note}}") +
+        paragraph(
+          "While the window is open, everyone below super administrator is signed out and sees a maintenance page; open tabs are redirected within a few seconds. Nothing is deleted, and work already saved is unaffected."
+        ) +
+        paragraph(button("Open {{slug}}", "{{workspaceUrl}}", ACCENT)) +
+        paragraph(
+          `<span style="font-size:12px;color:#64748B;">Sent by the TimeSphere platform rather than from your own workspace — your workspace may be unreachable during the window.</span>`
+        )
+    )
+  },
+  {
+    key: "maintenance.cleared",
+    group: "Operator",
+    description: "Sent when a platform-wide maintenance window is lifted — the all-clear.",
+    variables: ["workspace", "slug", "workspaceUrl", "note", "appUrl"],
+    sample: { workspace: "Acme Corp", slug: "acme", workspaceUrl: "https://acme.timesphere.app", note: "", appUrl: "https://timesphere.app" },
+    subject: "{{workspace}} is back — maintenance is finished",
+    html: shell(
+      { title: "Maintenance finished", preheader: "Your workspace is open again." },
+      heading("{{workspace}} is back") +
+        paragraph("The maintenance window has been lifted and your workspace is open to everyone again. No action is needed.") +
+        paragraph("{{note}}") +
+        paragraph(button("Open {{slug}}", "{{workspaceUrl}}"))
+    )
+  },
+  {
     key: "backup.alert",
     group: "Operator",
     description: "Sent when a managed backup succeeds or fails, to the addresses on that workspace's backup policy.",

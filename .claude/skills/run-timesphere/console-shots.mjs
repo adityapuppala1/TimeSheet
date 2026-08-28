@@ -60,6 +60,8 @@ const PAGES = [
   ["/plan-tiers", "plan-tiers"],
   ["/analytics", "analytics"],
   ["/backups", "backups"],
+  ["/monitoring", "monitoring"],
+  ["/maintenance", "maintenance"],
   ["/settings", "settings"]
 ];
 

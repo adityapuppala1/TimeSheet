@@ -697,3 +697,32 @@ model BackupRun {
   @@index([status, startedAt])
   @@index([destinationId])
 }
+
+/// One platform-wide maintenance broadcast — armed or cleared across N workspaces at once.
+///
+/// The WINDOW itself is not stored here: it lives in each workspace's own `MaintenanceSettings`,
+/// which is what the request gate, the SPA redirect and the heartbeat already read. Duplicating it
+/// in the control plane would create two sources of truth that can disagree, and "the platform says
+/// maintenance, the workspace says no" is a state nobody can debug.
+///
+/// What IS stored is the thing a tenant row cannot answer: did this reach all forty of them, who
+/// sent it, and which ones failed.
+model PlatformMaintenanceBroadcast {
+  id               String    @id @default(uuid())
+  enabled          Boolean
+  scheduledStartAt DateTime?
+  scheduledEndAt   DateTime?
+  message          String?   @db.VarChar(500)
+  /// The platform admin's email. Not a user id: they have no user row in any tenant.
+  actorLabel       String    @db.VarChar(255)
+  targetCount      Int
+  appliedCount     Int
+  failedCount      Int
+  notifiedCount    Int       @default(0)
+  emailedCount     Int       @default(0)
+  /// Per-workspace results, so a partial failure names the workspaces rather than a count.
+  outcomes         Json?
+  createdAt        DateTime  @default(now())
+
+  @@index([createdAt])
+}

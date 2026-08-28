@@ -12,6 +12,54 @@ number, on purpose — an installation must never render history for a version t
 
 _Nothing yet._
 
+## 3.15.0 — one maintenance window for the whole fleet, and per-workspace monitoring — 2026-08-29
+
+### ✨ Maintenance, across every workspace at once
+
+- **Arm one window over the whole deployment** from the platform console: pick the hours, write what
+  people will read, choose the workspaces (or all of them), and lift it again in one action.
+- It **reuses the mechanism a workspace already has** rather than adding a second one. Arming writes
+  each tenant's own maintenance row, so a customer gets exactly what their own administrator's
+  window produces — everyone below super admin signed out, the maintenance page, the in-app notice,
+  and open tabs redirected within about fifteen seconds by the heartbeat that was already running.
+  A second, control-plane gate would have meant a cross-database read on every authenticated request
+  and two sources of truth that can disagree; "the platform thinks we are in maintenance, the
+  workspace does not" is a state with no owner.
+- **Each workspace's super admins are emailed by the platform relay, not by their own workspace** —
+  a window that is about to take a workspace offline may be taking its outbound mail with it, and a
+  notice that cannot leave is not a notice. Both notices are editable, previewable, test-sendable
+  platform templates like every other.
+- **Partial failure is reported, never swallowed.** One workspace with an unreachable database does
+  not stop the other thirty-nine; it is named, with its error, and the broadcast history records who
+  armed what, over how many workspaces, and which ones did not take it.
+
+### ✨ Per-workspace monitoring
+
+- **Every tenant database at a glance** — size, tables, estimated rows, how long its probe took, its
+  maintenance state, and the alerts its numbers imply, with filters for Alerting, Maintenance and
+  Unreachable. Read one workspace at a time on purpose: forty fresh connections at once against the
+  server the whole platform runs on is a self-inflicted outage.
+- **Inspect one workspace** and the Maintenance tab its own administrators see is right there —
+  **server health, service status with its uptime strip, past incidents and API performance** over
+  7 / 30 / 90 days. Those are the SAME services called inside that tenant's context, so a support
+  call has one set of numbers instead of two that can disagree.
+- **A database panel that does not lie about scope.** Schema size split into data and indexes, the
+  largest tables, and the MySQL server's own counters — with everything server-wide labelled as
+  such, because on a shared box those belong to every workspace and reading them as one customer's
+  fault sends you to debug the wrong customer. Row counts are InnoDB estimates and say so.
+- **Alerts are derived from the numbers on the page, and every one states the threshold it crossed.**
+  Nothing here is a black box, and a panel that fails narrows the page rather than emptying it.
+
+### 🐛 Fixed
+
+- **The console scrolled sideways on a phone.** A visually hidden label inside a button in a table's
+  last column is absolutely positioned, and an absolutely positioned box whose containing block sits
+  outside the scrolling wrapper joins the *document's* overflow instead of the table's. One hidden
+  word stretched the page to 967px on a 390px screen while the table itself was perfectly contained.
+  The console's one table wrapper is now a containing block, which fixes it everywhere at once.
+- **A utilisation meter read a healthy cache hit rate as an emergency.** Buffer pool hit rate is a
+  percentage where 95% is the bad end; it was painted in the same red as a disk about to fill.
+
 ## 3.14.0 — managed backups: a plan entitlement, six destinations, and rules you can preview — 2026-08-29
 
 ### ✨ Backups became a plan feature, and a real one

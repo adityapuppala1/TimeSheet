@@ -618,6 +618,41 @@ export const HELP_ARTICLES: HelpArticle[] = [
     ],
     notes: "Nothing is ever deleted before a newer backup has succeeded, and the newest backup is never pruned however old it is. Alerts go through the PLATFORM relay rather than the workspace's own mail \u2014 the workspace's SMTP may be the thing that is broken. mysqldump and mysql must exist on the API host; the Backups page probes for them and says so.",
     keywords: ["scheduled backups", "s3", "azure", "google drive", "onedrive", "sftp", "retention", "gfs", "grandfather father son", "cadence", "daily", "weekly", "alerts", "slack", "test restore", "pitr", "destination"]
+  },
+  {
+    id: "platform-admin-maintenance",
+    category: "Platform & operations",
+    title: "Put every workspace into maintenance at once",
+    roles: SA,
+    where: "/platform-admin → Maintenance",
+    when: "A database migration, a host move, or anything that takes the whole deployment down for a while.",
+    steps: [
+      "Arm a window: pick when it starts and ends, write what people will read, and choose the workspaces. Leaving every box clear reaches every workspace that can be signed into.",
+      "This is not a separate lockout: it writes each workspace’s OWN maintenance setting, so customers get exactly what their own administrator’s window produces — everyone below super admin signed out, the maintenance page, and open tabs redirected within about fifteen seconds by the app’s heartbeat.",
+      "Notify people in-app writes the notification everyone currently online already receives. Email each workspace’s super admins sends the notice from the PLATFORM relay, because a workspace going offline may take its own mail with it.",
+      "Every workspace lists the live state read from each tenant database — in maintenance, scheduled, open, or unreachable with the reason.",
+      "Lift on N clears the window everywhere it is armed, in one action. A single workspace can also be armed or lifted from its own row.",
+      "Broadcast history records who armed what, over how many workspaces, and which ones did not take it. Open a row for the per-workspace outcome."
+    ],
+    notes: "A workspace whose database is unreachable never stops the rest of the fleet — it is reported by name with its error instead of being counted as a success. Super admins are not locked out of their own workspace during a window, so a customer can still work while their people cannot.",
+    keywords: ["maintenance", "maintenance window", "downtime", "lockout", "outage", "broadcast", "fleet", "redirect", "heartbeat", "notify", "planned maintenance", "all organizations"]
+  },
+  {
+    id: "platform-admin-monitoring",
+    category: "Platform & operations",
+    title: "Monitor one customer’s instance",
+    roles: SA,
+    where: "/platform-admin → Monitoring",
+    when: "A customer reports it is slow, or you want to know which workspace is growing fastest.",
+    steps: [
+      "The fleet table reads every workspace database through its own connection string: size, tables, estimated rows, how long the probe took, and any alerts its numbers imply. Filter by Alerting, Maintenance or Unreachable.",
+      "Inspect opens one workspace. Overview lists what needs attention — alerts are derived from the numbers on the page, and each one states the threshold it crossed.",
+      "Database: schema size split into data and indexes, the largest tables, and the MySQL server’s own counters. Anything labelled server-wide belongs to the box, which other workspaces may share — do not read it as this customer’s fault.",
+      "Server health, Service status, Past incidents and API performance are the SAME figures the customer sees in their own Maintenance tab, so a support call has one set of numbers rather than two.",
+      "The window control (7 / 30 / 90 days) applies to the status page, its incidents and the API charts together."
+    ],
+    notes: "Row counts are InnoDB estimates, not exact counts — an exact count needs a full table scan, which is not worth doing to draw a chart. The fleet is read one workspace at a time on purpose: opening forty database connections at once is a self-inflicted outage on the server the whole platform runs on.",
+    keywords: ["monitoring", "grafana", "database performance", "slow", "metrics", "alerts", "server health", "status page", "incidents", "api performance", "p95", "error rate", "buffer pool", "connections", "tenant health"]
   }
 ];
 

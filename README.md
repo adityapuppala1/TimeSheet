@@ -132,21 +132,21 @@ CAB tool holds none of that.
 | **Custom dashboards & scheduled reports (V6, opt-in)** | Build a view from a fixed catalogue of tiles — closed on purpose, so "open items" has one definition and two dashboards cannot disagree. A shared dashboard stores a *layout*, never data: every tile resolves against the viewer's own projects, so publishing one can never publish a project somebody could not already see. Email a dashboard daily, weekly or monthly to stakeholders with no account; the report is built with the sender's access and stops itself if that person leaves. |
 | **Change management (V8, opt-in)** | Raise, assess, approve, schedule, implement, validate and close a change — with the governance a ticket cannot express. **A change IS a ticket** plus an extension row, so comments, attachments, watchers, the audit trail and project-scoped visibility came free and there is no second visibility rule to keep in step. Keys read `HICS-TS-20260819-0001`. Four change types — Standard, Normal, Emergency, and **Major, which is Normal escalated rather than a fourth peer**: it forces a backout plan even when the matrix bands the change Low, and a post-implementation review even when it succeeded, because the matrix scores probability of harm and has no way to say *structurally significant*. A weighted **risk assessment** bands the change and the band decides whether a backout plan is mandatory — which is why a *complete* assessment is required to submit: an unanswered parameter contributes zero to a normalised score, so a half-filled form under-reports (measured: high impact + high data risk with nine blanks scored 27 and banded LOW), and leaving fields empty was a way to skip the module's central rule. Approval is **the requester's manager, or a super admin** — never the requester, and a rejection opens a new round rather than overwriting the first, so the objection survives the rework. A **runbook** of numbered implementation steps, test cases and dependencies stays editable *after* approval, because recording that step 4 failed is the work that happens then; an open predecessor refuses the move to Implementing with a 409 that names it. Per-stage **SLA clocks** judge a finished stage on how long it actually took rather than against the current time — the alternative is a dashboard that turns green the moment an overrun closes. A **calendar** shows scheduled work against the blackout periods it has to dodge, in one call. CSV, Excel and PDF export from one shared query, fetched as authenticated blobs and stating their own row caps. Two email templates live in **Workspace Settings → Email templates** with the same analytics and failure triage as every other mail, going to the requester, implementer, approvers and collaborators with super admins in BCC. Delivery-health figures are **null, never 0%**, when nothing has closed yet. See [docs/API.md](docs/API.md#change-management-v8). |
 | **Multi-tenant SaaS platform** | Runs as either a single-org on-prem deployment or a true multi-org SaaS platform on the same codebase. Each organization gets its own physically separate MySQL database (never a shared table filtered by a tenant column) — see [Multi-tenancy](#multi-tenancy) below. |
-| **Platform administration** | A separate `/platform-admin` console (its own auth, its own JWT secret, zero shared client state with the tenant app) for organization lifecycle, plan-tier limits (seat counts, AI budget ceilings, allowed SSO providers/chat platforms), and cross-org analytics — restricted by convention to aggregate numbers, never row-level tenant content. |
+| **Platform administration** | A separate `/platform-admin` console (its own auth, its own JWT secret, zero shared client state with the tenant app) for organization lifecycle, plan-tier limits (seat counts, AI budget ceilings, allowed SSO providers/chat platforms), managed backups, one maintenance window armed across the whole fleet, per-workspace database and API monitoring, and cross-org analytics — restricted by convention to aggregate numbers, never row-level tenant content. |
 
 ## By the numbers
 
-Counted from the tree at v3.14.0, not estimated — regenerate any of these with the one-liners in
+Counted from the tree at v3.15.0, not estimated — regenerate any of these with the one-liners in
 [CONTRIBUTING.md](CONTRIBUTING.md#regenerating-readmes-by-the-numbers) rather than trusting a figure
 that looks stale.
 
 | | |
 |---|---|
-| REST routes | **477** across 55 controllers |
-| Prisma models / enums | **127** / 44, plus **109** tenant migrations and 14 control-plane migrations |
-| Services / cron workers | **124** / 27 |
-| Web pages | **83** |
-| Unit tests | **1,885** across 161 files (`npm test -w apps/api`), plus **69** in `apps/web` |
+| REST routes | **492** across 55 controllers |
+| Prisma models / enums | **127** / 44, plus **109** tenant migrations and 15 control-plane migrations |
+| Services / cron workers | **126** / 27 |
+| Web pages | **85** |
+| Unit tests | **1,893** across 162 files (`npm test -w apps/api`), plus **69** in `apps/web` |
 | End-to-end specs | **29** Playwright specs, run across desktop, phone, tablet, laptop, 4K, Firefox and WebKit |
 | Editable email templates | **39**, every one of them with preview, test send, revert and per-template delivery analytics |
 | RBAC permissions | **38**, over 5 roles |

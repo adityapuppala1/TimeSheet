@@ -61,7 +61,16 @@ export function ConsolePage({ title, description, eyebrow, actions, children }: 
           whole cluster drops to its own line instead of squeezing the heading to one word a line.
           Below `sm` it is simply stacked — a phone has no room for a second column. */}
       <div className="flex flex-col gap-3 sm:flex-row sm:flex-wrap sm:items-end sm:justify-between">
-        <div className="min-w-0 flex-1 basis-[20rem]">
+        {/*
+         * `sm:` on BOTH flex properties, and that prefix is the fix for a real bug rather than
+         * tidiness. Below `sm` this container is `flex-col`, and in a column `flex-basis` sizes the
+         * HEIGHT — so a bare `basis-[20rem]` gave the title block a 320px tall basis on a phone and
+         * left roughly 160px of nothing between the description and the buttons under it. Every
+         * page in the console inherited that gap, on every section, which is most of why the
+         * console read as loose and unstructured on a small screen. The basis only means "a
+         * readable column" once the container is actually a row.
+         */}
+        <div className="min-w-0 sm:flex-1 sm:basis-[20rem]">
           {eyebrow && <p className="mb-1 font-mono text-[11px] font-semibold uppercase tracking-[0.14em] text-accent">{eyebrow}</p>}
           <h1 className="text-2xl font-black tracking-tight text-foreground">{title}</h1>
           {description && <p className="mt-1 max-w-3xl text-sm text-muted-foreground">{description}</p>}
@@ -97,7 +106,9 @@ export function ConsoleSection({
        corners, but it also clips focus rings at the card edge, so a padded body does without. */
     <section className={cn("min-w-0 rounded-xl border border-border bg-card shadow-sm", flush && "overflow-hidden", className)}>
       <header className="flex flex-col gap-2 border-b border-border px-5 py-4 sm:flex-row sm:flex-wrap sm:items-start sm:justify-between sm:gap-3">
-        <div className="min-w-0 flex-1 basis-[16rem]">
+        {/* `sm:`-gated for the same reason as ConsolePage's title block above: in the phone's
+            column direction a basis is a height, not a width. */}
+        <div className="min-w-0 sm:flex-1 sm:basis-[16rem]">
           <h2 className="text-base font-semibold text-foreground">{title}</h2>
           {description && <p className="mt-0.5 max-w-2xl text-sm text-muted-foreground">{description}</p>}
         </div>
@@ -131,7 +142,16 @@ export function Toolbar({ children, className }: { children: ReactNode; classNam
  */
 export function ConsoleTable({ minWidth = 900, children, className }: { minWidth?: number; children: ReactNode; className?: string }) {
   return (
-    <div className={cn("min-w-0 overflow-x-auto rounded-lg border border-border", className)}>
+    /*
+     * `relative` is load-bearing, not decoration. A `sr-only` label inside a button in the last
+     * column is `position: absolute`, and an absolutely positioned box whose containing block sits
+     * OUTSIDE this scroller does not join the scroller's overflow — it joins the document's. So one
+     * visually hidden word at x≈966 quietly stretched `documentElement.scrollWidth` to 967 on a
+     * 390px phone while the table itself was perfectly contained, which is exactly the shape of
+     * bug the responsive spec caught on /platform-admin/backups. Positioning the wrapper makes it
+     * the containing block, and the hidden label scrolls with the table like everything else.
+     */
+    <div className={cn("relative min-w-0 overflow-x-auto rounded-lg border border-border", className)}>
       {/* Inline style, not `min-w-[${minWidth}px]`: Tailwind's JIT only compiles class names it can
           read as literals in the source, so a class built from a prop would generate no CSS. */}
       <table className="w-full caption-bottom text-sm" style={{ minWidth }}>

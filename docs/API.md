@@ -2147,6 +2147,42 @@ Same prefix and auth, different router (`platform-admin-console.controller.ts`).
   a scratch database, counts the tables and drops it (Enterprise only);
   `POST /backups/tick { dryRun }` runs the scheduler pass, defaulting to a dry run.
 
+### Fleet maintenance (3.15.0)
+
+- `GET /maintenance/fleet` — every reachable workspace's CURRENT maintenance window, read live from
+  its own tenant database (never cached: a stale answer to "is everyone in maintenance yet?" is
+  worse than a slow one), plus the last fifteen broadcasts. A workspace whose database did not
+  answer is returned with `settings: null` and its error, never guessed at.
+- `POST /maintenance/broadcast` `{ organizationIds[], enabled, scheduledStartAt?, scheduledEndAt?,
+  message?, notifyUsers?, emailSuperAdmins? }` — arms or lifts one window across the chosen
+  workspaces (an empty `organizationIds` means every reachable one). It writes each tenant's own
+  `MaintenanceSettings` row inside `withOrgTenant`, so the customer-facing behaviour is exactly the
+  behaviour their own admin's window produces: the `503 { code: "MAINTENANCE" }` gate in
+  `middleware/auth.ts`, the SPA's redirect to `/maintenance`, and the 15-second heartbeat that
+  redirects an open tab. `notifyUsers` calls the tenant's own `notifyUsersOfMaintenance`;
+  `emailSuperAdmins` sends `maintenance.scheduled` / `maintenance.cleared` through the **platform**
+  relay, because a workspace going offline may take its own outbound mail with it.
+  Arming without both window ends is `422`. One workspace's failure never stops the fleet — each
+  result is returned per workspace and recorded on the `PlatformMaintenanceBroadcast` row.
+
+### Per-workspace monitoring (3.15.0)
+
+- `GET /monitoring/fleet` — every workspace database at a glance: size, table count, estimated rows,
+  how long its probe took, its maintenance phase, and the alerts its numbers imply. Read
+  **sequentially** on purpose — one fresh connection per workspace, and forty at once against one
+  MySQL server is a self-inflicted outage.
+- `GET /monitoring/:orgId?days=1..90` — one workspace, as five independent sections
+  (`{ data, error }` each, so a failure narrows the page rather than emptying it): its maintenance
+  window, `getSystemHealth()`, `getStatusPage(days)` with its incident history,
+  `getApiPerformanceOverview(days * 24)` and the database metrics — the SAME services that draw the
+  customer's own Maintenance tab, called inside their tenant context, so support has one set of
+  numbers rather than two.
+- `GET /monitoring/:orgId/database` — the database panel alone, for the poll that keeps it fresh.
+  Counters that describe the MySQL **server** (connections, buffer pool, uptime) are returned under
+  `server` and tagged `scope: "server"`: on a shared box they belong to every workspace, and reading
+  them as one tenant's fault sends somebody to debug the wrong customer. Row counts are InnoDB
+  estimates and are labelled as such.
+
 ## Public retention doors
 
 Base URL `/api/public`. No authentication: a signed token in the URL is the credential, and the

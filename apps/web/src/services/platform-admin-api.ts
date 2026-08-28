@@ -1,4 +1,8 @@
 import axios, { type AxiosRequestConfig } from "axios";
+/* TYPE-ONLY, and erased at build: the platform console reads the very same tenant health
+   services a workspace's own Maintenance tab does, so a second copy of these shapes could
+   only drift out of step with the first. No runtime coupling to the tenant axios client. */
+import type { ApiPerformanceOverview, StatusPage, SystemHealthSnapshot } from "./api";
 
 /**
  * A completely separate axios instance from services/api.ts's tenant `api` — different base
@@ -757,4 +761,143 @@ export const platformBackupApi = {
   sweep: async (orgId: string) => (await platformAdminApi.post<{ kept: number; deleted: number; failed: number }>(`/backups/sweep/${orgId}`)).data,
   testRestore: async (runId: string) => (await platformAdminApi.post<{ ok: boolean; message: string; tables?: number }>(`/backups/runs/${runId}/test-restore`)).data,
   tick: async (dryRun: boolean) => (await platformAdminApi.post<BackupTickResult>("/backups/tick", { dryRun })).data
+};
+
+/* ================================ Fleet maintenance ================================= */
+
+/** One workspace's own `MaintenanceSettings` row, read through the control plane. */
+export interface WorkspaceMaintenanceState {
+  organizationId: string;
+  name: string;
+  slug: string;
+  status: string;
+  settings: {
+    enabled: boolean;
+    phase: "off" | "scheduled" | "active" | "expired" | string;
+    scheduledStartAt: string | null;
+    scheduledEndAt: string | null;
+    message: string | null;
+  } | null;
+  /** Set when the workspace's database could not be read — stated rather than guessed at. */
+  error: string | null;
+}
+
+export interface BroadcastOutcome {
+  organizationId: string;
+  slug: string;
+  ok: boolean;
+  notified: number;
+  emailed: boolean;
+  error: string | null;
+}
+
+export interface MaintenanceBroadcastRow {
+  id: string;
+  enabled: boolean;
+  scheduledStartAt: string | null;
+  scheduledEndAt: string | null;
+  message: string | null;
+  actorLabel: string;
+  targetCount: number;
+  appliedCount: number;
+  failedCount: number;
+  notifiedCount: number;
+  emailedCount: number;
+  outcomes: BroadcastOutcome[] | null;
+  createdAt: string;
+}
+
+/* ================================ Tenant monitoring ================================= */
+
+export interface TenantDatabaseMetrics {
+  databaseName: string;
+  host: string;
+  serverVersion: string | null;
+  schema: {
+    tableCount: number;
+    estimatedRows: number;
+    dataBytes: number;
+    indexBytes: number;
+    totalBytes: number;
+    indexShare: number | null;
+    largestTables: Array<{ name: string; estimatedRows: number; dataBytes: number; indexBytes: number; totalBytes: number }>;
+  };
+  /** Everything here describes the SERVER, which other workspaces may share. */
+  server: {
+    scope: "server";
+    uptimeSec: number | null;
+    threadsConnected: number | null;
+    threadsRunning: number | null;
+    maxConnections: number | null;
+    connectionUsePercent: number | null;
+    slowQueries: number | null;
+    questions: number | null;
+    bufferPoolHitRate: number | null;
+    abortedConnects: number | null;
+  };
+  queryMs: number;
+}
+
+export interface HealthAlert {
+  severity: "critical" | "warning" | "info";
+  title: string;
+  detail: string;
+  area: "database" | "services" | "api" | "server" | "maintenance";
+}
+
+/** A panel that may have failed on its own without taking the page with it. */
+export interface HealthSection<T> {
+  data: T | null;
+  error: string | null;
+}
+
+export interface FleetHealthRow {
+  organizationId: string;
+  name: string;
+  slug: string;
+  status: string;
+  planTier: string;
+  databaseName: string | null;
+  reachable: boolean;
+  error: string | null;
+  totalBytes: number | null;
+  tableCount: number | null;
+  estimatedRows: number | null;
+  queryMs: number | null;
+  maintenancePhase: string | null;
+  alerts: HealthAlert[];
+}
+
+export const platformOpsApi = {
+  fleetMaintenance: async () =>
+    (await platformAdminApi.get<{ workspaces: WorkspaceMaintenanceState[]; broadcasts: MaintenanceBroadcastRow[] }>("/maintenance/fleet")).data,
+
+  /** `organizationIds: []` means every reachable workspace — the console always states which. */
+  broadcast: async (payload: {
+    organizationIds: string[];
+    enabled: boolean;
+    scheduledStartAt?: string | null;
+    scheduledEndAt?: string | null;
+    message?: string | null;
+    notifyUsers?: boolean;
+    emailSuperAdmins?: boolean;
+  }) => (await platformAdminApi.post<{ broadcastId: string; outcomes: BroadcastOutcome[] }>("/maintenance/broadcast", payload)).data,
+
+  fleetHealth: async () =>
+    (await platformAdminApi.get<{ rows: FleetHealthRow[]; totals: { databases: number; reachable: number; totalBytes: number; alerts: number } }>("/monitoring/fleet")).data,
+
+  tenantHealth: async (orgId: string, days = 30) =>
+    (
+      await platformAdminApi.get<{
+        organization: { id: string; name: string; slug: string; status: string; planTier: string; databaseName: string | null };
+        maintenance: HealthSection<{ enabled: boolean; phase: string; scheduledStartAt: string | null; scheduledEndAt: string | null; message: string | null }>;
+        system: HealthSection<SystemHealthSnapshot>;
+        status: HealthSection<StatusPage>;
+        api: HealthSection<ApiPerformanceOverview>;
+        database: HealthSection<TenantDatabaseMetrics>;
+        alerts: HealthAlert[];
+      }>(`/monitoring/${orgId}`, { params: { days } })
+    ).data,
+
+  tenantDatabase: async (orgId: string) => (await platformAdminApi.get<TenantDatabaseMetrics>(`/monitoring/${orgId}/database`)).data
 };

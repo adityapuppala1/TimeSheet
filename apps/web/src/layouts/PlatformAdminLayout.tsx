@@ -8,18 +8,21 @@
  * A console that ignores the theme the operator chose everywhere else reads as broken, not as
  * distinct.
  *
- * Grouped navigation, unlike the first three-item version: eight destinations do need wayfinding.
- * Tenants (organizations, tiers, analytics), Growth (retention, emails, feedback), Platform
- * (settings) — the order an operator's day runs in.
+ * Grouped navigation, unlike the first three-item version: ten destinations do need wayfinding.
+ * Tenants (organizations, tiers, analytics), Growth (retention, emails, feedback), Operations
+ * (monitoring, maintenance, backups), Platform (settings) — the order an operator's day runs in.
+ * Operations is its own group rather than more items under Platform because those three are what
+ * somebody opens when something is wrong, and a group you reach for under pressure should not be
+ * mixed in with the one you reach for once a quarter.
  *
  * THE SHELL OWNS THE GEOMETRY. The sidebar is a hard 16rem column and the content column clips its
  * own horizontal overflow, so a page can never widen the shell: anything wide scrolls inside its
  * own box (`ConsoleTable` in the console kit), which is the repo's rule everywhere. `<main>` sets
- * the one padding scale and the one measure the eight pages share; a page that sets its own is a
+ * the one padding scale and the one measure the ten pages share; a page that sets its own is a
  * bug. Read the AccountFooter and column comments below before "simplifying" a `min-w-0` away —
  * each one is load-bearing and each one is there because something visibly broke without it.
  */
-import { BarChart3, Building2, DatabaseBackup, HeartHandshake, KeyRound, LayoutDashboard, LogOut, Mails, Menu, MessageSquareHeart, Settings2, ShieldAlert, ShieldCheck, SlidersHorizontal } from "lucide-react";
+import { Activity, BarChart3, Building2, DatabaseBackup, HeartHandshake, KeyRound, LayoutDashboard, LogOut, Mails, Menu, MessageSquareHeart, Radio, Settings2, ShieldAlert, ShieldCheck, SlidersHorizontal } from "lucide-react";
 import { useState } from "react";
 import { NavLink, Outlet, useNavigate } from "react-router";
 import { useMutation } from "@tanstack/react-query";
@@ -56,11 +59,16 @@ const NAV: Array<{ heading?: string; items: Array<{ to: string; label: string; i
     ]
   },
   {
-    heading: "Platform",
+    heading: "Operations",
     items: [
-      { to: "/platform-admin/backups", label: "Backups", icon: DatabaseBackup },
-      { to: "/platform-admin/settings", label: "Settings", icon: Settings2 }
+      { to: "/platform-admin/monitoring", label: "Monitoring", icon: Activity },
+      { to: "/platform-admin/maintenance", label: "Maintenance", icon: Radio },
+      { to: "/platform-admin/backups", label: "Backups", icon: DatabaseBackup }
     ]
+  },
+  {
+    heading: "Platform",
+    items: [{ to: "/platform-admin/settings", label: "Settings", icon: Settings2 }]
   }
 ];
 

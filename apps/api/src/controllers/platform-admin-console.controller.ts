@@ -40,6 +40,8 @@ import {
 import { getPlatformAnalytics } from "../services/platform-admin-analytics.service.js";
 import { getPlatformEmailAnalytics } from "../services/platform-email-analytics.service.js";
 import { deleteSnapshot, listSnapshots, restoreSnapshot, snapshotPath } from "../services/platform-backup.service.js";
+import { broadcastMaintenance, getFleetMaintenance, listBroadcasts } from "../services/platform-maintenance.service.js";
+import { getDatabaseMetrics, getFleetHealth, getTenantHealth } from "../services/platform-tenant-health.service.js";
 import { DESTINATION_FIELDS, describeSecret, encryptDestinationSecret, testDestination, type BackupDestinationKind, type DestinationRecord } from "../services/backup-destination.service.js";
 import { backupEntitlement, nextRunAt, planRetention, runBackup, runBackupTick, sweepRetention, testRestore } from "../services/backup.service.js";
 import { allowedBackupFrequencies, BACKUP_FREQUENCY_LABEL, backupFrequencyAllowed, type BackupFrequency } from "@timesheet/shared";
@@ -546,6 +548,70 @@ platformAdminConsoleRouter.delete("/auth/sessions/:id", async (req, res) => {
   if (id === req.platformAdminSessionId) throw new AppError(409, "Use Sign out to end this session.");
   await controlPrisma.platformAdminSession.updateMany({ where: { id, adminUserId: req.platformAdmin!.id, revokedAt: null }, data: { revokedAt: new Date() } });
   res.status(204).send();
+});
+
+/* ============================ Platform-wide maintenance ========================= */
+
+/**
+ * Every workspace's current maintenance window, read live.
+ *
+ * NOT CACHED, on purpose: this is an operator watching a change window, and a ten-second-stale
+ * "is everyone in maintenance yet?" is worse than a slow answer.
+ */
+platformAdminConsoleRouter.get("/maintenance/fleet", async (_req, res) => {
+  const [workspaces, broadcasts] = await Promise.all([getFleetMaintenance(), listBroadcasts(15)]);
+  res.json({ workspaces, broadcasts });
+});
+
+const broadcastSchema = z.object({
+  body: z
+    .object({
+      /** Empty = every reachable workspace. The console makes that choice explicit. */
+      organizationIds: z.array(z.string()).default([]),
+      enabled: z.boolean(),
+      scheduledStartAt: z.string().datetime().nullable().optional(),
+      scheduledEndAt: z.string().datetime().nullable().optional(),
+      message: z.string().max(500).nullable().optional(),
+      notifyUsers: z.boolean().optional(),
+      emailSuperAdmins: z.boolean().optional()
+    })
+    .strict()
+});
+
+platformAdminConsoleRouter.post("/maintenance/broadcast", validate(broadcastSchema), async (req, res) => {
+  const result = await broadcastMaintenance({
+    organizationIds: req.body.organizationIds ?? [],
+    enabled: req.body.enabled,
+    scheduledStartAt: req.body.scheduledStartAt ? new Date(req.body.scheduledStartAt) : null,
+    scheduledEndAt: req.body.scheduledEndAt ? new Date(req.body.scheduledEndAt) : null,
+    message: req.body.message ?? null,
+    notifyUsers: req.body.notifyUsers ?? false,
+    emailSuperAdmins: req.body.emailSuperAdmins ?? false,
+    actorLabel: actorLabel(req)
+  });
+  res.json(result);
+});
+
+/* ============================== Per-tenant monitoring =========================== */
+
+/** Every workspace's database at a glance, with the alerts each one's numbers imply. */
+platformAdminConsoleRouter.get("/monitoring/fleet", async (_req, res) => {
+  res.json(await getFleetHealth());
+});
+
+/**
+ * One workspace: its maintenance state, server health, service status with incident history, API
+ * performance and database metrics — the same figures its own admins see in their Maintenance tab,
+ * because the same services produce them.
+ */
+platformAdminConsoleRouter.get("/monitoring/:orgId", async (req, res) => {
+  const days = Math.min(90, Math.max(1, Number(req.query.days) || 30));
+  res.json(await getTenantHealth(String(req.params.orgId), days));
+});
+
+/** The database panel alone, for the poll that keeps it fresh without re-reading the whole page. */
+platformAdminConsoleRouter.get("/monitoring/:orgId/database", async (req, res) => {
+  res.json(await getDatabaseMetrics(String(req.params.orgId)));
 });
 
 /* ============================== Managed backups ================================= */
