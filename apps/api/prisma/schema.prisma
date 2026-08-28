@@ -1951,17 +1951,17 @@ model PracticeUpdateRecord {
   periodLabel String   @db.VarChar(120)
 
   /// The counted half: metrics and initiative tables, exactly as generated.
-  data Json
+  data      Json
   /// The written half: the editable prose. Null while a generate produced figures but no narrative.
   narrative Json?
   /// Which of "switched off", "unreachable" or "wrong shape" happened, when the model didn't write.
   /// Kept so reopening a restored draft explains itself instead of looking silently incomplete.
-  aiFailed String? @db.Text
+  aiFailed  String? @db.Text
 
   /// What was actually mailed, captured at send time. The archive renders THIS rather than
   /// re-deriving from `data`, so a change to the email template can never rewrite history.
-  sentSubject String? @db.VarChar(400)
-  sentHtml    String? @db.LongText
+  sentSubject String?   @db.VarChar(400)
+  sentHtml    String?   @db.LongText
   sentAt      DateTime?
   /// The addresses it went to, as they were then — a distribution list edited later must not
   /// change who a past update says it reached.
@@ -3996,7 +3996,21 @@ model AiProposalChange {
   proposalId String
   proposal   AiProposal @relation(fields: [proposalId], references: [id], onDelete: Cascade)
 
-  /// TICKET | PROJECT | BOOKING | LINK
+  /// TICKET | CHANGE | PROJECT | BOOKING | LINK | TICKET_LABEL — the authoritative list is
+  /// `aiProposalTargetTypes` in packages/shared, which the API and the browser both import.
+  ///
+  /// THIS COMMENT USED TO SAY FOUR OF THOSE SIX, and so did the web's copy of the union. That is
+  /// how a change request's id ended up being fetched as a ticket: the browser's type said CHANGE
+  /// could not occur, so nothing flagged the page routing every proposal target to the ticket
+  /// sheet, and the 404 rendered as a blank panel.
+  ///
+  /// WHY IT IS A VarChar AND NOT AN ENUM, when `op` and the proposal's `kind`/`status` beside it
+  /// all are: every row is created through ONE path (`createProposal`, ai-proposal.service.ts)
+  /// whose changes are typed `DraftChange`, so the database already cannot receive a value outside
+  /// that list and an enum would add no guarantee. What it would add is a schema migration on a
+  /// live table for every future value — a cost worth paying for `status`, which drives queries and
+  /// indexes, and not for a discriminator that only decides which page a link opens. Revisit this
+  /// if a second write path appears or if anything starts filtering on this column.
   targetType String             @db.VarChar(20)
   /// NULL for op = CREATE — the row does not exist yet. Filled in once applied.
   targetId   String?

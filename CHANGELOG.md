@@ -12,6 +12,55 @@ number, on purpose — an installation must never render history for a version t
 
 _Nothing yet._
 
+## 3.8.1 — three reported bugs, and the type that hid one of them — 2026-08-28
+
+### 🐛 Opening a ticket from AI suggestions showed a blank panel
+
+- **Reported, reproduced, fixed.** The "open this" chevron on the AI suggestions page sent *every*
+  target to the ticket panel — but a suggestion points at whatever produced it: drafted change
+  sections point at a change request, risk mitigations point at a project. Only plan breakdowns and
+  requirements point at tickets. On a real workspace 11 of 13 targets weren't tickets, so the panel
+  asked for a ticket that didn't exist and rendered nothing at all.
+- **The chevron now goes where the thing actually lives** — a change opens the change, a ticket
+  opens the ticket — and it isn't offered at all for the kinds that have no page of their own,
+  rather than being a link that goes somewhere useless.
+- **A ticket panel that can't load now says why.** It separates "there is no ticket here" from "you
+  don't have access to it" from "the request failed", each with what to do next. That matters
+  beyond this one flow: the panel opens from a URL anybody can type or bookmark, so it has to answer
+  for an id that resolves to nothing no matter who sent it.
+
+### 🐛 The uploaded-document preview wouldn't scroll on a phone
+
+- The preview had a scrolling box inside a dialog that also scrolled, so below roughly 600 px of
+  screen height a swipe moved whichever of the two it happened to land on — which reads as "it
+  won't scroll". It also sized itself against the wrong viewport height, so with the browser's
+  address bar showing it was always slightly too tall for the space it had.
+- Now the title and the **Close** button stay put and only the document moves. Checked at five
+  screen heights from a small phone up.
+
+### ⚡ Scrolling near AI content was three times more expensive than it needed to be
+
+- **Measured, not guessed** — and it was none of the obvious suspects. Switching off the animated
+  card borders changed nothing; the rich-text editors accounted for 14% and the blurred panels 9%.
+- The cause was the small shimmering "Refine with AI" labels: six of them on one page, each
+  animating forever, each forcing the browser to recalculate the page's styles every frame. On the
+  Practice update page that was **57 ms per frame with every frame dropped**; it is now **20 ms with
+  none dropped** — the same as pages that have no AI content at all, and this on a deliberately
+  slowed-down machine standing in for a phone.
+- **The labels still shimmer, on hover.** At rest they keep their gradient and hold still, which is
+  what the rest of the app's AI styling already does — a control that shimmers permanently is the
+  kind of motion people turn off site-wide to escape.
+
+### 🔧 The type that let the first bug through
+
+- The list of things an AI suggestion can point at was written out by hand in three places — the
+  database schema's comment, the API, and the browser — and two of them had fallen behind. Because
+  the browser's copy said a change request couldn't appear, nothing flagged the page treating one
+  as a ticket.
+- It is now defined **once** and imported by both applications, and the routing has to account for
+  every entry: adding a new kind of target stops the build until somebody decides where its link
+  should go. Nine new tests cover it, including the exact case that broke.
+
 ## 3.8.0 — every upload gets scanned, and identity lives in one tab — 2026-08-28
 
 ### 🔒 Files are scanned for malware before they are stored, not after

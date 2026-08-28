@@ -24,6 +24,7 @@
  * WHO CALLS THIS: `controllers/ai-proposal.controller.ts`.
  */
 import { Prisma } from "@prisma/client";
+import type { AiProposalTargetType } from "@timesheet/shared";
 import { prisma } from "../config/prisma.js";
 import { AppError } from "../middleware/error.js";
 import { audit } from "./audit.service.js";
@@ -45,7 +46,9 @@ export type ProposalKind =
   | "CHANGE_DRAFT"
   | "REQUIREMENTS_DOC";
 export type ChangeOp = "CREATE" | "UPDATE" | "LINK";
-export type ChangeTarget = "TICKET" | "PROJECT" | "BOOKING" | "LINK" | "TICKET_LABEL" | "CHANGE";
+/** Re-exported rather than redeclared: the list lives in @timesheet/shared so the browser can
+ *  import the same one. See the comment there for why it is not a Prisma enum. */
+export type ChangeTarget = AiProposalTargetType;
 
 export interface DraftChange {
   targetType: ChangeTarget;

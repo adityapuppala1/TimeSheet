@@ -171,6 +171,34 @@ export type SecurityFindingStatus = (typeof securityFindingStatuses)[number];
 export const securityFindingAiVerdicts = ["TRUE_POSITIVE", "FALSE_POSITIVE", "NEEDS_REVIEW"] as const;
 export type SecurityFindingAiVerdict = (typeof securityFindingAiVerdicts)[number];
 
+/**
+ * What one row of an AI proposal points AT — the single source for the API and the browser alike.
+ *
+ * WHY THIS LIVES HERE and not as a literal union in each app. It used to be written twice: once in
+ * `ai-proposal.service.ts` (correct, six values) and once by hand in the web's `api.ts` (four
+ * values, missing CHANGE and TICKET_LABEL). The copies drifted, and because the web's copy said
+ * CHANGE could not occur, TypeScript happily accepted a page that routed every proposal target to
+ * the ticket sheet — so a change id was fetched as a ticket, 404'd, and rendered a blank panel.
+ * Two apps agreeing about a wire format is exactly what this package is for.
+ *
+ * WHY IT IS NOT A PRISMA ENUM, unlike its three siblings on the same table (`AiProposalKind`,
+ * `AiProposalStatus`, `AiProposalChangeOp`), which is a fair question to ask:
+ *   - Every row is created through ONE path — `createProposal` in ai-proposal.service.ts — whose
+ *     `changes` are `DraftChange[]`, and `DraftChange.targetType` is this type. The database
+ *     already cannot receive a value outside this list, so an enum would add no guarantee.
+ *   - A MySQL enum makes every future value a schema migration on a live table. That cost is worth
+ *     paying for `status`, which drives queries and indexes; it is not worth paying for a
+ *     discriminator that only decides which page a link opens.
+ * If that ever stops being true — a second write path, or a query that filters on this column —
+ * revisit it, but do so deliberately rather than for symmetry.
+ *
+ * ADDING A VALUE: add it here, and the web's `destinationFor` (pages/Proposals.tsx) will fail to
+ * compile until somebody decides where its "open this" chevron should go. That failure is the
+ * point; it is the check this list exists to provide.
+ */
+export const aiProposalTargetTypes = ["TICKET", "CHANGE", "PROJECT", "BOOKING", "LINK", "TICKET_LABEL"] as const;
+export type AiProposalTargetType = (typeof aiProposalTargetTypes)[number];
+
 export const testRunStatuses = ["PASSED", "FAILED", "RUNNING"] as const;
 export type TestRunStatus = (typeof testRunStatuses)[number];
 
