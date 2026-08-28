@@ -460,6 +460,30 @@
   }
 }
 
+/*
+ * THE GRADIENT IS ALWAYS ON; THE MOTION IS NOT. This used to animate infinitely and pause on hover
+ * — exactly backwards, and by far the most expensive thing in the app.
+ *
+ * MEASURED, on the Practice update page (six of these on screen, one per section, 6x CPU throttle
+ * to stand in for a phone). Scrolling with the animation running: 57.4 ms median frame, 75.2 ms
+ * p95, 59 of 59 frames janky, 307 ms of style recalculation across 65 recalcs. With it off:
+ * 20.9 ms median, 23.9 ms p95, ZERO janky frames, zero recalcs. The Tickets page, with five times
+ * the DOM nodes and none of these, sits at 17.6 ms — so this one rule was the entire difference
+ * between "smooth" and "sluggish", and it was not the border glow, the rich-text editors or the
+ * backdrop blurs, all three of which were measured and cleared first.
+ *
+ * WHY IT CANNOT JUST BE OPTIMISED: `background-position` is not a compositable property, and under
+ * `background-clip: text` every frame re-rasterises a text-shaped clip on the main thread.
+ * `will-change` (48.4 ms), `contain` (57.5 ms) and both together (62.8 ms — worse) were each
+ * measured and none of them helps. There is no cheap version of this effect.
+ *
+ * WHY HOVER IS THE RIGHT TRIGGER: the sibling rule below says it outright — "a control that
+ * shimmers permanently in a toolbar is the kind of motion people disable the whole app's animation
+ * to escape". `.ai-specular` already follows that; this now does too. At rest the gradient still
+ * marks the control as one that spends a model call, which was always the job. The old comment
+ * worried about a label holding still for a reader, and that concern is met better this way: at
+ * rest — which is when anybody is reading — it is now completely static.
+ */
 .ai-gradient-text {
   background-image: linear-gradient(
     90deg,
@@ -471,11 +495,15 @@
   -webkit-background-clip: text;
   background-clip: text;
   color: transparent;
-  animation: ai-gradient-slide 3s linear infinite;
 }
-/* Pause on hover: a label somebody is trying to read must hold still for them. */
-.ai-gradient-text:hover {
-  animation-play-state: paused;
+
+/* The label is nearly always inside the button rather than being it, so the hover that matters is
+   the control's, not the span's. Both are listed so it works either way. */
+:is(button, a, [role="button"]):hover .ai-gradient-text,
+:is(button, a, [role="button"]):focus-visible .ai-gradient-text,
+.ai-gradient-text:hover,
+.ai-gradient-text:focus-visible {
+  animation: ai-gradient-slide 3s linear infinite;
 }
 
 @keyframes ai-gradient-slide {
@@ -547,6 +575,10 @@
 @media (prefers-reduced-motion: reduce) {
   .ai-glow::before,
   .ai-gradient-text,
+  .ai-gradient-text:hover,
+  .ai-gradient-text:focus-visible,
+  :is(button, a, [role="button"]):hover .ai-gradient-text,
+  :is(button, a, [role="button"]):focus-visible .ai-gradient-text,
   .ai-strand {
     animation: none;
   }

@@ -691,8 +691,18 @@ function SourceDocumentCard({ doc, canWrite, onChanged }: { doc: RequirementsDoc
       </Card>
 
       <Dialog open={viewerOpen} onOpenChange={setViewerOpen}>
-        <DialogContent className="sm:max-w-2xl">
-          <DialogHeader>
+        {/*
+          A COLUMN WITH ONE SCROLLING ROW, not a dialog that scrolls as a whole.
+
+          `overflow-hidden` cancels the `overflow-y-auto` DialogContent sets for itself, so the only
+          scrollable element in here is the body below. The alternative — letting the whole dialog
+          scroll — pushes the title and the Close button off screen on a long document, and Close is
+          the one control a reader on a phone must always be able to reach. `min-h-0` on the body is
+          what makes it shrink instead of the flex default of refusing to go below its content, which
+          is the thing that quietly turns a fixed footer back into a scrolled-away one.
+        */}
+        <DialogContent className="flex max-h-[calc(100dvh-2rem)] flex-col overflow-hidden sm:max-w-2xl">
+          <DialogHeader className="shrink-0 pr-8">
             <DialogTitle className="truncate">{doc.sourceDocumentName}</DialogTitle>
             <DialogDescription>
               {doc.sourceDocumentSize != null && `${formatBytes(doc.sourceDocumentSize)} · `}
@@ -700,8 +710,10 @@ function SourceDocumentCard({ doc, canWrite, onChanged }: { doc: RequirementsDoc
               {doc.sourceDocumentUploadedAt && ` on ${new Date(doc.sourceDocumentUploadedAt).toLocaleDateString()}`}
             </DialogDescription>
           </DialogHeader>
-          <SourceDocumentViewer docId={doc.id} enabled={viewerOpen} />
-          <DialogFooter>
+          <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain">
+            <SourceDocumentViewer docId={doc.id} enabled={viewerOpen} />
+          </div>
+          <DialogFooter className="shrink-0">
             <Button variant="ghost" onClick={() => setViewerOpen(false)}>
               Close
             </Button>

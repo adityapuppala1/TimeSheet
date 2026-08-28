@@ -70,6 +70,32 @@ const STATUS_LABEL: Record<AiProposalRow["status"], string> = {
 };
 
 /** Renders one row's change as before → after, so a reviewer sees what actually moves. */
+/**
+ * Where the "open this" chevron goes, per target type - and `null` when the honest answer is
+ * nowhere.
+ *
+ * THIS USED TO SEND EVERY TARGET TO THE TICKET SHEET, which was wrong for most rows on this
+ * page. A proposal targets whatever the feature that produced it works on: CHANGE_DRAFT targets
+ * change requests, RISK_MITIGATION targets projects, and only PLAN_BREAKDOWN and REQUIREMENTS_DOC
+ * target tickets. On a real workspace 11 of 13 targets were not tickets, so the chevron handed a
+ * change or project id to `GET /tickets/:id`, which 404s - and the ticket sheet had no error
+ * state, so it opened blank. Two bugs stacked into one silent white panel.
+ *
+ * The reason nothing caught it: `targetType` in api.ts listed four values and omitted CHANGE, so
+ * TypeScript believed the case could not arise. That union is corrected too.
+ *
+ * BOOKING, LINK and TICKET_LABEL return null deliberately. None has a page of its own, and a
+ * chevron landing on a list the viewer may not have permission for is worse than no chevron: it
+ * reads as a broken link rather than an absent feature. If a per-project view ever gains a deep
+ * link, PROJECT belongs here too.
+ */
+function destinationFor(change: AiProposalChangeRow): string | null {
+  if (!change.targetId) return null;
+  if (change.targetType === "TICKET") return `/app/tickets?open=${change.targetId}`;
+  if (change.targetType === "CHANGE") return `/app/changes/${change.targetId}`;
+  return null;
+}
+
 function ChangeDiff({ change }: { change: AiProposalChangeRow }) {
   if (change.op === "CREATE" || change.op === "LINK") return null;
   const before = change.before ?? {};
@@ -351,12 +377,13 @@ export function ProposalsPage() {
                             )}
                           </div>
 
-                          {change.targetId && (
+                          {destinationFor(change) && (
                             <Button
                               size="sm"
                               variant="ghost"
                               className="h-6 shrink-0 px-1.5"
-                              onClick={() => navigate(`/app/tickets?open=${change.targetId}`)}
+                              title={`Open this ${change.targetType.toLowerCase()}`}
+                              onClick={() => navigate(destinationFor(change)!)}
                             >
                               <ChevronRight className="h-3.5 w-3.5" />
                             </Button>

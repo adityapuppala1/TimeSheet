@@ -61,12 +61,32 @@ function PdfPreview({ docId }: { docId: string }) {
   }, [docId]);
 
   if (failed) return <p className="text-sm text-muted-foreground">That file could not be loaded — it may have been removed from storage.</p>;
-  if (!url) return <Skeleton className="h-[60vh] w-full" />;
+  if (!url) return <Skeleton className="h-[60dvh] w-full" />;
   // `title` is what a screen reader announces for the frame; without it this is an unlabelled
   // region. Sandboxed on the server side too via the response's own CSP header.
-  return <iframe src={url} title="Uploaded document" className="h-[60vh] w-full rounded-md border border-border" />;
+  return <iframe src={url} title="Uploaded document" className="h-[60dvh] w-full rounded-md border border-border" />;
 }
 
+/**
+ * The document body. Deliberately renders at its NATURAL height and owns no scroll container of
+ * its own — the dialog around it is the single scroll region (see RequirementsDocView.tsx).
+ *
+ * WHY, because the previous `max-h-[60vh] overflow-auto` here looked more careful and was worse on
+ * a phone. Two things went wrong at once:
+ *
+ *  1. TWO NESTED SCROLLERS. Below roughly 600px of viewport height the dialog started scrolling as
+ *     well, so reading a long document meant scrolling the dialog to reach the box, then scrolling
+ *     the box, and a fling landed on whichever one the gesture happened to hit first. That is the
+ *     "it will not scroll" report: it scrolls, just not the thing under your thumb.
+ *  2. `vh` AGAINST THE DIALOG'S `dvh`. dialog.tsx caps itself at `100dvh-2rem` precisely because
+ *     mobile `vh` measures the viewport with the URL bar HIDDEN — its own comment says so. A 60vh
+ *     child inside a dvh-capped parent is therefore sized against a taller viewport than the one
+ *     the reader has, so with the URL bar showing the box was always a little too tall for the
+ *     space it was given.
+ *
+ * The PDF frame keeps an explicit height because an iframe has no intrinsic one, but in `dvh` for
+ * the reason above. An iframe is its own scroll context, so it is not a second scroller here.
+ */
 export function SourceDocumentViewer({ docId, enabled }: { docId: string; enabled: boolean }) {
   const view = useQuery({
     queryKey: ["requirements-docs", docId, "source-view"],
@@ -96,7 +116,7 @@ export function SourceDocumentViewer({ docId, enabled }: { docId: string; enable
 
       {data.kind === "html" && (
         <div
-          className={`max-h-[60vh] overflow-auto rounded-md border border-border p-4 ${DOCX_PROSE}`}
+          className={`rounded-md border border-border p-4 ${DOCX_PROSE}`}
           // Converted by mammoth (a small fixed tag vocabulary, no scripts or styles) and still run
           // through the app's sanitizer — two layers, because somebody else wrote this file.
           dangerouslySetInnerHTML={safeHtml(data.html ?? "")}
@@ -105,7 +125,7 @@ export function SourceDocumentViewer({ docId, enabled }: { docId: string; enable
 
       {(data.kind === "markdown" || data.kind === "text") &&
         (data.text?.trim() ? (
-          <div className="max-h-[60vh] overflow-auto rounded-md border border-border p-4">
+          <div className="rounded-md border border-border p-4">
             {data.kind === "markdown" ? (
               <AiRichContent content={data.text} />
             ) : (

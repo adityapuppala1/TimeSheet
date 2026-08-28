@@ -5031,7 +5031,14 @@ export interface RiskSnapshotRow {
 
 export interface AiProposalChangeRow {
   id: string;
-  targetType: "TICKET" | "PROJECT" | "BOOKING" | "LINK";
+  /**
+   * The six values the API actually writes (grep `targetType:` in apps/api/src). This union used
+   * to list four and omit CHANGE and TICKET_LABEL, which is precisely why nothing caught the
+   * Proposals page sending change ids to the ticket sheet: TypeScript believed CHANGE could not
+   * occur. The column is a plain VarChar with no database enum behind it, so this list is a
+   * hand-kept mirror — add to it here when a new proposal kind starts emitting one.
+   */
+  targetType: "TICKET" | "CHANGE" | "PROJECT" | "BOOKING" | "LINK" | "TICKET_LABEL";
   targetId: string | null;
   op: "CREATE" | "UPDATE" | "LINK";
   before: Record<string, unknown> | null;

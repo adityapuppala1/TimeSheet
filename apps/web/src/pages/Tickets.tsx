@@ -1198,6 +1198,34 @@ function CreateTicketDialog({
   );
 }
 
+/**
+ * Why the message is chosen from the STATUS and not from the server's text: a 404 here is usually
+ * not "this ticket was deleted" but "that id was never a ticket", and the two need different
+ * advice. A 403 needs different advice again. The server's own wording is fine for a toast and too
+ * terse to be the only thing in an otherwise empty panel.
+ */
+function ticketStatusOf(error: unknown): number | undefined {
+  return (error as { response?: { status?: number } } | null)?.response?.status;
+}
+
+function ticketErrorTitle(error: unknown): string {
+  const status = ticketStatusOf(error);
+  if (status === 404) return "There is no ticket here";
+  if (status === 403) return "You don't have access to this ticket";
+  return "This ticket couldn't be loaded";
+}
+
+function ticketErrorHint(error: unknown): string {
+  const status = ticketStatusOf(error);
+  if (status === 404) {
+    return "The link points at something that isn't a ticket, or at one that has since been deleted. If you followed it from somewhere else in the app, that link is wrong — worth reporting.";
+  }
+  if (status === 403) {
+    return "It exists, but it belongs to a project you aren't assigned to. Ask its project lead to add you.";
+  }
+  return "Something went wrong fetching it. Close this and try again — if it keeps happening, the API may be down.";
+}
+
 function TicketDetailSheet({
   ticketId,
   onClose,
@@ -1356,6 +1384,33 @@ function TicketDetailSheet({
             <Skeleton className="h-6 w-1/2" />
             <Skeleton className="h-24 w-full" />
             <Skeleton className="h-40 w-full" />
+          </div>
+        )}
+        {/*
+          THE THIRD STATE. Until this existed there were only two branches — loading, and a ticket —
+          so a query that FAILED rendered an open sheet containing nothing but the screen-reader-only
+          title above it: a blank white panel with a close button, and no way to tell a deleted
+          ticket from a permission problem from a bug.
+
+          It was reachable from more than a stale bookmark. `/app/tickets?open=<id>` takes whatever
+          id it is handed, and the AI suggestions page was handing it change and project ids (see
+          Proposals.tsx) — so most of the "open this" chevrons on that page landed here, blank.
+          That routing is fixed, but the guarantee belongs HERE: this sheet opens on a URL parameter
+          anybody can type, so it has to answer for an id that resolves to nothing no matter who
+          sent it.
+        */}
+        {!detail.isLoading && detail.isError && (
+          <div className="grid gap-3 pt-8">
+            <div className="grid gap-2 rounded-lg border border-border bg-muted/30 p-5">
+              <p className="flex items-center gap-2 font-semibold">
+                <AlertTriangle className="h-4 w-4 shrink-0 text-warning" aria-hidden />
+                {ticketErrorTitle(detail.error)}
+              </p>
+              <p className="text-sm leading-6 text-muted-foreground">{ticketErrorHint(detail.error)}</p>
+              <Button variant="outline" size="sm" className="mt-1 w-fit" onClick={onClose}>
+                Close
+              </Button>
+            </div>
           </div>
         )}
         {ticket && (
