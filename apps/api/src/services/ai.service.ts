@@ -4228,6 +4228,51 @@ export function isUsableAskAnswer(answer: string | null | undefined): boolean {
  *  enough that a model stuck in a loop costs five calls, not fifty. */
 const ASK_MAX_STEPS = 5;
 
+/**
+ * Whether a first answer should be sent back for another go because it consulted nothing.
+ *
+ * Exported and pure so it can be tested without standing up a provider — the loop it guards needs
+ * a model, a workspace and a tool registry, and none of those are needed to decide this.
+ *
+ * The three conditions each rule out a way of getting this wrong:
+ *   - `toolCallCount === 0` — an answer built on a tool result is a real answer, however short.
+ *   - `!alreadyNudged` — one correction, never a loop. The second reply is accepted either way.
+ *   - `step < maxSteps - 1` — never spend the last step on a nudge, or the question ends with
+ *     nothing at all rather than with a thin answer.
+ */
+/**
+ * Whether a reply is a STALL — the model announcing that it is about to look something up, offered
+ * as the final answer.
+ *
+ * Measured, from a real run: asked how many tickets were assigned to them, the assistant called
+ * `search_tickets`, received the rows, and then answered "Let me look up your ticket assignments."
+ * A tool WAS consulted, so the no-tools guard correctly stays out of it — but the reader still got
+ * nothing. Two different failures, two different checks.
+ *
+ * Deliberately narrow: it must be BOTH short and open with an announcement. A real answer that
+ * happens to begin "I'll summarise what changed" runs past the length cap and is left alone, and a
+ * short answer that reports something ("3 tickets, all open") matches no opening pattern. The cost
+ * of a false positive is one wasted call; the cost of being too eager is rewriting good answers.
+ */
+const STALL_OPENERS =
+  /^(let me\b|let's\b|i'?ll\b|i will\b|i am going to\b|i'?m going to\b|one moment\b|hold on\b|checking\b|looking (into|up)\b|allow me\b)/i;
+
+export function looksLikeStall(markdown: string): boolean {
+  const text = markdown.trim();
+  // Long enough to carry a finding is long enough to be left alone, whatever it opens with.
+  if (text.length > 160) return false;
+  return STALL_OPENERS.test(text);
+}
+
+export function shouldPushBackForNoTools(opts: {
+  toolCallCount: number;
+  alreadyNudged: boolean;
+  step: number;
+  maxSteps: number;
+}): boolean {
+  return opts.toolCallCount === 0 && !opts.alreadyNudged && opts.step < opts.maxSteps - 1;
+}
+
 /** Recent exchanges carried into the prompt, so follow-ups work. Trimmed hard — history is context,
  *  not the question. */
 const ASK_HISTORY_TURNS = 6;
@@ -4334,6 +4379,11 @@ export async function askWorkspaceChat(input: {
       "anything. For anything beyond the actions below, answer with where in the app a person does",
       "it — for example 'open the ticket and use Transition', or 'raise it from Change Management'.",
       "READS NEVER NEED PERMISSION. Never ask whether to look something up — look it up, then answer.",
+      // The measured failure this line exists for: asked where two weeks of hours went, the model
+      // replied that the person could open the Timesheets tab and filter by date. True, and useless.
+      "TELLING SOMEBODY WHICH PAGE TO OPEN IS NOT AN ANSWER to a question about their own data. If a",
+      "tool can fetch the figures, fetch them — 'you can find your entries under Timesheets' is a",
+      "wrong answer to 'where did my hours go', because my_timesheets exists and would have said.",
       "ACTIONS are the opposite: before one, make sure you have the real details from the person —",
       "never invent hours, dates or descriptions; ask instead. A refusal to an action is final:",
       "relay it, do not retry around it.",
@@ -4437,6 +4487,10 @@ export async function askWorkspaceChat(input: {
   // not a design. An identical consecutive call is answered from memory instead of re-run.
   let lastCallSignature = "";
   let lastCallResult = "";
+  /** One push back per question when the first answer consulted nothing — see the guard below. */
+  let nudgedForNoTools = false;
+  /** And one for a reply that consulted a tool but only announced that it was going to. */
+  let nudgedForStall = false;
   for (let step = 0; step < ASK_MAX_STEPS; step++) {
     const raw = await ask(extra);
     const parsed = parseJsonResponse(raw, AskActionSchema);
@@ -4469,10 +4523,51 @@ export async function askWorkspaceChat(input: {
       return { answer, toolCalls, model: lastModel, provider: lastProvider, inputTokens, outputTokens, costUsd, interactionId: interactionId ?? null };
     }
 
+    /*
+     * THE DEFLECTION GUARD, and the reason this whole feature was reported as "not using my data".
+     *
+     * Nothing here required the model to CONSULT anything before answering. Asked "where did my
+     * hours go over the last two weeks?" it replied, on step zero with no tool calls at all, that
+     * the person could find their entries under the Timesheets tab and filter by date — a true,
+     * useless sentence about the UI, when `my_timesheets` was sitting in its tool list and the
+     * prompt routes that exact phrasing to it. The loop accepted it because an "answer" action was
+     * always terminal, whether or not a single fact behind it came from the workspace.
+     *
+     * So a first answer with an empty transcript now gets one push back. Once, and only from the
+     * first step, so the cost is a single extra call on the questions that need it and nothing at
+     * all on the ones that already reached for a tool.
+     *
+     * THE ESCAPE HATCH IS EXPLICIT because the prompt above genuinely does ask the model to turn
+     * down general-knowledge questions in one sentence. Without permission to repeat itself, this
+     * would turn every correct refusal into a forced, pointless tool call — so the nudge says to
+     * answer identically if that is what this is. Whatever comes back second is accepted either
+     * way: one correction, never a loop.
+     */
+    if (parsed.action === "answer" && shouldPushBackForNoTools({ toolCallCount: toolCalls.length, alreadyNudged: nudgedForNoTools, step, maxSteps: ASK_MAX_STEPS })) {
+      nudgedForNoTools = true;
+      extra = `${extra}${NL}${NL}You answered without consulting a single tool, so nothing in that reply came from this workspace. Telling somebody which page to open is not an answer — the tools above are how you read their actual tickets, hours, changes and projects, and reads never need permission. Call the tool that fits the question and answer from what it returns. If, and only if, this is genuinely a general-knowledge question that no tool here can touch, reply exactly as you just did.`;
+      continue;
+    }
+
+    /* The stall: a tool ran, its rows are in the transcript, and the reply is an announcement that
+       the lookup is about to happen. One push back, then accept whatever comes — same budget rule
+       as the guard above, and a separate flag so neither can consume the other's single retry. */
+    if (
+      parsed.action === "answer" &&
+      toolCalls.length > 0 &&
+      !nudgedForStall &&
+      step < ASK_MAX_STEPS - 1 &&
+      looksLikeStall(parsed.markdown)
+    ) {
+      nudgedForStall = true;
+      extra = `${extra}${NL}${NL}That reply announced a lookup instead of reporting one. The tool results are already above — you have the data. Answer the question now from those results: the actual numbers, names and keys, not a description of what you are about to do.`;
+      continue;
+    }
+
     if (parsed.action === "answer") {
       const { interactionId } = await logAIUsage({
         feature: "ask_ai",
-        params: { steps: step + 1, tools: toolCalls.map((t) => t.tool) },
+        params: { steps: step + 1, tools: toolCalls.map((t) => t.tool), nudged: nudgedForNoTools || nudgedForStall },
         model: lastModel,
         provider: lastProvider,
         inputTokens,
