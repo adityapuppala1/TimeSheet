@@ -432,6 +432,15 @@ Run through this for the specific organization before calling it live:
     trusting it. A simulated date can never send or delete.
   - A paying customer is never deleted, whatever the clock says: converting nulls `trialTier`, and
     the schedule stops. Deletion also refuses any workspace that is not GRACE or SUSPENDED.
+- **Managed backups** (3.14.0) — `/platform-admin` → **Backups → Scheduled backups**. Per-tier
+  ceilings (Starter none, Team weekly, Enterprise daily), per-workspace schedules, destinations
+  (S3-compatible, Azure Blob, Google Drive, OneDrive/SharePoint, SFTP, or a local directory),
+  retention by count, age or GFS rotation, alerts by email/Slack/webhook, and Enterprise test
+  restores. Prerequisites on the API host: `mysqldump` for backups and `mysql` for restores — set
+  `MYSQLDUMP_PATH` / `MYSQL_PATH` when they are not on `PATH`; the page probes for both and says
+  which is missing. The scheduler runs at five past every hour and clamps every policy to its tier
+  on each pass, so a downgraded customer's cadence lowers itself without an edit. Nothing is ever
+  deleted before a newer backup has succeeded, and the newest is never pruned.
 - **Retention snapshots, and restoring one** (SaaS shape, 3.13.0) — `/platform-admin` → **Backups**.
   Every snapshot the retention programme took before deleting a workspace, with its size, its
   workspace and whether it can be restored; the page also probes the API host for `mysqldump` and

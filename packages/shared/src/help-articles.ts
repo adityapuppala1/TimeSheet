@@ -600,6 +600,24 @@ export const HELP_ARTICLES: HelpArticle[] = [
     ],
     notes: "These are retention snapshots, not platform backups: they only ever cover customers who lapsed and were deleted. Backing up live workspaces is your database's job — see docs/NEW_ORGANIZATION_SETUP.md § 7. After a restore, run npm run db:migrate:tenants if the platform has moved on since the dump was taken.",
     keywords: ["backup", "backups", "snapshot", "mysqldump", "restore", "recover", "deleted workspace", "download", "sql dump", "data recovery"]
+  },
+  {
+    id: "platform-admin-scheduled-backups",
+    category: "Platform & operations",
+    title: "Scheduled backups: cadence, destinations and retention",
+    roles: SA,
+    where: "/platform-admin \u2192 Backups \u2192 Scheduled backups",
+    when: "Setting up automatic backups for a customer, or working out why one did not run.",
+    steps: [
+      "What each plan allows is a CEILING, not a setting: Starter has no automatic backups, Team weekly with one destination, Enterprise daily with several plus test restores. A workspace picks its own cadence and the scheduler clamps it to the tier on every tick, so a downgrade takes effect without anyone editing a policy.",
+      "Destinations: add an S3-compatible bucket (Amazon, R2, Backblaze, Wasabi, Spaces, MinIO), Azure Blob container, Google Drive folder, OneDrive/SharePoint folder, SFTP server or a local directory. Credentials are encrypted at rest and never sent back to the screen \u2014 leaving a field blank on an edit keeps what is stored.",
+      "Press Test on a destination before relying on it. The result is recorded, never enforced: a bucket unreachable from your laptop can be perfectly reachable from the API host.",
+      "Configure gives one workspace its schedule, its destination, its retention rules and who is alerted. Retention is Keep-newest-N, Keep-by-age, or Grandfather-Father-Son \u2014 GFS keeps ONE object per slot and tags it, rather than storing four copies.",
+      "Dry run the pass shows what the 09:05 hourly scheduler would do right now, including any policy that has drifted above its tier.",
+      "Back up now runs one immediately. Test restore (Enterprise) downloads a backup, checks its SHA-256 against what was written, imports it into a scratch database, counts the tables and drops it."
+    ],
+    notes: "Nothing is ever deleted before a newer backup has succeeded, and the newest backup is never pruned however old it is. Alerts go through the PLATFORM relay rather than the workspace's own mail \u2014 the workspace's SMTP may be the thing that is broken. mysqldump and mysql must exist on the API host; the Backups page probes for them and says so.",
+    keywords: ["scheduled backups", "s3", "azure", "google drive", "onedrive", "sftp", "retention", "gfs", "grandfather father son", "cadence", "daily", "weekly", "alerts", "slack", "test restore", "pitr", "destination"]
   }
 ];
 

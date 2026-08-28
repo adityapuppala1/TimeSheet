@@ -450,7 +450,13 @@ const planTierLimitSchema = z.object({
       allowedSsoProviders: z.array(z.enum(["GOOGLE", "MICROSOFT", "SAML", "LDAP"])).optional(),
       allowedChatPlatforms: z.array(z.enum(["SLACK", "MICROSOFT_TEAMS", "GOOGLE_CHAT", "TELEGRAM"])).optional(),
       ...Object.fromEntries(capabilityKeys.map((key) => [key, z.boolean().optional()])),
-      ...Object.fromEntries(quotaKeys.map((key) => [key, z.number().int().nonnegative().max(UNLIMITED_PLAN_ITEMS).optional()]))
+      ...Object.fromEntries(quotaKeys.map((key) => [key, z.number().int().nonnegative().max(UNLIMITED_PLAN_ITEMS).optional()])),
+      // Managed backups. Not in `capabilityKeys`/`quotaKeys` because the cadence is an enum rather
+      // than a boolean or a count, and folding it into either list would make the generated console
+      // form render it as the wrong control.
+      backupFrequency: z.enum(["NONE", "WEEKLY", "DAILY", "HOURLY"]).optional(),
+      maxBackupDestinations: z.number().int().nonnegative().max(50).optional(),
+      backupPitrEnabled: z.boolean().optional()
     })
     .strict()
 });

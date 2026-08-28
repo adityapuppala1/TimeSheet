@@ -37,7 +37,7 @@
  */
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Fragment, useEffect, useState, type ReactNode } from "react";
-import { UNLIMITED_PLAN_ITEMS } from "@timesheet/shared";
+import { BACKUP_FREQUENCY_LABEL, UNLIMITED_PLAN_ITEMS, type BackupFrequency } from "@timesheet/shared";
 import { Badge } from "../../components/ui/badge";
 import { Button } from "../../components/ui/button";
 import { Checkbox } from "../../components/ui/checkbox";
@@ -45,6 +45,7 @@ import { Checkbox } from "../../components/ui/checkbox";
    workspace admin will see when they configure it. */
 import { CHAT_PLATFORM_MARKS, SSO_PROVIDER_MARKS, type Mark } from "../../components/ui/connector-marks";
 import { Input } from "../../components/ui/input";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../../components/ui/select";
 import { Skeleton } from "../../components/ui/skeleton";
 import { TableBody, TableCell, TableFooter, TableHead, TableHeader, TableRow } from "../../components/ui/table";
 import { toast } from "../../components/ui/toaster";
@@ -78,6 +79,9 @@ type TierDraft = {
   chatPlatforms: ChatPlatform[];
   capabilities: Record<PlanCapabilityKey, boolean>;
   quotas: Record<PlanQuotaKey, string>;
+  backupFrequency: BackupFrequency;
+  maxBackupDestinations: string;
+  backupPitrEnabled: boolean;
 };
 
 const draftFromRow = (row: PlanTierLimitRow): TierDraft => ({
@@ -86,7 +90,10 @@ const draftFromRow = (row: PlanTierLimitRow): TierDraft => ({
   providers: row.allowedSsoProviders,
   chatPlatforms: row.allowedChatPlatforms,
   capabilities: Object.fromEntries(PLAN_CAPABILITIES.map((c) => [c.key, row[c.key]])) as Record<PlanCapabilityKey, boolean>,
-  quotas: Object.fromEntries(PLAN_QUOTAS.map((q) => [q.key, String(row[q.key] ?? 0)])) as Record<PlanQuotaKey, string>
+  quotas: Object.fromEntries(PLAN_QUOTAS.map((q) => [q.key, String(row[q.key] ?? 0)])) as Record<PlanQuotaKey, string>,
+  backupFrequency: row.backupFrequency ?? "NONE",
+  maxBackupDestinations: String(row.maxBackupDestinations ?? 0),
+  backupPitrEnabled: row.backupPitrEnabled ?? false
 });
 
 const payloadFromDraft = (draft: TierDraft) => ({
@@ -95,7 +102,10 @@ const payloadFromDraft = (draft: TierDraft) => ({
   allowedSsoProviders: draft.providers,
   allowedChatPlatforms: draft.chatPlatforms,
   ...draft.capabilities,
-  ...(Object.fromEntries(PLAN_QUOTAS.map((q) => [q.key, Number(draft.quotas[q.key]) || 0])) as Record<PlanQuotaKey, number>)
+  ...(Object.fromEntries(PLAN_QUOTAS.map((q) => [q.key, Number(draft.quotas[q.key]) || 0])) as Record<PlanQuotaKey, number>),
+  backupFrequency: draft.backupFrequency,
+  maxBackupDestinations: Number(draft.maxBackupDestinations) || 0,
+  backupPitrEnabled: draft.backupPitrEnabled
 });
 
 /* ------------------------------------------------------------------------------------------- */
@@ -126,7 +136,21 @@ type ToggleRow = {
   get: (draft: TierDraft) => boolean;
   set: (draft: TierDraft, value: boolean) => TierDraft;
 };
-type EntitlementRow = NumberRow | ToggleRow;
+/**
+ * A row whose value is one of a fixed set rather than a number or a tick. Added for the backup
+ * cadence, which is neither: "weekly" is not a quantity, and rendering it as a checkbox would lose
+ * the difference between hourly, daily and weekly — the whole point of the entitlement.
+ */
+type SelectRow = {
+  kind: "select";
+  id: string;
+  label: string;
+  hint?: string;
+  options: Array<{ value: string; label: string }>;
+  get: (draft: TierDraft) => string;
+  set: (draft: TierDraft, value: string) => TierDraft;
+};
+type EntitlementRow = NumberRow | ToggleRow | SelectRow;
 type EntitlementGroup = { id: string; title: string; note?: ReactNode; rows: EntitlementRow[] };
 
 /** How every control writes back: name the tier, hand over a pure draft transform. */
@@ -134,6 +158,50 @@ type TierEdit = (tier: PlanTier, next: (draft: TierDraft) => TierDraft) => void;
 
 const isNumberRow = (row: EntitlementRow): row is NumberRow => row.kind === "number";
 const isToggleRow = (row: EntitlementRow): row is ToggleRow => row.kind === "toggle";
+const isSelectRow = (row: EntitlementRow): row is SelectRow => row.kind === "select";
+
+const FREQUENCY_OPTIONS = (["NONE", "WEEKLY", "DAILY", "HOURLY"] as BackupFrequency[]).map((value) => ({ value, label: BACKUP_FREQUENCY_LABEL[value] }));
+
+const BACKUP_GROUP: EntitlementGroup = {
+  id: "backups",
+  title: "Managed backups",
+  note: (
+    <>
+      The cadence is a <strong className="text-foreground">ceiling</strong>, not a setting: a workspace picks its own schedule under
+      Platform → Backups and the scheduler clamps it to the tier on every tick, so a downgrade takes effect without anybody editing a
+      policy. The pre-deletion snapshot the retention programme takes is separate and applies on every plan, including Starter.
+    </>
+  ),
+  rows: [
+    {
+      kind: "select",
+      id: "backupFrequency",
+      label: "Automatic backups",
+      hint: "The most frequent schedule this tier may ask for. “No automatic backups” switches the module off for the tier entirely.",
+      options: FREQUENCY_OPTIONS,
+      get: (d) => d.backupFrequency,
+      set: (d, v) => ({ ...d, backupFrequency: v as BackupFrequency })
+    },
+    {
+      kind: "number",
+      id: "maxBackupDestinations",
+      label: "Backup destinations",
+      hint: "How many places this tier may write to at once — a primary bucket plus an off-site copy is two.",
+      min: 0,
+      max: 50,
+      get: (d) => d.maxBackupDestinations,
+      set: (d, v) => ({ ...d, maxBackupDestinations: v })
+    },
+    {
+      kind: "toggle",
+      id: "backupPitrEnabled",
+      label: "Test restores & point-in-time recovery",
+      hint: "The expensive half — a test restore materialises a whole database to prove the dump reads back.",
+      get: (d) => d.backupPitrEnabled,
+      set: (d, v) => ({ ...d, backupPitrEnabled: v })
+    }
+  ]
+};
 
 const ENTITLEMENT_GROUPS: EntitlementGroup[] = [
   {
@@ -206,6 +274,8 @@ const ENTITLEMENT_GROUPS: EntitlementGroup[] = [
       set: (d: TierDraft, v: string): TierDraft => ({ ...d, quotas: { ...d.quotas, [quota.key]: v } })
     }))
   }
+,
+  BACKUP_GROUP
 ];
 
 /* ------------------------------------------------------------------------------------------- */
@@ -385,6 +455,24 @@ function TierMatrix({
 
 function MatrixCell({ row, tier, draft, onEdit }: { row: EntitlementRow; tier: PlanTier; draft: TierDraft; onEdit: TierEdit }) {
   const tierLabel = TIER_LABEL[tier];
+  if (isSelectRow(row)) {
+    return (
+      <TableCell className="align-top">
+        <Select value={row.get(draft)} onValueChange={(v) => onEdit(tier, (d) => row.set(d, v))}>
+          <SelectTrigger className="h-9" aria-label={`${row.label} — ${tierLabel}`}>
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            {row.options.map((o) => (
+              <SelectItem key={o.value} value={o.value}>
+                {o.label}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+      </TableCell>
+    );
+  }
   if (isNumberRow(row)) {
     return (
       <Num className="align-top">
@@ -448,13 +536,30 @@ function TierCard({
       {ENTITLEMENT_GROUPS.map((group) => {
         const numbers = group.rows.filter(isNumberRow);
         const toggles = group.rows.filter(isToggleRow);
+        const selects = group.rows.filter(isSelectRow);
         // Ticks with a hint get a column to themselves; the bare allow-lists pair up at `sm+`.
         const hinted = toggles.some((toggle) => toggle.hint);
         return (
           <div key={group.id} className="grid gap-3">
             <h3 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">{group.title}</h3>
-            {numbers.length > 0 && (
+            {(numbers.length > 0 || selects.length > 0) && (
               <FieldGrid cols={2}>
+                {selects.map((selectRow) => (
+                  <Field key={selectRow.id} label={selectRow.label} hint={selectRow.hint}>
+                    <Select value={selectRow.get(draft)} onValueChange={(v) => onEdit(row.tier, (d) => selectRow.set(d, v))}>
+                      <SelectTrigger aria-label={`${selectRow.label} — ${TIER_LABEL[row.tier]}`}>
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {selectRow.options.map((o) => (
+                          <SelectItem key={o.value} value={o.value}>
+                            {o.label}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </Field>
+                ))}
                 {numbers.map((numberRow) => (
                   <CardNumberField key={numberRow.id} row={numberRow} tier={row.tier} draft={draft} onEdit={onEdit} />
                 ))}

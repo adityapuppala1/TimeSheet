@@ -78,6 +78,7 @@ import { Link } from "react-router";
 import { Badge } from "../components/ui/badge";
 import { Button } from "../components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../components/ui/card";
+import { DeploymentDialog } from "../components/marketing/DeploymentDialog";
 import { PricingDialog } from "../components/marketing/PricingDialog";
 import { Reveal, useScrollProgress, useSectionSpy } from "../components/marketing/Reveal";
 import { ScreenshotFrame } from "../components/marketing/ScreenshotFrame";
@@ -555,7 +556,7 @@ const PRICING = [
     cadence: "per seat / month",
     description: "Small teams getting timesheets and tickets out of spreadsheets and inboxes.",
     cta: "Start free",
-    bullets: ["Up to 10 active users", "Timesheets + ticketing core", "Manager approvals + basic SLA", "Google sign-in", "CSV exports"]
+    bullets: ["Up to 10 active users", "Timesheets + ticketing core", "Manager approvals + basic SLA", "Google sign-in", "CSV exports", "No automatic backups"]
   },
   {
     name: "Team",
@@ -578,7 +579,11 @@ const PRICING = [
       // quieter half of the accuracy rule: a card that under-sells a tier costs the same deal as
       // one that over-sells it, and nothing on this page was checking for the omission.
       "Change management + the weekly leadership update",
-      "Audit log + role-based access"
+      "Audit log + role-based access",
+      // Generated-adjacent: the cadence here is the one PLAN_TIER_LIMITS grants, and the compare
+      // table renders it from the constant. A card that promised daily while the tier enforced
+      // weekly is exactly the drift this file's header is about.
+      "Weekly off-site backups to your own bucket or SFTP"
     ]
   },
   {
@@ -593,6 +598,8 @@ const PRICING = [
       "SCIM 2.0 provisioning + custom workflows",
       "Capacity planning, the AI copilot and identity verification",
       "Your own dedicated database",
+      "Daily backups to S3, Azure, Drive, OneDrive or SFTP — with test restores",
+      "SaaS, your own cloud, or on-premises",
       "Platform-adjustable seat and AI-budget limits",
       "Dedicated support + uptime SLA"
     ]
@@ -643,6 +650,9 @@ const NAV_SECTIONS = [
 
 export function Landing() {
   const [pricingOpen, setPricingOpen] = useState(false);
+  // "Talk to sales" used to point at /login, which is neither a sales flow nor an answer to the
+  // first question an Enterprise buyer asks: how would we run this, and where does the data sit?
+  const [deploymentOpen, setDeploymentOpen] = useState(false);
   const [tourId, setTourId] = useState(TOUR[0].id);
   const [group, setGroup] = useState<FeatureGroup | "all">("all");
   const [menuOpen, setMenuOpen] = useState(false);
@@ -1237,11 +1247,18 @@ export function Landing() {
                         </li>
                       ))}
                     </ul>
-                    <Button asChild className="mt-6 w-full" variant={tier.highlight ? "default" : "outline"}>
-                      {/* The trial tiers point at /signup, which now exists. Enterprise keeps
-                          /login, because "Talk to sales" is not a self-serve flow. */}
-                      <Link to={tier.name === "Enterprise" ? "/login" : "/signup"}>{tier.cta}</Link>
-                    </Button>
+                    {/* The trial tiers point at /signup. Enterprise opens the deployment-model
+                        comparison instead — "Talk to sales" is not a self-serve flow, and the
+                        question it is really asking is which of the three ways to run it fits. */}
+                    {tier.name === "Enterprise" ? (
+                      <Button className="mt-6 w-full" variant="outline" onClick={() => setDeploymentOpen(true)}>
+                        {tier.cta}
+                      </Button>
+                    ) : (
+                      <Button asChild className="mt-6 w-full" variant={tier.highlight ? "default" : "outline"}>
+                        <Link to="/signup">{tier.cta}</Link>
+                      </Button>
+                    )}
                   </CardContent>
                 </Card>
               </Reveal>
@@ -1340,6 +1357,7 @@ export function Landing() {
       </footer>
 
       <PricingDialog open={pricingOpen} onOpenChange={setPricingOpen} />
+      <DeploymentDialog open={deploymentOpen} onOpenChange={setDeploymentOpen} />
     </div>
   );
 }

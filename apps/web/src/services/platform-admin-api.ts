@@ -128,6 +128,10 @@ export type PlanTierLimitRow = {
   aiMonthlyBudgetCeilingUsd: string;
   allowedSsoProviders: Array<SsoProvider>;
   allowedChatPlatforms: Array<ChatPlatform>;
+  /** Managed backups. A CEILING on the cadence, not a setting — see the schema's doc comment. */
+  backupFrequency: "NONE" | "WEEKLY" | "DAILY" | "HOURLY";
+  maxBackupDestinations: number;
+  backupPitrEnabled: boolean;
 } & Record<PlanCapabilityKey, boolean> &
   Record<PlanQuotaKey, number>;
 
@@ -608,4 +612,149 @@ export const platformPublicApi = {
   reactivateInfo: async (token: string) =>
     (await axios.get<{ workspace: string; slug: string; url: string; status: OrgStatus; alreadyActive: boolean; eligible: boolean; deleteDate: string | null }>(`${API_BASE_URL.replace(/\/$/, "")}/public/reactivate/${encodeURIComponent(token)}`)).data,
   reactivate: async (token: string) => (await axios.post<{ restored: boolean; alreadyActive: boolean; url: string }>(`${API_BASE_URL.replace(/\/$/, "")}/public/reactivate/${encodeURIComponent(token)}`)).data
+};
+
+/* ================================================================================================
+ * Managed backups (3.14.0) — the tier entitlement, destinations, per-workspace schedules, the runs
+ * they produce, and the retention rules that prune them.
+ * ============================================================================================== */
+
+export type BackupFrequency = "NONE" | "WEEKLY" | "DAILY" | "HOURLY";
+export type BackupDestinationKind = "LOCAL" | "S3" | "AZURE_BLOB" | "GOOGLE_DRIVE" | "ONEDRIVE" | "SFTP";
+export type BackupRetentionMode = "COUNT" | "AGE" | "GFS";
+export type BackupRunKind = "SCHEDULED" | "MANUAL" | "PRE_DELETE" | "TEST_RESTORE";
+export type BackupRunStatus = "RUNNING" | "SUCCEEDED" | "FAILED" | "SKIPPED";
+
+export interface DestinationFieldSpec {
+  key: string;
+  label: string;
+  hint?: string;
+  /** Write-only: sent on save, never returned. The console shows whether it is SET, never its value. */
+  secret?: boolean;
+  optional?: boolean;
+  placeholder?: string;
+}
+
+export interface BackupDestinationRow {
+  id: string;
+  name: string;
+  kind: BackupDestinationKind;
+  /** null = platform-owned; any workspace's policy may point at it. */
+  organizationId: string | null;
+  organizationName: string | null;
+  config: Record<string, string>;
+  prefix: string | null;
+  isDefault: boolean;
+  /** Which secret fields have a value stored — never the values. */
+  secretsSet: Record<string, boolean>;
+  lastTestedAt: string | null;
+  lastTestStatus: string | null;
+  lastTestMessage: string | null;
+  runCount: number;
+}
+
+export interface BackupPolicyRow {
+  id: string;
+  enabled: boolean;
+  frequency: BackupFrequency;
+  hourUtc: number;
+  dayOfWeek: number;
+  destinationId: string | null;
+  destinationName: string | null;
+  retentionMode: BackupRetentionMode;
+  keepCount: number;
+  keepDays: number;
+  gfsDaily: number;
+  gfsWeekly: number;
+  gfsMonthly: number;
+  gfsYearly: number;
+  alertEmails: string | null;
+  hasAlertWebhook: boolean;
+  alertOnSuccess: boolean;
+  alertOnFailure: boolean;
+  lastRunAt: string | null;
+  lastStatus: BackupRunStatus | null;
+  nextRunAt: string | null;
+  /** Recomputed server-side, so a stale stored value is never shown. */
+  projectedNextRunAt: string | null;
+  /** The tier no longer permits what this policy asks for — the scheduler will clamp it. */
+  overTier: boolean;
+}
+
+export interface BackupWorkspaceRow {
+  organizationId: string;
+  name: string;
+  slug: string;
+  status: OrgStatus;
+  planTier: PlanTier;
+  trialTier: PlanTier | null;
+  hasDatabase: boolean;
+  entitlement: { tier: PlanTier; frequency: BackupFrequency; maxDestinations: number; pitrEnabled: boolean };
+  allowedFrequencies: BackupFrequency[];
+  policy: BackupPolicyRow | null;
+}
+
+export interface BackupRunRow {
+  id: string;
+  organizationId: string;
+  organizationName: string;
+  slug: string;
+  destinationName: string | null;
+  destinationKind: BackupDestinationKind | null;
+  kind: BackupRunKind;
+  status: BackupRunStatus;
+  startedAt: string;
+  finishedAt: string | null;
+  bytes: number | null;
+  objectKey: string | null;
+  checksumSha256: string | null;
+  errorMessage: string | null;
+  retentionTag: string | null;
+}
+
+export interface BackupOverview {
+  tiers: Array<{ tier: PlanTier; backupFrequency: BackupFrequency; backupFrequencyLabel: string; maxBackupDestinations: number; backupPitrEnabled: boolean }>;
+  frequencyLabels: Record<BackupFrequency, string>;
+  destinationKinds: Array<{ kind: BackupDestinationKind; label: string; blurb: string; fields: DestinationFieldSpec[] }>;
+  destinations: BackupDestinationRow[];
+  workspaces: BackupWorkspaceRow[];
+  recentRuns: BackupRunRow[];
+}
+
+export interface BackupTickResult {
+  due: number;
+  ran: Array<{ slug: string; status: string; message: string }>;
+  clamped: Array<{ slug: string; asked: BackupFrequency; allowed: BackupFrequency }>;
+  dryRun: boolean;
+  now: string;
+}
+
+export const platformBackupApi = {
+  overview: async () => (await platformAdminApi.get<BackupOverview>("/backups/overview")).data,
+
+  createDestination: async (payload: {
+    name: string;
+    kind: BackupDestinationKind;
+    organizationId?: string | null;
+    config: Record<string, string>;
+    secrets?: Record<string, string>;
+    prefix?: string | null;
+    isDefault?: boolean;
+  }) => (await platformAdminApi.post<{ id: string }>("/backups/destinations", payload)).data,
+  /** Only the secret fields actually retyped are sent; the server merges the rest. */
+  updateDestination: async (id: string, payload: Partial<{ name: string; config: Record<string, string>; secrets: Record<string, string>; prefix: string | null; isDefault: boolean }>) =>
+    (await platformAdminApi.patch<{ id: string }>(`/backups/destinations/${id}`, payload)).data,
+  testDestination: async (id: string) => (await platformAdminApi.post<{ ok: boolean; message: string }>(`/backups/destinations/${id}/test`)).data,
+  deleteDestination: async (id: string) => platformAdminApi.delete(`/backups/destinations/${id}`),
+
+  savePolicy: async (orgId: string, payload: Record<string, unknown>) =>
+    (await platformAdminApi.put<{ id: string; nextRunAt: string | null }>(`/backups/policy/${orgId}`, payload)).data,
+  retentionPreview: async (orgId: string) =>
+    (await platformAdminApi.get<{ total: number; keep: Array<{ id: string; tag: string | null }>; drop: Array<{ id: string; startedAt: string; objectKey: string | null }> }>(`/backups/policy/${orgId}/retention-preview`)).data,
+
+  runNow: async (orgId: string, destinationId?: string) =>
+    (await platformAdminApi.post<{ runId: string; status: string; message: string; bytes?: number }>(`/backups/run/${orgId}`, destinationId ? { destinationId } : {})).data,
+  sweep: async (orgId: string) => (await platformAdminApi.post<{ kept: number; deleted: number; failed: number }>(`/backups/sweep/${orgId}`)).data,
+  testRestore: async (runId: string) => (await platformAdminApi.post<{ ok: boolean; message: string; tables?: number }>(`/backups/runs/${runId}/test-restore`)).data,
+  tick: async (dryRun: boolean) => (await platformAdminApi.post<BackupTickResult>("/backups/tick", { dryRun })).data
 };

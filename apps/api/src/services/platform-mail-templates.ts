@@ -202,6 +202,21 @@ export const PLATFORM_TEMPLATES: PlatformTemplateDef[] = [
     )
   },
   {
+    key: "backup.alert",
+    group: "Operator",
+    description: "Sent when a managed backup succeeds or fails, to the addresses on that workspace's backup policy.",
+    variables: ["workspace", "slug", "outcome", "destination", "detail", "appUrl"],
+    sample: { workspace: "Acme Corp", slug: "acme", outcome: "FAILED", destination: "Primary S3 bucket", detail: "AccessDenied: the key is not permitted to PutObject on acme-timesphere-backups", appUrl: "https://timesphere.app" },
+    subject: "Backup {{outcome}} — {{workspace}}",
+    html: shell(
+      { title: "Backup {{outcome}}", preheader: "{{workspace}} — {{destination}}", accentColor: ACCENT },
+      heading("Backup {{outcome}} for {{workspace}}") +
+        paragraph("Workspace <strong>{{workspace}}</strong> (<code>{{slug}}</code>), destination <strong>{{destination}}</strong>.") +
+        paragraph("{{detail}}") +
+        paragraph("<span style=\"font-size:12px;color:#64748B;\">Sent by the platform rather than by the workspace — the workspace's own mail server may be the thing that is not working.</span>")
+    )
+  },
+  {
     key: "platform.smtp_test",
     group: "Operator",
     description: "What the “Send test” button on Platform mail settings sends. Proves the relay, the From address and the reply-to.",

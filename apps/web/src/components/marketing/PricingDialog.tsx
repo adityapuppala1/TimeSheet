@@ -11,7 +11,7 @@
  * ahead of the build. A row nobody has implemented is a support ticket at best and a refund at
  * worst, so when in doubt it doesn't go in.
  */
-import { PLAN_TIER_LIMITS, type PlanTier } from "@timesheet/shared";
+import { BACKUP_FREQUENCY_LABEL, PLAN_TIER_LIMITS, type PlanTier } from "@timesheet/shared";
 import { Check, Minus } from "lucide-react";
 import { Fragment } from "react";
 import { Badge } from "../ui/badge";
@@ -43,6 +43,11 @@ const TIER_LABEL: Record<string, string> = {
 };
 
 const usd = (amount: number) => (amount === 0 ? "—" : `$${amount.toLocaleString("en-US")}/mo`);
+/** The backup cadence a tier permits, in the words the console and the scheduler use. */
+const backupCadence = (tier: PlanTier): Cell => {
+  const frequency = PLAN_TIER_LIMITS[tier].backupFrequency;
+  return frequency === "NONE" ? false : BACKUP_FREQUENCY_LABEL[frequency];
+};
 const ssoList = (tier: PlanTier) => PLAN_TIER_LIMITS[tier].allowedSsoProviders.map((p) => TIER_LABEL[p] ?? p).join(", ");
 const chatList = (tier: PlanTier) => {
   const platforms = PLAN_TIER_LIMITS[tier].allowedChatPlatforms;
@@ -206,6 +211,82 @@ const GROUPS: Array<{ group: string; rows: Row[] }> = [
       },
       { label: "Platform-adjustable seat and AI-budget limits", starter: false, team: false, enterprise: true },
       { label: "Dedicated support + uptime SLA", starter: false, team: false, enterprise: true }
+    ]
+  },
+  {
+    group: "Managed backups",
+    rows: [
+      {
+        // Generated from PLAN_TIER_LIMITS like every other tier-gated row, so the table and the
+        // ceiling the scheduler enforces cannot drift.
+        label: "Automatic database backups",
+        hint: "Your workspace's own database, dumped and written off-site on a schedule. The cadence is a ceiling the platform enforces, not a suggestion.",
+        starter: backupCadence("STARTER"),
+        team: backupCadence("TEAM"),
+        enterprise: backupCadence("ENTERPRISE")
+      },
+      {
+        label: "Choose where backups are stored",
+        hint: "Amazon S3 or any S3-compatible bucket (R2, B2, Wasabi, MinIO), Azure Blob Storage, Google Drive, OneDrive/SharePoint, or your own SFTP server. Credentials are encrypted at rest.",
+        starter: false,
+        team: "One destination",
+        enterprise: `Up to ${PLAN_TIER_LIMITS.ENTERPRISE.maxBackupDestinations}`
+      },
+      {
+        label: "Retention rules",
+        hint: "Keep the newest N, keep by age, or Grandfather-Father-Son rotation. Nothing is ever deleted before a newer backup has succeeded.",
+        starter: false,
+        team: true,
+        enterprise: true
+      },
+      {
+        label: "Failure alerts by email, Slack or webhook",
+        hint: "Sent by the platform, not from your workspace — the thing that is broken may be your own mail.",
+        starter: false,
+        team: true,
+        enterprise: true
+      },
+      {
+        label: "Test restores + point-in-time recovery",
+        hint: "Restores a backup into a scratch database, verifies its checksum and table count, then drops it — proof the copy is readable, not just present.",
+        starter: PLAN_TIER_LIMITS.STARTER.backupPitrEnabled,
+        team: PLAN_TIER_LIMITS.TEAM.backupPitrEnabled,
+        enterprise: PLAN_TIER_LIMITS.ENTERPRISE.backupPitrEnabled
+      },
+      {
+        // Worth stating because it is the row people assume is Enterprise-only and it is not.
+        label: "Snapshot before a workspace is deleted",
+        hint: "Taken automatically before the retention programme removes a lapsed workspace, on every plan.",
+        starter: true,
+        team: true,
+        enterprise: true
+      }
+    ]
+  },
+  {
+    group: "How you run it",
+    rows: [
+      {
+        label: "TimeSphere Cloud (SaaS)",
+        hint: "We run it. Subdomain per workspace, our infrastructure, our backups.",
+        starter: true,
+        team: true,
+        enterprise: true
+      },
+      {
+        label: "Your own cloud",
+        hint: "The same images in your AWS/Azure/GCP account, with our Helm chart. Your VPC, your database, your bucket.",
+        starter: false,
+        team: false,
+        enterprise: true
+      },
+      {
+        label: "On-premises",
+        hint: "Air-gappable, in your own datacentre. Docker Compose or Kubernetes, licensed annually.",
+        starter: false,
+        team: false,
+        enterprise: true
+      }
     ]
   }
 ];

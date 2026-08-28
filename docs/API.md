@@ -2126,6 +2126,27 @@ Same prefix and auth, different router (`platform-admin-console.controller.ts`).
   still has a database**, so a live tenant can never be overwritten.
   `DELETE /backups/:id` removes one from disk.
 
+### Managed backups (3.14.0)
+
+- `GET /backups/overview` — one read behind the whole module: what each tier permits, every
+  destination (with which secret fields are set, never their values), every workspace's policy with
+  its recomputed next run and whether it has drifted above its tier, and the recent runs.
+- `POST|PATCH /backups/destinations[/:id]` — an S3-compatible bucket, Azure Blob container, Google
+  Drive folder, OneDrive/SharePoint folder, SFTP server or local directory. Credentials go in a
+  write-only `secrets` object, are sealed with AES-256-GCM and are never returned; a PATCH that
+  omits a secret keeps the stored one. `POST /backups/destinations/:id/test` records a connectivity
+  result **without enforcing it**. `DELETE` refuses while a policy still points at it.
+- `PUT /backups/policy/:orgId` — one policy per workspace: cadence, UTC hour, weekday, destination,
+  retention (`COUNT` / `AGE` / `GFS` with its four slot budgets), alert addresses, an encrypted
+  Slack-or-webhook URL, and which outcomes alert. A cadence above the tier is refused with a message
+  naming the tier, rather than silently downgraded.
+- `GET /backups/policy/:orgId/retention-preview` — what the rules WOULD keep and drop against the
+  runs that exist. No writes.
+- `POST /backups/run/:orgId` runs one now; `POST /backups/sweep/:orgId` applies retention;
+  `POST /backups/runs/:runId/test-restore` downloads a backup, verifies its SHA-256, imports it into
+  a scratch database, counts the tables and drops it (Enterprise only);
+  `POST /backups/tick { dryRun }` runs the scheduler pass, defaulting to a dry run.
+
 ## Public retention doors
 
 Base URL `/api/public`. No authentication: a signed token in the URL is the credential, and the

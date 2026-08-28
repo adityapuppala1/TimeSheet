@@ -51,11 +51,11 @@ enum SsoProviderType {
 /// resolve which tenant database and SSO configuration a request belongs to, BEFORE the
 /// request is authenticated (see tenant-context.ts).
 model Organization {
-  id        String    @id @default(uuid())
-  name      String    @db.VarChar(200)
-  slug      String    @unique @db.VarChar(63)
-  status    OrgStatus @default(PROVISIONING)
-  planTier  PlanTier  @default(STARTER)
+  id       String    @id @default(uuid())
+  name     String    @db.VarChar(200)
+  slug     String    @unique @db.VarChar(63)
+  status   OrgStatus @default(PROVISIONING)
+  planTier PlanTier  @default(STARTER)
 
   /// Per-org overrides of the plan tier's defaults (see PlanTierLimit) — null means "use the
   /// tier default." Only a platform admin can set these (see Phase B6/B7).
@@ -81,7 +81,7 @@ model Organization {
   /// webhook arriving mid-trial has nothing to compare against. `plan-limits.service.ts` resolves
   /// the effective tier from both, so every existing entitlement check inherits trials with no
   /// caller changes at all.
-  trialTier PlanTier?
+  trialTier      PlanTier?
 
   /// Which lifecycle warnings have already gone out, as days-before-expiry (`[7, 3, 1]`).
   /// The worker runs daily and must be idempotent: without this it re-sends every warning on every
@@ -101,25 +101,28 @@ model Organization {
   /// — and after it is deleted, for the confirmation. Reading super admins out of a tenant
   /// database that is about to be dropped is the wrong dependency direction. Null on every org
   /// created before this column existed; the worker falls back to the tenant's super admins then.
-  ownerEmail             String?   @db.VarChar(255)
+  ownerEmail           String?   @db.VarChar(255)
   /// Day markers already sent — `["feedback10", "ended", "30", "60", "80", "90"]`. Same
   /// idempotence rule as `trialNoticesSent`: recorded even when the mail failed, so a broken
   /// relay does not turn into a daily copy of the same reminder.
-  retentionNoticesSent   Json?
+  retentionNoticesSent Json?
   /// A platform admin's "do not delete this one" — set while a conversation is in progress. The
   /// reminders still go; only the deletion is held.
-  retentionHold          Boolean   @default(false)
+  retentionHold        Boolean   @default(false)
   /// When the physical database was dropped under the policy. The org row stays, ARCHIVED, so the
   /// slug is not silently re-issued and the audit trail survives its subject.
-  retentionDeletedAt     DateTime?
+  retentionDeletedAt   DateTime?
 
-  database    OrgDatabase?
-  ssoConfigs  OrgSsoConfig[]
-  authMethod  OrgAuthMethod?
-  directory   OrgUserDirectory[]
-  domains     OrgDomain[]
-  feedback    TrialFeedback[]
-  platformEmails PlatformEmailLog[]
+  database           OrgDatabase?
+  ssoConfigs         OrgSsoConfig[]
+  authMethod         OrgAuthMethod?
+  directory          OrgUserDirectory[]
+  domains            OrgDomain[]
+  feedback           TrialFeedback[]
+  platformEmails     PlatformEmailLog[]
+  backupPolicy       OrgBackupPolicy?
+  backupDestinations BackupDestination[]
+  backupRuns         BackupRun[]
 
   @@index([status])
 }
@@ -241,20 +244,20 @@ model PlatformAuditLog {
 /// (apps/api/src/utils/encryption.ts) — decrypted only inside the tenant-Prisma-client
 /// factory, never logged, never returned by any API response.
 model OrgDatabase {
-  id             String    @id @default(uuid())
-  organizationId String    @unique
+  id             String       @id @default(uuid())
+  organizationId String       @unique
   organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
 
-  encryptedDsn String   @db.Text
+  encryptedDsn String @db.Text
   /// Plaintext host/database name kept alongside the encrypted DSN purely for ops
   /// dashboards/monitoring — never enough on its own to connect.
-  host         String   @db.VarChar(255)
-  databaseName String   @db.VarChar(128)
+  host         String @db.VarChar(255)
+  databaseName String @db.VarChar(128)
 
-  migratedAt     DateTime?
+  migratedAt    DateTime?
   /// Name of the last tenant migration applied — compared against the latest migration in
   /// apps/api/prisma/migrations to detect a tenant that's drifted behind on schema.
-  schemaVersion  String?   @db.VarChar(160)
+  schemaVersion String?   @db.VarChar(160)
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -286,23 +289,23 @@ model OrgSsoConfig {
 
   // LDAP / Active Directory — a direct bind, not a redirect, so there's no client secret to
   // encrypt in the OIDC sense; the service-account bind credential plays that role instead.
-  ldapUrl                     String?  @db.VarChar(500)
-  ldapBindDn                  String?  @db.VarChar(500)
-  encryptedLdapBindCredential String?  @db.Text
-  ldapSearchBase              String?  @db.VarChar(500)
+  ldapUrl                     String? @db.VarChar(500)
+  ldapBindDn                  String? @db.VarChar(500)
+  encryptedLdapBindCredential String? @db.Text
+  ldapSearchBase              String? @db.VarChar(500)
   /// Template with a `{{email}}` placeholder substituted at auth time, e.g. `(mail={{email}})`.
-  ldapUserFilter              String?  @db.VarChar(255)
-  ldapTlsRejectUnauthorized   Boolean  @default(true)
+  ldapUserFilter              String? @db.VarChar(255)
+  ldapTlsRejectUnauthorized   Boolean @default(true)
 
   /// Result of the last connection test (see services/sso-validation.service.ts). Recorded, not
   /// enforced: an IdP behind a corporate firewall can be unreachable from this server and still be
   /// correctly configured, so a failing test must never block a save. What it DOES gate is
   /// `OrgAuthMethod.requireSsoOnly` — turning off password login for a whole workspace on a
   /// configuration nobody has ever proven works is how a workspace locks itself out.
-  lastTestedAt     DateTime?
+  lastTestedAt    DateTime?
   /// "PASS" | "FAIL" — null means never tested, which is a state the settings card shows.
-  lastTestStatus   String?   @db.VarChar(16)
-  lastTestMessage  String?   @db.Text
+  lastTestStatus  String?   @db.VarChar(16)
+  lastTestMessage String?   @db.Text
 
   /// When a real person last completed a sign-in through this provider.
   ///
@@ -397,12 +400,12 @@ model OrgDomain {
 /// tenant User. A compromised tenant database can never yield platform-admin credentials,
 /// since platform admins don't exist in any tenant database at all.
 model PlatformAdminUser {
-  id           String     @id @default(uuid())
-  email        String     @unique @db.VarChar(255)
+  id           String              @id @default(uuid())
+  email        String              @unique @db.VarChar(255)
   passwordHash String
-  name         String     @db.VarChar(120)
+  name         String              @db.VarChar(120)
   status       PlatformAdminStatus @default(ACTIVE)
-  createdAt    DateTime   @default(now())
+  createdAt    DateTime            @default(now())
   lastLoginAt  DateTime?
 
   sessions PlatformAdminSession[]
@@ -417,7 +420,7 @@ enum PlatformAdminStatus {
 /// (apps/api/prisma/schema.prisma's Session) — reused deliberately so
 /// auth.service.ts#refresh's logic can be mirrored rather than reinvented for platform admins.
 model PlatformAdminSession {
-  id                  String    @id @default(uuid())
+  id                  String            @id @default(uuid())
   adminUserId         String
   adminUser           PlatformAdminUser @relation(fields: [adminUserId], references: [id], onDelete: Cascade)
   refreshHash         String
@@ -427,7 +430,7 @@ model PlatformAdminSession {
   ipAddress           String?
   expiresAt           DateTime
   revokedAt           DateTime?
-  createdAt           DateTime  @default(now())
+  createdAt           DateTime          @default(now())
 
   @@index([adminUserId, expiresAt])
 }
@@ -446,12 +449,12 @@ model PlanTierLimit {
   allowedSsoProviders       Json
   /// Which chat platforms (Slack/Microsoft Teams/Google Chat/Telegram) this tier may connect —
   /// same enable-gate pattern as allowedSsoProviders, checked in chat-integrations.controller.ts.
-  allowedChatPlatforms      Json @default("[]")
+  allowedChatPlatforms      Json     @default("[]")
   /// Whether this tier may use face (identity) verification — Enterprise-only by seed default.
   /// Enabling/enrolling/verifying fail CLOSED against this; enforcement on submissions fails
   /// OPEN (see face.service.ts#isFaceVerificationRequired) so a downgraded/lapsed org's staff
   /// are never locked out of logging their own time by a billing change.
-  faceVerificationEnabled   Boolean @default(false)
+  faceVerificationEnabled   Boolean  @default(false)
 
   /// --- Planning layer (V6) -------------------------------------------------------------------
   /// Every one of these defaults to the RESTRICTIVE value (false / 0). That is deliberate and is
@@ -464,41 +467,57 @@ model PlanTierLimit {
   /// All of these fail CLOSED, matching faceVerificationEnabled: the capability is refused unless
   /// the tier grants it. The counts are creation ceilings; 0 means the tier cannot use the
   /// feature at all.
-  ganttEnabled              Boolean @default(false)
-  resourceMgmtEnabled       Boolean @default(false)
-  approvalsEnabled          Boolean @default(false)
-  proofingEnabled           Boolean @default(false)
-  customWorkflowsEnabled    Boolean @default(false)
+  ganttEnabled           Boolean @default(false)
+  resourceMgmtEnabled    Boolean @default(false)
+  approvalsEnabled       Boolean @default(false)
+  proofingEnabled        Boolean @default(false)
+  customWorkflowsEnabled Boolean @default(false)
   /// Whether the AI PM copilot family exists for this tier. Spend is still bounded by
   /// aiMonthlyBudgetCeilingUsd above — this only decides whether the features are offered.
-  aiPmCopilotEnabled        Boolean @default(false)
-  maxPortfolios             Int     @default(0)
-  maxRequestForms           Int     @default(0)
-  maxBlueprints             Int     @default(0)
-  maxCustomFields           Int     @default(0)
-  maxDashboards             Int     @default(0)
+  aiPmCopilotEnabled     Boolean @default(false)
+  maxPortfolios          Int     @default(0)
+  maxRequestForms        Int     @default(0)
+  maxBlueprints          Int     @default(0)
+  maxCustomFields        Int     @default(0)
+  maxDashboards          Int     @default(0)
 
   /// --- Goals / OKRs (V8 phase 1) -----------------------------------------------------------
   /// Same restrictive-default rule as the V6 block above, same reason: a tier row that misses
   /// its initialisation under-entitles, and the migration that adds these runs the guarded
   /// UPDATE with the real Team/Enterprise values from @timesheet/shared's PLAN_TIER_LIMITS.
-  goalsEnabled              Boolean @default(false)
-  maxGoals                  Int     @default(0)
+  goalsEnabled Boolean @default(false)
+  maxGoals     Int     @default(0)
 
   /// --- Change management (V8 phase 11) -----------------------------------------------------
   /// Same restrictive-default rule as every block above: a tier row that misses its initialisation
   /// under-entitles rather than over-entitles, and the migration that adds these runs the guarded
   /// UPDATE with the real Team/Enterprise values from @timesheet/shared's PLAN_TIER_LIMITS.
-  changeManagementEnabled   Boolean @default(false)
+  changeManagementEnabled Boolean @default(false)
   /// Ceiling on approval POLICIES, not on changes — a workspace should never be unable to record a
   /// change it actually made because it hit a plan limit. 0 = the tier cannot use the module.
-  maxChangePolicies         Int     @default(0)
+  maxChangePolicies       Int     @default(0)
+
+  /// --- Managed backups (3.14.0) --------------------------------------------------------------
+  /// The most frequent AUTOMATIC backup this tier may schedule. `NONE` means the tier cannot use
+  /// the backup module at all, which is Starter's default — the same restrictive-default rule as
+  /// every capability above, for the same reason: a tier row that misses its initialisation
+  /// under-entitles rather than over-entitles.
+  ///
+  /// It is a CEILING, not a setting. A per-organization policy chooses its own cadence and the
+  /// server clamps it to this — so a workspace on Team cannot be configured hourly even by a
+  /// platform admin, because that is what the tier means.
+  backupFrequency       BackupFrequency @default(NONE)
+  /// How many destinations a tier may have configured at once. 0 pairs with `NONE`.
+  maxBackupDestinations Int             @default(0)
+  /// Test restores and point-in-time recovery. Gated separately from the schedule because it is
+  /// the expensive half: a test restore materialises a whole database somewhere.
+  backupPitrEnabled     Boolean         @default(false)
 
   /// --- Weekly AI/ML Practice Update (3.5.0) -------------------------------------------------
   /// Same restrictive-default rule as every block above. Gated for what the artefact CONTAINS —
   /// one document rolling up every project, everyone's hours and every open security finding, then
   /// mailed to addresses with no account here — rather than for what it costs to produce.
-  practiceUpdateEnabled     Boolean @default(false)
+  practiceUpdateEnabled Boolean @default(false)
 }
 
 /// Platform-wide Stripe configuration (id = "global") — one Stripe account across every org on
@@ -510,10 +529,171 @@ model PlanTierLimit {
 /// billing.controller.ts's webhook handler reads a completed session's price ID back through
 /// this same mapping to know which tier to set on Organization.planTier.
 model PlatformBillingSettings {
-  id                          String   @id
-  encryptedSecretKey          String?
+  id                            String   @id
+  encryptedSecretKey            String?
   encryptedWebhookSigningSecret String?
-  priceIdTeam                 String?  @db.VarChar(255)
-  priceIdEnterprise           String?  @db.VarChar(255)
-  updatedAt                   DateTime @updatedAt
+  priceIdTeam                   String?  @db.VarChar(255)
+  priceIdEnterprise             String?  @db.VarChar(255)
+  updatedAt                     DateTime @updatedAt
+}
+
+/// How often a workspace's database is backed up automatically. Ordered from least to most
+/// frequent; `backupFrequencyRank` in the API compares them, so the ORDER of these members is not
+/// load-bearing — the rank map is.
+enum BackupFrequency {
+  NONE
+  WEEKLY
+  DAILY
+  HOURLY
+}
+
+/// Where a backup is written. LOCAL is the filesystem of the API host, which is the only one that
+/// needs no credentials and the only one that is NOT off-site — it is offered because a
+/// single-server on-prem install is a real deployment, and stated as what it is on the screen.
+enum BackupDestinationKind {
+  LOCAL
+  S3
+  AZURE_BLOB
+  GOOGLE_DRIVE
+  ONEDRIVE
+  SFTP
+}
+
+enum BackupRetentionMode {
+  /// Keep the newest N.
+  COUNT
+  /// Keep everything younger than N days.
+  AGE
+  /// Grandfather-Father-Son: N dailies, N weeklies, N monthlies, N yearlies.
+  GFS
+}
+
+enum BackupRunKind {
+  SCHEDULED
+  MANUAL
+  /// The snapshot the retention programme takes immediately before deleting a workspace.
+  PRE_DELETE
+  /// A restore into a scratch database, to prove the backup is readable. Never touches the tenant.
+  TEST_RESTORE
+}
+
+enum BackupRunStatus {
+  RUNNING
+  SUCCEEDED
+  FAILED
+  /// Nothing was attempted — no destination, no entitlement, or the tier forbids the cadence.
+  SKIPPED
+}
+
+/// A place backups are written to.
+///
+/// SCOPE. `organizationId` null means the destination belongs to the PLATFORM and any workspace's
+/// policy may point at it — which is how a single operator-owned bucket serves every tenant, with
+/// each workspace's objects under its own key prefix. A non-null one belongs to that customer
+/// alone (an enterprise writing into their own bucket), and no other org's policy may select it.
+///
+/// SECRETS. Everything that authenticates lives in `encryptedSecret` as one AES-256-GCM blob
+/// (utils/encryption.ts) and is decrypted only inside the adapter that needs it. `config` holds
+/// what is safe to show back: a bucket name, a region, a host, a folder id.
+model BackupDestination {
+  id              String                @id @default(uuid())
+  organizationId  String?
+  organization    Organization?         @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  name            String                @db.VarChar(120)
+  kind            BackupDestinationKind
+  /// Non-secret settings, shape per kind — see services/backup-destination.service.ts.
+  config          Json
+  encryptedSecret String?               @db.Text
+  /// Key prefix every object for this destination is written under, e.g. `timesphere/`.
+  prefix          String?               @db.VarChar(255)
+  isDefault       Boolean               @default(false)
+  /// Result of the last connectivity test. Recorded, never enforced: a bucket unreachable from a
+  /// laptop can be perfectly reachable from the API host, so a failing test must not block a save.
+  lastTestedAt    DateTime?
+  lastTestStatus  String?               @db.VarChar(16)
+  lastTestMessage String?               @db.Text
+  createdAt       DateTime              @default(now())
+  updatedAt       DateTime              @updatedAt
+
+  runs     BackupRun[]
+  policies OrgBackupPolicy[]
+
+  @@index([organizationId])
+}
+
+/// One workspace's backup schedule and retention rules. At most one per organization.
+model OrgBackupPolicy {
+  id             String       @id @default(uuid())
+  organizationId String       @unique
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  enabled   Boolean         @default(false)
+  /// Requested cadence. The scheduler clamps it to the tier's `backupFrequency` on every tick, so
+  /// a downgrade takes effect without anyone editing the policy.
+  frequency BackupFrequency @default(NONE)
+  /// UTC hour for a daily/weekly run. Stored in UTC and labelled as UTC everywhere, because a
+  /// platform serving several timezones cannot mean "2am" without saying whose.
+  hourUtc   Int             @default(2)
+  /// 0 = Sunday. Only read for WEEKLY.
+  dayOfWeek Int             @default(0)
+
+  destinationId String?
+  destination   BackupDestination? @relation(fields: [destinationId], references: [id], onDelete: SetNull)
+
+  retentionMode BackupRetentionMode @default(COUNT)
+  keepCount     Int                 @default(7)
+  keepDays      Int                 @default(30)
+  gfsDaily      Int                 @default(7)
+  gfsWeekly     Int                 @default(4)
+  gfsMonthly    Int                 @default(12)
+  gfsYearly     Int                 @default(3)
+
+  /// Comma-separated addresses. Empty means nobody is mailed — which the console says out loud,
+  /// because a backup nobody is told about failing is the same as no backup.
+  alertEmails           String? @db.VarChar(1000)
+  /// A Slack incoming webhook or any HTTPS endpoint. Encrypted: the URL IS the credential.
+  encryptedAlertWebhook String? @db.Text
+  alertOnSuccess        Boolean @default(false)
+  alertOnFailure        Boolean @default(true)
+
+  lastRunAt  DateTime?
+  lastStatus BackupRunStatus?
+  /// When the scheduler will next consider this policy. Recomputed after every run, so a tick that
+  /// runs twice does nothing the second time.
+  nextRunAt  DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([enabled, nextRunAt])
+}
+
+/// One backup attempt — scheduled, manual, pre-delete, or a test restore. The monitoring screen,
+/// the alerts and the retention sweep all read this table.
+model BackupRun {
+  id             String             @id @default(uuid())
+  organizationId String
+  organization   Organization       @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  destinationId  String?
+  destination    BackupDestination? @relation(fields: [destinationId], references: [id], onDelete: SetNull)
+
+  kind           BackupRunKind
+  status         BackupRunStatus
+  startedAt      DateTime        @default(now())
+  finishedAt     DateTime?
+  /// Size of the dump. Null while RUNNING and on a failure before anything was written.
+  bytes          BigInt?
+  /// Where it landed, in the destination's own address space.
+  objectKey      String?         @db.VarChar(1024)
+  /// SHA-256 of the dump, so a restore can prove it read back what was written.
+  checksumSha256 String?         @db.Char(64)
+  errorMessage   String?         @db.Text
+  /// Which GFS slot keeps this run alive: DAILY / WEEKLY / MONTHLY / YEARLY, or null under the
+  /// simpler retention modes.
+  retentionTag   String?         @db.VarChar(16)
+  metadata       Json?
+
+  @@index([organizationId, startedAt])
+  @@index([status, startedAt])
+  @@index([destinationId])
 }

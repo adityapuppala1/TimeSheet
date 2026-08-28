@@ -44,7 +44,13 @@ describe("plan tier limits", () => {
         maxGoals: 0,
         changeManagementEnabled: false,
         maxChangePolicies: 0,
-        practiceUpdateEnabled: false
+        practiceUpdateEnabled: false,
+        // Managed backups (3.14.0). Starter gets none — deliberately, because a backup has a real
+        // recurring per-workspace cost that scales with cadence. The pre-deletion snapshot the
+        // retention programme takes is separate and applies on every plan.
+        backupFrequency: "NONE",
+        maxBackupDestinations: 0,
+        backupPitrEnabled: false
       },
       TEAM: {
         seatLimit: UNLIMITED_SEATS,
@@ -69,7 +75,12 @@ describe("plan tier limits", () => {
         maxGoals: 25,
         changeManagementEnabled: true,
         maxChangePolicies: 5,
-        practiceUpdateEnabled: true
+        practiceUpdateEnabled: true,
+        // Weekly, one destination, no test restores — the honest floor for a paying team, bounding
+        // the worst case at seven days of work for one dump and one upload a week.
+        backupFrequency: "WEEKLY",
+        maxBackupDestinations: 1,
+        backupPitrEnabled: false
       },
       ENTERPRISE: {
         seatLimit: UNLIMITED_SEATS,
@@ -92,7 +103,13 @@ describe("plan tier limits", () => {
         maxGoals: UNLIMITED_PLAN_ITEMS,
         changeManagementEnabled: true,
         maxChangePolicies: UNLIMITED_PLAN_ITEMS,
-        practiceUpdateEnabled: true
+        practiceUpdateEnabled: true,
+        // Daily and dedicated, several destinations, and the expensive half — test restores and
+        // PITR. HOURLY exists in the model and is deliberately NOT granted by the tier: it
+        // multiplies egress and storage by twenty-four and is a per-contract conversation.
+        backupFrequency: "DAILY",
+        maxBackupDestinations: 5,
+        backupPitrEnabled: true
       }
     });
   });

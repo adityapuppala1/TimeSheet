@@ -12,6 +12,59 @@ number, on purpose — an installation must never render history for a version t
 
 _Nothing yet._
 
+## 3.14.0 — managed backups: a plan entitlement, six destinations, and rules you can preview — 2026-08-29
+
+### ✨ Backups became a plan feature, and a real one
+
+- **Starter: none. Team: weekly. Enterprise: daily**, with test restores and room for several
+  destinations. The cadence is a **ceiling, not a setting** — a workspace picks its own schedule and
+  the scheduler clamps it to the tier on every pass, so a downgrade lowers the cadence without
+  anybody editing a policy, and a Team workspace cannot be set hourly even by a platform admin who
+  meant well.
+- Tiered because a backup has a real recurring per-workspace cost that scales with how often it
+  runs. What is **not** tiered: the snapshot taken before the retention programme deletes a lapsed
+  workspace still happens on every plan, including Starter.
+
+### ✨ Where backups go is yours to choose
+
+- **Six destinations**: any S3-compatible bucket (Amazon S3, Cloudflare R2, Backblaze B2, Wasabi,
+  DigitalOcean Spaces, MinIO), **Azure Blob Storage**, **Google Drive**, **OneDrive / SharePoint**,
+  your own **SFTP** server, or a local directory. One interface, six adapters — which cloud a
+  customer's data sits in is a row in a table rather than a branch through the backup path.
+- Credentials are sealed with AES-256-GCM and **never returned to the browser**: the console is told
+  which fields are set, not what they are, and leaving one blank on an edit keeps the stored value.
+  A connectivity test is recorded and never enforced — a bucket unreachable from a laptop can be
+  perfectly reachable from the API host.
+
+### ✨ Scheduling, retention, monitoring and recovery
+
+- **Scheduling** — hourly, daily or weekly, at a stated UTC hour and weekday. The scheduler runs at
+  five past the hour and only touches policies that are due; **Dry run the pass** shows exactly what
+  it would do, including any policy that has drifted above its tier.
+- **Retention** — keep the newest N, keep by age, or **Grandfather-Father-Son**. GFS *promotes*
+  rather than copies: one object is kept and tagged as the daily, weekly, monthly or yearly it
+  satisfies, so a year of history is not four copies of the same bytes. Two rules the code enforces
+  and the tests pin: nothing is deleted before a newer backup has **succeeded**, and the newest
+  backup is never pruned however old it is.
+- **Monitoring and alerts** — every run recorded with its size, object key and SHA-256, and alerts
+  by **email, Slack or any webhook** on failure (and optionally on success). Alerts are sent by the
+  platform, not by the workspace, because the workspace's own mail may be what is broken. The alert
+  email is an editable, previewable, test-sendable platform template like every other.
+- **Test restores (Enterprise)** — downloads a backup, checks its checksum against what was written,
+  imports it into a scratch database, counts the tables, and drops it. Proof the copy is readable,
+  not merely present. It can never touch the tenant.
+
+### ✨ "Talk to sales" answers the question it is actually asked
+
+- The Enterprise CTA pointed at `/login`. It now opens a comparison of the three ways to run
+  TimeSphere — **our cloud, your own cloud, or on-premises** — with what genuinely differs: who
+  operates the servers, where the database sits, **who holds the encryption key**, whether backups
+  can stay inside your network, whether it runs with no internet at all, who bills the
+  infrastructure, and the shape of the pricing for each. Pricing is stated as a shape rather than an
+  invented number, because the number is a conversation.
+- Compare plans gains a Managed backups group and a How you run it group, both generated from the
+  same constants the platform enforces.
+
 ## 3.13.0 — the console, straightened out — and backups you can actually restore — 2026-08-28
 
 ### 🎨 Every console page rebuilt on one layout kit

@@ -18,16 +18,18 @@
  *    live tenant is the one mistake nobody recovers from.
  */
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { AlertTriangle, Archive, CheckCircle2, Database, Download, HardDrive, RotateCcw, Trash2, XCircle } from "lucide-react";
+import { AlertTriangle, Archive, CalendarClock, CheckCircle2, Database, Download, HardDrive, RotateCcw, Trash2, XCircle } from "lucide-react";
 import { useState } from "react";
 import { Badge } from "../../components/ui/badge";
 import { Button } from "../../components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "../../components/ui/dialog";
 import { Input } from "../../components/ui/input";
 import { Skeleton } from "../../components/ui/skeleton";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "../../components/ui/tabs";
 import { TableBody, TableCell, TableHead, TableHeader, TableRow } from "../../components/ui/table";
 import { toast } from "../../components/ui/toaster";
 import { platformAdminConsoleApi, type SnapshotFile } from "../../services/platform-admin-api";
+import { BackupSchedulesTab } from "./BackupSchedules";
 import { ConsolePage, ConsoleSection, ConsoleTable, EmptyState, Field, KpiCard, KpiGrid, Num, PRIMARY_BTN, shortDateTime } from "./console-ui";
 
 const errorMessageOf = (error: unknown) => (error as { response?: { data?: { message?: string } } })?.response?.data?.message;
@@ -172,8 +174,23 @@ export function PlatformAdminBackups() {
     <ConsolePage
       eyebrow="Platform"
       title="Backups"
-      description="The snapshots taken before the retention programme deletes a workspace. Download one to hand back to a customer, restore one that was deleted by mistake, or clear out what you no longer need to keep."
+      description="Scheduled backups for every workspace — where they go, how long they are kept, and whether they came back — plus the one-off snapshots the retention programme takes before it deletes a workspace."
     >
+      <Tabs defaultValue="scheduled" className="grid min-w-0 grid-cols-1 gap-4">
+        <TabsList className="w-fit max-w-full overflow-x-auto">
+          <TabsTrigger value="scheduled" className="gap-1.5">
+            <CalendarClock className="h-3.5 w-3.5" />Scheduled backups
+          </TabsTrigger>
+          <TabsTrigger value="snapshots" className="gap-1.5">
+            <Archive className="h-3.5 w-3.5" />Pre-deletion snapshots
+          </TabsTrigger>
+        </TabsList>
+
+        <TabsContent value="scheduled" className="mt-0 min-w-0">
+          <BackupSchedulesTab />
+        </TabsContent>
+
+        <TabsContent value="snapshots" className="mt-0 grid min-w-0 gap-6">
       {backups.isLoading && <Skeleton className="h-64 w-full" />}
 
       {d && !d.configured && (
@@ -322,8 +339,10 @@ export function PlatformAdminBackups() {
         </>
       )}
 
-      <RestoreDialog file={restoring} onClose={() => setRestoring(null)} />
-      <DeleteDialog file={deleting} onClose={() => setDeleting(null)} />
+          <RestoreDialog file={restoring} onClose={() => setRestoring(null)} />
+          <DeleteDialog file={deleting} onClose={() => setDeleting(null)} />
+        </TabsContent>
+      </Tabs>
     </ConsolePage>
   );
 }

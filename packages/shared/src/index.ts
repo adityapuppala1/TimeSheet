@@ -687,6 +687,35 @@ export const UNLIMITED_SEATS = 1_000_000;
  *  module-init time — a `const` further down the file would be in its temporal dead zone. */
 export const UNLIMITED_PLAN_ITEMS = 1_000_000;
 
+/**
+ * How often a workspace's database is backed up automatically.
+ *
+ * The ORDER of this union is not what compares them — `BACKUP_FREQUENCY_RANK` is, so a member can
+ * be added without every comparison in the codebase silently changing meaning.
+ */
+export type BackupFrequency = "NONE" | "WEEKLY" | "DAILY" | "HOURLY";
+
+/** Least to most frequent. A tier permits any cadence whose rank is <= its own. */
+export const BACKUP_FREQUENCY_RANK: Record<BackupFrequency, number> = { NONE: 0, WEEKLY: 1, DAILY: 2, HOURLY: 3 };
+
+export const BACKUP_FREQUENCY_LABEL: Record<BackupFrequency, string> = {
+  NONE: "No automatic backups",
+  WEEKLY: "Weekly",
+  DAILY: "Daily",
+  HOURLY: "Hourly"
+};
+
+/** True when `wanted` is within what `ceiling` allows. The one comparison, so the API, the worker
+ *  and the console cannot disagree about what a tier permits. */
+export function backupFrequencyAllowed(wanted: BackupFrequency, ceiling: BackupFrequency): boolean {
+  return BACKUP_FREQUENCY_RANK[wanted] <= BACKUP_FREQUENCY_RANK[ceiling];
+}
+
+/** Every cadence a tier may choose, most frequent first — what the console's picker renders. */
+export function allowedBackupFrequencies(ceiling: BackupFrequency): BackupFrequency[] {
+  return (["HOURLY", "DAILY", "WEEKLY", "NONE"] as BackupFrequency[]).filter((f) => backupFrequencyAllowed(f, ceiling));
+}
+
 export interface PlanTierLimits {
   seatLimit: number;
   /** A HARD platform ceiling, clamped over whatever budget the org sets for itself. An explicit
@@ -747,6 +776,31 @@ export interface PlanTierLimits {
    * pages they come from; what a downgrade removes is the packaged, mailable roll-up.
    */
   practiceUpdateEnabled: boolean;
+
+  /* --- Managed backups (3.14.0) ------------------------------------------------------------ */
+  /**
+   * The most frequent AUTOMATIC backup this tier may schedule, and a CEILING rather than a
+   * setting: a workspace picks its own cadence and the server clamps it to this, so a downgrade
+   * takes effect on the next tick without anyone editing a policy.
+   *
+   * `NONE` means the tier cannot use the backup module at all — Starter. Fails CLOSED like every
+   * capability on this interface.
+   *
+   * WHY IT IS TIERED AT ALL, since a backup is not a feature anybody wants to be sold: it has a
+   * real, recurring, per-workspace cost that scales with how often it runs — a dump, egress to an
+   * off-site destination, and storage that is kept for as long as the retention policy says. A
+   * flat "everyone gets hourly" is a bill somebody pays. What is NOT tiered is the pre-deletion
+   * snapshot: every workspace gets one before the retention programme drops it, on every plan.
+   */
+  backupFrequency: BackupFrequency;
+  /** How many destinations may be configured at once. 0 pairs with a `NONE` frequency. */
+  maxBackupDestinations: number;
+  /**
+   * Test restores and point-in-time recovery. Gated separately from the schedule because it is the
+   * expensive half — a test restore materialises an entire database somewhere to prove the dump
+   * reads back.
+   */
+  backupPitrEnabled: boolean;
 }
 
 export const PLAN_TIER_LIMITS: Record<PlanTier, PlanTierLimits> = {
@@ -771,7 +825,12 @@ export const PLAN_TIER_LIMITS: Record<PlanTier, PlanTierLimits> = {
     maxGoals: 0,
     changeManagementEnabled: false,
     maxChangePolicies: 0,
-    practiceUpdateEnabled: false
+    practiceUpdateEnabled: false,
+    // No automatic backups on Starter. The pre-deletion snapshot the retention programme takes is
+    // NOT this — every workspace gets one of those, on every plan.
+    backupFrequency: "NONE",
+    maxBackupDestinations: 0,
+    backupPitrEnabled: false
   },
   TEAM: {
     seatLimit: UNLIMITED_SEATS,
@@ -803,7 +862,15 @@ export const PLAN_TIER_LIMITS: Record<PlanTier, PlanTierLimits> = {
     changeManagementEnabled: true,
     maxChangePolicies: 5,
     // A practice update is a management artefact, and Team is where a workspace has managers in it.
-    practiceUpdateEnabled: true
+    practiceUpdateEnabled: true,
+    // WEEKLY, and one destination. A weekly off-site copy is the honest floor for a paying team:
+    // it bounds the worst case at seven days of work, and it costs one dump and one upload a week
+    // per workspace. Daily is what Enterprise buys, because daily is what multiplies the cost.
+    backupFrequency: "WEEKLY",
+    maxBackupDestinations: 1,
+    // Test restores and PITR are the expensive half — a whole database materialised to prove a
+    // dump reads back — so they are the other thing Enterprise buys.
+    backupPitrEnabled: false
   },
   ENTERPRISE: {
     seatLimit: UNLIMITED_SEATS,
@@ -826,7 +893,14 @@ export const PLAN_TIER_LIMITS: Record<PlanTier, PlanTierLimits> = {
     maxGoals: UNLIMITED_PLAN_ITEMS,
     changeManagementEnabled: true,
     maxChangePolicies: UNLIMITED_PLAN_ITEMS,
-    practiceUpdateEnabled: true
+    practiceUpdateEnabled: true,
+    // DAILY, dedicated, with room for several destinations — a primary bucket plus an off-site
+    // copy is a normal enterprise requirement, not an exotic one. HOURLY exists in the model and
+    // is deliberately NOT granted by the tier: it is a per-contract conversation, because it
+    // multiplies both egress and storage by twenty-four.
+    backupFrequency: "DAILY",
+    maxBackupDestinations: 5,
+    backupPitrEnabled: true
   }
 };
 

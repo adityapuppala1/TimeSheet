@@ -40,6 +40,7 @@ import { startFlowScheduleWorker } from "./workers/flow-schedule.worker.js";
 import { startGoalDigestWorker } from "./workers/goal-digest.worker.js";
 import { startTrialLifecycleWorker } from "./workers/trial-lifecycle.worker.js";
 import { startPlatformRetentionWorker } from "./workers/platform-retention.worker.js";
+import { startBackupWorker } from "./workers/backup.worker.js";
 import { startAIRetentionWorker } from "./workers/ai-retention.worker.js";
 import { runForEveryOrg } from "./workers/run-for-every-org.js";
 import { registerFlowDispatch } from "./services/automation-dispatch.service.js";
@@ -239,6 +240,7 @@ server.on("listening", async () => {
   startGoalDigestWorker();
   startTrialLifecycleWorker();
   startPlatformRetentionWorker();
+  startBackupWorker();
   startApiTelemetryRetentionWorker();
 
   // The Studio's event triggers. Registered once, for the whole internal event vocabulary — which

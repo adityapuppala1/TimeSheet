@@ -40,6 +40,9 @@ import {
 import { getPlatformAnalytics } from "../services/platform-admin-analytics.service.js";
 import { getPlatformEmailAnalytics } from "../services/platform-email-analytics.service.js";
 import { deleteSnapshot, listSnapshots, restoreSnapshot, snapshotPath } from "../services/platform-backup.service.js";
+import { DESTINATION_FIELDS, describeSecret, encryptDestinationSecret, testDestination, type BackupDestinationKind, type DestinationRecord } from "../services/backup-destination.service.js";
+import { backupEntitlement, nextRunAt, planRetention, runBackup, runBackupTick, sweepRetention, testRestore } from "../services/backup.service.js";
+import { allowedBackupFrequencies, BACKUP_FREQUENCY_LABEL, backupFrequencyAllowed, type BackupFrequency } from "@timesheet/shared";
 
 export const platformAdminConsoleRouter = Router();
 platformAdminConsoleRouter.use(requirePlatformAdmin);
@@ -545,7 +548,358 @@ platformAdminConsoleRouter.delete("/auth/sessions/:id", async (req, res) => {
   res.status(204).send();
 });
 
-/* ================================== Backups ==================================== */
+/* ============================== Managed backups ================================= */
+
+/**
+ * The backup module's whole state for the console: what each tier allows, every destination, every
+ * organization's policy and its next run, and the recent runs.
+ *
+ * ONE READ, NOT FIVE. Every figure on that screen has to agree with every other — a queue that says
+ * "next run tomorrow" beside a policy the tier no longer permits is worse than no screen — and five
+ * independent endpoints cannot promise that.
+ */
+platformAdminConsoleRouter.get("/backups/overview", async (_req, res) => {
+  const now = new Date();
+  const [orgs, destinations, tierRows, recentRuns] = await Promise.all([
+    controlPrisma.organization.findMany({
+      where: { status: { in: ["ACTIVE", "GRACE", "SUSPENDED"] } },
+      orderBy: { name: "asc" },
+      include: { backupPolicy: { include: { destination: { select: { id: true, name: true, kind: true } } } }, database: { select: { databaseName: true } } }
+    }),
+    controlPrisma.backupDestination.findMany({ orderBy: [{ organizationId: "asc" }, { name: "asc" }], include: { organization: { select: { name: true, slug: true } }, _count: { select: { runs: true } } } }),
+    controlPrisma.planTierLimit.findMany(),
+    controlPrisma.backupRun.findMany({
+      orderBy: { startedAt: "desc" },
+      take: 60,
+      include: { organization: { select: { name: true, slug: true } }, destination: { select: { name: true, kind: true } } }
+    })
+  ]);
+
+  const workspaces = await Promise.all(
+    orgs.map(async (org) => {
+      const entitlement = await backupEntitlement(org);
+      const policy = org.backupPolicy;
+      return {
+        organizationId: org.id,
+        name: org.name,
+        slug: org.slug,
+        status: org.status,
+        planTier: org.planTier,
+        trialTier: org.trialTier,
+        hasDatabase: Boolean(org.database),
+        entitlement,
+        allowedFrequencies: allowedBackupFrequencies(entitlement.frequency),
+        policy: policy
+          ? {
+              id: policy.id,
+              enabled: policy.enabled,
+              frequency: policy.frequency,
+              hourUtc: policy.hourUtc,
+              dayOfWeek: policy.dayOfWeek,
+              destinationId: policy.destinationId,
+              destinationName: policy.destination?.name ?? null,
+              retentionMode: policy.retentionMode,
+              keepCount: policy.keepCount,
+              keepDays: policy.keepDays,
+              gfsDaily: policy.gfsDaily,
+              gfsWeekly: policy.gfsWeekly,
+              gfsMonthly: policy.gfsMonthly,
+              gfsYearly: policy.gfsYearly,
+              alertEmails: policy.alertEmails,
+              hasAlertWebhook: Boolean(policy.encryptedAlertWebhook),
+              alertOnSuccess: policy.alertOnSuccess,
+              alertOnFailure: policy.alertOnFailure,
+              lastRunAt: policy.lastRunAt,
+              lastStatus: policy.lastStatus,
+              nextRunAt: policy.nextRunAt,
+              // Recomputed rather than trusted: a policy edited by hand or a tier that changed
+              // since the last run makes the stored value stale, and the console must not repeat it.
+              projectedNextRunAt: policy.enabled ? nextRunAt(policy, now) : null,
+              /** True when the tier no longer permits what this policy asks for. */
+              overTier: !backupFrequencyAllowed(policy.frequency as BackupFrequency, entitlement.frequency)
+            }
+          : null
+      };
+    })
+  );
+
+  const tiers = tierRows.map((t) => ({
+    tier: t.tier,
+    backupFrequency: t.backupFrequency,
+    backupFrequencyLabel: BACKUP_FREQUENCY_LABEL[t.backupFrequency as BackupFrequency],
+    maxBackupDestinations: t.maxBackupDestinations,
+    backupPitrEnabled: t.backupPitrEnabled
+  }));
+
+  res.json({
+    tiers,
+    frequencyLabels: BACKUP_FREQUENCY_LABEL,
+    destinationKinds: Object.entries(DESTINATION_FIELDS).map(([kind, spec]) => ({ kind, label: spec.label, blurb: spec.blurb, fields: spec.fields })),
+    destinations: destinations.map((d) => ({
+      id: d.id,
+      name: d.name,
+      kind: d.kind,
+      /** null = a platform-owned destination any workspace may use. */
+      organizationId: d.organizationId,
+      organizationName: d.organization?.name ?? null,
+      config: d.config,
+      prefix: d.prefix,
+      isDefault: d.isDefault,
+      secretsSet: describeSecret(d as DestinationRecord),
+      lastTestedAt: d.lastTestedAt,
+      lastTestStatus: d.lastTestStatus,
+      lastTestMessage: d.lastTestMessage,
+      runCount: d._count.runs
+    })),
+    workspaces,
+    recentRuns: recentRuns.map((r) => ({
+      id: r.id,
+      organizationId: r.organizationId,
+      organizationName: r.organization.name,
+      slug: r.organization.slug,
+      destinationName: r.destination?.name ?? null,
+      destinationKind: r.destination?.kind ?? null,
+      kind: r.kind,
+      status: r.status,
+      startedAt: r.startedAt,
+      finishedAt: r.finishedAt,
+      // BigInt does not survive JSON.stringify — Express would throw rather than serialise it.
+      bytes: r.bytes === null ? null : Number(r.bytes),
+      objectKey: r.objectKey,
+      checksumSha256: r.checksumSha256,
+      errorMessage: r.errorMessage,
+      retentionTag: r.retentionTag
+    }))
+  });
+});
+
+const destinationBody = z.object({
+  name: z.string().min(2).max(120),
+  kind: z.enum(["LOCAL", "S3", "AZURE_BLOB", "GOOGLE_DRIVE", "ONEDRIVE", "SFTP"]),
+  organizationId: z.string().nullable().optional(),
+  config: z.record(z.string()).default({}),
+  /** Write-only. Only the keys present are changed, so a save that leaves a field blank keeps it. */
+  secrets: z.record(z.string()).optional(),
+  prefix: z.string().max(255).nullable().optional(),
+  isDefault: z.boolean().optional()
+});
+
+platformAdminConsoleRouter.post("/backups/destinations", validate(z.object({ body: destinationBody.strict() })), async (req, res) => {
+  const b = req.body;
+  if (b.organizationId) {
+    const org = await controlPrisma.organization.findUnique({ where: { id: b.organizationId } });
+    if (!org) throw new AppError(404, "Organization not found");
+    const entitlement = await backupEntitlement(org);
+    const existing = await controlPrisma.backupDestination.count({ where: { organizationId: b.organizationId } });
+    if (existing >= entitlement.maxDestinations) {
+      throw new AppError(409, `The ${entitlement.tier} plan allows ${entitlement.maxDestinations} destination${entitlement.maxDestinations === 1 ? "" : "s"} per workspace; ${org.slug} already has ${existing}.`);
+    }
+  }
+  const row = await controlPrisma.backupDestination.create({
+    data: {
+      name: b.name.trim(),
+      kind: b.kind as BackupDestinationKind,
+      organizationId: b.organizationId ?? null,
+      config: b.config,
+      encryptedSecret: b.secrets && Object.keys(b.secrets).length ? encryptDestinationSecret(b.secrets) : null,
+      prefix: b.prefix?.trim() || null,
+      isDefault: b.isDefault ?? false
+    }
+  });
+  await platformAudit("PLATFORM_ADMIN", actorLabel(req), "backup.destination_created", "BackupDestination", row.id, { name: row.name, kind: row.kind });
+  res.status(201).json({ id: row.id });
+});
+
+platformAdminConsoleRouter.patch(
+  "/backups/destinations/:id",
+  validate(z.object({ params: z.object({ id: z.string() }), body: destinationBody.partial().strict() })),
+  async (req, res) => {
+    const id = String(req.params.id);
+    const current = await controlPrisma.backupDestination.findUnique({ where: { id } });
+    if (!current) throw new AppError(404, "Destination not found");
+
+    // MERGE the secrets rather than replace them: the console never receives the stored values, so
+    // a form that submits only what was retyped must not blank the rest.
+    let encryptedSecret = current.encryptedSecret;
+    if (req.body.secrets && Object.keys(req.body.secrets).length) {
+      const kept = describeSecret(current as DestinationRecord);
+      const merged: Record<string, string> = {};
+      for (const [key, value] of Object.entries(req.body.secrets as Record<string, string>)) if (value) merged[key] = value;
+      // Anything already set and not retyped is preserved by re-reading and re-encrypting.
+      if (current.encryptedSecret) {
+        for (const key of Object.keys(kept)) if (kept[key] && merged[key] === undefined) merged[key] = "__KEEP__";
+      }
+      const { decryptSecret } = await import("../utils/encryption.js");
+      const previous: Record<string, string> = current.encryptedSecret ? (JSON.parse(decryptSecret(current.encryptedSecret)) as Record<string, string>) : {};
+      for (const key of Object.keys(merged)) if (merged[key] === "__KEEP__") merged[key] = previous[key];
+      encryptedSecret = encryptDestinationSecret(merged);
+    }
+
+    const row = await controlPrisma.backupDestination.update({
+      where: { id },
+      data: {
+        ...(req.body.name ? { name: req.body.name.trim() } : {}),
+        ...(req.body.kind ? { kind: req.body.kind as BackupDestinationKind } : {}),
+        ...(req.body.config ? { config: req.body.config } : {}),
+        ...(req.body.prefix !== undefined ? { prefix: req.body.prefix?.trim() || null } : {}),
+        ...(req.body.isDefault !== undefined ? { isDefault: req.body.isDefault } : {}),
+        encryptedSecret
+      }
+    });
+    await platformAudit("PLATFORM_ADMIN", actorLabel(req), "backup.destination_updated", "BackupDestination", row.id, { name: row.name });
+    res.json({ id: row.id });
+  }
+);
+
+platformAdminConsoleRouter.post("/backups/destinations/:id/test", async (req, res) => {
+  const row = await controlPrisma.backupDestination.findUnique({ where: { id: String(req.params.id) } });
+  if (!row) throw new AppError(404, "Destination not found");
+  const result = await testDestination(row as DestinationRecord);
+  // RECORDED, NEVER ENFORCED — the same rule the SSO connection test follows: a destination
+  // unreachable from here can be perfectly reachable from a production host.
+  await controlPrisma.backupDestination.update({
+    where: { id: row.id },
+    data: { lastTestedAt: new Date(), lastTestStatus: result.ok ? "PASS" : "FAIL", lastTestMessage: result.message }
+  });
+  res.json(result);
+});
+
+platformAdminConsoleRouter.delete("/backups/destinations/:id", async (req, res) => {
+  const id = String(req.params.id);
+  const inUse = await controlPrisma.orgBackupPolicy.count({ where: { destinationId: id } });
+  if (inUse > 0) throw new AppError(409, `${inUse} backup polic${inUse === 1 ? "y is" : "ies are"} still pointed at this destination. Repoint them first.`);
+  await controlPrisma.backupDestination.delete({ where: { id } }).catch(() => {
+    throw new AppError(404, "Destination not found");
+  });
+  await platformAudit("PLATFORM_ADMIN", actorLabel(req), "backup.destination_deleted", "BackupDestination", id);
+  res.status(204).send();
+});
+
+const policyBody = z
+  .object({
+    enabled: z.boolean().optional(),
+    frequency: z.enum(["NONE", "WEEKLY", "DAILY", "HOURLY"]).optional(),
+    hourUtc: z.number().int().min(0).max(23).optional(),
+    dayOfWeek: z.number().int().min(0).max(6).optional(),
+    destinationId: z.string().nullable().optional(),
+    retentionMode: z.enum(["COUNT", "AGE", "GFS"]).optional(),
+    keepCount: z.number().int().min(1).max(500).optional(),
+    keepDays: z.number().int().min(1).max(3650).optional(),
+    gfsDaily: z.number().int().min(0).max(60).optional(),
+    gfsWeekly: z.number().int().min(0).max(52).optional(),
+    gfsMonthly: z.number().int().min(0).max(120).optional(),
+    gfsYearly: z.number().int().min(0).max(20).optional(),
+    alertEmails: z.string().max(1000).nullable().optional(),
+    alertWebhook: z.string().max(2000).nullable().optional(),
+    alertOnSuccess: z.boolean().optional(),
+    alertOnFailure: z.boolean().optional()
+  })
+  .strict();
+
+platformAdminConsoleRouter.put("/backups/policy/:orgId", validate(z.object({ params: z.object({ orgId: z.string() }), body: policyBody })), async (req, res) => {
+  const orgId = String(req.params.orgId);
+  const org = await controlPrisma.organization.findUnique({ where: { id: orgId } });
+  if (!org) throw new AppError(404, "Organization not found");
+
+  const entitlement = await backupEntitlement(org);
+  const wanted = (req.body.frequency ?? "NONE") as BackupFrequency;
+  // The tier is a ceiling and the API says so plainly rather than silently downgrading a save — an
+  // operator who asked for hourly deserves to be told why they did not get it.
+  if (req.body.frequency && !backupFrequencyAllowed(wanted, entitlement.frequency)) {
+    throw new AppError(
+      403,
+      `${org.slug} is on ${entitlement.tier}, which allows ${BACKUP_FREQUENCY_LABEL[entitlement.frequency].toLowerCase()} at most. Raise the plan tier to schedule ${BACKUP_FREQUENCY_LABEL[wanted].toLowerCase()}.`
+    );
+  }
+  if (req.body.enabled && entitlement.frequency === "NONE") {
+    throw new AppError(403, `The ${entitlement.tier} plan does not include managed backups.`);
+  }
+  if (req.body.destinationId) {
+    const dest = await controlPrisma.backupDestination.findUnique({ where: { id: req.body.destinationId } });
+    if (!dest) throw new AppError(404, "Destination not found");
+    // A workspace-owned destination belongs to that workspace alone.
+    if (dest.organizationId && dest.organizationId !== orgId) throw new AppError(403, `"${dest.name}" belongs to a different workspace.`);
+  }
+
+  const existing = await controlPrisma.orgBackupPolicy.findUnique({ where: { organizationId: orgId } });
+  const merged = {
+    enabled: req.body.enabled ?? existing?.enabled ?? false,
+    frequency: (req.body.frequency ?? existing?.frequency ?? "NONE") as BackupFrequency,
+    hourUtc: req.body.hourUtc ?? existing?.hourUtc ?? 2,
+    dayOfWeek: req.body.dayOfWeek ?? existing?.dayOfWeek ?? 0
+  };
+  const webhookData =
+    req.body.alertWebhook === undefined
+      ? {}
+      : { encryptedAlertWebhook: req.body.alertWebhook ? encryptSecret(req.body.alertWebhook) : null };
+
+  const data = {
+    ...merged,
+    destinationId: req.body.destinationId !== undefined ? req.body.destinationId : (existing?.destinationId ?? null),
+    retentionMode: req.body.retentionMode ?? existing?.retentionMode ?? "COUNT",
+    keepCount: req.body.keepCount ?? existing?.keepCount ?? 7,
+    keepDays: req.body.keepDays ?? existing?.keepDays ?? 30,
+    gfsDaily: req.body.gfsDaily ?? existing?.gfsDaily ?? 7,
+    gfsWeekly: req.body.gfsWeekly ?? existing?.gfsWeekly ?? 4,
+    gfsMonthly: req.body.gfsMonthly ?? existing?.gfsMonthly ?? 12,
+    gfsYearly: req.body.gfsYearly ?? existing?.gfsYearly ?? 3,
+    alertEmails: req.body.alertEmails !== undefined ? req.body.alertEmails : (existing?.alertEmails ?? null),
+    alertOnSuccess: req.body.alertOnSuccess ?? existing?.alertOnSuccess ?? false,
+    alertOnFailure: req.body.alertOnFailure ?? existing?.alertOnFailure ?? true,
+    nextRunAt: merged.enabled ? nextRunAt(merged, new Date()) : null,
+    ...webhookData
+  };
+
+  const row = await controlPrisma.orgBackupPolicy.upsert({ where: { organizationId: orgId }, update: data, create: { organizationId: orgId, ...data } });
+  await platformAudit("PLATFORM_ADMIN", actorLabel(req), "backup.policy_updated", "Organization", orgId, { slug: org.slug, enabled: row.enabled, frequency: row.frequency });
+  res.json({ id: row.id, nextRunAt: row.nextRunAt });
+});
+
+/** What the retention rules WOULD keep and drop, against the runs that exist. No writes. */
+platformAdminConsoleRouter.get("/backups/policy/:orgId/retention-preview", async (req, res) => {
+  const policy = await controlPrisma.orgBackupPolicy.findUnique({ where: { organizationId: String(req.params.orgId) } });
+  if (!policy) throw new AppError(404, "This workspace has no backup policy yet.");
+  const runs = await controlPrisma.backupRun.findMany({
+    where: { organizationId: String(req.params.orgId), status: "SUCCEEDED", objectKey: { not: null } },
+    select: { id: true, startedAt: true, objectKey: true },
+    orderBy: { startedAt: "desc" }
+  });
+  const decision = planRetention(runs, policy);
+  res.json({
+    total: runs.length,
+    keep: decision.keep,
+    drop: decision.drop.map((r) => ({ id: r.id, startedAt: r.startedAt, objectKey: r.objectKey }))
+  });
+});
+
+platformAdminConsoleRouter.post("/backups/run/:orgId", validate(z.object({ params: z.object({ orgId: z.string() }), body: z.object({ destinationId: z.string().optional() }).strict().optional() })), async (req, res) => {
+  const result = await runBackup(String(req.params.orgId), { kind: "MANUAL", actorLabel: actorLabel(req), destinationId: req.body?.destinationId });
+  if (result.status === "FAILED") throw new AppError(502, result.message);
+  res.json(result);
+});
+
+platformAdminConsoleRouter.post("/backups/sweep/:orgId", async (req, res) => {
+  const policy = await controlPrisma.orgBackupPolicy.findUnique({ where: { organizationId: String(req.params.orgId) } });
+  if (!policy) throw new AppError(404, "This workspace has no backup policy yet.");
+  res.json(await sweepRetention(String(req.params.orgId), policy.id));
+});
+
+platformAdminConsoleRouter.post("/backups/runs/:runId/test-restore", async (req, res) => {
+  const result = await testRestore(String(req.params.runId), actorLabel(req));
+  if (!result.ok) throw new AppError(502, result.message);
+  res.json(result);
+});
+
+platformAdminConsoleRouter.post("/backups/tick", validate(z.object({ body: z.object({ dryRun: z.boolean().optional() }).strict().optional() })), async (req, res) => {
+  const dryRun = req.body?.dryRun !== false;
+  const result = await runBackupTick(new Date(), { dryRun, actorLabel: actorLabel(req) });
+  if (!dryRun) await platformAudit("PLATFORM_ADMIN", actorLabel(req), "backup.tick_run", "PlatformRetentionSettings", "global", { ran: result.ran.length });
+  res.json(result);
+});
+
+/* ================================== Snapshots ==================================== */
+
+/* ============================ Pre-deletion snapshots ============================ */
 
 /**
  * The snapshots the retention programme takes before it drops a workspace. See
