@@ -45,6 +45,7 @@ import { acquireAiSlot } from "./ai-concurrency.service.js";
 import { AI_CHAT_TOOLS, findAiChatTool, type AiChatToolContext } from "./ai-chat-tools.js";
 import { AI_CHAT_ACTIONS, findAiChatAction } from "./ai-chat-actions.js";
 import { assertToolAllowed, sanitiseToolResult, visibleTools, type AccessibleTool, type ChatActor } from "./ai-chat-guardrails.js";
+import { cleanAnswer as cleanAskAnswer } from "./ai-answer-format.js";
 import { requireTenantContext } from "../config/tenant-context.js";
 import { AppError } from "../middleware/error.js";
 import { decryptSecret } from "../utils/encryption.js";
@@ -4213,52 +4214,30 @@ export const ASK_OUT_OF_SCOPE = [
  * Deliberately loose. A false positive costs one extra correction round; a false negative puts
  * machine syntax in front of a person.
  */
+/* Moved to ai-answer-format.ts, which owns every observed misformat shape with a test per shape —
+   this file's inline version was the second regex-only attempt and both missed the UNTERMINATED
+   envelopes that actually reach users. Re-exported so existing imports and tests keep working. */
+export { stripProtocolEcho, recoverEnvelopeMarkdown, cleanAnswer } from "./ai-answer-format.js";
+
 /**
- * Strips this loop's own protocol out of an answer before a person ever sees it.
+ * Words that make a question ABOUT this product, whatever else it says.
  *
- * THE BUG, from a real run and visible in a screenshot. Asked to break tickets down by status and
- * priority, the model produced the right table and the right chart — underneath three paragraphs of
- * narration ("First, I will use the search_tickets tool…") and three fenced JSON blocks showing
- * `{"action": "answer"…}`, `{"action": "tool"…}` and `{"action": "refuse"}`. All of that is the
- * envelope this loop speaks in, echoed back as content. The answer was correct and looked broken.
+ * WHY A KEYWORD LIST GETS A VETO OVER THE MODEL. Making `refuse` terminal (3.8.8) saved a round
+ * trip on genuinely off-topic questions — and handed an 8B model the power to refuse anything with
+ * no second chance. Measured within a day: "timesheet count and status", four words squarely about
+ * this product, came back `{"action":"refuse"}` and the person got the out-of-scope boilerplate.
  *
- * It got worse when `refuse` was added: a third action is a third token for a small model to
- * narrate, and `{"action": "refuse"}` started appearing as literal text inside answers to questions
- * it had not refused.
- *
- * WHY STRIP RATHER THAN RETRY. The content around the echo is usually fine — the table and the
- * chart in that run were both correct and both computed from real tool results. Throwing the answer
- * away to re-roll a small model would trade a cosmetic fault for a coin flip, and cost a call.
- *
- * WHY THIS IS SAFE. It only removes text that IS this protocol: a fenced block or a standalone line
- * whose body is an object carrying our own `"action": "tool" | "answer" | "refuse"` key. No genuine
- * answer about tickets, hours or changes contains that envelope — it is ours, not the workspace's.
- * A `json` fence holding real data is left alone, because it will not match.
+ * A question naming a timesheet cannot be out of scope here, whatever the model classified. So a
+ * refusal of a prompt containing one of these nouns is overridden ONCE — pushed back with the
+ * observation that the question names workspace data — and accepted if the model insists. The list
+ * is nouns this product owns rather than generic words, so "what's the weather" still refuses
+ * instantly and only questions that genuinely mention the domain pay the extra call.
  */
-export function stripProtocolEcho(markdown: string): string {
-  // The backslashes are optional on BOTH quotes of both halves: the model escapes its own envelope
-  // when it echoes it, so the observed form was `{ \"action\": \"answer\", … }` with the key itself
-  // escaped. A pattern that only allowed an unescaped key matched none of the real cases.
-  const ACTION = /\\?"action\\?"\s*:\s*\\?"(tool|answer|refuse)\\?"/;
+const IN_SCOPE_HINT =
+  /\b(timesheets?|tickets?|changes?|projects?|goals?|sprints?|hours?|approvals?|escalations?|slas?|workspaces?|teams?|users?|reports?|attestations?|invoices?|capacity|utili[sz]ation|backlog|assignees?|priorit(y|ies)|status(es)?)\b/i;
 
-  let out = markdown
-    // Fenced blocks whose body is our envelope, with or without a language tag.
-    .replace(/```[a-zA-Z]*\s*\n?\s*\{[\s\S]*?\}\s*\n?```/g, (block) => (ACTION.test(block) ? "" : block))
-    // A bare envelope on its own line — same object, no fence around it.
-    .split("\n")
-    .filter((line) => !(ACTION.test(line) && line.trim().startsWith("{")))
-    .join("\n");
-
-  // The narration that introduces one of those blocks reads as a stray fragment once the block is
-  // gone, so a line that only announces a tool call goes with it. Anchored and short-only, so a
-  // sentence that happens to mention a tool while reporting a finding survives.
-  out = out
-    .split("\n")
-    .filter((line) => !/^\s*(first,?\s+)?i (will|'ll|am going to) (use|call|consult|check)\b.{0,90}$/i.test(line))
-    .join("\n");
-
-  // Collapse the blank runs the removals leave behind, then trim.
-  return out.replace(/\n{3,}/g, "\n\n").trim();
+export function refusalLooksWrong(prompt: string): boolean {
+  return IN_SCOPE_HINT.test(prompt);
 }
 
 function looksLikeToolAttempt(raw: string): boolean {
@@ -4267,6 +4246,15 @@ function looksLikeToolAttempt(raw: string): boolean {
   // figures the model wrote because the prompt asked for JSON. Neither is prose, and publishing
   // either shows a person machine syntax where an answer should be.
   if (text.startsWith("{") && text.endsWith("}")) return true;
+  /*
+   * An UNTERMINATED tool envelope: `{ "action": "tool", "tool": "…` that simply stops. It fails the
+   * ends-with-} check above and fails strict parsing, and — unlike an unterminated ANSWER envelope,
+   * which ai-answer-format.ts recovers the markdown from — there is nothing in it worth recovering.
+   * Without this it fell through to the freeform fallback and was published as the answer, which is
+   * exactly the screenshot this line comes from. Answer envelopes are deliberately NOT matched
+   * here: recovery beats a correction round when the content is already present.
+   */
+  if (/^\{\s*\\?"action\\?"\s*:\s*\\?"(tool|refuse)\\?"/.test(text)) return true;
   return /<\|?(tool_call|function_call|tool▁call)|<function[ =]|\[TOOL_CALL\]|call:\s*\w+\s*[{(]|^\w+\{"?\w+"?\s*:/im.test(text);
 }
 
@@ -4577,6 +4565,8 @@ export async function askWorkspaceChat(input: {
   let nudgedForNoTools = false;
   /** And one for a reply that consulted a tool but only announced that it was going to. */
   let nudgedForStall = false;
+  /** And one for a refusal of a question that plainly names workspace data. */
+  let nudgedForRefusal = false;
   for (let step = 0; step < ASK_MAX_STEPS; step++) {
     const raw = await ask(extra);
     const parsed = parseJsonResponse(raw, AskActionSchema);
@@ -4594,7 +4584,7 @@ export async function askWorkspaceChat(input: {
     if (!parsed) {
       const answer = looksLikeToolAttempt(raw)
         ? ASK_FAILURE_ANSWERS[0]
-        : stripProtocolEcho(raw) || ASK_FAILURE_ANSWERS[1];
+        : cleanAskAnswer(raw) || ASK_FAILURE_ANSWERS[1];
       const { interactionId } = await logAIUsage({
         feature: "ask_ai",
         params: { steps: step + 1, freeform: true },
@@ -4612,6 +4602,14 @@ export async function askWorkspaceChat(input: {
     /* Out of scope: one call, one fixed sentence, no nudge. Placing this ABOVE the no-tools guard
        is what stops an off-topic question costing a second round trip to be told the same thing —
        a refusal consulting no tools is correct, not a deflection. */
+    /* A refusal of a question that NAMES workspace data is overridden once — see refusalLooksWrong.
+       Same one-shot budget as the other nudges, and a separate flag so none can eat another's retry. */
+    if (parsed.action === "refuse" && refusalLooksWrong(input.prompt) && !nudgedForRefusal && step < ASK_MAX_STEPS - 1) {
+      nudgedForRefusal = true;
+      extra = `${extra}${NL}${NL}You refused, but the question mentions this workspace's own data — that is in scope by definition. Answer it: call the tool that fits and reply from what it returns. Only refuse questions with no connection to this product at all.`;
+      continue;
+    }
+
     if (parsed.action === "refuse") {
       const { interactionId } = await logAIUsage({
         feature: "ask_ai",
@@ -4678,8 +4676,8 @@ export async function askWorkspaceChat(input: {
     }
 
     if (parsed.action === "answer") {
-      // Its own protocol, removed before anybody reads it — see stripProtocolEcho.
-      const answerMarkdown = stripProtocolEcho(parsed.markdown) || parsed.markdown;
+      // Its own protocol, removed before anybody reads it — see ai-answer-format.ts.
+      const answerMarkdown = cleanAskAnswer(parsed.markdown, parsed.markdown);
       const { interactionId } = await logAIUsage({
         feature: "ask_ai",
         params: { steps: step + 1, tools: toolCalls.map((t) => t.tool), nudged: nudgedForNoTools || nudgedForStall },
@@ -4751,7 +4749,7 @@ export async function askWorkspaceChat(input: {
   const final = parseJsonResponse(finalRaw, AskActionSchema);
   const answer =
     final?.action === "answer"
-      ? stripProtocolEcho(final.markdown) || final.markdown
+      ? cleanAskAnswer(final.markdown, final.markdown)
       : looksLikeToolAttempt(finalRaw)
         ? ASK_FAILURE_ANSWERS[2]
         : finalRaw.trim() || ASK_FAILURE_ANSWERS[3];

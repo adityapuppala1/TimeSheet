@@ -21,7 +21,7 @@ import { describe, expect, it, vi } from "vitest";
 // predicate needs none of that, so the heavy edges are stubbed and only the pure function is read.
 vi.mock("../../src/config/prisma.js", () => ({ prisma: {} }));
 
-const { shouldPushBackForNoTools, looksLikeStall, ASK_OUT_OF_SCOPE } = await import("../../src/services/ai.service.js");
+const { shouldPushBackForNoTools, looksLikeStall, ASK_OUT_OF_SCOPE, refusalLooksWrong } = await import("../../src/services/ai.service.js");
 
 const MAX = 5;
 
@@ -125,4 +125,29 @@ describe("the out-of-scope refusal", () => {
       expect(lowered).toContain(noun);
     }
   });
+});
+
+describe("vetoing a refusal of a question that names workspace data", () => {
+  it("overrides the measured case", () => {
+    // Four words squarely about this product, and the model returned {"action":"refuse"} — with
+    // refusals terminal since 3.8.8, the person got the out-of-scope boilerplate for it.
+    expect(refusalLooksWrong("timesheet count and status")).toBe(true);
+  });
+
+  it.each([
+    "how many tickets are open",
+    "show me change approvals this month",
+    "which projects are at risk",
+    "my hours last week",
+    "who are the inactive users"
+  ])("overrides for %j", (q) => {
+    expect(refusalLooksWrong(q)).toBe(true);
+  });
+
+  it.each(["what is the capital of France?", "write me a poem about the sea", "explain quantum entanglement"])(
+    "lets a genuine refusal of %j stand, so off-topic still costs one call",
+    (q) => {
+      expect(refusalLooksWrong(q)).toBe(false);
+    }
+  );
 });

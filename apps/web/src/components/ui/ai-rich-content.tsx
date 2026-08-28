@@ -98,6 +98,18 @@ function segmentForFence(language: string, body: string): Segment {
   }
   if (language === "mermaid") return { kind: "mermaid", source: body.trim() };
 
+  /*
+   * A chart written into a `json` (or untagged) fence draws anyway. Observed: asked for user stats
+   * by role, the model produced a correct table AND a correct chart spec — `{"type": "bar",
+   * "title": "User Stats by Role", "data": […]}` — but fenced it as ```json, so the person saw a
+   * wall of JSON where the picture should have been. The spec was right; only the label was wrong.
+   * `parseChartSpec` already shape-checks every field, so trusting the shape rather than the label
+   * widens what is ACCEPTED without widening what is TRUSTED — a fence holding anything that is not
+   * exactly a chart spec still renders as code.
+   */
+  const asChart = parseChartSpec(body);
+  if (asChart) return { kind: "chart", spec: asChart };
+
   // Pretty-print when it parses; show it exactly as written when it doesn't, because malformed
   // JSON is itself information worth seeing rather than hiding behind a reformat.
   let code = body.trim();

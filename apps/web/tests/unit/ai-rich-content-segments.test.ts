@@ -37,6 +37,27 @@ describe("splitSegments — fenced blocks", () => {
   });
 });
 
+describe("splitSegments — a chart mislabelled as json", () => {
+  it("draws a json fence whose body IS a chart spec", () => {
+    /*
+     * Observed: asked for user stats by role, the model produced a correct chart spec and fenced it
+     * ```json, so the person saw a wall of JSON where the picture should have been. The spec is
+     * shape-checked exactly as a ```chart fence is — the label was the only thing wrong.
+     */
+    const md = ['```json', '{"type": "bar", "title": "User Stats by Role", "data": [{"label": "Admin", "value": 5}]}', '```'].join("\n");
+    const segments = splitSegments(md);
+    expect(segments.map((s) => s.kind)).toEqual(["chart"]);
+  });
+
+  it("still shows a json fence of ordinary data as code", () => {
+    // The widening is by SHAPE, not by fence: anything that is not exactly a chart spec renders as
+    // the code block it always was.
+    const md = ['```json', '{ "openTickets": 12, "closed": 3 }', '```'].join("\n");
+    const segments = splitSegments(md);
+    expect(segments.map((s) => s.kind)).toEqual(["code"]);
+  });
+});
+
 describe("splitSegments — the markdown-link chart form", () => {
   it("draws a chart written as a link", () => {
     const segments = splitSegments(`Hours by project:\n\n[Bar chart of hours](${BAR})\n`);

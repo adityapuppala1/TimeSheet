@@ -12,6 +12,29 @@ number, on purpose — an installation must never render history for a version t
 
 _Nothing yet._
 
+## 3.9.1 — malformed answers are recovered, and a wrong refusal gets overruled — 2026-08-28
+
+### 🐛 Answers that arrived broken are now repaired instead of shown broken
+
+- The previous fix removed the assistant's internal syntax when it appeared *around* an answer. The
+  shapes that kept coming were worse: answers wrapped *inside* that syntax, cut off mid-stream, so
+  the whole envelope — quotes, escapes and all — was printed as text with your table trapped inside
+  it. Those are now unwrapped: the real content is pulled out, the escaped line breaks become real
+  ones, and the table renders as a table.
+- Every repaired shape came from a real screenshot, and each one is now a test. Charts, JSON blocks
+  of real data, tables, headings and quoted ticket titles are pinned as untouchable — a cleaner that
+  ate a chart would be worse than the bug.
+- A chart the model labels as plain JSON now draws as a chart anyway: the shape is checked, not the
+  label, and anything that isn't exactly a chart still shows as code.
+
+### 🐛 "timesheet count and status" was being refused as off-topic
+
+- Making refusals instant (3.8.8) handed the model the power to misclassify with no second chance —
+  and it did, refusing a four-word question about timesheets. A question that names this product's
+  own data — timesheets, tickets, changes, projects, hours, approvals — can no longer be refused
+  outright: the assistant is sent back once to answer it properly. Genuinely off-topic questions
+  still get the instant, fixed refusal.
+
 ## 3.9.0 — Ask AI stops showing you its plumbing, and gains a `/` menu — 2026-08-28
 
 ### 🐛 Answers were printing the assistant's own internal instructions
