@@ -148,7 +148,9 @@ function ollama(model, prompt) {
     model,
     stream: false,
     options: { temperature: 0, num_predict: 900 },
-    messages: [{ role: "user", content: prompt }]
+    // NOTHINK=1 appends qwen3's no-think switch — its reasoning mode costs ~35s/call on this GPU
+    // and the loop makes up to five calls per question, which is unusable interactively.
+    messages: [{ role: "user", content: process.env.NOTHINK ? `${prompt}\n/no_think` : prompt }]
   });
   return new Promise((resolve, reject) => {
     const req = http.request(
