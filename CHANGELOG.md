@@ -10,7 +10,68 @@ user of a running installation.
 The parser that feeds the in-app What's-new page ignores this section until it gains a version
 number, on purpose — an installation must never render history for a version that does not exist yet.
 
-_Nothing yet._
+### 📊 The discounting nobody could see
+
+- **`billedMrrMinor` stopped being a hard-coded `null`.** Every revenue figure in the console is list
+  price, it says so in bold, and that is still true of every figure it was true of before. What was
+  missing was the number beside it: what customers are *actually* billed, and therefore the gap —
+  which is what discounting is. The previous author stopped deliberately and was right about why.
+  Fetching Stripe subscription amounts on a screen an operator refreshes while talking to somebody is
+  one outbound call per customer per render, and a rate limit with a date on it. So this is a
+  **reconciliation job**: a nightly sweep at 03:50 UTC writes `Organization.billed*`, and the page
+  reads a column. It costs the same at four workspaces and at four hundred, and the revenue service
+  still opens no socket.
+- **An annual subscription is normalised to a monthly figure, and that is the whole risk.** A Stripe
+  price carries its own `recurring.interval`; a customer billed yearly hands over twelve months of
+  money at once, and storing that as MRR reports them as worth eleven months more than they are —
+  every month, plausibly, on the screen most likely to be shown to somebody making a decision. The
+  division lives in one pure function with a fixture per interval, so getting it wrong turns a test
+  red rather than a board slide.
+- **Nothing is folded in as zero, ever.** A workspace whose reconciliation failed is counted
+  separately and **named on the page**, because a Stripe outage counted at £0 against a real list
+  price reads as the entire customer base going free. "Not reconciled yet" renders as *not reconciled
+  yet*, not as a gap of zero — they are opposite sentences and both would have looked like `$0`. A
+  deployment with no Stripe account, which is most of them, gets no card at all rather than an empty
+  one implying something is broken. And the comparison names its own population: only workspaces
+  with both a reconciled amount and a list price to be discounted *from*, so an Enterprise contract
+  with no list price is excluded and stated rather than reported as a 100% discount.
+- The way this deployment builds a Stripe client had been written out four times by the time a fourth
+  caller needed it; it is now one place, with a `null`-returning variant for the jobs and a throwing
+  one for the routes somebody clicked. Reconciling by hand is `platform:billing` — it spends our
+  payment processor's quota and what it fetches is money — which is deliberately *not* the gate on
+  the usage sweep sitting next to it, that one being a load decision about tenant databases.
+
+### 🐛 A card that showed a number and would not let you change it
+
+- **Per-org numeric quotas are settable, not just viewable.** The override editor shipped with the
+  boolean capabilities editable and the quotas readable-and-removable — while the API had accepted a
+  new value the whole time. So the console showed `maxGoals: 20`, offered a Remove button, and had no
+  way to make it 40. That reads as broken rather than as cautious, and the caution bought nothing.
+- Raising a quota above what the plan includes **is** a grant and goes through the gate that already
+  existed: the same acknowledgement a switched-on capability needs, the same refusal naming the key,
+  the same audit row. Nothing was routed around to make room for it.
+- A quota that is negative, fractional or absurdly large is now **refused with a sentence naming the
+  key** rather than silently dropped. The two readings of an override are deliberately different
+  functions: the one inside every entitlement check must never throw, so it ignores a bad value; the
+  one behind a person's click must not, because an operator who types `-5`, sees a saved card with no
+  override on it and walks away has been told nothing at all.
+
+### 🎨 Five signposts that pointed at the wrong door
+
+- A previous pass fixed eleven flat-out wrong labels and left five as judgement calls. Each was a
+  navigation instruction that skipped a level or used a name the screen does not carry: "Workspace
+  Settings → AI features" (four places) omits the **AI** tab the card sits inside, so a reader
+  scanning the tab strip finds no such tab; "AI tab → Datasets" is *Golden datasets*; "Workspace
+  Settings → Reminders" — in an email a customer reads and then acts on — is *Reminders & schedule*;
+  "Ticketing → Automation" is *Automation rules*. All corrected.
+- "Platform → Backups" was the interesting one, because both halves of it were wrong in different
+  places. Backups sits under **Operations** in the console sidebar, but the Backups page's own
+  eyebrow said "Platform" — the only page in the console whose eyebrow disagreed with its nav group.
+  So the pointer sent a reader to a heading with no Backups under it, and the page then agreed with
+  the wrong pointer on arrival. Both now say Operations.
+- Deliberately **not** touched: the changelog's historical entries, which are a record of what was
+  true when they were written and not a document to be retrofitted; and `ai.service.ts`'s "Timesheets
+  tab", which is quoting a *bad* past AI answer on purpose and would lose its point if corrected.
 
 ## 5.0.0 — a claimed fix now has to be proven — 2026-08-31
 

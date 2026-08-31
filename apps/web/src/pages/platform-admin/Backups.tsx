@@ -158,7 +158,12 @@ export function PlatformAdminBackups() {
 
   return (
     <ConsolePage
-      eyebrow="Platform"
+      /* "Operations", not "Platform". Every other page in this console takes its eyebrow from the
+         nav group it actually sits in, and Backups was the one that did not — so a cross-reference
+         written as "Platform → Backups" (there was one, on Plan tiers) sent a reader to a sidebar
+         heading with no Backups under it, and the page then agreed with the wrong pointer on
+         arrival. CONSOLE_NAV in layouts/PlatformAdminLayout.tsx is the authority. */
+      eyebrow="Operations"
       title="Backups"
       description="Scheduled backups for every workspace — where they go, how long they are kept, and whether they came back — plus the one-off snapshots the retention programme takes before it deletes a workspace."
     >

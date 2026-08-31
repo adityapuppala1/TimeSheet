@@ -3,8 +3,8 @@
  * the same one.
  *
  * WHY THIS EXISTS (a defect in V8 phase 3, fixed in the same release): the roster introduced a
- * second screen that talks about the same twenty-two capabilities Workspace Settings → AI features
- * already lists. Left alone, that produced three problems, and only the first is cosmetic:
+ * second screen that talks about the same twenty-two capabilities Workspace Settings → AI → AI
+ * features already lists. Left alone, that produced three problems, and only the first is cosmetic:
  *
  *   1. THE SAME ROWS IN TWO PLACES with no cross-reference, so the product looked like it held two
  *      copies of its own capability list.

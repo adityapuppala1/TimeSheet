@@ -67,6 +67,20 @@ export const FEATURE_OVERRIDE_KEYS = Object.keys(OVERRIDABLE_FEATURES) as Featur
 const isOverridableKey = (key: string): key is FeatureOverrideKey => key in OVERRIDABLE_FEATURES;
 
 /**
+ * The largest quota an override may set.
+ *
+ * WHY THERE IS A CEILING AT ALL. Every quota here is a COUNT of things a workspace may create —
+ * portfolios, dashboards, custom fields. "Unlimited" is not spelled with a big number in this
+ * product, and a typed `100000000` is far more likely to be a slipped keyboard than a decision;
+ * stored, it is indistinguishable from one. A million is comfortably beyond any real workspace and
+ * near enough to be obviously wrong when somebody meant fifty.
+ *
+ * ONE CONSTANT, TWO READERS. The route's zod schema and `validateOverrideInput` below both use it,
+ * so the number the API advertises and the number it enforces cannot drift apart.
+ */
+export const MAX_QUOTA_OVERRIDE = 1_000_000;
+
+/**
  * Whatever is in the JSON column, reduced to overrides this build understands.
  *
  * FAILS QUIET AND CLOSED. A key outside the allowlist, a value of the wrong shape, a quota that is
@@ -87,6 +101,68 @@ export function readFeatureOverrides(raw: unknown): FeatureOverrides {
     }
   }
   return out;
+}
+
+export interface OverrideValidation {
+  /** The overrides that survived — exactly what `readFeatureOverrides` would have kept. */
+  clean: FeatureOverrides;
+  /** One readable sentence per rejected value, naming the key. Empty means the input was sound. */
+  errors: string[];
+}
+
+/**
+ * The WRITE path's reading of the same input, which REFUSES what the read path quietly drops.
+ *
+ * WHY THE TWO ARE DIFFERENT, AND WHY THAT IS NOT A DUPLICATED RULE. `readFeatureOverrides` runs
+ * inside every entitlement check in the product against a column that is already stored; the only
+ * safe thing it can do with a bad value is ignore it, because throwing would turn one malformed
+ * JSON value into a workspace-wide outage. This function runs once, on a person's click, against
+ * input they can still fix — and there, silence is the wrong answer. An operator who types `-5`
+ * into a quota and is shown a saved card with no override on it has been told nothing; they will
+ * assume it worked and find out when a customer cannot create a portfolio.
+ *
+ * WHAT IT REFUSES, and each one has happened to somebody: a negative ceiling, a fraction where the
+ * entitlement is a count of rows, a number so large it is obviously a slipped keypress, and a value
+ * of the wrong SHAPE for its key — a number typed into a capability, or a boolean into a quota.
+ *
+ * WHAT IT STILL DROPS SILENTLY: a key outside the allowlist. That is deliberate and is the same
+ * decision the route's schema documents — the allowlist in this file is the authority, so a key
+ * from a build that has since been rolled back must not be able to fail somebody's save. It cannot
+ * entitle anybody either way, because nothing reads it.
+ */
+export function validateOverrideInput(raw: unknown): OverrideValidation {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
+    return { clean: {}, errors: ["Overrides must be an object of key → value."] };
+  }
+  const clean: FeatureOverrides = {};
+  const errors: string[] = [];
+
+  for (const [key, value] of Object.entries(raw as Record<string, unknown>)) {
+    if (!isOverridableKey(key)) continue;
+    if (OVERRIDABLE_FEATURES[key] === "boolean") {
+      if (typeof value !== "boolean") {
+        errors.push(`${key} is a capability, so it must be true or false.`);
+        continue;
+      }
+      clean[key] = value;
+      continue;
+    }
+    if (typeof value !== "number" || !Number.isFinite(value)) {
+      errors.push(`${key} is a quota, so it must be a number.`);
+    } else if (!Number.isInteger(value)) {
+      // The underlying entitlement counts rows. Half a dashboard is not a thing anybody can be
+      // granted, and rounding it here would store something the operator did not type.
+      errors.push(`${key} must be a whole number — it is a count, not a rate.`);
+    } else if (value < 0) {
+      errors.push(`${key} cannot be negative. Use 0 to allow none, or remove the override to fall back to the plan.`);
+    } else if (value > MAX_QUOTA_OVERRIDE) {
+      errors.push(`${key} cannot exceed ${MAX_QUOTA_OVERRIDE.toLocaleString("en-US")}.`);
+    } else {
+      clean[key] = value;
+    }
+  }
+
+  return { clean, errors };
 }
 
 export type OverrideEffect = "grant" | "restrict" | "noop";

@@ -419,7 +419,7 @@ export const SEED_TEMPLATES: Record<string, SeedTemplate> = {
         para("They've also received a direct reminder asking them to catch up. If this happens repeatedly, consider a 1:1 — daily logging is a leading indicator of team health."),
         button("Open team view", "{{appUrl}}/app/team", COLORS.accent)
       ].join("\n"),
-      footerNote: "Triggered automatically by the workspace's daily-reminder schedule. Edit the timing in Workspace Settings → Reminders."
+      footerNote: "Triggered automatically by the workspace's daily-reminder schedule. Edit the timing in Workspace Settings → Reminders & schedule."
     })
   },
 

@@ -529,6 +529,12 @@ export function PlatformAdminOrgProfile() {
  * READ-ONLY UNTIL THE OPERATOR ASKS. Overrides are rare and consequential; a form permanently open
  * on the org profile invites a stray click. Editing is behind a toggle, the way every other
  * consequential control in this console is.
+ *
+ * BOTH SHAPES ARE EDITABLE. The first pass gave the boolean capabilities switches and left the
+ * numeric quotas as a list you could read and remove but not change — while the API accepted a new
+ * value the whole time. A card that shows a number and will not let you edit it reads as broken
+ * rather than as careful, so the quotas are inputs now, and they go through the same grant
+ * classification, the same acknowledgement and the same audit row the switches do.
  */
 function FeatureOverridesCard({ orgId }: { orgId: string }) {
   const queryClient = useQueryClient();
@@ -665,26 +671,72 @@ function FeatureOverridesCard({ orgId }: { orgId: string }) {
                 );
               })}
           </div>
-          {/* Quotas are numbers, and a spinner per quota beside seventeen checkboxes reads as a
-              form nobody wants to meet. They keep their existing values and can be cleared; setting
-              a new one is rare enough to belong in a later pass rather than in a crowded card. */}
-          {view.available.filter((entry) => entry.kind === "quota" && draft?.[entry.key] !== undefined).length > 0 && (
-            <ul className="grid gap-2">
-              {view.available
-                .filter((entry) => entry.kind === "quota" && draft?.[entry.key] !== undefined)
-                .map((entry) => (
-                  <li key={entry.key} className="flex min-w-0 flex-wrap items-center gap-2 rounded-lg border border-border p-3 text-sm">
-                    <span className="min-w-0 flex-1 truncate font-mono text-xs">{entry.key}</span>
-                    <span className="tabular-nums text-muted-foreground">
-                      plan {String(entry.tierValue)} → <span className="font-semibold text-foreground">{String(draft?.[entry.key])}</span>
+          {/* The quotas, EDITABLE.
+              They shipped read-and-remove-only, on the reasoning that a spinner per quota beside
+              ten checkboxes makes a form nobody wants to meet. That was the wrong trade: the API
+              accepted a new value all along, so the card showed a number and refused to let anybody
+              change it — which reads as broken, not as cautious. Every field is now an input,
+              blank means "no override, use the plan", and a value above the plan's goes through the
+              same acknowledgement gate a capability grant does. */}
+          <ul className="grid gap-2">
+            {view.available
+              .filter((entry) => entry.kind === "quota")
+              .map((entry) => {
+                const current = draft?.[entry.key];
+                const grants = typeof current === "number" && typeof entry.tierValue === "number" && current > entry.tierValue;
+                return (
+                  <li
+                    key={entry.key}
+                    className={cn("flex min-w-0 flex-wrap items-center gap-2 rounded-lg border p-3 text-sm", grants ? "border-warning/40 bg-warning/10" : "border-border")}
+                  >
+                    <span className="min-w-0 flex-1 truncate font-mono text-xs" title={entry.key}>
+                      {entry.key}
                     </span>
-                    <Button variant="outline" size="sm" onClick={() => setDraft((d) => { const copy = { ...(d ?? {}) }; delete copy[entry.key]; return copy; })}>
-                      Remove
+                    <span className="shrink-0 text-[11px] text-muted-foreground">plan: {String(entry.tierValue)}</span>
+                    <input
+                      type="number"
+                      min={0}
+                      step={1}
+                      inputMode="numeric"
+                      aria-label={`${entry.key} override`}
+                      placeholder="—"
+                      className="h-8 w-24 shrink-0 rounded-md border border-border bg-background px-2 text-right text-sm tabular-nums"
+                      value={current === undefined ? "" : String(current)}
+                      onChange={(event) => {
+                        const raw = event.target.value;
+                        setDraft((d) => {
+                          const copy = { ...(d ?? {}) };
+                          // EMPTY MEANS NO OVERRIDE, not zero. Clearing the box has to be the way
+                          // back to the plan default — otherwise the only way to remove an override
+                          // would be to type the plan's own number, which stores a key that pins
+                          // this workspace to today's answer after the tier changes.
+                          if (raw.trim() === "") delete copy[entry.key];
+                          else {
+                            const parsed = Number(raw);
+                            // Only the two rules a text box can enforce without a second copy of
+                            // the policy: whole, and not negative. The CEILING is deliberately not
+                            // repeated here — `validateOverrideInput` on the server owns it and
+                            // refuses with a sentence naming the key, and a hand-copied maximum in
+                            // a React component is exactly the drift this repo keeps getting bitten
+                            // by. Typing a million and one is refused clearly, not silently.
+                            if (Number.isInteger(parsed) && parsed >= 0) copy[entry.key] = parsed;
+                          }
+                          return copy;
+                        });
+                      }}
+                    />
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      disabled={current === undefined}
+                      onClick={() => setDraft((d) => { const copy = { ...(d ?? {}) }; delete copy[entry.key]; return copy; })}
+                    >
+                      Clear
                     </Button>
                   </li>
-                ))}
-            </ul>
-          )}
+                );
+              })}
+          </ul>
           <Button
             variant="outline"
             size="sm"

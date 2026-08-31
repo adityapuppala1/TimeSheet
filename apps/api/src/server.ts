@@ -44,6 +44,7 @@ import { startPlatformRetentionWorker } from "./workers/platform-retention.worke
 import { startBackupWorker } from "./workers/backup.worker.js";
 import { startTenantDbSampleWorker } from "./workers/tenant-db-sample.worker.js";
 import { startOrgUsageSnapshotWorker } from "./workers/org-usage-snapshot.worker.js";
+import { startBilledRevenueReconcileWorker } from "./workers/billed-revenue-reconcile.worker.js";
 import { startPlatformAlertDigestWorker } from "./workers/platform-alert-digest.worker.js";
 import { startAIRetentionWorker } from "./workers/ai-retention.worker.js";
 import { runForEveryOrg } from "./workers/run-for-every-org.js";
@@ -250,6 +251,10 @@ server.on("listening", async () => {
   // Nightly, at 03:40 UTC — the daily business snapshot the console's revenue, churn, cohort and
   // account-health screens all read instead of reopening every tenant database on every click.
   startOrgUsageSnapshotWorker();
+  // Nightly at 03:50 UTC, and only where Stripe is configured — what each subscribed workspace is
+  // actually billed, so the console can show the gap against list price. The one nightly job that
+  // makes an outbound call, which is precisely why it is a job and not a page read.
+  startBilledRevenueReconcileWorker();
   // Every six hours — the fleet's alerts, to the people who are not looking at the console. Sends
   // only when something has CHANGED, so running it four times a day costs nothing in noise.
   startPlatformAlertDigestWorker();

@@ -13,7 +13,7 @@
  * granted capability comes back true and a revoked one comes back false.
  */
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { classifyOverrides, grantingKeys, readFeatureOverrides } from "../../src/utils/feature-overrides.js";
+import { classifyOverrides, grantingKeys, MAX_QUOTA_OVERRIDE, readFeatureOverrides, validateOverrideInput } from "../../src/utils/feature-overrides.js";
 
 /* --------------------------------- the fake control plane -------------------------------- */
 
@@ -147,6 +147,56 @@ describe("readFeatureOverrides — fails quiet and closed", () => {
   });
 });
 
+describe("validateOverrideInput — the WRITE path, which refuses what the read path drops", () => {
+  /* THE TWO FUNCTIONS ARE DELIBERATELY DIFFERENT, and this block is what stops somebody
+     "simplifying" them into one. `readFeatureOverrides` runs inside every entitlement check against
+     a column that is already stored, so its only safe move is to ignore a bad value. This one runs
+     on a person's click, on input they can still fix — and an operator who types `-5`, sees a saved
+     card with no override on it, and walks away believing it worked has been told nothing at all. */
+
+  it("accepts a sound quota and a sound capability", () => {
+    expect(validateOverrideInput({ maxGoals: 50, goalsEnabled: true })).toEqual({ clean: { maxGoals: 50, goalsEnabled: true }, errors: [] });
+    // Zero is a legitimate quota — "this workspace may create none" — and is not the same as absent.
+    expect(validateOverrideInput({ maxGoals: 0 }).errors).toEqual([]);
+  });
+
+  it("REFUSES a negative quota, naming the key", () => {
+    const { clean, errors } = validateOverrideInput({ maxGoals: -5 });
+    expect(errors).toHaveLength(1);
+    expect(errors[0]).toMatch(/maxGoals/);
+    expect(errors[0]).toMatch(/negative/i);
+    expect(clean).toEqual({});
+  });
+
+  it("REFUSES a fraction, because the entitlement counts rows", () => {
+    expect(validateOverrideInput({ maxDashboards: 2.5 }).errors[0]).toMatch(/whole number/i);
+  });
+
+  it("REFUSES a quota past the ceiling, and the ceiling is one constant", () => {
+    expect(validateOverrideInput({ maxPortfolios: MAX_QUOTA_OVERRIDE }).errors).toEqual([]);
+    expect(validateOverrideInput({ maxPortfolios: MAX_QUOTA_OVERRIDE + 1 }).errors[0]).toMatch(/cannot exceed/i);
+    // Infinity and NaN both pass a bare `typeof value === "number"`, which is why the check is
+    // `Number.isFinite` and not that.
+    expect(validateOverrideInput({ maxPortfolios: Number.POSITIVE_INFINITY }).errors).toHaveLength(1);
+    expect(validateOverrideInput({ maxPortfolios: Number.NaN }).errors).toHaveLength(1);
+  });
+
+  it("REFUSES a value of the wrong shape for its key, in both directions", () => {
+    expect(validateOverrideInput({ maxGoals: true }).errors[0]).toMatch(/must be a number/i);
+    expect(validateOverrideInput({ goalsEnabled: 1 }).errors[0]).toMatch(/true or false/i);
+  });
+
+  it("still DROPS an unknown key silently, which is the one thing it does not refuse", () => {
+    // Deliberate and documented: the allowlist is the authority, nothing reads an unknown key, and
+    // a key from a rolled-back build must not be able to fail somebody's save.
+    expect(validateOverrideInput({ seatLimit: 9999, maxGoals: 4 })).toEqual({ clean: { maxGoals: 4 }, errors: [] });
+  });
+
+  it("reports every bad value, not just the first", () => {
+    expect(validateOverrideInput({ maxGoals: -1, maxDashboards: 1.5 }).errors).toHaveLength(2);
+  });
+});
+
 /* ============================== granting and revoking ============================== */
 
 describe("setOrgFeatureOverrides", () => {
@@ -222,6 +272,64 @@ describe("setOrgFeatureOverrides", () => {
     const result = await setOrgFeatureOverrides({ orgId: "org-1", overrides: { ganttEnabled: true }, acknowledgeGrants: false, actorLabel: "ops@x.test" });
     expect(result.effectiveTier).toBe("TEAM");
     expect(result.grants).toEqual([]);
+  });
+
+  /* ---------------------- a NUMERIC QUOTA can be SET, not just cleared ---------------------- */
+
+  it("SETS a numeric quota below the plan's, with no ceremony — that is a restriction", async () => {
+    orgRow = org({ planTier: "TEAM" });
+    const result = await setOrgFeatureOverrides({ orgId: "org-1", overrides: { maxGoals: 5 }, acknowledgeGrants: false, actorLabel: "ops@x.test" });
+    expect(result.overrides).toEqual({ maxGoals: 5 });
+    expect(result.classified[0].effect).toBe("restrict");
+    expect(orgRow!.featureOverrides).toEqual({ maxGoals: 5 });
+  });
+
+  it("REFUSES a numeric quota ABOVE the plan's without an acknowledgement, exactly like a capability grant", async () => {
+    // The whole reason making quotas settable is safe: a bigger ceiling IS a grant, and it goes
+    // through the same gate rather than round it.
+    orgRow = org({ planTier: "TEAM" });
+    await expect(
+      setOrgFeatureOverrides({ orgId: "org-1", overrides: { maxGoals: 500 }, acknowledgeGrants: false, actorLabel: "ops@x.test" })
+    ).rejects.toMatchObject({ statusCode: 422, code: "OVERRIDE_GRANTS_BEYOND_PLAN" });
+    expect(orgRow!.featureOverrides).toBeNull();
+    expect(platformAudit).not.toHaveBeenCalled();
+  });
+
+  it("SETS it when acknowledged, and the audit row still records the grant", async () => {
+    orgRow = org({ planTier: "TEAM" });
+    const result = await setOrgFeatureOverrides({
+      orgId: "org-1",
+      overrides: { maxGoals: 500 },
+      acknowledgeGrants: true,
+      actorLabel: "ops@x.test",
+      reason: "design partner, ticket OPS-901"
+    });
+    expect(result.overrides).toEqual({ maxGoals: 500 });
+    expect(result.grants).toEqual(["maxGoals"]);
+    expect(platformAudit).toHaveBeenCalledTimes(1);
+    const [, , action, , , metadata, provenance] = platformAudit.mock.calls[0];
+    expect(action).toBe("organization.feature_overrides_set");
+    expect(metadata).toMatchObject({ grants: ["maxGoals"], keys: ["maxGoals"] });
+    expect(provenance).toMatchObject({ reason: "design partner, ticket OPS-901", before: {}, after: { maxGoals: 500 } });
+  });
+
+  it("REFUSES nonsense clearly rather than storing it, and writes nothing", async () => {
+    orgRow = org({ planTier: "TEAM" });
+    for (const bad of [{ maxGoals: -1 }, { maxGoals: 2.5 }, { maxGoals: MAX_QUOTA_OVERRIDE + 1 }, { maxGoals: true }]) {
+      await expect(
+        setOrgFeatureOverrides({ orgId: "org-1", overrides: bad as never, acknowledgeGrants: true, actorLabel: "ops@x.test" })
+      ).rejects.toMatchObject({ statusCode: 422, code: "OVERRIDE_INVALID" });
+    }
+    // A refusal is not a half-applied change: nothing stored, nothing recorded.
+    expect(orgRow!.featureOverrides).toBeNull();
+    expect(platformAudit).not.toHaveBeenCalled();
+  });
+
+  it("names the offending key in the refusal, so the operator knows which box to fix", async () => {
+    orgRow = org({ planTier: "TEAM" });
+    await expect(
+      setOrgFeatureOverrides({ orgId: "org-1", overrides: { maxDashboards: -3 } as never, acknowledgeGrants: true, actorLabel: "ops@x.test" })
+    ).rejects.toThrow(/maxDashboards/);
   });
 
   it("reads back what it wrote, with the effect of each key", async () => {

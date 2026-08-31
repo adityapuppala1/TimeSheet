@@ -360,7 +360,7 @@ function RunOutcomeStats({ rows }: { rows: AgentRunRow[] }) {
       <p className="text-[11px] text-muted-foreground">
         Last {done.length} finished run{done.length === 1 ? "" : "s"} shown here · {avgSteps.toFixed(1)} steps and{" "}
         {money(totalCost / done.length)} per run on average. Each step is captured — promote the interesting ones into a golden
-        dataset (AI tab → Datasets, feature <code className="rounded bg-muted px-1">agent_step</code>) and the eval runner can
+        dataset (AI tab → Golden datasets, feature <code className="rounded bg-muted px-1">agent_step</code>) and the eval runner can
         replay them against any change.
       </p>
     </div>

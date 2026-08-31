@@ -1,0 +1,87 @@
+-- The gap between what the plans advertise and what customers are actually billed.
+--
+-- THE GAP IS THE POINT, AND IT WAS UNREACHABLE. Every revenue figure in the platform console is
+-- LIST PRICE — `PlanTierLimit.listPricePerSeatMinor` × billable seats — and every screen that shows
+-- one says so in bold. That labelling is honest and it stays. But a customer on a negotiated
+-- discount, an annual commitment or a hand-agreed Enterprise contract pays something else, and the
+-- difference IS the discounting. `platform-revenue.service.ts` has carried a `billedMrrMinor` field
+-- since 5.0.0 with a hard-coded `null` in it and a note explaining that filling it in "is a
+-- reconciliation job, not a page render". This is that job's storage.
+--
+-- WHY IT CANNOT BE A PAGE READ. Stripe knows the billed amount, and asking it means one outbound
+-- HTTP call per subscribed workspace. The revenue screen is one an operator refreshes while
+-- talking to somebody, so doing that on render is a rate limit with a date on it. A nightly sweep
+-- writes the answer here and the screen reads a column, which costs the same at four workspaces
+-- and at four hundred — the same trade `OrgUsageSnapshot` made for the same reason.
+--
+-- WHY ON `Organization` AND NOT A NEW TABLE. This is exactly one row per workspace, it is
+-- overwritten rather than accumulated, and `stripeCustomerId` / `stripeSubscriptionId` — the two
+-- columns it is derived from and only meaningful beside — are already here. A one-to-one table
+-- would be a join on every read to store a number that has no history worth keeping: the figure an
+-- operator wants is the CURRENT billed amount, and yesterday's is already in Stripe's own invoices.
+--
+-- ===================================================================================
+-- WHAT EXISTING ROWS DO. READ THIS BEFORE EDITING.
+--
+-- Every column added here is NULL on every existing workspace, and THERE IS NO BACKFILL — not
+-- "not yet", but none possible and none wanted. The only source for a billed amount is Stripe, and
+-- reaching Stripe is precisely the work this migration exists to move out of the request path. So
+-- the columns are empty until the worker runs, and every reader is written for that:
+--
+--   * `billedMrrMinor IS NULL` means NOT RECONCILED. It does not mean zero, and the console renders
+--     it as "not reconciled yet" rather than as a gap of 0 — those are opposite sentences, and the
+--     one this schema must never let a screen accidentally say is the second.
+--   * A workspace with no `stripeSubscriptionId` is never reconciled at all and contributes
+--     NOTHING to the comparison — not a zero. Most installations of this product have no Stripe
+--     account whatsoever and assign tiers by hand; for them these columns stay null forever and the
+--     console does not render the card at all.
+--   * `billedReconcileError` is set on a failed attempt and cleared on the next success. A
+--     workspace carrying one is counted and NAMED separately in the console. Folding a failed
+--     reconciliation into the total as zero would report a Stripe outage as a 100% discount, which
+--     is the single most misleading number this feature could produce.
+--
+-- BECAUSE THERE IS NO BACKFILL THERE IS NO DML HERE AT ALL, which is what makes a re-run guard
+-- unnecessary: nothing in this file behaves differently the second time it executes. The rule the
+-- governance migration learned the hard way — guard on ABSENCE, never on a value, because
+-- `WHERE role = 'READ_ONLY'` re-promoted deliberate demotions on a replayed deploy — is honoured
+-- here by having nothing to guard. The ALTER itself is not idempotent, so an interrupted run wants
+-- a human, and this file is NOT marked `@rerunnable`.
+-- ===================================================================================
+--
+-- WHY `billedMrrMinor` IS AN INT IN MINOR UNITS, exactly like `listPricePerSeatMinor`: it is an
+-- exact amount of money and must never touch a float. Stripe reports `unit_amount` in minor units
+-- for the same reason, so the value arrives in the right shape and is stored in it.
+--
+-- WHY IT IS ALWAYS A MONTHLY FIGURE. A subscription may bill annually, quarterly or weekly.
+-- Storing whatever Stripe returned would make an annual customer worth twelve months of MRR in
+-- every total that sums this column — a wildly wrong number that looks entirely plausible on a
+-- screen. `subscriptionMonthlyMinor` in `services/platform-billing-reconcile.service.ts` divides by
+-- the price's own `recurring.interval` and `interval_count` before anything is written here, and it
+-- is a pure function precisely so a fixture can prove the division.
+--
+-- WHY `billedSubscriptionId` IS STORED RATHER THAN ASSUMED EQUAL TO `stripeSubscriptionId`: a
+-- workspace that cancels and resubscribes gets a new subscription id, and the figure reconciled
+-- against the old one is then stale in a way nothing else would reveal. Keeping the id the number
+-- CAME FROM lets a reader see that, instead of attributing an amount to a subscription that never
+-- produced it.
+--
+-- WHY `billedReconciledAt` AND `billedReconcileAttemptedAt` ARE TWO COLUMNS: the first is when a
+-- figure was last known good, the second is when the sweep last tried. Collapsing them would make a
+-- workspace that has been failing for a week indistinguishable from one that has never been
+-- reached, and those call for different actions.
+--
+-- NO NEW INDEX. The sweep selects on `stripeSubscriptionId IS NOT NULL`, and that column already
+-- carries a UNIQUE index from `20260716213000_add_stripe_billing`. Adding
+-- `Organization_billedReconciledAt_idx` would index a column nothing filters or sorts on, on a
+-- table with one row per customer.
+--
+-- PORTABILITY NOTE: written in canonical casing by hand — `prisma migrate diff` introspected off
+-- Windows MariaDB emits lowercase table names (the 2.4.0 lesson, docs/DATABASE.md).
+
+-- AlterTable
+ALTER TABLE `Organization` ADD COLUMN `billedMrrMinor` INTEGER NULL,
+    ADD COLUMN `billedCurrency` VARCHAR(3) NULL,
+    ADD COLUMN `billedSubscriptionId` VARCHAR(255) NULL,
+    ADD COLUMN `billedReconciledAt` DATETIME(3) NULL,
+    ADD COLUMN `billedReconcileAttemptedAt` DATETIME(3) NULL,
+    ADD COLUMN `billedReconcileError` VARCHAR(500) NULL;

@@ -54,7 +54,8 @@ import {
 } from "../services/retention.service.js";
 import { resolveSalesInbox, SALES_LEAD_STATUSES } from "../services/sales-lead.service.js";
 import { captureOrgUsageSnapshots, getPlatformAnalytics } from "../services/platform-admin-analytics.service.js";
-import { getFleetAccountHealth, getFleetUsageTrend, getOrgUsageProfile, getRevenueOverview } from "../services/platform-revenue.service.js";
+import { getBilledRevenueReconciliation, getFleetAccountHealth, getFleetUsageTrend, getOrgUsageProfile, getRevenueOverview } from "../services/platform-revenue.service.js";
+import { reconcileBilledRevenue } from "../services/platform-billing-reconcile.service.js";
 import { getPlatformEmailAnalytics } from "../services/platform-email-analytics.service.js";
 import { deleteSnapshot, listSnapshots, restoreSnapshot, snapshotPath } from "../services/platform-backup.service.js";
 import { broadcastMaintenance, getFleetMaintenance, listBroadcasts } from "../services/platform-maintenance.service.js";
@@ -1514,9 +1515,11 @@ platformAdminConsoleRouter.get("/analytics/summary", async (_req, res) => {
 /*
  * All READS, on `platform:read` — which is what every operator holds, and correctly so: a revenue
  * or health number is aggregate, carries no customer content, and an operator who cannot see the
- * business cannot run it. The one WRITE here, triggering a sweep by hand, is `platform:operate`
- * for the same reason `POST /monitoring/sample` is: it opens a connection to every tenant database
- * in the fleet, which is a load decision rather than a reporting one.
+ * business cannot run it. There are exactly TWO writes, and they carry different capabilities on
+ * purpose: triggering the usage sweep by hand is `platform:operate`, for the same reason `POST
+ * /monitoring/sample` is — it opens a connection to every tenant database in the fleet, which is a
+ * load decision rather than a reporting one. Reconciling against Stripe is `platform:billing`,
+ * because it spends our payment processor's quota and what it fetches is money.
  *
  * EDITING A LIST PRICE IS NOT HERE. It is a field on `PATCH /plan-tier-limits/:tier` in
  * platform-admin.controller.ts, already gated on `platform:billing` — money belongs to the finance
@@ -1575,6 +1578,49 @@ platformAdminConsoleRouter.post("/analytics/snapshot", operate, async (req, res)
     captured: result.captured,
     failed: result.failed.length,
     prunedRows: result.prunedRows
+  });
+  res.json(result);
+});
+
+/**
+ * The stored billed-revenue reconciliation on its own — list against billed, and the gap.
+ *
+ * `platform:read`, like every other figure on that screen: it is an aggregate about our own
+ * business with no customer content in it, and an operator who cannot see the discounting cannot
+ * argue about it. Null when Stripe is not configured, which is the common deployment and not an
+ * error — the console renders no card at all rather than a zero.
+ *
+ * A SEPARATE ROUTE FROM `/analytics/revenue`, which already carries the same object, because the
+ * console refetches JUST this card after a reconcile. Re-running the whole revenue overview — a
+ * cohort table, a churn window and a fleet scan — to refresh three numbers would be the expensive
+ * half of the page paying for the cheap half.
+ */
+platformAdminConsoleRouter.get("/analytics/billed-revenue", async (_req, res) => {
+  res.json(await getBilledRevenueReconciliation());
+});
+
+/**
+ * Reconcile against Stripe NOW rather than waiting for 03:50 UTC.
+ *
+ * `platform:billing`, and this is the one route on this screen that is not `platform:read`. It is
+ * the only action in the console that spends our Stripe API quota, and what it fetches is money —
+ * the same reasoning that puts `PATCH /plan-tier-limits/:tier` (the LIST price) on the finance
+ * role. Note the deliberate difference from `POST /analytics/snapshot` above, which is
+ * `platform:operate`: that one opens a connection to every tenant database, which is a load
+ * decision an on-call operator makes. This one talks to our payment processor.
+ *
+ * Safe to run twice — each pass overwrites the same columns per workspace — and one workspace's
+ * failure is recorded against that workspace rather than aborting the sweep.
+ */
+platformAdminConsoleRouter.post("/analytics/reconcile-billing", billing, async (req, res) => {
+  const result = await reconcileBilledRevenue();
+  await platformAudit("PLATFORM_ADMIN", actorLabel(req), "billed_revenue.reconciled", "Organization", null, {
+    configured: result.configured,
+    attempted: result.attempted,
+    reconciled: result.reconciled,
+    // The failing workspaces by SLUG, not just a count: the audit row is where somebody looks to
+    // find out which customer's billing has been unreadable for a week.
+    failed: result.failed.map((entry) => entry.slug)
   });
   res.json(result);
 });
@@ -1715,11 +1761,20 @@ platformAdminConsoleRouter.get("/organizations/:orgId/feature-overrides", async 
 const featureOverrideSchema = z.object({
   body: z
     .object({
-      /** Replace, not merge — `{}` clears every override. See the service for why merging leaves
-       *  keys nobody can see and therefore nobody can remove. Values are validated loosely here and
-       *  sanitised strictly against the allowlist in `readFeatureOverrides`; the allowlist is the
-       *  authority, so a key this schema has never heard of is dropped rather than rejected. */
-      overrides: z.record(z.string().max(64), z.union([z.boolean(), z.number().int().min(0).max(1_000_000)])).default({}),
+      /**
+       * Replace, not merge — `{}` clears every override. See the service for why merging leaves
+       * keys nobody can see and therefore nobody can remove.
+       *
+       * THIS SCHEMA CHECKS SHAPE ONLY: is the value a boolean or a number. Whether a number is
+       * negative, fractional or absurd is decided ONE layer down, by `validateOverrideInput` in
+       * utils/feature-overrides.ts, and deliberately not here as well. A quota is now settable from
+       * the console, so its refusal has to be a sentence naming the key rather than a generic
+       * "invalid body" — and a rule written in two places is a rule that eventually disagrees with
+       * itself about which value was allowed. The allowlist of KEYS is the same story: it lives in
+       * that util, so a key this schema has never heard of is dropped there rather than rejected
+       * here.
+       */
+      overrides: z.record(z.string().max(64), z.union([z.boolean(), z.number()])).default({}),
       /** Required only when something is being GRANTED beyond the plan. The service names which. */
       acknowledgeGrants: z.boolean().default(false)
     })

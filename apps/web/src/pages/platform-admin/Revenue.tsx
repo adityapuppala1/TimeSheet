@@ -12,6 +12,12 @@
  *     gap somebody can see;
  *   - a percentage the data cannot support renders as "—" with the reason, never as 0%.
  *
+ * THERE IS EXACTLY ONE FIGURE ON THIS PAGE THAT IS NOT LIST PRICE, and it was added as a SECOND
+ * number rather than as a reinterpretation of the first: the billed-revenue card at the foot,
+ * `BilledRevenue` below. It shows what Stripe actually charges and the gap against list — which is
+ * discounting — and it carries its own population, its own labels and its own "not reconciled yet"
+ * state. Nothing above it changed meaning, and no list-price label was softened to make room.
+ *
  * IT READS SNAPSHOTS. `OrgUsageSnapshot` is written nightly by a worker; nothing on this page opens
  * a tenant database, which is why it costs the same at four workspaces and four hundred. The series
  * starts the night the feature shipped and cannot be backfilled — there was never any history to
@@ -105,7 +111,8 @@ export function PlatformAdminRevenue() {
         <>
           Monthly recurring revenue, churn, retention and trial conversion, computed from the nightly usage snapshot.{" "}
           <strong className="text-foreground">Every figure here is LIST PRICE</strong> — what the plan advertises per seat, not what any customer is billed. A
-          discount, an annual commitment or a negotiated Enterprise contract will differ.
+          discount, an annual commitment or a negotiated Enterprise contract will differ. The one exception is the billed-revenue card at the foot of the page,
+          which says so on every number it shows.
         </>
       }
       actions={
@@ -391,17 +398,108 @@ function Loaded({ data }: { data: RevenueOverview }) {
       {/* Only rendered when Stripe is actually configured. The common deployment assigns tiers by
           hand and has no Stripe account, and an empty "billed revenue" card on those installs would
           read as something broken. */}
-      {stripe && (
-        <ConsoleSection title="Stripe reconciliation" description="The gap between list price and what is actually billed — which is what discounting looks like.">
-          <dl className="grid grid-cols-1 gap-3 sm:grid-cols-3">
-            <Stat label="Subscribed workspaces" value={String(stripe.subscribedAccounts)} hint="Carry a Stripe subscription" />
-            <Stat label="List MRR" value={money(stripe.listMrrMinor, currency)} hint="What the plans advertise" />
-            <Stat label="Billed MRR" value={money(stripe.billedMrrMinor, currency)} hint="Not fetched on page load" />
-          </dl>
-          <p className="mt-3 text-xs text-muted-foreground">{stripe.note}</p>
-        </ConsoleSection>
-      )}
+      {stripe && <BilledRevenue stripe={stripe} />}
     </>
+  );
+}
+
+/**
+ * List against billed, and the gap — the one number on this page that is NOT list price.
+ *
+ * IT ADDS A SECOND NUMBER; IT DOES NOT REINTERPRET THE FIRST. Every list-price label above stays
+ * exactly as it was, and this card names its own population rather than borrowing the page's: the
+ * comparison covers only the workspaces that have a Stripe subscription, a successful
+ * reconciliation, and a tier with a list price to be discounted from. Everything else is counted
+ * as excluded and, where it failed, named.
+ *
+ * "NOT RECONCILED YET" IS NOT "NO GAP", and keeping those apart is most of the work here. A
+ * `billedMrrMinor` of null renders as an em dash with the reason underneath; it must never render
+ * as $0, because $0 billed against a real list MRR is a 100% discount — a spectacular claim to make
+ * about a deployment whose nightly job simply has not run.
+ */
+/** The sentence under the discounting figure. Three states, and the third is a real one: billed
+ *  ABOVE list happens (a legacy price, an amount edited by hand in Stripe) and is shown as such
+ *  rather than clamped, because the only evidence the two disagree is the sign. */
+function discountHint(stripe: NonNullable<RevenueOverview["stripe"]>): string {
+  if (stripe.discountMinor === null) return "Needs a reconciled amount to compare";
+  if (stripe.discountMinor >= 0) return `${pct(stripe.discountPercent)} below list`;
+  return `${pct(stripe.discountPercent === null ? null : Math.abs(stripe.discountPercent))} ABOVE list`;
+}
+
+function BilledRevenue({ stripe }: { stripe: NonNullable<RevenueOverview["stripe"]> }) {
+  const queryClient = useQueryClient();
+  const role = usePlatformAdminAuthStore((s) => s.admin?.role);
+  const canReconcile = role ? platformRoleHas(role, platformCapabilities.PLATFORM_BILLING) : false;
+  const currency = stripe.currency;
+
+  const reconcile = useMutation({
+    mutationFn: platformRevenueApi.reconcileBilling,
+    onSuccess: (result) => {
+      if (!result.configured) toast.error("Stripe is not configured on this deployment.");
+      else if (result.failed.length) toast.warning(`${result.reconciled} of ${result.attempted} reconciled — ${result.failed.map((f) => f.slug).join(", ")} failed.`);
+      else toast.success(`Reconciled ${result.reconciled} workspace${result.reconciled === 1 ? "" : "s"} against Stripe.`);
+      queryClient.invalidateQueries({ queryKey: ["platform-admin", "revenue"] });
+    },
+    onError: () => toast.error("The reconciliation could not be run.")
+  });
+
+  const reconciled = stripe.billedMrrMinor !== null;
+
+  return (
+    <ConsoleSection
+      title="Billed revenue vs list price"
+      description="What Stripe actually charges these workspaces, against what their plans advertise. The difference is discounting."
+      actions={
+        canReconcile ? (
+          <Toolbar>
+            <Button variant="outline" size="sm" onClick={() => reconcile.mutate()} disabled={reconcile.isPending}>
+              <RefreshCw className={cn("mr-1.5 h-3.5 w-3.5", reconcile.isPending && "animate-spin")} />
+              {reconcile.isPending ? "Reconciling…" : "Reconcile now"}
+            </Button>
+          </Toolbar>
+        ) : undefined
+      }
+    >
+      <dl className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-4">
+        <Stat
+          label="List MRR (compared)"
+          value={money(stripe.comparableListMrrMinor, currency)}
+          hint={reconciled ? `${stripe.comparedAccounts} of ${stripe.subscribedAccounts} subscribed workspaces` : "Nothing to compare yet"}
+        />
+        <Stat
+          label="Billed MRR"
+          value={money(stripe.billedMrrMinor, currency)}
+          /* The two sentences this card exists to keep apart. */
+          hint={reconciled ? "What Stripe charges, normalised to a month" : "Not reconciled yet — this is not a gap of zero"}
+        />
+        <Stat label="Discounting" value={money(stripe.discountMinor, currency)} hint={discountHint(stripe)} />
+        <Stat
+          label="Last reconciled"
+          value={stripe.lastReconciledAt ? shortDate(stripe.lastReconciledAt) : "—"}
+          hint={stripe.lastReconciledAt ? "Nightly at 03:50 UTC" : "The nightly sweep has not run"}
+        />
+      </dl>
+
+      <p className="mt-3 text-xs text-muted-foreground">
+        {stripe.note} The fleet's whole list MRR is {money(stripe.listMrrMinor, currency)}; only the workspaces named above are part of this comparison.{" "}
+        {stripe.mixedCurrencies && <span className="font-semibold text-warning">The compared workspaces are not all in one currency, so the subtraction adds unlike amounts.</span>}
+      </p>
+
+      {/* Named, not counted. An operator cannot chase "3 failed"; they can chase three slugs. */}
+      {stripe.failures.length > 0 && (
+        <ul className="mt-3 grid gap-2">
+          {stripe.failures.map((failure) => (
+            <li key={failure.orgId} className="min-w-0 rounded-lg border border-warning/40 bg-warning/10 p-3 text-sm">
+              <Link to={`/platform-admin/organizations/${failure.orgId}`} className="font-medium text-foreground hover:text-accent hover:underline">
+                {failure.name}
+              </Link>
+              <span className="ml-2 font-mono text-xs text-muted-foreground">{failure.slug}</span>
+              <p className="mt-1 text-xs text-muted-foreground">{failure.message} Excluded from the figures above rather than counted as zero.</p>
+            </li>
+          ))}
+        </ul>
+      )}
+    </ConsoleSection>
   );
 }
 

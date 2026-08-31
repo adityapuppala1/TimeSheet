@@ -471,11 +471,13 @@ export const HELP_ARTICLES: HelpArticle[] = [
       "CI webhooks: GitHub Actions, GitLab, Jenkins and friends push test runs and security findings. A finding is routed by the file it names — see Route findings by file path below — so it lands on the module that owns the code rather than on whoever happens to be first in the list.",
       "Malware scanning: the switch scans EVERY upload before it is stored. It fails closed — with it on and the scanner down, uploads are refused — so use Test scanner beside it before flipping."
     ],
-    // No screenshot on purpose. This article is about the Security & DevOps SETTINGS tab, and the
-    // only security-shaped capture in `apps/web/public/product/` is `security.png` — the
-    // "Security & DevOps insights" page, which is where findings are READ rather than where any of
-    // the switches described above live. Pointing a reader at a picture of somewhere they are not
-    // is worse than showing them nothing, so this waits for a real capture of the tab.
+    // The TAB, not the insights page. This article named `security.png` for a while, which is the
+    // "Security & DevOps insights" screen — where findings are READ, not where any of the switches
+    // above live — so a reader following the steps was looking at a picture of somewhere they were
+    // not. `settings-security-devops.png` is a real capture of this tab, taken by
+    // tests/e2e/screenshots.spec.ts alongside every other product shot so it is anonymised and
+    // refreshed rather than going stale as a hand-cropped one-off.
+    screenshot: "settings-security-devops.png",
     keywords: ["security", "devops", "github", "oauth", "ci", "webhook", "virus", "malware", "scan", "clamav", "findings"]
   },
   {

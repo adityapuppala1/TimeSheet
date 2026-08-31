@@ -1391,13 +1391,45 @@ export interface SeatOverageRow {
   seatsRemaining: number;
 }
 
+/**
+ * List price against what Stripe actually bills, and the gap between them.
+ *
+ * THE GAP IS DISCOUNTING, and it is a SECOND number beside the list-price ones — it never
+ * reinterprets them. Every field below is about a NAMED subset of workspaces: those carrying a
+ * Stripe subscription that has been reconciled, is revenue-bearing, and is on a tier with a list
+ * price to compare against. Everything excluded is counted in `excluded` and, where it failed, named
+ * in `failures`, because a total whose population is unstated is a total nobody can check.
+ */
 export interface StripeReconciliation {
   subscribedAccounts: number;
+  /** How many workspaces are actually in the comparison. */
+  comparedAccounts: number;
+  excluded: { neverReconciled: number; failed: number; unpriced: number; notRevenueBearing: number };
+  /** The workspaces whose last reconciliation failed, by name. Never folded into the total as zero:
+   *  a Stripe outage rendered as a 100% discount is worse than an honest gap. */
+  failures: Array<{ orgId: string; slug: string; name: string; message: string }>;
+  /** The WHOLE fleet's list MRR, for context on how much of the business is being compared. */
   listMrrMinor: number;
-  /** Null means "not fetched" — the console renders that, never a zero gap. */
+  /** List MRR of the compared workspaces only — the half that is comparable with `billedMrrMinor`. */
+  comparableListMrrMinor: number | null;
+  /** Null means NOT RECONCILED YET, which the console renders as such. It never means a gap of zero. */
   billedMrrMinor: number | null;
   discountMinor: number | null;
+  discountPercent: number | null;
+  currency: string;
+  mixedCurrencies: boolean;
+  lastReconciledAt: string | null;
   note: string;
+}
+
+/** What a hand-triggered reconciliation did. `configured: false` means this deployment has no
+ *  Stripe secret key at all — a normal state, not a failure. */
+export interface ReconcileResult {
+  configured: boolean;
+  attempted: number;
+  reconciled: number;
+  failed: Array<{ orgId: string; slug: string; message: string }>;
+  at: string;
 }
 
 export interface RevenueOverview {
@@ -1496,7 +1528,15 @@ export const platformRevenueApi = {
   /** Take today's snapshot now rather than waiting for 03:40 UTC. Safe to run twice — the sweep
    *  upserts on (workspace, day). */
   snapshotNow: async () =>
-    (await platformAdminApi.post<{ day: string; captured: number; failed: Array<{ slug: string; error: string }>; prunedRows: number }>("/analytics/snapshot")).data
+    (await platformAdminApi.post<{ day: string; captured: number; failed: Array<{ slug: string; error: string }>; prunedRows: number }>("/analytics/snapshot")).data,
+  /** The stored list-vs-billed reconciliation on its own. Null when Stripe is not configured, which
+   *  is the common deployment — the page renders no card at all rather than a zero. Fetched
+   *  separately from `overview` so refreshing three numbers after a reconcile does not re-run a
+   *  cohort table and a churn window. */
+  billedRevenue: async () => (await platformAdminApi.get<StripeReconciliation | null>("/analytics/billed-revenue")).data,
+  /** Ask Stripe now rather than waiting for 03:50 UTC. `platform:billing` — it spends our Stripe
+   *  quota and what it fetches is money, which is why it is not the same gate as "Snapshot now". */
+  reconcileBilling: async () => (await platformAdminApi.post<ReconcileResult>("/analytics/reconcile-billing")).data
 };
 
 /* ================== Fleet alerts, schema drift and the org timeline (5.0.0) ================== */

@@ -14,10 +14,9 @@
  * surprise mid-cycle charge. The new headcount is what the NEXT invoice is for, which is what a
  * customer expects from a per-seat plan and what avoids a support ticket per hire.
  */
-import Stripe from "stripe";
 import { controlPrisma } from "../config/control-prisma.js";
 import { countActiveSeats } from "./seat-count.service.js";
-import { decryptSecret } from "../utils/encryption.js";
+import { resolveStripeClient } from "./stripe-client.service.js";
 
 export async function syncSubscriptionSeats(orgId: string): Promise<void> {
   try {
@@ -27,11 +26,11 @@ export async function syncSubscriptionSeats(orgId: string): Promise<void> {
     });
     if (!org?.stripeSubscriptionId) return; // Never bought through Stripe — nothing to keep in step.
 
-    const settings = await controlPrisma.platformBillingSettings.findUnique({ where: { id: "global" } });
-    if (!settings?.encryptedSecretKey) return; // Billing isn't configured on this deployment.
+    const context = await resolveStripeClient();
+    if (!context) return; // Billing isn't configured on this deployment.
 
     const seats = Math.max(1, await countActiveSeats());
-    const stripe = new Stripe(decryptSecret(settings.encryptedSecretKey));
+    const { stripe } = context;
     const subscription = await stripe.subscriptions.retrieve(org.stripeSubscriptionId);
     const item = subscription.items.data[0];
     if (!item || item.quantity === seats) return; // Already right — do not spend a write saying so.

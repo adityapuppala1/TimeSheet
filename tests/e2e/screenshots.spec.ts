@@ -39,6 +39,12 @@ const SHOTS: { slug: string; url: string; label: string; focus?: string; tab?: s
   // page's DEFAULT tab (Reminders & schedule) published under an "AI controls" heading — the
   // exact silent drift this spec exists to prevent.
   { slug: "settings-ai", url: "/app/settings", label: "AI settings", tab: "AI" },
+  // 5.0.0. The Security & DevOps TAB, which is where the switches live — deliberately distinct
+  // from the `security` shot above, which is the insights PAGE where findings are read. The help
+  // manual's security-devops article named `security.png` for a while and therefore illustrated a
+  // screen the reader was not on; a capture of the actual tab is the fix, and this is where it has
+  // to come from so it is anonymised and refreshed with every other product shot.
+  { slug: "settings-security-devops", url: "/app/settings", label: "Security & DevOps settings", tab: "Security & DevOps" },
   // The V8 surfaces the marketing pages now show. The Studio is captured from the top on
   // purpose: the first card's quoted activation errors are the activation gate doing its job,
   // which is exactly the claim the marketing copy makes about it.

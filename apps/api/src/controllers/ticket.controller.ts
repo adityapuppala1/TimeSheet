@@ -622,7 +622,7 @@ ticketRouter.post("/", requirePermission(permissions.TICKETS_WRITE), validate(cr
   await audit(req.user!.id, "ticket.created", "Ticket", ticket.id, { key: ticket.key });
   emitDomainEvent("ticket.created", { ticket });
 
-  // Rules engine (Workspace Settings → Ticketing → Automation) — only runs when the creator
+  // Rules engine (Workspace Settings → Ticketing → Automation rules) — only runs when the creator
   // didn't already pick an assignee, so an explicit human choice always wins over an automated
   // default; a rule is a fallback, not an override. Manual-creation-only, same as
   // applyTicketRules's own doc comment explains (email/chat intake keep their existing routing).

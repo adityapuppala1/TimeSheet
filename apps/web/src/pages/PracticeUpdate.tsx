@@ -346,7 +346,7 @@ function RecipientsCard() {
             <Sparkles className="mt-0.5 h-3.5 w-3.5 shrink-0" />
             <span>
               AI drafting is off, so the written sections will start empty and the email falls back to
-              the underlying figures. Turn it on under Workspace Settings → AI features.
+              the underlying figures. Turn it on under Workspace Settings → AI → AI features.
             </span>
           </p>
         )}

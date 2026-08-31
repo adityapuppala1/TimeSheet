@@ -2281,7 +2281,7 @@ model ModuleAssigneeRule {
 
 /// General-purpose if/then automation on manually-created tickets — generalizes
 /// ModuleAssigneeRule (which is intake-routing-specific, keyed one-to-one on a module) into a
-/// broader rule an admin can shape from Workspace Settings → Ticketing → Automation. Email/chat
+/// broader rule an admin can shape from Workspace Settings → Ticketing → Automation rules. Email/chat
 /// intake keep using their own existing routing (EmailRoutingRule/ChatRoutingRule/
 /// ModuleAssigneeRule) — this only evaluates on the manual-creation path
 /// (ticket.controller.ts's POST /), since that's the one surface with no routing rule today.

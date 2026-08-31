@@ -119,10 +119,14 @@ vi.mock("../../src/services/platform-admin-analytics.service.js", () => ({
   getPlatformAnalytics: vi.fn().mockResolvedValue({})
 }));
 vi.mock("../../src/services/platform-revenue.service.js", () => ({
+  getBilledRevenueReconciliation: vi.fn().mockResolvedValue(null),
   getFleetAccountHealth: vi.fn().mockResolvedValue({ rows: [], coverage: {}, seatOverage: [] }),
   getFleetUsageTrend: vi.fn().mockResolvedValue([]),
   getOrgUsageProfile: vi.fn().mockResolvedValue({}),
   getRevenueOverview: vi.fn().mockResolvedValue({})
+}));
+vi.mock("../../src/services/platform-billing-reconcile.service.js", () => ({
+  reconcileBilledRevenue: vi.fn().mockResolvedValue({ configured: false, attempted: 0, reconciled: 0, failed: [], at: "2026-08-31T03:50:00.000Z" })
 }));
 vi.mock("../../src/services/platform-email-analytics.service.js", () => ({ getPlatformEmailAnalytics: vi.fn().mockResolvedValue({}) }));
 vi.mock("../../src/services/platform-backup.service.js", () => ({
@@ -293,6 +297,10 @@ const ROUTES: Route[] = [
   { method: "get", path: "/analytics/health", cap: READ },
   { method: "get", path: "/analytics/usage-trend", cap: READ },
   { method: "get", path: `/analytics/org/${ORG}`, cap: READ },
+  /* Billed revenue. The READ is `platform:read` like every other figure on that screen — it is an
+     aggregate about our own business with no customer content in it. The WRITE beside it is the
+     one action on the revenue page that is NOT `platform:operate`; see the note there. */
+  { method: "get", path: "/analytics/billed-revenue", cap: READ },
 
   /* The 4.3.0 operational screens. All reads, all `platform:read`: an operator who cannot see what
      is broken cannot be on call for it, and the alert delivery CONFIGURATION is readable for the
@@ -320,6 +328,12 @@ const ROUTES: Route[] = [
   { method: "get", path: "/billing-settings", cap: BILLING },
   { method: "patch", path: "/billing-settings", cap: BILLING, body: { priceIdTeam: "price_x" } },
   { method: "put", path: `/backups/policy/${ORG}`, cap: BILLING, body: { enabled: false } },
+  {
+    method: "post",
+    path: "/analytics/reconcile-billing",
+    cap: BILLING,
+    note: "spends our Stripe API quota and what it fetches is money — deliberately NOT platform:operate like the usage sweep beside it"
+  },
 
   /* ---- operate: run the platform ---- */
   { method: "post", path: "/organizations", cap: OPERATE, body: { name: "Acme", slug: "acme" } },
@@ -426,6 +440,15 @@ describe("the callouts, stated on their own so a regression names itself", () =>
   it("BILLING cannot reach the tenant rescue routes — a finance role has no business in a customer's user table", async () => {
     expect((await call({ method: "post", path: `/organizations/${ORG}/restore-password-login`, cap: SUPPORT }, "BILLING")).status).toBe(403);
     expect((await call({ method: "post", path: `/organizations/${ORG}/reset-admin-password`, cap: SUPPORT, body: { email: "a@b.test" } }, "BILLING")).status).toBe(403);
+  });
+
+  it("SUPPORT and READ_ONLY can SEE the billed-revenue gap but cannot spend Stripe quota to refresh it", async () => {
+    // The split this route exists to draw: reading the discounting is a business question every
+    // operator has, and re-fetching it is a call to our payment processor.
+    for (const role of ["SUPPORT", "READ_ONLY"] as const) {
+      expect((await call({ method: "get", path: "/analytics/billed-revenue", cap: READ }, role)).status).not.toBe(403);
+      expect((await call({ method: "post", path: "/analytics/reconcile-billing", cap: BILLING }, role)).status).toBe(403);
+    }
   });
 
   it("SUPPORT cannot move a workspace onto a different plan", async () => {

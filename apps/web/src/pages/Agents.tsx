@@ -796,7 +796,7 @@ function AgentCard({
             <span>
               Switched on, but nothing in it can act yet — every capability below has its AI feature turned off in{" "}
               <Link to="/app/settings" className="underline">
-                Workspace settings → AI features
+                Workspace settings → AI → AI features
               </Link>
               .
             </span>

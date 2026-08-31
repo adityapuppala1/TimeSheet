@@ -12,8 +12,20 @@
  * THE RULE — an override may never silently GRANT past the plan — and the allowlist of keys both
  * live in `utils/feature-overrides.ts`, which is pure and has no database. This file is the half
  * that touches the world: it resolves which tier to judge an override against, it enforces the
- * acknowledgement, and it writes the audit row. Three mechanisms stand between an operator and an
- * accidental grant, and all three are here or in that util:
+ * acknowledgement, and it writes the audit row.
+ *
+ * A NUMERIC QUOTA IS SETTABLE, NOT JUST VIEWABLE. The first pass shipped the capability switches
+ * editable and left the quotas readable-and-removable — a card that shows a number and refuses to
+ * let you change it, which reads as broken rather than as cautious. It is now editable, and it goes
+ * through EVERY mechanism below unchanged: raising `maxGoals` above what the tier includes is a
+ * grant, needs the same acknowledgement a capability grant needs, and lands in the same audit row.
+ *
+ * Four mechanisms stand between an operator and an accidental or nonsensical grant, and all four
+ * are here or in that util:
+ *   0. `validateOverrideInput` REFUSES a value that is the wrong shape for its key, negative,
+ *      fractional where the entitlement counts rows, or absurdly large — with a sentence naming the
+ *      key. The read path drops those silently because it must never throw; the write path must
+ *      not, because an operator who typed `-5` and was shown a clean card has been told nothing.
  *   1. `classifyOverrides` names the EFFECT of every key against the tier the workspace actually
  *      has right now — trial included, because judging against `planTier` while the resolver reads
  *      `trialTier` would show an operator the wrong answer for the length of a trial.
@@ -31,6 +43,7 @@ import {
   grantingKeys,
   OVERRIDABLE_FEATURES,
   readFeatureOverrides,
+  validateOverrideInput,
   type ClassifiedOverride,
   type FeatureOverrideKey,
   type FeatureOverrides
@@ -100,9 +113,19 @@ export async function setOrgFeatureOverrides(input: {
 }): Promise<OrgOverrideView> {
   const { org, tier, tierLimit } = await loadOrgAndTier(input.orgId);
 
-  // Sanitised BEFORE classification, so an unknown key can never reach the stored column and can
-  // never be classified as a grant of something that does not exist.
-  const clean = readFeatureOverrides(input.overrides);
+  // VALIDATED, then sanitised, before anything is classified.
+  //
+  // The order matters twice over. An unknown key can never reach the stored column and so can never
+  // be classified as a grant of something that does not exist — that was always true. What is new
+  // is the REFUSAL: a numeric quota can now be SET from the console, and a value that is negative,
+  // fractional or absurd has to come back as a sentence the operator can act on rather than
+  // vanishing into a saved card that looks like it worked. `readFeatureOverrides` cannot do that
+  // job — it runs inside every entitlement check and must never throw — so the write path asks
+  // `validateOverrideInput` instead, and the two are documented against each other in that file.
+  const { clean, errors } = validateOverrideInput(input.overrides);
+  if (errors.length > 0) {
+    throw new AppError(422, `That override could not be saved: ${errors.join(" ")}`, { code: "OVERRIDE_INVALID" });
+  }
   const classified = classifyOverrides(tierLimit as unknown as Record<string, unknown>, clean);
   const grants = grantingKeys(classified);
 

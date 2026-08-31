@@ -27,21 +27,15 @@ import { getEffectiveSeatLimit } from "../services/plan-limits.service.js";
 import { countActiveSeats } from "../services/seat-count.service.js";
 import { forgetOrgStatus } from "../services/org-status.service.js";
 import { notifyPaymentFailed, notifyPlanChanged } from "../services/billing-notify.service.js";
+import { DEAD_SUBSCRIPTION_STATUSES, resolveStripeClient, requireStripeClient } from "../services/stripe-client.service.js";
 import { decryptSecret } from "../utils/encryption.js";
-
-async function getStripeClient(): Promise<{ stripe: Stripe; settings: NonNullable<Awaited<ReturnType<typeof controlPrisma.platformBillingSettings.findUnique>>> }> {
-  const settings = await controlPrisma.platformBillingSettings.findUnique({ where: { id: "global" } });
-  if (!settings?.encryptedSecretKey) throw new AppError(503, "Billing isn't configured on this deployment yet.");
-  const stripe = new Stripe(decryptSecret(settings.encryptedSecretKey));
-  return { stripe, settings };
-}
 
 export const billingRouter = Router();
 billingRouter.use(requireAuth);
 
 /**
  * GET /status — the org's current plan tier + seat usage, for the Workspace Settings Billing
- * card. Doesn't require `getStripeClient()` — an org that's never touched Stripe (manually
+ * card. Doesn't require `requireStripeClient()` — an org that's never touched Stripe (manually
  * assigned a tier, or still on STARTER) still needs to see its own status.
  */
 billingRouter.get("/status", async (req, res) => {
@@ -90,10 +84,10 @@ function isMissingResource(error: unknown): boolean {
   return stripeError?.statusCode === 404 || stripeError?.code === "resource_missing";
 }
 
-/** Statuses a subscription never comes back from. Anything else — `past_due`, `unpaid`, `paused`,
- *  a card in `incomplete` — is a live subscription with a problem, and changing the plan on it is
- *  still the right move; opening a second Checkout for it would just bill the customer twice. */
-const DEAD_SUBSCRIPTION_STATUSES = new Set<Stripe.Subscription.Status>(["canceled", "incomplete_expired"]);
+/* `DEAD_SUBSCRIPTION_STATUSES` — the statuses a subscription never comes back from — now lives in
+   stripe-client.service.ts beside the client itself. Opening a second Checkout against a live-but-
+   troubled subscription would bill the customer twice, so the set has to mean the same thing here
+   and in the billed-revenue reconciliation, which is why it stopped being a private const. */
 
 /**
  * Moves an EXISTING subscription onto `priceId`, or reports that there is nothing to move.
@@ -152,7 +146,7 @@ async function changeSubscriptionInPlace(stripe: Stripe, subscriptionId: string,
  */
 billingRouter.post("/checkout-session", requireSuperAdmin, validate(checkoutSchema), async (req, res) => {
   const { orgId } = requireTenantContext();
-  const { stripe, settings } = await getStripeClient();
+  const { stripe, settings } = await requireStripeClient();
 
   const priceId = req.body.tier === "TEAM" ? settings.priceIdTeam : settings.priceIdEnterprise;
   if (!priceId) throw new AppError(503, `No Stripe Price configured for the ${req.body.tier} tier yet.`);
@@ -222,7 +216,7 @@ billingRouter.post("/portal-session", requireSuperAdmin, async (req, res) => {
     throw new AppError(409, "This workspace has no billing account with Stripe yet. Choose a plan first — the billing portal opens once there's a subscription to manage.");
   }
 
-  const { stripe } = await getStripeClient();
+  const { stripe } = await requireStripeClient();
   try {
     const session = await stripe.billingPortal.sessions.create({
       customer: org.stripeCustomerId,
@@ -286,7 +280,7 @@ billingRouter.get("/invoices", requireSuperAdmin, async (_req, res) => {
     return;
   }
 
-  const { stripe } = await getStripeClient();
+  const { stripe } = await requireStripeClient();
   const list = await stripe.invoices.list({ customer: org.stripeCustomerId, limit: 12 });
   const invoices: InvoiceSummary[] = list.data.map((invoice) => ({
     id: invoice.id ?? "",
@@ -340,17 +334,22 @@ function tierForPriceId(settings: { priceIdTeam: string | null; priceIdEnterpris
 
 billingWebhookRouter.post("/webhook", express.raw({ type: "application/json" }), async (req, res, next) => {
   try {
-    const settings = await controlPrisma.platformBillingSettings.findUnique({ where: { id: "global" } });
-    if (!settings?.encryptedSecretKey || !settings.encryptedWebhookSigningSecret) {
+    // Still 404 rather than the helper's 503, and deliberately: an unconfigured deployment should
+    // look to Stripe's retry machinery like a URL that is not there, not like an outage worth
+    // hammering. The signing secret is checked here too because a client alone cannot verify a
+    // webhook, and half-configured billing must not accept an unverified body.
+    const context = await resolveStripeClient();
+    const signingSecret = context?.settings.encryptedWebhookSigningSecret;
+    if (!context || !signingSecret) {
       throw new AppError(404, "Billing isn't configured on this deployment yet.");
     }
-    const stripe = new Stripe(decryptSecret(settings.encryptedSecretKey));
+    const { stripe, settings } = context;
     const signature = req.headers["stripe-signature"];
     if (!signature || Array.isArray(signature)) throw new AppError(401, "Missing Stripe signature.");
 
     let event: Stripe.Event;
     try {
-      event = stripe.webhooks.constructEvent(req.body as Buffer, signature, decryptSecret(settings.encryptedWebhookSigningSecret));
+      event = stripe.webhooks.constructEvent(req.body as Buffer, signature, decryptSecret(signingSecret));
     } catch {
       throw new AppError(401, "Invalid Stripe webhook signature.");
     }

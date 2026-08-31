@@ -185,7 +185,7 @@ const BACKUP_GROUP: EntitlementGroup = {
   note: (
     <>
       The cadence is a <strong className="text-foreground">ceiling</strong>, not a setting: a workspace picks its own schedule under
-      Platform → Backups and the scheduler clamps it to the tier on every tick, so a downgrade takes effect without anybody editing a
+      Operations → Backups and the scheduler clamps it to the tier on every tick, so a downgrade takes effect without anybody editing a
       policy. The pre-deletion snapshot the retention programme takes is separate and applies on every plan, including Starter.
     </>
   ),

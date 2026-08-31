@@ -92,6 +92,41 @@ model Organization {
   stripeCustomerId     String? @unique @db.VarChar(255)
   stripeSubscriptionId String? @unique @db.VarChar(255)
 
+  /// --- What Stripe says this workspace actually pays (5.1.0) --------------------------------
+  ///
+  /// WHY THESE COLUMNS EXIST. Every revenue figure in the console is LIST PRICE — what the plan
+  /// advertises, from `PlanTierLimit.listPricePerSeatMinor` — and it is labelled as such
+  /// everywhere. The number an operator actually wants is the GAP between that and what customers
+  /// are billed, because that gap is the discounting nobody decided to standardise. Stripe knows
+  /// the billed amount; the console cannot ask it on every page render without turning a screen
+  /// somebody refreshes into a rate limit. So the answer is written down HERE by
+  /// `workers/billed-revenue-reconcile.worker.ts` and read from here.
+  ///
+  /// NULLABLE THROUGHOUT, AND NULL IS NOT ZERO. A workspace with no Stripe subscription simply has
+  /// none of this, and that is the common case rather than an error. A workspace whose
+  /// reconciliation has never run has `billedReconciledAt` null, and the console says "not
+  /// reconciled yet" instead of showing a gap of zero — the two sentences mean opposite things.
+  ///
+  /// `billedMrrMinor` IS ALWAYS A MONTHLY FIGURE, normalised from whatever interval the
+  /// subscription actually bills on. An annual subscription stored at its full yearly amount would
+  /// report twelve times the truth, which is the easiest way for this whole feature to be
+  /// confidently wrong; `subscriptionMonthlyMinor` in the reconcile service owns that division.
+  billedMrrMinor             Int?
+  billedCurrency             String?   @db.VarChar(3)
+  /// The subscription the figure came from. Kept beside the amount rather than assumed equal to
+  /// `stripeSubscriptionId`, so a figure reconciled before a resubscribe is visibly stale rather
+  /// than silently attributed to a subscription it never described.
+  billedSubscriptionId       String?   @db.VarChar(255)
+  /// When a reconciliation last SUCCEEDED. Null means the figure above is absent, never zero.
+  billedReconciledAt         DateTime?
+  /// When one was last ATTEMPTED, success or failure — the two are separate so a run that failed
+  /// cannot look like one that never happened.
+  billedReconcileAttemptedAt DateTime?
+  /// The last failure, cleared on the next success. A workspace carrying one is counted and NAMED
+  /// separately in the console rather than folded into the total as zero: a Stripe outage must not
+  /// read as a 100% discount.
+  billedReconcileError       String?   @db.VarChar(500)
+
   /// Free-trial clock. Null on every workspace a platform admin provisioned by hand, which is how
   /// every existing org was created — a null `trialEndsAt` means "no trial", never "expired".
   trialStartedAt DateTime?

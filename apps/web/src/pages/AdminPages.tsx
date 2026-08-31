@@ -3576,7 +3576,7 @@ function StatusReportCard() {
       <CardContent className="grid gap-3">
         {disabled && (
           <p className="rounded-md border border-dashed border-border bg-muted/30 p-3 text-sm text-muted-foreground">
-            This feature is off for this workspace. An admin can turn it on under Workspace Settings → AI features.
+            This feature is off for this workspace. An admin can turn it on under Workspace Settings → AI → AI features.
           </p>
         )}
         <div className="flex flex-wrap items-end gap-2.5">

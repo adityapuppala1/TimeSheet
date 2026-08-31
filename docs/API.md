@@ -2444,6 +2444,24 @@ silently under-reported.
   (`platform-account-health.ts`) with no database in the way. Also returns `seatOverage` — the
   workspaces at or above 90% of a **real** seat ceiling, warmest first; unlimited tiers are excluded
   rather than listed at 0%, because there is nothing for them to press against.
+- `GET /analytics/billed-revenue` (`platform:read`) — the stored list-vs-billed reconciliation on
+  its own, the same object `GET /analytics/revenue` carries as `stripe`. `null` when Stripe is not
+  configured, which is the common deployment; the console then renders no card at all rather than a
+  zero. Every figure is over a **named subset**: workspaces that carry a Stripe subscription, have
+  been reconciled successfully, are revenue-bearing, and sit on a tier with a list price to be
+  discounted from. Everything else is counted in `excluded` (`neverReconciled` / `failed` /
+  `unpriced` / `notRevenueBearing`) and, where it failed, named in `failures`. **`billedMrrMinor`
+  null means not reconciled yet, never a gap of zero** — a failed workspace folded in at 0 against a
+  real list price would report a Stripe outage as 100% discounting.
+- `POST /analytics/reconcile-billing` (`platform:billing`) — run the sweep now instead of waiting
+  for 03:50 UTC. The only action on the revenue screen that is not `platform:operate`: it spends our
+  Stripe API quota and what it fetches is money, which is the same reasoning that puts the list-price
+  edit on the finance role. Walks every workspace holding a `stripeSubscriptionId`, reads
+  `unit_amount × quantity` per line and **normalises it to a month through the price's own
+  `recurring.interval`** — an annual subscription stored at its full yearly amount would report
+  twelve times the truth — then writes `Organization.billed*`. One workspace's failure is recorded
+  against that workspace and does not abort the sweep. Safe to run twice. Audited as
+  `billed_revenue.reconciled`, with the failing slugs named.
 - `GET /analytics/usage-trend?days=90` — seats, agents, backlog, ticket total and AI spend summed
   across the fleet, per day.
 - `GET /analytics/org/:orgId?days=60` — one workspace's snapshot series, its health, the scorer's
@@ -2492,11 +2510,15 @@ only while somebody had the Monitoring page open. These routes are the alerts le
 - `GET`/`PUT /organizations/:orgId/feature-overrides` (`platform:operate` **plus** a reason —
   deliberately not `platform:billing`, which covers the commercial dials, not the product's shape).
   Stored as `Organization.featureOverrides`, SQL `NULL` when empty rather than `{}`, restricted to a
-  17-key allowlist. `PUT` **replaces**; `{}` clears. Granting past what the tier includes is allowed
-  and must be deliberate: without `acknowledgeGrants` it is a **422 `OVERRIDE_GRANTS_BEYOND_PLAN`**
-  naming the keys, and the audit row `organization.feature_overrides_set` carries the reason, the
-  IP, and the before and after — awaited, not detached, because an override that is not on the
-  record is an override nobody can explain later.
+  17-key allowlist. `PUT` **replaces**; `{}` clears. Both shapes are settable — the boolean
+  capabilities and the numeric quotas. Granting past what the tier includes is allowed and must be
+  deliberate, and a **bigger quota is a grant** exactly as a switched-on capability is: without
+  `acknowledgeGrants` it is a **422 `OVERRIDE_GRANTS_BEYOND_PLAN`** naming the keys, and the audit
+  row `organization.feature_overrides_set` carries the reason, the IP, and the before and after —
+  awaited, not detached, because an override that is not on the record is an override nobody can
+  explain later. A quota value that is negative, fractional or above the ceiling is a **422
+  `OVERRIDE_INVALID`** naming the key; the write path refuses what the read path (which runs inside
+  every entitlement check and must never throw) drops silently.
 - `GET /organizations/:orgId/timeline?days=` (`platform:read`) — one merged incident timeline per
   workspace, from audit rows, backup runs, alert conditions appearing and clearing, maintenance
   broadcasts and failed platform email. It is the Org 360 page's narrative half, and like the rest
